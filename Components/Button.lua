@@ -1,6 +1,14 @@
 local S = SuuUI.UISignals
 local max, min, abs = math.max, math.min, math.abs
 
+-- A variant tints the border and label with an intent token. The background stays on the
+-- surface tokens so variants read as emphasis, not as a different kind of control.
+local variantToken = {
+    danger  = "colorDanger",
+    success = "colorSuccess",
+    warning = "colorWarning",
+}
+
 local BtnMeta = {}
 BtnMeta.__index = BtnMeta
 
@@ -100,10 +108,12 @@ end
 
 function BtnMeta:ApplyTheme()
     local T   = SuuUI.Theme
-    local bg  = T:GetToken(self._enabled ~= false and "colorBgAlt" or "colorBgActive")
-    local bd  = T:GetToken("colorBorder")
+    local en  = self._enabled ~= false
+    local bg  = T:GetToken(en and "colorBgAlt" or "colorBgDisabled")
+    local vk  = en and variantToken[self._variant] or nil
+    local bd  = T:GetToken(vk or "colorBorder")
     local bw  = T:GetToken("borderWidth") or 1
-    local tc  = T:GetToken(self._enabled ~= false and "colorText" or "colorTextDisable")
+    local tc  = T:GetToken(not en and "colorTextDisabled" or (vk or "colorText"))
     local font= T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local sz  = T:GetToken("fontSizeMd") or 13
     self._f:SetBackdrop({
@@ -118,8 +128,8 @@ function BtnMeta:ApplyTheme()
     -- Padding is token-driven and text metrics move with the font tokens, so both are
     -- re-read here and the button re-fits itself.
     self._font, self._fontSize, self._fontFlags = font, sz, ""
-    self._padX = self._padXProp or (T:GetToken("spaceMd") or 8) + bw
-    self._padY = self._padYProp or (T:GetToken("spaceSm") or 4) + bw
+    self._padX = self._padXProp or (T:GetToken("spaceSm") or 8) + bw
+    self._padY = self._padYProp or (T:GetToken("spaceXs") or 4) + bw
     self:_autosize()
 end
 
@@ -127,7 +137,8 @@ end
 -- Width and height are measured from the text plus token padding unless w/h are
 -- given. Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED,
 -- TEXT_CHANGED, SIZE_CHANGED.
--- @param props table  { label, onClick, w, h, minW, minH, padX, padY }
+-- @param props table  { label, onClick, variant, w, h, minW, minH, padX, padY }
+--   variant: nil (default) | "danger" | "success" | "warning" — tints border and label
 -- @param parent frame
 -- @return table  Button handle
 function SuuUI.Components.Button(props, parent)
@@ -157,6 +168,7 @@ function SuuUI.Components.Button(props, parent)
     local id = "btn_" .. tostring(f)
     handle = setmetatable({
         _f=f, _label=lbl, _box=box, _eid=id, _enabled=true,
+        _variant = props.variant,
         _autoW = props.w == nil,
         _autoH = props.h == nil,
         _minW  = props.minW or 0,
@@ -175,7 +187,7 @@ function SuuUI.Components.Button(props, parent)
         if handle._enabled == false then return end
         local c = T:GetToken("colorBgHover")
         if c then f:SetBackdropColor(c[1], c[2], c[3], c[4]) end
-        local ac = T:GetToken("colorBorderFocus")
+        local ac = T:GetToken(variantToken[handle._variant] or "colorBorderFocus")
         if ac then f:SetBackdropBorderColor(ac[1], ac[2], ac[3], ac[4]) end
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
     end)
@@ -185,8 +197,11 @@ function SuuUI.Components.Button(props, parent)
     end)
     f:SetScript("OnMouseDown", function()
         if handle._enabled == false then return end
-        local c = T:GetToken("colorBgActive")
+        local c = T:GetToken("colorBgPressed")
         if c then f:SetBackdropColor(c[1], c[2], c[3], c[4]) end
+        -- Pressed deepens the accent border, distinguishing it from hover
+        local ac = T:GetToken(variantToken[handle._variant] or "colorAccentHover")
+        if ac then f:SetBackdropBorderColor(ac[1], ac[2], ac[3], ac[4]) end
         SuuUI.Anim.Presets.ScalePop(f)
     end)
     f:SetScript("OnMouseUp", function(_, btn)

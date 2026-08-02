@@ -1,7 +1,10 @@
 local ipairs = ipairs
 local S = SuuUI.UISignals
 
-local ROW_H = 22
+-- Option rows hold text, so their height is floored against the font size token.
+local function rowHeight()
+    return SuuUI.Theme:GetControlHeight("sizeControlMd")
+end
 
 local DdMeta = {}
 DdMeta.__index = DdMeta
@@ -11,7 +14,11 @@ function DdMeta:GetHeight()    return self._f:GetHeight() end
 function DdMeta:IsShown()      return self._f:IsShown() end
 function DdMeta:GetFrame()     return self._f end
 
+--- Sets an explicit size, dropping token-driven height.
+-- @param w number
+-- @param h number
 function DdMeta:SetSize(w, h)
+    self._autoH = false
     self._f:SetSize(w, h)
     S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
@@ -97,7 +104,9 @@ function DdMeta:_row(index, opt)
         row._lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         row._box:Add(row._lbl, { valign = "center", inset = { left = 6, right = 6 } })
         self._rows[index] = row
-        self._rowList:Add(row, { width = "fill", height = ROW_H })
+        self._rowList:Add(row, { width = "fill", height = rowHeight() })
+    else
+        self._rowList:SetChildProps(row, { width = "fill", height = rowHeight() })
     end
 
     row:SetBackdrop({
@@ -140,7 +149,7 @@ function DdMeta:_openPanel()
     local bg  = T:GetToken("colorBgAlt")
     local bd  = T:GetToken("colorBorder")
     local bw  = T:GetToken("borderWidth") or 1
-    local gap = T:GetToken("spaceSm") or 4
+    local gap = T:GetToken("spaceXs") or 4
     local panel = self._panel
 
     for _, row in ipairs(self._rows) do row:Hide() end
@@ -153,7 +162,7 @@ function DdMeta:_openPanel()
         relativePoint = "BOTTOMLEFT",
         x = 0, y = -2,
         width  = self._f:GetWidth(),
-        height = #self._options * ROW_H + gap * 2,
+        height = #self._options * rowHeight() + gap * 2,
     })
     panel:SetFrameStrata("TOOLTIP")
 
@@ -179,6 +188,17 @@ function DdMeta:ApplyTheme()
     local bw = T:GetToken("borderWidth") or 1
     local tc = T:GetToken("colorText")
     local muted = T:GetToken("colorTextMuted")
+
+    -- Font and size tokens both move at runtime, so re-derive the height unless the
+    -- caller pinned one, and report it so the containing layout re-flows.
+    if self._autoH then
+        local h = T:GetControlHeight("sizeControlLg")
+        if math.abs((self._f:GetHeight() or 0) - h) > 0.5 then
+            self._f:SetHeight(h)
+            S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._f:GetWidth(), h)
+        end
+    end
+
     self._f:SetBackdrop({
         bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
         edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
@@ -199,7 +219,7 @@ end
 -- @return table  Dropdown handle
 function SuuUI.Components.Dropdown(props, parent)
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    f:SetSize(props.w or 160, props.h or 24)
+    f:SetSize(props.w or 160, props.h or SuuUI.Theme:GetControlHeight("sizeControlLg"))
     f:EnableMouse(true)
 
     -- Selected label spans the button, arrow pinned to the right edge
@@ -221,7 +241,7 @@ function SuuUI.Components.Dropdown(props, parent)
 
     local rowList = SuuUI.Layout:CreateContainer({
         host = panel, layout = "flow", dir = "vertical", gap = 0,
-        padding = { top = SuuUI.Theme:GetToken("spaceSm") or 4 },
+        padding = { top = SuuUI.Theme:GetToken("spaceXs") or 4 },
     })
 
     local id = "dd_" .. tostring(f)
@@ -230,6 +250,7 @@ function SuuUI.Components.Dropdown(props, parent)
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,
         _value=props.value, _onChange=props.onChange, _enabled=true,
+        _autoH=props.h == nil,
     }, DdMeta)
 
     if props.value then handle:SetValue(props.value) end

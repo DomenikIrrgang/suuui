@@ -9,7 +9,7 @@ local function Build(entry, parent)
     local row = SuuUI._SettingsRow.Stacked(parent)
 
     local div = C.Divider({ label = entry.label }, row:GetFrame())
-    row:Add(div, { width = "fill", height = 28 })
+    row:Add(div, { width = "fill", height = SuuUI.Theme:GetControlHeight("sizeRow") })
 
     return row
 end

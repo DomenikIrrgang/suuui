@@ -11,8 +11,9 @@ local function Build(entry, pluginId, parent)
 
     local current = SuuUI.Settings:Get(pluginId, entry.key) or entry.default or {1, 1, 1, 1}
 
-    local swatch = C.ColorSwatch({ value = current, w = 22 }, row:GetFrame())
-    row:Add(swatch, { width = 22, height = 22 })
+    -- Size comes from the swatch's own size token
+    local swatch = C.ColorSwatch({ value = current }, row:GetFrame())
+    row:Add(swatch)
 
     S:Connect(swatch, S.SIGNALS.CLICKED, function()
         local val = SuuUI.Settings:Get(pluginId, entry.key) or entry.default or {1, 1, 1, 1}

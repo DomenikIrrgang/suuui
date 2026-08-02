@@ -12,7 +12,8 @@ local function Build(entry, pluginId, parent)
     local tog = C.Toggle({
         value = SuuUI.Settings:Get(pluginId, entry.key),
     }, row:GetFrame())
-    row:Add(tog, { width = 36, height = 18 })
+    -- Size comes from the toggle's own size tokens; omitting the props keeps them
+    row:Add(tog)
 
     S:Connect(tog, S.SIGNALS.VALUE_CHANGED, function(val)
         SuuUI.Settings:Set(pluginId, entry.key, val)

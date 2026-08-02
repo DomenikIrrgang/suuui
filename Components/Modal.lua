@@ -39,6 +39,9 @@ function ModalMeta:Hide()
         onDone   = function()
             self._window:Hide()
             if self._input then self._input:SetValue("") end
+            -- One-shot modals (notices) free themselves once the fade finishes, rather
+            -- than leaving a hidden frame behind on every message.
+            if self._autoDestroy then self:Destroy() end
         end,
     }):Play()
     S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
@@ -68,15 +71,40 @@ function ModalMeta:ApplyTheme()
     if bd then self._window:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
 end
 
+--- Shows a dismissible notice modal for a one-way message.
+-- Use this instead of printing to chat for anything the user needs to acknowledge.
+-- @param props table  { title, message, tone, confirmText, w }
+--   tone: "warning" for a blocked but expected action (deleting a built-in theme),
+--         "danger" for something that actually went wrong, "success" for a completed
+--         action, nil for neutral information
+-- @return table  Modal handle
+function SuuUI.Components.Notice(props)
+    local modal = SuuUI.Components.Modal({
+        title          = props.title,
+        message        = props.message,
+        confirmText    = props.confirmText or "OK",
+        confirmVariant = props.tone,
+        dismissOnly    = true,
+        autoDestroy    = true,
+        w              = props.w,
+    })
+    modal:Show()
+    return modal
+end
+
 --- Creates a modal dialog with optional input field.
 -- Emits CONFIRMED (value), CANCELLED, VISIBILITY_CHANGED.
--- @param props table  { title, message, input, onConfirm, onCancel, confirmText, cancelText, w }
+-- @param props table  { title, message, input, onConfirm, onCancel, confirmText,
+--   cancelText, confirmVariant, dismissOnly, autoDestroy, w }
+--   confirmVariant: nil | "danger" | "success" | "warning" — tints the confirm button
+--   dismissOnly: true drops the cancel button, for notices with nothing to cancel
+--   autoDestroy: true frees the modal once it finishes hiding (one-shot dialogs)
 -- @param parent frame  Optional parent (defaults to UIParent)
 -- @return table  Modal handle
 function SuuUI.Components.Modal(props, parent)
     parent = parent or UIParent
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceMd") or 8
+    local gap = T:GetToken("spaceSm") or 8
     local pad = T:GetToken("spaceLg") or 16
     local w   = props.w or 360
 
@@ -99,7 +127,7 @@ function SuuUI.Components.Modal(props, parent)
 
     local overlayBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
     local overlayTex = overlay:CreateTexture(nil, "BACKGROUND")
-    overlayTex:SetColorTexture(0, 0, 0, T:GetToken("shadowAlpha") or 0.7)
+    overlayTex:SetColorTexture(0, 0, 0, T:GetToken("opacityOverlay") or 0.7)
     overlayBox:Add(overlayTex)
 
     local window = CreateFrame("Frame", nil, shell, "BackdropTemplate")
@@ -109,11 +137,12 @@ function SuuUI.Components.Modal(props, parent)
 
     local id = "modal_" .. tostring(window)
     local handle = setmetatable({
-        _window   = window,
-        _overlay  = overlay,
-        _shell    = shell,
-        _shellBox = shellBox,
-        _eid      = id,
+        _window      = window,
+        _overlay     = overlay,
+        _shell       = shell,
+        _shellBox    = shellBox,
+        _eid         = id,
+        _autoDestroy = props.autoDestroy or false,
     }, ModalMeta)
 
     local root = SuuUI.Layout:CreateContainer({
@@ -125,20 +154,23 @@ function SuuUI.Components.Modal(props, parent)
         padding = { top=pad, right=pad, bottom=pad, left=pad },
     })
 
+    -- Heights omitted throughout: text re-measures itself when a font token changes and
+    -- the input derives its height from the size tokens, so the modal re-flows instead
+    -- of clipping.
     if props.title then
         local title = C.Text({ text=props.title, size="lg", color="text", justify="CENTER" }, root:GetFrame())
-        root:Add(title, { width = "fill", height = 22 })
+        root:Add(title, { width = "fill" })
     end
 
     if props.message then
         local msg = C.Text({ text=props.message, size="md", color="muted", justify="CENTER" }, root:GetFrame())
-        root:Add(msg, { width = "fill", height = 22 })
+        root:Add(msg, { width = "fill" })
     end
 
     local input
     if props.input then
-        input = C.Input({ value = "", w = w - pad * 2, h = 24 }, root:GetFrame())
-        root:Add(input, { width = "fill", height = 24 })
+        input = C.Input({ value = "", w = w - pad * 2 }, root:GetFrame())
+        root:Add(input, { width = "fill" })
         handle._input = input
     end
 
@@ -167,16 +199,24 @@ function SuuUI.Components.Modal(props, parent)
         align  = "center",
     })
 
-    -- Buttons hug their labels, so the row is sized from its content to stay centred
-    local confirmBtn = C.Button({ label = props.confirmText or "Confirm", minW = 100 },
-        btnRow:GetFrame())
-    local cancelBtn  = C.Button({ label = props.cancelText  or "Cancel",  minW = 100 },
-        btnRow:GetFrame())
-
+    -- Buttons hug their labels, so the row is sized from its content to stay centred.
+    -- The intent colour lives on the confirm button, where the action is actually taken,
+    -- rather than on the button that merely opens this dialog.
+    local confirmBtn = C.Button({
+        label   = props.confirmText or "Confirm",
+        minW    = 100,
+        variant = props.confirmVariant,
+    }, btnRow:GetFrame())
     btnRow:Add(confirmBtn)
-    btnRow:Add(cancelBtn)
     S:Connect(confirmBtn, S.SIGNALS.CLICKED, confirm)
-    S:Connect(cancelBtn,  S.SIGNALS.CLICKED, cancel)
+
+    -- A notice has nothing to cancel: one button that just dismisses it
+    if not props.dismissOnly then
+        local cancelBtn = C.Button({ label = props.cancelText or "Cancel", minW = 100 },
+            btnRow:GetFrame())
+        btnRow:Add(cancelBtn)
+        S:Connect(cancelBtn, S.SIGNALS.CLICKED, cancel)
+    end
 
     local rowW = btnRow:GetContentSize()
     root:Add(btnRow, { width = rowW })

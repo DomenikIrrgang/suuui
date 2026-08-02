@@ -12,9 +12,9 @@ local function Build(entry, pluginId, parent)
     local inp = C.Input({
         value = SuuUI.Settings:Get(pluginId, entry.key) or "",
         w     = 140,
-        h     = 22,
     }, row:GetFrame())
-    row:Add(inp, { width = 140, height = 22 })
+    -- Height omitted: the input derives it from its size and font tokens
+    row:Add(inp, { width = 140 })
 
     S:Connect(inp, S.SIGNALS.TEXT_CHANGED, function(text)
         SuuUI.Settings:Set(pluginId, entry.key, text)

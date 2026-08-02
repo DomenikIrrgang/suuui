@@ -49,12 +49,12 @@ local container = SuuUI.Layout:CreateContainer({
   parent  = parentFrame,
   layout  = "flow",           -- "flow" | "grid" | "anchor"
   dir     = "vertical",       -- "vertical" | "horizontal" (flow only)
-  gap     = T:GetToken("spaceSm"),  -- spacing between children (4px)
+  gap     = T:GetToken("spaceXs"),  -- spacing between children (4px)
   padding = {                 -- space from container edges
-    top    = T:GetToken("spaceMd"),  -- 8px
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),  -- 8px
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
   cols = 2,                   -- column count (grid only)
 })
@@ -67,12 +67,32 @@ container:Add(childFrame, {
 ```
 
 **Spacing Tokens:**
-- `spaceSm` = 4px  — tight spacing (list gaps, compact UIs)
-- `spaceMd` = 8px  — standard spacing (most containers)
+- `spaceXs` = 4px  — tight spacing (list gaps, compact UIs)
+- `spaceSm` = 8px  — standard spacing (most containers)
+- `spaceMd` = 12px — roomier rows and insets
 - `spaceLg` = 16px — loose spacing (section separation)
 - `spaceXl` = 24px — major spacing (page-level separation)
 
 Use space tokens for both gaps and padding to maintain consistent visual rhythm.
+
+**Size tokens, not literal heights.** Font sizes are user-editable, so a hardcoded
+control height clips its text once the font outgrows it. Omit `height` and let the
+component derive it, or read the token when the container needs the number:
+
+| Token | Used for |
+|---|---|
+| `sizeControlSm` | toggle, colour swatch, minimap button |
+| `sizeControlMd` | input, dropdown option row, window close button |
+| `sizeControlLg` | dropdown, primary button rows |
+| `sizeRow` | settings rows, section dividers |
+| `sizeNavRow` | settings nav items |
+| `sizeTitleBar` | window title strip |
+| `sizeIcon` | icons, resize grip, scroll thumb minimum |
+| `sizeScrollbar` | scrollbar track and thumb width |
+
+`Theme:GetControlHeight(sizeKey, fontKey)` returns the token floored against the font
+metrics — use it for anything that holds text. Read the token directly for elements that
+do not (`GetToken("sizeControlSm")`).
 
 ---
 
@@ -98,7 +118,7 @@ to the far edge — that is the canonical label-left / control-right row:
 ```lua
 local row = SuuUI.Layout:CreateContainer({
   parent = parent, layout = "flow", dir = "horizontal",
-  gap = T:GetToken("spaceMd"), align = "center", h = 28,
+  gap = T:GetToken("spaceSm"), align = "center", h = 28,
 })
 row:Add(label,  { width = "fill" })   -- eats the slack
 row:Add(toggle, { width = 36, height = 18 })  -- lands on the right, vertically centred
@@ -225,12 +245,12 @@ local list = SuuUI.Layout:CreateContainer({
   parent  = content,
   layout  = "flow",
   dir     = "vertical",
-  gap     = T:GetToken("spaceSm"),
+  gap     = T:GetToken("spaceXs"),
   padding = {
-    top    = T:GetToken("spaceMd"),
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 list:Add(item1, { width = "fill", height = 32 })
@@ -241,7 +261,7 @@ local buttons = SuuUI.Layout:CreateContainer({
   parent = footer,
   layout = "flow",
   dir    = "horizontal",
-  gap    = T:GetToken("spaceMd"),
+  gap    = T:GetToken("spaceSm"),
 })
 buttons:Add(cancelBtn, { width = 80, height = 24 })
 buttons:Add(okBtn, { width = 80, height = 24 })
@@ -290,12 +310,12 @@ local grid = SuuUI.Layout:CreateContainer({
   parent  = content,
   layout  = "grid",
   cols    = 3,
-  gap     = T:GetToken("spaceMd"),
+  gap     = T:GetToken("spaceSm"),
   padding = {
-    top    = T:GetToken("spaceMd"),
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 
@@ -321,12 +341,12 @@ local container = SuuUI.Layout:CreateContainer({
   parent  = content,
   layout  = "flow",
   dir     = "vertical",
-  gap     = T:GetToken("spaceSm"),
+  gap     = T:GetToken("spaceXs"),
   padding = {
-    top    = T:GetToken("spaceMd"),
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 container:GetFrame():SetAllPoints(content)
@@ -349,11 +369,11 @@ local container = SuuUI.Layout:CreateContainer({
   parent  = contentFrame,
   layout  = "flow",
   dir     = "vertical",
-  gap     = T:GetToken("spaceSm"),
+  gap     = T:GetToken("spaceXs"),
   padding = {
     top    = 0,
     right  = 0,
-    bottom = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceXs"),
     left   = 0,
   },
 })
@@ -372,12 +392,12 @@ local form = SuuUI.Layout:CreateContainer({
   parent  = panel,
   layout  = "grid",
   cols    = 2,
-  gap     = T:GetToken("spaceMd"),
+  gap     = T:GetToken("spaceSm"),
   padding = {
-    top    = T:GetToken("spaceMd"),
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 

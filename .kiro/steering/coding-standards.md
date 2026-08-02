@@ -48,12 +48,12 @@ local container = SuuUI.Layout:CreateContainer({
   parent  = parent,
   layout  = "flow",
   dir     = "vertical",
-  gap     = T:GetToken("spaceSm"),      -- use space tokens for gaps
+  gap     = T:GetToken("spaceXs"),      -- use space tokens for gaps
   padding = {
-    top    = T:GetToken("spaceMd"),     -- use space tokens for padding
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),     -- use space tokens for padding
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 container:Add(btn, { width = "fill", height = 32 })
@@ -61,10 +61,27 @@ container:Add(row, { width = "fill" })
 ```
 
 **Spacing token usage:**
-- Use `spaceSm` (4px) for tight spacing - list gaps, compact UIs
-- Use `spaceMd` (8px) for standard spacing - most containers, panels
+- Use `spaceXs` (4px) for tight spacing - list gaps, compact UIs
+- Use `spaceSm` (8px) for standard spacing - most containers, panels
+- Use `spaceMd` (12px) for roomier rows and insets
 - Use `spaceLg` (16px) for loose spacing - section separation
 - Use `spaceXl` (24px) for major spacing - page-level separation
+
+**Never hardcode a control height.** Font size tokens are user-editable, so a control
+pinned to a literal height clips its own text once the font grows past it. Read the size
+tokens instead, and floor text-bearing controls against the font metrics:
+
+```lua
+-- ❌ FORBIDDEN
+row:Add(input, { width = 140, height = 22 })
+
+-- ✅ REQUIRED: the component derives its own height from tokens
+row:Add(input, { width = 140 })
+
+-- ✅ REQUIRED when a container needs the number itself
+local h = T:GetControlHeight("sizeControlLg")   -- max(token, fontSizeMd + spaceXs*2)
+local n = T:GetToken("sizeControlSm")           -- no text: the token as-is
+```
 
 **Layout properties you MUST use:**
 - `width = "fill"` — stretch to container width (respects padding)

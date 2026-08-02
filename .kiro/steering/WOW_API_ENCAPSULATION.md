@@ -96,7 +96,7 @@ local row = SuuUI.Layout:CreateContainer({
   parent = parent,
   layout = "flow",
   dir    = "horizontal",
-  gap    = T:GetToken("spaceSm"),
+  gap    = T:GetToken("spaceXs"),
 })
 row:Add(label:GetFrame(), { width = "fill" })
 row:Add(input:GetFrame(), { width = 80, height = 22 })

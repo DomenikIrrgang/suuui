@@ -248,12 +248,12 @@ local col = SuuUI.Layout:CreateContainer({
   parent  = contentFrame,
   layout  = "flow",
   dir     = "vertical",
-  gap     = T:GetToken("spaceSm"),
+  gap     = T:GetToken("spaceXs"),
   padding = {
-    top    = T:GetToken("spaceMd"),
-    right  = T:GetToken("spaceMd"),
-    bottom = T:GetToken("spaceMd"),
-    left   = T:GetToken("spaceMd"),
+    top    = T:GetToken("spaceSm"),
+    right  = T:GetToken("spaceSm"),
+    bottom = T:GetToken("spaceSm"),
+    left   = T:GetToken("spaceSm"),
   },
 })
 
@@ -300,7 +300,7 @@ A label-left / control-right row is a horizontal flow where the label fills:
 ```lua
 local row = SuuUI.Layout:CreateContainer({
   parent = parent, layout = "flow", dir = "horizontal",
-  gap = T:GetToken("spaceMd"), align = "center", h = 28,
+  gap = T:GetToken("spaceSm"), align = "center", h = 28,
 })
 row:Add(label,  { width = "fill" })
 row:Add(toggle, { width = 36, height = 18 })
@@ -316,13 +316,72 @@ Always use theme tokens for consistent spacing:
 
 ```lua
 local T = SuuUI.Theme
-gap     = T:GetToken("spaceSm")   -- 4px:  tight spacing (list gaps)
-gap     = T:GetToken("spaceMd")   -- 8px:  standard spacing (most containers)
+gap     = T:GetToken("spaceXs")   -- 4px:  tight spacing (list gaps)
+gap     = T:GetToken("spaceSm")   -- 8px:  standard spacing (most containers)
+gap     = T:GetToken("spaceMd")   -- 12px: roomier rows and insets
 gap     = T:GetToken("spaceLg")   -- 16px: loose spacing (section separation)
 gap     = T:GetToken("spaceXl")   -- 24px: major spacing (page-level)
 ```
 
 Use the same tokens for both `gap` and `padding` to maintain visual rhythm.
+
+**Size Tokens:**
+
+Never hardcode a control height. Font sizes are user-editable, so a literal height clips
+its own text once the font grows past it. Omit `height` and let the component size itself
+from tokens, or read the token when your container needs the number:
+
+```lua
+row:Add(input, { width = 140 })                       -- component derives its height
+local h = T:GetControlHeight("sizeControlLg")         -- text-bearing: floored by font
+local n = T:GetToken("sizeControlSm")                 -- no text: token as-is
+```
+
+`sizeControlSm` / `Md` / `Lg`, `sizeRow`, `sizeNavRow`, `sizeTitleBar`, `sizeIcon`,
+`sizeScrollbar`. See `LAYOUT_SYSTEM.md` for what each is used for.
+
+---
+
+## Messages, Warnings, and Confirmations
+
+Don't print errors to chat — they scroll away and carry no styling. Use `Notice`:
+
+```lua
+local C = SuuUI.Components
+
+-- Blocked but expected: the user asked for something the rules disallow
+C.Notice({ title = "Not Allowed", message = "Built-in themes cannot be deleted.",
+           tone = "warning" })
+
+-- Something actually failed
+local ok, err = pcall(risky)
+if not ok then
+  C.Notice({ title = "Error", message = tostring(err), tone = "danger" })
+end
+```
+
+Notices are dismiss-only and free themselves when closed, so calling one per failure
+does not accumulate frames. Completed actions can confirm in chat instead — blocking on
+a dialog to say "done" costs a click for nothing.
+
+**Intent colour goes on the button that commits the action, never on the one that opens
+the dialog:**
+
+```lua
+-- ❌ the page shouts before the user has asked for anything
+local deleteBtn = C.Button({ label = "Delete", variant = "danger" }, row)
+
+-- ✅ neutral trigger, intent on the confirm button inside the dialog
+local deleteBtn = C.Button({ label = "Delete" }, row)
+C.Modal({ title = "Delete Profile", message = "This cannot be undone.",
+          confirmText = "Delete", confirmVariant = "danger",
+          onConfirm = doDelete }):Show()
+
+-- ✅ creation confirms in success
+C.Modal({ title = "Create Profile", message = "Name:", input = true,
+          confirmText = "Create", confirmVariant = "success",
+          onConfirm = doCreate }):Show()
+```
 
 **NEVER call SetPoint. It is not available to you.**
 

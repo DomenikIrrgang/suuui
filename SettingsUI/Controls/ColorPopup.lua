@@ -50,7 +50,7 @@ function M.Open(swatch, value, onChange)
     activeHandler = onChange
     p:SetValue(value[1], value[2], value[3], value[4] or 1)
 
-    local gap = SuuUI.Theme:GetToken("spaceSm") or 4
+    local gap = SuuUI.Theme:GetToken("spaceXs") or 4
     if SuuUI.UIRoot and SuuUI.UIRoot:GetRoot() then
         SuuUI.UIRoot:UpdateElementAnchor(p:GetFrame(), {
             point         = "TOPRIGHT",

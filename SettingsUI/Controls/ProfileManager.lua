@@ -10,9 +10,22 @@ local function profileOptions()
     return options
 end
 
+-- A blocked but expected action: the user asked for something the rules disallow.
+local function warn(message)
+    C.Notice({ title = "Not Allowed", message = message, tone = "warning" })
+end
+
+-- Something actually failed. Surfaced in danger colours so it reads differently to warn.
 local function report(ok, err)
-    if not ok then print("|cffff0000SuuUI:|r " .. tostring(err)) end
+    if not ok then
+        C.Notice({ title = "Error", message = tostring(err), tone = "danger" })
+    end
     return ok
+end
+
+-- Completed actions confirm in chat rather than blocking on a dialog
+local function say(message)
+    print(SuuUI.Theme:GetColorCode("colorSuccess") .. "SuuUI:|r " .. message)
 end
 
 --- Builds the profile manager page section.
@@ -21,8 +34,8 @@ end
 -- @return table  Root container handle
 local function Build(entry, parent)
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceMd") or 8
-    local pad = T:GetToken("spaceMd") or 8
+    local gap = T:GetToken("spaceSm") or 8
+    local pad = T:GetToken("spaceSm") or 8
 
     local root = SuuUI.Layout:CreateContainer({
         parent  = parent,
@@ -33,13 +46,14 @@ local function Build(entry, parent)
     })
 
     -- Current profile row
+    local rowH = T:GetControlHeight("sizeControlLg")
     local currentRow = SuuUI.Layout:CreateContainer({
         parent = root:GetFrame(),
         layout = "flow",
         dir    = "horizontal",
         gap    = gap,
         align  = "center",
-        h      = 24,
+        h      = rowH,
     })
     local currentLbl = C.Text({ text = "Current Profile:", size = "sm", color = "muted" },
         currentRow:GetFrame())
@@ -47,7 +61,7 @@ local function Build(entry, parent)
         currentRow:GetFrame())
     currentRow:Add(currentLbl, { width = 100 })
     currentRow:Add(currentName, { width = "fill" })
-    root:Add(currentRow, { width = "fill", height = 24 })
+    root:Add(currentRow, { width = "fill", height = rowH })
 
     -- Profile selector
     local profileDD = C.Dropdown({
@@ -55,7 +69,8 @@ local function Build(entry, parent)
         value   = SuuUI.Profiles:GetActiveName(),
         w       = 200,
     }, root:GetFrame())
-    root:Add(profileDD, { width = 200, height = 24 })
+    -- Height omitted: the dropdown derives it from its size and font tokens
+    root:Add(profileDD, { width = 200 })
 
     local function switchTo(name)
         SuuUI.Profiles:SetActive(name)
@@ -81,7 +96,8 @@ local function Build(entry, parent)
         align  = "center",
     })
 
-    -- Buttons size themselves to their labels; the row hugs them
+    -- Buttons size themselves to their labels; the row hugs them. These only open a
+    -- dialog, so the intent colour goes on the confirm button inside it.
     local createBtn = C.Button({ label = "Create", minW = 80 }, btnRow:GetFrame())
     local copyBtn   = C.Button({ label = "Copy",   minW = 80 }, btnRow:GetFrame())
     local deleteBtn = C.Button({ label = "Delete", minW = 80 }, btnRow:GetFrame())
@@ -93,7 +109,7 @@ local function Build(entry, parent)
     S:Connect(createBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
             title = "Create Profile", message = "Enter new profile name:",
-            input = true, confirmText = "Create",
+            input = true, confirmText = "Create", confirmVariant = "success",
             onConfirm = function(name)
                 if not name or name == "" then return end
                 if report(pcall(SuuUI.Profiles.Create, SuuUI.Profiles, name)) then
@@ -108,7 +124,7 @@ local function Build(entry, parent)
         C.Modal({
             title = "Copy Profile",
             message = "Copy '" .. SuuUI.Profiles:GetActiveName() .. "' to:",
-            input = true, confirmText = "Copy",
+            input = true, confirmText = "Copy", confirmVariant = "success",
             onConfirm = function(name)
                 if not name or name == "" then return end
                 local ok, err = pcall(function()
@@ -126,13 +142,13 @@ local function Build(entry, parent)
     S:Connect(deleteBtn, S.SIGNALS.CLICKED, function()
         local active = SuuUI.Profiles:GetActiveName()
         if active == "Default" then
-            print("|cffff0000SuuUI:|r Cannot delete Default profile")
+            warn("The Default profile cannot be deleted. Switch to another profile first.")
             return
         end
         C.Modal({
             title = "Delete Profile",
             message = "Delete '" .. active .. "'? This cannot be undone.",
-            confirmText = "Delete",
+            confirmText = "Delete", confirmVariant = "danger",
             onConfirm = function()
                 if report(pcall(SuuUI.Profiles.Delete, SuuUI.Profiles, active)) then
                     refreshOptions()
@@ -149,12 +165,12 @@ local function Build(entry, parent)
     S:Connect(resetBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
             title = "Reset Settings", message = "Reset all settings to defaults?",
-            confirmText = "Reset",
+            confirmText = "Reset", confirmVariant = "danger",
             onConfirm = function()
                 for _, plugin in ipairs(SuuUI.Plugins:GetAll()) do
                     SuuUI.Settings:ResetAll(plugin.id)
                 end
-                print("|cff00ff00SuuUI:|r Profile settings reset to defaults")
+                say("Profile settings reset to defaults")
             end,
         }):Show()
     end)

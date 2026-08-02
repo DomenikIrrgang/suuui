@@ -4,7 +4,11 @@ local S = SuuUI.UISignals
 
 local WIN_W, WIN_H = 780, 520
 local NAV_W, DIV_W = 180, 3
-local ROW_H        = 32
+
+-- Nav rows hold text, so their height is floored against the font size token
+local function navRowHeight()
+    return SuuUI.Theme:GetControlHeight("sizeNavRow")
+end
 
 local win, navScroll, contentScroll, navList
 local navItems = {}
@@ -25,7 +29,7 @@ end
 
 local function buildNav()
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceSm") or 4
+    local gap = T:GetToken("spaceXs") or 4
 
     if navList then navList:Destroy() end
     for _, item in ipairs(navItems) do item.nav:Destroy() end
@@ -55,9 +59,10 @@ local function buildNav()
     tinsert(entries, 1, { id = "_profiles", name = "Profiles" })
     tinsert(entries, 1, { id = "_theme",    name = "Theme" })
 
+    local rowH = navRowHeight()
     for _, entry in ipairs(entries) do
-        local nav = C.NavItem({ label = entry.name, h = ROW_H }, navList:GetFrame())
-        navList:Add(nav, { width = "fill", height = ROW_H })
+        local nav = C.NavItem({ label = entry.name, h = rowH }, navList:GetFrame())
+        navList:Add(nav, { width = "fill", height = rowH })
 
         local pid = entry.id
         S:Connect(nav, S.SIGNALS.CLICKED, function() selectPlugin(pid) end)
@@ -147,14 +152,15 @@ end
 -- placed by an anchor container rather than by hand.
 SuuUI.Events:On("SUUUI_CORE_READY", function()
     local host = SuuUI.Layout:CreateContainer({ host = Minimap, layout = "anchor" })
+    local size = SuuUI.Theme:GetToken("sizeControlSm") or 18
     local btn = C.IconButton({
         icon = "Interface\\Icons\\INV_Misc_Gem_01",
-        w    = 20,
+        w    = size,
     }, Minimap)
     host:Add(btn, {
         anchor = {
             point = "TOPRIGHT", relativePoint = "TOPRIGHT",
-            x = -2, y = -2, width = 20, height = 20,
+            x = -2, y = -2, width = size, height = size,
         },
     })
     S:Connect(btn, S.SIGNALS.CLICKED, function()

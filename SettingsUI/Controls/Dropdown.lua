@@ -14,7 +14,8 @@ local function Build(entry, pluginId, parent)
         value   = SuuUI.Settings:Get(pluginId, entry.key),
         w       = 140,
     }, row:GetFrame())
-    row:Add(dd, { width = 140, height = 24 })
+    -- Height omitted: the dropdown derives it from its size and font tokens
+    row:Add(dd, { width = 140 })
 
     S:Connect(dd, S.SIGNALS.VALUE_CHANGED, function(val)
         SuuUI.Settings:Set(pluginId, entry.key, val)

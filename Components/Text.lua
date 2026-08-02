@@ -6,7 +6,7 @@ local colmap  = {
     text      = "colorText",
     muted     = "colorTextMuted",
     textMuted = "colorTextMuted",
-    disable   = "colorTextDisable",
+    disable   = "colorTextDisabled",
     accent    = "colorAccent",
 }
 

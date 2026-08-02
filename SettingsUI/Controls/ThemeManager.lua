@@ -10,9 +10,22 @@ local function themeOptions()
     return options
 end
 
+-- A blocked but expected action: the user asked for something the rules disallow.
+local function warn(message)
+    C.Notice({ title = "Not Allowed", message = message, tone = "warning" })
+end
+
+-- Something actually failed. Surfaced in danger colours so it reads differently to warn.
 local function report(ok, err)
-    if not ok then print("|cffff0000SuuUI:|r " .. tostring(err)) end
+    if not ok then
+        C.Notice({ title = "Error", message = tostring(err), tone = "danger" })
+    end
     return ok
+end
+
+-- Completed actions confirm in chat rather than blocking on a dialog
+local function say(message)
+    print(SuuUI.Theme:GetColorCode("colorSuccess") .. "SuuUI:|r " .. message)
 end
 
 local function setToken(key, value)
@@ -27,12 +40,13 @@ local function colourRow(parent, def, editors)
     local row, _ = SuuUI._SettingsRow.Labelled(parent, def.label)
     local value  = T:GetToken(def.key) or {1, 1, 1, 1}
 
-    local swatch = C.ColorSwatch({ value = value, w = 24 }, row:GetFrame())
-    local hex    = C.Input({ value = "", w = 80, h = 22 }, row:GetFrame())
+    local swatch = C.ColorSwatch({ value = value }, row:GetFrame())
+    local hex    = C.Input({ value = "", w = 80 }, row:GetFrame())
     hex:SetValue(swatch:GetHex())
 
-    row:Add(hex,    { width = 80, height = 22 })
-    row:Add(swatch, { width = 24, height = 24 })
+    -- Heights omitted: both controls derive them from the size tokens they are editing
+    row:Add(hex, { width = 80 })
+    row:Add(swatch)
 
     local function applyColor(r, g, b, a)
         if setToken(def.key, { r, g, b, a }) then
@@ -98,8 +112,8 @@ end
 -- @return table  Root container handle
 local function Build(entry, parent)
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceMd") or 8
-    local pad = T:GetToken("spaceMd") or 8
+    local gap = T:GetToken("spaceSm") or 8
+    local pad = T:GetToken("spaceSm") or 8
     local editors = {}
 
     local root = SuuUI.Layout:CreateContainer({
@@ -111,20 +125,21 @@ local function Build(entry, parent)
     })
 
     -- Active theme row
+    local rowH = T:GetControlHeight("sizeControlLg")
     local currentRow = SuuUI.Layout:CreateContainer({
         parent = root:GetFrame(),
-        layout = "flow", dir = "horizontal", gap = gap, align = "center", h = 24,
+        layout = "flow", dir = "horizontal", gap = gap, align = "center", h = rowH,
     })
     local currentLbl  = C.Text({ text="Active Theme:", size="sm", color="muted" }, currentRow:GetFrame())
     local currentName = C.Text({ text=T:GetActive(), size="md", color="accent" }, currentRow:GetFrame())
     currentRow:Add(currentLbl,  { width = 100 })
     currentRow:Add(currentName, { width = "fill" })
-    root:Add(currentRow, { width = "fill", height = 24 })
+    root:Add(currentRow, { width = "fill", height = rowH })
 
     local themeDD = C.Dropdown({
         options = themeOptions(), value = T:GetActive(), w = 200,
     }, root:GetFrame())
-    root:Add(themeDD, { width = 200, height = 24 })
+    root:Add(themeDD, { width = 200 })
 
     local function syncEditable()
         local builtin = SuuUI.Theme:IsBuiltin(SuuUI.Theme:GetActive())
@@ -147,6 +162,8 @@ local function Build(entry, parent)
         layout = "flow", dir = "horizontal", gap = gap, align = "center",
     })
     -- Buttons size themselves to their labels; the row hugs them
+    -- These buttons only open a dialog; the intent colour belongs on the confirm button
+    -- inside it, where the action is actually committed.
     local createBtn = C.Button({ label="Create", minW = 80 }, btnRow:GetFrame())
     local deleteBtn = C.Button({ label="Delete", minW = 80 }, btnRow:GetFrame())
     local resetBtn  = C.Button({ label="Reset",  minW = 80 }, btnRow:GetFrame())
@@ -158,7 +175,7 @@ local function Build(entry, parent)
     S:Connect(createBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
             title="Create Theme", message="Enter new theme name:",
-            input=true, confirmText="Create",
+            input=true, confirmText="Create", confirmVariant="success",
             onConfirm = function(name)
                 if not name or name == "" then return end
                 if report(pcall(SuuUI.Theme.CreateUserTheme, SuuUI.Theme, name, "Modern")) then
@@ -173,13 +190,13 @@ local function Build(entry, parent)
     S:Connect(deleteBtn, S.SIGNALS.CLICKED, function()
         local active = SuuUI.Theme:GetActive()
         if SuuUI.Theme:IsBuiltin(active) then
-            print("|cffff0000SuuUI:|r Cannot delete built-in theme")
+            warn("Built-in themes cannot be deleted. Create your own theme to customise it.")
             return
         end
         C.Modal({
             title="Delete Theme",
             message="Delete '" .. active .. "'? This cannot be undone.",
-            confirmText="Delete",
+            confirmText="Delete", confirmVariant="danger",
             onConfirm = function()
                 if report(pcall(SuuUI.Theme.DeleteUserTheme, SuuUI.Theme, active)) then
                     themeDD:SetOptions(themeOptions())
@@ -192,17 +209,17 @@ local function Build(entry, parent)
     S:Connect(resetBtn, S.SIGNALS.CLICKED, function()
         local active = SuuUI.Theme:GetActive()
         if SuuUI.Theme:IsBuiltin(active) then
-            print("|cffff0000SuuUI:|r Cannot reset built-in theme")
+            warn("Built-in themes have no overrides to reset.")
             return
         end
         C.Modal({
             title="Reset Theme",
             message="Reset '" .. active .. "' to its base theme values?",
-            confirmText="Reset",
+            confirmText="Reset", confirmVariant="danger",
             onConfirm = function()
                 if report(pcall(SuuUI.Theme.ResetUserTheme, SuuUI.Theme, active)) then
                     refreshAll()
-                    print("|cff00ff00SuuUI:|r Theme reset to defaults")
+                    say("Theme reset to defaults")
                 end
             end,
         }):Show()

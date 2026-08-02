@@ -1,16 +1,41 @@
 local pairs, assert, type, ipairs = pairs, assert, type, ipairs
+local max, floor = math.max, math.floor
+local format = string.format
 
 local M = {}
 local builtins  = {}   -- [name] = tokenTable  (read-only)
 local active    = nil  -- current theme name
 local resolved  = {}   -- flat resolved token cache for active theme
 
+-- Tokens renamed or dropped when the palette moved to a two-tier scale. User themes
+-- stored under the old keys are translated on read so saved overrides keep working.
+-- false means the token no longer exists and the override is discarded.
+local migrations = {
+    colorTextDisable = "colorTextDisabled",
+    shadowAlpha      = "opacityOverlay",
+    spaceSm          = "spaceXs",   -- old Sm was 4px, now spaceXs
+    spaceMd          = "spaceSm",   -- old Md was 8px, now spaceSm
+    borderRadius     = false,       -- never implemented
+    fontFamilyMono   = false,       -- WoW ships no monospace face
+}
+
+-- A token value may be:
+--   a literal (number, string path, RGBA array)
+--   an alias: the string key of another token
+--   a derived colour: { ref = tokenKey, alpha = tokenKey|number }
 local function resolve(tokens, key, depth)
     depth = depth or 0
     if depth > 8 then return nil end
     local v = tokens[key]
     if type(v) == "string" and tokens[v] then
         return resolve(tokens, v, depth + 1)
+    end
+    if type(v) == "table" and v.ref then
+        local base = resolve(tokens, v.ref, depth + 1)
+        if type(base) ~= "table" then return nil end
+        local a = v.alpha
+        if type(a) == "string" then a = resolve(tokens, a, depth + 1) end
+        return { base[1], base[2], base[3], a or base[4] or 1 }
     end
     return v
 end
@@ -19,17 +44,21 @@ local function buildCache(themeName)
     resolved = {}
     local profile = SuuUI.Profiles:GetActive()
     local userTheme = (profile and profile.themes and profile.themes[themeName]) or {}
-    
+
     -- Determine base theme: if user theme has _base, use it; otherwise use themeName
     local baseName = userTheme._base or themeName
     local base = builtins[baseName] or {}
-    
+
     local merged = {}
     for k, v in pairs(base) do merged[k] = v end
-    -- Apply user overrides (skip _base meta key)
-    for k, v in pairs(userTheme) do 
-        if k ~= "_base" then
-            merged[k] = v 
+    -- Themes saved before the two-tier palette carry no version stamp; their keys are
+    -- translated. Stamped themes are already using current names.
+    local legacy = userTheme._tokenVersion == nil
+    for k, v in pairs(userTheme) do
+        if k ~= "_base" and k ~= "_tokenVersion" then
+            local target = k
+            if legacy and migrations[k] ~= nil then target = migrations[k] end
+            if target then merged[target] = v end
         end
     end
     for k in pairs(merged) do
@@ -49,6 +78,31 @@ end
 -- @return any
 function M:GetToken(key)
     return resolved[key]
+end
+
+--- Returns a colour token as a WoW chat escape prefix, e.g. "|cffff4040".
+-- Lets chat output use the theme's intent colours instead of hardcoded literals.
+-- @param key string  Colour token key
+-- @return string
+function M:GetColorCode(key)
+    local c = resolved[key]
+    if type(c) ~= "table" then return "|cffffffff" end
+    return format("|cff%02x%02x%02x",
+        floor(c[1] * 255 + 0.5), floor(c[2] * 255 + 0.5), floor(c[3] * 255 + 0.5))
+end
+
+--- Returns a control height token floored against the current font metrics.
+-- Font sizes are user-editable, so a control that holds text must not be pinned to a
+-- fixed height or the text clips once the font grows past it. Controls with no text
+-- (toggles, swatches) should read the size token directly instead.
+-- @param sizeKey string   Size token, e.g. "sizeControlMd"
+-- @param fontKey string   Optional font size token, defaults to "fontSizeMd"
+-- @return number
+function M:GetControlHeight(sizeKey, fontKey)
+    local base = resolved[sizeKey] or 22
+    local font = resolved[fontKey or "fontSizeMd"] or 13
+    local pad  = resolved.spaceXs or 4
+    return max(base, font + pad * 2)
 end
 
 --- Sets the active theme and fires SUUUI_THEME_CHANGED.
@@ -100,7 +154,7 @@ function M:CreateUserTheme(name, baseTheme)
     if not profile.themes then profile.themes = {} end
     assert(not profile.themes[name] and not builtins[name],
         "SuuUI Theme: theme already exists: " .. name)
-    profile.themes[name] = { _base = baseTheme }
+    profile.themes[name] = { _base = baseTheme, _tokenVersion = 2 }
 end
 
 --- Deletes a user theme. Built-in themes cannot be deleted.
@@ -120,9 +174,9 @@ function M:ResetUserTheme(name)
     assert(profile.themes and profile.themes[name],
         "SuuUI Theme: user theme not found: " .. name)
     
-    -- Keep only the _base field, clear all token overrides
+    -- Keep only the meta fields, clear all token overrides
     local baseTheme = profile.themes[name]._base or "Modern"
-    profile.themes[name] = { _base = baseTheme }
+    profile.themes[name] = { _base = baseTheme, _tokenVersion = 2 }
     
     if active == name then 
         buildCache(name)
@@ -140,6 +194,7 @@ function M:SetUserToken(themeName, key, value)
     assert(profile.themes and profile.themes[themeName],
         "SuuUI Theme: user theme not found: " .. themeName)
     profile.themes[themeName][key] = value
+    profile.themes[themeName]._tokenVersion = 2
     if active == themeName then 
         buildCache(themeName)
         SuuUI.Events:Emit("SUUUI_THEME_CHANGED", themeName)

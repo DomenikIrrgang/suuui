@@ -213,8 +213,8 @@ end
 -- @return table  ColorPicker handle
 function SuuUI.Components.ColorPicker(props, parent)
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceSm") or 4
-    local pad = T:GetToken("spaceMd") or 8
+    local gap = T:GetToken("spaceXs") or 4
+    local pad = T:GetToken("spaceSm") or 8
 
     local init = props.value or {1, 1, 1, 1}
     local r0, g0, b0, a0 = init[1], init[2], init[3], init[4] or 1
@@ -278,11 +278,13 @@ function SuuUI.Components.ColorPicker(props, parent)
     local preview = previewFrame:CreateTexture(nil, "ARTWORK")
     preview:SetColorTexture(r0, g0, b0, a0)
     previewBox:Add(preview)
-    rightCol:Add(previewFrame, { width = 96, height = 92 })
+    -- The preview absorbs whatever height the hex field does not need, so a larger font
+    -- token grows the field instead of overflowing the fixed-height column.
+    rightCol:Add(previewFrame, { width = 96, height = "fill" })
 
-    local hexInput = C.Input({ value = toHex(r0,g0,b0,a0), w = 96, h = 20, maxChars = 8 },
+    local hexInput = C.Input({ value = toHex(r0,g0,b0,a0), w = 96, maxChars = 8 },
         rightCol:GetFrame())
-    rightCol:Add(hexInput, { width = 96, height = 20 })
+    rightCol:Add(hexInput, { width = 96 })
 
     topRow:Add(rightCol, { width = 96, height = SV_SIZE })
     root:Add(topRow, { width = "fill", height = SV_SIZE })

@@ -1,3 +1,4 @@
+local abs = math.abs
 local S = SuuUI.UISignals
 
 local TogMeta = {}
@@ -8,7 +9,11 @@ function TogMeta:GetHeight()    return self._f:GetHeight() end
 function TogMeta:IsShown()      return self._f:IsShown() end
 function TogMeta:GetFrame()     return self._f end
 
+--- Sets an explicit size, dropping token-driven sizing.
+-- @param w number
+-- @param h number
 function TogMeta:SetSize(w, h)
+    self._autoSize = false
     self._f:SetSize(w, h)
 end
 
@@ -88,11 +93,21 @@ function TogMeta:_render(snap)
         }):Play()
     end
 
-    local kc = en and {1,1,1,1} or T:GetToken("colorTextDisable") or {0.4,0.4,0.4,1}
+    local kc = en and {1,1,1,1} or T:GetToken("colorTextDisabled") or {0.4,0.4,0.4,1}
     self._knob:SetBackdropColor(kc[1], kc[2], kc[3], kc[4])
 end
 
 function TogMeta:ApplyTheme()
+    -- Size tokens are user-editable; re-derive unless the caller pinned a size. The
+    -- frame's resize hook re-renders and emits SIZE_CHANGED.
+    if self._autoSize then
+        local T = SuuUI.Theme
+        local w = T:GetToken("sizeToggleW") or 36
+        local h = T:GetToken("sizeControlSm") or 18
+        if abs((self._f:GetWidth() or 0) - w) > 0.5 or abs((self._f:GetHeight() or 0) - h) > 0.5 then
+            self._f:SetSize(w, h)
+        end
+    end
     self:_render(true)
 end
 
@@ -102,8 +117,11 @@ end
 -- @param parent frame
 -- @return table  Toggle handle
 function SuuUI.Components.Toggle(props, parent)
-    local w = props.w or 36
-    local h = props.h or 18
+    -- A toggle carries no text, so its size comes straight from the size tokens and is
+    -- not floored against the font size.
+    local T0 = SuuUI.Theme
+    local w = props.w or T0:GetToken("sizeToggleW") or 36
+    local h = props.h or T0:GetToken("sizeControlSm") or 18
 
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
@@ -151,6 +169,7 @@ function SuuUI.Components.Toggle(props, parent)
         _box=box, _knobBox=knobBox, _knobAnchor=knobAnchor,
         _eid=id, _value=props.value == true, _enabled=true,
         _onChange=props.onChange,
+        _autoSize=props.w == nil and props.h == nil,
     }, TogMeta)
 
     f:SetScript("OnMouseUp", function()

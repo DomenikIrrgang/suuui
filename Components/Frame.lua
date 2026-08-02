@@ -68,7 +68,7 @@ function FrameMeta:ApplyTheme()
     })
 
     local bgKey = variantMap[self._variant]
-    if self._enabled == false then bgKey = "colorBgActive" end
+    if self._enabled == false then bgKey = "colorBgDisabled" end
     local bg = bgKey and T:GetToken(bgKey)
     if bg then
         self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])

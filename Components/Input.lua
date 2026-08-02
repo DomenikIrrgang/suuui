@@ -1,4 +1,5 @@
 -- EditBox is a Blizzard-required component. This wraps it with SuuUI theming.
+local abs = math.abs
 local S = SuuUI.UISignals
 
 -- Input-specific signals
@@ -16,9 +17,24 @@ function InpMeta:GetHeight()    return self._f:GetHeight() end
 function InpMeta:IsShown()      return self._f:IsShown() end
 function InpMeta:GetFrame()     return self._f end
 
+--- Sets an explicit size, dropping token-driven height.
+-- @param w number
+-- @param h number
 function InpMeta:SetSize(w, h)
+    self._autoH = false
     self._f:SetSize(w, h)
     S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
+end
+
+-- Font size tokens are user-editable, so an input pinned to a fixed height clips its
+-- own text once the font outgrows it. Re-derive from tokens unless the caller pinned
+-- the height, and report the new size so the containing layout re-flows.
+function InpMeta:_autosize()
+    if not self._autoH then return end
+    local h = SuuUI.Theme:GetControlHeight("sizeControlMd")
+    if abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
+    self._f:SetHeight(h)
+    S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._f:GetWidth(), h)
 end
 
 function InpMeta:Show()
@@ -82,16 +98,19 @@ function InpMeta:ApplyTheme()
     self._eb:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeMd") or 13, "")
     if tc then self._eb:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
+    self:_autosize()
 end
 
 --- Creates a themed text input.
 -- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
+-- Height defaults to the sizeControlMd token floored against the font size, and
+-- tracks token changes. Pass h to pin it.
 -- @param props table  { value, onChange, onEnter, w, h, maxChars }
 -- @param parent frame
 -- @return table  Input handle
 function SuuUI.Components.Input(props, parent)
     local w = props.w or 160
-    local h = props.h or 24
+    local h = props.h or SuuUI.Theme:GetControlHeight("sizeControlMd")
 
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     f:SetSize(w, h)
@@ -108,6 +127,7 @@ function SuuUI.Components.Input(props, parent)
     local handle = setmetatable({
         _f=f, _eb=eb, _box=box, _eid=id, _enabled=true,
         _hasFocus=false, _hasHover=false, _silent=false,
+        _autoH=props.h == nil,
     }, InpMeta)
 
     local function updateBorder()

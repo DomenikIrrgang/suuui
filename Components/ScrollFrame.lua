@@ -2,6 +2,15 @@ local max, min = math.max, math.min
 local select   = select
 local S = SuuUI.UISignals
 
+local function barWidth()
+    return SuuUI.Theme:GetToken("sizeScrollbar") or 8
+end
+
+-- Gutter reserved for the bar: its width plus the inset it sits in.
+local function gutter()
+    return barWidth() + 2
+end
+
 local ScrMeta = {}
 ScrMeta.__index = ScrMeta
 
@@ -46,7 +55,7 @@ end
 -- @return number
 function ScrMeta:GetContentWidth()
     local needsBar = self._content:GetHeight() > self._sf:GetHeight()
-    return needsBar and (self._f:GetWidth() - 10) or self._f:GetWidth()
+    return needsBar and (self._f:GetWidth() - gutter()) or self._f:GetWidth()
 end
 
 --- Sets the scrollable content height and refreshes the scrollbar.
@@ -70,7 +79,7 @@ function ScrMeta:_updateBar()
     local maxScroll = max(0, ch - sh)
     local cur     = self._sf:GetVerticalScroll()
     local pct     = (maxScroll > 0) and (cur / maxScroll) or 0
-    local thumbH  = max(16, trackH * (sh / max(ch, 1)))
+    local thumbH  = max(SuuUI.Theme:GetToken("sizeIcon") or 16, trackH * (sh / max(ch, 1)))
 
     -- Thumb size and offset go through the anchor container
     self._thumbAnchor.height = thumbH
@@ -81,7 +90,7 @@ function ScrMeta:_updateBar()
     self._track:SetShown(needsBar)
 
     -- Reserve gutter space for the scrollbar by insetting the viewport
-    self._box:SetChildProps(self._sf, needsBar and { inset = { right = 10 } } or nil)
+    self._box:SetChildProps(self._sf, needsBar and { inset = { right = gutter() } } or nil)
     local contentW = self._sf:GetWidth()
     self._content:SetWidth(contentW)
 
@@ -117,6 +126,12 @@ function ScrMeta:ApplyTheme()
     })
     if ac then self._thumb:SetBackdropColor(ac[1], ac[2], ac[3], ac[4]) end
     if bd then self._thumb:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+
+    -- The bar width token is editable, so re-apply it to the track and thumb
+    self._box:SetChildProps(self._track, {
+        align = "end", width = barWidth(), inset = { right = 1, top = 2, bottom = 2 },
+    })
+    self._thumbAnchor.width = barWidth()
     self:_updateBar()
 end
 
@@ -154,13 +169,15 @@ function SuuUI.Components.ScrollFrame(props, parent)
     sf:SetScrollChild(content)
 
     local track = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    box:Add(track, { align = "end", width = 8, inset = { right = 1, top = 2, bottom = 2 } })
+    box:Add(track, { align = "end", width = barWidth(), inset = { right = 1, top = 2, bottom = 2 } })
 
     -- Thumb position is driven through the track's anchor container
     local thumbBox = SuuUI.Layout:CreateContainer({ host = track, layout = "anchor" })
     local thumb = CreateFrame("Frame", nil, track, "BackdropTemplate")
     thumb:EnableMouse(true)
-    local thumbAnchor = { point = "TOP", relativePoint = "TOP", x = 0, y = 0, width = 8, height = 30 }
+    local thumbAnchor = {
+        point = "TOP", relativePoint = "TOP", x = 0, y = 0, width = barWidth(), height = 30,
+    }
     thumbBox:Add(thumb, { anchor = thumbAnchor })
 
     local id = "scr_" .. tostring(f)

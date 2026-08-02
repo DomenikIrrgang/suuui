@@ -2,9 +2,11 @@ local assert, type = assert, type
 local tinsert = table.insert
 local S = SuuUI.UISignals
 
-local TITLE_H  = 26
-local CLOSE_SZ = 22
-local GRIP_SZ  = 16
+-- Window chrome is token-driven. The title strip holds text, so its height is floored
+-- against the font size; the close button and grip carry no text of their own.
+local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar") end
+local function closeSize()   return SuuUI.Theme:GetToken("sizeControlMd") or 22 end
+local function gripSize()    return SuuUI.Theme:GetToken("sizeIcon") or 16 end
 
 local WinMeta = {}
 WinMeta.__index = WinMeta
@@ -38,6 +40,14 @@ local function applyTheme(self)
     self._closeText:SetFont(
         T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeLg") or 15, "")
+
+    -- Chrome geometry moves with the size and font tokens
+    self._shell:SetChildProps(self._titleStrip, { width = "fill", height = titleHeight() })
+    self._titleBox:SetChildProps(self._drag, { inset = { right = closeSize() + 12 } })
+    self._titleBox:SetChildProps(self._closeBtn, {
+        align = "end", valign = "center",
+        width = closeSize(), height = closeSize(), inset = { right = 6 },
+    })
 end
 
 -- Keeps the UIRoot anchor descriptor in step with the window's real position,
@@ -184,7 +194,7 @@ function SuuUI.Layout:CreateWindow(props)
 
     -- Title strip: bar texture behind, title text left, close button right
     local titleStrip = CreateFrame("Frame", nil, f)
-    shell:Add(titleStrip, { width = "fill", height = TITLE_H })
+    shell:Add(titleStrip, { width = "fill", height = titleHeight() })
 
     local titleBox = SuuUI.Layout:CreateContainer({ host = titleStrip, layout = "stack" })
     local bar = titleStrip:CreateTexture(nil, "BACKGROUND")
@@ -198,7 +208,7 @@ function SuuUI.Layout:CreateWindow(props)
     -- Drag region covers the strip but stops short of the close button
     local drag = CreateFrame("Frame", nil, titleStrip)
     drag:EnableMouse(true)
-    titleBox:Add(drag, { inset = { right = CLOSE_SZ + 12 } })
+    titleBox:Add(drag, { inset = { right = closeSize() + 12 } })
 
     local closeBtn = CreateFrame("Frame", nil, titleStrip, "BackdropTemplate")
     closeBtn:EnableMouse(true)
@@ -212,7 +222,7 @@ function SuuUI.Layout:CreateWindow(props)
     closeBtn:SetBackdropBorderColor(0, 0, 0, 0)
     titleBox:Add(closeBtn, {
         align = "end", valign = "center",
-        width = CLOSE_SZ, height = CLOSE_SZ, inset = { right = 6 },
+        width = closeSize(), height = closeSize(), inset = { right = 6 },
     })
 
     local closeBox = SuuUI.Layout:CreateContainer({ host = closeBtn, layout = "stack" })
@@ -234,6 +244,9 @@ function SuuUI.Layout:CreateWindow(props)
         _id        = props.id,
         _frame     = f,
         _shell     = shell,
+        _titleStrip= titleStrip,
+        _titleBox  = titleBox,
+        _drag      = drag,
         _titleBar  = bar,
         _titleText = title,
         _closeBtn  = closeBtn,
@@ -254,7 +267,7 @@ function SuuUI.Layout:CreateWindow(props)
         gripBox:Add(grip, {
             anchor = {
                 point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT",
-                x = 0, y = 0, width = GRIP_SZ, height = GRIP_SZ,
+                x = 0, y = 0, width = gripSize(), height = gripSize(),
             },
         })
 

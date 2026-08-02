@@ -238,59 +238,125 @@ Event payload: `"SUUUI_SETTING_CHANGED"` → `pluginId, key, value, oldValue`
 
 ### 6. Theme & Token System (`Core/Theme.lua`)
 
-Flat token table. Token names: camelCase with category prefix.
+Flat token table, but organised in **two tiers**. Token names: camelCase with category
+prefix. Categories: `color`, `opacity`, `font`, `space`, `size`, `border`, `anim`.
 
-Categories: `color`, `font`, `space`, `size`, `border`, `anim`
+**Tier 1 — primitives.** Named for what they *are*: `colorGray900`, `colorBlue400`.
+Neutrals run 950 (darkest) to 100 (lightest). These are the only colours the theme
+editor exposes.
 
-Token aliases: a token value that is a string resolves to another token key.
-Example: `tokens.colorAccent = "colorBlue400"` → `Theme:GetToken("colorAccent")`
-returns the value of `colorBlue400`. Aliases enable cascading theme changes.
+**Tier 2 — semantics.** Named for what they are *for*: `colorBg`, `colorBorder`,
+`colorDanger`. Every semantic is an alias or a derivation onto tier 1.
 
-Example tokens:
+**Components reference tier 2 only.** That is what makes a retint a one-line edit:
+change `colorBlue400` and every focused border, slider fill, and accent label follows.
+
+Three value forms:
+
+| Form | Example | Resolves to |
+|---|---|---|
+| literal | `colorGray900 = {0.08, 0.08, 0.10, 1.00}` | itself |
+| alias (string) | `colorAccent = "colorBlue400"` | the referenced token, chained up to 8 deep |
+| derivation (table) | `colorBg = { ref = "colorGray900", alpha = "opacityPanel" }` | the ref's RGB with the alpha token's value |
+
+Derivations are what keep opacity a single control: panel translucency is the
+`opacityPanel` token, not an alpha channel repeated across four colour literals.
+
 ```lua
--- Colors (RGBA arrays)
-colorBg        = {0.08, 0.08, 0.10, 0.95}
-colorBgAlt     = {0.11, 0.11, 0.14, 0.95}
-colorBgHover   = {0.15, 0.15, 0.18, 0.95}
+-- Tier 1: primitives
+colorGray900   = {0.08, 0.08, 0.10, 1.00}   -- 950 850 800 750 700 600 400 100 also defined
 colorBlue400   = {0.25, 0.55, 1.00, 1.00}
-colorAccent    = "colorBlue400"          -- alias
-colorText      = {0.92, 0.92, 0.92, 1.00}
-colorTextMuted = {0.55, 0.55, 0.60, 1.00}
-colorBorder    = {0.20, 0.20, 0.24, 1.00}
--- Fonts
-fontSizeSm     = 11
-fontSizeMd     = 13
-fontSizeLg     = 15
-fontFamilyMain = "Fonts\\FRIZQT__.TTF"
--- Spacing
-spaceSm        = 4
-spaceMd        = 8
-spaceLg        = 16
-spaceXl        = 24
--- Note: Use space tokens for both gaps (between items) and padding (container insets)
--- Border
-borderWidth    = 1
-borderRadius   = 4    -- simulated via corner textures
--- Animation durations (seconds)
-animFast       = 0.15
-animMid        = 0.25
-animSlow       = 0.40
+colorBlue500   = {0.18, 0.44, 0.90, 1.00}
+colorGreen400  = {0.20, 0.80, 0.40, 1.00}
+colorRed400    = {0.90, 0.25, 0.25, 1.00}
+colorYellow400 = {0.95, 0.80, 0.20, 1.00}
+opacityPanel   = 0.95
+opacityOverlay = 0.35
+
+-- Tier 2: surfaces
+colorBg          = { ref = "colorGray900", alpha = "opacityPanel" }
+colorBgAlt       = { ref = "colorGray850", alpha = "opacityPanel" }
+colorBgHover     = { ref = "colorGray800", alpha = "opacityPanel" }
+colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" }   -- selected
+colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" }   -- mouse down
+colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" }
+-- Tier 2: intent
+colorAccent      = "colorBlue400"
+colorAccentHover = "colorBlue500"
+colorSuccess     = "colorGreen400"
+colorDanger      = "colorRed400"
+colorWarning     = "colorYellow400"
+-- Tier 2: content
+colorText         = "colorGray100"
+colorTextMuted    = "colorGray400"
+colorTextDisabled = "colorGray600"
+colorBorder       = "colorGray700"
+colorBorderFocus  = "colorAccent"
+
+-- Typography
+fontSizeSm = 11    fontSizeMd = 13    fontSizeLg = 15    fontSizeXl = 18
+fontFamilyMain = "Fonts/FRIZQT__.TTF"
+
+-- Spacing, used for both gaps (between items) and padding (container insets)
+spaceXs = 4    spaceSm = 8    spaceMd = 12    spaceLg = 16    spaceXl = 24
+
+-- Sizes. Never hardcode a control height; see Theme:GetControlHeight.
+sizeControlSm = 18   -- toggle, swatch          sizeRow       = 28  -- settings rows
+sizeControlMd = 22   -- input, option row       sizeNavRow    = 32  -- nav items
+sizeControlLg = 24   -- dropdown, buttons       sizeTitleBar  = 26  -- window chrome
+sizeIcon      = 16   sizeScrollbar = 8          sizeToggleW   = 36
+
+borderWidth = 1
+animFast = 0.12    animMid = 0.22    animSlow = 0.38
 ```
 
+Every token has a consumer. A token nothing reads is worse than an absent one: it shows
+up in the theme editor as a control that silently does nothing. If you add a token, wire
+it; if you remove a consumer, remove the token.
+
+`colorSuccess` / `colorDanger` / `colorWarning` are the intent tokens — use them for
+state colouring rather than reaching for `colorGreen400` directly. They reach the screen
+through `Button`'s `variant` and `Modal`'s `confirmVariant`:
+
+| Intent | Where it belongs |
+|---|---|
+| `danger` | the confirm button of a destructive dialog; a failure notice |
+| `success` | the confirm button of a create/copy dialog |
+| `warning` | a notice for an action that is blocked but expected |
+
+**Intent colour goes on the button that commits the action, not the one that opens the
+dialog.** A "Delete" button on a settings page is neutral; the "Delete" button inside the
+confirmation dialog is `danger`. Colouring both makes the page shout before the user has
+asked for anything.
+
+**The theme editor exposes tier 1 colours only** (`SettingsUI/Controls/ThemeTokens.lua`).
+Editing a primitive cascades through every semantic that references it. Exposing the
+semantics too would let a user replace an alias with a literal and break that cascade
+permanently, so semantics stay `SetUserToken`-only.
+
 Built-in themes are read-only. User themes stored in profile under
-`profile.themes[name]` as a partial token override table.
+`profile.themes[name]` as a partial token override table, stamped with
+`_tokenVersion` so renamed keys from older saves can be migrated on read.
 
 **API:**
 ```lua
-SuuUI.Theme:GetToken(key)                       -- resolves aliases
+SuuUI.Theme:GetToken(key)                       -- resolves aliases and derivations
+SuuUI.Theme:GetControlHeight(sizeKey, fontKey)  -- size token floored by font metrics
 SuuUI.Theme:SetActive(name)                     -- fires SUUUI_THEME_CHANGED
 SuuUI.Theme:GetActive()
 SuuUI.Theme:List()
+SuuUI.Theme:IsBuiltin(name)
 SuuUI.Theme:CreateUserTheme(name, baseTheme)
 SuuUI.Theme:DeleteUserTheme(name)               -- error on built-ins
+SuuUI.Theme:ResetUserTheme(name)
 SuuUI.Theme:SetUserToken(themeName, key, value)
 SuuUI.Theme:ApplyToFrame(frame)                 -- utility: styles bg+border
 ```
+
+`GetControlHeight` returns `max(sizeToken, fontSize + spaceXs * 2)`. Use it for anything
+that holds text, since font sizes are user-editable and a control pinned to a literal
+height clips once the font outgrows it. Read the size token directly for elements with no
+text of their own (toggles, swatches, scrollbars).
 
 Components listen for `SUUUI_THEME_CHANGED` and call `ApplyTheme()` internally.
 
@@ -602,7 +668,10 @@ frames in a page. Register it in the `.toc` and document it here.
   height are measured from the text plus token padding unless `w`/`h` are given
   (`minW`/`minH` set floors). Re-fits on `SetLabel` and on font token changes, and
   emits `SIZE_CHANGED` so the containing layout re-flows. Add it without `width`/
-  `height` props to keep the hug.
+  `height` props to keep the hug. `variant`: `"danger"|"success"|"warning"` tints the
+  border and label with the matching intent token; the background stays on the surface
+  tokens so a variant reads as emphasis rather than a different control. Disabled state
+  overrides the variant.
 - `IconButton` — Button + texture slot.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox.
@@ -615,7 +684,12 @@ frames in a page. Register it in the `.toc` and document it here.
 - `ScrollFrame` — custom scrollbar + masked content.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
-- `Modal` — dialog with optional input, container-composed.
+- `Modal` — dialog with optional input, container-composed. `confirmVariant` tints the
+  confirm button with an intent token; `dismissOnly` drops the cancel button;
+  `autoDestroy` frees the modal once it finishes hiding.
+- `Notice` — one-shot dismissible message built on Modal. `tone` is
+  `"warning"|"danger"|"success"` or nil. **Use this instead of printing errors to chat.**
+  Self-destroying, so it is safe to call on every failure.
 - `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
 - `TextMetrics` — non-visual helper: `SuuUI.TextMetrics.Measure(text, font, size, flags)`
   returns the real width/height of a string. Use it for any fit-to-text sizing. A font
@@ -694,7 +768,7 @@ local list = SuuUI.Layout:CreateContainer({
   parent  = scrollContent,
   layout  = "flow",
   dir     = "vertical",
-  gap     = SuuUI.Theme:GetToken("spaceSm"),
+  gap     = SuuUI.Theme:GetToken("spaceXs"),
   padding = {top=8, right=8, bottom=8, left=8},
 })
 

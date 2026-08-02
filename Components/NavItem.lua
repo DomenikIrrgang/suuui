@@ -107,7 +107,7 @@ function SuuUI.Components.NavItem(props, parent)
     label:SetText(props.label or "")
     box:Add(label, {
         valign = "center",
-        inset  = { left = T:GetToken("spaceMd") or 8, right = T:GetToken("spaceSm") or 4 },
+        inset  = { left = T:GetToken("spaceSm") or 8, right = T:GetToken("spaceXs") or 4 },
     })
 
     local id = "nav_" .. tostring(f)

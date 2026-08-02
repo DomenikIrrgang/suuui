@@ -29,8 +29,8 @@ function M:Build(pluginId, scroll)
     if not schema then return end
 
     local T   = SuuUI.Theme
-    local gap = T:GetToken("spaceSm") or 4
-    local pad = T:GetToken("spaceMd") or 8
+    local gap = T:GetToken("spaceXs") or 4
+    local pad = T:GetToken("spaceSm") or 8
 
     local page = SuuUI.Layout:CreateContainer({
         parent  = content,

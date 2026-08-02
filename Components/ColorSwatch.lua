@@ -1,4 +1,5 @@
 local floor  = math.floor
+local abs    = math.abs
 local format = string.format
 local S = SuuUI.UISignals
 
@@ -10,7 +11,11 @@ function SwMeta:GetHeight()    return self._f:GetHeight() end
 function SwMeta:IsShown()      return self._f:IsShown() end
 function SwMeta:GetFrame()     return self._f end
 
+--- Sets an explicit size, dropping token-driven sizing.
+-- @param w number
+-- @param h number
 function SwMeta:SetSize(w, h)
+    self._autoSize = false
     self._f:SetSize(w, h)
     S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
@@ -67,15 +72,26 @@ function SwMeta:ApplyTheme()
     local T  = SuuUI.Theme
     local bd = T:GetToken("colorBorder")
     if bd then self._border:SetColorTexture(bd[1], bd[2], bd[3], bd[4]) end
+
+    -- A swatch holds no text, so its size comes straight from the token rather than
+    -- being floored against the font size.
+    if self._autoSize then
+        local size = T:GetToken("sizeControlMd") or 22
+        if abs((self._f:GetWidth() or 0) - size) > 0.5 then
+            self._f:SetSize(size, size)
+            S:Emit(self, S.SIGNALS.SIZE_CHANGED, size, size)
+        end
+    end
 end
 
 --- Creates a clickable colour swatch.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
+-- Size defaults to the sizeControlMd token and tracks token changes.
 -- @param props table  { value = {r,g,b,a}, w, h }
 -- @param parent frame
 -- @return table  ColorSwatch handle
 function SuuUI.Components.ColorSwatch(props, parent)
-    local size = props.w or 22
+    local size = props.w or SuuUI.Theme:GetToken("sizeControlMd") or 22
     local col  = props.value or {1, 1, 1, 1}
 
     local f = CreateFrame("Frame", nil, parent)
@@ -99,6 +115,7 @@ function SuuUI.Components.ColorSwatch(props, parent)
         _box     = box,
         _eid     = id,
         _enabled = true,
+        _autoSize = props.w == nil and props.h == nil,
         _color   = { col[1], col[2], col[3], col[4] or 1 },
     }, SwMeta)
 

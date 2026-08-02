@@ -12,8 +12,8 @@ local M = {}
 -- @return table, table   Row container handle, label handle
 function M.Labelled(parent, labelText)
     local T = SuuUI.Theme
-    local pad = T:GetToken("spaceMd") or 8
-    local vpad = T:GetToken("spaceSm") or 4
+    local pad = T:GetToken("spaceSm") or 8
+    local vpad = T:GetToken("spaceXs") or 4
 
     local row = SuuUI.Layout:CreateContainer({
         parent  = parent,
@@ -35,13 +35,13 @@ end
 -- @return table  Row container handle
 function M.Stacked(parent)
     local T = SuuUI.Theme
-    local pad = T:GetToken("spaceMd") or 8
+    local pad = T:GetToken("spaceSm") or 8
 
     return SuuUI.Layout:CreateContainer({
         parent  = parent,
         layout  = "flow",
         dir     = "vertical",
-        gap     = T:GetToken("spaceSm") or 4,
+        gap     = T:GetToken("spaceXs") or 4,
         padding = { top = 0, right = pad, bottom = 0, left = pad },
     })
 end
