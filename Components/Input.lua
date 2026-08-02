@@ -1,20 +1,48 @@
 -- EditBox is a Blizzard-required component. This wraps it with SuuUI theming.
+local S = SuuUI.UISignals
+
+-- Input-specific signals
+SuuUI.Components.INPUT_SIGNALS = {
+    SUBMITTED = "input.submitted",  -- Args: text
+}
+
+local SUBMITTED = SuuUI.Components.INPUT_SIGNALS.SUBMITTED
+
 local InpMeta = {}
 InpMeta.__index = InpMeta
 
-function InpMeta:SetPoint(...)  self._f:SetPoint(...) end
-function InpMeta:SetSize(w, h)  self._f:SetSize(w, h) self._eb:SetSize(w - 8, h - 4) end
-function InpMeta:Show()         self._f:Show() end
-function InpMeta:Hide()         self._f:Hide() end
+function InpMeta:GetWidth()     return self._f:GetWidth() end
+function InpMeta:GetHeight()    return self._f:GetHeight() end
 function InpMeta:IsShown()      return self._f:IsShown() end
 function InpMeta:GetFrame()     return self._f end
-function InpMeta:Destroy()      SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid) end
 
---- Enables or disables text input.
+function InpMeta:SetSize(w, h)
+    self._f:SetSize(w, h)
+    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
+end
+
+function InpMeta:Show()
+    self._f:Show()
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
+end
+
+function InpMeta:Hide()
+    self._f:Hide()
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
+end
+
+function InpMeta:Destroy()
+    S:DisconnectAll(self)
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._box:Destroy()
+end
+
+--- Enables or disables text input. Emits ENABLED_CHANGED.
 -- @param en bool
 function InpMeta:SetEnabled(en)
     self._enabled = en
     self._eb:SetEnabled(en)
+    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
 end
 
 --- Returns current text value.
@@ -23,10 +51,12 @@ function InpMeta:GetValue()
     return self._eb:GetText()
 end
 
---- Sets text value.
+--- Sets text value without emitting TEXT_CHANGED.
 -- @param text string
 function InpMeta:SetValue(text)
+    self._silent = true
     self._eb:SetText(text or "")
+    self._silent = false
 end
 
 --- Sets keyboard focus to the input field.
@@ -52,7 +82,8 @@ function InpMeta:ApplyTheme()
 end
 
 --- Creates a themed text input.
--- @param props table  { value, placeholder, onChange, onEnter, w, h, maxChars }
+-- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
+-- @param props table  { value, onChange, onEnter, w, h, maxChars }
 -- @param parent frame
 -- @return table  Input handle
 function SuuUI.Components.Input(props, parent)
@@ -62,18 +93,18 @@ function SuuUI.Components.Input(props, parent)
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     f:SetSize(w, h)
 
+    local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+
     local eb = CreateFrame("EditBox", nil, f)
-    eb:SetPoint("CENTER", f, "CENTER", 0, 0)
-    eb:SetSize(w - 8, h - 4)
+    box:Add(eb, { inset = { left = 4, right = 4, top = 2, bottom = 2 } })
     eb:SetAutoFocus(false)
     eb:SetMaxLetters(props.maxChars or 255)
     if props.value then eb:SetText(props.value) end
 
-    local T = SuuUI.Theme
     local id = "inp_" .. tostring(f)
     local handle = setmetatable({
-        _f=f, _eb=eb, _eid=id, _enabled=true,
-        _hasFocus=false, _hasHover=false,
+        _f=f, _eb=eb, _box=box, _eid=id, _enabled=true,
+        _hasFocus=false, _hasHover=false, _silent=false,
     }, InpMeta)
 
     local function updateBorder()
@@ -88,39 +119,43 @@ function SuuUI.Components.Input(props, parent)
     end
 
     eb:SetScript("OnTextChanged", function()
-        if props.onChange then props.onChange(eb:GetText()) end
+        if handle._silent then return end
+        local text = eb:GetText()
+        if props.onChange then props.onChange(text) end
+        S:Emit(handle, S.SIGNALS.TEXT_CHANGED, text)
     end)
     eb:SetScript("OnEnterPressed", function()
         eb:ClearFocus()
-        if props.onEnter then props.onEnter(eb:GetText()) end
+        local text = eb:GetText()
+        if props.onEnter then props.onEnter(text) end
+        S:Emit(handle, SUBMITTED, text)
     end)
     eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
     eb:SetScript("OnEditFocusGained", function()
         handle._hasFocus = true
         updateBorder()
+        S:Emit(handle, S.SIGNALS.FOCUSED)
     end)
     eb:SetScript("OnEditFocusLost", function()
         handle._hasFocus = false
         updateBorder()
+        S:Emit(handle, S.SIGNALS.UNFOCUSED)
     end)
-    f:SetScript("OnEnter", function()
+
+    local function hoverOn()
         handle._hasHover = true
         updateBorder()
-    end)
-    f:SetScript("OnLeave", function()
+        S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
+    end
+    local function hoverOff()
         handle._hasHover = false
         updateBorder()
-    end)
-    
-    -- EditBox should also trigger hover state
-    eb:SetScript("OnEnter", function()
-        handle._hasHover = true
-        updateBorder()
-    end)
-    eb:SetScript("OnLeave", function()
-        handle._hasHover = false
-        updateBorder()
-    end)
+        S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
+    end
+    f:SetScript("OnEnter", hoverOn)
+    f:SetScript("OnLeave", hoverOff)
+    eb:SetScript("OnEnter", hoverOn)
+    eb:SetScript("OnLeave", hoverOff)
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

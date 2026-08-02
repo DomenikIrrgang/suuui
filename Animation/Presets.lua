@@ -31,50 +31,52 @@ function P.FadeOut(frame, duration)
     }):Play()
 end
 
---- Slides frame in from an offset direction.
--- @param frame frame
+-- Position animation goes through an anchor-layout container, so the layout engine
+-- stays the only thing that positions anything.
+local function slide(container, child, anchor, dir, dist, duration, easing, onDone)
+    local horizontal = (dir == "left" or dir == "right")
+    local prop = horizontal and "x" or "y"
+    local base = horizontal and (anchor.x or 0) or (anchor.y or 0)
+    local offset = (dir == "right" or dir == "up") and (base + dist) or (base - dist)
+    return SuuUI.Anim:New({
+        container = container,
+        target    = child,
+        anchor    = anchor,
+        property  = prop,
+        from      = easing == "easeOut" and offset or base,
+        to        = easing == "easeOut" and base   or offset,
+        duration  = duration,
+        easing    = easing,
+        onDone    = onDone,
+    })
+end
+
+--- Slides a container child in from an offset direction.
+-- @param container table  Anchor-layout container holding the child
+-- @param child frame|table
+-- @param anchor table  Base anchor descriptor the offset is applied to
 -- @param dir string  "up"|"down"|"left"|"right"
 -- @param dist number  Pixel distance (default 12)
 -- @param duration number
-function P.SlideIn(frame, dir, dist, duration)
-    dist     = dist or 12
-    duration = duration or SuuUI.Theme:GetToken("animMid") or 0.20
-    local prop       = (dir == "left" or dir == "right") and "x" or "y"
-    local _, _, _, ox, oy = frame:GetPoint(1)
-    ox, oy = ox or 0, oy or 0
-    local from = (dir == "right") and (ox - dist)
-              or (dir == "left")  and (ox + dist)
-              or (dir == "down")  and (oy + dist)
-              or (oy - dist)
-    local to = (prop == "x") and ox or oy
-    frame:Show()
-    SuuUI.Anim:New({
-        target=frame, property=prop, from=from, to=to,
-        duration=duration, easing="easeOut",
-    }):Play()
+function P.SlideIn(container, child, anchor, dir, dist, duration)
+    local target = child.GetFrame and child:GetFrame() or child
+    target:Show()
+    slide(container, child, anchor, dir, dist or 12,
+        duration or SuuUI.Theme:GetToken("animMid") or 0.20, "easeOut"):Play()
 end
 
---- Slides frame out in a direction then hides it.
--- @param frame frame
+--- Slides a container child out in a direction then hides it.
+-- @param container table  Anchor-layout container holding the child
+-- @param child frame|table
+-- @param anchor table  Base anchor descriptor the offset is applied to
 -- @param dir string  "up"|"down"|"left"|"right"
 -- @param dist number
 -- @param duration number
-function P.SlideOut(frame, dir, dist, duration)
-    dist     = dist or 12
-    duration = duration or SuuUI.Theme:GetToken("animMid") or 0.20
-    local prop       = (dir == "left" or dir == "right") and "x" or "y"
-    local _, _, _, ox, oy = frame:GetPoint(1)
-    ox, oy = ox or 0, oy or 0
-    local to = (dir == "right") and (ox + dist)
-            or (dir == "left")  and (ox - dist)
-            or (dir == "down")  and (oy - dist)
-            or (oy + dist)
-    local from = (prop == "x") and ox or oy
-    SuuUI.Anim:New({
-        target=frame, property=prop, from=from, to=to,
-        duration=duration, easing="easeIn",
-        onDone = function() frame:Hide() end,
-    }):Play()
+function P.SlideOut(container, child, anchor, dir, dist, duration)
+    local target = child.GetFrame and child:GetFrame() or child
+    slide(container, child, anchor, dir, dist or 12,
+        duration or SuuUI.Theme:GetToken("animMid") or 0.20, "easeIn",
+        function() target:Hide() end):Play()
 end
 
 --- Quick scale pop: 1 → 1.08 → 1.

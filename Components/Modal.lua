@@ -1,16 +1,30 @@
 local C = SuuUI.Components
+local S = SuuUI.UISignals
+
+-- Modal-specific signals
+C.MODAL_SIGNALS = {
+    CONFIRMED = "modal.confirmed",  -- Args: inputValue (or nil)
+    CANCELLED = "modal.cancelled",  -- Args: none
+}
+
+local CONFIRMED = C.MODAL_SIGNALS.CONFIRMED
+local CANCELLED = C.MODAL_SIGNALS.CANCELLED
 
 local ModalMeta = {}
 ModalMeta.__index = ModalMeta
+
+function ModalMeta:GetFrame()  return self._window end
+function ModalMeta:IsShown()   return self._window:IsShown() end
+function ModalMeta:GetWidth()  return self._window:GetWidth() end
+function ModalMeta:GetHeight() return self._window:GetHeight() end
 
 function ModalMeta:Show()
     self._overlay:Show()
     self._window:Show()
     SuuUI.Anim.Presets.FadeIn(self._overlay, SuuUI.Theme:GetToken("animFast"))
     SuuUI.Anim.Presets.FadeIn(self._window, SuuUI.Theme:GetToken("animFast"))
-    if self._input then
-        self._input:SetFocus()
-    end
+    if self._input then self._input:SetFocus() end
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
 end
 
 function ModalMeta:Hide()
@@ -27,20 +41,16 @@ function ModalMeta:Hide()
             if self._input then self._input:SetValue("") end
         end,
     }):Play()
-end
-
-function ModalMeta:IsShown()
-    return self._window:IsShown()
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 function ModalMeta:Destroy()
+    S:DisconnectAll(self)
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._shellBox:Destroy()
     self._overlay:Hide()
     self._window:Hide()
-    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
-end
-
-function ModalMeta:GetFrame()
-    return self._window
+    self._shell:Hide()
 end
 
 function ModalMeta:ApplyTheme()
@@ -59,129 +69,135 @@ function ModalMeta:ApplyTheme()
 end
 
 --- Creates a modal dialog with optional input field.
--- @param props table  { title, message, input, onConfirm, onCancel, confirmText, cancelText }
+-- Emits CONFIRMED (value), CANCELLED, VISIBILITY_CHANGED.
+-- @param props table  { title, message, input, onConfirm, onCancel, confirmText, cancelText, w }
 -- @param parent frame  Optional parent (defaults to UIParent)
 -- @return table  Modal handle
 function SuuUI.Components.Modal(props, parent)
     parent = parent or UIParent
+    local T   = SuuUI.Theme
+    local gap = T:GetToken("spaceMd") or 8
+    local pad = T:GetToken("spaceLg") or 16
+    local w   = props.w or 360
 
-    local w = props.w or 360
-    
-    -- Calculate height based on content
-    local contentHeight = 16  -- Top padding
-    if props.title then contentHeight = contentHeight + 24 end
-    if props.message then contentHeight = contentHeight + 24 end
-    if props.input then contentHeight = contentHeight + 8 + 32 end  -- gap + input + spacing
-    contentHeight = contentHeight + 8 + 28 + 16  -- gap + buttons + bottom padding
-    
-    local h = props.h or contentHeight
+    -- The shell container covers the parent. Sized explicitly rather than with fill:
+    -- modals are transient, and fill would hook the parent's resize every time.
+    local shellBox = SuuUI.Layout:CreateContainer({
+        parent = parent,
+        layout = "stack",
+        w      = parent:GetWidth(),
+        h      = parent:GetHeight(),
+    })
+    local shell = shellBox:GetFrame()
+    shell:SetFrameStrata("DIALOG")
 
-    -- Semi-transparent overlay to block clicks
-    local overlay = CreateFrame("Frame", nil, parent)
-    overlay:SetAllPoints(parent)
-    overlay:SetFrameStrata("DIALOG")
+    local overlay = CreateFrame("Frame", nil, shell)
     overlay:EnableMouse(true)
     overlay:SetScript("OnMouseDown", function() end)
-    local overlayTex = overlay:CreateTexture(nil, "BACKGROUND")
-    overlayTex:SetAllPoints(overlay)
-    overlayTex:SetColorTexture(0, 0, 0, 0.7)
     overlay:Hide()
+    shellBox:Add(overlay)
 
-    -- Modal window
-    local window = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    window:SetSize(w, h)
-    window:SetPoint("CENTER", parent, "CENTER", 0, 0)
-    window:SetFrameStrata("DIALOG")
+    local overlayBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
+    local overlayTex = overlay:CreateTexture(nil, "BACKGROUND")
+    overlayTex:SetColorTexture(0, 0, 0, T:GetToken("shadowAlpha") or 0.7)
+    overlayBox:Add(overlayTex)
+
+    local window = CreateFrame("Frame", nil, shell, "BackdropTemplate")
     window:EnableMouse(true)
     window:Hide()
+    shellBox:Add(window, { align = "center", valign = "center", width = w, height = 1 })
 
     local id = "modal_" .. tostring(window)
     local handle = setmetatable({
-        _window  = window,
-        _overlay = overlay,
-        _eid     = id,
+        _window   = window,
+        _overlay  = overlay,
+        _shell    = shell,
+        _shellBox = shellBox,
+        _eid      = id,
     }, ModalMeta)
 
-    local yOffset = -16
+    local root = SuuUI.Layout:CreateContainer({
+        host    = window,
+        layout  = "flow",
+        dir     = "vertical",
+        gap     = gap,
+        align   = "center",
+        padding = { top=pad, right=pad, bottom=pad, left=pad },
+    })
 
-    -- Title
     if props.title then
-        local title = C.Text({ text=props.title, size="lg", color="text" }, window)
-        title:SetPoint("TOP", window, "TOP", 0, yOffset)
-        yOffset = yOffset - 24
+        local title = C.Text({ text=props.title, size="lg", color="text", justify="CENTER" }, root:GetFrame())
+        root:Add(title, { width = "fill", height = 22 })
     end
 
-    -- Message
     if props.message then
-        local msg = C.Text({ text=props.message, size="md", color="muted" }, window)
-        msg:SetPoint("TOP", window, "TOP", 0, yOffset)
-        yOffset = yOffset - 24
+        local msg = C.Text({ text=props.message, size="md", color="muted", justify="CENTER" }, root:GetFrame())
+        root:Add(msg, { width = "fill", height = 22 })
     end
 
-    -- Input field (optional)
     local input
     if props.input then
-        yOffset = yOffset - 8
-        input = C.Input({
-            value = "",
-            w     = w - 32,
-            h     = 24,
-            onEnter = function(text)
-                if props.onConfirm then
-                    props.onConfirm(text)
-                end
-                handle:Hide()
-            end,
-        }, window)
-        input:SetPoint("TOP", window, "TOP", 0, yOffset)
+        input = C.Input({ value = "", w = w - pad * 2, h = 24 }, root:GetFrame())
+        root:Add(input, { width = "fill", height = 24 })
         handle._input = input
-        yOffset = yOffset - 32
     end
 
-    -- Button row
-    yOffset = yOffset - 8
-    local btnW = 100
-    local btnGap = 12
-    local totalBtnW = btnW * 2 + btnGap
-    local btnStartX = -(totalBtnW / 2) + (btnW / 2)
+    local function confirm()
+        local val = input and input:GetValue() or nil
+        if props.onConfirm then props.onConfirm(val) end
+        S:Emit(handle, CONFIRMED, val)
+        handle:Hide()
+    end
+
+    local function cancel()
+        if props.onCancel then props.onCancel() end
+        S:Emit(handle, CANCELLED)
+        handle:Hide()
+    end
+
+    if input then
+        S:Connect(input, C.INPUT_SIGNALS.SUBMITTED, confirm)
+    end
+
+    local btnRow = SuuUI.Layout:CreateContainer({
+        parent = root:GetFrame(),
+        layout = "flow",
+        dir    = "horizontal",
+        gap    = gap + 4,
+        h      = 28,
+    })
 
     local confirmBtn = C.Button({
-        label   = props.confirmText or "Confirm",
-        w       = btnW,
-        h       = 28,
-        onClick = function()
-            if props.onConfirm then
-                local val = input and input:GetValue() or nil
-                props.onConfirm(val)
-            end
-            handle:Hide()
-        end,
-    }, window)
-    confirmBtn:SetPoint("TOP", window, "TOP", btnStartX, yOffset)
-
+        label = props.confirmText or "Confirm", w = 100, h = 28,
+    }, btnRow:GetFrame())
     local cancelBtn = C.Button({
-        label   = props.cancelText or "Cancel",
-        w       = btnW,
-        h       = 28,
-        onClick = function()
-            if props.onCancel then props.onCancel() end
-            handle:Hide()
-        end,
-    }, window)
-    cancelBtn:SetPoint("LEFT", confirmBtn:GetFrame(), "RIGHT", btnGap, 0)
+        label = props.cancelText or "Cancel", w = 100, h = 28,
+    }, btnRow:GetFrame())
 
-    -- ESC to close
+    btnRow:Add(confirmBtn, { width = 100, height = 28 })
+    btnRow:Add(cancelBtn,  { width = 100, height = 28 })
+    S:Connect(confirmBtn, S.SIGNALS.CLICKED, confirm)
+    S:Connect(cancelBtn,  S.SIGNALS.CLICKED, cancel)
+
+    root:Add(btnRow, { width = 212, height = 28 })
+
+    -- Size the window to the composed content through the stack container
+    local function fitWindow(h)
+        shellBox:SetChildProps(window, {
+            align = "center", valign = "center", width = w, height = h,
+        })
+    end
+    S:Connect(root, S.SIGNALS.SIZE_CHANGED, function(_, h) fitWindow(h) end)
+    local _, contentH = root:GetContentSize()
+    fitWindow(props.h or contentH)
+
     window:SetScript("OnKeyDown", function(_, key)
-        if key == "ESCAPE" then
-            if props.onCancel then props.onCancel() end
-            handle:Hide()
-        end
+        if key == "ESCAPE" then cancel() end
     end)
     window:EnableKeyboard(true)
     window:SetPropagateKeyboardInput(false)
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
-
     return handle
 end

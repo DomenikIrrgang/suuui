@@ -116,6 +116,9 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
         SuuUI.Theme:Init()  -- This now loads activeTheme from profile
         SuuUI.UIRoot:Init()  -- Initialize global UI root
         
+        -- Core subsystems (profiles, theme, UI root) are now usable
+        SuuUI.Events:Emit("SUUUI_CORE_READY")
+
         -- Listen for profile changes to apply theme
         SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
             local prof = SuuUI.Profiles:GetActive()
@@ -132,6 +135,7 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
             local en = SuuUI.Settings:Get(plugin.id, "enabled")
             if en == nil or en == true then plugin:Enable() end
         end
+        SuuUI.Events:Emit("SUUUI_READY")
     elseif event == "PLAYER_LOGOUT" then
         if not SuuUIConfig then SuuUIConfig = {} end
         SuuUIConfig.activeProfile = SuuUI.Profiles:GetActiveName()

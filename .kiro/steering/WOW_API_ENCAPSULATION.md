@@ -1,0 +1,165 @@
+# WoW API Encapsulation
+
+## Mandatory Rule
+
+**Raw WoW UI API calls live ONLY inside `Components/`, `Layout/`, and `Core/UIRoot.lua`.
+UI construction code (SettingsUI, plugins, controls) must never touch the Blizzard API directly.**
+
+**Positioning is stricter still.** `SetPoint`, `SetAllPoints`, and `ClearAllPoints`
+belong to the four layout strategies alone — `Layout/FlowLayout.lua`,
+`Layout/GridLayout.lua`, `Layout/StackLayout.lua`, `Layout/AnchorLayout.lua`. Not
+`SettingsUI/`, not plugins, and **not components**. A component positions its own
+internals by hosting a container on its own frame:
+
+```lua
+local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+box:Add(label, { align = "center", valign = "center" })
+```
+
+`SetPoint` is not exposed on component handles, containers, or windows. See
+`LAYOUT_SYSTEM.md` for the strategies, child properties, and the raw-call translation
+table. Missing a layout capability? Add it to the engine.
+
+Code that assembles a screen describes *what* it wants. Code inside a component decides
+*how* to make Blizzard render it. When those two mix, the theme system, layout engine,
+and signal system all get bypassed.
+
+---
+
+## Where Each Layer May Call the WoW API
+
+| Layer | Raw WoW UI API allowed? | `SetPoint` allowed? |
+|---|---|---|
+| `Layout/{Flow,Grid,Stack,Anchor}Layout.lua` | Yes | **Yes — only here** |
+| `Layout/Container.lua` | Yes | Only to self-anchor its own frame |
+| `Core/UIRoot.lua` | Yes — owns the single `UIParent` anchor | Only that one anchor |
+| `Core/Pool.lua` | Yes | `ClearAllPoints` on release only |
+| `Components/*` | Yes — internal frame/texture/fontstring construction | **No** — use a host container |
+| `Layout/Window.lua` | Yes | **No** — use host containers |
+| `SettingsUI/*` | **No** — compose components and containers only | **No** |
+| `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** |
+
+Hiding Blizzard's own frames (`MinimapCluster:Hide()`) is a plugin responsibility and
+stays allowed — that is not building our UI, it is suppressing theirs.
+
+---
+
+## Forbidden in UI Construction Code
+
+```lua
+-- ❌ Creating raw frames
+local row = CreateFrame("Frame", nil, parent)
+local btn = CreateFrame("Button", nil, parent)
+local box = CreateFrame("EditBox", nil, parent)
+
+-- ❌ Creating raw textures and font strings
+local tex = frame:CreateTexture(nil, "ARTWORK")
+tex:SetColorTexture(0.3, 0.3, 0.3, 1)
+local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+
+-- ❌ Backdrops, strata, mouse plumbing
+frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", ... })
+frame:SetBackdropColor(0.1, 0.1, 0.1, 1)
+frame:SetFrameStrata("FULLSCREEN_DIALOG")
+frame:SetFrameLevel(100)
+frame:EnableMouse(true)
+btn:RegisterForClicks("LeftButtonDown")
+
+-- ❌ Blizzard scripts as UI wiring
+frame:SetScript("OnClick", fn)
+frame:SetScript("OnUpdate", fn)
+frame:SetScript("OnSizeChanged", fn)
+
+-- ❌ Manual positioning
+frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, -10)
+frame:SetAllPoints(parent)
+
+-- ❌ Hardcoded colors and sizes instead of tokens
+tex:SetColorTexture(0.3, 0.3, 0.3, 1)
+frame:SetHeight(28)
+```
+
+## Required Instead
+
+```lua
+local T = SuuUI.Theme
+local C = SuuUI.Components
+local S = SuuUI.UISignals
+
+-- Components for anything visible
+local label   = C.Text({ text = "Background", size = "sm", color = "text" }, parent)
+local swatch  = C.ColorSwatch({ value = T:GetToken("colorBg") }, parent)
+local input   = C.Input({ value = "1A1A1A", w = 80 }, parent)
+
+-- Containers for all positioning
+local row = SuuUI.Layout:CreateContainer({
+  parent = parent,
+  layout = "flow",
+  dir    = "horizontal",
+  gap    = T:GetToken("spaceSm"),
+})
+row:Add(label:GetFrame(), { width = "fill" })
+row:Add(input:GetFrame(), { width = 80, height = 22 })
+row:Add(swatch:GetFrame(), { width = 24, height = 24 })
+
+-- Signals for all wiring
+S:Connect(swatch, S.SIGNALS.CLICKED, function() openPicker() end)
+S:Connect(input,  S.SIGNALS.TEXT_CHANGED, function(text) applyHex(text) end)
+```
+
+---
+
+## Narrow, Documented Exceptions
+
+These are the only cases where UI construction code may still call the WoW API:
+
+1. **A bare grouping frame passed straight into a container.** A frame with no styling,
+   no scripts, and no manual `SetPoint` — it exists only so a container has something
+   to position.
+   ```lua
+   local row = CreateFrame("Frame", nil, parent)  -- OK: no styling, no scripts
+   container:Add(row, { width = "fill", height = 28 })
+   ```
+   Prefer `SuuUI.Layout:CreateContainer` even here when the frame will hold children —
+   a container is itself a frame, so `CreateContainer{ parent = p }` usually replaces
+   the bare frame outright.
+
+2. **`GetCursorPosition()` / `UIParent:GetEffectiveScale()`** when a component genuinely
+   needs cursor math. This belongs in `Components/`, not in page code.
+
+3. **Game data APIs** in plugins: `RegisterEvent`, `UnitName`, `GetSpellInfo`, and friends.
+
+Everything else needs a component.
+
+---
+
+## Missing a Component? Build It.
+
+When a page needs a visual element the library does not have:
+
+1. **Stop** — do not inline `CreateFrame` + `CreateTexture` in the page.
+2. **Name it** — what is the reusable widget? (`ColorSwatch`, `Badge`, `SegmentedControl`)
+3. **Discuss the props** — what does its `props` table accept?
+4. **Implement** in `Components/<Name>.lua` following the standard shape:
+   - `(props, parent)` signature returning a metatable handle
+   - Shared API: `SetSize` `GetWidth` `GetHeight` `Show` `Hide` `IsShown` `SetEnabled`
+     `Destroy` `GetFrame` `ApplyTheme` — **no `SetPoint`**
+   - Internal parts positioned by a host container, never by `SetPoint`
+   - Token-driven colors and sizes, cached in `ApplyTheme()`
+   - Blizzard scripts translated into `SuuUI.UISignals` emissions
+   - `Destroy()` calls `SuuUI.UISignals:DisconnectAll(self)` and `SuuUI.Events:Off(...)`
+5. **Register** it in `SuuUI.toc` load order and `SuuUI.Components`.
+6. **Document** it in `architecture.md` under Component Library.
+
+A one-off inline frame in a page is always cheaper today and always more expensive
+later. Build the component.
+
+---
+
+## Why This Matters
+
+- **Theming** — a raw texture never reacts to `SUUUI_THEME_CHANGED`.
+- **Layout** — a manually anchored frame breaks when its container resizes.
+- **Signals** — a raw `OnClick` is invisible to anything else in the UI.
+- **Pooling** — raw frames cannot be recycled through `SuuUI.Pool`.
+- **Consistency** — two pages built with raw frames will never look identical.

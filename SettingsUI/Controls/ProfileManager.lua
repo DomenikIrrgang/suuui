@@ -1,203 +1,169 @@
-local tinsert, ipairs = table.insert, ipairs
+local tinsert, ipairs, pcall = table.insert, ipairs, pcall
 local C = SuuUI.Components
+local S = SuuUI.UISignals
 
---- Builds a profile manager control with list, buttons, and actions.
+local function profileOptions()
+    local options = {}
+    for _, name in ipairs(SuuUI.Profiles:List()) do
+        tinsert(options, { value = name, label = name })
+    end
+    return options
+end
+
+local function report(ok, err)
+    if not ok then print("|cffff0000SuuUI:|r " .. tostring(err)) end
+    return ok
+end
+
+--- Builds the profile manager page section.
 -- @param entry table    Schema entry (no specific props needed)
 -- @param parent frame
--- @return frame         Raw frame with container-based layout
+-- @return table  Root container handle
 local function Build(entry, parent)
-    local T = SuuUI.Theme
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(parent:GetWidth(), 180)
-
+    local T   = SuuUI.Theme
     local gap = T:GetToken("spaceMd") or 8
+    local pad = T:GetToken("spaceMd") or 8
 
-    -- Root container for all elements
-    local rootContainer = SuuUI.Layout:CreateContainer({
-        parent  = f,
+    local root = SuuUI.Layout:CreateContainer({
+        parent  = parent,
         layout  = "flow",
         dir     = "vertical",
         gap     = gap,
-        padding = {
-            top    = 0,
-            right  = 0,
-            bottom = 0,
-            left   = 0,
-        },
+        padding = { top = 0, right = pad, bottom = 0, left = pad },
     })
-    rootContainer:GetFrame():SetAllPoints(f)
 
-    -- Current profile display row with frames for proper sizing
-    local currentRow = CreateFrame("Frame", nil, f)
-    currentRow:SetSize(f:GetWidth(), 24)
-    currentRow:Show()
-    
-    local currentLbl = C.Text({ text="Current Profile:", size="sm", color="muted" }, currentRow)
-    currentLbl:GetFrame():SetPoint("LEFT", currentRow, "LEFT", 0, 0)
-    currentLbl:Show()
-    
-    local currentName = C.Text({ 
-        text=SuuUI.Profiles:GetActiveName(), 
-        size="md", 
-        color="accent" 
-    }, currentRow)
-    currentName:GetFrame():SetPoint("LEFT", currentLbl:GetFrame(), "RIGHT", 8, 0)
-    currentName:Show()
-    
-    rootContainer:Add(currentRow, { width = "fill", height = 24 })
+    -- Current profile row
+    local currentRow = SuuUI.Layout:CreateContainer({
+        parent = root:GetFrame(),
+        layout = "flow",
+        dir    = "horizontal",
+        gap    = gap,
+        align  = "center",
+        h      = 24,
+    })
+    local currentLbl = C.Text({ text = "Current Profile:", size = "sm", color = "muted" },
+        currentRow:GetFrame())
+    local currentName = C.Text({ text = SuuUI.Profiles:GetActiveName(), size = "md", color = "accent" },
+        currentRow:GetFrame())
+    currentRow:Add(currentLbl, { width = 100 })
+    currentRow:Add(currentName, { width = "fill" })
+    root:Add(currentRow, { width = "fill", height = 24 })
 
-    -- Profile dropdown
-    local profileDD
-    local function updateDropdown()
-        local profiles = SuuUI.Profiles:List()
-        local options = {}
-        for _, name in ipairs(profiles) do
-            tinsert(options, { value=name, label=name })
-        end
-        return options
+    -- Profile selector
+    local profileDD = C.Dropdown({
+        options = profileOptions(),
+        value   = SuuUI.Profiles:GetActiveName(),
+        w       = 200,
+    }, root:GetFrame())
+    root:Add(profileDD, { width = 200, height = 24 })
+
+    local function switchTo(name)
+        SuuUI.Profiles:SetActive(name)
+        SuuUI.Profiles:LinkCharacter(name)
+        currentName:SetText(name)
     end
 
-    profileDD = C.Dropdown({
-        options  = updateDropdown(),
-        value    = SuuUI.Profiles:GetActiveName(),
-        w        = 200,
-        onChange = function(val)
-            SuuUI.Profiles:SetActive(val)
-            SuuUI.Profiles:LinkCharacter(val)
-            currentName:SetText(val)
-        end,
-    }, f)
-    rootContainer:Add(profileDD:GetFrame(), { height = 32 })
+    S:Connect(profileDD, S.SIGNALS.VALUE_CHANGED, function(val)
+        switchTo(val)
+    end)
 
-    -- Button row with frames for proper sizing
-    local btnRow = CreateFrame("Frame", nil, f)
-    btnRow:SetSize(f:GetWidth(), 24)
-    btnRow:Show()
-    
-    local btnW = 80
+    local function refreshOptions(selected)
+        profileDD:SetOptions(profileOptions())
+        profileDD:SetValue(selected or SuuUI.Profiles:GetActiveName())
+    end
 
-    local createBtn = C.Button({
-        label = "Create",
-        w = btnW, h = 24,
-        onClick = function()
-            local modal = C.Modal({
-                title      = "Create Profile",
-                message    = "Enter new profile name:",
-                input      = true,
-                confirmText = "Create",
-                onConfirm  = function(name)
-                    if name and name ~= "" then
-                        local ok, err = pcall(SuuUI.Profiles.Create, SuuUI.Profiles, name)
-                        if ok then
-                            profileDD:SetOptions(updateDropdown())
-                            profileDD:SetValue(name)
-                            SuuUI.Profiles:SetActive(name)
-                            SuuUI.Profiles:LinkCharacter(name)
-                            currentName:SetText(name)
-                        else
-                            print("|cffff0000SuuUI:|r " .. tostring(err))
-                        end
-                    end
-                end,
-            })
-            modal:Show()
-        end,
-    }, btnRow)
-    createBtn:GetFrame():SetPoint("LEFT", btnRow, "LEFT", 0, 0)
+    -- Action buttons
+    local btnRow = SuuUI.Layout:CreateContainer({
+        parent = root:GetFrame(),
+        layout = "flow",
+        dir    = "horizontal",
+        gap    = gap,
+        h      = 24,
+    })
 
-    local copyBtn = C.Button({
-        label = "Copy",
-        w = btnW, h = 24,
-        onClick = function()
-            local modal = C.Modal({
-                title      = "Copy Profile",
-                message    = "Copy '" .. SuuUI.Profiles:GetActiveName() .. "' to:",
-                input      = true,
-                confirmText = "Copy",
-                onConfirm  = function(name)
-                    if name and name ~= "" then
-                        local ok, err = pcall(function()
-                            SuuUI.Profiles:Create(name)
-                            SuuUI.Profiles:CopyTo(name)
-                        end)
-                        if ok then
-                            profileDD:SetOptions(updateDropdown())
-                            profileDD:SetValue(name)
-                            SuuUI.Profiles:SetActive(name)
-                            SuuUI.Profiles:LinkCharacter(name)
-                            currentName:SetText(name)
-                        else
-                            print("|cffff0000SuuUI:|r " .. tostring(err))
-                        end
-                    end
-                end,
-            })
-            modal:Show()
-        end,
-    }, btnRow)
-    copyBtn:GetFrame():SetPoint("LEFT", createBtn:GetFrame(), "RIGHT", 8, 0)
+    local createBtn = C.Button({ label = "Create", w = 80, h = 24 }, btnRow:GetFrame())
+    local copyBtn   = C.Button({ label = "Copy",   w = 80, h = 24 }, btnRow:GetFrame())
+    local deleteBtn = C.Button({ label = "Delete", w = 80, h = 24 }, btnRow:GetFrame())
+    btnRow:Add(createBtn, { width = 80, height = 24 })
+    btnRow:Add(copyBtn,   { width = 80, height = 24 })
+    btnRow:Add(deleteBtn, { width = 80, height = 24 })
+    root:Add(btnRow, { width = "fill", height = 24 })
 
-    local deleteBtn = C.Button({
-        label = "Delete",
-        w = btnW, h = 24,
-        onClick = function()
-            local active = SuuUI.Profiles:GetActiveName()
-            if active == "Default" then
-                print("|cffff0000SuuUI:|r Cannot delete Default profile")
-                return
-            end
-            local modal = C.Modal({
-                title      = "Delete Profile",
-                message    = "Delete '" .. active .. "'? This cannot be undone.",
-                confirmText = "Delete",
-                onConfirm  = function()
-                    local ok, err = pcall(SuuUI.Profiles.Delete, SuuUI.Profiles, active)
-                    if ok then
-                        profileDD:SetOptions(updateDropdown())
-                        profileDD:SetValue(SuuUI.Profiles:GetActiveName())
-                        currentName:SetText(SuuUI.Profiles:GetActiveName())
-                    else
-                        print("|cffff0000SuuUI:|r " .. tostring(err))
-                    end
-                end,
-            })
-            modal:Show()
-        end,
-    }, btnRow)
-    deleteBtn:GetFrame():SetPoint("LEFT", copyBtn:GetFrame(), "RIGHT", 8, 0)
-    
-    rootContainer:Add(btnRow, { width = "fill", height = 24 })
+    S:Connect(createBtn, S.SIGNALS.CLICKED, function()
+        C.Modal({
+            title = "Create Profile", message = "Enter new profile name:",
+            input = true, confirmText = "Create",
+            onConfirm = function(name)
+                if not name or name == "" then return end
+                if report(pcall(SuuUI.Profiles.Create, SuuUI.Profiles, name)) then
+                    refreshOptions(name)
+                    switchTo(name)
+                end
+            end,
+        }):Show()
+    end)
 
-    -- Reset button
-    local resetAllBtn = C.Button({
-        label = "Reset All Settings",
-        w = 160, h = 24,
-        onClick = function()
-            local modal = C.Modal({
-                title      = "Reset Settings",
-                message    = "Reset all settings to defaults?",
-                confirmText = "Reset",
-                onConfirm  = function()
-                    local plugins = SuuUI.Plugins:GetAll()
-                    for _, plugin in ipairs(plugins) do
-                        SuuUI.Settings:ResetAll(plugin.id)
-                    end
-                    print("|cff00ff00SuuUI:|r Profile settings reset to defaults")
-                end,
-            })
-            modal:Show()
-        end,
-    }, f)
-    rootContainer:Add(resetAllBtn:GetFrame(), { height = 24 })
+    S:Connect(copyBtn, S.SIGNALS.CLICKED, function()
+        C.Modal({
+            title = "Copy Profile",
+            message = "Copy '" .. SuuUI.Profiles:GetActiveName() .. "' to:",
+            input = true, confirmText = "Copy",
+            onConfirm = function(name)
+                if not name or name == "" then return end
+                local ok, err = pcall(function()
+                    SuuUI.Profiles:Create(name)
+                    SuuUI.Profiles:CopyTo(name)
+                end)
+                if report(ok, err) then
+                    refreshOptions(name)
+                    switchTo(name)
+                end
+            end,
+        }):Show()
+    end)
 
-    -- Listen for profile changes to update UI
+    S:Connect(deleteBtn, S.SIGNALS.CLICKED, function()
+        local active = SuuUI.Profiles:GetActiveName()
+        if active == "Default" then
+            print("|cffff0000SuuUI:|r Cannot delete Default profile")
+            return
+        end
+        C.Modal({
+            title = "Delete Profile",
+            message = "Delete '" .. active .. "'? This cannot be undone.",
+            confirmText = "Delete",
+            onConfirm = function()
+                if report(pcall(SuuUI.Profiles.Delete, SuuUI.Profiles, active)) then
+                    refreshOptions()
+                    currentName:SetText(SuuUI.Profiles:GetActiveName())
+                end
+            end,
+        }):Show()
+    end)
+
+    -- Reset everything
+    local resetBtn = C.Button({ label = "Reset All Settings", w = 160, h = 24 }, root:GetFrame())
+    root:Add(resetBtn, { width = 160, height = 24 })
+
+    S:Connect(resetBtn, S.SIGNALS.CLICKED, function()
+        C.Modal({
+            title = "Reset Settings", message = "Reset all settings to defaults?",
+            confirmText = "Reset",
+            onConfirm = function()
+                for _, plugin in ipairs(SuuUI.Plugins:GetAll()) do
+                    SuuUI.Settings:ResetAll(plugin.id)
+                end
+                print("|cff00ff00SuuUI:|r Profile settings reset to defaults")
+            end,
+        }):Show()
+    end)
+
     SuuUI.Events:On("SUUUI_PROFILE_LOADED", function(name)
         currentName:SetText(name)
-        profileDD:SetValue(name)
-        profileDD:SetOptions(updateDropdown())
+        refreshOptions(name)
     end, "profile_mgr_ui")
 
-    return f
+    return root
 end
 
 if not SuuUI._SettingsControls then SuuUI._SettingsControls = {} end

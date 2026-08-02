@@ -1,19 +1,28 @@
 local ipairs = ipairs
+local S = SuuUI.UISignals
 
 local M = {}
 
-local activeContainers = {}  -- track containers per contentFrame for cleanup
+local pages = {}   -- [contentFrame] = container handle
 
---- Builds the settings page for pluginId into contentFrame.
--- Clears existing children first. Uses schema order for render order.
+local coreTypes = {
+    section         = true,
+    profile_manager = true,
+    theme_manager   = true,
+}
+
+--- Builds the settings page for pluginId into a ScrollFrame's content area.
+-- Emits CONTENT_RESIZED on the scroll handle so it can update its scrollbar.
 -- @param pluginId string
--- @param contentFrame frame  Inner frame of a ScrollFrame content area
-function M:Build(pluginId, contentFrame)
-    -- clean up previous container
-    local containerId = tostring(contentFrame)
-    if activeContainers[containerId] then
-        local children = activeContainers[containerId]._children
-        for _, child in ipairs(children) do child:Hide() end
+-- @param scroll table  ScrollFrame handle that hosts the page
+function M:Build(pluginId, scroll)
+    local content = scroll:GetContent()
+
+    -- Tear down the previous page for this content area
+    local previous = pages[content]
+    if previous then
+        previous:Destroy()
+        pages[content] = nil
     end
 
     local schema = SuuUI.Settings:GetSchema(pluginId)
@@ -23,58 +32,42 @@ function M:Build(pluginId, contentFrame)
     local gap = T:GetToken("spaceSm") or 4
     local pad = T:GetToken("spaceMd") or 8
 
-    -- Create container for proper layout
-    local container = SuuUI.Layout:CreateContainer({
-        parent     = contentFrame,
-        layout     = "flow",
-        dir        = "vertical",
-        gap        = gap,
-        fillWidth  = true,  -- Fill parent width automatically
-        padding = {
-            top    = pad,
-            right  = pad,
-            bottom = pad,
-            left   = pad,
-        },
+    local page = SuuUI.Layout:CreateContainer({
+        parent  = content,
+        layout  = "flow",
+        dir     = "vertical",
+        gap     = gap,
+        w       = scroll:GetContentWidth(),
+        padding = { top = pad, right = pad, bottom = pad, left = pad },
     })
-    -- Root container inside ScrollFrame needs minimal positioning (exception to no-SetPoint rule)
-    container:GetFrame():SetPoint("TOPLEFT", contentFrame, "TOPLEFT", 0, 0)
-    activeContainers[containerId] = container
-    
-    -- Connect to container SIZE_CHANGED to update contentFrame height for scrolling
-    SuuUI.UISignals:Connect(container, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function(w, h)
-        -- Content frame should match actual content height
-        contentFrame:SetHeight(h)
-        -- Emit CONTENT_RESIZED on contentFrame so ScrollFrame can update
-        SuuUI.UISignals:Emit(contentFrame, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED, h)
+    pages[content] = page
+
+    -- The page reports its own height; the scroll frame reacts to it
+    S:Connect(page, S.SIGNALS.SIZE_CHANGED, function(_, h)
+        S:Emit(scroll, S.SIGNALS.CONTENT_RESIZED, h)
+    end)
+
+    -- Keep the page width in step with the scroll frame
+    S:Connect(scroll, S.SIGNALS.SIZE_CHANGED, function()
+        page:SetWidth(scroll:GetContentWidth())
     end)
 
     for _, entry in ipairs(schema) do
         local builder = SuuUI._SettingsControls and SuuUI._SettingsControls[entry.type]
         if builder then
-            local row
-            if entry.type == "section" or entry.type == "profile_manager" or entry.type == "theme_manager" then
-                row = builder(entry, contentFrame)
-            else
-                row = builder(entry, pluginId, contentFrame)
-            end
+            local row = coreTypes[entry.type]
+                and builder(entry, content)
+                or  builder(entry, pluginId, content)
             if row then
-                -- Use row's natural height instead of fixed ROW_HEIGHTS
-                local height = row:GetHeight()
-                -- Add with fill width to use all available space
-                container:Add(row, { width = "fill", height = height })
+                page:Add(row, { width = "fill", height = row:GetHeight() })
             end
         else
             SuuUI.Debug("PageBuilder: no control for type: " .. tostring(entry.type))
         end
     end
 
-    -- Resize content frame AND container so scroll works correctly
-    local _, contentHeight = container:GetContentSize()
-    container:GetFrame():SetHeight(contentHeight)
-    -- Content frame should match the actual content height
-    -- (ScrollFrame will show scrollbar if content > visible area)
-    contentFrame:SetHeight(contentHeight)
+    local _, contentHeight = page:GetContentSize()
+    S:Emit(scroll, S.SIGNALS.CONTENT_RESIZED, contentHeight)
 end
 
 SuuUI._PageBuilder = M

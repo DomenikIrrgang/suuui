@@ -1,5 +1,10 @@
 local assert, type = assert, type
 local tinsert = table.insert
+local S = SuuUI.UISignals
+
+local TITLE_H  = 26
+local CLOSE_SZ = 22
+local GRIP_SZ  = 16
 
 local WinMeta = {}
 WinMeta.__index = WinMeta
@@ -19,23 +24,32 @@ local function applyTheme(self)
     if bg then self._frame:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
     if bd then self._frame:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
 
-    -- title bar
     local bar = T:GetToken("colorBgAlt")
     if bar then self._titleBar:SetColorTexture(bar[1], bar[2], bar[3], bar[4]) end
 
-    -- title text
     local tc = T:GetToken("colorText")
     if tc then self._titleText:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
     self._titleText:SetFont(
         T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeMd") or 13, "")
 
-    -- close button: × glyph styled with theme colors
     local mc = T:GetToken("colorTextMuted")
     if mc then self._closeText:SetTextColor(mc[1], mc[2], mc[3], mc[4]) end
     self._closeText:SetFont(
         T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeLg") or 15, "")
+end
+
+-- Keeps the UIRoot anchor descriptor in step with the window's real position,
+-- so a root re-layout never snaps the window back to where it started.
+local function syncAnchor(f)
+    if not (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()) then return end
+    if not f._suuui_anchor then return end
+    SuuUI.UIRoot:UpdateElementAnchor(f, {
+        point = "TOPLEFT",
+        x     = f:GetLeft() or 0,
+        y     = (f:GetTop() or 0) - GetScreenHeight(),
+    })
 end
 
 local function savePos(self)
@@ -44,32 +58,58 @@ local function savePos(self)
     local x = self._frame:GetLeft()
     local y = self._frame:GetTop()
     SuuUIConfig.windows[self._id] = { x = x, y = y - GetScreenHeight() }
+    syncAnchor(self._frame)
 end
 
-local function restorePos(self)
-    local cfg = SuuUIConfig and SuuUIConfig.windows and SuuUIConfig.windows[self._id]
-    if cfg then
-        self._frame:ClearAllPoints()
-        self._frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cfg.x, cfg.y)
+-- UIRoot owns window placement. Register as soon as the root exists.
+local function registerWithRoot(f, layer, id)
+    if not (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()) then return false end
+    local cfg = SuuUIConfig and SuuUIConfig.windows and SuuUIConfig.windows[id]
+    local ok, err = pcall(function()
+        SuuUI.UIRoot:AddElement(f, layer, cfg
+            and { point = "TOPLEFT", x = cfg.x, y = cfg.y }
+            or  { point = "CENTER",  x = 0,     y = 0 })
+    end)
+    if not ok then
+        SuuUI.Debug("Window UIRoot registration failed: " .. tostring(err))
     end
+    return true
 end
 
---- Shows the window with a fade-in animation.
+--- Shows the window with a fade-in animation. Emits VISIBILITY_CHANGED.
 function WinMeta:Show()
     self._frame:SetAlpha(0)
     self._frame:Show()
     SuuUI.Anim.Presets.FadeIn(self._frame, SuuUI.Theme:GetToken("animFast"))
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
 end
 
---- Hides the window with a fade-out animation.
+--- Hides the window with a fade-out animation. Emits VISIBILITY_CHANGED.
 function WinMeta:Hide()
     SuuUI.Anim.Presets.FadeOut(self._frame, SuuUI.Theme:GetToken("animFast"))
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 --- Toggles window visibility.
 function WinMeta:Toggle()
     if self._frame:IsShown() then self:Hide() else self:Show() end
 end
+
+--- Returns whether the window is shown.
+-- @return bool
+function WinMeta:IsShown()   return self._frame:IsShown() end
+
+--- Returns the window's outer frame.
+-- @return frame
+function WinMeta:GetFrame()  return self._frame end
+
+--- Returns the window width.
+-- @return number
+function WinMeta:GetWidth()  return self._frame:GetWidth() end
+
+--- Returns the window height.
+-- @return number
+function WinMeta:GetHeight() return self._frame:GetHeight() end
 
 --- Sets the window title text.
 -- @param text string
@@ -81,6 +121,18 @@ end
 -- @return frame
 function WinMeta:GetContentFrame()
     return self._content
+end
+
+--- Returns a container that lays out children in the window's content area.
+-- @param props table  Optional container props
+-- @return table  Container handle
+function WinMeta:GetContentContainer(props)
+    if not self._contentBox then
+        props = props or {}
+        props.host = self._content
+        self._contentBox = SuuUI.Layout:CreateContainer(props)
+    end
+    return self._contentBox
 end
 
 --- Saves window position to per-character SavedVariables.
@@ -100,117 +152,88 @@ function SuuUI.Layout:CreateWindow(props)
     assert(type(props.id) == "string", "SuuUI Window: id required")
     local w = props.w or 400
     local h = props.h or 300
-    local layer = props.layer or "normal"  -- default layer
+    local layer = props.layer or "normal"
 
-    -- Use UIRoot if available, otherwise fall back to UIParent
     local parent = UIParent
     if SuuUI.UIRoot and SuuUI.UIRoot.GetRoot then
         local root = SuuUI.UIRoot:GetRoot()
-        if root then
-            parent = root
-        end
+        if root then parent = root end
     end
-    
+
     local f = CreateFrame("Frame", "SuuUI_win_" .. props.id, parent, "BackdropTemplate")
     f:SetSize(w, h)
-    f:SetPoint("CENTER")  -- Default center position
     f:SetFrameStrata("HIGH")
     f:SetMovable(true)
-    f:SetResizable(true)  -- Allow resizing
+    f:SetResizable(true)
     f:EnableMouse(true)
     f:SetClampedToScreen(true)
 
-    -- Title bar texture
-    local bar = f:CreateTexture(nil, "BACKGROUND")
-    bar:SetPoint("TOPLEFT",  f, "TOPLEFT",  1, -1)
-    bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -1, -1)
-    bar:SetHeight(26)
+    -- Declared up front so the resize script can reference it. This must be registered
+    -- BEFORE the shell container adopts the frame, so the container chains onto it
+    -- instead of replacing it — otherwise nothing re-lays out on resize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, width, height)
+        if handle then S:Emit(handle, S.SIGNALS.SIZE_CHANGED, width, height) end
+    end)
 
-    -- Title text
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("LEFT", bar, "LEFT", 10, 0)
+    -- Chrome is laid out by the engine: title strip on top, content below
+    local shell = SuuUI.Layout:CreateContainer({
+        host = f, layout = "flow", dir = "vertical", gap = 0,
+        padding = { top = 1, right = 1, bottom = 1, left = 1 },
+    })
+
+    -- Title strip: bar texture behind, title text left, close button right
+    local titleStrip = CreateFrame("Frame", nil, f)
+    shell:Add(titleStrip, { width = "fill", height = TITLE_H })
+
+    local titleBox = SuuUI.Layout:CreateContainer({ host = titleStrip, layout = "stack" })
+    local bar = titleStrip:CreateTexture(nil, "BACKGROUND")
+    titleBox:Add(bar)
+
+    local title = titleStrip:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetText(props.title or props.id)
+    title:SetJustifyH("LEFT")
+    titleBox:Add(title, { valign = "center", inset = { left = 10, right = 40 } })
 
-    -- Drag region (covers title bar, leaves room for close button on the right)
-    local drag = CreateFrame("Frame", nil, f)
-    drag:SetPoint("TOPLEFT",  bar, "TOPLEFT")
-    drag:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", -34, 0)  -- 22px btn + 6px margin + 6px gap
+    -- Drag region covers the strip but stops short of the close button
+    local drag = CreateFrame("Frame", nil, titleStrip)
     drag:EnableMouse(true)
+    titleBox:Add(drag, { inset = { right = CLOSE_SZ + 12 } })
+
+    local closeBtn = CreateFrame("Frame", nil, titleStrip, "BackdropTemplate")
+    closeBtn:EnableMouse(true)
+    closeBtn:SetFrameLevel(f:GetFrameLevel() + 10)
+    closeBtn:SetBackdrop({
+        bgFile   = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1, insets = { left=1, right=1, top=1, bottom=1 },
+    })
+    closeBtn:SetBackdropColor(0, 0, 0, 0)
+    closeBtn:SetBackdropBorderColor(0, 0, 0, 0)
+    titleBox:Add(closeBtn, {
+        align = "end", valign = "center",
+        width = CLOSE_SZ, height = CLOSE_SZ, inset = { right = 6 },
+    })
+
+    local closeBox = SuuUI.Layout:CreateContainer({ host = closeBtn, layout = "stack" })
+    local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    closeText:SetText("×")
+    closeBox:Add(closeText, { align = "center", valign = "center" })
+
+    -- Content area takes the remaining height
+    local content = CreateFrame("Frame", nil, f)
+    shell:Add(content, { width = "fill", height = "fill" })
+
     drag:SetScript("OnMouseDown", function() f:StartMoving() end)
     drag:SetScript("OnMouseUp", function()
         f:StopMovingOrSizing()
         savePos({ _frame = f, _id = props.id })
     end)
 
-    -- Close button: plain Frame with a × FontString, fully custom styled
-    local closeBtn = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    closeBtn:SetSize(22, 22)
-    closeBtn:SetPoint("RIGHT", bar, "RIGHT", -6, 0)
-    closeBtn:EnableMouse(true)
-    closeBtn:SetFrameLevel(f:GetFrameLevel() + 10)  -- above drag region
-    closeBtn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1, insets = { left=1, right=1, top=1, bottom=1 },
-    })
-    closeBtn:SetBackdropColor(0, 0, 0, 0)        -- transparent until hover
-    closeBtn:SetBackdropBorderColor(0, 0, 0, 0)  -- no border
-
-    local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    closeText:SetPoint("CENTER", closeBtn, "CENTER", 0, 0)
-    closeText:SetText("×")
-
-    -- Content area below title bar
-    local content = CreateFrame("Frame", nil, f)
-    content:SetPoint("TOPLEFT",     f, "TOPLEFT",     1, -27)
-    content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1,  1)
-
-    -- Resize grip (bottom-right corner) if resizable
-    local resizeGrip = nil
-    if props.resizable then
-        local minW = props.minW or 200
-        local minH = props.minH or 200
-        local maxW = props.maxW or 2000
-        local maxH = props.maxH or 2000
-        
-        resizeGrip = CreateFrame("Frame", nil, f)
-        resizeGrip:SetSize(16, 16)
-        resizeGrip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
-        resizeGrip:EnableMouse(true)
-        resizeGrip:SetFrameLevel(f:GetFrameLevel() + 10)
-        
-        -- Visual indicator (diagonal lines)
-        local tex = resizeGrip:CreateTexture(nil, "OVERLAY")
-        tex:SetAllPoints()
-        tex:SetColorTexture(0.5, 0.5, 0.5, 0.5)
-        
-        resizeGrip:SetScript("OnMouseDown", function()
-            f:StartSizing("BOTTOMRIGHT")
-        end)
-        resizeGrip:SetScript("OnMouseUp", function()
-            f:StopMovingOrSizing()
-            -- Enforce min/max bounds
-            local width = f:GetWidth()
-            local height = f:GetHeight()
-            if width < minW then width = minW end
-            if width > maxW then width = maxW end
-            if height < minH then height = minH end
-            if height > maxH then height = maxH end
-            f:SetSize(width, height)
-            savePos({ _frame = f, _id = props.id })
-        end)
-        resizeGrip:SetScript("OnEnter", function()
-            tex:SetColorTexture(0.7, 0.7, 0.7, 0.7)
-        end)
-        resizeGrip:SetScript("OnLeave", function()
-            tex:SetColorTexture(0.5, 0.5, 0.5, 0.5)
-        end)
-    end
-
-    -- Build handle first so the close callback can reference it safely
-    local handle = setmetatable({
+    handle = setmetatable({
         _id        = props.id,
         _frame     = f,
+        _shell     = shell,
         _titleBar  = bar,
         _titleText = title,
         _closeBtn  = closeBtn,
@@ -219,7 +242,46 @@ function SuuUI.Layout:CreateWindow(props)
         _layer     = layer,
     }, WinMeta)
 
-    -- Close button interactions
+    -- Resize grip, placed by an anchor container on the window frame
+    if props.resizable then
+        local minW, minH = props.minW or 200, props.minH or 200
+        local maxW, maxH = props.maxW or 2000, props.maxH or 2000
+
+        local gripBox = SuuUI.Layout:CreateContainer({ host = f, layout = "anchor" })
+        local grip = CreateFrame("Frame", nil, f)
+        grip:EnableMouse(true)
+        grip:SetFrameLevel(f:GetFrameLevel() + 10)
+        gripBox:Add(grip, {
+            anchor = {
+                point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT",
+                x = 0, y = 0, width = GRIP_SZ, height = GRIP_SZ,
+            },
+        })
+
+        local gripTexBox = SuuUI.Layout:CreateContainer({ host = grip, layout = "stack" })
+        local tex = grip:CreateTexture(nil, "OVERLAY")
+        gripTexBox:Add(tex)
+
+        local function gripColor(hover)
+            local c = SuuUI.Theme:GetToken(hover and "colorTextMuted" or "colorBorder")
+                   or {0.5, 0.5, 0.5, 1}
+            tex:SetColorTexture(c[1], c[2], c[3], hover and 0.9 or 0.6)
+        end
+        gripColor(false)
+
+        grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+        grip:SetScript("OnMouseUp", function()
+            f:StopMovingOrSizing()
+            local width  = math.max(minW, math.min(maxW, f:GetWidth()))
+            local height = math.max(minH, math.min(maxH, f:GetHeight()))
+            f:SetSize(width, height)
+            savePos({ _frame = f, _id = props.id })
+        end)
+        grip:SetScript("OnEnter", function() gripColor(true) end)
+        grip:SetScript("OnLeave", function() gripColor(false) end)
+        handle._gripBox = gripBox
+    end
+
     local T = SuuUI.Theme
     closeBtn:SetScript("OnEnter", function()
         local ac = T:GetToken("colorText")
@@ -232,40 +294,19 @@ function SuuUI.Layout:CreateWindow(props)
         local mc = T:GetToken("colorTextMuted")
         if mc then closeText:SetTextColor(mc[1], mc[2], mc[3], mc[4]) end
     end)
-    closeBtn:SetScript("OnMouseUp", function()
-        handle:Hide()
-    end)
+    closeBtn:SetScript("OnMouseUp", function() handle:Hide() end)
 
     applyTheme(handle)
     f:Hide()
 
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, "win_" .. props.id)
 
-    local posFrame = CreateFrame("Frame")
-    posFrame:RegisterEvent("PLAYER_LOGIN")
-    posFrame:SetScript("OnEvent", function()
-        posFrame:UnregisterAllEvents()
-        restorePos(handle)
-        
-        -- Register with UIRoot after position is restored (if UIRoot is available)
-        if SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot() then
-            local x = f:GetLeft() or 0
-            local y = (f:GetTop() or 0) - GetScreenHeight()
-            local ok, err = pcall(function()
-                SuuUI.UIRoot:AddElement(f, layer, {
-                    point = "TOPLEFT",
-                    x = x,
-                    y = y,
-                    width = w,
-                    height = h,
-                })
-            end)
-            if not ok then
-                -- UIRoot registration failed, but window can still function
-                SuuUI.Debug("Window UIRoot registration failed: " .. tostring(err))
-            end
-        end
-    end)
+    -- Register now if the root already exists, otherwise as soon as it does
+    if not registerWithRoot(f, layer, props.id) then
+        SuuUI.Events:Once("SUUUI_CORE_READY", function()
+            registerWithRoot(f, layer, props.id)
+        end, "win_root_" .. props.id)
+    end
 
     registry[props.id] = handle
     tinsert(SuuUI.Layout._windows or {}, handle)

@@ -18,10 +18,10 @@ function M:Init()
     rootContainer = SuuUI.Layout:CreateContainer({
         parent  = root,
         layout  = "anchor",
+        fill    = true,
         padding = {top=0, right=0, bottom=0, left=0},
     })
-    rootContainer:GetFrame():SetAllPoints(root)
-    
+
     -- Initialize layers for different UI element types
     layers = {
         background = {},  -- Background elements (lowest)
@@ -65,7 +65,7 @@ function M:AddElement(element, layer, anchorDesc)
     -- Add to layer tracking
     table.insert(layers[layer], element)
     
-    -- Add to root container
+    -- Add to root container. AnchorLayout reads the descriptor from _layoutProps.
     rootContainer:Add(element, { anchor = element._suuui_anchor })
 end
 
@@ -92,11 +92,16 @@ end
 -- @param element frame
 -- @param anchorDesc table  New anchor descriptor
 function M:UpdateElementAnchor(element, anchorDesc)
-    if not element then return end
-    
+    if not element or not anchorDesc then return end
+
     element._suuui_anchor = anchorDesc
-    
-    -- Trigger container layout recalculation
+    -- AnchorLayout resolves from _layoutProps.anchor, so keep both in step
+    if element._layoutProps then
+        element._layoutProps.anchor = anchorDesc
+    else
+        element._layoutProps = { anchor = anchorDesc }
+    end
+
     rootContainer:Layout()
 end
 

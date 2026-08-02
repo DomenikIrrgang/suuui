@@ -224,13 +224,14 @@ local lbl = SuuUI.Components.Text({
   color = "text", -- token suffix: "text"|"textMuted"|"accent"
 }, parentFrame)
 
--- All components share:
+-- All components share (note: no SetPoint — containers do the positioning):
 comp:SetSize(w, h)
-comp:SetPoint(point, relativeTo, relativePoint, x, y)
-comp:Show() / comp:Hide()
+comp:GetWidth() / comp:GetHeight()
+comp:Show() / comp:Hide() / comp:IsShown()
 comp:SetEnabled(bool)
 comp:Destroy()
 comp:GetFrame()
+comp:ApplyTheme()
 ```
 
 ---
@@ -278,16 +279,36 @@ win:Show()
 When adding children to containers, pass optional layout properties:
 
 ```lua
-container:Add(frame, {
+container:Add(child, {
   width  = "fill" | number,  -- "fill" = take available space, number = fixed px
   height = "fill" | number,  -- "fill" = distribute space (flow only)
+  align  = "start" | "center" | "end" | "stretch",  -- cross-axis alignment
 })
 ```
 
 - `width = "fill"` — stretches to container width (respects padding, all layouts)
 - `height = "fill"` — distributes available vertical space (flow layouts only)
+- `align` — cross-axis placement; also settable on the container for all children
 - Fixed numbers — explicit pixel dimensions
-- Omit property — uses frame's natural size
+- Omit property — uses child's natural size
+
+`Add()` takes a raw frame, a component handle, or another container. Pass the handle
+where you have one — the container unwraps it and can listen to its signals.
+
+A label-left / control-right row is a horizontal flow where the label fills:
+
+```lua
+local row = SuuUI.Layout:CreateContainer({
+  parent = parent, layout = "flow", dir = "horizontal",
+  gap = T:GetToken("spaceMd"), align = "center", h = 28,
+})
+row:Add(label,  { width = "fill" })
+row:Add(toggle, { width = 36, height = 18 })
+```
+
+Set `fill = true` on a container to anchor it to every side of its parent and track
+parent resizes. Leave `h` unset and the container hugs its content, reporting the new
+height through `SIZE_CHANGED` — no manual height maths anywhere.
 
 **Spacing Tokens:**
 
@@ -303,7 +324,11 @@ gap     = T:GetToken("spaceXl")   -- 24px: major spacing (page-level)
 
 Use the same tokens for both `gap` and `padding` to maintain visual rhythm.
 
-**NEVER manually position UI with SetPoint chains:**
+**NEVER call SetPoint. It is not available to you.**
+
+`SetPoint`, `SetAllPoints`, and `ClearAllPoints` exist only inside the four layout
+strategies (`Flow`, `Grid`, `Stack`, `Anchor`). Component handles and containers do not
+expose `SetPoint` at all, so there is nothing to reach for.
 
 ```lua
 -- ❌ FORBIDDEN
@@ -319,6 +344,15 @@ for i, item in ipairs(items) do
   container:Add(item, { width = "fill" })
 end
 ```
+
+Need something overlaid, centred, inset, or at a computed offset? Use the `stack` or
+`anchor` strategy — see `LAYOUT_SYSTEM.md`. Containers self-anchor to their parent, so
+you never position a container either.
+
+**Missing a layout algorithm or property? Add it to the engine.** That is the expected
+move, not a local workaround. Adding a strategy is one file in `Layout/` registered in
+`Container.lua`; adding a child property is a few lines in one strategy. Document it in
+`LAYOUT_SYSTEM.md` and `architecture.md` so every plugin gets it.
 
 **If the layout system doesn't support what you need:**
 
@@ -392,13 +426,98 @@ Do not write raw tables to SVs yourself — they are written on PLAYER_LOGOUT.
 
 ---
 
+## Building Plugin UI: No Raw WoW API
+
+**Your plugin's UI code must not call the WoW UI API.** Compose components and
+containers. Raw `CreateFrame`, `CreateTexture`, `CreateFontString`, `SetBackdrop`,
+`SetFrameStrata`, `EnableMouse`, and `SetScript` belong inside `Components/` and
+`Layout/`. See `WOW_API_ENCAPSULATION.md`.
+
+```lua
+-- ❌ FORBIDDEN in plugin UI code
+local row = CreateFrame("Frame", nil, parent)
+local tex = row:CreateTexture(nil, "ARTWORK")
+tex:SetColorTexture(0.2, 0.2, 0.2, 1)
+row:SetScript("OnClick", handler)
+
+-- ✅ REQUIRED
+local btn = SuuUI.Components.Button({ label = "Apply" }, parent)
+container:Add(btn:GetFrame(), { width = 100, height = 24 })
+SuuUI.UISignals:Connect(btn, SuuUI.UISignals.SIGNALS.CLICKED, handler)
+```
+
+Game data APIs (`RegisterEvent`, `UnitHealth`, `GetSpellInfo`) are fine — that is data,
+not UI. Hiding Blizzard's own frames in `onEnable`/`onDisable` is also fine.
+
+**Need a widget the library doesn't have?** Don't inline it. Propose a new component,
+build it in `Components/<Name>.lua`, and every plugin benefits. Inside it, lay out the
+parts with a host container (`CreateContainer{ host = f, layout = "stack" }`) — a
+component never calls `SetPoint` either.
+
+---
+
+## Component Signals
+
+Wire UI with `SuuUI.UISignals`, never by attaching Blizzard scripts to a component's
+frame. See `UI_SIGNALS.md` for the full signal table and payloads.
+
+```lua
+local S = SuuUI.UISignals
+
+-- ❌ FORBIDDEN: reaching through GetFrame() to attach a script
+slider:GetFrame():SetScript("OnMouseUp", handler)
+
+-- ✅ REQUIRED: connect to the signal
+local id = S:Connect(slider, S.SIGNALS.VALUE_CHANGED, function(new, old)
+  SuuUI.Settings:Set("my_plugin", "size", new)
+end)
+
+-- Clean up when you drop the handle
+S:Disconnect(slider, S.SIGNALS.VALUE_CHANGED, id)
+S:DisconnectAll(slider)
+```
+
+Common signals: `VALUE_CHANGED` (new, old), `TEXT_CHANGED` (text), `CLICKED` (button),
+`SIZE_CHANGED` (w, h), `VISIBILITY_CHANGED` (isVisible), `CONTENT_RESIZED` (height),
+`ENABLED_CHANGED` (isEnabled), `MOUSE_ENTER`, `MOUSE_LEAVE`, `FOCUSED`, `UNFOCUSED`.
+
+Component-specific signals live on the component table and carry their own payloads:
+
+```lua
+SuuUI.Components.INPUT_SIGNALS.SUBMITTED             -- Args: text
+SuuUI.Components.COLORPICKER_SIGNALS.COLOR_PICKED    -- Args: r, g, b, a
+SuuUI.Components.COLORPICKER_SIGNALS.REQUEST_CLOSE   -- Args: none
+SuuUI.Components.MODAL_SIGNALS.CONFIRMED             -- Args: inputValue or nil
+SuuUI.Components.MODAL_SIGNALS.CANCELLED             -- Args: none
+```
+
+Setter methods (`SetValue`, `SetSelected`) are deliberately silent — they do not emit
+`VALUE_CHANGED`. Only user interaction emits, which keeps external state syncing from
+looping back on itself.
+
+If your plugin defines custom signals, prefix them with your plugin id and document
+the payload inline:
+```lua
+MY_PLUGIN_SIGNALS = {
+  TARGET_SWAPPED = "my_plugin.target_swapped",  -- Args: unitId
+}
+```
+
+Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
+
+---
+
 ## Rules Summary
 
-1. Always prefix pool IDs, event names, and frame names with your plugin id.
+1. Always prefix pool IDs, event names, signal names, and frame names with your plugin id.
 2. Never call another plugin's functions directly.
 3. Never allocate tables in OnUpdate.
-4. Always clean up (Destroy components, Off events) in onDisable.
+4. Always clean up in onDisable: `Destroy()` components, `SuuUI.Events:Off`,
+   and `SuuUI.UISignals:DisconnectAll`.
 5. Restore all Blizzard frames in onDisable.
 6. Register settings schema in onInit, not at file load time.
 7. **ALWAYS use Container-based layouts. NEVER manually position UI elements.**
 8. **If a layout feature is missing, discuss and extend the system — don't hack workarounds.**
+9. **NEVER call raw WoW UI API in plugin UI code. Compose components and containers.**
+10. **NEVER use Blizzard frame scripts for UI wiring. Connect to UISignals instead.**
+11. **If a component is missing, build it in `Components/` — don't inline raw frames.**

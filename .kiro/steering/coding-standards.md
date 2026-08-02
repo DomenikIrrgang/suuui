@@ -23,7 +23,18 @@ return M
 
 ## UI Layout Rules
 
-**ALWAYS use the Container-based layout system. NEVER manually position UI elements.**
+**Everything is positioned by the layout engine. `SetPoint` lives only in the four
+layout strategies** (`Layout/{Flow,Grid,Stack,Anchor}Layout.lua`) — not in
+`SettingsUI/`, not in plugins, and not in components. Components lay out their own
+internals with a host container:
+
+```lua
+local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+box:Add(label, { align = "center", valign = "center" })
+```
+
+No public handle exposes `SetPoint`. If a layout algorithm or property is missing,
+implement it in the engine — see `LAYOUT_SYSTEM.md`.
 
 ```lua
 -- ❌ FORBIDDEN: Manual positioning
@@ -147,12 +158,76 @@ Dependencies are implicit via load order.
 
 ## WoW API Usage
 
-- Prefer SuuUI component API over raw WoW API for any UI that touches the theme.
+**Raw WoW UI API is confined to `Components/`, `Layout/`, and `Core/UIRoot.lua`.**
+UI construction code (`SettingsUI/`, plugin pages, controls) composes components and
+containers only. Positioning calls are tighter still: only the layout strategies.
+Full rules in `WOW_API_ENCAPSULATION.md`.
+
+```lua
+-- ❌ FORBIDDEN in UI construction code
+local row = CreateFrame("Frame", nil, parent)
+local tex = row:CreateTexture(nil, "ARTWORK")
+tex:SetColorTexture(0.3, 0.3, 0.3, 1)
+row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
+row:SetFrameStrata("FULLSCREEN_DIALOG")
+row:EnableMouse(true)
+row:SetScript("OnClick", fn)
+
+-- ✅ REQUIRED
+local C = SuuUI.Components
+local swatch = C.ColorSwatch({ value = T:GetToken("colorBg") }, parent)
+container:Add(swatch:GetFrame(), { width = 24, height = 24 })
+SuuUI.UISignals:Connect(swatch, SuuUI.UISignals.SIGNALS.CLICKED, openPicker)
+```
+
+Narrow exceptions: a bare unstyled grouping frame handed straight to a container,
+`GetCursorPosition()` inside a component, and game data APIs in plugins.
+
 - Only use Blizzard templates when there is no reasonable alternative
-  (EditBox for text input is the main exception).
+  (EditBox for text input is the main exception) — and wrap it in a component.
 - When hiding Blizzard frames, use `frame:Hide()` or `frame:UnregisterAllEvents()`.
   Do NOT nil them or `frame:SetParent(nil)` — this can cause taint.
 - Check for frame existence before operating: `if frame and frame.Hide then`.
+- If a needed widget does not exist, build it in `Components/` — do not inline it.
+
+## UI Signals
+
+**Never use Blizzard frame scripts to notify other UI elements.** Use
+`SuuUI.UISignals`. Full contract in `UI_SIGNALS.md`.
+
+```lua
+-- ❌ FORBIDDEN: Blizzard script as UI wiring
+container:GetFrame():SetScript("OnSizeChanged", function(_, w, h) resizeScroll(h) end)
+toggle:GetFrame():SetScript("OnMouseUp", handler)
+
+-- ✅ REQUIRED: signals
+local S = SuuUI.UISignals
+S:Connect(container, S.SIGNALS.SIZE_CHANGED, function(w, h) resizeScroll(h) end)
+S:Connect(toggle, S.SIGNALS.VALUE_CHANGED, function(new, old) handler(new) end)
+```
+
+Components emit; consumers connect. Inside a component, translate the Blizzard script
+into an emit:
+
+```lua
+hit:SetScript("OnMouseUp", function()
+  local old = self._value
+  self._value = not old
+  self:_render()
+  SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.VALUE_CHANGED, self._value, old)
+end)
+```
+
+Always disconnect in `Destroy()`:
+```lua
+function CompMeta:Destroy()
+  SuuUI.UISignals:DisconnectAll(self)
+  SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+end
+```
+
+Use `SuuUI.Events` for addon-wide state (theme, profile, settings) and
+`frame:RegisterEvent` for WoW game data. Neither replaces UISignals for UI wiring.
 
 ## Table Utilities
 

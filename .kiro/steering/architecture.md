@@ -17,7 +17,9 @@ SuuUI/
 ├── SuuUI.toc
 ├── Core/
 │   ├── Init.lua          -- bootstrap, version, global namespace
-│   ├── EventBus.lua      -- internal pub/sub system
+│   ├── EventBus.lua      -- addon-wide pub/sub (theme, profile, settings)
+│   ├── UISignals.lua     -- per-element signal system (Godot-style)
+│   ├── UIRoot.lua        -- single fullscreen root, layer management
 │   ├── Plugin.lua        -- plugin registry and lifecycle
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry and value I/O
@@ -29,23 +31,29 @@ SuuUI/
 │   └── Presets.lua       -- named animation presets (fadeIn, slideIn, etc.)
 ├── Layout/
 │   ├── Window.lua        -- draggable, resizable top-level window
-│   ├── Container.lua     -- base container with layout support
-│   ├── FlowLayout.lua    -- horizontal / vertical flow
+│   ├── Container.lua     -- base container; creates or adopts (host) a layout box
+│   ├── FlowLayout.lua    -- horizontal / vertical flow with fill + align
 │   ├── GridLayout.lua    -- fixed grid
-│   └── AnchorLayout.lua  -- manual anchor-based layout
+│   ├── StackLayout.lua   -- overlay: inset, align, valign (replaces SetAllPoints)
+│   └── AnchorLayout.lua  -- absolute / fraction-driven placement (thumbs, panels)
 ├── Components/
-│   ├── Frame.lua         -- styled base frame (border, bg, radius)
+│   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
+│   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
 │   ├── Button.lua        -- full custom button (no Blizzard template)
 │   ├── IconButton.lua
+│   ├── NavItem.lua       -- selectable labelled row (nav lists)
 │   ├── Toggle.lua        -- custom checkbox/toggle
 │   ├── Slider.lua        -- custom slider
 │   ├── Dropdown.lua      -- custom dropdown
 │   ├── Input.lua         -- EditBox wrapper (Blizzard required)
+│   ├── ColorSwatch.lua   -- clickable colour square
 │   ├── ColorPicker.lua   -- custom HSV color picker
+│   ├── KeyCapture.lua    -- button that captures the next keypress
 │   ├── ScrollFrame.lua   -- scroll container
 │   ├── Tooltip.lua       -- custom tooltip
-│   └── Divider.lua
+│   ├── Divider.lua
+│   └── Modal.lua         -- dialog with optional input
 ├── SettingsUI/
 │   ├── SettingsWindow.lua -- unified settings window (left nav + content)
 │   ├── PageBuilder.lua    -- auto-builds a settings page from schema
@@ -114,6 +122,39 @@ SuuUI.Events:Once(event, callback, owner)  -- auto-removes after first fire
 ```
 
 Events are plain strings. Convention: `"SUUUI_THEME_CHANGED"`, `"SUUUI_PROFILE_LOADED"`.
+
+### 2b. UI Signals (`Core/UISignals.lua`)
+
+Per-element signal system for UI-to-UI communication. See `UI_SIGNALS.md` for the
+full contract. Blizzard frame scripts must never be used to notify other UI elements —
+they stay inside the component that owns the frame.
+
+**API:**
+```lua
+local S = SuuUI.UISignals
+local id = S:Connect(obj, S.SIGNALS.SIZE_CHANGED, function(w, h) end)
+S:Disconnect(obj, S.SIGNALS.SIZE_CHANGED, id)
+S:DisconnectAll(obj, signal)   -- signal optional; omit to clear the object
+S:Emit(obj, S.SIGNALS.SIZE_CHANGED, w, h)
+S:HasConnections(obj, signal)
+```
+
+Registry uses weak keys, so destroyed objects are collected and their connections
+vanish with them. Callbacks run through `pcall` and log failures via `SuuUI.Debug`.
+
+**Standard signals** (payload in parentheses): `SIZE_CHANGED` (w, h),
+`POSITION_CHANGED` (x, y), `VISIBILITY_CHANGED` (isVisible), `MOUSE_ENTER` (—),
+`MOUSE_LEAVE` (—), `CLICKED` (button), `VALUE_CHANGED` (new, old),
+`TEXT_CHANGED` (text), `SCROLL_CHANGED` (scrollY), `CONTENT_RESIZED` (height),
+`ENABLED_CHANGED` (isEnabled), `FOCUSED` (—), `UNFOCUSED` (—).
+
+**Choosing the right bus:**
+
+| Kind | Mechanism |
+|---|---|
+| UI element notifying another UI element | `SuuUI.UISignals` |
+| Addon-wide state change | `SuuUI.Events` |
+| WoW game data | `frame:RegisterEvent` in a plugin |
 
 ### 3. Plugin System (`Core/Plugin.lua`)
 
@@ -298,39 +339,95 @@ local c = SuuUI.Layout:CreateContainer({
   layout  = "flow",   -- "flow" | "grid" | "anchor"
   dir     = "vertical",
   gap     = 8,
+  align   = "center", -- default cross-axis alignment for children
+  fill    = true,     -- anchor to all sides of parent, track parent resizes
   padding = {top=8, right=8, bottom=8, left=8},
 })
 
--- Add child with flexible sizing
+-- Add child with flexible sizing. Accepts a frame, component handle, or container.
 c:Add(child, { width = "fill", height = 32 })  -- fill width, fixed height
 c:Add(child, { width = 200 })                  -- fixed width, natural height
+c:Add(child, { align = "center" })             -- per-child cross-axis override
 c:Add(child)                                   -- natural dimensions
 
-c:Remove(child)
-c:Layout()            -- auto-called on Add/Remove
+c:Remove(child)        -- drops only this container's own signal connection
+c:Clear()              -- removes and hides every child
+c:Layout()             -- auto-called on Add/Remove/resize
 c:SetSize(w, h)
-c:GetContentSize()    -- returns computed w, h of all children
+c:GetContentSize()     -- returns computed w, h of all children
+c:GetChildren()
+c:Destroy()            -- destroys children, drops all connections
 ```
+
+Containers are frame-like: `GetFrame` `GetWidth` `GetHeight` `SetWidth` `SetHeight`
+`SetPoint` `ClearAllPoints` `Show` `Hide` `IsShown`. That is what lets them nest.
+A container emits `SIZE_CHANGED` whenever its computed size changes.
 
 **Layout Properties:**
 - `width = "fill"` — child takes available horizontal space
 - `width = number` — fixed width in pixels
 - `height = "fill"` — child takes available vertical space (flow layouts only)
 - `height = number` — fixed height in pixels
+- `align = "start"|"center"|"end"|"stretch"` — cross-axis alignment
 - Omit property to use child's natural size
 
 ### Layout Strategies
 
+**These four files are the only place in the addon that calls `SetPoint`.**
+
 - **FlowLayout** (`Layout/FlowLayout.lua`): horizontal or vertical flow with flexible sizing.
-  - Supports `width="fill"` to stretch children to container width
-  - Supports `height="fill"` to distribute available vertical space among fill children
-  - Calculates available space after accounting for fixed-size children and gaps
+  - `width="fill"` / `height="fill"` distribute remaining main-axis space
+  - `align` gives cross-axis placement (`start`/`center`/`end`/`stretch`)
   - Respects padding on all 4 sides
-- **GridLayout** (`Layout/GridLayout.lua`): fixed columns, equal or weighted cells.
-  - Automatically calculates column width based on container width, padding, and gap
-  - Respects padding on all 4 sides
-- **AnchorLayout** (`Layout/AnchorLayout.lua`): children provide anchor descriptors,
-  engine resolves and applies them — avoids manual SetPoint chains in plugin code.
+- **GridLayout** (`Layout/GridLayout.lua`): fixed columns, equal cells.
+  - Column width derived from container width, padding, and gap
+- **StackLayout** (`Layout/StackLayout.lua`): overlays children on the container box.
+  - `inset` (number or per-edge table), `align`, `valign`, explicit `width`/`height`
+  - Replaces `SetAllPoints`, centred labels, edge-spanning text, and inset icons
+  - This is what components use internally
+- **AnchorLayout** (`Layout/AnchorLayout.lua`): children carry anchor descriptors.
+  - For computed positions: slider fills and thumbs, scrollbar thumbs, floating panels
+  - Move a child with `container:SetChildAnchor(child, desc)`
+  - `relativeTo` may be a frame, a component handle, `"parent"`, or `nil`
+
+### Host containers
+
+`CreateContainer{ host = existingFrame }` adopts a frame as its layout box instead of
+creating one. Components use this so internal layout costs no extra frames and needs no
+`SetPoint`. Adopting chains any existing `OnSizeChanged` rather than replacing it.
+
+**Register a frame's own resize script before adopting it.** The container chains onto
+whatever is already there, so ordering decides who survives — setting the script after
+the container adopts the frame replaces the container's re-layout hook and breaks
+resizing silently.
+
+### Container sizing is always explicit
+
+Containers never rely on anchor-derived geometry. WoW does not lay out frames that have
+never been displayed, so an anchor-only container inside a hidden window reports width 0
+and collapses its children. `fill = true` mirrors the parent's size and tracks its
+resizes; containers also re-layout on `OnShow`.
+
+### Shared floating host
+
+`SuuUI.Layout:GetFloatingHost()` returns the single anchor container for transient
+screen-level panels (dropdown panels, tooltips, popups). Use it rather than creating a
+per-panel screen-level container, which would accumulate resize handlers on `UIParent`
+as pages rebuild. Remove your panel on teardown; never destroy the host.
+
+### Animating position
+
+The animator's `x`/`y` properties drive an anchor descriptor through
+`container:SetChildAnchor`, so even motion goes through the engine:
+
+```lua
+SuuUI.Anim:New({
+  container = knobBox, target = knob, anchor = knobAnchor,
+  property  = "x", from = 3, to = 20, duration = 0.1, easing = "easeOut",
+}):Play()
+```
+
+`container` and `anchor` are required for `x`/`y`; there is no `SetPoint` fallback.
 
 ### Extending the Layout System
 
@@ -370,12 +467,14 @@ c:GetContentSize()    -- returns computed w, h of all children
    - Broken layouts when container resizes
 
 **Current known limitations to discuss:**
-- No alignment control (left/center/right, top/middle/bottom) within containers
 - No wrapping in flow layouts
 - No percentage-based sizing (`width = "50%"`)
 - No min/max size constraints
 - No margin (distinct from container padding)
-- No z-index/layer control for overlapping children
+- No z-index/layer control for overlapping children (use UIRoot layers)
+
+Resolved: cross-axis `align` (`start`/`center`/`end`/`stretch`) on containers and
+children; container `fill` for parent-tracking; nested containers as first-class children.
 
 ---
 
@@ -432,10 +531,15 @@ SuuUI.Anim.Presets.ScalePop(frame, duration)
 All components accept `(props, parent)`. Return a handle with shared API.
 All components auto-restyle on `SUUUI_THEME_CHANGED`.
 
+**Components are the ONLY place raw WoW UI API may be called.** `CreateFrame`,
+`CreateTexture`, `CreateFontString`, `SetBackdrop`, `SetFrameStrata`, `EnableMouse`,
+and `SetScript` belong inside `Components/`, `Layout/`, and `Core/UIRoot.lua` — never
+in `SettingsUI/` or plugin page code. See `WOW_API_ENCAPSULATION.md`.
+
 **Shared API (all components):**
 ```lua
 comp:SetSize(w, h)
-comp:SetPoint(...)
+comp:GetWidth() / comp:GetHeight()
 comp:Show() / comp:Hide() / comp:IsShown()
 comp:SetEnabled(bool)
 comp:Destroy()
@@ -443,19 +547,51 @@ comp:GetFrame()
 comp:ApplyTheme()
 ```
 
+There is deliberately **no `comp:SetPoint`**. Components are positioned by adding them
+to a container; they position their own internals with a host container. See
+`LAYOUT_SYSTEM.md`.
+
+**Every component must also:**
+1. Emit the standard `SuuUI.UISignals` signals that apply to it — a component with a
+   value emits `VALUE_CHANGED`, one that resizes emits `SIZE_CHANGED`, and so on.
+2. Translate Blizzard scripts into signals internally. The script never escapes the
+   component file; consumers connect to signals, not to `GetFrame():SetScript(...)`.
+3. Cache token values in `ApplyTheme()` and re-read only there.
+4. Clean up in `Destroy()`: `SuuUI.UISignals:DisconnectAll(self)` plus
+   `SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)`.
+
+**Missing a component?** Build it in `Components/<Name>.lua` rather than inlining raw
+frames in a page. Register it in the `.toc` and document it here.
+
 **Components:**
-- `Frame` — base styled container (bg, border, simulated corner radius).
+- `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,
+  `border = false` to drop the border.
 - `Text` — FontString with token font/size/color.
 - `Button` — fully custom, animated hover/press states.
 - `IconButton` — Button + texture slot.
+- `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox.
 - `Slider` — custom track + thumb, label, value display.
-- `Dropdown` — custom panel, animated open/close, keyboard nav.
+- `Dropdown` — custom panel, animated open/close.
 - `Input` — EditBox (Blizzard, unavoidable), themed styling.
+- `ColorSwatch` — clickable colour square with token border, `GetHex()` helper.
 - `ColorPicker` — custom HSV picker + hex input.
+- `KeyCapture` — button that captures the next keypress into a binding string.
 - `ScrollFrame` — custom scrollbar + masked content.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
+- `Modal` — dialog with optional input, container-composed.
+- `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
+
+**Component-specific signals:**
+
+| Component | Signal constant | Payload |
+|---|---|---|
+| `Input` | `Components.INPUT_SIGNALS.SUBMITTED` | `text` |
+| `ColorPicker` | `Components.COLORPICKER_SIGNALS.COLOR_PICKED` | `r, g, b, a` |
+| `ColorPicker` | `Components.COLORPICKER_SIGNALS.REQUEST_CLOSE` | — |
+| `Modal` | `Components.MODAL_SIGNALS.CONFIRMED` | `inputValue` or `nil` |
+| `Modal` | `Components.MODAL_SIGNALS.CANCELLED` | — |
 
 ---
 

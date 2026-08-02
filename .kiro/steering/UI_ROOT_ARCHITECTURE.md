@@ -6,11 +6,18 @@ SuuUI implements a **single global UI root** system where ALL UI elements are ch
 
 ## Core Principle
 
-**NEVER use manual `SetPoint` positioning except for:**
-1. The UI root itself (anchored to UIParent)
-2. Internal layout within individual components (like button label positioning)
+**ALL positioning goes through the layout engine. `SetPoint` appears only in the four
+layout strategies** (`Layout/FlowLayout.lua`, `GridLayout.lua`, `StackLayout.lua`,
+`AnchorLayout.lua`).
 
-**ALL other positioning MUST use containers.**
+Component internals are no exception: a component lays out its own parts with a host
+container (`CreateContainer{ host = f, layout = "stack" }`). `SetPoint` is not exposed
+on component handles, containers, or windows.
+
+The only sanctioned raw anchors, each documented in code:
+1. `Core/UIRoot.lua` anchoring the root to `UIParent`
+2. `Layout/Container.lua` self-anchoring its own frame to its parent
+3. `Core/Pool.lua` clearing points when releasing a recycled frame
 
 ## Architecture Hierarchy
 
@@ -205,9 +212,16 @@ container:Add(row2, { width = "fill", height = 24 })
 
 1. ✅ ONE UI root for entire addon
 2. ✅ ALL windows are children of UI root
-3. ✅ ALL element positioning uses containers
-4. ✅ Containers can be nested
-5. ❌ NO manual `SetPoint` for layout (except component internals)
-6. ❌ NO direct children of UIParent (use UI root)
-7. ❌ NO manual yOffset tracking
-8. ❌ NO calculating positions in loops
+3. ✅ ALL positioning uses containers — including inside components
+4. ✅ Containers can be nested, and can adopt an existing frame via `host`
+5. ✅ Raw WoW UI API only in `Components/`, `Layout/`, `Core/UIRoot.lua`
+   (see `WOW_API_ENCAPSULATION.md`)
+6. ✅ Elements communicate via `SuuUI.UISignals` (see `UI_SIGNALS.md`)
+7. ✅ Missing a layout algorithm or property? Implement it in the engine
+8. ❌ NO `SetPoint`/`SetAllPoints` outside the four layout strategies
+9. ❌ NO `SetPoint` on any public handle — it is not exposed
+10. ❌ NO direct children of UIParent (use UI root)
+11. ❌ NO manual yOffset tracking
+12. ❌ NO calculating positions in loops
+13. ❌ NO `CreateFrame`/`CreateTexture`/`SetBackdrop` in page or plugin UI code
+14. ❌ NO Blizzard frame scripts (`OnSizeChanged`, `OnClick`, `OnMouseWheel`) for UI wiring

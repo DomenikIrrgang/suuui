@@ -7,21 +7,33 @@ local running  = false
 
 local ticker = CreateFrame("Frame")
 
+-- Position is animated through the layout engine, never by touching SetPoint.
+-- "x"/"y" require def.container (an anchor-layout container holding the target)
+-- plus def.anchor, the base descriptor whose offset is being driven.
+local function animateAnchor(a, axis, v)
+    if not a.container then
+        SuuUI.Debug("Anim: property '" .. axis .. "' requires a container")
+        return
+    end
+    local base = a.anchor or {}
+    a.container:SetChildAnchor(a.target, {
+        point         = base.point,
+        relativeTo    = base.relativeTo,
+        relativePoint = base.relativePoint,
+        width         = base.width,
+        height        = base.height,
+        x             = (axis == "x") and v or (base.x or 0),
+        y             = (axis == "y") and v or (base.y or 0),
+    })
+end
+
 local setters = {
-    alpha = function(f, v) f:SetAlpha(v) end,
-    width = function(f, v) f:SetWidth(v) end,
-    height= function(f, v) f:SetHeight(v) end,
-    scale = function(f, v) f:SetScale(v) end,
-    x = function(f, v)
-        local point, rel, rp, _, yofs = f:GetPoint(1)
-        f:ClearAllPoints()
-        f:SetPoint(point or "TOPLEFT", rel, rp, v, yofs or 0)
-    end,
-    y = function(f, v)
-        local point, rel, rp, xofs = f:GetPoint(1)
-        f:ClearAllPoints()
-        f:SetPoint(point or "TOPLEFT", rel, rp, xofs or 0, v)
-    end,
+    alpha = function(_, v, a) a.target:SetAlpha(v) end,
+    width = function(_, v, a) a.target:SetWidth(v) end,
+    height= function(_, v, a) a.target:SetHeight(v) end,
+    scale = function(_, v, a) a.target:SetScale(v) end,
+    x     = function(_, v, a) animateAnchor(a, "x", v) end,
+    y     = function(_, v, a) animateAnchor(a, "y", v) end,
 }
 
 local function tick(_, dt)
@@ -35,7 +47,7 @@ local function tick(_, dt)
             local val   = a.from + (a.to - a.from) * eased
             local setter = setters[a.property]
             if setter and a.target and a.target.IsShown then
-                setter(a.target, val)
+                setter(a.target, val, a)
             end
             if t >= 1 then
                 a._playing = false
@@ -93,11 +105,16 @@ function AnimMeta:IsPlaying()
 end
 
 --- Creates a new animation handle (does not auto-play).
--- @param def table  { target, property, from, to, duration, easing, onDone }
+-- @param def table  { target, property, from, to, duration, easing, onDone, container, anchor }
+--   property: "alpha"|"width"|"height"|"scale"|"x"|"y"
+--   container + anchor: required for "x"/"y" — position is driven through the
+--   layout engine via container:SetChildAnchor, never through SetPoint.
 -- @return table  Animation handle
 function M:New(def)
     return setmetatable({
-        target   = def.target,
+        target    = def.target,
+        container = def.container,
+        anchor    = def.anchor,
         property = def.property or "alpha",
         from     = def.from or 0,
         to       = def.to   or 1,

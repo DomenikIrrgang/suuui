@@ -1,28 +1,41 @@
 local max, min = math.max, math.min
 local select   = select
+local S = SuuUI.UISignals
 
 local ScrMeta = {}
 ScrMeta.__index = ScrMeta
 
-function ScrMeta:SetPoint(...)  self._f:SetPoint(...) end
-function ScrMeta:Show()         self._f:Show() end
-function ScrMeta:Hide()         self._f:Hide() end
+function ScrMeta:GetWidth()     return self._f:GetWidth() end
+function ScrMeta:GetHeight()    return self._f:GetHeight() end
 function ScrMeta:IsShown()      return self._f:IsShown() end
 function ScrMeta:GetFrame()     return self._f end
 function ScrMeta:SetEnabled()   end
-function ScrMeta:Destroy()      SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid) end
 
---- Resizes the scroll frame.
+function ScrMeta:Show()
+    self._f:Show()
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
+end
+
+function ScrMeta:Hide()
+    self._f:Hide()
+    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
+end
+
+function ScrMeta:Destroy()
+    S:DisconnectAll(self)
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._thumb:SetScript("OnUpdate", nil)
+    self._thumbBox:Destroy()
+    self._box:Destroy()
+end
+
+--- Resizes the scroll frame. Emits SIZE_CHANGED.
 -- @param w number
 -- @param h number
 function ScrMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    local needsBar = self._content:GetHeight() > h
-    local contentW = needsBar and (w - 10) or w
-    self._sf:SetSize(contentW, h)
-    self._content:SetWidth(contentW)
-    self._track:SetHeight(h - 4)
     self:_updateBar()
+    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 --- Returns the inner content frame for attaching children.
@@ -38,10 +51,18 @@ function ScrMeta:GetContentWidth()
     return needsBar and (self._f:GetWidth() - 10) or self._f:GetWidth()
 end
 
+--- Sets the scrollable content height and refreshes the scrollbar.
+-- @param height number
+function ScrMeta:SetContentHeight(height)
+    self._content:SetHeight(max(height, self._sf:GetHeight()))
+    self:_updateBar()
+end
+
 --- Scrolls to the top of the content.
 function ScrMeta:ScrollToTop()
     self._sf:SetVerticalScroll(0)
     self:_updateBar()
+    S:Emit(self, S.SIGNALS.SCROLL_CHANGED, 0)
 end
 
 function ScrMeta:_updateBar()
@@ -52,17 +73,18 @@ function ScrMeta:_updateBar()
     local cur     = self._sf:GetVerticalScroll()
     local pct     = (maxScroll > 0) and (cur / maxScroll) or 0
     local thumbH  = max(16, trackH * (sh / max(ch, 1)))
-    self._thumb:SetHeight(thumbH)
-    self._thumb:SetPoint("TOP", self._track, "TOP", 0, -(pct * (trackH - thumbH)))
-    
+
+    -- Thumb size and offset go through the anchor container
+    self._thumbAnchor.height = thumbH
+    self._thumbAnchor.y      = -(pct * (trackH - thumbH))
+    self._thumbBox:SetChildAnchor(self._thumb, self._thumbAnchor)
+
     local needsBar = ch > sh
     self._track:SetShown(needsBar)
-    
-    -- Adjust scroll frame and content width when scrollbar visibility changes
-    local w = self._f:GetWidth()
-    local contentW = needsBar and (w - 10) or w
-    self._sf:SetWidth(contentW)
-    self._content:SetWidth(contentW)
+
+    -- Reserve gutter space for the scrollbar by insetting the viewport
+    self._box:SetChildProps(self._sf, needsBar and { inset = { right = 10 } } or nil)
+    self._content:SetWidth(self._sf:GetWidth())
 end
 
 function ScrMeta:ApplyTheme()
@@ -89,6 +111,8 @@ function ScrMeta:ApplyTheme()
 end
 
 --- Creates a custom scroll frame with a styled scrollbar.
+-- Emits SCROLL_CHANGED (scrollY), SIZE_CHANGED, VISIBILITY_CHANGED.
+-- Connect CONTENT_RESIZED on the handle to report a new content height.
 -- @param props table  { w, h }
 -- @param parent frame
 -- @return table  ScrollFrame handle
@@ -99,81 +123,80 @@ function SuuUI.Components.ScrollFrame(props, parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
 
-    -- The WoW ScrollFrame widget (initial width will be adjusted)
-    local sf = CreateFrame("ScrollFrame", nil, f)
-    sf:SetSize(w, h)
-    sf:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
+    -- Viewport and scrollbar track are stacked in the outer frame
+    local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
-    -- Content frame (scroll child)
+    local sf = CreateFrame("ScrollFrame", nil, f)
+    box:Add(sf)
+
     local content = CreateFrame("Frame", nil, sf)
-    content:SetSize(w, h)  -- minimum = scroll frame height
+    content:SetSize(w, h)
     sf:SetScrollChild(content)
 
-    -- Scrollbar track (Frame so GetHeight() works)
     local track = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    track:SetWidth(8)
-    track:SetHeight(h - 4)
-    track:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -1, -2)
-    track:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1,  2)
+    box:Add(track, { align = "end", width = 8, inset = { right = 1, top = 2, bottom = 2 } })
 
-    -- Scrollbar thumb
+    -- Thumb position is driven through the track's anchor container
+    local thumbBox = SuuUI.Layout:CreateContainer({ host = track, layout = "anchor" })
     local thumb = CreateFrame("Frame", nil, track, "BackdropTemplate")
-    thumb:SetWidth(8)
-    thumb:SetHeight(30)
-    thumb:SetPoint("TOP", track, "TOP", 0, 0)
     thumb:EnableMouse(true)
+    local thumbAnchor = { point = "TOP", relativePoint = "TOP", x = 0, y = 0, width = 8, height = 30 }
+    thumbBox:Add(thumb, { anchor = thumbAnchor })
 
     local id = "scr_" .. tostring(f)
     local handle = setmetatable({
-        _f=f, _sf=sf, _content=content,
-        _track=track, _thumb=thumb, _eid=id,
+        _f=f, _sf=sf, _content=content, _box=box,
+        _track=track, _thumb=thumb,
+        _thumbBox=thumbBox, _thumbAnchor=thumbAnchor, _eid=id,
     }, ScrMeta)
 
-    -- Mouse wheel scroll: only when content overflows
     sf:SetScript("OnMouseWheel", function(_, delta)
         if content:GetHeight() <= sf:GetHeight() then return end
         local cur = sf:GetVerticalScroll()
         local maxScroll = max(0, content:GetHeight() - sf:GetHeight())
-        sf:SetVerticalScroll(max(0, min(maxScroll, cur - delta * 20)))
+        local newScroll = max(0, min(maxScroll, cur - delta * 20))
+        sf:SetVerticalScroll(newScroll)
         handle:_updateBar()
+        S:Emit(handle, S.SIGNALS.SCROLL_CHANGED, newScroll)
     end)
 
-    -- Thumb drag
     local dragging, dragStartY, dragStartScroll = false, 0, 0
+    local function onDragUpdate()
+        if not dragging then
+            thumb:SetScript("OnUpdate", nil)
+            return
+        end
+        local cy = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+        local delta = dragStartY - cy
+        local trackH   = track:GetHeight()
+        local thumbH   = thumb:GetHeight()
+        local maxScroll = max(0, content:GetHeight() - sf:GetHeight())
+        local ratio    = maxScroll / max(1, trackH - thumbH)
+        local newScroll = max(0, min(maxScroll, dragStartScroll + delta * ratio))
+        sf:SetVerticalScroll(newScroll)
+        handle:_updateBar()
+        S:Emit(handle, S.SIGNALS.SCROLL_CHANGED, newScroll)
+    end
+
     thumb:SetScript("OnMouseDown", function(_, btn)
         if btn ~= "LeftButton" then return end
         dragging = true
         dragStartY = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
         dragStartScroll = sf:GetVerticalScroll()
-        thumb:SetScript("OnUpdate", function()
-            if not dragging then
-                thumb:SetScript("OnUpdate", nil)
-                return
-            end
-            local cy = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
-            local delta = dragStartY - cy
-            local trackH   = track:GetHeight()
-            local thumbH   = thumb:GetHeight()
-            local ch       = content:GetHeight()
-            local sh       = sf:GetHeight()
-            local maxScroll = max(0, ch - sh)
-            local ratio    = maxScroll / max(1, trackH - thumbH)
-            sf:SetVerticalScroll(max(0, min(maxScroll, dragStartScroll + delta * ratio)))
-            handle:_updateBar()
-        end)
+        thumb:SetScript("OnUpdate", onDragUpdate)
     end)
     thumb:SetScript("OnMouseUp", function()
         dragging = false
         thumb:SetScript("OnUpdate", nil)
     end)
 
-    -- Recompute bar when content size changes via signal
-    SuuUI.UISignals:Connect(content, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED, function(contentHeight)
-        handle:_updateBar()
+    -- Content reports its own height growth through the signal bus
+    S:Connect(handle, S.SIGNALS.CONTENT_RESIZED, function(contentHeight)
+        handle:SetContentHeight(contentHeight)
     end)
 
     handle:ApplyTheme()
-    handle:_updateBar()  -- set initial thumb visibility and position
+    handle:_updateBar()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

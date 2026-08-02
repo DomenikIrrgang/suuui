@@ -1,72 +1,50 @@
-local pairs, type, assert = pairs, type, assert
+local pairs, ipairs, type, assert = pairs, ipairs, type, assert
 local tinsert, tremove = table.insert, table.remove
-local ceil = math.ceil
+local ceil, abs = math.ceil, math.abs
 
 local strategies = {
     flow   = function(c) SuuUI._FlowLayout.Apply(c) end,
     grid   = function(c) SuuUI._GridLayout.Apply(c) end,
     anchor = function(c) SuuUI._AnchorLayout.Apply(c) end,
+    stack  = function(c) SuuUI._StackLayout.Apply(c) end,
 }
 
 local ContMeta = {}
 ContMeta.__index = ContMeta
 
---- Adds a child frame to the container and re-runs layout.
--- @param child frame or handle
--- @param layoutProps table  Optional { width="fill"|number, height="fill"|number }
-function ContMeta:Add(child, layoutProps)
-    if layoutProps then
-        child._layoutProps = layoutProps
-    end
-    tinsert(self._children, child)
-    
-    -- Connect to SIZE_CHANGED signal for automatic re-layout
-    local connId = SuuUI.UISignals:Connect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function(w, h)
-        -- Just trigger layout - Layout() will emit SIZE_CHANGED if needed
-        self:Layout()
-    end)
-    
-    -- Store connection ID for cleanup
-    if not self._signalConnections then
-        self._signalConnections = {}
-    end
-    self._signalConnections[child] = connId
-    
+--- Returns the raw WoW frame this container lays out inside.
+-- @return frame
+function ContMeta:GetFrame()
+    return self._frame
+end
+
+--- Returns the container's current width.
+-- @return number
+function ContMeta:GetWidth()
+    return self._frame:GetWidth()
+end
+
+--- Returns the container's current height.
+-- @return number
+function ContMeta:GetHeight()
+    return self._frame:GetHeight()
+end
+
+--- Sets the container width and re-runs layout.
+-- @param w number
+function ContMeta:SetWidth(w)
+    self._frame:SetWidth(w)
     self:Layout()
 end
 
---- Removes a child frame and re-runs layout.
--- @param child frame
-function ContMeta:Remove(child)
-    -- Clean up signal connection
-    if self._signalConnections and self._signalConnections[child] then
-        SuuUI.UISignals:DisconnectAll(child)
-        self._signalConnections[child] = nil
-    end
-    
-    for i = #self._children, 1, -1 do
-        if self._children[i] == child then
-            tremove(self._children, i)
-            break
-        end
-    end
+--- Sets the container height and re-runs layout.
+-- @param h number
+function ContMeta:SetHeight(h)
+    self._frame:SetHeight(h)
     self:Layout()
 end
 
---- Re-calculates and applies child positions.
-function ContMeta:Layout()
-    local fn = strategies[self._layoutType]
-    if fn then 
-        fn(self) 
-        
-        -- Always emit SIZE_CHANGED after layout to notify parents
-        local _, h = self:GetContentSize()
-        self._frame:SetHeight(h)
-        SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, self._frame:GetWidth(), h)
-    end
-end
-
---- Sets container size.
+--- Sets container size and re-runs layout.
 -- @param w number
 -- @param h number
 function ContMeta:SetSize(w, h)
@@ -74,91 +52,255 @@ function ContMeta:SetSize(w, h)
     self:Layout()
 end
 
---- Returns the raw WoW frame.
--- @return frame
-function ContMeta:GetFrame()
-    return self._frame
+--- Shows the container. Emits VISIBILITY_CHANGED.
+function ContMeta:Show()
+    self._frame:Show()
+    SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, true)
+end
+
+--- Hides the container. Emits VISIBILITY_CHANGED.
+function ContMeta:Hide()
+    self._frame:Hide()
+    SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, false)
+end
+
+--- Returns whether the container is shown.
+-- @return bool
+function ContMeta:IsShown()
+    return self._frame:IsShown()
+end
+
+-- Layout strategies position frames; signals are emitted by handles. Unwrap once
+-- here so components never need to reimplement the frame interface.
+local function targetOf(child)
+    if type(child) == "table" and child.GetFrame then return child:GetFrame() end
+    return child
+end
+
+--- Adds a child to the container and re-runs layout.
+-- Accepts a raw frame/texture/fontstring, a component handle, or another container.
+-- @param child frame|table
+-- @param layoutProps table  Optional strategy-specific properties
+--   flow/grid: { width, height, align }
+--   stack:     { inset, align, valign, width, height }
+--   anchor:    { anchor = { point, relativeTo, relativePoint, x, y, width, height } }
+function ContMeta:Add(child, layoutProps)
+    local target = targetOf(child)
+    if layoutProps then target._layoutProps = layoutProps end
+
+    -- A nested container stops sizing its own frame on any axis the parent controls
+    if getmetatable(child) == ContMeta then
+        child._managed = true
+        local h = layoutProps and layoutProps.height
+        if h == "fill" or type(h) == "number" or self._layoutType == "stack" then
+            child._hug = false
+        end
+    end
+
+    tinsert(self._children, target)
+    self._sources[target] = child
+
+    -- Re-layout when a child reports a new size
+    local connId = SuuUI.UISignals:Connect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function()
+        self:Layout()
+    end)
+    self._childConns[child] = connId
+
+    self:Layout()
+    return child
+end
+
+--- Updates one child's layout properties and re-runs layout.
+-- Use this instead of repositioning a child by hand.
+-- @param child frame|table
+-- @param layoutProps table
+function ContMeta:SetChildProps(child, layoutProps)
+    local target = targetOf(child)
+    target._layoutProps = layoutProps
+    self:Layout()
+end
+
+--- Updates one child's anchor descriptor (anchor layout) and re-runs layout.
+-- @param child frame|table
+-- @param anchorDesc table  { point, relativeTo, relativePoint, x, y, width, height }
+function ContMeta:SetChildAnchor(child, anchorDesc)
+    local target = targetOf(child)
+    target._layoutProps = target._layoutProps or {}
+    target._layoutProps.anchor = anchorDesc
+    self:Layout()
+end
+
+--- Removes a child and re-runs layout. Accepts the handle or its frame.
+-- @param child frame|table
+function ContMeta:Remove(child)
+    local target = targetOf(child)
+    local source = self._sources[target] or child
+
+    local connId = self._childConns[source]
+    if connId then
+        -- Only drop our own connection, never the child's other listeners
+        SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
+        self._childConns[source] = nil
+    end
+    self._sources[target] = nil
+
+    for i = #self._children, 1, -1 do
+        if self._children[i] == target then
+            tremove(self._children, i)
+            break
+        end
+    end
+    self:Layout()
+end
+
+--- Removes and hides every child, then re-runs layout.
+function ContMeta:Clear()
+    for i = #self._children, 1, -1 do
+        local target = self._children[i]
+        local source = self._sources[target] or target
+        local connId = self._childConns[source]
+        if connId then
+            SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
+            self._childConns[source] = nil
+        end
+        if source.Hide then source:Hide() end
+        self._sources[target] = nil
+        tremove(self._children, i)
+    end
+    self:Layout()
+end
+
+--- Returns the container's children in insertion order.
+-- @return table
+function ContMeta:GetChildren()
+    return self._children
+end
+
+--- Re-calculates and applies child positions. Emits SIZE_CHANGED when the size changes.
+function ContMeta:Layout()
+    if self._laying then return end
+    local fn = strategies[self._layoutType]
+    if not fn then return end
+
+    self._laying = true
+    fn(self)
+
+    -- Hug content height when nothing else owns this container's height
+    if self._hug then
+        local _, contentH = self:GetContentSize()
+        if abs((self._frame:GetHeight() or 0) - contentH) > 0.5 then
+            self._frame:SetHeight(contentH)
+        end
+    end
+    self._laying = false
+
+    local w, h = self._frame:GetWidth(), self._frame:GetHeight()
+    if abs((self._lastW or -1) - w) > 0.5 or abs((self._lastH or -1) - h) > 0.5 then
+        self._lastW, self._lastH = w, h
+        SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, w, h)
+    end
 end
 
 --- Returns computed bounding size of all children.
 -- @return number, number  width, height
 function ContMeta:GetContentSize()
-    if #self._children == 0 then
-        return 0, 0
-    end
-    
     local pad = self._padding
     local gap = self._gap
-    
-    if self._layoutType == "flow" then
+    local n   = #self._children
+
+    if n == 0 then
+        return pad.left + pad.right, pad.top + pad.bottom
+    end
+
+    if self._layoutType == "stack" then
+        return SuuUI._StackLayout.ContentSize(self)
+
+    elseif self._layoutType == "flow" then
         if self._dir == "vertical" then
-            -- Vertical flow: width is widest child, height is sum of heights + gaps + padding
-            local maxW = 0
-            local totalH = pad.top + pad.bottom
+            local maxW, totalH = 0, pad.top + pad.bottom
             for i, child in ipairs(self._children) do
-                local w = child:GetWidth()
+                local w = child:GetWidth() or 0
                 if w > maxW then maxW = w end
-                totalH = totalH + child:GetHeight()
-                if i < #self._children then
-                    totalH = totalH + gap
-                end
+                totalH = totalH + (child:GetHeight() or 0)
+                if i < n then totalH = totalH + gap end
             end
             return maxW + pad.left + pad.right, totalH
-        else
-            -- Horizontal flow: width is sum of widths + gaps + padding, height is tallest child
-            local maxH = 0
-            local totalW = pad.left + pad.right
-            for i, child in ipairs(self._children) do
-                local h = child:GetHeight()
-                if h > maxH then maxH = h end
-                totalW = totalW + child:GetWidth()
-                if i < #self._children then
-                    totalW = totalW + gap
-                end
-            end
-            return totalW, maxH + pad.top + pad.bottom
         end
+
+        local maxH, totalW = 0, pad.left + pad.right
+        for i, child in ipairs(self._children) do
+            local h = child:GetHeight() or 0
+            if h > maxH then maxH = h end
+            totalW = totalW + (child:GetWidth() or 0)
+            if i < n then totalW = totalW + gap end
+        end
+        return totalW, maxH + pad.top + pad.bottom
+
     elseif self._layoutType == "grid" then
-        -- Grid layout: calculate based on columns
         local cols = self._cols
-        local rows = ceil(#self._children / cols)
-        local colW = 0
+        local rows = ceil(n / cols)
+        local colW = self._children[1]:GetWidth() or 0
         local totalH = pad.top + pad.bottom
-        
-        -- Find max column width (all equal in grid)
-        if #self._children > 0 then
-            colW = self._children[1]:GetWidth()
-        end
-        
-        -- Calculate total height
+
         for r = 1, rows do
             local rowH = 0
             for c = 1, cols do
                 local idx = (r - 1) * cols + c
-                if idx <= #self._children then
-                    local h = self._children[idx]:GetHeight()
+                if idx <= n then
+                    local h = self._children[idx]:GetHeight() or 0
                     if h > rowH then rowH = h end
                 end
             end
             totalH = totalH + rowH
-            if r < rows then
-                totalH = totalH + gap
-            end
+            if r < rows then totalH = totalH + gap end
         end
-        
-        local totalW = pad.left + pad.right + (colW * cols) + (gap * (cols - 1))
-        return totalW, totalH
+
+        return pad.left + pad.right + (colW * cols) + (gap * (cols - 1)), totalH
     end
-    
-    -- Fallback for anchor layout or unknown
+
     return self._frame:GetWidth(), self._frame:GetHeight()
 end
 
+--- Destroys the container and every child it owns, dropping all connections.
+function ContMeta:Destroy()
+    for child, connId in pairs(self._childConns) do
+        SuuUI.UISignals:Disconnect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
+        if child.Destroy and child ~= self then child:Destroy() end
+    end
+    self._childConns = {}
+    self._sources    = {}
+    self._children   = {}
+    SuuUI.UISignals:DisconnectAll(self)
+    if not self._adopted then self._frame:Hide() end
+end
+
+local floatingHost
+
+--- Returns the shared anchor container for floating panels (dropdown panels,
+-- tooltips, popups). Transient panels must use this rather than each creating their
+-- own screen-level container, which would accumulate resize handlers on UIParent.
+-- Remove your panel from it when you destroy it; never destroy the host itself.
+-- @return table  Container handle (anchor layout)
+function SuuUI.Layout:GetFloatingHost()
+    if not floatingHost then
+        local parent = (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot())
+                       or UIParent
+        floatingHost = self:CreateContainer({ host = parent, layout = "anchor" })
+    end
+    return floatingHost
+end
+
 --- Creates a new Container with a layout strategy.
--- @param props table  { parent, layout, dir, gap, padding, cols, fillWidth, fillHeight }
+-- @param props table  { parent, host, layout, dir, gap, padding, cols, align, valign, fill, w, h }
+--   parent: frame the container is created inside
+--   host:   adopt an existing frame as the layout box instead of creating one.
+--           Components use this so internal layout costs no extra frame.
+--   fill:   mirror the parent's size and track its resizes
+--   layout: "flow" | "grid" | "anchor" | "stack"
 -- @return table  Container handle
 function SuuUI.Layout:CreateContainer(props)
-    assert(props.parent, "SuuUI Container: parent required")
+    assert(props.parent or props.host, "SuuUI Container: parent or host required")
+
     local padInput = props.padding or {}
     local pad = {
         top    = padInput.top    or 0,
@@ -166,49 +308,69 @@ function SuuUI.Layout:CreateContainer(props)
         bottom = padInput.bottom or 0,
         left   = padInput.left   or 0,
     }
-    local f   = CreateFrame("Frame", nil, props.parent)
-    
-    -- Set initial size based on fillWidth/fillHeight or explicit w/h
-    if props.fillWidth then
-        f:SetWidth(props.parent:GetWidth())
-    elseif props.w then
-        f:SetWidth(props.w)
-    end
-    
-    if props.fillHeight then
-        f:SetHeight(props.parent:GetHeight())
-    elseif props.h then
-        f:SetHeight(props.h)
+
+    local f, adopted, parentFrame
+    if props.host then
+        f = props.host.GetFrame and props.host:GetFrame() or props.host
+        adopted = true
+    else
+        parentFrame = props.parent.GetFrame and props.parent:GetFrame() or props.parent
+        f = CreateFrame("Frame", nil, parentFrame)
+        -- Self-anchor: nothing outside the layout engine ever positions a container.
+        -- A parent container overrides this when it lays the container out.
+        f:SetPoint("TOPLEFT", parentFrame, "TOPLEFT", 0, 0)
+        -- Size explicitly rather than relying on anchor-derived geometry: WoW does not
+        -- resolve anchor sizes for frames that have never been laid out (e.g. inside a
+        -- window that starts hidden), which would report 0 and collapse every child.
+        f:SetWidth(props.w or parentFrame:GetWidth() or 0)
+        if props.fill then
+            f:SetHeight(parentFrame:GetHeight() or 0)
+        elseif props.h then
+            f:SetHeight(props.h)
+        end
     end
 
     local handle = setmetatable({
-        _frame      = f,
-        _children   = {},
-        _layoutType = props.layout or "flow",
-        _dir        = props.dir or "vertical",
-        _gap        = props.gap or 0,
-        _padding    = pad,
-        _cols       = props.cols or 2,
-        _fillWidth  = props.fillWidth or false,
-        _fillHeight = props.fillHeight or false,
+        _frame       = f,
+        _adopted     = adopted or false,
+        _children    = {},
+        _childConns  = {},
+        _sources     = {},
+        _layoutType  = props.layout or "flow",
+        _dir         = props.dir or "vertical",
+        _gap         = props.gap or 0,
+        _padding     = pad,
+        _cols        = props.cols or 2,
+        _align       = props.align,
+        _valign      = props.valign,
+        _fill        = props.fill or false,
+        _hug         = not props.fill and not props.h and not adopted,
     }, ContMeta)
-    
-    -- Auto-relayout when container is resized
-    f:SetScript("OnSizeChanged", function()
+
+    -- Own-frame resize drives re-layout. Allowed here: this file is the layout engine.
+    -- Chain any existing handler so adopting a frame never steals its script.
+    local prev = f:GetScript("OnSizeChanged")
+    f:SetScript("OnSizeChanged", function(self_, w, h)
+        if prev then prev(self_, w, h) end
         handle:Layout()
     end)
-    
-    -- If fillWidth or fillHeight, update when parent resizes
-    if props.fillWidth or props.fillHeight then
-        props.parent:SetScript("OnSizeChanged", function()
-            if handle._fillWidth then
-                f:SetWidth(props.parent:GetWidth())
-            end
-            if handle._fillHeight then
-                f:SetHeight(props.parent:GetHeight())
-            end
+
+    -- A fill container mirrors its parent's size. Tracking the parent explicitly keeps
+    -- the container's own size real (never anchor-derived), which children depend on.
+    if parentFrame and props.fill then
+        local prevParent = parentFrame:GetScript("OnSizeChanged")
+        parentFrame:SetScript("OnSizeChanged", function(self_, w, h)
+            if prevParent then prevParent(self_, w, h) end
+            f:SetSize(w, h)
         end)
     end
-    
+
+    -- Geometry may only become known once the frame is first displayed
+    local prevShow = f:GetScript("OnShow")
+    f:SetScript("OnShow", function(self_, ...)
+        if prevShow then prevShow(self_, ...) end
+        handle:Layout()
+    end)
+
     return handle
 end

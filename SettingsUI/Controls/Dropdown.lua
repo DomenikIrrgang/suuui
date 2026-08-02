@@ -1,33 +1,30 @@
 local C = SuuUI.Components
+local S = SuuUI.UISignals
 
 --- Builds a dropdown control row.
 -- @param entry table    Schema entry { key, label, options, default }
 -- @param pluginId string
 -- @param parent frame
--- @return frame         Raw frame, height=32
+-- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(parent:GetWidth(), 32)
-
-    local lbl = C.Text({ text = entry.label, size = "md" }, f)
-    lbl:SetPoint("LEFT", f, "LEFT", 8, 0)
+    local row = SuuUI._SettingsRow.Labelled(parent, entry.label, 32)
 
     local dd = C.Dropdown({
-        options  = entry.options or {},
-        value    = SuuUI.Settings:Get(pluginId, entry.key),
-        w        = 140,
-        onChange = function(val)
-            SuuUI.Settings:Set(pluginId, entry.key, val)
-        end,
-    }, f)
-    dd:SetPoint("RIGHT", f, "RIGHT", -8, 0)
+        options = entry.options or {},
+        value   = SuuUI.Settings:Get(pluginId, entry.key),
+        w       = 140,
+    }, row:GetFrame())
+    row:Add(dd, { width = 140, height = 24 })
 
-    -- Update dropdown when profile loads
+    S:Connect(dd, S.SIGNALS.VALUE_CHANGED, function(val)
+        SuuUI.Settings:Set(pluginId, entry.key, val)
+    end)
+
     SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
         dd:SetValue(SuuUI.Settings:Get(pluginId, entry.key))
     end, "ctrl_dropdown_" .. pluginId .. "_" .. entry.key)
 
-    return f
+    return row
 end
 
 if not SuuUI._SettingsControls then SuuUI._SettingsControls = {} end

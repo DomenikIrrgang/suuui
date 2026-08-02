@@ -1,141 +1,82 @@
-local ipairs, tinsert, abs = ipairs, table.insert, math.abs
+local ipairs, tinsert = ipairs, table.insert
+local C = SuuUI.Components
+local S = SuuUI.UISignals
 
--- Dimensions
 local WIN_W, WIN_H = 780, 520
-local NAV_W        = 180
-local CONTENT_W    = WIN_W - NAV_W - 3  -- 3px divider
+local NAV_W, DIV_W = 180, 3
+local ROW_H        = 32
 
-local win, navScroll, contentScroll
-local navItems   = {}   -- array of { pluginId, btnFrame }
-local activeId   = nil
-
-local function applyNavItemTheme(item, selected)
-    local T   = SuuUI.Theme
-    local bg  = T:GetToken(selected and "colorBgActive" or "colorBg")
-    local tc  = T:GetToken(selected and "colorText" or "colorTextMuted")
-    local bw  = T:GetToken("borderWidth") or 1
-    item.btn:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then item.btn:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    local bdc = T:GetToken("colorBorder")
-    if bdc then item.btn:SetBackdropBorderColor(bdc[1], bdc[2], bdc[3], bdc[4]) end
-    if tc  then item.lbl:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
-end
+local win, navScroll, contentScroll, navList
+local navItems = {}
+local activeId = nil
 
 local function selectPlugin(id)
     if activeId == id then return end
     activeId = id
 
     for _, item in ipairs(navItems) do
-        applyNavItemTheme(item, item.id == id)
+        item.nav:SetSelected(item.id == id)
     end
 
-    -- rebuild content page
-    local content = contentScroll:GetContent()
-    SuuUI._PageBuilder:Build(id, content)
+    SuuUI._PageBuilder:Build(id, contentScroll)
     contentScroll:ScrollToTop()
-
-    -- animate content fade
-    SuuUI.Anim.Presets.FadeIn(contentScroll:GetFrame(),
-        SuuUI.Theme:GetToken("animFast"))
+    SuuUI.Anim.Presets.FadeIn(contentScroll:GetFrame(), SuuUI.Theme:GetToken("animFast"))
 end
 
 local function buildNav()
-    local T       = SuuUI.Theme
-    local navCont = navScroll:GetContent()
-    local rowH    = 32
-    local gap     = T:GetToken("spaceSm") or 4
-    local pad     = T:GetToken("spaceSm") or 4
-    local contentWidth = navScroll:GetContentWidth()
+    local T   = SuuUI.Theme
+    local gap = T:GetToken("spaceSm") or 4
 
-    -- clear old items
-    for _, item in ipairs(navItems) do item.btn:Hide() end
-    navItems  = {}
-    activeId  = nil   -- reset so auto-select fires correctly
+    if navList then navList:Destroy() end
+    for _, item in ipairs(navItems) do item.nav:Destroy() end
+    navItems = {}
+    activeId = nil
 
-    -- Create a container for proper layout
-    local container = SuuUI.Layout:CreateContainer({
-        parent  = navCont,
+    navList = SuuUI.Layout:CreateContainer({
+        parent  = navScroll:GetContent(),
         layout  = "flow",
         dir     = "vertical",
         gap     = gap,
-        padding = {
-            top    = pad,
-            right  = pad,
-            bottom = pad,
-            left   = pad,
-        },
+        w       = navScroll:GetContentWidth(),
+        padding = { top = gap, right = gap, bottom = gap, left = gap },
     })
-    container:GetFrame():SetAllPoints(navCont)
 
-    local plugins = SuuUI.Plugins:GetAll()
+    S:Connect(navList, S.SIGNALS.SIZE_CHANGED, function(_, h)
+        S:Emit(navScroll, S.SIGNALS.CONTENT_RESIZED, h)
+    end)
 
-    -- Insert core entries first
-    tinsert(plugins, 1, { id = "_profiles", name = "Profiles" })
-    tinsert(plugins, 1, { id = "_theme", name = "Theme" })
+    local entries = SuuUI.Plugins:GetAll()
+    tinsert(entries, 1, { id = "_profiles", name = "Profiles" })
+    tinsert(entries, 1, { id = "_theme",    name = "Theme" })
 
-    for _, plugin in ipairs(plugins) do
-        local btn = CreateFrame("Frame", nil, navCont, "BackdropTemplate")
-        btn:SetHeight(rowH)
-        btn:EnableMouse(true)
+    for _, entry in ipairs(entries) do
+        local nav = C.NavItem({ label = entry.name, h = ROW_H }, navList:GetFrame())
+        navList:Add(nav, { width = "fill", height = ROW_H })
 
-        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("LEFT", btn, "LEFT", 8, 0)
-        lbl:SetText(plugin.name)
-        lbl:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-            T:GetToken("fontSizeMd") or 13, "")
-
-        local item = { id = plugin.id, btn = btn, lbl = lbl }
-        tinsert(navItems, item)
-        applyNavItemTheme(item, false)
-
-        local pid = plugin.id
-        btn:SetScript("OnMouseUp", function() selectPlugin(pid) end)
-        btn:SetScript("OnEnter", function()
-            if activeId == pid then return end
-            local hov = T:GetToken("colorBgHover")
-            if hov then btn:SetBackdropColor(hov[1], hov[2], hov[3], hov[4]) end
-        end)
-        btn:SetScript("OnLeave", function()
-            applyNavItemTheme(item, activeId == pid)
-        end)
-
-        -- Add to container with fill width
-        container:Add(btn, { width = "fill" })
+        local pid = entry.id
+        S:Connect(nav, S.SIGNALS.CLICKED, function() selectPlugin(pid) end)
+        tinsert(navItems, { id = pid, nav = nav })
     end
 
-    -- Calculate total height for scroll content
-    local totalHeight = (#plugins * rowH) + ((#plugins - 1) * gap)
-    navCont:SetHeight(totalHeight)
-
-    -- auto-select first
-    if #navItems > 0 and not activeId then
+    if #navItems > 0 then
         selectPlugin(navItems[1].id)
     end
 end
 
-local function buildCoreSettingsSchema()
-    -- Theme settings
+local function registerCoreSchemas()
     if not SuuUI.Settings:GetSchema("_theme") then
         SuuUI.Settings:Register("_theme", {
-            { key="theme_mgr", type="theme_manager" },
+            { key = "theme_mgr", type = "theme_manager" },
         })
     end
-    
-    -- Profile settings
     if not SuuUI.Settings:GetSchema("_profiles") then
         SuuUI.Settings:Register("_profiles", {
-            { key="profile_mgr", type="profile_manager" },
+            { key = "profile_mgr", type = "profile_manager" },
         })
     end
 end
 
 local function createWindow()
-    local T = SuuUI.Theme
-
     win = SuuUI.Layout:CreateWindow({
         id        = "settings",
         title     = "SuuUI Settings",
@@ -147,121 +88,75 @@ local function createWindow()
     })
 
     local content = win:GetContentFrame()
-    local contentHeight = content:GetHeight()
-    local contentWidth = content:GetWidth()
 
-    -- Create horizontal container for layout (nav | divider | content)
-    local mainContainer = SuuUI.Layout:CreateContainer({
-        parent     = content,
-        layout     = "flow",
-        dir        = "horizontal",
-        gap        = 0,
-        w          = contentWidth,
-        h          = contentHeight,
-        padding    = { top=0, right=0, bottom=0, left=0 },
+    -- Nav | divider | page, tracking the window as it resizes
+    local main = SuuUI.Layout:CreateContainer({
+        parent  = content,
+        layout  = "flow",
+        dir     = "horizontal",
+        gap     = 0,
+        fill    = true,
+        padding = { top = 0, right = 0, bottom = 0, left = 0 },
     })
-    -- Position container at top-left (minimal positioning exception for root containers)
-    mainContainer:GetFrame():SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
-    
-    -- Update container size when window resizes
-    content:SetScript("OnSizeChanged", function(self, width, height)
-        mainContainer:SetSize(width, height)
-    end)
 
-    -- Calculate available width for content area
-    local availContentWidth = contentWidth - NAV_W - 3
+    local navPanel  = C.Frame({ variant = "bgAlt" }, main:GetFrame())
+    local divider   = C.Divider({ dir = "vertical" }, main:GetFrame())
+    local pagePanel = C.Frame({ variant = "transparent", border = false }, main:GetFrame())
 
-    -- Nav panel background
-    local navBg = CreateFrame("Frame", nil, mainContainer:GetFrame(), "BackdropTemplate")
-    navBg:SetSize(NAV_W, contentHeight)
+    main:Add(navPanel,  { width = NAV_W, height = "fill" })
+    main:Add(divider,   { width = DIV_W, height = "fill" })
+    main:Add(pagePanel, { width = "fill", height = "fill" })
 
-    -- Divider
-    local divFrame = CreateFrame("Frame", nil, mainContainer:GetFrame())
-    divFrame:SetSize(3, contentHeight)
-    local div = SuuUI.Components.Divider({ dir="vertical", h=contentHeight }, divFrame)
-    div:SetPoint("CENTER", divFrame, "CENTER")
+    -- Scroll areas fill their panels through nested fill containers
+    local navBox = SuuUI.Layout:CreateContainer({
+        parent = navPanel:GetFrame(),
+        layout = "flow",
+        dir    = "vertical",
+        fill   = true,
+    })
+    navScroll = C.ScrollFrame({ w = NAV_W, h = WIN_H }, navPanel:GetFrame())
+    navBox:Add(navScroll, { width = "fill", height = "fill" })
 
-    -- Content scroll area wrapper
-    local contentWrapper = CreateFrame("Frame", nil, mainContainer:GetFrame())
-    contentWrapper:SetSize(availContentWidth, contentHeight)
-
-    -- Add elements to horizontal container FIRST (before creating ScrollFrames)
-    -- This allows the container to position and resize them properly
-    mainContainer:Add(navBg, { width = NAV_W, height = "fill" })
-    mainContainer:Add(divFrame, { width = 3, height = "fill" })
-    mainContainer:Add(contentWrapper, { width = "fill", height = "fill" })
-
-    -- NOW create ScrollFrames after layout has positioned the wrapper frames
-    -- Use the actual wrapper sizes after layout
-    local actualNavWidth = navBg:GetWidth()
-    local actualNavHeight = navBg:GetHeight()
-    local actualContentWidth = contentWrapper:GetWidth()
-    local actualContentHeight = contentWrapper:GetHeight()
-    
-    navScroll = SuuUI.Components.ScrollFrame({ w=actualNavWidth, h=actualNavHeight }, navBg)
-    local navScrollFrame = navScroll:GetFrame()
-    navScrollFrame:ClearAllPoints()
-    navScrollFrame:SetAllPoints(navBg)
-    
-    -- Theme navBg
-    local function styleNavBg()
-        local bg = T:GetToken("colorBgAlt")
-        local bd = T:GetToken("colorBorder")
-        local bw = T:GetToken("borderWidth") or 1
-        navBg:SetBackdrop({
-            bgFile="Interface\\Buttons\\WHITE8x8",
-            edgeFile="Interface\\Buttons\\WHITE8x8",
-            edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-        })
-        if bg then navBg:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-        if bd then navBg:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    end
-    styleNavBg()
-    SuuUI.Events:On("SUUUI_THEME_CHANGED", styleNavBg, "settings_navbg")
-    
-    contentScroll = SuuUI.Components.ScrollFrame({ w=actualContentWidth, h=actualContentHeight }, contentWrapper)
-    local contentScrollFrame = contentScroll:GetFrame()
-    contentScrollFrame:ClearAllPoints()
-    contentScrollFrame:SetAllPoints(contentWrapper)
-    -- Explicitly update ScrollFrame size to recalculate content width
-    contentScroll:SetSize(actualContentWidth, actualContentHeight)
-    -- Also explicitly set content frame width for PageBuilder
-    local contentArea = contentScroll:GetContent()
-    contentArea:SetWidth(contentScroll:GetContentWidth())
-    
-    -- Update ScrollFrame sizes when container elements resize
-    navBg:SetScript("OnSizeChanged", function(self, width, height)
-        navScroll:SetSize(width, height)
-    end)
-    
-    contentWrapper:SetScript("OnSizeChanged", function(self, width, height)
-        contentScroll:SetSize(width, height)
-    end)
+    local pageBox = SuuUI.Layout:CreateContainer({
+        parent = pagePanel:GetFrame(),
+        layout = "flow",
+        dir    = "vertical",
+        fill   = true,
+    })
+    contentScroll = C.ScrollFrame({ w = WIN_W - NAV_W - DIV_W, h = WIN_H }, pagePanel:GetFrame())
+    pageBox:Add(contentScroll, { width = "fill", height = "fill" })
 end
 
--- Slash command
 SLASH_SUUUI1 = "/suuui"
 SlashCmdList["SUUUI"] = function()
     if not win then
-        buildCoreSettingsSchema()
+        registerCoreSchemas()
         createWindow()
         buildNav()
     end
     win:Toggle()
 end
 
--- Minimap button (simple texture button on Minimap)
-local minimapBtn = CreateFrame("Button", "SuuUI_MinimapButton", Minimap)
-minimapBtn:SetSize(20, 20)
-minimapBtn:SetPoint("TOPRIGHT", Minimap, "TOPRIGHT", -2, -2)
-minimapBtn:SetFrameStrata("HIGH")
-minimapBtn:SetNormalTexture("Interface\\Icons\\INV_Misc_Gem_01")
-minimapBtn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-minimapBtn:SetScript("OnClick", function()
-    SlashCmdList["SUUUI"]()
-end)
+-- Minimap launcher. Built once core is up so it is themed from the start, and
+-- placed by an anchor container rather than by hand.
+SuuUI.Events:On("SUUUI_CORE_READY", function()
+    local host = SuuUI.Layout:CreateContainer({ host = Minimap, layout = "anchor" })
+    local btn = C.IconButton({
+        icon = "Interface\\Icons\\INV_Misc_Gem_01",
+        w    = 20,
+    }, Minimap)
+    host:Add(btn, {
+        anchor = {
+            point = "TOPRIGHT", relativePoint = "TOPRIGHT",
+            x = -2, y = -2, width = 20, height = 20,
+        },
+    })
+    S:Connect(btn, S.SIGNALS.CLICKED, function()
+        SlashCmdList["SUUUI"]()
+    end)
+end, "settings_minimap")
 
--- Rebuild nav after all plugins have initialised
+-- Rebuild nav once plugins have registered
 SuuUI.Events:On("SUUUI_PLUGIN_ENABLED", function()
     if win then buildNav() end
 end, "settings_rebuild")

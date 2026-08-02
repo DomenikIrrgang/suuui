@@ -1,33 +1,30 @@
 local C = SuuUI.Components
+local S = SuuUI.UISignals
 
 --- Builds a text input control row.
 -- @param entry table    Schema entry { key, label, default }
 -- @param pluginId string
 -- @param parent frame
--- @return frame         Raw frame, height=32
+-- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(parent:GetWidth(), 32)
-
-    local lbl = C.Text({ text = entry.label, size = "md" }, f)
-    lbl:SetPoint("LEFT", f, "LEFT", 8, 0)
+    local row = SuuUI._SettingsRow.Labelled(parent, entry.label, 32)
 
     local inp = C.Input({
-        value    = SuuUI.Settings:Get(pluginId, entry.key) or "",
-        w        = 140,
-        h        = 22,
-        onChange = function(val)
-            SuuUI.Settings:Set(pluginId, entry.key, val)
-        end,
-    }, f)
-    inp:SetPoint("RIGHT", f, "RIGHT", -8, 0)
+        value = SuuUI.Settings:Get(pluginId, entry.key) or "",
+        w     = 140,
+        h     = 22,
+    }, row:GetFrame())
+    row:Add(inp, { width = 140, height = 22 })
 
-    -- sync on profile switch
+    S:Connect(inp, S.SIGNALS.TEXT_CHANGED, function(text)
+        SuuUI.Settings:Set(pluginId, entry.key, text)
+    end)
+
     SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
         inp:SetValue(SuuUI.Settings:Get(pluginId, entry.key) or "")
     end, "ctrl_text_" .. pluginId .. entry.key)
 
-    return f
+    return row
 end
 
 if not SuuUI._SettingsControls then SuuUI._SettingsControls = {} end
