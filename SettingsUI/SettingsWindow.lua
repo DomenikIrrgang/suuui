@@ -148,40 +148,62 @@ local function createWindow()
     })
 
     local content = win:GetContentFrame()
+    local contentHeight = content:GetHeight()
+    local contentWidth = content:GetWidth()
 
-    -- Nav panel background (anchored to left edge and full height)
-    local navBg = CreateFrame("Frame", nil, content, "BackdropTemplate")
-    navBg:SetPoint("TOPLEFT",    content, "TOPLEFT",    0,  0)
-    navBg:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", 0,  0)
-    navBg:SetWidth(NAV_W)
-
-    -- Nav scroll (fills entire navBg)
-    navScroll = SuuUI.Components.ScrollFrame({ w=NAV_W, h=100 }, navBg)
-    navScroll:GetFrame():SetPoint("TOPLEFT", navBg, "TOPLEFT", 0, 0)
-    navScroll:GetFrame():SetPoint("BOTTOMRIGHT", navBg, "BOTTOMRIGHT", 0, 0)
+    -- Create horizontal container for layout (nav | divider | content)
+    local mainContainer = SuuUI.Layout:CreateContainer({
+        parent     = content,
+        layout     = "flow",
+        dir        = "horizontal",
+        gap        = 0,
+        w          = contentWidth,
+        h          = contentHeight,
+        padding    = { top=0, right=0, bottom=0, left=0 },
+    })
+    -- Position container at top-left (minimal positioning exception for root containers)
+    mainContainer:GetFrame():SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
     
-    -- Ensure navScroll resizes when window resizes
-    navBg:SetScript("OnSizeChanged", function(self, width, height)
-        navScroll:SetSize(width, height)
-    end)
-
-    -- Divider between nav and content (full height)
-    local div = SuuUI.Components.Divider({ dir="vertical", h=100 }, content)
-    div:SetPoint("TOPLEFT", content, "TOPLEFT", NAV_W, 0)
-    div:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", NAV_W, 0)
-
-    -- Content scroll (fills remaining space to the right of divider)
-    contentScroll = SuuUI.Components.ScrollFrame({ w=100, h=100 }, content)
-    contentScroll:GetFrame():SetPoint("TOPLEFT", content, "TOPLEFT", NAV_W + 3, 0)
-    contentScroll:GetFrame():SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
-    
-    -- Ensure ScrollFrame resizes when window resizes
+    -- Update container size when window resizes
     content:SetScript("OnSizeChanged", function(self, width, height)
-        local scrollWidth = width - NAV_W - 3
-        local scrollHeight = height
-        contentScroll:SetSize(scrollWidth, scrollHeight)
+        mainContainer:SetSize(width, height)
     end)
 
+    -- Calculate available width for content area
+    local availContentWidth = contentWidth - NAV_W - 3
+
+    -- Nav panel background
+    local navBg = CreateFrame("Frame", nil, mainContainer:GetFrame(), "BackdropTemplate")
+    navBg:SetSize(NAV_W, contentHeight)
+
+    -- Divider
+    local divFrame = CreateFrame("Frame", nil, mainContainer:GetFrame())
+    divFrame:SetSize(3, contentHeight)
+    local div = SuuUI.Components.Divider({ dir="vertical", h=contentHeight }, divFrame)
+    div:SetPoint("CENTER", divFrame, "CENTER")
+
+    -- Content scroll area wrapper
+    local contentWrapper = CreateFrame("Frame", nil, mainContainer:GetFrame())
+    contentWrapper:SetSize(availContentWidth, contentHeight)
+
+    -- Add elements to horizontal container FIRST (before creating ScrollFrames)
+    -- This allows the container to position and resize them properly
+    mainContainer:Add(navBg, { width = NAV_W, height = "fill" })
+    mainContainer:Add(divFrame, { width = 3, height = "fill" })
+    mainContainer:Add(contentWrapper, { width = "fill", height = "fill" })
+
+    -- NOW create ScrollFrames after layout has positioned the wrapper frames
+    -- Use the actual wrapper sizes after layout
+    local actualNavWidth = navBg:GetWidth()
+    local actualNavHeight = navBg:GetHeight()
+    local actualContentWidth = contentWrapper:GetWidth()
+    local actualContentHeight = contentWrapper:GetHeight()
+    
+    navScroll = SuuUI.Components.ScrollFrame({ w=actualNavWidth, h=actualNavHeight }, navBg)
+    local navScrollFrame = navScroll:GetFrame()
+    navScrollFrame:ClearAllPoints()
+    navScrollFrame:SetAllPoints(navBg)
+    
     -- Theme navBg
     local function styleNavBg()
         local bg = T:GetToken("colorBgAlt")
@@ -197,6 +219,25 @@ local function createWindow()
     end
     styleNavBg()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", styleNavBg, "settings_navbg")
+    
+    contentScroll = SuuUI.Components.ScrollFrame({ w=actualContentWidth, h=actualContentHeight }, contentWrapper)
+    local contentScrollFrame = contentScroll:GetFrame()
+    contentScrollFrame:ClearAllPoints()
+    contentScrollFrame:SetAllPoints(contentWrapper)
+    -- Explicitly update ScrollFrame size to recalculate content width
+    contentScroll:SetSize(actualContentWidth, actualContentHeight)
+    -- Also explicitly set content frame width for PageBuilder
+    local contentArea = contentScroll:GetContent()
+    contentArea:SetWidth(contentScroll:GetContentWidth())
+    
+    -- Update ScrollFrame sizes when container elements resize
+    navBg:SetScript("OnSizeChanged", function(self, width, height)
+        navScroll:SetSize(width, height)
+    end)
+    
+    contentWrapper:SetScript("OnSizeChanged", function(self, width, height)
+        contentScroll:SetSize(width, height)
+    end)
 end
 
 -- Slash command

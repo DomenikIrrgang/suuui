@@ -43,18 +43,18 @@ function M.Apply(container)
         local props = child._layoutProps or {}
         local childW, childH
         
-        -- Apply flexible width (cw already accounts for left+right padding)
+        -- Apply flexible width
         if props.width == "fill" then
-            childW = cw
+            childW = vertical and cw or fillSize  -- vertical: full width, horizontal: calculated fill
         elseif type(props.width) == "number" then
             childW = props.width
         else
             childW = child:GetWidth()
         end
         
-        -- Apply flexible height (ch already accounts for top+bottom padding)
+        -- Apply flexible height
         if props.height == "fill" then
-            childH = vertical and fillSize or ch
+            childH = vertical and fillSize or ch  -- vertical: calculated fill, horizontal: full height
         elseif type(props.height) == "number" then
             childH = props.height
         else
