@@ -12,19 +12,38 @@ local ContMeta = {}
 ContMeta.__index = ContMeta
 
 --- Adds a child frame to the container and re-runs layout.
--- @param child frame
+-- @param child frame or handle
 -- @param layoutProps table  Optional { width="fill"|number, height="fill"|number }
 function ContMeta:Add(child, layoutProps)
     if layoutProps then
         child._layoutProps = layoutProps
     end
     tinsert(self._children, child)
+    
+    -- Connect to SIZE_CHANGED signal for automatic re-layout
+    local connId = SuuUI.UISignals:Connect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function(w, h)
+        -- Just trigger layout - Layout() will emit SIZE_CHANGED if needed
+        self:Layout()
+    end)
+    
+    -- Store connection ID for cleanup
+    if not self._signalConnections then
+        self._signalConnections = {}
+    end
+    self._signalConnections[child] = connId
+    
     self:Layout()
 end
 
 --- Removes a child frame and re-runs layout.
 -- @param child frame
 function ContMeta:Remove(child)
+    -- Clean up signal connection
+    if self._signalConnections and self._signalConnections[child] then
+        SuuUI.UISignals:DisconnectAll(child)
+        self._signalConnections[child] = nil
+    end
+    
     for i = #self._children, 1, -1 do
         if self._children[i] == child then
             tremove(self._children, i)
@@ -37,7 +56,14 @@ end
 --- Re-calculates and applies child positions.
 function ContMeta:Layout()
     local fn = strategies[self._layoutType]
-    if fn then fn(self) end
+    if fn then 
+        fn(self) 
+        
+        -- Always emit SIZE_CHANGED after layout to notify parents
+        local _, h = self:GetContentSize()
+        self._frame:SetHeight(h)
+        SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, self._frame:GetWidth(), h)
+    end
 end
 
 --- Sets container size.

@@ -133,7 +133,8 @@ function SuuUI.Components.ScrollFrame(props, parent)
     sf:SetScript("OnMouseWheel", function(_, delta)
         if content:GetHeight() <= sf:GetHeight() then return end
         local cur = sf:GetVerticalScroll()
-        sf:SetVerticalScroll(max(0, cur - delta * 20))
+        local maxScroll = max(0, content:GetHeight() - sf:GetHeight())
+        sf:SetVerticalScroll(max(0, min(maxScroll, cur - delta * 20)))
         handle:_updateBar()
     end)
 
@@ -166,8 +167,10 @@ function SuuUI.Components.ScrollFrame(props, parent)
         thumb:SetScript("OnUpdate", nil)
     end)
 
-    -- Recompute bar when content size changes
-    content:SetScript("OnSizeChanged", function() handle:_updateBar() end)
+    -- Recompute bar when content size changes via signal
+    SuuUI.UISignals:Connect(content, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED, function(contentHeight)
+        handle:_updateBar()
+    end)
 
     handle:ApplyTheme()
     handle:_updateBar()  -- set initial thumb visibility and position

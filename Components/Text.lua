@@ -36,14 +36,17 @@ function TextMeta:ApplyTheme()
 end
 
 --- Creates a themed text element.
--- @param props table  { text, size, color, flags, w, h }
+-- @param props table  { text, size, color, flags, w, h, justify }
 --   size: "sm"|"md"|"lg"|"xl"   color: "text"|"muted"|"disable"|"accent"
+--   justify: "LEFT"|"CENTER"|"RIGHT" (default: "LEFT")
 -- @param parent frame
 -- @return table  Text handle
 function SuuUI.Components.Text(props, parent)
     local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     if props.w and props.h then fs:SetSize(props.w, props.h) end
     if props.text then fs:SetText(props.text) end
+    fs:SetJustifyH(props.justify or "LEFT")
+    fs:SetJustifyV("MIDDLE")
 
     local id = "text_" .. tostring(fs)
     local handle = setmetatable({

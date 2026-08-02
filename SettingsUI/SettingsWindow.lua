@@ -35,8 +35,7 @@ local function selectPlugin(id)
 
     -- rebuild content page
     local content = contentScroll:GetContent()
-    local scrollHeight = contentScroll:GetFrame():GetHeight()
-    SuuUI._PageBuilder:Build(id, content, scrollHeight)
+    SuuUI._PageBuilder:Build(id, content)
     contentScroll:ScrollToTop()
 
     -- animate content fade

@@ -8,8 +8,7 @@ local activeContainers = {}  -- track containers per contentFrame for cleanup
 -- Clears existing children first. Uses schema order for render order.
 -- @param pluginId string
 -- @param contentFrame frame  Inner frame of a ScrollFrame content area
--- @param scrollHeight number  Visible height of the scroll area (optional)
-function M:Build(pluginId, contentFrame, scrollHeight)
+function M:Build(pluginId, contentFrame)
     -- clean up previous container
     local containerId = tostring(contentFrame)
     if activeContainers[containerId] then
@@ -41,6 +40,14 @@ function M:Build(pluginId, contentFrame, scrollHeight)
     -- Root container inside ScrollFrame needs minimal positioning (exception to no-SetPoint rule)
     container:GetFrame():SetPoint("TOPLEFT", contentFrame, "TOPLEFT", 0, 0)
     activeContainers[containerId] = container
+    
+    -- Connect to container SIZE_CHANGED to update contentFrame height for scrolling
+    SuuUI.UISignals:Connect(container, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function(w, h)
+        -- Content frame should match actual content height
+        contentFrame:SetHeight(h)
+        -- Emit CONTENT_RESIZED on contentFrame so ScrollFrame can update
+        SuuUI.UISignals:Emit(contentFrame, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED, h)
+    end)
 
     for _, entry in ipairs(schema) do
         local builder = SuuUI._SettingsControls and SuuUI._SettingsControls[entry.type]
@@ -65,10 +72,9 @@ function M:Build(pluginId, contentFrame, scrollHeight)
     -- Resize content frame AND container so scroll works correctly
     local _, contentHeight = container:GetContentSize()
     container:GetFrame():SetHeight(contentHeight)
-    -- Content frame should be at least as tall as the scroll area to fill visible space
-    local minHeight = scrollHeight or contentHeight
-    local finalHeight = math.max(contentHeight, minHeight)
-    contentFrame:SetHeight(finalHeight)
+    -- Content frame should match the actual content height
+    -- (ScrollFrame will show scrollbar if content > visible area)
+    contentFrame:SetHeight(contentHeight)
 end
 
 SuuUI._PageBuilder = M

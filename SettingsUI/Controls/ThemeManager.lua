@@ -8,11 +8,9 @@ local C = SuuUI.Components
 local function Build(entry, parent)
     local T = SuuUI.Theme
     local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(parent:GetWidth(), 220)
-
+    
     local gap = T:GetToken("spaceMd") or 8
-    local isEditing = false
-    local tokenRowsContainer
+    local tokenInputs = {}
 
     -- Root container for all elements
     local rootContainer = SuuUI.Layout:CreateContainer({
@@ -58,6 +56,16 @@ local function Build(entry, parent)
         end
         return options
     end
+    
+    -- Function to update input enabled state based on theme
+    local function updateInputsEnabled()
+        local active = SuuUI.Theme:GetActive()
+        local isBuiltin = SuuUI.Theme:IsBuiltin(active)
+        
+        for _, data in pairs(tokenInputs) do
+            data.input:SetEnabled(not isBuiltin)
+        end
+    end
 
     themeDD = C.Dropdown({
         options  = updateDropdown(),
@@ -66,10 +74,7 @@ local function Build(entry, parent)
         onChange = function(val)
             SuuUI.Theme:SetActive(val)
             currentName:SetText(val)
-            -- Hide editor if switching themes
-            if isEditing then
-                toggleEditor(false)
-            end
+            updateInputsEnabled()
         end,
     }, f)
     rootContainer:Add(themeDD:GetFrame(), { height = 32 })
@@ -98,7 +103,7 @@ local function Build(entry, parent)
                             themeDD:SetValue(name)
                             SuuUI.Theme:SetActive(name)
                             currentName:SetText(name)
-                            if isEditing then toggleEditor(false) end
+                            updateInputsEnabled()
                         else
                             print("|cffff0000SuuUI:|r " .. tostring(err))
                         end
@@ -110,40 +115,7 @@ local function Build(entry, parent)
     }, btnRow)
     createBtn:GetFrame():SetPoint("LEFT", btnRow, "LEFT", 0, 0)
 
-    -- Function to toggle token editor visibility
-    function toggleEditor(show)
-        isEditing = show
-        
-        if show then
-            editBtn:SetLabel("Done")
-            if tokenRowsContainer then
-                tokenRowsContainer:GetFrame():Show()
-            end
-        else
-            editBtn:SetLabel("Edit")
-            if tokenRowsContainer then
-                tokenRowsContainer:GetFrame():Hide()
-            end
-        end
-    end
-
-    editBtn = C.Button({
-        label = "Edit",
-        w = btnW, h = 24,
-        onClick = function()
-            local active = SuuUI.Theme:GetActive()
-            
-            if SuuUI.Theme:IsBuiltin(active) then
-                print("|cffff0000SuuUI:|r Cannot edit built-in theme '" .. active .. "'")
-                return
-            end
-            
-            toggleEditor(not isEditing)
-        end,
-    }, btnRow)
-    editBtn:GetFrame():SetPoint("LEFT", createBtn:GetFrame(), "RIGHT", 8, 0)
-
-    deleteBtn = C.Button({
+    local deleteBtn = C.Button({
         label = "Delete",
         w = btnW, h = 24,
         onClick = function()
@@ -164,7 +136,7 @@ local function Build(entry, parent)
                         themeDD:SetOptions(updateDropdown())
                         themeDD:SetValue(SuuUI.Theme:GetActive())
                         currentName:SetText(SuuUI.Theme:GetActive())
-                        if isEditing then toggleEditor(false) end
+                        updateInputsEnabled()
                     else
                         print("|cffff0000SuuUI:|r " .. tostring(err))
                     end
@@ -173,25 +145,23 @@ local function Build(entry, parent)
             modal:Show()
         end,
     }, btnRow)
-    deleteBtn:GetFrame():SetPoint("LEFT", editBtn:GetFrame(), "RIGHT", 8, 0)
+    deleteBtn:GetFrame():SetPoint("LEFT", createBtn:GetFrame(), "RIGHT", 8, 0)
     
     rootContainer:Add(btnRow, { width = "fill", height = 24 })
 
     -- Info text
     local infoText = C.Text({
-        text  = "Built-in themes (Default, Modern) cannot be edited or deleted.\nCreate a new theme to customize tokens.",
+        text  = "Built-in themes (Default, Modern) cannot be edited.\nCreate a new theme to customize tokens.",
         size  = "sm",
         color = "muted",
     }, f)
     infoText:GetFrame():SetHeight(32)
     rootContainer:Add(infoText:GetFrame(), { width = "fill", height = 32 })
 
-    -- Token editor section (initially hidden)
+    -- Token editor section (always visible)
     local tokenEditorFrame = CreateFrame("Frame", nil, f)
-    tokenEditorFrame:SetSize(f:GetWidth(), 860)  -- Height for all token rows
-    tokenEditorFrame:Hide()
     
-    tokenRowsContainer = SuuUI.Layout:CreateContainer({
+    local tokenRowsContainer = SuuUI.Layout:CreateContainer({
         parent  = tokenEditorFrame,
         layout  = "flow",
         dir     = "vertical",
@@ -234,26 +204,17 @@ local function Build(entry, parent)
         {key="animSlow", label="Animation Slow"},
     }
     
-    local tokenInputs = {}
-    
     for _, tokenDef in ipairs(editableTokens) do
         local tokenRow = CreateFrame("Frame", nil, tokenEditorFrame)
         tokenRow:SetHeight(28)
         
-        local tokenRowContainer = SuuUI.Layout:CreateContainer({
-            parent  = tokenRow,
-            layout  = "flow",
-            dir     = "horizontal",
-            gap     = 8,
-            padding = {top=0, right=0, bottom=0, left=0},
-        })
-        tokenRowContainer:GetFrame():SetAllPoints(tokenRow)
-        
+        -- Label on the left, vertically centered
         local label = C.Text({
             text  = tokenDef.label,
             size  = "sm",
             color = "text",
         }, tokenRow)
+        label:GetFrame():SetPoint("LEFT", tokenRow, "LEFT", 0, 0)
         label:GetFrame():SetWidth(150)
         
         local function updateInputValue()
@@ -274,6 +235,7 @@ local function Build(entry, parent)
         
         local valueStr = updateInputValue()
         
+        -- Input on the right, vertically centered
         local input = C.Input({
             value = valueStr,
             w     = 200,
@@ -308,9 +270,7 @@ local function Build(entry, parent)
                 end
             end,
         }, tokenRow)
-        
-        tokenRowContainer:Add(label:GetFrame(), { width = 150 })
-        tokenRowContainer:Add(input:GetFrame(), { width = 200 })
+        input:GetFrame():SetPoint("RIGHT", tokenRow, "RIGHT", 0, 0)
         
         tokenRowsContainer:Add(tokenRow, { width = "fill", height = 28 })
         
@@ -320,13 +280,25 @@ local function Build(entry, parent)
         }
     end
     
-    rootContainer:Add(tokenEditorFrame, { width = "fill", height = 860 })
+    -- Calculate tokenEditorFrame height based on token rows
+    local _, tokenRowsHeight = tokenRowsContainer:GetContentSize()
+    tokenEditorFrame:SetSize(f:GetWidth(), tokenRowsHeight)
+    
+    rootContainer:Add(tokenEditorFrame, { width = "fill", height = tokenRowsHeight })
+
+    -- Set initial height including all elements
+    local _, totalHeight = rootContainer:GetContentSize()
+    f:SetHeight(totalHeight)
+
+    -- Initialize input enabled state based on current theme
+    updateInputsEnabled()
 
     -- Listen for theme changes to update UI and input values
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function(name)
         currentName:SetText(name)
         themeDD:SetValue(name)
         themeDD:SetOptions(updateDropdown())
+        updateInputsEnabled()
         
         -- Update all input values when theme changes
         for key, data in pairs(tokenInputs) do

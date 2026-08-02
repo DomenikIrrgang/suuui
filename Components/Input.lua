@@ -111,6 +111,16 @@ function SuuUI.Components.Input(props, parent)
         handle._hasHover = false
         updateBorder()
     end)
+    
+    -- EditBox should also trigger hover state
+    eb:SetScript("OnEnter", function()
+        handle._hasHover = true
+        updateBorder()
+    end)
+    eb:SetScript("OnLeave", function()
+        handle._hasHover = false
+        updateBorder()
+    end)
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
