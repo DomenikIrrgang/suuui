@@ -147,6 +147,39 @@ local function Build(entry, parent)
     }, btnRow)
     deleteBtn:GetFrame():SetPoint("LEFT", createBtn:GetFrame(), "RIGHT", 8, 0)
     
+    local resetBtn = C.Button({
+        label = "Reset",
+        w = btnW, h = 24,
+        onClick = function()
+            local active = SuuUI.Theme:GetActive()
+            
+            if SuuUI.Theme:IsBuiltin(active) then
+                print("|cffff0000SuuUI:|r Cannot reset built-in theme")
+                return
+            end
+            
+            local modal = C.Modal({
+                title      = "Reset Theme",
+                message    = "Reset '" .. active .. "' to default Modern theme values?",
+                confirmText = "Reset",
+                onConfirm  = function()
+                    local ok, err = pcall(SuuUI.Theme.ResetUserTheme, SuuUI.Theme, active)
+                    if ok then
+                        -- Refresh all token inputs
+                        for key, data in pairs(tokenInputs) do
+                            data.updateValue()
+                        end
+                        print("|cff00ff00SuuUI:|r Theme reset to defaults")
+                    else
+                        print("|cffff0000SuuUI:|r " .. tostring(err))
+                    end
+                end,
+            })
+            modal:Show()
+        end,
+    }, btnRow)
+    resetBtn:GetFrame():SetPoint("LEFT", deleteBtn:GetFrame(), "RIGHT", 8, 0)
+    
     rootContainer:Add(btnRow, { width = "fill", height = 24 })
 
     -- Info text

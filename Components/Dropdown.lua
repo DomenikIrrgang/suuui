@@ -185,7 +185,7 @@ function SuuUI.Components.Dropdown(props, parent)
 
     local arrow = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     arrow:SetPoint("RIGHT", f, "RIGHT", -4, 0)
-    arrow:SetText("▾")
+    arrow:SetText("v")  -- Simple ASCII character that all fonts support
 
     local panel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     panel:Hide()

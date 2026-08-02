@@ -66,7 +66,15 @@ function SuuUI.Components.Modal(props, parent)
     parent = parent or UIParent
 
     local w = props.w or 360
-    local h = props.h or (props.input and 160 or 140)
+    
+    -- Calculate height based on content
+    local contentHeight = 16  -- Top padding
+    if props.title then contentHeight = contentHeight + 24 end
+    if props.message then contentHeight = contentHeight + 24 end
+    if props.input then contentHeight = contentHeight + 8 + 32 end  -- gap + input + spacing
+    contentHeight = contentHeight + 8 + 28 + 16  -- gap + buttons + bottom padding
+    
+    local h = props.h or contentHeight
 
     -- Semi-transparent overlay to block clicks
     local overlay = CreateFrame("Frame", nil, parent)

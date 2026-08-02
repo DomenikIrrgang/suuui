@@ -113,17 +113,17 @@ bootFrame:RegisterEvent("PLAYER_LOGOUT")
 bootFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == "SuuUI" then
         SuuUI.Profiles:Init()
-        SuuUI.Theme:Init()
+        SuuUI.Theme:Init()  -- This now loads activeTheme from profile
         SuuUI.UIRoot:Init()  -- Initialize global UI root
-        -- Apply theme from loaded profile if it exists
-        local profile = SuuUI.Profiles:GetActive()
-        if profile.plugins and profile.plugins._theme and profile.plugins._theme.theme then
-            SuuUI.Theme:SetActive(profile.plugins._theme.theme)
-        end
+        
         -- Listen for profile changes to apply theme
         SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
             local prof = SuuUI.Profiles:GetActive()
-            local themeName = (prof.plugins and prof.plugins._theme and prof.plugins._theme.theme) or "Modern"
+            local themeName = prof.activeTheme or "Modern"
+            -- Verify theme exists
+            if not SuuUI.Theme:IsBuiltin(themeName) and not (prof.themes and prof.themes[themeName]) then
+                themeName = "Modern"
+            end
             SuuUI.Theme:SetActive(themeName)
         end, "_theme_profile_boot")
     elseif event == "PLAYER_LOGIN" then

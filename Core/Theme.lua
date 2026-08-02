@@ -57,6 +57,11 @@ function M:SetActive(name)
     assert(builtins[name] or (SuuUI.Profiles:GetActive().themes or {})[name],
         "SuuUI Theme: unknown theme: " .. tostring(name))
     active = name
+    
+    -- Save to profile
+    local profile = SuuUI.Profiles:GetActive()
+    profile.activeTheme = name
+    
     buildCache(name)
     SuuUI.Events:Emit("SUUUI_THEME_CHANGED", name)
 end
@@ -107,6 +112,24 @@ function M:DeleteUserTheme(name)
     if active == name then self:SetActive("Modern") end
 end
 
+--- Resets a user theme to its base theme defaults by clearing all overrides.
+-- @param name string
+function M:ResetUserTheme(name)
+    assert(not builtins[name], "SuuUI Theme: cannot reset built-in theme")
+    local profile = SuuUI.Profiles:GetActive()
+    assert(profile.themes and profile.themes[name],
+        "SuuUI Theme: user theme not found: " .. name)
+    
+    -- Keep only the _base field, clear all token overrides
+    local baseTheme = profile.themes[name]._base or "Modern"
+    profile.themes[name] = { _base = baseTheme }
+    
+    if active == name then 
+        buildCache(name)
+        SuuUI.Events:Emit("SUUUI_THEME_CHANGED", name)
+    end
+end
+
 --- Sets a token override in a user theme.
 -- @param themeName string
 -- @param key string
@@ -135,8 +158,18 @@ end
 --- Initialises theme system; called after profiles are ready.
 function M:Init()
     -- Guard: profile may not exist yet on very first login
+    local themeName = "Modern"
     local ok = pcall(function()
-        buildCache("Modern")
+        local profile = SuuUI.Profiles:GetActive()
+        -- Load saved theme from profile, default to Modern
+        themeName = profile.activeTheme or "Modern"
+        
+        -- Verify theme still exists
+        if not builtins[themeName] and not (profile.themes and profile.themes[themeName]) then
+            themeName = "Modern"
+        end
+        
+        buildCache(themeName)
     end)
     if not ok then
         -- Profiles not ready yet; build from builtins only
@@ -146,7 +179,7 @@ function M:Init()
             resolved[k] = resolve(base, k)
         end
     end
-    active = "Modern"
+    active = themeName
 end
 
 SuuUI.Theme = M
