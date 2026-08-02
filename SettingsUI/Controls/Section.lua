@@ -6,7 +6,7 @@ local C = SuuUI.Components
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, parent)
-    local row = SuuUI._SettingsRow.Stacked(parent, 28)
+    local row = SuuUI._SettingsRow.Stacked(parent)
 
     local div = C.Divider({ label = entry.label }, row:GetFrame())
     row:Add(div, { width = "fill", height = 28 })

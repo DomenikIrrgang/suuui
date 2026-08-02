@@ -7,14 +7,13 @@ local S = SuuUI.UISignals
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local row = SuuUI._SettingsRow.Labelled(parent, entry.label, 32)
+    local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
     local bind = C.KeyCapture({
         value = SuuUI.Settings:Get(pluginId, entry.key) or "",
-        w     = 120,
-        h     = 22,
+        minW  = 120,
     }, row:GetFrame())
-    row:Add(bind, { width = 120, height = 22 })
+    row:Add(bind)
 
     S:Connect(bind, S.SIGNALS.VALUE_CHANGED, function(val)
         SuuUI.Settings:Set(pluginId, entry.key, val)

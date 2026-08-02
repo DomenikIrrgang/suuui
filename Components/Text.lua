@@ -1,3 +1,4 @@
+local abs = math.abs
 local S = SuuUI.UISignals
 
 local sizemap = { sm="fontSizeSm", md="fontSizeMd", lg="fontSizeLg", xl="fontSizeXl" }
@@ -54,7 +55,20 @@ end
 -- @param text string
 function TextMeta:SetText(text)
     self._fs:SetText(text)
+    self:_measure()
     S:Emit(self, S.SIGNALS.TEXT_CHANGED, text)
+end
+
+-- A parent layout pins the font string to an explicit height measured at the font
+-- size in force at the time. Font tokens change at runtime, so re-measure and report
+-- the new height; the containing layout re-flows off SIZE_CHANGED.
+function TextMeta:_measure()
+    if self._fixed then return end
+    local h = self._fs:GetStringHeight()
+    if not h or h <= 0 then return end
+    if abs((self._fs:GetHeight() or 0) - h) <= 0.5 then return end
+    self._fs:SetHeight(h)
+    S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._fs:GetWidth(), h)
 end
 
 --- Returns the displayed text.
@@ -72,6 +86,7 @@ function TextMeta:ApplyTheme()
     local col   = T:GetToken(ckey) or {0.92, 0.92, 0.92, 1}
     self._fs:SetFont(font, size, self._flags or "")
     self._fs:SetTextColor(col[1], col[2], col[3], col[4])
+    self:_measure()
 end
 
 --- Creates a themed text element.
@@ -96,6 +111,7 @@ function SuuUI.Components.Text(props, parent)
         _color     = props.color or "text",
         _baseColor = props.color or "text",
         _flags     = props.flags or "",
+        _fixed     = (props.w and props.h) and true or false,
     }, TextMeta)
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

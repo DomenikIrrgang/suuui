@@ -137,6 +137,15 @@ host:Remove(panel)
 A container with no `h` reports its content height through `SIZE_CHANGED`, so parents
 and scroll frames resize themselves without anyone tracking offsets.
 
+**Font strings re-measure.** Flow layout measures a font string child with
+`GetStringHeight()` after assigning it a width, rather than trusting a height pinned
+by an earlier pass. Text metrics depend on the `fontSize*` tokens, which change at
+runtime, so omit `height` on text children and let the layout measure them.
+
+**Hugging containers lay out twice.** A container with no `h` sets its height from
+content, then re-runs its strategy so `align` / `valign` resolve against the settled
+height.
+
 **Passing children:** `Add()` accepts a raw frame, a component handle, or another
 container. Handles are unwrapped internally, so `container:Add(btn)` and
 `container:Add(btn:GetFrame())` are equivalent — prefer the handle so the container
@@ -474,7 +483,7 @@ All SuuUI components return handles with a `GetFrame()` method:
 
 ```lua
 local btn = SuuUI.Components.Button({label="Click Me"}, parent)
-container:Add(btn:GetFrame(), { width = 100, height = 24 })
+container:Add(btn)   -- omit width/height: the button hugs its label
 
 local text = SuuUI.Components.Text({text="Label"}, parent)
 container:Add(text:GetFrame(), { width = "fill" })

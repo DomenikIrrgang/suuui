@@ -59,7 +59,9 @@ function M:Build(pluginId, scroll)
                 and builder(entry, content)
                 or  builder(entry, pluginId, content)
             if row then
-                page:Add(row, { width = "fill", height = row:GetHeight() })
+                -- No fixed height: rows hug their content so a font token change
+                -- re-flows the page instead of clipping inside a stale row height.
+                page:Add(row, { width = "fill" })
             end
         else
             SuuUI.Debug("PageBuilder: no control for type: " .. tostring(entry.type))

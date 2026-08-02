@@ -5,14 +5,15 @@ local C = SuuUI.Components
 local M = {}
 
 --- Creates a labelled settings row: label on the left, controls right-aligned.
+-- The row hugs its content so it re-flows when font size tokens change.
 -- Add trailing controls with row:Add(control, { width=..., height=... }).
 -- @param parent frame    Frame the row is created inside
 -- @param labelText string
--- @param height number   Row height (default 28)
 -- @return table, table   Row container handle, label handle
-function M.Labelled(parent, labelText, height)
+function M.Labelled(parent, labelText)
     local T = SuuUI.Theme
     local pad = T:GetToken("spaceMd") or 8
+    local vpad = T:GetToken("spaceSm") or 4
 
     local row = SuuUI.Layout:CreateContainer({
         parent  = parent,
@@ -20,8 +21,7 @@ function M.Labelled(parent, labelText, height)
         dir     = "horizontal",
         gap     = pad,
         align   = "center",
-        h       = height or 28,
-        padding = { top = 0, right = pad, bottom = 0, left = pad },
+        padding = { top = vpad, right = pad, bottom = vpad, left = pad },
     })
 
     local label = C.Text({ text = labelText or "", size = "md", color = "text" }, row:GetFrame())
@@ -30,11 +30,10 @@ function M.Labelled(parent, labelText, height)
     return row, label
 end
 
---- Creates a full-width row that stacks its children vertically.
+--- Creates a full-width row that stacks its children vertically and hugs them.
 -- @param parent frame
--- @param height number  Row height
 -- @return table  Row container handle
-function M.Stacked(parent, height)
+function M.Stacked(parent)
     local T = SuuUI.Theme
     local pad = T:GetToken("spaceMd") or 8
 
@@ -43,7 +42,6 @@ function M.Stacked(parent, height)
         layout  = "flow",
         dir     = "vertical",
         gap     = T:GetToken("spaceSm") or 4,
-        h       = height,
         padding = { top = 0, right = pad, bottom = 0, left = pad },
     })
 end

@@ -379,6 +379,9 @@ A container emits `SIZE_CHANGED` whenever its computed size changes.
   - `width="fill"` / `height="fill"` distribute remaining main-axis space
   - `align` gives cross-axis placement (`start`/`center`/`end`/`stretch`)
   - Respects padding on all 4 sides
+  - Font string children are measured with `GetStringHeight()` after their width is
+    assigned, so text re-flows when a `fontSize*` token changes. Omit `height` on
+    text children; a fixed height pins them to the old font's metrics.
 - **GridLayout** (`Layout/GridLayout.lua`): fixed columns, equal cells.
   - Column width derived from container width, padding, and gap
 - **StackLayout** (`Layout/StackLayout.lua`): overlays children on the container box.
@@ -400,6 +403,31 @@ creating one. Components use this so internal layout costs no extra frames and n
 whatever is already there, so ordering decides who survives — setting the script after
 the container adopts the frame replaces the container's re-layout hook and breaks
 resizing silently.
+
+### Components must react to being resized
+
+A parent layout resizes a child's **frame** directly; it never calls the handle's
+`SetSize`. So any component whose internals depend on its own width or height must hook
+its frame's `OnSizeChanged` (registered before its host container, per above), recompute,
+and emit `SIZE_CHANGED`:
+
+```lua
+local handle
+f:SetScript("OnSizeChanged", function(_, w, h)
+    if not (handle and handle._box) then return end   -- guard during construction
+    handle:_render()
+    S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
+end)
+```
+
+`SetSize` on the handle should then just set the frame size and let the hook do the work,
+so both paths behave identically. `ScrollFrame`, `Slider`, and `Toggle` all rely on this.
+Emitting only from `SetSize` is the trap: consumers listening for `SIZE_CHANGED` never
+hear about layout-driven resizes and keep stale widths.
+
+Position that is animated should also be applied immediately when the change is a resize
+rather than a value change — otherwise the element sits at a stale offset until the
+animation ticks. `Toggle:_render(snap)` shows the pattern.
 
 ### Container sizing is always explicit
 
@@ -556,7 +584,10 @@ to a container; they position their own internals with a host container. See
    value emits `VALUE_CHANGED`, one that resizes emits `SIZE_CHANGED`, and so on.
 2. Translate Blizzard scripts into signals internally. The script never escapes the
    component file; consumers connect to signals, not to `GetFrame():SetScript(...)`.
-3. Cache token values in `ApplyTheme()` and re-read only there.
+3. Cache token values in `ApplyTheme()` and re-read only there. If the new tokens
+   change the element's own size — a font size token changing text metrics, say —
+   `ApplyTheme()` must re-measure and emit `SIZE_CHANGED`, or the containing layout
+   keeps the geometry it measured under the old theme. `Text` and `Slider` do this.
 4. Clean up in `Destroy()`: `SuuUI.UISignals:DisconnectAll(self)` plus
    `SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)`.
 
@@ -567,7 +598,11 @@ frames in a page. Register it in the `.toc` and document it here.
 - `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,
   `border = false` to drop the border.
 - `Text` — FontString with token font/size/color.
-- `Button` — fully custom, animated hover/press states.
+- `Button` — fully custom, animated hover/press states. Hugs its label: width and
+  height are measured from the text plus token padding unless `w`/`h` are given
+  (`minW`/`minH` set floors). Re-fits on `SetLabel` and on font token changes, and
+  emits `SIZE_CHANGED` so the containing layout re-flows. Add it without `width`/
+  `height` props to keep the hug.
 - `IconButton` — Button + texture slot.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox.
@@ -582,6 +617,10 @@ frames in a page. Register it in the `.toc` and document it here.
 - `Divider` — horizontal/vertical line, optional label.
 - `Modal` — dialog with optional input, container-composed.
 - `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
+- `TextMetrics` — non-visual helper: `SuuUI.TextMetrics.Measure(text, font, size, flags)`
+  returns the real width/height of a string. Use it for any fit-to-text sizing. A font
+  string's own `GetStringWidth` is clamped to the width its layout assigned, so
+  measuring a live label that is already truncated shrinks it further on every pass.
 
 **Component-specific signals:**
 

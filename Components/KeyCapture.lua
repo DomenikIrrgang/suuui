@@ -15,7 +15,6 @@ function KeyMeta:GetFrame()     return self._btn:GetFrame() end
 
 function KeyMeta:SetSize(w, h)
     self._btn:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function KeyMeta:Show()
@@ -76,10 +75,12 @@ function SuuUI.Components.KeyCapture(props, parent)
     local placeholder = props.placeholder or "Not Bound"
     local value = props.value or ""
 
+    -- No w/h: the button hugs the binding text, which can be long ("CTRL-SHIFT-F1")
     local btn = SuuUI.Components.Button({
         label = value ~= "" and value or placeholder,
-        w     = props.w or 120,
-        h     = props.h or 22,
+        w     = props.w,
+        h     = props.h,
+        minW  = props.minW or 120,
     }, parent)
 
     -- Keyboard catcher: hidden, only enabled during capture. Sized by the engine.
@@ -99,6 +100,11 @@ function SuuUI.Components.KeyCapture(props, parent)
         _enabled     = true,
         _capturing   = false,
     }, KeyMeta)
+
+    -- The button re-fits itself to the binding text; pass that on so parent layouts re-flow
+    S:Connect(btn, S.SIGNALS.SIZE_CHANGED, function(w, h)
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
+    end)
 
     catcher:SetScript("OnKeyDown", function(_, key)
         if not handle._capturing then return end

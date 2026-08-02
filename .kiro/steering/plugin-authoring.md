@@ -442,7 +442,7 @@ row:SetScript("OnClick", handler)
 
 -- ✅ REQUIRED
 local btn = SuuUI.Components.Button({ label = "Apply" }, parent)
-container:Add(btn:GetFrame(), { width = 100, height = 24 })
+container:Add(btn)   -- omit width/height: the button hugs its label
 SuuUI.UISignals:Connect(btn, SuuUI.UISignals.SIGNALS.CLICKED, handler)
 ```
 
@@ -480,6 +480,10 @@ S:DisconnectAll(slider)
 Common signals: `VALUE_CHANGED` (new, old), `TEXT_CHANGED` (text), `CLICKED` (button),
 `SIZE_CHANGED` (w, h), `VISIBILITY_CHANGED` (isVisible), `CONTENT_RESIZED` (height),
 `ENABLED_CHANGED` (isEnabled), `MOUSE_ENTER`, `MOUSE_LEAVE`, `FOCUSED`, `UNFOCUSED`.
+
+`SIZE_CHANGED` must fire whenever the element's frame changes size — including when a
+parent layout resizes it, which does not go through the handle's `SetSize`. Emit it from
+the frame's `OnSizeChanged` hook, not from `SetSize`.
 
 Component-specific signals live on the component table and carry their own payloads:
 

@@ -190,6 +190,10 @@ function ContMeta:Layout()
         local _, contentH = self:GetContentSize()
         if abs((self._frame:GetHeight() or 0) - contentH) > 0.5 then
             self._frame:SetHeight(contentH)
+            -- Cross-axis alignment is measured against the container's own height, so
+            -- re-run the strategy now that hugging has settled it. The resize itself
+            -- cannot re-enter: the _laying guard is still held.
+            fn(self)
         end
     end
     self._laying = false

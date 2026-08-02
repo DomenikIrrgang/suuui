@@ -7,7 +7,7 @@ local S = SuuUI.UISignals
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local row = SuuUI._SettingsRow.Labelled(parent, entry.label, 28)
+    local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
     local tog = C.Toggle({
         value = SuuUI.Settings:Get(pluginId, entry.key),

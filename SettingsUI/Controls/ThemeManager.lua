@@ -24,7 +24,7 @@ end
 -- Builds one colour token row: label, hex input, swatch
 local function colourRow(parent, def, editors)
     local T = SuuUI.Theme
-    local row, _ = SuuUI._SettingsRow.Labelled(parent, def.label, 28)
+    local row, _ = SuuUI._SettingsRow.Labelled(parent, def.label)
     local value  = T:GetToken(def.key) or {1, 1, 1, 1}
 
     local swatch = C.ColorSwatch({ value = value, w = 24 }, row:GetFrame())
@@ -72,14 +72,14 @@ end
 -- Builds one numeric token row: slider with inline label
 local function numberRow(parent, def, editors)
     local T   = SuuUI.Theme
-    local row = SuuUI._SettingsRow.Stacked(parent, 44)
+    local row = SuuUI._SettingsRow.Stacked(parent)
 
     local sld = C.Slider({
         label = def.label,
         value = T:GetToken(def.key) or def.min,
         min   = def.min, max = def.max, step = def.step,
     }, row:GetFrame())
-    row:Add(sld, { width = "fill", height = 36 })
+    row:Add(sld, { width = "fill" })
 
     S:Connect(sld, S.SIGNALS.VALUE_CHANGED, function(val)
         setToken(def.key, val)
@@ -144,15 +144,16 @@ local function Build(entry, parent)
     -- Action buttons
     local btnRow = SuuUI.Layout:CreateContainer({
         parent = root:GetFrame(),
-        layout = "flow", dir = "horizontal", gap = gap, h = 24,
+        layout = "flow", dir = "horizontal", gap = gap, align = "center",
     })
-    local createBtn = C.Button({ label="Create", w=80, h=24 }, btnRow:GetFrame())
-    local deleteBtn = C.Button({ label="Delete", w=80, h=24 }, btnRow:GetFrame())
-    local resetBtn  = C.Button({ label="Reset",  w=80, h=24 }, btnRow:GetFrame())
-    btnRow:Add(createBtn, { width = 80, height = 24 })
-    btnRow:Add(deleteBtn, { width = 80, height = 24 })
-    btnRow:Add(resetBtn,  { width = 80, height = 24 })
-    root:Add(btnRow, { width = "fill", height = 24 })
+    -- Buttons size themselves to their labels; the row hugs them
+    local createBtn = C.Button({ label="Create", minW = 80 }, btnRow:GetFrame())
+    local deleteBtn = C.Button({ label="Delete", minW = 80 }, btnRow:GetFrame())
+    local resetBtn  = C.Button({ label="Reset",  minW = 80 }, btnRow:GetFrame())
+    btnRow:Add(createBtn)
+    btnRow:Add(deleteBtn)
+    btnRow:Add(resetBtn)
+    root:Add(btnRow, { width = "fill" })
 
     S:Connect(createBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
@@ -211,9 +212,9 @@ local function Build(entry, parent)
         text  = "Built-in themes (Default, Modern) cannot be edited.\nCreate a new theme to customise tokens.",
         size  = "sm", color = "muted", wrap = true,
     }, root:GetFrame())
-    root:Add(info, { width = "fill", height = 32 })
+    root:Add(info, { width = "fill" })
 
-    -- Token editors
+    -- Token editors hug their content: font size tokens change their height at runtime
     for _, def in ipairs(SuuUI._ThemeEditableTokens) do
         local row
         if def.type == "color" then
@@ -221,7 +222,7 @@ local function Build(entry, parent)
         else
             row = numberRow(root:GetFrame(), def, editors)
         end
-        root:Add(row, { width = "fill", height = row:GetHeight() })
+        root:Add(row, { width = "fill" })
     end
 
     syncEditable()

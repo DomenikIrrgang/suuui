@@ -11,6 +11,29 @@ local function crossOffset(align, available, childSize)
     return 0
 end
 
+local function resolveWidth(child, props, align, cw, vertical, fillSize)
+    if props.width == "fill" then
+        return vertical and cw or (fillSize or 0)
+    elseif type(props.width) == "number" then
+        return props.width
+    elseif vertical and align == "stretch" then
+        return cw
+    end
+    return child:GetWidth() or 0
+end
+
+-- A font string's height depends on the width the layout gives it, and on the font
+-- size token, which changes at runtime. Assign the width first, then read the
+-- measured string height back rather than trusting a previously pinned height.
+local function naturalHeight(child, childW)
+    if child.GetStringHeight then
+        if childW and childW > 0 then child:SetWidth(childW) end
+        local h = child:GetStringHeight()
+        if h and h > 0 then return h end
+    end
+    return child:GetHeight() or 0
+end
+
 --- Applies flow layout to a container's children.
 -- Child layout props: { width="fill"|number, height="fill"|number, align="start"|"center"|"end"|"stretch" }
 -- "fill" distributes remaining space on the main axis; "stretch" fills the cross axis.
@@ -35,8 +58,12 @@ function M.Apply(container)
             fillCount = fillCount + 1
         elseif type(mainProp) == "number" then
             usedSpace = usedSpace + mainProp
+        elseif vertical then
+            local align = props.align or container._align
+            usedSpace = usedSpace
+                + naturalHeight(child, resolveWidth(child, props, align, cw, true, nil))
         else
-            usedSpace = usedSpace + ((vertical and child:GetHeight() or child:GetWidth()) or 0)
+            usedSpace = usedSpace + (child:GetWidth() or 0)
         end
     end
 
@@ -49,17 +76,8 @@ function M.Apply(container)
     for _, child in ipairs(children) do
         local props = child._layoutProps or {}
         local align = props.align or container._align
-        local childW, childH
-
-        if props.width == "fill" then
-            childW = vertical and cw or fillSize
-        elseif type(props.width) == "number" then
-            childW = props.width
-        elseif vertical and align == "stretch" then
-            childW = cw
-        else
-            childW = child:GetWidth() or 0
-        end
+        local childW = resolveWidth(child, props, align, cw, vertical, fillSize)
+        local childH
 
         if props.height == "fill" then
             childH = vertical and fillSize or ch
@@ -68,7 +86,7 @@ function M.Apply(container)
         elseif not vertical and align == "stretch" then
             childH = ch
         else
-            childH = child:GetHeight() or 0
+            childH = naturalHeight(child, childW)
         end
 
         child:SetSize(childW, childH)

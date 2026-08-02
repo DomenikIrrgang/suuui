@@ -29,13 +29,11 @@ function ScrMeta:Destroy()
     self._box:Destroy()
 end
 
---- Resizes the scroll frame. Emits SIZE_CHANGED.
+--- Resizes the scroll frame. Emits SIZE_CHANGED via the frame's resize hook.
 -- @param w number
 -- @param h number
 function ScrMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    self:_updateBar()
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 --- Returns the inner content frame for attaching children.
@@ -84,7 +82,19 @@ function ScrMeta:_updateBar()
 
     -- Reserve gutter space for the scrollbar by insetting the viewport
     self._box:SetChildProps(self._sf, needsBar and { inset = { right = 10 } } or nil)
-    self._content:SetWidth(self._sf:GetWidth())
+    local contentW = self._sf:GetWidth()
+    self._content:SetWidth(contentW)
+
+    -- The scrollbar appearing or vanishing changes the usable width, so tell consumers.
+    -- Without this, content laid out before the bar appeared overflows underneath it.
+    if self._lastContentW ~= contentW then
+        self._lastContentW = contentW
+        if not self._reporting then
+            self._reporting = true
+            S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._f:GetWidth(), self._f:GetHeight())
+            self._reporting = false
+        end
+    end
 end
 
 function ScrMeta:ApplyTheme()
@@ -123,6 +133,16 @@ function SuuUI.Components.ScrollFrame(props, parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
 
+    -- React whenever the frame is resized, including by a parent layout (which sizes
+    -- the frame directly and never calls SetSize). Registered before the host container
+    -- adopts the frame so the container chains onto it.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, newW, newH)
+        if not (handle and handle._box) then return end
+        handle:_updateBar()
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, newW, newH)
+    end)
+
     -- Viewport and scrollbar track are stacked in the outer frame
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
@@ -144,7 +164,7 @@ function SuuUI.Components.ScrollFrame(props, parent)
     thumbBox:Add(thumb, { anchor = thumbAnchor })
 
     local id = "scr_" .. tostring(f)
-    local handle = setmetatable({
+    handle = setmetatable({
         _f=f, _sf=sf, _content=content, _box=box,
         _track=track, _thumb=thumb,
         _thumbBox=thumbBox, _thumbAnchor=thumbAnchor, _eid=id,

@@ -56,6 +56,9 @@ end
 function InpMeta:SetValue(text)
     self._silent = true
     self._eb:SetText(text or "")
+    -- SetText parks the cursor at the end, which scrolls the view and shows only the
+    -- tail of the value. Rewind unless the user is actively editing the field.
+    if not self._eb:HasFocus() then self._eb:SetCursorPosition(0) end
     self._silent = false
 end
 

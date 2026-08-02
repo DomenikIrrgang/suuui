@@ -45,6 +45,12 @@ local function buildNav()
         S:Emit(navScroll, S.SIGNALS.CONTENT_RESIZED, h)
     end)
 
+    -- Keep the nav list width in step with the scroll frame (scrollbar appearing
+    -- changes the usable content width)
+    S:Connect(navScroll, S.SIGNALS.SIZE_CHANGED, function()
+        if navList then navList:SetWidth(navScroll:GetContentWidth()) end
+    end)
+
     local entries = SuuUI.Plugins:GetAll()
     tinsert(entries, 1, { id = "_profiles", name = "Profiles" })
     tinsert(entries, 1, { id = "_theme",    name = "Theme" })

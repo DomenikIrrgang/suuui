@@ -10,8 +10,6 @@ function TogMeta:GetFrame()     return self._f end
 
 function TogMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    self:_render()
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function TogMeta:Show()
@@ -52,7 +50,9 @@ function TogMeta:SetValue(val)
     self:_render()
 end
 
-function TogMeta:_render()
+--- Renders the current state.
+-- @param snap bool  Place the knob immediately instead of animating (used on resize)
+function TogMeta:_render(snap)
     local T    = SuuUI.Theme
     local on   = self._value
     local en   = self._enabled ~= false
@@ -66,27 +66,34 @@ function TogMeta:_render()
     local knobSize = th - 4
     local knobX    = on and (tw - knobSize - 3) or 3
 
-    -- Animate the knob's anchor offset through the layout engine
     local fromX = self._knobX or knobX
     self._knobX = knobX
     self._knobAnchor.width  = knobSize
     self._knobAnchor.height = knobSize
-    SuuUI.Anim:New({
-        container = self._knobBox,
-        target    = self._knob,
-        anchor    = self._knobAnchor,
-        property  = "x",
-        from      = fromX, to = knobX,
-        duration  = T:GetToken("animFast") or 0.12,
-        easing    = "easeOut",
-    }):Play()
+
+    -- The anchor descriptor stays authoritative, so the knob is correctly placed even
+    -- if no animation runs. Resizes snap; value changes animate.
+    self._knobAnchor.x = knobX
+    if snap or fromX == knobX then
+        self._knobBox:SetChildAnchor(self._knob, self._knobAnchor)
+    else
+        SuuUI.Anim:New({
+            container = self._knobBox,
+            target    = self._knob,
+            anchor    = self._knobAnchor,
+            property  = "x",
+            from      = fromX, to = knobX,
+            duration  = T:GetToken("animFast") or 0.12,
+            easing    = "easeOut",
+        }):Play()
+    end
 
     local kc = en and {1,1,1,1} or T:GetToken("colorTextDisable") or {0.4,0.4,0.4,1}
     self._knob:SetBackdropColor(kc[1], kc[2], kc[3], kc[4])
 end
 
 function TogMeta:ApplyTheme()
-    self:_render()
+    self:_render(true)
 end
 
 --- Creates an animated toggle switch.
@@ -101,6 +108,16 @@ function SuuUI.Components.Toggle(props, parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
     f:EnableMouse(true)
+
+    -- The knob offset derives from the frame width, so re-render whenever the frame is
+    -- resized, including by a parent layout. Registered before the host container
+    -- adopts the frame so the container chains onto it.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, newW, newH)
+        if not (handle and handle._knobBox) then return end
+        handle:_render(true)
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, newW, newH)
+    end)
 
     -- Track fills the toggle; the knob is positioned by an anchor container
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
@@ -129,7 +146,7 @@ function SuuUI.Components.Toggle(props, parent)
     knobBox:Add(knob, { anchor = knobAnchor })
 
     local id = "tog_" .. tostring(f)
-    local handle = setmetatable({
+    handle = setmetatable({
         _f=f, _track=track, _knob=knob,
         _box=box, _knobBox=knobBox, _knobAnchor=knobAnchor,
         _eid=id, _value=props.value == true, _enabled=true,
@@ -148,7 +165,7 @@ function SuuUI.Components.Toggle(props, parent)
     f:SetScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
     f:SetScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
 
-    handle:_render()
+    handle:_render(true)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

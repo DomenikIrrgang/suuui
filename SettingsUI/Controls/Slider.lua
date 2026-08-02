@@ -7,7 +7,7 @@ local S = SuuUI.UISignals
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local row = SuuUI._SettingsRow.Stacked(parent, 44)
+    local row = SuuUI._SettingsRow.Stacked(parent)
 
     local sld = C.Slider({
         label = entry.label,
@@ -16,7 +16,7 @@ local function Build(entry, pluginId, parent)
         max   = entry.max  or 100,
         step  = entry.step or 1,
     }, row:GetFrame())
-    row:Add(sld, { width = "fill", height = 36 })
+    row:Add(sld, { width = "fill" })
 
     S:Connect(sld, S.SIGNALS.VALUE_CHANGED, function(val)
         SuuUI.Settings:Set(pluginId, entry.key, val)

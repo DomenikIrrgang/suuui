@@ -164,22 +164,22 @@ function SuuUI.Components.Modal(props, parent)
         layout = "flow",
         dir    = "horizontal",
         gap    = gap + 4,
-        h      = 28,
+        align  = "center",
     })
 
-    local confirmBtn = C.Button({
-        label = props.confirmText or "Confirm", w = 100, h = 28,
-    }, btnRow:GetFrame())
-    local cancelBtn = C.Button({
-        label = props.cancelText or "Cancel", w = 100, h = 28,
-    }, btnRow:GetFrame())
+    -- Buttons hug their labels, so the row is sized from its content to stay centred
+    local confirmBtn = C.Button({ label = props.confirmText or "Confirm", minW = 100 },
+        btnRow:GetFrame())
+    local cancelBtn  = C.Button({ label = props.cancelText  or "Cancel",  minW = 100 },
+        btnRow:GetFrame())
 
-    btnRow:Add(confirmBtn, { width = 100, height = 28 })
-    btnRow:Add(cancelBtn,  { width = 100, height = 28 })
+    btnRow:Add(confirmBtn)
+    btnRow:Add(cancelBtn)
     S:Connect(confirmBtn, S.SIGNALS.CLICKED, confirm)
     S:Connect(cancelBtn,  S.SIGNALS.CLICKED, cancel)
 
-    root:Add(btnRow, { width = 212, height = 28 })
+    local rowW = btnRow:GetContentSize()
+    root:Add(btnRow, { width = rowW })
 
     -- Size the window to the composed content through the stack container
     local function fitWindow(h)

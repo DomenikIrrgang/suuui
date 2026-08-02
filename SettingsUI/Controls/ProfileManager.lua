@@ -78,16 +78,17 @@ local function Build(entry, parent)
         layout = "flow",
         dir    = "horizontal",
         gap    = gap,
-        h      = 24,
+        align  = "center",
     })
 
-    local createBtn = C.Button({ label = "Create", w = 80, h = 24 }, btnRow:GetFrame())
-    local copyBtn   = C.Button({ label = "Copy",   w = 80, h = 24 }, btnRow:GetFrame())
-    local deleteBtn = C.Button({ label = "Delete", w = 80, h = 24 }, btnRow:GetFrame())
-    btnRow:Add(createBtn, { width = 80, height = 24 })
-    btnRow:Add(copyBtn,   { width = 80, height = 24 })
-    btnRow:Add(deleteBtn, { width = 80, height = 24 })
-    root:Add(btnRow, { width = "fill", height = 24 })
+    -- Buttons size themselves to their labels; the row hugs them
+    local createBtn = C.Button({ label = "Create", minW = 80 }, btnRow:GetFrame())
+    local copyBtn   = C.Button({ label = "Copy",   minW = 80 }, btnRow:GetFrame())
+    local deleteBtn = C.Button({ label = "Delete", minW = 80 }, btnRow:GetFrame())
+    btnRow:Add(createBtn)
+    btnRow:Add(copyBtn)
+    btnRow:Add(deleteBtn)
+    root:Add(btnRow, { width = "fill" })
 
     S:Connect(createBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
@@ -142,8 +143,8 @@ local function Build(entry, parent)
     end)
 
     -- Reset everything
-    local resetBtn = C.Button({ label = "Reset All Settings", w = 160, h = 24 }, root:GetFrame())
-    root:Add(resetBtn, { width = 160, height = 24 })
+    local resetBtn = C.Button({ label = "Reset All Settings" }, root:GetFrame())
+    root:Add(resetBtn)
 
     S:Connect(resetBtn, S.SIGNALS.CLICKED, function()
         C.Modal({
