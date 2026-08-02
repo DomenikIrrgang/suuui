@@ -6,12 +6,19 @@ DdMeta.__index = DdMeta
 function DdMeta:SetPoint(...)  self._f:SetPoint(...) end
 function DdMeta:SetSize(w, h)  self._f:SetSize(w, h) end
 function DdMeta:Show()         self._f:Show() end
-function DdMeta:Hide()         self._f:Hide() end
+function DdMeta:Hide()         
+    self._f:Hide()
+    self:_closePanel()
+end
 function DdMeta:IsShown()      return self._f:IsShown() end
 function DdMeta:GetFrame()     return self._f end
 function DdMeta:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     if self._panel then self._panel:Hide() end
+    if self._clickFrame then
+        self._clickFrame:Hide()
+        self._clickFrame = nil
+    end
 end
 function DdMeta:SetEnabled(en)
     self._enabled = en
@@ -47,6 +54,9 @@ end
 function DdMeta:_closePanel()
     if self._panel and self._panel:IsShown() then
         SuuUI.Anim.Presets.FadeOut(self._panel, SuuUI.Theme:GetToken("animFast"))
+        if self._clickFrame then
+            self._clickFrame:Hide()
+        end
     end
 end
 
@@ -128,6 +138,12 @@ function DdMeta:_openPanel()
     panel:SetAlpha(0)
     panel:Show()
     SuuUI.Anim.Presets.FadeIn(panel, T:GetToken("animFast"))
+    
+    -- Show click-outside detection frame and reset state
+    if self._clickFrame then
+        self._resetClickDetection()
+        self._clickFrame:Show()
+    end
 end
 
 function DdMeta:ApplyTheme()
@@ -190,6 +206,67 @@ function SuuUI.Components.Dropdown(props, parent)
         if panel:IsShown() then handle:_closePanel()
         else handle:_openPanel() end
     end)
+
+    -- Click-outside-to-close detection using mouse state polling
+    local clickFrame = CreateFrame("Frame")
+    clickFrame:Hide()
+    local wasMouseDown = false
+    local ignoreNextClick = false
+    
+    clickFrame:SetScript("OnUpdate", function()
+        if not panel:IsShown() then
+            clickFrame:Hide()
+            wasMouseDown = false
+            ignoreNextClick = false
+            return
+        end
+        
+        local isMouseDown = IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton")
+        
+        -- Detect click (mouse down -> mouse up transition)
+        if wasMouseDown and not isMouseDown then
+            if ignoreNextClick then
+                -- Skip this click (it was the one that opened the dropdown)
+                ignoreNextClick = false
+            else
+                local cx, cy = GetCursorPosition()
+                local scale = UIParent:GetEffectiveScale()
+                cx = cx / scale
+                cy = cy / scale
+                
+                -- Check dropdown button bounds
+                local fl = f:GetLeft() or 0
+                local fr = f:GetRight() or 0
+                local ft = f:GetTop() or 0
+                local fb = f:GetBottom() or 0
+                
+                local clickInButton = (cx >= fl and cx <= fr and cy >= fb and cy <= ft)
+                
+                -- Check panel bounds
+                local pl = panel:GetLeft() or 0
+                local pr = panel:GetRight() or 0
+                local pt = panel:GetTop() or 0
+                local pb = panel:GetBottom() or 0
+                
+                local clickInPanel = (cx >= pl and cx <= pr and cy >= pb and cy <= pt)
+                
+                if not clickInButton and not clickInPanel then
+                    -- Click is outside - close the panel
+                    handle:_closePanel()
+                end
+            end
+        end
+        
+        wasMouseDown = isMouseDown
+    end)
+    
+    -- Method to reset the ignore flag when opening
+    handle._resetClickDetection = function()
+        ignoreNextClick = true
+        wasMouseDown = true  -- Assume mouse is down when opening
+    end
+    
+    handle._clickFrame = clickFrame
 
     -- close on click elsewhere
     panel:SetScript("OnHide", function() end)

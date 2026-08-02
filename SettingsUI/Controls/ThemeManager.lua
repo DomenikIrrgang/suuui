@@ -57,13 +57,13 @@ local function Build(entry, parent)
         return options
     end
     
-    -- Function to update input enabled state based on theme
+    -- Function to update control enabled state based on theme
     local function updateInputsEnabled()
         local active = SuuUI.Theme:GetActive()
         local isBuiltin = SuuUI.Theme:IsBuiltin(active)
         
         for _, data in pairs(tokenInputs) do
-            data.input:SetEnabled(not isBuiltin)
+            data.control:SetEnabled(not isBuiltin)
         end
     end
 
@@ -170,43 +170,42 @@ local function Build(entry, parent)
     })
     tokenRowsContainer:GetFrame():SetAllPoints(tokenEditorFrame)
 
-    -- Create token editor rows
+    -- Create token editor rows with appropriate controls
     local editableTokens = {
-        -- Colors
-        {key="colorBg", label="Background"},
-        {key="colorBgAlt", label="Background Alt"},
-        {key="colorBgHover", label="Background Hover"},
-        {key="colorBgActive", label="Background Active"},
-        {key="colorBlue400", label="Blue 400"},
-        {key="colorBlue500", label="Blue 500"},
-        {key="colorGreen400", label="Green 400"},
-        {key="colorRed400", label="Red 400"},
-        {key="colorYellow400", label="Yellow 400"},
-        {key="colorText", label="Text"},
-        {key="colorTextMuted", label="Text Muted"},
-        {key="colorTextDisable", label="Text Disabled"},
-        {key="colorBorder", label="Border"},
-        -- Fonts
-        {key="fontSizeSm", label="Font Size Small"},
-        {key="fontSizeMd", label="Font Size Medium"},
-        {key="fontSizeLg", label="Font Size Large"},
-        {key="fontSizeXl", label="Font Size XL"},
-        -- Spacing
-        {key="spaceSm", label="Space Small"},
-        {key="spaceMd", label="Space Medium"},
-        {key="spaceLg", label="Space Large"},
-        {key="spaceXl", label="Space XL"},
-        -- Other
-        {key="borderWidth", label="Border Width"},
-        {key="borderRadius", label="Border Radius"},
-        {key="animFast", label="Animation Fast"},
-        {key="animMid", label="Animation Mid"},
-        {key="animSlow", label="Animation Slow"},
+        -- Colors (use ColorPicker)
+        {key="colorBg", label="Background", type="color"},
+        {key="colorBgAlt", label="Background Alt", type="color"},
+        {key="colorBgHover", label="Background Hover", type="color"},
+        {key="colorBgActive", label="Background Active", type="color"},
+        {key="colorBlue400", label="Blue 400", type="color"},
+        {key="colorBlue500", label="Blue 500", type="color"},
+        {key="colorGreen400", label="Green 400", type="color"},
+        {key="colorRed400", label="Red 400", type="color"},
+        {key="colorYellow400", label="Yellow 400", type="color"},
+        {key="colorText", label="Text", type="color"},
+        {key="colorTextMuted", label="Text Muted", type="color"},
+        {key="colorTextDisable", label="Text Disabled", type="color"},
+        {key="colorBorder", label="Border", type="color"},
+        -- Font sizes (use Slider)
+        {key="fontSizeSm", label="Font Size Small", type="number", min=8, max=20, step=1},
+        {key="fontSizeMd", label="Font Size Medium", type="number", min=10, max=24, step=1},
+        {key="fontSizeLg", label="Font Size Large", type="number", min=12, max=28, step=1},
+        {key="fontSizeXl", label="Font Size XL", type="number", min=14, max=32, step=1},
+        -- Spacing (use Slider)
+        {key="spaceSm", label="Space Small", type="number", min=0, max=16, step=1},
+        {key="spaceMd", label="Space Medium", type="number", min=0, max=24, step=1},
+        {key="spaceLg", label="Space Large", type="number", min=0, max=32, step=1},
+        {key="spaceXl", label="Space XL", type="number", min=0, max=48, step=1},
+        -- Other (use Slider)
+        {key="borderWidth", label="Border Width", type="number", min=1, max=4, step=1},
+        {key="borderRadius", label="Border Radius", type="number", min=0, max=16, step=1},
+        {key="animFast", label="Animation Fast", type="number", min=0.05, max=0.5, step=0.05},
+        {key="animMid", label="Animation Mid", type="number", min=0.1, max=0.8, step=0.05},
+        {key="animSlow", label="Animation Slow", type="number", min=0.2, max=1.0, step=0.05},
     }
     
     for _, tokenDef in ipairs(editableTokens) do
         local tokenRow = CreateFrame("Frame", nil, tokenEditorFrame)
-        tokenRow:SetHeight(28)
         
         -- Label on the left, vertically centered
         local label = C.Text({
@@ -217,67 +216,171 @@ local function Build(entry, parent)
         label:GetFrame():SetPoint("LEFT", tokenRow, "LEFT", 0, 0)
         label:GetFrame():SetWidth(150)
         
-        local function updateInputValue()
+        local control
+        
+        if tokenDef.type == "color" then
+            -- Use simple color swatch + hex input for color tokens
             local currentValue = T:GetToken(tokenDef.key)
-            local valueType = type(currentValue)
-            local valueStr = ""
             
-            if valueType == "table" then
-                valueStr = string.format("%.2f, %.2f, %.2f, %.2f", 
-                    currentValue[1] or 0, currentValue[2] or 0, 
-                    currentValue[3] or 0, currentValue[4] or 1)
-            else
-                valueStr = tostring(currentValue)
-            end
+            -- Color swatch button
+            local swatchBtn = CreateFrame("Button", nil, tokenRow)
+            swatchBtn:SetSize(24, 24)
+            swatchBtn:SetPoint("RIGHT", tokenRow, "RIGHT", -4, 0)
+            swatchBtn:EnableMouse(true)
+            swatchBtn:RegisterForClicks("LeftButtonDown")
             
-            return valueStr
-        end
-        
-        local valueStr = updateInputValue()
-        
-        -- Input on the right, vertically centered
-        local input = C.Input({
-            value = valueStr,
-            w     = 200,
-            h     = 22,
-            onEnter = function(text)
-                local active = SuuUI.Theme:GetActive()
-                if SuuUI.Theme:IsBuiltin(active) then return end
-                
-                -- Get current value type
-                local currentValue = T:GetToken(tokenDef.key)
-                local currentType = type(currentValue)
-                
-                -- Parse and set the token value
-                local newValue
-                if currentType == "table" then
-                    -- Parse RGBA color string
-                    local r, g, b, a = text:match("([%d%.]+),%s*([%d%.]+),%s*([%d%.]+),%s*([%d%.]+)")
-                    if r and g and b and a then
-                        newValue = {tonumber(r), tonumber(g), tonumber(b), tonumber(a)}
+            local swatchTex = swatchBtn:CreateTexture(nil, "ARTWORK")
+            swatchTex:SetAllPoints()
+            swatchTex:SetColorTexture(currentValue[1], currentValue[2], currentValue[3], currentValue[4])
+            
+            -- Border for swatch
+            local swatchBorder = swatchBtn:CreateTexture(nil, "BORDER")
+            swatchBorder:SetColorTexture(0.3, 0.3, 0.3, 1)
+            swatchBorder:SetPoint("TOPLEFT", swatchBtn, "TOPLEFT", -1, 1)
+            swatchBorder:SetPoint("BOTTOMRIGHT", swatchBtn, "BOTTOMRIGHT", 1, -1)
+            swatchTex:SetDrawLayer("ARTWORK", 1)
+            
+            -- Hex input next to swatch
+            local hexInput = C.Input({
+                value = string.format("%02X%02X%02X", 
+                    currentValue[1]*255, currentValue[2]*255, currentValue[3]*255),
+                w = 80,
+                h = 22,
+                onEnter = function(text)
+                    local active = SuuUI.Theme:GetActive()
+                    if SuuUI.Theme:IsBuiltin(active) then return end
+                    
+                    -- Parse hex color
+                    local hex = text:match("^#?(%x+)$")
+                    if hex and #hex == 6 then
+                        local r = tonumber(hex:sub(1,2), 16) / 255
+                        local g = tonumber(hex:sub(3,4), 16) / 255
+                        local b = tonumber(hex:sub(5,6), 16) / 255
+                        
+                        local ok, err = pcall(SuuUI.Theme.SetUserToken, SuuUI.Theme, active, tokenDef.key, {r, g, b, currentValue[4]})
+                        if ok then
+                            swatchTex:SetColorTexture(r, g, b, currentValue[4])
+                        else
+                            print("|cffff0000SuuUI:|r " .. tostring(err))
+                        end
                     end
-                elseif currentType == "number" then
-                    newValue = tonumber(text)
-                else
-                    newValue = text
+                end,
+            }, tokenRow)
+            hexInput:GetFrame():SetPoint("RIGHT", swatchBtn, "LEFT", -4, 0)
+            
+            -- Color picker modal
+            local colorPickerPanel
+            
+            -- Click swatch to open color picker
+            swatchBtn:SetScript("OnClick", function()
+                print("Swatch clicked for " .. tokenDef.key)  -- Debug
+                local active = SuuUI.Theme:GetActive()
+                if SuuUI.Theme:IsBuiltin(active) then 
+                    print("Cannot edit built-in theme")
+                    return 
                 end
                 
-                if newValue then
-                    local ok, err = pcall(SuuUI.Theme.SetUserToken, SuuUI.Theme, active, tokenDef.key, newValue)
+                if not colorPickerPanel then
+                    print("Creating color picker panel")  -- Debug
+                    colorPickerPanel = C.ColorPicker({
+                        value = currentValue,
+                        onChange = function(r, g, b, a)
+                            print("Color changed:", r, g, b, a)  -- Debug
+                            -- Update the theme token
+                            local ok, err = pcall(SuuUI.Theme.SetUserToken, SuuUI.Theme, active, tokenDef.key, {r, g, b, a})
+                            if ok then
+                                swatchTex:SetColorTexture(r, g, b, a)
+                                hexInput:SetValue(string.format("%02X%02X%02X", r*255, g*255, b*255))
+                                currentValue = {r, g, b, a}
+                            else
+                                print("|cffff0000SuuUI:|r " .. tostring(err))
+                            end
+                        end,
+                    }, UIParent)
+                    -- Set high strata so it appears above the settings window
+                    colorPickerPanel:GetFrame():SetFrameStrata("FULLSCREEN_DIALOG")
+                    colorPickerPanel:GetFrame():SetFrameLevel(100)
+                    colorPickerPanel:Hide()
+                    
+                    -- Close picker when clicking outside
+                    colorPickerPanel:OnRequestClose(function()
+                        colorPickerPanel:Hide()
+                    end)
+                end
+                
+                -- Toggle visibility
+                if colorPickerPanel:IsShown() then
+                    print("Hiding color picker")
+                    colorPickerPanel:Hide()
+                else
+                    print("Showing color picker")
+                    local cv = T:GetToken(tokenDef.key)
+                    colorPickerPanel:SetValue(cv[1], cv[2], cv[3], cv[4])
+                    
+                    -- Position at mouse cursor
+                    local cx, cy = GetCursorPosition()
+                    local scale = UIParent:GetEffectiveScale()
+                    cx = cx / scale
+                    cy = cy / scale
+                    
+                    colorPickerPanel:GetFrame():ClearAllPoints()
+                    colorPickerPanel:GetFrame():SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cx, cy)
+                    
+                    colorPickerPanel:Show()
+                end
+            end)
+            
+            swatchBtn:SetScript("OnEnter", function()
+                swatchBtn:SetAlpha(0.8)
+            end)
+            swatchBtn:SetScript("OnLeave", function()
+                swatchBtn:SetAlpha(1.0)
+            end)
+            
+            tokenRow:SetHeight(28)
+            
+            tokenInputs[tokenDef.key] = {
+                control = hexInput,
+                swatch = swatchTex,
+                updateValue = function()
+                    local val = T:GetToken(tokenDef.key)
+                    swatchTex:SetColorTexture(val[1], val[2], val[3], val[4])
+                    hexInput:SetValue(string.format("%02X%02X%02X", val[1]*255, val[2]*255, val[3]*255))
+                end
+            }
+            
+        elseif tokenDef.type == "number" then
+            -- Use Slider for numeric tokens
+            local currentValue = T:GetToken(tokenDef.key)
+            control = C.Slider({
+                value = currentValue,
+                min = tokenDef.min,
+                max = tokenDef.max,
+                step = tokenDef.step,
+                w = 200,
+                onChange = function(val)
+                    local active = SuuUI.Theme:GetActive()
+                    if SuuUI.Theme:IsBuiltin(active) then return end
+                    
+                    local ok, err = pcall(SuuUI.Theme.SetUserToken, SuuUI.Theme, active, tokenDef.key, val)
                     if not ok then
                         print("|cffff0000SuuUI:|r " .. tostring(err))
                     end
+                end,
+            }, tokenRow)
+            control:GetFrame():SetPoint("RIGHT", tokenRow, "RIGHT", 0, 0)
+            tokenRow:SetHeight(44)
+            
+            tokenInputs[tokenDef.key] = {
+                control = control,
+                updateValue = function()
+                    local val = T:GetToken(tokenDef.key)
+                    control:SetValue(val)
                 end
-            end,
-        }, tokenRow)
-        input:GetFrame():SetPoint("RIGHT", tokenRow, "RIGHT", 0, 0)
+            }
+        end
         
-        tokenRowsContainer:Add(tokenRow, { width = "fill", height = 28 })
-        
-        tokenInputs[tokenDef.key] = {
-            input = input,
-            updateValue = updateInputValue
-        }
+        tokenRowsContainer:Add(tokenRow, { width = "fill", height = tokenRow:GetHeight() })
     end
     
     -- Calculate tokenEditorFrame height based on token rows
@@ -293,17 +396,16 @@ local function Build(entry, parent)
     -- Initialize input enabled state based on current theme
     updateInputsEnabled()
 
-    -- Listen for theme changes to update UI and input values
+    -- Listen for theme changes to update UI and control values
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function(name)
         currentName:SetText(name)
         themeDD:SetValue(name)
         themeDD:SetOptions(updateDropdown())
         updateInputsEnabled()
         
-        -- Update all input values when theme changes
+        -- Update all control values when theme changes
         for key, data in pairs(tokenInputs) do
-            local valueStr = data.updateValue()
-            data.input:SetValue(valueStr)
+            data.updateValue()
         end
     end, "theme_mgr_ui")
 

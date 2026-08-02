@@ -119,8 +119,21 @@ function SuuUI.Components.Slider(props, parent)
         _onChange=props.onChange, _enabled=true,
     }, SldMeta)
 
+    local isDragging = false
+
     hit:SetScript("OnMouseDown", function(_, btn)
         if handle._enabled == false or btn ~= "LeftButton" then return end
+        isDragging = true
+    end)
+    
+    hit:SetScript("OnMouseUp", function()
+        isDragging = false
+    end)
+    
+    -- Continuous tracking while dragging
+    f:SetScript("OnUpdate", function()
+        if not isDragging or not handle._enabled then return end
+        
         local cx, _cy = GetCursorPosition()
         cx = cx / UIParent:GetEffectiveScale()
         local tl   = track:GetLeft() or 0
@@ -128,8 +141,11 @@ function SuuUI.Components.Slider(props, parent)
         local pct  = max(0, min(1, (cx - tl) / tw))
         local raw  = vmin + (vmax - vmin) * pct
         local snapped = floor(raw / step + 0.5) * step
-        handle:SetValue(snapped)
-        if handle._onChange then handle._onChange(handle._value) end
+        
+        if snapped ~= handle._value then
+            handle:SetValue(snapped)
+            if handle._onChange then handle._onChange(handle._value) end
+        end
     end)
 
     handle:ApplyTheme()

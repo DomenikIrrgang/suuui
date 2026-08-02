@@ -1,17 +1,43 @@
 local max, min, floor, abs = math.max, math.min, math.floor, math.abs
 local format = string.format
+local C = SuuUI.Components
 
 local CpMeta = {}
 CpMeta.__index = CpMeta
 
 function CpMeta:SetPoint(...)  self._f:SetPoint(...) end
 function CpMeta:SetSize(w, h)  self._f:SetSize(w, h) end
-function CpMeta:Show()         self._f:Show() end
-function CpMeta:Hide()         self._f:Hide() end
+function CpMeta:Show()         
+    self._f:Show()
+    -- Register global click listener when shown
+    if self._clickFrame then
+        self._resetClickDetection()
+        self._clickFrame:Show()
+    end
+end
+function CpMeta:Hide()         
+    self._f:Hide()
+    -- Unregister global click listener when hidden
+    if self._clickFrame then
+        self._clickFrame:Hide()
+    end
+end
 function CpMeta:IsShown()      return self._f:IsShown() end
 function CpMeta:GetFrame()     return self._f end
 function CpMeta:SetEnabled(en) self._enabled = en end
-function CpMeta:Destroy()      SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid) end
+function CpMeta:Destroy()      
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._clickFrame then
+        self._clickFrame:Hide()
+        self._clickFrame = nil
+    end
+end
+
+--- Registers a function to be called when clicking outside the picker.
+-- @param fn function
+function CpMeta:OnRequestClose(fn)
+    self._onRequestClose = fn
+end
 
 --- Returns current color as r, g, b, a (0-1 each).
 -- @return number, number, number, number
@@ -123,17 +149,45 @@ end
 -- @param parent frame
 -- @return table  ColorPicker handle
 function SuuUI.Components.ColorPicker(props, parent)
+    local T = SuuUI.Theme
     local initColor = props.value or {1, 1, 1, 1}
     local r0, g0, b0, a0 = initColor[1], initColor[2], initColor[3], initColor[4] or 1
     local h0, s0, v0 = rgbToHsv(r0, g0, b0)
 
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    f:SetSize(160, 140)
+    f:SetSize(240, 180)
+
+    -- Root container
+    local rootContainer = SuuUI.Layout:CreateContainer({
+        parent  = f,
+        layout  = "flow",
+        dir     = "vertical",
+        gap     = 4,
+        padding = {
+            top    = 8,
+            right  = 8,
+            bottom = 8,
+            left   = 8,
+        },
+    })
+    rootContainer:GetFrame():SetAllPoints(f)
+
+    -- Top row: SV box + preview
+    local topRow = CreateFrame("Frame", nil, f)
+    topRow:SetSize(224, 120)
+    
+    local topRowContainer = SuuUI.Layout:CreateContainer({
+        parent  = topRow,
+        layout  = "flow",
+        dir     = "horizontal",
+        gap     = 8,
+        padding = {top=0, right=0, bottom=0, left=0},
+    })
+    topRowContainer:GetFrame():SetAllPoints(topRow)
 
     -- SV box (saturation/value square)
-    local svBox = CreateFrame("Frame", nil, f)
-    svBox:SetSize(120, 90)
-    svBox:SetPoint("TOPLEFT", f, "TOPLEFT", 6, -6)
+    local svBox = CreateFrame("Frame", nil, topRow)
+    svBox:SetSize(120, 120)
     svBox:EnableMouse(true)
 
     -- base hue layer
@@ -142,72 +196,167 @@ function SuuUI.Components.ColorPicker(props, parent)
     local hhr, hhg, hhb = hsvToRgb(h0, 1, 1)
     svHueTex:SetColorTexture(hhr, hhg, hhb, 1)
 
-    -- white gradient (left=white, right=transparent)
+    -- white->transparent gradient (left to right) - creates saturation axis
     local svWhite = svBox:CreateTexture(nil, "ARTWORK")
     svWhite:SetAllPoints(svBox)
-    svWhite:SetGradientAlpha("HORIZONTAL", 1,1,1,1, 1,1,1,0)
+    svWhite:SetTexture("Interface\\Buttons\\WHITE8x8")
+    svWhite:SetGradient("HORIZONTAL", 
+        CreateColor(1, 1, 1, 1),  -- left: white
+        CreateColor(1, 1, 1, 0))  -- right: transparent
+    svWhite:SetDrawLayer("ARTWORK", 0)
 
-    -- black gradient (top=transparent, bottom=black)
+    -- transparent->black gradient (top to bottom) - creates value axis
     local svBlack = svBox:CreateTexture(nil, "OVERLAY")
     svBlack:SetAllPoints(svBox)
-    svBlack:SetGradientAlpha("VERTICAL", 0,0,0,0, 0,0,0,1)
+    svBlack:SetTexture("Interface\\Buttons\\WHITE8x8")
+    svBlack:SetGradient("VERTICAL",
+        CreateColor(0, 0, 0, 0),  -- top: transparent
+        CreateColor(0, 0, 0, 1))  -- bottom: black
+    svBlack:SetDrawLayer("OVERLAY", 0)
 
     -- SV thumb
     local svThumb = CreateFrame("Frame", nil, svBox)
     svThumb:SetSize(8, 8)
-    svThumb:SetPoint("CENTER", svBox, "TOPLEFT", s0*120, -v0*90)
+    svThumb:SetPoint("CENTER", svBox, "TOPLEFT", s0*120, -v0*120)
     local svTex = svThumb:CreateTexture(nil, "OVERLAY")
     svTex:SetAllPoints(svThumb)
     svTex:SetColorTexture(1, 1, 1, 0.9)
+    
+    topRowContainer:Add(svBox, { width = 120, height = 120 })
+
+    -- Right side: preview and hex input
+    local rightCol = CreateFrame("Frame", nil, topRow)
+    rightCol:SetSize(96, 120)
+    
+    local rightContainer = SuuUI.Layout:CreateContainer({
+        parent  = rightCol,
+        layout  = "flow",
+        dir     = "vertical",
+        gap     = 4,
+        padding = {top=0, right=0, bottom=0, left=0},
+    })
+    rightContainer:GetFrame():SetAllPoints(rightCol)
+
+    -- Preview swatch
+    local previewFrame = CreateFrame("Frame", nil, rightCol)
+    previewFrame:SetSize(96, 96)
+    local preview = previewFrame:CreateTexture(nil, "ARTWORK")
+    preview:SetAllPoints(previewFrame)
+    preview:SetColorTexture(r0, g0, b0, a0)
+    
+    rightContainer:Add(previewFrame, { width = 96, height = 96 })
+
+    -- Hex input with label
+    local hexRow = CreateFrame("Frame", nil, rightCol)
+    hexRow:SetSize(96, 20)
+    
+    local hexLabel = C.Text({
+        text  = "Hex:",
+        size  = "sm",
+        color = "textMuted",
+    }, hexRow)
+    hexLabel:GetFrame():SetPoint("LEFT", hexRow, "LEFT", 0, 4)
+    hexLabel:GetFrame():SetWidth(30)
+    
+    local hexInput = CreateFrame("EditBox", nil, hexRow)
+    hexInput:SetSize(66, 16)
+    hexInput:SetPoint("RIGHT", hexRow, "RIGHT", 0, 0)
+    hexInput:SetAutoFocus(false)
+    hexInput:SetMaxLetters(8)
+    hexInput:SetFont("Fonts/FRIZQT__.TTF", 11, "")
+    hexInput:SetText(toHex(r0, g0, b0, a0))
+    hexInput:SetTextColor(0.9, 0.9, 0.9, 1)
+    
+    rightContainer:Add(hexRow, { width = 96, height = 20 })
+    
+    topRowContainer:Add(rightCol, { width = 96, height = 120 })
+    
+    rootContainer:Add(topRow, { width = "fill", height = 120 })
+
+    -- Hue bar with label
+    local hueRow = CreateFrame("Frame", nil, f)
+    hueRow:SetSize(224, 14)
+    
+    local hueRowContainer = SuuUI.Layout:CreateContainer({
+        parent  = hueRow,
+        layout  = "flow",
+        dir     = "horizontal",
+        gap     = 4,
+        padding = {top=0, right=0, bottom=0, left=0},
+    })
+    hueRowContainer:GetFrame():SetAllPoints(hueRow)
+    
+    local hueLabel = C.Text({
+        text  = "Hue:",
+        size  = "sm",
+        color = "text",
+    }, hueRow)
+    hueLabel:GetFrame():SetWidth(35)
+    hueRowContainer:Add(hueLabel:GetFrame(), { width = 35, height = 14 })
 
     -- Hue bar
-    local hueBar = CreateFrame("Frame", nil, f)
-    hueBar:SetSize(120, 10)
-    hueBar:SetPoint("TOPLEFT", svBox, "BOTTOMLEFT", 0, -4)
+    local hueBar = CreateFrame("Frame", nil, hueRow)
+    hueBar:SetSize(185, 14)
     hueBar:EnableMouse(true)
 
-    -- Use the Blizzard color picker hue texture — full spectrum, no custom gradient needed
+    -- Use the Blizzard color picker hue texture
     local hueTex = hueBar:CreateTexture(nil, "ARTWORK")
     hueTex:SetAllPoints(hueBar)
     hueTex:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-ColorSwatch")
 
     -- hue thumb
     local hueThumb = CreateFrame("Frame", nil, hueBar)
-    hueThumb:SetSize(6, 14)
-    hueThumb:SetPoint("CENTER", hueBar, "LEFT", h0 * 120, 0)
+    hueThumb:SetSize(6, 18)
+    hueThumb:SetPoint("CENTER", hueBar, "LEFT", h0 * 185, 0)
     local htTex = hueThumb:CreateTexture(nil, "OVERLAY")
     htTex:SetAllPoints(hueThumb)
     htTex:SetColorTexture(1, 1, 1, 0.9)
+    
+    hueRowContainer:Add(hueBar, { width = 185, height = 14 })
+    
+    rootContainer:Add(hueRow, { width = "fill", height = 14 })
+
+    -- Alpha slider with label
+    local alphaRow = CreateFrame("Frame", nil, f)
+    alphaRow:SetSize(224, 14)
+    
+    local alphaRowContainer = SuuUI.Layout:CreateContainer({
+        parent  = alphaRow,
+        layout  = "flow",
+        dir     = "horizontal",
+        gap     = 4,
+        padding = {top=0, right=0, bottom=0, left=0},
+    })
+    alphaRowContainer:GetFrame():SetAllPoints(alphaRow)
+    
+    local alphaLabel = C.Text({
+        text  = "Alpha:",
+        size  = "sm",
+        color = "text",
+    }, alphaRow)
+    alphaLabel:GetFrame():SetWidth(35)
+    alphaRowContainer:Add(alphaLabel:GetFrame(), { width = 35, height = 14 })
 
     -- Alpha slider
-    local alphaBar = CreateFrame("Frame", nil, f)
-    alphaBar:SetSize(120, 10)
-    alphaBar:SetPoint("TOPLEFT", hueBar, "BOTTOMLEFT", 0, -4)
+    local alphaBar = CreateFrame("Frame", nil, alphaRow)
+    alphaBar:SetSize(185, 14)
     alphaBar:EnableMouse(true)
     local alphaTex = alphaBar:CreateTexture(nil, "ARTWORK")
     alphaTex:SetAllPoints(alphaBar)
-    alphaTex:SetGradientAlpha("HORIZONTAL", 0,0,0,0, 1,1,1,1)
+    alphaTex:SetTexture("Interface\\Buttons\\WHITE8x8")
+    alphaTex:SetGradient("HORIZONTAL",
+        CreateColor(0.5, 0.5, 0.5, 0),  -- left: transparent gray
+        CreateColor(0.5, 0.5, 0.5, 1))  -- right: opaque gray
     local alphaThumb = CreateFrame("Frame", nil, alphaBar)
-    alphaThumb:SetSize(6, 14)
-    alphaThumb:SetPoint("CENTER", alphaBar, "LEFT", a0 * 120, 0)
+    alphaThumb:SetSize(6, 18)
+    alphaThumb:SetPoint("CENTER", alphaBar, "LEFT", a0 * 185, 0)
     local atTex = alphaThumb:CreateTexture(nil, "OVERLAY")
     atTex:SetAllPoints(alphaThumb)
     atTex:SetColorTexture(1, 1, 1, 0.9)
-
-    -- Preview swatch
-    local preview = f:CreateTexture(nil, "ARTWORK")
-    preview:SetSize(24, 24)
-    preview:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
-    preview:SetColorTexture(r0, g0, b0, a0)
-
-    -- Hex input
-    local hexInput = CreateFrame("EditBox", nil, f)
-    hexInput:SetSize(50, 16)
-    hexInput:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6, 6)
-    hexInput:SetAutoFocus(false)
-    hexInput:SetMaxLetters(8)
-    hexInput:SetFont("Fonts/FRIZQT__.TTF", 11, "")
-    hexInput:SetText(toHex(r0, g0, b0, a0))
+    
+    alphaRowContainer:Add(alphaBar, { width = 185, height = 14 })
+    
+    rootContainer:Add(alphaRow, { width = "fill", height = 14 })
 
     local id = "cp_" .. tostring(f)
     local handle = setmetatable({
@@ -220,30 +369,61 @@ function SuuUI.Components.ColorPicker(props, parent)
         _h=h0, _s=s0, _v=v0,
     }, CpMeta)
 
+    local isDraggingSV = false
+    local isDraggingHue = false
+    local isDraggingAlpha = false
+
     svBox:SetScript("OnMouseDown", function()
-        local cx, cy = GetCursorPosition()
-        cx = cx / UIParent:GetEffectiveScale()
-        cy = cy / UIParent:GetEffectiveScale()
-        handle:_pickFromSV(cx, cy)
+        isDraggingSV = true
     end)
-    svBox:SetScript("OnMouseUp", function(_, _, x, y) handle:_pickFromSV(x, y) end)
+    
+    svBox:SetScript("OnMouseUp", function()
+        isDraggingSV = false
+    end)
 
     hueBar:SetScript("OnMouseDown", function()
-        local cx, _ = GetCursorPosition()
-        cx = cx / UIParent:GetEffectiveScale()
-        handle:_pickFromHue(cx)
+        isDraggingHue = true
+    end)
+    
+    hueBar:SetScript("OnMouseUp", function()
+        isDraggingHue = false
     end)
 
     alphaBar:SetScript("OnMouseDown", function()
-        local bl = alphaBar:GetLeft() or 0
-        local bw = alphaBar:GetWidth()
-        local cx, _ = GetCursorPosition()
-        cx = cx / UIParent:GetEffectiveScale()
-        local a  = max(0, min(1, (cx - bl) / bw))
-        handle._a = a
-        alphaThumb:SetPoint("CENTER", alphaBar, "LEFT", a * bw, 0)
-        handle:_render()
-        if handle._onChange then handle._onChange(handle._r, handle._g, handle._b, a) end
+        isDraggingAlpha = true
+    end)
+    
+    alphaBar:SetScript("OnMouseUp", function()
+        isDraggingAlpha = false
+    end)
+    
+    -- OnUpdate handler for continuous tracking
+    f:SetScript("OnUpdate", function()
+        local scale = UIParent:GetEffectiveScale()
+        local cx, cy = GetCursorPosition()
+        cx = cx / scale
+        cy = cy / scale
+        
+        if isDraggingSV then
+            handle:_pickFromSV(cx, cy)
+        elseif isDraggingHue then
+            handle:_pickFromHue(cx)
+        elseif isDraggingAlpha then
+            local bl = alphaBar:GetLeft() or 0
+            local bw = alphaBar:GetWidth()
+            local a  = max(0, min(1, (cx - bl) / bw))
+            handle._a = a
+            alphaThumb:SetPoint("CENTER", alphaBar, "LEFT", a * bw, 0)
+            handle:_render()
+            if handle._onChange then handle._onChange(handle._r, handle._g, handle._b, a) end
+        end
+    end)
+    
+    -- Stop dragging when mouse is released anywhere
+    f:SetScript("OnMouseUp", function()
+        isDraggingSV = false
+        isDraggingHue = false
+        isDraggingAlpha = false
     end)
 
     hexInput:SetScript("OnEnterPressed", function()
@@ -263,6 +443,58 @@ function SuuUI.Components.ColorPicker(props, parent)
         hexInput:ClearFocus()
     end)
     hexInput:SetScript("OnEscapePressed", function() hexInput:ClearFocus() end)
+
+    -- Click-outside-to-close detection using mouse state polling
+    local clickFrame = CreateFrame("Frame")
+    clickFrame:Hide()
+    local wasMouseDown = false
+    local ignoreNextClick = false
+    
+    clickFrame:SetScript("OnUpdate", function()
+        if not f:IsShown() then
+            clickFrame:Hide()
+            wasMouseDown = false
+            ignoreNextClick = false
+            return
+        end
+        
+        local isMouseDown = IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton")
+        
+        -- Detect click (mouse down -> mouse up transition)
+        if wasMouseDown and not isMouseDown then
+            if ignoreNextClick then
+                -- Skip this click (it was the one that opened the picker)
+                ignoreNextClick = false
+            else
+                local cx, cy = GetCursorPosition()
+                local scale = UIParent:GetEffectiveScale()
+                cx = cx / scale
+                cy = cy / scale
+                
+                local fl = f:GetLeft() or 0
+                local fr = f:GetRight() or 0
+                local ft = f:GetTop() or 0
+                local fb = f:GetBottom() or 0
+                
+                if cx < fl or cx > fr or cy < fb or cy > ft then
+                    -- Click is outside - close the picker
+                    if handle._onRequestClose then
+                        handle._onRequestClose()
+                    end
+                end
+            end
+        end
+        
+        wasMouseDown = isMouseDown
+    end)
+    
+    -- Method to reset the ignore flag when showing
+    handle._resetClickDetection = function()
+        ignoreNextClick = true
+        wasMouseDown = true  -- Assume mouse is down when opening
+    end
+    
+    handle._clickFrame = clickFrame
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
