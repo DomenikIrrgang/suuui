@@ -2,18 +2,6 @@ local ipairs = ipairs
 
 local M = {}
 
-local ROW_HEIGHTS = {
-    section         = 28,
-    toggle          = 28,
-    slider          = 44,
-    dropdown        = 32,
-    color           = 32,
-    text            = 32,
-    keybind         = 32,
-    profile_manager = 180,
-    theme_manager   = 1120,  -- Includes space for expanded token editor (220 + 860 + gaps)
-}
-
 local activeContainers = {}  -- track containers per contentFrame for cleanup
 
 --- Builds the settings page for pluginId into contentFrame.
@@ -64,8 +52,8 @@ function M:Build(pluginId, contentFrame, scrollHeight)
                 row = builder(entry, pluginId, contentFrame)
             end
             if row then
-                local height = ROW_HEIGHTS[entry.type] or 32
-                row:SetHeight(height)
+                -- Use row's natural height instead of fixed ROW_HEIGHTS
+                local height = row:GetHeight()
                 -- Add with fill width to use all available space
                 container:Add(row, { width = "fill", height = height })
             end
