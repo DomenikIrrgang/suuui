@@ -12,12 +12,12 @@ function SwMeta:IsShown()      return self._f:IsShown() end
 function SwMeta:GetFrame()     return self._f end
 
 --- Sets an explicit size, dropping token-driven sizing.
+-- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
 -- @param h number
 function SwMeta:SetSize(w, h)
     self._autoSize = false
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function SwMeta:Show()
@@ -79,7 +79,6 @@ function SwMeta:ApplyTheme()
         local size = T:GetToken("sizeControlMd") or 22
         if abs((self._f:GetWidth() or 0) - size) > 0.5 then
             self._f:SetSize(size, size)
-            S:Emit(self, S.SIGNALS.SIZE_CHANGED, size, size)
         end
     end
 end
@@ -98,6 +97,14 @@ function SuuUI.Components.ColorSwatch(props, parent)
     f:SetSize(size, props.h or size)
     f:EnableMouse(true)
 
+    -- Registered before the host container adopts the frame so the container chains
+    -- onto this hook. A parent layout resizes the frame directly, never via SetSize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w2, h2)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
+    end)
+
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local border = f:CreateTexture(nil, "BACKGROUND")
@@ -108,7 +115,7 @@ function SuuUI.Components.ColorSwatch(props, parent)
     box:Add(swatch, { inset = 1 })
 
     local id = "swatch_" .. tostring(f)
-    local handle = setmetatable({
+    handle = setmetatable({
         _f       = f,
         _swatch  = swatch,
         _border  = border,

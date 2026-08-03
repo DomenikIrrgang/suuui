@@ -99,6 +99,19 @@ Every component you write must:
 2. **Translate** Blizzard scripts into signals internally — the Blizzard script never
    escapes the component file.
 3. **Clean up** in `Destroy()` with `SuuUI.UISignals:DisconnectAll(self)`.
+4. **Test every signal it emits** — payload and emission count. Setters are silent by
+   contract, so assert that too: `SetValue` must not emit `VALUE_CHANGED`. Use
+   `H.signalSpy(handle, signal)`; see `TESTING.md`.
+
+```lua
+-- Spec for the toggle above
+local spy = H.signalSpy(tog, H.S.SIGNALS.VALUE_CHANGED)
+H.click(tog)
+expect(spy:arg(1)).truthy()          -- new value
+expect(spy:arg(2)).falsy()           -- old value
+tog:SetValue(false)
+expect(spy.count).as("setters do not emit").eq(1)
+```
 
 ```lua
 -- ✅ CORRECT: Blizzard script converted to a signal inside the component

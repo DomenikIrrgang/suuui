@@ -54,15 +54,22 @@ end
 --- Returns the available content width (accounting for scrollbar).
 -- @return number
 function ScrMeta:GetContentWidth()
-    local needsBar = self._content:GetHeight() > self._sf:GetHeight()
-    return needsBar and (self._f:GetWidth() - gutter()) or self._f:GetWidth()
+    return self:_needsBar() and (self._f:GetWidth() - gutter()) or self._f:GetWidth()
 end
 
 --- Sets the scrollable content height and refreshes the scrollbar.
 -- @param height number
 function ScrMeta:SetContentHeight(height)
-    self._content:SetHeight(max(height, self._sf:GetHeight()))
+    self._contentH = height
     self:_updateBar()
+end
+
+-- Whether a bar is needed, judged against the reported content height rather than the
+-- content frame's height. The frame's height is floored at the viewport, so reading it
+-- back makes a shrinking viewport look like overflowing content and reserves a gutter
+-- for a bar that is not there.
+function ScrMeta:_needsBar()
+    return (self._contentH or 0) > self._sf:GetHeight()
 end
 
 --- Scrolls to the top of the content.
@@ -73,8 +80,11 @@ function ScrMeta:ScrollToTop()
 end
 
 function ScrMeta:_updateBar()
-    local ch      = self._content:GetHeight()
     local sh      = self._sf:GetHeight()
+    local needsBar = self:_needsBar()
+    local ch      = max(self._contentH or 0, sh)
+    self._content:SetHeight(ch)
+
     local trackH  = self._track:GetHeight()
     local maxScroll = max(0, ch - sh)
     local cur     = self._sf:GetVerticalScroll()
@@ -86,7 +96,6 @@ function ScrMeta:_updateBar()
     self._thumbAnchor.y      = -(pct * (trackH - thumbH))
     self._thumbBox:SetChildAnchor(self._thumb, self._thumbAnchor)
 
-    local needsBar = ch > sh
     self._track:SetShown(needsBar)
 
     -- Reserve gutter space for the scrollbar by insetting the viewport

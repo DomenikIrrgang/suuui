@@ -114,8 +114,11 @@ function CpMeta:_syncThumbs()
     local hr, hg, hb = hsvToRgb(self._h, 1, 1)
     self._svHueTex:SetColorTexture(hr, hg, hb, 1)
 
+    -- The square runs unsaturated to saturated left to right, and bright to black top to
+    -- bottom. Value is therefore an offset *down* from the top by its inverse, matching
+    -- how _pickFromSV reads it back from the cursor.
     self._svAnchor.x = self._s * SV_SIZE
-    self._svAnchor.y = -self._v * SV_SIZE
+    self._svAnchor.y = -(1 - self._v) * SV_SIZE
     self._svBox:SetChildAnchor(self._svThumb, self._svAnchor)
 
     self._hueAnchor.x = self._h * BAR_W
@@ -137,11 +140,13 @@ function CpMeta:_commit()
     S:Emit(self, COLOR_PICKED, self._r, self._g, self._b, self._a)
 end
 
+-- Cursor coordinates are bottom-up, so (top - py) is the distance *down* from the top
+-- edge. Value runs bright at the top to black at the bottom, hence the inversion.
 function CpMeta:_pickFromSV(px, py)
     local bl = self._svFrame:GetLeft() or 0
     local bt = self._svFrame:GetTop()  or 0
     self._s = max(0, min(1, (px - bl) / SV_SIZE))
-    self._v = max(0, min(1, (bt - py) / SV_SIZE))
+    self._v = max(0, min(1, 1 - (bt - py) / SV_SIZE))
     self._r, self._g, self._b = hsvToRgb(self._h, self._s, self._v)
     self:_syncThumbs()
     self:_commit()
@@ -252,16 +257,22 @@ function SuuUI.Components.ColorPicker(props, parent)
     svWhite:SetGradient("HORIZONTAL", CreateColor(1,1,1,1), CreateColor(1,1,1,0))
     svLayers:Add(svWhite)
 
+    -- A VERTICAL gradient runs its first colour along the bottom edge, so black goes
+    -- first: the square is bright at the top and black at the bottom, which is what
+    -- _pickFromSV and _syncThumbs both assume.
     local svBlack = svFrame:CreateTexture(nil, "OVERLAY")
     svBlack:SetTexture("Interface\\Buttons\\WHITE8x8")
-    svBlack:SetGradient("VERTICAL", CreateColor(0,0,0,0), CreateColor(0,0,0,1))
+    svBlack:SetGradient("VERTICAL", CreateColor(0,0,0,1), CreateColor(0,0,0,0))
     svLayers:Add(svBlack)
 
     local svBox = SuuUI.Layout:CreateContainer({ host = svFrame, layout = "anchor" })
     local svThumb = CreateFrame("Frame", nil, svFrame)
+    -- Offsets are left at zero: _syncThumbs runs before the picker is first shown and
+    -- owns the mapping from colour to thumb position, so duplicating it here would only
+    -- create a second formula to keep in step.
     local svAnchor = {
         point = "CENTER", relativePoint = "TOPLEFT",
-        x = s0 * SV_SIZE, y = -v0 * SV_SIZE, width = 8, height = 8,
+        x = 0, y = 0, width = 8, height = 8,
     }
     svBox:Add(svThumb, { anchor = svAnchor })
     local svThumbBox = SuuUI.Layout:CreateContainer({ host = svThumb, layout = "stack" })

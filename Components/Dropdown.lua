@@ -15,12 +15,12 @@ function DdMeta:IsShown()      return self._f:IsShown() end
 function DdMeta:GetFrame()     return self._f end
 
 --- Sets an explicit size, dropping token-driven height.
+-- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
 -- @param h number
 function DdMeta:SetSize(w, h)
     self._autoH = false
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function DdMeta:Show()
@@ -195,7 +195,6 @@ function DdMeta:ApplyTheme()
         local h = T:GetControlHeight("sizeControlLg")
         if math.abs((self._f:GetHeight() or 0) - h) > 0.5 then
             self._f:SetHeight(h)
-            S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._f:GetWidth(), h)
         end
     end
 
@@ -222,6 +221,14 @@ function SuuUI.Components.Dropdown(props, parent)
     f:SetSize(props.w or 160, props.h or SuuUI.Theme:GetControlHeight("sizeControlLg"))
     f:EnableMouse(true)
 
+    -- Registered before the host container adopts the frame so the container chains
+    -- onto this hook. A parent layout resizes the frame directly, never via SetSize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w2, h2)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
+    end)
+
     -- Selected label spans the button, arrow pinned to the right edge
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
@@ -245,7 +252,7 @@ function SuuUI.Components.Dropdown(props, parent)
     })
 
     local id = "dd_" .. tostring(f)
-    local handle = setmetatable({
+    handle = setmetatable({
         _f=f, _selText=selText, _arrow=arrow, _panel=panel,
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,

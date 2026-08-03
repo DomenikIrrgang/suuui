@@ -69,10 +69,16 @@ SuuUI/
 │   ├── UnitFrames/
 │   ├── ActionBars/
 │   └── ...
-└── Themes/
-    ├── Default.lua        -- read-only default dark theme
-    └── Modern.lua         -- read-only modern theme (ships as default active)
+├── Themes/
+│   ├── Default.lua        -- read-only default dark theme
+│   └── Modern.lua         -- read-only modern theme (ships as default active)
+└── Tests/                 -- not shipped to the client; see TESTING.md
+    ├── run.lua            -- test runner
+    ├── harness/           -- simulated WoW client + assertions
+    └── spec/              -- one spec per component / subsystem
 ```
+
+`Tests/` is not listed in the `.toc`, so the client never loads it.
 
 ---
 
@@ -167,7 +173,7 @@ local plugin = SuuUI:CreatePlugin({
   id       = "minimap",        -- unique snake_case string
   name     = "Minimap",        -- display name for settings UI
   version  = "1.0",
-  onInit   = function(p) end,  -- called once after all addons load
+  onInit   = function(p) end,  -- exactly once, on login or on late registration
   onEnable = function(p) end,  -- called when plugin is enabled
   onDisable= function(p) end,  -- called when plugin is disabled
 })
@@ -176,12 +182,23 @@ local plugin = SuuUI:CreatePlugin({
 plugin:GetSettings()    -- returns plugin's live settings table
 plugin:GetProfile()     -- returns plugin's profile sub-table
 plugin:IsEnabled()
-plugin:Enable()
-plugin:Disable()
+plugin:Enable()         -- no-op when already enabled
+plugin:Disable()        -- no-op when already disabled
 ```
 
-The core calls `onInit` during `ADDON_LOADED`, then `onEnable`/`onDisable`
-as appropriate. Plugins must NOT assume load order of other plugins.
+On `PLAYER_LOGIN` the core runs every `onInit`, then every `onEnable`, in two separate
+passes — so an `onEnable` may rely on another plugin's settings and events already
+existing, while an `onInit` may not. Plugins must NOT assume load order of other plugins.
+
+**`onInit` runs exactly once per plugin.** `Plugins:InitAll()` skips plugins already
+initialised, so it is safe to re-call. A plugin registered *after* the login pass — an
+addon whose `.toc` loads later — is initialised and enabled at `CreatePlugin` time
+instead, so it comes up identically without re-entering anyone else's `onInit`.
+
+```lua
+SuuUI.Plugins:InitAll()            -- idempotent
+SuuUI.Plugins:IsInitialised(id)    -- whether onInit has run
+```
 
 ### 4. Profile System (`Core/Profile.lua`)
 
@@ -656,9 +673,13 @@ to a container; they position their own internals with a host container. See
    keeps the geometry it measured under the old theme. `Text` and `Slider` do this.
 4. Clean up in `Destroy()`: `SuuUI.UISignals:DisconnectAll(self)` plus
    `SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)`.
+5. **Have a spec** in `Tests/spec/` covering its geometry, token-driven sizing, every
+   signal, disabled state, theme reaction, edge cases and teardown. A component without
+   one is not finished. See `TESTING.md`.
 
 **Missing a component?** Build it in `Components/<Name>.lua` rather than inlining raw
-frames in a page. Register it in the `.toc` and document it here.
+frames in a page. Register it in the `.toc`, write its spec in `Tests/spec/`, and
+document it here.
 
 **Components:**
 - `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,
@@ -844,6 +865,21 @@ Examples of features worth discussing:
 
 Bring these up, design a generic API, implement it in the layout system,
 and document it for all plugins to use.
+
+---
+
+## Testing
+
+Every component, layout strategy and core subsystem has a spec under `Tests/spec/`, run
+with `lua Tests/run.lua` from the addon root. **No change to `Components/`, `Layout/`,
+`Core/` or `SettingsUI/` is done until the suite passes and the new behaviour is covered.**
+
+The suite loads the real addon into a sandbox against a simulated WoW client that solves
+the actual anchor graph, so specs assert real pixel geometry rather than intent — where a
+label sits, whether a thumb stays inside its track, whether two rows overlap. That is the
+only way to verify a layout engine, since placement is the thing it produces.
+
+Full contract, spec checklist and harness API: `TESTING.md`.
 
 ---
 

@@ -18,23 +18,22 @@ function InpMeta:IsShown()      return self._f:IsShown() end
 function InpMeta:GetFrame()     return self._f end
 
 --- Sets an explicit size, dropping token-driven height.
+-- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
 -- @param h number
 function InpMeta:SetSize(w, h)
     self._autoH = false
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 -- Font size tokens are user-editable, so an input pinned to a fixed height clips its
 -- own text once the font outgrows it. Re-derive from tokens unless the caller pinned
--- the height, and report the new size so the containing layout re-flows.
+-- the height; the resize hook reports the new size so the containing layout re-flows.
 function InpMeta:_autosize()
     if not self._autoH then return end
     local h = SuuUI.Theme:GetControlHeight("sizeControlMd")
     if abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
     self._f:SetHeight(h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._f:GetWidth(), h)
 end
 
 function InpMeta:Show()
@@ -114,6 +113,17 @@ function SuuUI.Components.Input(props, parent)
 
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     f:SetSize(w, h)
+    -- The edit box is inset inside the border, so the frame owns the surrounding ring.
+    -- Without mouse input there, hovering the border would not highlight the field.
+    f:EnableMouse(true)
+
+    -- Registered before the host container adopts the frame so the container chains
+    -- onto this hook. A parent layout resizes the frame directly, never via SetSize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w2, h2)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
+    end)
 
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
@@ -124,7 +134,7 @@ function SuuUI.Components.Input(props, parent)
     if props.value then eb:SetText(props.value) end
 
     local id = "inp_" .. tostring(f)
-    local handle = setmetatable({
+    handle = setmetatable({
         _f=f, _eb=eb, _box=box, _eid=id, _enabled=true,
         _hasFocus=false, _hasHover=false, _silent=false,
         _autoH=props.h == nil,

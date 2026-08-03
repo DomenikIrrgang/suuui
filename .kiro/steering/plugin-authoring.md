@@ -69,7 +69,7 @@ SuuUI:CreatePlugin({
   id       = string,   -- required, unique snake_case, used as namespace key
   name     = string,   -- required, shown in settings nav
   version  = string,   -- optional, shown in settings nav
-  onInit   = function(plugin) end,    -- called once on PLAYER_LOGIN
+  onInit   = function(plugin) end,    -- exactly once, see below
   onEnable = function(plugin) end,    -- called when plugin becomes active
   onDisable= function(plugin) end,    -- called when plugin is deactivated
 })
@@ -418,7 +418,8 @@ move, not a local workaround. Adding a strategy is one file in `Layout/` registe
 1. **Document the requirement** — what layout behavior is missing?
 2. **Bring it up for discussion** — don't implement workarounds
 3. **Extend the system generically** — make it reusable for all plugins
-4. **Update architecture docs** — document the new capability
+4. **Add tests** — cover the new behaviour in `Tests/spec/` (see `TESTING.md`)
+5. **Update architecture docs** — document the new capability
 
 Examples of features to discuss if needed:
 - Alignment (center/right, middle/bottom)
@@ -509,9 +510,10 @@ Game data APIs (`RegisterEvent`, `UnitHealth`, `GetSpellInfo`) are fine — that
 not UI. Hiding Blizzard's own frames in `onEnable`/`onDisable` is also fine.
 
 **Need a widget the library doesn't have?** Don't inline it. Propose a new component,
-build it in `Components/<Name>.lua`, and every plugin benefits. Inside it, lay out the
-parts with a host container (`CreateContainer{ host = f, layout = "stack" }`) — a
-component never calls `SetPoint` either.
+build it in `Components/<Name>.lua`, spec it in `Tests/spec/`, and every plugin benefits.
+Inside it, lay out the parts with a host container
+(`CreateContainer{ host = f, layout = "stack" }`) — a component never calls `SetPoint`
+either.
 
 ---
 
@@ -584,3 +586,5 @@ Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
 9. **NEVER call raw WoW UI API in plugin UI code. Compose components and containers.**
 10. **NEVER use Blizzard frame scripts for UI wiring. Connect to UISignals instead.**
 11. **If a component is missing, build it in `Components/` — don't inline raw frames.**
+12. **Test the UI you build.** A new component is not finished without a spec in
+    `Tests/spec/`. Run `lua Tests/run.lua` before calling a change done. See `TESTING.md`.

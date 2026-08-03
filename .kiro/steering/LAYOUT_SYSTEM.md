@@ -457,7 +457,10 @@ If you need layout behavior that doesn't exist:
 2. **Document** — describe what you need
 3. **Discuss** — propose a generic API
 4. **Implement** — extend the layout system
-5. **Document** — update guides for all plugins
+5. **Spec it** — a new strategy or child property needs tests in `Tests/spec/` proving
+   the geometry it produces, including the edge cases (zero size, negative space,
+   conflicting properties). See `TESTING.md`.
+6. **Document** — update guides for all plugins
 
 ### Known Limitations
 

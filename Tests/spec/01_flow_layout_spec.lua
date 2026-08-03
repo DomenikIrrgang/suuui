@@ -1,0 +1,267 @@
+local H = require("harness")
+
+local function child(parent, w, h)
+    local f = H.env.CreateFrame("Frame", nil, parent)
+    f:SetSize(w or 50, h or 20)
+    return f
+end
+
+describe("FlowLayout", function()
+    local host
+
+    before_each(function()
+        H.setup()
+        host = H.parent(200, 300)
+    end)
+
+    local function container(props)
+        props.parent = props.parent or host
+        return H.Layout:CreateContainer(props)
+    end
+
+    describe("vertical direction", function()
+        it("stacks children top to bottom separated by the gap", function()
+            local c = container({ layout = "flow", dir = "vertical", gap = 6, h = 300 })
+            local a, b, d = child(host), child(host), child(host)
+            c:Add(a, { width = "fill", height = 20 })
+            c:Add(b, { width = "fill", height = 30 })
+            c:Add(d, { width = "fill", height = 20 })
+            H.expectStackedVertically({ a, b, d }, 6)
+        end)
+
+        it("applies padding on all four sides", function()
+            local c = container({
+                layout = "flow", dir = "vertical", gap = 0, h = 300,
+                padding = { top = 7, right = 5, bottom = 9, left = 3 },
+            })
+            local a = child(host)
+            c:Add(a, { width = "fill", height = 20 })
+            H.expectOffset(a, c, 3, 7)
+            -- fill respects both horizontal insets
+            H.expectSize(a, 200 - 3 - 5, 20)
+        end)
+
+        it("gives width='fill' the full inner width regardless of natural size", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300,
+                                  padding = { left = 10, right = 10 } })
+            local a = child(host, 12, 20)
+            c:Add(a, { width = "fill", height = 20 })
+            H.expectSize(a, 180, 20)
+        end)
+
+        it("keeps a fixed numeric width", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local a = child(host, 999, 20)
+            c:Add(a, { width = 40, height = 20 })
+            H.expectSize(a, 40, 20)
+        end)
+
+        it("uses the child's natural width when width is omitted", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local a = child(host, 37, 20)
+            c:Add(a, { height = 20 })
+            H.expectSize(a, 37, 20)
+        end)
+
+        it("splits leftover height between height='fill' children", function()
+            local c = container({ layout = "flow", dir = "vertical", gap = 10, h = 200 })
+            local fixed = child(host)
+            local f1, f2 = child(host), child(host)
+            c:Add(fixed, { width = "fill", height = 40 })
+            c:Add(f1, { width = "fill", height = "fill" })
+            c:Add(f2, { width = "fill", height = "fill" })
+            -- 200 total - 40 fixed - 2 gaps of 10 = 140, halved
+            H.expectSize(f1, nil, 70)
+            H.expectSize(f2, nil, 70)
+        end)
+
+        it("clamps fill height to zero rather than negative when space is short", function()
+            local c = container({ layout = "flow", dir = "vertical", gap = 0, h = 30 })
+            local fixed = child(host)
+            local f1 = child(host)
+            c:Add(fixed, { width = "fill", height = 100 })
+            c:Add(f1, { width = "fill", height = "fill" })
+            expect(f1:GetHeight()).gte(0)
+            expect(f1:GetHeight()).eq(0)
+        end)
+
+        it("aligns a narrow child to the cross axis start by default", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local a = child(host, 40, 20)
+            c:Add(a, { height = 20 })
+            H.expectOffset(a, c, 0, 0)
+        end)
+
+        it("centres a narrow child with align='center'", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local a = child(host, 40, 20)
+            c:Add(a, { height = 20, align = "center" })
+            H.expectOffset(a, c, (200 - 40) / 2, 0)
+        end)
+
+        it("pushes a narrow child to the right with align='end'", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local a = child(host, 40, 20)
+            c:Add(a, { height = 20, align = "end" })
+            H.expectOffset(a, c, 200 - 40, 0)
+        end)
+
+        it("treats align='stretch' as a full-width child", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300,
+                                  padding = { left = 8, right = 8 } })
+            local a = child(host, 10, 20)
+            c:Add(a, { height = 20, align = "stretch" })
+            H.expectSize(a, 200 - 16, 20)
+        end)
+
+        it("honours a container-level align for every child", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300, align = "center" })
+            local a, b = child(host, 40, 20), child(host, 80, 20)
+            c:Add(a, { height = 20 })
+            c:Add(b, { height = 20 })
+            H.expectCenteredH(a, c)
+            H.expectCenteredH(b, c)
+        end)
+
+        it("lets a child align override the container align", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300, align = "center" })
+            local a = child(host, 40, 20)
+            c:Add(a, { height = 20, align = "start" })
+            H.expectOffset(a, c, 0, nil)
+        end)
+    end)
+
+    describe("horizontal direction", function()
+        it("lays children left to right separated by the gap", function()
+            local c = container({ layout = "flow", dir = "horizontal", gap = 8, h = 40 })
+            local a, b = child(host, 30, 20), child(host, 50, 20)
+            c:Add(a, { width = 30, height = 20 })
+            c:Add(b, { width = 50, height = 20 })
+            H.expectRowHorizontally({ a, b }, 8)
+        end)
+
+        it("gives width='fill' the leftover main-axis space", function()
+            local c = container({ layout = "flow", dir = "horizontal", gap = 10, h = 40 })
+            local label = child(host)
+            local ctrl  = child(host)
+            c:Add(label, { width = "fill", height = 20 })
+            c:Add(ctrl, { width = 36, height = 20 })
+            -- 200 - 36 fixed - 10 gap
+            H.expectSize(label, 154, 20)
+        end)
+
+        it("puts the fixed control at the far edge in a label-left row", function()
+            local c = container({ layout = "flow", dir = "horizontal", gap = 8, h = 28,
+                                  padding = { left = 4, right = 4 } })
+            local label = child(host)
+            local ctrl  = child(host)
+            c:Add(label, { width = "fill" })
+            c:Add(ctrl, { width = 36, height = 18 })
+            local cbox, ctrlBox = H.box(c), H.box(ctrl)
+            expect(ctrlBox.right).as("control lands on the right inset").eq(cbox.right - 4)
+        end)
+
+        it("splits leftover width evenly between two fill children", function()
+            local c = container({ layout = "flow", dir = "horizontal", gap = 20, h = 40 })
+            local a, b = child(host), child(host)
+            c:Add(a, { width = "fill", height = 10 })
+            c:Add(b, { width = "fill", height = 10 })
+            H.expectSize(a, 90, nil)
+            H.expectSize(b, 90, nil)
+        end)
+
+        it("stretches children to the container height with height='fill'", function()
+            local c = container({ layout = "flow", dir = "horizontal", h = 60 })
+            local a = child(host, 20, 5)
+            c:Add(a, { width = 20, height = "fill" })
+            H.expectSize(a, 20, 60)
+        end)
+
+        it("centres a short child vertically with align='center'", function()
+            local c = container({ layout = "flow", dir = "horizontal", h = 60, align = "center" })
+            local a = child(host, 20, 20)
+            c:Add(a, { width = 20, height = 20 })
+            H.expectCenteredV(a, c)
+        end)
+
+        it("aligns a short child to the bottom with align='end'", function()
+            local c = container({ layout = "flow", dir = "horizontal", h = 60 })
+            local a = child(host, 20, 20)
+            c:Add(a, { width = 20, height = 20, align = "end" })
+            H.expectOffset(a, c, 0, 40)
+        end)
+    end)
+
+    describe("font string children", function()
+        it("measures text height after assigning the width, so text re-flows", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("one two three four five six seven eight nine ten eleven twelve")
+            c:Add(fs, { width = "fill" })
+            local wideHeight = fs:GetHeight()
+
+            c:SetWidth(60)
+            expect(fs:GetHeight()).as("narrower container wraps to more lines").gt(wideHeight)
+        end)
+
+        it("re-measures when the font size grows", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 11, "")
+            fs:SetText("hello world")
+            c:Add(fs, { width = "fill" })
+            local small = fs:GetHeight()
+            fs:SetFont("Fonts/FRIZQT__.TTF", 22, "")
+            c:Layout()
+            expect(fs:GetHeight()).gt(small)
+        end)
+
+        it("does not shrink a text child on repeated layout passes", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("a stable label")
+            c:Add(fs, { width = "fill" })
+            local first = fs:GetHeight()
+            for _ = 1, 5 do c:Layout() end
+            expect(fs:GetHeight()).eq(first)
+        end)
+    end)
+
+    describe("edge cases", function()
+        it("does nothing with no children", function()
+            local c = container({ layout = "flow", dir = "vertical", gap = 8 })
+            expect(function() c:Layout() end).notThrows()
+            expect(#c:GetChildren()).eq(0)
+        end)
+
+        it("places a single child with no gap contribution", function()
+            local c = container({ layout = "flow", dir = "vertical", gap = 50, h = 100 })
+            local a = child(host)
+            c:Add(a, { width = "fill", height = 20 })
+            H.expectOffset(a, c, 0, 0)
+        end)
+
+        it("survives a zero-width container without negative sizes", function()
+            local c = container({ layout = "flow", dir = "vertical", w = 0, h = 100 })
+            local a = child(host)
+            c:Add(a, { width = "fill", height = 10 })
+            expect(a:GetWidth()).gte(0)
+        end)
+
+        it("keeps children inside the padded box", function()
+            local c = container({
+                layout = "flow", dir = "vertical", gap = 4, h = 300,
+                padding = { top = 10, right = 10, bottom = 10, left = 10 },
+            })
+            local items = {}
+            for i = 1, 4 do
+                items[i] = child(host)
+                c:Add(items[i], { width = "fill", height = 20 })
+            end
+            for _, item in ipairs(items) do H.expectInside(item, c) end
+            H.expectNoOverlap(items)
+        end)
+    end)
+end)

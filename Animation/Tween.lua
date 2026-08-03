@@ -7,9 +7,13 @@ local function easeOut(t)   return t * (2 - t) end
 local function easeInOut(t)
     return t < 0.5 and (2 * t * t) or (-1 + (4 - 2 * t) * t)
 end
+-- easeOutBack: overshoots past the target then settles back. The cubed term is what
+-- pins f(0) to 0; with a squared term the curve starts at 2 and the animation would
+-- begin at double its target value.
 local function spring(t)
     local s = 1.70158
-    return t == 1 and 1 or ((t - 1) * ((s + 1) * (t - 1) + s) + 1)
+    local d = t - 1
+    return d * d * ((s + 1) * d + s) + 1
 end
 
 local easings = {

@@ -4,6 +4,28 @@ local tinsert = table.insert
 local M = {}
 local registry  = {}  -- [id] = pluginHandle
 local order     = {}  -- insertion order array of ids
+local ready     = false  -- true once the core has finished its login pass
+
+-- Runs a plugin's onInit at most once. Init is a property of the plugin, not of the
+-- call that triggers it, so InitAll is safe to re-run and a late registration can be
+-- initialised on its own without re-entering anyone else's onInit.
+local function initPlugin(plugin)
+    if plugin._inited then return end
+    plugin._inited = true
+    if plugin._def.onInit then
+        local ok, err = pcall(plugin._def.onInit, plugin)
+        if not ok then
+            SuuUI.Debug("Plugin onInit error [" .. plugin.id .. "]: " .. tostring(err))
+        end
+    end
+end
+
+-- The one place that decides whether a plugin should be running: absent or true means
+-- enabled, so a plugin with no "enabled" setting is on by default.
+local function autoEnable(plugin)
+    local en = SuuUI.Settings:Get(plugin.id, "enabled")
+    if en == nil or en == true then plugin:Enable() end
+end
 
 local PluginMeta = {}
 PluginMeta.__index = PluginMeta
@@ -70,6 +92,15 @@ function SuuUI:CreatePlugin(def)
 
     registry[def.id] = plugin
     tinsert(order, def.id)
+
+    -- An addon that loads after our login pass would otherwise never be initialised.
+    -- Bring it up immediately: every other plugin is already up, so there is no
+    -- init-before-enable ordering left to respect.
+    if ready then
+        initPlugin(plugin)
+        autoEnable(plugin)
+    end
+
     return plugin
 end
 
@@ -90,17 +121,21 @@ function M:GetAll()
     return list
 end
 
---- Called by core bootstrap to fire onInit for all registered plugins.
+--- Fires onInit for every plugin that has not been initialised yet.
+-- Idempotent: calling it again is a no-op for plugins already initialised. A plugin
+-- registered during another plugin's onInit is picked up by the same pass.
 function M:InitAll()
     for _, id in ipairs(order) do
-        local plugin = registry[id]
-        if plugin._def.onInit then
-            local ok, err = pcall(plugin._def.onInit, plugin)
-            if not ok then
-                SuuUI.Debug("Plugin onInit error [" .. id .. "]: " .. tostring(err))
-            end
-        end
+        initPlugin(registry[id])
     end
+end
+
+--- Returns whether a plugin has had its onInit run.
+-- @param id string
+-- @return bool
+function M:IsInitialised(id)
+    local plugin = registry[id]
+    return plugin ~= nil and plugin._inited == true
 end
 
 SuuUI.Plugins = M
@@ -130,11 +165,13 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
             SuuUI.Theme:SetActive(themeName)
         end, "_theme_profile_boot")
     elseif event == "PLAYER_LOGIN" then
+        -- Two phases on purpose: every onInit runs before any onEnable, so a plugin's
+        -- onEnable can rely on another plugin's settings and events already existing.
         SuuUI.Plugins:InitAll()
         for _, plugin in ipairs(SuuUI.Plugins:GetAll()) do
-            local en = SuuUI.Settings:Get(plugin.id, "enabled")
-            if en == nil or en == true then plugin:Enable() end
+            autoEnable(plugin)
         end
+        ready = true
         SuuUI.Events:Emit("SUUUI_READY")
     elseif event == "PLAYER_LOGOUT" then
         if not SuuUIConfig then SuuUIConfig = {} end

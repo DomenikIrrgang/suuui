@@ -218,10 +218,12 @@ container:Add(row2, { width = "fill", height = 24 })
    (see `WOW_API_ENCAPSULATION.md`)
 6. ✅ Elements communicate via `SuuUI.UISignals` (see `UI_SIGNALS.md`)
 7. ✅ Missing a layout algorithm or property? Implement it in the engine
-8. ❌ NO `SetPoint`/`SetAllPoints` outside the four layout strategies
-9. ❌ NO `SetPoint` on any public handle — it is not exposed
-10. ❌ NO direct children of UIParent (use UI root)
-11. ❌ NO manual yOffset tracking
-12. ❌ NO calculating positions in loops
-13. ❌ NO `CreateFrame`/`CreateTexture`/`SetBackdrop` in page or plugin UI code
-14. ❌ NO Blizzard frame scripts (`OnSizeChanged`, `OnClick`, `OnMouseWheel`) for UI wiring
+8. ✅ Every component and layout strategy has a spec in `Tests/spec/` asserting the real
+   geometry it produces (see `TESTING.md`)
+9. ❌ NO `SetPoint`/`SetAllPoints` outside the four layout strategies
+10. ❌ NO `SetPoint` on any public handle — it is not exposed
+11. ❌ NO direct children of UIParent (use UI root)
+12. ❌ NO manual yOffset tracking
+13. ❌ NO calculating positions in loops
+14. ❌ NO `CreateFrame`/`CreateTexture`/`SetBackdrop` in page or plugin UI code
+15. ❌ NO Blizzard frame scripts (`OnSizeChanged`, `OnClick`, `OnMouseWheel`) for UI wiring

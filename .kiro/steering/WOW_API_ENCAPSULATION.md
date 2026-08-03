@@ -149,7 +149,9 @@ When a page needs a visual element the library does not have:
    - Blizzard scripts translated into `SuuUI.UISignals` emissions
    - `Destroy()` calls `SuuUI.UISignals:DisconnectAll(self)` and `SuuUI.Events:Off(...)`
 5. **Register** it in `SuuUI.toc` load order and `SuuUI.Components`.
-6. **Document** it in `architecture.md` under Component Library.
+6. **Spec** it in `Tests/spec/` — geometry, token-driven sizing, every signal, disabled
+   state, theme reaction, edge cases, teardown. See `TESTING.md`.
+7. **Document** it in `architecture.md` under Component Library.
 
 A one-off inline frame in a page is always cheaper today and always more expensive
 later. Build the component.

@@ -8,9 +8,11 @@ function IcoMeta:GetHeight()    return self._f:GetHeight() end
 function IcoMeta:IsShown()      return self._f:IsShown() end
 function IcoMeta:GetFrame()     return self._f end
 
+--- Resizes the button. SIZE_CHANGED comes from the frame's resize hook.
+-- @param w number
+-- @param h number
 function IcoMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function IcoMeta:Show()
@@ -64,11 +66,22 @@ end
 -- @param parent frame
 -- @return table  IconButton handle
 function SuuUI.Components.IconButton(props, parent)
-    local size = props.w or 24
-    local pad  = props.padding or 3
-    local f    = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    f:SetSize(size, size)
+    -- Square by default; h is honoured when a caller wants a non-square hit area.
+    local w   = props.w or 24
+    local h   = props.h or w
+    local pad = props.padding or 3
+    local f   = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    f:SetSize(w, h)
     f:EnableMouse(true)
+
+    -- Registered before the host container adopts the frame so the container chains
+    -- onto this hook instead of replacing it. A parent layout resizes the frame
+    -- directly and never calls SetSize, so this is the only place that sees it.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w2, h2)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
+    end)
 
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
@@ -77,7 +90,7 @@ function SuuUI.Components.IconButton(props, parent)
     box:Add(icon, { inset = pad })
 
     local id = "ico_" .. tostring(f)
-    local handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true }, IcoMeta)
+    handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true }, IcoMeta)
 
     local T = SuuUI.Theme
     f:SetScript("OnEnter", function()

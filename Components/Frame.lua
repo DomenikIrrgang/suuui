@@ -15,9 +15,12 @@ function FrameMeta:GetHeight()     return self._f:GetHeight() end
 function FrameMeta:IsShown()       return self._f:IsShown() end
 function FrameMeta:GetFrame()      return self._f end
 
+--- Resizes the frame. SIZE_CHANGED comes from the frame's own resize hook, so an
+--- explicit resize and a layout-driven one behave identically.
+-- @param w number
+-- @param h number
 function FrameMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function FrameMeta:Show()
@@ -92,7 +95,10 @@ end
 -- @return table  Frame handle
 function SuuUI.Components.Frame(props, parent)
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    if props.w and props.h then f:SetSize(props.w, props.h) end
+    -- Each axis is applied on its own: a caller that pins only one leaves the other for
+    -- the containing layout to decide.
+    if props.w then f:SetWidth(props.w) end
+    if props.h then f:SetHeight(props.h) end
     if props.alpha then f:SetAlpha(props.alpha) end
 
     local id = "frame_" .. tostring(f)

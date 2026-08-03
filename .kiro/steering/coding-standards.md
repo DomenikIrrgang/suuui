@@ -274,6 +274,28 @@ end
 
 Do not use inheritance chains deeper than one level.
 
+## Testing
+
+**Every component, layout strategy and core subsystem has a spec. Run the suite before
+calling a change done:**
+
+```bash
+lua Tests/run.lua                      # from the addon root
+lua Tests/run.lua --filter Slider       # while iterating
+```
+
+- New behaviour needs a spec that would fail without the change.
+- Changed behaviour means updating the existing spec, never deleting it.
+- Geometry assertions derive expected values from theme tokens and `H.textWidth` /
+  `H.lineHeight`, never from hardcoded pixels — a literal passes under one theme and
+  lies under every other.
+- Assert results, not intent: check the size and position a layout property produced,
+  not that the property was stored.
+- Behaviour that is arguably wrong but needs a decision gets pinned with a passing test
+  for what happens today plus an `xit` naming the invariant. Never leave the suite red.
+
+Full contract and spec checklist: `TESTING.md`.
+
 ## File Size Discipline
 
 Target: **< 200 lines per file** for component files, **< 150 lines** for core files.

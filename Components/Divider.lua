@@ -9,9 +9,11 @@ function DivMeta:IsShown()      return self._f:IsShown() end
 function DivMeta:GetFrame()     return self._f end
 function DivMeta:SetEnabled()   end
 
+--- Resizes the divider. SIZE_CHANGED comes from the frame's resize hook.
+-- @param w number
+-- @param h number
 function DivMeta:SetSize(w, h)
     self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
 end
 
 function DivMeta:Show()
@@ -65,6 +67,14 @@ function SuuUI.Components.Divider(props, parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
 
+    -- Registered before the host container adopts the frame so the container chains
+    -- onto this hook. A parent layout resizes the frame directly, never via SetSize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w2, h2)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
+    end)
+
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     -- The line spans one axis and is centred on the other
@@ -83,7 +93,7 @@ function SuuUI.Components.Divider(props, parent)
     end
 
     local id = "div_" .. tostring(f)
-    local handle = setmetatable({ _f=f, _line=line, _label=labelFs, _box=box, _eid=id }, DivMeta)
+    handle = setmetatable({ _f=f, _line=line, _label=labelFs, _box=box, _eid=id }, DivMeta)
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
