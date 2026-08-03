@@ -12,19 +12,38 @@ C.COLORPICKER_SIGNALS = {
 local COLOR_PICKED  = C.COLORPICKER_SIGNALS.COLOR_PICKED
 local REQUEST_CLOSE = C.COLORPICKER_SIGNALS.REQUEST_CLOSE
 
-local SV_SIZE = 120
-local BAR_W   = 185
-local BAR_H   = 14
+-- Panel geometry. None of these have a matching theme token, so they stay named
+-- constants rather than being bent onto a token that does not fit.
+--
+-- PANEL_W is the sum of the parts at the default spacing tokens: padding, the
+-- saturation square, the inner gap, the right-hand column, padding. PANEL_H is the
+-- padded height of the square plus the two bar rows.
+local PANEL_W    = 240
+local PANEL_H    = 180
+-- Side of the square saturation/value field.
+local SV_SIZE    = 120
+-- Bar rows: the label column, then the bar filling the rest of the panel width.
+local LABEL_W    = 35
+local BAR_W      = 185
+local BAR_H      = 14
+-- Right-hand column holding the preview swatch above the hex field.
+local COL_W      = 96
+-- Thumbs. The bar thumb is a tall thin sliver that deliberately overhangs its bar;
+-- its height is the small-control token, its width has no token.
+local BAR_THUMB_W = 6
+local SV_THUMB    = 8
 
 local CpMeta = {}
 CpMeta.__index = CpMeta
 
-function CpMeta:GetWidth()     return self._f:GetWidth() end
-function CpMeta:GetHeight()    return self._f:GetHeight() end
-function CpMeta:IsShown()      return self._f:IsShown() end
-function CpMeta:GetFrame()     return self._f end
+local function barThumbH()
+    return SuuUI.Theme:GetToken("sizeControlSm") or 18
+end
+
 function CpMeta:SetEnabled(en) self._enabled = en end
 
+-- SIZE_CHANGED is emitted here rather than from a frame resize hook: the panel is a
+-- floating popup at a fixed size, never stretched by a parent layout.
 function CpMeta:SetSize(w, h)
     self._f:SetSize(w, h)
     S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
@@ -168,17 +187,18 @@ function CpMeta:_pickFromAlpha(px)
 end
 
 function CpMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBgAlt")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    -- The bar thumbs ride the small-control token, so re-apply it on a theme change.
+    local th = barThumbH()
+    self._hueAnchor.height   = th
+    self._alphaAnchor.height = th
+    self._hueBox:SetChildAnchor(self._hueThumb, self._hueAnchor)
+    self._alphaBox:SetChildAnchor(self._alphaThumb, self._alphaAnchor)
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame. Show, Hide and SetSize are defined
+-- above and survive: Show/Hide arm the click-away watcher, and SetSize emits.
+SuuUI.Components.InstallBase(CpMeta, "_f")
 
 -- Builds a labelled bar row (hue / alpha) and returns frame + anchor container + thumb
 local function barRow(parent, root, labelText, gap, thumbTex)
@@ -187,7 +207,7 @@ local function barRow(parent, root, labelText, gap, thumbTex)
         gap = gap, align = "center", h = BAR_H,
     })
     local label = C.Text({ text = labelText, size = "sm", color = "muted" }, row:GetFrame())
-    row:Add(label, { width = 35, height = BAR_H })
+    row:Add(label, { width = LABEL_W, height = BAR_H })
 
     local bar = CreateFrame("Frame", nil, row:GetFrame())
     bar:EnableMouse(true)
@@ -199,7 +219,10 @@ local function barRow(parent, root, labelText, gap, thumbTex)
 
     local thumbBox = SuuUI.Layout:CreateContainer({ host = bar, layout = "anchor" })
     local thumb = CreateFrame("Frame", nil, bar)
-    local anchor = { point = "CENTER", relativePoint = "LEFT", x = 0, y = 0, width = 6, height = 18 }
+    local anchor = {
+        point = "CENTER", relativePoint = "LEFT", x = 0, y = 0,
+        width = BAR_THUMB_W, height = barThumbH(),
+    }
     thumbBox:Add(thumb, { anchor = anchor })
 
     local tBox = SuuUI.Layout:CreateContainer({ host = thumb, layout = "stack" })
@@ -226,7 +249,7 @@ function SuuUI.Components.ColorPicker(props, parent)
     local h0, s0, v0 = rgbToHsv(r0, g0, b0)
 
     local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    f:SetSize(240, 180)
+    f:SetSize(PANEL_W, PANEL_H)
 
     local root = SuuUI.Layout:CreateContainer({
         host    = f,
@@ -272,7 +295,7 @@ function SuuUI.Components.ColorPicker(props, parent)
     -- create a second formula to keep in step.
     local svAnchor = {
         point = "CENTER", relativePoint = "TOPLEFT",
-        x = 0, y = 0, width = 8, height = 8,
+        x = 0, y = 0, width = SV_THUMB, height = SV_THUMB,
     }
     svBox:Add(svThumb, { anchor = svAnchor })
     local svThumbBox = SuuUI.Layout:CreateContainer({ host = svThumb, layout = "stack" })
@@ -291,13 +314,13 @@ function SuuUI.Components.ColorPicker(props, parent)
     previewBox:Add(preview)
     -- The preview absorbs whatever height the hex field does not need, so a larger font
     -- token grows the field instead of overflowing the fixed-height column.
-    rightCol:Add(previewFrame, { width = 96, height = "fill" })
+    rightCol:Add(previewFrame, { width = COL_W, height = "fill" })
 
-    local hexInput = C.Input({ value = toHex(r0,g0,b0,a0), w = 96, maxChars = 8 },
+    local hexInput = C.Input({ value = toHex(r0,g0,b0,a0), w = COL_W, maxChars = 8 },
         rightCol:GetFrame())
-    rightCol:Add(hexInput, { width = 96 })
+    rightCol:Add(hexInput, { width = COL_W })
 
-    topRow:Add(rightCol, { width = 96, height = SV_SIZE })
+    topRow:Add(rightCol, { width = COL_W, height = SV_SIZE })
     root:Add(topRow, { width = "fill", height = SV_SIZE })
 
     local hueFrame, hueTex, hueBox, hueThumb, hueAnchor =

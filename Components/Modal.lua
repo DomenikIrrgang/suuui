@@ -13,11 +13,6 @@ local CANCELLED = C.MODAL_SIGNALS.CANCELLED
 local ModalMeta = {}
 ModalMeta.__index = ModalMeta
 
-function ModalMeta:GetFrame()  return self._window end
-function ModalMeta:IsShown()   return self._window:IsShown() end
-function ModalMeta:GetWidth()  return self._window:GetWidth() end
-function ModalMeta:GetHeight() return self._window:GetHeight() end
-
 function ModalMeta:Show()
     self._overlay:Show()
     self._window:Show()
@@ -57,40 +52,12 @@ function ModalMeta:Destroy()
 end
 
 function ModalMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBg")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
-    self._window:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = bw,
-        insets   = {left=bw, right=bw, top=bw, bottom=bw},
-    })
-    if bg then self._window:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._window:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    SuuUI.Backdrop.Apply(self._window, { bg = "colorBg", border = "colorBorder" })
 end
 
---- Shows a dismissible notice modal for a one-way message.
--- Use this instead of printing to chat for anything the user needs to acknowledge.
--- @param props table  { title, message, tone, confirmText, w }
---   tone: "warning" for a blocked but expected action (deleting a built-in theme),
---         "danger" for something that actually went wrong, "success" for a completed
---         action, nil for neutral information
--- @return table  Modal handle
-function SuuUI.Components.Notice(props)
-    local modal = SuuUI.Components.Modal({
-        title          = props.title,
-        message        = props.message,
-        confirmText    = props.confirmText or "OK",
-        confirmVariant = props.tone,
-        dismissOnly    = true,
-        autoDestroy    = true,
-        w              = props.w,
-    })
-    modal:Show()
-    return modal
-end
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize. Show and Hide are defined
+-- above and survive: they drive the overlay, the fade, and optional autoDestroy.
+SuuUI.Components.InstallBase(ModalMeta, "_window")
 
 --- Creates a modal dialog with optional input field.
 -- Emits CONFIRMED (value), CANCELLED, VISIBILITY_CHANGED.

@@ -12,11 +12,6 @@ local SUBMITTED = SuuUI.Components.INPUT_SIGNALS.SUBMITTED
 local InpMeta = {}
 InpMeta.__index = InpMeta
 
-function InpMeta:GetWidth()     return self._f:GetWidth() end
-function InpMeta:GetHeight()    return self._f:GetHeight() end
-function InpMeta:IsShown()      return self._f:IsShown() end
-function InpMeta:GetFrame()     return self._f end
-
 --- Sets an explicit size, dropping token-driven height.
 -- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
@@ -34,16 +29,6 @@ function InpMeta:_autosize()
     local h = SuuUI.Theme:GetControlHeight("sizeControlMd")
     if abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
     self._f:SetHeight(h)
-end
-
-function InpMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function InpMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 function InpMeta:Destroy()
@@ -82,23 +67,30 @@ function InpMeta:SetFocus()
     self._eb:SetFocus()
 end
 
+-- Surface and border colour only. Focus and hover changes take this path so a state
+-- flip never rebuilds the backdrop table.
+function InpMeta:_paint()
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, "colorBgAlt")
+    B.SetBorder(self._f, (self._hasFocus or self._hasHover)
+        and "colorBorderFocus" or "colorBorder")
+end
+
 function InpMeta:ApplyTheme()
     local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBgAlt")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
     local tc = T:GetToken("colorText")
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    -- Re-assert the live state: a theme change must not drop the focus ring.
+    self:_paint()
     self._eb:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeMd") or 13, "")
     if tc then self._eb:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
     self:_autosize()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
+-- above and survives: it has to clear the autosize flag.
+SuuUI.Components.InstallBase(InpMeta, "_f")
 
 --- Creates a themed text input.
 -- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
@@ -128,7 +120,9 @@ function SuuUI.Components.Input(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local eb = CreateFrame("EditBox", nil, f)
-    box:Add(eb, { inset = { left = 4, right = 4, top = 2, bottom = 2 } })
+    -- The vertical inset has no matching space token (2px), so it stays a literal.
+    local insetX = SuuUI.Theme:GetToken("spaceXs") or 4
+    box:Add(eb, { inset = { left = insetX, right = insetX, top = 2, bottom = 2 } })
     eb:SetAutoFocus(false)
     eb:SetMaxLetters(props.maxChars or 255)
     if props.value then eb:SetText(props.value) end
@@ -140,16 +134,7 @@ function SuuUI.Components.Input(props, parent)
         _autoH=props.h == nil,
     }, InpMeta)
 
-    local function updateBorder()
-        local T = SuuUI.Theme
-        if handle._hasFocus or handle._hasHover then
-            local c = T:GetToken("colorBorderFocus")
-            if c then f:SetBackdropBorderColor(c[1], c[2], c[3], c[4]) end
-        else
-            local bd = T:GetToken("colorBorder")
-            if bd then f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-        end
-    end
+    local function updateBorder() handle:_paint() end
 
     eb:SetScript("OnTextChanged", function()
         if handle._silent then return end

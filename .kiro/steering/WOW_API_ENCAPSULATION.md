@@ -140,11 +140,18 @@ When a page needs a visual element the library does not have:
 1. **Stop** — do not inline `CreateFrame` + `CreateTexture` in the page.
 2. **Name it** — what is the reusable widget? (`ColorSwatch`, `Badge`, `SegmentedControl`)
 3. **Discuss the props** — what does its `props` table accept?
-4. **Implement** in `Components/<Name>.lua` following the standard shape:
+4. **Implement** in `Components/<Name>.lua` following the standard shape. The full
+   annotated skeleton is **"Anatomy of a Component" in `coding-standards.md`** — start
+   there and copy it rather than assembling the rules below from scratch:
    - `(props, parent)` signature returning a metatable handle
    - Shared API: `SetSize` `GetWidth` `GetHeight` `Show` `Hide` `IsShown` `SetEnabled`
      `Destroy` `GetFrame` `ApplyTheme` — **no `SetPoint`**
    - Internal parts positioned by a host container, never by `SetPoint`
+   - Backdrop via `SuuUI.Backdrop.Apply(f, { bg, border })`, recoloured with
+     `SetBg` / `SetBorder` — never a hand-built `SetBackdrop` table
+   - Shared accessors installed with `SuuUI.Components.InstallBase(Meta, "_f")`, not
+     retyped by hand
+   - Text via `SuuUI.Components.Text`, so it re-measures on a `fontSize*` change
    - Token-driven colors and sizes, cached in `ApplyTheme()`
    - Blizzard scripts translated into `SuuUI.UISignals` emissions
    - `Destroy()` calls `SuuUI.UISignals:DisconnectAll(self)` and `SuuUI.Events:Off(...)`
@@ -155,6 +162,40 @@ When a page needs a visual element the library does not have:
 
 A one-off inline frame in a page is always cheaper today and always more expensive
 later. Build the component.
+
+---
+
+## Duplicating a Primitive Is Also a Violation
+
+Being inside `Components/` licenses the raw API, not the copy-paste. A component that
+hand-rolls something a shared primitive already does is the same failure as a page that
+hand-rolls a component: the fix has to be made in fifteen files instead of one, and one
+of them is always missed.
+
+```lua
+-- ❌ the backdrop table, the texture path, and the token resolution, per component
+local c  = SuuUI.Theme:GetToken("colorBg")
+local bc = SuuUI.Theme:GetToken("colorBorder")
+local bw = SuuUI.Theme:GetToken("borderWidth") or 1
+f:SetBackdrop({
+    bgFile   = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    edgeSize = bw,
+    insets   = { left = bw, right = bw, top = bw, bottom = bw },
+})
+f:SetBackdropColor(c[1], c[2], c[3], c[4])
+f:SetBackdropBorderColor(bc[1], bc[2], bc[3], bc[4])
+
+-- ✅ one primitive, tokens resolved for you
+SuuUI.Backdrop.Apply(f, { bg = "colorBg", border = "colorBorder" })
+
+-- ✅ and a hover or selection flip recolours without rebuilding the table
+SuuUI.Backdrop.SetBg(f, "colorBgHover")
+```
+
+Same for the accessors (`InstallBase`), text (`Components.Text`), and text measurement
+(`TextMetrics.Measure`). If a primitive is missing the shape you need, extend the
+primitive — that is one file, and every component gets the fix.
 
 ---
 

@@ -2,33 +2,41 @@ local max, min = math.max, math.min
 local select   = select
 local S = SuuUI.UISignals
 
+-- Vertical inset of the bar track inside the frame, and the gap between the viewport
+-- and the bar. No space token is this small (spaceXs is 4), so both stay named
+-- constants rather than forcing a token that does not fit.
+local TRACK_INSET_Y = 2
+local BAR_GAP       = 1
+
 local function barWidth()
     return SuuUI.Theme:GetToken("sizeScrollbar") or 8
 end
 
--- Gutter reserved for the bar: its width plus the inset it sits in.
+local function borderWidth()
+    return SuuUI.Theme:GetToken("borderWidth") or 1
+end
+
+-- Gutter reserved for the bar: its width, the border inset it sits in, and the gap
+-- that keeps it clear of the viewport.
 local function gutter()
-    return barWidth() + 2
+    return barWidth() + borderWidth() + BAR_GAP
+end
+
+-- Stack props for the track. Rebuilt on every theme change because both the bar width
+-- and the border inset are token-driven.
+local function trackProps()
+    local bw = borderWidth()
+    return {
+        align = "end",
+        width = barWidth(),
+        inset = { right = bw, top = TRACK_INSET_Y, bottom = TRACK_INSET_Y },
+    }
 end
 
 local ScrMeta = {}
 ScrMeta.__index = ScrMeta
 
-function ScrMeta:GetWidth()     return self._f:GetWidth() end
-function ScrMeta:GetHeight()    return self._f:GetHeight() end
-function ScrMeta:IsShown()      return self._f:IsShown() end
-function ScrMeta:GetFrame()     return self._f end
 function ScrMeta:SetEnabled()   end
-
-function ScrMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function ScrMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
-end
 
 function ScrMeta:Destroy()
     S:DisconnectAll(self)
@@ -36,13 +44,6 @@ function ScrMeta:Destroy()
     self._thumb:SetScript("OnUpdate", nil)
     self._thumbBox:Destroy()
     self._box:Destroy()
-end
-
---- Resizes the scroll frame. Emits SIZE_CHANGED via the frame's resize hook.
--- @param w number
--- @param h number
-function ScrMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
 end
 
 --- Returns the inner content frame for attaching children.
@@ -116,33 +117,19 @@ function ScrMeta:_updateBar()
 end
 
 function ScrMeta:ApplyTheme()
-    local T   = SuuUI.Theme
-    local bg  = T:GetToken("colorBgAlt")
-    local ac  = T:GetToken("colorAccent")
-    local bd  = T:GetToken("colorBorder")
-    local bw  = T:GetToken("borderWidth") or 1
-    self._track:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._track:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._track:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    self._thumb:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if ac then self._thumb:SetBackdropColor(ac[1], ac[2], ac[3], ac[4]) end
-    if bd then self._thumb:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    local B = SuuUI.Backdrop
+    B.Apply(self._track, { bg = "colorBgAlt", border = "colorBorder" })
+    B.Apply(self._thumb, { bg = "colorAccent", border = "colorBorder" })
 
-    -- The bar width token is editable, so re-apply it to the track and thumb
-    self._box:SetChildProps(self._track, {
-        align = "end", width = barWidth(), inset = { right = 1, top = 2, bottom = 2 },
-    })
+    -- Bar width and border inset are both editable tokens, so re-apply them to the
+    -- track and thumb.
+    self._box:SetChildProps(self._track, trackProps())
     self._thumbAnchor.width = barWidth()
     self:_updateBar()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(ScrMeta, "_f")
 
 --- Creates a custom scroll frame with a styled scrollbar.
 -- Emits SCROLL_CHANGED (scrollY), SIZE_CHANGED, VISIBILITY_CHANGED.
@@ -178,7 +165,7 @@ function SuuUI.Components.ScrollFrame(props, parent)
     sf:SetScrollChild(content)
 
     local track = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    box:Add(track, { align = "end", width = barWidth(), inset = { right = 1, top = 2, bottom = 2 } })
+    box:Add(track, trackProps())
 
     -- Thumb position is driven through the track's anchor container
     local thumbBox = SuuUI.Layout:CreateContainer({ host = track, layout = "anchor" })

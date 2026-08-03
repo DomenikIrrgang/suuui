@@ -1,13 +1,12 @@
 local abs = math.abs
 local S = SuuUI.UISignals
 
+-- The knob is a plain white dot with no intent colour of its own, matching the client's
+-- default backdrop edge. Shared so a render allocates nothing.
+local KNOB_WHITE = { 1, 1, 1, 1 }
+
 local TogMeta = {}
 TogMeta.__index = TogMeta
-
-function TogMeta:GetWidth()     return self._f:GetWidth() end
-function TogMeta:GetHeight()    return self._f:GetHeight() end
-function TogMeta:IsShown()      return self._f:IsShown() end
-function TogMeta:GetFrame()     return self._f end
 
 --- Sets an explicit size, dropping token-driven sizing.
 -- @param w number
@@ -15,16 +14,6 @@ function TogMeta:GetFrame()     return self._f end
 function TogMeta:SetSize(w, h)
     self._autoSize = false
     self._f:SetSize(w, h)
-end
-
-function TogMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function TogMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 function TogMeta:Destroy()
@@ -59,12 +48,12 @@ end
 -- @param snap bool  Place the knob immediately instead of animating (used on resize)
 function TogMeta:_render(snap)
     local T    = SuuUI.Theme
+    local B    = SuuUI.Backdrop
     local on   = self._value
     local en   = self._enabled ~= false
-    local track = on and T:GetToken("colorAccent") or T:GetToken("colorBgAlt")
-    local bord  = T:GetToken("colorBorder")
-    if track then self._track:SetBackdropColor(track[1], track[2], track[3], track[4]) end
-    if bord  then self._track:SetBackdropBorderColor(bord[1], bord[2], bord[3], bord[4]) end
+    -- Value and enabled flips recolour only, so the backdrop table is never rebuilt.
+    B.SetBg(self._track, on and "colorAccent" or "colorBgAlt")
+    B.SetBorder(self._track, "colorBorder")
 
     local tw       = self._f:GetWidth()
     local th       = self._f:GetHeight()
@@ -93,8 +82,7 @@ function TogMeta:_render(snap)
         }):Play()
     end
 
-    local kc = en and {1,1,1,1} or T:GetToken("colorTextDisabled") or {0.4,0.4,0.4,1}
-    self._knob:SetBackdropColor(kc[1], kc[2], kc[3], kc[4])
+    B.SetBg(self._knob, en and KNOB_WHITE or "colorTextDisabled")
 end
 
 function TogMeta:ApplyTheme()
@@ -108,8 +96,16 @@ function TogMeta:ApplyTheme()
             self._f:SetSize(w, h)
         end
     end
+    -- The full Apply picks up a changed borderWidth token; _render then recolours.
+    local B = SuuUI.Backdrop
+    B.Apply(self._track, { bg = "colorBgAlt", border = "colorBorder" })
+    B.Apply(self._knob,  { bg = KNOB_WHITE,   border = KNOB_WHITE })
     self:_render(true)
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
+-- above and survives: it has to clear the token-sizing flag.
+SuuUI.Components.InstallBase(TogMeta, "_f")
 
 --- Creates an animated toggle switch.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, MOUSE_ENTER, MOUSE_LEAVE.
@@ -141,21 +137,11 @@ function SuuUI.Components.Toggle(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local track = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    track:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=1, insets={left=1,right=1,top=1,bottom=1},
-    })
     box:Add(track)
 
     local knobBox = SuuUI.Layout:CreateContainer({ host = track, layout = "anchor" })
     local knobSize = h - 4
     local knob = CreateFrame("Frame", nil, track, "BackdropTemplate")
-    knob:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=1, insets={left=1,right=1,top=1,bottom=1},
-    })
 
     local knobAnchor = {
         point = "LEFT", relativePoint = "LEFT",
@@ -184,7 +170,7 @@ function SuuUI.Components.Toggle(props, parent)
     f:SetScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
     f:SetScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
 
-    handle:_render(true)
+    handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

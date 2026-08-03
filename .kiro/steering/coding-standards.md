@@ -21,6 +21,197 @@ return M
 -- or: SuuUI.MyModule = M
 ```
 
+## Component File Conventions
+
+A component defines its own methods on its metatable first, then calls `InstallBase`
+last, just before the constructor:
+
+```lua
+local CompMeta = {}
+CompMeta.__index = CompMeta
+
+function CompMeta:ApplyTheme() ... end
+function CompMeta:Destroy() ... end
+function CompMeta:Show() ... end          -- custom: drives an overlay and a fade
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Hide. Show is defined
+-- above and survives.
+SuuUI.Components.InstallBase(CompMeta, "_f")
+```
+
+`InstallBase(meta, field)` only fills gaps — it never overwrites a method the metatable
+already defines, so calling it before the definitions would silently do nothing useful
+and calling it after keeps every custom override. `field` defaults to `"_f"`; pass the
+handle field that holds the widget (`"_window"` for `Modal`). Its `SetSize` deliberately
+does not emit `SIZE_CHANGED`; that comes from the frame's own `OnSizeChanged` hook.
+
+Backdrops go through `SuuUI.Backdrop.Apply` / `SetBg` / `SetBorder` and text through
+`SuuUI.Components.Text`. Never re-implement a primitive inside a component — see
+`WOW_API_ENCAPSULATION.md`.
+
+## Anatomy of a Component
+
+Every component in `Components/` follows this shape. A new one that departs from it is
+almost certainly rebuilding something that already exists. Read `Components/NavItem.lua`
+as the shortest complete example, `Components/Dropdown.lua` for one with pooled children.
+
+```lua
+local S = SuuUI.UISignals
+
+local CompMeta = {}
+CompMeta.__index = CompMeta
+
+-- 1. Transient state: recolour only, never rebuild the backdrop table.
+function CompMeta:_paint()
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, self._hovered and "colorBgHover" or "colorBgAlt")
+    B.SetBorder(self._f, "colorBorder")
+    self._labelText:SetColor(self._enabled == false and "disable" or "text")
+end
+
+-- 2. Re-derive token-driven size. Font tokens are user-editable, so a height taken
+--    once at construction goes stale and the content overflows. Skip when the caller
+--    pinned a size. The frame's resize hook reports the new size onwards.
+function CompMeta:_autosize()
+    if not self._autoH then return end
+    local h = SuuUI.Theme:GetControlHeight("sizeControlMd")
+    if math.abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
+    self._f:SetHeight(h)
+end
+
+-- 3. Full restyle: backdrop, owned child handles, colours, then re-derive the size.
+--    No box:Layout() needed — see "Let the container track your children" below.
+function CompMeta:ApplyTheme()
+    SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    -- The event bus fires listeners newest-first, so a child handle's own subscription
+    -- may not have run yet. Apply it explicitly or this component measures the old font.
+    self._labelText:ApplyTheme()
+    self:_paint()
+    self:_autosize()
+end
+
+function CompMeta:Destroy()
+    S:DisconnectAll(self)
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._labelText:Destroy()   -- every handle this component owns
+    self._box:Destroy()
+    self._f:Hide()
+end
+
+-- 4. A custom SetSize drops token sizing, then InstallBase fills the rest. It goes
+--    last so every override above survives.
+function CompMeta:SetSize(w, h)
+    self._autoH = false
+    self._f:SetSize(w, h)
+end
+
+SuuUI.Components.InstallBase(CompMeta, "_f")
+
+--- Creates a thing. Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, SIZE_CHANGED.
+-- @param props table  { label, w, h }
+-- @param parent frame
+-- @return table  handle
+function SuuUI.Components.Thing(props, parent)
+    local T = SuuUI.Theme
+    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    -- Text-bearing, so the height is floored against the font metrics.
+    f:SetSize(props.w or 160, props.h or T:GetControlHeight("sizeControlMd"))
+    f:EnableMouse(true)
+
+    -- 5. Resize hook BEFORE the host container adopts the frame, so the container
+    --    chains onto it instead of replacing it. A parent layout resizes the frame
+    --    directly and never calls the handle's SetSize, so this is the only place
+    --    that sees a layout-driven resize.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w, h)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
+    end)
+
+    -- 6. Internals are positioned by a host container. No SetPoint, ever.
+    local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+
+    -- 7. Compose. Text owns the font and colour tokens and re-measures itself.
+    local labelText = SuuUI.Components.Text({
+        text = props.label or "", size = "md", justify = "LEFT",
+    }, f)
+    box:Add(labelText, {
+        valign = "center",
+        inset  = { left = T:GetToken("spaceSm"), right = T:GetToken("spaceXs") },
+    })
+
+    local id = "thing_" .. tostring(f)
+    handle = setmetatable({
+        _f = f, _box = box, _eid = id, _enabled = true,
+        _autoH = props.h == nil,   -- the caller did not pin a height, so tokens own it
+        -- Keep the original field pointing at the region when you wrap it in a handle;
+        -- callers and specs reach _label, while _labelText owns it.
+        _label = labelText:GetFrame(), _labelText = labelText,
+    }, CompMeta)
+
+    -- 8. Blizzard scripts are translated into signals and never escape this file.
+    f:SetScript("OnMouseUp", function(_, btn)
+        if handle._enabled == false then return end
+        S:Emit(handle, S.SIGNALS.CLICKED, btn or "LeftButton")
+    end)
+
+    handle:ApplyTheme()
+    SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
+    return handle
+end
+```
+
+The rules that shape it, and why:
+
+| Do | Because |
+|---|---|
+| `SuuUI.Backdrop` for bg/border | a hand-built `SetBackdrop` table stops tracking `borderWidth` |
+| `Components.Text` for any text | it re-measures on a `fontSize*` change; a raw font string does not |
+| Compose existing components | `Notice` is a `Modal`; `Modal` is `Text` + `Input` + `Button`; `Window`'s close is a `Button` |
+| `InstallBase` after your methods | gap-fill only, so custom overrides survive |
+| Host container for internals | `SetPoint` belongs to the four layout strategies alone |
+| `_paint()` vs `ApplyTheme()` | a hover should not rebuild a backdrop table every frame |
+| `GetControlHeight` for text | font tokens are user-editable; a literal height clips |
+| Re-derive size in `ApplyTheme` | a height read once at construction goes stale and the content overflows |
+| Apply owned handles explicitly | the event bus fires newest-first, so children may lag a theme change |
+| Emit from the frame's resize hook | layout-driven resizes never go through the handle's `SetSize` |
+| Destroy every handle you own | otherwise each rebuild leaks a theme subscription |
+
+### Let the container track your children
+
+`container:Add` connects to the child's `SIZE_CHANGED` and re-runs layout on its own —
+but only when you hand it the **handle**. Pass `labelText` and a font-token change
+re-measures the label, emits, and the box re-flows for free. Pass
+`labelText:GetFrame()` and the connection lands on the frame, which never emits that
+re-measure, so you have to call `self._box:Layout()` by hand in `ApplyTheme` and
+`SetText` and remember to keep doing it.
+
+```lua
+-- ✅ preferred: the container follows the child's re-measure
+box:Add(labelText, { valign = "center" })
+
+-- ⚠️ raw region: works, but now every restyle path owes a manual box:Layout()
+box:Add(labelText:GetFrame(), { valign = "center" })
+```
+
+Pass the handle unless you have a reason not to. `Components/NavItem.lua` does, and needs
+no `Layout()` call anywhere.
+
+**The handle is not always sufficient.** `Text` emits `SIZE_CHANGED` on a *height* change
+only — it owns its height but lets the layout assign its width, and emitting on width
+would loop against the container that just sized it. So a text change that keeps the same
+height can leave a child at a stale width depending on how the layout sized it.
+`Components/Divider.lua` hits this and calls `self._box:Layout()` after `SetText` and in
+`ApplyTheme`; its spec fails without those calls, so they are load-bearing, not habit.
+
+If you add a `SetText` path and are not certain, write the spec first: assert the label's
+width after the change and see whether it needs the manual re-run. Do not add the call
+speculatively, and do not assume you can drop it.
+
+**Deliberate exception:** `Button` keeps a raw font string, because its autosize pipeline
+measures through `SuuUI.TextMetrics` and pins the label width itself — `Components.Text`
+would fight it. If you need a similar exception, say why in a comment at the call site.
+
 ## UI Layout Rules
 
 **Everything is positioned by the layout engine. `SetPoint` lives only in the four
@@ -298,6 +489,15 @@ Full contract and spec checklist: `TESTING.md`.
 
 ## File Size Discipline
 
-Target: **< 200 lines per file** for component files, **< 150 lines** for core files.
-If a file grows beyond this, split into a `-Internal.lua` helper file.
-Fewer lines = faster load. Every byte loaded is read from disk at login.
+Rough target: **~200 lines** for component files, **~150 lines** for core files. Fewer
+lines load faster, and every byte is read from disk at login.
+
+**These are guidelines, not limits.** A cohesive component that needs 300 lines to be
+correct is better than two files that have to reach into each other's internals to stay
+in step. Split when the file is doing two separable jobs — that is why `Notice` lives
+apart from `Modal` — not to hit a number. `ColorPicker`, `Container` and `Theme` are all
+over target and are all one coherent thing each.
+
+If you do split, a `-Internal.lua` helper alongside the main file is the pattern. Never
+split a component in a way that puts `SetPoint`, backdrop building, or token resolution
+outside the primitives that own them.

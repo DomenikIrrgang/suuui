@@ -1,62 +1,64 @@
 local assert, type = assert, type
 local tinsert = table.insert
+local C = SuuUI.Components
 local S = SuuUI.UISignals
 
--- Window chrome is token-driven. The title strip holds text, so its height is floored
--- against the font size; the close button and grip carry no text of their own.
+-- Window chrome is token-driven. The title strip and the close button both carry text,
+-- so their heights are floored against the font metrics — a literal would clip once the
+-- user raises a font token. The resize grip has no text of its own.
 local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar") end
-local function closeSize()   return SuuUI.Theme:GetToken("sizeControlMd") or 22 end
+local function closeSize()   return SuuUI.Theme:GetControlHeight("sizeControlMd") end
 local function gripSize()    return SuuUI.Theme:GetToken("sizeIcon") or 16 end
+local function borderWidth() return SuuUI.Theme:GetToken("borderWidth") or 1 end
+local function chromeGap()   return SuuUI.Theme:GetToken("spaceMd") or 12 end
 
 -- ASCII only. FRIZQT__.TTF has no glyph for U+00D7 (the multiplication sign that reads
 -- as a nicer close mark in a text editor), so it drew as blank in the client.
 local CLOSE_GLYPH = "X"
+
+-- Left gutter for the title text. Falls between spaceSm (8) and spaceMd (12), so it is
+-- a named constant rather than a space token bent to fit.
+local TITLE_PAD_L = 10
+
+-- Gap between the close button and the window's right edge. Deliberately tighter than
+-- spaceSm (8) so the button reads as part of the chrome rather than a floating control,
+-- and wider than spaceXs (4) so it is not flush with the border.
+local CLOSE_EDGE_GAP = 6
+
+-- The close button is a fixed square sized from the control token, so its glyph is given
+-- the whole box: the component's default text padding would clamp the label narrower
+-- than its own metrics and the client would clip it.
+local CLOSE_GLYPH_PAD = 0
 
 local WinMeta = {}
 WinMeta.__index = WinMeta
 local registry = {}
 
 local function applyTheme(self)
-    local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBg")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
-    self._frame:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = bw,
-        insets   = { left=bw, right=bw, top=bw, bottom=bw },
-    })
-    if bg then self._frame:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._frame:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    SuuUI.Backdrop.Apply(self._frame, { bg = "colorBg", border = "colorBorder" })
 
-    local bar = T:GetToken("colorBgAlt")
-    if bar then self._titleBar:SetColorTexture(bar[1], bar[2], bar[3], bar[4]) end
-
-    local tc = T:GetToken("colorText")
-    if tc then self._titleText:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
-    self._titleText:SetFont(
-        T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeMd") or 13, "")
-
-    local mc = T:GetToken("colorTextMuted")
-    if mc then self._closeText:SetTextColor(mc[1], mc[2], mc[3], mc[4]) end
-    self._closeText:SetFont(
-        T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeLg") or 15, "")
-
-    -- The close mark is sized from its font, so its box has to be re-measured here.
-    -- Nothing else re-lays it out: the button keeps the same token size, so no resize
-    -- fires, and the mark would stay pinned to the metrics of the previous font.
-    self._closeBox:Layout()
-
-    -- Chrome geometry moves with the size and font tokens
+    -- Chrome geometry moves with the size and font tokens. The title text and the drag
+    -- region both have to clear the close button, so both insets are expressed from its
+    -- token size rather than from a magic width.
+    local cs, gap = closeSize(), chromeGap()
     self._shell:SetChildProps(self._titleStrip, { width = "fill", height = titleHeight() })
-    self._titleBox:SetChildProps(self._drag, { inset = { right = closeSize() + 12 } })
+    self._titleBox:SetChildProps(self._titleT, {
+        valign = "center",
+        inset  = { left = TITLE_PAD_L, right = cs + CLOSE_EDGE_GAP + gap },
+    })
+    self._titleBox:SetChildProps(self._drag, { inset = { right = cs + gap } })
     self._titleBox:SetChildProps(self._closeBtn, {
         align = "end", valign = "center",
-        width = closeSize(), height = closeSize(), inset = { right = 6 },
+        width = cs, height = cs, inset = { right = CLOSE_EDGE_GAP },
     })
+
+    -- The chrome components own their own tokens, but the event bus fires listeners
+    -- newest-first: left to their own handlers they would restyle after the window had
+    -- already re-flowed the strip, so the title would be measured at the previous font.
+    self._titleStrip:ApplyTheme()
+    self._titleT:ApplyTheme()
+    self._closeBtn:ApplyTheme()
+
 end
 
 -- Hands the size limits to the client so a drag stops dead at the bound instead of
@@ -126,26 +128,10 @@ function WinMeta:Toggle()
     if self._frame:IsShown() then self:Hide() else self:Show() end
 end
 
---- Returns whether the window is shown.
--- @return bool
-function WinMeta:IsShown()   return self._frame:IsShown() end
-
---- Returns the window's outer frame.
--- @return frame
-function WinMeta:GetFrame()  return self._frame end
-
---- Returns the window width.
--- @return number
-function WinMeta:GetWidth()  return self._frame:GetWidth() end
-
---- Returns the window height.
--- @return number
-function WinMeta:GetHeight() return self._frame:GetHeight() end
-
 --- Sets the window title text.
 -- @param text string
 function WinMeta:SetTitle(text)
-    self._titleText:SetText(text)
+    self._titleT:SetText(text)
 end
 
 --- Returns the inner content frame for attaching children.
@@ -176,11 +162,23 @@ function WinMeta:ApplyTheme()
     applyTheme(self)
 end
 
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize. Show and Hide are defined
+-- above and survive: they animate. Deferred to first use because the .toc loads the
+-- layout engine ahead of Components/Base.lua.
+local baseInstalled = false
+local function installBase()
+    if baseInstalled then return end
+    baseInstalled = true
+    C.InstallBase(WinMeta, "_frame")
+end
+
 --- Creates a new draggable themed window.
 -- @param props table  { id, title, w, h, minW, minH, resizable, layer }
 -- @return table  Window handle
 function SuuUI.Layout:CreateWindow(props)
     assert(type(props.id) == "string", "SuuUI Window: id required")
+    installBase()
+
     local minW, minH = props.minW or 200, props.minH or 200
     local maxW, maxH = props.maxW or 2000, props.maxH or 2000
     local w = props.w or 400
@@ -213,49 +211,41 @@ function SuuUI.Layout:CreateWindow(props)
         if handle then S:Emit(handle, S.SIGNALS.SIZE_CHANGED, width, height) end
     end)
 
-    -- Chrome is laid out by the engine: title strip on top, content below
+    -- Chrome is laid out by the engine: title strip on top, content below. The shell
+    -- padding is the window's own border, so it tracks the border token.
+    local bw = borderWidth()
     local shell = SuuUI.Layout:CreateContainer({
         host = f, layout = "flow", dir = "vertical", gap = 0,
-        padding = { top = 1, right = 1, bottom = 1, left = 1 },
+        padding = { top = bw, right = bw, bottom = bw, left = bw },
     })
 
-    -- Title strip: bar texture behind, title text left, close button right
-    local titleStrip = CreateFrame("Frame", nil, f)
+    -- Title strip: an alt-surface frame holding the title text and the close button
+    local titleStrip = C.Frame({ variant = "bgAlt", border = false }, f)
     shell:Add(titleStrip, { width = "fill", height = titleHeight() })
 
     local titleBox = SuuUI.Layout:CreateContainer({ host = titleStrip, layout = "stack" })
-    local bar = titleStrip:CreateTexture(nil, "BACKGROUND")
-    titleBox:Add(bar)
 
-    local title = titleStrip:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetText(props.title or props.id)
-    title:SetJustifyH("LEFT")
-    titleBox:Add(title, { valign = "center", inset = { left = 10, right = 40 } })
+    -- Text owns the font, colour and re-measure on a font token change, which a
+    -- hand-rolled font string does not.
+    local titleT = C.Text({
+        text = props.title or props.id, size = "md", color = "text",
+        justify = "LEFT", wrap = false,
+    }, titleStrip:GetFrame())
+    titleBox:Add(titleT, { valign = "center", inset = { left = TITLE_PAD_L } })
 
     -- Drag region covers the strip but stops short of the close button
-    local drag = CreateFrame("Frame", nil, titleStrip)
+    local drag = CreateFrame("Frame", nil, titleStrip:GetFrame())
     drag:EnableMouse(true)
-    titleBox:Add(drag, { inset = { right = closeSize() + 12 } })
+    titleBox:Add(drag)
 
-    local closeBtn = CreateFrame("Frame", nil, titleStrip, "BackdropTemplate")
-    closeBtn:EnableMouse(true)
-    closeBtn:SetFrameLevel(f:GetFrameLevel() + 10)
-    closeBtn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1, insets = { left=1, right=1, top=1, bottom=1 },
-    })
-    closeBtn:SetBackdropColor(0, 0, 0, 0)
-    closeBtn:SetBackdropBorderColor(0, 0, 0, 0)
-    titleBox:Add(closeBtn, {
-        align = "end", valign = "center",
-        width = closeSize(), height = closeSize(), inset = { right = 6 },
-    })
-
-    local closeBox = SuuUI.Layout:CreateContainer({ host = closeBtn, layout = "stack" })
-    local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    closeText:SetText(CLOSE_GLYPH)
-    closeBox:Add(closeText, { align = "center", valign = "center" })
+    -- Button, not IconButton: the close mark is a text glyph, so it needs the label
+    -- pipeline that re-measures itself when a font token changes.
+    local closeBtn = C.Button({
+        label = CLOSE_GLYPH, w = closeSize(), h = closeSize(),
+        padX = CLOSE_GLYPH_PAD, padY = CLOSE_GLYPH_PAD,
+    }, titleStrip:GetFrame())
+    closeBtn:GetFrame():SetFrameLevel(f:GetFrameLevel() + 10)
+    titleBox:Add(closeBtn)
 
     -- Content area takes the remaining height
     local content = CreateFrame("Frame", nil, f)
@@ -274,11 +264,12 @@ function SuuUI.Layout:CreateWindow(props)
         _titleStrip= titleStrip,
         _titleBox  = titleBox,
         _drag      = drag,
-        _titleBar  = bar,
-        _titleText = title,
+        _titleT    = titleT,
         _closeBtn  = closeBtn,
-        _closeBox  = closeBox,
-        _closeText = closeText,
+        -- _titleText and _closeText stay the font strings so callers and specs reach the
+        -- same regions the components own.
+        _titleText = titleT:GetFrame(),
+        _closeText = closeBtn._label,
         _content   = content,
         _layer     = layer,
     }, WinMeta)
@@ -319,19 +310,7 @@ function SuuUI.Layout:CreateWindow(props)
         handle._gripBox = gripBox
     end
 
-    local T = SuuUI.Theme
-    closeBtn:SetScript("OnEnter", function()
-        local ac = T:GetToken("colorText")
-        if ac then closeText:SetTextColor(ac[1], ac[2], ac[3], ac[4]) end
-        local hov = T:GetToken("colorBgHover")
-        if hov then closeBtn:SetBackdropColor(hov[1], hov[2], hov[3], hov[4]) end
-    end)
-    closeBtn:SetScript("OnLeave", function()
-        closeBtn:SetBackdropColor(0, 0, 0, 0)
-        local mc = T:GetToken("colorTextMuted")
-        if mc then closeText:SetTextColor(mc[1], mc[2], mc[3], mc[4]) end
-    end)
-    closeBtn:SetScript("OnMouseUp", function() handle:Hide() end)
+    S:Connect(closeBtn, S.SIGNALS.CLICKED, function() handle:Hide() end)
 
     applyTheme(handle)
     f:Hide()

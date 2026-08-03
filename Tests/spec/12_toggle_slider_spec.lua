@@ -245,6 +245,54 @@ describe("Components.Slider", function()
         end)
     end)
 
+    describe("label re-measure on a font token change", function()
+        -- Below this font size the strip is floored at LABEL_MIN_H, so growing the font
+        -- resizes nothing. There is no resize hook to ride, and the label strings still
+        -- have to re-flow or the client draws them clipped.
+        local FLOOR_FONT, GROWN_FONT = 8, 11
+
+        local function tinySlider()
+            H.T:CreateUserTheme("Tiny", "Modern")
+            H.T:SetUserToken("Tiny", "fontSizeMd", FLOOR_FONT)
+            H.T:SetActive("Tiny")
+            local s = H.mount(H.C.Slider({ label = "Scale", value = 50, w = 200 }, host))
+            -- Settle both strings against the small font's metrics
+            s:SetSize(220, s:GetHeight())
+            return s
+        end
+
+        it("sits at the minimum strip height at both font sizes", function()
+            local s = tinySlider()
+            expect(H.lineHeight(GROWN_FONT)).as("still inside the floor").lte(LABEL_MIN_H)
+            H.expectSize(s, nil, LABEL_MIN_H + TRACK_AREA)
+            H.T:SetUserToken("Tiny", "fontSizeMd", GROWN_FONT)
+            H.expectSize(s, nil, LABEL_MIN_H + TRACK_AREA)
+        end)
+
+        it("re-measures the label so the taller glyphs are not clipped", function()
+            local s = tinySlider()
+            expect(s._labelText:GetHeight()).eq(H.lineHeight(FLOOR_FONT))
+            H.T:SetUserToken("Tiny", "fontSizeMd", GROWN_FONT)
+            expect(s._labelText:GetHeight()).eq(H.lineHeight(GROWN_FONT))
+            H.expectTextNotClipped(s._labelText)
+        end)
+
+        it("re-measures the value readout too", function()
+            local s = tinySlider()
+            H.T:SetUserToken("Tiny", "fontSizeMd", GROWN_FONT)
+            expect(s._valText:GetHeight()).eq(H.lineHeight(GROWN_FONT))
+            H.expectTextNotClipped(s._valText)
+        end)
+
+        it("keeps both strings inside the slider afterwards", function()
+            local s = tinySlider()
+            H.T:SetUserToken("Tiny", "fontSizeMd", GROWN_FONT)
+            H.expectInside(s._labelText, s:GetFrame())
+            H.expectInside(s._valText, s:GetFrame())
+            H.expectNoOverlap({ s._labelText, s._valText })
+        end)
+    end)
+
     describe("value clamping", function()
         it("clamps an out-of-range initial value up to min", function()
             expect(H.C.Slider({ min = 10, max = 20, value = -5 }, host):GetValue()).eq(10)
@@ -476,6 +524,26 @@ describe("Components.Slider", function()
             expect(lb.left).lte(vb.left)
             expect(vb.right).near(H.box(s).right, 0.5)
             expect(s._valText:GetJustifyH()).eq("RIGHT")
+        end)
+
+        it("emits VISIBILITY_CHANGED from Show and Hide", function()
+            local s = H.C.Slider({ label = "Scale" }, host)
+            local spy = H.signalSpy(s, H.S.SIGNALS.VISIBILITY_CHANGED)
+            s:Hide()
+            expect(spy:arg(1)).falsy()
+            expect(s:IsShown()).falsy()
+            s:Show()
+            expect(spy:arg(1)).truthy()
+            expect(spy.count).eq(2)
+        end)
+
+        it("emits SIZE_CHANGED once from an explicit resize", function()
+            local s = H.C.Slider({ label = "Scale" }, host)
+            local spy = H.signalSpy(s, H.S.SIGNALS.SIZE_CHANGED)
+            s:SetSize(240, s:GetHeight())
+            H.expectSize(s, 240, nil)
+            expect(spy.count).eq(1)
+            expect(spy:arg(1)).eq(240)
         end)
 
         it("unregisters its drag ticker on Destroy", function()

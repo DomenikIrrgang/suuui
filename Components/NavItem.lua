@@ -3,29 +3,16 @@ local S = SuuUI.UISignals
 local NavMeta = {}
 NavMeta.__index = NavMeta
 
-function NavMeta:GetWidth()     return self._f:GetWidth() end
-function NavMeta:GetHeight()    return self._f:GetHeight() end
-function NavMeta:IsShown()      return self._f:IsShown() end
-function NavMeta:GetFrame()     return self._f end
-
-function NavMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
-    S:Emit(self, S.SIGNALS.SIZE_CHANGED, w, h)
-end
-
-function NavMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function NavMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
+local function bgKeyFor(self)
+    if self._selected then return "colorBgActive" end
+    if self._hovered  then return "colorBgHover"  end
+    return "colorBg"
 end
 
 function NavMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._labelText:Destroy()
     self._box:Destroy()
     self._f:Hide()
 end
@@ -42,7 +29,7 @@ end
 --- Sets the label text.
 -- @param text string
 function NavMeta:SetLabel(text)
-    self._label:SetText(text)
+    self._labelText:SetText(text)
     S:Emit(self, S.SIGNALS.TEXT_CHANGED, text)
 end
 
@@ -57,36 +44,28 @@ end
 function NavMeta:SetSelected(selected)
     self._selected = selected == true
     self._hovered  = false
-    self:ApplyTheme()
+    self:_paint()
+end
+
+-- Surface, border and text colour only. Hover and selection changes take this path so
+-- a state flip never rebuilds the backdrop table. The colour token lives in Text.
+function NavMeta:_paint()
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, bgKeyFor(self))
+    B.SetBorder(self._f, "colorBorder")
+    self._labelText:SetColor(self._selected and "text" or "muted")
 end
 
 function NavMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bw = T:GetToken("borderWidth") or 1
-    local bgKey
-    if self._selected then
-        bgKey = "colorBgActive"
-    elseif self._hovered then
-        bgKey = "colorBgHover"
-    else
-        bgKey = "colorBg"
-    end
-    local bg = T:GetToken(bgKey)
-    local tc = T:GetToken(self._selected and "colorText" or "colorTextMuted")
-    local bd = T:GetToken("colorBorder")
-
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    if tc then self._label:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
-    self._label:SetFont(
-        T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeMd") or 13, "")
+    SuuUI.Backdrop.Apply(self._f, { bg = bgKeyFor(self), border = "colorBorder" })
+    -- The bus fires listeners newest-first, so Text's own subscription may not have run
+    -- yet. Apply it here; the box re-flows off the label's SIZE_CHANGED.
+    self._labelText:ApplyTheme()
+    self:_paint()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(NavMeta, "_f")
 
 --- Creates a selectable navigation row with a label.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
@@ -100,25 +79,39 @@ function SuuUI.Components.NavItem(props, parent)
     f:SetSize(props.w or 160, props.h or 32)
     f:EnableMouse(true)
 
+    -- Registered before the host container adopts the frame, so the container chains
+    -- onto this rather than replacing it.
+    local handle
+    f:SetScript("OnSizeChanged", function(_, w, h)
+        if not handle then return end
+        S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
+    end)
+
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
-    local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    label:SetJustifyH("LEFT")
-    label:SetText(props.label or "")
-    box:Add(label, {
+    -- Text owns the font and colour tokens and re-measures on a token change, which a
+    -- hand-rolled font string does not. The handle is added rather than its frame, so
+    -- the box re-flows off its SIZE_CHANGED instead of needing a manual Layout call.
+    local labelText = SuuUI.Components.Text({
+        text = props.label or "", size = "md", justify = "LEFT",
+        color = props.selected == true and "text" or "muted",
+    }, f)
+    box:Add(labelText, {
         valign = "center",
         inset  = { left = T:GetToken("spaceSm") or 8, right = T:GetToken("spaceXs") or 4 },
     })
 
     local id = "nav_" .. tostring(f)
-    local handle = setmetatable({
-        _f        = f,
-        _label    = label,
-        _box      = box,
-        _eid      = id,
-        _enabled  = true,
-        _selected = props.selected == true,
-        _hovered  = false,
+    handle = setmetatable({
+        _f         = f,
+        -- _label stays the font string so callers and specs reach the same region.
+        _label     = labelText:GetFrame(),
+        _labelText = labelText,
+        _box       = box,
+        _eid       = id,
+        _enabled   = true,
+        _selected  = props.selected == true,
+        _hovered   = false,
     }, NavMeta)
 
     f:SetScript("OnMouseUp", function(_, btn)
@@ -128,12 +121,12 @@ function SuuUI.Components.NavItem(props, parent)
     f:SetScript("OnEnter", function()
         if handle._enabled == false or handle._selected then return end
         handle._hovered = true
-        handle:ApplyTheme()
+        handle:_paint()
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
     end)
     f:SetScript("OnLeave", function()
         handle._hovered = false
-        handle:ApplyTheme()
+        handle:_paint()
         S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
     end)
 

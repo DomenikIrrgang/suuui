@@ -10,29 +10,6 @@ local variantMap = {
 local FrameMeta = {}
 FrameMeta.__index = FrameMeta
 
-function FrameMeta:GetWidth()      return self._f:GetWidth() end
-function FrameMeta:GetHeight()     return self._f:GetHeight() end
-function FrameMeta:IsShown()       return self._f:IsShown() end
-function FrameMeta:GetFrame()      return self._f end
-
---- Resizes the frame. SIZE_CHANGED comes from the frame's own resize hook, so an
---- explicit resize and a layout-driven one behave identically.
--- @param w number
--- @param h number
-function FrameMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
-end
-
-function FrameMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function FrameMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
-end
-
 --- Enables or disables the frame. Emits ENABLED_CHANGED.
 -- @param en bool
 function FrameMeta:SetEnabled(en)
@@ -61,31 +38,16 @@ function FrameMeta:Destroy()
 end
 
 function FrameMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bw = T:GetToken("borderWidth") or 1
-    self._f:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = bw,
-        insets   = { left=bw, right=bw, top=bw, bottom=bw },
-    })
-
     local bgKey = variantMap[self._variant]
     if self._enabled == false then bgKey = "colorBgDisabled" end
-    local bg = bgKey and T:GetToken(bgKey)
-    if bg then
-        self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
-    else
-        self._f:SetBackdropColor(0, 0, 0, 0)
-    end
-
-    if self._border == false then
-        self._f:SetBackdropBorderColor(0, 0, 0, 0)
-    else
-        local bd = T:GetToken("colorBorder")
-        if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    end
+    SuuUI.Backdrop.Apply(self._f, {
+        bg     = bgKey,
+        border = self._border ~= false and "colorBorder" or false,
+    })
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(FrameMeta, "_f")
 
 --- Creates a styled frame container.
 -- @param props table  { w, h, alpha, variant, border }

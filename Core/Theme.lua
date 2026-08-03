@@ -202,12 +202,10 @@ function M:SetUserToken(themeName, key, value)
 end
 
 --- Applies bg and border tokens to a raw WoW frame.
+-- Resolved at call time: Components/Backdrop.lua loads after this file.
 -- @param frame frame
 function M:ApplyToFrame(frame)
-    local bg = resolved.colorBg
-    if bg then frame:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    local bd = resolved.colorBorder
-    if bd then frame:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+    SuuUI.Backdrop.Apply(frame, { bg = "colorBg", border = "colorBorder" })
 end
 
 --- Initialises theme system; called after profiles are ready.

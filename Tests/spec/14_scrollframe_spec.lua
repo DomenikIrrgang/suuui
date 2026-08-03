@@ -7,8 +7,13 @@ describe("Components.ScrollFrame", function()
         host = H.parent(400, 400)
     end)
 
-    -- The bar occupies its token width plus the 2px inset it sits in.
-    local function gutter() return H.token("sizeScrollbar") + 2 end
+    -- The bar occupies its token width, the border inset it sits in, and a 1px gap
+    -- keeping it clear of the viewport. The gap has no matching space token.
+    local BAR_GAP = 1
+    local function gutter() return H.token("sizeScrollbar") + H.token("borderWidth") + BAR_GAP end
+
+    -- Vertical inset of the track inside the frame. Smaller than any space token.
+    local TRACK_INSET_Y = 2
 
     local function scroller(w, h)
         return H.mount(H.C.ScrollFrame({ w = w or 200, h = h or 300 }, host))
@@ -26,15 +31,52 @@ describe("Components.ScrollFrame", function()
 
         it("sizes the bar track from the sizeScrollbar token", function()
             local s = scroller()
-            H.expectSize(s._track, H.token("sizeScrollbar"), 300 - 4)
+            H.expectSize(s._track, H.token("sizeScrollbar"), 300 - TRACK_INSET_Y * 2)
         end)
 
-        it("pins the track to the right edge with a 1px inset", function()
+        it("insets the track from the right edge by the borderWidth token", function()
             local s = scroller()
             s:SetContentHeight(900)
             local sb, tb = H.box(s), H.box(s._track)
-            expect(tb.right).eq(sb.right - 1)
-            expect(tb.top).eq(sb.top + 2)
+            expect(tb.right).eq(sb.right - H.token("borderWidth"))
+            expect(tb.top).eq(sb.top + TRACK_INSET_Y)
+        end)
+
+        it("follows the borderWidth token when it changes", function()
+            local s = scroller()
+            s:SetContentHeight(900)
+            H.T:CreateUserTheme("Thick", "Modern")
+            H.T:SetUserToken("Thick", "borderWidth", 4)
+            H.T:SetActive("Thick")
+            local sb, tb = H.box(s), H.box(s._track)
+            expect(tb.right).as("the track rides the border inset").eq(sb.right - 4)
+            expect(s:GetContentWidth())
+                .as("the gutter widens with the inset").eq(200 - (H.token("sizeScrollbar") + 4 + BAR_GAP))
+        end)
+
+        it("styles the track and thumb from the surface tokens", function()
+            local s = scroller()
+            H.expectTokenColor(H.backdropColor(s._track), "colorBgAlt")
+            H.expectTokenColor(H.borderColor(s._track), "colorBorder")
+            H.expectTokenColor(H.backdropColor(s._thumb), "colorAccent")
+            H.expectTokenColor(H.borderColor(s._thumb), "colorBorder")
+        end)
+
+        it("derives the backdrop insets from the borderWidth token", function()
+            local s = scroller()
+            local bw = H.token("borderWidth")
+            expect(s._track:GetBackdrop().insets)
+                .deepEq({ left = bw, right = bw, top = bw, bottom = bw })
+            expect(s._thumb:GetBackdrop().edgeSize).eq(bw)
+        end)
+
+        it("re-tints the thumb when the accent primitive changes", function()
+            local s = scroller()
+            H.T:CreateUserTheme("Loud", "Modern")
+            H.T:SetUserToken("Loud", "colorBlue400", { 1, 0, 1, 1 })
+            H.T:SetActive("Loud")
+            expect(H.backdropColor(s._thumb)).deepEq({ 1, 0, 1, 1 })
+            H.expectTokenColor(H.backdropColor(s._thumb), "colorAccent")
         end)
 
         it("re-applies a changed bar width token", function()
@@ -324,6 +366,27 @@ describe("Components.ScrollFrame", function()
         it("treats SetEnabled as a no-op", function()
             local s = scroller()
             expect(function() s:SetEnabled(false) end).notThrows()
+        end)
+
+        it("keeps the standard accessors and reports visibility", function()
+            local s = scroller(200, 300)
+            local spy = H.signalSpy(s, H.S.SIGNALS.VISIBILITY_CHANGED)
+            expect(s:GetFrame()).eq(s._f)
+            expect(s:GetWidth()).eq(200)
+            expect(s:GetHeight()).eq(300)
+            s:Hide()
+            expect(s:IsShown()).falsy()
+            s:Show()
+            expect(spy.count).eq(2)
+            expect(spy:arg(1)).truthy()
+        end)
+
+        it("reports an explicit SetSize through the frame's resize hook", function()
+            local s = scroller(200, 300)
+            local spy = H.signalSpy(s, H.S.SIGNALS.SIZE_CHANGED)
+            s:SetSize(260, 200)
+            H.expectSize(s, 260, 200)
+            expect(spy.count).as("the resize hook reports it, not SetSize").gte(1)
         end)
 
         it("drops its drag ticker on Destroy", function()

@@ -12,11 +12,6 @@ local variantToken = {
 local BtnMeta = {}
 BtnMeta.__index = BtnMeta
 
-function BtnMeta:GetWidth()      return self._f:GetWidth() end
-function BtnMeta:GetHeight()     return self._f:GetHeight() end
-function BtnMeta:IsShown()       return self._f:IsShown() end
-function BtnMeta:GetFrame()      return self._f end
-
 --- Sets an explicit size, dropping auto-sizing on both axes.
 -- SIZE_CHANGED comes from the frame's resize hook, so layout-driven and explicit
 -- resizes behave identically.
@@ -25,16 +20,6 @@ function BtnMeta:GetFrame()      return self._f end
 function BtnMeta:SetSize(w, h)
     self._autoW, self._autoH = false, false
     self._f:SetSize(w, h)
-end
-
-function BtnMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function BtnMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 function BtnMeta:Destroy()
@@ -106,23 +91,30 @@ function BtnMeta:SetEnabled(en)
     S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
 end
 
+-- Surface, border and label colour for the resting state. Hover, press and disabled
+-- changes take this path so a state flip never rebuilds the backdrop table.
+function BtnMeta:_paint()
+    local B  = SuuUI.Backdrop
+    local en = self._enabled ~= false
+    local vk = en and variantToken[self._variant] or nil
+    B.SetBg(self._f, en and "colorBgAlt" or "colorBgDisabled")
+    B.SetBorder(self._f, vk or "colorBorder")
+    local tc = SuuUI.Theme:GetToken(not en and "colorTextDisabled" or (vk or "colorText"))
+    if tc then self._label:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
+end
+
 function BtnMeta:ApplyTheme()
     local T   = SuuUI.Theme
     local en  = self._enabled ~= false
-    local bg  = T:GetToken(en and "colorBgAlt" or "colorBgDisabled")
     local vk  = en and variantToken[self._variant] or nil
-    local bd  = T:GetToken(vk or "colorBorder")
     local bw  = T:GetToken("borderWidth") or 1
-    local tc  = T:GetToken(not en and "colorTextDisabled" or (vk or "colorText"))
     local font= T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local sz  = T:GetToken("fontSizeMd") or 13
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
+    SuuUI.Backdrop.Apply(self._f, {
+        bg     = en and "colorBgAlt" or "colorBgDisabled",
+        border = vk or "colorBorder",
     })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    if tc then self._label:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
+    self:_paint()
     self._label:SetFont(font, sz, "")
 
     -- Padding is token-driven and text metrics move with the font tokens, so both are
@@ -132,6 +124,10 @@ function BtnMeta:ApplyTheme()
     self._padY = self._padYProp or (T:GetToken("spaceXs") or 4) + bw
     self:_autosize()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
+-- above and survives: it has to clear the autosize flags.
+SuuUI.Components.InstallBase(BtnMeta, "_f")
 
 --- Creates a fully custom styled button that hugs its label.
 -- Width and height are measured from the text plus token padding unless w/h are
@@ -182,31 +178,27 @@ function SuuUI.Components.Button(props, parent)
 
     box:Add(lbl, handle._lblProps)
 
-    local T = SuuUI.Theme
+    local B = SuuUI.Backdrop
     f:SetScript("OnEnter", function()
         if handle._enabled == false then return end
-        local c = T:GetToken("colorBgHover")
-        if c then f:SetBackdropColor(c[1], c[2], c[3], c[4]) end
-        local ac = T:GetToken(variantToken[handle._variant] or "colorBorderFocus")
-        if ac then f:SetBackdropBorderColor(ac[1], ac[2], ac[3], ac[4]) end
+        B.SetBg(f, "colorBgHover")
+        B.SetBorder(f, variantToken[handle._variant] or "colorBorderFocus")
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
     end)
     f:SetScript("OnLeave", function()
-        handle:ApplyTheme()
+        handle:_paint()
         S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
     end)
     f:SetScript("OnMouseDown", function()
         if handle._enabled == false then return end
-        local c = T:GetToken("colorBgPressed")
-        if c then f:SetBackdropColor(c[1], c[2], c[3], c[4]) end
+        B.SetBg(f, "colorBgPressed")
         -- Pressed deepens the accent border, distinguishing it from hover
-        local ac = T:GetToken(variantToken[handle._variant] or "colorAccentHover")
-        if ac then f:SetBackdropBorderColor(ac[1], ac[2], ac[3], ac[4]) end
+        B.SetBorder(f, variantToken[handle._variant] or "colorAccentHover")
         SuuUI.Anim.Presets.ScalePop(f)
     end)
     f:SetScript("OnMouseUp", function(_, btn)
         if handle._enabled == false then return end
-        handle:ApplyTheme()
+        handle:_paint()
         if props.onClick then props.onClick() end
         S:Emit(handle, S.SIGNALS.CLICKED, btn or "LeftButton")
     end)

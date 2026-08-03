@@ -6,11 +6,6 @@ local S = SuuUI.UISignals
 local SwMeta = {}
 SwMeta.__index = SwMeta
 
-function SwMeta:GetWidth()     return self._f:GetWidth() end
-function SwMeta:GetHeight()    return self._f:GetHeight() end
-function SwMeta:IsShown()      return self._f:IsShown() end
-function SwMeta:GetFrame()     return self._f end
-
 --- Sets an explicit size, dropping token-driven sizing.
 -- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
@@ -18,16 +13,6 @@ function SwMeta:GetFrame()     return self._f end
 function SwMeta:SetSize(w, h)
     self._autoSize = false
     self._f:SetSize(w, h)
-end
-
-function SwMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function SwMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
 function SwMeta:Destroy()
@@ -73,6 +58,14 @@ function SwMeta:ApplyTheme()
     local bd = T:GetToken("colorBorder")
     if bd then self._border:SetColorTexture(bd[1], bd[2], bd[3], bd[4]) end
 
+    -- The visible border is the colour texture showing through the inset, so the inset
+    -- is the border width token rather than a pixel literal.
+    local bw = T:GetToken("borderWidth") or 1
+    if self._swatchProps.inset ~= bw then
+        self._swatchProps.inset = bw
+        self._box:SetChildProps(self._swatch, self._swatchProps)
+    end
+
     -- A swatch holds no text, so its size comes straight from the token rather than
     -- being floored against the font size.
     if self._autoSize then
@@ -82,6 +75,10 @@ function SwMeta:ApplyTheme()
         end
     end
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
+-- above and survives: it has to clear the token-sizing flag.
+SuuUI.Components.InstallBase(SwMeta, "_f")
 
 --- Creates a clickable colour swatch.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
@@ -112,7 +109,8 @@ function SuuUI.Components.ColorSwatch(props, parent)
 
     local swatch = f:CreateTexture(nil, "ARTWORK")
     swatch:SetColorTexture(col[1], col[2], col[3], col[4] or 1)
-    box:Add(swatch, { inset = 1 })
+    local swatchProps = { inset = SuuUI.Theme:GetToken("borderWidth") or 1 }
+    box:Add(swatch, swatchProps)
 
     local id = "swatch_" .. tostring(f)
     handle = setmetatable({
@@ -120,6 +118,7 @@ function SuuUI.Components.ColorSwatch(props, parent)
         _swatch  = swatch,
         _border  = border,
         _box     = box,
+        _swatchProps = swatchProps,
         _eid     = id,
         _enabled = true,
         _autoSize = props.w == nil and props.h == nil,

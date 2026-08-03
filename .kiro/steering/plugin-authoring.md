@@ -515,6 +515,13 @@ Inside it, lay out the parts with a host container
 (`CreateContainer{ host = f, layout = "stack" }`) — a component never calls `SetPoint`
 either.
 
+Follow **"Anatomy of a Component" in `coding-standards.md`**: it has the annotated
+skeleton every existing component is built from, so a new one comes out in the same
+style. In short — backdrops through `SuuUI.Backdrop`, text through `Components.Text`,
+accessors through `SuuUI.Components.InstallBase`, internals through a host container,
+Blizzard scripts translated into signals, and compose the components that already exist
+instead of rebuilding their parts.
+
 ---
 
 ## Component Signals

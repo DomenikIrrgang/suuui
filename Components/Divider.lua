@@ -3,56 +3,44 @@ local S = SuuUI.UISignals
 local DivMeta = {}
 DivMeta.__index = DivMeta
 
-function DivMeta:GetWidth()     return self._f:GetWidth() end
-function DivMeta:GetHeight()    return self._f:GetHeight() end
-function DivMeta:IsShown()      return self._f:IsShown() end
-function DivMeta:GetFrame()     return self._f end
 function DivMeta:SetEnabled()   end
-
---- Resizes the divider. SIZE_CHANGED comes from the frame's resize hook.
--- @param w number
--- @param h number
-function DivMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
-end
-
-function DivMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function DivMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
-end
 
 function DivMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._labelText then self._labelText:Destroy() end
     self._box:Destroy()
 end
 
 --- Sets the divider's label text.
 -- @param text string
 function DivMeta:SetText(text)
-    if self._label then
-        self._label:SetText(text)
+    if self._labelText then
+        self._labelText:SetText(text)
+        -- This label is centred, so its width is its own rather than assigned by the
+        -- layout, and Text only emits SIZE_CHANGED when its *height* changes. New text
+        -- of the same height is therefore invisible to the box: re-run it by hand or the
+        -- client keeps the previous string's width and clips. Adding the handle instead
+        -- of the region would not help here, for the same reason.
+        self._box:Layout()
         S:Emit(self, S.SIGNALS.TEXT_CHANGED, text)
     end
 end
 
 function DivMeta:ApplyTheme()
-    local T = SuuUI.Theme
-    local c = T:GetToken("colorBorder")
+    local c = SuuUI.Theme:GetToken("colorBorder")
     if c then self._line:SetColorTexture(c[1], c[2], c[3], c[4]) end
-    if self._label then
-        local tc = T:GetToken("colorTextMuted")
-        if tc then self._label:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
-        self._label:SetFont(
-            T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-            T:GetToken("fontSizeSm") or 11, "")
+    if self._labelText then
+        -- Applied here rather than left to Text's own subscription: the bus fires
+        -- listeners newest-first, so the divider would otherwise lay out against the
+        -- previous font. The centred label owns its width, so re-run the box by hand.
+        self._labelText:ApplyTheme()
+        self._box:Layout()
     end
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(DivMeta, "_f")
 
 --- Creates a horizontal or vertical divider line.
 -- Emits SIZE_CHANGED, VISIBILITY_CHANGED, TEXT_CHANGED.
@@ -61,8 +49,9 @@ end
 -- @return table  Divider handle
 function SuuUI.Components.Divider(props, parent)
     local vertical = props.dir == "vertical"
-    local w = props.w or (vertical and 1 or 200)
-    local h = props.h or (vertical and 20 or 1)
+    local thickness = SuuUI.Theme:GetToken("borderWidth") or 1
+    local w = props.w or (vertical and thickness or 200)
+    local h = props.h or (vertical and 20 or thickness)
 
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(w, h)
@@ -80,20 +69,30 @@ function SuuUI.Components.Divider(props, parent)
     -- The line spans one axis and is centred on the other
     local line = f:CreateTexture(nil, "ARTWORK")
     if vertical then
-        box:Add(line, { align = "center", width = 1 })
+        box:Add(line, { align = "center", width = thickness })
     else
-        box:Add(line, { valign = "center", height = 1 })
+        box:Add(line, { valign = "center", height = thickness })
     end
 
-    local labelFs
+    -- Text owns the font and colour tokens and re-measures on a token change, which a
+    -- hand-rolled font string does not.
+    local labelText
     if props.label and props.label ~= "" then
-        labelFs = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        labelFs:SetText(props.label)
-        box:Add(labelFs, { align = "center", valign = "center" })
+        labelText = SuuUI.Components.Text({ text = props.label, size = "sm",
+                                            color = "muted", justify = "CENTER" }, f)
+        box:Add(labelText:GetFrame(), { align = "center", valign = "center" })
     end
 
     local id = "div_" .. tostring(f)
-    handle = setmetatable({ _f=f, _line=line, _label=labelFs, _box=box, _eid=id }, DivMeta)
+    handle = setmetatable({
+        _f     = f,
+        _line  = line,
+        -- _label stays the font string so callers and specs reach the same region.
+        _label = labelText and labelText:GetFrame() or nil,
+        _labelText = labelText,
+        _box   = box,
+        _eid   = id,
+    }, DivMeta)
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle

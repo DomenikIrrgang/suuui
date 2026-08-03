@@ -8,19 +8,9 @@ local ignored = {
 local KeyMeta = {}
 KeyMeta.__index = KeyMeta
 
-function KeyMeta:GetWidth()     return self._btn:GetWidth() end
-function KeyMeta:GetHeight()    return self._btn:GetHeight() end
-function KeyMeta:IsShown()      return self._btn:IsShown() end
+-- The handle wraps a Button handle rather than a frame, so GetFrame has to reach one
+-- level further than the installed accessor would.
 function KeyMeta:GetFrame()     return self._btn:GetFrame() end
-
-function KeyMeta:SetSize(w, h)
-    self._btn:SetSize(w, h)
-end
-
-function KeyMeta:Show()
-    self._btn:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
 
 function KeyMeta:Hide()
     self:_stop()
@@ -65,6 +55,10 @@ function KeyMeta:_stop()
     self._catcher:EnableKeyboard(false)
     self._catcher:Hide()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, SetSize, Show against the wrapped Button
+-- handle. GetFrame and Hide are defined above and survive.
+SuuUI.Components.InstallBase(KeyMeta, "_btn")
 
 --- Creates a keybind capture control: a button that listens for the next keypress.
 -- Emits VALUE_CHANGED (newBind, oldBind), CLICKED.

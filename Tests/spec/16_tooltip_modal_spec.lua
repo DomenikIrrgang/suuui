@@ -2,6 +2,11 @@ local H = require("harness")
 
 describe("Components.Tooltip", function()
     local host
+    -- Vertical padding around the tip text. Tighter than any space token, so the
+    -- component keeps it as a named constant and so does the spec.
+    local PAD_Y = 10
+    local function padX() return H.token("spaceSm") * 2 end
+
     before_each(function()
         H.setup()
         host = H.parent(300, 200)
@@ -31,25 +36,27 @@ describe("Components.Tooltip", function()
         local tip = H.C.Tooltip({}, host)
         tip:ShowTip("Hello")
         local size = H.token("fontSizeSm")
-        H.expectSize(tip, H.textWidth("Hello", size) + 16, H.lineHeight(size) + 10)
+        H.expectSize(tip, H.textWidth("Hello", size) + padX(), H.lineHeight(size) + PAD_Y)
     end)
 
-    it("anchors above a trigger frame with 4px of clearance", function()
+    it("anchors above a trigger frame with spaceXs of clearance", function()
         local trigger = H.parent(60, 20)
         local tip = H.C.Tooltip({}, host)
         tip:ShowTip("Info", trigger)
         local tb, tipBox = H.box(trigger), H.box(tip)
-        expect(tipBox.bottom).as("bottom of tip meets top of trigger").eq(tb.top - 4)
+        expect(tipBox.bottom).as("bottom of tip meets top of trigger")
+            .eq(tb.top - H.token("spaceXs"))
         H.expectCenteredH(tip, trigger)
     end)
 
-    it("follows the cursor with a 12px offset when no trigger is given", function()
+    it("follows the cursor with a spaceMd offset when no trigger is given", function()
         local tip = H.C.Tooltip({}, host)
         H.cursor(400, 300)
         tip:ShowTip("Follow")
+        local off = H.token("spaceMd")
         local box = H.box(tip)
-        expect(box.left).eq(412)
-        expect(H.state.screenHeight - box.bottom).eq(312)
+        expect(box.left).eq(400 + off)
+        expect(H.state.screenHeight - box.bottom).eq(300 + off)
     end)
 
     it("fades in to full opacity", function()
@@ -123,7 +130,7 @@ describe("Components.Tooltip", function()
         H.cursor(500, 400)
         tip:ShowTip("Two")
         expect(tip:GetFrame():GetNumPoints()).eq(1)
-        expect(H.box(tip).left).eq(512)
+        expect(H.box(tip).left).eq(500 + H.token("spaceMd"))
     end)
 
     it("grows to fit a longer second tip", function()
@@ -133,9 +140,54 @@ describe("Components.Tooltip", function()
         local size = H.token("fontSizeSm")
         local long = "a considerably longer tooltip caption than the first"
         tip:ShowTip("short")
-        H.expectSize(tip, H.textWidth("short", size) + 16, nil)
+        H.expectSize(tip, H.textWidth("short", size) + padX(), nil)
         tip:ShowTip(long)
-        H.expectSize(tip, H.textWidth(long, size) + 16, nil)
+        H.expectSize(tip, H.textWidth(long, size) + padX(), nil)
+    end)
+
+    it("draws its text uncut at the size it settles on", function()
+        local tip = H.C.Tooltip({}, host)
+        tip:ShowTip("a caption that must render in full")
+        H.expectTextNotClipped(tip._text)
+    end)
+
+    it("re-measures and regrows when the fontSizeSm token changes", function()
+        -- The Text component owns the font token and re-measures on a change; the tip
+        -- reads the new metrics back so a bigger font is not clipped by a stale box.
+        local tip = H.C.Tooltip({}, host)
+        tip:ShowTip("Resizable caption")
+        local before = H.box(tip)
+
+        H.T:CreateUserTheme("Big", "Modern")
+        H.T:SetUserToken("Big", "fontSizeSm", H.token("fontSizeSm") * 2)
+        H.T:SetActive("Big")
+
+        local size = H.token("fontSizeSm")
+        H.expectSize(tip, H.textWidth("Resizable caption", size) + padX(),
+                          H.lineHeight(size) + PAD_Y)
+        expect(H.box(tip).width).as("a bigger font needs a wider tip").gt(before.width)
+        expect(H.box(tip).height).gt(before.height)
+        H.expectTextNotClipped(tip._text)
+    end)
+
+    it("keeps the surface tokens across a theme change", function()
+        local tip = H.C.Tooltip({}, host)
+        tip:ShowTip("Themed")
+        H.expectTokenColor(H.backdropColor(tip), "colorBg")
+        H.expectTokenColor(H.borderColor(tip), "colorBorder")
+        H.T:SetActive("Default")
+        H.expectTokenColor(H.backdropColor(tip), "colorBg")
+        H.expectTokenColor(H.borderColor(tip), "colorBorder")
+        H.expectTokenColor(H.textColor(tip._text), "colorText")
+    end)
+
+    it("emits SIZE_CHANGED from an explicit SetSize", function()
+        local tip = H.C.Tooltip({}, host)
+        local spy = H.signalSpy(tip, H.S.SIGNALS.SIZE_CHANGED)
+        tip:SetSize(200, 40)
+        H.expectSize(tip, 200, 40)
+        expect(spy.count).eq(1)
+        expect(spy:arg(1)).eq(200)
     end)
 
     it("drops its frame from the shared host on Destroy but leaves the host", function()
@@ -211,10 +263,42 @@ describe("Components.Modal", function()
             H.expectTokenColor(H.borderColor(m), "colorBorder")
         end)
 
-        it("has no SetSize or SetEnabled, being a composed dialog", function()
+        it("derives the window backdrop insets from the borderWidth token", function()
             local m = H.C.Modal({ title = "T" })
-            expect(m.SetSize).isNil()
-            expect(m.SetEnabled).isNil()
+            local bw = H.token("borderWidth")
+            expect(m:GetFrame():GetBackdrop().edgeSize).eq(bw)
+            expect(m:GetFrame():GetBackdrop().insets)
+                .deepEq({ left = bw, right = bw, top = bw, bottom = bw })
+        end)
+
+        it("follows the borderWidth token when the theme changes it", function()
+            local m = H.C.Modal({ title = "T" })
+            H.T:CreateUserTheme("Thick", "Modern")
+            H.T:SetUserToken("Thick", "borderWidth", 3)
+            H.T:SetActive("Thick")
+            expect(m:GetFrame():GetBackdrop().edgeSize).eq(3)
+        end)
+
+        it("has no SetEnabled, being a composed dialog", function()
+            local m = H.C.Modal({ title = "T" })
+            expect(m.SetEnabled).as("nothing about a dialog is enabled or disabled").isNil()
+        end)
+
+        it("reads its geometry and visibility off the window", function()
+            local m = H.C.Modal({ title = "T" })
+            expect(m:GetFrame()).eq(m._window)
+            expect(m:GetWidth()).eq(m._window:GetWidth())
+            expect(m:GetHeight()).eq(m._window:GetHeight())
+            expect(m:IsShown()).falsy()
+        end)
+
+        it("keeps the width it was composed at when SetSize is called", function()
+            -- Modal shares the standard accessors, so SetSize reaches the window. The
+            -- shell still owns the width it was composed at, and re-asserts it as soon
+            -- as the resize re-runs the content layout. Pinned so a change is visible.
+            local m = H.C.Modal({ title = "T", w = 400 })
+            m:SetSize(500, 200)
+            H.expectSize(m, 400, 200)
         end)
     end)
 

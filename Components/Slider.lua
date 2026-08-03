@@ -9,6 +9,8 @@ local THUMB_SIZE  = 12
 local TRACK_AREA  = 22
 local LABEL_MIN_H = 14
 local RING_WIDTH  = 1
+-- Width of the value readout column. No space or size token matches it.
+local VAL_W       = 40
 local WHITE       = "Interface\\Buttons\\WHITE8x8"
 local CIRCLE_MASK = "Interface\\Minimap\\UI-Minimap-Background"
 
@@ -28,25 +30,6 @@ end
 
 local SldMeta = {}
 SldMeta.__index = SldMeta
-
-function SldMeta:GetWidth()     return self._f:GetWidth() end
-function SldMeta:GetHeight()    return self._f:GetHeight() end
-function SldMeta:IsShown()      return self._f:IsShown() end
-function SldMeta:GetFrame()     return self._f end
-
-function SldMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
-end
-
-function SldMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function SldMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
-end
 
 function SldMeta:Destroy()
     S:DisconnectAll(self)
@@ -101,22 +84,17 @@ function SldMeta:_render()
     if bg then self._trackBg:SetColorTexture(bg[1], bg[2], bg[3], bg[4]) end
 
     local disp = (self._step >= 1) and floor(self._value) or self._value
-    self._valText:SetText(tostring(disp))
+    self._valT:SetText(tostring(disp))
 end
 
 function SldMeta:ApplyTheme()
     self:_render()
-    local T  = SuuUI.Theme
-    local tc = T:GetToken("colorText")
-    local f  = T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
-    -- Primary label, same weight as every other row label (C.Text size "md")
-    local sz = T:GetToken("fontSizeMd") or 13
-    if tc then
-        self._labelText:SetTextColor(tc[1], tc[2], tc[3], tc[4])
-        self._valText:SetTextColor(tc[1], tc[2], tc[3], tc[4])
-    end
-    self._labelText:SetFont(f, sz, "")
-    self._valText:SetFont(f, sz, "")
+    -- Both strips are Text components, so they own the font and colour tokens. They are
+    -- applied here rather than left to their own theme handler because the event bus
+    -- fires listeners newest-first: the slider would otherwise measure the label strip
+    -- against the previous font.
+    self._labelT:ApplyTheme()
+    self._valT:ApplyTheme()
     self:_resizeLabelStrip()
 end
 
@@ -124,12 +102,15 @@ end
 -- slider itself. Changing the frame height fires OnSizeChanged, which re-renders and
 -- emits SIZE_CHANGED so the containing layout re-flows.
 function SldMeta:_resizeLabelStrip()
-    local h = ceil(max(LABEL_MIN_H, self._labelText:GetStringHeight() or 0))
+    local h = ceil(max(LABEL_MIN_H, self._labelT:GetHeight() or 0))
     if h == self._labelH then return end
     self._labelH = h
     self._box:SetChildProps(self._labelRow, { width = "fill", height = h })
     self._f:SetHeight(h + TRACK_AREA)
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(SldMeta, "_f")
 
 --- Creates a custom slider.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, SIZE_CHANGED.
@@ -163,15 +144,16 @@ function SuuUI.Components.Slider(props, parent)
     })
 
     local labelRow = SuuUI.Layout:CreateContainer({
-        parent = f, layout = "flow", dir = "horizontal", gap = 4, h = LABEL_MIN_H,
+        parent = f, layout = "flow", dir = "horizontal",
+        gap = SuuUI.Theme:GetToken("spaceXs") or 4, h = LABEL_MIN_H,
     })
-    local labelText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    labelText:SetText(props.label or "")
-    labelText:SetJustifyH("LEFT")
-    local valText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    valText:SetJustifyH("RIGHT")
-    labelRow:Add(labelText, { width = "fill" })
-    labelRow:Add(valText, { width = 40 })
+    -- Text owns the font and colour tokens and re-measures itself when they change,
+    -- which a hand-rolled font string does not. The handles are added to the row so the
+    -- row re-flows off their SIZE_CHANGED rather than only when something resizes it.
+    local labelT = SuuUI.Components.Text({ text = props.label or "", justify = "LEFT" }, f)
+    local valT   = SuuUI.Components.Text({ justify = "RIGHT" }, f)
+    labelRow:Add(labelT, { width = "fill" })
+    labelRow:Add(valT, { width = VAL_W })
     box:Add(labelRow, { width = "fill", height = LABEL_MIN_H })
 
     -- Track strip: a stack container inset horizontally, holding the 4px track
@@ -228,7 +210,10 @@ function SuuUI.Components.Slider(props, parent)
         _trackBg=trackBg, _fill=fill, _hit=hit,
         _thumb=thumb, _thumbBox=thumbBox, _thumbRing=thumbRing, _thumbDot=thumbDot,
         _fillAnchor=fillAnchor, _thumbAnchor=thumbAnchor,
-        _labelText=labelText, _valText=valText,
+        -- _labelText and _valText stay the font strings so callers and specs reach the
+        -- same regions; _labelT and _valT are the Text handles that own them.
+        _labelT=labelT, _valT=valT,
+        _labelText=labelT:GetFrame(), _valText=valT:GetFrame(),
         _labelRow=labelRow, _labelH=LABEL_MIN_H,
         _eid=id, _value=val, _vmin=vmin, _vmax=vmax, _step=step,
         _onChange=props.onChange, _enabled=true,

@@ -1,6 +1,10 @@
 local ipairs = ipairs
 local S = SuuUI.UISignals
 
+-- Horizontal breathing room inside the button and inside an option row. No space token
+-- is 6px, so this stays a literal rather than moving the geometry onto spaceXs/spaceSm.
+local TEXT_INSET = 6
+
 -- Option rows hold text, so their height is floored against the font size token.
 local function rowHeight()
     return SuuUI.Theme:GetControlHeight("sizeControlMd")
@@ -9,11 +13,6 @@ end
 local DdMeta = {}
 DdMeta.__index = DdMeta
 
-function DdMeta:GetWidth()     return self._f:GetWidth() end
-function DdMeta:GetHeight()    return self._f:GetHeight() end
-function DdMeta:IsShown()      return self._f:IsShown() end
-function DdMeta:GetFrame()     return self._f end
-
 --- Sets an explicit size, dropping token-driven height.
 -- SIZE_CHANGED comes from the frame's resize hook.
 -- @param w number
@@ -21,11 +20,6 @@ function DdMeta:GetFrame()     return self._f end
 function DdMeta:SetSize(w, h)
     self._autoH = false
     self._f:SetSize(w, h)
-end
-
-function DdMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
 end
 
 function DdMeta:Hide()
@@ -38,6 +32,13 @@ function DdMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     self._box:Destroy()
+    -- Pooled rows are not the row list's to free: it holds raw frames, so their own
+    -- boxes and label handles have to be released here or they keep a theme
+    -- subscription alive for the lifetime of the session.
+    for _, row in ipairs(self._rows) do
+        row._box:Destroy()
+        row._lblT:Destroy()
+    end
     self._rowList:Destroy()
     -- The floating host is shared: drop our panel, never destroy the host
     self._panelHost:Remove(self._panel)
@@ -68,7 +69,7 @@ function DdMeta:SetValue(value)
     self._value = value
     for _, opt in ipairs(self._options) do
         if opt.value == value then
-            self._selText:SetText(opt.label)
+            self._selT:SetText(opt.label)
             return
         end
     end
@@ -91,50 +92,39 @@ end
 
 -- Builds or reuses one option row inside the row list container
 function DdMeta:_row(index, opt)
-    local T   = SuuUI.Theme
-    local bg  = T:GetToken("colorBgAlt")
-    local bd  = T:GetToken("colorBorder")
-    local bw  = T:GetToken("borderWidth") or 1
+    local B = SuuUI.Backdrop
 
     local row = self._rows[index]
     if not row then
         row = CreateFrame("Frame", nil, self._panel, "BackdropTemplate")
         row:EnableMouse(true)
         row._box = SuuUI.Layout:CreateContainer({ host = row, layout = "stack" })
-        row._lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row._box:Add(row._lbl, { valign = "center", inset = { left = 6, right = 6 } })
+        -- One Text handle per pooled row, reused as the option list is rebuilt, so a
+        -- rebuild never accumulates handles. _lbl stays the font string other code and
+        -- the specs reach for.
+        row._lblT = SuuUI.Components.Text({ justify = "LEFT" }, row)
+        row._lbl  = row._lblT:GetFrame()
+        row._box:Add(row._lblT, {
+            valign = "center",
+            inset  = { left = TEXT_INSET, right = TEXT_INSET },
+        })
         self._rows[index] = row
         self._rowList:Add(row, { width = "fill", height = rowHeight() })
     else
         self._rowList:SetChildProps(row, { width = "fill", height = rowHeight() })
     end
 
-    row:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then row:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then row:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-
-    row._lbl:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeMd") or 13, "")
-    row._lbl:SetText(opt.label)
-    local tc = T:GetToken("colorText")
-    if tc then row._lbl:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
+    B.Apply(row, { bg = "colorBgAlt", border = "colorBorder" })
+    row._lblT:SetText(opt.label)
 
     local optVal, optLabel = opt.value, opt.label
-    row:SetScript("OnEnter", function()
-        local hov = T:GetToken("colorBgHover")
-        if hov then row:SetBackdropColor(hov[1], hov[2], hov[3], hov[4]) end
-    end)
-    row:SetScript("OnLeave", function()
-        if bg then row:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    end)
+    -- Hover is transient state: recolour only, never rebuild the backdrop table.
+    row:SetScript("OnEnter", function() B.SetBg(row, "colorBgHover") end)
+    row:SetScript("OnLeave", function() B.SetBg(row, "colorBgAlt") end)
     row:SetScript("OnMouseUp", function()
         local old = self._value
         self._value = optVal
-        self._selText:SetText(optLabel)
+        self._selT:SetText(optLabel)
         self:_closePanel()
         if self._onChange then self._onChange(optVal) end
         S:Emit(self, S.SIGNALS.VALUE_CHANGED, optVal, old)
@@ -146,9 +136,6 @@ end
 
 function DdMeta:_openPanel()
     local T   = SuuUI.Theme
-    local bg  = T:GetToken("colorBgAlt")
-    local bd  = T:GetToken("colorBorder")
-    local bw  = T:GetToken("borderWidth") or 1
     local gap = T:GetToken("spaceXs") or 4
     local panel = self._panel
 
@@ -166,14 +153,6 @@ function DdMeta:_openPanel()
     })
     panel:SetFrameStrata("TOOLTIP")
 
-    panel:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8",
-        edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then panel:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then panel:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-
     panel:SetAlpha(0)
     panel:Show()
     SuuUI.Anim.Presets.FadeIn(panel, T:GetToken("animFast"))
@@ -182,12 +161,8 @@ function DdMeta:_openPanel()
 end
 
 function DdMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBgAlt")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
-    local tc = T:GetToken("colorText")
-    local muted = T:GetToken("colorTextMuted")
+    local T = SuuUI.Theme
+    local B = SuuUI.Backdrop
 
     -- Font and size tokens both move at runtime, so re-derive the height unless the
     -- caller pinned one, and report it so the containing layout re-flows.
@@ -198,17 +173,20 @@ function DdMeta:ApplyTheme()
         end
     end
 
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
-    if tc then self._selText:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
-    if muted then self._arrow:SetTextColor(muted[1], muted[2], muted[3], muted[4]) end
-    self._selText:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeMd") or 13, "")
+    local surface = { bg = "colorBgAlt", border = "colorBorder" }
+    B.Apply(self._f, surface)
+    B.Apply(self._panel, surface)
+    -- Rows are only rebuilt when the panel opens, so restyle the pooled ones here too
+    -- or an open panel keeps the previous theme's border width.
+    for _, row in ipairs(self._rows) do B.Apply(row, surface) end
+
+    self._selT:ApplyTheme()
+    self._arrowT:ApplyTheme()
 end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show. SetSize and Hide are defined
+-- above and survive: one clears the autosize flag, the other closes the panel.
+SuuUI.Components.InstallBase(DdMeta, "_f")
 
 --- Creates a custom dropdown.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, VISIBILITY_CHANGED.
@@ -232,13 +210,24 @@ function SuuUI.Components.Dropdown(props, parent)
     -- Selected label spans the button, arrow pinned to the right edge
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
-    local selText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    selText:SetJustifyH("LEFT")
-    box:Add(selText, { valign = "center", inset = { left = 6, right = 16 } })
+    -- Text owns the font and colour tokens and re-measures on a token change; the
+    -- handles are added so the box re-flows off their SIZE_CHANGED.
+    local T = SuuUI.Theme
+    local selT = SuuUI.Components.Text({ justify = "LEFT" }, f)
+    -- The right inset reserves the arrow column: its box plus the arrow's own inset.
+    box:Add(selT, {
+        valign = "center",
+        inset  = { left = TEXT_INSET, right = T:GetToken("spaceLg") or 16 },
+    })
 
-    local arrow = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    arrow:SetText("v")
-    box:Add(arrow, { align = "end", valign = "center", inset = { right = 4 }, width = 8 })
+    local arrowT = SuuUI.Components.Text({ text = "v", color = "muted",
+                                           justify = "CENTER" }, f)
+    box:Add(arrowT, {
+        align  = "end",
+        valign = "center",
+        inset  = { right = T:GetToken("spaceXs") or 4 },
+        width  = T:GetToken("spaceSm") or 8,
+    })
 
     -- Panel floats over everything, placed by the shared floating host
     local panelHost = SuuUI.Layout:GetFloatingHost()
@@ -253,7 +242,11 @@ function SuuUI.Components.Dropdown(props, parent)
 
     local id = "dd_" .. tostring(f)
     handle = setmetatable({
-        _f=f, _selText=selText, _arrow=arrow, _panel=panel,
+        _f=f, _panel=panel,
+        -- _selText and _arrow stay the font strings so callers and specs reach the same
+        -- regions; _selT and _arrowT are the Text handles that own them.
+        _selT=selT, _arrowT=arrowT,
+        _selText=selT:GetFrame(), _arrow=arrowT:GetFrame(),
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,
         _value=props.value, _onChange=props.onChange, _enabled=true,

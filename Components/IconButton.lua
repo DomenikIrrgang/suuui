@@ -3,28 +3,6 @@ local S = SuuUI.UISignals
 local IcoMeta = {}
 IcoMeta.__index = IcoMeta
 
-function IcoMeta:GetWidth()     return self._f:GetWidth() end
-function IcoMeta:GetHeight()    return self._f:GetHeight() end
-function IcoMeta:IsShown()      return self._f:IsShown() end
-function IcoMeta:GetFrame()     return self._f end
-
---- Resizes the button. SIZE_CHANGED comes from the frame's resize hook.
--- @param w number
--- @param h number
-function IcoMeta:SetSize(w, h)
-    self._f:SetSize(w, h)
-end
-
-function IcoMeta:Show()
-    self._f:Show()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
-end
-
-function IcoMeta:Hide()
-    self._f:Hide()
-    S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
-end
-
 --- Enables or disables the button. Emits ENABLED_CHANGED.
 -- @param en bool
 function IcoMeta:SetEnabled(en)
@@ -47,18 +25,20 @@ function IcoMeta:SetIcon(path)
     self._icon:SetTexture(path)
 end
 
-function IcoMeta:ApplyTheme()
-    local T  = SuuUI.Theme
-    local bg = T:GetToken("colorBgAlt")
-    local bd = T:GetToken("colorBorder")
-    local bw = T:GetToken("borderWidth") or 1
-    self._f:SetBackdrop({
-        bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8",
-        edgeSize=bw, insets={left=bw,right=bw,top=bw,bottom=bw},
-    })
-    if bg then self._f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]) end
-    if bd then self._f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4]) end
+-- Surface and border only, so leaving hover never rebuilds the backdrop table.
+function IcoMeta:_paint()
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, "colorBgAlt")
+    B.SetBorder(self._f, "colorBorder")
 end
+
+function IcoMeta:ApplyTheme()
+    SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    self:_paint()
+end
+
+-- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
+SuuUI.Components.InstallBase(IcoMeta, "_f")
 
 --- Creates an icon button.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
@@ -92,15 +72,13 @@ function SuuUI.Components.IconButton(props, parent)
     local id = "ico_" .. tostring(f)
     handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true }, IcoMeta)
 
-    local T = SuuUI.Theme
     f:SetScript("OnEnter", function()
         if handle._enabled == false then return end
-        local c = T:GetToken("colorBgHover")
-        if c then f:SetBackdropColor(c[1], c[2], c[3], c[4]) end
+        SuuUI.Backdrop.SetBg(f, "colorBgHover")
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
     end)
     f:SetScript("OnLeave", function()
-        handle:ApplyTheme()
+        handle:_paint()
         S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
     end)
     f:SetScript("OnMouseUp", function(_, btn)

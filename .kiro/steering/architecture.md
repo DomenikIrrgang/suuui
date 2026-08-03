@@ -37,6 +37,8 @@ SuuUI/
 │   ├── StackLayout.lua   -- overlay: inset, align, valign (replaces SetAllPoints)
 │   └── AnchorLayout.lua  -- absolute / fraction-driven placement (thumbs, panels)
 ├── Components/
+│   ├── Backdrop.lua      -- shared bg+border backdrop primitive (SuuUI.Backdrop)
+│   ├── Base.lua          -- InstallBase: shared handle accessors on a metatable
 │   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
 │   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
@@ -53,7 +55,8 @@ SuuUI/
 │   ├── ScrollFrame.lua   -- scroll container
 │   ├── Tooltip.lua       -- custom tooltip
 │   ├── Divider.lua
-│   └── Modal.lua         -- dialog with optional input
+│   ├── Modal.lua         -- dialog with optional input
+│   └── Notice.lua        -- one-shot dismissible message, built on Modal
 ├── SettingsUI/
 │   ├── SettingsWindow.lua -- unified settings window (left nav + content)
 │   ├── PageBuilder.lua    -- auto-builds a settings page from schema
@@ -367,7 +370,7 @@ SuuUI.Theme:CreateUserTheme(name, baseTheme)
 SuuUI.Theme:DeleteUserTheme(name)               -- error on built-ins
 SuuUI.Theme:ResetUserTheme(name)
 SuuUI.Theme:SetUserToken(themeName, key, value)
-SuuUI.Theme:ApplyToFrame(frame)                 -- utility: styles bg+border
+SuuUI.Theme:ApplyToFrame(frame)                 -- bg+border via SuuUI.Backdrop.Apply
 ```
 
 `GetControlHeight` returns `max(sizeToken, fontSize + spaceXs * 2)`. Use it for anything
@@ -655,6 +658,27 @@ All components auto-restyle on `SUUUI_THEME_CHANGED`.
 and `SetScript` belong inside `Components/`, `Layout/`, and `Core/UIRoot.lua` — never
 in `SettingsUI/` or plugin page code. See `WOW_API_ENCAPSULATION.md`.
 
+Allowed there does not mean reached for first. Inside a component, the raw API is for
+what genuinely has no primitive: the frame itself, its scripts, textures, cursor math.
+Everything with a primitive goes through the primitive:
+
+- backdrop styling → `SuuUI.Backdrop.Apply` / `SetBg` / `SetBorder`, never `SetBackdrop`
+  plus a hand-built table and hand-resolved tokens
+- text → `Components.Text`, so the element re-measures when a `fontSize*` token changes
+- `GetWidth` `GetHeight` `IsShown` `GetFrame` `SetSize` `Show` `Hide` →
+  `Components.InstallBase`, never retyped on the metatable
+
+And a component composes the components that already exist rather than rebuilding their
+parts — `Notice` is a `Modal`; `Modal` itself is `Text` + `Input` + `Button` in
+containers. Re-implementing a sibling's internals is the same duplication as inlining
+raw frames in a page, one layer down.
+
+**Writing a new component? Follow "Anatomy of a Component" in `coding-standards.md`.**
+It carries the annotated skeleton every component in this directory is built from —
+construction order, the `_paint()` / `ApplyTheme()` split, why the resize hook is
+registered before the host container adopts the frame, and what `Destroy()` must free.
+`Components/NavItem.lua` is the shortest complete example in the codebase.
+
 **Shared API (all components):**
 ```lua
 comp:SetSize(w, h)
@@ -688,6 +712,15 @@ to a container; they position their own internals with a host container. See
 **Missing a component?** Build it in `Components/<Name>.lua` rather than inlining raw
 frames in a page. Register it in the `.toc`, write its spec in `Tests/spec/`, and
 document it here.
+
+**Shared primitives** (non-visual, consumed by the components above):
+- `Backdrop` — `SuuUI.Backdrop.Apply(frame, { bg, border, borderWidth })` builds the
+  standard bg+border backdrop; `SetBg` / `SetBorder` recolour without rebuilding it.
+  `bg`/`border` take a token key, a literal `{r,g,b,a}`, or `false`/nil for fully
+  transparent. `Theme:ApplyToFrame` delegates to it.
+- `Base` — `SuuUI.Components.InstallBase(meta, field)` installs `GetWidth` `GetHeight`
+  `IsShown` `GetFrame` `SetSize` `Show` `Hide` onto a component metatable, filling only
+  the gaps so a custom override survives. `SetSize` never emits `SIZE_CHANGED`.
 
 **Components:**
 - `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,
