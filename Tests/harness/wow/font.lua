@@ -51,7 +51,7 @@ local function splitParagraphs(text)
     return out
 end
 
-local function wrap(line, size, bound)
+local function wrap(line, size, bound, breakWords)
     local perChar = (size or M.defaultSize) * M.widthRatio
     local maxChars = max(1, floor(bound / perChar))
     if #line <= maxChars then return { line } end
@@ -63,10 +63,13 @@ local function wrap(line, size, bound)
             currentLine = candidate
         else
             if currentLine ~= "" then lines[#lines + 1] = currentLine end
-            -- A word longer than the bound is broken rather than overflowing
-            while #word > maxChars do
-                lines[#lines + 1] = word:sub(1, maxChars)
-                word = word:sub(maxChars + 1)
+            -- The client only breaks inside a word when non-space wrap is enabled.
+            -- Otherwise a word wider than the bound stays on its line and is clipped.
+            if breakWords then
+                while #word > maxChars do
+                    lines[#lines + 1] = word:sub(1, maxChars)
+                    word = word:sub(maxChars + 1)
+                end
             end
             currentLine = word
         end
@@ -81,8 +84,9 @@ end
 -- @param size number      Font point size
 -- @param wordWrap bool    Whether wrapping is enabled (WoW default: true)
 -- @param bound number     Assigned width in pixels, or nil for unbounded
+-- @param nonSpaceWrap bool  Whether breaking inside a word is allowed (default: false)
 -- @return number, number, number  renderedWidth, height, lineCount
-function M.measure(text, size, wordWrap, bound)
+function M.measure(text, size, wordWrap, bound, nonSpaceWrap)
     local clean = M.strip(text)
     size = size or M.defaultSize
     local lh = M.lineHeight(size)
@@ -94,7 +98,9 @@ function M.measure(text, size, wordWrap, bound)
 
     if wordWrap and bound and bound > 0 then
         for _, p in ipairs(paragraphs) do
-            for _, l in ipairs(wrap(p, size, bound)) do lines[#lines + 1] = l end
+            for _, l in ipairs(wrap(p, size, bound, nonSpaceWrap)) do
+                lines[#lines + 1] = l
+            end
         end
     else
         lines = paragraphs
@@ -107,6 +113,25 @@ function M.measure(text, size, wordWrap, bound)
     if bound and bound > 0 and rendered > bound then rendered = bound end
 
     return rendered, #lines * lh, #lines
+end
+
+--- Narrowest box that renders the text without cutting glyphs.
+-- Wrap off: the whole longest line. Wrap on: the widest single word, because the
+-- client only breaks inside a word when non-space wrap is enabled — a one-glyph
+-- label in a box narrower than the glyph is clipped, not re-flowed.
+-- @param text string
+-- @param size number
+-- @param wordWrap bool
+-- @param nonSpaceWrap bool
+-- @return number
+function M.minWidth(text, size, wordWrap, nonSpaceWrap)
+    local clean = M.strip(text)
+    if clean == "" then return 0 end
+    if not wordWrap then return M.unbounded(clean, size) end
+    if nonSpaceWrap then return 0 end
+    local widest = 0
+    for word in clean:gmatch("%S+") do widest = max(widest, M.lineWidth(word, size)) end
+    return widest
 end
 
 --- Unbounded width of text: what it would occupy with no layout constraint.

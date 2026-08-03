@@ -738,7 +738,9 @@ document it here.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox.
 - `Slider` — custom track + thumb, label, value display.
-- `Dropdown` — custom panel, animated open/close.
+- `Dropdown` — custom panel, animated open/close. Shows the `colorBorderFocus` ring
+  while hovered or open, like `Input`. Its arrow column is measured from the glyph via
+  `TextMetrics`, not pinned to a space token, so it never truncates to an ellipsis.
 - `Input` — EditBox (Blizzard, unavoidable), themed styling.
 - `ColorSwatch` — clickable colour square with token border, `GetHex()` helper.
 - `ColorPicker` — custom HSV picker + hex input.

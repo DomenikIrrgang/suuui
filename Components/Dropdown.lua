@@ -10,6 +10,21 @@ local function rowHeight()
     return SuuUI.Theme:GetControlHeight("sizeControlMd")
 end
 
+local ARROW_GLYPH = "v"
+
+-- The arrow column is measured, never a space token. A column narrower than the glyph
+-- does not overflow: the client clips it and draws an ellipsis instead of the arrow.
+-- Font sizes are user-editable, so this is re-derived on every theme change.
+local function arrowWidth()
+    local T = SuuUI.Theme
+    local w = SuuUI.TextMetrics.Measure(ARROW_GLYPH,
+        T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
+        T:GetToken("fontSizeMd") or 13)
+    -- A pixel of slack, as Button does: a column pinned to exactly the measured width
+    -- can still trip truncation on rounding.
+    return w + 2
+end
+
 local DdMeta = {}
 DdMeta.__index = DdMeta
 
@@ -88,6 +103,34 @@ function DdMeta:_closePanel()
         SuuUI.Anim.Presets.FadeOut(self._panel, SuuUI.Theme:GetToken("animFast"))
         if self._clickAway then self._clickAway:Disarm() end
     end
+    self._open = false
+    self:_paint()
+end
+
+-- Surface and border colour only. Hover and open changes take this path so a state
+-- flip never rebuilds the backdrop table.
+function DdMeta:_paint()
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, "colorBgAlt")
+    B.SetBorder(self._f, (self._hovered or self._open)
+        and "colorBorderFocus" or "colorBorder")
+end
+
+-- The arrow column is as wide as the glyph, and the label's right inset reserves that
+-- column plus a gap either side of it. Both move with the font and space tokens.
+function DdMeta:_reflow()
+    local pad = SuuUI.Theme:GetToken("spaceXs") or 4
+    local aw  = arrowWidth()
+    self._box:SetChildProps(self._arrowT, {
+        align  = "end",
+        valign = "center",
+        inset  = { right = pad },
+        width  = aw,
+    })
+    self._box:SetChildProps(self._selT, {
+        valign = "center",
+        inset  = { left = TEXT_INSET, right = pad * 2 + aw },
+    })
 end
 
 -- Builds or reuses one option row inside the row list container
@@ -157,6 +200,9 @@ function DdMeta:_openPanel()
     panel:Show()
     SuuUI.Anim.Presets.FadeIn(panel, T:GetToken("animFast"))
 
+    self._open = true
+    self:_paint()
+
     if self._clickAway then self._clickAway:Arm() end
 end
 
@@ -180,8 +226,12 @@ function DdMeta:ApplyTheme()
     -- or an open panel keeps the previous theme's border width.
     for _, row in ipairs(self._rows) do B.Apply(row, surface) end
 
+    -- Re-assert the live state: a theme change must not drop the hover or open ring.
+    self:_paint()
+
     self._selT:ApplyTheme()
     self._arrowT:ApplyTheme()
+    self:_reflow()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show. SetSize and Hide are defined
@@ -212,22 +262,14 @@ function SuuUI.Components.Dropdown(props, parent)
 
     -- Text owns the font and colour tokens and re-measures on a token change; the
     -- handles are added so the box re-flows off their SIZE_CHANGED.
-    local T = SuuUI.Theme
+    -- Both children's insets are re-derived in _reflow, called from ApplyTheme, so the
+    -- arrow column and the label's reserved gutter track the font and space tokens.
     local selT = SuuUI.Components.Text({ justify = "LEFT" }, f)
-    -- The right inset reserves the arrow column: its box plus the arrow's own inset.
-    box:Add(selT, {
-        valign = "center",
-        inset  = { left = TEXT_INSET, right = T:GetToken("spaceLg") or 16 },
-    })
+    box:Add(selT, { valign = "center", inset = { left = TEXT_INSET } })
 
-    local arrowT = SuuUI.Components.Text({ text = "v", color = "muted",
+    local arrowT = SuuUI.Components.Text({ text = ARROW_GLYPH, color = "muted",
                                            justify = "CENTER" }, f)
-    box:Add(arrowT, {
-        align  = "end",
-        valign = "center",
-        inset  = { right = T:GetToken("spaceXs") or 4 },
-        width  = T:GetToken("spaceSm") or 8,
-    })
+    box:Add(arrowT, { align = "end", valign = "center" })
 
     -- Panel floats over everything, placed by the shared floating host
     local panelHost = SuuUI.Layout:GetFloatingHost()
@@ -250,7 +292,7 @@ function SuuUI.Components.Dropdown(props, parent)
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,
         _value=props.value, _onChange=props.onChange, _enabled=true,
-        _autoH=props.h == nil,
+        _autoH=props.h == nil, _hovered=false, _open=false,
     }, DdMeta)
 
     if props.value then handle:SetValue(props.value) end
@@ -260,8 +302,16 @@ function SuuUI.Components.Dropdown(props, parent)
         if panel:IsShown() then handle:_closePanel()
         else handle:_openPanel() end
     end)
-    f:SetScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
-    f:SetScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
+    f:SetScript("OnEnter", function()
+        handle._hovered = true
+        handle:_paint()
+        S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
+    end)
+    f:SetScript("OnLeave", function()
+        handle._hovered = false
+        handle:_paint()
+        S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
+    end)
 
     handle._clickAway = SuuUI.Components.ClickAway({
         frame     = panel,

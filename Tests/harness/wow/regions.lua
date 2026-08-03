@@ -148,7 +148,16 @@ function FontStringMeta:CanWordWrap()
     return self._wordWrap ~= false
 end
 
-function FontStringMeta:SetNonSpaceWrap(on) self._nonSpaceWrap = on end
+-- WoW defaults non-space wrap off: a word wider than the box is clipped, not broken.
+function FontStringMeta:SetNonSpaceWrap(on)
+    self._nonSpaceWrap = on and true or false
+    state.invalidate(self)
+end
+
+function FontStringMeta:CanNonSpaceWrap()
+    return self._nonSpaceWrap == true
+end
+
 function FontStringMeta:SetMaxLines(n)      self._maxLines = n end
 function FontStringMeta:SetDrawLayer(layer, sub)
     self._drawLayer, self._subLayer = layer, sub
@@ -164,7 +173,8 @@ end
 --- Rendered text width, clamped to the assigned width like the real client.
 function FontStringMeta:GetStringWidth()
     local size = self._fontSize or font.defaultSize
-    local w = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self))
+    local w = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
+                           self:CanNonSpaceWrap())
     return w
 end
 
@@ -176,13 +186,15 @@ end
 --- Rendered text height, accounting for wrapping at the assigned width.
 function FontStringMeta:GetStringHeight()
     local size = self._fontSize or font.defaultSize
-    local _, h = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self))
+    local _, h = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
+                              self:CanNonSpaceWrap())
     return h
 end
 
 function FontStringMeta:GetNumLines()
     local size = self._fontSize or font.defaultSize
-    local _, _, n = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self))
+    local _, _, n = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
+                                 self:CanNonSpaceWrap())
     return n
 end
 
@@ -197,14 +209,17 @@ function FontStringMeta:IsTextClipped()
     local boxW = boundWidth(self)
     local boxH = geometry.hasDerivedHeight(self) and geometry.height(self) or self._h
 
-    -- With word wrap on, a narrow box re-flows into more lines rather than cutting
-    -- glyphs off, so the height is what reveals the clip. With wrap off it cuts.
-    local needW = font.unbounded(self._text, size)
-    local needH = select(2, font.measure(self._text, size, self:CanWordWrap(), boxW))
+    -- With word wrap on, a narrow box re-flows between words rather than cutting glyphs,
+    -- so the height usually reveals the clip. It cannot re-flow inside a word unless
+    -- non-space wrap is on, so a box narrower than its widest word still clips — that
+    -- is the single-glyph label pinned to a too-small column.
+    local needW = font.minWidth(self._text, size, self:CanWordWrap(), self:CanNonSpaceWrap())
+    local needH = select(2, font.measure(self._text, size, self:CanWordWrap(), boxW,
+                                         self:CanNonSpaceWrap()))
 
     local clipped = false
     if boxH and boxH + 0.5 < needH then clipped = true end
-    if not self:CanWordWrap() and boxW and boxW + 0.5 < needW then clipped = true end
+    if boxW and needW > 0 and boxW + 0.5 < needW then clipped = true end
     return clipped, boxW, boxH, needW, needH
 end
 
