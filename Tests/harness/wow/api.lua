@@ -4,6 +4,7 @@ local state    = require("harness.wow.state")
 local widget   = require("harness.wow.widget")
 local frame    = require("harness.wow.frame")
 local regions  = require("harness.wow.regions")
+local font     = require("harness.wow.font")
 
 local M = {}
 
@@ -13,6 +14,7 @@ local M = {}
 function M.install(env)
     widget.resetSerial()
     state.reset()
+    font.resetFaces()
 
     ------------------------------------------------------------------------------
     -- Screen root
@@ -52,10 +54,15 @@ function M.install(env)
     ------------------------------------------------------------------------------
     -- Font objects
     ------------------------------------------------------------------------------
-    local function fontObject(name, size)
-        local o = { _name = name, _size = size }
-        function o:GetFont() return "Fonts/FRIZQT__.TTF", self._size, "" end
+    -- Font objects report their own face, as the client's do. That is what makes the
+    -- GetFonts harvest meaningful: the addon reads a path off each object, so objects
+    -- that all claimed the same face would hide a broken harvest.
+    local fontObjects = {}
+    local function fontObject(name, size, path)
+        local o = { _name = name, _size = size, _path = path or "Fonts/FRIZQT__.TTF" }
+        function o:GetFont() return self._path, self._size, "" end
         function o:GetName() return self._name end
+        fontObjects[#fontObjects + 1] = name
         return o
     end
 
@@ -86,6 +93,20 @@ function M.install(env)
     env.GameFontNormalLarge = fontObject("GameFontNormalLarge", 16)
     env.GameFontHighlight   = fontObject("GameFontHighlight", 12)
     env.ChatFontNormal      = fontObject("ChatFontNormal", 14)
+    env.NumberFontNormal    = fontObject("NumberFontNormal", 12, "Fonts/ARIALN.TTF")
+    env.QuestTitleFont      = fontObject("QuestTitleFont", 15, "Fonts/MORPHEUS.TTF")
+
+    -- Returns font OBJECT names, not paths. The path comes off each object.
+    env.GetFonts = function()
+        local out = {}
+        for i, name in ipairs(fontObjects) do out[i] = name end
+        return out
+    end
+
+    -- The client's locale font globals. enUS values here; other locales ship other files.
+    env.STANDARD_TEXT_FONT = "Fonts/FRIZQT__.TTF"
+    env.UNIT_NAME_FONT     = "Fonts/FRIZQT__.TTF"
+    env.DAMAGE_TEXT_FONT   = "Fonts/skurri.TTF"
 
     env.GetScreenWidth  = function() return state.screenWidth end
     env.GetScreenHeight = function() return state.screenHeight end
@@ -148,11 +169,20 @@ function M.install(env)
     env.strtrim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
     env.wipe = function(t) for k in pairs(t) do t[k] = nil end return t end
 
+    --- Adds a client font object reporting a face, the way a locale client ships extra
+    --- fonts. It becomes visible to GetFonts, so the addon's harvest can see it.
+    local function addFontObject(name, path, size)
+        env[name] = fontObject(name, size or 12, path)
+        return env[name]
+    end
+
     return {
         UIParent   = UIParent,
         Minimap    = Minimap,
         CreateFrame = CreateFrame,
         fireEvent  = fireEvent,
+        fontObjects = fontObjects,
+        addFontObject = addFontObject,
     }
 end
 

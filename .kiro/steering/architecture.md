@@ -23,6 +23,7 @@ SuuUI/
 │   ├── Plugin.lua        -- plugin registry and lifecycle
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry and value I/O
+│   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
 │   ├── Theme.lua         -- token system, theme registry, active theme
 │   └── Pool.lua          -- typed frame pool
 ├── Animation/
@@ -315,7 +316,7 @@ colorBorderFocus  = "colorAccent"
 
 -- Typography
 fontSizeSm = 11    fontSizeMd = 13    fontSizeLg = 15    fontSizeXl = 18
-fontFamilyMain = "Fonts/FRIZQT__.TTF"
+fontFamilyMain = "Friz Quadrata TT"   -- a font NAME; GetToken resolves it to a path
 
 -- Spacing, used for both gaps (between items) and padding (container insets)
 spaceXs = 4    spaceSm = 8    spaceMd = 12    spaceLg = 16    spaceXl = 24
@@ -358,9 +359,16 @@ Built-in themes are read-only. User themes stored in profile under
 `profile.themes[name]` as a partial token override table, stamped with
 `_tokenVersion` so renamed keys from older saves can be migrated on read.
 
+**`fontFamilyMain` is a fourth value form: a font name.** It stores a name rather than a
+file path so the choice survives a media addon moving its file, and `GetToken` hands
+consumers the resolved path — nothing downstream changes. A literal path still passes
+through, which is what a hand-edited SavedVariable may hold. `GetTokenRaw` returns the
+stored name, which is what the theme editor's dropdown displays.
+
 **API:**
 ```lua
-SuuUI.Theme:GetToken(key)                       -- resolves aliases and derivations
+SuuUI.Theme:GetToken(key)                       -- resolves aliases, derivations, fonts
+SuuUI.Theme:GetTokenRaw(key)                    -- stored value, before resolution
 SuuUI.Theme:GetControlHeight(sizeKey, fontKey)  -- size token floored by font metrics
 SuuUI.Theme:SetActive(name)                     -- fires SUUUI_THEME_CHANGED
 SuuUI.Theme:GetActive()
@@ -379,6 +387,50 @@ height clips once the font outgrows it. Read the size token directly for element
 text of their own (toggles, swatches, scrollbars).
 
 Components listen for `SUUUI_THEME_CHANGED` and call `ApplyTheme()` internally.
+
+### 6b. Font Registry (`Core/Fonts.lua`)
+
+Backs the `fontFamilyMain` token. **There is no filesystem API in WoW** — a font list has
+to be assembled from what the client will admit to:
+
+| Source | How |
+|---|---|
+| curated client faces | Friz Quadrata TT, Arial Narrow, Morpheus, Skurri |
+| locale faces | `STANDARD_TEXT_FONT`, `UNIT_NAME_FONT`, `DAMAGE_TEXT_FONT`, `NAMEPLATE_FONT` |
+| everything the client loaded | `GetFonts()` returns font *object* names; the path comes off each object via `GetFont()` |
+| media addons | `LibSharedMedia-3.0` if the player has it — read only, never a dependency |
+| plugins and users | `Fonts:Register(name, path)` |
+
+Every candidate is validated by probing `SetFont`, which returns false for a file the
+client cannot load. That is the only way to check a path, and it is what makes locale
+variance and user-dropped files safe. Entries are deduplicated by path across slash style
+and case, since LSM registers with backslashes and this addon writes forward ones.
+
+Names match LSM's for the same files, deliberately: a theme saved while SharedMedia was
+installed has to keep resolving once it is gone, and the reverse.
+
+**API:**
+```lua
+SuuUI.Fonts:List()               -- { { name, path, source } } sorted by name
+SuuUI.Fonts:Options()            -- { { value = name, label = name } } for a Dropdown
+SuuUI.Fonts:Path(nameOrPath)     -- always returns a loadable path; falls back if not
+SuuUI.Fonts:Name(pathOrName)     -- display name, or nil
+SuuUI.Fonts:Has(name)
+SuuUI.Fonts:Validate(path)
+SuuUI.Fonts:Register(name, path, source)
+SuuUI.Fonts:Add(path)            -- register by path alone, named after the file
+SuuUI.Fonts:Refresh()            -- rescan; emits SUUUI_FONTS_CHANGED if the set moved
+SuuUI.Fonts.FALLBACK             -- "Fonts/FRIZQT__.TTF"
+```
+
+`Add` backs the theme editor's "Add" button: a font dropped into an addon folder that no
+media addon registered is invisible to every discovery source, so taking the path directly
+is the only route to it. It returns nil for a file the client cannot load, which is the
+caller's cue to say so through a `Notice` rather than storing a broken path.
+
+`Refresh()` runs on `PLAYER_LOGIN` because a media addon can load after SuuUI. `Theme`
+listens for `SUUUI_FONTS_CHANGED` and re-emits `SUUUI_THEME_CHANGED` only when the
+resolved path actually moved, so a font that was missing at boot appears without a reload.
 
 ### 7. Frame Pool (`Core/Pool.lua`)
 
@@ -725,7 +777,11 @@ document it here.
 **Components:**
 - `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,
   `border = false` to drop the border.
-- `Text` — FontString with token font/size/color.
+- `Text` — FontString with token font/size/color. `font` (prop or `SetFont(path)`) pins an
+  explicit face, overriding the font token while size and colour still follow tokens; it
+  re-measures, so a taller face reports its new height. Only for text that must render in
+  a face other than the theme's — a font picker previewing its options. Pass `nil` to
+  follow the token again.
 - `Button` — fully custom, animated hover/press states. Hugs its label: width and
   height are measured from the text plus token padding unless `w`/`h` are given
   (`minW`/`minH` set floors). Re-fits on `SetLabel` and on font token changes, and
@@ -740,7 +796,11 @@ document it here.
 - `Slider` — custom track + thumb, label, value display.
 - `Dropdown` — custom panel, animated open/close. Shows the `colorBorderFocus` ring
   while hovered or open, like `Input`. Its arrow column is measured from the glyph via
-  `TextMetrics`, not pinned to a space token, so it never truncates to an ellipsis.
+  `TextMetrics`, not pinned to a space token, so it never truncates to an ellipsis. An
+  option may carry `font = path` to render in that face — the font picker's preview. Row
+  and button heights are then measured from the face rather than assumed equal, since a
+  face's line height does not follow from the point size, and the panel is sized from the
+  rows it actually laid out.
 - `Input` — EditBox (Blizzard, unavoidable), themed styling.
 - `ColorSwatch` — clickable colour square with token border, `GetHex()` helper.
 - `ColorPicker` — custom HSV picker + hex input.

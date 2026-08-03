@@ -141,6 +141,33 @@ SuuUI.Settings:ResetAll("my_plugin")
 
 ---
 
+## Fonts
+
+The font face is a theme token, so text you build from `Components.Text` already follows
+whatever the user picked — you never set a font yourself. If your plugin needs to offer
+its own font choice, read the registry rather than hardcoding paths:
+
+```lua
+local dd = C.Dropdown({ options = SuuUI.Fonts:Options() }, parent)
+-- store the name; resolve it only when you need a path
+local path = SuuUI.Fonts:Path(SuuUI.Settings:Get("my_plugin", "font"))
+```
+
+`Options()` covers the client's own faces, the locale's, and anything
+`LibSharedMedia-3.0` exposes if the player has it. Bundling a font with your addon? Call
+`SuuUI.Fonts:Register("My Font", "Interface/AddOns/MyPlugin/fonts/mine.ttf")` in `onInit`
+and it joins the list everywhere — registered fonts survive the login rescan.
+
+To show each option in the face it names, hand the dropdown a `font` per option:
+
+```lua
+local options = SuuUI.Fonts:Options()
+for _, opt in ipairs(options) do opt.font = SuuUI.Fonts:Path(opt.value) end
+C.Dropdown({ options = options }, parent)
+```
+
+---
+
 ## Event Bus
 
 Plugins communicate via events, never by direct calls into each other.
@@ -167,6 +194,7 @@ SuuUI.Events:Once("SUUUI_PROFILE_LOADED", function() end, "my_plugin")
 |---|---|
 | `SUUUI_PROFILE_LOADED` | `profileName` |
 | `SUUUI_THEME_CHANGED` | `themeName` |
+| `SUUUI_FONTS_CHANGED` | — (the available font list grew or shrank) |
 | `SUUUI_SETTING_CHANGED` | `pluginId, key, value, oldValue` |
 | `SUUUI_PLUGIN_ENABLED` | `pluginId` |
 | `SUUUI_PLUGIN_DISABLED` | `pluginId` |

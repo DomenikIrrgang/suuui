@@ -1,4 +1,4 @@
-local ipairs = ipairs
+local ipairs, max, abs = ipairs, math.max, math.abs
 local S = SuuUI.UISignals
 
 -- Horizontal breathing room inside the button and inside an option row. No space token
@@ -8,6 +8,16 @@ local TEXT_INSET = 6
 -- Option rows hold text, so their height is floored against the font size token.
 local function rowHeight()
     return SuuUI.Theme:GetControlHeight("sizeControlMd")
+end
+
+-- Height a label needs in an explicit face. An option may render in its own font (a font
+-- picker does), and a face's line height is not derivable from the point size alone, so
+-- the token floor is not enough on its own — a tall face would draw clipped glyphs.
+local function faceHeight(text, font, floor)
+    if not font then return floor end
+    local T = SuuUI.Theme
+    local _, th = SuuUI.TextMetrics.Measure(text or "", font, T:GetToken("fontSizeMd") or 13)
+    return max(floor, th + (T:GetToken("spaceXs") or 4) * 2)
 end
 
 local ARROW_GLYPH = "v"
@@ -84,10 +94,22 @@ function DdMeta:SetValue(value)
     self._value = value
     for _, opt in ipairs(self._options) do
         if opt.value == value then
-            self._selT:SetText(opt.label)
+            self:_select(opt)
             return
         end
     end
+end
+
+-- Shows an option as the selection. An option carrying a font renders in it, which also
+-- changes how tall the button has to be, so the height is re-derived here too.
+function DdMeta:_select(opt)
+    self._selFont = opt.font
+    self._selT:SetFont(opt.font)
+    self._selT:SetText(opt.label)
+    self:_autosize()
+    -- The label is token-sized, so a face change resizes nothing and nothing else
+    -- re-measures it: without this the box keeps the old face's width and clips.
+    self._box:Layout()
 end
 
 --- Updates the available options array. Closes panel if open.
@@ -133,9 +155,21 @@ function DdMeta:_reflow()
     })
 end
 
--- Builds or reuses one option row inside the row list container
+-- Re-derives the button height from the size token and the selected face, unless the
+-- caller pinned a height. The frame's resize hook reports the change onwards.
+function DdMeta:_autosize()
+    if not self._autoH then return end
+    local h = faceHeight(self._selT:GetText(), self._selFont,
+                         SuuUI.Theme:GetControlHeight("sizeControlLg"))
+    if abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
+    self._f:SetHeight(h)
+end
+
+-- Builds or reuses one option row inside the row list container. Returns the row and the
+-- height it took, which the panel sums rather than assuming every row is the same.
 function DdMeta:_row(index, opt)
     local B = SuuUI.Backdrop
+    local h = faceHeight(opt.label, opt.font, rowHeight())
 
     local row = self._rows[index]
     if not row then
@@ -152,29 +186,34 @@ function DdMeta:_row(index, opt)
             inset  = { left = TEXT_INSET, right = TEXT_INSET },
         })
         self._rows[index] = row
-        self._rowList:Add(row, { width = "fill", height = rowHeight() })
+        self._rowList:Add(row, { width = "fill", height = h })
     else
-        self._rowList:SetChildProps(row, { width = "fill", height = rowHeight() })
+        self._rowList:SetChildProps(row, { width = "fill", height = h })
     end
 
     B.Apply(row, { bg = "colorBgAlt", border = "colorBorder" })
+    row._lblT:SetFont(opt.font)
     row._lblT:SetText(opt.label)
+    -- Same reason as _select: a token-sized label does not resize when its face changes,
+    -- so the host box has to re-measure it explicitly.
+    row._box:Layout()
 
     local optVal, optLabel = opt.value, opt.label
     -- Hover is transient state: recolour only, never rebuild the backdrop table.
     row:SetScript("OnEnter", function() B.SetBg(row, "colorBgHover") end)
     row:SetScript("OnLeave", function() B.SetBg(row, "colorBgAlt") end)
+    local optFont = opt.font
     row:SetScript("OnMouseUp", function()
         local old = self._value
         self._value = optVal
-        self._selT:SetText(optLabel)
+        self:_select({ value = optVal, label = optLabel, font = optFont })
         self:_closePanel()
         if self._onChange then self._onChange(optVal) end
         S:Emit(self, S.SIGNALS.VALUE_CHANGED, optVal, old)
     end)
 
     row:Show()
-    return row
+    return row, h
 end
 
 function DdMeta:_openPanel()
@@ -183,7 +222,13 @@ function DdMeta:_openPanel()
     local panel = self._panel
 
     for _, row in ipairs(self._rows) do row:Hide() end
-    for i, opt in ipairs(self._options) do self:_row(i, opt) end
+    -- Rows can differ in height when options carry their own faces, so the panel is
+    -- sized from what the rows actually took rather than from a single row height.
+    local total = 0
+    for i, opt in ipairs(self._options) do
+        local _, h = self:_row(i, opt)
+        total = total + h
+    end
 
     -- Panel placement and size come from the anchor container
     self._panelHost:SetChildAnchor(panel, {
@@ -192,7 +237,7 @@ function DdMeta:_openPanel()
         relativePoint = "BOTTOMLEFT",
         x = 0, y = -2,
         width  = self._f:GetWidth(),
-        height = #self._options * rowHeight() + gap * 2,
+        height = total + gap * 2,
     })
     panel:SetFrameStrata("TOOLTIP")
 
@@ -210,15 +255,6 @@ function DdMeta:ApplyTheme()
     local T = SuuUI.Theme
     local B = SuuUI.Backdrop
 
-    -- Font and size tokens both move at runtime, so re-derive the height unless the
-    -- caller pinned one, and report it so the containing layout re-flows.
-    if self._autoH then
-        local h = T:GetControlHeight("sizeControlLg")
-        if math.abs((self._f:GetHeight() or 0) - h) > 0.5 then
-            self._f:SetHeight(h)
-        end
-    end
-
     local surface = { bg = "colorBgAlt", border = "colorBorder" }
     B.Apply(self._f, surface)
     B.Apply(self._panel, surface)
@@ -231,6 +267,9 @@ function DdMeta:ApplyTheme()
 
     self._selT:ApplyTheme()
     self._arrowT:ApplyTheme()
+    -- Font and size tokens both move at runtime, so the height is re-derived after the
+    -- label has restyled — it depends on the selected face's metrics at the new size.
+    self:_autosize()
     self:_reflow()
 end
 

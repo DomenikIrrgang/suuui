@@ -25,6 +25,10 @@ SuuUI._ThemeEditableTokens = {
     { key="opacityPanel",   label="Panel Opacity",   type="number", min=0.3,  max=1.0, step=0.05 },
     { key="opacityOverlay", label="Overlay Opacity", type="number", min=0.1,  max=1.0, step=0.05 },
 
+    -- Stored as a font name, not a path; SuuUI.Fonts resolves it. Options come from the
+    -- client's own faces plus anything LibSharedMedia-3.0 exposes, if the player has it.
+    { key="fontFamilyMain", label="Font",           type="font" },
+
     { key="fontSizeSm",   label="Font Size Small",  type="number", min=8,    max=20,  step=1 },
     { key="fontSizeMd",   label="Font Size Medium", type="number", min=10,   max=24,  step=1 },
     { key="fontSizeLg",   label="Font Size Large",  type="number", min=12,   max=28,  step=1 },

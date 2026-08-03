@@ -165,6 +165,10 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
             SuuUI.Theme:SetActive(themeName)
         end, "_theme_profile_boot")
     elseif event == "PLAYER_LOGIN" then
+        -- Media addons that register fonts may load after SuuUI, so rescan now that
+        -- every addon is present. Fires SUUUI_FONTS_CHANGED only if the set moved.
+        SuuUI.Fonts:Refresh()
+
         -- Two phases on purpose: every onInit runs before any onEnable, so a plugin's
         -- onEnable can rely on another plugin's settings and events already existing.
         SuuUI.Plugins:InitAll()

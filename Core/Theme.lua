@@ -6,6 +6,7 @@ local M = {}
 local builtins  = {}   -- [name] = tokenTable  (read-only)
 local active    = nil  -- current theme name
 local resolved  = {}   -- flat resolved token cache for active theme
+local rawTokens = {}   -- merged token table before resolution, for the theme editor
 
 -- Tokens renamed or dropped when the palette moved to a two-tier scale. User themes
 -- stored under the old keys are translated on read so saved overrides keep working.
@@ -40,6 +41,15 @@ local function resolve(tokens, key, depth)
     return v
 end
 
+-- fontFamilyMain stores a font *name*, so the choice survives a media addon moving its
+-- file. Consumers want a path, so the name is resolved once per cache build rather than
+-- on every GetToken. A literal path passes straight through, which is what the built-in
+-- themes carry and what a hand-edited SavedVariable may hold.
+local function fontPath(value)
+    if SuuUI.Fonts then return SuuUI.Fonts:Path(value) end
+    return value
+end
+
 local function buildCache(themeName)
     resolved = {}
     local profile = SuuUI.Profiles:GetActive()
@@ -64,6 +74,8 @@ local function buildCache(themeName)
     for k in pairs(merged) do
         resolved[k] = resolve(merged, k)
     end
+    rawTokens = merged
+    resolved.fontFamilyMain = fontPath(resolved.fontFamilyMain)
 end
 
 --- Registers a built-in (read-only) theme. Called by Themes/*.lua files.
@@ -78,6 +90,15 @@ end
 -- @return any
 function M:GetToken(key)
     return resolved[key]
+end
+
+--- Returns a token's stored value, before alias, derivation and font resolution.
+-- The theme editor needs this: fontFamilyMain stores a font name while GetToken hands
+-- consumers the resolved file path.
+-- @param key string
+-- @return any
+function M:GetTokenRaw(key)
+    return rawTokens[key]
 end
 
 --- Returns a colour token as a WoW chat escape prefix, e.g. "|cffff4040".
@@ -231,8 +252,21 @@ function M:Init()
         for k in pairs(base) do
             resolved[k] = resolve(base, k)
         end
+        rawTokens = base
+        resolved.fontFamilyMain = fontPath(resolved.fontFamilyMain)
     end
     active = themeName
+
+    -- A media addon can load after SuuUI, so a font name that fell back at boot may
+    -- become resolvable later. Rebuild and restyle only when the path actually moved.
+    SuuUI.Events:On("SUUUI_FONTS_CHANGED", function()
+        if not active then return end
+        local before = resolved.fontFamilyMain
+        buildCache(active)
+        if resolved.fontFamilyMain ~= before then
+            SuuUI.Events:Emit("SUUUI_THEME_CHANGED", active)
+        end
+    end, "_theme_fonts")
 end
 
 SuuUI.Theme = M

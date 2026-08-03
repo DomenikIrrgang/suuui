@@ -190,6 +190,174 @@ describe("Theme manager page", function()
             if child:IsVisible() then H.expectInside(child, content) end
         end
     end)
+
+    -- The font row is a dropdown of every face the client and any media addon expose.
+    -- Its control frame is the row sibling that takes mouse input, which is what a
+    -- disabled dropdown stops doing.
+    local function fontControl()
+        local label = visibleLabels(win:GetFrame())["Font"]
+        if not label then return nil end
+        local row = label:GetParent()
+        for _, child in ipairs(row._childFrames) do
+            if child:IsVisible() and child:IsMouseEnabled() then return child end
+        end
+        return row._childFrames[1]
+    end
+
+    it("shows the active theme's font by name", function()
+        expect(visibleLabels(win:GetFrame())["Font"]).as("the row is rendered").notNil()
+        expect(visibleLabels(win:GetFrame())["Friz Quadrata TT"])
+            .as("selected by name, not by file path").notNil()
+    end)
+
+    it("offers every font the registry knows", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.runAnimations()
+
+        H.click(fontControl())
+        H.runAnimations()
+        -- The panel floats on the shared host, so it hangs off UIParent, not the window.
+        local labels = visibleLabels(H.UIParent)
+        for _, opt in ipairs(H.SuuUI.Fonts:Options()) do
+            expect(labels[opt.label]).as(opt.label .. " is offered").notNil()
+        end
+    end)
+
+    it("cannot be changed on a built-in theme", function()
+        expect(H.T:IsBuiltin(H.T:GetActive())).truthy()
+        expect(H.click(fontControl())).as("a disabled dropdown takes no input").falsy()
+        H.runAnimations()
+        expect(visibleLabels(H.UIParent)["Arial Narrow"]).as("no panel opened").isNil()
+    end)
+
+    it("can be changed on a user theme, and the change reaches the UI", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.runAnimations()
+
+        local control = fontControl()
+        expect(H.click(control)).as("editable now").truthy()
+        H.runAnimations()
+
+        local option = visibleLabels(H.UIParent)["Arial Narrow"]
+        expect(option).as("the open panel lists it").notNil()
+        H.click(option:GetParent())
+        H.runAnimations()
+
+        expect(H.T:GetTokenRaw("fontFamilyMain")).eq("Arial Narrow")
+        expect(H.token("fontFamilyMain")).eq("Fonts/ARIALN.TTF")
+        expect(visibleLabels(win:GetFrame())["Arial Narrow"]).as("row shows the choice").notNil()
+    end)
+
+    it("previews each option in the face it names", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.runAnimations()
+        H.click(fontControl())
+        H.runAnimations()
+
+        local labels = visibleLabels(H.UIParent)
+        for _, opt in ipairs(H.SuuUI.Fonts:Options()) do
+            local region = labels[opt.label]
+            expect(region).notNil()
+            expect((region:GetFont())).as(opt.label .. " renders in itself")
+                .eq(H.SuuUI.Fonts:Path(opt.value))
+            H.expectTextNotClipped(region)
+        end
+    end)
+
+    -- Add: the escape hatch for a font no discovery source can see, since WoW exposes no
+    -- way to list files.
+    local function addFontControl()
+        local label = visibleLabels(win:GetFrame())["Font"]
+        local row = label:GetParent()
+        for _, child in ipairs(row._childFrames) do
+            for _, region in ipairs(child._regions) do
+                if region._kind == "FontString" and region:GetText() == "Add" then
+                    return child
+                end
+            end
+        end
+    end
+
+    -- The modal floats on UIParent, and the settings window behind it is full of visible
+    -- edit boxes and an "Add" button of its own. Both lookups prune that subtree, or they
+    -- find the page's controls instead of the dialog's.
+    local function inModal(predicate)
+        local found
+        local function walk(frame)
+            if found or frame == win:GetFrame() or not frame:IsVisible() then return end
+            if predicate(frame) then found = frame; return end
+            for _, child in ipairs(frame._childFrames) do walk(child) end
+        end
+        walk(H.UIParent)
+        return found
+    end
+
+    local function modalInput()
+        return inModal(function(f) return f._kind == "EditBox" end)
+    end
+
+    local function modalConfirm()
+        return inModal(function(f)
+            for _, region in ipairs(f._regions) do
+                if region._kind == "FontString" and region:GetText() == "Add" then
+                    return true
+                end
+            end
+            return false
+        end)
+    end
+
+    it("takes a custom font path and selects it", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.runAnimations()
+
+        H.font.addFace("Interface/AddOns/MyMedia/fonts/Expressway.ttf")
+        H.click(addFontControl())
+        H.runAnimations()
+
+        H.typeText({ _eb = modalInput() }, "Interface/AddOns/MyMedia/fonts/Expressway.ttf")
+        H.click(modalConfirm())
+        H.runAnimations()
+
+        expect(H.SuuUI.Fonts:Has("Expressway")).as("registered").truthy()
+        expect(H.T:GetTokenRaw("fontFamilyMain")).as("and selected").eq("Expressway")
+        expect(H.token("fontFamilyMain"))
+            .eq("Interface/AddOns/MyMedia/fonts/Expressway.ttf")
+    end)
+
+    it("warns instead of storing a path the client cannot load", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.runAnimations()
+
+        H.click(addFontControl())
+        H.runAnimations()
+        H.typeText({ _eb = modalInput() }, "Interface/AddOns/Typo/fnots/mine.ttf")
+        H.click(modalConfirm())
+        H.runAnimations()
+
+        expect(H.T:GetTokenRaw("fontFamilyMain")).as("token untouched")
+            .eq("Friz Quadrata TT")
+        expect(visibleLabels(H.UIParent)["Font Not Loaded"]).as("said so").notNil()
+    end)
+
+    it("cannot add a font on a built-in theme", function()
+        expect(H.click(addFontControl())).falsy()
+    end)
+
+    it("keeps every visible label unclipped after a font change", function()
+        H.T:CreateUserTheme("Spec", "Modern")
+        H.T:SetActive("Spec")
+        H.T:SetUserToken("Spec", "fontFamilyMain", "Morpheus")
+        H.runAnimations()
+        for _, region in pairs(visibleLabels(win:GetFrame())) do
+            H.expectTextNotClipped(region)
+        end
+    end)
 end)
 
 describe("Profile manager page", function()

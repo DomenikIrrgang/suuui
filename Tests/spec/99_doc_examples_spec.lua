@@ -66,6 +66,27 @@ describe("steering doc examples", function()
         expect(H.click(btn)).falsy()
         expect(function() H.forceClick(btn) end).notThrows()
     end)
+
+    it("TESTING.md: a face swap is measurable", function()
+        expect(H.textWidth("hello", 12, "Fonts/ARIALN.TTF")).lt(H.textWidth("hello", 12))
+    end)
+
+    it("plugin-authoring.md: the font dropdown preview example", function()
+        local options = H.SuuUI.Fonts:Options()
+        for _, opt in ipairs(options) do opt.font = H.SuuUI.Fonts:Path(opt.value) end
+        local dd = H.mount(H.C.Dropdown({ options = options }, host))
+        H.click(dd)
+        for i, opt in ipairs(options) do
+            expect((dd._rows[i]._lbl:GetFont())).as(opt.label).eq(opt.font)
+        end
+    end)
+
+    it("plugin-authoring.md: resolving a stored font name to a path", function()
+        H.SuuUI.Settings:Register("doc_font_plugin",
+            { { key = "font", label = "Font", type = "text", default = "Arial Narrow" } })
+        local path = H.SuuUI.Fonts:Path(H.SuuUI.Settings:Get("doc_font_plugin", "font"))
+        expect(path).eq("Fonts/ARIALN.TTF")
+    end)
 end)
 
 -- The "Anatomy of a Component" skeleton in coding-standards.md is the template every new

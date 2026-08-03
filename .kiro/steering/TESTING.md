@@ -116,6 +116,20 @@ H.expectSize(btn, H.textWidth("OK", size) + 2 + padX * 2,
 `H.textWidth`, `H.textHeight` and `H.lineHeight` use the harness font model, so they
 move with it. Never assert a raw glyph count.
 
+**Each measuring helper takes an optional font path**, because faces have different glyph
+advances and line heights in the model just as they do in the client. Pass it whenever the
+face under test is not the default, or a swap will measure identically before and after
+and the test passes whether or not the swap happened:
+
+```lua
+expect(H.textWidth("hello", 12, "Fonts/ARIALN.TTF")).lt(H.textWidth("hello", 12))
+```
+
+`H.font.faces` is also the set of faces the client will load — `SetFont` returns false for
+anything else, which is what font path validation reads. `H.addFont(name, path)` adds a
+loadable face plus a client font object that reports it, the way a locale client or a media
+addon does; faces reset on every `H.setup()`.
+
 **Assert text is not clipped wherever a font string is sized.** The client clips a font
 string to its box instead of overflowing it, so a label pinned to a stale or unmeasured
 size draws a half glyph while its position, size and colour all still assert clean. That

@@ -39,6 +39,8 @@
 -- Geometry:    H.box H.offset H.expectBox H.expectSize H.expectOffset H.expectInside
 --              H.expectNoOverlap H.expectStackedVertically H.expectRowHorizontally
 --              H.expectCenteredH H.expectCenteredV H.expectTokenColor
+-- Text:        H.textWidth H.textHeight H.lineHeight H.fontOf H.expectTextNotClipped
+--              (each measuring helper takes an optional font path: faces differ)
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll
 --              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
 --              H.cursorOn H.setMouseDown H.mods
@@ -392,19 +394,45 @@ end
 --- assertions stay valid if the model's ratios change.
 -- @param text string
 -- @param size number
+-- @param path string  Optional font path; omitted uses the base metric model
 -- @return number
-function M.textWidth(text, size)
-    return font.unbounded(text, size or M.token("fontSizeMd"))
+function M.textWidth(text, size, path)
+    return font.unbounded(text, size or M.token("fontSizeMd"), path)
 end
 
 --- Measured text height using the harness font model.
-function M.textHeight(text, size, wrap, bound)
-    local _, h = font.measure(text, size or M.token("fontSizeMd"), wrap, bound)
+function M.textHeight(text, size, wrap, bound, path)
+    local _, h = font.measure(text, size or M.token("fontSizeMd"), wrap, bound, false, path)
     return h
 end
 
 --- Single-line height at a font size.
-function M.lineHeight(size) return font.lineHeight(size or M.token("fontSizeMd")) end
+function M.lineHeight(size, path)
+    return font.lineHeight(size or M.token("fontSizeMd"), path)
+end
+
+--- Makes a font face loadable and gives the client a font object reporting it, the way
+--- a locale client or a media addon adds one. The addon's GetFonts harvest can then see
+--- it. Faces reset on every H.setup().
+-- @param name string   Font object global name
+-- @param path string   Font file path
+-- @param ratios table  Optional { widthRatio, heightRatio }
+-- @return string  The path
+function M.addFont(name, path, ratios)
+    ratios = ratios or {}
+    font.addFace(path, ratios.widthRatio, ratios.heightRatio)
+    M.wow.addFontObject(name, path)
+    return path
+end
+
+--- Font path in force on a widget, component handle or region.
+-- @param target table
+-- @return string, number, string  path, size, flags
+function M.fontOf(target)
+    local f = M.frameOf(target)
+    assert(f and f.GetFont, "harness: fontOf target has no GetFont")
+    return f:GetFont()
+end
 
 require("harness.expect_layout")(M)
 

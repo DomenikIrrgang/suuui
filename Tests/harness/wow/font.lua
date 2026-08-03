@@ -17,6 +17,69 @@ M.defaultSize = 12
 
 local ceil, max, floor = math.ceil, math.max, math.floor
 
+-- The faces an enUS client ships. Restored on every setup so a test that adds one does
+-- not leak it into the next.
+local DEFAULT_FACES = {
+    ["fonts/frizqt__.ttf"] = { widthRatio = 0.5,  heightRatio = 1.25 },
+    ["fonts/arialn.ttf"]   = { widthRatio = 0.38, heightRatio = 1.25 },
+    ["fonts/morpheus.ttf"] = { widthRatio = 0.7,  heightRatio = 1.5  },
+    ["fonts/skurri.ttf"]   = { widthRatio = 0.55, heightRatio = 1.25 },
+}
+
+--- Per-face metrics, keyed by normalised path. A face swap changes glyph advance
+--- without changing point size, so without this a spec asserting a font change would
+--- measure identically before and after and pass for the wrong reason.
+---
+--- This table is also the set of faces the client can load: SetFont rejects anything
+--- absent from it, which is how the real client reports a missing font file and the
+--- only way font path validation can be tested.
+M.faces = {}
+
+--- Normalises a font path the way the client does: either slash, any case.
+-- @param path string
+-- @return string
+function M.normalise(path)
+    if type(path) ~= "string" then return "" end
+    return (path:gsub("\\", "/"):lower())
+end
+
+--- Restores the default face table. Called on every harness setup.
+function M.resetFaces()
+    M.faces = {}
+    for path, ratios in pairs(DEFAULT_FACES) do
+        M.faces[path] = { widthRatio = ratios.widthRatio, heightRatio = ratios.heightRatio }
+    end
+end
+
+--- Makes a font path loadable, as a locale client or a media addon does.
+-- @param path string
+-- @param widthRatio number   Optional glyph advance ratio
+-- @param heightRatio number  Optional line height ratio
+function M.addFace(path, widthRatio, heightRatio)
+    M.faces[M.normalise(path)] = {
+        widthRatio  = widthRatio  or M.widthRatio,
+        heightRatio = heightRatio or M.heightRatio,
+    }
+end
+
+M.resetFaces()
+
+--- Whether the client can load a font path.
+-- @param path string
+-- @return bool
+function M.hasFace(path)
+    return M.faces[M.normalise(path)] ~= nil
+end
+
+--- Metric ratios for a face, defaulting to the base model for an unknown path.
+-- @param path string
+-- @return number, number  widthRatio, heightRatio
+function M.ratios(path)
+    local face = M.faces[M.normalise(path)]
+    if not face then return M.widthRatio, M.heightRatio end
+    return face.widthRatio or M.widthRatio, face.heightRatio or M.heightRatio
+end
+
 --- Strips WoW markup that carries no width: colour codes, texture escapes.
 -- @param text string
 -- @return string
@@ -31,16 +94,20 @@ end
 --- Width of a single line of text at a point size, ignoring any layout bound.
 -- @param line string
 -- @param size number
+-- @param path string  Optional font path; omitted uses the base metric model
 -- @return number
-function M.lineWidth(line, size)
-    return ceil(#line * (size or M.defaultSize) * M.widthRatio)
+function M.lineWidth(line, size, path)
+    local wr = M.ratios(path)
+    return ceil(#line * (size or M.defaultSize) * wr)
 end
 
 --- Height of one line at a point size.
 -- @param size number
+-- @param path string  Optional font path
 -- @return number
-function M.lineHeight(size)
-    return ceil((size or M.defaultSize) * M.heightRatio)
+function M.lineHeight(size, path)
+    local _, hr = M.ratios(path)
+    return ceil((size or M.defaultSize) * hr)
 end
 
 local function splitParagraphs(text)
@@ -51,8 +118,8 @@ local function splitParagraphs(text)
     return out
 end
 
-local function wrap(line, size, bound, breakWords)
-    local perChar = (size or M.defaultSize) * M.widthRatio
+local function wrap(line, size, bound, breakWords, path)
+    local perChar = (size or M.defaultSize) * M.ratios(path)
     local maxChars = max(1, floor(bound / perChar))
     if #line <= maxChars then return { line } end
 
@@ -85,11 +152,12 @@ end
 -- @param wordWrap bool    Whether wrapping is enabled (WoW default: true)
 -- @param bound number     Assigned width in pixels, or nil for unbounded
 -- @param nonSpaceWrap bool  Whether breaking inside a word is allowed (default: false)
+-- @param path string     Optional font path
 -- @return number, number, number  renderedWidth, height, lineCount
-function M.measure(text, size, wordWrap, bound, nonSpaceWrap)
+function M.measure(text, size, wordWrap, bound, nonSpaceWrap, path)
     local clean = M.strip(text)
     size = size or M.defaultSize
-    local lh = M.lineHeight(size)
+    local lh = M.lineHeight(size, path)
 
     if clean == "" then return 0, 0, 0 end
 
@@ -98,7 +166,7 @@ function M.measure(text, size, wordWrap, bound, nonSpaceWrap)
 
     if wordWrap and bound and bound > 0 then
         for _, p in ipairs(paragraphs) do
-            for _, l in ipairs(wrap(p, size, bound, nonSpaceWrap)) do
+            for _, l in ipairs(wrap(p, size, bound, nonSpaceWrap, path)) do
                 lines[#lines + 1] = l
             end
         end
@@ -107,7 +175,7 @@ function M.measure(text, size, wordWrap, bound, nonSpaceWrap)
     end
 
     local widest = 0
-    for _, l in ipairs(lines) do widest = max(widest, M.lineWidth(l, size)) end
+    for _, l in ipairs(lines) do widest = max(widest, M.lineWidth(l, size, path)) end
 
     local rendered = widest
     if bound and bound > 0 and rendered > bound then rendered = bound end
@@ -123,27 +191,31 @@ end
 -- @param size number
 -- @param wordWrap bool
 -- @param nonSpaceWrap bool
+-- @param path string  Optional font path
 -- @return number
-function M.minWidth(text, size, wordWrap, nonSpaceWrap)
+function M.minWidth(text, size, wordWrap, nonSpaceWrap, path)
     local clean = M.strip(text)
     if clean == "" then return 0 end
-    if not wordWrap then return M.unbounded(clean, size) end
+    if not wordWrap then return M.unbounded(clean, size, path) end
     if nonSpaceWrap then return 0 end
     local widest = 0
-    for word in clean:gmatch("%S+") do widest = max(widest, M.lineWidth(word, size)) end
+    for word in clean:gmatch("%S+") do
+        widest = max(widest, M.lineWidth(word, size, path))
+    end
     return widest
 end
 
 --- Unbounded width of text: what it would occupy with no layout constraint.
 -- @param text string
 -- @param size number
+-- @param path string  Optional font path
 -- @return number
-function M.unbounded(text, size)
+function M.unbounded(text, size, path)
     local clean = M.strip(text)
     if clean == "" then return 0 end
     local widest = 0
     for _, p in ipairs(splitParagraphs(clean)) do
-        widest = max(widest, M.lineWidth(p, size))
+        widest = max(widest, M.lineWidth(p, size, path))
     end
     return widest
 end

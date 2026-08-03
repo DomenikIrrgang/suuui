@@ -287,6 +287,66 @@ describe("harness: WoW API simulation", function()
             expect(H.font.unbounded("|cffff0000abc|r", 10)).eq(H.font.unbounded("abc", 10))
         end)
 
+        it("measures a different face differently at the same point size", function()
+            -- Without per-face metrics a spec asserting a font swap would measure the
+            -- same before and after, and pass whether or not the swap happened.
+            local wide   = H.textWidth("hello", 12, "Fonts/FRIZQT__.TTF")
+            local narrow = H.textWidth("hello", 12, "Fonts/ARIALN.TTF")
+            expect(narrow).lt(wide)
+            expect(H.lineHeight(12, "Fonts/MORPHEUS.TTF")).gt(H.lineHeight(12, "Fonts/FRIZQT__.TTF"))
+        end)
+
+        it("measures a font string with the face it was given", function()
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/ARIALN.TTF", 12, "")
+            fs:SetText("hello")
+            expect(fs:GetUnboundedStringWidth()).eq(H.textWidth("hello", 12, "Fonts/ARIALN.TTF"))
+            expect(fs:GetUnboundedStringWidth()).lt(H.textWidth("hello", 12, "Fonts/FRIZQT__.TTF"))
+        end)
+
+        it("rejects SetFont for a face the client cannot load, changing nothing", function()
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/ARIALN.TTF", 12, "")
+            expect(fs:SetFont("Interface/AddOns/Nope/missing.ttf", 14, "")).falsy()
+            expect((fs:GetFont())).eq("Fonts/ARIALN.TTF")
+            expect(select(2, fs:GetFont())).as("size untouched too").eq(12)
+        end)
+
+        it("accepts a face added by H.addFont", function()
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            H.addFont("TestLocaleFont", "Fonts/2002.TTF")
+            expect(fs:SetFont("Fonts/2002.TTF", 12, "")).truthy()
+        end)
+
+        it("normalises font paths across slash style and case", function()
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            expect(fs:SetFont("Fonts\\frizqt__.TTF", 12, "")).truthy()
+        end)
+
+        it("exposes client font objects through GetFonts with resolvable paths", function()
+            local names = H.env.GetFonts()
+            expect(#names).gt(0)
+            local paths = {}
+            for _, name in ipairs(names) do
+                local obj = H.env[name]
+                expect(obj).as(name .. " is a real font object").notNil()
+                paths[select(1, obj:GetFont())] = true
+            end
+            expect(paths["Fonts/FRIZQT__.TTF"]).truthy()
+            expect(paths["Fonts/ARIALN.TTF"]).as("objects report their own face").truthy()
+        end)
+
+        it("resets added faces between setups", function()
+            H.addFont("TransientFont", "Fonts/transient.ttf")
+            expect(H.font.hasFace("Fonts/transient.ttf")).truthy()
+            H.setup()
+            expect(H.font.hasFace("Fonts/transient.ttf")).falsy()
+        end)
+
         it("reports no clip when the box fits the text", function()
             local p = H.parent(400, 100)
             local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")

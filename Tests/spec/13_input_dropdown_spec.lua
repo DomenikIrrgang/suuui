@@ -549,6 +549,111 @@ describe("Components.Dropdown", function()
         end)
     end)
 
+    describe("per-option faces", function()
+        local faced
+
+        before_each(function()
+            -- A font picker renders each option in the face it names, so the list is a
+            -- preview. Nothing else in the addon needs this, but the picker is unusable
+            -- without it.
+            faced = {
+                { value = "friz",  label = "Friz Quadrata TT", font = "Fonts/FRIZQT__.TTF" },
+                { value = "arial", label = "Arial Narrow",     font = "Fonts/ARIALN.TTF" },
+                { value = "morph", label = "Morpheus",         font = "Fonts/MORPHEUS.TTF" },
+            }
+        end)
+
+        it("renders each option row in its own face", function()
+            local d = H.mount(H.C.Dropdown({ options = faced }, host))
+            H.click(d)
+            for i, opt in ipairs(faced) do
+                expect((H.fontOf(d._rows[i]._lbl))).as(opt.label).eq(opt.font)
+            end
+        end)
+
+        it("keeps the theme face for an option that names none", function()
+            local d = H.mount(H.C.Dropdown({ options = options }, host))
+            H.click(d)
+            expect((H.fontOf(d._rows[1]._lbl))).eq(H.token("fontFamilyMain"))
+        end)
+
+        it("gives a taller face a taller row, so no glyph is clipped", function()
+            local d = H.mount(H.C.Dropdown({ options = faced }, host))
+            H.click(d)
+            local plain = H.box(d._rows[1]).height
+            local tall  = H.box(d._rows[3]).height
+            expect(tall).as("Morpheus has a taller line than the token floor").gt(plain)
+            for i in ipairs(faced) do
+                H.expectTextNotClipped(d._rows[i]._lbl)
+                H.expectInside(d._rows[i]._lbl, d._rows[i])
+            end
+        end)
+
+        it("sizes the panel from the rows it actually laid out", function()
+            local d = H.mount(H.C.Dropdown({ options = faced, w = 200 }, host))
+            H.click(d)
+            local total = 0
+            for i in ipairs(faced) do total = total + H.box(d._rows[i]).height end
+            H.expectSize(d._panel, 200, total + H.token("spaceXs") * 2)
+            H.expectNoOverlap(d._rows)
+        end)
+
+        it("shows the selection in its own face", function()
+            local d = H.mount(H.C.Dropdown({ options = faced, value = "arial" }, host))
+            expect((H.fontOf(d._selText))).eq("Fonts/ARIALN.TTF")
+            H.expectTextNotClipped(d._selText)
+        end)
+
+        it("switches the selected face when a new option is picked", function()
+            local d = H.mount(H.C.Dropdown({ options = faced, value = "friz" }, host))
+            H.click(d)
+            H.click(d._rows[3])
+            expect((H.fontOf(d._selText))).eq("Fonts/MORPHEUS.TTF")
+            H.expectTextNotClipped(d._selText)
+            H.expectInside(d._selText, d:GetFrame())
+        end)
+
+        it("grows the button for a face taller than the size token", function()
+            local plain = H.C.Dropdown({ options = options, value = "solid" }, host)
+            local tall  = H.C.Dropdown({ options = faced, value = "morph" }, host)
+            expect(tall:GetHeight()).gt(plain:GetHeight())
+            expect(plain:GetHeight()).eq(H.controlHeight("sizeControlLg"))
+        end)
+
+        it("keeps a pinned height whatever the face", function()
+            local d = H.C.Dropdown({ options = faced, value = "morph", h = 20 }, host)
+            H.expectSize(d, nil, 20)
+        end)
+
+        it("re-derives the button height on a font size token change", function()
+            local d = H.mount(H.C.Dropdown({ options = faced, value = "morph" }, host))
+            local before = d:GetHeight()
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 24)
+            H.T:SetActive("Big")
+            expect(d:GetHeight()).gt(before)
+
+            -- A fixed-width dropdown truncates a long label horizontally at a large font,
+            -- as it does for any long text — that is the width the caller asked for. What
+            -- must never happen is a box too short for the face's line height.
+            local _, _, boxH, _, needH = d._selText:IsTextClipped()
+            expect(boxH).as("tall enough for the face").gte(needH)
+        end)
+
+        it("drops the face override when a plain option is selected", function()
+            local mixed = {
+                { value = "morph", label = "Morpheus", font = "Fonts/MORPHEUS.TTF" },
+                { value = "plain", label = "Plain" },
+            }
+            local d = H.mount(H.C.Dropdown({ options = mixed, value = "morph" }, host))
+            H.click(d)
+            H.click(d._rows[2])
+            expect((H.fontOf(d._selText))).as("back to the theme face")
+                .eq(H.token("fontFamilyMain"))
+            expect(d:GetHeight()).eq(H.controlHeight("sizeControlLg"))
+        end)
+    end)
+
     describe("choosing an option", function()
         it("emits VALUE_CHANGED with new and old, and calls onChange", function()
             local seen

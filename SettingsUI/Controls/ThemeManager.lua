@@ -73,7 +73,7 @@ local function colourRow(parent, def, editors)
     end)
 
     editors[def.key] = {
-        control = hex,
+        controls = { hex },
         refresh = function()
             local v = T:GetToken(def.key) or {1, 1, 1, 1}
             swatch:SetValue(v[1], v[2], v[3], v[4])
@@ -100,9 +100,82 @@ local function numberRow(parent, def, editors)
     end)
 
     editors[def.key] = {
-        control = sld,
+        controls = { sld },
         refresh = function() sld:SetValue(T:GetToken(def.key) or def.min) end,
     }
+    return row
+end
+
+-- Each option renders in the face it names, so the list is a preview rather than a set
+-- of labels the user has to try one at a time.
+local function fontOptions()
+    local options = SuuUI.Fonts:Options()
+    for _, opt in ipairs(options) do
+        opt.font = SuuUI.Fonts:Path(opt.value)
+    end
+    return options
+end
+
+-- Builds the font token row: a dropdown of every face the client and any media addon
+-- expose, plus an entry for a path nothing registered. The token stores the name, so the
+-- display value is the name too — resolved from the raw token, falling back to a reverse
+-- lookup for a theme that stores a path.
+local function fontRow(parent, def, editors)
+    local T = SuuUI.Theme
+    local row = SuuUI._SettingsRow.Labelled(parent, def.label)
+
+    local function currentName()
+        return SuuUI.Fonts:Name(T:GetTokenRaw(def.key))
+            or SuuUI.Fonts:Name(T:GetToken(def.key))
+    end
+
+    local dd = C.Dropdown({
+        options = fontOptions(), value = currentName(), w = 200,
+    }, row:GetFrame())
+    local addBtn = C.Button({ label = "Add" }, row:GetFrame())
+    row:Add(dd, { width = 200 })
+    row:Add(addBtn)
+
+    local function repopulate()
+        dd:SetOptions(fontOptions())
+        dd:SetValue(currentName())
+    end
+
+    S:Connect(dd, S.SIGNALS.VALUE_CHANGED, function(name)
+        setToken(def.key, name)
+    end)
+
+    -- A font dropped into an addon folder that no media addon registered is invisible to
+    -- every discovery source, since WoW exposes no way to list files. Taking the path
+    -- directly is the only route to it.
+    S:Connect(addBtn, S.SIGNALS.CLICKED, function()
+        C.Modal({
+            title   = "Add Font",
+            message = "Font file path, for example:\n"
+                   .. "Interface/AddOns/MyMedia/fonts/mine.ttf",
+            input = true, confirmText = "Add", confirmVariant = "success",
+            onConfirm = function(path)
+                path = (path or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if path == "" then return end
+
+                local name = SuuUI.Fonts:Add(path)
+                if not name then
+                    C.Notice({
+                        title   = "Font Not Loaded",
+                        message = "The client could not load:\n" .. path
+                               .. "\n\nCheck the path, and that the file is a TTF or OTF "
+                               .. "inside your WoW folder.",
+                        tone = "warning",
+                    })
+                    return
+                end
+                repopulate()
+                if setToken(def.key, name) then dd:SetValue(name) end
+            end,
+        }):Show()
+    end)
+
+    editors[def.key] = { controls = { dd, addBtn }, refresh = repopulate }
     return row
 end
 
@@ -141,10 +214,14 @@ local function Build(entry, parent)
     }, root:GetFrame())
     root:Add(themeDD, { width = 200 })
 
+    -- Built-in themes are read-only, so every control that writes a token goes dead
+    -- rather than silently discarding the edit.
     local function syncEditable()
         local builtin = SuuUI.Theme:IsBuiltin(SuuUI.Theme:GetActive())
         for _, editor in pairs(editors) do
-            editor.control:SetEnabled(not builtin)
+            for _, control in ipairs(editor.controls) do
+                control:SetEnabled(not builtin)
+            end
         end
     end
 
@@ -236,6 +313,8 @@ local function Build(entry, parent)
         local row
         if def.type == "color" then
             row = colourRow(root:GetFrame(), def, editors)
+        elseif def.type == "font" then
+            row = fontRow(root:GetFrame(), def, editors)
         else
             row = numberRow(root:GetFrame(), def, editors)
         end
@@ -251,6 +330,10 @@ local function Build(entry, parent)
         syncEditable()
         refreshAll()
     end, "theme_mgr_ui")
+
+    -- A media addon can register fonts after this page was built, so the font row has
+    -- to repopulate rather than keep the option list it opened with.
+    SuuUI.Events:On("SUUUI_FONTS_CHANGED", refreshAll, "theme_mgr_ui")
 
     return root
 end

@@ -48,7 +48,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     fontSizeMd          = 13,
     fontSizeLg          = 15,
     fontSizeXl          = 18,
-    fontFamilyMain      = "Fonts/FRIZQT__.TTF",
+    -- A font name, not a path: SuuUI.Fonts resolves it. See Themes/Default.lua.
+    fontFamilyMain      = "Friz Quadrata TT",
 
     spaceXs          = 4,
     spaceSm          = 8,

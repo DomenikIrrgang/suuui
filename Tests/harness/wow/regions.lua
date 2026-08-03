@@ -111,7 +111,11 @@ function FontStringMeta:SetFormattedText(fmt, ...)
     self:SetText(string.format(fmt, ...))
 end
 
+--- Sets the face, size and flags. Returns false and changes nothing when the client
+--- cannot load the path, as the real client does for a missing font file — that return
+--- value is the only way an addon can validate a font path.
 function FontStringMeta:SetFont(path, size, flags)
+    if not font.hasFace(path) then return false end
     self._font, self._fontSize, self._fontFlags = path, size, flags
     state.invalidate(self)
     return true
@@ -174,27 +178,27 @@ end
 function FontStringMeta:GetStringWidth()
     local size = self._fontSize or font.defaultSize
     local w = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
-                           self:CanNonSpaceWrap())
+                           self:CanNonSpaceWrap(), self._font)
     return w
 end
 
 --- Text width free of any layout-assigned bound.
 function FontStringMeta:GetUnboundedStringWidth()
-    return font.unbounded(self._text, self._fontSize or font.defaultSize)
+    return font.unbounded(self._text, self._fontSize or font.defaultSize, self._font)
 end
 
 --- Rendered text height, accounting for wrapping at the assigned width.
 function FontStringMeta:GetStringHeight()
     local size = self._fontSize or font.defaultSize
     local _, h = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
-                              self:CanNonSpaceWrap())
+                              self:CanNonSpaceWrap(), self._font)
     return h
 end
 
 function FontStringMeta:GetNumLines()
     local size = self._fontSize or font.defaultSize
     local _, _, n = font.measure(self._text, size, self:CanWordWrap(), boundWidth(self),
-                                 self:CanNonSpaceWrap())
+                                 self:CanNonSpaceWrap(), self._font)
     return n
 end
 
@@ -213,9 +217,10 @@ function FontStringMeta:IsTextClipped()
     -- so the height usually reveals the clip. It cannot re-flow inside a word unless
     -- non-space wrap is on, so a box narrower than its widest word still clips — that
     -- is the single-glyph label pinned to a too-small column.
-    local needW = font.minWidth(self._text, size, self:CanWordWrap(), self:CanNonSpaceWrap())
+    local needW = font.minWidth(self._text, size, self:CanWordWrap(),
+                                self:CanNonSpaceWrap(), self._font)
     local needH = select(2, font.measure(self._text, size, self:CanWordWrap(), boxW,
-                                         self:CanNonSpaceWrap()))
+                                         self:CanNonSpaceWrap(), self._font))
 
     local clipped = false
     if boxH and boxH + 0.5 < needH then clipped = true end

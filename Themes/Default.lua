@@ -53,7 +53,9 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     fontSizeMd          = 13,
     fontSizeLg          = 15,
     fontSizeXl          = 18,
-    fontFamilyMain      = "Fonts/FRIZQT__.TTF",
+    -- A font name, not a path: SuuUI.Fonts resolves it, and falls back to a loadable
+    -- face if it ever goes missing. A literal path still works here.
+    fontFamilyMain      = "Friz Quadrata TT",
 
     -- Spacing scale, used for both gaps and padding
     spaceXs          = 4,

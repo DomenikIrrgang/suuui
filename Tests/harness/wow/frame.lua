@@ -2,6 +2,7 @@
 local state   = require("harness.wow.state")
 local widget  = require("harness.wow.widget")
 local regions = require("harness.wow.regions")
+local font    = require("harness.wow.font")
 
 local Base = widget.Base
 local M = {}
@@ -258,7 +259,10 @@ function EditBoxMeta:SetNumeric(on)       self._numeric = on and true or false e
 function EditBoxMeta:HighlightText()      end
 function EditBoxMeta:SetTextInsets(...)   self._textInsets = { ... } end
 
+--- Returns false and changes nothing for a face the client cannot load, as the real
+--- client does. See FontStringMeta:SetFont.
 function EditBoxMeta:SetFont(path, size, flags)
+    if not font.hasFace(path) then return false end
     self._font, self._fontSize, self._fontFlags = path, size, flags
     return true
 end

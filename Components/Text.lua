@@ -77,9 +77,25 @@ function TextMeta:GetText()
     return self._fs:GetText()
 end
 
+--- Overrides the face with an explicit font path, or clears the override with nil.
+-- Only for text that has to render in a face other than the theme's — a font picker
+-- showing each option in its own face. Size and colour still follow the tokens, and the
+-- element re-measures, so a taller face reports its new height.
+-- @param path string|nil  Font file path, resolved through SuuUI.Fonts
+function TextMeta:SetFont(path)
+    self._font = path
+    self:ApplyTheme()
+end
+
+--- Returns the explicit face override, or nil when the text follows the theme token.
+-- @return string|nil
+function TextMeta:GetFontOverride()
+    return self._font
+end
+
 function TextMeta:ApplyTheme()
     local T     = SuuUI.Theme
-    local font  = T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
+    local font  = self._font or T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local skey  = sizemap[self._size] or "fontSizeMd"
     local size  = T:GetToken(skey) or 13
     local ckey  = colmap[self._color] or "colorText"
@@ -90,9 +106,10 @@ function TextMeta:ApplyTheme()
 end
 
 --- Creates a themed text element.
--- @param props table  { text, size, color, flags, w, h, justify, wrap }
+-- @param props table  { text, size, color, flags, w, h, justify, wrap, font }
 --   size: "sm"|"md"|"lg"|"xl"   color: "text"|"muted"|"disable"|"accent"
 --   justify: "LEFT"|"CENTER"|"RIGHT" (default: "LEFT")
+--   font: explicit face path, overriding the theme token. Omit in normal use.
 -- @param parent frame
 -- @return table  Text handle
 function SuuUI.Components.Text(props, parent)
@@ -111,6 +128,7 @@ function SuuUI.Components.Text(props, parent)
         _color     = props.color or "text",
         _baseColor = props.color or "text",
         _flags     = props.flags or "",
+        _font      = props.font,
         _fixed     = (props.w and props.h) and true or false,
     }, TextMeta)
     handle:ApplyTheme()

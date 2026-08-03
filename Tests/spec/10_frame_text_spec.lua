@@ -192,6 +192,78 @@ describe("Components.Text", function()
         expect(t:GetHeight()).eq(H.lineHeight(H.token("fontSizeMd")))
     end)
 
+    describe("face override", function()
+        it("follows the theme font token by default", function()
+            local t = H.C.Text({ text = "x" }, host)
+            expect((H.fontOf(t))).eq(H.token("fontFamilyMain"))
+            expect(t:GetFontOverride()).isNil()
+        end)
+
+        it("renders in an explicit face from props", function()
+            local t = H.C.Text({ text = "x", font = "Fonts/MORPHEUS.TTF" }, host)
+            expect((H.fontOf(t))).eq("Fonts/MORPHEUS.TTF")
+            expect(t:GetFontOverride()).eq("Fonts/MORPHEUS.TTF")
+        end)
+
+        it("keeps the size and colour tokens while overriding the face", function()
+            local t = H.C.Text({ text = "x", size = "lg", color = "accent",
+                                 font = "Fonts/ARIALN.TTF" }, host)
+            local _, size = H.fontOf(t)
+            expect(size).eq(H.token("fontSizeLg"))
+            H.expectTokenColor(H.textColor(t), "colorAccent")
+        end)
+
+        it("re-measures for the override's own line height", function()
+            local plain = H.C.Text({ text = "Sample" }, host)
+            local tall  = H.C.Text({ text = "Sample", font = "Fonts/MORPHEUS.TTF" }, host)
+            expect(tall:GetHeight()).as("a taller face reports a taller line")
+                .gt(plain:GetHeight())
+            expect(tall:GetHeight())
+                .eq(H.lineHeight(H.token("fontSizeMd"), "Fonts/MORPHEUS.TTF"))
+        end)
+
+        it("switches face through SetFont", function()
+            local t = H.mount(H.C.Text({ text = "Sample" }, host))
+            t:SetFont("Fonts/MORPHEUS.TTF")
+            expect((H.fontOf(t))).eq("Fonts/MORPHEUS.TTF")
+            expect(t:GetHeight())
+                .eq(H.lineHeight(H.token("fontSizeMd"), "Fonts/MORPHEUS.TTF"))
+        end)
+
+        it("reports the new height when a layout had pinned it", function()
+            -- An unsized font string tracks its own text, so there is nothing to report.
+            -- A layout-assigned height was measured at the old face, so a swap has to
+            -- emit or the container keeps the height it measured.
+            local col = H.Layout:CreateContainer({
+                parent = host, layout = "flow", dir = "vertical", w = 200,
+            })
+            local t = H.C.Text({ text = "Sample" }, col:GetFrame())
+            col:Add(t, { width = "fill", height = H.lineHeight(H.token("fontSizeMd")) })
+
+            local spy = H.signalSpy(t, H.S.SIGNALS.SIZE_CHANGED)
+            t:SetFont("Fonts/MORPHEUS.TTF")
+            expect(spy.count).gte(1)
+            expect(spy:arg(2))
+                .gte(H.lineHeight(H.token("fontSizeMd"), "Fonts/MORPHEUS.TTF"))
+        end)
+
+        it("returns to the theme face when the override is cleared", function()
+            local t = H.C.Text({ text = "x", font = "Fonts/ARIALN.TTF" }, host)
+            t:SetFont(nil)
+            expect((H.fontOf(t))).eq(H.token("fontFamilyMain"))
+            expect(t:GetFontOverride()).isNil()
+        end)
+
+        it("keeps the override across a theme change", function()
+            local t = H.C.Text({ text = "x", font = "Fonts/ARIALN.TTF" }, host)
+            H.T:CreateUserTheme("Other", "Modern")
+            H.T:SetUserToken("Other", "fontFamilyMain", "Morpheus")
+            H.T:SetActive("Other")
+            expect((H.fontOf(t))).as("an explicit face is not a theme default")
+                .eq("Fonts/ARIALN.TTF")
+        end)
+    end)
+
     it("does not re-measure when both w and h were given", function()
         local t = H.C.Text({ text = "pinned", w = 80, h = 9 }, host)
         expect(t:GetHeight()).as("an explicitly sized text stays put").eq(9)
