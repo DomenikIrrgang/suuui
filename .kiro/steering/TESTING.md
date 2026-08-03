@@ -41,6 +41,14 @@ Specs are numbered so the run order reads bottom-up: harness, layout strategies,
 container, core, then components, then integration. One spec file per component or
 closely related pair.
 
+Two specs exist to protect the rest:
+
+- `00_harness_spec.lua` verifies the simulated client itself — the anchor solver, resize
+  notification, text metrics, input routing. If it fails, every other spec is unreliable
+  and possibly green for the wrong reason.
+- `99_doc_examples_spec.lua` runs the code examples printed in these steering docs, so
+  the guidance cannot rot away from the API. Change an example here, update it there.
+
 ---
 
 ## What a Component Spec Must Cover
