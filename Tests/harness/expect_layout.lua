@@ -167,6 +167,23 @@ return function(H)
         end
     end
 
+    --- Asserts a font string's box is big enough to render its text uncut.
+    -- The client silently clips instead of overflowing, so a layout that pins a font
+    -- string to a stale size produces a half-drawn glyph and no other assertion fails.
+    -- @param target table  A font string, or a handle whose frame is one
+    function H.expectTextNotClipped(target)
+        local fs = H.frameOf(target)
+        if not fs.IsTextClipped then
+            bail(label(target) .. " is not a font string")
+        end
+        local clipped, boxW, boxH, needW, needH = fs:IsTextClipped()
+        if clipped then
+            bail(string.format("%s text %s is clipped: box %sx%s, needs %sx%s",
+                label(target), fmt(fs:GetText()),
+                fmt(boxW), fmt(boxH), fmt(needW), fmt(needH)))
+        end
+    end
+
     --- Asserts a colour tuple matches a theme token's resolved value.
     -- @param got table  { r, g, b, a } or four return values collected by the caller
     -- @param tokenKey string

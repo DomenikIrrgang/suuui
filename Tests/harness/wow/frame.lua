@@ -183,6 +183,26 @@ function FrameMeta:SetResizeBounds(minW, minH, maxW, maxH)
     self._minResize, self._maxResize = { minW, minH }, { maxW, maxH }
 end
 
+function FrameMeta:GetResizeBounds()
+    local minr, maxr = self._minResize, self._maxResize
+    return minr and minr[1], minr and minr[2], maxr and maxr[1], maxr and maxr[2]
+end
+
+-- The client drives a user resize itself while StartSizing is active, clamping the
+-- result to the resize bounds. Programmatic SetSize is deliberately NOT clamped, which
+-- matches the real client: the bounds govern user resizing only.
+function FrameMeta:_userResize(w, h)
+    assert(self._sizing, "harness: _userResize without an active StartSizing")
+    local minr, maxr = self._minResize, self._maxResize
+    if minr then
+        w, h = math.max(w, minr[1] or w), math.max(h, minr[2] or h)
+    end
+    if maxr then
+        w, h = math.min(w, maxr[1] or w), math.min(h, maxr[2] or h)
+    end
+    self:SetSize(w, h)
+end
+
 function FrameMeta:StartMoving()
     assert(self._movable, "harness: StartMoving on a frame that is not movable")
     self._moving = true

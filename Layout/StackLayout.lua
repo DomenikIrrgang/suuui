@@ -12,6 +12,20 @@ local function insetOf(props)
     return 0, 0, 0, 0
 end
 
+-- A font string's natural size comes from its text and font, never from its current
+-- rect. A region the client has not laid out yet reports 0, and one sized by an earlier
+-- pass is stale the moment a fontSize token changes — either way, pinning that number
+-- gives the string a box smaller than its glyphs and the client clips them.
+local function naturalSize(child)
+    if child.GetStringHeight and child.GetFont then
+        local font, size, flags = child:GetFont()
+        if font and size then
+            return SuuUI.TextMetrics.Measure(child:GetText(), font, size, flags)
+        end
+    end
+    return child:GetWidth() or 0, child:GetHeight() or 0
+end
+
 -- Resolves one axis: returns offset from the box start and the child's size.
 local function axis(align, boxSize, natural, explicit)
     if align == "stretch" or align == nil then
@@ -46,8 +60,18 @@ function M.Apply(container)
         local boxW = max(0, cw - il - ir)
         local boxH = max(0, chh - it - ib)
 
-        local dx, w = axis(props.align  or container._align,  boxW, child:GetWidth(),  props.width)
-        local dy, h = axis(props.valign or container._valign, boxH, child:GetHeight(), props.height)
+        local alignH = props.align  or container._align
+        local alignV = props.valign or container._valign
+
+        -- Only measure when an axis actually needs a natural size
+        local nw, nh
+        if (alignH and alignH ~= "stretch" and not props.width)
+        or (alignV and alignV ~= "stretch" and not props.height) then
+            nw, nh = naturalSize(child)
+        end
+
+        local dx, w = axis(alignH, boxW, nw, props.width)
+        local dy, h = axis(alignV, boxH, nh, props.height)
 
         child:SetSize(w, h)
         child:ClearAllPoints()
@@ -65,8 +89,10 @@ function M.ContentSize(container)
     for _, child in ipairs(container._children) do
         local props = child._layoutProps or {}
         local it, ir, ib, il = insetOf(props)
-        maxW = max(maxW, (props.width  or child:GetWidth()  or 0) + il + ir)
-        maxH = max(maxH, (props.height or child:GetHeight() or 0) + it + ib)
+        local nw, nh
+        if not (props.width and props.height) then nw, nh = naturalSize(child) end
+        maxW = max(maxW, (props.width  or nw or 0) + il + ir)
+        maxH = max(maxH, (props.height or nh or 0) + it + ib)
     end
     return maxW + pad.left + pad.right, maxH + pad.top + pad.bottom
 end

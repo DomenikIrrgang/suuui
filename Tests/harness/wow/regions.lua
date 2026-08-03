@@ -186,6 +186,28 @@ function FontStringMeta:GetNumLines()
     return n
 end
 
+--- Harness accessor: whether the assigned box is too small for the rendered text, so
+--- the client would draw a clipped glyph. No real API reports this, but it is exactly
+--- what a user sees when a layout pins a font string to a stale or unmeasured size,
+--- so specs need to be able to assert against it.
+-- @return bool, number, number, number, number  clipped, boxW, boxH, needW, needH
+function FontStringMeta:IsTextClipped()
+    if (self._text or "") == "" then return false, 0, 0, 0, 0 end
+    local size = self._fontSize or font.defaultSize
+    local boxW = boundWidth(self)
+    local boxH = geometry.hasDerivedHeight(self) and geometry.height(self) or self._h
+
+    -- With word wrap on, a narrow box re-flows into more lines rather than cutting
+    -- glyphs off, so the height is what reveals the clip. With wrap off it cuts.
+    local needW = font.unbounded(self._text, size)
+    local needH = select(2, font.measure(self._text, size, self:CanWordWrap(), boxW))
+
+    local clipped = false
+    if boxH and boxH + 0.5 < needH then clipped = true end
+    if not self:CanWordWrap() and boxW and boxW + 0.5 < needW then clipped = true end
+    return clipped, boxW, boxH, needW, needH
+end
+
 -- A font string with neither an explicit size nor opposing anchors reports its text
 -- extent, which is what flow layout measures when height is omitted.
 function FontStringMeta:GetWidth()

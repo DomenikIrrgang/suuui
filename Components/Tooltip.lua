@@ -29,8 +29,14 @@ end
 -- @param anchorFrame frame|nil  If provided, anchors to frame instead of cursor
 function TipMeta:ShowTip(text, anchorFrame)
     self._text:SetText(text or "")
-    local tw = self._text:GetStringWidth() + 16
-    local th = self._text:GetStringHeight() + 10
+
+    -- Measure through TextMetrics, not the live font string: the layout has already
+    -- assigned it the previous tip's width, and GetStringWidth is clamped to that, so
+    -- a longer second tip would report the shorter box and never grow.
+    local font, size, flags = self._text:GetFont()
+    local mw, mh = SuuUI.TextMetrics.Measure(text or "", font, size, flags)
+    local tw = mw + 16
+    local th = mh + 10
 
     -- Placement goes through the anchor container, never SetPoint
     if anchorFrame then

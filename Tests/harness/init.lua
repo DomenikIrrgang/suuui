@@ -40,8 +40,8 @@
 --              H.expectNoOverlap H.expectStackedVertically H.expectRowHorizontally
 --              H.expectCenteredH H.expectCenteredV H.expectTokenColor
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll
---              H.key H.typeText H.pressEnter H.pressEscape H.cursor H.cursorOn
---              H.setMouseDown H.mods
+--              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
+--              H.cursorOn H.setMouseDown H.mods
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
 --
 -- H.setup() reloads the whole addon into a fresh sandbox against a fresh simulated
@@ -240,6 +240,24 @@ function M.mouseUp(target, button)
     if not deliverable(f) then return false end
     M.setMouseDown(button or "LeftButton", false)
     f:_fire("OnMouseUp", button or "LeftButton")
+    return true
+end
+
+--- Drags a resize grip by a delta, the way the client resizes a frame: press the grip,
+--- let the client move the edge, release. The client clamps the result to the frame's
+--- resize bounds, so a drag past a bound simply stops there.
+-- @param grip table    The grip widget that calls StartSizing
+-- @param dw number     Width delta in pixels
+-- @param dh number     Height delta in pixels
+-- @return bool  Whether the drag was delivered
+function M.dragResize(grip, dw, dh)
+    local g = M.frameOf(grip)
+    if not M.mouseDown(g) then return false end
+    local f = g
+    while f and not f._sizing do f = f:GetParent() end
+    assert(f, "harness: dragResize found no frame sizing after OnMouseDown")
+    f:_userResize(f:GetWidth() + (dw or 0), f:GetHeight() + (dh or 0))
+    M.mouseUp(g)
     return true
 end
 

@@ -8,6 +8,10 @@ local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar")
 local function closeSize()   return SuuUI.Theme:GetToken("sizeControlMd") or 22 end
 local function gripSize()    return SuuUI.Theme:GetToken("sizeIcon") or 16 end
 
+-- ASCII only. FRIZQT__.TTF has no glyph for U+00D7 (the multiplication sign that reads
+-- as a nicer close mark in a text editor), so it drew as blank in the client.
+local CLOSE_GLYPH = "X"
+
 local WinMeta = {}
 WinMeta.__index = WinMeta
 local registry = {}
@@ -41,6 +45,11 @@ local function applyTheme(self)
         T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeLg") or 15, "")
 
+    -- The close mark is sized from its font, so its box has to be re-measured here.
+    -- Nothing else re-lays it out: the button keeps the same token size, so no resize
+    -- fires, and the mark would stay pinned to the metrics of the previous font.
+    self._closeBox:Layout()
+
     -- Chrome geometry moves with the size and font tokens
     self._shell:SetChildProps(self._titleStrip, { width = "fill", height = titleHeight() })
     self._titleBox:SetChildProps(self._drag, { inset = { right = closeSize() + 12 } })
@@ -48,6 +57,18 @@ local function applyTheme(self)
         align = "end", valign = "center",
         width = closeSize(), height = closeSize(), inset = { right = 6 },
     })
+end
+
+-- Hands the size limits to the client so a drag stops dead at the bound instead of
+-- overshooting and snapping back when the mouse is released. SetMinResize/SetMaxResize
+-- are the pre-10.0 spelling, kept as a fallback.
+local function applyResizeBounds(f, minW, minH, maxW, maxH)
+    if f.SetResizeBounds then
+        f:SetResizeBounds(minW, minH, maxW, maxH)
+    else
+        if f.SetMinResize then f:SetMinResize(minW, minH) end
+        if f.SetMaxResize then f:SetMaxResize(maxW, maxH) end
+    end
 end
 
 -- Keeps the UIRoot anchor descriptor in step with the window's real position,
@@ -160,8 +181,14 @@ end
 -- @return table  Window handle
 function SuuUI.Layout:CreateWindow(props)
     assert(type(props.id) == "string", "SuuUI Window: id required")
+    local minW, minH = props.minW or 200, props.minH or 200
+    local maxW, maxH = props.maxW or 2000, props.maxH or 2000
     local w = props.w or 400
     local h = props.h or 300
+    if props.resizable then
+        w = math.max(minW, math.min(maxW, w))
+        h = math.max(minH, math.min(maxH, h))
+    end
     local layer = props.layer or "normal"
 
     local parent = UIParent
@@ -227,7 +254,7 @@ function SuuUI.Layout:CreateWindow(props)
 
     local closeBox = SuuUI.Layout:CreateContainer({ host = closeBtn, layout = "stack" })
     local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    closeText:SetText("×")
+    closeText:SetText(CLOSE_GLYPH)
     closeBox:Add(closeText, { align = "center", valign = "center" })
 
     -- Content area takes the remaining height
@@ -250,6 +277,7 @@ function SuuUI.Layout:CreateWindow(props)
         _titleBar  = bar,
         _titleText = title,
         _closeBtn  = closeBtn,
+        _closeBox  = closeBox,
         _closeText = closeText,
         _content   = content,
         _layer     = layer,
@@ -257,8 +285,7 @@ function SuuUI.Layout:CreateWindow(props)
 
     -- Resize grip, placed by an anchor container on the window frame
     if props.resizable then
-        local minW, minH = props.minW or 200, props.minH or 200
-        local maxW, maxH = props.maxW or 2000, props.maxH or 2000
+        applyResizeBounds(f, minW, minH, maxW, maxH)
 
         local gripBox = SuuUI.Layout:CreateContainer({ host = f, layout = "anchor" })
         local grip = CreateFrame("Frame", nil, f)
@@ -285,9 +312,6 @@ function SuuUI.Layout:CreateWindow(props)
         grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
         grip:SetScript("OnMouseUp", function()
             f:StopMovingOrSizing()
-            local width  = math.max(minW, math.min(maxW, f:GetWidth()))
-            local height = math.max(minH, math.min(maxH, f:GetHeight()))
-            f:SetSize(width, height)
             savePos({ _frame = f, _id = props.id })
         end)
         grip:SetScript("OnEnter", function() gripColor(true) end)

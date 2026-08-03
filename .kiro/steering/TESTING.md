@@ -116,6 +116,11 @@ H.expectSize(btn, H.textWidth("OK", size) + 2 + padX * 2,
 `H.textWidth`, `H.textHeight` and `H.lineHeight` use the harness font model, so they
 move with it. Never assert a raw glyph count.
 
+**Assert text is not clipped wherever a font string is sized.** The client clips a font
+string to its box instead of overflowing it, so a label pinned to a stale or unmeasured
+size draws a half glyph while its position, size and colour all still assert clean. That
+failure mode is only visible through `H.expectTextNotClipped(fontString)`.
+
 ---
 
 ## Forbidden in Specs

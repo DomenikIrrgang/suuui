@@ -159,6 +159,40 @@ describe("Layout.Window", function()
             H.expectCenteredV(w._closeBtn, w._titleStrip)
         end)
 
+        it("draws the close mark with a glyph the game font can render", function()
+            local w = window()
+            local text = w._closeText:GetText()
+            expect(text).notNil()
+            expect(#text).as("multi-byte glyphs are missing from FRIZQT__.TTF").eq(1)
+            expect(text:match("^[\32-\126]$")).as("ASCII printable").notNil()
+        end)
+
+        it("gives the close mark a box big enough for its own font", function()
+            local w = window({ w = 400 })
+            H.expectTextNotClipped(w._closeText)
+            local _, size = w._closeText:GetFont()
+            expect(size).eq(H.token("fontSizeLg"))
+            H.expectSize(w._closeText, H.textWidth(w._closeText:GetText(), size),
+                                       H.lineHeight(size))
+        end)
+
+        it("centres the close mark inside the close button", function()
+            local w = window({ w = 400 })
+            H.expectCenteredH(w._closeText, w._closeBtn)
+            H.expectCenteredV(w._closeText, w._closeBtn)
+            H.expectInside(w._closeText, w._closeBtn)
+        end)
+
+        it("re-measures the close mark when the font token changes", function()
+            local w = window({ w = 400 })
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeLg", 30)
+            H.T:SetActive("Big")
+            H.expectTextNotClipped(w._closeText)
+            H.expectSize(w._closeText, H.textWidth(w._closeText:GetText(), 30),
+                                       H.lineHeight(30))
+        end)
+
         it("stops the drag region short of the close button", function()
             local w = window({ w = 400 })
             H.expectNoOverlap({ w._drag, w._closeBtn })
@@ -216,6 +250,84 @@ describe("Layout.Window", function()
 
         it("marks the frame resizable", function()
             expect(window({ resizable = true }):GetFrame():IsResizable()).truthy()
+        end)
+    end)
+
+    describe("resize bounds", function()
+        local function resizable(props)
+            props = props or {}
+            props.resizable = true
+            props.w, props.h = props.w or 400, props.h or 300
+            props.minW, props.minH = props.minW or 300, props.minH or 250
+            props.maxW, props.maxH = props.maxW or 900, props.maxH or 700
+            local w = window(props)
+            w:Show()
+            return w, w._gripBox:GetChildren()[1]
+        end
+
+        it("hands the limits to the client so the drag stops at them", function()
+            local w = resizable()
+            local minW, minH, maxW, maxH = w:GetFrame():GetResizeBounds()
+            expect(minW).eq(300)
+            expect(minH).eq(250)
+            expect(maxW).eq(900)
+            expect(maxH).eq(700)
+        end)
+
+        it("stops a shrink drag at the minimum instead of snapping back", function()
+            local w, grip = resizable()
+            expect(H.dragResize(grip, -400, -400)).as("the grip takes mouse input").truthy()
+            H.expectSize(w, 300, 250)
+        end)
+
+        it("stops a grow drag at the maximum", function()
+            local w, grip = resizable()
+            H.dragResize(grip, 5000, 5000)
+            H.expectSize(w, 900, 700)
+        end)
+
+        it("resizes freely between the bounds", function()
+            local w, grip = resizable()
+            H.dragResize(grip, 120, 90)
+            H.expectSize(w, 520, 390)
+        end)
+
+        it("re-flows the chrome to the clamped size", function()
+            local w, grip = resizable()
+            H.dragResize(grip, -400, -400)
+            H.expectSize(w._titleStrip, 300 - 2, H.controlHeight("sizeTitleBar"))
+            H.expectSize(w:GetContentFrame(), 300 - 2,
+                         250 - 2 - H.controlHeight("sizeTitleBar"))
+            H.expectInside(w:GetContentFrame(), w:GetFrame())
+        end)
+
+        it("defaults the bounds when none are given", function()
+            local w = window({ resizable = true })
+            local minW, minH, maxW, maxH = w:GetFrame():GetResizeBounds()
+            expect(minW).eq(200)
+            expect(minH).eq(200)
+            expect(maxW).eq(2000)
+            expect(maxH).eq(2000)
+        end)
+
+        it("sets no bounds on a non-resizable window", function()
+            expect(window():GetFrame():GetResizeBounds()).isNil()
+        end)
+
+        it("opens no smaller than its minimum", function()
+            H.expectSize(window({ w = 100, h = 80, resizable = true,
+                                  minW = 300, minH = 250 }), 300, 250)
+        end)
+
+        it("opens no larger than its maximum", function()
+            H.expectSize(window({ w = 3000, h = 3000, resizable = true,
+                                  maxW = 900, maxH = 700 }), 900, 700)
+        end)
+
+        it("saves the position after a resize drag", function()
+            local w, grip = resizable({ id = "resized" })
+            H.dragResize(grip, -400, -400)
+            expect(H.env.SuuUIConfig.windows["resized"]).notNil()
         end)
     end)
 

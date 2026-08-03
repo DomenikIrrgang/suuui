@@ -234,6 +234,21 @@ box:Add(text,  { valign = "center", inset = { left = 6, right = 16 } })  -- span
 | `valign` | `"start"｜"center"｜"end"｜"stretch"` | vertical placement (default `stretch`) |
 | `width` / `height` | `number` | explicit size when that axis is not stretched |
 
+A non-stretched axis needs the child's natural size, and for a font string that comes
+from `TextMetrics.Measure` against its current font — never from its rect. A region the
+client has not laid out yet reports 0, and one sized by an earlier pass is stale as soon
+as a `fontSize*` token changes. Either way the string gets a box smaller than its glyphs
+and **the client clips rather than overflows**, which is invisible to every geometry
+assertion. So when a component changes a font string's font, re-run the host container:
+
+```lua
+label:SetFont(T:GetToken("fontFamilyMain"), T:GetToken("fontSizeLg"), "")
+box:Layout()   -- the box is sized from the font; nothing else re-measures it
+```
+
+A resize would re-layout on its own, but a font change on a token-sized element does not
+resize anything, so there is no hook to ride. Assert it with `H.expectTextNotClipped`.
+
 ### Flow Layout
 Arranges children in a single direction with optional flexible sizing.
 

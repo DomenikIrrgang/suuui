@@ -411,6 +411,10 @@ win:GetContentFrame()   -- inner frame, attach children here
 win:SavePosition()      -- called automatically on drag stop
 ```
 
+`minW` / `minH` / `maxW` / `maxH` are handed to the client via `SetResizeBounds`, so a
+drag stops dead at the limit. Never clamp after the fact in `OnMouseUp` — the window
+overshoots and visibly snaps back. The initial `w`/`h` are clamped into the bounds too.
+
 ### Container (`Layout/Container.lua`)
 
 Layout unit with a strategy. Recalculates child positions on `Layout()`.
@@ -471,6 +475,10 @@ A container emits `SIZE_CHANGED` whenever its computed size changes.
   - `inset` (number or per-edge table), `align`, `valign`, explicit `width`/`height`
   - Replaces `SetAllPoints`, centred labels, edge-spanning text, and inset icons
   - This is what components use internally
+  - Font string children on a non-stretched axis are measured with
+    `TextMetrics.Measure`, not from their rect, so they track the `fontSize*` tokens.
+    Call `box:Layout()` after changing a font string's font — a token-sized element
+    does not resize, so nothing else re-measures it and the client clips the glyphs.
 - **AnchorLayout** (`Layout/AnchorLayout.lua`): children carry anchor descriptors.
   - For computed positions: slider fills and thumbs, scrollbar thumbs, floating panels
   - Move a child with `container:SetChildAnchor(child, desc)`
