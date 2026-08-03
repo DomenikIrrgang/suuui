@@ -125,10 +125,12 @@ and the test passes whether or not the swap happened:
 expect(H.textWidth("hello", 12, "Fonts/ARIALN.TTF")).lt(H.textWidth("hello", 12))
 ```
 
-`H.font.faces` is also the set of faces the client will load — `SetFont` returns false for
-anything else, which is what font path validation reads. `H.addFont(name, path)` adds a
-loadable face plus a client font object that reports it, the way a locale client or a media
-addon does; faces reset on every `H.setup()`.
+`H.font.faces` is also the set of faces the client will load. **`SetFont` raises for
+anything else**, as the live client does (`Invalid font asset`), so code that probes font
+paths has to protect the call — modelling that as a `false` return once hid an error that
+unwound out of the `PLAYER_LOGIN` handler. `H.addFont(name, path)` adds a loadable face
+plus a client font object that reports it, the way a locale client or a media addon does;
+faces reset on every `H.setup()`.
 
 **Assert text is not clipped wherever a font string is sized.** The client clips a font
 string to its box instead of overflowing it, so a label pinned to a stale or unmeasured

@@ -103,10 +103,15 @@ function M.install(env)
         return out
     end
 
+    env.GameFontWhite = fontObject("GameFontWhite", 12)
+
     -- The client's locale font globals. enUS values here; other locales ship other files.
     env.STANDARD_TEXT_FONT = "Fonts/FRIZQT__.TTF"
     env.UNIT_NAME_FONT     = "Fonts/FRIZQT__.TTF"
     env.DAMAGE_TEXT_FONT   = "Fonts/skurri.TTF"
+    -- Not a path. The live client really does define this one as a font OBJECT name, and
+    -- handing it to SetFont raises "Invalid font asset" — the shape that broke login.
+    env.NAMEPLATE_FONT     = "GameFontWhite"
 
     env.GetScreenWidth  = function() return state.screenWidth end
     env.GetScreenHeight = function() return state.screenHeight end

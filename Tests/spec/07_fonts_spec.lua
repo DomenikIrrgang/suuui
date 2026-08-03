@@ -47,6 +47,43 @@ describe("Core.Fonts", function()
             expect(F:Has("Ghost")).falsy()
         end)
 
+        it("never raises while validating a candidate", function()
+            -- The client raises "Invalid font asset" instead of returning false. An
+            -- unguarded probe unwound out of the PLAYER_LOGIN handler and cost plugin
+            -- init and SUUUI_READY, so nothing here may throw for any input.
+            for _, bogus in ipairs({
+                "Interface/AddOns/Nope/missing.ttf", "GameFontWhite", "not a path",
+                "Fonts/", "", "Fonts/FRIZQT__", 17, true,
+            }) do
+                expect(function() F:Register("Bogus", bogus) end)
+                    .as(tostring(bogus)).notThrows()
+                expect(function() F:Validate(bogus) end).as(tostring(bogus)).notThrows()
+                expect(function() F:Path(bogus) end).as(tostring(bogus)).notThrows()
+                expect(function() F:Add(bogus) end).as(tostring(bogus)).notThrows()
+            end
+        end)
+
+        it("resolves a client global that names a font object, not a file", function()
+            -- NAMEPLATE_FONT is "GameFontWhite" in the live client. Handed to SetFont it
+            -- raises; the object itself knows its file.
+            expect(H.env.NAMEPLATE_FONT).as("the harness ships the real shape")
+                .eq("GameFontWhite")
+            expect(names()["Nameplates"] or F:Name("Fonts/FRIZQT__.TTF")).notNil()
+            expect(F:Register("Object Named", "GameFontWhite"))
+                .as("already registered under the curated name for that file").falsy()
+
+            H.addFont("SpecFacedObject", "Fonts/spec-object.ttf")
+            expect(F:Register("Via Object", "SpecFacedObject")).truthy()
+            expect(F:Path("Via Object")).as("stored as the file, not the object name")
+                .eq("Fonts/spec-object.ttf")
+        end)
+
+        it("rejects a name that resolves to nothing without probing it", function()
+            expect(F:Register("Not A Font", "SomeGlobalThatIsNotAFontObject")).falsy()
+            expect(F:Validate("GameFontNormal")).as("an object with a real file").truthy()
+            expect(F:Validate("nonsense")).falsy()
+        end)
+
         it("rejects an empty name or path", function()
             expect(F:Register("", "Fonts/2002.TTF")).falsy()
             expect(F:Register("Nameless", "")).falsy()
@@ -209,6 +246,57 @@ describe("Core.Fonts", function()
             expect(F:Has("Gone Face")).as("dropped, not resurrected as a bad path").falsy()
             expect(F:Path("Gone Face")).eq(F.FALLBACK)
         end)
+    end)
+end)
+
+describe("Login pass with hostile font globals", function()
+    -- The font scan runs from Theme's cache build and again on PLAYER_LOGIN. An error in
+    -- it used to unwind out of the boot handler, so plugin init and SUUUI_READY never ran
+    -- and the addon came up half-alive with only a font error to show for it.
+    local function boot()
+        local inits = 0
+        H.SuuUI:CreatePlugin({ id = "boot_probe", name = "Boot Probe",
+                               onInit = function() inits = inits + 1 end })
+        local ready = H.eventSpy("SUUUI_READY")
+        H.fireEvent("ADDON_LOADED", "SuuUI")
+        H.fireEvent("PLAYER_LOGIN")
+        return ready, function() return inits end
+    end
+
+    it("completes when a font global names a font object instead of a file", function()
+        H.setup({ boot = false })
+        H.env.NAMEPLATE_FONT = "GameFontWhite"
+        local ready, inits = boot()
+        expect(ready.count).as("SUUUI_READY still fires").eq(1)
+        expect(inits()).as("plugins still initialise").eq(1)
+    end)
+
+    it("completes when a font global points at a missing file", function()
+        H.setup({ boot = false })
+        H.env.STANDARD_TEXT_FONT = "Fonts/does-not-exist.ttf"
+        H.env.DAMAGE_TEXT_FONT   = "Fonts/also-gone.otf"
+        local ready, inits = boot()
+        expect(ready.count).eq(1)
+        expect(inits()).eq(1)
+        expect(H.SuuUI.Fonts:Has("Friz Quadrata TT"))
+            .as("the rest of the list survived").truthy()
+    end)
+
+    it("completes when GetFonts hands back junk", function()
+        H.setup({ boot = false })
+        H.env.GetFonts = function()
+            return { "NoSuchGlobal", "GameFontNormal", 42, {} }
+        end
+        local ready, inits = boot()
+        expect(ready.count).eq(1)
+        expect(inits()).eq(1)
+    end)
+
+    it("still resolves a usable face for the theme after a bad scan", function()
+        H.setup({ boot = false })
+        H.env.STANDARD_TEXT_FONT = "Fonts/does-not-exist.ttf"
+        boot()
+        expect(H.font.hasFace(H.T:GetToken("fontFamilyMain"))).truthy()
     end)
 end)
 

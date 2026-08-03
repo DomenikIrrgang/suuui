@@ -254,6 +254,20 @@ describe("Components.Text", function()
             expect(t:GetFontOverride()).isNil()
         end)
 
+        it("degrades an unloadable override instead of raising", function()
+            -- An override comes from a caller, and SetFont raises on an invalid asset.
+            -- ApplyTheme runs from a theme-change callback, so an error there would stop
+            -- every later element restyling.
+            local t
+            expect(function()
+                t = H.C.Text({ text = "x", font = "Interface/AddOns/Nope/gone.ttf" }, host)
+            end).notThrows()
+            expect((H.fontOf(t))).eq(H.SuuUI.Fonts.FALLBACK)
+
+            expect(function() t:SetFont("also nonsense") end).notThrows()
+            expect(H.font.hasFace((H.fontOf(t)))).truthy()
+        end)
+
         it("keeps the override across a theme change", function()
             local t = H.C.Text({ text = "x", font = "Fonts/ARIALN.TTF" }, host)
             H.T:CreateUserTheme("Other", "Modern")

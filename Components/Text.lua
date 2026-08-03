@@ -95,7 +95,11 @@ end
 
 function TextMeta:ApplyTheme()
     local T     = SuuUI.Theme
-    local font  = self._font or T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
+    -- An override comes from a caller, so it is resolved rather than trusted: SetFont
+    -- raises on an asset the client cannot load, and this runs from a theme-change
+    -- callback where an error would stop every later element restyling.
+    local font  = self._font and SuuUI.Fonts:Path(self._font)
+                  or T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local skey  = sizemap[self._size] or "fontSizeMd"
     local size  = T:GetToken(skey) or 13
     local ckey  = colmap[self._color] or "colorText"

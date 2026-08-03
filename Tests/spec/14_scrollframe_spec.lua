@@ -435,4 +435,43 @@ describe("TextMetrics", function()
         expect(probeHost).notNil()
         expect(probeHost:IsShown()).falsy()
     end)
+
+    it("measures a different face differently", function()
+        local wide   = H.SuuUI.TextMetrics.Measure("hello", "Fonts/FRIZQT__.TTF", 13)
+        local narrow = H.SuuUI.TextMetrics.Measure("hello", "Fonts/ARIALN.TTF", 13)
+        expect(narrow).lt(wide)
+    end)
+
+    describe("CanLoadFont", function()
+        it("accepts a face the client ships", function()
+            expect(H.SuuUI.TextMetrics.CanLoadFont("Fonts/ARIALN.TTF")).truthy()
+        end)
+
+        it("reports false for a missing file without raising", function()
+            -- The client raises "Invalid font asset" rather than returning false, so the
+            -- probe is protected. Unguarded, this unwound out of the login handler.
+            expect(H.SuuUI.TextMetrics.CanLoadFont("Interface/AddOns/Nope/gone.ttf"))
+                .falsy()
+        end)
+
+        it("reports false for junk input", function()
+            for _, bad in ipairs({ "", "GameFontWhite", "not a path" }) do
+                expect(H.SuuUI.TextMetrics.CanLoadFont(bad)).as(bad).falsy()
+            end
+            expect(H.SuuUI.TextMetrics.CanLoadFont(nil)).falsy()
+            expect(H.SuuUI.TextMetrics.CanLoadFont(12)).falsy()
+        end)
+
+        it("leaves the probe's own face untouched, so measuring still works", function()
+            local before = H.SuuUI.TextMetrics.Measure("hello", "Fonts/ARIALN.TTF", 13)
+            H.SuuUI.TextMetrics.CanLoadFont("Interface/AddOns/Nope/gone.ttf")
+            expect(H.SuuUI.TextMetrics.Measure("hello", "Fonts/ARIALN.TTF", 13)).eq(before)
+        end)
+    end)
+
+    it("degrades instead of raising when asked to measure an unloadable face", function()
+        expect(function()
+            H.SuuUI.TextMetrics.Measure("x", "Interface/AddOns/Nope/gone.ttf", 13)
+        end).notThrows()
+    end)
 end)

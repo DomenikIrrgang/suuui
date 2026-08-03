@@ -25,7 +25,14 @@ end
 -- @return number, number  width, height in pixels
 function M.Measure(text, font, size, flags)
     ensureProbe()
-    if font and size then probe:SetFont(font, size, flags or "") end
+    if font and size then
+        -- The client raises on an invalid asset, and a measurement is never worth a Lua
+        -- error. Degrade to the probe's current face and name the culprit instead.
+        local ok = pcall(probe.SetFont, probe, font, size, flags or "")
+        if not ok then
+            SuuUI.Debug("TextMetrics: cannot load font " .. tostring(font))
+        end
+    end
     probe:SetText(text or "")
 
     local w = probe.GetUnboundedStringWidth and probe:GetUnboundedStringWidth()
@@ -35,18 +42,20 @@ function M.Measure(text, font, size, flags)
 end
 
 --- Reports whether the client can load a font file.
--- SetFont returns false and leaves the font untouched when the file is missing or not a
--- usable face, which is the only way to test a path — there is no filesystem API. The
--- probe's own font is restored so a validation pass never disturbs the next measurement.
+-- Applying the font is the only way to test it — there is no filesystem API. The client
+-- **raises** on an invalid asset ("Invalid font asset (X): file not found") rather than
+-- just returning false, so the probe is protected: an unguarded one takes down whatever
+-- was iterating font candidates. The probe's own font is restored either way, so a
+-- validation pass never disturbs the next measurement.
 -- @param path string  Font file path
 -- @return bool
 function M.CanLoadFont(path)
     if type(path) ~= "string" or path == "" then return false end
     ensureProbe()
     local font, size, flags = probe:GetFont()
-    local ok = probe:SetFont(path, size or 12, flags or "")
-    if font and size then probe:SetFont(font, size, flags or "") end
-    return ok and true or false
+    local ok, applied = pcall(probe.SetFont, probe, path, size or 12, flags or "")
+    if font and size then pcall(probe.SetFont, probe, font, size, flags or "") end
+    return ok and applied ~= false
 end
 
 SuuUI.TextMetrics = M

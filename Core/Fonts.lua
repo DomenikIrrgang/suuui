@@ -44,6 +44,33 @@ local function normalise(path)
     return lower(gsub(path, "\\", "/"))
 end
 
+-- A font asset is a file. Probing anything else makes the client raise, so candidates are
+-- shape-checked before they are touched.
+local function isFontFile(value)
+    local lowered = lower(value)
+    return lowered:match("%.ttf$") ~= nil
+        or lowered:match("%.otf$") ~= nil
+        or lowered:match("%.ttc$") ~= nil
+end
+
+-- Turns a candidate into a font file path, or nil if it cannot be one.
+--
+-- Not every client font global holds a path: `NAMEPLATE_FONT` is the string
+-- "GameFontWhite", a font *object* name. Handing that to SetFont raises "Invalid font
+-- asset", which is what took down the login pass before this existed. The object knows
+-- its own file, so ask it.
+local function resolveAsset(value)
+    if type(value) ~= "string" or value == "" then return nil end
+    if isFontFile(value) then return value end
+
+    local obj = _G[value]
+    if type(obj) == "table" and obj.GetFont then
+        local ok, path = pcall(obj.GetFont, obj)
+        if ok and type(path) == "string" and isFontFile(path) then return path end
+    end
+    return nil
+end
+
 -- Name for a harvested path that no curated entry covers: the bare filename. Names are
 -- the persisted key, so this stays deliberately dumb — a prettifier that changed later
 -- would orphan every value saved under the old spelling.
@@ -113,29 +140,39 @@ local function scan()
     end
 end
 
-local function ensureScanned()
-    if not scanned then scan() end
+-- A misbehaving source must not take down the caller. This runs from Theme's cache build
+-- and from the login pass, where an error costs plugin init and SUUUI_READY — so the
+-- worst case is a short font list, never a broken login.
+local function safeScan()
+    local ok, err = pcall(scan)
+    if not ok then SuuUI.Debug("Fonts: scan failed: " .. tostring(err)) end
 end
 
---- Registers a font face. Rejects a path the client cannot load, and keeps the first
---- name registered for a given file so the list holds one entry per face.
+local function ensureScanned()
+    if not scanned then safeScan() end
+end
+
+--- Registers a font face. Accepts a file path or the name of a font object that knows
+--- one. Rejects anything the client cannot load, and keeps the first name registered for
+--- a given file so the list holds one entry per face.
 -- @param name string  Display name, and the value stored in the theme token
--- @param path string  Font file path
+-- @param path string  Font file path, or a font object name
 -- @param source string  Optional origin tag: "client"|"locale"|"lsm"|"user"
 -- @return bool  Whether the font was added
 function M:Register(name, path, source)
     if type(name) ~= "string" or name == "" then return false end
-    if type(path) ~= "string" or path == "" then return false end
-    local key = normalise(path)
+    local asset = resolveAsset(path)
+    if not asset then return false end
+    local key = normalise(asset)
     if byPath[key] or byName[name] then return false end
-    if not loadable(path) then return false end
+    if not loadable(asset) then return false end
 
-    local entry = { name = name, path = path, source = source or "user" }
+    local entry = { name = name, path = asset, source = source or "user" }
     byName[name] = entry
     byPath[key]  = entry
     order = nil
     if entry.source == "user" then
-        external[#external + 1] = { name = name, path = path, source = "user" }
+        external[#external + 1] = { name = name, path = asset, source = "user" }
     end
     return true
 end
@@ -173,7 +210,8 @@ end
 -- @param path string
 -- @return bool
 function M:Validate(path)
-    return type(path) == "string" and path ~= "" and loadable(path) or false
+    local asset = resolveAsset(path)
+    return asset ~= nil and loadable(asset)
 end
 
 --- Resolves a stored token value to a usable font path.
@@ -192,9 +230,10 @@ function M:Path(value)
     if pathed then return pathed.path end
     -- An unregistered path the client can still load: honour it rather than overriding
     -- a working choice, and remember it so it appears in the list.
-    if loadable(value) then
-        self:Register(nameFromPath(value), value, "user")
-        return value
+    local asset = resolveAsset(value)
+    if asset and loadable(asset) then
+        self:Register(nameFromPath(asset), asset, "user")
+        return asset
     end
     return self.FALLBACK
 end
@@ -206,16 +245,17 @@ end
 -- @param path string
 -- @return string|nil  The name it was registered under
 function M:Add(path)
-    if not self:Validate(path) then return nil end
+    local asset = resolveAsset(path)
+    if not (asset and loadable(asset)) then return nil end
     ensureScanned()
-    local existing = self:Name(path)
+    local existing = self:Name(asset)
     if existing then return existing end
 
-    local name = nameFromPath(path)
-    if self:Register(name, path, "user") then return name end
+    local name = nameFromPath(asset)
+    if self:Register(name, asset, "user") then return name end
     -- The filename is already taken by a different face. The full path is unambiguous
     -- and still tells the user which file they picked.
-    if self:Register(path, path, "user") then return path end
+    if self:Register(asset, asset, "user") then return asset end
     return nil
 end
 
@@ -236,7 +276,7 @@ end
 function M:Refresh()
     local before = byName
     byName, byPath, order = {}, {}, nil
-    scan()
+    safeScan()
 
     local changed = false
     for name in pairs(byName) do

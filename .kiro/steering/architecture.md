@@ -401,10 +401,24 @@ to be assembled from what the client will admit to:
 | media addons | `LibSharedMedia-3.0` if the player has it — read only, never a dependency |
 | plugins and users | `Fonts:Register(name, path)` |
 
-Every candidate is validated by probing `SetFont`, which returns false for a file the
-client cannot load. That is the only way to check a path, and it is what makes locale
-variance and user-dropped files safe. Entries are deduplicated by path across slash style
-and case, since LSM registers with backslashes and this addon writes forward ones.
+Every candidate is validated by probing `SetFont` through `TextMetrics.CanLoadFont`, since
+applying a font is the only way to test it. Entries are deduplicated by path across slash
+style and case, because LSM registers with backslashes and this addon writes forward ones.
+
+**Two traps live here, and both have already cost a broken login:**
+
+- **`SetFont` raises on an invalid asset** — `Invalid font asset (X): file not found` —
+  rather than returning false. Every probe is wrapped in `pcall`, and any face that comes
+  from a caller (a `Text` `font` prop, a `Dropdown` option's `font`) is resolved through
+  `Fonts:Path` before it reaches `SetFont`. An unguarded probe unwound out of the
+  `PLAYER_LOGIN` handler and cost plugin init and `SUUUI_READY`.
+- **Not every client font global holds a path.** `NAMEPLATE_FONT` is `"GameFontWhite"`, a
+  font *object* name. Candidates are shape-checked for a font file extension first, and a
+  name that isn't one is resolved via the object's own `GetFont()`.
+
+The scan itself is wrapped too, so the worst case is a short font list rather than a failed
+login. The simulated client raises the same way, and ships `NAMEPLATE_FONT` in its real
+object-name shape, so the whole suite exercises both traps on every setup.
 
 Names match LSM's for the same files, deliberately: a theme saved while SharedMedia was
 installed has to keep resolving once it is gone, and the reverse.

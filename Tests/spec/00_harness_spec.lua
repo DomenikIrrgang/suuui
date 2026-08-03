@@ -305,13 +305,23 @@ describe("harness: WoW API simulation", function()
             expect(fs:GetUnboundedStringWidth()).lt(H.textWidth("hello", 12, "Fonts/FRIZQT__.TTF"))
         end)
 
-        it("rejects SetFont for a face the client cannot load, changing nothing", function()
+        it("raises on SetFont for an asset the client cannot load, changing nothing", function()
+            -- The live client raises rather than returning false. Modelling it as a return
+            -- value hid a login-breaking error: the unguarded probe in Fonts' validation
+            -- unwound out of the PLAYER_LOGIN handler and cost plugin init.
             local p = H.parent(400, 100)
             local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             fs:SetFont("Fonts/ARIALN.TTF", 12, "")
-            expect(fs:SetFont("Interface/AddOns/Nope/missing.ttf", 14, "")).falsy()
+            expect(function() fs:SetFont("Interface/AddOns/Nope/missing.ttf", 14, "") end)
+                .throws("Invalid font asset")
             expect((fs:GetFont())).eq("Fonts/ARIALN.TTF")
             expect(select(2, fs:GetFont())).as("size untouched too").eq(12)
+        end)
+
+        it("raises the same way for an EditBox", function()
+            local eb = H.env.CreateFrame("EditBox", nil, H.parent(100, 30))
+            expect(function() eb:SetFont("Fonts/nope.ttf", 12, "") end)
+                .throws("Invalid font asset")
         end)
 
         it("accepts a face added by H.addFont", function()

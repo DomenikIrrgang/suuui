@@ -10,6 +10,13 @@ local function rowHeight()
     return SuuUI.Theme:GetControlHeight("sizeControlMd")
 end
 
+-- An option's face comes from a caller, so it is resolved to something loadable before
+-- use. SetFont raises on an invalid asset, and a dropdown option is not worth an error.
+local function faceOf(opt)
+    if not (opt and opt.font) then return nil end
+    return SuuUI.Fonts:Path(opt.font)
+end
+
 -- Height a label needs in an explicit face. An option may render in its own font (a font
 -- picker does), and a face's line height is not derivable from the point size alone, so
 -- the token floor is not enough on its own — a tall face would draw clipped glyphs.
@@ -103,8 +110,8 @@ end
 -- Shows an option as the selection. An option carrying a font renders in it, which also
 -- changes how tall the button has to be, so the height is re-derived here too.
 function DdMeta:_select(opt)
-    self._selFont = opt.font
-    self._selT:SetFont(opt.font)
+    self._selFont = faceOf(opt)
+    self._selT:SetFont(self._selFont)
     self._selT:SetText(opt.label)
     self:_autosize()
     -- The label is token-sized, so a face change resizes nothing and nothing else
@@ -169,7 +176,8 @@ end
 -- height it took, which the panel sums rather than assuming every row is the same.
 function DdMeta:_row(index, opt)
     local B = SuuUI.Backdrop
-    local h = faceHeight(opt.label, opt.font, rowHeight())
+    local face = faceOf(opt)
+    local h = faceHeight(opt.label, face, rowHeight())
 
     local row = self._rows[index]
     if not row then
@@ -192,7 +200,7 @@ function DdMeta:_row(index, opt)
     end
 
     B.Apply(row, { bg = "colorBgAlt", border = "colorBorder" })
-    row._lblT:SetFont(opt.font)
+    row._lblT:SetFont(face)
     row._lblT:SetText(opt.label)
     -- Same reason as _select: a token-sized label does not resize when its face changes,
     -- so the host box has to re-measure it explicitly.

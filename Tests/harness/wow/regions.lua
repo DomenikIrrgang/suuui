@@ -111,11 +111,17 @@ function FontStringMeta:SetFormattedText(fmt, ...)
     self:SetText(string.format(fmt, ...))
 end
 
---- Sets the face, size and flags. Returns false and changes nothing when the client
---- cannot load the path, as the real client does for a missing font file — that return
---- value is the only way an addon can validate a font path.
+--- Sets the face, size and flags.
+--- **Raises** for an asset the client cannot load, exactly as the live client does:
+--- "FontString:SetFont(): Invalid font asset (X): file not found". It does not quietly
+--- return false, so any code probing font paths has to protect the call — an unguarded
+--- probe unwinds into whatever was iterating candidates. Modelling this as a return value
+--- let a login-breaking error through.
 function FontStringMeta:SetFont(path, size, flags)
-    if not font.hasFace(path) then return false end
+    if not font.hasFace(path) then
+        error("FontString:SetFont(): Invalid font asset (" .. tostring(path)
+              .. "): file not found", 2)
+    end
     self._font, self._fontSize, self._fontFlags = path, size, flags
     state.invalidate(self)
     return true

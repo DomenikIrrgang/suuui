@@ -640,6 +640,16 @@ describe("Components.Dropdown", function()
             expect(boxH).as("tall enough for the face").gte(needH)
         end)
 
+        it("degrades an unloadable option face instead of raising", function()
+            -- Option faces come from a caller, and the client raises on an invalid asset.
+            local bogus = { { value = "x", label = "Missing",
+                              font = "Interface/AddOns/Nope/gone.ttf" } }
+            local d = H.mount(H.C.Dropdown({ options = bogus, value = "x" }, host))
+            expect((H.fontOf(d._selText))).eq(H.SuuUI.Fonts.FALLBACK)
+            expect(function() H.click(d) end).notThrows()
+            expect((H.fontOf(d._rows[1]._lbl))).eq(H.SuuUI.Fonts.FALLBACK)
+        end)
+
         it("drops the face override when a plain option is selected", function()
             local mixed = {
                 { value = "morph", label = "Morpheus", font = "Fonts/MORPHEUS.TTF" },
