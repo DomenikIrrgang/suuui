@@ -1,4 +1,7 @@
 local ipairs = ipairs
+-- Descriptors carry caller-computed positions — a slider thumb at pct * trackWidth, a
+-- scrollbar thumb at a fraction of its track — so this is where those land on the grid.
+local snap = SuuUI.Pixel.Snap
 
 local M = {}
 
@@ -25,15 +28,18 @@ function M.Apply(container)
             child:ClearAllPoints()
 
             if a.width or a.height then
-                child:SetSize(a.width or child:GetWidth(), a.height or child:GetHeight())
+                child:SetSize(
+                    snap(a.width  or child:GetWidth()),
+                    snap(a.height or child:GetHeight())
+                )
             end
 
             child:SetPoint(
                 a.point or "TOPLEFT",
                 rel,
                 a.relativePoint or a.point or "TOPLEFT",
-                a.x or 0,
-                a.y or 0
+                snap(a.x or 0),
+                snap(a.y or 0)
             )
         end
     end

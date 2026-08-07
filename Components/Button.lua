@@ -107,7 +107,9 @@ function BtnMeta:ApplyTheme()
     local T   = SuuUI.Theme
     local en  = self._enabled ~= false
     local vk  = en and variantToken[self._variant] or nil
-    local bw  = T:GetToken("borderWidth") or 1
+    -- The same snapped width Backdrop draws, so the label's padding matches the border
+    -- it sits inside rather than the unsnapped token.
+    local bw  = SuuUI.Pixel.Line(T:GetToken("borderWidth") or 1)
     local font= T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local sz  = T:GetToken("fontSizeMd") or 13
     SuuUI.Backdrop.Apply(self._f, {

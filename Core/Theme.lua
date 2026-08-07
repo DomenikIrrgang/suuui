@@ -123,7 +123,10 @@ function M:GetControlHeight(sizeKey, fontKey)
     local base = resolved[sizeKey] or 22
     local font = resolved[fontKey or "fontSizeMd"] or 13
     local pad  = resolved.spaceXs or 4
-    return max(base, font + pad * 2)
+    -- Ceil onto the pixel grid rather than round: a control that lands half a pixel
+    -- short of its own text clips the glyphs. Tokens are user-editable, so this cannot
+    -- assume the inputs were integers.
+    return SuuUI.Pixel.Ceil(max(base, font + pad * 2))
 end
 
 --- Sets the active theme and fires SUUUI_THEME_CHANGED.
@@ -267,6 +270,12 @@ function M:Init()
             SuuUI.Events:Emit("SUUUI_THEME_CHANGED", active)
         end
     end, "_theme_fonts")
+
+    -- A resolution or scale change moves the pixel grid, which changes what every
+    -- token-derived size snaps to. Restyling is the same work a theme change needs.
+    SuuUI.Events:On("SUUUI_PIXEL_GRID_CHANGED", function()
+        if active then SuuUI.Events:Emit("SUUUI_THEME_CHANGED", active) end
+    end, "_theme_pixel")
 end
 
 SuuUI.Theme = M

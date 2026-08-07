@@ -1,4 +1,5 @@
 local type, ipairs, max = type, ipairs, math.max
+local snap, pxfloor = SuuUI.Pixel.Snap, SuuUI.Pixel.Floor
 
 local M = {}
 
@@ -27,13 +28,15 @@ local function naturalSize(child)
 end
 
 -- Resolves one axis: returns offset from the box start and the child's size.
+-- Centring halves an odd difference, which is the one place this strategy leaves the
+-- pixel grid, so the offset is snapped back onto it.
 local function axis(align, boxSize, natural, explicit)
     if align == "stretch" or align == nil then
         return 0, boxSize
     end
-    local size = explicit or natural or 0
+    local size = snap(explicit or natural or 0)
     if align == "center" then
-        return max(0, (boxSize - size) / 2), size
+        return snap(max(0, (boxSize - size) / 2)), size
     elseif align == "end" then
         return max(0, boxSize - size), size
     end
@@ -50,15 +53,18 @@ end
 -- @param container table  Container handle
 function M.Apply(container)
     local pad = container._padding
-    local cw  = max(0, (container._frame:GetWidth()  or 0) - pad.left - pad.right)
-    local chh = max(0, (container._frame:GetHeight() or 0) - pad.top  - pad.bottom)
+    -- Floor rather than snap: the content box must never round up past the frame it
+    -- sits in. Everything downstream derives from these, so the whole strategy stays on
+    -- the grid once they are.
+    local cw  = pxfloor(max(0, (container._frame:GetWidth()  or 0) - pad.left - pad.right))
+    local chh = pxfloor(max(0, (container._frame:GetHeight() or 0) - pad.top  - pad.bottom))
 
     for _, child in ipairs(container._children) do
         local props = child._layoutProps or {}
         local it, ir, ib, il = insetOf(props)
 
-        local boxW = max(0, cw - il - ir)
-        local boxH = max(0, chh - it - ib)
+        local boxW = max(0, cw - snap(il) - snap(ir))
+        local boxH = max(0, chh - snap(it) - snap(ib))
 
         local alignH = props.align  or container._align
         local alignV = props.valign or container._valign
@@ -76,7 +82,7 @@ function M.Apply(container)
         child:SetSize(w, h)
         child:ClearAllPoints()
         child:SetPoint("TOPLEFT", container._frame, "TOPLEFT",
-            pad.left + il + dx, -(pad.top + it + dy))
+            snap(pad.left + il + dx), -snap(pad.top + it + dy))
     end
 end
 
@@ -91,10 +97,13 @@ function M.ContentSize(container)
         local it, ir, ib, il = insetOf(props)
         local nw, nh
         if not (props.width and props.height) then nw, nh = naturalSize(child) end
-        maxW = max(maxW, (props.width  or nw or 0) + il + ir)
-        maxH = max(maxH, (props.height or nh or 0) + it + ib)
+        maxW = max(maxW, snap(props.width  or nw or 0) + snap(il) + snap(ir))
+        maxH = max(maxH, snap(props.height or nh or 0) + snap(it) + snap(ib))
     end
-    return maxW + pad.left + pad.right, maxH + pad.top + pad.bottom
+    -- Ceil: a hugging container must not round below the content it wraps, or the client
+    -- clips the last row of glyphs.
+    return SuuUI.Pixel.Ceil(maxW + pad.left + pad.right),
+           SuuUI.Pixel.Ceil(maxH + pad.top + pad.bottom)
 end
 
 SuuUI._StackLayout = M

@@ -125,6 +125,17 @@ and the test passes whether or not the swap happened:
 expect(H.textWidth("hello", 12, "Fonts/ARIALN.TTF")).lt(H.textWidth("hello", 12))
 ```
 
+**The default client is a 1:1 pixel grid**, so snapped geometry is integral and every
+assertion reads naturally. That also means it hides scale bugs: pass
+`H.setup({ physicalHeight = 1080 })` to get a real scale on the root, and add
+`H.SuuUI.Pixel:SetEnabled(false)` on top to get a *fractional* grid where nothing lands on
+an integer. Both configurations are worth a spec for anything that computes a position or
+reads the cursor — a mis-scaled hit test is invisible at 1:1.
+
+Cursor coordinates belong to a space, so name it: `H.cursor(x, y, frame)` treats `x, y` as
+being in that frame's coordinate space. Omitting the frame means `UIParent`, which is only
+the same thing while nothing in the chain has a scale.
+
 `H.font.faces` is also the set of faces the client will load. **`SetFont` raises for
 anything else**, as the live client does (`Invalid font asset`), so code that probes font
 paths has to protect the call — modelling that as a `false` return once hid an error that

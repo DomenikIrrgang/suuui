@@ -195,6 +195,7 @@ SuuUI.Events:Once("SUUUI_PROFILE_LOADED", function() end, "my_plugin")
 | `SUUUI_PROFILE_LOADED` | `profileName` |
 | `SUUUI_THEME_CHANGED` | `themeName` |
 | `SUUUI_FONTS_CHANGED` | — (the available font list grew or shrank) |
+| `SUUUI_PIXEL_GRID_CHANGED` | `grid` (resolution or UI scale moved the pixel grid) |
 | `SUUUI_SETTING_CHANGED` | `pluginId, key, value, oldValue` |
 | `SUUUI_PLUGIN_ENABLED` | `pluginId` |
 | `SUUUI_PLUGIN_DISABLED` | `pluginId` |
@@ -367,6 +368,45 @@ local n = T:GetToken("sizeControlSm")                 -- no text: token as-is
 
 `sizeControlSm` / `Md` / `Lg`, `sizeRow`, `sizeNavRow`, `sizeTitleBar`, `sizeIcon`,
 `sizeScrollbar`. See `LAYOUT_SYSTEM.md` for what each is used for.
+
+---
+
+## Pixel Perfect: What You Get and What You Must Not Do
+
+The UI is laid out in units, not pixels — one unit spans `physicalHeight / 768` pixels — so
+`Core/Pixel.lua` scales the UI root to a whole-pixel grid and the layout strategies snap
+every coordinate onto it. **You get this for free**: build with containers and components
+and your plugin is crisp at every resolution. A fractional width passed to `Add` comes back
+rounded, so assert geometry rather than the number you passed.
+
+Two things will break it, so don't:
+
+```lua
+-- ❌ NEVER call SetScale. A second scale in the chain puts units back between pixels,
+--    which is the exact problem the root scale removes.
+myFrame:SetScale(0.8)
+
+-- ❌ NEVER divide the cursor by UIParent's scale. Your frames live under the scaled root,
+--    so this is off by the ratio between the two.
+local cx = GetCursorPosition() / UIParent:GetEffectiveScale()
+
+-- ✅ read the cursor in the space of the frame you are comparing against
+local cx, cy = SuuUI.Pixel.CursorIn(myFrame)
+```
+
+Producing geometry outside a layout strategy — a computed anchor offset, a texture
+thickness — snap it yourself:
+
+```lua
+SuuUI.Pixel.Snap(v)   -- nearest grid step
+SuuUI.Pixel.Floor(v)  -- a size that must not overflow its space
+SuuUI.Pixel.Ceil(v)   -- a size that must not clip its content
+SuuUI.Pixel.Line(v)   -- a thickness, floored at one pixel so it never disappears
+```
+
+Listen for `SUUUI_PIXEL_GRID_CHANGED` only if you cache pixel measurements. `Theme`
+re-emits `SUUUI_THEME_CHANGED` when the grid moves, so anything already restyling on a
+theme change is covered.
 
 ---
 

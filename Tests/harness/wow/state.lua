@@ -8,6 +8,13 @@ M.screenWidth  = 1024
 M.screenHeight = 768
 M.uiScale      = 1
 
+-- Physical pixels of the drawing area, which is a different thing from the unit-space
+-- screen size above: GetScreenHeight() is always 768 units, while a 1080p monitor draws
+-- those 768 units across 1080 pixels. Pixel snapping depends on the ratio, so the
+-- simulated client has to model both. Defaults match unit space, giving a 1:1 grid.
+M.physicalWidth  = 1024
+M.physicalHeight = 768
+
 M.widgets   = {}   -- every widget, creation order
 M.frames    = {}   -- frames only (things that can hold scripts)
 M.cursorX   = 0    -- raw cursor coords, as GetCursorPosition() reports them

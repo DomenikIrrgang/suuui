@@ -221,7 +221,8 @@ function SuuUI.Components.Slider(props, parent)
 
     -- Tracks the cursor only while dragging, then unregisters (no idle OnUpdate)
     local function onUpdate()
-        local cx = GetCursorPosition() / UIParent:GetEffectiveScale()
+        -- Against the track's own scale: it is the track's rect being compared.
+        local cx = SuuUI.Pixel.CursorIn(track)
         local tl  = track:GetLeft() or 0
         local tw  = track:GetWidth()
         if not tw or tw <= 0 then return end

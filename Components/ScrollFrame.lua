@@ -13,7 +13,7 @@ local function barWidth()
 end
 
 local function borderWidth()
-    return SuuUI.Theme:GetToken("borderWidth") or 1
+    return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
 end
 
 -- Gutter reserved for the bar: its width, the border inset it sits in, and the gap
@@ -199,7 +199,7 @@ function SuuUI.Components.ScrollFrame(props, parent)
             thumb:SetScript("OnUpdate", nil)
             return
         end
-        local cy = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+        local _, cy = SuuUI.Pixel.CursorIn(thumb)
         local delta = dragStartY - cy
         local trackH   = track:GetHeight()
         local thumbH   = thumb:GetHeight()
@@ -214,7 +214,7 @@ function SuuUI.Components.ScrollFrame(props, parent)
     thumb:SetScript("OnMouseDown", function(_, btn)
         if btn ~= "LeftButton" then return end
         dragging = true
-        dragStartY = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+        dragStartY = select(2, SuuUI.Pixel.CursorIn(thumb))
         dragStartScroll = sf:GetVerticalScroll()
         thumb:SetScript("OnUpdate", onDragUpdate)
     end)

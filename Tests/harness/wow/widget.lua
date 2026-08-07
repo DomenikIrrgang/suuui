@@ -261,11 +261,22 @@ function Base:SetScale(s)
 end
 function Base:GetScale() return self._scale end
 
+-- Detaches a region from the parent scale chain, so its effective scale is its own
+-- scale alone. Pixel-grid code uses this to hold a known scale regardless of what the
+-- player's UI Scale slider is set to.
+function Base:SetIgnoreParentScale(ignore)
+    self._ignoreParentScale = ignore and true or false
+    state.invalidate(self)
+end
+function Base:IsIgnoringParentScale() return self._ignoreParentScale == true end
+
 function Base:GetEffectiveScale()
     local s = self._scale or 1
+    if self._ignoreParentScale then return s end
     local p = self._parent
     while p do
         s = s * (p._scale or 1)
+        if p._ignoreParentScale then return s end
         p = p._parent
     end
     return s * state.uiScale

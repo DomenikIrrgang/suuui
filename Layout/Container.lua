@@ -1,6 +1,6 @@
 local pairs, ipairs, type, assert = pairs, ipairs, type, assert
 local tinsert, tremove = table.insert, table.remove
-local ceil, abs = math.ceil, math.abs
+local ceil, abs, min = math.ceil, math.abs, math.min
 
 local strategies = {
     flow   = function(c) SuuUI._FlowLayout.Apply(c) end,
@@ -185,10 +185,14 @@ function ContMeta:Layout()
     self._laying = true
     fn(self)
 
+    -- Half the grid step, so a change of one pixel is always significant. A flat 0.5
+    -- would swallow a real move on a high-DPI display, where a pixel is a third of a unit.
+    local eps = min(0.5, SuuUI.Pixel.grid / 2)
+
     -- Hug content height when nothing else owns this container's height
     if self._hug then
         local _, contentH = self:GetContentSize()
-        if abs((self._frame:GetHeight() or 0) - contentH) > 0.5 then
+        if abs((self._frame:GetHeight() or 0) - contentH) > eps then
             self._frame:SetHeight(contentH)
             -- Cross-axis alignment is measured against the container's own height, so
             -- re-run the strategy now that hugging has settled it. The resize itself
@@ -199,7 +203,7 @@ function ContMeta:Layout()
     self._laying = false
 
     local w, h = self._frame:GetWidth(), self._frame:GetHeight()
-    if abs((self._lastW or -1) - w) > 0.5 or abs((self._lastH or -1) - h) > 0.5 then
+    if abs((self._lastW or -1) - w) > eps or abs((self._lastH or -1) - h) > eps then
         self._lastW, self._lastH = w, h
         SuuUI.UISignals:Emit(self, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, w, h)
     end
@@ -209,11 +213,12 @@ end
 -- @return number, number  width, height
 function ContMeta:GetContentSize()
     local pad = self._padding
-    local gap = self._gap
+    local gap = SuuUI.Pixel.Snap(self._gap)
     local n   = #self._children
+    local pxceil = SuuUI.Pixel.Ceil
 
     if n == 0 then
-        return pad.left + pad.right, pad.top + pad.bottom
+        return pxceil(pad.left + pad.right), pxceil(pad.top + pad.bottom)
     end
 
     if self._layoutType == "stack" then
@@ -228,7 +233,7 @@ function ContMeta:GetContentSize()
                 totalH = totalH + (child:GetHeight() or 0)
                 if i < n then totalH = totalH + gap end
             end
-            return maxW + pad.left + pad.right, totalH
+            return pxceil(maxW + pad.left + pad.right), pxceil(totalH)
         end
 
         local maxH, totalW = 0, pad.left + pad.right
@@ -238,14 +243,18 @@ function ContMeta:GetContentSize()
             totalW = totalW + (child:GetWidth() or 0)
             if i < n then totalW = totalW + gap end
         end
-        return totalW, maxH + pad.top + pad.bottom
+        return pxceil(totalW), pxceil(maxH + pad.top + pad.bottom)
 
     elseif self._layoutType == "grid" then
         local cols = self._cols
         local rows = ceil(n / cols)
-        local colW = self._children[1]:GetWidth() or 0
-        local totalH = pad.top + pad.bottom
+        -- Sum the real column widths: the strategy spreads the flooring remainder across
+        -- the leftmost columns, so cols * firstWidth no longer describes the row.
+        local widths, colGap = SuuUI._GridLayout.columnWidths(self)
+        local totalW = pad.left + pad.right + colGap * (cols - 1)
+        for c = 1, cols do totalW = totalW + (widths[c] or 0) end
 
+        local totalH = pad.top + pad.bottom
         for r = 1, rows do
             local rowH = 0
             for c = 1, cols do
@@ -256,10 +265,10 @@ function ContMeta:GetContentSize()
                 end
             end
             totalH = totalH + rowH
-            if r < rows then totalH = totalH + gap end
+            if r < rows then totalH = totalH + colGap end
         end
 
-        return pad.left + pad.right + (colW * cols) + (gap * (cols - 1)), totalH
+        return pxceil(totalW), pxceil(totalH)
     end
 
     return self._frame:GetWidth(), self._frame:GetHeight()

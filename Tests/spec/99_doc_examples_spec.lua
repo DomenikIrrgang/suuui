@@ -327,3 +327,56 @@ describe("coding-standards.md: Anatomy of a Component", function()
             .as("a destroyed component must not restyle").notThrows()
     end)
 end)
+
+describe("steering doc examples: pixel grid", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+    end)
+
+    it("architecture.md: the Pixel API surface exists as documented", function()
+        local P = H.SuuUI.Pixel
+        for _, name in ipairs({ "Snap", "Floor", "Ceil", "Line", "CursorIn" }) do
+            expect(type(P[name])).as("Pixel." .. name).eq("function")
+        end
+        for _, name in ipairs({ "Refresh", "Attach", "Detach", "SetEnabled",
+                                "SetMultiplier", "AutoMultiplier", "Init" }) do
+            expect(type(P[name])).as("Pixel:" .. name).eq("function")
+        end
+        for _, name in ipairs({ "grid", "mult", "scale", "multiplier", "physicalHeight" }) do
+            expect(type(P[name])).as("Pixel." .. name).eq("number")
+        end
+    end)
+
+    it("coding-standards.md: CursorIn reads the cursor in a frame's own space", function()
+        local f = H.parent(100, 50)
+        H.cursor(40, 25, f)
+        local cx, cy = H.SuuUI.Pixel.CursorIn(f)
+        expect(cx).near(40, 1e-6)
+        expect(cy).near(25, 1e-6)
+    end)
+
+    it("LAYOUT_SYSTEM.md: a fractional width comes back snapped", function()
+        local col = H.Layout:CreateContainer({ parent = host, layout = "flow",
+                                              dir = "vertical", w = 300 })
+        local child = H.env.CreateFrame("Frame", nil, host)
+        col:Add(child, { width = 20.6, height = 10 })
+        expect(child:GetWidth()).eq(21)
+    end)
+
+    it("plugin-authoring.md: Line never rounds a thickness away", function()
+        local P = H.SuuUI.Pixel
+        expect(P.Line(0.2)).gte(P.grid)
+        expect(P.Snap(13.7)).eq(14)
+        expect(P.Floor(13.9)).eq(13)
+        expect(P.Ceil(13.1)).eq(14)
+    end)
+
+    it("TESTING.md: physicalHeight puts a real scale on the root", function()
+        H.setup({ physicalHeight = 1080 })
+        expect(H.env.SuuUI_UIRoot:GetEffectiveScale()).lt(1)
+        H.SuuUI.Pixel:SetEnabled(false)
+        expect(H.SuuUI.Pixel.grid).as("a fractional grid").lt(1)
+    end)
+end)

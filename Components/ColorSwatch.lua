@@ -59,8 +59,8 @@ function SwMeta:ApplyTheme()
     if bd then self._border:SetColorTexture(bd[1], bd[2], bd[3], bd[4]) end
 
     -- The visible border is the colour texture showing through the inset, so the inset
-    -- is the border width token rather than a pixel literal.
-    local bw = T:GetToken("borderWidth") or 1
+    -- is the border width token rather than a pixel literal, snapped to the pixel grid.
+    local bw = SuuUI.Pixel.Line(T:GetToken("borderWidth") or 1)
     if self._swatchProps.inset ~= bw then
         self._swatchProps.inset = bw
         self._box:SetChildProps(self._swatch, self._swatchProps)
@@ -109,7 +109,9 @@ function SuuUI.Components.ColorSwatch(props, parent)
 
     local swatch = f:CreateTexture(nil, "ARTWORK")
     swatch:SetColorTexture(col[1], col[2], col[3], col[4] or 1)
-    local swatchProps = { inset = SuuUI.Theme:GetToken("borderWidth") or 1 }
+    local swatchProps = {
+        inset = SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1),
+    }
     box:Add(swatch, swatchProps)
 
     local id = "swatch_" .. tostring(f)

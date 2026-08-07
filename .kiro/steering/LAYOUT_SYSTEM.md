@@ -12,6 +12,16 @@ Layout/FlowLayout.lua    Layout/GridLayout.lua
 Layout/StackLayout.lua   Layout/AnchorLayout.lua
 ```
 
+**Those four files are also where pixel snapping happens.** Every coordinate they hand to
+`SetPoint` / `SetSize` / `SetWidth` goes through `SuuUI.Pixel.Snap`, so nothing you build
+on top has to think about it: pass a fractional width and you get a crisp frame back. See
+"Pixel Grid" in `architecture.md` for why units are not pixels in the first place.
+
+One consequence worth knowing: a value you pass in may come back rounded.
+`container:Add(child, { width = 20.6 })` produces a 21-unit child, and a `"fill"` share is
+floored with the remainder spread across the leading children so the run still reaches the
+far edge. Assert the geometry, not the number you passed.
+
 Nowhere else. Not in plugins, not in `SettingsUI/`, and **not inside components
 either**. A component lays out its own internals by hosting a container on its own
 frame (see "Component internals" below).

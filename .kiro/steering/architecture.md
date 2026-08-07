@@ -25,6 +25,7 @@ SuuUI/
 │   ├── Settings.lua      -- settings schema registry and value I/O
 │   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
 │   ├── Theme.lua         -- token system, theme registry, active theme
+│   ├── Pixel.lua         -- pixel grid: root scale, snapping, cursor space conversion
 │   └── Pool.lua          -- typed frame pool
 ├── Animation/
 │   ├── Tween.lua         -- easing functions
@@ -151,6 +152,10 @@ S:HasConnections(obj, signal)
 
 Registry uses weak keys, so destroyed objects are collected and their connections
 vanish with them. Callbacks run through `pcall` and log failures via `SuuUI.Debug`.
+
+Built-in bus events: `SUUUI_PROFILE_LOADED`, `SUUUI_THEME_CHANGED`, `SUUUI_FONTS_CHANGED`,
+`SUUUI_PIXEL_GRID_CHANGED`, `SUUUI_SETTING_CHANGED`, `SUUUI_PLUGIN_ENABLED`,
+`SUUUI_PLUGIN_DISABLED`.
 
 **Standard signals** (payload in parentheses): `SIZE_CHANGED` (w, h),
 `POSITION_CHANGED` (x, y), `VISIBILITY_CHANGED` (isVisible), `MOUSE_ENTER` (—),
@@ -446,6 +451,70 @@ caller's cue to say so through a `Notice` rather than storing a broken path.
 listens for `SUUUI_FONTS_CHANGED` and re-emits `SUUUI_THEME_CHANGED` only when the
 resolved path actually moved, so a font that was missing at boot appears without a reload.
 
+### 6c. Pixel Grid (`Core/Pixel.lua`)
+
+The engine lays the UI out in **units, not pixels**. The drawing area is always 768 units
+tall, so one unit spans `physicalHeight / 768` pixels — 1.40625 at 1080p on the default
+scale. A 1-unit border therefore straddles a pixel boundary and the rasteriser renders it
+as a grey smear rather than a line. That is the whole "why" behind this module.
+
+Fixing it takes two things, and one without the other is useless:
+
+1. **A grid.** The scale on `SuuUI_UIRoot` is set so one unit is an exact whole number of
+   pixels. `SetIgnoreParentScale` detaches it from the player's UI Scale slider; where the
+   client lacks that, the parent chain is divided back out so both paths agree.
+2. **Coordinates on it.** A perfect grid buys nothing if the layout hands `SetPoint` 13.7.
+   Every value the four strategies pass to `SetPoint` / `SetSize` / `SetWidth` goes through
+   `Pixel.Snap`.
+
+**Why the root and not `UIParent`.** Scaling `UIParent` moves every Blizzard frame and
+every other addon's anchors. Scaling our own root is reversible, invisible to everyone
+else, and sidesteps the 0.64 floor the `uiScale` CVar enforces (which is why the CVar
+route silently fails above 1200px vertical).
+
+**Why an integer multiplier.** At 1x, a 4K panel yields 2160 units of vertical space and a
+520-unit window occupies a quarter of the screen. `multiplier` picks a whole-number
+multiple of the base scale — chosen from the physical height, aiming for roughly 1000
+units — so a unit is still an exact whole number of pixels and the UI stays exactly as
+crisp while being physically usable. A *fractional* multiplier would put units back
+between pixels, which is the problem this module exists to remove, so `SetMultiplier`
+rounds.
+
+**`grid` vs `mult`.** `mult` is one physical pixel expressed in units. `grid` is the snap
+quantum. With scaling active they differ on purpose: units are whole pixels, so `grid` is
+1 and every measurement stays integral. With scaling **off** — user preference, or a
+custom scale — units are off-grid by definition, so `grid` becomes `mult` and snapping
+targets real pixels instead. That indirection is why a border is exactly one pixel either
+way instead of 1.4.
+
+**API:**
+```lua
+SuuUI.Pixel.Snap(v)              -- nearest grid multiple
+SuuUI.Pixel.Floor(v)             -- for a size that must not overflow its space
+SuuUI.Pixel.Ceil(v)              -- for a size that must not clip its content
+SuuUI.Pixel.Line(v)              -- line thickness, floored at one pixel so it never vanishes
+SuuUI.Pixel.CursorIn(frame)      -- cursor in that frame's coordinate space
+SuuUI.Pixel:Refresh()            -- recompute; emits SUUUI_PIXEL_GRID_CHANGED if it moved
+SuuUI.Pixel:Attach(frame)        -- drive a frame's scale (UIRoot attaches the root)
+SuuUI.Pixel:SetEnabled(bool)     -- scaling on/off; snapping stays on either way
+SuuUI.Pixel:SetMultiplier(n)     -- override; nil returns to automatic
+SuuUI.Pixel.grid / .mult / .scale / .multiplier / .physicalHeight
+```
+
+`Snap` is **idempotent**, which is load-bearing: `Container:Layout` re-runs its strategy
+after hugging, and a non-idempotent rounding would drift on every pass and never settle.
+
+**`CursorIn` is not optional.** `GetCursorPosition()` reports raw screen coordinates,
+while a frame's `GetLeft`/`GetBottom` are in that frame's space. The two differ by the
+frame's effective scale — and the pixel grid puts a scale on the root, so anything under
+it that divides by `UIParent:GetEffectiveScale()` is off by the ratio between the two. Use
+`CursorIn(theFrameYouAreComparingAgainst)` for every hit test and drag.
+
+`Refresh` is driven by `DISPLAY_SIZE_CHANGED`, `UI_SCALE_CHANGED` and `CVAR_UPDATE`.
+`Theme` listens for `SUUUI_PIXEL_GRID_CHANGED` and re-emits `SUUUI_THEME_CHANGED`, since
+a moved grid changes what every token-derived size snaps to — the same restyle a theme
+change needs. Same pattern as `SUUUI_FONTS_CHANGED`.
+
 ### 7. Frame Pool (`Core/Pool.lua`)
 
 Typed pools keyed by string ID. Plugins prefix their IDs: `"minimap.buffIcon"`.
@@ -529,10 +598,20 @@ A container emits `SIZE_CHANGED` whenever its computed size changes.
 
 ### Layout Strategies
 
-**These four files are the only place in the addon that calls `SetPoint`.**
+**These four files are the only place in the addon that calls `SetPoint`.** That is also
+what makes them the only place that needs to snap to the pixel grid: every coordinate
+reaching `SetPoint` / `SetSize` passes through `SuuUI.Pixel.Snap` here, so components and
+plugins get crisp geometry without doing anything. See `Core/Pixel.lua` above.
+
+Sizes use `Floor` where overflowing the parent would be worse than being a pixel short
+(content boxes, stretched children) and `Ceil` where clipping content would be worse
+(hugging containers, text heights).
 
 - **FlowLayout** (`Layout/FlowLayout.lua`): horizontal or vertical flow with flexible sizing.
   - `width="fill"` / `height="fill"` distribute remaining main-axis space
+  - Fill shares are floored onto the grid and the **remainder is handed out one pixel at
+    a time** to the leading children. Flooring an equal share loses up to `fillCount - 1`
+    pixels, which shows up as the last child in a filled row stopping short of the edge.
   - `align` gives cross-axis placement (`start`/`center`/`end`/`stretch`)
   - Respects padding on all 4 sides
   - Font string children are measured with `GetStringHeight()` after their width is
@@ -540,6 +619,9 @@ A container emits `SIZE_CHANGED` whenever its computed size changes.
     text children; a fixed height pins them to the old font's metrics.
 - **GridLayout** (`Layout/GridLayout.lua`): fixed columns, equal cells.
   - Column width derived from container width, padding, and gap
+  - Widths are computed once for the whole grid, so a column is the same width in every
+    row, and the flooring remainder is spread across the leftmost columns so the row still
+    reaches the right edge
 - **StackLayout** (`Layout/StackLayout.lua`): overlays children on the container box.
   - `inset` (number or per-edge table), `align`, `valign`, explicit `width`/`height`
   - Replaces `SetAllPoints`, centred labels, edge-spanning text, and inset icons
@@ -829,6 +911,11 @@ document it here.
   `"warning"|"danger"|"success"` or nil. **Use this instead of printing errors to chat.**
   Self-destroying, so it is safe to call on every failure.
 - `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
+  Reads the cursor with `Pixel.CursorIn(panel)`, not against `UIParent`.
+- `Pixel` — non-visual, in `Core/`: the pixel grid. `Snap` / `Floor` / `Ceil` for geometry,
+  `Line` for a thickness that must never round to zero, `CursorIn(frame)` for every hit
+  test and drag. `Backdrop` uses `Line` for its edge and `Theme:GetControlHeight` uses
+  `Ceil`, so a control never lands half a pixel short of its own text.
 - `TextMetrics` — non-visual helper: `SuuUI.TextMetrics.Measure(text, font, size, flags)`
   returns the real width/height of a string. Use it for any fit-to-text sizing. A font
   string's own `GetStringWidth` is clamped to the width its layout assigned, so

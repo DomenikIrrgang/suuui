@@ -20,7 +20,10 @@ end
 --                       borderWidth = number|nil }
 function M.Apply(frame, opts)
     opts = opts or {}
-    local bw = opts.borderWidth or SuuUI.Theme:GetToken("borderWidth") or 1
+    -- Snapped to the pixel grid, with the grid step as the floor. A 1-unit border spans
+    -- 1.4 pixels at 1080p on the default scale, which the rasteriser resolves as a grey
+    -- smear rather than a line; Line() makes it exactly one pixel and never zero.
+    local bw = SuuUI.Pixel.Line(opts.borderWidth or SuuUI.Theme:GetToken("borderWidth") or 1)
     frame:SetBackdrop({
         bgFile   = WHITE,
         edgeFile = WHITE,

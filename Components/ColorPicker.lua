@@ -350,9 +350,7 @@ function SuuUI.Components.ColorPicker(props, parent)
     -- Drag tracking: OnUpdate registered only while a control is held
     local mode = nil
     local function onUpdate()
-        local scale = UIParent:GetEffectiveScale()
-        local cx, cy = GetCursorPosition()
-        cx, cy = cx / scale, cy / scale
+        local cx, cy = SuuUI.Pixel.CursorIn(f)
         if     mode == "sv"    then handle:_pickFromSV(cx, cy)
         elseif mode == "hue"   then handle:_pickFromHue(cx)
         elseif mode == "alpha" then handle:_pickFromAlpha(cx) end

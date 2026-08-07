@@ -77,9 +77,9 @@ function SuuUI.Components.ClickAway(props)
             if handle._ignoreNext then
                 handle._ignoreNext = false
             else
-                local scale = UIParent:GetEffectiveScale()
-                local cx, cy = GetCursorPosition()
-                cx, cy = cx / scale, cy / scale
+                -- Guard rects are in the panel's own space, so read the cursor there
+                -- rather than UIParent's: the two differ under the scaled UI root.
+                local cx, cy = SuuUI.Pixel.CursorIn(handle._frame)
 
                 local inside = false
                 for i = 1, #handle._guards do

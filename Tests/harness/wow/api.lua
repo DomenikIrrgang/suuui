@@ -116,6 +116,12 @@ function M.install(env)
     env.GetScreenWidth  = function() return state.screenWidth end
     env.GetScreenHeight = function() return state.screenHeight end
 
+    -- Physical pixels, not units. This is the only way to learn the real resolution,
+    -- and the pixel grid is derived from it: one unit spans physicalHeight/768 pixels.
+    env.GetPhysicalScreenSize = function()
+        return state.physicalWidth, state.physicalHeight
+    end
+
     env.GetCursorPosition = function() return state.cursorX, state.cursorY end
     env.IsMouseButtonDown = function(button)
         if button == nil then

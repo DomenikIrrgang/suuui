@@ -62,11 +62,12 @@ function TipMeta:ShowTip(text, anchorFrame)
         a.point, a.relativeTo, a.relativePoint = "BOTTOM", anchorFrame, "TOP"
         a.x, a.y = 0, T:GetToken("spaceXs") or 4
     else
-        local cx, cy = GetCursorPosition()
-        local scale  = UIParent:GetEffectiveScale()
+        -- The offset is applied inside the tooltip's own container, so the cursor has to
+        -- be read in the tooltip's space rather than UIParent's.
+        local cx, cy = SuuUI.Pixel.CursorIn(self._f)
         local off    = T:GetToken("spaceMd") or 12
         a.point, a.relativeTo, a.relativePoint = "BOTTOMLEFT", nil, "BOTTOMLEFT"
-        a.x, a.y = cx / scale + off, cy / scale + off
+        a.x, a.y = cx + off, cy + off
     end
     self:_fit()
 

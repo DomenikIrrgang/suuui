@@ -49,7 +49,9 @@ SuuUI.Components.InstallBase(DivMeta, "_f")
 -- @return table  Divider handle
 function SuuUI.Components.Divider(props, parent)
     local vertical = props.dir == "vertical"
-    local thickness = SuuUI.Theme:GetToken("borderWidth") or 1
+    -- A hairline is the whole point of a divider: snapped to the grid so it draws as one
+    -- crisp pixel rather than a 1.4-pixel grey smear.
+    local thickness = SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
     local w = props.w or (vertical and thickness or 200)
     local h = props.h or (vertical and 20 or thickness)
 

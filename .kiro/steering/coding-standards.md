@@ -437,6 +437,41 @@ end
 Use `SuuUI.Events` for addon-wide state (theme, profile, settings) and
 `frame:RegisterEvent` for WoW game data. Neither replaces UISignals for UI wiring.
 
+## Pixel Grid
+
+The UI is laid out in units, not pixels: one unit spans `physicalHeight / 768` pixels, so
+a 1-unit border is 1.4 pixels at 1080p and renders as a grey smear. `Core/Pixel.lua` fixes
+this by scaling the root to a whole-pixel grid and snapping every coordinate onto it. Full
+rationale in `architecture.md`.
+
+Two rules follow for code you write:
+
+**Never do your own cursor scale math.** `GetCursorPosition()` is in raw screen
+coordinates; a frame's `GetLeft`/`GetBottom` are in that frame's space. They differ by the
+frame's effective scale, and the root carries one, so dividing by `UIParent`'s is wrong for
+everything under it — a slider tracks ~40% too far at 1080p.
+
+```lua
+-- ❌ correct only while nothing in the chain has a scale, which is never
+local cx = GetCursorPosition() / UIParent:GetEffectiveScale()
+
+-- ✅ the space you are actually comparing against
+local cx, cy = SuuUI.Pixel.CursorIn(track)
+```
+
+**Never call `SetScale` on your own frames.** A second scale in the chain puts units back
+between pixels. `Core/Pixel.lua` owns the only one, on the root.
+
+Snapping happens inside the four layout strategies, so component and page code needs no
+calls. Reach for the helpers directly only where you produce geometry outside a strategy:
+
+```lua
+SuuUI.Pixel.Snap(v)   -- nearest grid step
+SuuUI.Pixel.Floor(v)  -- must not overflow its space
+SuuUI.Pixel.Ceil(v)   -- must not clip its content
+SuuUI.Pixel.Line(v)   -- thickness, floored at one pixel so it never disappears
+```
+
 ## Table Utilities
 
 A small set of table helpers lives in `Core/Init.lua` as `SuuUI.Utils`:

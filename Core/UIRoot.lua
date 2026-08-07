@@ -13,6 +13,11 @@ function M:Init()
     root = CreateFrame("Frame", "SuuUI_UIRoot", UIParent)
     root:SetAllPoints(UIParent)
     root:SetFrameStrata("MEDIUM")
+
+    -- The single place a scale is set. Driving it here rather than on UIParent keeps the
+    -- pixel grid ours: Blizzard frames and other addons are left where they were, and
+    -- the 0.64 floor on the uiScale CVar does not apply to a frame scale.
+    SuuUI.Pixel:Attach(root)
     
     -- Create root container using anchor layout for absolute positioning
     rootContainer = SuuUI.Layout:CreateContainer({

@@ -19,6 +19,15 @@ The only sanctioned raw anchors, each documented in code:
 2. `Layout/Container.lua` self-anchoring its own frame to its parent
 3. `Core/Pool.lua` clearing points when releasing a recycled frame
 
+The root is also the **only frame in the addon that carries a scale**. `Core/Pixel.lua`
+drives it so one unit is a whole number of physical pixels — see "Pixel Grid" in
+`architecture.md`. Two things follow for anything under the root:
+
+- Its effective scale is **not** `UIParent`'s. Read the cursor with
+  `SuuUI.Pixel.CursorIn(frame)`, never `GetCursorPosition() / UIParent:GetEffectiveScale()`.
+- Never call `SetScale` yourself. A second scale in the chain puts units back between
+  pixels, which is exactly what the root scale exists to prevent.
+
 ## Architecture Hierarchy
 
 ```

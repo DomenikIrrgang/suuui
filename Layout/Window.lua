@@ -9,7 +9,7 @@ local S = SuuUI.UISignals
 local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar") end
 local function closeSize()   return SuuUI.Theme:GetControlHeight("sizeControlMd") end
 local function gripSize()    return SuuUI.Theme:GetToken("sizeIcon") or 16 end
-local function borderWidth() return SuuUI.Theme:GetToken("borderWidth") or 1 end
+local function borderWidth() return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1) end
 local function chromeGap()   return SuuUI.Theme:GetToken("spaceMd") or 12 end
 
 -- ASCII only. FRIZQT__.TTF has no glyph for U+00D7 (the multiplication sign that reads
@@ -85,11 +85,21 @@ local function syncAnchor(f)
     })
 end
 
+-- A drag-resize is the one geometry in the addon the client writes directly, so it never
+-- passes through a layout strategy and can leave the window a fraction of a unit wide —
+-- which puts its border back across a pixel boundary. Snap it once the drag ends.
+local function snapSize(f)
+    local snap = SuuUI.Pixel.Snap
+    local w, h = snap(f:GetWidth() or 0), snap(f:GetHeight() or 0)
+    if w > 0 and h > 0 then f:SetSize(w, h) end
+end
+
 local function savePos(self)
     if not SuuUIConfig then SuuUIConfig = {} end
     if not SuuUIConfig.windows then SuuUIConfig.windows = {} end
-    local x = self._frame:GetLeft()
-    local y = self._frame:GetTop()
+    local snap = SuuUI.Pixel.Snap
+    local x = snap(self._frame:GetLeft() or 0)
+    local y = snap(self._frame:GetTop() or 0)
     SuuUIConfig.windows[self._id] = { x = x, y = y - GetScreenHeight() }
     syncAnchor(self._frame)
 end
@@ -303,6 +313,7 @@ function SuuUI.Layout:CreateWindow(props)
         grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
         grip:SetScript("OnMouseUp", function()
             f:StopMovingOrSizing()
+            snapSize(f)
             savePos({ _frame = f, _id = props.id })
         end)
         grip:SetScript("OnEnter", function() gripColor(true) end)

@@ -66,13 +66,20 @@ M.root = "."
 ----------------------------------------------------------------------------------
 
 --- Loads a fresh addon instance. Returns the SuuUI namespace.
--- @param opts table  { boot = true, debug = false, screenWidth, screenHeight }
+-- screenWidth/Height are unit space (always 768 tall in the real client);
+-- physicalWidth/Height are pixels and drive the pixel grid. They default to unit space,
+-- which gives mult == 1 and integer snapping. Pass physicalHeight = 1080 to exercise a
+-- fractional grid.
+-- @param opts table  { boot = true, debug = false, screenWidth, screenHeight,
+--                      physicalWidth, physicalHeight, uiScale }
 -- @return table  SuuUI
 function M.setup(opts)
     opts = opts or {}
     state.screenWidth  = opts.screenWidth  or 1024
     state.screenHeight = opts.screenHeight or 768
     state.uiScale      = opts.uiScale or 1
+    state.physicalWidth  = opts.physicalWidth  or state.screenWidth
+    state.physicalHeight = opts.physicalHeight or state.screenHeight
 
     local loaded = addon.load({ root = M.root, boot = opts.boot, debug = opts.debug })
     M.env      = loaded.env
@@ -164,22 +171,29 @@ end
 -- Input simulation
 ----------------------------------------------------------------------------------
 
---- Places the cursor in UI coordinates (the space components work in after dividing
---- by the effective scale).
+--- Places the cursor, given coordinates in a frame's own space.
+--
+-- GetCursorPosition reports raw screen coordinates; a frame's GetLeft/GetBottom are in
+-- that frame's space. The two differ by the frame's effective scale, so the space the
+-- coordinates belong to has to be named. Defaults to UIParent, which is the same thing
+-- only while nothing in the chain carries a scale.
 -- @param x number
 -- @param y number
-function M.cursor(x, y)
-    local scale = M.UIParent:GetEffectiveScale()
+-- @param space table  Optional frame or handle whose space x/y are expressed in
+function M.cursor(x, y, space)
+    local f = space and M.frameOf(space) or M.UIParent
+    local scale = f:GetEffectiveScale()
+    if type(scale) ~= "number" or scale <= 0 then scale = 1 end
     state.cursorX, state.cursorY = x * scale, y * scale
 end
 
---- Places the cursor at the centre of a widget.
+--- Places the cursor at the centre of a widget, in that widget's own space.
 -- @param target table
 function M.cursorOn(target)
     local f = M.frameOf(target)
     local cx, cy = f:GetCenter()
     assert(cx, "harness: cursorOn target has no resolvable position")
-    M.cursor(cx, cy)
+    M.cursor(cx, cy, f)
 end
 
 --- Sets a mouse button's held state, as IsMouseButtonDown reports it.

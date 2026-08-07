@@ -149,6 +149,8 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == "SuuUI" then
         SuuUI.Profiles:Init()
         SuuUI.Theme:Init()  -- This now loads activeTheme from profile
+        -- Before UIRoot: the grid has to be known when the first container lays out.
+        SuuUI.Pixel:Init()
         SuuUI.UIRoot:Init()  -- Initialize global UI root
         
         -- Core subsystems (profiles, theme, UI root) are now usable
