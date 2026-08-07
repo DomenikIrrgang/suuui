@@ -28,6 +28,9 @@ local dependents
 
 --- Clears all widgets and input state. Called when the harness reloads the addon.
 function M.reset()
+    -- The solver converts between screen space and region units, so it needs the client
+    -- UI scale. It cannot require this file back, so push the value across.
+    geometry.uiScale = M.uiScale
     M.widgets   = {}
     M.frames    = {}
     M.cursorX   = 0

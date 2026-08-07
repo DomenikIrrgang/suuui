@@ -125,6 +125,35 @@ and the test passes whether or not the swap happened:
 expect(H.textWidth("hello", 12, "Fonts/ARIALN.TTF")).lt(H.textWidth("hello", 12))
 ```
 
+### Two coordinate spaces
+
+The simulated client models both spaces the real one has, because conflating them is a
+live bug class:
+
+| Space | What is in it | Vertical range |
+|---|---|---|
+| **Screen** | `H.box`, `H.offset`, `GetCursorPosition`, every `expect*` geometry helper | `0 .. 768` |
+| **Region units** | a widget's own `GetLeft` / `GetTop` / `GetWidth`, its `SetPoint` offsets, its `SetWidth` | screen ÷ its effective scale |
+
+They coincide while nothing carries a scale, which is most of the suite. The pixel grid
+puts one on the UI root, so anything under it reports a **different screen height** than
+`GetScreenHeight()` does — 1080 against 768 at 1080p. Code that mixes the two is wrong on
+the vertical axis only, and looks perfect horizontally.
+
+So: compare a widget against another widget in screen space (`H.box`, `H.offset`), and
+compare a widget against its own reported numbers in region units. Do not mix a `H.box`
+value with a `GetWidth()` value under a scale.
+
+```lua
+-- ❌ tb is screen space, the drag handler works in the track's units
+local tb = H.box(s._track)
+H.cursor(tb.left + tb.width * 0.75, tb.top, s._track)
+
+-- ✅ the track's own ruler, which is what its handler compares against
+local track = s._track
+H.cursor(track:GetLeft() + track:GetWidth() * 0.75, track:GetTop(), track)
+```
+
 **The default client is a 1:1 pixel grid**, so snapped geometry is integral and every
 assertion reads naturally. That also means it hides scale bugs: pass
 `H.setup({ physicalHeight = 1080 })` to get a real scale on the root, and add

@@ -113,8 +113,11 @@ function M.install(env)
     -- handing it to SetFont raises "Invalid font asset" — the shape that broke login.
     env.NAMEPLATE_FONT     = "GameFontWhite"
 
-    env.GetScreenWidth  = function() return state.screenWidth end
-    env.GetScreenHeight = function() return state.screenHeight end
+    -- UIParent's size in UIParent's own region units, which is what the client returns.
+    -- Deliberately not the same as a scaled frame's view of the screen: that difference
+    -- is a real bug class and the harness has to be able to show it.
+    env.GetScreenWidth  = function() return UIParent:GetWidth() end
+    env.GetScreenHeight = function() return UIParent:GetHeight() end
 
     -- Physical pixels, not units. This is the only way to learn the real resolution,
     -- and the pixel grid is derived from it: one unit spans physicalHeight/768 pixels.

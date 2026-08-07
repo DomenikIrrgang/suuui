@@ -392,6 +392,15 @@ local cx = GetCursorPosition() / UIParent:GetEffectiveScale()
 
 -- ✅ read the cursor in the space of the frame you are comparing against
 local cx, cy = SuuUI.Pixel.CursorIn(myFrame)
+
+-- ❌ NEVER mix a widget's own numbers with a screen constant. GetScreenHeight() is in
+--    UIParent's units; your frame's GetTop() is in the scaled root's. This breaks the
+--    vertical axis only, so it looks half-right.
+local y = myFrame:GetTop() - GetScreenHeight()
+
+-- ✅ measure against something that shares your space
+local root = SuuUI.UIRoot:GetRootContainer():GetFrame()
+local y = myFrame:GetTop() - root:GetTop()
 ```
 
 Producing geometry outside a layout strategy — a computed anchor offset, a texture

@@ -504,11 +504,24 @@ SuuUI.Pixel.grid / .mult / .scale / .multiplier / .physicalHeight
 `Snap` is **idempotent**, which is load-bearing: `Container:Layout` re-runs its strategy
 after hugging, and a non-idempotent rounding would drift on every pass and never settle.
 
-**`CursorIn` is not optional.** `GetCursorPosition()` reports raw screen coordinates,
-while a frame's `GetLeft`/`GetBottom` are in that frame's space. The two differ by the
-frame's effective scale — and the pixel grid puts a scale on the root, so anything under
-it that divides by `UIParent:GetEffectiveScale()` is off by the ratio between the two. Use
-`CursorIn(theFrameYouAreComparingAgainst)` for every hit test and drag.
+**Two coordinate spaces, and mixing them is the bug this module invites.** A widget
+reports its rect in its own *region units* — screen space divided by its effective scale —
+while `GetCursorPosition()` and `GetScreenHeight()` are in screen space and `UIParent`'s
+units respectively. They all coincide until something carries a scale, and the pixel grid
+puts one on the root. After that, anything under the root measures the screen as 1080 units
+tall while `GetScreenHeight()` still says 768.
+
+That failure mode is distinctive: **horizontal stays correct and vertical breaks.** An `x`
+offset needs no screen constant, so it never picks up the wrong one; a `y` offset measured
+downward from the screen top does. Two places have already hit it:
+
+- `CursorIn` exists because five call sites divided the cursor by
+  `UIParent:GetEffectiveScale()`, which made a slider track ~40% too far.
+- `Window`'s saved position measures against the root's own rect, not `GetScreenHeight()`.
+  Deriving `y` from the screen constant dropped windows 312 units too high at 1080p.
+
+The rule: **measure between two frames that share a space, or convert explicitly.** Never
+combine a widget's own numbers with a screen-space constant.
 
 `Refresh` is driven by `DISPLAY_SIZE_CHANGED`, `UI_SCALE_CHANGED` and `CVAR_UPDATE`.
 `Theme` listens for `SUUUI_PIXEL_GRID_CHANGED` and re-emits `SUUUI_THEME_CHANGED`, since

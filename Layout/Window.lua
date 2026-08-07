@@ -73,16 +73,39 @@ local function applyResizeBounds(f, minW, minH, maxW, maxH)
     end
 end
 
+-- The window's offset from the UI root's top-left, which is the frame of reference the
+-- anchor descriptor is applied in.
+--
+-- Measured against the root's own rect, never against GetScreenHeight(). A widget reports
+-- its rect in its own region units, and the root carries the pixel-grid scale, so a window
+-- under it is in a different unit space from UIParent — GetScreenHeight() is in UIParent's.
+-- Mixing them leaves y wrong by the difference between the two screen heights (312 units
+-- at 1080p) while x, needing no screen constant, stays correct. The root and the window
+-- share a space, so measuring between them has no conversion to get wrong.
+local function offsetFromRoot(f)
+    local ref = SuuUI.UIRoot and SuuUI.UIRoot.GetRootContainer
+                and SuuUI.UIRoot:GetRootContainer()
+    local rf  = ref and ref:GetFrame()
+    local rl, rt = rf and rf:GetLeft(), rf and rf:GetTop()
+    if not (rl and rt) then
+        -- No root yet: derive the screen top in this frame's own units instead. 768 is
+        -- the engine's virtual screen height, so this is the same conversion the client
+        -- applies, just done explicitly.
+        local scale = f:GetEffectiveScale()
+        if type(scale) ~= "number" or scale <= 0 then scale = 1 end
+        rl, rt = 0, 768 / scale
+    end
+    local snap = SuuUI.Pixel.Snap
+    return snap((f:GetLeft() or 0) - rl), snap((f:GetTop() or 0) - rt)
+end
+
 -- Keeps the UIRoot anchor descriptor in step with the window's real position,
 -- so a root re-layout never snaps the window back to where it started.
 local function syncAnchor(f)
     if not (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()) then return end
     if not f._suuui_anchor then return end
-    SuuUI.UIRoot:UpdateElementAnchor(f, {
-        point = "TOPLEFT",
-        x     = f:GetLeft() or 0,
-        y     = (f:GetTop() or 0) - GetScreenHeight(),
-    })
+    local x, y = offsetFromRoot(f)
+    SuuUI.UIRoot:UpdateElementAnchor(f, { point = "TOPLEFT", x = x, y = y })
 end
 
 -- A drag-resize is the one geometry in the addon the client writes directly, so it never
@@ -97,10 +120,9 @@ end
 local function savePos(self)
     if not SuuUIConfig then SuuUIConfig = {} end
     if not SuuUIConfig.windows then SuuUIConfig.windows = {} end
-    local snap = SuuUI.Pixel.Snap
-    local x = snap(self._frame:GetLeft() or 0)
-    local y = snap(self._frame:GetTop() or 0)
-    SuuUIConfig.windows[self._id] = { x = x, y = y - GetScreenHeight() }
+    -- The same offsets the anchor is rebuilt from, so a save and a restore agree.
+    local x, y = offsetFromRoot(self._frame)
+    SuuUIConfig.windows[self._id] = { x = x, y = y }
     syncAnchor(self._frame)
 end
 

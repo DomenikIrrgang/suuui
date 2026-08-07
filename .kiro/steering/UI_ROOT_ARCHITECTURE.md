@@ -25,6 +25,10 @@ drives it so one unit is a whole number of physical pixels — see "Pixel Grid" 
 
 - Its effective scale is **not** `UIParent`'s. Read the cursor with
   `SuuUI.Pixel.CursorIn(frame)`, never `GetCursorPosition() / UIParent:GetEffectiveScale()`.
+- **Never use `GetScreenWidth`/`GetScreenHeight` as a reference point.** They are in
+  `UIParent`'s units; a frame under the root reports its own rect in the root's. Measure
+  against `UIRoot:GetRootContainer():GetFrame()` instead, which shares your space. Mixing
+  the two is wrong on the vertical axis only, so it looks half-correct.
 - Never call `SetScale` yourself. A second scale in the chain puts units back between
   pixels, which is exactly what the root scale exists to prevent.
 

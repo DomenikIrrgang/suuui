@@ -6,9 +6,43 @@
 --
 -- Coordinate space matches WoW: origin bottom-left of the screen, y grows upward,
 -- SetPoint y offsets are positive-up.
+--
+-- Two spaces exist, and conflating them is a real bug class the addon can hit:
+--
+--   * Screen space — what this solver works in. Vertically 0..screenHeight, shared by
+--     every widget, and the space GetCursorPosition() reports in.
+--   * Region units — what a widget's own GetLeft/GetTop/GetWidth report, and what its
+--     SetPoint offsets and SetWidth are expressed in. Screen space divided by the
+--     widget's effective scale.
+--
+-- With no scale anywhere the two coincide, which is why modelling only one was enough
+-- until the pixel grid put a scale on the UI root. Now a frame under the root reports a
+-- different screen height than GetScreenHeight() does, and code that mixes them is wrong
+-- on one axis only — invisible unless the solver keeps the spaces apart.
 local M = {}
 
 local abs, floor = math.abs, math.floor
+
+-- The client's UI Scale CVar, mirrored here because state.lua requires this file and
+-- cannot be required back. harness.wow.state keeps it in step.
+M.uiScale = 1
+
+--- Effective scale of a widget: its own scale times its ancestors', or its own alone
+--- when it ignores the parent chain.
+-- @param w table
+-- @return number
+function M.effScale(w)
+    if not w then return 1 end
+    local s = w._scale or 1
+    if w._ignoreParentScale then return s end
+    local p = w._parent
+    while p do
+        s = s * (p._scale or 1)
+        if p._ignoreParentScale then return s end
+        p = p._parent
+    end
+    return s * (M.uiScale or 1)
+end
 
 -- point name -> { xFraction, yFraction } within the widget's own box
 local POINTS = {
@@ -84,8 +118,12 @@ function M.resolve(widget)
     widget._resolving = true
 
     local rect
+    local sc = M.effScale(widget)
     if widget._isScreenRoot then
-        rect = { left = 0, bottom = 0, width = widget._w or 0, height = widget._h or 0 }
+        -- A screen root covers the screen whatever its scale; the scale only changes the
+        -- units it reports, which the accessors apply.
+        rect = { left = 0, bottom = 0, width = widget._w or 0, height = widget._h or 0,
+                 derivedW = true, derivedH = true }
     else
         local xEqs, yEqs = {}, {}
         for _, p in ipairs(widget._points or {}) do
@@ -95,13 +133,16 @@ function M.resolve(widget)
                 local mfx, mfy = M.fractions(p.point)
                 local rfx, rfy = M.fractions(p.relativePoint)
                 if mfx and rfx then
+                    -- The offset is in the anchored widget's own units, so it converts
+                    -- into screen space before joining the relative rect, which is
+                    -- already there.
                     xEqs[#xEqs + 1] = {
                         frac = mfx,
-                        value = relRect.left + rfx * relRect.width + (p.x or 0),
+                        value = relRect.left + rfx * relRect.width + (p.x or 0) * sc,
                     }
                     yEqs[#yEqs + 1] = {
                         frac = mfy,
-                        value = relRect.bottom + rfy * relRect.height + (p.y or 0),
+                        value = relRect.bottom + rfy * relRect.height + (p.y or 0) * sc,
                     }
                 end
             end
@@ -110,13 +151,16 @@ function M.resolve(widget)
         if #xEqs == 0 and #yEqs == 0 then
             rect = nil
         else
-            local left, width, derivedW   = solveAxis(xEqs, widget._w)
-            local bottom, height, derivedH = solveAxis(yEqs, widget._h)
+            -- SetWidth/SetHeight are in own units too.
+            local ownW = widget._w and widget._w * sc or nil
+            local ownH = widget._h and widget._h * sc or nil
+            local left, width, derivedW   = solveAxis(xEqs, ownW)
+            local bottom, height, derivedH = solveAxis(yEqs, ownH)
             rect = {
                 left     = left,
                 bottom   = bottom,
-                width    = width  or widget._w or 0,
-                height   = height or widget._h or 0,
+                width    = width  or ownW or 0,
+                height   = height or ownH or 0,
                 derivedW = derivedW,
                 derivedH = derivedH,
             }
@@ -129,13 +173,16 @@ function M.resolve(widget)
     return rect
 end
 
+-- Every accessor below reports region units, matching the client: the screen-space rect
+-- divided by the widget's own effective scale.
+
 --- Resolved width: derived from opposing anchors when present, else the set width.
 -- @param widget table
 -- @return number
 function M.width(widget)
     local r = M.resolve(widget)
-    if r and r.derivedW then return r.width end
-    return widget._w or (r and r.width) or 0
+    if r and r.derivedW then return r.width / M.effScale(widget) end
+    return widget._w or (r and r.width / M.effScale(widget)) or 0
 end
 
 --- Resolved height: derived from opposing anchors when present, else the set height.
@@ -143,8 +190,8 @@ end
 -- @return number
 function M.height(widget)
     local r = M.resolve(widget)
-    if r and r.derivedH then return r.height end
-    return widget._h or (r and r.height) or 0
+    if r and r.derivedH then return r.height / M.effScale(widget) end
+    return widget._h or (r and r.height / M.effScale(widget)) or 0
 end
 
 --- True when both edges of the horizontal axis are pinned by anchors.
@@ -159,11 +206,36 @@ function M.hasDerivedHeight(widget)
     return (r and r.derivedH) == true
 end
 
---- Screen-space edges. Return nil for a widget with no resolvable anchors.
-function M.left(widget)   local r = M.resolve(widget) return r and r.left end
-function M.bottom(widget) local r = M.resolve(widget) return r and r.bottom end
-function M.right(widget)  local r = M.resolve(widget) return r and (r.left + r.width) end
-function M.top(widget)    local r = M.resolve(widget) return r and (r.bottom + r.height) end
+--- Edges in the widget's own region units, as GetLeft() and friends report them.
+--- Return nil for a widget with no resolvable anchors.
+function M.left(widget)
+    local r = M.resolve(widget) return r and r.left / M.effScale(widget)
+end
+function M.bottom(widget)
+    local r = M.resolve(widget) return r and r.bottom / M.effScale(widget)
+end
+function M.right(widget)
+    local r = M.resolve(widget) return r and (r.left + r.width) / M.effScale(widget)
+end
+function M.top(widget)
+    local r = M.resolve(widget) return r and (r.bottom + r.height) / M.effScale(widget)
+end
+
+--- Centre in the widget's own region units.
+function M.center(widget)
+    local r = M.resolve(widget)
+    if not r then return nil end
+    local sc = M.effScale(widget)
+    return (r.left + r.width / 2) / sc, (r.bottom + r.height / 2) / sc
+end
+
+--- Rect in the widget's own region units: left, bottom, width, height.
+function M.ownRect(widget)
+    local r = M.resolve(widget)
+    if not r then return nil end
+    local sc = M.effScale(widget)
+    return r.left / sc, r.bottom / sc, r.width / sc, r.height / sc
+end
 
 --- Returns a widget's rect as left/top/width/height with top measured downward from
 -- the screen top. Handy for asserting layout results, which are all TOPLEFT-based.

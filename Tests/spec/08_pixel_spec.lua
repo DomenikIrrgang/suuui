@@ -523,11 +523,18 @@ describe("cursor math under a scaled root", function()
             .lt(H.UIParent:GetEffectiveScale())
     end)
 
+    -- The track's own region units, which is the space its GetLeft/GetWidth report in and
+    -- the space the drag handler compares against. H.box is screen space, so it is the
+    -- wrong ruler here as soon as anything carries a scale.
+    local function cursorAlongTrack(s, fraction)
+        local track = s._track
+        H.cursor(track:GetLeft() + track:GetWidth() * fraction, track:GetTop(), track)
+    end
+
     it("tracks a slider drag against the track's own scale", function()
         local s = H.mount(H.C.Slider({ min = 0, max = 100, value = 0, w = 200, step = 1 },
                                      host))
-        local tb = H.box(s._track)
-        H.cursor(tb.left + tb.width * 0.75, tb.top, s._track)
+        cursorAlongTrack(s, 0.75)
         H.mouseDown(s._hit, "LeftButton")
         H.tick(0.05)
         expect(s:GetValue()).as("cursor read in the wrong space").near(75, 1)
@@ -536,13 +543,12 @@ describe("cursor math under a scaled root", function()
     it("reaches both ends of the track", function()
         local s = H.mount(H.C.Slider({ min = 0, max = 100, value = 50, w = 200, step = 1 },
                                      host))
-        local tb = H.box(s._track)
-        H.cursor(tb.left, tb.top, s._track)
+        cursorAlongTrack(s, 0)
         H.mouseDown(s._hit, "LeftButton")
         H.tick(0.05)
         expect(s:GetValue()).eq(0)
 
-        H.cursor(tb.left + tb.width, tb.top, s._track)
+        cursorAlongTrack(s, 1)
         H.tick(0.05)
         expect(s:GetValue()).eq(100)
     end)
@@ -632,5 +638,86 @@ describe("hairlines and drag-produced geometry", function()
         expect(f:GetWidth() % 1).as("width off the grid").lt(1e-6)
         expect(f:GetHeight() % 1).as("height off the grid").lt(1e-6)
         win:Hide()
+    end)
+end)
+
+-- A window's saved position is an offset from the UI root's top-left. The root carries the
+-- pixel-grid scale, so the window measures the screen in different units than
+-- GetScreenHeight() reports — 1080 against 768 at 1080p. Deriving y from the screen
+-- constant instead of the root's own rect left the window 312 units too high on release,
+-- while x, needing no screen constant, stayed correct.
+describe("window position under a scaled root", function()
+    local function makeWindow(id)
+        local win = H.Layout:CreateWindow({ id = id, title = "T", w = 300, h = 200 })
+        win:Show()
+        return win
+    end
+
+    -- Moves the window the way the client does: StartMoving/StopMovingOrSizing leave the
+    -- frame wherever the mouse dropped it, then the release handler re-derives the anchor
+    -- descriptor and saves. The invariant under test is that re-deriving does not move it.
+    -- @return table, table  where it was dropped, where it ended up
+    local function dragTo(win, x, y)
+        local f = win:GetFrame()
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", H.UIParent, "TOPLEFT", x, y)
+        local dropped = H.box(f)
+        win._drag:_fire("OnMouseUp", "LeftButton")
+        return dropped, H.box(f)
+    end
+
+    it("puts the root on a scale, so the two rulers differ", function()
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        local root = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+        expect(root:GetTop()).as("root sees a taller screen").gt(H.env.GetScreenHeight())
+    end)
+
+    it("leaves the window where it was dropped", function()
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        local win = makeWindow("pixel_move")
+        local dropped, after = dragTo(win, 120, -90)
+
+        expect(after.left).as("horizontal was always fine").near(dropped.left, 1)
+        expect(after.top).as("vertical must not jump").near(dropped.top, 1)
+    end)
+
+    it("saves the offset in the root's own frame of reference", function()
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        local win = makeWindow("pixel_save")
+        local f = win:GetFrame()
+        dragTo(win, 150, -60)
+
+        local root = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+        local cfg = H.env.SuuUIConfig.windows["pixel_save"]
+        expect(cfg).notNil()
+        expect(cfg.x).near(f:GetLeft() - root:GetLeft(), 1)
+        expect(cfg.y).as("y measured against the root, not the screen")
+            .near(f:GetTop() - root:GetTop(), 1)
+        expect(cfg.y).lte(0)
+    end)
+
+    it("restores a saved position to the same place", function()
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        local win = makeWindow("pixel_restore")
+        local _, landed = dragTo(win, 140, -70)
+        local saved = H.env.SuuUIConfig.windows["pixel_restore"]
+
+        -- Same SavedVariables, fresh client: the restore path has to agree with the save,
+        -- or a window walks up the screen a little on every login.
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        H.env.SuuUIConfig = { windows = { pixel_restore = saved } }
+        local again = makeWindow("pixel_restore")
+
+        local box = H.box(again:GetFrame())
+        expect(box.left).near(landed.left, 1)
+        expect(box.top).as("restored to a different height").near(landed.top, 1)
+    end)
+
+    it("still works on an unscaled root", function()
+        H.setup()
+        local win = makeWindow("pixel_move_1x")
+        local dropped, after = dragTo(win, 110, -55)
+        expect(after.left).near(dropped.left, 1)
+        expect(after.top).near(dropped.top, 1)
     end)
 end)

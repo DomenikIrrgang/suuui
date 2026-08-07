@@ -270,6 +270,42 @@ describe("harness: WoW API simulation", function()
             expect(H.parent(10, 10):GetEffectiveScale()).near(0.8, 1e-9)
         end)
 
+        it("reports a scaled widget's rect in its own region units", function()
+            local p = H.parent(100, 100)
+            p:SetScale(0.5)
+            -- Own units are unchanged by the scale; screen space halves.
+            expect(p:GetWidth()).as("SetWidth is in own units").eq(100)
+            expect(H.box(p).width).as("screen space is scaled").near(50, 1e-9)
+        end)
+
+        it("treats a SetPoint offset as the anchored widget's own units", function()
+            local p = H.parent(200, 200)
+            local c = H.env.CreateFrame("Frame", nil, p)
+            c:SetSize(10, 10)
+            c:SetScale(0.5)
+            c:SetPoint("TOPLEFT", p, "TOPLEFT", 20, 0)
+            -- 20 of the child's units is 10 screen units at half scale.
+            expect(H.offset(c, p)).near(10, 1e-9)
+            expect(c:GetLeft() - p:GetLeft() * 2).as("own units").near(20, 1e-9)
+        end)
+
+        it("makes a scaled frame see a taller screen than GetScreenHeight reports", function()
+            local p = H.parent(10, 10)
+            p:SetScale(0.5)
+            -- This divergence is the whole point: a frame under a scaled ancestor measures
+            -- the screen in its own units, and GetScreenHeight is in UIParent's. Code that
+            -- mixes them is wrong on the vertical axis only.
+            expect(H.env.GetScreenHeight()).eq(768)
+            expect(H.UIParent:GetTop()).eq(768)
+            expect(p:GetTop()).as("same screen, different ruler").near(1536, 1e-9)
+        end)
+
+        it("reports UIParent's own size through GetScreenHeight", function()
+            H.setup({ uiScale = 0.8 })
+            expect(H.env.GetScreenHeight()).near(768 / 0.8, 1e-9)
+            expect(H.env.GetScreenHeight()).near(H.UIParent:GetHeight(), 1e-9)
+        end)
+
         it("cuts the parent chain at SetIgnoreParentScale", function()
             H.setup({ uiScale = 0.8 })
             local p = H.parent(100, 100)

@@ -105,15 +105,11 @@ function Base:GetTop()    return geometry.top(self) end
 function Base:GetBottom() return geometry.bottom(self) end
 
 function Base:GetCenter()
-    local r = geometry.resolve(self)
-    if not r then return nil end
-    return r.left + r.width / 2, r.bottom + r.height / 2
+    return geometry.center(self)
 end
 
 function Base:GetRect()
-    local r = geometry.resolve(self)
-    if not r then return nil end
-    return r.left, r.bottom, r.width, r.height
+    return geometry.ownRect(self)
 end
 
 ----------------------------------------------------------------------------------
@@ -257,6 +253,9 @@ function Base:GetAlpha()  return self._alpha end
 
 function Base:SetScale(s)
     self._scale = s
+    -- A scale change moves this widget's whole subtree in screen space, and the solver
+    -- caches by generation, so the invalidation has to be global rather than local.
+    geometry.invalidate()
     state.invalidate(self)
 end
 function Base:GetScale() return self._scale end
@@ -266,20 +265,15 @@ function Base:GetScale() return self._scale end
 -- player's UI Scale slider is set to.
 function Base:SetIgnoreParentScale(ignore)
     self._ignoreParentScale = ignore and true or false
+    geometry.invalidate()
     state.invalidate(self)
 end
 function Base:IsIgnoringParentScale() return self._ignoreParentScale == true end
 
+-- One implementation, shared with the geometry solver, which needs it to convert between
+-- screen space and a widget's own region units.
 function Base:GetEffectiveScale()
-    local s = self._scale or 1
-    if self._ignoreParentScale then return s end
-    local p = self._parent
-    while p do
-        s = s * (p._scale or 1)
-        if p._ignoreParentScale then return s end
-        p = p._parent
-    end
-    return s * state.uiScale
+    return geometry.effScale(self)
 end
 
 ----------------------------------------------------------------------------------
