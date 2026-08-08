@@ -130,10 +130,15 @@ never by direct function calls into each other.
 **API:**
 ```lua
 SuuUI.Events:On(event, callback, owner)    -- subscribe
-SuuUI.Events:Off(event, owner)             -- unsubscribe all for owner
+SuuUI.Events:Off(event, owner)             -- unsubscribe owner from one event
+SuuUI.Events:OffAll(owner)                 -- unsubscribe owner from ALL events
 SuuUI.Events:Emit(event, ...)              -- fire with varargs payload
 SuuUI.Events:Once(event, callback, owner)  -- auto-removes after first fire
 ```
+
+`Emit` dispatches over a snapshot of the listener list, so a callback may safely
+unsubscribe itself or siblings mid-dispatch without skipping or double-firing. Entries
+removed during dispatch are flagged dead and skipped by remaining iterations.
 
 Events are plain strings. Convention: `"SUUUI_THEME_CHANGED"`, `"SUUUI_PROFILE_LOADED"`.
 
@@ -671,6 +676,73 @@ SuuUI.Pool:Release(typeId, frame)       -- return to pool, hides and resets fram
 SuuUI.Pool:ReleaseAll(typeId)           -- return all active frames of type
 ```
 
+### 8. UI Root & Layer System (`Core/UIRoot.lua`)
+
+The single fullscreen frame that parents every SuuUI element. It is the backbone of
+z-order, the home of the pixel scale, and the only file in the addon that calls
+`SetFrameStrata` or `SetFrameLevel`. See `UI_ROOT_ARCHITECTURE.md` for the design
+rationale, container hierarchy diagram, and layout rules.
+
+**Invariants:**
+
+- `SetFrameStrata` / `SetFrameLevel` appear ONLY in this file. Every other module
+  names a layer and lets UIRoot translate.
+- Placement never goes to `UIParent`. The root carries the addon's own scale
+  (via `Pixel:Attach`), so anchoring to `UIParent` would put a frame into the wrong
+  coordinate space and bypass the pixel grid.
+
+**The five-rung ladder:**
+
+| Layer | Strata | Purpose |
+|-------|--------|---------|
+| `background` | LOW | Background elements (rarely used) |
+| `normal` | MEDIUM | Plugin content — unit frames, bars. The root's own strata; children inherit it without asking |
+| `window` | HIGH | Windows the player opened (settings, etc.) |
+| `dialog` | DIALOG | Modals/popups opened *from* a window |
+| `tooltip` | TOOLTIP | Tooltips and dropdown panels |
+
+`window` sits between `normal` and `dialog` because a window is chrome the player opened
+to configure the unit frames it must cover. Frame level alone cannot guarantee it: a plugin
+frame parented to the root container is nested one level deeper than a window on the same
+strata, so it outranks the window in the level tie-break and draws over it — that is the
+exact bug that put the player frame on top of the settings window.
+
+**API:**
+```lua
+SuuUI.UIRoot:Init()                              -- creates root frame + container; once at ADDON_LOADED
+SuuUI.UIRoot:SetLayer(element, layer)            -- z-order only, no placement; usable before Init()
+SuuUI.UIRoot:GetLayer(element)                   -- returns layer name or nil
+SuuUI.UIRoot:GetLayerStrata(layer)               -- layer → strata string; usable before Init()
+SuuUI.UIRoot:RaiseAbove(element, host, steps?)   -- same rung as host, higher level (default steps=1)
+SuuUI.UIRoot:AddElement(element, layer, anchorDesc) -- z-order + placement via root container
+SuuUI.UIRoot:RemoveElement(element)              -- remove from layer tracking + container
+SuuUI.UIRoot:UpdateElementAnchor(element, anchorDesc) -- reposition in place, triggers Layout()
+SuuUI.UIRoot:GetRoot()                           -- the raw root frame
+SuuUI.UIRoot:GetRootContainer()                  -- the anchor-layout container
+SuuUI.UIRoot:GetLayerElements(layer)             -- all elements in a layer (array)
+```
+
+`AddElement` overwrites any strata the element set for itself — callers that want a
+higher rung ask for a higher layer, not a raw strata. `SetLayer` is the z-order-only
+path for frames the root does not position (draggable plugin frames, modals filling
+their parent, dropdown panels anchored to their field).
+
+### 9. Reload Guard (`Core/ReloadGuard.lua`)
+
+Generic utility for settings that require a UI reload to take effect. When a guarded
+setting changes, the value is reverted immediately and a confirmation modal appears;
+on confirm the new value is re-applied and `ReloadUI()` fires.
+
+**API:**
+```lua
+SuuUI.ReloadGuard:Register(pluginId, key, opts)  -- opts: { title, message, confirmText, cancelText }
+SuuUI.ReloadGuard:IsGuarded(pluginId, key)       -- returns bool
+SuuUI.ReloadGuard:Unregister(pluginId, key)      -- removes the guard
+```
+
+The guard intercepts `SUUUI_SETTING_CHANGED` for registered keys. A `_blocked` flag
+prevents recursion when the guard itself writes back the reverted or confirmed value.
+
 ---
 
 ## Layout Engine
@@ -690,6 +762,7 @@ local win = SuuUI.Layout:CreateWindow({
 win:Show() / win:Hide() / win:Toggle()
 win:SetTitle(str)
 win:GetContentFrame()   -- inner frame, attach children here
+win:GetContentSize()    -- usable content width, height (use instead of reaching through GetContentFrame())
 win:SavePosition()      -- called automatically on drag stop
 ```
 
@@ -705,7 +778,7 @@ Supports flexible sizing via layout properties.
 ```lua
 local c = SuuUI.Layout:CreateContainer({
   parent  = frame,
-  layout  = "flow",   -- "flow" | "grid" | "anchor"
+  layout  = "flow",   -- "flow" | "stack" | "grid" | "anchor"
   dir     = "vertical",
   gap     = 8,
   align   = "center", -- default cross-axis alignment for children
@@ -724,6 +797,8 @@ c:Clear()              -- removes and hides every child
 c:Layout()             -- auto-called on Add/Remove/resize
 c:SetSize(w, h)
 c:GetContentSize()     -- returns computed w, h of all children
+c:SetChildProps(child, layoutProps)       -- update a child's layout props and re-layout
+c:SetChildFraction(child, axis, fraction) -- axis = "width"|"height"; fraction 0..1
 c:GetChildren()
 c:Destroy()            -- destroys children, drops all connections
 ```
@@ -753,11 +828,15 @@ Sizes use `Floor` where overflowing the parent would be worse than being a pixel
 
 - **FlowLayout** (`Layout/FlowLayout.lua`): horizontal or vertical flow with flexible sizing.
   - `width="fill"` / `height="fill"` distribute remaining main-axis space
+  - `width="auto"` — hugs the child's own content width, re-measured every pass via
+    `NaturalWidth`
   - Fill shares are floored onto the grid and the **remainder is handed out one pixel at
     a time** to the leading children. Flooring an equal share loses up to `fillCount - 1`
     pixels, which shows up as the last child in a filled row stopping short of the edge.
   - `align` gives cross-axis placement (`start`/`center`/`end`/`stretch`)
   - Respects padding on all 4 sides
+  - **Hidden children are skipped**: a child whose `IsShown()` is false consumes no space
+    and no gap
   - Font string children are measured with `GetStringHeight()` after their width is
     assigned, so text re-flows when a `fontSize*` token changes. Omit `height` on
     text children; a fixed height pins them to the old font's metrics.
@@ -766,10 +845,18 @@ Sizes use `Floor` where overflowing the parent would be worse than being a pixel
   - Widths are computed once for the whole grid, so a column is the same width in every
     row, and the flooring remainder is spread across the leftmost columns so the row still
     reaches the right edge
+  - **Hidden children are skipped** rather than holding an empty cell
 - **StackLayout** (`Layout/StackLayout.lua`): overlays children on the container box.
   - `inset` (number or per-edge table), `align`, `valign`, explicit `width`/`height`
+  - `widthFraction` / `heightFraction` (0..1) — size as a share of the inner box on that
+    axis, recomputed every pass. Overrides `width`/`height` and stretch on the same axis;
+    placement still follows `align`/`valign` (defaulting to `"start"`). Clamped, floored
+    to the pixel grid. This is how a progress fill states its percentage without touching
+    a point.
   - Replaces `SetAllPoints`, centred labels, edge-spanning text, and inset icons
   - This is what components use internally
+  - Hidden children are still laid out (unlike flow/grid) — hiding and resizing a child
+    before showing it again is a valid pattern here (a progress fill at 0% is exactly that)
   - Font string children on a non-stretched axis are measured with
     `TextMetrics.Measure`, not from their rect, so they track the `fontSize*` tokens.
     Call `box:Layout()` after changing a font string's font — a token-sized element
@@ -1049,6 +1136,14 @@ document it here.
 - `ColorPicker` — custom HSV picker + hex input.
 - `KeyCapture` — button that captures the next keypress into a binding string.
 - `ScrollFrame` — custom scrollbar + masked content.
+- `StatusBar` — progress/resource bar (health, mana, energy, rage). Props: `w`, `h`,
+  `value`, `max`, `fillColor` ({r,g,b,a} literal), `bgColor` (token or literal, default
+  `"colorBgAlt"`), `border` (bool, default true). API: `SetValue`, `SetMax`, `GetValue`,
+  `GetMax`, `GetPercent`, `SetFillColor`, `SetBgColor`, `Destroy`. The fill is a
+  **fractional stack child** of the track (`widthFraction`), so the layout engine owns
+  the fill geometry — the component sets no points, and the fill stays correct across
+  resizes and border-width changes without recomputation. A borderless bar insets by 0 so
+  track and fill share edges exactly. Emits `VALUE_CHANGED` and `SIZE_CHANGED`.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
 - `Modal` — dialog with optional input, container-composed. `confirmVariant` tints the

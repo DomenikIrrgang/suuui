@@ -1,6 +1,14 @@
 local max, min, floor, ceil = math.max, math.min, math.floor, math.ceil
 local S = SuuUI.UISignals
 
+-- Structural geometry of the slider's own track and thumb. These are deliberately NOT
+-- tokens: they describe how this one control is drawn, not design language any other
+-- widget shares, and the token scale has nothing at this size (the track is thinner than
+-- the smallest control token, the thumb is not an icon). Bending them onto a token that
+-- does not mean the same thing would make a font-size change resize the track. The
+-- exception is required to be justified, so it is — see "No Magic Numbers" in
+-- coding-standards.md. The one measurement that IS design language, the thumb's height,
+-- reads sizeControlSm through barThumbH().
 local TRACK_H     = 4
 local TRACK_PAD   = 6
 local THUMB_SIZE  = 12

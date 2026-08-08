@@ -33,9 +33,10 @@ end
 M.columnWidths = columnWidths
 
 --- Applies grid layout to a container's children.
+-- Hidden children are skipped rather than holding an empty cell.
 -- @param container table  Needs _children, _padding, _gap, _cols
 function M.Apply(container)
-    local children = container._children
+    local children = SuuUI._FlowLayout.visibleChildren(container._children)
     local pad      = container._padding
     local cols     = container._cols or 2
     local widths, gap = columnWidths(container)

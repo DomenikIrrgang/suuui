@@ -121,6 +121,14 @@ function ContMeta:Add(child, layoutProps)
     end)
     self._childConns[child] = connId
 
+    -- ...and when it shows or hides. Flow and grid skip hidden children, so a child that
+    -- hides itself has to trigger the pass that closes its gap; without this the hole it
+    -- leaves stays open until something else happens to re-lay the container out.
+    local visConn = SuuUI.UISignals:Connect(child, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, function()
+        self:Layout()
+    end)
+    self._childVisConns[child] = visConn
+
     self:Layout()
     return child
 end
@@ -174,6 +182,11 @@ function ContMeta:Remove(child)
         SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
         self._childConns[source] = nil
     end
+    local visConn = self._childVisConns[source]
+    if visConn then
+        SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, visConn)
+        self._childVisConns[source] = nil
+    end
     self._sources[target] = nil
 
     for i = #self._children, 1, -1 do
@@ -194,6 +207,11 @@ function ContMeta:Clear()
         if connId then
             SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
             self._childConns[source] = nil
+        end
+        local visConn = self._childVisConns[source]
+        if visConn then
+            SuuUI.UISignals:Disconnect(source, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, visConn)
+            self._childVisConns[source] = nil
         end
         if source.Hide then source:Hide() end
         self._sources[target] = nil
@@ -257,19 +275,25 @@ function ContMeta:GetContentSize()
         return SuuUI._StackLayout.ContentSize(self)
 
     elseif self._layoutType == "flow" then
+        -- Hidden children are skipped by the strategy, so a hugging container must not
+        -- reserve their height either, or hiding a row would leave a gap the size of it.
+        local children, vn = SuuUI._FlowLayout.visibleChildren(self._children)
+        if vn == 0 then
+            return pxceil(pad.left + pad.right), pxceil(pad.top + pad.bottom)
+        end
         if self._dir == "vertical" then
             local maxW, totalH = 0, pad.top + pad.bottom
-            for i, child in ipairs(self._children) do
+            for i, child in ipairs(children) do
                 local w = child:GetWidth() or 0
                 if w > maxW then maxW = w end
                 totalH = totalH + (child:GetHeight() or 0)
-                if i < n then totalH = totalH + gap end
+                if i < vn then totalH = totalH + gap end
             end
             return pxceil(maxW + pad.left + pad.right), pxceil(totalH)
         end
 
         local maxH, totalW = 0, pad.left + pad.right
-        for i, child in ipairs(self._children) do
+        for i, child in ipairs(children) do
             local props = child._layoutProps or {}
             -- A content-hug child is measured, not read back: its pinned width is
             -- whatever the last pass assigned, which predates any text change.
@@ -279,13 +303,15 @@ function ContMeta:GetContentSize()
             local h = child:GetHeight() or 0
             if h > maxH then maxH = h end
             totalW = totalW + w
-            if i < n then totalW = totalW + gap end
+            if i < vn then totalW = totalW + gap end
         end
         return pxceil(totalW), pxceil(maxH + pad.top + pad.bottom)
 
     elseif self._layoutType == "grid" then
+        local children = SuuUI._FlowLayout.visibleChildren(self._children)
+        local gn   = #children
         local cols = self._cols
-        local rows = ceil(n / cols)
+        local rows = ceil(gn / cols)
         -- Sum the real column widths: the strategy spreads the flooring remainder across
         -- the leftmost columns, so cols * firstWidth no longer describes the row.
         local widths, colGap = SuuUI._GridLayout.columnWidths(self)
@@ -297,8 +323,8 @@ function ContMeta:GetContentSize()
             local rowH = 0
             for c = 1, cols do
                 local idx = (r - 1) * cols + c
-                if idx <= n then
-                    local h = self._children[idx]:GetHeight() or 0
+                if idx <= gn then
+                    local h = children[idx]:GetHeight() or 0
                     if h > rowH then rowH = h end
                 end
             end
@@ -322,7 +348,11 @@ function ContMeta:Destroy()
         SuuUI.UISignals:Disconnect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
         if child.Destroy and child ~= self then child:Destroy() end
     end
-    self._childConns = {}
+    for child, visConn in pairs(self._childVisConns) do
+        SuuUI.UISignals:Disconnect(child, SuuUI.UISignals.SIGNALS.VISIBILITY_CHANGED, visConn)
+    end
+    self._childConns    = {}
+    self._childVisConns = {}
     self._sources    = {}
     self._children   = {}
     SuuUI.UISignals:DisconnectAll(self)
@@ -394,6 +424,7 @@ function SuuUI.Layout:CreateContainer(props)
         _adopted     = adopted or false,
         _children    = {},
         _childConns  = {},
+        _childVisConns = {},
         _sources     = {},
         _layoutType  = props.layout or "flow",
         _dir         = props.dir or "vertical",

@@ -450,10 +450,26 @@ Dependencies are implicit via load order.
 
 ## WoW API Usage
 
-**Raw WoW UI API is confined to `Components/`, `Layout/`, and `Core/UIRoot.lua`.**
-UI construction code (`SettingsUI/`, plugin pages, controls) composes components and
-containers only. Positioning calls are tighter still: only the layout strategies.
-Full rules in `WOW_API_ENCAPSULATION.md`.
+**Raw WoW UI API is confined to `Components/`, `Layout/`, and `Core/UIRoot.lua`**, plus the
+three engine files `WOW_API_ENCAPSULATION.md` whitelists (`Core/Pixel.lua`'s resolution
+watcher, `Core/MoveableFrame.lua`'s drag overlay, `Animation/Animator.lua`'s `OnUpdate`
+driver). UI construction code (`SettingsUI/`, plugin pages, controls) composes components
+and containers only. Positioning calls are tighter still: only the layout strategies.
+Full rules, including the allow-table and the narrow exceptions, in
+`WOW_API_ENCAPSULATION.md` — that file is authoritative when the two disagree.
+
+Two exceptions apply to plugins specifically, and they are not loopholes:
+
+- **A bare grouping frame** — `CreateFrame("Frame", nil, parent)` with no styling, no
+  scripts and no `SetPoint`, existing only so a container has something to lay out. Prefer
+  `Layout:CreateContainer` even here.
+- **Game data plumbing** — an invisible frame with `RegisterEvent` +
+  `SetScript("OnEvent")`, plus `UnitHealth`/`UnitName`/`GetSpellInfo` and friends. Reading
+  the game is not building UI.
+
+The forbidden list below is about **building visible UI**: a styled frame, a texture, a
+backdrop, a strata, mouse plumbing, or a Blizzard script used to wire one part of our UI to
+another.
 
 ```lua
 -- ❌ FORBIDDEN in UI construction code

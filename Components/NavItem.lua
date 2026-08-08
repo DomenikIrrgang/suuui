@@ -30,7 +30,21 @@ end
 -- @param text string
 function NavMeta:SetLabel(text)
     self._labelText:SetText(text)
+    if self._autoW then self:_autosize() end
     S:Emit(self, S.SIGNALS.TEXT_CHANGED, text)
+end
+
+-- Sizes the item to its own label plus the same insets the label is laid out with.
+-- Opt-in via props.autoW, for a horizontal tab strip where a fixed nav width would make
+-- every tab as wide as the widest possible one. Measured on the shared probe, never on
+-- the label: a font string's GetStringWidth is clamped to the width it was given.
+function NavMeta:_autosize()
+    local T = SuuUI.Theme
+    local fs = self._label
+    local font, size, flags = fs:GetFont()
+    local tw = SuuUI.TextMetrics.Measure(fs:GetText() or "", font, size, flags)
+    local insets = (T:GetToken("spaceSm") or 8) + (T:GetToken("spaceXs") or 4)
+    self._f:SetWidth(SuuUI.Pixel.Ceil(tw + insets))
 end
 
 --- Returns whether the item is selected.
@@ -62,6 +76,8 @@ function NavMeta:ApplyTheme()
     -- yet. Apply it here; the box re-flows off the label's SIZE_CHANGED.
     self._labelText:ApplyTheme()
     self:_paint()
+    -- A font size token change moves the label's width, so a hugging item re-measures.
+    if self._autoW then self:_autosize() end
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
@@ -69,7 +85,8 @@ SuuUI.Components.InstallBase(NavMeta, "_f")
 
 --- Creates a selectable navigation row with a label.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
--- @param props table  { label, selected, w, h }
+-- @param props table  { label, selected, w, h, autoW }
+--   autoW: size the item to its label instead of props.w (horizontal tab strips)
 -- @param parent frame
 -- @return table  NavItem handle
 function SuuUI.Components.NavItem(props, parent)
@@ -112,6 +129,7 @@ function SuuUI.Components.NavItem(props, parent)
         _enabled   = true,
         _selected  = props.selected == true,
         _hovered   = false,
+        _autoW     = props.autoW == true,
     }, NavMeta)
 
     f:SetScript("OnMouseUp", function(_, btn)
@@ -131,6 +149,7 @@ function SuuUI.Components.NavItem(props, parent)
     end)
 
     handle:ApplyTheme()
+    if handle._autoW then handle:_autosize() end
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

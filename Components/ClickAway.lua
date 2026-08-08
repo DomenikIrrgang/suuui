@@ -40,6 +40,9 @@ end
 function AwayMeta:Destroy()
     self._watcher:SetScript("OnUpdate", nil)
     self._watcher:Hide()
+    -- Nothing is connected today, but the component contract is unconditional: a Destroy
+    -- that skips this is a leak waiting for the first signal someone adds here.
+    SuuUI.UISignals:DisconnectAll(self)
 end
 
 --- Creates a click-outside watcher.

@@ -120,13 +120,75 @@ SuuUI.Settings:Register("my_plugin", {
 })
 ```
 
-Types: `toggle` `slider` `dropdown` `color` `text` `keybind` `section`
+Types: `toggle` `slider` `dropdown` `color` `text` `keybind` `section` `subtabs`
 
 Optional field on any entry:
 ```lua
 validate = function(value) return true end
 -- or: return false, "Error message shown in UI"
 ```
+
+### Settings that depend on another setting
+
+A control that only means something while another setting is on states that with
+`enabledIf`, naming the key it depends on:
+
+```lua
+{ key="show_level",       label="Show Level",       type="toggle", default=true },
+{ key="hide_level_at_max", label="Hide at Max Level", type="toggle", default=true,
+  enabledIf="show_level" },
+```
+
+While the dependency is falsy the control is **greyed out, not hidden, and never
+cleared** — its stored value still applies the moment the dependency comes back on, and a
+control that vanishes leaves the player unable to see what it was set to. The widget
+refuses the mouse, so the state is real rather than cosmetic.
+
+Do not gate a control on itself, and do not gate the control that switches the dependency
+— that is the one the player needs in order to undo it.
+
+Wired for `toggle` today; any control adopts it with one line, because the binder takes
+handles rather than knowing the control type:
+
+```lua
+SuuUI._SettingsDeps.Bind(pluginId, entry, control, label)
+```
+
+### Grouping a page into tabs
+
+A plugin that repeats the same settings for several similar things — one group per unit
+frame, per bar, per module — uses `subtabs` instead of one long scroll. Each tab owns a
+slice of schema:
+
+```lua
+SuuUI.Settings:Register("unit_frames", {
+  { key="enabled", label="Enable Unit Frames", type="toggle", default=true },
+  { key="unit", type="subtabs", tabs={
+    { id="player", label="Player", schema={
+      { key="",                   label="General",    type="section" },
+      { key="player_show_name",   label="Show Name",  type="toggle", default=true },
+      { key="",                   label="Health Bar", type="section" },
+      { key="player_health_height", label="Height",   type="slider",
+        default=39, min=8, max=60, step=1 },
+    }},
+    { id="target", label="Target", schema={ --[[ ... ]] }},
+  }},
+})
+```
+
+**Declare a setting once, in the tab it is rendered in.** `Register` walks a tab's
+schema exactly like the top level, so a nested entry's `default`, range and `validate`
+all work from there. Repeating the key at the top level "for the default" gives one
+setting two declarations, and `Get` reads its default from one while the slider reads its
+range from the other — they drift. `Register` logs a warning when it sees conflicting
+defaults for one key.
+
+Which tab is open is session UI state, not a preference: it is remembered per plugin
+while the client runs and never written to the profile.
+
+A key that needs a default and a home in the profile but no control — a position written
+by `MoveableFrame`, say — uses `type="position"` or `type="internal"`, which the page
+builder skips deliberately rather than warning about.
 
 ---
 

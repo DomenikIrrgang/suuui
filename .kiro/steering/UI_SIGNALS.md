@@ -47,27 +47,65 @@ reference to. The registry uses **weak keys**, so objects are garbage collected
 normally and stale connections disappear with them. Callbacks are invoked through
 `pcall`; a throwing callback logs via `SuuUI.Debug` and never breaks the emitter.
 
+**Teardown semantics:** UISignals has no owner-keyed bulk disconnect. You can only
+disconnect by `(obj, signal, id)` (one callback), by `(obj, signal)` (all callbacks
+for that signal on that object), or by `(obj)` (everything on that object). There is
+no `DisconnectAll(owner)` that sweeps all objects a given owner touched. Contrast with
+`Settings:Unwatch(owner)` / `Settings:UnwatchPrefix(prefix)` and
+`Events:Off(event, owner)` / `Events:OffAll(owner)`, which **are** owner-keyed. In
+`Destroy()` methods, call `S:DisconnectAll(self)` — this cleans up because `self` is
+the object signals were connected to.
+
 ---
 
 ## Standard Signals
 
-Every component may emit these. Payloads are fixed — do not change them per component.
+Every component may emit these. Payloads are fixed — do not change them per component
+(with documented exceptions noted below).
 
 | Signal | Constant | Payload |
 |---|---|---|
 | `size_changed` | `SIGNALS.SIZE_CHANGED` | `width, height` |
-| `position_changed` | `SIGNALS.POSITION_CHANGED` | `x, y` |
-| `visibility_changed` | `SIGNALS.VISIBILITY_CHANGED` | `isVisible` |
+| `position_changed` | `SIGNALS.POSITION_CHANGED` | `x, y` — **reserved, currently unemitted** (see note) |
+| `visibility_changed` | `SIGNALS.VISIBILITY_CHANGED` | `isVisible` (boolean) |
 | `mouse_enter` | `SIGNALS.MOUSE_ENTER` | — |
 | `mouse_leave` | `SIGNALS.MOUSE_LEAVE` | — |
 | `clicked` | `SIGNALS.CLICKED` | `button` |
-| `value_changed` | `SIGNALS.VALUE_CHANGED` | `newValue, oldValue` |
+| `value_changed` | `SIGNALS.VALUE_CHANGED` | `newValue, oldValue` (see exception below) |
 | `text_changed` | `SIGNALS.TEXT_CHANGED` | `newText` |
 | `scroll_changed` | `SIGNALS.SCROLL_CHANGED` | `scrollY` |
-| `content_resized` | `SIGNALS.CONTENT_RESIZED` | `contentHeight` |
+| `content_resized` | `SIGNALS.CONTENT_RESIZED` | `contentHeight` (see usage note) |
 | `enabled_changed` | `SIGNALS.ENABLED_CHANGED` | `isEnabled` |
 | `focused` | `SIGNALS.FOCUSED` | — |
 | `unfocused` | `SIGNALS.UNFOCUSED` | — |
+
+### Signal Notes
+
+**`POSITION_CHANGED`** — Declared in `Core/UISignals.lua` but never emitted anywhere
+in the codebase. The layout strategies (`StackLayout`, `FlowLayout`, `GridLayout`,
+`AnchorLayout`) position children via `SetPoint` without announcing the move. If
+positional notifications are needed in the future, those layout strategies would be
+the emitters. Until then, do **not** write consumers that depend on this signal — it
+will never fire.
+
+**`VALUE_CHANGED` — ColorPicker exception.** `Components/ColorPicker.lua` emits a
+**single table** `{r, g, b, a}` as the sole argument — no `oldValue` second arg.
+This is intentional and tested (`spec/15_keycapture_colorpicker_spec.lua` asserts
+`"VALUE_CHANGED carries one table here"`). Rationale: a colour is one semantic value
+with four numeric components; splitting it across positional new/old args would force
+every consumer to unpack and repack. Consumers connecting to `VALUE_CHANGED` on a
+ColorPicker must expect `function(colorTable)` where `colorTable = {r, g, b, a}`.
+
+**`CONTENT_RESIZED` — unusual emission direction.** This signal is emitted **onto**
+a ScrollFrame handle by whatever owns the content (e.g. `PageBuilder`, `SettingsWindow`),
+not by the scroll frame itself. The pattern is: the content owner connects to its
+content container's `SIZE_CHANGED`, then calls `S:Emit(scrollFrame, S.SIGNALS.CONTENT_RESIZED, h)`
+to tell the scroll frame how tall its content has become. The scroll frame reacts by
+updating its scrollbar range.
+
+**`VISIBILITY_CHANGED`** — Payload is a single boolean (`true` on show, `false` on hide).
+
+**`SIZE_CHANGED`** — Payload is always `width, height` (two numbers).
 
 ### Component-Specific Signals
 
@@ -79,6 +117,23 @@ document the payload next to the definition:
 M.SIGNALS_COLORPICKER = {
   COLOR_PICKED   = "colorpicker.color_picked",   -- Args: r, g, b, a
   REQUEST_CLOSE  = "colorpicker.request_close",  -- Args: none
+}
+```
+
+```lua
+-- Components/Input.lua
+C.INPUT_SIGNALS = {
+  SUBMITTED = "input.submitted",  -- Args: text (the current input value, emitted on Enter)
+}
+```
+
+Consumers: `ColorPicker.lua`, `Modal.lua`, `ThemeManager.lua` (hex input submission).
+
+```lua
+-- Components/Modal.lua
+C.MODAL_SIGNALS = {
+  CONFIRMED = "modal.confirmed",  -- Args: inputValue (string, or nil when the modal has no input field)
+  CANCELLED = "modal.cancelled",  -- Args: none
 }
 ```
 

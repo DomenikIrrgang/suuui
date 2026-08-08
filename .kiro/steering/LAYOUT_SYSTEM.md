@@ -532,6 +532,34 @@ If you need layout behavior that doesn't exist:
 
 ### Known Limitations
 
+**Hidden children.** Flow and grid **skip a child whose `IsShown()` is false**: it consumes
+no main-axis space and no gap, so hiding a row closes the hole it would otherwise leave.
+Showing it again restores the layout, and a container re-flows automatically when a child
+handle emits `VISIBILITY_CHANGED`. The test is `IsShown`, not `IsVisible` — a child hidden
+only because its window is closed has not opted out, and treating those as absent would
+collapse every container the moment it is hidden.
+
+Stack and anchor deliberately do **not** skip hidden children. Their children each occupy
+the whole box independently, so a hidden one costs nothing, and skipping it would strand
+any component that hides a child and resizes it before showing it again — a progress fill
+at 0% is exactly that pattern.
+
+**`Remove(child)` does not hide or unparent the child.** It is a membership operation: the
+child is dropped from the layout and keeps its last geometry, still parented and still
+visible. Callers decide visibility, which is why `Tooltip` and `Dropdown` follow `Remove`
+with their own `Hide()`. Contrast `Clear()`, which hides every child as it removes it.
+
+**Grid uses one `gap` for both axes.** There is no separate `rowGap`/`colGap`; the same
+value spaces columns and rows. Add the split to the strategy if a caller needs it.
+
+**Anchor containers cannot hug content.** `GetContentSize()` has no anchor branch and falls
+through to the container's own frame size, so hugging would be a no-op. Give an anchor
+container an explicit size or `fill = true` — which is what `UIRoot` and the floating host
+both do.
+
+**Hugging is height-only.** A container without an explicit `w` takes its parent's width and
+never shrinks to content. Width hugging is not implemented.
+
 - No wrapping in flow layouts
 - No percentage-based sizing (`width = "50%"`)
 - No min/max size constraints

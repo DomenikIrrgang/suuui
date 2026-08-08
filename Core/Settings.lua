@@ -93,6 +93,29 @@ local function notifyWatchers(pluginId, key, value)
     end
 end
 
+local MAX_SCHEMA_DEPTH = 6
+
+--- Calls fn(entry) for every entry in a schema, descending into grouped entries.
+-- A grouping control (subtabs) carries its children in `tabs[i].schema`, and those
+-- children are real settings: they must be indexed, reset and torn down exactly like a
+-- top-level entry, or a setting would only work when it happens to be declared flat.
+-- Declaring a key once, in the group it is rendered in, is the point.
+-- @param schemaArray table
+-- @param fn function(entry)
+-- @param depth number|nil
+local function eachEntry(schemaArray, fn, depth)
+    depth = (depth or 0) + 1
+    if depth > MAX_SCHEMA_DEPTH or type(schemaArray) ~= "table" then return end
+    for _, entry in ipairs(schemaArray) do
+        fn(entry)
+        if type(entry.tabs) == "table" then
+            for _, tab in ipairs(entry.tabs) do
+                eachEntry(tab.schema, fn, depth)
+            end
+        end
+    end
+end
+
 --- Registers a settings schema for a plugin.
 -- @param pluginId string
 -- @param schemaArray table  Array of schema entry tables
@@ -102,12 +125,24 @@ function M:Register(pluginId, schemaArray)
     schemas[pluginId] = schemaArray
 
     local idx, trans = {}, {}
-    for _, entry in ipairs(schemaArray) do
-        if entry.key and entry.key ~= "" then
-            idx[entry.key] = entry
-            if entry.transient then trans[entry.key] = true end
+    eachEntry(schemaArray, function(entry)
+        local key = entry.key
+        if not key or key == "" then return end
+        local existing = idx[key]
+        if existing and existing ~= entry then
+            -- Two declarations of one key is a drift bug waiting to happen: the reader
+            -- would take its default from one and its range from the other. Name it.
+            if existing.default ~= nil and entry.default ~= nil
+               and not valuesEqual(existing.default, entry.default) then
+                SuuUI.Debug("Settings: conflicting defaults declared for "
+                    .. pluginId .. "." .. key)
+            end
+            if existing.default == nil and entry.default ~= nil then idx[key] = entry end
+        else
+            idx[key] = entry
         end
-    end
+        if entry.transient then trans[key] = true end
+    end)
     entryIndex[pluginId]    = idx
     transientKeys[pluginId] = trans
 end
@@ -250,6 +285,29 @@ function M.ControlOwner(pluginId, kind, key)
     return M.ControlOwnerPrefix(pluginId) .. tostring(kind) .. ":" .. tostring(key)
 end
 
+--- Drops the watchers that the controls for a slice of schema registered.
+--
+-- Every control file subscribes under `ControlOwner(pluginId, entry.type, entry.key)`,
+-- so the owner string is derivable from the schema alone. That lets a surface which
+-- built *part* of a page (one subtab) retire exactly its own subscriptions without
+-- tracking each one — an owner prefix cannot do this, because the controls are not
+-- registered under a prefix that says which group they came from.
+--
+-- Without this, swapping a group's contents leaves a watcher bound to a destroyed
+-- widget; the next write, and every profile load, then calls into it.
+-- @param pluginId string
+-- @param schemaArray table  The entries whose controls are going away
+-- @return number  How many watchers were removed
+function M:UnwatchControls(pluginId, schemaArray)
+    local removed = 0
+    eachEntry(schemaArray, function(entry)
+        if entry.key and entry.key ~= "" and entry.type then
+            removed = removed + self:Unwatch(M.ControlOwner(pluginId, entry.type, entry.key))
+        end
+    end)
+    return removed
+end
+
 --- Returns the live watcher count. Used by tests to catch subscription leaks.
 -- @return number
 function M:GetWatcherCount()
@@ -267,15 +325,17 @@ function M:Reset(pluginId, key)
 end
 
 --- Resets all settings for a plugin to their schema defaults.
+-- Descends into grouped entries, so a setting declared inside a subtab resets like any
+-- other rather than being silently skipped.
 -- @param pluginId string
 function M:ResetAll(pluginId)
     local schema = schemas[pluginId]
     if not schema then return end
-    for _, entry in ipairs(schema) do
+    eachEntry(schema, function(entry)
         if entry.key and entry.key ~= "" then
             self:Set(pluginId, entry.key, entry.default)
         end
-    end
+    end)
 end
 
 SuuUI.Settings = M

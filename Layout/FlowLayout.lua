@@ -72,14 +72,42 @@ local function fillShare(availSpace, fillCount)
     return base, steps
 end
 
+-- The children that actually take part in the flow.
+--
+-- A hidden child must not hold a slot: it would keep its share of the main axis AND its
+-- gap, leaving a hole in the middle of the row that nothing occupies. `IsShown` is the
+-- right test rather than `IsVisible` — a child hidden because the whole panel is hidden
+-- has not opted out of the layout, and skipping those would collapse every container the
+-- moment its window closes.
+--
+-- Stack and anchor layouts deliberately do NOT do this: their children each occupy the
+-- whole box independently, so a hidden one costs nothing, and skipping it would strand
+-- components that hide a child and then resize it before showing it again (a progress
+-- fill at 0% is exactly that).
+-- @param children table
+-- @return table, number  visible children, count
+local function visibleChildren(children)
+    local out, n = {}, 0
+    for i = 1, #children do
+        local c = children[i]
+        if not c.IsShown or c:IsShown() then
+            n = n + 1
+            out[n] = c
+        end
+    end
+    return out, n
+end
+
+M.visibleChildren = visibleChildren
+
 --- Applies flow layout to a container's children.
 -- Child layout props: { width="fill"|"auto"|number, height="fill"|number, align="start"|"center"|"end"|"stretch" }
 -- "fill" distributes remaining space on the main axis; "auto" hugs the child's own
 -- content width (re-measured every pass); "stretch" fills the cross axis.
+-- Hidden children are skipped entirely, so hiding one closes its gap.
 -- @param container table  Container handle
 function M.Apply(container)
-    local children = container._children
-    local n        = #children
+    local children, n = visibleChildren(container._children)
     if n == 0 then return end
 
     local pad      = container._padding

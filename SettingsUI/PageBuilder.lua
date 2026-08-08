@@ -13,6 +13,41 @@ local coreTypes = {
     theme_manager   = true,
 }
 
+-- Entries that carry a value but have no control: they exist so the key has a default
+-- and a home in the profile. Listed rather than left to fall through, so the "no control
+-- for type" warning below keeps meaning "this type is missing a builder".
+local dataOnly = {
+    internal = true,
+    position = true,
+}
+
+--- Builds each schema entry into `container`, in order.
+-- Shared by the page itself and by any grouping control (subtabs) that renders a slice
+-- of schema, so there is one definition of how a schema entry becomes a row.
+-- @param schemaArray table  Entries to build
+-- @param pluginId string
+-- @param parentFrame frame  Frame the rows are created inside
+-- @param container table    Container handle the rows are added to
+function M:BuildEntries(schemaArray, pluginId, parentFrame, container)
+    for _, entry in ipairs(schemaArray) do
+        if not dataOnly[entry.type] then
+            local builder = SuuUI._SettingsControls and SuuUI._SettingsControls[entry.type]
+            if builder then
+                local row = coreTypes[entry.type]
+                    and builder(entry, parentFrame)
+                    or  builder(entry, pluginId, parentFrame)
+                if row then
+                    -- No fixed height: rows hug their content so a font token change
+                    -- re-flows the page instead of clipping inside a stale row height.
+                    container:Add(row, { width = "fill" })
+                end
+            else
+                SuuUI.Debug("PageBuilder: no control for type: " .. tostring(entry.type))
+            end
+        end
+    end
+end
+
 --- Builds the settings page for pluginId into a ScrollFrame's content area.
 -- Emits CONTENT_RESIZED on the scroll handle so it can update its scrollbar.
 -- @param pluginId string
@@ -71,21 +106,7 @@ function M:Build(pluginId, scroll)
         page:SetWidth(scroll:GetContentWidth())
     end)
 
-    for _, entry in ipairs(schema) do
-        local builder = SuuUI._SettingsControls and SuuUI._SettingsControls[entry.type]
-        if builder then
-            local row = coreTypes[entry.type]
-                and builder(entry, content)
-                or  builder(entry, pluginId, content)
-            if row then
-                -- No fixed height: rows hug their content so a font token change
-                -- re-flows the page instead of clipping inside a stale row height.
-                page:Add(row, { width = "fill" })
-            end
-        else
-            SuuUI.Debug("PageBuilder: no control for type: " .. tostring(entry.type))
-        end
-    end
+    self:BuildEntries(schema, pluginId, content, page)
 
     local _, contentHeight = page:GetContentSize()
     S:Emit(scroll, S.SIGNALS.CONTENT_RESIZED, contentHeight)
