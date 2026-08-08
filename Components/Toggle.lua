@@ -20,6 +20,9 @@ function TogMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     self._box:Destroy()
+    -- The layout box is adopted, so destroying it does not hide the frame it lays out.
+    -- Without this the widget stays painted on screen after teardown.
+    self._f:Hide()
 end
 
 --- Sets the enabled/interactive state. Emits ENABLED_CHANGED.

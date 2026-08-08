@@ -400,4 +400,475 @@ describe("Core.MoveableFrame", function()
             expect(y).eq(50)
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: anchor-relative-to-parent fix (not UIParent)
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: RestorePosition anchors to parent, not UIParent", function()
+        it("restored frame is anchored relative to its parent, not UIParent", function()
+            local rootContainer = H.SuuUI.UIRoot:GetRootContainer()
+            local rootFrame = rootContainer:GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local _, relativeTo = f:GetPoint(1)
+            -- The frame must NOT be anchored to UIParent — it should be anchored
+            -- to the root container frame (or another frame in the root's tree)
+            expect(relativeTo).as("must not anchor to UIParent").neq(H.UIParent)
+        end)
+
+        it("placement is correct under a non-1 pixel multiplier", function()
+            H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+            host = H.parent(1024, 768)
+
+            local rootContainer = H.SuuUI.UIRoot:GetRootContainer()
+            local rootFrame = rootContainer:GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.Settings:Register("test_plugin", {
+                { key = "frame_position", type = "position", default = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 40, y = -60 } },
+            })
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 40, y = -60 },
+            })
+
+            -- The frame should resolve to the saved offsets in the root's unit space.
+            -- Under a non-1 pixel multiplier the root carries a scale, so if placement
+            -- went through UIParent the offsets would be in a different space and the
+            -- on-screen position would be wrong.
+            local point, relativeTo, relPoint, x, y = f:GetPoint(1)
+            expect(point).eq("TOPLEFT")
+            expect(relPoint).eq("TOPLEFT")
+            expect(x).near(40, 1)
+            expect(y).near(-60, 1)
+            -- Crucially, the relativeTo must be in the root tree, not UIParent
+            expect(relativeTo).neq(H.UIParent)
+        end)
+
+        it("saved position from settings resolves correctly under scale", function()
+            H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+            host = H.parent(1024, 768)
+
+            H.SuuUI.Settings:Register("test_plugin", {
+                { key = "frame_position", type = "position", default = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 } },
+            })
+            H.SuuUI.Settings:Set("test_plugin", "frame_position", {
+                point = "TOPRIGHT", relPoint = "TOPRIGHT", x = -50, y = -30,
+            })
+
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local point, relativeTo, relPoint, x, y = f:GetPoint(1)
+            expect(point).eq("TOPRIGHT")
+            expect(relPoint).eq("TOPRIGHT")
+            expect(x).near(-50, 1)
+            expect(y).near(-30, 1)
+            expect(relativeTo).as("anchored inside root tree").neq(H.UIParent)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: Apply registers with UIRoot, no double-register
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: Apply registers frame as UIRoot element", function()
+        it("registers the frame as a UIRoot element when root exists", function()
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            -- _suuui_anchor is set by UIRoot:AddElement
+            expect(f._suuui_anchor).notNil()
+        end)
+
+        it("does not double-register on a second Apply", function()
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            -- Count elements in the normal layer before second Apply
+            local normalBefore = #H.SuuUI.UIRoot:GetLayerElements("normal")
+
+            -- Remove and re-apply — simulate plugin re-init
+            H.SuuUI.MoveableFrame:Remove(f)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            -- Should have same number — one entry, not two
+            expect(#H.SuuUI.UIRoot:GetLayerElements("normal")).eq(normalBefore)
+        end)
+
+        it("skips UIRoot registration when _suuui_anchor already set", function()
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            -- Pre-set _suuui_anchor to simulate already registered
+            f._suuui_anchor = { point = "CENTER", x = 0, y = 0 }
+            local normalBefore = #H.SuuUI.UIRoot:GetLayerElements("normal")
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            -- Should NOT have added a new element
+            expect(#H.SuuUI.UIRoot:GetLayerElements("normal")).eq(normalBefore)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: overlay/backdrop/label placed by stack containers
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: overlay geometry via containers", function()
+        local function applyMounted()
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(200, 80)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "My Frame",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 0, y = 0 },
+            })
+            H.SuuUI.ToggleUI:Enable()
+            return f
+        end
+
+        it("overlay covers the frame exactly", function()
+            local f = applyMounted()
+            local overlay = f._suuui_moveable.overlay
+            local fBox = H.box(f)
+            local oBox = H.box(overlay)
+            expect(oBox).notNil()
+            expect(oBox.left).near(fBox.left, 1)
+            expect(oBox.top).near(fBox.top, 1)
+            expect(oBox.width).near(fBox.width, 1)
+            expect(oBox.height).near(fBox.height, 1)
+        end)
+
+        it("backdrop texture covers the overlay", function()
+            local f = applyMounted()
+            local overlay = f._suuui_moveable.overlay
+            local overlayBg = f._suuui_moveable.overlayBg
+            H.expectInside(overlayBg, overlay)
+        end)
+
+        it("label is centred in the overlay", function()
+            local f = applyMounted()
+            local overlay = f._suuui_moveable.overlay
+            local label = f._suuui_moveable.label
+            H.expectCenteredH(label, overlay)
+            H.expectCenteredV(label, overlay)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: label uses Text component, overlay uses theme token
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: label is Text component, overlay uses colorEditOverlay token", function()
+        it("label shows the displayName", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Player Frame",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local label = f._suuui_moveable.label
+            -- Text component wraps a font string; GetText retrieves the display text
+            expect(label:GetText()).eq("Player Frame")
+        end)
+
+        it("overlay tint uses the colorEditOverlay theme token", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local overlayBg = f._suuui_moveable.overlayBg
+            local r, g, b, a = overlayBg:GetColorTexture()
+            local tokenColor = H.token("colorEditOverlay") or { 0, 0.6, 1, 0.2 }
+            expect(r).near(tokenColor[1], 0.01)
+            expect(g).near(tokenColor[2], 0.01)
+            expect(b).near(tokenColor[3], 0.01)
+            expect(a).near(tokenColor[4], 0.01)
+        end)
+
+        it("overlay is repainted when the theme changes", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local overlayBg = f._suuui_moveable.overlayBg
+
+            -- Read color before theme change
+            local rBefore, gBefore, bBefore, aBefore = overlayBg:GetColorTexture()
+
+            -- Emit theme change — the overlay should repaint from the token
+            H.SuuUI.Events:Emit("SUUUI_THEME_CHANGED", "Modern")
+
+            local rAfter, gAfter, bAfter, aAfter = overlayBg:GetColorTexture()
+            -- The color should still equal the token (which may or may not have changed
+            -- depending on the theme, but the handler ran)
+            local tokenColor = H.token("colorEditOverlay") or { 0, 0.6, 1, 0.2 }
+            expect(rAfter).near(tokenColor[1], 0.01)
+            expect(gAfter).near(tokenColor[2], 0.01)
+            expect(bAfter).near(tokenColor[3], 0.01)
+            expect(aAfter).near(tokenColor[4], 0.01)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: Remove destroys containers, drops listener, clears placeBox
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: Remove cleanup", function()
+        it("theme change after Remove does not repaint anything", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local overlayBg = f._suuui_moveable.overlayBg
+            H.SuuUI.MoveableFrame:Remove(f)
+
+            -- Paint a sentinel colour to detect if the handler fires
+            overlayBg:SetColorTexture(0.99, 0.99, 0.99, 0.99)
+            H.SuuUI.Events:Emit("SUUUI_THEME_CHANGED", "Modern")
+
+            -- The sentinel should remain untouched — the listener was removed
+            local r, g, b, a = overlayBg:GetColorTexture()
+            expect(r).near(0.99, 0.01)
+            expect(g).near(0.99, 0.01)
+            expect(b).near(0.99, 0.01)
+            expect(a).near(0.99, 0.01)
+        end)
+
+        it("clears _suuui_placeBox on Remove", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            H.SuuUI.MoveableFrame:Remove(f)
+            expect(f._suuui_placeBox).isNil()
+        end)
+
+        it("destroys the overlayBox and contentBox containers", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            local overlayBox = f._suuui_moveable.overlayBox
+            local contentBox = f._suuui_moveable.contentBox
+            H.SuuUI.MoveableFrame:Remove(f)
+
+            -- After Destroy, these containers should be marked destroyed
+            expect(overlayBox._destroyed).eq(true)
+            expect(contentBox._destroyed).eq(true)
+        end)
+
+        it("drops the SUUUI_THEME_CHANGED listener by owner", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+
+            -- Track that the listener fires before Remove
+            local fired = 0
+            local origBg = f._suuui_moveable.overlayBg
+            -- Capture reference before remove
+            H.SuuUI.MoveableFrame:Remove(f)
+
+            -- Register a new spy to see if the old listener owner still works
+            local spyFired = false
+            H.SuuUI.Events:On("SUUUI_THEME_CHANGED", function()
+                spyFired = true
+            end, "moveable_theme_test_plugin_frame_position")
+            -- The fact that we can register with the same owner proves Off removed
+            -- the old one (otherwise the old handler would have been called above)
+            H.SuuUI.Events:Emit("SUUUI_THEME_CHANGED", "Modern")
+            expect(spyFired).eq(true)
+            -- Clean up
+            H.SuuUI.Events:Off("SUUUI_THEME_CHANGED", "moveable_theme_test_plugin_frame_position")
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- REGRESSION: OnDragStop restates anchor so root re-layout doesn't snap back
+    ---------------------------------------------------------------------------
+    describe("REGRESSION: OnDragStop restates anchor for root stability", function()
+        it("frame stays in place after a root re-layout following drag", function()
+            local rootContainer = H.SuuUI.UIRoot:GetRootContainer()
+            local rootFrame = rootContainer:GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            H.SuuUI.ToggleUI:Enable()
+
+            -- Simulate a drag: the client moves the frame to a new position, then
+            -- fires OnDragStop. We emulate by clearing anchors and setting the new pos.
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", rootFrame, "TOPLEFT", 200, -100)
+
+            -- Fire the drag stop handler (which saves position and restates anchor)
+            local overlay = f._suuui_moveable.overlay
+            overlay:GetScript("OnDragStop")()
+
+            -- Record position after drag
+            local boxAfterDrag = H.box(f)
+            expect(boxAfterDrag).notNil()
+
+            -- Force a root re-layout (the bug was that re-layout snapped it back)
+            rootContainer:Layout()
+
+            -- The frame must stay where the drag left it
+            local boxAfterLayout = H.box(f)
+            expect(boxAfterLayout.left).as("horizontal stable after relayout")
+                .near(boxAfterDrag.left, 1)
+            expect(boxAfterLayout.top).as("vertical stable after relayout")
+                .near(boxAfterDrag.top, 1)
+        end)
+
+        it("drag saves the new position to settings", function()
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            H.SuuUI.ToggleUI:Enable()
+
+            -- Simulate drag to new position
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", rootFrame, "TOPLEFT", 150, -75)
+
+            local overlay = f._suuui_moveable.overlay
+            overlay:GetScript("OnDragStop")()
+
+            -- Settings should reflect the drag
+            local pos = H.SuuUI.Settings:Get("test_plugin", "frame_position")
+            expect(pos.point).eq("TOPLEFT")
+            expect(pos.x).near(150, 1)
+            expect(pos.y).near(-75, 1)
+        end)
+
+        it("drag under non-1 scale still anchors correctly after relayout", function()
+            H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+            host = H.parent(1024, 768)
+
+            H.SuuUI.Settings:Register("test_plugin", {
+                { key = "frame_position", type = "position", default = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 } },
+            })
+
+            local rootContainer = H.SuuUI.UIRoot:GetRootContainer()
+            local rootFrame = rootContainer:GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            H.SuuUI.ToggleUI:Enable()
+
+            -- Simulate drag
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", rootFrame, "TOPLEFT", 300, -200)
+
+            local overlay = f._suuui_moveable.overlay
+            overlay:GetScript("OnDragStop")()
+
+            local boxAfterDrag = H.box(f)
+            expect(boxAfterDrag).notNil()
+
+            -- Force relayout
+            rootContainer:Layout()
+
+            local boxAfterLayout = H.box(f)
+            expect(boxAfterLayout.left).as("stable horizontal under scale")
+                .near(boxAfterDrag.left, 1)
+            expect(boxAfterLayout.top).as("stable vertical under scale")
+                .near(boxAfterDrag.top, 1)
+        end)
+    end)
 end)

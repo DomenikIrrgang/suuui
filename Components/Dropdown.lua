@@ -63,6 +63,11 @@ end
 function DdMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    -- The face's own label handles. Easy to miss because the box owns their font strings,
+    -- but each Text handle holds its own theme subscription and outlives the box without
+    -- this — one per dropdown, for the rest of the session.
+    self._selT:Destroy()
+    self._arrowT:Destroy()
     self._box:Destroy()
     -- Pooled rows are not the row list's to free: it holds raw frames, so their own
     -- boxes and label handles have to be released here or they keep a theme
@@ -79,6 +84,7 @@ function DdMeta:Destroy()
         self._clickAway:Destroy()
         self._clickAway = nil
     end
+    self._f:Hide()
 end
 
 --- Enables or disables the dropdown. Emits ENABLED_CHANGED.

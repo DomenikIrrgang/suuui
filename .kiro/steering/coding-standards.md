@@ -312,18 +312,42 @@ container:Add(bar, { width = "fill", height = 30 })
 local gap = 2
 tex:SetColorTexture(0.1, 0.1, 0.12, 1)
 
--- ✅ REQUIRED: tokens, read through the theme
+-- ✅ REQUIRED: tokens for design language, settings for a widget's own dimensions
 local T = SuuUI.Theme
-frame:SetWidth(T:GetToken("sizeUnitFrameW"))
-container:Add(bar, { width = "fill", height = T:GetToken("sizeUnitHealthBar") })
+frame:SetWidth(SuuUI.Settings:Get("unit_frames", "player_width"))
+container:Add(bar, {
+  width  = "fill",
+  height = SuuUI.Settings:Get("unit_frames", "player_health_height"),
+})
 local gap = T:GetToken("spaceXxs")
 SuuUI.Backdrop.Apply(frame, { bg = "colorBgAlt", border = "colorBorder" })
 ```
 
 **The token does not exist yet? Add it** — to `Themes/Default.lua`, `Themes/Modern.lua`,
 and `SettingsUI/Controls/ThemeTokens.lua` so it is editable. Component-specific sizes are
-welcome there (`sizeToggleW`, `sizeScrollbar`, `sizeUnitHealthBar` are all precedents); a
-theme is where design decisions live, not just colours.
+welcome there (`sizeToggleW`, `sizeScrollbar` are precedents); a theme is where design
+decisions live, not just colours.
+
+### Token or setting?
+
+Not every named number belongs in the theme. Ask what the value *is*:
+
+| The value | Home | Why |
+|---|---|---|
+| Design language the whole UI shares — spacing scale, font steps, border width, surface colours, animation timings, the size of a shared control | **theme token** | One edit retints or re-scales every consumer |
+| One plugin's own widget dimensions and behaviour — a unit frame's width, which bars it shows, where it sits | **plugin setting** (`Settings:Register`, with the number as the entry's `default`) | It describes that widget, not the design language, and a player wants it per profile and on that plugin's own page |
+
+A plugin's own dimensions in the theme is a category error: the theme editor fills up with
+one plugin's controls, every other theme has to carry values it does not use, and the
+player cannot vary them per profile. A schema `default` is a perfectly good single
+declaration of a number — it is named, discoverable, and editable.
+
+Both sources are live, and code must react to either:
+
+```lua
+SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:Relayout() end, id)
+SuuUI.Settings:Watch(pluginId, "player_width", function() self:Relayout() end, owner)
+```
 
 **Read tokens through the narrowest API available**, so a rename or a casing slip cannot
 happen twice:

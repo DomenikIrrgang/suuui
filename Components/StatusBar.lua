@@ -1,5 +1,4 @@
 local type = type
-local max = math.max
 
 local S = SuuUI.UISignals
 
@@ -17,13 +16,17 @@ function StatusBarMeta:_inset()
     return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
 end
 
---- Re-anchors the fill to the current inset. Border width is a token, so this has to be
---- restated on a theme change rather than fixed at construction.
+--- Restates the fill's inset on the host container. Border width is a token, so this has
+--- to be re-stated on a theme change rather than fixed at construction. The fill's
+--- position and size are the container's business; this only says how far in it sits.
 function StatusBarMeta:_anchorFill()
-    local inset = self:_inset()
-    self._fillFrame:ClearAllPoints()
-    self._fillFrame:SetPoint("TOPLEFT", self._f, "TOPLEFT", inset, -inset)
-    self._fillFrame:SetPoint("BOTTOMLEFT", self._f, "BOTTOMLEFT", inset, inset)
+    if not self._fillBox then return end
+    self._fillBox:SetChildProps(self._fillFrame, {
+        inset          = self:_inset(),
+        align          = "start",
+        valign         = "stretch",
+        widthFraction  = self._pct or 0,
+    })
 end
 
 --- Recolours the bar fill and background.
@@ -35,7 +38,10 @@ function StatusBarMeta:_paint()
     self._bar:SetColorTexture(r, g, b, a)
 end
 
---- Updates the bar fill width based on current value/max.
+--- Updates the bar fill from the current value/max.
+-- The pixel width is the layout engine's job: the fill is a fractional child of the
+-- track, so stating the fraction is the whole update. It then stays correct across
+-- resizes and border-width changes without this ever running again.
 function StatusBarMeta:_updateFill()
     local pct = 0
     if self._max > 0 then
@@ -44,16 +50,20 @@ function StatusBarMeta:_updateFill()
         if pct > 1 then pct = 1 end
     end
     self._pct = pct
-    -- Fill is positioned by the host container's anchor strategy. We set the fill
-    -- frame's width as a fraction of the outer frame's width.
-    local totalW = self._f:GetWidth() or 0
-    local inset  = self:_inset()
-    local innerW = max(totalW - inset * 2, 0)
-    local fillW = SuuUI.Pixel.Floor(innerW * pct)
-    if fillW < 0.5 then
+    if not self._fillBox then return end
+
+    self._fillBox:SetChildFraction(self._fillFrame, "width", pct)
+    self:_syncFillVisibility()
+end
+
+--- Hides the fill when it rounds below half a pixel.
+-- A sub-pixel fill renders as a sliver of colour pinned to the left edge, which reads as
+-- a rendering artefact rather than an empty bar.
+function StatusBarMeta:_syncFillVisibility()
+    if not self._fillFrame then return end
+    if (self._fillFrame:GetWidth() or 0) < 0.5 then
         self._fillFrame:Hide()
     else
-        self._fillFrame:SetWidth(fillW)
         self._fillFrame:Show()
     end
 end
@@ -128,6 +138,8 @@ end
 function StatusBarMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._barBox  then self._barBox:Destroy();  self._barBox  = nil end
+    if self._fillBox then self._fillBox:Destroy(); self._fillBox = nil end
     self._f:Hide()
 end
 
@@ -148,14 +160,12 @@ function SuuUI.Components.StatusBar(props, parent)
     if props.w then f:SetWidth(props.w) end
     if props.h then f:SetHeight(props.h) end
 
-    -- Fill texture frame: a child frame holding a texture, anchored by _anchorFill() once
-    -- the handle exists, since the inset depends on whether the bar has a border.
+    -- Fill frame: a child frame holding the fill texture. Both are placed by host
+    -- containers below, never by hand — the fill is a fractional child of the track.
     local fillFrame = CreateFrame("Frame", nil, f)
-    fillFrame:SetWidth(0)
 
     local bar = fillFrame:CreateTexture(nil, "ARTWORK")
     bar:SetTexture(WHITE)
-    bar:SetAllPoints(fillFrame)
 
     local id = "statusbar_" .. tostring(f)
     local handle = setmetatable({
@@ -171,13 +181,28 @@ function SuuUI.Components.StatusBar(props, parent)
         _showBorder = props.border ~= false,
     }, StatusBarMeta)
 
-    f:SetScript("OnSizeChanged", function(_, w, h)
-        handle:_updateFill()
+    -- The track hosts the fill; the fill hosts its texture. Two adopted containers, no
+    -- extra frames, and not one point set by this component.
+    handle._fillBox = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+    handle._fillBox:Add(fillFrame, {
+        inset         = handle:_inset(),
+        align         = "start",
+        valign        = "stretch",
+        widthFraction = 0,
+    })
+    handle._barBox = SuuUI.Layout:CreateContainer({ host = fillFrame, layout = "stack" })
+    handle._barBox:Add(bar)
+
+    -- Chain the container's own resize handler rather than replacing it: the container
+    -- must re-flow the fill first, so the visibility check below reads a fresh width.
+    local prevSize = f:GetScript("OnSizeChanged")
+    f:SetScript("OnSizeChanged", function(self_, w, h)
+        if prevSize then prevSize(self_, w, h) end
+        handle:_syncFillVisibility()
         S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
     end)
 
     handle:ApplyTheme()
-    handle:_updateFill()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

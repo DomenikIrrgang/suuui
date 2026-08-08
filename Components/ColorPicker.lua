@@ -194,6 +194,12 @@ function CpMeta:ApplyTheme()
     self._alphaAnchor.height = th
     self._hueBox:SetChildAnchor(self._hueThumb, self._hueAnchor)
     self._alphaBox:SetChildAnchor(self._alphaThumb, self._alphaAnchor)
+    -- Thumb markers: painted from a token rather than fixed white at construction, so a
+    -- theme can darken them. They sit over arbitrary colour, hence their own token.
+    local mk = SuuUI.Theme:GetToken("colorMarker") or {1, 1, 1, 0.9}
+    for _, tex in ipairs(self._markers or {}) do
+        if tex then tex:SetColorTexture(mk[1], mk[2], mk[3], mk[4] or 0.9) end
+    end
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame. Show, Hide and SetSize are defined
@@ -227,11 +233,10 @@ local function barRow(parent, root, labelText, gap, thumbTex)
 
     local tBox = SuuUI.Layout:CreateContainer({ host = thumb, layout = "stack" })
     local tTex = thumb:CreateTexture(nil, "OVERLAY")
-    tTex:SetColorTexture(1, 1, 1, 0.9)
     tBox:Add(tTex)
 
     root:Add(row, { width = "fill", height = BAR_H })
-    return bar, tex, thumbBox, thumb, anchor
+    return bar, tex, thumbBox, thumb, anchor, tTex
 end
 
 --- Creates a custom HSV color picker panel.
@@ -300,7 +305,6 @@ function SuuUI.Components.ColorPicker(props, parent)
     svBox:Add(svThumb, { anchor = svAnchor })
     local svThumbBox = SuuUI.Layout:CreateContainer({ host = svThumb, layout = "stack" })
     local svTex = svThumb:CreateTexture(nil, "OVERLAY")
-    svTex:SetColorTexture(1, 1, 1, 0.9)
     svThumbBox:Add(svTex)
 
     -- Right column: preview swatch + hex field
@@ -323,11 +327,11 @@ function SuuUI.Components.ColorPicker(props, parent)
     topRow:Add(rightCol, { width = COL_W, height = SV_SIZE })
     root:Add(topRow, { width = "fill", height = SV_SIZE })
 
-    local hueFrame, hueTex, hueBox, hueThumb, hueAnchor =
+    local hueFrame, hueTex, hueBox, hueThumb, hueAnchor, hueMarkerTex =
         barRow(f, root, "Hue:", gap)
     hueTex:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-ColorSwatch")
 
-    local alphaFrame, alphaTex, alphaBox, alphaThumb, alphaAnchor =
+    local alphaFrame, alphaTex, alphaBox, alphaThumb, alphaAnchor, alphaMarkerTex =
         barRow(f, root, "Alpha:", gap)
     alphaTex:SetTexture("Interface\\Buttons\\WHITE8x8")
     alphaTex:SetGradient("HORIZONTAL",
@@ -340,6 +344,8 @@ function SuuUI.Components.ColorPicker(props, parent)
         _svBox=svBox, _svThumb=svThumb, _svAnchor=svAnchor,
         _hueFrame=hueFrame, _hueBox=hueBox, _hueThumb=hueThumb, _hueAnchor=hueAnchor,
         _alphaFrame=alphaFrame, _alphaBox=alphaBox, _alphaThumb=alphaThumb, _alphaAnchor=alphaAnchor,
+        -- The three thumb markers, kept so ApplyTheme can recolour them
+        _markers={ svTex, hueMarkerTex, alphaMarkerTex },
         _preview=preview, _hexInput=hexInput,
         _eid=id, _enabled=true, _onChange=props.onChange,
         _r=r0, _g=g0, _b=b0, _a=a0, _h=h0, _s=s0, _v=v0,

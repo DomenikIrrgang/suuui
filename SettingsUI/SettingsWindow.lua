@@ -14,6 +14,7 @@ local function navRowHeight()
 end
 
 local win, navScroll, contentScroll, navList
+local navScrollConn = nil
 local navItems = {}
 local activeId = nil
 
@@ -36,6 +37,12 @@ local function buildNav()
 
     local previousId = activeId
 
+    -- The scroll frame survives a nav rebuild, so its listener has to be released by hand.
+    -- Left connected, every plugin enable/disable stacks another callback on it.
+    if navScrollConn then
+        S:Disconnect(navScroll, S.SIGNALS.SIZE_CHANGED, navScrollConn)
+        navScrollConn = nil
+    end
     if navList then navList:Destroy() end
     for _, item in ipairs(navItems) do item.nav:Destroy() end
     navItems = {}
@@ -56,7 +63,7 @@ local function buildNav()
 
     -- Keep the nav list width in step with the scroll frame (scrollbar appearing
     -- changes the usable content width)
-    S:Connect(navScroll, S.SIGNALS.SIZE_CHANGED, function()
+    navScrollConn = S:Connect(navScroll, S.SIGNALS.SIZE_CHANGED, function()
         if navList then navList:SetWidth(navScroll:GetContentWidth()) end
     end)
 
@@ -112,7 +119,7 @@ local function createWindow()
     local content = win:GetContentFrame()
     -- Read the real content box rather than WIN_W/WIN_H: the window caps itself to the
     -- screen, so the constants are only a request and can overshoot on a small display.
-    local contentW, contentH = content:GetWidth(), content:GetHeight()
+    local contentW, contentH = win:GetContentSize()
 
     -- Nav | divider | page, tracking the window as it resizes
     local main = SuuUI.Layout:CreateContainer({

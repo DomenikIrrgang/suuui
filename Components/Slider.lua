@@ -37,6 +37,9 @@ function SldMeta:Destroy()
     self._f:SetScript("OnUpdate", nil)
     self._thumbBox:Destroy()
     self._box:Destroy()
+    -- The layout box is adopted, so destroying it does not hide the frame it lays out.
+    -- Without this the widget stays painted on screen after teardown.
+    self._f:Hide()
 end
 
 --- Enables or disables the slider. Emits ENABLED_CHANGED.

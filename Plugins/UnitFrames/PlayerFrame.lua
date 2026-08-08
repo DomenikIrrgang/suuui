@@ -31,20 +31,30 @@ end
 ---------------------------------------------------------------------------
 -- Layout metrics
 --
--- Every number here comes from a theme token, so the frame follows the theme editor and
--- the font sliders instead of pinning its own literals: widths and bar heights from the
--- size tokens, gaps from the spacing scale, and the name row from the measured text. A
--- literal row height would clip the name the moment the font outgrows it.
+-- Two sources, split by what the value actually is:
+--   * this widget's own dimensions come from the plugin's Settings, so they are
+--     profile-aware and tunable on the Unit Frames page;
+--   * spacing, font size and track opacity come from theme tokens, because they are
+--     design language shared with the rest of the UI.
+-- Nothing here is a literal: a width in code is a width nobody can change.
 ---------------------------------------------------------------------------
+local PLUGIN_ID = "unit_frames"
 local INFO_FONT = "lg"  -- font size token suffix, shared by name and level
 
+-- Settings keys for the player frame's dimensions, in one place so the watchers and the
+-- metrics read the same list.
+local SIZE_KEYS = { "player_width", "player_health_height", "player_power_height" }
+
 local function metrics()
+    local get = function(key) return SuuUI.Settings:Get(PLUGIN_ID, key) end
     return {
-        width    = T:GetToken("sizeUnitFrameW"),
+        -- widget dimensions: plugin settings
+        width    = get("player_width"),
+        health   = get("player_health_height"),
+        resource = get("player_power_height"),
+        -- design language: theme tokens
         infoGap  = T:GetToken("spaceXs"),
         barGap   = T:GetToken("spaceXxs"),
-        health   = T:GetToken("sizeUnitHealthBar"),
-        resource = T:GetToken("sizeUnitPowerBar"),
         fontSize = T:GetFontSize(INFO_FONT),
     }
 end
@@ -118,9 +128,10 @@ function PlayerFrame:_syncSize()
     end
 end
 
---- Re-reads every token-derived metric. Bound to SUUUI_THEME_CHANGED, so editing a size
---- token or a font slider re-lays the frame instead of waiting for a reload.
-function PlayerFrame:ApplyTheme()
+--- Re-reads every derived metric and re-lays the frame. Bound to both
+--- SUUUI_THEME_CHANGED and the size settings, so moving a slider or editing a spacing
+--- token takes effect immediately instead of waiting for a reload.
+function PlayerFrame:Relayout()
     local m = metrics()
     self._root:SetGap(m.infoGap)
     self._infoRow:SetGap(m.infoGap)
@@ -132,6 +143,11 @@ function PlayerFrame:ApplyTheme()
     self._resourceBar:SetBgColor(barTrackColor())
     self:_syncSize()
     self._root:Layout()
+end
+
+--- Theme hook. Same work as a settings change, so it shares one path.
+function PlayerFrame:ApplyTheme()
+    self:Relayout()
 end
 
 function PlayerFrame:Create(parent)
@@ -211,10 +227,18 @@ function PlayerFrame:Create(parent)
         self:_syncSize()
     end)
 
-    -- Size, spacing and font tokens are all user-editable, so the frame re-derives its
-    -- metrics on a theme change rather than holding the values it was built with.
+    -- Spacing and font tokens are user-editable, so the frame re-derives on a theme change
+    -- rather than holding the values it was built with.
     self._themeId = "unitframes_player_" .. tostring(self._wrapper)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end, self._themeId)
+
+    -- The dimension sliders are watched the same way: a settings change re-lays the frame
+    -- immediately and survives a profile switch, which rewrites these values underneath us.
+    for _, key in ipairs(SIZE_KEYS) do
+        SuuUI.Settings:Watch(PLUGIN_ID, key, function()
+            self:Relayout()
+        end, self._themeId .. "_" .. key)
+    end
 
     -- WoW event frame for data updates
     self._events = CreateFrame("Frame")
@@ -302,6 +326,9 @@ end
 
 function PlayerFrame:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._themeId)
+    for _, key in ipairs(SIZE_KEYS) do
+        SuuUI.Settings:Unwatch(self._themeId .. "_" .. key)
+    end
     self._events:UnregisterAllEvents()
     self._events:Hide()
     self._nameText:Destroy()
@@ -341,10 +368,19 @@ local plugin = SuuUI:CreatePlugin({
     version = "0.1",
 
     onInit = function(p)
+        -- The frame's own dimensions are settings, not theme tokens: they describe one
+        -- plugin's widget rather than the design language, and a player wants them per
+        -- profile. The defaults here are the single declaration of each number.
         SuuUI.Settings:Register("unit_frames", {
             { key = "enabled",        label = "Enable Unit Frames",   type = "toggle", default = true },
             { key = "",               label = "Player Frame",         type = "section" },
             { key = "player_enabled", label = "Enable Player Frame",  type = "toggle", default = true },
+            { key = "player_width",         label = "Frame Width",         type = "slider",
+              min = 120, max = 420, step = 2, default = 304 },
+            { key = "player_health_height", label = "Health Bar Height",   type = "slider",
+              min = 8,  max = 60, step = 1, default = 39 },
+            { key = "player_power_height",  label = "Resource Bar Height", type = "slider",
+              min = 4,  max = 40, step = 1, default = 22 },
             { key = "player_position", type = "position", default = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 20, y = 60 } },
         })
 

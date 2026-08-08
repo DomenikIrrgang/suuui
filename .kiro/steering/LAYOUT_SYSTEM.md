@@ -57,7 +57,7 @@ local T = SuuUI.Theme
 
 local container = SuuUI.Layout:CreateContainer({
   parent  = parentFrame,
-  layout  = "flow",           -- "flow" | "grid" | "anchor"
+  layout  = "flow",           -- "flow" | "stack" | "grid" | "anchor"
   dir     = "vertical",       -- "vertical" | "horizontal" (flow only)
   gap     = T:GetToken("spaceXs"),  -- spacing between children (4px)
   padding = {                 -- space from container edges
@@ -71,7 +71,7 @@ local container = SuuUI.Layout:CreateContainer({
 
 -- Add children with layout properties
 container:Add(childFrame, {
-  width  = "fill",            -- "fill" | number | omit
+  width  = "fill",            -- "fill" | "auto" | number | omit
   height = 32,                -- "fill" | number | omit
 })
 ```
@@ -100,9 +100,6 @@ component derive it, or read the token when the container needs the number:
 | `sizeTitleBar` | window title strip |
 | `sizeIcon` | icons, resize grip, scroll thumb minimum |
 | `sizeScrollbar` | scrollbar track and thumb width |
-| `sizeUnitFrameW` | unit frame width |
-| `sizeUnitHealthBar` | unit frame health bar height |
-| `sizeUnitPowerBar` | unit frame resource bar height |
 
 `Theme:GetControlHeight(sizeKey, fontKey)` returns the token floored against the font
 metrics — use it for anything that holds text. Read the token directly for elements that
@@ -260,6 +257,35 @@ box:Add(text,  { valign = "center", inset = { left = 6, right = 16 } })  -- span
 | `align` | `"start"｜"center"｜"end"｜"stretch"` | horizontal placement (default `stretch`) |
 | `valign` | `"start"｜"center"｜"end"｜"stretch"` | vertical placement (default `stretch`) |
 | `width` / `height` | `number` | explicit size when that axis is not stretched |
+| `widthFraction` / `heightFraction` | `0..1` | size as a share of the inner box on that axis, recomputed every pass |
+
+#### Fractional children — progress fills
+
+A bar that is 60% full is 60% of *whatever width the container currently has*. Stating that
+as a pixel width means recomputing it on every resize, every border-width change and every
+theme change — which is how a fill ends up anchoring itself and drifting out of the layout
+engine. State the fraction instead and the strategy derives the pixels:
+
+```lua
+-- The track hosts the fill; the fill is a fractional child of it.
+local fillBox = SuuUI.Layout:CreateContainer({ host = trackFrame, layout = "stack" })
+fillBox:Add(fill, {
+  inset         = borderWidth,   -- stay inside the border
+  align         = "start",       -- grow from the left edge
+  valign        = "stretch",     -- full height of the track
+  widthFraction = 0,
+})
+
+-- Every value change is one call. Resizes need no call at all.
+fillBox:SetChildFraction(fill, "width", value / max)
+```
+
+A fraction **overrides `width`/`height` and `stretch` on the same axis**, is clamped to
+`0..1`, and floors to the pixel grid so a fill never rounds up past its track. Placement
+still follows `align`/`valign`, defaulting to `start` — set `align = "end"` for a bar that
+drains rightwards, or `heightFraction` for a vertical bar. A fractional axis contributes
+nothing to `GetContentSize`, since a hugging container cannot be sized by a child that is
+itself sized from the container.
 
 A non-stretched axis needs the child's natural size, and for a font string that comes
 from `TextMetrics.Measure` against its current font — never from its rect. A region the
@@ -524,6 +550,8 @@ Bring the rest up if you need them!
 container:Add(child, layoutProps)          -- frame, texture, fontstring, handle, or container
 container:SetChildProps(child, props)      -- change a child's layout props, then re-layout
 container:SetChildAnchor(child, desc)      -- anchor layout: move/resize one child
+container:SetChildFraction(child, axis, f) -- stack layout: size one child as a 0..1 share
+                                           -- of the box on "width" or "height"
 container:Remove(child)
 container:Clear()                          -- remove and hide every child
 container:Layout()                         -- auto-called on Add/Remove/resize

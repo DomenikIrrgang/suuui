@@ -5,6 +5,7 @@ local M = {}
 
 local pages      = {}   -- [contentFrame] = container handle
 local pageOwners = {}   -- [contentFrame] = watcher owner prefix of the page built there
+local pageConns  = {}   -- [contentFrame] = conn id on the SCROLL handle, which outlives the page
 
 local coreTypes = {
     section         = true,
@@ -28,6 +29,13 @@ function M:Build(pluginId, scroll)
         if pageOwners[content] then
             SuuUI.Settings:UnwatchPrefix(pageOwners[content])
             pageOwners[content] = nil
+        end
+        -- The scroll frame outlives the page, so a listener registered on IT is not cleaned
+        -- up by destroying the page. Left connected, every nav switch adds another callback
+        -- that resizes the page it captured — a page that no longer exists.
+        if pageConns[content] then
+            S:Disconnect(scroll, S.SIGNALS.SIZE_CHANGED, pageConns[content])
+            pageConns[content] = nil
         end
         previous:Destroy()
         pages[content] = nil
@@ -56,8 +64,10 @@ function M:Build(pluginId, scroll)
         S:Emit(scroll, S.SIGNALS.CONTENT_RESIZED, h)
     end)
 
-    -- Keep the page width in step with the scroll frame
-    S:Connect(scroll, S.SIGNALS.SIZE_CHANGED, function()
+    -- Keep the page width in step with the scroll frame. Tracked, because this one lives on
+    -- the scroll handle rather than the page and must be dropped when the page goes.
+    pageConns[content] = S:Connect(scroll, S.SIGNALS.SIZE_CHANGED, function()
+        if pages[content] ~= page then return end
         page:SetWidth(scroll:GetContentWidth())
     end)
 

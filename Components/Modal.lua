@@ -53,6 +53,16 @@ end
 
 function ModalMeta:ApplyTheme()
     SuuUI.Backdrop.Apply(self._window, { bg = "colorBg", border = "colorBorder" })
+    -- The scrim is themed too: a hardcoded black dims a light theme into mud, and it was
+    -- painted once at construction so a theme switch never reached it.
+    if self._overlayTex then
+        local c = SuuUI.Theme:GetToken("colorOverlay")
+        if c then
+            self._overlayTex:SetColorTexture(c[1], c[2], c[3], c[4] or 0.7)
+        else
+            self._overlayTex:SetColorTexture(0, 0, 0, SuuUI.Theme:GetToken("opacityOverlay") or 0.7)
+        end
+    end
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize. Show and Hide are defined
@@ -94,7 +104,6 @@ function SuuUI.Components.Modal(props, parent)
 
     local overlayBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
     local overlayTex = overlay:CreateTexture(nil, "BACKGROUND")
-    overlayTex:SetColorTexture(0, 0, 0, T:GetToken("opacityOverlay") or 0.7)
     overlayBox:Add(overlayTex)
 
     local window = CreateFrame("Frame", nil, shell, "BackdropTemplate")
@@ -106,6 +115,7 @@ function SuuUI.Components.Modal(props, parent)
     local handle = setmetatable({
         _window      = window,
         _overlay     = overlay,
+        _overlayTex  = overlayTex,
         _shell       = shell,
         _shellBox    = shellBox,
         _eid         = id,

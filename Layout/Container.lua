@@ -145,6 +145,23 @@ function ContMeta:SetChildAnchor(child, anchorDesc)
     self:Layout()
 end
 
+--- Updates one child's fractional size on a single axis and re-runs layout (stack layout).
+-- This is how a progress fill states "I am 60% of the track" without ever touching a
+-- point: the strategy recomputes the pixel size from the container's current box on
+-- every pass, so the fill stays correct through resizes and theme changes for free.
+-- Merges into the child's existing props, so inset and alignment survive the update.
+-- @param child frame|table
+-- @param axisName string  "width" | "height"
+-- @param fraction number  0..1, clamped
+function ContMeta:SetChildFraction(child, axisName, fraction)
+    assert(axisName == "width" or axisName == "height",
+        "SuuUI Container: SetChildFraction axis must be \"width\" or \"height\"")
+    local target = targetOf(child)
+    target._layoutProps = target._layoutProps or {}
+    target._layoutProps[axisName .. "Fraction"] = fraction
+    self:Layout()
+end
+
 --- Removes a child and re-runs layout. Accepts the handle or its frame.
 -- @param child frame|table
 function ContMeta:Remove(child)
@@ -296,7 +313,11 @@ function ContMeta:GetContentSize()
 end
 
 --- Destroys the container and every child it owns, dropping all connections.
+-- Retires the parent-resize tracker installed for a fill container: the handler itself
+-- cannot be safely unhooked (something may have chained onto it since), so it is flagged
+-- dead and returns early instead of resizing a destroyed frame on every parent resize.
 function ContMeta:Destroy()
+    self._destroyed = true
     for child, connId in pairs(self._childConns) do
         SuuUI.UISignals:Disconnect(child, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, connId)
         if child.Destroy and child ~= self then child:Destroy() end
@@ -317,8 +338,12 @@ local floatingHost
 -- @return table  Container handle (anchor layout)
 function SuuUI.Layout:GetFloatingHost()
     if not floatingHost then
-        local parent = (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot())
-                       or UIParent
+        -- Same invariant as ColorPopup: the host is cached for the session, so falling back
+        -- to UIParent would permanently bind every floating panel to the client's own frame
+        -- — and install the resize handler on UIParent that this host exists to avoid.
+        -- UIRoot:AddElement asserts the same way; a cached singleton deserves it more.
+        local parent = SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()
+        assert(parent, "SuuUI Layout: GetFloatingHost() requires UIRoot:Init() to have run")
         floatingHost = self:CreateContainer({ host = parent, layout = "anchor" })
     end
     return floatingHost
@@ -386,6 +411,7 @@ function SuuUI.Layout:CreateContainer(props)
     local prev = f:GetScript("OnSizeChanged")
     f:SetScript("OnSizeChanged", function(self_, w, h)
         if prev then prev(self_, w, h) end
+        if handle._destroyed then return end
         handle:Layout()
     end)
 
@@ -395,6 +421,7 @@ function SuuUI.Layout:CreateContainer(props)
         local prevParent = parentFrame:GetScript("OnSizeChanged")
         parentFrame:SetScript("OnSizeChanged", function(self_, w, h)
             if prevParent then prevParent(self_, w, h) end
+            if handle._destroyed then return end
             f:SetSize(w, h)
         end)
     end
@@ -403,6 +430,7 @@ function SuuUI.Layout:CreateContainer(props)
     local prevShow = f:GetScript("OnShow")
     f:SetScript("OnShow", function(self_, ...)
         if prevShow then prevShow(self_, ...) end
+        if handle._destroyed then return end
         handle:Layout()
     end)
 

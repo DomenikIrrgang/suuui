@@ -175,10 +175,23 @@ local function Build(entry, parent)
         }):Show()
     end)
 
+    -- One owner for every listener this page registers, dropped first so a nav rebuild
+    -- replaces its subscribers rather than stacking a second set onto dead widgets.
+    local OWNER = "profile_mgr_ui"
+    SuuUI.Events:OffAll(OWNER)
+
     SuuUI.Events:On("SUUUI_PROFILE_LOADED", function(name)
         currentName:SetText(name)
         refreshOptions(name)
-    end, "profile_mgr_ui")
+    end, OWNER)
+
+    -- Teardown symmetry: destroying the page must drop the bus listener with it, or the
+    -- next profile load calls back into widgets that no longer exist.
+    local containerDestroy = root.Destroy
+    root.Destroy = function(selfRoot)
+        SuuUI.Events:OffAll(OWNER)
+        containerDestroy(selfRoot)
+    end
 
     return root
 end

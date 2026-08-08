@@ -207,6 +207,15 @@ function WinMeta:GetContentFrame()
     return self._content
 end
 
+--- Returns the usable size of the content area.
+-- The real box, not the requested one: a window caps itself to the screen, so the w/h it
+-- was built with are a request that a small display overrides. Callers size their panels
+-- from this rather than reaching through GetContentFrame() to the client's own getters.
+-- @return number, number  width, height
+function WinMeta:GetContentSize()
+    return self._content:GetWidth() or 0, self._content:GetHeight() or 0
+end
+
 --- Returns a container that lays out children in the window's content area.
 -- @param props table  Optional container props
 -- @return table  Container handle

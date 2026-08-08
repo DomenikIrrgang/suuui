@@ -34,10 +34,33 @@ and signal system all get bypassed.
 | `Layout/Container.lua` | Yes | Only to self-anchor its own frame |
 | `Core/UIRoot.lua` | Yes — owns the single `UIParent` anchor | Only that one anchor |
 | `Core/Pool.lua` | Yes | `ClearAllPoints` on release only |
+| `Core/Pixel.lua` | Yes — an invisible event watcher only, no visible UI | **No** |
+| `Core/MoveableFrame.lua` | Yes — drag overlay internals, as a component would | **No** — hosts containers |
+| `Animation/*` | Yes — one invisible `OnUpdate` driver frame | **No** — position animates through `container:SetChildAnchor` |
 | `Components/*` | Yes — internal frame/texture/fontstring construction, but z-order via `UIRoot:SetLayer` | **No** — use a host container |
 | `Layout/Window.lua` | Yes — z-order via `UIRoot:SetLayer`/`RaiseAbove` | **No** — use host containers |
 | `SettingsUI/*` | **No** — compose components and containers only | **No** |
 | `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** |
+
+The three engine rows are narrow, and worth stating explicitly because a blanket "only
+`Components/`, `Layout/` and `UIRoot`" reads as though they were violations:
+
+- **`Core/Pixel.lua`** creates one frame that is never shown, purely to receive
+  `DISPLAY_SIZE_CHANGED` / `UI_SCALE_CHANGED`. Event plumbing, not UI.
+- **`Animation/Animator.lua`** creates one frame to hang `OnUpdate` on. It animates
+  `alpha`, `width`, `height` and `scale` through the client's setters, but **position is
+  animated through the layout engine** — `x`/`y` require a container and drive
+  `SetChildAnchor`, so a tween never fights a strategy for the same anchor.
+- **`Core/MoveableFrame.lua`** builds an edit-mode drag overlay, which is component work in
+  everything but its folder. It gets the component licence and the component restriction:
+  raw `CreateFrame`/`CreateTexture` for its own internals, but its overlay, backdrop and
+  label are placed by host containers, and the frame's own position goes through
+  `UIRoot:UpdateElementAnchor` — never `SetPoint` against `UIParent`.
+
+**Placement never goes to `UIParent`.** The root carries the addon's own scale
+(`Pixel:Attach`), so `UIParent` is a *different unit space*: the same offsets resolve
+somewhere else at any pixel multiplier other than 1. A frame that positions itself states
+its placement to `UIRoot` and lets `AnchorLayout` resolve it in root space.
 
 Hiding Blizzard's own frames (`MinimapCluster:Hide()`) is a plugin responsibility and
 stays allowed — that is not building our UI, it is suppressing theirs.

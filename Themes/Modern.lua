@@ -23,6 +23,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityOverlay   = 0.45,
     -- See Themes/Default.lua: the empty part of a frameless bar.
     opacityBarTrack  = 0.60,
+    -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
+    opacityEditOverlay = 0.20,
 
     -- Tier 2: surfaces
     colorBg          = { ref = "colorGray900", alpha = "opacityPanel" },
@@ -31,6 +33,14 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" },
+
+    -- Overlays. A modal's scrim dims the screen behind it; edit mode's drag surface takes
+    -- the accent hue so "you can move this" reads the same as every other affordance.
+    colorOverlay     = { ref = "colorGray950", alpha = "opacityOverlay" },
+    colorEditOverlay = { ref = "colorAccent",  alpha = "opacityEditOverlay" },
+    -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
+    -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
+    colorMarker      = { ref = "colorGray100", alpha = 0.90 },
 
     -- Tier 2: intent
     colorAccent      = "colorBlue400",
@@ -70,11 +80,6 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
-
-    -- Unit frames: see Themes/Default.lua for why these live in the theme.
-    sizeUnitFrameW    = 234,
-    sizeUnitHealthBar = 30,
-    sizeUnitPowerBar  = 16,
 
     borderWidth      = 1,
 

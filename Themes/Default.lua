@@ -28,6 +28,8 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- frame bar has, so at 0 rage this is the whole widget: too low and the bar vanishes
     -- against the game world.
     opacityBarTrack  = 0.60,
+    -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
+    opacityEditOverlay = 0.20,
 
     -- Tier 2: surfaces. { ref, alpha } takes the primitive's RGB with a token alpha,
     -- so panel translucency is one slider instead of four colour edits.
@@ -37,6 +39,14 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" },
+
+    -- Overlays. A modal's scrim dims the screen behind it; edit mode's drag surface takes
+    -- the accent hue so "you can move this" reads the same as every other affordance.
+    colorOverlay     = { ref = "colorGray950", alpha = "opacityOverlay" },
+    colorEditOverlay = { ref = "colorAccent",  alpha = "opacityEditOverlay" },
+    -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
+    -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
+    colorMarker      = { ref = "colorGray100", alpha = 0.90 },
 
     -- Tier 2: intent
     colorAccent      = "colorBlue400",
@@ -82,13 +92,6 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
-
-    -- Unit frames. Widths and bar heights belong here for the same reason sizeToggleW
-    -- does: they are design decisions, editable in the theme editor, and no layout file
-    -- should carry them as literals.
-    sizeUnitFrameW    = 234,
-    sizeUnitHealthBar = 30,
-    sizeUnitPowerBar  = 16,
 
     borderWidth      = 1,
 

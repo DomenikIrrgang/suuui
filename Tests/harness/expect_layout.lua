@@ -208,6 +208,113 @@ return function(H)
         end
     end
 
+    ------------------------------------------------------------------------------
+    -- Hit testing
+    --
+    -- The client delivers a click to the TOPMOST visible, mouse-enabled frame under the
+    -- cursor. The harness delivers H.click straight to the widget you name, which is
+    -- convenient but means a frame can be completely covered by another and still pass a
+    -- click test — exactly the bug class that put the player frame over the settings
+    -- window. These helpers resolve a point the way the client would, so occlusion
+    -- becomes assertable.
+    ------------------------------------------------------------------------------
+
+    -- A frame is only hittable if it AND every ancestor is shown: hiding a parent hides
+    -- the subtree, and the client's hit test walks the same chain.
+    local function effectivelyVisible(f)
+        local cur = f
+        while cur do
+            if cur.IsShown and not cur:IsShown() then return false end
+            cur = cur.GetParent and cur:GetParent() or nil
+        end
+        return true
+    end
+
+    local function screenBox(f)
+        local st = require("harness.wow.state")
+        return geometry.boxFromTop(f, st.screenHeight)
+    end
+
+    --- Returns the frame a click at (x, y) would actually reach, or nil.
+    -- Ranks by strata first, then frame level, then creation order — the client's own
+    -- ordering, and the same ladder expectDrawsAbove uses.
+    -- @param x number  Screen coordinate, left-to-right
+    -- @param y number  Screen coordinate, TOP-DOWN (matches H.box)
+    -- @return table|nil
+    function H.topmostAt(x, y)
+        local st    = require("harness.wow.state")
+        local order = require("harness.wow.frame").STRATA_ORDER
+        local best, bestRank, bestLevel
+        for i = 1, #st.frames do
+            local f = st.frames[i]
+            if f.IsMouseEnabled and f:IsMouseEnabled() and effectivelyVisible(f) then
+                local b = screenBox(f)
+                if b and x >= b.left and x <= b.right and y >= b.top and y <= b.bottom then
+                    local rank  = order[f:GetFrameStrata()] or 0
+                    local level = f:GetFrameLevel() or 0
+                    -- >= on level so a later-created sibling at the same level wins, which
+                    -- is how the client resolves a tie.
+                    if not best or rank > bestRank
+                       or (rank == bestRank and level >= bestLevel) then
+                        best, bestRank, bestLevel = f, rank, level
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    --- Returns the centre point of a widget in top-down screen coordinates.
+    -- @param target table
+    -- @return number, number
+    function H.centerPoint(target)
+        local f = H.frameOf(target)
+        if not f then bail("centerPoint needs a widget") end
+        local b = screenBox(f)
+        if not b then bail(label(target) .. " has no resolvable position (no anchors)") end
+        return b.left + b.width / 2, b.top + b.height / 2
+    end
+
+    --- Asserts a click at (x, y) reaches the expected widget rather than something above it.
+    -- @param expected table
+    -- @param x number
+    -- @param y number
+    function H.expectHitTarget(expected, x, y)
+        local want = H.frameOf(expected)
+        local got  = H.topmostAt(x, y)
+        if got ~= want then
+            bail(string.format("click at (%s, %s) reaches %s, expected %s",
+                fmt(x), fmt(y), got and label(got) or "nothing", label(expected)))
+        end
+    end
+
+    --- Asserts nothing covers a widget: a click at its own centre reaches it.
+    -- @param target table
+    function H.expectClickable(target)
+        local f = H.frameOf(target)
+        if not (f.IsMouseEnabled and f:IsMouseEnabled()) then
+            bail(label(target) .. " is not mouse-enabled, so no click can reach it")
+        end
+        local x, y = H.centerPoint(target)
+        H.expectHitTarget(target, x, y)
+    end
+
+    --- Asserts `over` swallows a click aimed at `under`'s centre.
+    -- The occlusion counterpart to expectDrawsAbove: drawing above is about pixels, this
+    -- is about input. Use it for a panel or modal that must capture clicks meant for
+    -- whatever it covers.
+    -- @param over table
+    -- @param under table
+    function H.expectOccludes(over, under)
+        local x, y = H.centerPoint(under)
+        local got = H.topmostAt(x, y)
+        local want = H.frameOf(over)
+        if got ~= want then
+            bail(string.format("%s does not occlude %s: a click at its centre reaches %s",
+                label(over), label(under), got and label(got) or "nothing"))
+        end
+    end
+
     --- Asserts a colour tuple matches a theme token's resolved value.
     -- @param got table  { r, g, b, a } or four return values collected by the caller
     -- @param tokenKey string

@@ -23,6 +23,10 @@ local MAX_EQ_DEPTH = 4
 -- equality would report every save as a change and echo it back to the writer.
 local function valuesEqual(a, b, depth)
     if a == b then return true end
+    -- NaN is the one value that is not equal to itself, so a NaN setting would read as
+    -- "changed" on every write and re-notify every watcher forever. Two NaNs are the same
+    -- setting as far as this guard is concerned.
+    if a ~= a and b ~= b then return true end
     if type(a) ~= "table" or type(b) ~= "table" then return false end
     depth = (depth or 0) + 1
     if depth > MAX_EQ_DEPTH then return false end

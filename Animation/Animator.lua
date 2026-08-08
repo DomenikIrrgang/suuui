@@ -1,5 +1,5 @@
 local tremove, tinsert = table.remove, table.insert
-local type, pcall = type, pcall
+local type, pcall, ipairs = type, pcall, ipairs
 
 local M = {}
 local active   = {}   -- array of running anim handles
@@ -41,12 +41,23 @@ local function tick(_, dt)
         local a = active[i]
         if a._playing then
             a._elapsed = a._elapsed + dt
-            local t = a._elapsed / a.duration
-            if t >= 1 then t = 1 end
+            -- A zero (or negative) duration is an instant jump to the end value, not a
+            -- division: dividing here yields inf, and inf through an overshooting ease
+            -- produces a NaN that the client then rejects on every setter.
+            local t
+            if not a.duration or a.duration <= 0 then
+                t = 1
+            else
+                t = a._elapsed / a.duration
+                if t >= 1 then t = 1 end
+            end
             local eased = SuuUI.Tween.Ease(t, a.easing)
             local val   = a.from + (a.to - a.from) * eased
             local setter = setters[a.property]
-            if setter and a.target and a.target.IsShown then
+            -- Call IsShown, do not merely check that it exists: a method reference is
+            -- always truthy, so testing `a.target.IsShown` guarded nothing and let the
+            -- animator keep driving frames that were hidden or already torn down.
+            if setter and a.target and a.target.IsShown and a.target:IsShown() then
                 setter(a.target, val, a)
             end
             if t >= 1 then
@@ -126,20 +137,44 @@ function M:New(def)
     }, AnimMeta)
 end
 
+--- Cancels every running animation on a target, without firing their onDone.
+-- Call this before destroying or recycling a frame: an animation left running holds a
+-- reference to the frame and keeps writing to it, which on a pooled frame means the next
+-- owner inherits a tween that is still fading the previous one out.
+-- @param target frame
+-- @return number  How many animations were stopped
+function M:CancelAll(target)
+    if not target then return 0 end
+    local stopped = 0
+    for i = #active, 1, -1 do
+        local a = active[i]
+        if a.target == target then
+            a._playing = false
+            tremove(active, i)
+            stopped = stopped + 1
+        end
+    end
+    return stopped
+end
+
 --- Plays a set of animations simultaneously.
 -- @param anims table  Array of animation handles
 function M:Parallel(anims)
-    for _, a in pairs(anims) do a:Play() end
+    for _, a in ipairs(anims) do a:Play() end
 end
 
 --- Plays animations one after another.
+-- Chaining is held outside the handles: writing the continuation into each anim's own
+-- onDone permanently rewires it, so the same handle replayed later — standalone or in a
+-- different sequence — would still drag the old chain along behind it.
 -- @param anims table  Array of animation handles
 function M:Sequence(anims)
     local function chain(i)
-        if i > #anims then return end
         local a = anims[i]
+        if not a then return end
         local orig = a.onDone
         a.onDone = function()
+            a.onDone = orig      -- restore before continuing, so the handle is reusable
             if orig then orig() end
             chain(i + 1)
         end

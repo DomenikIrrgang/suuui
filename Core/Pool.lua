@@ -1,4 +1,4 @@
-local pairs, assert, type = pairs, assert, type
+local pairs, assert, type, ipairs = pairs, assert, type, ipairs
 local tinsert, tremove = table.insert, table.remove
 
 local M = {}
@@ -36,6 +36,45 @@ function M:Acquire(typeId, parent)
     return f
 end
 
+-- Scripts a pooled frame may have picked up from its previous owner. A stale handler is
+-- the dangerous half of recycling: the frame looks fresh, but its OnMouseUp still closes
+-- the dropdown that released it, and the closure keeps that dropdown alive.
+local SCRIPTS = {
+    "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnClick",
+    "OnUpdate", "OnSizeChanged", "OnShow", "OnHide",
+    "OnDragStart", "OnDragStop", "OnKeyDown", "OnKeyUp", "OnValueChanged",
+}
+
+--- Strips everything the previous owner put on a frame, so the next Acquire hands back a
+--- frame in its factory-fresh state rather than one carrying someone else's wiring.
+local function reset(frame)
+    frame:Hide()
+    frame:ClearAllPoints()
+
+    for _, script in ipairs(SCRIPTS) do
+        -- Not every frame type supports every script; setting an unsupported one throws.
+        if frame.HasScript and frame:HasScript(script) then
+            frame:SetScript(script, nil)
+        end
+    end
+
+    -- Signals are keyed by object, so a recycled frame would otherwise still deliver to
+    -- listeners registered by whoever held it last.
+    if SuuUI.UISignals then SuuUI.UISignals:DisconnectAll(frame) end
+    -- An in-flight tween writes to the frame after release and holds a reference to it.
+    if SuuUI.Anim and SuuUI.Anim.CancelAll then SuuUI.Anim:CancelAll(frame) end
+
+    frame:SetAlpha(1)
+    frame:SetScale(1)
+    if frame.EnableMouse then frame:EnableMouse(false) end
+    if frame.SetMovable  then frame:SetMovable(false) end
+    if frame.RegisterForDrag then frame:RegisterForDrag() end
+    -- Layout metadata: a leftover _layoutProps would have the next container lay the frame
+    -- out with the previous owner's width/fraction/anchor.
+    frame._layoutProps = nil
+    frame._anchor      = nil
+end
+
 --- Returns a frame to the pool.
 -- @param typeId string
 -- @param frame frame
@@ -45,8 +84,7 @@ function M:Release(typeId, frame)
     for i = #act, 1, -1 do
         if act[i] == frame then
             tremove(act, i)
-            frame:Hide()
-            frame:ClearAllPoints()
+            reset(frame)
             tinsert(inactive[typeId], frame)
             return
         end
@@ -61,8 +99,7 @@ function M:ReleaseAll(typeId)
     local pool = inactive[typeId]
     for i = #act, 1, -1 do
         local f = tremove(act, i)
-        f:Hide()
-        f:ClearAllPoints()
+        reset(f)
         tinsert(pool, f)
     end
 end

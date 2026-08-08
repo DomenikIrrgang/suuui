@@ -10,6 +10,9 @@ function DivMeta:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     if self._labelText then self._labelText:Destroy() end
     self._box:Destroy()
+    -- The layout box is adopted, so destroying it does not hide the frame it lays out.
+    -- Without this the widget stays painted on screen after teardown.
+    self._f:Hide()
 end
 
 --- Sets the divider's label text.

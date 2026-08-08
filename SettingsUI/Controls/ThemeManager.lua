@@ -59,6 +59,14 @@ local function colourRow(parent, def, editors)
         SuuUI._ColorPopup.Open(swatch, { swatch:GetValue() }, applyColor)
     end)
 
+    -- The shared picker anchors to this swatch and holds applyColor. Rebuilding the theme
+    -- page while it is open would leave it writing tokens through a destroyed row.
+    local rowDestroy = row.Destroy
+    row.Destroy = function(selfRow)
+        SuuUI._ColorPopup.CloseFor(swatch)
+        rowDestroy(selfRow)
+    end
+
     S:Connect(hex, C.INPUT_SIGNALS.SUBMITTED, function(text)
         local digits = text:match("^#?(%x%x%x%x%x%x)$")
         if not digits then
@@ -323,17 +331,32 @@ local function Build(entry, parent)
 
     syncEditable()
 
+    -- One owner for every listener this page registers. Dropped first, so rebuilding the
+    -- page on a nav switch replaces its subscribers instead of stacking another set on top
+    -- of widgets that are about to be destroyed.
+    local OWNER = "theme_mgr_ui"
+    SuuUI.Events:OffAll(OWNER)
+
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function(name)
         currentName:SetText(name)
         themeDD:SetOptions(themeOptions())
         themeDD:SetValue(name)
         syncEditable()
         refreshAll()
-    end, "theme_mgr_ui")
+    end, OWNER)
 
     -- A media addon can register fonts after this page was built, so the font row has
     -- to repopulate rather than keep the option list it opened with.
-    SuuUI.Events:On("SUUUI_FONTS_CHANGED", refreshAll, "theme_mgr_ui")
+    SuuUI.Events:On("SUUUI_FONTS_CHANGED", refreshAll, OWNER)
+
+    -- Teardown symmetry: the page owns this container, so destroying the page has to drop
+    -- the bus listeners too. A Settings watcher is cleaned up by owner prefix; an event
+    -- listener has no such sweep, so it is released here or not at all.
+    local containerDestroy = root.Destroy
+    root.Destroy = function(selfRoot)
+        SuuUI.Events:OffAll(OWNER)
+        containerDestroy(selfRoot)
+    end
 
     return root
 end
