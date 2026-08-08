@@ -21,10 +21,12 @@ function M:Apply(frame, opts)
     -- Register with ToggleUI
     SuuUI.ToggleUI:Register(frame)
 
-    -- Create overlay (hidden by default)
+    -- Create overlay (hidden by default). It stays on the frame's own layer and is only
+    -- raised above it: promoting it to a higher layer would draw the edit-mode overlay
+    -- over the settings window that carries the Edit Mode toggle.
     local overlay = CreateFrame("Frame", nil, frame)
     overlay:SetAllPoints(frame)
-    overlay:SetFrameStrata("DIALOG")
+    SuuUI.UIRoot:RaiseAbove(overlay, frame, 5)
     overlay:Hide()
 
     -- Overlay backdrop (semi-transparent blue)
@@ -61,32 +63,38 @@ function M:Apply(frame, opts)
     end)
     overlay:SetScript("OnDragStop", function()
         frame:StopMovingOrSizing()
-        -- Save position
+        -- Save position. The position watcher below would echo this write straight
+        -- back into RestorePosition, so it is suppressed for the duration of our own
+        -- save; only changes from elsewhere (a profile switch, a reset) should move
+        -- the frame out from under the player.
         local point, _, relPoint, x, y = frame:GetPoint()
+        local data = frame._suuui_moveable
+        data._saving = true
         SuuUI.Settings:Set(pluginId, key, {
             point    = point,
             relPoint = relPoint,
             x        = x,
             y        = y,
         })
+        data._saving = false
     end)
 
-    -- Respond to edit mode changes
-    SuuUI.Events:On("SUUUI_EDIT_MODE_CHANGED", function(isEdit)
+    -- Edit mode drives the overlay. `immediate` matters: a frame created while edit
+    -- mode is already on must show its overlay at once, not wait for the next toggle.
+    SuuUI.Settings:Watch("_layout", "edit_mode", function(isEdit)
         if isEdit then
             overlay:Show()
         else
             overlay:Hide()
         end
-    end, "moveable_" .. pluginId .. "_" .. key)
+    end, "moveable_" .. pluginId .. "_" .. key, { immediate = true })
 
-    -- Restore saved position (or apply defaults)
-    M:RestorePosition(frame)
-
-    -- Respond to profile changes
-    SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
+    -- Position is bound the same way, so `immediate` also performs the initial restore.
+    SuuUI.Settings:Watch(pluginId, key, function()
+        local data = frame._suuui_moveable
+        if not data or data._saving then return end
         M:RestorePosition(frame)
-    end, "moveable_pos_" .. pluginId .. "_" .. key)
+    end, "moveable_pos_" .. pluginId .. "_" .. key, { immediate = true })
 end
 
 --- Restores a frame's position from Settings or defaults.
@@ -117,8 +125,8 @@ function M:Remove(frame)
     local data = frame._suuui_moveable
     if not data then return end
 
-    SuuUI.Events:Off("SUUUI_EDIT_MODE_CHANGED", "moveable_" .. data.pluginId .. "_" .. data.key)
-    SuuUI.Events:Off("SUUUI_PROFILE_LOADED", "moveable_pos_" .. data.pluginId .. "_" .. data.key)
+    SuuUI.Settings:Unwatch("moveable_" .. data.pluginId .. "_" .. data.key)
+    SuuUI.Settings:Unwatch("moveable_pos_" .. data.pluginId .. "_" .. data.key)
     SuuUI.ToggleUI:Unregister(frame)
 
     data.overlay:Hide()

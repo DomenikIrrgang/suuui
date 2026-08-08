@@ -34,13 +34,35 @@ and signal system all get bypassed.
 | `Layout/Container.lua` | Yes | Only to self-anchor its own frame |
 | `Core/UIRoot.lua` | Yes — owns the single `UIParent` anchor | Only that one anchor |
 | `Core/Pool.lua` | Yes | `ClearAllPoints` on release only |
-| `Components/*` | Yes — internal frame/texture/fontstring construction | **No** — use a host container |
-| `Layout/Window.lua` | Yes | **No** — use host containers |
+| `Components/*` | Yes — internal frame/texture/fontstring construction, but z-order via `UIRoot:SetLayer` | **No** — use a host container |
+| `Layout/Window.lua` | Yes — z-order via `UIRoot:SetLayer`/`RaiseAbove` | **No** — use host containers |
 | `SettingsUI/*` | **No** — compose components and containers only | **No** |
 | `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** |
 
 Hiding Blizzard's own frames (`MinimapCluster:Hide()`) is a plugin responsibility and
 stays allowed — that is not building our UI, it is suppressing theirs.
+
+## Z-order Goes Through the Layer System
+
+`SetFrameStrata` is `Core/UIRoot.lua`'s alone — it is the file that owns the ladder, and
+the one place a client strata string may appear. Everywhere else, including `Components/*`
+and `Layout/Window.lua`, names a layer:
+
+```lua
+-- ❌ a raw strata, decided locally, in the client's vocabulary
+panel:SetFrameStrata("TOOLTIP")
+overlay:SetFrameStrata("DIALOG")
+closeBtn:SetFrameLevel(win:GetFrameLevel() + 10)
+
+-- ✅ a layer, decided by the ladder
+SuuUI.UIRoot:SetLayer(panel, "tooltip")
+SuuUI.UIRoot:RaiseAbove(overlay, frame, 5)     -- same layer, higher level
+SuuUI.UIRoot:AddElement(win, "window", anchor) -- layer + placement
+```
+
+Scattered strata strings are how two frames end up on the same rung by accident, and there
+is no single place to read the resulting z-order back. Layer names in
+`UI_ROOT_ARCHITECTURE.md`.
 
 ---
 

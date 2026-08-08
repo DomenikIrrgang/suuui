@@ -32,11 +32,98 @@ describe("UIRoot", function()
 
     it("maps each layer to its frame strata", function()
         for layer, strata in pairs({ background = "LOW", normal = "MEDIUM",
-                                     dialog = "HIGH", tooltip = "TOOLTIP" }) do
+                                     window = "HIGH", dialog = "DIALOG",
+                                     tooltip = "TOOLTIP" }) do
             local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
             H.SuuUI.UIRoot:AddElement(f, layer, { point = "CENTER", x = 0, y = 0 })
             expect(f:GetFrameStrata()).as(layer).eq(strata)
         end
+    end)
+
+    it("reads a layer's strata without touching a frame", function()
+        expect(H.SuuUI.UIRoot:GetLayerStrata("window")).eq("HIGH")
+        expect(H.SuuUI.UIRoot:GetLayerStrata("dialog")).eq("DIALOG")
+        expect(H.SuuUI.UIRoot:GetLayerStrata(nil)).eq("MEDIUM")
+        expect(H.SuuUI.UIRoot:GetLayerStrata("nowhere")).isNil()
+    end)
+
+    it("puts the root itself on the normal layer so plain children inherit it", function()
+        local root = H.SuuUI.UIRoot:GetRoot()
+        expect(root:GetFrameStrata()).eq("MEDIUM")
+        local child = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRootContainer():GetFrame())
+        expect(child:GetFrameStrata()).eq("MEDIUM")
+    end)
+
+    it("orders the layers so each rung covers the one below", function()
+        local frames = {}
+        for _, layer in ipairs({ "background", "normal", "window", "dialog", "tooltip" }) do
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:SetLayer(f, layer)
+            frames[#frames + 1] = f
+        end
+        for i = 2, #frames do
+            H.expectDrawsAbove(frames[i], frames[i - 1])
+        end
+    end)
+
+    describe("SetLayer", function()
+        it("applies a layer's strata without positioning the frame", function()
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            expect(H.SuuUI.UIRoot:SetLayer(f, "window")).eq("HIGH")
+            expect(f:GetFrameStrata()).eq("HIGH")
+            expect(f:GetPoint()).isNil()
+        end)
+
+        it("records the layer for later reads", function()
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:SetLayer(f, "dialog")
+            expect(H.SuuUI.UIRoot:GetLayer(f)).eq("dialog")
+        end)
+
+        it("defaults to the normal layer", function()
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:SetLayer(f)
+            expect(f:GetFrameStrata()).eq("MEDIUM")
+        end)
+
+        it("rejects an unknown layer", function()
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            expect(function() H.SuuUI.UIRoot:SetLayer(f, "nowhere") end).throws("invalid layer")
+        end)
+
+        it("tags an element added through AddElement too", function()
+            local f = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:AddElement(f, "dialog", { point = "CENTER", x = 0, y = 0 })
+            expect(H.SuuUI.UIRoot:GetLayer(f)).eq("dialog")
+        end)
+    end)
+
+    describe("RaiseAbove", function()
+        it("keeps decoration on its host's layer and above it", function()
+            local host = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:SetLayer(host, "normal")
+            local deco = H.env.CreateFrame("Frame", nil, host)
+            H.SuuUI.UIRoot:RaiseAbove(deco, host, 5)
+            expect(deco:GetFrameStrata()).eq("MEDIUM")
+            expect(deco:GetFrameLevel()).eq(host:GetFrameLevel() + 5)
+            H.expectDrawsAbove(deco, host)
+        end)
+
+        it("does not promote decoration over a window", function()
+            local host = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:SetLayer(host, "normal")
+            local deco = H.env.CreateFrame("Frame", nil, host)
+            H.SuuUI.UIRoot:RaiseAbove(deco, host, 5)
+            local win = H.Layout:CreateWindow({ id = "spec_raise_win" })
+            H.expectDrawsAbove(win:GetFrame(), deco)
+        end)
+
+        it("rises one level by default", function()
+            local host = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            local deco = H.env.CreateFrame("Frame", nil, host)
+            H.SuuUI.UIRoot:RaiseAbove(deco, host)
+            expect(deco:GetFrameLevel()).eq(host:GetFrameLevel() + 1)
+        end)
     end)
 
     it("defaults to the normal layer", function()
@@ -96,6 +183,44 @@ describe("Layout.Window", function()
 
         it("names the frame after its id", function()
             expect(window({ id = "settings" }):GetFrame():GetName()).eq("SuuUI_win_settings")
+        end)
+
+        it("sits on the window layer", function()
+            local f = window():GetFrame()
+            expect(H.SuuUI.UIRoot:GetLayer(f)).eq("window")
+            expect(f:GetFrameStrata()).eq("HIGH")
+        end)
+
+        it("draws over a plugin frame parented to the root", function()
+            -- How a plugin frame is mounted (UnitFrames' player frame): a plain frame on the
+            -- root container, inheriting the content rung. It is nested one level deeper than
+            -- the window, so a shared strata would let it cover the window.
+            local plugin = H.env.CreateFrame("Frame", nil,
+                H.SuuUI.UIRoot:GetRootContainer():GetFrame())
+            plugin:SetSize(180, 52)
+            H.expectDrawsAbove(window():GetFrame(), plugin)
+        end)
+
+        it("draws under a dialog opened from it", function()
+            local win = window()
+            local popup = H.env.CreateFrame("Frame", nil, H.SuuUI.UIRoot:GetRoot())
+            H.SuuUI.UIRoot:AddElement(popup, "dialog", { point = "CENTER", x = 0, y = 0 })
+            H.expectDrawsAbove(popup, win:GetFrame())
+        end)
+
+        it("honours an explicit layer", function()
+            local f = window({ id = "spec_dialog_win", layer = "dialog" }):GetFrame()
+            expect(f:GetFrameStrata()).eq("DIALOG")
+        end)
+
+        it("keeps its chrome above the window on the same layer", function()
+            local win = window({ resizable = true })
+            local f = win:GetFrame()
+            for name, part in pairs({ close = win._closeBtn:GetFrame(), grip = win._grip }) do
+                expect(part).as(name).notNil()
+                expect(part:GetFrameStrata()).as(name).eq(f:GetFrameStrata())
+                H.expectDrawsAbove(part, f)
+            end
         end)
 
         it("parents itself to the UI root, not UIParent", function()
@@ -376,11 +501,13 @@ describe("Layout.Window", function()
 
         it("defaults the bounds when none are given", function()
             local w = window({ resizable = true })
+            local root = H.SuuUI.UIRoot:GetRoot()
             local minW, minH, maxW, maxH = w:GetFrame():GetResizeBounds()
             expect(minW).eq(200)
             expect(minH).eq(200)
-            expect(maxW).eq(2000)
-            expect(maxH).eq(2000)
+            -- No explicit max, so the screen is the ceiling rather than a magic constant
+            expect(maxW).eq(math.floor(root:GetWidth() * 0.9))
+            expect(maxH).eq(math.floor(root:GetHeight() * 0.9))
         end)
 
         it("sets no bounds on a non-resizable window", function()
@@ -499,6 +626,103 @@ describe("Layout.Window", function()
         end)
     end)
 
+    describe("centered option", function()
+        it("centres the window even when a saved position exists", function()
+            H.env.SuuUIConfig = { windows = { centered_win = { x = 50, y = -50 } } }
+            local w = window({ id = "centered_win", w = 400, h = 300, centered = true })
+            H.expectCenteredH(w:GetFrame(), H.SuuUI.UIRoot:GetRoot())
+            H.expectCenteredV(w:GetFrame(), H.SuuUI.UIRoot:GetRoot())
+        end)
+
+        it("re-centres on every open, so a drag does not stick", function()
+            local w = window({ id = "recentre", w = 400, h = 300, centered = true })
+            w:Show()
+            local centre = H.box(w:GetFrame())
+
+            -- Move it the way the client does, behind the layout's back
+            w:GetFrame():SetPoint("TOPLEFT", H.SuuUI.UIRoot:GetRoot(), "TOPLEFT", 12, -12)
+            expect(H.box(w:GetFrame()).left).as("the move landed").eq(12)
+
+            w:Hide()
+            w:Show()
+            H.expectBox(w:GetFrame(), { left = centre.left, top = centre.top })
+        end)
+
+        it("does not save position after a drag", function()
+            local w = window({ id = "centered_drag", centered = true })
+            w:Show()
+            expect(H.mouseDown(w._drag)).as("the drag strip takes mouse input").truthy()
+            expect(H.mouseUp(w._drag)).as("the release is delivered").truthy()
+            local saved = H.env.SuuUIConfig and H.env.SuuUIConfig.windows
+                          and H.env.SuuUIConfig.windows["centered_drag"]
+            expect(saved).as("no position saved for a centered window").falsy()
+        end)
+
+        it("does not save position after a resize drag", function()
+            local w = window({ id = "centered_resize", w = 400, h = 300,
+                               centered = true, resizable = true })
+            w:Show()
+            local grip = w._gripBox:GetChildren()[1]
+            expect(grip).as("the resize grip exists").notNil()
+            expect(H.dragResize(grip, -80, -60)).as("the resize drag ran").truthy()
+            expect(w:GetFrame():GetWidth()).as("the window actually resized").eq(320)
+            local saved = H.env.SuuUIConfig and H.env.SuuUIConfig.windows
+                          and H.env.SuuUIConfig.windows["centered_resize"]
+            expect(saved).as("no position saved for a centered window").falsy()
+        end)
+
+        it("still saves position for a window that is not centered", function()
+            local w = window({ id = "not_centered" })
+            w:Show()
+            expect(H.mouseDown(w._drag)).truthy()
+            H.mouseUp(w._drag)
+            expect(H.env.SuuUIConfig.windows["not_centered"]).notNil()
+        end)
+    end)
+
+    describe("screen fit", function()
+        local function rootSize()
+            local root = H.SuuUI.UIRoot:GetRoot()
+            return root:GetWidth(), root:GetHeight()
+        end
+
+        it("caps a request that is taller than the screen", function()
+            local _, rh = rootSize()
+            local w = window({ w = 400, h = rh + 200 })
+            expect(w:GetFrame():GetHeight()).as("height capped below the root").lt(rh)
+        end)
+
+        it("caps a request that is wider than the screen", function()
+            local rw = rootSize()
+            local w = window({ w = rw + 200, h = 300 })
+            expect(w:GetFrame():GetWidth()).as("width capped below the root").lt(rw)
+        end)
+
+        it("leaves a request that already fits alone", function()
+            H.expectSize(window({ w = 400, h = 300 }), 400, 300)
+        end)
+
+        it("caps a resizable window and its resize bounds together", function()
+            local rw, rh = rootSize()
+            local w = window({ w = rw + 500, h = rh + 500, resizable = true })
+            local _, _, maxW, maxH = w:GetFrame():GetResizeBounds()
+            expect(maxW).lt(rw)
+            expect(maxH).lt(rh)
+            H.expectSize(w, maxW, maxH)
+        end)
+
+        it("honours an explicit max over the screen cap", function()
+            H.expectSize(window({ w = 3000, h = 3000, resizable = true,
+                                  maxW = 900, maxH = 700 }), 900, 700)
+        end)
+
+        it("never caps below the declared minimum", function()
+            local _, rh = rootSize()
+            local w = window({ w = 400, h = rh + 500, resizable = true, minH = rh })
+            expect(w:GetFrame():GetHeight()).as("the minimum wins").eq(rh)
+        end)
+    end)
+
     describe("content container", function()
         it("memoises the content container", function()
             local w = window()
@@ -558,6 +782,48 @@ describe("Settings window", function()
         expect(H.Layout:GetWindow("settings")).isNil()
         H.env.SlashCmdList["SUUUI"]()
         expect(H.Layout:GetWindow("settings")).notNil()
+    end)
+
+    it("opens centred", function()
+        H.env.SlashCmdList["SUUUI"]()
+        local win = H.Layout:GetWindow("settings")
+        H.expectCenteredH(win:GetFrame(), H.SuuUI.UIRoot:GetRoot())
+        H.expectCenteredV(win:GetFrame(), H.SuuUI.UIRoot:GetRoot())
+    end)
+
+    it("re-opens centred after being dragged away", function()
+        H.env.SlashCmdList["SUUUI"]()
+        local win = H.Layout:GetWindow("settings")
+        local centre = H.box(win:GetFrame())
+
+        win:GetFrame():SetPoint("TOPLEFT", H.SuuUI.UIRoot:GetRoot(), "TOPLEFT", 5, -5)
+        expect(H.box(win:GetFrame()).left).as("the drag landed").eq(5)
+
+        H.env.SlashCmdList["SUUUI"]()   -- close
+        H.runAnimations()
+        H.env.SlashCmdList["SUUUI"]()   -- open again
+        H.expectBox(win:GetFrame(), { left = centre.left, top = centre.top })
+    end)
+
+    it("fits on screen at every supported resolution", function()
+        for _, res in ipairs({ { 1366, 768 }, { 1280, 800 }, { 1440, 900 },
+                              { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } }) do
+            H.setup({ physicalWidth = res[1], physicalHeight = res[2] })
+            H.env.SlashCmdList["SUUUI"]()
+            local f = H.Layout:GetWindow("settings"):GetFrame()
+            local root = H.SuuUI.UIRoot:GetRoot()
+            local label = res[1] .. "x" .. res[2]
+            expect(f:GetWidth()).as(label .. " width fits").lte(root:GetWidth())
+            expect(f:GetHeight()).as(label .. " height fits").lte(root:GetHeight())
+        end
+    end)
+
+    it("is bigger than the pre-scaling 780x520 on a 1080p panel", function()
+        H.setup({ physicalWidth = 1920, physicalHeight = 1080 })
+        H.env.SlashCmdList["SUUUI"]()
+        local f = H.Layout:GetWindow("settings"):GetFrame()
+        expect(f:GetWidth()).as("wider than the old default").gt(780)
+        expect(f:GetHeight()).as("taller than the old default").gt(520)
     end)
 
     it("toggles the window on repeated invocations", function()

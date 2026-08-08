@@ -328,6 +328,64 @@ describe("coding-standards.md: Anatomy of a Component", function()
     end)
 end)
 
+describe("steering doc examples: reactive state", function()
+    before_each(function() H.setup() end)
+
+    it("architecture.md 5b: the documented Watch API surface exists", function()
+        local S = H.SuuUI.Settings
+        for _, name in ipairs({ "Watch", "Unwatch", "UnwatchPrefix", "GetWatcherCount",
+                                "IsTransient", "Get", "Set", "Reset", "ResetAll" }) do
+            expect(type(S[name])).as("Settings:" .. name).eq("function")
+        end
+        for _, name in ipairs({ "ControlOwner", "ControlOwnerPrefix" }) do
+            expect(type(S[name])).as("Settings." .. name).eq("function")
+        end
+        expect(S.ControlOwnerPrefix("my_plugin")).eq("page:my_plugin:")
+        expect(S.ControlOwner("my_plugin", "toggle", "flag"))
+            .eq("page:my_plugin:toggle:flag")
+    end)
+
+    it("plugin-authoring.md: the Watch + immediate example reacts and self-seeds", function()
+        H.SuuUI.Settings:Register("my_plugin", {
+            { key = "enabled", label = "Enable", type = "toggle", default = true },
+        })
+        local state = nil
+        H.SuuUI.Settings:Watch("my_plugin", "enabled", function(val)
+            state = val and "enabled" or "disabled"
+        end, "my_plugin", { immediate = true })
+
+        expect(state).as("immediate seeded it from the default").eq("enabled")
+        H.SuuUI.Settings:Set("my_plugin", "enabled", false)
+        expect(state).eq("disabled")
+
+        H.SuuUI.Settings:Unwatch("my_plugin")
+        H.SuuUI.Settings:Set("my_plugin", "enabled", true)
+        expect(state).as("Unwatch by owner really detaches").eq("disabled")
+    end)
+
+    it("architecture.md 5b: a transient key never reaches the profile", function()
+        H.SuuUI.Settings:Register("modey", {
+            { key = "in_mode", type = "toggle", default = false, transient = true },
+        })
+        H.SuuUI.Settings:Set("modey", "in_mode", true)
+        expect(H.SuuUI.Settings:Get("modey", "in_mode")).eq(true)
+        expect(H.SuuUI.Settings:IsTransient("modey", "in_mode")).eq(true)
+
+        local profile = H.SuuUI.Profiles:GetActive()
+        expect(profile.plugins["modey"] and profile.plugins["modey"].in_mode).isNil()
+    end)
+
+    it("architecture.md 5: Set reports effective values, not raw stored ones", function()
+        H.SuuUI.Settings:Register("eff_doc", {
+            { key = "n", type = "slider", default = 12, min = 0, max = 100 },
+        })
+        local spy = H.eventSpy("SUUUI_SETTING_CHANGED")
+        H.SuuUI.Settings:Set("eff_doc", "n", 20)
+        expect(spy:arg(3)).eq(20)
+        expect(spy:arg(4)).as("the documented effective old value").eq(12)
+    end)
+end)
+
 describe("steering doc examples: pixel grid", function()
     local host
     before_each(function()

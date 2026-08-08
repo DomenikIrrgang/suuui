@@ -10,8 +10,7 @@ local function Build(entry, pluginId, parent)
     local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
     local bind = C.KeyCapture({
-        value = SuuUI.Settings:Get(pluginId, entry.key) or "",
-        minW  = 120,
+        minW = 120,
     }, row:GetFrame())
     row:Add(bind)
 
@@ -19,9 +18,9 @@ local function Build(entry, pluginId, parent)
         SuuUI.Settings:Set(pluginId, entry.key, val)
     end)
 
-    SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
-        bind:SetValue(SuuUI.Settings:Get(pluginId, entry.key) or "")
-    end, "ctrl_bind_" .. pluginId .. entry.key)
+    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+        bind:SetValue(val or "")
+    end, SuuUI.Settings.ControlOwner(pluginId, "keybind", entry.key), { immediate = true })
 
     return row
 end

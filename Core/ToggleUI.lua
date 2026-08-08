@@ -1,35 +1,34 @@
 -- ToggleUI: central edit-mode manager for repositioning SuuUI frames.
--- Provides a registry for moveable frames, a toggle command, and events.
+-- Provides a registry for moveable frames and the toggle/lock/unlock commands.
+--
+-- State: the authoritative edit-mode value is Settings("_layout", "edit_mode"), a
+-- transient (non-persisted) key. There is NO local shadow variable — reads go through
+-- Settings:Get, writes through Settings:Set, and subscribers use Settings:Watch, so
+-- the slash command, the settings toggle and every overlay cannot disagree.
 local pairs = pairs
 
 local M = {}
 local registry = {}  -- [frame] = true
-local editMode = false
 
 --- Returns whether edit mode is currently active.
 -- @return bool
 function M:IsEditMode()
-    return editMode
+    return SuuUI.Settings:Get("_layout", "edit_mode") or false
 end
 
---- Toggles edit mode on/off, notifying all registered frames.
+--- Toggles edit mode on/off.
 function M:Toggle()
-    editMode = not editMode
-    SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", editMode)
+    SuuUI.Settings:Set("_layout", "edit_mode", not self:IsEditMode())
 end
 
 --- Enables edit mode explicitly.
 function M:Enable()
-    if editMode then return end
-    editMode = true
-    SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", true)
+    SuuUI.Settings:Set("_layout", "edit_mode", true)
 end
 
 --- Disables edit mode explicitly.
 function M:Disable()
-    if not editMode then return end
-    editMode = false
-    SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", false)
+    SuuUI.Settings:Set("_layout", "edit_mode", false)
 end
 
 --- Registers a frame with the toggle UI system.
@@ -58,30 +57,21 @@ SuuUI.ToggleUI = M
 
 -- Register the layout settings schema so the toggle is available in the settings panel
 -- and position data can be reset from the UI.
+--
+-- edit_mode is `transient`: session state, never written to SavedVariables. Edit mode
+-- is a mode the player is currently in, not a preference — persisting it would log
+-- them back in with every frame draggable, and a profile switch would silently
+-- enter or leave it.
 SuuUI.Settings:Register("_layout", {
     { key = "",          label = "Edit Mode",        type = "section" },
-    { key = "edit_mode", label = "Toggle Edit Mode", type = "toggle", default = false },
+    { key = "edit_mode", label = "Toggle Edit Mode", type = "toggle", default = false,
+      transient = true },
 })
 
--- Sync: when the _layout.edit_mode setting is changed (from the settings panel),
--- update the ToggleUI state to match.
-SuuUI.Events:On("SUUUI_SETTING_CHANGED", function(pluginId, key, value)
-    if pluginId == "_layout" and key == "edit_mode" then
-        if value and not editMode then
-            editMode = true
-            SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", true)
-        elseif not value and editMode then
-            editMode = false
-            SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", false)
-        end
-    end
-end, "_toggleui_settings_sync")
-
--- Sync: when edit mode is toggled via slash command or API, update the setting.
-SuuUI.Events:On("SUUUI_EDIT_MODE_CHANGED", function(isEdit)
-    -- Only update if the setting differs to avoid infinite loop
-    local current = SuuUI.Settings:Get("_layout", "edit_mode")
-    if current ~= isEdit then
-        SuuUI.Settings:Set("_layout", "edit_mode", isEdit)
-    end
-end, "_toggleui_setting_write")
+-- Deprecated. SUUUI_EDIT_MODE_CHANGED was the public edit-mode event before edit mode
+-- became a watched setting, and third-party plugins may still listen for it. New code
+-- should watch the setting instead:
+--   SuuUI.Settings:Watch("_layout", "edit_mode", cb, owner, { immediate = true })
+SuuUI.Settings:Watch("_layout", "edit_mode", function(isEdit)
+    SuuUI.Events:Emit("SUUUI_EDIT_MODE_CHANGED", isEdit and true or false)
+end, "_toggleui_deprecated_event")

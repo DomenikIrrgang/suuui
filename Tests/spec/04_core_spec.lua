@@ -175,7 +175,18 @@ describe("Settings", function()
         expect(spy:arg(1)).eq("spec_plugin")
         expect(spy:arg(2)).eq("size")
         expect(spy:arg(3)).eq(20)
-        expect(spy:arg(4)).as("nothing was stored before").isNil()
+        -- The EFFECTIVE old value, not the raw stored nil. A listener that reverts a
+        -- change (ReloadGuard) writes this value back, so handing it nil would clear
+        -- the key and leave every bound widget showing nil for a setting that reads
+        -- as its default.
+        expect(spy:arg(4)).as("the value a reader saw before the write").eq(12)
+    end)
+
+    it("drops a write that does not change the effective value", function()
+        local spy = H.eventSpy("SUUUI_SETTING_CHANGED")
+        -- Never written, so it reads as its default of 12. Writing 12 changes nothing.
+        H.SuuUI.Settings:Set("spec_plugin", "size", 12)
+        expect(spy.count).as("no event for a no-op write").eq(0)
     end)
 
     it("stores false, distinct from unset", function()

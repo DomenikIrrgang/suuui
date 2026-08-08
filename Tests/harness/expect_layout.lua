@@ -184,6 +184,30 @@ return function(H)
         end
     end
 
+    --- Asserts one widget draws over another, the way the client resolves it: strata rung
+    --- first, frame level only as the tie-break inside a rung. Comparing levels alone is
+    --- how a z-order bug hides — a deeper-nested frame outranks a shallow one inside a
+    --- shared strata even though it was never meant to cover it.
+    -- @param target table  The widget expected on top
+    -- @param under table   The widget expected underneath
+    function H.expectDrawsAbove(target, under)
+        local order = require("harness.wow.frame").STRATA_ORDER
+        local a, b = H.frameOf(target), H.frameOf(under)
+        if not (a and b) then bail("expectDrawsAbove needs two widgets") end
+        local sa, sb = a:GetFrameStrata(), b:GetFrameStrata()
+        if order[sa] ~= order[sb] then
+            if order[sa] < order[sb] then
+                bail(string.format("%s is on strata %s, below %s on %s",
+                    label(target), sa, label(under), sb))
+            end
+            return
+        end
+        if a:GetFrameLevel() <= b:GetFrameLevel() then
+            bail(string.format("%s and %s share strata %s, and level %d is not above %d",
+                label(target), label(under), sa, a:GetFrameLevel(), b:GetFrameLevel()))
+        end
+    end
+
     --- Asserts a colour tuple matches a theme token's resolved value.
     -- @param got table  { r, g, b, a } or four return values collected by the caller
     -- @param tokenKey string

@@ -45,22 +45,45 @@ describe("Core.ToggleUI", function()
     end)
 
     describe("events", function()
-        it("fires SUUUI_EDIT_MODE_CHANGED on toggle", function()
+        it("fires SUUUI_SETTING_CHANGED on toggle", function()
             local received = nil
-            H.SuuUI.Events:On("SUUUI_EDIT_MODE_CHANGED", function(val)
-                received = val
+            H.SuuUI.Events:On("SUUUI_SETTING_CHANGED", function(pid, key, val)
+                if pid == "_layout" and key == "edit_mode" then
+                    received = val
+                end
             end, "test_toggle")
             H.SuuUI.ToggleUI:Toggle()
             expect(received).eq(true)
         end)
 
-        it("fires event with false when toggling off", function()
+        it("fires SUUUI_SETTING_CHANGED with false when toggling off", function()
             H.SuuUI.ToggleUI:Enable()
             local received = nil
-            H.SuuUI.Events:On("SUUUI_EDIT_MODE_CHANGED", function(val)
-                received = val
+            H.SuuUI.Events:On("SUUUI_SETTING_CHANGED", function(pid, key, val)
+                if pid == "_layout" and key == "edit_mode" then
+                    received = val
+                end
             end, "test_toggle_off")
             H.SuuUI.ToggleUI:Toggle()
+            expect(received).eq(false)
+        end)
+
+        it("notifies watchers on toggle", function()
+            local received = nil
+            H.SuuUI.Settings:Watch("_layout", "edit_mode", function(val)
+                received = val
+            end, "test_watcher")
+            H.SuuUI.ToggleUI:Toggle()
+            expect(received).eq(true)
+        end)
+
+        it("notifies watchers with false when disabling", function()
+            H.SuuUI.ToggleUI:Enable()
+            local received = nil
+            H.SuuUI.Settings:Watch("_layout", "edit_mode", function(val)
+                received = val
+            end, "test_watcher_off")
+            H.SuuUI.ToggleUI:Disable()
             expect(received).eq(false)
         end)
     end)
@@ -251,6 +274,36 @@ describe("Core.MoveableFrame", function()
             H.SuuUI.ToggleUI:Enable()
             H.SuuUI.ToggleUI:Disable()
             expect(f._suuui_moveable.overlay:IsShown()).eq(false)
+        end)
+
+        it("keeps the overlay on the frame's layer, just above it", function()
+            local f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(100, 50)
+            H.SuuUI.UIRoot:SetLayer(f, "normal")
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            local overlay = f._suuui_moveable.overlay
+            expect(overlay:GetFrameStrata()).eq(f:GetFrameStrata())
+            H.expectDrawsAbove(overlay, f)
+        end)
+
+        it("does not let the overlay cover the window that toggles edit mode", function()
+            local f = H.env.CreateFrame("Frame", nil,
+                H.SuuUI.UIRoot:GetRootContainer():GetFrame())
+            f:SetSize(100, 50)
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 },
+            })
+            local win = H.Layout:CreateWindow({ id = "spec_editmode_win" })
+            H.SuuUI.ToggleUI:Enable()
+            H.expectDrawsAbove(win:GetFrame(), f._suuui_moveable.overlay)
         end)
     end)
 

@@ -10,8 +10,7 @@ local function Build(entry, pluginId, parent)
     local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
     local inp = C.Input({
-        value = SuuUI.Settings:Get(pluginId, entry.key) or "",
-        w     = 140,
+        w = 140,
     }, row:GetFrame())
     -- Height omitted: the input derives it from its size and font tokens
     row:Add(inp, { width = 140 })
@@ -20,9 +19,9 @@ local function Build(entry, pluginId, parent)
         SuuUI.Settings:Set(pluginId, entry.key, text)
     end)
 
-    SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
-        inp:SetValue(SuuUI.Settings:Get(pluginId, entry.key) or "")
-    end, "ctrl_text_" .. pluginId .. entry.key)
+    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+        inp:SetValue(val or "")
+    end, SuuUI.Settings.ControlOwner(pluginId, "text", entry.key), { immediate = true })
 
     return row
 end

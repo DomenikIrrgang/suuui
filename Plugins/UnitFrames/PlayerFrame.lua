@@ -30,26 +30,14 @@ function PlayerFrame:Create(parent)
 
     local pad = T:GetToken("spaceXs") or 4
     local gap = 2  -- tight gap between health and resource bars
+    local infoGap = 2  -- gap between info row and bars
 
-    -- Background frame for the whole unit frame
-    self._bg = C.Frame({
-        variant = "bgAlt",
-        border  = true,
-    }, parent)
+    -- Wrapper frame that holds everything (info row + bar background)
+    self._wrapper = CreateFrame("Frame", nil, parent)
 
-    -- Attach the container inside the background frame
-    self._container = SuuUI.Layout:CreateContainer({
-        host    = self._bg:GetFrame(),
-        layout  = "flow",
-        dir     = "vertical",
-        gap     = gap,
-        fill    = true,
-        padding = { top = pad, right = pad, bottom = pad, left = pad },
-    })
-
-    -- Info row: name on left, level on right
+    -- Info row: name on left, level on right — sits ABOVE the bar background
     self._infoRow = SuuUI.Layout:CreateContainer({
-        parent  = self._bg:GetFrame(),
+        parent  = self._wrapper,
         layout  = "flow",
         dir     = "horizontal",
         gap     = T:GetToken("spaceXs") or 4,
@@ -71,6 +59,34 @@ function PlayerFrame:Create(parent)
     self._infoRow:Add(self._nameText, { width = "fill" })
     self._infoRow:Add(self._levelText)
 
+    -- Anchor info row at the top of the wrapper
+    local infoFrame = self._infoRow:GetFrame()
+    infoFrame:SetPoint("TOPLEFT", self._wrapper, "TOPLEFT", 0, 0)
+    infoFrame:SetPoint("TOPRIGHT", self._wrapper, "TOPRIGHT", 0, 0)
+    infoFrame:SetHeight(14)
+
+    -- Background frame for just the bars (no name row)
+    self._bg = C.Frame({
+        variant = "bgAlt",
+        border  = true,
+    }, self._wrapper)
+
+    -- Anchor bar background below the info row
+    self._bg:GetFrame():SetPoint("TOPLEFT", infoFrame, "BOTTOMLEFT", 0, -infoGap)
+    self._bg:GetFrame():SetPoint("TOPRIGHT", infoFrame, "BOTTOMRIGHT", 0, -infoGap)
+    self._bg:GetFrame():SetPoint("BOTTOMLEFT", self._wrapper, "BOTTOMLEFT", 0, 0)
+    self._bg:GetFrame():SetPoint("BOTTOMRIGHT", self._wrapper, "BOTTOMRIGHT", 0, 0)
+
+    -- Attach the container inside the background frame (bars only)
+    self._container = SuuUI.Layout:CreateContainer({
+        host    = self._bg:GetFrame(),
+        layout  = "flow",
+        dir     = "vertical",
+        gap     = gap,
+        fill    = true,
+        padding = { top = pad, right = pad, bottom = pad, left = pad },
+    })
+
     -- Health bar
     self._healthBar = C.StatusBar({
         fillColor = HEALTH_COLOR,
@@ -85,8 +101,7 @@ function PlayerFrame:Create(parent)
         border    = false,
     }, self._bg:GetFrame())
 
-    -- Assemble layout
-    self._container:Add(self._infoRow,     { width = "fill", height = 14 })
+    -- Assemble layout (bars only — info row is outside)
     self._container:Add(self._healthBar,   { width = "fill", height = 16 })
     self._container:Add(self._resourceBar, { width = "fill", height = 10 })
 
@@ -145,7 +160,7 @@ function PlayerFrame:UpdatePower()
 end
 
 function PlayerFrame:GetFrame()
-    return self._bg:GetFrame()
+    return self._wrapper
 end
 
 function PlayerFrame:GetContainer()
@@ -162,6 +177,8 @@ function PlayerFrame:Destroy()
     self._infoRow:Destroy()
     self._container:Destroy()
     self._bg:Destroy()
+    self._wrapper:Hide()
+    self._wrapper = nil
 end
 
 ---------------------------------------------------------------------------
@@ -218,8 +235,14 @@ local plugin = SuuUI:CreatePlugin({
             p._playerFrame = PlayerFrame:Create(root:GetFrame())
 
             -- Size the frame explicitly (MoveableFrame handles positioning)
+            -- Height: 14 (info row) + 2 (infoGap) + 4 (pad top) + 16 (health) + 2 (gap) + 10 (resource) + 4 (pad bottom) = 52
             local frame = p._playerFrame:GetFrame()
-            frame:SetSize(180, 50)
+            frame:SetSize(180, 52)
+
+            -- Player-facing game UI, so it belongs on the content rung — stated through the
+            -- library's layer system rather than left to inherit, so a settings window or a
+            -- modal is guaranteed to draw over it.
+            SuuUI.UIRoot:SetLayer(frame, "normal")
 
             -- Make it moveable — position stored in plugin settings
             SuuUI.MoveableFrame:Apply(frame, {

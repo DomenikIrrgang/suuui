@@ -9,10 +9,8 @@ local S = SuuUI.UISignals
 local function Build(entry, pluginId, parent)
     local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
-    local current = SuuUI.Settings:Get(pluginId, entry.key) or entry.default or {1, 1, 1, 1}
-
     -- Size comes from the swatch's own size token
-    local swatch = C.ColorSwatch({ value = current }, row:GetFrame())
+    local swatch = C.ColorSwatch({}, row:GetFrame())
     row:Add(swatch)
 
     S:Connect(swatch, S.SIGNALS.CLICKED, function()
@@ -22,11 +20,12 @@ local function Build(entry, pluginId, parent)
         end)
     end)
 
-    SuuUI.Events:On("SUUUI_SETTING_CHANGED", function(pid, key, val)
-        if pid == pluginId and key == entry.key and val then
-            swatch:SetValue(val[1], val[2], val[3], val[4] or 1)
-        end
-    end, "ctrl_color_" .. pluginId .. entry.key)
+    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+        -- A colour must always resolve to something paintable: an unset key would
+        -- otherwise leave the swatch with no colour at all.
+        local c = val or entry.default or {1, 1, 1, 1}
+        swatch:SetValue(c[1], c[2], c[3], c[4] or 1)
+    end, SuuUI.Settings.ControlOwner(pluginId, "color", entry.key), { immediate = true })
 
     return row
 end

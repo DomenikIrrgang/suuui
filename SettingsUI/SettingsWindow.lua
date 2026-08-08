@@ -2,7 +2,10 @@ local ipairs, tinsert = ipairs, table.insert
 local C = SuuUI.Components
 local S = SuuUI.UISignals
 
-local WIN_W, WIN_H = 780, 520
+-- Preferred size, not a guarantee: the window caps itself to the screen, so a small
+-- display opens it smaller rather than off the bottom edge. Sized for a 1080p panel,
+-- where the pixel grid gives 1920x1080 units.
+local WIN_W, WIN_H = 1248, 832
 local NAV_W, DIV_W = 180, 3
 
 -- Nav rows hold text, so their height is floored against the font size token
@@ -101,11 +104,15 @@ local function createWindow()
         w         = WIN_W,
         h         = WIN_H,
         resizable = true,
+        centered  = true,
         minW      = 600,
         minH      = 400,
     })
 
     local content = win:GetContentFrame()
+    -- Read the real content box rather than WIN_W/WIN_H: the window caps itself to the
+    -- screen, so the constants are only a request and can overshoot on a small display.
+    local contentW, contentH = content:GetWidth(), content:GetHeight()
 
     -- Nav | divider | page, tracking the window as it resizes
     local main = SuuUI.Layout:CreateContainer({
@@ -132,7 +139,7 @@ local function createWindow()
         dir    = "vertical",
         fill   = true,
     })
-    navScroll = C.ScrollFrame({ w = NAV_W, h = WIN_H }, navPanel:GetFrame())
+    navScroll = C.ScrollFrame({ w = NAV_W, h = contentH }, navPanel:GetFrame())
     navBox:Add(navScroll, { width = "fill", height = "fill" })
 
     local pageBox = SuuUI.Layout:CreateContainer({
@@ -141,7 +148,8 @@ local function createWindow()
         dir    = "vertical",
         fill   = true,
     })
-    contentScroll = C.ScrollFrame({ w = WIN_W - NAV_W - DIV_W, h = WIN_H }, pagePanel:GetFrame())
+    contentScroll = C.ScrollFrame({ w = contentW - NAV_W - DIV_W, h = contentH },
+                                  pagePanel:GetFrame())
     pageBox:Add(contentScroll, { width = "fill", height = "fill" })
 end
 

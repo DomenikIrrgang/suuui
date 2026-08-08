@@ -117,6 +117,31 @@ local function snapSize(f)
     if w > 0 and h > 0 then f:SetSize(w, h) end
 end
 
+-- A window lives in the root's unit space, and the pixel grid makes that space the
+-- screen: one unit is `multiplier` physical pixels, so the root is
+-- physicalHeight / multiplier units tall. A window sized past that hangs its lower edge
+-- and its resize grip off-screen, where SetClampedToScreen is no help — that clamps
+-- position, not size. So the screen, not an arbitrary constant, is the default ceiling.
+-- A margin is left so a maximal window still reads as a window.
+local ROOT_FIT      = 0.9
+local FALLBACK_MAX  = 2000
+
+-- nil when the root does not exist yet, which leaves the fallback in charge rather than
+-- capping against a size we cannot know.
+local function rootExtent()
+    local root = SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()
+    if not root then return nil, nil end
+    local w, h = root:GetWidth(), root:GetHeight()
+    if type(w) ~= "number" or w <= 0 then w = nil end
+    if type(h) ~= "number" or h <= 0 then h = nil end
+    return w, h
+end
+
+local function fitCap(avail)
+    if not avail then return FALLBACK_MAX end
+    return SuuUI.Pixel.Floor(avail * ROOT_FIT)
+end
+
 local function savePos(self)
     if not SuuUIConfig then SuuUIConfig = {} end
     if not SuuUIConfig.windows then SuuUIConfig.windows = {} end
@@ -127,9 +152,9 @@ local function savePos(self)
 end
 
 -- UIRoot owns window placement. Register as soon as the root exists.
-local function registerWithRoot(f, layer, id)
+local function registerWithRoot(f, layer, id, centered)
     if not (SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()) then return false end
-    local cfg = SuuUIConfig and SuuUIConfig.windows and SuuUIConfig.windows[id]
+    local cfg = (not centered) and SuuUIConfig and SuuUIConfig.windows and SuuUIConfig.windows[id]
     local ok, err = pcall(function()
         SuuUI.UIRoot:AddElement(f, layer, cfg
             and { point = "TOPLEFT", x = cfg.x, y = cfg.y }
@@ -141,8 +166,18 @@ local function registerWithRoot(f, layer, id)
     return true
 end
 
+--- Re-asserts a CENTER placement through UIRoot, which also puts the anchor descriptor
+--- back in step with the frame after a drag moved it behind the layout's back.
+function WinMeta:Center()
+    if not (SuuUI.UIRoot and SuuUI.UIRoot.UpdateElementAnchor) then return end
+    SuuUI.UIRoot:UpdateElementAnchor(self._frame, { point = "CENTER", x = 0, y = 0 })
+end
+
 --- Shows the window with a fade-in animation. Emits VISIBILITY_CHANGED.
 function WinMeta:Show()
+    -- A centered window keeps no position, so every open starts from the middle again
+    -- rather than wherever the last drag in this session happened to leave it.
+    if self._centered then self:Center() end
     self._frame:SetAlpha(0)
     self._frame:Show()
     SuuUI.Anim.Presets.FadeIn(self._frame, SuuUI.Theme:GetToken("animFast"))
@@ -205,21 +240,32 @@ local function installBase()
 end
 
 --- Creates a new draggable themed window.
--- @param props table  { id, title, w, h, minW, minH, resizable, layer }
+-- w/h are a preference: without an explicit maxW/maxH they are capped to the screen, so
+-- a window is never born larger than the space it has to live in.
+-- centered = true pins the window to the middle on every open and keeps no saved
+-- position, for a window that should always appear in the same place.
+-- @param props table  { id, title, w, h, minW, minH, maxW, maxH, resizable, centered, layer }
 -- @return table  Window handle
 function SuuUI.Layout:CreateWindow(props)
     assert(type(props.id) == "string", "SuuUI Window: id required")
     installBase()
 
     local minW, minH = props.minW or 200, props.minH or 200
-    local maxW, maxH = props.maxW or 2000, props.maxH or 2000
+    -- An explicit max is honoured as given; otherwise the screen is the ceiling.
+    local rootW, rootH = rootExtent()
+    local maxW, maxH = props.maxW or fitCap(rootW), props.maxH or fitCap(rootH)
     local w = props.w or 400
     local h = props.h or 300
     if props.resizable then
         w = math.max(minW, math.min(maxW, w))
         h = math.max(minH, math.min(maxH, h))
+    else
+        -- No resize bounds to satisfy, so only the ceiling applies: a fixed-size window
+        -- is never grown, just kept on screen.
+        w, h = math.min(maxW, w), math.min(maxH, h)
     end
-    local layer = props.layer or "normal"
+    local layer = props.layer or "window"
+    local centered = props.centered or false
 
     local parent = UIParent
     if SuuUI.UIRoot and SuuUI.UIRoot.GetRoot then
@@ -229,7 +275,10 @@ function SuuUI.Layout:CreateWindow(props)
 
     local f = CreateFrame("Frame", "SuuUI_win_" .. props.id, parent, "BackdropTemplate")
     f:SetSize(w, h)
-    f:SetFrameStrata("HIGH")
+    -- Placed by the layer system, not by a hand-written strata: registerWithRoot re-applies
+    -- the same layer later, and a window created before the root exists must still land on
+    -- the window rung rather than tie with the plugin frames it is meant to cover.
+    SuuUI.UIRoot:SetLayer(f, layer)
     f:SetMovable(true)
     f:SetResizable(true)
     f:EnableMouse(true)
@@ -276,7 +325,7 @@ function SuuUI.Layout:CreateWindow(props)
         label = CLOSE_GLYPH, w = closeSize(), h = closeSize(),
         padX = CLOSE_GLYPH_PAD, padY = CLOSE_GLYPH_PAD,
     }, titleStrip:GetFrame())
-    closeBtn:GetFrame():SetFrameLevel(f:GetFrameLevel() + 10)
+    SuuUI.UIRoot:RaiseAbove(closeBtn:GetFrame(), f, 10)
     titleBox:Add(closeBtn)
 
     -- Content area takes the remaining height
@@ -286,7 +335,7 @@ function SuuUI.Layout:CreateWindow(props)
     drag:SetScript("OnMouseDown", function() f:StartMoving() end)
     drag:SetScript("OnMouseUp", function()
         f:StopMovingOrSizing()
-        savePos({ _frame = f, _id = props.id })
+        if not centered then savePos({ _frame = f, _id = props.id }) end
     end)
 
     handle = setmetatable({
@@ -304,6 +353,7 @@ function SuuUI.Layout:CreateWindow(props)
         _closeText = closeBtn._label,
         _content   = content,
         _layer     = layer,
+        _centered  = centered,
     }, WinMeta)
 
     -- Resize grip, placed by an anchor container on the window frame
@@ -313,7 +363,7 @@ function SuuUI.Layout:CreateWindow(props)
         local gripBox = SuuUI.Layout:CreateContainer({ host = f, layout = "anchor" })
         local grip = CreateFrame("Frame", nil, f)
         grip:EnableMouse(true)
-        grip:SetFrameLevel(f:GetFrameLevel() + 10)
+        SuuUI.UIRoot:RaiseAbove(grip, f, 10)
         gripBox:Add(grip, {
             anchor = {
                 point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT",
@@ -336,11 +386,12 @@ function SuuUI.Layout:CreateWindow(props)
         grip:SetScript("OnMouseUp", function()
             f:StopMovingOrSizing()
             snapSize(f)
-            savePos({ _frame = f, _id = props.id })
+            if not centered then savePos({ _frame = f, _id = props.id }) end
         end)
         grip:SetScript("OnEnter", function() gripColor(true) end)
         grip:SetScript("OnLeave", function() gripColor(false) end)
         handle._gripBox = gripBox
+        handle._grip    = grip
     end
 
     S:Connect(closeBtn, S.SIGNALS.CLICKED, function() handle:Hide() end)
@@ -351,9 +402,9 @@ function SuuUI.Layout:CreateWindow(props)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, "win_" .. props.id)
 
     -- Register now if the root already exists, otherwise as soon as it does
-    if not registerWithRoot(f, layer, props.id) then
+    if not registerWithRoot(f, layer, props.id, centered) then
         SuuUI.Events:Once("SUUUI_CORE_READY", function()
-            registerWithRoot(f, layer, props.id)
+            registerWithRoot(f, layer, props.id, centered)
         end, "win_root_" .. props.id)
     end
 

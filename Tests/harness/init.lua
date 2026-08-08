@@ -38,7 +38,7 @@
 --              .isNil/.notNil/.matches/.contains/.len/.throws/.notThrows, and .as("note")
 -- Geometry:    H.box H.offset H.expectBox H.expectSize H.expectOffset H.expectInside
 --              H.expectNoOverlap H.expectStackedVertically H.expectRowHorizontally
---              H.expectCenteredH H.expectCenteredV H.expectTokenColor
+--              H.expectCenteredH H.expectCenteredV H.expectTokenColor H.expectDrawsAbove
 -- Text:        H.textWidth H.textHeight H.lineHeight H.fontOf H.expectTextNotClipped
 --              (each measuring helper takes an optional font path: faces differ)
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll

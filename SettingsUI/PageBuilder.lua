@@ -3,7 +3,8 @@ local S = SuuUI.UISignals
 
 local M = {}
 
-local pages = {}   -- [contentFrame] = container handle
+local pages      = {}   -- [contentFrame] = container handle
+local pageOwners = {}   -- [contentFrame] = watcher owner prefix of the page built there
 
 local coreTypes = {
     section         = true,
@@ -18,9 +19,16 @@ local coreTypes = {
 function M:Build(pluginId, scroll)
     local content = scroll:GetContent()
 
-    -- Tear down the previous page for this content area
+    -- Tear down the previous page for this content area. Its controls each registered a
+    -- Settings watcher, and those must go with the widgets they drive — otherwise every
+    -- nav switch leaves behind a subscriber holding a destroyed handle, which then fires
+    -- on every write and every profile load.
     local previous = pages[content]
     if previous then
+        if pageOwners[content] then
+            SuuUI.Settings:UnwatchPrefix(pageOwners[content])
+            pageOwners[content] = nil
+        end
         previous:Destroy()
         pages[content] = nil
     end
@@ -40,7 +48,8 @@ function M:Build(pluginId, scroll)
         w       = scroll:GetContentWidth(),
         padding = { top = pad, right = pad, bottom = pad, left = pad },
     })
-    pages[content] = page
+    pages[content]      = page
+    pageOwners[content] = SuuUI.Settings.ControlOwnerPrefix(pluginId)
 
     -- The page reports its own height; the scroll frame reacts to it
     S:Connect(page, S.SIGNALS.SIZE_CHANGED, function(_, h)

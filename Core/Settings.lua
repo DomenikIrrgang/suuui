@@ -1,20 +1,91 @@
-local pairs, assert, type, ipairs = pairs, assert, type, ipairs
+local pairs, assert, type, ipairs, tostring = pairs, assert, type, ipairs, tostring
+local tinsert, tremove = table.insert, table.remove
 
 local M = {}
-local schemas = {}  -- [pluginId] = { schemaEntry, ... }
+local schemas        = {}  -- [pluginId] = { schemaEntry, ... }
+local entryIndex     = {}  -- [pluginId][key] = schemaEntry
+local transientKeys  = {}  -- [pluginId][key] = true    session state, never persisted
+local transientStore = {}  -- [pluginId][key] = value   lives for one UI session
+local watchers       = {}  -- [bucketKey] = { { cb, owner, pluginId, key }, ... }
+local watcherCount   = 0
 
-local function pluginProfile(pluginId)
+-- Watchers are bucketed by pluginId+key so a write notifies only its own subscribers.
+-- A flat list would make every Set a full scan, and this system backs every frame in
+-- every unit-frame group, not just the settings panel.
+local function bucketKey(pluginId, key)
+    return tostring(pluginId) .. "\0" .. tostring(key)
+end
+
+local MAX_EQ_DEPTH = 4
+
+--- Value equality that treats tables structurally.
+-- Positions and colours are stored as fresh tables on every write, so reference
+-- equality would report every save as a change and echo it back to the writer.
+local function valuesEqual(a, b, depth)
+    if a == b then return true end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    depth = (depth or 0) + 1
+    if depth > MAX_EQ_DEPTH then return false end
+    for k, v in pairs(a) do
+        if not valuesEqual(v, b[k], depth) then return false end
+    end
+    for k in pairs(b) do
+        if a[k] == nil then return false end
+    end
+    return true
+end
+
+local function isTransient(pluginId, key)
+    local keys = transientKeys[pluginId]
+    return keys ~= nil and keys[key] == true
+end
+
+--- Returns the table a key's value is stored in.
+-- Transient keys resolve to a session table that is never written to SavedVariables;
+-- everything else resolves to the active profile.
+local function storeFor(pluginId, key)
+    if isTransient(pluginId, key) then
+        if not transientStore[pluginId] then transientStore[pluginId] = {} end
+        return transientStore[pluginId]
+    end
     local profile = SuuUI.Profiles:GetActive()
     if not profile.plugins then profile.plugins = {} end
     if not profile.plugins[pluginId] then profile.plugins[pluginId] = {} end
     return profile.plugins[pluginId]
 end
 
-local function schemaEntry(pluginId, key)
-    local schema = schemas[pluginId]
-    if not schema then return nil end
-    for _, entry in ipairs(schema) do
-        if entry.key == key then return entry end
+local function defaultFor(pluginId, key)
+    local idx = entryIndex[pluginId]
+    local entry = idx and idx[key]
+    return entry and entry.default
+end
+
+--- The value a reader would see for a candidate write.
+-- Writing nil clears the stored value, which means the schema default becomes
+-- visible again — so nil must be resolved before anything is told a value changed.
+local function effectiveOf(pluginId, key, value)
+    if value ~= nil then return value end
+    return defaultFor(pluginId, key)
+end
+
+--- Notifies watchers of a key with the effective value.
+-- Iterates a snapshot: a callback may Watch or Unwatch while it runs (rebuilding a
+-- settings page does exactly that), and mutating the live list under iteration
+-- silently skips subscribers.
+local function notifyWatchers(pluginId, key, value)
+    local list = watchers[bucketKey(pluginId, key)]
+    if not list or #list == 0 then return end
+    local snapshot = {}
+    for i = 1, #list do snapshot[i] = list[i] end
+    for i = 1, #snapshot do
+        local w = snapshot[i]
+        if not w._dead then
+            local ok, err = pcall(w.cb, value)
+            if not ok then
+                SuuUI.Debug("Settings:Watch callback error [" .. tostring(pluginId)
+                    .. "." .. tostring(key) .. "]: " .. tostring(err))
+            end
+        end
     end
 end
 
@@ -25,6 +96,16 @@ function M:Register(pluginId, schemaArray)
     assert(type(pluginId) == "string", "SuuUI Settings: pluginId must be string")
     assert(not schemas[pluginId], "SuuUI Settings: schema already registered for " .. pluginId)
     schemas[pluginId] = schemaArray
+
+    local idx, trans = {}, {}
+    for _, entry in ipairs(schemaArray) do
+        if entry.key and entry.key ~= "" then
+            idx[entry.key] = entry
+            if entry.transient then trans[entry.key] = true end
+        end
+    end
+    entryIndex[pluginId]    = idx
+    transientKeys[pluginId] = trans
 end
 
 --- Returns the schema array for a plugin.
@@ -39,18 +120,34 @@ end
 -- @param key string
 -- @return any
 function M:Get(pluginId, key)
-    local store = pluginProfile(pluginId)
+    local store = storeFor(pluginId, key)
     if store[key] ~= nil then return store[key] end
-    local entry = schemaEntry(pluginId, key)
-    return entry and entry.default
+    return defaultFor(pluginId, key)
 end
 
---- Writes a setting value to the active profile and fires SUUUI_SETTING_CHANGED.
+--- Returns whether a key is session state rather than profile state.
+-- @param pluginId string
+-- @param key string
+-- @return bool
+function M:IsTransient(pluginId, key)
+    return isTransient(pluginId, key)
+end
+
+--- Writes a setting value, notifies watchers, then fires SUUUI_SETTING_CHANGED.
+--
+-- Both the watcher payload and the event carry EFFECTIVE values — the value a
+-- reader would get from Get — never the raw stored value. A key that has never
+-- been written stores nil while reading as its schema default, so handing out the
+-- raw value tells subscribers the setting is nil when it is not.
+--
+-- A write that does not change the effective value is dropped: no store write, no
+-- watcher call, no event.
 -- @param pluginId string
 -- @param key string
 -- @param value any
 function M:Set(pluginId, key, value)
-    local entry = schemaEntry(pluginId, key)
+    local idx = entryIndex[pluginId]
+    local entry = idx and idx[key]
     if entry and entry.validate then
         local ok, err = entry.validate(value)
         if ok == false then
@@ -58,17 +155,109 @@ function M:Set(pluginId, key, value)
             return
         end
     end
-    local store = pluginProfile(pluginId)
-    local old = store[key]
-    store[key] = value
-    SuuUI.Events:Emit("SUUUI_SETTING_CHANGED", pluginId, key, value, old)
+
+    local oldEffective = self:Get(pluginId, key)
+    local newEffective = effectiveOf(pluginId, key, value)
+    if valuesEqual(oldEffective, newEffective) then return end
+
+    storeFor(pluginId, key)[key] = value
+    notifyWatchers(pluginId, key, newEffective)
+    SuuUI.Events:Emit("SUUUI_SETTING_CHANGED", pluginId, key, newEffective, oldEffective)
+end
+
+--- Subscribes to changes of one pluginId + key.
+--
+-- The callback receives the effective value. It fires when Set changes the value and
+-- on profile switches, so a bound widget cannot drift from the store regardless of
+-- what caused the change.
+--
+-- @param pluginId string
+-- @param key string
+-- @param cb function(value)
+-- @param owner string   Handle for Unwatch / UnwatchPrefix. Required.
+-- @param opts table     { immediate = true } fires cb once now with the current value
+function M:Watch(pluginId, key, cb, owner, opts)
+    assert(type(cb) == "function", "Settings:Watch cb must be a function")
+    assert(type(owner) == "string" and owner ~= "", "Settings:Watch owner must be a non-empty string")
+
+    local bk = bucketKey(pluginId, key)
+    if not watchers[bk] then watchers[bk] = {} end
+    tinsert(watchers[bk], { cb = cb, owner = owner, pluginId = pluginId, key = key })
+    watcherCount = watcherCount + 1
+
+    if opts and opts.immediate then
+        local ok, err = pcall(cb, self:Get(pluginId, key))
+        if not ok then
+            SuuUI.Debug("Settings:Watch immediate error [" .. tostring(pluginId)
+                .. "." .. tostring(key) .. "]: " .. tostring(err))
+        end
+    end
+end
+
+local function dropWatchers(match)
+    local removed = 0
+    for bk, list in pairs(watchers) do
+        for i = #list, 1, -1 do
+            if match(list[i].owner) then
+                -- Marked as well as removed: a notify snapshot taken before this call
+                -- must not deliver to a subscriber that has since been torn down.
+                list[i]._dead = true
+                tremove(list, i)
+                removed = removed + 1
+            end
+        end
+        if #list == 0 then watchers[bk] = nil end
+    end
+    watcherCount = watcherCount - removed
+    return removed
+end
+
+--- Unsubscribes every watcher registered under an exact owner.
+-- @param owner string
+-- @return number  How many were removed
+function M:Unwatch(owner)
+    if type(owner) ~= "string" then return 0 end
+    return dropWatchers(function(o) return o == owner end)
+end
+
+--- Unsubscribes every watcher whose owner starts with a prefix.
+-- Lets a surface that built many watchers drop them all without tracking each one.
+-- @param prefix string
+-- @return number  How many were removed
+function M:UnwatchPrefix(prefix)
+    if type(prefix) ~= "string" or prefix == "" then return 0 end
+    local n = #prefix
+    return dropWatchers(function(o) return o:sub(1, n) == prefix end)
+end
+
+--- Owner prefix shared by every control on one plugin's settings page.
+-- @param pluginId string
+-- @return string
+function M.ControlOwnerPrefix(pluginId)
+    return "page:" .. tostring(pluginId) .. ":"
+end
+
+--- Owner string for a single settings-page control.
+-- @param pluginId string
+-- @param kind string  Control type, e.g. "toggle"
+-- @param key string
+-- @return string
+function M.ControlOwner(pluginId, kind, key)
+    return M.ControlOwnerPrefix(pluginId) .. tostring(kind) .. ":" .. tostring(key)
+end
+
+--- Returns the live watcher count. Used by tests to catch subscription leaks.
+-- @return number
+function M:GetWatcherCount()
+    return watcherCount
 end
 
 --- Resets a single setting to its schema default.
 -- @param pluginId string
 -- @param key string
 function M:Reset(pluginId, key)
-    local entry = schemaEntry(pluginId, key)
+    local idx = entryIndex[pluginId]
+    local entry = idx and idx[key]
     if not entry then return end
     self:Set(pluginId, key, entry.default)
 end
@@ -86,3 +275,23 @@ function M:ResetAll(pluginId)
 end
 
 SuuUI.Settings = M
+
+-- A profile switch changes every persisted value at once, so watchers are re-notified
+-- centrally rather than each subscriber listening for the profile event itself.
+-- Transient keys are session state and are deliberately left alone.
+SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
+    for _, list in pairs(watchers) do
+        local snapshot = {}
+        for i = 1, #list do snapshot[i] = list[i] end
+        for i = 1, #snapshot do
+            local w = snapshot[i]
+            if not w._dead and not isTransient(w.pluginId, w.key) then
+                local ok, err = pcall(w.cb, M:Get(w.pluginId, w.key))
+                if not ok then
+                    SuuUI.Debug("Settings:Watch profile-reload error ["
+                        .. tostring(w.pluginId) .. "." .. tostring(w.key) .. "]: " .. tostring(err))
+                end
+            end
+        end
+    end
+end, "_settings_watch_profile")

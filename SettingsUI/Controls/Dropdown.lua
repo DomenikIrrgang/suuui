@@ -11,7 +11,6 @@ local function Build(entry, pluginId, parent)
 
     local dd = C.Dropdown({
         options = entry.options or {},
-        value   = SuuUI.Settings:Get(pluginId, entry.key),
         w       = 140,
     }, row:GetFrame())
     -- Height omitted: the dropdown derives it from its size and font tokens
@@ -21,9 +20,9 @@ local function Build(entry, pluginId, parent)
         SuuUI.Settings:Set(pluginId, entry.key, val)
     end)
 
-    SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
-        dd:SetValue(SuuUI.Settings:Get(pluginId, entry.key))
-    end, "ctrl_dropdown_" .. pluginId .. "_" .. entry.key)
+    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+        dd:SetValue(val)
+    end, SuuUI.Settings.ControlOwner(pluginId, "dropdown", entry.key), { immediate = true })
 
     return row
 end

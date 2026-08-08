@@ -42,11 +42,11 @@ Events:SetScript("OnEvent", function(_, event, name)
       SuuUI.Settings:Register("my_plugin", {
         { key="enabled", label="Enable", type="toggle", default=true },
       })
-      SuuUI.Events:On("SUUUI_SETTING_CHANGED", function(id, key, val)
-        if id == "my_plugin" and key == "enabled" then
-          if val then p:Enable() else p:Disable() end
-        end
-      end, "my_plugin")
+      -- Watch the key, do not filter the global event. The callback also runs on
+      -- profile switches, and `immediate` runs it now with the current value.
+      SuuUI.Settings:Watch("my_plugin", "enabled", function(val)
+        if val then p:Enable() else p:Disable() end
+      end, "my_plugin", { immediate = true })
     end,
 
     onEnable = function(p)
@@ -133,11 +133,33 @@ validate = function(value) return true end
 ## Settings API
 
 ```lua
-SuuUI.Settings:Get("my_plugin", "myToggle")        -- current value
-SuuUI.Settings:Set("my_plugin", "myToggle", false)  -- write + fire event
+SuuUI.Settings:Get("my_plugin", "myToggle")         -- current value, else the default
+SuuUI.Settings:Set("my_plugin", "myToggle", false)  -- write + notify
 SuuUI.Settings:Reset("my_plugin", "myToggle")       -- reset to default
 SuuUI.Settings:ResetAll("my_plugin")
 ```
+
+**Never cache a setting in your own variable.** Read it with `Get` when you need it, and
+subscribe with `Watch` when you need to react. A local copy is a second source of truth,
+and it goes stale the first time the value changes by a route you did not think about —
+the settings panel, a slash command, a profile switch, another plugin.
+
+```lua
+SuuUI.Settings:Watch("my_plugin", "barHeight", function(val)
+  myBar:SetHeight(val)
+end, "my_plugin", { immediate = true })
+```
+
+- The callback gets the effective value, and also fires on profile switches.
+- `{ immediate = true }` runs it once now, so the same line handles first paint.
+- The `owner` string ("my_plugin" here) is how you unsubscribe. **Drop your watchers when
+  the thing they drive goes away** — `SuuUI.Settings:Unwatch("my_plugin")` in `onDisable`
+  if you tear your frames down there. A watcher outlives the frame it updates.
+
+Use `transient = true` on a schema entry for state that should not survive `/reload`
+(a mode the player is currently in, not a preference they configured).
+
+See `architecture.md` §5b for the full contract.
 
 ---
 
@@ -187,6 +209,11 @@ SuuUI.Events:Emit("MY_PLUGIN_SOMETHING_HAPPENED", payload)
 -- Subscribe once
 SuuUI.Events:Once("SUUUI_PROFILE_LOADED", function() end, "my_plugin")
 ```
+
+**To react to one of your settings, use `Settings:Watch` instead** (see Settings API
+above). `SUUUI_SETTING_CHANGED` fires for every write anywhere in the addon, so a
+per-key listener has to filter it, gets no initial value, and needs a second
+`SUUUI_PROFILE_LOADED` subscription to survive a profile switch.
 
 **Built-in events:**
 

@@ -11,7 +11,6 @@ local function Build(entry, pluginId, parent)
 
     local sld = C.Slider({
         label = entry.label,
-        value = SuuUI.Settings:Get(pluginId, entry.key),
         min   = entry.min  or 0,
         max   = entry.max  or 100,
         step  = entry.step or 1,
@@ -22,9 +21,9 @@ local function Build(entry, pluginId, parent)
         SuuUI.Settings:Set(pluginId, entry.key, val)
     end)
 
-    SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
-        sld:SetValue(SuuUI.Settings:Get(pluginId, entry.key))
-    end, "ctrl_slider_" .. pluginId .. "_" .. entry.key)
+    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+        sld:SetValue(val)
+    end, SuuUI.Settings.ControlOwner(pluginId, "slider", entry.key), { immediate = true })
 
     return row
 end

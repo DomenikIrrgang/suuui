@@ -40,6 +40,8 @@ UIParent (WoW's base frame)
       └─ Root Container (anchor layout)
           ├─ Layer: background
           ├─ Layer: normal
+          │   └─ Plugin content (unit frames, bars — inherits this rung from the root)
+          ├─ Layer: window
           │   └─ Settings Window
           │       └─ Window Container (vertical flow)
           │           ├─ Title Bar
@@ -80,7 +82,7 @@ SuuUI.UIRoot:AddElement(frame, layer, anchorDesc)
 
 **Parameters:**
 - `frame`: The WoW frame to add
-- `layer`: One of "background", "normal", "dialog", "tooltip"
+- `layer`: One of "background", "normal", "window", "dialog", "tooltip"
 - `anchorDesc`: Anchor descriptor table
   ```lua
   {
@@ -104,14 +106,40 @@ SuuUI.UIRoot:UpdateElementAnchor(frame, newAnchorDesc)
 
 ## Layers
 
-The UI root manages 4 distinct layers with different frame strata:
+The UI root owns the z-order. It is the **only** file in the addon that calls
+`SetFrameStrata`: everything else names a layer and lets the root translate. That keeps one
+ladder to reason about, and keeps components independent of the client's strata vocabulary.
 
 | Layer | Strata | Purpose |
 |-------|--------|---------|
 | `background` | LOW | Background elements (rarely used) |
-| `normal` | MEDIUM | Standard windows and frames |
-| `dialog` | HIGH | Modals and dialogs |
-| `tooltip` | TOOLTIP | Tooltips (always on top) |
+| `normal` | MEDIUM | Plugin content — unit frames, bars, anything the player plays with. The root's own strata, so a frame parented to the root inherits this rung without asking |
+| `window` | HIGH | SuuUI windows (settings, and anything else from `CreateWindow`) |
+| `dialog` | DIALOG | Modals and popups opened *from* a window (`Modal`, the colour picker) |
+| `tooltip` | TOOLTIP | Tooltips and dropdown panels (always on top) |
+
+A window must outrank plugin content by **layer**, not by frame level. Level is only the
+tie-break inside a rung, and a frame nested one level deeper than the window wins that
+tie-break: a plugin frame on the root container is a child of the container, which is a
+child of the root, so it sits a level above a window parented to the root and draws over
+it. That is exactly the bug that put the player frame on top of the settings window.
+
+### Assigning a layer
+
+```lua
+-- Positioned by the root: layer + anchor in one call
+SuuUI.UIRoot:AddElement(frame, "window", { point = "CENTER", x = 0, y = 0 })
+
+-- Layer only, for frames that place themselves (a draggable plugin frame, a modal
+-- filling its parent, a dropdown panel anchored to its field)
+SuuUI.UIRoot:SetLayer(frame, "normal")
+SuuUI.UIRoot:GetLayer(frame)          --> "normal"
+SuuUI.UIRoot:GetLayerStrata("dialog") --> "DIALOG"  (readable before Init)
+
+-- Decoration that belongs TO a frame: same rung, higher level. Never a higher layer —
+-- an edit-mode overlay promoted to `dialog` would cover the window that toggles it.
+SuuUI.UIRoot:RaiseAbove(overlay, frame, 5)
+```
 
 ## Window Integration
 

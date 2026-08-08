@@ -84,7 +84,7 @@ function SuuUI.Components.Modal(props, parent)
         h      = parent:GetHeight(),
     })
     local shell = shellBox:GetFrame()
-    shell:SetFrameStrata("DIALOG")
+    SuuUI.UIRoot:SetLayer(shell, "dialog")
 
     local overlay = CreateFrame("Frame", nil, shell)
     overlay:EnableMouse(true)

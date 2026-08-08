@@ -22,10 +22,13 @@ SuuUI/
 │   ├── UIRoot.lua        -- single fullscreen root, layer management
 │   ├── Plugin.lua        -- plugin registry and lifecycle
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
-│   ├── Settings.lua      -- settings schema registry and value I/O
+│   ├── Settings.lua      -- settings schema registry, value I/O, reactive watchers
 │   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
 │   ├── Theme.lua         -- token system, theme registry, active theme
 │   ├── Pixel.lua         -- pixel grid: root scale, snapping, cursor space conversion
+│   ├── ReloadGuard.lua   -- confirmation modal for settings needing a UI reload
+│   ├── ToggleUI.lua      -- edit mode state + moveable-frame registry
+│   ├── MoveableFrame.lua -- mixin making a frame repositionable in edit mode
 │   └── Pool.lua          -- typed frame pool
 ├── Animation/
 │   ├── Tween.lua         -- easing functions
@@ -155,7 +158,14 @@ vanish with them. Callbacks run through `pcall` and log failures via `SuuUI.Debu
 
 Built-in bus events: `SUUUI_PROFILE_LOADED`, `SUUUI_THEME_CHANGED`, `SUUUI_FONTS_CHANGED`,
 `SUUUI_PIXEL_GRID_CHANGED`, `SUUUI_SETTING_CHANGED`, `SUUUI_PLUGIN_ENABLED`,
-`SUUUI_PLUGIN_DISABLED`.
+`SUUUI_PLUGIN_DISABLED`. Deprecated: `SUUUI_EDIT_MODE_CHANGED` — still emitted for
+third-party listeners, but new code watches the setting instead (see 5b).
+
+**To react to one setting, use `Settings:Watch`, not `SUUUI_SETTING_CHANGED`.** The event
+is a broadcast of every write in the addon, so a listener has to filter by pluginId and
+key, gets no initial value, and has to subscribe to `SUUUI_PROFILE_LOADED` separately to
+survive a profile switch. `Watch` handles all three. The event remains the right tool for
+something that genuinely cares about *any* setting changing, such as `ReloadGuard`.
 
 **Standard signals** (payload in parentheses): `SIZE_CHANGED` (w, h),
 `POSITION_CHANGED` (x, y), `VISIBILITY_CHANGED` (isVisible), `MOUSE_ENTER` (—),
@@ -168,6 +178,7 @@ Built-in bus events: `SUUUI_PROFILE_LOADED`, `SUUUI_THEME_CHANGED`, `SUUUI_FONTS
 | Kind | Mechanism |
 |---|---|
 | UI element notifying another UI element | `SuuUI.UISignals` |
+| Reacting to one setting's value | `SuuUI.Settings:Watch` |
 | Addon-wide state change | `SuuUI.Events` |
 | WoW game data | `frame:RegisterEvent` in a plugin |
 
@@ -247,6 +258,7 @@ Schema entry shape:
   min=, max=, step=          -- slider
   options={}                 -- dropdown: array of {value, label}
   validate = function(v) end -- optional, returns true or error string
+  transient = true           -- optional: session state, never saved (see 5b)
 }
 ```
 
@@ -254,13 +266,132 @@ Schema entry shape:
 ```lua
 SuuUI.Settings:Register(pluginId, schemaArray)
 SuuUI.Settings:GetSchema(pluginId)
-SuuUI.Settings:Get(pluginId, key)          -- reads from active profile
-SuuUI.Settings:Set(pluginId, key, value)   -- writes, fires SUUUI_SETTING_CHANGED
+SuuUI.Settings:Get(pluginId, key)          -- stored value, else the schema default
+SuuUI.Settings:Set(pluginId, key, value)   -- writes, notifies watchers, fires the event
 SuuUI.Settings:Reset(pluginId, key)        -- resets to schema default
 SuuUI.Settings:ResetAll(pluginId)
+SuuUI.Settings:IsTransient(pluginId, key)
 ```
 
 Event payload: `"SUUUI_SETTING_CHANGED"` → `pluginId, key, value, oldValue`
+
+**`Set` carries effective values, not raw stored ones.** A key that has never been
+written stores `nil` while reading as its schema default, so both the watcher payload and
+the event report what `Get` would return — before and after. Handing out the raw `nil`
+tells a subscriber the setting is unset when it reads as `true`, and any listener that
+writes `oldValue` back (`ReloadGuard` does, to revert a cancelled change) then clears the
+key and leaves every bound widget rendering `nil`.
+
+**A write that does not change the effective value is dropped** — no store write, no
+watcher call, no event. Tables are compared structurally, not by reference, because
+positions and colours are stored as a fresh table on every save and reference equality
+would report each one as a change and echo it back to whoever wrote it.
+
+### 5b. Reactive State Bindings (`Settings:Watch`)
+
+**The store is the single source of truth. A feature must never keep its own copy of a
+value that also lives in Settings.** Two copies reconciled by events is the bug this
+system exists to prevent: the settings panel and a slash command each held their own
+edit-mode flag, and whichever the user did not touch went stale.
+
+Do not re-render the UI from scratch on a state change — WoW frames are retained
+objects, and rebuilding them loses scroll position, animation state and anchors. Instead
+subscribe to the individual key you display and patch that one property. Same guarantee
+as a declarative framework ("if state changes, the UI reflects it"), reached the way a
+retained-mode toolkit reaches it.
+
+```lua
+SuuUI.Settings:Watch(pluginId, key, callback, owner, opts)
+SuuUI.Settings:Unwatch(owner)              -- drop one owner's watchers
+SuuUI.Settings:UnwatchPrefix(prefix)       -- drop a whole group at once
+SuuUI.Settings:GetWatcherCount()           -- live count; tests assert against leaks
+SuuUI.Settings.ControlOwnerPrefix(pluginId)      -- "page:<pluginId>:"
+SuuUI.Settings.ControlOwner(pluginId, kind, key) -- one settings-page control
+```
+
+The callback receives the effective value. It fires when `Set` changes the value **and**
+on profile switches, so a bound widget cannot drift from the store regardless of what
+caused the change — panel, slash command, keybind, or another plugin.
+
+**Pass `{ immediate = true }` unless you have a reason not to.** It fires the callback
+once at registration with the current value, which makes the callback the single place
+that renders the value:
+
+```lua
+-- The watcher owns the displayed value, initial state included
+SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+    tog:SetValue(val)
+end, SuuUI.Settings.ControlOwner(pluginId, "toggle", entry.key), { immediate = true })
+```
+
+Reading the value separately to seed the widget and *then* watching for changes is the
+same duplication in miniature, and it is how `MoveableFrame` shipped a frame that was
+draggable with no visible overlay: it hid the overlay at construction and waited for a
+change that had already happened.
+
+**Every `Watch` needs an owner, and something has to unwatch it.** A watcher outlives the
+widget it drives unless someone drops it, and a leaked one keeps firing into a destroyed
+handle on every write and every profile switch. Two conventions cover the codebase:
+
+| Subscriber | Owner | Dropped by |
+|---|---|---|
+| a settings-page control | `Settings.ControlOwner(pluginId, kind, key)` | `PageBuilder` calls `UnwatchPrefix` when it rebuilds that content area |
+| anything else | any stable string | whatever owns the teardown (`MoveableFrame:Remove`) |
+
+`GetWatcherCount` exists so a spec can assert that a rebuild is watcher-neutral. Use it:
+a subscription leak is invisible until something fires into freed state.
+
+**Callbacks may Watch and Unwatch while a notify is in flight** — rebuilding a settings
+page does exactly that, from inside a watcher on the plugin's `enabled` key. Notification
+therefore iterates a snapshot, and a watcher removed mid-pass is skipped rather than
+delivered to. A watcher added mid-pass is not called until the next change.
+
+**`transient = true` marks session state rather than a preference.** The value lives for
+one UI session and never reaches SavedVariables, so it starts at its default on every
+login and a profile switch neither reads nor writes it. Edit mode is the case that named
+the flag: it is a mode the player is currently in, and persisting it logged them back in
+with every frame draggable.
+
+Reach for it when the answer to "should this survive `/reload`?" is no. Everything the
+player configures is a preference and stays in the profile.
+
+### 5c. Edit Mode & Moveable Frames
+
+`Core/ToggleUI.lua` holds edit mode; `Core/MoveableFrame.lua` makes one frame
+repositionable. Both are consumers of 5b rather than state owners — ToggleUI keeps no
+flag of its own, and every surface that cares subscribes to the same key.
+
+```lua
+SuuUI.ToggleUI:IsEditMode()          -- reads Settings("_layout", "edit_mode")
+SuuUI.ToggleUI:Toggle() / :Enable() / :Disable()
+SuuUI.ToggleUI:Register(frame) / :Unregister(frame) / :GetAll()
+
+SuuUI.MoveableFrame:Apply(frame, {
+  pluginId = "unit_frames", key = "player_position",
+  displayName = "Player Frame",
+  defaults = { point = "CENTER", relPoint = "CENTER", x = 0, y = -200 },
+})
+SuuUI.MoveableFrame:RestorePosition(frame)
+SuuUI.MoveableFrame:ResetPosition(frame)
+SuuUI.MoveableFrame:Remove(frame)     -- unwatches; required on teardown
+```
+
+Positions live in the owning plugin's own settings namespace, so they are profile-aware
+for free and a plugin's frames travel with its settings. `/suuui toggle`, `/suuui lock`
+and `/suuui unlock` are dispatched by `SettingsWindow`'s slash handler — ToggleUI does
+not register its own, because `SettingsWindow` loads later in the `.toc` and would
+overwrite it.
+
+**A frame that writes its own state must not react to that write.** `OnDragStop` saves
+the position the player just dragged to, and the position watcher would immediately
+restore it — harmless while restore is a no-op, and a fight with the player's cursor the
+moment it starts clamping or snapping. The save sets a `_saving` flag that its own
+watcher checks, so only changes from elsewhere (a profile switch, a reset) move the
+frame. Any bidirectional binding needs this; it is not specific to dragging.
+
+`SUUUI_EDIT_MODE_CHANGED` is **deprecated**. It was the public edit-mode event before
+edit mode became a watched setting, and ToggleUI still emits it from a watcher so
+third-party plugins keep working. New code watches the setting.
 
 ### 6. Theme & Token System (`Core/Theme.lua`)
 

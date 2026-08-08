@@ -71,6 +71,92 @@ describe("Plugins.UnitFrames", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             expect(plugin._playerFrame:GetFrame()).notNil()
         end)
+
+        it("GetFrame returns the wrapper, not the bar background", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local topFrame = pf:GetFrame()
+            expect(topFrame).eq(pf._wrapper)
+            expect(topFrame).neq(pf._bg:GetFrame())
+        end)
+
+        it("frame is sized to fit info row + gap + bar area", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local frame = plugin._playerFrame:GetFrame()
+            local w, h = frame:GetSize()
+            expect(w).eq(180)
+            expect(h).eq(52)
+        end)
+    end)
+
+    describe("player frame layout", function()
+        it("info row is parented to the wrapper", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local infoParent = pf._infoRow:GetFrame():GetParent()
+            expect(infoParent).eq(pf._wrapper)
+        end)
+
+        it("bar background is parented to the wrapper", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local bgParent = pf._bg:GetFrame():GetParent()
+            expect(bgParent).eq(pf._wrapper)
+        end)
+
+        it("info row is anchored at the top of the wrapper", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local infoFrame = pf._infoRow:GetFrame()
+            local n = infoFrame:GetNumPoints()
+            local found = false
+            for i = 1, n do
+                local point, relativeTo, relativePoint = infoFrame:GetPoint(i)
+                if point == "TOPLEFT" and relativeTo == pf._wrapper and relativePoint == "TOPLEFT" then
+                    found = true
+                end
+            end
+            expect(found).eq(true)
+        end)
+
+        it("bar background is anchored below the info row", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local bgFrame = pf._bg:GetFrame()
+            local infoFrame = pf._infoRow:GetFrame()
+            local n = bgFrame:GetNumPoints()
+            local found = false
+            for i = 1, n do
+                local point, relativeTo, relativePoint = bgFrame:GetPoint(i)
+                if point == "TOPLEFT" and relativeTo == infoFrame and relativePoint == "BOTTOMLEFT" then
+                    found = true
+                end
+            end
+            expect(found).eq(true)
+        end)
+
+        it("health and resource bars are parented to the bar background", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local bgFrame = pf._bg:GetFrame()
+            expect(pf._healthBar:GetFrame():GetParent()).eq(bgFrame)
+            expect(pf._resourceBar:GetFrame():GetParent()).eq(bgFrame)
+        end)
+
+        it("name text is not inside the bar background", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local bgFrame = pf._bg:GetFrame()
+            -- Walk up from nameText — should NOT find bgFrame as ancestor
+            local nameFrame = pf._nameText:GetFrame()
+            local parent = nameFrame:GetParent()
+            local found_bg = false
+            while parent do
+                if parent == bgFrame then found_bg = true; break end
+                parent = parent.GetParent and parent:GetParent() or nil
+            end
+            expect(found_bg).eq(false)
+        end)
     end)
 
     describe("health bar", function()

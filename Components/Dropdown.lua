@@ -247,7 +247,7 @@ function DdMeta:_openPanel()
         width  = self._f:GetWidth(),
         height = total + gap * 2,
     })
-    panel:SetFrameStrata("TOOLTIP")
+    SuuUI.UIRoot:SetLayer(panel, "tooltip")
 
     panel:SetAlpha(0)
     panel:Show()

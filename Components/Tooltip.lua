@@ -71,7 +71,7 @@ function TipMeta:ShowTip(text, anchorFrame)
     end
     self:_fit()
 
-    self._f:SetFrameStrata("TOOLTIP")
+    SuuUI.UIRoot:SetLayer(self._f, "tooltip")
     self._f:SetAlpha(0)
     self._f:Show()
     SuuUI.Anim.Presets.FadeIn(self._f, T:GetToken("animFast"))
