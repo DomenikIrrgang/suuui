@@ -31,6 +31,8 @@ local function buildNav()
     local T   = SuuUI.Theme
     local gap = T:GetToken("spaceXs") or 4
 
+    local previousId = activeId
+
     if navList then navList:Destroy() end
     for _, item in ipairs(navItems) do item.nav:Destroy() end
     navItems = {}
@@ -57,9 +59,11 @@ local function buildNav()
 
     local entries = SuuUI.Plugins:GetAll()
     tinsert(entries, 1, { id = "_profiles", name = "Profiles" })
+    tinsert(entries, 1, { id = "_layout",   name = "Layout" })
     tinsert(entries, 1, { id = "_theme",    name = "Theme" })
 
     local rowH = navRowHeight()
+    local restoredId = nil
     for _, entry in ipairs(entries) do
         local nav = C.NavItem({ label = entry.name, h = rowH }, navList:GetFrame())
         navList:Add(nav, { width = "fill", height = rowH })
@@ -67,9 +71,12 @@ local function buildNav()
         local pid = entry.id
         S:Connect(nav, S.SIGNALS.CLICKED, function() selectPlugin(pid) end)
         tinsert(navItems, { id = pid, nav = nav })
+        if pid == previousId then restoredId = pid end
     end
 
-    if #navItems > 0 then
+    if restoredId then
+        selectPlugin(restoredId)
+    elseif #navItems > 0 then
         selectPlugin(navItems[1].id)
     end
 end
@@ -139,13 +146,22 @@ local function createWindow()
 end
 
 SLASH_SUUUI1 = "/suuui"
-SlashCmdList["SUUUI"] = function()
-    if not win then
-        registerCoreSchemas()
-        createWindow()
-        buildNav()
+SlashCmdList["SUUUI"] = function(msg)
+    local cmd = (msg or ""):lower():match("^%s*(.-)%s*$")
+    if cmd == "toggle" then
+        SuuUI.ToggleUI:Toggle()
+    elseif cmd == "lock" then
+        SuuUI.ToggleUI:Disable()
+    elseif cmd == "unlock" then
+        SuuUI.ToggleUI:Enable()
+    else
+        if not win then
+            registerCoreSchemas()
+            createWindow()
+            buildNav()
+        end
+        win:Toggle()
     end
-    win:Toggle()
 end
 
 -- Minimap launcher. Built once core is up so it is themed from the start, and
@@ -168,7 +184,11 @@ SuuUI.Events:On("SUUUI_CORE_READY", function()
     end)
 end, "settings_minimap")
 
--- Rebuild nav once plugins have registered
+-- Rebuild nav when plugin list changes
 SuuUI.Events:On("SUUUI_PLUGIN_ENABLED", function()
     if win then buildNav() end
 end, "settings_rebuild")
+
+SuuUI.Events:On("SUUUI_PLUGIN_DISABLED", function()
+    if win then buildNav() end
+end, "settings_rebuild_disabled")

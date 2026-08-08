@@ -51,6 +51,11 @@ function M.install(env)
     Minimap:SetSize(140, 140)
     Minimap:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -20, -20)
 
+    -- Blizzard PlayerFrame stub (UnitFrames plugin hides it)
+    local PlayerFrame = CreateFrame("Frame", "PlayerFrame", UIParent)
+    PlayerFrame:SetSize(180, 70)
+    PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
+
     ------------------------------------------------------------------------------
     -- Font objects
     ------------------------------------------------------------------------------
@@ -154,6 +159,18 @@ function M.install(env)
     env.UnitLevel     = function() return 60 end
     env.GetTime       = function() return state.clock or 0 end
     env.InCombatLockdown = function() return state.inCombat == true end
+
+    -- ReloadUI stub for testing (records call rather than actually reloading)
+    env.ReloadUI = function()
+        state.reloadUICalled = (state.reloadUICalled or 0) + 1
+    end
+
+    -- Unit resource APIs for UnitFrames plugin
+    env.UnitHealth    = function() return state.unitHealth or 100 end
+    env.UnitHealthMax = function() return state.unitHealthMax or 100 end
+    env.UnitPower     = function() return state.unitPower or 80 end
+    env.UnitPowerMax  = function() return state.unitPowerMax or 100 end
+    env.UnitPowerType = function() return state.unitPowerType or 0 end
 
     env.SlashCmdList = {}
     env.hooksecurefunc = function(tbl, name, fn)
