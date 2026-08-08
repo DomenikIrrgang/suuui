@@ -296,6 +296,66 @@ Example missing features to discuss:
 - Absolute positioning within container
 - Z-order/layering control
 
+## No Magic Numbers
+
+**A visual value in code is a bug waiting to happen. Name it, or read it from the theme.**
+Every size, spacing, colour, duration and font size that ends up on screen must come from
+a theme token. Tokens are the design system: they are user-editable in the theme editor,
+they cascade to every consumer, and they re-emit `SUUUI_THEME_CHANGED` so the UI re-derives
+without a reload. A literal does none of that and has to be hunted down in every file that
+copied it.
+
+```lua
+-- ❌ FORBIDDEN: literals decided locally
+frame:SetSize(234, 66)
+container:Add(bar, { width = "fill", height = 30 })
+local gap = 2
+tex:SetColorTexture(0.1, 0.1, 0.12, 1)
+
+-- ✅ REQUIRED: tokens, read through the theme
+local T = SuuUI.Theme
+frame:SetWidth(T:GetToken("sizeUnitFrameW"))
+container:Add(bar, { width = "fill", height = T:GetToken("sizeUnitHealthBar") })
+local gap = T:GetToken("spaceXxs")
+SuuUI.Backdrop.Apply(frame, { bg = "colorBgAlt", border = "colorBorder" })
+```
+
+**The token does not exist yet? Add it** — to `Themes/Default.lua`, `Themes/Modern.lua`,
+and `SettingsUI/Controls/ThemeTokens.lua` so it is editable. Component-specific sizes are
+welcome there (`sizeToggleW`, `sizeScrollbar`, `sizeUnitHealthBar` are all precedents); a
+theme is where design decisions live, not just colours.
+
+**Read tokens through the narrowest API available**, so a rename or a casing slip cannot
+happen twice:
+
+| Need | Use | Not |
+|---|---|---|
+| Pixel size of a text step | `T:GetFontSize("lg")` | `T:GetToken("fontSize" .. key:upper())` |
+| Height of a text-bearing control | `T:GetControlHeight(sizeKey, fontKey)` | a literal, or the bare size token |
+| Height of a text row | Let it hug its measured text | any literal row height |
+| A backdrop colour | `Backdrop.Apply/SetBg` with a token key | `SetBackdropColor(r, g, b, a)` |
+
+**Re-derive on `SUUUI_THEME_CHANGED`.** Reading a token once at build time and keeping the
+number is the same failure as hardcoding it — the value is now stale the moment the user
+moves a slider. Cache in `ApplyTheme()` and rebind there:
+
+```lua
+SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
+```
+
+**The narrow exceptions**, all of which must carry a comment saying why:
+1. **Game data, not design** — Blizzard's own power-type colours, class colours, level
+   caps. These are facts about the client, not choices the theme gets to make.
+2. **A structural constant with no visual meaning** — an array index, a loop bound, a
+   pixel-grid divisor, `0` / `1` identities.
+3. **A defensive fallback** on a token read (`T:GetToken("spaceXs") or 4`), for code that
+   must survive a hand-edited SavedVariable. Not needed for tokens that ship in every
+   built-in theme, since user themes merge onto a built-in base.
+
+**Tests follow the same rule**: assert against `H.token(...)`, `H.textWidth(...)`,
+`H.lineHeight(...)`. A spec that hardcodes 234 passes for the wrong reason and fails the
+moment a token moves — see `TESTING.md`.
+
 ## Comments
 
 Only `---` single-line doc comments on **public API functions**.

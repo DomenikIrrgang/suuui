@@ -156,7 +156,11 @@ function M.install(env)
     env.UnitName      = function(unit) return unit == "player" and "Testchar" or nil end
     env.GetRealmName  = function() return "TestRealm" end
     env.UnitClass     = function() return "Warrior", "WARRIOR", 1 end
-    env.UnitLevel     = function() return 60 end
+    env.UnitLevel     = function() return state.unitLevel or 60 end
+    -- The level cap, as the anniversary client reports it. Specs move state.maxPlayerLevel
+    -- to exercise the at-cap and below-cap branches of a unit frame.
+    env.GetMaxLevelForPlayerExpansion = function() return state.maxPlayerLevel or 60 end
+    env.MAX_PLAYER_LEVEL = 60
     env.GetTime       = function() return state.clock or 0 end
     env.InCombatLockdown = function() return state.inCombat == true end
 

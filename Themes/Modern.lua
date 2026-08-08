@@ -21,6 +21,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
 
     opacityPanel     = 0.97,
     opacityOverlay   = 0.45,
+    -- See Themes/Default.lua: the empty part of a frameless bar.
+    opacityBarTrack  = 0.60,
 
     -- Tier 2: surfaces
     colorBg          = { ref = "colorGray900", alpha = "opacityPanel" },
@@ -51,6 +53,7 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- A font name, not a path: SuuUI.Fonts resolves it. See Themes/Default.lua.
     fontFamilyMain      = "Friz Quadrata TT",
 
+    spaceXxs         = 2,
     spaceXs          = 4,
     spaceSm          = 8,
     spaceMd          = 12,
@@ -67,6 +70,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
+
+    -- Unit frames: see Themes/Default.lua for why these live in the theme.
+    sizeUnitFrameW    = 234,
+    sizeUnitHealthBar = 30,
+    sizeUnitPowerBar  = 16,
 
     borderWidth      = 1,
 

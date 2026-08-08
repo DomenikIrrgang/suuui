@@ -20,90 +20,201 @@ local POWER_COLORS = {
 -- Health bar colour: a modern green
 local HEALTH_COLOR = {0.22, 0.78, 0.32, 1}
 
+-- The empty part of a bar. Neutral black at a token opacity rather than a panel colour:
+-- the frame has no backing plate, so this is the only surface behind the fill. It shares
+-- the fill's box exactly (StatusBar insets nothing when there is no border), so a full bar
+-- covers its track and an empty one occupies the same footprint.
+local function barTrackColor()
+    return {0, 0, 0, T:GetToken("opacityBarTrack")}
+end
+
+---------------------------------------------------------------------------
+-- Layout metrics
+--
+-- Every number here comes from a theme token, so the frame follows the theme editor and
+-- the font sliders instead of pinning its own literals: widths and bar heights from the
+-- size tokens, gaps from the spacing scale, and the name row from the measured text. A
+-- literal row height would clip the name the moment the font outgrows it.
+---------------------------------------------------------------------------
+local INFO_FONT = "lg"  -- font size token suffix, shared by name and level
+
+local function metrics()
+    return {
+        width    = T:GetToken("sizeUnitFrameW"),
+        infoGap  = T:GetToken("spaceXs"),
+        barGap   = T:GetToken("spaceXxs"),
+        health   = T:GetToken("sizeUnitHealthBar"),
+        resource = T:GetToken("sizeUnitPowerBar"),
+        fontSize = T:GetFontSize(INFO_FONT),
+    }
+end
+
+---------------------------------------------------------------------------
+-- Max level for this client
+--
+-- No single API covers every flavour: retail and recent classic builds expose
+-- GetMaxLevelForPlayerExpansion, older ones only the MAX_PLAYER_LEVEL global. Probe in
+-- order and return nil when none answers — an unknown cap shows the level rather than
+-- hiding it, since a visible level is the safer wrong answer.
+---------------------------------------------------------------------------
+local function maxPlayerLevel()
+    if type(GetMaxLevelForPlayerExpansion) == "function" then
+        local lvl = GetMaxLevelForPlayerExpansion()
+        if type(lvl) == "number" and lvl > 0 then return lvl end
+    end
+    if type(GetMaxPlayerLevel) == "function" then
+        local lvl = GetMaxPlayerLevel()
+        if type(lvl) == "number" and lvl > 0 then return lvl end
+    end
+    if type(MAX_PLAYER_LEVEL_TABLE) == "table" and type(GetExpansionLevel) == "function" then
+        local lvl = MAX_PLAYER_LEVEL_TABLE[GetExpansionLevel()]
+        if type(lvl) == "number" and lvl > 0 then return lvl end
+    end
+    if type(MAX_PLAYER_LEVEL) == "number" and MAX_PLAYER_LEVEL > 0 then
+        return MAX_PLAYER_LEVEL
+    end
+    return nil
+end
+
 ---------------------------------------------------------------------------
 -- Player frame widget
 ---------------------------------------------------------------------------
 local PlayerFrame = {}
 
+--- The height the name row needs at the current font tokens. The row hugs its measured
+--- text; before it has any text to measure, fall back to the font token so the frame is
+--- never built collapsed.
+-- @return number
+function PlayerFrame:_infoHeight()
+    local measured = self._infoRow:GetHeight() or 0
+    if measured > 0 then return SuuUI.Pixel.Ceil(measured) end
+    local m = metrics()
+    return SuuUI.Pixel.Ceil(m.fontSize + m.barGap)
+end
+
+--- The bar group's height: both bar tokens plus the gap between them.
+-- @return number
+function PlayerFrame:_barsHeight()
+    local m = metrics()
+    return m.health + m.barGap + m.resource
+end
+
+--- The frame's intrinsic size, entirely token-derived: width from the size token, height
+--- from the name row plus the bar group. Sizing flows one way — content sets the frame's
+--- height, never the reverse — so there is no layout cycle to resolve.
+-- @return number, number  width, height
+function PlayerFrame:GetPreferredSize()
+    local m = metrics()
+    return m.width, self:_infoHeight() + m.infoGap + self:_barsHeight()
+end
+
+--- Resizes the wrapper to the current preferred size. The bar group fills what the name
+--- row leaves, so the bars keep their token heights and only the row absorbs a font change.
+function PlayerFrame:_syncSize()
+    local w, h = self:GetPreferredSize()
+    if math.abs((self._wrapper:GetWidth() or 0) - w) > 0.5
+       or math.abs((self._wrapper:GetHeight() or 0) - h) > 0.5 then
+        self._wrapper:SetSize(w, h)
+    end
+end
+
+--- Re-reads every token-derived metric. Bound to SUUUI_THEME_CHANGED, so editing a size
+--- token or a font slider re-lays the frame instead of waiting for a reload.
+function PlayerFrame:ApplyTheme()
+    local m = metrics()
+    self._root:SetGap(m.infoGap)
+    self._infoRow:SetGap(m.infoGap)
+    self._bars:SetGap(m.barGap)
+    self._bars:SetChildProps(self._healthBar,   { width = "fill", height = m.health })
+    self._bars:SetChildProps(self._resourceBar, { width = "fill", height = m.resource })
+    self._root:SetChildProps(self._bars, { width = "fill", height = self:_barsHeight() })
+    self._healthBar:SetBgColor(barTrackColor())
+    self._resourceBar:SetBgColor(barTrackColor())
+    self:_syncSize()
+    self._root:Layout()
+end
+
 function PlayerFrame:Create(parent)
     local self = setmetatable({}, { __index = PlayerFrame })
+    local m = metrics()
 
-    local pad = T:GetToken("spaceXs") or 4
-    local gap = 2  -- tight gap between health and resource bars
-    local infoGap = 2  -- gap between info row and bars
-
-    -- Wrapper frame that holds everything (info row + bar background)
+    -- Bare grouping frame: no styling and no backdrop, so nothing draws behind the bars.
+    -- Sized up front because the containers below lay out against a real geometry; the
+    -- height is provisional until the name row has measured itself.
     self._wrapper = CreateFrame("Frame", nil, parent)
+    self._wrapper:SetSize(m.width, m.infoGap + m.health + m.barGap + m.resource)
 
-    -- Info row: name on left, level on right — sits ABOVE the bar background
+    -- Root column: info row on top, bar group below.
+    self._root = SuuUI.Layout:CreateContainer({
+        host   = self._wrapper,
+        layout = "flow",
+        dir    = "vertical",
+        gap    = m.infoGap,
+    })
+
+    -- Info row: name, then level immediately beside it. Both hug their own text, so the
+    -- level sits against the name instead of being pushed to the far edge.
     self._infoRow = SuuUI.Layout:CreateContainer({
-        parent  = self._wrapper,
-        layout  = "flow",
-        dir     = "horizontal",
-        gap     = T:GetToken("spaceXs") or 4,
-        align   = "center",
+        parent = self._wrapper,
+        layout = "flow",
+        dir    = "horizontal",
+        gap    = m.infoGap,
+        align  = "center",
     })
 
     self._nameText = C.Text({
         text  = "",
-        size  = "sm",
+        size  = INFO_FONT,
         color = "text",
     }, self._infoRow:GetFrame())
 
     self._levelText = C.Text({
         text  = "",
-        size  = "sm",
+        size  = INFO_FONT,
         color = "textMuted",
     }, self._infoRow:GetFrame())
 
-    self._infoRow:Add(self._nameText, { width = "fill" })
-    self._infoRow:Add(self._levelText)
+    self._infoRow:Add(self._nameText,  { width = "auto" })
+    self._infoRow:Add(self._levelText, { width = "auto" })
 
-    -- Anchor info row at the top of the wrapper
-    local infoFrame = self._infoRow:GetFrame()
-    infoFrame:SetPoint("TOPLEFT", self._wrapper, "TOPLEFT", 0, 0)
-    infoFrame:SetPoint("TOPRIGHT", self._wrapper, "TOPRIGHT", 0, 0)
-    infoFrame:SetHeight(14)
-
-    -- Background frame for just the bars (no name row)
-    self._bg = C.Frame({
-        variant = "bgAlt",
-        border  = true,
-    }, self._wrapper)
-
-    -- Anchor bar background below the info row
-    self._bg:GetFrame():SetPoint("TOPLEFT", infoFrame, "BOTTOMLEFT", 0, -infoGap)
-    self._bg:GetFrame():SetPoint("TOPRIGHT", infoFrame, "BOTTOMRIGHT", 0, -infoGap)
-    self._bg:GetFrame():SetPoint("BOTTOMLEFT", self._wrapper, "BOTTOMLEFT", 0, 0)
-    self._bg:GetFrame():SetPoint("BOTTOMRIGHT", self._wrapper, "BOTTOMRIGHT", 0, 0)
-
-    -- Attach the container inside the background frame (bars only)
-    self._container = SuuUI.Layout:CreateContainer({
-        host    = self._bg:GetFrame(),
-        layout  = "flow",
-        dir     = "vertical",
-        gap     = gap,
-        fill    = true,
-        padding = { top = pad, right = pad, bottom = pad, left = pad },
+    -- Bar group: also frameless. The bars are the only painted surfaces in the widget.
+    self._bars = SuuUI.Layout:CreateContainer({
+        parent = self._wrapper,
+        layout = "flow",
+        dir    = "vertical",
+        gap    = m.barGap,
     })
 
-    -- Health bar
     self._healthBar = C.StatusBar({
         fillColor = HEALTH_COLOR,
-        bgColor   = "colorBg",
+        bgColor   = barTrackColor(),
         border    = false,
-    }, self._bg:GetFrame())
+    }, self._bars:GetFrame())
 
-    -- Resource bar
     self._resourceBar = C.StatusBar({
         fillColor = POWER_COLORS[0],  -- default to mana
-        bgColor   = "colorBg",
+        bgColor   = barTrackColor(),
         border    = false,
-    }, self._bg:GetFrame())
+    }, self._bars:GetFrame())
 
-    -- Assemble layout (bars only — info row is outside)
-    self._container:Add(self._healthBar,   { width = "fill", height = 16 })
-    self._container:Add(self._resourceBar, { width = "fill", height = 10 })
+    -- Bar heights are stated, not filled: the frame's height is derived FROM them, so a
+    -- bar that sized itself from the frame would close the loop.
+    self._bars:Add(self._healthBar,   { width = "fill", height = m.health })
+    self._bars:Add(self._resourceBar, { width = "fill", height = m.resource })
+
+    -- No height on the info row: it hugs its own text, which is what makes the frame
+    -- follow the font tokens. The wrapper then tracks the row through SIZE_CHANGED.
+    self._root:Add(self._infoRow, { width = "fill" })
+    self._root:Add(self._bars,    { width = "fill", height = self:_barsHeight() })
+
+    S:Connect(self._infoRow, S.SIGNALS.SIZE_CHANGED, function()
+        self:_syncSize()
+    end)
+
+    -- Size, spacing and font tokens are all user-editable, so the frame re-derives its
+    -- metrics on a theme change rather than holding the values it was built with.
+    self._themeId = "unitframes_player_" .. tostring(self._wrapper)
+    SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end, self._themeId)
 
     -- WoW event frame for data updates
     self._events = CreateFrame("Frame")
@@ -112,13 +223,20 @@ function PlayerFrame:Create(parent)
     self._events:RegisterEvent("UNIT_POWER_UPDATE")
     self._events:RegisterEvent("UNIT_MAXPOWER")
     self._events:RegisterEvent("UNIT_DISPLAYPOWER")
+    self._events:RegisterEvent("UNIT_LEVEL")
+    self._events:RegisterEvent("PLAYER_LEVEL_UP")
     self._events:RegisterEvent("PLAYER_ENTERING_WORLD")
     self._events:SetScript("OnEvent", function(_, event, unit, ...)
         if event == "PLAYER_ENTERING_WORLD" then
             self:UpdateAll()
+        elseif event == "PLAYER_LEVEL_UP" then
+            -- Carries the new level as its first argument, ahead of UnitLevel updating.
+            self:UpdateInfo(unit)
         elseif unit == "player" or event == "UNIT_DISPLAYPOWER" then
             if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
                 self:UpdateHealth()
+            elseif event == "UNIT_LEVEL" then
+                self:UpdateInfo()
             elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
                 self:UpdatePower()
             end
@@ -126,6 +244,7 @@ function PlayerFrame:Create(parent)
     end)
 
     self:UpdateAll()
+    self:_syncSize()
     return self
 end
 
@@ -135,11 +254,25 @@ function PlayerFrame:UpdateAll()
     self:UpdatePower()
 end
 
-function PlayerFrame:UpdateInfo()
+--- Refreshes name and level. The level is shown only below the level cap: at max level
+--- it carries no information and only adds clutter.
+-- @param level number|nil  Overrides UnitLevel, for PLAYER_LEVEL_UP's payload
+function PlayerFrame:UpdateInfo(level)
     local name = UnitName("player") or ""
-    local level = UnitLevel("player") or 0
     self._nameText:SetText(name)
-    self._levelText:SetText(tostring(level))
+
+    level = level or UnitLevel("player") or 0
+    local cap = maxPlayerLevel()
+    if cap and level >= cap then
+        self._levelText:SetText("")
+        self._levelText:Hide()
+    else
+        self._levelText:SetText(tostring(level))
+        self._levelText:Show()
+    end
+
+    -- Both texts hug their content, so the row has to re-measure after a text change.
+    self._infoRow:Layout()
 end
 
 function PlayerFrame:UpdateHealth()
@@ -164,10 +297,11 @@ function PlayerFrame:GetFrame()
 end
 
 function PlayerFrame:GetContainer()
-    return self._container
+    return self._root
 end
 
 function PlayerFrame:Destroy()
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._themeId)
     self._events:UnregisterAllEvents()
     self._events:Hide()
     self._nameText:Destroy()
@@ -175,8 +309,8 @@ function PlayerFrame:Destroy()
     self._healthBar:Destroy()
     self._resourceBar:Destroy()
     self._infoRow:Destroy()
-    self._container:Destroy()
-    self._bg:Destroy()
+    self._bars:Destroy()
+    self._root:Destroy()
     self._wrapper:Hide()
     self._wrapper = nil
 end
@@ -234,10 +368,8 @@ local plugin = SuuUI:CreatePlugin({
             local root = SuuUI.UIRoot:GetRootContainer()
             p._playerFrame = PlayerFrame:Create(root:GetFrame())
 
-            -- Size the frame explicitly (MoveableFrame handles positioning)
-            -- Height: 14 (info row) + 2 (infoGap) + 4 (pad top) + 16 (health) + 2 (gap) + 10 (resource) + 4 (pad bottom) = 52
+            -- Size comes from the widget's own layout metrics — no magic numbers here.
             local frame = p._playerFrame:GetFrame()
-            frame:SetSize(180, 52)
 
             -- Player-facing game UI, so it belongs on the content rung — stated through the
             -- library's layer system rather than left to inherit, so a settings window or a

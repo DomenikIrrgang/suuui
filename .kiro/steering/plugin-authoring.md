@@ -697,5 +697,10 @@ Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
 9. **NEVER call raw WoW UI API in plugin UI code. Compose components and containers.**
 10. **NEVER use Blizzard frame scripts for UI wiring. Connect to UISignals instead.**
 11. **If a component is missing, build it in `Components/` — don't inline raw frames.**
-12. **Test the UI you build.** A new component is not finished without a spec in
+12. **NEVER hardcode a visual value.** Sizes, spacing, colours, durations and font sizes
+    come from theme tokens — add the token to both built-in themes and to
+    `ThemeTokens.lua` if it does not exist yet, then re-derive on `SUUUI_THEME_CHANGED`.
+    Game facts (class colours, power colours, level caps) are the exception. See
+    "No Magic Numbers" in `coding-standards.md`.
+13. **Test the UI you build.** A new component is not finished without a spec in
     `Tests/spec/`. Run `lua Tests/run.lua` before calling a change done. See `TESTING.md`.

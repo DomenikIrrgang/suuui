@@ -139,6 +139,57 @@ describe("Components.StatusBar", function()
         end)
     end)
 
+    describe("borderless fill geometry", function()
+        it("fills the whole box at 100%, with no track showing around it", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, value = 100, max = 100,
+                                        border = false }, host)
+            H.mount(bar)
+            local barBox, fillBox = H.box(bar), H.box(bar._fillFrame)
+            expect(fillBox.left).eq(barBox.left)
+            expect(fillBox.right).eq(barBox.right)
+            expect(fillBox.top).eq(barBox.top)
+            expect(fillBox.bottom).eq(barBox.bottom)
+        end)
+
+        it("an empty bar's track covers exactly what a full fill would", function()
+            local empty = H.C.StatusBar({ w = 100, h = 16, value = 0, max = 100,
+                                          border = false }, host)
+            local full  = H.C.StatusBar({ w = 100, h = 16, value = 100, max = 100,
+                                          border = false }, host)
+            H.mount(empty)
+            H.mount(full)
+            -- The track is the bar frame itself, so the two footprints must agree: an
+            -- inset fill is what made an empty bar look wider than a filled one.
+            H.expectSize(empty, H.box(full._fillFrame).width, H.box(full._fillFrame).height)
+        end)
+
+        it("keeps the border inset when a border is drawn", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, value = 100, max = 100,
+                                        border = true }, host)
+            H.mount(bar)
+            local bw = H.SuuUI.Pixel.Line(H.token("borderWidth"))
+            local barBox, fillBox = H.box(bar), H.box(bar._fillFrame)
+            expect(fillBox.left).eq(barBox.left + bw)
+            expect(fillBox.top).eq(barBox.top + bw)
+            expect(fillBox.height).eq(barBox.height - bw * 2)
+        end)
+
+        it("paints the background over the whole box when borderless", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, border = false }, host)
+            H.mount(bar)
+            local bd = H.frameOf(bar)._backdrop
+            expect(bd.insets.left).eq(0)
+            expect(bd.insets.top).eq(0)
+        end)
+
+        it("insets the background by the border width when bordered", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, border = true }, host)
+            H.mount(bar)
+            local bw = H.SuuUI.Pixel.Line(H.token("borderWidth"))
+            expect(H.frameOf(bar)._backdrop.insets.left).eq(bw)
+        end)
+    end)
+
     describe("colour", function()
         it("SetFillColor changes the bar texture colour", function()
             local bar = H.C.StatusBar({ w = 100, h = 16, value = 50, max = 100 }, host)

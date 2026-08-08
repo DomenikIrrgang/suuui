@@ -52,6 +52,21 @@ function ContMeta:SetSize(w, h)
     self:Layout()
 end
 
+--- Sets the gap between children and re-runs layout.
+-- Gaps come from spacing tokens, which are user-editable, so anything that reads a token
+-- at build time needs a way to re-state it when the theme changes.
+-- @param gap number
+function ContMeta:SetGap(gap)
+    self._gap = gap or 0
+    self:Layout()
+end
+
+--- Returns the current gap between children.
+-- @return number
+function ContMeta:GetGap()
+    return self._gap
+end
+
 --- Shows the container. Emits VISIBILITY_CHANGED.
 function ContMeta:Show()
     self._frame:Show()
@@ -238,9 +253,15 @@ function ContMeta:GetContentSize()
 
         local maxH, totalW = 0, pad.left + pad.right
         for i, child in ipairs(self._children) do
+            local props = child._layoutProps or {}
+            -- A content-hug child is measured, not read back: its pinned width is
+            -- whatever the last pass assigned, which predates any text change.
+            local w = (props.width == "auto")
+                      and SuuUI._FlowLayout.NaturalWidth(child)
+                      or (child:GetWidth() or 0)
             local h = child:GetHeight() or 0
             if h > maxH then maxH = h end
-            totalW = totalW + (child:GetWidth() or 0)
+            totalW = totalW + w
             if i < n then totalW = totalW + gap end
         end
         return pxceil(totalW), pxceil(maxH + pad.top + pad.bottom)

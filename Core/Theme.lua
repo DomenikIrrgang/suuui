@@ -112,6 +112,21 @@ function M:GetColorCode(key)
         floor(c[1] * 255 + 0.5), floor(c[2] * 255 + 0.5), floor(c[3] * 255 + 0.5))
 end
 
+-- Maps the component size keys onto the font size tokens. One table, so nothing has to
+-- rebuild a token name from a size key and get the casing wrong.
+local fontSizeTokens = {
+    sm = "fontSizeSm", md = "fontSizeMd", lg = "fontSizeLg", xl = "fontSizeXl",
+}
+
+--- Returns the resolved font size for a component size key ("sm".."xl").
+-- Use this instead of composing the token name yourself when you need the pixel size of
+-- the same step a Text element renders at.
+-- @param sizeKey string  "sm"|"md"|"lg"|"xl"; unknown keys fall back to md
+-- @return number
+function M:GetFontSize(sizeKey)
+    return resolved[fontSizeTokens[sizeKey] or "fontSizeMd"]
+end
+
 --- Returns a control height token floored against the current font metrics.
 -- Font sizes are user-editable, so a control that holds text must not be pinned to a
 -- fixed height or the text clips once the font grows past it. Controls with no text

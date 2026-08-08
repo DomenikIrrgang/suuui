@@ -6,6 +6,26 @@ local S = SuuUI.UISignals
 local StatusBarMeta = {}
 StatusBarMeta.__index = StatusBarMeta
 
+--- How far the fill and the track sit inside the bar frame.
+--- A bordered bar insets both by the border width so neither paints under the edge. A
+--- borderless bar insets by nothing: there is no edge to avoid, and an inset there would
+--- leave the track showing as a hairline ring around a full bar and make an empty bar a
+--- pixel wider on every side than the fill that replaces it.
+-- @return number
+function StatusBarMeta:_inset()
+    if not self._showBorder then return 0 end
+    return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
+end
+
+--- Re-anchors the fill to the current inset. Border width is a token, so this has to be
+--- restated on a theme change rather than fixed at construction.
+function StatusBarMeta:_anchorFill()
+    local inset = self:_inset()
+    self._fillFrame:ClearAllPoints()
+    self._fillFrame:SetPoint("TOPLEFT", self._f, "TOPLEFT", inset, -inset)
+    self._fillFrame:SetPoint("BOTTOMLEFT", self._f, "BOTTOMLEFT", inset, inset)
+end
+
 --- Recolours the bar fill and background.
 function StatusBarMeta:_paint()
     local B = SuuUI.Backdrop
@@ -27,8 +47,8 @@ function StatusBarMeta:_updateFill()
     -- Fill is positioned by the host container's anchor strategy. We set the fill
     -- frame's width as a fraction of the outer frame's width.
     local totalW = self._f:GetWidth() or 0
-    local bw = SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
-    local innerW = max(totalW - bw * 2, 0)
+    local inset  = self:_inset()
+    local innerW = max(totalW - inset * 2, 0)
     local fillW = SuuUI.Pixel.Floor(innerW * pct)
     if fillW < 0.5 then
         self._fillFrame:Hide()
@@ -43,7 +63,9 @@ function StatusBarMeta:ApplyTheme()
     SuuUI.Backdrop.Apply(self._f, {
         bg     = self._bgColor or "colorBgAlt",
         border = self._showBorder and "colorBorder" or false,
+        inset  = self:_inset(),
     })
+    self:_anchorFill()
     self:_paint()
     self:_updateFill()
 end
@@ -126,11 +148,9 @@ function SuuUI.Components.StatusBar(props, parent)
     if props.w then f:SetWidth(props.w) end
     if props.h then f:SetHeight(props.h) end
 
-    -- Fill texture frame: a child frame holding a texture, anchored inside the border
+    -- Fill texture frame: a child frame holding a texture, anchored by _anchorFill() once
+    -- the handle exists, since the inset depends on whether the bar has a border.
     local fillFrame = CreateFrame("Frame", nil, f)
-    local bw = SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1)
-    fillFrame:SetPoint("TOPLEFT", f, "TOPLEFT", bw, -bw)
-    fillFrame:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", bw, bw)
     fillFrame:SetWidth(0)
 
     local bar = fillFrame:CreateTexture(nil, "ARTWORK")

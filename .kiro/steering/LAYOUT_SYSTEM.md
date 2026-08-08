@@ -77,6 +77,7 @@ container:Add(childFrame, {
 ```
 
 **Spacing Tokens:**
+- `spaceXxs` = 2px — hairline gaps (bars stacked inside one widget)
 - `spaceXs` = 4px  — tight spacing (list gaps, compact UIs)
 - `spaceSm` = 8px  — standard spacing (most containers)
 - `spaceMd` = 12px — roomier rows and insets
@@ -99,6 +100,9 @@ component derive it, or read the token when the container needs the number:
 | `sizeTitleBar` | window title strip |
 | `sizeIcon` | icons, resize grip, scroll thumb minimum |
 | `sizeScrollbar` | scrollbar track and thumb width |
+| `sizeUnitFrameW` | unit frame width |
+| `sizeUnitHealthBar` | unit frame health bar height |
+| `sizeUnitPowerBar` | unit frame resource bar height |
 
 `Theme:GetControlHeight(sizeKey, fontKey)` returns the token floored against the font
 metrics — use it for anything that holds text. Read the token directly for elements that
@@ -111,8 +115,9 @@ do not (`GetToken("sizeControlSm")`).
 | Property | Values | Behavior |
 |----------|--------|----------|
 | `width` | `"fill"` | Stretch to container width (respects padding) |
+| `width` | `"auto"` | Hug the child's own content, re-measured every pass |
 | `width` | `number` | Fixed pixel width |
-| `width` | omit | Use child's natural width |
+| `width` | omit | Use child's natural width, as last assigned |
 | `height` | `"fill"` | Distribute available space (flow) or fill height |
 | `height` | `number` | Fixed pixel height |
 | `height` | omit | Use child's natural height |
@@ -132,6 +137,18 @@ local row = SuuUI.Layout:CreateContainer({
 })
 row:Add(label,  { width = "fill" })   -- eats the slack
 row:Add(toggle, { width = 36, height = 18 })  -- lands on the right, vertically centred
+```
+
+For the opposite arrangement — two labels that sit **against** each other rather than at
+opposite edges (a unit frame's name and level) — give both `width = "auto"`. Omitting
+`width` is not the same thing: a child keeps whatever width the previous pass pinned on
+it, so a font string first laid out while empty stays zero wide once its text arrives.
+`"auto"` re-measures the content on every pass, so it survives a text change:
+
+```lua
+row:Add(nameText,  { width = "auto" })
+row:Add(levelText, { width = "auto" })   -- one gap right of the name
+-- After changing either text, re-run the row: row:Layout()
 ```
 
 **Container sizing:**

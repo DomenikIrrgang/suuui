@@ -1009,7 +1009,10 @@ document it here.
 - `Backdrop` — `SuuUI.Backdrop.Apply(frame, { bg, border, borderWidth })` builds the
   standard bg+border backdrop; `SetBg` / `SetBorder` recolour without rebuilding it.
   `bg`/`border` take a token key, a literal `{r,g,b,a}`, or `false`/nil for fully
-  transparent. `Theme:ApplyToFrame` delegates to it.
+  transparent. `Theme:ApplyToFrame` delegates to it. `inset` controls how far the
+  background sits inside the frame and defaults to the border width; a borderless surface
+  that must cover its whole box passes `inset = 0`, which is what keeps a frameless
+  `StatusBar`'s track and fill on the same edges.
 - `Base` — `SuuUI.Components.InstallBase(meta, field)` installs `GetWidth` `GetHeight`
   `IsShown` `GetFrame` `SetSize` `Show` `Hide` onto a component metatable, filling only
   the gaps so a custom override survives. `SetSize` never emits `SIZE_CHANGED`.

@@ -10,6 +10,8 @@ describe("Plugins.UnitFrames", function()
         state.unitPower = 60
         state.unitPowerMax = 100
         state.unitPowerType = 0  -- Mana
+        state.unitLevel = 42     -- below the cap, so the level is visible by default
+        state.maxPlayerLevel = 60
         state.reloadUICalled = 0
         H.setup()
         host = H.parent(1024, 768)
@@ -72,20 +74,36 @@ describe("Plugins.UnitFrames", function()
             expect(plugin._playerFrame:GetFrame()).notNil()
         end)
 
-        it("GetFrame returns the wrapper, not the bar background", function()
+        it("GetFrame returns the wrapper that holds the info row and the bars", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
             local topFrame = pf:GetFrame()
             expect(topFrame).eq(pf._wrapper)
-            expect(topFrame).neq(pf._bg:GetFrame())
+            expect(topFrame).neq(pf._bars:GetFrame())
+            expect(topFrame).neq(pf._infoRow:GetFrame())
         end)
 
-        it("frame is sized to fit info row + gap + bar area", function()
+        it("frame is sized to fit info row + gap + bar group", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local frame = pf:GetFrame()
+            local infoH = H.lineHeight(H.token("fontSizeLg"))
+            H.expectSize(frame, H.token("sizeUnitFrameW"),
+                infoH + H.token("spaceXs")
+                + H.token("sizeUnitHealthBar") + H.token("spaceXxs")
+                + H.token("sizeUnitPowerBar"))
+        end)
+
+        it("reports its intrinsic size, so the plugin needs no magic numbers", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local frame = plugin._playerFrame:GetFrame()
-            local w, h = frame:GetSize()
-            expect(w).eq(180)
-            expect(h).eq(52)
+            local w, h = plugin._playerFrame:GetPreferredSize()
+            H.expectSize(frame, w, h)
+        end)
+
+        it("takes its width from the unit frame size token", function()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            H.expectSize(pf:GetFrame(), H.token("sizeUnitFrameW"), nil)
         end)
     end)
 
@@ -97,65 +115,150 @@ describe("Plugins.UnitFrames", function()
             expect(infoParent).eq(pf._wrapper)
         end)
 
-        it("bar background is parented to the wrapper", function()
+        it("bar group is parented to the wrapper", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            local bgParent = pf._bg:GetFrame():GetParent()
-            expect(bgParent).eq(pf._wrapper)
+            expect(pf._bars:GetFrame():GetParent()).eq(pf._wrapper)
         end)
 
-        it("info row is anchored at the top of the wrapper", function()
+        it("info row sits at the top of the wrapper", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            local infoFrame = pf._infoRow:GetFrame()
-            local n = infoFrame:GetNumPoints()
-            local found = false
-            for i = 1, n do
-                local point, relativeTo, relativePoint = infoFrame:GetPoint(i)
-                if point == "TOPLEFT" and relativeTo == pf._wrapper and relativePoint == "TOPLEFT" then
-                    found = true
-                end
-            end
-            expect(found).eq(true)
+            H.expectOffset(pf._infoRow, pf._wrapper, 0, 0)
+            H.expectSize(pf._infoRow, H.token("sizeUnitFrameW"),
+                H.lineHeight(H.token("fontSizeLg")))
         end)
 
-        it("bar background is anchored below the info row", function()
+        it("bar group sits below the info row, one info gap down", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            local bgFrame = pf._bg:GetFrame()
-            local infoFrame = pf._infoRow:GetFrame()
-            local n = bgFrame:GetNumPoints()
-            local found = false
-            for i = 1, n do
-                local point, relativeTo, relativePoint = bgFrame:GetPoint(i)
-                if point == "TOPLEFT" and relativeTo == infoFrame and relativePoint == "BOTTOMLEFT" then
-                    found = true
-                end
-            end
-            expect(found).eq(true)
+            local infoH = H.lineHeight(H.token("fontSizeLg"))
+            H.expectOffset(pf._bars, pf._wrapper, 0, infoH + H.token("spaceXs"))
+            H.expectSize(pf._bars, H.token("sizeUnitFrameW"),
+                H.token("sizeUnitHealthBar") + H.token("spaceXxs")
+                + H.token("sizeUnitPowerBar"))
         end)
 
-        it("health and resource bars are parented to the bar background", function()
+        it("health and resource bars are parented to the bar group", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            local bgFrame = pf._bg:GetFrame()
-            expect(pf._healthBar:GetFrame():GetParent()).eq(bgFrame)
-            expect(pf._resourceBar:GetFrame():GetParent()).eq(bgFrame)
+            local barsFrame = pf._bars:GetFrame()
+            expect(pf._healthBar:GetFrame():GetParent()).eq(barsFrame)
+            expect(pf._resourceBar:GetFrame():GetParent()).eq(barsFrame)
         end)
 
-        it("name text is not inside the bar background", function()
+        it("bars span the full frame width — no inset plate around them", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            local bgFrame = pf._bg:GetFrame()
-            -- Walk up from nameText — should NOT find bgFrame as ancestor
-            local nameFrame = pf._nameText:GetFrame()
-            local parent = nameFrame:GetParent()
-            local found_bg = false
-            while parent do
-                if parent == bgFrame then found_bg = true; break end
-                parent = parent.GetParent and parent:GetParent() or nil
-            end
-            expect(found_bg).eq(false)
+            local wrapBox = H.box(pf._wrapper)
+            local healthBox = H.box(pf._healthBar)
+            expect(healthBox.left).eq(wrapBox.left)
+            expect(healthBox.right).eq(wrapBox.right)
+        end)
+
+        it("bar heights come from the unit bar size tokens", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            H.expectSize(pf._healthBar, H.token("sizeUnitFrameW"), H.token("sizeUnitHealthBar"))
+            H.expectSize(pf._resourceBar, H.token("sizeUnitFrameW"), H.token("sizeUnitPowerBar"))
+            expect(H.token("sizeUnitHealthBar")).as("health is the taller bar")
+                .gt(H.token("sizeUnitPowerBar"))
+        end)
+
+        it("resource bar sits directly under the health bar", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local hb, rb = H.box(pf._healthBar), H.box(pf._resourceBar)
+            expect(rb.top).as("one bar gap below the health bar")
+                .eq(hb.bottom + H.token("spaceXxs"))
+        end)
+
+        it("bars reach the bottom of the frame", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            expect(H.box(pf._resourceBar).bottom).eq(H.box(pf._wrapper).bottom)
+        end)
+
+        it("re-derives the layout when a size token changes", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local T = H.SuuUI.Theme
+            local before = select(2, pf:GetPreferredSize())
+
+            -- A user theme is required: built-ins are read-only by design.
+            T:CreateUserTheme("TokenProbe", T:GetActive())
+            T:SetActive("TokenProbe")
+            T:SetUserToken("TokenProbe", "sizeUnitHealthBar", H.token("sizeUnitHealthBar") + 12)
+
+            H.expectSize(pf._healthBar, nil, H.token("sizeUnitHealthBar"))
+            H.expectSize(pf:GetFrame(), H.token("sizeUnitFrameW"), before + 12)
+        end)
+    end)
+
+    describe("minimal styling", function()
+        it("has no backing plate frame behind the bars", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            expect(pf._bg).isNil()
+        end)
+
+        it("paints no background on the wrapper", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            expect(H.backdropColor(pf._wrapper)).isNil()
+        end)
+
+        it("paints no background behind the name row", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            expect(H.backdropColor(pf._infoRow)).isNil()
+            expect(H.backdropColor(pf._bars)).isNil()
+        end)
+
+        it("uses a translucent track behind a bar fill, not the opaque panel colour", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            local track = H.backdropColor(pf._healthBar)
+            expect(track).notNil()
+            expect(track[4]).as("track opacity comes from the token")
+                .near(H.token("opacityBarTrack"), 0.001)
+            expect(track[4]).lt(H.token("opacityPanel"))
+        end)
+
+        it("an empty resource bar still covers the bar's full box", function()
+            state.unitPowerType = 1  -- rage, and a warrior starts at 0
+            state.unitPower = 0
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._resourceBar:GetPercent()).eq(0)
+            expect(pf._resourceBar._fillFrame:IsShown()).as("no fill at 0 rage").eq(false)
+            -- The track is the bar frame itself, so the empty bar is still a full-width
+            -- strip rather than a sliver that does not line up with the health bar.
+            H.expectSize(pf._resourceBar, H.token("sizeUnitFrameW"), H.token("sizeUnitPowerBar"))
+            expect(H.box(pf._resourceBar).left).eq(H.box(pf._healthBar).left)
+            expect(H.box(pf._resourceBar).right).eq(H.box(pf._healthBar).right)
+        end)
+
+        it("a full bar's fill lines up with the empty bar's track", function()
+            state.unitPowerType = 1
+            state.unitPower = 0
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            local emptyBox = H.box(pf._resourceBar)
+            -- Same bar, now full: the fill must land on the track's own edges
+            pf._resourceBar:SetValue(pf._resourceBar:GetMax())
+            local fillBox = H.box(pf._resourceBar._fillFrame)
+            expect(fillBox.left).eq(emptyBox.left)
+            expect(fillBox.right).eq(emptyBox.right)
+            expect(fillBox.top).eq(emptyBox.top)
+            expect(fillBox.bottom).eq(emptyBox.bottom)
+        end)
+
+        it("draws no border around the bars", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            expect(H.borderColor(pf._healthBar)[4]).eq(0)
+            expect(H.borderColor(pf._resourceBar)[4]).eq(0)
         end)
     end)
 
@@ -226,10 +329,92 @@ describe("Plugins.UnitFrames", function()
             expect(pf._nameText:GetText()).eq("Testchar")
         end)
 
-        it("shows the player level", function()
-            local plugin = H.SuuUI.Plugins:Get("unit_frames")
-            local pf = plugin._playerFrame
+        it("shows the level beside the name below max level", function()
+            state.unitLevel = 42
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._levelText:GetText()).eq("42")
+            expect(pf._levelText:IsShown()).eq(true)
+        end)
+
+        it("puts the level immediately right of the name, not at the far edge", function()
+            state.unitLevel = 42
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            local nameBox, levelBox = H.box(pf._nameText), H.box(pf._levelText)
+            local gap = H.token("spaceXs")
+            expect(levelBox.left).as("one gap right of the name").eq(nameBox.right + gap)
+            expect(levelBox.right).as("nowhere near the frame's right edge")
+                .lt(H.box(pf._wrapper).right - 10)
+        end)
+
+        it("starts the name at the left edge of the frame", function()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(H.box(pf._nameText).left).eq(H.box(pf._wrapper).left)
+        end)
+
+        it("sizes the name to its own text rather than leaving it pinned at zero", function()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            H.expectSize(pf._nameText, H.textWidth("Testchar", H.token("fontSizeLg")), nil)
+            H.expectTextNotClipped(pf._nameText)
+        end)
+
+        it("hides the level at max level", function()
+            state.unitLevel = 60
+            state.maxPlayerLevel = 60
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._levelText:GetText()).eq("")
+            expect(pf._levelText:IsShown()).eq(false)
+        end)
+
+        it("hides the level above max level too", function()
+            state.unitLevel = 61
+            state.maxPlayerLevel = 60
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._levelText:IsShown()).eq(false)
+        end)
+
+        it("shows the level again when the cap moves up", function()
+            state.unitLevel = 60
+            state.maxPlayerLevel = 70
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
             expect(pf._levelText:GetText()).eq("60")
+            expect(pf._levelText:IsShown()).eq(true)
+        end)
+
+        it("collapses the level to zero width once hidden", function()
+            state.unitLevel = 60
+            state.maxPlayerLevel = 60
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._levelText:GetWidth()).eq(0)
+        end)
+
+        it("re-measures the level after a level-up", function()
+            state.unitLevel = 8
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            local narrow = pf._levelText:GetWidth()
+
+            state.unitLevel = 48
+            pf:UpdateInfo()
+            expect(pf._levelText:GetText()).eq("48")
+            expect(pf._levelText:GetWidth()).as("two digits are wider than one").gt(narrow)
+        end)
+
+        it("hides the level when PLAYER_LEVEL_UP reaches the cap", function()
+            state.unitLevel = 59
+            state.maxPlayerLevel = 60
+            H.setup()
+            local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+            expect(pf._levelText:IsShown()).eq(true)
+
+            -- The event carries the new level ahead of UnitLevel catching up
+            pf._events:GetScript("OnEvent")(pf._events, "PLAYER_LEVEL_UP", 60)
+            expect(pf._levelText:IsShown()).eq(false)
         end)
     end)
 

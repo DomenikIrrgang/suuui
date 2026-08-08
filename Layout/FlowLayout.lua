@@ -14,9 +14,26 @@ local function crossOffset(align, available, childSize)
     return 0
 end
 
+-- The width of a child's own content, free of whatever width a previous layout pinned
+-- on it. A font string reports GetStringWidth clamped to its assigned width, so a label
+-- that was first laid out while empty would keep reporting zero after its text arrives —
+-- the unbounded measurement is the only reading that survives a text change.
+-- @param child frame|fontstring
+-- @return number
+function M.NaturalWidth(child)
+    if child.GetUnboundedStringWidth then
+        return pxceil(child:GetUnboundedStringWidth() or 0)
+    elseif child.GetStringWidth then
+        return pxceil(child:GetStringWidth() or 0)
+    end
+    return snap(child:GetWidth() or 0)
+end
+
 local function resolveWidth(child, props, align, cw, vertical, fillSize)
     if props.width == "fill" then
         return vertical and cw or (fillSize or 0)
+    elseif props.width == "auto" then
+        return M.NaturalWidth(child)
     elseif type(props.width) == "number" then
         return snap(props.width)
     elseif vertical and align == "stretch" then
@@ -56,8 +73,9 @@ local function fillShare(availSpace, fillCount)
 end
 
 --- Applies flow layout to a container's children.
--- Child layout props: { width="fill"|number, height="fill"|number, align="start"|"center"|"end"|"stretch" }
--- "fill" distributes remaining space on the main axis; "stretch" fills the cross axis.
+-- Child layout props: { width="fill"|"auto"|number, height="fill"|number, align="start"|"center"|"end"|"stretch" }
+-- "fill" distributes remaining space on the main axis; "auto" hugs the child's own
+-- content width (re-measured every pass); "stretch" fills the cross axis.
 -- @param container table  Container handle
 function M.Apply(container)
     local children = container._children
@@ -85,7 +103,10 @@ function M.Apply(container)
             usedSpace = usedSpace
                 + naturalHeight(child, resolveWidth(child, props, align, cw, true, nil))
         else
-            usedSpace = usedSpace + snap(child:GetWidth() or 0)
+            -- Routed through resolveWidth so a content-hug child is measured here too:
+            -- summing its stale pinned width would mis-budget the row's fill space.
+            usedSpace = usedSpace
+                + resolveWidth(child, props, props.align or container._align, cw, false, nil)
         end
     end
 

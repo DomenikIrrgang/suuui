@@ -24,6 +24,10 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- Opacity, applied to the semantics below via { ref, alpha }
     opacityPanel     = 0.95,
     opacityOverlay   = 0.35,
+    -- How visible the empty part of a frameless bar is. It is the only surface a unit
+    -- frame bar has, so at 0 rage this is the whole widget: too low and the bar vanishes
+    -- against the game world.
+    opacityBarTrack  = 0.60,
 
     -- Tier 2: surfaces. { ref, alpha } takes the primitive's RGB with a token alpha,
     -- so panel translucency is one slider instead of four colour edits.
@@ -58,6 +62,7 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     fontFamilyMain      = "Friz Quadrata TT",
 
     -- Spacing scale, used for both gaps and padding
+    spaceXxs         = 2,
     spaceXs          = 4,
     spaceSm          = 8,
     spaceMd          = 12,
@@ -77,6 +82,13 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
+
+    -- Unit frames. Widths and bar heights belong here for the same reason sizeToggleW
+    -- does: they are design decisions, editable in the theme editor, and no layout file
+    -- should carry them as literals.
+    sizeUnitFrameW    = 234,
+    sizeUnitHealthBar = 30,
+    sizeUnitPowerBar  = 16,
 
     borderWidth      = 1,
 

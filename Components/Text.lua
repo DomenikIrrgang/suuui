@@ -1,7 +1,8 @@
 local abs = math.abs
 local S = SuuUI.UISignals
 
-local sizemap = { sm="fontSizeSm", md="fontSizeMd", lg="fontSizeLg", xl="fontSizeXl" }
+-- Size keys resolve through Theme:GetFontSize — the single map from "sm".."xl" onto the
+-- font size tokens. Colours still map here because they are Text-specific aliases.
 local colmap  = {
     text      = "colorText",
     muted     = "colorTextMuted",
@@ -100,8 +101,7 @@ function TextMeta:ApplyTheme()
     -- callback where an error would stop every later element restyling.
     local font  = self._font and SuuUI.Fonts:Path(self._font)
                   or T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
-    local skey  = sizemap[self._size] or "fontSizeMd"
-    local size  = T:GetToken(skey) or 13
+    local size  = T:GetFontSize(self._size) or 13
     local ckey  = colmap[self._color] or "colorText"
     local col   = T:GetToken(ckey) or {0.92, 0.92, 0.92, 1}
     self._fs:SetFont(font, size, self._flags or "")
