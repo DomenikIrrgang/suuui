@@ -87,4 +87,6 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     animFast         = 0.10,
     animMid          = 0.20,
     animSlow         = 0.35,
+    animBarFill      = 0.22,
+    animPopScale     = 1.06,
 })

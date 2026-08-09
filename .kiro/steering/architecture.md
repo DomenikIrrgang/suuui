@@ -33,6 +33,7 @@ SuuUI/
 ├── Animation/
 │   ├── Tween.lua         -- easing functions
 │   ├── Animator.lua      -- animation runner, chaining, sequencing
+│   ├── Transitions.lua   -- value-transition registry (instant, smooth, rate)
 │   └── Presets.lua       -- named animation presets (fadeIn, slideIn, etc.)
 ├── Layout/
 │   ├── Window.lua        -- draggable, resizable top-level window
@@ -470,6 +471,12 @@ sizeIcon      = 16   sizeScrollbar = 8          sizeToggleW   = 36
 
 borderWidth = 1
 animFast = 0.12    animMid = 0.22    animSlow = 0.38
+-- Bar fill: time for a full sweep. Its own token because bar smoothing reads as
+-- physical motion and wants to be slower than a panel transition, and a player who
+-- wants bars to snap should not have to speed up every dropdown to get it. 0 disables.
+animBarFill  = 0.28   -- Modern: 0.22. Read by StatusBar transitions (ctx:Duration).
+-- Press pop: how far a button scales. 1 disables the pop without code changes.
+animPopScale = 1.08   -- Modern: 1.06. Read by Presets.ScalePop.
 ```
 
 Every token has a consumer. A token nothing reads is worse than an absent one: it shows
@@ -985,7 +992,16 @@ children; container `fill` for parent-tracking; nested containers as first-class
 
 Pure stateless functions. `Tween.Ease(t, easingType)` where `t` is 0–1.
 
-Types: `linear`, `easeIn`, `easeOut`, `easeInOut`, `spring`
+Types: `linear`, `easeIn`, `easeOut`, `easeInOut`, `easeOutBack`, `spring`
+
+`easeOutBack` overshoots past the target then settles back. `spring` is an alias for it —
+the name predates this addon — so new code reaches for `easeOutBack` and old code keeps
+working. A real spring would be a damped oscillator with a settle time rather than a fixed
+duration, which this is not.
+
+`Tween.Has(name)` returns whether an easing name is registered. Unknown names fall back to
+linear inside `Ease` rather than erroring, because the function runs inside the animation
+tick and throwing there would take the client's frame with it.
 
 ### Animator (`Animation/Animator.lua`)
 
@@ -996,23 +1012,129 @@ All active animations share one update tick — minimal overhead.
 -- Single animation
 local anim = SuuUI.Anim:New({
   target   = frame,
-  property = "alpha",   -- "alpha"|"width"|"height"|"x"|"y"|"scale"
+  property = "alpha",   -- "alpha"|"width"|"height"|"scale"|"x"|"y"|"value"
   from     = 0, to = 1,
   duration = 0.25,
   easing   = "easeOut",
   onDone   = function() end,
 })
 
--- Parallel (simultaneous)
-SuuUI.Anim:Parallel({anim1, anim2})
+-- Parallel (simultaneous) — returns a group handle
+local group = SuuUI.Anim:Parallel({anim1, anim2})
 
--- Sequence (one after another)
-SuuUI.Anim:Sequence({anim1, anim2, anim3})
+-- Sequence (one after another) — returns a group handle
+local group = SuuUI.Anim:Sequence({anim1, anim2, anim3})
 
 anim:Play()
 anim:Stop()
 anim:Reverse()
 anim:IsPlaying()
+
+group:Play()        -- restarts the group
+group:Stop()        -- stops every animation in the group
+group:IsPlaying()   -- true while any member is still running
+```
+
+**The `value` property** animates an arbitrary scalar without a frame. Instead of a
+setter on `target`, it calls an `apply` callback:
+
+```lua
+SuuUI.Anim:New({
+  target   = owner,         -- used only for identity (pre-emption, CancelAll)
+  property = "value",
+  apply    = function(v) ctx:Set(v) end,   -- the single write path
+  from     = 0, to = 1,
+  duration = 0.28,
+  easing   = "easeOut",
+})
+```
+
+`value` is what the transition registry uses under the hood: the animated quantity is a
+fraction, not a pixel width, so the layout engine stays the only thing computing geometry.
+
+**One animation per (target, property).** Starting a new animation pre-empts any other
+running animation that writes the same property of the same target. Two live tweens on one
+property fight every tick; the rule that the latest one wins prevents a hover-on/hover-off
+pair from stranding a frame at a half-faded alpha.
+
+**Final value is always written.** The animator writes an animation's last value even when
+the target is hidden. Intermediate writes are skipped while hidden — nothing can observe
+them — but skipping the final write would strand the frame at whatever partial value it
+held when it was hidden. This is load-bearing for `ScalePop`: a frame hidden mid-pop must
+return to exactly 1.0.
+
+**API:**
+```lua
+SuuUI.Anim:New(def)                -- create (does not auto-play)
+SuuUI.Anim:CancelAll(target)       -- stop all running animations on a target
+SuuUI.Anim:GetActiveCount(target?) -- running count, optionally for one target
+SuuUI.Anim:Parallel(anims)         -- returns a group handle
+SuuUI.Anim:Sequence(anims)         -- returns a group handle
+```
+
+### Value Transitions (`Animation/Transitions.lua`)
+
+A registry of named strategies describing HOW a displayed scalar approaches its logical
+target when that target moves. `StatusBar` is the first consumer, but the contract is not
+bar-specific — it is "a painted value chases a logical value", which is the same shape for
+a progress fill, a numeric readout counting up, or a needle following a setting.
+
+**Why fractions, not pixels.** The animated quantity is a scalar fraction (0..1), never a
+pixel width. The component translates the fraction into geometry through the layout
+engine (`SetChildFraction`), so a strategy never touches geometry, never fights the pixel
+grid, and resizes are free — the fraction is scale-independent.
+
+**Why `ctx:Set` is the only write path.** A strategy receives a context whose `Set()` is
+the single route to the painted value. It cannot reach past the component into the layout
+engine, cannot desync the logical value from the painted one, and cannot skip the
+pixel-quantisation guard that keeps 40 raid frames from re-laying out 60 times a second.
+
+**Strategy contract:**
+
+| Hook | Required | Called when |
+|------|----------|-------------|
+| `Attach(ctx)` | no | the owner adopted this strategy |
+| `Apply(ctx, from, to)` | **yes** | the target moved; drive `ctx:Set` from `from` to `to` |
+| `Cancel(ctx)` | no | abandon motion in flight, leaving the value where it is |
+| `Detach(ctx)` | no | the owner dropped this strategy; release scratch |
+
+**Context object:**
+
+| Field / Method | Returns | Purpose |
+|---|---|---|
+| `ctx.owner` | handle | the handle that owns the value (a StatusBar handle) |
+| `ctx.state` | table | scratch table the strategy owns; allocated once per attach |
+| `ctx:Set(v)` | — | paint `v` now — the ONLY write path |
+| `ctx:Get()` | number | the currently painted value |
+| `ctx:Target()` | number | the current logical target |
+| `ctx:Duration()` | number | seconds for a full 0..1 sweep (bar's override or `animBarFill` token) |
+
+**Built-in strategies:**
+
+| Name | Behaviour | When to use |
+|------|-----------|-------------|
+| `instant` | `Set(to)` immediately | deterministic specs; "off" as a selectable choice |
+| `smooth` | fixed-duration ease (easeOut), regardless of distance | sparse, large changes — a health bar taking a single hit |
+| `rate` | constant speed (linear), duration scaled by distance | frequent small updates — energy regen, cast progress — where a fixed-duration ease restarts faster than it finishes and the bar permanently lags |
+
+**Override levels (highest wins):**
+
+| Level | How | Scope |
+|-------|-----|-------|
+| Registry default | `SuuUI.Anim.Transitions:SetDefault("smooth")` | all new bars that do not name one |
+| Per-bar by name | `bar:SetTransition("rate")` or `transition = "rate"` prop | one bar |
+| Per-bar inline table | `bar:SetTransition({ Apply = function(ctx, from, to) ... end })` | one bar, no registration needed |
+| Per-call immediate | `bar:SetValue(50, { immediate = true })` | one write, skips whatever strategy is active |
+
+**API:**
+```lua
+SuuUI.Anim.Transitions:Register(name, strategy)
+SuuUI.Anim.Transitions:Has(name)
+SuuUI.Anim.Transitions:Get(name)
+SuuUI.Anim.Transitions:List()
+SuuUI.Anim.Transitions:SetDefault(name)
+SuuUI.Anim.Transitions:GetDefault()
+SuuUI.Anim.Transitions:Resolve(spec)   -- nil|name|table → normalised strategy
 ```
 
 ### Presets (`Animation/Presets.lua`)
@@ -1020,10 +1142,14 @@ anim:IsPlaying()
 ```lua
 SuuUI.Anim.Presets.FadeIn(frame, duration)
 SuuUI.Anim.Presets.FadeOut(frame, duration)
-SuuUI.Anim.Presets.SlideIn(frame, dir, dist, duration)  -- dir: "up"|"down"|"left"|"right"
-SuuUI.Anim.Presets.SlideOut(frame, dir, dist, duration)
+SuuUI.Anim.Presets.SlideIn(container, child, anchor, dir, dist, duration)
+SuuUI.Anim.Presets.SlideOut(container, child, anchor, dir, dist, duration)
 SuuUI.Anim.Presets.ScalePop(frame, duration)
 ```
+
+`SlideIn`/`SlideOut` animate position through an anchor-layout container — `dir` is
+`"up"|"down"|"left"|"right"`. `ScalePop` is the addon's one sanctioned `SetScale`; see
+`coding-standards.md` for the carve-out rationale.
 
 ---
 
@@ -1143,12 +1269,22 @@ document it here.
 - `ScrollFrame` — custom scrollbar + masked content.
 - `StatusBar` — progress/resource bar (health, mana, energy, rage). Props: `w`, `h`,
   `value`, `max`, `fillColor` ({r,g,b,a} literal), `bgColor` (token or literal, default
-  `"colorBgAlt"`), `border` (bool, default true). API: `SetValue`, `SetMax`, `GetValue`,
-  `GetMax`, `GetPercent`, `SetFillColor`, `SetBgColor`, `Destroy`. The fill is a
-  **fractional stack child** of the track (`widthFraction`), so the layout engine owns
-  the fill geometry — the component sets no points, and the fill stays correct across
-  resizes and border-width changes without recomputation. A borderless bar insets by 0 so
-  track and fill share edges exactly. Emits `VALUE_CHANGED` and `SIZE_CHANGED`.
+  `"colorBgAlt"`), `border` (bool, default true), `transition` (strategy name or inline
+  table, default: the registry default), `transitionDuration` (seconds for a full sweep,
+  default: the `animBarFill` token). API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
+  `GetPercent`, `GetDisplayPercent`, `IsTransitioning`, `SetTransition`,
+  `SetTransitionDuration`, `SnapToTarget`, `SetFillColor`, `SetBgColor`, `Destroy`. The
+  fill is a **fractional stack child** of the track (`widthFraction`), so the layout
+  engine owns the fill geometry — the component sets no points, and the fill stays correct
+  across resizes and border-width changes without recomputation. A borderless bar insets
+  by 0 so track and fill share edges exactly. `GetPercent` reports the logical target
+  fraction (what `SetValue` implies); `GetDisplayPercent` reports the painted fraction,
+  which lags the target mid-transition. `IsTransitioning` returns true while the two
+  differ. `SetTransition` accepts a registered name or an inline strategy table;
+  `SetTransitionDuration` overrides the `animBarFill` token for one bar. A theme change
+  never animates — `ApplyTheme` restates the current painted fraction without triggering
+  the transition. Emits `VALUE_CHANGED`, `SIZE_CHANGED`, `VISIBILITY_CHANGED`, and
+  `STATUSBAR_SIGNALS.FILL_SETTLED`.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
 - `Modal` — dialog with optional input, container-composed. `confirmVariant` tints the

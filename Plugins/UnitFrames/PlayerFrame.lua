@@ -50,6 +50,10 @@ local SIZE_KEYS = { "player_width", "player_health_height", "player_power_height
 -- change bar geometry.
 local VIS_KEYS = { "player_show_name", "player_show_level", "player_hide_level_at_max" }
 
+-- Shared opts table for a transition-free bar write. Allocated once: these calls happen
+-- on game events, and a fresh table per update would allocate under combat load.
+local IMMEDIATE = { immediate = true }
+
 local function metrics()
     local get = function(key) return SuuUI.Settings:Get(PLUGIN_ID, key) end
     return {
@@ -222,12 +226,19 @@ function PlayerFrame:Create(parent)
         fillColor = HEALTH_COLOR,
         bgColor   = barTrackColor(),
         border    = false,
+        -- Health moves in sparse, large steps, so a fixed-duration ease reads as the bar
+        -- absorbing a hit.
+        transition = "smooth",
     }, self._bars:GetFrame())
 
     self._resourceBar = C.StatusBar({
         fillColor = POWER_COLORS[0],  -- default to mana
         bgColor   = barTrackColor(),
         border    = false,
+        -- Energy and rage tick faster than a fixed-duration ease completes, and each
+        -- event would restart one — so the bar would trail its true value continuously
+        -- and never settle. Constant speed converges instead.
+        transition = "rate",
     }, self._bars:GetFrame())
 
     -- Bar heights are stated, not filled: the frame's height is derived FROM them, so a
@@ -276,7 +287,9 @@ function PlayerFrame:Create(parent)
     self._events:RegisterEvent("PLAYER_ENTERING_WORLD")
     self._events:SetScript("OnEvent", function(_, event, unit, ...)
         if event == "PLAYER_ENTERING_WORLD" then
-            self:UpdateAll()
+            -- Every value is being established for the first time, not changing, so the
+            -- bars adopt them outright instead of sweeping up from empty.
+            self:UpdateAll(true)
         elseif event == "PLAYER_LEVEL_UP" then
             -- Carries the new level as its first argument, ahead of UnitLevel updating.
             self:UpdateInfo(unit)
@@ -285,21 +298,29 @@ function PlayerFrame:Create(parent)
                 self:UpdateHealth()
             elseif event == "UNIT_LEVEL" then
                 self:UpdateInfo()
-            elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
+            elseif event == "UNIT_DISPLAYPOWER" then
+                -- The resource changed identity — rage to energy on a form swap — so the
+                -- old fill and the new one measure different things. Sliding between them
+                -- animates a quantity that does not exist.
+                self:UpdatePower(true)
+            elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
                 self:UpdatePower()
             end
         end
     end)
 
-    self:UpdateAll()
+    self:UpdateAll(true)
     self:_syncSize()
     return self
 end
 
-function PlayerFrame:UpdateAll()
+--- Refreshes every displayed value.
+-- @param immediate bool  Skip bar transitions — for the first paint and for a change
+--   that redefines what the bar means rather than moving it.
+function PlayerFrame:UpdateAll(immediate)
     self:UpdateInfo()
-    self:UpdateHealth()
-    self:UpdatePower()
+    self:UpdateHealth(immediate)
+    self:UpdatePower(immediate)
 end
 
 --- Refreshes name and level. Visibility respects player_show_name / player_show_level,
@@ -342,21 +363,27 @@ function PlayerFrame:UpdateInfo(level)
     end
 end
 
-function PlayerFrame:UpdateHealth()
+--- Refreshes the health bar.
+-- @param immediate bool  Skip the fill transition
+function PlayerFrame:UpdateHealth(immediate)
+    local opts = immediate and IMMEDIATE or nil
     local cur = UnitHealth("player") or 0
     local mx  = UnitHealthMax("player") or 1
-    self._healthBar:SetMax(mx)
-    self._healthBar:SetValue(cur)
+    self._healthBar:SetMax(mx, opts)
+    self._healthBar:SetValue(cur, opts)
 end
 
-function PlayerFrame:UpdatePower()
+--- Refreshes the resource bar.
+-- @param immediate bool  Skip the fill transition
+function PlayerFrame:UpdatePower(immediate)
+    local opts = immediate and IMMEDIATE or nil
     local powerType = UnitPowerType("player") or 0
     local cur = UnitPower("player") or 0
     local mx  = UnitPowerMax("player") or 1
     local color = POWER_COLORS[powerType] or POWER_COLORS[0]
     self._resourceBar:SetFillColor(color)
-    self._resourceBar:SetMax(mx)
-    self._resourceBar:SetValue(cur)
+    self._resourceBar:SetMax(mx, opts)
+    self._resourceBar:SetValue(cur, opts)
 end
 
 function PlayerFrame:GetFrame()

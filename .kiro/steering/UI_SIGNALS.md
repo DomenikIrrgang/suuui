@@ -137,6 +137,21 @@ C.MODAL_SIGNALS = {
 }
 ```
 
+```lua
+-- Components/StatusBar.lua
+C.STATUSBAR_SIGNALS = {
+  FILL_SETTLED = "statusbar.fill_settled",  -- Args: fraction (the painted value caught up with the target)
+}
+```
+
+`FILL_SETTLED` fires once when the displayed fill fraction reaches the logical target
+after a transition. Consumers use it to know when motion has stopped — e.g. to trigger a
+flash or remove a "catching up" indicator. It also fires on an `instant` transition (the
+fill settles on the same call), so listeners do not need to special-case strategies.
+
+StatusBar also emits the standard `VISIBILITY_CHANGED` signal (payload: `isVisible`) on
+show and hide, chained from the frame's own scripts.
+
 Rules for custom signals:
 1. Prefix with the component or plugin id.
 2. Document the payload in a comment on the same line.

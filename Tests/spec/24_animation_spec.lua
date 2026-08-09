@@ -82,11 +82,13 @@ describe("Animation.Animator", function()
             expect(a.property).eq("alpha")
         end)
 
-        it("defaults from=0, to=1, duration=0.25, easing=easeOut", function()
+        it("defaults from=0, to=1, easing=easeOut, duration from the animMid token", function()
             local a = H.SuuUI.Anim:New({ target = target })
             expect(a.from).eq(0)
             expect(a.to).eq(1)
-            expect(a.duration).eq(0.25)
+            -- Durations are design language, so the default is the token rather than a
+            -- literal no theme controls. It was 0.25, which matched neither theme.
+            expect(a.duration).as("default duration follows the theme").eq(H.token("animMid"))
             expect(a.easing).eq("easeOut")
         end)
 
@@ -670,6 +672,529 @@ describe("Animation.Animator", function()
             a:Play()
             H.tick(0.5)
             expect(target:GetAlpha()).near(0.5, 0.05)
+        end)
+    end)
+end)
+
+describe("Animation regressions", function()
+    local host, target
+
+    before_each(function()
+        H.setup()
+        host = H.parent(400, 300)
+        target = H.env.CreateFrame("Frame", nil, host)
+        target:SetSize(100, 50)
+        target:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 1. PRE-EMPTION: Play() cancels any other running anim on same target+property
+    ---------------------------------------------------------------------------
+    describe("regression: pre-emption (latest wins on same target+property)", function()
+        it("starting a second alpha anim stops the first", function()
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 0.5, duration = 1, easing = "linear",
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 1, easing = "linear",
+            })
+            a1:Play()
+            H.tick(0.1)
+            a2:Play()
+            expect(a1:IsPlaying()).as("first should be stopped").eq(false)
+            expect(a2:IsPlaying()).as("second should be playing").eq(true)
+        end)
+
+        it("pre-empted anim does not fire onDone", function()
+            local done1 = false
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 0.5, duration = 1,
+                onDone = function() done1 = true end,
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 0.1,
+            })
+            a1:Play()
+            H.tick(0.05)
+            a2:Play()
+            H.runAnimations()
+            expect(done1).as("pre-empted onDone must not fire").eq(false)
+        end)
+
+        it("value converges to the SECOND animation's target", function()
+            target:SetAlpha(0)
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 0.3, duration = 1, easing = "linear",
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 0.9, duration = 0.1, easing = "linear",
+            })
+            a1:Play()
+            H.tick(0.05)
+            a2:Play()
+            H.runAnimations()
+            expect(target:GetAlpha()).eq(0.9)
+        end)
+
+        it("different properties on the same target do NOT pre-empt", function()
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 1,
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "width",
+                from = 10, to = 200, duration = 1,
+            })
+            a1:Play()
+            a2:Play()
+            expect(a1:IsPlaying()).as("alpha still plays").eq(true)
+            expect(a2:IsPlaying()).as("width still plays").eq(true)
+        end)
+
+        it("same property on different targets does NOT pre-empt", function()
+            local other = H.env.CreateFrame("Frame", nil, host)
+            other:SetSize(50, 50)
+            other:SetPoint("TOPLEFT", host, "TOPLEFT", 100, 0)
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 1,
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = other, property = "alpha",
+                from = 0, to = 1, duration = 1,
+            })
+            a1:Play()
+            a2:Play()
+            expect(a1:IsPlaying()).as("first target unaffected").eq(true)
+            expect(a2:IsPlaying()).as("second target plays").eq(true)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 2. FINAL WRITE ALWAYS LANDS (even when hidden)
+    ---------------------------------------------------------------------------
+    describe("regression: final write always lands when hidden", function()
+        it("hidden frame receives the final value on completion", function()
+            target:SetAlpha(0.5)
+            target:Show()
+            local a = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 0.8, duration = 0.2, easing = "linear",
+            })
+            a:Play()
+            H.tick(0.05)
+            target:Hide()
+            -- Intermediate writes are skipped, but final must land
+            H.runAnimations()
+            expect(target:GetAlpha()).as("final value written even while hidden").eq(0.8)
+        end)
+
+        it("ScalePop on a frame hidden mid-pop ends at scale exactly 1", function()
+            target:SetScale(1)
+            target:Show()
+            H.SuuUI.Anim.Presets.ScalePop(target, 0.2)
+            H.tick(0.05)
+            -- Hide while the pop is mid-flight (scale > 1)
+            target:Hide()
+            H.runAnimations()
+            expect(target:GetScale()).as("scale must be exactly 1 after hidden pop").eq(1)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 3. EXACT FINAL VALUE (a.to itself, not from+(to-from)*ease(1))
+    ---------------------------------------------------------------------------
+    describe("regression: exact final value (no floating-point drift)", function()
+        it("final write is exactly a.to, not from+(to-from)*ease(1)", function()
+            target:SetAlpha(0)
+            local a = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0.1, to = 0.7, duration = 0.1, easing = "linear",
+            })
+            a:Play()
+            H.runAnimations()
+            -- Must be EXACT equality, not .near — the fix guarantees a.to is written
+            expect(target:GetAlpha()).as("exact to value").eq(0.7)
+        end)
+
+        it("exact final value with easeOut (overshooting easing)", function()
+            target:SetWidth(10)
+            local a = H.SuuUI.Anim:New({
+                target = target, property = "width",
+                from = 10.3, to = 99.7, duration = 0.1, easing = "easeOut",
+            })
+            a:Play()
+            H.runAnimations()
+            expect(target:GetWidth()).as("exact to for width").eq(99.7)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 4. REVERSE MID-FLIGHT mirrors elapsed clock (no value teleport)
+    ---------------------------------------------------------------------------
+    describe("regression: Reverse mid-flight mirrors elapsed (no teleport)", function()
+        it("reversing mid-flight continues from current value without jump", function()
+            target:SetAlpha(0)
+            local a = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 1, easing = "linear",
+            })
+            a:Play()
+            H.tick(0.5) -- at t=0.5, alpha ~ 0.5
+            local before = target:GetAlpha()
+            a:Reverse() -- now from=1, to=0; elapsed mirrored to 0.5
+            H.tick(0.016) -- one more frame
+            local after = target:GetAlpha()
+            -- The value should NOT jump; it should stay near where it was (0.5) and
+            -- start heading back toward 0. A teleport would put it near 0 or 1.
+            expect(math.abs(after - before)).as("no teleport on reverse").lt(0.1)
+            -- Value should be heading downward (toward 0, the new 'to')
+            H.tick(0.5)
+            expect(target:GetAlpha()).as("converges to original from").near(0, 0.05)
+        end)
+
+        it("Reverse on a non-playing animation still works (starts playback)", function()
+            local a = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 0.1,
+            })
+            a:Reverse()
+            expect(a:IsPlaying()).eq(true)
+            expect(a.from).eq(1)
+            expect(a.to).eq(0)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 5. SEQUENCE ABORT NO LONGER LEAKS (chain on _finish, not onDone)
+    ---------------------------------------------------------------------------
+    describe("regression: sequence abort does not leak chain on replay", function()
+        it("stopping mid-sequence then replaying standalone fires only caller onDone", function()
+            local steps = {}
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 0, to = 1,
+                duration = 0.1, onDone = function() table.insert(steps, "a1") end,
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 1, to = 0.5,
+                duration = 0.1, onDone = function() table.insert(steps, "a2") end,
+            })
+            local a3 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 0.5, to = 0,
+                duration = 0.1, onDone = function() table.insert(steps, "a3") end,
+            })
+            local seq = H.SuuUI.Anim:Sequence({ a1, a2, a3 })
+            -- Let a1 finish, a2 starts
+            H.tick(0.15)
+            -- Stop the sequence while a2 is playing
+            seq:Stop()
+            -- Clear tracking
+            steps = {}
+            -- Replay a1 standalone
+            a1:Play()
+            H.runAnimations()
+            -- Only a1's own onDone should fire; a2 and a3 must NOT run
+            expect(#steps).as("only a1 onDone fires").eq(1)
+            expect(steps[1]).eq("a1")
+        end)
+
+        it("caller onDone field identity is never reassigned by the sequence", function()
+            local cb = function() end
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 0, to = 1,
+                duration = 0.1, onDone = cb,
+            })
+            local a2 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 1, to = 0,
+                duration = 0.1,
+            })
+            H.SuuUI.Anim:Sequence({ a1, a2 })
+            -- Even while the sequence is active, onDone must stay the caller's callback
+            expect(a1.onDone).as("onDone not overwritten during sequence").eq(cb)
+            H.runAnimations()
+            expect(a1.onDone).as("onDone intact after sequence").eq(cb)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 6. GROUP HANDLES (Sequence/Parallel return handle with Play/Stop/IsPlaying/onDone)
+    ---------------------------------------------------------------------------
+    describe("regression: group handles (Play, Stop, IsPlaying, onDone)", function()
+        it("Parallel returns a handle where IsPlaying is true while members run", function()
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.2 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "width", from = 10, to = 200, duration = 0.3 })
+            local grp = H.SuuUI.Anim:Parallel({ a1, a2 })
+            expect(grp:IsPlaying()).as("parallel IsPlaying while running").eq(true)
+            H.runAnimations()
+            expect(grp:IsPlaying()).as("parallel IsPlaying after done").eq(false)
+        end)
+
+        it("Sequence returns a handle where IsPlaying is true while members run", function()
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 1, to = 0, duration = 0.1 })
+            local grp = H.SuuUI.Anim:Sequence({ a1, a2 })
+            expect(grp:IsPlaying()).as("sequence IsPlaying").eq(true)
+            H.runAnimations()
+            expect(grp:IsPlaying()).as("sequence done").eq(false)
+        end)
+
+        it("Stop on a Parallel halts all members", function()
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "width", from = 10, to = 200, duration = 1 })
+            local grp = H.SuuUI.Anim:Parallel({ a1, a2 })
+            H.tick(0.1)
+            grp:Stop()
+            expect(a1:IsPlaying()).eq(false)
+            expect(a2:IsPlaying()).eq(false)
+            expect(grp:IsPlaying()).eq(false)
+        end)
+
+        it("Stop on a Sequence halts current member and prevents continuation", function()
+            local ran3 = false
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 1, to = 0.5, duration = 1 })
+            local a3 = H.SuuUI.Anim:New({
+                target = target, property = "alpha", from = 0.5, to = 0, duration = 0.1,
+                onDone = function() ran3 = true end,
+            })
+            local grp = H.SuuUI.Anim:Sequence({ a1, a2, a3 })
+            -- Let a1 finish so a2 starts
+            H.tick(0.15)
+            grp:Stop()
+            H.runAnimations()
+            expect(a2:IsPlaying()).eq(false)
+            expect(ran3).as("later steps must not run").eq(false)
+        end)
+
+        it("group onDone fires once after Parallel completes", function()
+            local count = 0
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "width", from = 10, to = 200, duration = 0.2 })
+            local grp = H.SuuUI.Anim:Parallel({ a1, a2 })
+            grp.onDone = function() count = count + 1 end
+            H.runAnimations()
+            expect(count).as("group onDone fires exactly once").eq(1)
+        end)
+
+        it("group onDone fires once after Sequence completes", function()
+            local count = 0
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 1, to = 0, duration = 0.1 })
+            local grp = H.SuuUI.Anim:Sequence({ a1, a2 })
+            grp.onDone = function() count = count + 1 end
+            H.runAnimations()
+            expect(count).as("sequence onDone fires once").eq(1)
+        end)
+
+        it("Play() on a group restarts it", function()
+            local count = 0
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 1, to = 0, duration = 0.1 })
+            local grp = H.SuuUI.Anim:Sequence({ a1, a2 })
+            grp.onDone = function() count = count + 1 end
+            H.runAnimations()
+            expect(count).eq(1)
+            -- Replay
+            grp:Play()
+            expect(grp:IsPlaying()).eq(true)
+            H.runAnimations()
+            expect(count).eq(2)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 7. GetActiveCount
+    ---------------------------------------------------------------------------
+    describe("regression: GetActiveCount", function()
+        it("returns 0 when idle", function()
+            expect(H.SuuUI.Anim:GetActiveCount()).eq(0)
+        end)
+
+        it("counts running animations", function()
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "width", from = 10, to = 100, duration = 1 })
+            a1:Play()
+            a2:Play()
+            expect(H.SuuUI.Anim:GetActiveCount()).eq(2)
+        end)
+
+        it("filters by target", function()
+            local other = H.env.CreateFrame("Frame", nil, host)
+            other:SetSize(50, 50)
+            other:SetPoint("TOPLEFT", host, "TOPLEFT", 100, 0)
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 1 })
+            local a2 = H.SuuUI.Anim:New({ target = other, property = "alpha", from = 0, to = 1, duration = 1 })
+            a1:Play()
+            a2:Play()
+            expect(H.SuuUI.Anim:GetActiveCount(target)).eq(1)
+            expect(H.SuuUI.Anim:GetActiveCount(other)).eq(1)
+        end)
+
+        it("drops to 0 after Stop", function()
+            local a = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 1 })
+            a:Play()
+            a:Stop()
+            expect(H.SuuUI.Anim:GetActiveCount()).eq(0)
+        end)
+
+        it("drops to 0 after CancelAll", function()
+            local a1 = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 1 })
+            local a2 = H.SuuUI.Anim:New({ target = target, property = "width", from = 10, to = 100, duration = 1 })
+            a1:Play()
+            a2:Play()
+            H.SuuUI.Anim:CancelAll(target)
+            expect(H.SuuUI.Anim:GetActiveCount()).eq(0)
+        end)
+
+        it("drops to 0 after natural completion", function()
+            local a = H.SuuUI.Anim:New({ target = target, property = "alpha", from = 0, to = 1, duration = 0.1 })
+            a:Play()
+            H.runAnimations()
+            expect(H.SuuUI.Anim:GetActiveCount()).eq(0)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 8. ANCHOR SCRATCH — generic pairs copy preserves custom descriptor keys
+    ---------------------------------------------------------------------------
+    describe("regression: anchor scratch preserves custom descriptor keys", function()
+        it("a custom key on the base anchor survives the animation", function()
+            local container = H.Layout:CreateContainer({ host = host, layout = "anchor" })
+            container:Add(target, { anchor = {
+                point = "TOPLEFT", relativePoint = "TOPLEFT", x = 0, y = 0,
+            }})
+            local anchorDef = {
+                point = "TOPLEFT", relativePoint = "TOPLEFT",
+                x = 0, y = 0,
+                customData = "preserved", -- non-standard key
+            }
+            local lastDesc
+            -- Spy on SetChildAnchor to capture what was passed
+            local origSet = container.SetChildAnchor
+            container.SetChildAnchor = function(self, child, desc)
+                lastDesc = desc
+                return origSet(self, child, desc)
+            end
+            local a = H.SuuUI.Anim:New({
+                target = target, container = container, anchor = anchorDef,
+                property = "x", from = 0, to = 50, duration = 0.1, easing = "linear",
+            })
+            a:Play()
+            H.tick(0.05)
+            -- The scratch descriptor passed to SetChildAnchor must include customData
+            expect(lastDesc).notNil()
+            expect(lastDesc.customData).as("custom key preserved by pairs copy").eq("preserved")
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 9. TWEEN — easeOutBack is canonical, spring is alias; Has; debug warning
+    ---------------------------------------------------------------------------
+    describe("regression: Tween easeOutBack/spring alias and Has/warn", function()
+        it("easeOutBack and spring produce identical results at several t values", function()
+            local Tween = H.SuuUI.Tween
+            local samples = { 0, 0.1, 0.25, 0.5, 0.75, 0.9, 1 }
+            for _, t in ipairs(samples) do
+                expect(Tween.Ease(t, "easeOutBack")).as("t=" .. t).eq(Tween.Ease(t, "spring"))
+            end
+        end)
+
+        it("Tween.Has reports both easeOutBack and spring", function()
+            expect(H.SuuUI.Tween.Has("easeOutBack")).eq(true)
+            expect(H.SuuUI.Tween.Has("spring")).eq(true)
+        end)
+
+        it("Tween.Has returns false for unknown names", function()
+            expect(H.SuuUI.Tween.Has("nonexistent")).eq(false)
+            expect(H.SuuUI.Tween.Has("")).eq(false)
+        end)
+
+        it("Tween.Has reports all standard easings", function()
+            local names = { "linear", "easeIn", "easeOut", "easeInOut", "easeOutBack", "spring" }
+            for _, name in ipairs(names) do
+                expect(H.SuuUI.Tween.Has(name)).as(name).eq(true)
+            end
+        end)
+
+        it("unknown easing warns via Debug exactly once per name", function()
+            H.setup({ debug = true })
+            local log = H.debugLog()
+            local before = #log
+            H.SuuUI.Tween.Ease(0.5, "bogus_name_xyz")
+            expect(#log).as("first call warns").eq(before + 1)
+            expect(log[#log]).matches("bogus_name_xyz")
+            -- Second call with same name: no additional warning
+            H.SuuUI.Tween.Ease(0.7, "bogus_name_xyz")
+            expect(#log).as("second call does not warn again").eq(before + 1)
+        end)
+
+        it("nil easing does not warn (falls back silently)", function()
+            H.setup({ debug = true })
+            local log = H.debugLog()
+            local before = #log
+            H.SuuUI.Tween.Ease(0.5, nil)
+            expect(#log).as("nil does not warn").eq(before)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 10. MID-DISPATCH SAFETY: onDone that stops a sibling must not skip anyone
+    ---------------------------------------------------------------------------
+    describe("regression: mid-dispatch stop does not skip sibling animations", function()
+        it("all animations advance when one onDone stops another", function()
+            local other = H.env.CreateFrame("Frame", nil, host)
+            other:SetSize(50, 50)
+            other:SetPoint("TOPLEFT", host, "TOPLEFT", 100, 0)
+            local third = H.env.CreateFrame("Frame", nil, host)
+            third:SetSize(50, 50)
+            third:SetPoint("TOPLEFT", host, "TOPLEFT", 200, 0)
+
+            target:SetAlpha(0)
+            other:SetAlpha(0)
+            third:SetAlpha(0)
+
+            -- a3 is a longer animation that must still advance fully
+            local a3 = H.SuuUI.Anim:New({
+                target = third, property = "alpha",
+                from = 0, to = 1, duration = 0.2, easing = "linear",
+            })
+            -- a2 is what a1's onDone will stop
+            local a2 = H.SuuUI.Anim:New({
+                target = other, property = "alpha",
+                from = 0, to = 1, duration = 1, easing = "linear",
+            })
+            -- a1 finishes quickly and stops a2 in its onDone
+            local a1 = H.SuuUI.Anim:New({
+                target = target, property = "alpha",
+                from = 0, to = 1, duration = 0.1, easing = "linear",
+                onDone = function() a2:Stop() end,
+            })
+            a1:Play()
+            a2:Play()
+            a3:Play()
+            -- Advance enough to complete a1 (triggers the stop of a2) and finish a3
+            H.runAnimations()
+            -- a3 must have completed and reached its target
+            expect(third:GetAlpha()).as("third frame must complete, not be skipped").eq(1)
+            -- a2 was stopped, so it should NOT have reached its target
+            expect(a2:IsPlaying()).eq(false)
+            expect(other:GetAlpha()).as("stopped anim didn't finish").lt(1)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Default duration is now the animMid token
+    ---------------------------------------------------------------------------
+    describe("regression: default duration is animMid token", function()
+        it("New() without duration uses the animMid token value", function()
+            local a = H.SuuUI.Anim:New({ target = target })
+            expect(a.duration).eq(H.token("animMid"))
         end)
     end)
 end)

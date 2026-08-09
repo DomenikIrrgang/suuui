@@ -101,4 +101,11 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     animFast         = 0.12,
     animMid          = 0.22,
     animSlow         = 0.38,
+    -- Time for a status bar fill to travel its whole length. Its own token rather than
+    -- animMid: bar smoothing reads as physical motion and wants to be slower than a
+    -- panel transition, and a player who wants bars to snap should not have to speed up
+    -- every dropdown to get it. 0 disables smoothing entirely.
+    animBarFill      = 0.28,
+    -- How far a button scales on press. 1 disables the pop without touching code.
+    animPopScale     = 1.08,
 })

@@ -614,6 +614,21 @@ local cx, cy = SuuUI.Pixel.CursorIn(track)
 **Never call `SetScale` on your own frames.** A second scale in the chain puts units back
 between pixels. `Core/Pixel.lua` owns the only one, on the root.
 
+**One exception: `Presets.ScalePop`.** The prohibition is about a scale a frame *keeps* —
+it breaks the pixel grid for the frame's entire lifetime. `ScalePop` is transient and
+self-reverting: it scales up to `animPopScale` and back down to exactly 1.0 in a single
+sequence, is never nested, never persisted, and never read back by layout. Because the
+final value is 1.0, the grid is restored as soon as the animation settles.
+
+This guarantee rests on the animator always writing an animation's final value even when
+the target is hidden. Without that, a frame hidden mid-pop kept a fractional scale
+indefinitely — precisely the persistent violation the rule exists to prevent. The animator
+now guarantees the final write lands regardless of visibility (see `Animator.lua`'s
+`applyValue`). Callers wanting no pop at all pass `scalePop = false` (Button, IconButton),
+or set the `animPopScale` token to 1 to disable it UI-wide without code changes.
+
+The rule stays absolute everywhere else: no other code path may call `SetScale`.
+
 Snapping happens inside the four layout strategies, so component and page code needs no
 calls. Reach for the helpers directly only where you produce geometry outside a strategy:
 

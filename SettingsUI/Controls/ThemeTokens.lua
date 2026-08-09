@@ -60,4 +60,9 @@ SuuUI._ThemeEditableTokens = {
     { key="animFast",     label="Animation Fast",   type="number", min=0.05, max=0.5, step=0.05 },
     { key="animMid",      label="Animation Mid",    type="number", min=0.1,  max=0.8, step=0.05 },
     { key="animSlow",     label="Animation Slow",   type="number", min=0.2,  max=1.0, step=0.05 },
+    -- Floored at 0 on purpose: 0 is "no smoothing", which is a legitimate preference and
+    -- resolves through the animator's instant path rather than a division.
+    { key="animBarFill",  label="Bar Fill Speed",   type="number", min=0,    max=1.0, step=0.02 },
+    -- 1 is "no pop", so the press animation is disableable UI-wide from here.
+    { key="animPopScale", label="Press Pop Scale",  type="number", min=1.0,  max=1.2, step=0.01 },
 }

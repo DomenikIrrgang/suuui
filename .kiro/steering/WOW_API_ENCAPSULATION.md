@@ -36,7 +36,7 @@ and signal system all get bypassed.
 | `Core/Pool.lua` | Yes | `ClearAllPoints` on release only |
 | `Core/Pixel.lua` | Yes — an invisible event watcher only, no visible UI | **No** |
 | `Core/MoveableFrame.lua` | Yes — drag overlay internals, as a component would | **No** — hosts containers |
-| `Animation/*` | Yes — one invisible `OnUpdate` driver frame | **No** — position animates through `container:SetChildAnchor` |
+| `Animation/*` | Yes — one invisible `OnUpdate` driver frame | **No** — position animates through `container:SetChildAnchor`; `ScalePop` is the one sanctioned `SetScale` (transient, self-reverting to 1.0; see `coding-standards.md`) |
 | `Components/*` | Yes — internal frame/texture/fontstring construction, but z-order via `UIRoot:SetLayer` | **No** — use a host container |
 | `Layout/Window.lua` | Yes — z-order via `UIRoot:SetLayer`/`RaiseAbove` | **No** — use host containers |
 | `SettingsUI/*` | **No** — compose components and containers only | **No** |
@@ -50,7 +50,9 @@ The three engine rows are narrow, and worth stating explicitly because a blanket
 - **`Animation/Animator.lua`** creates one frame to hang `OnUpdate` on. It animates
   `alpha`, `width`, `height` and `scale` through the client's setters, but **position is
   animated through the layout engine** — `x`/`y` require a container and drive
-  `SetChildAnchor`, so a tween never fights a strategy for the same anchor.
+  `SetChildAnchor`, so a tween never fights a strategy for the same anchor. `ScalePop` is
+  the one sanctioned `SetScale`: transient, self-reverting to exactly 1.0, and never
+  nested. See `coding-standards.md` for the full carve-out rationale.
 - **`Core/MoveableFrame.lua`** builds an edit-mode drag overlay, which is component work in
   everything but its folder. It gets the component licence and the component restriction:
   raw `CreateFrame`/`CreateTexture` for its own internals, but its overlay, backdrop and

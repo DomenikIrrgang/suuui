@@ -306,6 +306,8 @@ describe("Plugins.UnitFrames", function()
             local emptyBox = H.box(pf._resourceBar)
             -- Same bar, now full: the fill must land on the track's own edges
             pf._resourceBar:SetValue(pf._resourceBar:GetMax())
+            -- The bar ships with a fill transition, so assert where the fill settles.
+            H.runAnimations()
             local fillBox = H.box(pf._resourceBar._fillFrame)
             expect(fillBox.left).eq(emptyBox.left)
             expect(fillBox.right).eq(emptyBox.right)
@@ -543,11 +545,15 @@ describe("Plugins.UnitFrames", function()
             -- 0%
             bar:SetMax(100)
             bar:SetValue(0)
+            -- The player frame's bars ship with a fill transition, so every assertion
+            -- here is about where the fill settles, not where it is a frame later.
+            H.runAnimations()
             -- fill hidden at 0%: test it's inside by checking fill frame width ≤ track width
             expect(bar._fillFrame:GetWidth()).as("0% fill width").eq(0)
 
             -- 50%
             bar:SetValue(50)
+            H.runAnimations()
             H.expectInside(bar._fillFrame, bar)
             local trackBox = H.box(bar)
             local fillBox = H.box(bar._fillFrame)
@@ -557,6 +563,7 @@ describe("Plugins.UnitFrames", function()
 
             -- 100%
             bar:SetValue(100)
+            H.runAnimations()
             H.expectInside(bar._fillFrame, bar)
             local fullBox = H.box(bar._fillFrame)
             expect(fullBox.left).eq(trackBox.left)
@@ -570,9 +577,11 @@ describe("Plugins.UnitFrames", function()
             bar:SetMax(100)
 
             bar:SetValue(0)
+            H.runAnimations()
             expect(bar._fillFrame:GetWidth()).as("0% fill width").eq(0)
 
             bar:SetValue(50)
+            H.runAnimations()
             H.expectInside(bar._fillFrame, bar)
             local trackBox = H.box(bar)
             local fillBox = H.box(bar._fillFrame)
@@ -580,6 +589,7 @@ describe("Plugins.UnitFrames", function()
             expect(fillBox.right).lt(trackBox.right + 0.5)
 
             bar:SetValue(100)
+            H.runAnimations()
             H.expectInside(bar._fillFrame, bar)
             local fullBox = H.box(bar._fillFrame)
             expect(fullBox.left).eq(trackBox.left)
@@ -653,14 +663,17 @@ describe("Plugins.UnitFrames", function()
 
             -- Set to 0%
             bar:SetValue(0)
+            H.runAnimations()
             expect(bar._fillFrame:IsShown()).as("hidden at 0%").eq(false)
 
             -- Set to a small but visible value
             bar:SetValue(5)
+            H.runAnimations()
             expect(bar._fillFrame:IsShown()).as("shown above sub-pixel threshold").eq(true)
 
             -- Back to 0%
             bar:SetValue(0)
+            H.runAnimations()
             expect(bar._fillFrame:IsShown()).as("hidden again at 0%").eq(false)
         end)
     end)

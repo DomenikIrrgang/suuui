@@ -70,8 +70,14 @@ M.root = "."
 -- physicalWidth/Height are pixels and drive the pixel grid. They default to unit space,
 -- which gives mult == 1 and integer snapping. Pass physicalHeight = 1080 to exercise a
 -- fractional grid.
+--
+-- Status bar fill transitions default to "instant" for the same reason: a value written
+-- under the shipped "smooth" default arrives over several frames, so a spec asserting a
+-- fill width straight after SetValue would be measuring a value still in transit. The
+-- simple configuration by default, the real one where the spec is about it — pass
+-- barTransitions = true for that.
 -- @param opts table  { boot = true, debug = false, screenWidth, screenHeight,
---                      physicalWidth, physicalHeight, uiScale }
+--                      physicalWidth, physicalHeight, uiScale, barTransitions }
 -- @return table  SuuUI
 function M.setup(opts)
     opts = opts or {}
@@ -91,6 +97,9 @@ function M.setup(opts)
     M.S        = loaded.SuuUI.UISignals
     M.T        = loaded.SuuUI.Theme
     M.Layout   = loaded.SuuUI.Layout
+    if not opts.barTransitions then
+        M.SuuUI.Anim.Transitions:SetDefault("instant")
+    end
     return M.SuuUI
 end
 

@@ -161,6 +161,23 @@ assertion reads naturally. That also means it hides scale bugs: pass
 an integer. Both configurations are worth a spec for anything that computes a position or
 reads the cursor — a mis-scaled hit test is invisible at 1:1.
 
+**Bar transitions default to `instant`** (`H.setup()` calls
+`Transitions:SetDefault("instant")` unless you pass `barTransitions = true`). The shipped
+default is `"smooth"`, which means a value written by `SetValue` arrives over several
+frames, so a spec asserting a fill width straight afterwards would measure a value still in
+transit — non-deterministic and dependent on tick count. The simple configuration by
+default, the real one where the spec is about it:
+
+```lua
+H.setup({ barTransitions = true })
+```
+
+When a spec wants the value where an animated fill **settles** rather than its intermediate
+state, call `H.runAnimations()` after the write — it advances the clock far enough for
+every queued animation (including chained sequences) to complete. Specs for the real
+`PlayerFrame` plugin must use it because that plugin names its strategies explicitly and
+overrides the test default.
+
 Cursor coordinates belong to a space, so name it: `H.cursor(x, y, frame)` treats `x, y` as
 being in that frame's coordinate space. Omitting the frame means `UIParent`, which is only
 the same thing while nothing in the chain has a scale.
