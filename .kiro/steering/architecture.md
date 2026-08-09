@@ -1519,7 +1519,8 @@ document it here.
   `""` clears one, and an unchanged write is dropped, since a readout is rewritten on every
   game event and usually says the same thing. Slots are built on first use and take plain
   strings only: what a number *means* belongs to whoever owns the value, so no formatting
-  reaches the component (`Plugins/UnitFrames/PlayerFrame.lua` holds the health formats).
+  reaches the component (`Plugins/UnitFrames/PlayerFrame.lua` holds the formats its health
+  and resource bars share).
   `SetTextSize` moves every slot onto another font step at once — a token **key**, never a
   pixel size, so a plugin can expose the step as a setting and the readouts still follow a
   user's edit of that token. One step per bar rather than per slot: three readouts on one

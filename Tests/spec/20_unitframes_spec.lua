@@ -657,6 +657,97 @@ describe("Plugins.UnitFrames", function()
         end)
     end)
 
+    describe("resource bar readouts", function()
+        local function bar()
+            return H.SuuUI.Plugins:Get("unit_frames")._playerFrame._resourceBar
+        end
+
+        local function setMode(slot, mode)
+            H.SuuUI.Settings:Set("unit_frames", "player_power_text_" .. slot, mode)
+        end
+
+        local function setPower(cur, mx)
+            state.unitPower = cur
+            if mx then state.unitPowerMax = mx end
+            H.fireEvent("UNIT_POWER_UPDATE", "player")
+        end
+
+        it("shows nothing until asked", function()
+            for _, slot in ipairs({ "left", "center", "right" }) do
+                expect(bar():GetText(slot)).as(slot .. " starts empty").isNil()
+            end
+        end)
+
+        it("serves all three positions with the health bar's formats", function()
+            setMode("left", "current")
+            setMode("center", "current_max")
+            setMode("right", "percent")
+            expect(bar():GetText("left")).eq("60")
+            expect(bar():GetText("center")).eq("60 / 100")
+            expect(bar():GetText("right")).eq("60%")
+        end)
+
+        it("follows the unit through a power event", function()
+            setMode("center", "current_max")
+            setPower(30, 100)
+            expect(bar():GetText("center")).eq("30 / 100")
+        end)
+
+        it("follows a max-power change", function()
+            setMode("right", "percent")
+            state.unitPower, state.unitPowerMax = 100, 400
+            H.fireEvent("UNIT_MAXPOWER", "player")
+            expect(bar():GetText("right")).eq("25%")
+        end)
+
+        it("re-reads the readouts when the power type changes identity", function()
+            -- Rage to energy is a different quantity with a different max, so the readout
+            -- has to be restated rather than left describing the resource that is gone.
+            setMode("center", "current_max")
+            state.unitPowerType = 3          -- Energy
+            state.unitPower, state.unitPowerMax = 45, 100
+            H.fireEvent("UNIT_DISPLAYPOWER", "player")
+            expect(bar():GetText("center")).eq("45 / 100")
+        end)
+
+        it("clears a slot set back to none", function()
+            setMode("left", "current")
+            expect(bar():GetText("left")).eq("60")
+            setMode("left", "none")
+            expect(bar():GetText("left")).isNil()
+        end)
+
+        it("takes its own font step, independent of the health bar", function()
+            -- Per bar, not per frame: the resource bar is the shorter of the two, so the
+            -- steps that suit them are not always the same.
+            setMode("center", "current_max")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "xl")
+            H.SuuUI.Settings:Set("unit_frames", "player_power_text_size", "sm")
+            local _, size = H.fontOf(bar()._texts.center)
+            expect(size).eq(H.token("fontSizeSm"))
+            local hb = H.SuuUI.Plugins:Get("unit_frames")._playerFrame._healthBar
+            local _, hsize = H.fontOf(hb._texts.center)
+            expect(hsize).as("the health bar keeps its own step").eq(H.token("fontSizeXl"))
+        end)
+
+        it("renders the readouts inside the resource bar", function()
+            setMode("left", "current")
+            setMode("right", "percent")
+            local b = bar()
+            H.expectInside(b._texts.left, b)
+            H.expectInside(b._texts.right, b)
+            H.expectCenteredV(b._texts.left, b)
+            H.expectTextNotClipped(b._texts.right)
+        end)
+
+        it("draws the readout over the fill", function()
+            setMode("center", "current_max")
+            setPower(100, 100)
+            H.runAnimations()
+            H.expectDrawsAbove(bar()._textOverlay, bar()._fillFrame)
+        end)
+    end)
+
     describe("info display", function()
         it("shows the player name", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")

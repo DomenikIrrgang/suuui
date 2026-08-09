@@ -171,12 +171,13 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
                 .deepEq({ "sm", "md", "lg", "xl" })
         end)
 
-        it("has exactly one readout size setting", function()
-            local n = 0
+        it("has one readout size setting per bar, never one per position", function()
+            local sizes = {}
             for _, e in ipairs(playerTab().schema) do
-                if e.key and e.key:match("text_size") then n = n + 1 end
+                if e.key and e.key:match("text_size") then sizes[#sizes + 1] = e.key end
             end
-            expect(n).as("per-position sizes were deliberately not built").eq(1)
+            expect(sizes).as("one step per bar; per-position sizes were not built")
+                .deepEq({ "player_health_text_size", "player_power_text_size" })
         end)
 
         it("groups the readout dropdowns before the height slider", function()
@@ -201,7 +202,37 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
         it("keeps the resource bar height editable", function()
             local sections = sectionsOf(playerTab())
             expect(sections[3].keys).as("resource height is still on the page")
-                .deepEq({ "player_power_height" })
+                .deepEq({
+                    "player_power_text_left", "player_power_text_center",
+                    "player_power_text_right", "player_power_text_size",
+                    "player_power_height",
+                })
+        end)
+
+        it("gives the resource bar the same readout controls as the health bar", function()
+            -- Written from the same helpers, so the two bars cannot drift apart: a player
+            -- who learnt the health readouts has already learnt these.
+            local function shapeOf(bar)
+                local out = {}
+                for _, e in ipairs(playerTab().schema) do
+                    if e.key and e.key:match("^player_" .. bar .. "_text_") then
+                        local values = {}
+                        for i, opt in ipairs(e.options) do values[i] = opt.value end
+                        out[#out + 1] = { e.label, e.type, table.concat(values, ",") }
+                    end
+                end
+                return out
+            end
+            expect(shapeOf("power")).deepEq(shapeOf("health"))
+        end)
+
+        it("starts the resource bar with every readout off", function()
+            -- The shorter of the two bars, and the one a player is least often reading a
+            -- number off, so it stays clean unless asked otherwise.
+            for _, slot in ipairs({ "left", "center", "right" }) do
+                expect(setting("player_power_text_" .. slot)).eq("none")
+            end
+            expect(setting("player_power_text_size")).eq("md")
         end)
 
         it("declares every per-unit key exactly once", function()

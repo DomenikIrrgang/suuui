@@ -47,19 +47,24 @@ local SIZE_KEYS = { "player_width", "player_health_height", "player_power_height
 local VIS_KEYS = { "player_show_name", "player_show_level", "player_hide_level_at_max" }
 
 ---------------------------------------------------------------------------
--- Health readouts
+-- Bar readouts
 --
--- Three independent slots overlaid inside the health bar, each free to show any of the
--- formats — so a player who wants the raw number on the left and the percentage on the
--- right gets that without either position being a special case.
+-- Three independent slots overlaid inside a bar, each free to show any of the formats — so
+-- a player who wants the raw number on the left and the percentage on the right gets that
+-- without either position being a special case.
+--
+-- Both bars share one implementation. Health and power are the same question asked of two
+-- numbers, so the formats, the slot loop, the watchers and the option lists are written
+-- once and parameterised by the bar; a second copy is the thing that drifts, and the two
+-- bars would end up offering different formats after the first change to either.
 --
 -- The bar takes plain strings, so what a number MEANS is decided here. These are the only
 -- formats, and the setting stores which one a slot uses rather than a format string: a
 -- stored pattern would be a value nothing validates and the dropdown could not describe.
 ---------------------------------------------------------------------------
-local HEALTH_TEXT_SLOTS = { "left", "center", "right" }
+local TEXT_SLOTS = { "left", "center", "right" }
 
-local HEALTH_TEXT = {
+local BAR_TEXT = {
     current_max = function(cur, mx) return format("%d / %d", cur, mx) end,
     current     = function(cur) return format("%d", cur) end,
     -- Floored, never rounded: a unit one hit from dead must not read 100%, and the moment
@@ -71,10 +76,24 @@ local HEALTH_TEXT = {
     -- clears the slot. A no-op function here would need its own branch at every call site.
 }
 
--- Fresh each call rather than one shared constant: the table is handed to three schema
--- entries and on to three Dropdown controls, and a shared options list is one aliased
--- table away from three controls editing each other's state.
-local function healthTextOptions()
+-- The bars that carry readouts, and where each reads its numbers from. The `id` is also
+-- the settings key infix, so it matches the height keys already on the page
+-- (`player_health_height`, `player_power_height`) rather than inventing a second spelling.
+local READOUT_BARS = {
+    { id = "health", field = "_healthBar", label = "Health Bar",
+      value = function() return UnitHealth("player") or 0, UnitHealthMax("player") or 1 end },
+    { id = "power",  field = "_resourceBar", label = "Resource Bar",
+      value = function() return UnitPower("player") or 0, UnitPowerMax("player") or 1 end },
+}
+
+-- Indexed by id for the update path, which is handed a bar name rather than iterating.
+local READOUT_BARS_BY_ID = {}
+for _, def in ipairs(READOUT_BARS) do READOUT_BARS_BY_ID[def.id] = def end
+
+-- Fresh each call rather than one shared constant: the table is handed to a schema entry
+-- and on to a Dropdown control — eight of them across the two bars — and a shared options
+-- list is one aliased table away from those controls editing each other's state.
+local function textOptions()
     return {
         { value = "none",        label = "None" },
         { value = "current_max", label = "Current / Max" },
@@ -84,28 +103,35 @@ local function healthTextOptions()
 end
 
 --- The settings key holding one slot's readout mode.
+-- @param bar string   "health" | "power"
 -- @param slot string  "left" | "center" | "right"
 -- @return string
-local function healthTextKey(slot)
-    return "player_health_text_" .. slot
+local function textKey(bar, slot)
+    return "player_" .. bar .. "_text_" .. slot
 end
 
--- The font step the readouts render at, as a player-editable setting.
+--- The settings key holding one bar's readout font step.
 --
--- One setting for the whole bar rather than one per position: three readouts on one bar at
--- three different sizes reads as a rendering fault, not as a choice.
+-- One setting per bar rather than one per position: three readouts on one bar at three
+-- different sizes reads as a rendering fault, not as a choice. Per BAR rather than one for
+-- the frame, because the two bars are different heights and the taller one can carry a
+-- bigger step.
 --
 -- It stores a size KEY, so the pixel size still comes from the theme and a readout set to
 -- Large follows a user's edit of `fontSizeLg`. A pixel value here would be this plugin
 -- holding a font size of its own, which is the duplication the token scale exists to
 -- prevent — and it would stop tracking the rest of the UI the moment the theme was scaled.
-local HEALTH_TEXT_SIZE_KEY = "player_health_text_size"
+-- @param bar string  "health" | "power"
+-- @return string
+local function textSizeKey(bar)
+    return "player_" .. bar .. "_text_size"
+end
 
--- The step a bar this tall wants, and the schema default. Declared once here so the
--- default and the option list cannot drift apart.
+-- The step both bars start at, and the schema default. Declared once here so a default and
+-- the option list cannot drift apart.
 local BAR_TEXT_SIZE = "md"
 
-local function healthTextSizeOptions()
+local function textSizeOptions()
     return {
         { value = "sm", label = "Small" },
         { value = "md", label = "Medium" },
@@ -371,8 +397,10 @@ end
 function PlayerFrame:Create(parent)
     local self = setmetatable({}, { __index = PlayerFrame })
     local m = metrics()
-    -- Resolved by the readout watchers below, before anything reads them.
-    self._healthFmt = {}
+    -- Resolved by the readout watchers below, before anything reads them. One slot table
+    -- per bar, allocated here so a watcher never has to check whether its bar exists yet.
+    self._fmt = {}
+    for _, def in ipairs(READOUT_BARS) do self._fmt[def.id] = {} end
 
     -- Bare grouping frame: no styling and no backdrop, so nothing draws behind the bars.
     -- Sized up front because the containers below lay out against a real geometry; the
@@ -503,25 +531,27 @@ function PlayerFrame:Create(parent)
         end, self._themeId .. "_" .. key)
     end
 
-    -- Readout modes. Immediate, because the watcher IS what resolves _healthFmt — reading
-    -- the three settings separately to seed it and then watching for changes would be two
-    -- places holding the same fact, and the seed is the one that goes stale.
-    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
-        SuuUI.Settings:Watch(PLUGIN_ID, healthTextKey(slot), function()
-            self:_syncHealthTextModes()
-            self:UpdateHealthText()
-        end, self._themeId .. "_" .. healthTextKey(slot), { immediate = true })
-    end
+    -- Readouts, per bar. Immediate, because the watcher IS what resolves the formatter
+    -- table and the font step — reading the settings separately to seed them and then
+    -- watching for changes would be two places holding the same fact, and the seed is the
+    -- one that goes stale.
+    for _, def in ipairs(READOUT_BARS) do
+        for _, slot in ipairs(TEXT_SLOTS) do
+            SuuUI.Settings:Watch(PLUGIN_ID, textKey(def.id, slot), function()
+                self:_syncTextModes(def.id)
+                self:UpdateReadouts(def.id)
+            end, self._themeId .. "_" .. textKey(def.id, slot), { immediate = true })
+        end
 
-    -- Readout size: one step for every slot, applied to the bar rather than per readout.
-    -- Immediate for the same reason as the modes — this is the first paint of the size, so
-    -- the bar is never built at a step the setting does not name.
-    SuuUI.Settings:Watch(PLUGIN_ID, HEALTH_TEXT_SIZE_KEY, function(val)
-        self._healthBar:SetTextSize(val)
-        -- The step decides the readouts' height, and the bar's own height does not follow
-        -- it — so nothing else re-flows the frame after a size change.
-        self:_syncSize()
-    end, self._themeId .. "_" .. HEALTH_TEXT_SIZE_KEY, { immediate = true })
+        -- One step for every slot on this bar, applied to the bar rather than per readout.
+        SuuUI.Settings:Watch(PLUGIN_ID, textSizeKey(def.id), function(val)
+            local widget = self[def.field]
+            if widget then widget:SetTextSize(val) end
+            -- The step decides the readouts' height, and a bar's own height does not follow
+            -- it — so nothing else re-flows the frame after a size change.
+            self:_syncSize()
+        end, self._themeId .. "_" .. textSizeKey(def.id), { immediate = true })
+    end
 
     -- WoW event frame for data updates
     self._events = CreateFrame("Frame")
@@ -619,32 +649,42 @@ function PlayerFrame:UpdateHealth(immediate)
     local mx  = UnitHealthMax("player") or 1
     self._healthBar:SetMax(mx, opts)
     self._healthBar:SetValue(cur, opts)
-    self:UpdateHealthText(cur, mx)
+    self:UpdateReadouts("health", cur, mx)
 end
 
---- Caches the formatter each readout slot is configured for.
+--- Caches the formatter each readout slot is configured for, for one bar.
 --
 -- Derived, never copied: the watcher re-resolves it — including on a profile switch, which
--- the watcher also delivers — so it cannot go stale. It exists so a health event does not
--- read three settings, since UNIT_HEALTH arrives several times a second under combat.
-function PlayerFrame:_syncHealthTextModes()
-    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
-        self._healthFmt[slot] = HEALTH_TEXT[SuuUI.Settings:Get(PLUGIN_ID, healthTextKey(slot))]
+-- the watcher also delivers — so it cannot go stale. It exists so a game event does not
+-- read three settings, since UNIT_HEALTH and UNIT_POWER_UPDATE arrive several times a
+-- second under combat.
+-- @param bar string  "health" | "power"
+function PlayerFrame:_syncTextModes(bar)
+    local slots = self._fmt[bar]
+    for _, slot in ipairs(TEXT_SLOTS) do
+        slots[slot] = BAR_TEXT[SuuUI.Settings:Get(PLUGIN_ID, textKey(bar, slot))]
     end
 end
 
---- Writes the three health readouts.
+--- Writes one bar's three readouts.
 --
 -- A slot set to "none" resolves to no formatter, and the nil clears it — so switching a
 -- readout off removes it rather than freezing it at the last value it happened to show.
--- @param cur number|nil  Current health; read from the unit when omitted
--- @param mx number|nil   Max health; read from the unit when omitted
-function PlayerFrame:UpdateHealthText(cur, mx)
-    cur = cur or UnitHealth("player") or 0
-    mx  = mx  or UnitHealthMax("player") or 1
-    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
-        local fmt = self._healthFmt[slot]
-        self._healthBar:SetText(slot, fmt and fmt(cur, mx) or nil)
+-- @param bar string     "health" | "power"
+-- @param cur number|nil Current value; read from the unit when omitted
+-- @param mx number|nil  Max value; read from the unit when omitted
+function PlayerFrame:UpdateReadouts(bar, cur, mx)
+    local def = READOUT_BARS_BY_ID[bar]
+    local widget = self[def.field]
+    if not widget then return end
+    if not (cur and mx) then
+        local c, m = def.value()
+        cur, mx = cur or c, mx or m
+    end
+    local slots = self._fmt[bar]
+    for _, slot in ipairs(TEXT_SLOTS) do
+        local fmt = slots[slot]
+        widget:SetText(slot, fmt and fmt(cur, mx) or nil)
     end
 end
 
@@ -659,6 +699,7 @@ function PlayerFrame:UpdatePower(immediate)
     self._resourceBar:SetFillColor(color)
     self._resourceBar:SetMax(mx, opts)
     self._resourceBar:SetValue(cur, opts)
+    self:UpdateReadouts("power", cur, mx)
 end
 
 function PlayerFrame:GetFrame()
@@ -801,23 +842,38 @@ local plugin = SuuUI:CreatePlugin({
                     --
                     -- Dropdowns as a block with the slider last, matching the General
                     -- section: controls of one kind read as one group.
-                    { key = healthTextKey("left"), label = "Left Text", type = "dropdown",
-                      default = "none", options = healthTextOptions() },
+                    { key = textKey("health", "left"), label = "Left Text", type = "dropdown",
+                      default = "none", options = textOptions() },
                     -- The one default that shows something. A bar with no readout at all
                     -- would ship the feature invisible, and the centre is where a single
                     -- readout belongs; the flanks stay off so the default stays quiet.
-                    { key = healthTextKey("center"), label = "Center Text", type = "dropdown",
-                      default = "current_max", options = healthTextOptions() },
-                    { key = healthTextKey("right"), label = "Right Text", type = "dropdown",
-                      default = "none", options = healthTextOptions() },
+                    { key = textKey("health", "center"), label = "Center Text", type = "dropdown",
+                      default = "current_max", options = textOptions() },
+                    { key = textKey("health", "right"), label = "Right Text", type = "dropdown",
+                      default = "none", options = textOptions() },
                     -- One step for all three readouts. A token key rather than a pixel
                     -- size, so it still follows a theme font edit.
-                    { key = HEALTH_TEXT_SIZE_KEY, label = "Text Size", type = "dropdown",
-                      default = BAR_TEXT_SIZE, options = healthTextSizeOptions() },
+                    { key = textSizeKey("health"), label = "Text Size", type = "dropdown",
+                      default = BAR_TEXT_SIZE, options = textSizeOptions() },
                     { key = "player_health_height", label = "Height", type = "slider",
                       min = 8, max = 60, step = 1, default = 39 },
 
                     { key = "", label = "Resource Bar", type = "section" },
+                    -- The same four controls as the health bar, from the same helpers: the
+                    -- two bars are one question asked of two numbers, and a player who
+                    -- learns the health readouts has already learnt these.
+                    --
+                    -- Every position defaults to None here. The resource bar is the shorter
+                    -- of the two and the one a player is least often reading a number off,
+                    -- so it stays clean unless asked otherwise.
+                    { key = textKey("power", "left"), label = "Left Text", type = "dropdown",
+                      default = "none", options = textOptions() },
+                    { key = textKey("power", "center"), label = "Center Text", type = "dropdown",
+                      default = "none", options = textOptions() },
+                    { key = textKey("power", "right"), label = "Right Text", type = "dropdown",
+                      default = "none", options = textOptions() },
+                    { key = textSizeKey("power"), label = "Text Size", type = "dropdown",
+                      default = BAR_TEXT_SIZE, options = textSizeOptions() },
                     { key = "player_power_height",  label = "Height", type = "slider",
                       min = 4, max = 40, step = 1, default = 22 },
                 }},
