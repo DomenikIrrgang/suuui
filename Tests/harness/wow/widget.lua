@@ -249,7 +249,10 @@ end
 ----------------------------------------------------------------------------------
 
 function Base:SetAlpha(a) self._alpha = a end
-function Base:GetAlpha()  return self._alpha end
+-- Defaults to 1 like the client's own widgets: a frame nobody has faded is fully opaque,
+-- so a disabled-state assertion can compare against 1 without the widget having been
+-- explicitly painted first.
+function Base:GetAlpha()  return self._alpha or 1 end
 
 function Base:SetScale(s)
     self._scale = s

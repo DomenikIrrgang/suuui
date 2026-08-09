@@ -87,12 +87,16 @@ function DdMeta:Destroy()
     self._f:Hide()
 end
 
---- Enables or disables the dropdown. Emits ENABLED_CHANGED.
--- @param en bool
-function DdMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
+--- Extra disabling behaviour beyond the canonical fade + mouse-drop. The panel rows
+--- are separate frames with their own mouse — disabling at the root does not block
+--- them. Closing the panel when disabling ensures no row click can fire VALUE_CHANGED.
+--- Hover state is also cleared so the border returns to rest.
+function DdMeta:_onEnabledChanged(en)
+    if not en then
+        self:_closePanel()
+        self._hovered = false
+        self:_paint()
+    end
 end
 
 --- Returns the selected option value.
@@ -218,6 +222,10 @@ function DdMeta:_row(index, opt)
     row:SetScript("OnLeave", function() B.SetBg(row, "colorBgAlt") end)
     local optFont = opt.font
     row:SetScript("OnMouseUp", function()
+        -- Guard against row clicks on a disabled dropdown. The panel should already be
+        -- closed by _onEnabledChanged, but a race between the fade-out animation and a
+        -- click landing on the row could still fire this.
+        if self._enabled == false then return end
         local old = self._value
         self._value = optVal
         self:_select({ value = optVal, label = optLabel, font = optFont })
@@ -285,11 +293,15 @@ function DdMeta:ApplyTheme()
     -- label has restyled — it depends on the selected face's metrics at the new size.
     self:_autosize()
     self:_reflow()
+    -- A live opacityDisabled edit reaches an already-disabled widget.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show. SetSize and Hide are defined
 -- above and survive: one clears the autosize flag, the other closes the panel.
 SuuUI.Components.InstallBase(DdMeta, "_f")
+-- Installs SetEnabled, IsEnabled, _applyEnabled via the canonical fade mechanism.
+SuuUI.Components.InstallEnable(DdMeta, "_f")
 
 --- Creates a custom dropdown.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, VISIBILITY_CHANGED.
@@ -356,6 +368,7 @@ function SuuUI.Components.Dropdown(props, parent)
         else handle:_openPanel() end
     end)
     f:SetScript("OnEnter", function()
+        if handle._enabled == false then return end
         handle._hovered = true
         handle:_paint()
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)

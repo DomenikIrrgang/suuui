@@ -7,7 +7,7 @@ local S = SuuUI.UISignals
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
-    local row = SuuUI._SettingsRow.Labelled(parent, entry.label)
+    local row, label = SuuUI._SettingsRow.Labelled(parent, entry.label)
 
     -- Size comes from the swatch's own size token
     local swatch = C.ColorSwatch({}, row:GetFrame())
@@ -26,6 +26,11 @@ local function Build(entry, pluginId, parent)
         local c = val or entry.default or {1, 1, 1, 1}
         swatch:SetValue(c[1], c[2], c[3], c[4] or 1)
     end, SuuUI.Settings.ControlOwner(pluginId, "color", entry.key), { immediate = true })
+
+    -- Greys the row out while a setting it depends on is off. No-op without enabledIf.
+    -- The label is a sibling in the row, not a child of the control, so it has to be
+    -- passed explicitly or half the row keeps looking live.
+    SuuUI._SettingsDeps.Bind(pluginId, entry, swatch, label)
 
     -- The picker is a shared singleton anchored to this swatch while it is open. If the
     -- page is torn down mid-edit it would keep pointing at a destroyed handle, so the row

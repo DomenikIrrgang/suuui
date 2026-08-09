@@ -22,15 +22,6 @@ function SwMeta:Destroy()
     self._f:Hide()
 end
 
---- Enables or disables interaction. Emits ENABLED_CHANGED.
--- @param en bool
-function SwMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    self._f:SetAlpha(en and 1 or 0.4)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
-
 --- Returns the swatch colour as r, g, b, a.
 -- @return number, number, number, number
 function SwMeta:GetValue()
@@ -74,11 +65,16 @@ function SwMeta:ApplyTheme()
             self._f:SetSize(size, size)
         end
     end
+
+    -- Re-apply enabled state so a live opacityDisabled token edit propagates.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
 -- above and survives: it has to clear the token-sizing flag.
 SuuUI.Components.InstallBase(SwMeta, "_f")
+-- Canonical enabled-state: single root-frame fade via opacityDisabled token.
+SuuUI.Components.InstallEnable(SwMeta, "_f")
 
 --- Creates a clickable colour swatch.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
@@ -137,7 +133,13 @@ function SuuUI.Components.ColorSwatch(props, parent)
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
     end)
     f:SetScript("OnLeave", function()
-        f:SetAlpha(handle._enabled == false and 0.4 or 1)
+        -- Restore the correct alpha: if disabled, re-apply the token-driven fade;
+        -- otherwise snap back to fully opaque.
+        if handle._enabled == false then
+            handle:_applyEnabled()
+        else
+            f:SetAlpha(1)
+        end
         S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
     end)
 

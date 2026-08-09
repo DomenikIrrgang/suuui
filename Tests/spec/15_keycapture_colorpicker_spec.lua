@@ -669,3 +669,344 @@ describe("Components.ColorPicker", function()
         expect(function() H.T:SetActive("Default") end).notThrows()
     end)
 end)
+
+describe("Components.KeyCapture — disabled state (InstallEnable)", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 100)
+        H.mods({})
+    end)
+
+    it("fades to the opacityDisabled token when disabled", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        expect(k:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+    end)
+
+    it("restores full alpha when re-enabled", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        k:SetEnabled(true)
+        expect(k:GetFrame():GetAlpha()).eq(1)
+    end)
+
+    it("drops mouse input on the outer frame when disabled", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        expect(k:GetFrame():IsMouseEnabled()).falsy()
+    end)
+
+    it("restores mouse input when re-enabled", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        k:SetEnabled(true)
+        expect(k:GetFrame():IsMouseEnabled()).truthy()
+    end)
+
+    it("emits ENABLED_CHANGED", function()
+        local k = H.C.KeyCapture({}, host)
+        local spy = H.signalSpy(k, H.S.SIGNALS.ENABLED_CHANGED)
+        k:SetEnabled(false)
+        k:SetEnabled(true)
+        expect(spy.count).eq(2)
+        expect(spy:arg(1, 1)).falsy()
+        expect(spy:arg(1, 2)).truthy()
+    end)
+
+    it("exposes IsEnabled", function()
+        local k = H.C.KeyCapture({}, host)
+        expect(k:IsEnabled()).truthy()
+        k:SetEnabled(false)
+        expect(k:IsEnabled()).falsy()
+    end)
+
+    it("does NOT double-fade the inner button — button alpha stays 1", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        -- The Button handle's _fade is false, so even though Button's own SetEnabled
+        -- is called via _onEnabledChanged, the button frame itself should remain at
+        -- the parent-cascaded alpha, not multiply it.
+        expect(k._btn:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        -- Crucially, the Button's own _applyEnabled must NOT set a second alpha on
+        -- the frame. The frame's raw alpha should be the token value, not token^2.
+        -- GetAlpha returns the frame's own alpha; cascaded alpha from parents is
+        -- separate (GetEffectiveAlpha). Since _btn:GetFrame() IS k:GetFrame(), the
+        -- value should match exactly.
+        expect(k._btn:GetFrame():GetAlpha()).eq(k:GetFrame():GetAlpha())
+    end)
+
+    it("refuses click delivery when disabled", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        expect(H.click(k)).falsy()
+    end)
+
+    it("stops an active capture session when disabled mid-capture", function()
+        local k = H.C.KeyCapture({}, host)
+        H.click(k)
+        expect(k._capturing).truthy()
+        k:SetEnabled(false)
+        expect(k._capturing).falsy()
+        expect(k._catcher:IsKeyboardEnabled()).falsy()
+    end)
+
+    it("propagates a live opacityDisabled token edit via ApplyTheme", function()
+        local k = H.C.KeyCapture({}, host)
+        k:SetEnabled(false)
+        H.T:CreateUserTheme("Dim", "Modern")
+        H.T:SetUserToken("Dim", "opacityDisabled", 0.25)
+        H.T:SetActive("Dim")
+        expect(k:GetFrame():GetAlpha()).eq(0.25)
+    end)
+
+    it("is visually distinct from enabled in every value state", function()
+        for _, val in ipairs({"", "F1", "CTRL-SHIFT-F12"}) do
+            local k = H.C.KeyCapture({ value = val }, host)
+            local enabledAlpha = k:GetFrame():GetAlpha()
+            k:SetEnabled(false)
+            expect(k:GetFrame():GetAlpha())
+                .as("disabled must differ for value='" .. val .. "'")
+                .neq(enabledAlpha)
+        end
+    end)
+end)
+
+describe("Components.ColorSwatch — disabled state (InstallEnable)", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 100)
+    end)
+
+    it("fades to the opacityDisabled token when disabled", function()
+        local sw = H.C.ColorSwatch({ value = {1, 0, 0, 1} }, host)
+        sw:SetEnabled(false)
+        expect(sw:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+    end)
+
+    it("restores full alpha when re-enabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        sw:SetEnabled(true)
+        expect(sw:GetFrame():GetAlpha()).eq(1)
+    end)
+
+    it("drops mouse input when disabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        expect(sw:GetFrame():IsMouseEnabled()).falsy()
+    end)
+
+    it("restores mouse input when re-enabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        sw:SetEnabled(true)
+        expect(sw:GetFrame():IsMouseEnabled()).truthy()
+    end)
+
+    it("emits ENABLED_CHANGED", function()
+        local sw = H.C.ColorSwatch({}, host)
+        local spy = H.signalSpy(sw, H.S.SIGNALS.ENABLED_CHANGED)
+        sw:SetEnabled(false)
+        sw:SetEnabled(true)
+        expect(spy.count).eq(2)
+    end)
+
+    it("exposes IsEnabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        expect(sw:IsEnabled()).truthy()
+        sw:SetEnabled(false)
+        expect(sw:IsEnabled()).falsy()
+    end)
+
+    it("refuses click delivery when disabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        expect(H.click(sw)).falsy()
+    end)
+
+    it("propagates a live opacityDisabled token edit via ApplyTheme", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        H.T:CreateUserTheme("Dim", "Modern")
+        H.T:SetUserToken("Dim", "opacityDisabled", 0.25)
+        H.T:SetActive("Dim")
+        expect(sw:GetFrame():GetAlpha()).eq(0.25)
+    end)
+
+    it("is visually distinct from enabled with a light colour", function()
+        local sw = H.C.ColorSwatch({ value = {1, 0.9, 0.8, 1} }, host)
+        local enabledAlpha = sw:GetFrame():GetAlpha()
+        sw:SetEnabled(false)
+        expect(sw:GetFrame():GetAlpha()).neq(enabledAlpha)
+    end)
+
+    it("is visually distinct from enabled with a very dark colour", function()
+        local sw = H.C.ColorSwatch({ value = {0.05, 0.05, 0.05, 1} }, host)
+        local enabledAlpha = sw:GetFrame():GetAlpha()
+        sw:SetEnabled(false)
+        expect(sw:GetFrame():GetAlpha()).neq(enabledAlpha)
+    end)
+
+    it("does not re-assert hardcoded alpha on OnLeave while disabled", function()
+        local sw = H.C.ColorSwatch({}, host)
+        sw:SetEnabled(false)
+        -- Simulate an OnLeave firing (e.g. from a programmatic cursor move)
+        sw:GetFrame():_fire("OnLeave")
+        expect(sw:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+    end)
+end)
+
+describe("Components.ColorPicker — disabled state (InstallEnable)", function()
+    local host
+    local SV_SIZE, BAR_W = 120, 185
+
+    before_each(function()
+        H.setup()
+        host = H.parent(400, 300)
+    end)
+
+    local function picker(props)
+        return H.mount(H.C.ColorPicker(props or {}, host))
+    end
+
+    it("fades to the opacityDisabled token when disabled", function()
+        local p = picker({ value = { 1, 0, 0, 1 } })
+        p:SetEnabled(false)
+        expect(p:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+    end)
+
+    it("restores full alpha when re-enabled", function()
+        local p = picker()
+        p:SetEnabled(false)
+        p:SetEnabled(true)
+        expect(p:GetFrame():GetAlpha()).eq(1)
+    end)
+
+    it("keeps root frame mouse-disabled (it was never mouse-enabled)", function()
+        local p = picker()
+        p:SetEnabled(false)
+        expect(p:GetFrame():IsMouseEnabled()).falsy()
+        p:SetEnabled(true)
+        -- Root frame was never mouse-enabled, so re-enable preserves that.
+        expect(p:GetFrame():IsMouseEnabled()).falsy()
+    end)
+
+    it("disables mouse on the SV area when disabled", function()
+        local p = picker()
+        p:SetEnabled(false)
+        expect(p._svFrame:IsMouseEnabled()).falsy()
+    end)
+
+    it("disables mouse on the hue bar when disabled", function()
+        local p = picker()
+        p:SetEnabled(false)
+        expect(p._hueFrame:IsMouseEnabled()).falsy()
+    end)
+
+    it("disables mouse on the alpha bar when disabled", function()
+        local p = picker()
+        p:SetEnabled(false)
+        expect(p._alphaFrame:IsMouseEnabled()).falsy()
+    end)
+
+    it("re-enables mouse on all areas when re-enabled", function()
+        local p = picker()
+        p:SetEnabled(false)
+        p:SetEnabled(true)
+        expect(p._svFrame:IsMouseEnabled()).truthy()
+        expect(p._hueFrame:IsMouseEnabled()).truthy()
+        expect(p._alphaFrame:IsMouseEnabled()).truthy()
+    end)
+
+    it("emits ENABLED_CHANGED", function()
+        local p = picker()
+        local spy = H.signalSpy(p, H.S.SIGNALS.ENABLED_CHANGED)
+        p:SetEnabled(false)
+        p:SetEnabled(true)
+        expect(spy.count).eq(2)
+        expect(spy:arg(1, 1)).falsy()
+        expect(spy:arg(1, 2)).truthy()
+    end)
+
+    it("exposes IsEnabled", function()
+        local p = picker()
+        expect(p:IsEnabled()).truthy()
+        p:SetEnabled(false)
+        expect(p:IsEnabled()).falsy()
+    end)
+
+    it("does not pick from the SV area while disabled", function()
+        local p = picker({ value = { 1, 0, 0, 1 } })
+        p:SetEnabled(false)
+        local before = { p:GetValue() }
+        local sv = H.box(p._svFrame)
+        H.cursor(sv.left + SV_SIZE / 2, H.state.screenHeight - (sv.top + SV_SIZE / 2))
+        H.forceClick(p._svFrame)
+        expect({ p:GetValue() }).deepEq(before)
+    end)
+
+    it("does not pick from the hue bar while disabled", function()
+        local p = picker({ value = { 1, 0, 0, 1 } })
+        p:SetEnabled(false)
+        local before = { p:GetValue() }
+        local bar = H.box(p._hueFrame)
+        H.cursor(bar.left + BAR_W / 2, H.state.screenHeight - (bar.top + 7))
+        H.forceClick(p._hueFrame)
+        expect({ p:GetValue() }).deepEq(before)
+    end)
+
+    it("does not pick from the alpha bar while disabled", function()
+        local p = picker({ value = { 1, 1, 1, 0.5 } })
+        p:SetEnabled(false)
+        local before = { p:GetValue() }
+        local bar = H.box(p._alphaFrame)
+        H.cursor(bar.left + BAR_W * 0.75, H.state.screenHeight - (bar.top + 7))
+        H.forceClick(p._alphaFrame)
+        expect({ p:GetValue() }).deepEq(before)
+    end)
+
+    it("ignores hex submission while disabled", function()
+        local p = picker({ value = { 1, 0, 0, 1 } })
+        p:SetEnabled(false)
+        p._hexInput:SetValue("00FF00FF")
+        H.pressEnter(p._hexInput)
+        expect({ p:GetValue() }).deepEq({ 1, 0, 0, 1 })
+    end)
+
+    it("stops an in-progress drag when disabled mid-drag", function()
+        local p = picker({ value = { 1, 1, 1, 1 } })
+        local bar = H.box(p._alphaFrame)
+        H.cursor(bar.left, H.state.screenHeight - (bar.top + 7))
+        H.mouseDown(p._alphaFrame, "LeftButton")
+        expect(p:GetFrame():GetScript("OnUpdate")).notNil()
+        p:SetEnabled(false)
+        expect(p:GetFrame():GetScript("OnUpdate")).isNil()
+    end)
+
+    it("propagates a live opacityDisabled token edit via ApplyTheme", function()
+        local p = picker()
+        p:SetEnabled(false)
+        H.T:CreateUserTheme("Dim", "Modern")
+        H.T:SetUserToken("Dim", "opacityDisabled", 0.25)
+        H.T:SetActive("Dim")
+        expect(p:GetFrame():GetAlpha()).eq(0.25)
+    end)
+
+    it("is visually distinct from enabled in every colour state", function()
+        for _, col in ipairs({
+            { 1, 0, 0, 1 },
+            { 0, 0, 0, 1 },
+            { 1, 1, 1, 0 },
+            { 0.5, 0.5, 0.5, 0.5 },
+        }) do
+            local p = picker({ value = col })
+            local enabledAlpha = p:GetFrame():GetAlpha()
+            p:SetEnabled(false)
+            expect(p:GetFrame():GetAlpha())
+                .as("disabled must differ for colour " .. table.concat(col, ","))
+                .neq(enabledAlpha)
+        end
+    end)
+end)

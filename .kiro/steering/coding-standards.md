@@ -61,12 +61,14 @@ local S = SuuUI.UISignals
 local CompMeta = {}
 CompMeta.__index = CompMeta
 
--- 1. Transient state: recolour only, never rebuild the backdrop table.
+-- 1. Transient state: recolour only, never rebuild the backdrop table. Note what is
+--    NOT here: the enabled state. A paint path must never branch on `_enabled` — see
+--    "Disabled State" below.
 function CompMeta:_paint()
     local B = SuuUI.Backdrop
     B.SetBg(self._f, self._hovered and "colorBgHover" or "colorBgAlt")
     B.SetBorder(self._f, "colorBorder")
-    self._labelText:SetColor(self._enabled == false and "disable" or "text")
+    self._labelText:SetColor("text")
 end
 
 -- 2. Re-derive token-driven size. Font tokens are user-editable, so a height taken
@@ -87,6 +89,9 @@ function CompMeta:ApplyTheme()
     -- may not have run yet. Apply it explicitly or this component measures the old font.
     self._labelText:ApplyTheme()
     self:_paint()
+    -- opacityDisabled is user-editable, so re-assert the disabled fade here too or a
+    -- live token edit never reaches a control that is already sitting disabled.
+    self:_applyEnabled()
     self:_autosize()
 end
 
@@ -99,13 +104,15 @@ function CompMeta:Destroy()
 end
 
 -- 4. A custom SetSize drops token sizing, then InstallBase fills the rest. It goes
---    last so every override above survives.
+--    last so every override above survives. InstallEnable follows for the enabled
+--    state; both are gap-fill only.
 function CompMeta:SetSize(w, h)
     self._autoH = false
     self._f:SetSize(w, h)
 end
 
 SuuUI.Components.InstallBase(CompMeta, "_f")
+SuuUI.Components.InstallEnable(CompMeta, "_f")
 
 --- Creates a thing. Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, SIZE_CHANGED.
 -- @param props table  { label, w, h }
@@ -169,6 +176,7 @@ The rules that shape it, and why:
 | `Components.Text` for any text | it re-measures on a `fontSize*` change; a raw font string does not |
 | Compose existing components | `Notice` is a `Modal`; `Modal` is `Text` + `Input` + `Button`; `Window`'s close is a `Button` |
 | `InstallBase` after your methods | gap-fill only, so custom overrides survive |
+| `InstallEnable` for the enabled state | one fade covers every value state; a recolour only covers the parts you remembered |
 | Host container for internals | `SetPoint` belongs to the four layout strategies alone |
 | `_paint()` vs `ApplyTheme()` | a hover should not rebuild a backdrop table every frame |
 | `GetControlHeight` for text | font tokens are user-editable; a literal height clips |
@@ -379,6 +387,50 @@ SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
 **Tests follow the same rule**: assert against `H.token(...)`, `H.textWidth(...)`,
 `H.lineHeight(...)`. A spec that hardcodes 234 passes for the wrong reason and fails the
 moment a token moves — see `TESTING.md`.
+
+## Disabled State
+
+**A disabled control must look different from the enabled one in EVERY state it can be
+in** — every value, selection, variant and focus combination. Not "usually different":
+off-and-disabled has to differ from off-and-enabled just as clearly as on-and-disabled
+differs from on-and-enabled. A user scanning a settings page decides what is live from the
+pixels alone.
+
+**One mechanism owns it: `SuuUI.Components.InstallEnable(Meta, "_f")`.** It fades the root
+frame to `opacityDisabled` and drops mouse input. Never hand-write `SetEnabled`.
+
+```lua
+-- Extra per-component behaviour hangs off the hook, not off a bespoke SetEnabled.
+function CompMeta:_onEnabledChanged(en)
+    self._hit:EnableMouse(en)     -- an inner hit frame the root fade cannot reach
+end
+```
+
+Why a fade and not a recolour: a recolour dims only the parts the component remembers to
+dim. That is exactly how a disabled Toggle used to keep a fully saturated accent track
+while only its knob greyed, and how a disabled Slider stayed pixel-identical to a live one
+at every value. A root-frame fade is state-independent by construction — there is no value
+or variant it can fail to cover.
+
+The rules that follow from it:
+
+| Rule | Because |
+|---|---|
+| Paint paths never branch on `_enabled` | the fade already carries the state; a recolour under a fade double-dims |
+| Call `_applyEnabled()` from `ApplyTheme` | `opacityDisabled` is user-editable and must reach an already-disabled widget |
+| Only the OUTERMOST handle fades | frame alpha cascades, so a composite delegating to a child multiplies the fades (0.4² = 0.16) — set `_fade = false` on the inner handle |
+| A faded widget must be inert | dropping the root frame's mouse is not always enough: an EditBox takes mouse without `EnableMouse`, and pooled menu rows are separate frames |
+| Never write an empty `SetEnabled` stub | `Dependency.Bind` guards with `if target.SetEnabled`, so a stub makes the guard pass and the caller believes the widget was greyed |
+| No disabled surface tokens | a `colorBgDisabled` that resolved to the same value as `colorBgAlt` is what hid this whole bug class; `colorTextDisabled` survives for `Components.Text` only |
+
+`Components.Text` is the one deliberate exception: it dims through `colorTextDisabled` and
+sets `_fade = false`, because fading a label that is already disabled-grey leaves it
+unreadable. Its root element is a `FontString`, which has no mouse to drop.
+
+**Test every state, not one.** A disabled-state spec asserts `GetAlpha()` against
+`H.token("opacityDisabled")` for each value the control can hold, plus that interaction is
+genuinely inert. A single "it dims" test is how a component ships passing while one of its
+states still looks live.
 
 ## Comments
 

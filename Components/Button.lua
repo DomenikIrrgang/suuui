@@ -82,38 +82,30 @@ function BtnMeta:GetLabel()
     return self._label:GetText()
 end
 
---- Enables or disables the button. Emits ENABLED_CHANGED.
--- @param en bool
-function BtnMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    self:ApplyTheme()
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
+-- SetEnabled is installed by InstallEnable below. No bespoke override needed: the
+-- canonical fade + mouse-drop covers all variant × value states uniformly.
 
 -- Surface, border and label colour for the resting state. Hover, press and disabled
 -- changes take this path so a state flip never rebuilds the backdrop table.
 function BtnMeta:_paint()
     local B  = SuuUI.Backdrop
-    local en = self._enabled ~= false
-    local vk = en and variantToken[self._variant] or nil
-    B.SetBg(self._f, en and "colorBgAlt" or "colorBgDisabled")
+    local vk = variantToken[self._variant]
+    B.SetBg(self._f, "colorBgAlt")
     B.SetBorder(self._f, vk or "colorBorder")
-    local tc = SuuUI.Theme:GetToken(not en and "colorTextDisabled" or (vk or "colorText"))
+    local tc = SuuUI.Theme:GetToken(vk or "colorText")
     if tc then self._label:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
 end
 
 function BtnMeta:ApplyTheme()
     local T   = SuuUI.Theme
-    local en  = self._enabled ~= false
-    local vk  = en and variantToken[self._variant] or nil
+    local vk  = variantToken[self._variant]
     -- The same snapped width Backdrop draws, so the label's padding matches the border
     -- it sits inside rather than the unsnapped token.
     local bw  = SuuUI.Pixel.Line(T:GetToken("borderWidth") or 1)
     local font= T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local sz  = T:GetToken("fontSizeMd") or 13
     SuuUI.Backdrop.Apply(self._f, {
-        bg     = en and "colorBgAlt" or "colorBgDisabled",
+        bg     = "colorBgAlt",
         border = vk or "colorBorder",
     })
     self:_paint()
@@ -125,18 +117,23 @@ function BtnMeta:ApplyTheme()
     self._padX = self._padXProp or (T:GetToken("spaceSm") or 8) + bw
     self._padY = self._padYProp or (T:GetToken("spaceXs") or 4) + bw
     self:_autosize()
+    -- A live opacityDisabled edit reaches an already-disabled widget.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
 -- above and survives: it has to clear the autosize flags.
 SuuUI.Components.InstallBase(BtnMeta, "_f")
+-- Installs SetEnabled, IsEnabled, _applyEnabled via the canonical fade mechanism.
+SuuUI.Components.InstallEnable(BtnMeta, "_f")
 
 --- Creates a fully custom styled button that hugs its label.
 -- Width and height are measured from the text plus token padding unless w/h are
 -- given. Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED,
 -- TEXT_CHANGED, SIZE_CHANGED.
--- @param props table  { label, onClick, variant, w, h, minW, minH, padX, padY }
+-- @param props table  { label, onClick, variant, w, h, minW, minH, padX, padY, scalePop }
 --   variant: nil (default) | "danger" | "success" | "warning" — tints border and label
+--   scalePop: false to drop the press pop, for chrome in a strip it would overflow
 -- @param parent frame
 -- @return table  Button handle
 function SuuUI.Components.Button(props, parent)
@@ -167,6 +164,9 @@ function SuuUI.Components.Button(props, parent)
     handle = setmetatable({
         _f=f, _label=lbl, _box=box, _eid=id, _enabled=true,
         _variant = props.variant,
+        -- Opt-in by default: the pop is the standard press feedback, and only chrome
+        -- wedged into a tight strip needs to give it up.
+        _scalePop = props.scalePop ~= false,
         _autoW = props.w == nil,
         _autoH = props.h == nil,
         _minW  = props.minW or 0,
@@ -196,7 +196,10 @@ function SuuUI.Components.Button(props, parent)
         B.SetBg(f, "colorBgPressed")
         -- Pressed deepens the accent border, distinguishing it from hover
         B.SetBorder(f, variantToken[handle._variant] or "colorAccentHover")
-        SuuUI.Anim.Presets.ScalePop(f)
+        -- Chrome buttons sitting inside a tight strip opt out: the pop grows the frame
+        -- past its container and reads as a glitch rather than feedback. The pressed
+        -- colours above are the whole affordance in that case.
+        if handle._scalePop then SuuUI.Anim.Presets.ScalePop(f) end
     end)
     f:SetScript("OnMouseUp", function(_, btn)
         if handle._enabled == false then return end

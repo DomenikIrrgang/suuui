@@ -420,6 +420,90 @@ describe("SettingsUI controls", function()
         end)
     end)
 
+    -- Until these were wired, _SettingsDeps.Bind was called from exactly one builder
+    -- (toggle), so an enabledIf on any other control type was accepted by the schema and
+    -- then silently ignored. One case per builder, so dropping any single Bind call fails.
+    describe("enabledIf dependency wiring", function()
+        -- type -> the component factory whose handle the row hands to Bind
+        local factoryFor = {
+            slider   = "Slider",
+            dropdown = "Dropdown",
+            text     = "Input",
+            color    = "ColorSwatch",
+            keybind  = "KeyCapture",
+        }
+
+        local function buildDependent(type_, extra)
+            local plugin = "dep_" .. type_
+            local entry = { key = "child", label = "Child", type = type_, enabledIf = "master" }
+            for k, v in pairs(extra or {}) do entry[k] = v end
+            H.SuuUI.Settings:Register(plugin, {
+                { key = "master", label = "Master", type = "toggle", default = true },
+                entry,
+            })
+
+            -- Wrap the factory so the spec holds the handle the builder created; the row
+            -- itself is an anonymous container and does not expose its control.
+            local name = factoryFor[type_]
+            local real, captured = H.SuuUI.Components[name], nil
+            H.SuuUI.Components[name] = function(...)
+                captured = real(...)
+                return captured
+            end
+            local builtRow = H.SuuUI._SettingsControls[type_](entry, plugin, host)
+            H.SuuUI.Components[name] = real
+
+            expect(captured).as(name .. " handle captured").notNil()
+            return captured, plugin, builtRow
+        end
+
+        for _, type_ in ipairs({ "slider", "dropdown", "text", "color", "keybind" }) do
+            it("greys a " .. type_ .. " whose dependency goes false", function()
+                local ctrl, plugin = buildDependent(type_,
+                    type_ == "slider" and { min = 0, max = 10, step = 1, default = 5 } or nil)
+
+                expect(ctrl:IsEnabled()).as("live while master is on").truthy()
+
+                H.SuuUI.Settings:Set(plugin, "master", false)
+                expect(ctrl:IsEnabled()).as("greyed when master goes off").falsy()
+                expect(ctrl:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+
+                H.SuuUI.Settings:Set(plugin, "master", true)
+                expect(ctrl:IsEnabled()).as("live again").truthy()
+                expect(ctrl:GetFrame():GetAlpha()).eq(1)
+            end)
+        end
+
+        -- The label is a sibling in the row, not a child of the control, so the fade on
+        -- the control cannot reach it. It has to be passed to Bind explicitly.
+        it("greys the row label alongside the control", function()
+            H.SuuUI.Settings:Register("dep_label", {
+                { key = "master", label = "Master", type = "toggle", default = true },
+                { key = "child", label = "Child", type = "dropdown", enabledIf = "master",
+                  options = { "a", "b" } },
+            })
+
+            local realText, texts = H.SuuUI.Components.Text, {}
+            H.SuuUI.Components.Text = function(...)
+                local t = realText(...)
+                texts[#texts + 1] = t
+                return t
+            end
+            H.SuuUI._SettingsControls["dropdown"](
+                { key = "child", label = "Child", type = "dropdown", enabledIf = "master",
+                  options = { "a", "b" } }, "dep_label", host)
+            H.SuuUI.Components.Text = realText
+
+            -- Row.Labelled creates the row label first, before the control's own text.
+            local label = texts[1]
+            expect(label).notNil()
+            expect(label:IsEnabled()).as("live while master is on").truthy()
+
+            H.SuuUI.Settings:Set("dep_label", "master", false)
+            expect(label:IsEnabled()).as("label greys with the control").falsy()
+        end)
+    end)
+
     it("registers a builder for every schema type the docs list", function()
         for _, type_ in ipairs({ "toggle", "slider", "dropdown", "color", "text",
                                  "keybind", "section", "profile_manager", "theme_manager" }) do

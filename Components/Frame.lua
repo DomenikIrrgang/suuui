@@ -10,14 +10,6 @@ local variantMap = {
 local FrameMeta = {}
 FrameMeta.__index = FrameMeta
 
---- Enables or disables the frame. Emits ENABLED_CHANGED.
--- @param en bool
-function FrameMeta:SetEnabled(en)
-    self._enabled = en
-    self:ApplyTheme()
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
-
 --- Returns a container that lays out children inside this frame.
 -- @param props table  Optional container props (layout, dir, gap, padding, align)
 -- @return table  Container handle
@@ -39,15 +31,22 @@ end
 
 function FrameMeta:ApplyTheme()
     local bgKey = variantMap[self._variant]
-    if self._enabled == false then bgKey = "colorBgDisabled" end
     SuuUI.Backdrop.Apply(self._f, {
         bg     = bgKey,
         border = self._border ~= false and "colorBorder" or false,
     })
+    -- Re-apply the fade because opacityDisabled is a user-editable token and may have
+    -- changed alongside the theme switch.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
 SuuUI.Components.InstallBase(FrameMeta, "_f")
+
+-- Fills in SetEnabled, IsEnabled, _applyEnabled. Frame is a passive container: it
+-- never enables mouse on its own, so the remembered-mouse-state logic in InstallEnable
+-- correctly avoids forcing mouse back on after a disable/enable round-trip.
+SuuUI.Components.InstallEnable(FrameMeta, "_f")
 
 --- Creates a styled frame container.
 -- @param props table  { w, h, alpha, variant, border }
@@ -67,7 +66,6 @@ function SuuUI.Components.Frame(props, parent)
     local handle = setmetatable({
         _f       = f,
         _eid     = id,
-        _enabled = true,
         _variant = props.variant or "bg",
         _border  = props.border,
     }, FrameMeta)

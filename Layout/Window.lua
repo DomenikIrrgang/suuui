@@ -333,6 +333,10 @@ function SuuUI.Layout:CreateWindow(props)
     local closeBtn = C.Button({
         label = CLOSE_GLYPH, w = closeSize(), h = closeSize(),
         padX = CLOSE_GLYPH_PAD, padY = CLOSE_GLYPH_PAD,
+        -- The glyph is sized to fit the title strip exactly, so the press pop would grow
+        -- it outside the strip and read as the button jumping out and back. The pressed
+        -- bg and border still land, so the press is still acknowledged.
+        scalePop = false,
     }, titleStrip:GetFrame())
     SuuUI.UIRoot:RaiseAbove(closeBtn:GetFrame(), f, 10)
     titleBox:Add(closeBtn)

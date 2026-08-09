@@ -43,7 +43,7 @@ SuuUI/
 │   └── AnchorLayout.lua  -- absolute / fraction-driven placement (thumbs, panels)
 ├── Components/
 │   ├── Backdrop.lua      -- shared bg+border backdrop primitive (SuuUI.Backdrop)
-│   ├── Base.lua          -- InstallBase: shared handle accessors on a metatable
+│   ├── Base.lua          -- InstallBase / InstallEnable: shared handle behaviour
 │   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
 │   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
@@ -1103,6 +1103,11 @@ document it here.
 - `Base` — `SuuUI.Components.InstallBase(meta, field)` installs `GetWidth` `GetHeight`
   `IsShown` `GetFrame` `SetSize` `Show` `Hide` onto a component metatable, filling only
   the gaps so a custom override survives. `SetSize` never emits `SIZE_CHANGED`.
+  `SuuUI.Components.InstallEnable(meta, field)` does the same for the enabled state:
+  `SetEnabled` `IsEnabled` `_applyEnabled`, where disabled is one root-frame fade to
+  `opacityDisabled` plus dropped mouse input. Components add extra disabling behaviour on
+  an `_onEnabledChanged(en)` hook rather than writing their own `SetEnabled`, so no paint
+  path has to remember to grey itself. See coding-standards.md "Disabled State".
 
 **Components:**
 - `Frame` — base styled container. `variant`: `"bg"|"bgAlt"|"bgActive"|"transparent"`,

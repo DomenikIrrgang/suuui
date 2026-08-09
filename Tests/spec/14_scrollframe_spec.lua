@@ -363,9 +363,11 @@ describe("Components.ScrollFrame", function()
             H.expectStackedVertically(rows, 4)
         end)
 
-        it("treats SetEnabled as a no-op", function()
+        -- ScrollFrame is not a control. Removing SetEnabled ensures Dependency.lua's
+        -- guard (`if target.SetEnabled`) correctly skips it.
+        it("does not expose SetEnabled", function()
             local s = scroller()
-            expect(function() s:SetEnabled(false) end).notThrows()
+            expect(s.SetEnabled).as("ScrollFrame is not a control; Dependency skips it").isNil()
         end)
 
         it("keeps the standard accessors and reports visibility", function()

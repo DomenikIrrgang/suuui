@@ -196,6 +196,8 @@ When a page needs a visual element the library does not have:
      `SetBg` / `SetBorder` — never a hand-built `SetBackdrop` table
    - Shared accessors installed with `SuuUI.Components.InstallBase(Meta, "_f")`, not
      retyped by hand
+   - Enabled state installed with `SuuUI.Components.InstallEnable(Meta, "_f")` — never a
+     hand-written `SetEnabled`, and never a raw `SetAlpha` for the disabled fade
    - Text via `SuuUI.Components.Text`, so it re-measures on a `fontSize*` change
    - Token-driven colors and sizes, cached in `ApplyTheme()`
    - Blizzard scripts translated into `SuuUI.UISignals` emissions

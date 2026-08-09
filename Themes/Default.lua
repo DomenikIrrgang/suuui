@@ -30,6 +30,10 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     opacityBarTrack  = 0.60,
     -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
     opacityEditOverlay = 0.20,
+    -- How far a disabled control fades. It is the ONLY signal that a control is inert, so
+    -- it has to read at a glance on every widget, in every value state; low enough to be
+    -- unmistakable, high enough that the label is still readable.
+    opacityDisabled  = 0.40,
 
     -- Tier 2: surfaces. { ref, alpha } takes the primitive's RGB with a token alpha,
     -- so panel translucency is one slider instead of four colour edits.
@@ -38,7 +42,6 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorBgHover     = { ref = "colorGray800", alpha = "opacityPanel" },
     colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" },
-    colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" },
 
     -- Overlays. A modal's scrim dims the screen behind it; edit mode's drag surface takes
     -- the accent hue so "you can move this" reads the same as every other affordance.

@@ -25,15 +25,6 @@ function TogMeta:Destroy()
     self._f:Hide()
 end
 
---- Sets the enabled/interactive state. Emits ENABLED_CHANGED.
--- @param en bool
-function TogMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    self:_render()
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
-
 --- Returns the current toggle value.
 -- @return bool
 function TogMeta:GetValue()
@@ -53,8 +44,7 @@ function TogMeta:_render(snap)
     local T    = SuuUI.Theme
     local B    = SuuUI.Backdrop
     local on   = self._value
-    local en   = self._enabled ~= false
-    -- Value and enabled flips recolour only, so the backdrop table is never rebuilt.
+    -- Value flips recolour only, so the backdrop table is never rebuilt.
     B.SetBg(self._track, on and "colorAccent" or "colorBgAlt")
     B.SetBorder(self._track, "colorBorder")
 
@@ -85,7 +75,7 @@ function TogMeta:_render(snap)
         }):Play()
     end
 
-    B.SetBg(self._knob, en and KNOB_WHITE or "colorTextDisabled")
+    B.SetBg(self._knob, KNOB_WHITE)
 end
 
 function TogMeta:ApplyTheme()
@@ -104,11 +94,18 @@ function TogMeta:ApplyTheme()
     B.Apply(self._track, { bg = "colorBgAlt", border = "colorBorder" })
     B.Apply(self._knob,  { bg = KNOB_WHITE,   border = KNOB_WHITE })
     self:_render(true)
+    -- A live edit to opacityDisabled must reach a widget that is already sitting faded.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
 -- above and survives: it has to clear the token-sizing flag.
 SuuUI.Components.InstallBase(TogMeta, "_f")
+-- Canonical enabled-state handling: root-frame fade + mouse drop. No _onEnabledChanged
+-- hook is needed — the fade is the whole disabled visual, and _render deliberately does
+-- not consult _enabled, so the track keeps its accent instead of half-greying the way the
+-- old knob-only recolour did.
+SuuUI.Components.InstallEnable(TogMeta, "_f")
 
 --- Creates an animated toggle switch.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, MOUSE_ENTER, MOUSE_LEAVE.

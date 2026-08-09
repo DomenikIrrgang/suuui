@@ -591,6 +591,17 @@ describe("Layout.Window", function()
             local w = window()
             expect(H.click(w._closeBtn)).as("hidden chrome takes no input").falsy()
         end)
+
+        -- The glyph is sized to the title strip exactly, so a press pop would grow it
+        -- outside the strip. Regression guard for the close button visibly jumping out
+        -- and back when clicked.
+        it("does not pop the close button on press", function()
+            local w = window()
+            w:Show()
+            H.runAnimations()
+            H.mouseDown(w._closeBtn)
+            expect(w._closeBtn:GetFrame():GetScale()).as("no pop").near(1, 0.001)
+        end)
     end)
 
     describe("position persistence", function()

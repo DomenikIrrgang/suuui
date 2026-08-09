@@ -25,6 +25,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityBarTrack  = 0.60,
     -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
     opacityEditOverlay = 0.20,
+    -- See Themes/Default.lua: how far a disabled control fades.
+    opacityDisabled  = 0.40,
 
     -- Tier 2: surfaces
     colorBg          = { ref = "colorGray900", alpha = "opacityPanel" },
@@ -32,7 +34,6 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorBgHover     = { ref = "colorGray800", alpha = "opacityPanel" },
     colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" },
     colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" },
-    colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" },
 
     -- Overlays. A modal's scrim dims the screen behind it; edit mode's drag surface takes
     -- the accent hue so "you can move this" reads the same as every other affordance.

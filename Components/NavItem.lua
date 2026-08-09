@@ -17,14 +17,8 @@ function NavMeta:Destroy()
     self._f:Hide()
 end
 
---- Enables or disables the item. Emits ENABLED_CHANGED.
--- @param en bool
-function NavMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    self:ApplyTheme()
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
+-- SetEnabled is installed by InstallEnable below. No bespoke override needed: the
+-- canonical fade + mouse-drop covers both selected and unselected states uniformly.
 
 --- Sets the label text.
 -- @param text string
@@ -78,10 +72,14 @@ function NavMeta:ApplyTheme()
     self:_paint()
     -- A font size token change moves the label's width, so a hugging item re-measures.
     if self._autoW then self:_autosize() end
+    -- A live opacityDisabled edit reaches an already-disabled widget.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
 SuuUI.Components.InstallBase(NavMeta, "_f")
+-- Installs SetEnabled, IsEnabled, _applyEnabled via the canonical fade mechanism.
+SuuUI.Components.InstallEnable(NavMeta, "_f")
 
 --- Creates a selectable navigation row with a label.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.

@@ -18,12 +18,13 @@ function KeyMeta:Hide()
     S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, false)
 end
 
---- Enables or disables capture. Emits ENABLED_CHANGED.
--- @param en bool
-function KeyMeta:SetEnabled(en)
-    self._enabled = en
-    self._btn:SetEnabled(en)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
+--- Extra per-component behaviour when enabled state changes: set the inner Button's
+-- guard flag so its OnEnter/OnLeave/OnMouseUp handlers refuse interaction. We write
+-- the flag directly instead of calling btn:SetEnabled, because Button has its own
+-- InstallEnable whose _applyEnabled would fight over the shared frame's mouse state.
+function KeyMeta:_onEnabledChanged(en)
+    self._btn._enabled = en
+    if not en then self:_stop() end
 end
 
 --- Returns the current binding string.
@@ -41,11 +42,13 @@ end
 
 function KeyMeta:ApplyTheme()
     self._btn:ApplyTheme()
+    self:_applyEnabled()
 end
 
 function KeyMeta:Destroy()
     self:_stop()
     S:DisconnectAll(self)
+    SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     self._catchBox:Destroy()
     self._btn:Destroy()
 end
@@ -59,6 +62,11 @@ end
 -- Fills in GetWidth, GetHeight, IsShown, SetSize, Show against the wrapped Button
 -- handle. GetFrame and Hide are defined above and survive.
 SuuUI.Components.InstallBase(KeyMeta, "_btn")
+-- Canonical enabled-state: fades the underlying frame, drops mouse, emits
+-- ENABLED_CHANGED. The field is "_f" (the Button's raw frame) so EnableMouse and
+-- SetAlpha reach the actual WoW frame. The Button handle carries _fade = false to
+-- prevent a cascading double-fade if Button's own SetEnabled ever runs.
+SuuUI.Components.InstallEnable(KeyMeta, "_f")
 
 --- Creates a keybind capture control: a button that listens for the next keypress.
 -- Emits VALUE_CHANGED (newBind, oldBind), CLICKED.
@@ -86,6 +94,7 @@ function SuuUI.Components.KeyCapture(props, parent)
     catcher:Hide()
 
     local handle = setmetatable({
+        _f           = btn:GetFrame(),
         _btn         = btn,
         _catcher     = catcher,
         _catchBox    = catchBox,
@@ -94,6 +103,13 @@ function SuuUI.Components.KeyCapture(props, parent)
         _enabled     = true,
         _capturing   = false,
     }, KeyMeta)
+
+    -- The Button is a child of the same frame that InstallEnable fades. Suppress the
+    -- Button's own fade so the two do not multiply (0.4^2 = 0.16).
+    btn._fade = false
+    -- KeyCapture fully owns the frame's enabled-state (alpha + mouse). Neutralise
+    -- Button's _applyEnabled so its ApplyTheme path cannot fight with ours.
+    btn._applyEnabled = function() end
 
     -- The button re-fits itself to the binding text; pass that on so parent layouts re-flow
     S:Connect(btn, S.SIGNALS.SIZE_CHANGED, function(w, h)
@@ -130,6 +146,11 @@ function SuuUI.Components.KeyCapture(props, parent)
         btn:SetLabel("Press key...")
         S:Emit(handle, S.SIGNALS.CLICKED, button)
     end)
+
+    -- Listen for theme changes so _applyEnabled can track a live opacityDisabled edit.
+    local eid = "keycap_" .. tostring(btn:GetFrame())
+    handle._eid = eid
+    SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, eid)
 
     return handle
 end
