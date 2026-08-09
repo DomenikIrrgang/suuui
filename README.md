@@ -54,7 +54,7 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 2048 assertions with no external dependencies — no busted, no luarocks.
+runs 2124 assertions with no external dependencies — no busted, no luarocks.
 
 Full contracts live in `.kiro/steering/`: `architecture.md` for the subsystem reference,
 `LAYOUT_SYSTEM.md`, `UI_SIGNALS.md`, `WOW_API_ENCAPSULATION.md`, `coding-standards.md`,

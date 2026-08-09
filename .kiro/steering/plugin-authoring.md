@@ -708,7 +708,8 @@ SuuUI.Anim:Sequence({
 
 ## Hiding Blizzard UI
 
-Do this in `onEnable`, undo in `onDisable`. Never nil Blizzard frames.
+Do this in `onEnable`, undo in `onDisable`. Never nil a Blizzard frame and never
+`SetParent(nil)` it — both taint.
 
 ```lua
 onEnable = function()
@@ -719,11 +720,56 @@ onDisable = function()
 end,
 ```
 
-For frames that re-show themselves, unregister their events:
+**`onDisable` really does have to restore.** It is not only the path to a reload: a
+`plugin:Disable()` from a settings watcher, another plugin, or a spec runs with nothing
+behind it, and a frame left hidden there stays hidden for the rest of the session.
+
+### A frame that re-shows itself
+
+Most Blizzard frames show themselves again from their own events — entering the world,
+changing power type, an Edit Mode client applying a layout. `Hide()` alone does not survive
+that, so suppression needs a hook, and the hook needs a flag:
+
 ```lua
-frame:UnregisterAllEvents()
-frame:Hide()
+-- Keyed by frame: what THIS plugin is currently suppressing, and what it has hooked.
+local suppressed, hooked = {}, {}
+
+local function suppress(frame)
+    suppressed[frame] = true
+    -- HookScript cannot be undone, so the hook asks the flag on every show instead of
+    -- assuming it should always hide. It also keeps Blizzard's own handler, unlike SetScript.
+    if not hooked[frame] then
+        hooked[frame] = true
+        frame:HookScript("OnShow", function(self)
+            if suppressed[self] then self:Hide() end
+        end)
+    end
+    frame:Hide()
+end
+
+local function restore(frame)
+    if not suppressed[frame] then return end   -- never show a frame someone else hid
+    suppressed[frame] = nil                    -- BEFORE the Show, or the hook undoes it
+    frame:Show()
+end
 ```
+
+Three details are load-bearing, and each has a regression test:
+
+- **Do not `UnregisterAllEvents()`.** Nothing in the API enumerates a frame's registered
+  events, so unregistering is a one-way door: `onDisable` can never hand the frame back
+  alive. The guarded hook is a complete suppression mechanism on its own — a hidden frame
+  can only become visible through a show, and every show fires `OnShow` — so leave the
+  registrations where Blizzard put them.
+- **Clear the flag before the `Show()`.** The hook is permanent; restore in the other order
+  and it hides the frame straight back on the way out.
+- **Restore only what you suppressed.** With your feature switched off you never hid
+  anything, and showing the frame anyway overrides whatever else did.
+
+Both first-party plugins that suppress a Blizzard frame follow exactly this shape —
+`Plugins/UnitFrames/PlayerFrame.lua` (`PlayerFrame`) and `Plugins/CastBars/CastBars.lua`
+(`PlayerCastingBarFrame` / `CastingBarFrame`). Keep the existence check: a global whose name
+changed between client generations is simply absent on the other one.
 
 ---
 

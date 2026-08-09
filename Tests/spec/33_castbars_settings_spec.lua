@@ -242,13 +242,18 @@ describe("Plugins.CastBars – settings", function()
                 expect(cbf:IsShown()).eq(false)
             end)
 
-            it(name .. " has its events unregistered", function()
+            it(name .. " keeps its events so it can be handed back alive", function()
+                -- UnregisterAllEvents is a one-way door: nothing in the API enumerates a
+                -- frame's registered events, so a plugin that unregisters can never
+                -- restore. Suppression is the guarded OnShow hook instead, which costs
+                -- nothing to undo -- and the registrations are left where Blizzard put
+                -- them.
                 local cbf = H.env[name]
                 local count = 0
                 if cbf._events then
                     for _ in pairs(cbf._events) do count = count + 1 end
                 end
-                expect(count).as("no registered events").eq(0)
+                expect(count).as("events left where Blizzard put them").gt(0)
             end)
 
             it(name .. " stays hidden when something shows it again", function()
@@ -258,7 +263,58 @@ describe("Plugins.CastBars – settings", function()
                 cbf:Show()
                 expect(cbf:IsShown()).as("re-show is defeated").eq(false)
             end)
+
+            it(name .. " stays hidden when its own event handler shows it", function()
+                -- The realistic route: the frame re-shows itself from an event it
+                -- registered, which is exactly what leaving the registrations in place
+                -- allows. The hook is what has to catch it.
+                H.fireEvent("PLAYER_ENTERING_WORLD")
+                expect(H.env[name]:IsShown()).as("event-driven re-show is defeated").eq(false)
+            end)
+
+            it(name .. " is shown again when the plugin is disabled", function()
+                H.SuuUI.Plugins:Get(PLUGIN_ID):Disable()
+                expect(H.env[name]:IsShown())
+                    .as("a programmatic Disable has no reload behind it").eq(true)
+            end)
+
+            it(name .. " stays shown after a disable, not re-hidden by the hook", function()
+                -- The hook cannot be uninstalled, so the guard flag is the only thing
+                -- keeping it from hiding the frame straight back on the next show.
+                H.SuuUI.Plugins:Get(PLUGIN_ID):Disable()
+                H.env[name]:Hide()
+                H.env[name]:Show()
+                expect(H.env[name]:IsShown()).as("the hook is inert once restored").eq(true)
+                H.fireEvent("PLAYER_ENTERING_WORLD")
+                expect(H.env[name]:IsShown()).as("and stays inert under event traffic").eq(true)
+            end)
+
+            it(name .. " is suppressed again on a re-enable", function()
+                local p = H.SuuUI.Plugins:Get(PLUGIN_ID)
+                p:Disable()
+                p:Enable()
+                expect(H.env[name]:IsShown()).as("round-trip re-hides").eq(false)
+                H.env[name]:Show()
+                expect(H.env[name]:IsShown())
+                    .as("the existing hook is reused, not stacked").eq(false)
+            end)
         end
+
+        it("does not show a cast bar it never hid", function()
+            -- player_enabled off means nothing was suppressed, so onDisable must not
+            -- reach for the frame at all: another addon may be the one hiding it.
+            H.setup({ boot = false })
+            H.SuuUI.Settings:Register(PLUGIN_ID, {
+                { key = "player_enabled", label = "Enable Cast Bar", type = "toggle", default = false },
+            })
+            H.fireEvent("ADDON_LOADED", "SuuUI")
+            H.fireEvent("PLAYER_LOGIN")
+
+            local cbf = H.env.PlayerCastingBarFrame
+            cbf:Hide()
+            H.SuuUI.Plugins:Get(PLUGIN_ID):Disable()
+            expect(cbf:IsShown()).as("left as someone else set it").eq(false)
+        end)
 
         it("hides the legacy bar on a client that only has that name", function()
             H.setup({ castBarGlobals = { "CastingBarFrame" } })

@@ -83,6 +83,58 @@ describe("Plugins.UnitFrames", function()
             local blizFrame = H.env.PlayerFrame
             expect(blizFrame:IsShown()).eq(false)
         end)
+
+        it("keeps its events so it can be handed back alive", function()
+            -- UnregisterAllEvents is a one-way door: nothing in the API enumerates a
+            -- frame's registered events, so a plugin that unregisters can never restore.
+            -- Suppression is the guarded OnShow hook instead.
+            local count = 0
+            if H.env.PlayerFrame._events then
+                for _ in pairs(H.env.PlayerFrame._events) do count = count + 1 end
+            end
+            expect(count).as("events left where Blizzard put them").gt(0)
+        end)
+
+        it("stays hidden when something shows it again", function()
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown()).as("re-show is defeated").eq(false)
+        end)
+
+        it("stays hidden when its own event handler shows it", function()
+            -- The realistic route, and the reason leaving the registrations in place
+            -- needs the hook: the frame shows itself from an event it registered.
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.PlayerFrame:IsShown())
+                .as("event-driven re-show is defeated").eq(false)
+        end)
+
+        it("is shown again when the plugin is disabled", function()
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            expect(H.env.PlayerFrame:IsShown())
+                .as("a programmatic Disable has no reload behind it").eq(true)
+        end)
+
+        it("stays shown after a disable, not re-hidden by the hook", function()
+            -- The hook cannot be uninstalled, so the guard flag is the only thing keeping
+            -- it from hiding the frame straight back on the next show.
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            H.env.PlayerFrame:Hide()
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown()).as("the hook is inert once restored").eq(true)
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.PlayerFrame:IsShown())
+                .as("and stays inert under event traffic").eq(true)
+        end)
+
+        it("is suppressed again on a re-enable", function()
+            local p = H.SuuUI.Plugins:Get("unit_frames")
+            p:Disable()
+            p:Enable()
+            expect(H.env.PlayerFrame:IsShown()).as("round-trip re-hides").eq(false)
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown())
+                .as("the existing hook is reused, not stacked").eq(false)
+        end)
     end)
 
     describe("player frame creation", function()

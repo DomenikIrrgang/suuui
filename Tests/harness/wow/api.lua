@@ -51,20 +51,41 @@ function M.install(env)
     Minimap:SetSize(140, 140)
     Minimap:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -20, -20)
 
+    -- A Blizzard system frame arrives with its own events already registered and re-shows
+    -- itself from them: entering the world, changing power type, or an Edit Mode layout
+    -- being applied. Both halves matter to an addon that suppresses one.
+    --
+    -- The registration is state the addon must not destroy, because nothing in the API
+    -- enumerates a frame's registered events -- so UnregisterAllEvents is a one-way door
+    -- and the frame can never be handed back alive. The re-show is what a bare Hide()
+    -- cannot survive, and is the whole reason suppression needs an OnShow hook.
+    --
+    -- A stub with neither let a suppression spec assert "no registered events" against a
+    -- frame that never had any: it passed for the wrong reason, in both directions.
+    --
+    -- None of these events are fired by the boot sequence, so a spec exercises the
+    -- re-show path deliberately rather than tripping over it.
+    local BLIZZARD_SYSTEM_EVENTS = { "PLAYER_ENTERING_WORLD", "UNIT_HEALTH", "UNIT_DISPLAYPOWER" }
+    local function blizzardSystemFrame(frame)
+        for _, event in ipairs(BLIZZARD_SYSTEM_EVENTS) do frame:RegisterEvent(event) end
+        frame:SetScript("OnEvent", function(self) self:Show() end)
+        return frame
+    end
+
     -- Blizzard PlayerFrame stub (UnitFrames plugin hides it)
-    local PlayerFrame = CreateFrame("Frame", "PlayerFrame", UIParent)
+    local PlayerFrame = blizzardSystemFrame(CreateFrame("Frame", "PlayerFrame", UIParent))
     PlayerFrame:SetSize(180, 70)
     PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
 
     -- Blizzard cast bar stub (CastBars plugin hides it). A StatusBar in the live client;
-    -- a plain frame is enough here because the addon only unregisters and hides it.
+    -- a plain frame is enough here because the addon only hides it and watches it.
     --
     -- The name is a property of the client generation, not a constant: an Edit Mode
     -- client calls it PlayerCastingBarFrame, an older one CastingBarFrame. Both exist by
     -- default so a spec sees whichever the addon reaches for, and a spec that is about
     -- one generation narrows it through state.castBarGlobals.
     for _, name in ipairs(state.castBarGlobals or { "PlayerCastingBarFrame", "CastingBarFrame" }) do
-        local bar = CreateFrame("Frame", name, UIParent)
+        local bar = blizzardSystemFrame(CreateFrame("Frame", name, UIParent))
         bar:SetSize(195, 13)
         bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 160)
     end

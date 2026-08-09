@@ -792,4 +792,51 @@ describe("Components.StatusBar", function()
             H.expectTokenColor(H.borderColor(bar), "colorShield")
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- Enabled-state omission (deliberate — display-only, no mouse input)
+    --
+    -- StatusBar is not a control. It takes no mouse input and is never a target
+    -- of Dependency.Bind. Removing SetEnabled ensures Dependency.lua's guard
+    -- (`if target.SetEnabled`) correctly skips it. The composite that owns a bar
+    -- (a unit frame, a cast bar) fades its own outer handle, and frame alpha
+    -- cascades — so a bar has no second fade of its own.
+    ---------------------------------------------------------------------------
+    describe("enabled-state omission", function()
+        it("does not expose SetEnabled — not a control; Dependency skips it", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, max = 100, value = 50 }, host)
+            expect(bar.SetEnabled)
+                .as("StatusBar is display-only; Dependency.Bind must skip it").isNil()
+        end)
+
+        it("does not expose IsEnabled", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16 }, host)
+            expect(bar.IsEnabled).isNil()
+        end)
+
+        it("Dependency.Bind leaves a StatusBar alone instead of pretending to grey it", function()
+            -- The consequence that matters, and the reason an InstallEnable with
+            -- _fade = false would be wrong here rather than merely redundant: Bind's
+            -- guard is `if target.SetEnabled`, so a bar carrying a SetEnabled that
+            -- fades nothing and drops no mouse would satisfy the guard while staying
+            -- fully lit. Absent, it is skipped honestly.
+            local bar = H.C.StatusBar({ w = 100, h = 16, max = 100, value = 50 }, host)
+            H.SuuUI.Settings:Register("dep_probe", {
+                { key = "gate", label = "Gate", type = "toggle", default = true },
+                { key = "bar",  label = "Bar",  type = "slider", default = 1,
+                  enabledIf = "gate" },
+            })
+            local entry = H.SuuUI.Settings:GetSchema("dep_probe")[2]
+
+            local ok = pcall(H.SuuUI._SettingsDeps.Bind, "dep_probe", entry, bar)
+            expect(ok).as("binding a bar is a no-op, not an error").eq(true)
+
+            -- Flipping the dependency off must not reach the bar at all.
+            H.SuuUI.Settings:Set("dep_probe", "gate", false)
+            expect(bar:GetFrame():GetAlpha()).as("never faded").eq(1)
+            expect(bar.SetEnabled).as("still no stub to satisfy the guard").isNil()
+
+            H.SuuUI.Settings:Unwatch(H.SuuUI.Settings.ControlOwner("dep_probe", "slider", "bar"))
+        end)
+    end)
 end)

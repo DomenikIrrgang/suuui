@@ -374,6 +374,15 @@ function StatusBarMeta:Destroy()
     self._f:Hide()
 end
 
+-- StatusBar deliberately does NOT install InstallEnable (and has no SetEnabled).
+-- It is a display-only data visualisation that takes no mouse input and is never a
+-- settings-page control that Dependency.Bind would grey. It always sits inside a
+-- composite (a unit frame, a cast bar) whose OUTER handle owns the enabled state and
+-- fades — frame alpha cascades, so a second fade here would multiply (0.40 * 0.40 =
+-- 0.16) and render the bar nearly invisible. An InstallEnable with _fade = false
+-- would install a SetEnabled that does nothing visible (no fade, no mouse to drop),
+-- which is precisely the no-op stub the standing rule forbids: Dependency.Bind's
+-- guard (`if target.SetEnabled`) would pass while nothing is actually greyed.
 SuuUI.Components.InstallBase(StatusBarMeta, "_f")
 
 local WHITE = "Interface\\Buttons\\WHITE8x8"

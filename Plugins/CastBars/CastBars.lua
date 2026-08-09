@@ -185,39 +185,72 @@ end
 -- plugin does not replace yet.
 local BLIZZARD_CAST_FRAMES = { "PlayerCastingBarFrame", "CastingBarFrame" }
 
+-- Whether THIS plugin is currently suppressing a frame. The OnShow hook below is
+-- permanent -- HookScript cannot be undone -- so it asks this table on every show rather
+-- than assuming it should always hide. Without the flag, restoring the frame would be
+-- impossible: Show() would fire the hook and the hook would hide it straight back.
+local suppressed = {}
+
 -- Blizzard frames are permanent globals, so this never holds more than one entry per
 -- name. It exists so a disable/enable cycle does not stack a second hook on the frame.
 local hooked = {}
 
+-- Deliberately NOT UnregisterAllEvents(). Nothing in the API enumerates a frame's
+-- registered events, so unregistering is a one-way door: onDisable could never hand the
+-- frame back alive, which is what left Blizzard's bar dead until a reload. The hook is a
+-- complete suppression mechanism on its own -- a hidden frame can only become visible
+-- through a show, and every show fires OnShow -- so the registrations stay where Blizzard
+-- put them and the cost of suppressing is one Hide().
 local function suppress(frame)
-    frame:UnregisterAllEvents()
-    frame:Hide()
-    -- Unregistering closes every route the bar shows itself through on its own, but an
-    -- Edit Mode client re-shows a system frame when a layout is applied and never asks
-    -- us first. The hook is the only form that survives a Show this plugin did not
-    -- predict, and HookScript keeps Blizzard's own handler rather than replacing it.
+    suppressed[frame] = true
+    -- Unregistering would close the routes the bar shows itself through, but an Edit Mode
+    -- client re-shows a system frame when a layout is applied and never asks us first.
+    -- The hook is the only form that survives a Show this plugin did not predict, and
+    -- HookScript keeps Blizzard's own handler rather than replacing it.
     if not hooked[frame] then
         hooked[frame] = true
-        frame:HookScript("OnShow", function(self) self:Hide() end)
+        frame:HookScript("OnShow", function(self)
+            if suppressed[self] then self:Hide() end
+        end)
     end
+    frame:Hide()
 end
 
-local function hideBlizzardCastBar()
+-- Never touches a frame this plugin did not hide: with the player cast bar switched off
+-- we never suppressed anything, and showing it here would override whatever else hid it.
+--
+-- The flag is cleared BEFORE the Show, or the hook we cannot uninstall hides it again on
+-- the way out.
+local function restore(frame)
+    if not suppressed[frame] then return end
+    suppressed[frame] = nil
+    frame:Show()
+end
+
+local function forEachBlizzardCastFrame(fn)
     local found = false
     for _, name in ipairs(BLIZZARD_CAST_FRAMES) do
         local frame = _G[name]
         if frame then
-            suppress(frame)
+            fn(frame)
             found = true
         end
     end
+    return found
+end
+
+local function hideBlizzardCastBar()
     -- Say so rather than passing over it. A bare `if frame then` is what let this ship
     -- looking for the pre-Edit-Mode name alone: nothing errored, nothing happened, and
     -- Blizzard's cast bar stayed on screen underneath ours.
-    if not found then
+    if not forEachBlizzardCastFrame(suppress) then
         SuuUI.Debug("CastBars: no Blizzard player cast bar found to hide (looked for "
             .. tconcat(BLIZZARD_CAST_FRAMES, ", ") .. ")")
     end
+end
+
+local function restoreBlizzardCastBar()
+    forEachBlizzardCastFrame(restore)
 end
 
 ---------------------------------------------------------------------------
@@ -329,9 +362,13 @@ local plugin = SuuUI:CreatePlugin({
     end,
 
     onDisable = function(p)
+        -- Hand Blizzard's bar back before anything else: a programmatic Disable has no
+        -- reload behind it, so this is the only thing that undoes the suppression. Safe to
+        -- call unconditionally -- restore skips any frame this plugin did not hide.
+        restoreBlizzardCastBar()
+
         if not p._controllers then return end
         for _, ctl in pairs(p._controllers) do ctl:Stop() end
         p._controllers = nil
-        -- Blizzard frames are restored by the reload — no manual restore needed
     end,
 })

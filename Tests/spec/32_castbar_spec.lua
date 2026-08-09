@@ -897,4 +897,71 @@ describe("Plugins.CastBars – CastBar widget", function()
             end).notThrows()
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- Construction seeds itself through its own watchers
+    --
+    -- The layout and format watchers carry { immediate = true }, which makes the
+    -- callback the single place that establishes these values -- there is no
+    -- separate seeding call in the constructor. Section 5b of architecture.md is
+    -- explicit that the two together are duplication.
+    --
+    -- A bar built directly is what makes that testable. The plugin's own bar is
+    -- relaid out again by ApplyTheme and by the attach, both of which run after
+    -- construction during boot, so a bar that seeded nothing still measures
+    -- correctly through the live plugin and hides the omission completely.
+    ---------------------------------------------------------------------------
+    describe("construction seeds itself (immediate watchers)", function()
+        local function bareBar()
+            return H.SuuUI._CastBars.CastBar:Create(H.parent(400, 80), {
+                unit        = "player",
+                pluginId    = "cast_bars",
+                prefix      = "player_",
+                displayName = "Player",
+                attached    = false,
+            })
+        end
+
+        it("the time format is established without a constructor call", function()
+            -- _syncFormat resolves the time_format setting into _timeFmt. Nothing else
+            -- sets it, so an unseeded bar carries nil here and its first readout during
+            -- a cast has no formatter at all.
+            local b = bareBar()
+            expect(b._timeFmt).as("format resolved at construction").notNil()
+            b:Destroy()
+        end)
+
+        it("the icon is squared to the height setting without a constructor call", function()
+            -- Relayout derives the icon's width from the height setting -- a square icon
+            -- is as wide as the bar is tall. An unseeded bar never states that width.
+            local b = bareBar()
+            expect(b._iconProps.width)
+                .as("icon squared to the bar height").eq(setting("player_height"))
+            b:Destroy()
+        end)
+
+        it("the part-visibility settings are honoured at construction", function()
+            -- _syncParts is the one thing Relayout establishes that the constructor does
+            -- not do inline, so it is what proves the layout watcher really seeds itself.
+            -- A bar built while Show Icon is off must come up without an icon rather than
+            -- waiting for the first cast to notice.
+            H.SuuUI.Settings:Set("cast_bars", "player_show_icon", false)
+            H.SuuUI.Settings:Set("cast_bars", "player_show_time", false)
+            local b = bareBar()
+            expect(b._icon:IsShown()).as("icon off at construction").eq(false)
+            expect(b._timeText:IsShown()).as("time off at construction").eq(false)
+            expect(b._nameText:IsShown()).as("name still on").eq(true)
+            b:Destroy()
+        end)
+
+        it("a live format change still reaches the readout", function()
+            -- The other half of the contract: immediate must not have replaced the
+            -- reactive behaviour it was added alongside.
+            local b = bareBar()
+            local before = b._timeFmt
+            H.SuuUI.Settings:Set("cast_bars", "player_time_format", "percent")
+            expect(b._timeFmt ~= before).as("watcher still fires on a change").eq(true)
+            b:Destroy()
+        end)
+    end)
 end)

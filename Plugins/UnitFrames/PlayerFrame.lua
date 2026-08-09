@@ -376,14 +376,19 @@ function PlayerFrame:Create(parent)
 
     -- Bar heights are stated, not filled: the frame's height is derived FROM them, so a
     -- bar that sized itself from the frame would close the loop.
-    self._bars:Add(self._healthBar,   { width = "fill", height = m.health })
-    self._bars:Add(self._resourceBar, { width = "fill", height = m.resource })
+    --
+    -- Membership only, no height: the SIZE_KEYS watcher below runs immediately and is the
+    -- single place that states these heights. Repeating m.health here as well would be the
+    -- duplication section 5b exists to remove -- two sites to keep in step, and the one
+    -- that only runs at construction goes stale the moment a slider moves.
+    self._bars:Add(self._healthBar,   { width = "fill" })
+    self._bars:Add(self._resourceBar, { width = "fill" })
 
     -- No height on the info row: it hugs its own text, which is what makes the frame
     -- follow the font tokens. The wrapper then tracks the row through SIZE_CHANGED.
     self._root:Add(self._slotAbove, { width = "fill" })
     self._root:Add(self._infoRow,   { width = "fill" })
-    self._root:Add(self._bars,      { width = "fill", height = self:_barsHeight() })
+    self._root:Add(self._bars,      { width = "fill" })
     self._root:Add(self._slotBelow, { width = "fill" })
 
     S:Connect(self._infoRow, S.SIGNALS.SIZE_CHANGED, function()
@@ -405,15 +410,18 @@ function PlayerFrame:Create(parent)
     self._themeId = "unitframes_player_" .. tostring(self._wrapper)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end, self._themeId)
 
-    -- The dimension sliders are watched the same way: a settings change re-lays the frame
-    -- immediately and survives a profile switch, which rewrites these values underneath us.
+    -- The dimension sliders are watched with immediate = true: the watcher callback IS
+    -- the first paint — no separate seeding call. It also survives a profile switch,
+    -- which rewrites these values underneath us.
     for _, key in ipairs(SIZE_KEYS) do
         SuuUI.Settings:Watch(PLUGIN_ID, key, function()
             self:Relayout()
-        end, self._themeId .. "_" .. key)
+        end, self._themeId .. "_" .. key, { immediate = true })
     end
 
     -- Visibility settings: toggling name or level re-applies visibility and re-syncs size.
+    -- NOT immediate: UpdateAll(true) below already calls UpdateInfo, and it does strictly
+    -- more (seeds bar values with snap). Adding immediate would just repeat that work.
     for _, key in ipairs(VIS_KEYS) do
         SuuUI.Settings:Watch(PLUGIN_ID, key, function()
             self:SyncVisibility()
@@ -455,7 +463,6 @@ function PlayerFrame:Create(parent)
     end)
 
     self:UpdateAll(true)
-    self:_syncSize()
     return self
 end
 
@@ -570,13 +577,55 @@ local BLIZZARD_PLAYER_FRAMES = {
     "PlayerFrame",
 }
 
+-- Whether THIS plugin is currently suppressing a frame. The OnShow hook below is
+-- permanent -- HookScript cannot be undone -- so it asks this table on every show rather
+-- than assuming it should always hide. Without the flag, restoring the frame would be
+-- impossible: Show() would fire the hook and the hook would hide it straight back.
+local suppressed = {}
+
+-- Blizzard frames are permanent globals, so this never holds more than one entry per
+-- name. It exists so a disable/enable cycle does not stack a second hook on the frame.
+local hooked = {}
+
+-- Deliberately NOT UnregisterAllEvents(). Nothing in the API enumerates a frame's
+-- registered events, so unregistering is a one-way door: onDisable could never hand the
+-- frame back alive, which is what left Blizzard's player frame dead until a reload. The
+-- hook is a complete suppression mechanism on its own -- a hidden frame can only become
+-- visible through a show, and every show fires OnShow -- so the registrations stay where
+-- Blizzard put them and the cost of suppressing is one Hide().
+local function suppress(frame)
+    suppressed[frame] = true
+    if not hooked[frame] then
+        hooked[frame] = true
+        frame:HookScript("OnShow", function(self)
+            if suppressed[self] then self:Hide() end
+        end)
+    end
+    frame:Hide()
+end
+
+-- Never touches a frame this plugin did not hide: with the player frame switched off we
+-- never suppressed anything, and showing it here would override whatever else hid it.
+--
+-- The flag is cleared BEFORE the Show, or the hook we cannot uninstall hides it again on
+-- the way out.
+local function restore(frame)
+    if not suppressed[frame] then return end
+    suppressed[frame] = nil
+    frame:Show()
+end
+
 local function hideBlizzardPlayerFrame()
     for _, name in ipairs(BLIZZARD_PLAYER_FRAMES) do
         local frame = _G[name]
-        if frame then
-            frame:UnregisterAllEvents()
-            frame:Hide()
-        end
+        if frame then suppress(frame) end
+    end
+end
+
+local function restoreBlizzardPlayerFrame()
+    for _, name in ipairs(BLIZZARD_PLAYER_FRAMES) do
+        local frame = _G[name]
+        if frame then restore(frame) end
     end
 end
 
@@ -702,6 +751,10 @@ local plugin = SuuUI:CreatePlugin({
             p._playerFrame:Destroy()
             p._playerFrame = nil
         end
-        -- Blizzard frames are restored by the reload — no manual restore needed
+
+        -- Hand Blizzard's frame back. A programmatic Disable has no reload behind it, so
+        -- this is the only thing that undoes the suppression. Safe to call
+        -- unconditionally -- restore skips any frame this plugin did not hide.
+        restoreBlizzardPlayerFrame()
     end,
 })

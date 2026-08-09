@@ -45,12 +45,14 @@ SuuUI/
 │   ├── StackLayout.lua   -- overlay: inset, align, valign (replaces SetAllPoints)
 │   └── AnchorLayout.lua  -- absolute / fraction-driven placement (thumbs, panels)
 ├── Components/
+│   ├── TextMetrics.lua   -- non-visual: real width/height of a string (loads first)
 │   ├── Backdrop.lua      -- shared bg+border backdrop primitive (SuuUI.Backdrop)
 │   ├── Base.lua          -- InstallBase / InstallEnable: shared handle behaviour
 │   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
 │   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
 │   ├── Button.lua        -- full custom button (no Blizzard template)
+│   ├── Icon.lua          -- display-only texture, optional themed border, bevel trim
 │   ├── IconButton.lua
 │   ├── NavItem.lua       -- selectable labelled row (nav lists)
 │   ├── Toggle.lua        -- custom checkbox/toggle
@@ -64,22 +66,29 @@ SuuUI/
 │   ├── Tooltip.lua       -- custom tooltip
 │   ├── Divider.lua
 │   ├── Modal.lua         -- dialog with optional input
-│   └── Notice.lua        -- one-shot dismissible message, built on Modal
+│   ├── Notice.lua        -- one-shot dismissible message, built on Modal
+│   └── StatusBar.lua     -- progress/resource bar; fill is a fractional stack child
 ├── SettingsUI/
 │   ├── SettingsWindow.lua -- unified settings window (left nav + content)
 │   ├── PageBuilder.lua    -- auto-builds a settings page from schema
 │   └── Controls/          -- per-type setting control renderers
+│       ├── Row.lua
+│       ├── Dependency.lua
+│       ├── ColorPopup.lua
+│       ├── ThemeTokens.lua
+│       ├── Section.lua
 │       ├── Toggle.lua
 │       ├── Slider.lua
 │       ├── Dropdown.lua
 │       ├── Color.lua
 │       ├── Text.lua
 │       ├── Keybind.lua
-│       └── Section.lua
+│       ├── SubTabs.lua
+│       ├── ProfileManager.lua
+│       └── ThemeManager.lua
 ├── Plugins/               -- bundled first-party plugins live here
 │   ├── UnitFrames/
 │   ├── CastBars/
-│   ├── ActionBars/
 │   └── ...
 ├── Themes/
 │   ├── Default.lua        -- read-only default dark theme
@@ -590,7 +599,7 @@ fontSizeSm = 11    fontSizeMd = 13    fontSizeLg = 15    fontSizeXl = 18
 fontFamilyMain = "Friz Quadrata TT"   -- a font NAME; GetToken resolves it to a path
 
 -- Spacing, used for both gaps (between items) and padding (container insets)
-spaceXs = 4    spaceSm = 8    spaceMd = 12    spaceLg = 16    spaceXl = 24
+spaceXxs = 2   spaceXs = 4    spaceSm = 8    spaceMd = 12    spaceLg = 16    spaceXl = 24
 
 -- Sizes. Never hardcode a control height; see Theme:GetControlHeight.
 sizeControlSm = 18   -- toggle, swatch          sizeRow       = 28  -- settings rows
@@ -656,6 +665,8 @@ first non-colour, non-numeric control.
 SuuUI.Theme:GetToken(key)                       -- resolves aliases, derivations, fonts
 SuuUI.Theme:GetTokenRaw(key)                    -- stored value, before resolution
 SuuUI.Theme:GetUnitColor(key, unit)             -- class colour or token; always usable
+SuuUI.Theme:GetColorCode(key)                   -- a colour token as a |cffRRGGBB escape
+SuuUI.Theme:GetFontSize(sizeKey)                -- "sm"|"md"|"lg"|"xl" -> the fontSize* value
 SuuUI.Theme:GetControlHeight(sizeKey, fontKey)  -- size token floored by font metrics
 SuuUI.Theme:SetActive(name)                     -- fires SUUUI_THEME_CHANGED
 SuuUI.Theme:GetActive()
@@ -1486,7 +1497,7 @@ document it here.
   `"colorBorder"`), `transition` (strategy name or inline table, default: the registry
   default), `transitionDuration` (seconds for a full sweep, default: the `animBarFill`
   token). API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
-  `GetPercent`, `GetDisplayPercent`, `IsTransitioning`, `SetTransition`,
+  `GetPercent`, `GetDisplayPercent`, `IsTransitioning`, `SetTransition`, `GetTransition`,
   `SetTransitionDuration`, `SnapToTarget`, `SetFillColor`, `SetBgColor`, `SetBorderColor`,
   `SetBorderShown`, `IsBorderShown`, `Destroy`. The
   fill is a **fractional stack child** of the track (`widthFraction`), so the layout
@@ -1499,7 +1510,13 @@ document it here.
   `SetTransitionDuration` overrides the `animBarFill` token for one bar. A theme change
   never animates — `ApplyTheme` restates the current painted fraction without triggering
   the transition. Emits `VALUE_CHANGED`, `SIZE_CHANGED`, `VISIBILITY_CHANGED`, and
-  `STATUSBAR_SIGNALS.FILL_SETTLED`.
+  `STATUSBAR_SIGNALS.FILL_SETTLED`. **Deliberately has no `SetEnabled`**: it is
+  display-only, takes no mouse input, and is never a settings-page control, so it always
+  sits inside a composite whose outer handle owns the enabled fade. Installing
+  `InstallEnable` with `_fade = false` would leave a `SetEnabled` that fades nothing and
+  drops no mouse — the no-op stub that makes `Dependency.Bind`'s `if target.SetEnabled`
+  guard pass while nothing is actually greyed. Absent, it is skipped honestly, like
+  `Tooltip`, `Divider` and `ScrollFrame`.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
 - `Modal` — dialog with optional input, container-composed. `confirmVariant` tints the

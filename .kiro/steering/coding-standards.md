@@ -556,8 +556,10 @@ Narrow exceptions: a bare unstyled grouping frame handed straight to a container
 
 - Only use Blizzard templates when there is no reasonable alternative
   (EditBox for text input is the main exception) — and wrap it in a component.
-- When hiding Blizzard frames, use `frame:Hide()` or `frame:UnregisterAllEvents()`.
-  Do NOT nil them or `frame:SetParent(nil)` — this can cause taint.
+- When hiding Blizzard frames, use `frame:Hide()` plus a guarded `OnShow` hook for a frame
+  that re-shows itself — never `frame:UnregisterAllEvents()`, which nothing can undo, so
+  `onDisable` could never hand the frame back. Do NOT nil them or `frame:SetParent(nil)` —
+  this can cause taint. See "Hiding Blizzard UI" in `plugin-authoring.md`.
 - Check for frame existence before operating: `if frame and frame.Hide then`.
 - If a needed widget does not exist, build it in `Components/` — do not inline it.
 

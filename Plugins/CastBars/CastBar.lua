@@ -699,8 +699,6 @@ function CastBar:Create(parent, cfg)
     self._textRow:Add(self._nameText, { width = "fill" })
     self._textRow:Add(self._timeText, { width = "auto" })
 
-    self:_syncFormat()
-    self:Relayout()
     self:_hideContent()
 
     ------------------------------------------------------------------
@@ -711,7 +709,7 @@ function CastBar:Create(parent, cfg)
     for _, key in ipairs(LAYOUT_KEYS) do
         SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. key, function()
             self:Relayout()
-        end, self._owner .. ":" .. key)
+        end, self._owner .. ":" .. key, { immediate = true })
     end
     for _, key in ipairs(PAINT_KEYS) do
         SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. key, function()
@@ -722,7 +720,7 @@ function CastBar:Create(parent, cfg)
         SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. key, function()
             self:_syncFormat()
             self:_repaintTime()
-        end, self._owner .. ":" .. key)
+        end, self._owner .. ":" .. key, { immediate = true })
     end
 
     -- Edit mode decides what an idle bar shows. `immediate` matters: a bar created while
