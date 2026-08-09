@@ -25,6 +25,11 @@ local function Build(entry, pluginId, parent)
         sld:SetValue(val)
     end, SuuUI.Settings.ControlOwner(pluginId, "slider", entry.key), { immediate = true })
 
+    -- Greys the row out while a setting it depends on is off. No-op without enabledIf.
+    -- Only the slider is passed: it owns its own label strip, so the root-frame fade
+    -- already covers the text.
+    SuuUI._SettingsDeps.Bind(pluginId, entry, sld)
+
     return row
 end
 

@@ -40,12 +40,19 @@ function InpMeta:Destroy()
     self._f:Hide()
 end
 
---- Enables or disables text input. Emits ENABLED_CHANGED.
--- @param en bool
-function InpMeta:SetEnabled(en)
-    self._enabled = en
+--- Extra disabling behaviour beyond the canonical fade + mouse-drop. The EditBox
+--- accepts mouse input independently of its parent frame, and hover scripts on both
+--- the root frame and the edit box must be guarded so a faded input never flips its
+--- border to the focus colour.
+function InpMeta:_onEnabledChanged(en)
     self._eb:SetEnabled(en)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
+    if not en then
+        -- Clear focus and hover state so the border returns to rest when disabled
+        -- mid-interaction. ClearFocus fires OnEditFocusLost which resets _hasFocus.
+        if self._eb:HasFocus() then self._eb:ClearFocus() end
+        self._hasHover = false
+        self:_paint()
+    end
 end
 
 --- Returns current text value.
@@ -89,11 +96,15 @@ function InpMeta:ApplyTheme()
         T:GetToken("fontSizeMd") or 13, "")
     if tc then self._eb:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
     self:_autosize()
+    -- A live opacityDisabled edit reaches an already-disabled widget.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, Show, Hide. SetSize is defined
 -- above and survives: it has to clear the autosize flag.
 SuuUI.Components.InstallBase(InpMeta, "_f")
+-- Installs SetEnabled, IsEnabled, _applyEnabled via the canonical fade mechanism.
+SuuUI.Components.InstallEnable(InpMeta, "_f")
 
 --- Creates a themed text input.
 -- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
@@ -163,7 +174,10 @@ function SuuUI.Components.Input(props, parent)
         S:Emit(handle, S.SIGNALS.UNFOCUSED)
     end)
 
+    -- Hover scripts guard against the disabled state so a faded input never flips its
+    -- border to the focus colour.
     local function hoverOn()
+        if handle._enabled == false then return end
         handle._hasHover = true
         updateBorder()
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)

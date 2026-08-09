@@ -60,10 +60,77 @@ describe("Components.Frame", function()
         expect(f:GetFrame():GetBackdrop().edgeSize).eq(H.token("borderWidth"))
     end)
 
-    it("switches to the disabled surface when disabled", function()
-        local f = H.C.Frame({ w = 10, h = 10 }, host)
-        f:SetEnabled(false)
-        H.expectTokenColor(H.backdropColor(f), "colorBgDisabled")
+    describe("disabled state", function()
+        it("fades to opacityDisabled when disabled", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            f:SetEnabled(false)
+            expect(f:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        end)
+
+        it("restores full alpha when re-enabled", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            f:SetEnabled(false)
+            f:SetEnabled(true)
+            expect(f:GetFrame():GetAlpha()).eq(1)
+        end)
+
+        it("fades both bg and bgAlt variants identically", function()
+            for _, variant in ipairs({ "bg", "bgAlt" }) do
+                local f = H.C.Frame({ w = 10, h = 10, variant = variant }, host)
+                f:SetEnabled(false)
+                expect(f:GetFrame():GetAlpha()).as(variant .. " disabled alpha")
+                    .eq(H.token("opacityDisabled"))
+            end
+        end)
+
+        it("keeps the variant's own background token while disabled", function()
+            local f = H.C.Frame({ w = 10, h = 10, variant = "bgAlt" }, host)
+            f:SetEnabled(false)
+            H.expectTokenColor(H.backdropColor(f), "colorBgAlt")
+        end)
+
+        it("drops mouse input when disabled", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            f:GetFrame():EnableMouse(true)
+            f:SetEnabled(false)
+            expect(f:GetFrame():IsMouseEnabled()).falsy()
+        end)
+
+        it("restores mouse input when re-enabled", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            f:GetFrame():EnableMouse(true)
+            f:SetEnabled(false)
+            f:SetEnabled(true)
+            expect(f:GetFrame():IsMouseEnabled()).truthy()
+        end)
+
+        -- Frame is a passive container: it never explicitly enables mouse. A round-trip
+        -- through disable/enable must NOT force mouse on (it would start swallowing
+        -- clicks meant for children underneath).
+        it("does not enable mouse on a passive frame after a disable/enable round-trip", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            -- The default Frame never calls EnableMouse(true), so it starts off.
+            expect(f:GetFrame():IsMouseEnabled()).falsy()
+            f:SetEnabled(false)
+            f:SetEnabled(true)
+            expect(f:GetFrame():IsMouseEnabled()).as("passive frame stays non-mouse").falsy()
+        end)
+
+        it("re-reads opacityDisabled on theme change while already disabled", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            f:SetEnabled(false)
+            H.T:CreateUserTheme("Dim", "Modern")
+            H.T:SetUserToken("Dim", "opacityDisabled", 0.25)
+            H.T:SetActive("Dim")
+            expect(f:GetFrame():GetAlpha()).eq(0.25)
+        end)
+
+        it("reports IsEnabled correctly", function()
+            local f = H.C.Frame({ w = 10, h = 10 }, host)
+            expect(f:IsEnabled()).truthy()
+            f:SetEnabled(false)
+            expect(f:IsEnabled()).falsy()
+        end)
     end)
 
     it("emits ENABLED_CHANGED with the new state", function()
@@ -231,9 +298,6 @@ describe("Components.Text", function()
         end)
 
         it("reports the new height when a layout had pinned it", function()
-            -- An unsized font string tracks its own text, so there is nothing to report.
-            -- A layout-assigned height was measured at the old face, so a swap has to
-            -- emit or the container keeps the height it measured.
             local col = H.Layout:CreateContainer({
                 parent = host, layout = "flow", dir = "vertical", w = 200,
             })
@@ -255,9 +319,6 @@ describe("Components.Text", function()
         end)
 
         it("degrades an unloadable override instead of raising", function()
-            -- An override comes from a caller, and SetFont raises on an invalid asset.
-            -- ApplyTheme runs from a theme-change callback, so an error there would stop
-            -- every later element restyling.
             local t
             expect(function()
                 t = H.C.Text({ text = "x", font = "Interface/AddOns/Nope/gone.ttf" }, host)
@@ -315,12 +376,59 @@ describe("Components.Text", function()
         expect(col:GetHeight()).as("and the containing layout re-flows").gte(t:GetHeight())
     end)
 
-    it("switches to the disabled colour and back via SetEnabled", function()
-        local t = H.C.Text({ text = "x", color = "accent" }, host)
-        t:SetEnabled(false)
-        H.expectTokenColor(H.textColor(t), "colorTextDisabled")
-        t:SetEnabled(true)
-        H.expectTokenColor(H.textColor(t), "colorAccent")
+    describe("disabled state", function()
+        it("switches to the disabled colour via SetEnabled", function()
+            local t = H.C.Text({ text = "x", color = "accent" }, host)
+            t:SetEnabled(false)
+            H.expectTokenColor(H.textColor(t), "colorTextDisabled")
+        end)
+
+        it("restores the original colour when re-enabled", function()
+            local t = H.C.Text({ text = "x", color = "accent" }, host)
+            t:SetEnabled(false)
+            t:SetEnabled(true)
+            H.expectTokenColor(H.textColor(t), "colorAccent")
+        end)
+
+        -- Regression guard: Text opts out of the alpha fade because a greyed label at
+        -- 0.40 alpha is unreadable. If someone later 'unifies' the component onto the
+        -- fade, this test breaks.
+        it("keeps alpha 1 when disabled (no fade, only colour change)", function()
+            local t = H.C.Text({ text = "x" }, host)
+            t:SetEnabled(false)
+            expect(t:GetFrame():GetAlpha()).as("Text must not fade; it uses colour alone").eq(1)
+        end)
+
+        it("uses colorTextDisabled which is distinct from all enabled colour keys", function()
+            local t = H.C.Text({ text = "x" }, host)
+            t:SetEnabled(false)
+            local disabled = H.textColor(t)
+            for _, key in ipairs({ "text", "muted", "accent" }) do
+                local t2 = H.C.Text({ text = "x", color = key }, host)
+                local enabled = H.textColor(t2)
+                -- Manual deep-inequality: at least one channel must differ.
+                local same = true
+                for i = 1, 4 do
+                    if disabled[i] ~= enabled[i] then same = false; break end
+                end
+                expect(same).as("disabled must differ from " .. key).falsy()
+            end
+        end)
+
+        it("reports IsEnabled correctly", function()
+            local t = H.C.Text({ text = "x" }, host)
+            expect(t:IsEnabled()).truthy()
+            t:SetEnabled(false)
+            expect(t:IsEnabled()).falsy()
+        end)
+
+        it("emits ENABLED_CHANGED", function()
+            local t = H.C.Text({ text = "x" }, host)
+            local spy = H.signalSpy(t, H.S.SIGNALS.ENABLED_CHANGED)
+            t:SetEnabled(false)
+            expect(spy.count).eq(1)
+            expect(spy:arg(1)).falsy()
+        end)
     end)
 
     it("changes colour explicitly with SetColor", function()
@@ -444,9 +552,11 @@ describe("Components.Divider", function()
         expect(spy.count).eq(0)
     end)
 
-    it("treats SetEnabled as a no-op", function()
+    -- Divider does not expose SetEnabled — it is not a control. Dependency.lua's guard
+    -- (`if target.SetEnabled`) correctly skips it.
+    it("does not expose SetEnabled", function()
         local d = H.C.Divider({ w = 200, h = 1 }, host)
-        expect(function() d:SetEnabled(false) end).notThrows()
+        expect(d.SetEnabled).as("Divider is not a control; Dependency skips it").isNil()
     end)
 
     it("emits SIZE_CHANGED once from an explicit resize", function()

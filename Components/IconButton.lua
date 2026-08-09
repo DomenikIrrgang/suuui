@@ -3,15 +3,6 @@ local S = SuuUI.UISignals
 local IcoMeta = {}
 IcoMeta.__index = IcoMeta
 
---- Enables or disables the button. Emits ENABLED_CHANGED.
--- @param en bool
-function IcoMeta:SetEnabled(en)
-    self._enabled = en
-    self._f:EnableMouse(en)
-    self._icon:SetDesaturated(not en)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
-end
-
 function IcoMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
@@ -35,10 +26,14 @@ end
 function IcoMeta:ApplyTheme()
     SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
     self:_paint()
+    -- A live opacityDisabled edit reaches an already-disabled widget.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
 SuuUI.Components.InstallBase(IcoMeta, "_f")
+-- Installs SetEnabled, IsEnabled, _applyEnabled via the canonical fade mechanism.
+SuuUI.Components.InstallEnable(IcoMeta, "_f")
 
 --- Creates an icon button.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.

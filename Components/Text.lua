@@ -14,9 +14,15 @@ local colmap  = {
 local TextMeta = {}
 TextMeta.__index = TextMeta
 
-function TextMeta:GetWidth()     return self._fs:GetWidth() end
+-- Text opts OUT of the alpha fade. A label that is already disabled-grey (the
+-- colourTextDisabled token) fades to unreadable at 0.40 alpha. The colour change alone
+-- satisfies the design rule because colorTextDisabled is visually distinct from every
+-- enabled colour key in both shipped themes.
+TextMeta._fade = false
+
+function TextMeta:GetWidth()     return self._fs:GetWidth()  end
 function TextMeta:GetHeight()    return self._fs:GetHeight() end
-function TextMeta:IsShown()      return self._fs:IsShown() end
+function TextMeta:IsShown()      return self._fs:IsShown()   end
 function TextMeta:GetFrame()     return self._fs end
 
 function TextMeta:SetSize(w, h)
@@ -41,10 +47,11 @@ function TextMeta:SetColor(color)
     self:ApplyTheme()
 end
 
-function TextMeta:SetEnabled(en)
+--- Hook called by InstallEnable after the enabled state changes. Swaps to the
+-- disabled-grey colour token (or restores the base colour) and repaints.
+function TextMeta:_onEnabledChanged(en)
     self._color = en and (self._baseColor or "text") or "disable"
     self:ApplyTheme()
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
 end
 
 function TextMeta:Destroy()
@@ -107,6 +114,26 @@ function TextMeta:ApplyTheme()
     self._fs:SetFont(font, size, self._flags or "")
     self._fs:SetTextColor(col[1], col[2], col[3], col[4])
     self:_measure()
+end
+
+-- Text cannot use the generic InstallEnable because its root element is a FontString,
+-- which has no EnableMouse/IsMouseEnabled. The fade is already opted out (_fade = false)
+-- and a label never receives clicks, so manual definitions give the same contract
+-- (SetEnabled, IsEnabled, _applyEnabled, ENABLED_CHANGED signal) without the mouse path.
+function TextMeta:_applyEnabled()
+    -- No alpha fade (_fade = false) and no mouse to toggle on a FontString.
+    -- Exists so ApplyTheme can call it uniformly if desired.
+end
+
+function TextMeta:SetEnabled(en)
+    self._enabled = en ~= false
+    self:_applyEnabled()
+    if self._onEnabledChanged then self:_onEnabledChanged(self._enabled) end
+    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, self._enabled)
+end
+
+function TextMeta:IsEnabled()
+    return self._enabled ~= false
 end
 
 --- Creates a themed text element.

@@ -36,8 +36,6 @@ end
 local ScrMeta = {}
 ScrMeta.__index = ScrMeta
 
-function ScrMeta:SetEnabled()   end
-
 function ScrMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)

@@ -106,7 +106,7 @@ describe("coding-standards.md: Anatomy of a Component", function()
             local B = H.SuuUI.Backdrop
             B.SetBg(self._f, self._hovered and "colorBgHover" or "colorBgAlt")
             B.SetBorder(self._f, "colorBorder")
-            self._labelText:SetColor(self._enabled == false and "disable" or "text")
+            self._labelText:SetColor("text")
         end
 
         function CompMeta:_autosize()
@@ -120,6 +120,7 @@ describe("coding-standards.md: Anatomy of a Component", function()
             H.SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
             self._labelText:ApplyTheme()
             self:_paint()
+            self:_applyEnabled()
             self:_autosize()
         end
 
@@ -137,6 +138,7 @@ describe("coding-standards.md: Anatomy of a Component", function()
         end
 
         H.C.InstallBase(CompMeta, "_f")
+        H.C.InstallEnable(CompMeta, "_f")
 
         return function(props, parent)
             local T = H.T
@@ -198,6 +200,43 @@ describe("coding-standards.md: Anatomy of a Component", function()
             expect(t[name]).as(name).notNil()
         end
         expect(t:GetFrame()).notNil()
+    end)
+
+    -- The skeleton is the template every new component is copied from, so it has to model
+    -- the disabled contract too. A skeleton that greyed a label by hand is how the
+    -- per-part-recolour pattern kept being reintroduced.
+    it("gets the enabled-state contract from InstallEnable", function()
+        local t = Thing({ label = "Hello" }, host)
+        for _, name in ipairs({ "SetEnabled", "IsEnabled", "_applyEnabled" }) do
+            expect(t[name]).as(name).notNil()
+        end
+        expect(t:IsEnabled()).truthy()
+    end)
+
+    it("fades the whole widget when disabled, and restores it", function()
+        local t = Thing({ label = "Hello" }, host)
+        expect(t:GetFrame():GetAlpha()).eq(1)
+
+        t:SetEnabled(false)
+        expect(t:IsEnabled()).falsy()
+        expect(t:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        expect(t:GetFrame():IsMouseEnabled()).falsy()
+
+        t:SetEnabled(true)
+        expect(t:GetFrame():GetAlpha()).eq(1)
+        -- The skeleton's frame enables mouse at construction, so the round-trip has to
+        -- give it back rather than leaving a dead control behind.
+        expect(t:GetFrame():IsMouseEnabled()).truthy()
+    end)
+
+    it("re-asserts the fade when opacityDisabled changes under it", function()
+        local t = Thing({ label = "Hello" }, host)
+        t:SetEnabled(false)
+        H.T:CreateUserTheme("SkeletonDim", "Modern")
+        H.T:SetUserToken("SkeletonDim", "opacityDisabled", 0.25)
+        H.T:SetActive("SkeletonDim")
+        t:ApplyTheme()
+        expect(t:GetFrame():GetAlpha()).eq(0.25)
     end)
 
     it("paints itself from the surface and border tokens", function()

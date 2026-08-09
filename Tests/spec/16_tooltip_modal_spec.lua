@@ -199,8 +199,11 @@ describe("Components.Tooltip", function()
         expect(floating:GetFrame():IsShown()).truthy()
     end)
 
-    it("treats SetEnabled as a no-op", function()
-        expect(function() H.C.Tooltip({}, host):SetEnabled(false) end).notThrows()
+    -- Tooltip is not a control. Removing SetEnabled ensures Dependency.lua's guard
+    -- (`if target.SetEnabled`) correctly skips it.
+    it("does not expose SetEnabled", function()
+        expect(H.C.Tooltip({}, host).SetEnabled)
+            .as("Tooltip is not a control; Dependency skips it").isNil()
     end)
 end)
 

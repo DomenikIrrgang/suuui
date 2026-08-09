@@ -3,8 +3,6 @@ local S = SuuUI.UISignals
 local DivMeta = {}
 DivMeta.__index = DivMeta
 
-function DivMeta:SetEnabled()   end
-
 function DivMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)

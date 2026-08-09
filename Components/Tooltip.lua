@@ -8,8 +8,6 @@ local PAD_Y = 10
 local TipMeta = {}
 TipMeta.__index = TipMeta
 
-function TipMeta:SetEnabled() end
-
 -- SIZE_CHANGED is emitted here rather than from a frame resize hook: the tooltip's
 -- frame is sized through the shared floating host on every ShowTip, and reporting
 -- that as a consumer-visible resize would be noise.

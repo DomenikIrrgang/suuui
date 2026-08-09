@@ -50,12 +50,12 @@ function SldMeta:Destroy()
     self._f:Hide()
 end
 
---- Enables or disables the slider. Emits ENABLED_CHANGED.
--- @param en bool
-function SldMeta:SetEnabled(en)
-    self._enabled = en
+--- Extra per-component disabling behaviour: the inner hit frame must also drop
+-- mouse input, otherwise a faded slider still accepts drags through the hit overlay.
+-- The root-frame fade and root mouse state are handled by InstallEnable's canonical
+-- _applyEnabled; this hook covers the inner hit frame only.
+function SldMeta:_onEnabledChanged(en)
     self._hit:EnableMouse(en)
-    S:Emit(self, S.SIGNALS.ENABLED_CHANGED, en)
 end
 
 --- Returns the current slider value.
@@ -107,6 +107,8 @@ function SldMeta:ApplyTheme()
     self._labelT:ApplyTheme()
     self._valT:ApplyTheme()
     self:_resizeLabelStrip()
+    -- A live edit to opacityDisabled must reach a widget that is already sitting faded.
+    self:_applyEnabled()
 end
 
 -- The label strip grows with the font size token, so re-measure it and re-height the
@@ -122,6 +124,9 @@ end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame, SetSize, Show, Hide.
 SuuUI.Components.InstallBase(SldMeta, "_f")
+-- Canonical enabled-state handling: root-frame fade + mouse drop. The bespoke
+-- SetEnabled is gone; _onEnabledChanged disables the inner hit frame.
+SuuUI.Components.InstallEnable(SldMeta, "_f")
 
 --- Creates a custom slider.
 -- Emits VALUE_CHANGED (new, old), ENABLED_CHANGED, SIZE_CHANGED.

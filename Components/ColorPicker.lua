@@ -40,7 +40,20 @@ local function barThumbH()
     return SuuUI.Theme:GetToken("sizeControlSm") or 18
 end
 
-function CpMeta:SetEnabled(en) self._enabled = en end
+--- Extra per-component behaviour: disable mouse on the SV area, hue bar, alpha bar,
+-- and the hex input so a faded picker is truly inert.
+function CpMeta:_onEnabledChanged(en)
+    self._svFrame:EnableMouse(en)
+    self._hueFrame:EnableMouse(en)
+    self._alphaFrame:EnableMouse(en)
+    if self._hexInput and self._hexInput.SetEnabled then
+        self._hexInput:SetEnabled(en)
+    end
+    -- Stop an in-progress drag if we just disabled.
+    if not en then
+        self._f:SetScript("OnUpdate", nil)
+    end
+end
 
 -- SIZE_CHANGED is emitted here rather than from a frame resize hook: the panel is a
 -- floating popup at a fixed size, never stretched by a parent layout.
@@ -200,11 +213,15 @@ function CpMeta:ApplyTheme()
     for _, tex in ipairs(self._markers or {}) do
         if tex then tex:SetColorTexture(mk[1], mk[2], mk[3], mk[4] or 0.9) end
     end
+    -- Re-apply enabled state so a live opacityDisabled token edit propagates.
+    self:_applyEnabled()
 end
 
 -- Fills in GetWidth, GetHeight, IsShown, GetFrame. Show, Hide and SetSize are defined
 -- above and survive: Show/Hide arm the click-away watcher, and SetSize emits.
 SuuUI.Components.InstallBase(CpMeta, "_f")
+-- Canonical enabled-state: single root-frame fade via opacityDisabled token.
+SuuUI.Components.InstallEnable(CpMeta, "_f")
 
 -- Builds a labelled bar row (hue / alpha) and returns frame + anchor container + thumb
 local function barRow(parent, root, labelText, gap, thumbTex)
@@ -362,6 +379,7 @@ function SuuUI.Components.ColorPicker(props, parent)
         elseif mode == "alpha" then handle:_pickFromAlpha(cx) end
     end
     local function startDrag(which)
+        if handle._enabled == false then return end
         mode = which
         onUpdate()
         f:SetScript("OnUpdate", onUpdate)
@@ -381,6 +399,7 @@ function SuuUI.Components.ColorPicker(props, parent)
     f:SetScript("OnHide",               stopDrag)
 
     S:Connect(hexInput, C.INPUT_SIGNALS.SUBMITTED, function(hex)
+        if handle._enabled == false then return end
         hex = hex:match("^#?(%x+)$")
         if not hex then return end
         if #hex == 6 then hex = hex .. "FF" end
