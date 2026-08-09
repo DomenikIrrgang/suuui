@@ -839,4 +839,295 @@ describe("Components.StatusBar", function()
             H.SuuUI.Settings:Unwatch(H.SuuUI.Settings.ControlOwner("dep_probe", "slider", "bar"))
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- Overlay text
+    --
+    -- Three readout slots inside the bar's box. Placement is asserted as a RULE — inset
+    -- from an edge, centred on an axis — rather than as a measured width, because the
+    -- width comes from the text-measurement path and a spec that pinned the number would
+    -- be asserting the measurement rather than the layout.
+    ---------------------------------------------------------------------------
+    describe("overlay text", function()
+        -- How far a readout sits in from the bar's edge: past the border, then one space
+        -- step. Both are tokens, which is the whole reason not to write a number here.
+        local function inset(bar)
+            local bw = bar:IsBorderShown()
+                       and H.SuuUI.Pixel.Line(H.token("borderWidth")) or 0
+            return bw + H.token("spaceXs")
+        end
+
+        local function makeBar(props)
+            props = props or {}
+            props.w, props.h = props.w or 200, props.h or 24
+            props.max, props.value = props.max or 100, props.value or 50
+            return H.mount(H.C.StatusBar(props, host))
+        end
+
+        it("builds nothing until a slot is written", function()
+            local bar = makeBar()
+            expect(bar._textBox).as("no overlay frame for a bar with no text").isNil()
+            expect(bar._texts.left).isNil()
+            expect(bar:GetText("center")).isNil()
+        end)
+
+        it("builds a slot lazily on first write and reports it back", function()
+            local bar = makeBar()
+            bar:SetText("left", "42")
+            expect(bar:GetText("left")).eq("42")
+            expect(bar._texts.left).notNil()
+            expect(bar._textBox).notNil()
+            expect(bar._texts.center).as("only the slot written is built").isNil()
+        end)
+
+        it("clearing a slot that was never written builds nothing", function()
+            local bar = makeBar()
+            bar:SetText("center", nil)
+            expect(bar._textBox).as("no element to clear, so no overlay").isNil()
+        end)
+
+        it("nil clears a slot", function()
+            local bar = makeBar()
+            bar:SetText("right", "80%")
+            bar:SetText("right", nil)
+            expect(bar:GetText("right")).isNil()
+            expect(bar._texts.right:IsShown()).as("cleared, not left showing").eq(false)
+        end)
+
+        it("an empty string clears a slot, like nil", function()
+            local bar = makeBar()
+            bar:SetText("right", "80%")
+            bar:SetText("right", "")
+            expect(bar:GetText("right")).isNil()
+            expect(bar._texts.right:IsShown()).eq(false)
+        end)
+
+        it("showing a slot again after clearing reuses the element", function()
+            local bar = makeBar()
+            bar:SetText("left", "1")
+            local el = bar._texts.left
+            bar:SetText("left", nil)
+            bar:SetText("left", "2")
+            expect(bar._texts.left).as("no second element per slot").eq(el)
+            expect(el:IsShown()).eq(true)
+        end)
+
+        it("insets the left readout from the bar's left edge", function()
+            local bar = makeBar()
+            bar:SetText("left", "1234")
+            local dx = H.offset(bar._texts.left, bar)
+            expect(dx).near(inset(bar), 1)
+        end)
+
+        it("insets the right readout from the bar's right edge", function()
+            local bar = makeBar()
+            bar:SetText("right", "80%")
+            local bb, tb = H.box(bar), H.box(bar._texts.right)
+            expect((bb.left + bb.width) - (tb.left + tb.width)).near(inset(bar), 1)
+        end)
+
+        it("centres the centre readout on the bar", function()
+            local bar = makeBar()
+            bar:SetText("center", "50 / 100")
+            H.expectCenteredH(bar._texts.center, bar)
+        end)
+
+        it("centres every slot vertically", function()
+            local bar = makeBar({ h = 32 })
+            bar:SetText("left", "50")
+            bar:SetText("center", "50 / 100")
+            bar:SetText("right", "50%")
+            H.expectCenteredV(bar._texts.left, bar)
+            H.expectCenteredV(bar._texts.center, bar)
+            H.expectCenteredV(bar._texts.right, bar)
+        end)
+
+        it("keeps every readout inside the bar", function()
+            local bar = makeBar()
+            bar:SetText("left", "50")
+            bar:SetText("center", "50 / 100")
+            bar:SetText("right", "50%")
+            H.expectInside(bar._texts.left, bar)
+            H.expectInside(bar._texts.center, bar)
+            H.expectInside(bar._texts.right, bar)
+        end)
+
+        it("does not overlap the three slots at ordinary widths", function()
+            local bar = makeBar({ w = 300 })
+            bar:SetText("left", "50")
+            bar:SetText("center", "50 / 100")
+            bar:SetText("right", "50%")
+            H.expectNoOverlap({ bar._texts.left, bar._texts.center, bar._texts.right })
+        end)
+
+        it("draws the readout over the fill, not under it", function()
+            -- The fill lives in a CHILD frame of the bar, so a font string in the bar's
+            -- own layers would be hidden behind a full bar. The overlay is what carries
+            -- the z-order, and this is the assertion that would catch it losing.
+            local bar = makeBar({ value = 100 })
+            bar:SetText("center", "100 / 100")
+            H.expectDrawsAbove(bar._textOverlay, bar._fillFrame)
+            expect(bar._texts.center:GetFrame():GetParent())
+                .as("the readout rides the overlay").eq(bar._textOverlay)
+        end)
+
+        it("reserves enough box for the glyphs in every slot", function()
+            local bar = makeBar({ w = 300 })
+            bar:SetText("left", "12345")
+            bar:SetText("center", "12345 / 67890")
+            bar:SetText("right", "100%")
+            H.expectTextNotClipped(bar._texts.left)
+            H.expectTextNotClipped(bar._texts.center)
+            H.expectTextNotClipped(bar._texts.right)
+        end)
+
+        it("renders at the small font step by default", function()
+            local bar = makeBar()
+            bar:SetText("center", "50")
+            local _, size = H.fontOf(bar._texts.center)
+            expect(size).eq(H.token("fontSizeSm"))
+        end)
+
+        it("takes its font step from the textSize prop", function()
+            local bar = makeBar({ textSize = "lg" })
+            bar:SetText("center", "50")
+            local _, size = H.fontOf(bar._texts.center)
+            expect(size).eq(H.token("fontSizeLg"))
+        end)
+
+        it("changes the step of every slot at once through SetTextSize", function()
+            -- One step for the whole bar: three readouts on one bar at three sizes reads
+            -- as a rendering fault rather than a choice.
+            local bar = makeBar({ w = 300 })
+            bar:SetText("left", "50")
+            bar:SetText("center", "50 / 100")
+            bar:SetText("right", "50%")
+            bar:SetTextSize("xl")
+            expect(bar:GetTextSize()).eq("xl")
+            for _, slot in ipairs({ "left", "center", "right" }) do
+                local _, size = H.fontOf(bar._texts[slot])
+                expect(size).as(slot .. " follows the bar's step").eq(H.token("fontSizeXl"))
+                H.expectTextNotClipped(bar._texts[slot])
+            end
+        end)
+
+        it("applies the step to a slot written after the change", function()
+            -- Order must not matter: a plugin sets the size from a watcher and writes the
+            -- readouts from a game event, and neither knows which lands first.
+            local bar = makeBar()
+            bar:SetTextSize("lg")
+            bar:SetText("center", "50 / 100")
+            local _, size = H.fontOf(bar._texts.center)
+            expect(size).eq(H.token("fontSizeLg"))
+        end)
+
+        it("keeps the readouts placed and unclipped at a bigger step", function()
+            local bar = makeBar({ w = 300, h = 40 })
+            bar:SetText("left", "8420")
+            bar:SetText("right", "92%")
+            bar:SetTextSize("xl")
+            expect(H.offset(bar._texts.left, bar)).near(inset(bar), 1)
+            local bb, tb = H.box(bar), H.box(bar._texts.right)
+            expect((bb.left + bb.width) - (tb.left + tb.width)).near(inset(bar), 1)
+            H.expectCenteredV(bar._texts.left, bar)
+        end)
+
+        it("still follows the token after the step changed", function()
+            local bar = makeBar()
+            bar:SetText("center", "50 / 100")
+            bar:SetTextSize("lg")
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeLg", 26)
+            H.T:SetActive("Big")
+            local _, size = H.fontOf(bar._texts.center)
+            expect(size).as("the step is a key, not an escape from the theme").eq(26)
+        end)
+
+        it("ignores a nil step rather than dropping to a default", function()
+            local bar = makeBar({ textSize = "lg" })
+            bar:SetText("center", "50")
+            bar:SetTextSize(nil)
+            expect(bar:GetTextSize()).eq("lg")
+        end)
+
+        it("re-derives the readout font when the token moves", function()
+            local bar = makeBar({ textSize = "md" })
+            bar:SetText("center", "50 / 100")
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 30)
+            H.T:SetActive("Big")
+            local _, size = H.fontOf(bar._texts.center)
+            expect(size).as("font steps are user-editable").eq(30)
+            H.expectTextNotClipped(bar._texts.center)
+            H.expectCenteredH(bar._texts.center, bar)
+        end)
+
+        it("re-derives the readout inset when the spacing token moves", function()
+            local bar = makeBar()
+            bar:SetText("left", "50")
+            H.T:CreateUserTheme("Roomy", "Modern")
+            H.T:SetUserToken("Roomy", "spaceXs", 12)
+            H.T:SetActive("Roomy")
+            local dx = H.offset(bar._texts.left, bar)
+            expect(dx).as("inset follows the token, not the value at construction")
+                .near(inset(bar), 1)
+        end)
+
+        it("keeps the readouts placed when the bar is resized by a layout", function()
+            local bar = makeBar({ w = 200 })
+            bar:SetText("left", "50")
+            bar:SetText("right", "50%")
+            bar:GetFrame():SetWidth(320)
+            local dx = H.offset(bar._texts.left, bar)
+            expect(dx).near(inset(bar), 1)
+            local bb, tb = H.box(bar), H.box(bar._texts.right)
+            expect((bb.left + bb.width) - (tb.left + tb.width)).near(inset(bar), 1)
+        end)
+
+        it("skips the work when the readout has not changed", function()
+            -- A readout is written on every game event and usually says the same thing;
+            -- a percentage stays 51% for most of the ticks that produce it.
+            local bar = makeBar()
+            bar:SetText("center", "50 / 100")
+            local spy = H.signalSpy(bar._texts.center, H.S.SIGNALS.TEXT_CHANGED)
+            bar:SetText("center", "50 / 100")
+            expect(spy.count).as("an identical write does nothing").eq(0)
+            bar:SetText("center", "49 / 100")
+            expect(spy.count).eq(1)
+        end)
+
+        it("rejects a slot name it has no placement for", function()
+            local bar = makeBar()
+            expect(function() bar:SetText("middle", "50") end).throws("slot")
+            expect(function() bar:GetText("top") end).throws("slot")
+        end)
+
+        it("insets past the border on a bordered bar", function()
+            local plain = makeBar({ border = true })
+            plain:SetText("left", "50")
+            local bordered = H.offset(plain._texts.left, plain)
+
+            local bare = makeBar({ border = false })
+            bare:SetText("left", "50")
+            local borderless = H.offset(bare._texts.left, bare)
+
+            expect(bordered).as("text clears the edge it would otherwise sit on")
+                .gt(borderless)
+            expect(bordered - borderless)
+                .near(H.SuuUI.Pixel.Line(H.token("borderWidth")), 1)
+        end)
+
+        it("releases the readouts on Destroy", function()
+            local bar = makeBar()
+            bar:SetText("left", "50")
+            bar:SetText("center", "50 / 100")
+            local el = bar._texts.left
+            local spy = H.signalSpy(el, H.S.SIGNALS.TEXT_CHANGED)
+            bar:Destroy()
+            expect(bar._textBox).isNil()
+            expect(next(bar._texts)).as("every element released").isNil()
+            H.SuuUI.Events:Emit("SUUUI_THEME_CHANGED", "Modern")
+            expect(spy.count).as("a destroyed readout is not restyled").eq(0)
+        end)
+    end)
 end)

@@ -103,9 +103,93 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
 
         it("keeps width out of the Health Bar section", function()
             -- Width drives the name row and both bars, so filing it under one bar would
-            -- promise something narrower than it does.
+            -- promise something narrower than it does. The readouts DO belong here: they
+            -- are drawn inside this bar and describe nothing else.
             local sections = sectionsOf(playerTab())
-            expect(sections[2].keys).deepEq({ "player_health_height" })
+            expect(sections[2].keys).deepEq({
+                "player_health_text_left", "player_health_text_center",
+                "player_health_text_right", "player_health_text_size",
+                "player_health_height",
+            })
+            for _, key in ipairs(sections[2].keys) do
+                expect(key).as("width is frame-wide, not a health bar setting")
+                    .neq("player_width")
+            end
+        end)
+
+        it("offers a readout for every health bar position", function()
+            -- Three positions, each independently configurable: they are not alternatives,
+            -- so a player can have the number left and the percentage right at once.
+            expect(setting("player_health_text_left")).eq("none")
+            expect(setting("player_health_text_center"))
+                .as("one visible default, so the feature does not ship invisible")
+                .eq("current_max")
+            expect(setting("player_health_text_right")).eq("none")
+        end)
+
+        it("offers the same choices in every position", function()
+            local want = { "none", "current_max", "current", "percent" }
+            for _, slot in ipairs({ "left", "center", "right" }) do
+                local entry
+                for _, e in ipairs(playerTab().schema) do
+                    if e.key == "player_health_text_" .. slot then entry = e end
+                end
+                expect(entry).as(slot .. " readout is on the page").notNil()
+                expect(entry.type).eq("dropdown")
+                local values = {}
+                for i, opt in ipairs(entry.options) do values[i] = opt.value end
+                expect(values).deepEq(want)
+            end
+        end)
+
+        it("gives each position its own options table", function()
+            -- Shared between three entries, one Dropdown mutating an option would reach
+            -- into the other two.
+            local seen = {}
+            for _, e in ipairs(playerTab().schema) do
+                if e.key and e.key:match("^player_health_text_") then
+                    expect(seen[e.options]).as("options are not aliased").isNil()
+                    seen[e.options] = true
+                end
+            end
+        end)
+
+        it("offers one readout size for the whole bar, in token steps", function()
+            -- One setting, not one per position: three readouts on one bar at three sizes
+            -- reads as a rendering fault rather than a choice.
+            local entry
+            for _, e in ipairs(playerTab().schema) do
+                if e.key == "player_health_text_size" then entry = e end
+            end
+            expect(entry).notNil()
+            expect(entry.label).eq("Text Size")
+            expect(entry.type).eq("dropdown")
+            expect(entry.default).as("the step a bar this tall wants").eq("md")
+            local values = {}
+            for i, opt in ipairs(entry.options) do values[i] = opt.value end
+            expect(values).as("token steps, so it still follows a theme font edit")
+                .deepEq({ "sm", "md", "lg", "xl" })
+        end)
+
+        it("has exactly one readout size setting", function()
+            local n = 0
+            for _, e in ipairs(playerTab().schema) do
+                if e.key and e.key:match("text_size") then n = n + 1 end
+            end
+            expect(n).as("per-position sizes were deliberately not built").eq(1)
+        end)
+
+        it("groups the readout dropdowns before the height slider", function()
+            local types, inSection = {}, false
+            for _, e in ipairs(playerTab().schema) do
+                if e.type == "section" then
+                    if inSection then break end
+                    inSection = e.label == "Health Bar"
+                elseif inSection and e.key and e.key ~= "" then
+                    types[#types + 1] = e.type
+                end
+            end
+            expect(types).deepEq({ "dropdown", "dropdown", "dropdown", "dropdown", "slider" })
         end)
 
         it("labels width as frame-wide", function()

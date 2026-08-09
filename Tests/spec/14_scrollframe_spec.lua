@@ -431,6 +431,65 @@ describe("TextMetrics", function()
         expect(function() H.SuuUI.TextMetrics.Measure(nil, "Fonts/FRIZQT__.TTF", 13) end).notThrows()
     end)
 
+    describe("Box: the width reserved to render, not the metric", function()
+        local FONT = "Fonts/FRIZQT__.TTF"
+
+        it("reserves more width than the raw metric", function()
+            -- The client truncates with no tolerance at all: a box short by any amount
+            -- drops characters and draws an ellipsis. Reserving exactly the metric leaves
+            -- every fit-to-text label sitting on that boundary.
+            local m = H.SuuUI.TextMetrics.Measure("General", FONT, 11)
+            local b = H.SuuUI.TextMetrics.Box("General", FONT, 11)
+            expect(b).as("the reserved box clears the metric").gt(m)
+            expect(b).eq(H.textBox("General", 11))
+        end)
+
+        it("leaves the height on the metric", function()
+            -- Padding the height too would make every label a pixel taller than the
+            -- token-sized control that has to contain it.
+            local _, mh = H.SuuUI.TextMetrics.Measure("General", FONT, 11)
+            local _, bh = H.SuuUI.TextMetrics.Box("General", FONT, 11)
+            expect(bh).eq(mh)
+        end)
+
+        it("reserves nothing for empty text, so a hugging label still collapses", function()
+            expect(H.SuuUI.TextMetrics.Box("", FONT, 11)).eq(0)
+            expect(H.SuuUI.TextMetrics.Box(nil, FONT, 11)).eq(0)
+        end)
+    end)
+
+    describe("measuring space", function()
+        -- Font rasterisation is scale-dependent: the client rounds size * effectiveScale
+        -- to a whole pixel and keeps glyph advances per rasterised size, so the same font
+        -- at the same point size reports a different width under two different effective
+        -- scales. The pixel grid puts a scale on the root, so a probe left on UIParent
+        -- measures in a space nothing renders in and under-reports — which, against
+        -- zero-tolerance truncation, is the whole "Gene..." bug.
+        local function probeHost()
+            return H.env["SuuUI_textMetrics_probe"]
+        end
+
+        it("measures inside the UI root, not against UIParent", function()
+            H.SuuUI.TextMetrics.Measure("General", "Fonts/FRIZQT__.TTF", 11)
+            local host = probeHost()
+            expect(host).as("the probe exists once something has been measured").truthy()
+            expect(host:GetParent()).eq(H.SuuUI.UIRoot:GetRoot())
+        end)
+
+        it("re-homes a probe that was created before the root existed", function()
+            -- Order is not ours to control: a font scan measures during Theme init, which
+            -- can run before UIRoot:Init has built the root. A probe stranded on UIParent
+            -- would keep measuring in the wrong space for the whole session.
+            H.SuuUI.TextMetrics.Measure("General", "Fonts/FRIZQT__.TTF", 11)
+            local host = probeHost()
+            host:SetParent(H.UIParent)
+            expect(host:GetParent()).eq(H.UIParent)
+
+            H.SuuUI.TextMetrics.Measure("General", "Fonts/FRIZQT__.TTF", 11)
+            expect(probeHost():GetParent()).eq(H.SuuUI.UIRoot:GetRoot())
+        end)
+    end)
+
     it("keeps its probe hidden and out of any layout", function()
         H.SuuUI.TextMetrics.Measure("x", "Fonts/FRIZQT__.TTF", 13)
         local probeHost = H.env.SuuUI_textMetrics_probe

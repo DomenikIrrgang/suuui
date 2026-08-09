@@ -114,7 +114,11 @@ H.expectSize(btn, H.textWidth("OK", size) + 2 + padX * 2,
 ```
 
 `H.textWidth`, `H.textHeight` and `H.lineHeight` use the harness font model, so they
-move with it. Never assert a raw glyph count.
+move with it. `H.textBox` is the width the layout engine actually **reserves** for a
+string — `H.textWidth` plus the one-pixel render allowance `TextMetrics.Box` adds. Assert
+against `H.textBox` wherever a font string's own box is sized from its text (a
+`width = "auto"` child, a centred `Divider` label) and against `H.textWidth` where a
+component measures text and then adds its own padding. Never assert a raw glyph count.
 
 **Each measuring helper takes an optional font path**, because faces have different glyph
 advances and line heights in the model just as they do in the client. Pass it whenever the

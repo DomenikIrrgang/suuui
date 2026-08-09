@@ -1,4 +1,4 @@
-local max = math.max
+local max, pairs = math.max, pairs
 
 local S = SuuUI.UISignals
 
@@ -7,6 +7,15 @@ SuuUI.Components.STATUSBAR_SIGNALS = {
     FILL_SETTLED = "statusbar.fill_settled",  -- Args: fraction (the painted value caught up)
 }
 local SB_SIGNALS = SuuUI.Components.STATUSBAR_SIGNALS
+
+-- The three overlay text slots, and how each sits in the bar's box. Cross-axis placement
+-- is the same for all three, so only the main axis differs — which is the whole of what
+-- "left, centre, right" means to a layout strategy.
+local TEXT_SLOTS = {
+    left   = { align = "start",  justify = "LEFT" },
+    center = { align = "center", justify = "CENTER" },
+    right  = { align = "end",    justify = "RIGHT" },
+}
 
 local StatusBarMeta = {}
 StatusBarMeta.__index = StatusBarMeta
@@ -235,6 +244,133 @@ function StatusBarMeta:_syncFillVisibility()
 end
 
 ---------------------------------------------------------------------------
+-- Overlay text
+--
+-- Three readout slots inside the bar's own box. The bar is the right home for them: it
+-- owns the box, the border inset that text has to clear, and the z-order — the fill lives
+-- in a CHILD frame, so anything drawn in the bar's own layers would sit under it, and a
+-- caller building its own overlay would have to reach past that frame to get above it.
+--
+-- Slots take plain strings and nothing else. What a number MEANS — current over max, a
+-- percentage, an abbreviation — belongs to whoever owns the value, so no formatting and
+-- no unit data reaches this file.
+--
+-- Built lazily. An extra frame and up to three font strings is not something a bar with
+-- no text should pay for, and a raid's worth of frames is exactly where that would show.
+---------------------------------------------------------------------------
+
+--- How far a readout sits in from the bar's edge: past the border, then one space step.
+--- Both are tokens, so a theme change moves it — which is why this is re-derived rather
+--- than captured at construction.
+-- @return number
+function StatusBarMeta:_textInset()
+    return self:_inset() + (SuuUI.Theme:GetToken("spaceXs") or 4)
+end
+
+-- Layout props for one slot. The inset applies on both sides for every slot: it is what
+-- keeps a left readout off the edge, and shrinking the box symmetrically leaves a centred
+-- one exactly where it was.
+function StatusBarMeta:_slotProps(slot)
+    local pad = self:_textInset()
+    return {
+        align  = TEXT_SLOTS[slot].align,
+        valign = "center",
+        inset  = { left = pad, right = pad },
+    }
+end
+
+function StatusBarMeta:_ensureTextBox()
+    if self._textBox then return self._textBox end
+    -- Placed by the bar's own stack box rather than by a container of its own, so the
+    -- overlay tracks the bar's geometry in the very pass that moves the fill. A separate
+    -- parent-resize tracker would run after the bar has already emitted SIZE_CHANGED, and
+    -- the two would disagree for a frame.
+    local overlay = CreateFrame("Frame", nil, self._f)
+    self._fillBox:Add(overlay)
+    SuuUI.UIRoot:RaiseAbove(overlay, self._fillFrame, 1)
+    self._textOverlay = overlay
+    self._textBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
+    return self._textBox
+end
+
+function StatusBarMeta:_ensureText(slot)
+    local el = self._texts[slot]
+    if el then return el end
+    local box = self:_ensureTextBox()
+    el = SuuUI.Components.Text({
+        text    = "",
+        size    = self._textSize,
+        color   = "text",
+        justify = TEXT_SLOTS[slot].justify,
+    }, self._textOverlay)
+    self._texts[slot] = el
+    box:Add(el, self:_slotProps(slot))
+    return el
+end
+
+--- Sets the readout in one of the bar's three overlay slots.
+--
+-- Passing nil or "" clears the slot, so a caller switching a readout off writes the same
+-- way it writes a value — there is no separate clear call to forget.
+-- @param slot string  "left" | "center" | "right"
+-- @param text string|nil
+function StatusBarMeta:SetText(slot, text)
+    assert(TEXT_SLOTS[slot],
+        "SuuUI StatusBar: SetText slot must be \"left\", \"center\" or \"right\"")
+    if text == "" then text = nil end
+    -- Guarded on the stored value, because a readout is usually written on every game
+    -- event and usually says the same thing: a percentage stays 51% for most of the ticks
+    -- that produce it. Each skipped write is a re-measure and a container pass avoided.
+    if self._textVals[slot] == text then return end
+    self._textVals[slot] = text
+    -- Nothing built and nothing to show: there is no element to clear.
+    if not text and not self._texts[slot] then return end
+
+    local el = self:_ensureText(slot)
+    el:SetText(text or "")
+    if text then el:Show() else el:Hide() end
+    -- Text reports SIZE_CHANGED on a HEIGHT change only — it lets the layout own its
+    -- width — so a string that changes width at the same height leaves the slot at the
+    -- width the previous pass pinned, and the client clips rather than overflows.
+    self._textBox:Layout()
+end
+
+--- Returns the readout in one slot, or nil when the slot is empty.
+-- @param slot string  "left" | "center" | "right"
+-- @return string|nil
+function StatusBarMeta:GetText(slot)
+    assert(TEXT_SLOTS[slot],
+        "SuuUI StatusBar: GetText slot must be \"left\", \"center\" or \"right\"")
+    return self._textVals[slot]
+end
+
+--- Sets which font-size step the readouts render at.
+--
+-- A token KEY, not a pixel size: the number still comes from the theme, so a bar switched
+-- to "lg" follows a user's edit of `fontSizeLg`. That is what lets a plugin expose the step
+-- as a setting without any of them storing a font size of their own.
+--
+-- Applies to slots already built AND to any built later, so the order a caller sets the
+-- size and writes a readout in does not matter.
+-- @param size string  "sm" | "md" | "lg" | "xl"
+function StatusBarMeta:SetTextSize(size)
+    if not size or self._textSize == size then return end
+    self._textSize = size
+    for _, el in pairs(self._texts) do
+        el:SetFontSize(size)
+    end
+    -- A taller step needs a wider box, and Text only reports a height change — so nothing
+    -- else re-measures the slot's width and the client would clip it.
+    if self._textBox then self._textBox:Layout() end
+end
+
+--- Returns the font-size step the readouts render at.
+-- @return string
+function StatusBarMeta:GetTextSize()
+    return self._textSize
+end
+
+---------------------------------------------------------------------------
 -- Theme
 ---------------------------------------------------------------------------
 
@@ -252,6 +388,14 @@ function StatusBarMeta:ApplyTheme()
     self:_anchorFill()
     self:_paint()
     self:_paintFraction(self._display or 0)
+    -- Readouts are applied explicitly: the event bus dispatches newest-first, so a child
+    -- handle's own subscription may not have run yet and the slot would be measured at the
+    -- previous theme's font. Their insets move too — both the border width and the space
+    -- step behind them are tokens.
+    for slot, el in pairs(self._texts) do
+        el:ApplyTheme()
+        self._textBox:SetChildProps(el, self:_slotProps(slot))
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -369,6 +513,11 @@ function StatusBarMeta:Destroy()
     SuuUI.Anim:CancelAll(self)
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    for slot, el in pairs(self._texts) do
+        el:Destroy()
+        self._texts[slot] = nil
+    end
+    if self._textBox then self._textBox:Destroy(); self._textBox = nil end
     if self._barBox  then self._barBox:Destroy();  self._barBox  = nil end
     if self._fillBox then self._fillBox:Destroy(); self._fillBox = nil end
     self._f:Hide()
@@ -389,13 +538,14 @@ local WHITE = "Interface\\Buttons\\WHITE8x8"
 
 --- Creates a status bar (health/mana/energy/rage bar).
 -- @param props table  { w, h, value, max, fillColor, bgColor, border, borderColor,
---                       transition, transitionDuration }
+--                       transition, transitionDuration, textSize }
 --   fillColor: {r,g,b,a} literal colour for the bar fill
 --   bgColor: token key or literal for the background (default "colorBgAlt")
 --   border: bool whether to show border (default true)
 --   borderColor: token key or literal for the border (default "colorBorder")
 --   transition: strategy name or inline table (default: the registry default)
 --   transitionDuration: seconds for a full sweep (default: the animBarFill token)
+--   textSize: font size key for the overlay readouts ("sm".."xl", default "sm")
 -- @param parent frame
 -- @return table  StatusBar handle. Emits VALUE_CHANGED, SIZE_CHANGED, FILL_SETTLED.
 function SuuUI.Components.StatusBar(props, parent)
@@ -424,6 +574,11 @@ function SuuUI.Components.StatusBar(props, parent)
         _showBorder = props.border ~= false,
         _borderColor = props.borderColor or "colorBorder",
         _duration   = props.transitionDuration,
+        -- Overlay readouts. The tables are always here so SetText can read a slot before
+        -- anything is built; the elements themselves are not.
+        _textSize   = props.textSize or "sm",
+        _texts      = {},
+        _textVals   = {},
     }, StatusBarMeta)
 
     -- A new bar starts settled at its initial value rather than animating up from empty:

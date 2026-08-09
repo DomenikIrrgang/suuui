@@ -14,13 +14,29 @@ local function crossOffset(align, available, childSize)
     return 0
 end
 
+-- Text metrics taken in the space the text will actually render in, or nil for a child
+-- that is not a font string. This never consults the region's own rect: a font string the
+-- client has not laid out yet reports nothing, and one sized by an earlier pass is stale
+-- the moment a fontSize token moves.
+local function textBox(child)
+    if child.GetStringHeight and child.GetFont and SuuUI.TextMetrics then
+        local font, size, flags = child:GetFont()
+        if font and size then
+            return SuuUI.TextMetrics.Box(child:GetText() or "", font, size, flags)
+        end
+    end
+    return nil
+end
+
 -- The width of a child's own content, free of whatever width a previous layout pinned
 -- on it. A font string reports GetStringWidth clamped to its assigned width, so a label
 -- that was first laid out while empty would keep reporting zero after its text arrives —
--- the unbounded measurement is the only reading that survives a text change.
+-- a real measurement is the only reading that survives a text change.
 -- @param child frame|fontstring
 -- @return number
 function M.NaturalWidth(child)
+    local tw = textBox(child)
+    if tw then return tw end
     if child.GetUnboundedStringWidth then
         return pxceil(child:GetUnboundedStringWidth() or 0)
     elseif child.GetStringWidth then
@@ -49,8 +65,15 @@ end
 local function naturalHeight(child, childW)
     if child.GetStringHeight then
         if childW and childW > 0 then child:SetWidth(childW) end
+        -- The client's own wrapped height comes first, so multi-line text re-flows.
         local h = child:GetStringHeight()
         if h and h > 0 then return pxceil(h) end
+        -- It reports nothing for a font string it has not laid out — every label built
+        -- inside a window that has never been shown is in that state. Measure rather than
+        -- fall through to the region's rect, which reports zero and pins the label to zero
+        -- height, where it silently never draws.
+        local _, th = textBox(child)
+        if th and th > 0 then return th end
     end
     return snap(child:GetHeight() or 0)
 end

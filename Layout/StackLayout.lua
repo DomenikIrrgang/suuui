@@ -21,7 +21,9 @@ local function naturalSize(child)
     if child.GetStringHeight and child.GetFont then
         local font, size, flags = child:GetFont()
         if font and size then
-            return SuuUI.TextMetrics.Measure(child:GetText(), font, size, flags)
+            -- Box, not Measure: this number becomes the font string's own width, and the
+            -- client truncates a box that is short by any amount whatsoever.
+            return SuuUI.TextMetrics.Box(child:GetText(), font, size, flags)
         end
     end
     return child:GetWidth() or 0, child:GetHeight() or 0

@@ -1,5 +1,7 @@
 -- UnitFrames plugin: replaces Blizzard's unit frames with a modern, minimal design.
 -- This file implements the player frame; other units will follow.
+local format, floor = string.format, math.floor
+local ipairs, type = ipairs, type
 local C = SuuUI.Components
 local S = SuuUI.UISignals
 local T = SuuUI.Theme
@@ -43,6 +45,74 @@ local SIZE_KEYS = { "player_width", "player_health_height", "player_power_height
 -- rather than triggering a full relayout, because toggling a text widget doesn't
 -- change bar geometry.
 local VIS_KEYS = { "player_show_name", "player_show_level", "player_hide_level_at_max" }
+
+---------------------------------------------------------------------------
+-- Health readouts
+--
+-- Three independent slots overlaid inside the health bar, each free to show any of the
+-- formats — so a player who wants the raw number on the left and the percentage on the
+-- right gets that without either position being a special case.
+--
+-- The bar takes plain strings, so what a number MEANS is decided here. These are the only
+-- formats, and the setting stores which one a slot uses rather than a format string: a
+-- stored pattern would be a value nothing validates and the dropdown could not describe.
+---------------------------------------------------------------------------
+local HEALTH_TEXT_SLOTS = { "left", "center", "right" }
+
+local HEALTH_TEXT = {
+    current_max = function(cur, mx) return format("%d / %d", cur, mx) end,
+    current     = function(cur) return format("%d", cur) end,
+    -- Floored, never rounded: a unit one hit from dead must not read 100%, and the moment
+    -- a bar stops saying full is the whole reason to show a percentage.
+    percent     = function(cur, mx)
+        return format("%d%%", mx > 0 and floor(cur / mx * 100) or 0)
+    end,
+    -- "none" is deliberately absent: an unresolved mode leaves no formatter, which is what
+    -- clears the slot. A no-op function here would need its own branch at every call site.
+}
+
+-- Fresh each call rather than one shared constant: the table is handed to three schema
+-- entries and on to three Dropdown controls, and a shared options list is one aliased
+-- table away from three controls editing each other's state.
+local function healthTextOptions()
+    return {
+        { value = "none",        label = "None" },
+        { value = "current_max", label = "Current / Max" },
+        { value = "current",     label = "Current" },
+        { value = "percent",     label = "Percent" },
+    }
+end
+
+--- The settings key holding one slot's readout mode.
+-- @param slot string  "left" | "center" | "right"
+-- @return string
+local function healthTextKey(slot)
+    return "player_health_text_" .. slot
+end
+
+-- The font step the readouts render at, as a player-editable setting.
+--
+-- One setting for the whole bar rather than one per position: three readouts on one bar at
+-- three different sizes reads as a rendering fault, not as a choice.
+--
+-- It stores a size KEY, so the pixel size still comes from the theme and a readout set to
+-- Large follows a user's edit of `fontSizeLg`. A pixel value here would be this plugin
+-- holding a font size of its own, which is the duplication the token scale exists to
+-- prevent — and it would stop tracking the rest of the UI the moment the theme was scaled.
+local HEALTH_TEXT_SIZE_KEY = "player_health_text_size"
+
+-- The step a bar this tall wants, and the schema default. Declared once here so the
+-- default and the option list cannot drift apart.
+local BAR_TEXT_SIZE = "md"
+
+local function healthTextSizeOptions()
+    return {
+        { value = "sm", label = "Small" },
+        { value = "md", label = "Medium" },
+        { value = "lg", label = "Large" },
+        { value = "xl", label = "Extra Large" },
+    }
+end
 
 -- Shared opts table for a transition-free bar write. Allocated once: these calls happen
 -- on game events, and a fresh table per update would allocate under combat load.
@@ -301,6 +371,8 @@ end
 function PlayerFrame:Create(parent)
     local self = setmetatable({}, { __index = PlayerFrame })
     local m = metrics()
+    -- Resolved by the readout watchers below, before anything reads them.
+    self._healthFmt = {}
 
     -- Bare grouping frame: no styling and no backdrop, so nothing draws behind the bars.
     -- Sized up front because the containers below lay out against a real geometry; the
@@ -362,6 +434,9 @@ function PlayerFrame:Create(parent)
         -- Health moves in sparse, large steps, so a fixed-duration ease reads as the bar
         -- absorbing a hit.
         transition = "smooth",
+        -- No textSize here: the readout-size watcher below runs immediately and is the
+        -- single place that states it. Naming the step twice would leave the construction
+        -- copy stale the moment the player changed the setting.
     }, self._bars:GetFrame())
 
     self._resourceBar = C.StatusBar({
@@ -427,6 +502,26 @@ function PlayerFrame:Create(parent)
             self:SyncVisibility()
         end, self._themeId .. "_" .. key)
     end
+
+    -- Readout modes. Immediate, because the watcher IS what resolves _healthFmt — reading
+    -- the three settings separately to seed it and then watching for changes would be two
+    -- places holding the same fact, and the seed is the one that goes stale.
+    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
+        SuuUI.Settings:Watch(PLUGIN_ID, healthTextKey(slot), function()
+            self:_syncHealthTextModes()
+            self:UpdateHealthText()
+        end, self._themeId .. "_" .. healthTextKey(slot), { immediate = true })
+    end
+
+    -- Readout size: one step for every slot, applied to the bar rather than per readout.
+    -- Immediate for the same reason as the modes — this is the first paint of the size, so
+    -- the bar is never built at a step the setting does not name.
+    SuuUI.Settings:Watch(PLUGIN_ID, HEALTH_TEXT_SIZE_KEY, function(val)
+        self._healthBar:SetTextSize(val)
+        -- The step decides the readouts' height, and the bar's own height does not follow
+        -- it — so nothing else re-flows the frame after a size change.
+        self:_syncSize()
+    end, self._themeId .. "_" .. HEALTH_TEXT_SIZE_KEY, { immediate = true })
 
     -- WoW event frame for data updates
     self._events = CreateFrame("Frame")
@@ -524,6 +619,33 @@ function PlayerFrame:UpdateHealth(immediate)
     local mx  = UnitHealthMax("player") or 1
     self._healthBar:SetMax(mx, opts)
     self._healthBar:SetValue(cur, opts)
+    self:UpdateHealthText(cur, mx)
+end
+
+--- Caches the formatter each readout slot is configured for.
+--
+-- Derived, never copied: the watcher re-resolves it — including on a profile switch, which
+-- the watcher also delivers — so it cannot go stale. It exists so a health event does not
+-- read three settings, since UNIT_HEALTH arrives several times a second under combat.
+function PlayerFrame:_syncHealthTextModes()
+    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
+        self._healthFmt[slot] = HEALTH_TEXT[SuuUI.Settings:Get(PLUGIN_ID, healthTextKey(slot))]
+    end
+end
+
+--- Writes the three health readouts.
+--
+-- A slot set to "none" resolves to no formatter, and the nil clears it — so switching a
+-- readout off removes it rather than freezing it at the last value it happened to show.
+-- @param cur number|nil  Current health; read from the unit when omitted
+-- @param mx number|nil   Max health; read from the unit when omitted
+function PlayerFrame:UpdateHealthText(cur, mx)
+    cur = cur or UnitHealth("player") or 0
+    mx  = mx  or UnitHealthMax("player") or 1
+    for _, slot in ipairs(HEALTH_TEXT_SLOTS) do
+        local fmt = self._healthFmt[slot]
+        self._healthBar:SetText(slot, fmt and fmt(cur, mx) or nil)
+    end
 end
 
 --- Refreshes the resource bar.
@@ -549,12 +671,11 @@ end
 
 function PlayerFrame:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._themeId)
-    for _, key in ipairs(SIZE_KEYS) do
-        SuuUI.Settings:Unwatch(self._themeId .. "_" .. key)
-    end
-    for _, key in ipairs(VIS_KEYS) do
-        SuuUI.Settings:Unwatch(self._themeId .. "_" .. key)
-    end
+    -- Every watcher this frame registered shares the id as its owner prefix, so one call
+    -- retires the lot. Enumerating the key lists instead means a new group of watchers can
+    -- be added without its teardown, and a leaked watcher fires into a destroyed handle on
+    -- every write and every profile switch.
+    SuuUI.Settings:UnwatchPrefix(self._themeId)
     self._events:UnregisterAllEvents()
     self._events:Hide()
     self._nameText:Destroy()
@@ -673,6 +794,26 @@ local plugin = SuuUI:CreatePlugin({
                       min = 120, max = 420, step = 2, default = 304 },
 
                     { key = "", label = "Health Bar", type = "section" },
+                    -- One readout per position, each free to show any format. Three
+                    -- independent dropdowns rather than one "show health text" toggle plus
+                    -- a format: the positions are not alternatives, and a player who wants
+                    -- the number left and the percentage right needs both at once.
+                    --
+                    -- Dropdowns as a block with the slider last, matching the General
+                    -- section: controls of one kind read as one group.
+                    { key = healthTextKey("left"), label = "Left Text", type = "dropdown",
+                      default = "none", options = healthTextOptions() },
+                    -- The one default that shows something. A bar with no readout at all
+                    -- would ship the feature invisible, and the centre is where a single
+                    -- readout belongs; the flanks stay off so the default stays quiet.
+                    { key = healthTextKey("center"), label = "Center Text", type = "dropdown",
+                      default = "current_max", options = healthTextOptions() },
+                    { key = healthTextKey("right"), label = "Right Text", type = "dropdown",
+                      default = "none", options = healthTextOptions() },
+                    -- One step for all three readouts. A token key rather than a pixel
+                    -- size, so it still follows a theme font edit.
+                    { key = HEALTH_TEXT_SIZE_KEY, label = "Text Size", type = "dropdown",
+                      default = BAR_TEXT_SIZE, options = healthTextSizeOptions() },
                     { key = "player_health_height", label = "Height", type = "slider",
                       min = 8, max = 60, step = 1, default = 39 },
 

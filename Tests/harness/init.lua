@@ -39,7 +39,7 @@
 -- Geometry:    H.box H.offset H.expectBox H.expectSize H.expectOffset H.expectInside
 --              H.expectNoOverlap H.expectStackedVertically H.expectRowHorizontally
 --              H.expectCenteredH H.expectCenteredV H.expectTokenColor H.expectDrawsAbove
--- Text:        H.textWidth H.textHeight H.lineHeight H.fontOf H.expectTextNotClipped
+-- Text:        H.textWidth H.textBox H.textHeight H.lineHeight H.fontOf H.expectTextNotClipped
 --              (each measuring helper takes an optional font path: faces differ)
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll
 --              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
@@ -624,6 +624,22 @@ end
 -- @return number
 function M.textWidth(text, size, path)
     return font.unbounded(text, size or M.token("fontSizeMd"), path)
+end
+
+--- The width the layout engine RESERVES for a string, as distinct from the width the
+--- string measures. `TextMetrics.Box` adds one physical pixel on top of the metric,
+--- because the client truncates with zero tolerance and its rendered extent need not
+--- match the metric exactly. Assert against this wherever a font string's own box is
+--- sized from its text — a `width = "auto"` child, a centred Divider label — and against
+--- H.textWidth where a component measures text and then adds its own padding.
+-- @param text string
+-- @param size number
+-- @param path string  Optional font path
+-- @return number
+function M.textBox(text, size, path)
+    local w = M.textWidth(text, size, path)
+    if w <= 0 then return 0 end
+    return M.SuuUI.Pixel.Ceil(w + (M.SuuUI.Pixel.mult or 0))
 end
 
 --- Measured text height using the harness font model.

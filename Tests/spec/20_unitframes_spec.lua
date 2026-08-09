@@ -432,6 +432,194 @@ describe("Plugins.UnitFrames", function()
         end)
     end)
 
+    describe("health bar readouts", function()
+        local function bar()
+            return H.SuuUI.Plugins:Get("unit_frames")._playerFrame._healthBar
+        end
+
+        local function setMode(slot, mode)
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_" .. slot, mode)
+        end
+
+        -- Health moves through the client, so a readout change is driven the way the game
+        -- drives it rather than by calling the update path directly.
+        local function setHealth(cur, mx)
+            state.unitHealth = cur
+            if mx then state.unitHealthMax = mx end
+            H.fireEvent("UNIT_HEALTH", "player")
+        end
+
+        it("shows current over max in the centre by default", function()
+            expect(bar():GetText("center")).eq("80 / 100")
+            expect(bar():GetText("left")).as("flanks stay quiet by default").isNil()
+            expect(bar():GetText("right")).isNil()
+        end)
+
+        it("shows the current value alone when a slot asks for it", function()
+            setMode("left", "current")
+            expect(bar():GetText("left")).eq("80")
+        end)
+
+        it("shows a percentage when a slot asks for it", function()
+            setMode("right", "percent")
+            expect(bar():GetText("right")).eq("80%")
+        end)
+
+        it("serves all three positions independently", function()
+            setMode("left", "current")
+            setMode("center", "current_max")
+            setMode("right", "percent")
+            expect(bar():GetText("left")).eq("80")
+            expect(bar():GetText("center")).eq("80 / 100")
+            expect(bar():GetText("right")).eq("80%")
+        end)
+
+        it("floors the percentage rather than rounding it", function()
+            -- A unit one hit from dead must not read 100%: the moment a bar stops saying
+            -- full is the whole reason to show a percentage.
+            setMode("center", "percent")
+            setHealth(999, 1000)
+            expect(bar():GetText("center")).eq("99%")
+        end)
+
+        it("reports 0% rather than dividing by a zero max", function()
+            setMode("center", "percent")
+            setHealth(0, 0)
+            expect(bar():GetText("center")).eq("0%")
+        end)
+
+        it("clears a slot set back to none", function()
+            setMode("left", "percent")
+            expect(bar():GetText("left")).eq("80%")
+            setMode("left", "none")
+            expect(bar():GetText("left"))
+                .as("switched off means gone, not frozen at the last value").isNil()
+        end)
+
+        it("follows the unit through a health event", function()
+            setMode("left", "current")
+            setMode("center", "current_max")
+            setMode("right", "percent")
+            setHealth(25, 100)
+            expect(bar():GetText("left")).eq("25")
+            expect(bar():GetText("center")).eq("25 / 100")
+            expect(bar():GetText("right")).eq("25%")
+        end)
+
+        it("follows a max-health change too", function()
+            setMode("center", "current_max")
+            state.unitHealthMax = 5000
+            state.unitHealth = 2500
+            H.fireEvent("UNIT_MAXHEALTH", "player")
+            expect(bar():GetText("center")).eq("2500 / 5000")
+        end)
+
+        it("returns to the schema default on reset", function()
+            setMode("center", "percent")
+            H.SuuUI.Settings:Reset("unit_frames", "player_health_text_center")
+            expect(bar():GetText("center")).eq("80 / 100")
+        end)
+
+        it("renders the readouts inside the health bar", function()
+            setMode("left", "current")
+            setMode("center", "current_max")
+            setMode("right", "percent")
+            local b = bar()
+            H.expectInside(b._texts.left, b)
+            H.expectInside(b._texts.center, b)
+            H.expectInside(b._texts.right, b)
+            H.expectCenteredV(b._texts.center, b)
+        end)
+
+        it("reserves enough box for the glyphs", function()
+            setMode("center", "current_max")
+            setHealth(12345, 67890)
+            H.expectTextNotClipped(bar()._texts.center)
+        end)
+
+        it("renders at the medium font step, not the cast bar's small one", function()
+            setMode("center", "current_max")
+            local _, size = H.fontOf(bar()._texts.center)
+            expect(size).eq(H.token("fontSizeMd"))
+        end)
+
+        it("takes the readout step from the setting", function()
+            setMode("center", "current_max")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "xl")
+            local _, size = H.fontOf(bar()._texts.center)
+            expect(size).eq(H.token("fontSizeXl"))
+            H.expectTextNotClipped(bar()._texts.center)
+        end)
+
+        it("applies one step to every position", function()
+            setMode("left", "current")
+            setMode("center", "current_max")
+            setMode("right", "percent")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "sm")
+            local b = bar()
+            for _, slot in ipairs({ "left", "center", "right" }) do
+                local _, size = H.fontOf(b._texts[slot])
+                expect(size).as(slot .. " shares the bar's step").eq(H.token("fontSizeSm"))
+            end
+        end)
+
+        it("keeps a readout set before the step change at the new step", function()
+            -- The mode watcher and the size watcher fire in whatever order the store
+            -- delivers them, so neither may depend on running first.
+            setMode("right", "percent")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "lg")
+            local _, size = H.fontOf(bar()._texts.right)
+            expect(size).eq(H.token("fontSizeLg"))
+        end)
+
+        it("keeps the readouts inside the bar at the largest step", function()
+            setMode("left", "current")
+            setMode("right", "percent")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "xl")
+            local b = bar()
+            H.expectInside(b._texts.left, b)
+            H.expectInside(b._texts.right, b)
+            H.expectNoOverlap({ b._texts.left, b._texts.right })
+        end)
+
+        it("still follows the theme after the step was chosen", function()
+            setMode("center", "current_max")
+            H.SuuUI.Settings:Set("unit_frames", "player_health_text_size", "lg")
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeLg", 28)
+            H.T:SetActive("Big")
+            local _, size = H.fontOf(bar()._texts.center)
+            expect(size).as("a chosen step is still a token").eq(28)
+        end)
+
+        it("re-derives the readout after a font token change", function()
+            setMode("center", "current_max")
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 24)
+            H.T:SetActive("Big")
+            local b = bar()
+            local _, size = H.fontOf(b._texts.center)
+            expect(size).eq(24)
+            H.expectTextNotClipped(b._texts.center)
+            H.expectInside(b._texts.center, b)
+        end)
+
+        it("leaves no readout watcher behind when the frame goes away", function()
+            -- A leaked watcher fires into a destroyed handle on every write and every
+            -- profile switch, and the readouts added a third group of them — which is
+            -- exactly the group an enumerated teardown forgets.
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            plugin:Disable()
+            local base = H.SuuUI.Settings:GetWatcherCount()
+            plugin:Enable()
+            expect(H.SuuUI.Settings:GetWatcherCount())
+                .as("the live frame watches its settings").gt(base)
+            plugin:Disable()
+            expect(H.SuuUI.Settings:GetWatcherCount())
+                .as("no watcher outlives the frame").eq(base)
+        end)
+    end)
+
     describe("resource bar", function()
         it("displays current power value", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
@@ -502,7 +690,7 @@ describe("Plugins.UnitFrames", function()
 
         it("sizes the name to its own text rather than leaving it pinned at zero", function()
             local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
-            H.expectSize(pf._nameText, H.textWidth("Testchar", H.token("fontSizeLg")), nil)
+            H.expectSize(pf._nameText, H.textBox("Testchar", H.token("fontSizeLg")), nil)
             H.expectTextNotClipped(pf._nameText)
         end)
 

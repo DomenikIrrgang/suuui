@@ -205,7 +205,7 @@ describe("FlowLayout", function()
             local c = container({ layout = "flow", dir = "horizontal", h = 20 })
             local fs = label(host, "Testchar")
             c:Add(fs, { width = "auto", height = 14 })
-            H.expectSize(fs, H.textWidth("Testchar", 12), 14)
+            H.expectSize(fs, H.textBox("Testchar", 12), 14)
         end)
 
         it("packs a second auto child directly beside the first", function()
@@ -227,7 +227,7 @@ describe("FlowLayout", function()
 
             fs:SetText("Testchar")
             c:Layout()
-            H.expectSize(fs, H.textWidth("Testchar", 12), 14)
+            H.expectSize(fs, H.textBox("Testchar", 12), 14)
         end)
 
         it("collapses to zero width when the text is cleared", function()
@@ -247,7 +247,7 @@ describe("FlowLayout", function()
             local rest = child(host)
             c:Add(fs,   { width = "auto", height = 14 })
             c:Add(rest, { width = "fill", height = 14 })
-            H.expectSize(rest, 200 - H.textWidth("Testchar", 12) - 6, 14)
+            H.expectSize(rest, 200 - H.textBox("Testchar", 12) - 6, 14)
         end)
 
         it("falls back to a plain frame's own width", function()
@@ -264,7 +264,7 @@ describe("FlowLayout", function()
             c:Add(name,  { width = "auto", height = 14 })
             c:Add(level, { width = "auto", height = 14 })
             local w = c:GetContentSize()
-            expect(w).eq(H.textWidth("Testchar", 12) + 4 + H.textWidth("42", 12))
+            expect(w).eq(H.textBox("Testchar", 12) + 4 + H.textBox("42", 12))
         end)
     end)
 
@@ -302,6 +302,50 @@ describe("FlowLayout", function()
             local first = fs:GetHeight()
             for _ = 1, 5 do c:Layout() end
             expect(fs:GetHeight()).eq(first)
+        end)
+
+        -- The live client reports nothing for a font string it has not laid out yet, and
+        -- the settings page is built while its window has never been shown. The harness
+        -- always answers from its font model, so the only way to state this invariant is
+        -- to make the client report nothing on purpose. Falling through to the region's
+        -- own rect is what shipped every settings-row label at zero height, drawing
+        -- nothing at all while every assertion about it passed.
+        local function muteClientHeight(fs)
+            fs.GetStringHeight = function() return 0 end
+        end
+
+        it("measures a label the client reports no height for, instead of pinning zero", function()
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("Show Spell Name")
+            muteClientHeight(fs)
+
+            c:Add(fs, { width = "fill" })
+            expect(fs:GetHeight()).as("a label with no height never draws").gt(0)
+            expect(fs:GetHeight()).eq(H.lineHeight(12))
+        end)
+
+        it("still measures it in a horizontal row, where settings labels live", function()
+            local c = container({ layout = "flow", dir = "horizontal", h = 40, align = "center" })
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 13, "")
+            fs:SetText("Show Name")
+            muteClientHeight(fs)
+            local ctrl = child(host, 36, 18)
+
+            c:Add(fs, { width = "fill" })
+            c:Add(ctrl, { width = 36, height = 18 })
+            expect(fs:GetHeight()).eq(H.lineHeight(13))
+            H.expectTextNotClipped(fs)
+        end)
+
+        it("leaves a non-text child on its own rect", function()
+            -- The fallback is for font strings only: a plain frame's rect IS its size.
+            local c = container({ layout = "flow", dir = "vertical", h = 300 })
+            local f = child(host, 50, 27)
+            c:Add(f, { width = "fill" })
+            expect(f:GetHeight()).eq(27)
         end)
     end)
 

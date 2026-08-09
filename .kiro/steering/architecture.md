@@ -1459,7 +1459,10 @@ document it here.
   explicit face, overriding the font token while size and colour still follow tokens; it
   re-measures, so a taller face reports its new height. Only for text that must render in
   a face other than the theme's — a font picker previewing its options. Pass `nil` to
-  follow the token again.
+  follow the token again. `SetFontSize(key)` / `GetFontSize()` switch which `fontSize*`
+  step the element renders at, re-measuring and emitting `SIZE_CHANGED`. The step stays a
+  token key, so a size chosen by a plugin setting still follows a user's edit of that
+  token; an unknown key degrades to `fontSizeMd` rather than raising.
 - `Button` — fully custom, animated hover/press states. Hugs its label: width and
   height are measured from the text plus token padding unless `w`/`h` are given
   (`minW`/`minH` set floors). Re-fits on `SetLabel` and on font token changes, and
@@ -1496,10 +1499,12 @@ document it here.
   `"colorBgAlt"`), `border` (bool, default true), `borderColor` (token or literal, default
   `"colorBorder"`), `transition` (strategy name or inline table, default: the registry
   default), `transitionDuration` (seconds for a full sweep, default: the `animBarFill`
-  token). API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
+  token), `textSize` (font size key for the overlay readouts, default `"sm"`).
+  API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
   `GetPercent`, `GetDisplayPercent`, `IsTransitioning`, `SetTransition`, `GetTransition`,
   `SetTransitionDuration`, `SnapToTarget`, `SetFillColor`, `SetBgColor`, `SetBorderColor`,
-  `SetBorderShown`, `IsBorderShown`, `Destroy`. The
+  `SetBorderShown`, `IsBorderShown`, `SetText`, `GetText`, `SetTextSize`, `GetTextSize`,
+  `Destroy`. The
   fill is a **fractional stack child** of the track (`widthFraction`), so the layout
   engine owns the fill geometry — the component sets no points, and the fill stays correct
   across resizes and border-width changes without recomputation. A borderless bar insets
@@ -1509,7 +1514,20 @@ document it here.
   differ. `SetTransition` accepts a registered name or an inline strategy table;
   `SetTransitionDuration` overrides the `animBarFill` token for one bar. A theme change
   never animates — `ApplyTheme` restates the current painted fraction without triggering
-  the transition. Emits `VALUE_CHANGED`, `SIZE_CHANGED`, `VISIBILITY_CHANGED`, and
+  the transition. `SetText(slot, text)` fills one of three **overlay readouts** —
+  `"left"`, `"center"`, `"right"` — inset past the border and vertically centred; nil or
+  `""` clears one, and an unchanged write is dropped, since a readout is rewritten on every
+  game event and usually says the same thing. Slots are built on first use and take plain
+  strings only: what a number *means* belongs to whoever owns the value, so no formatting
+  reaches the component (`Plugins/UnitFrames/PlayerFrame.lua` holds the health formats).
+  `SetTextSize` moves every slot onto another font step at once — a token **key**, never a
+  pixel size, so a plugin can expose the step as a setting and the readouts still follow a
+  user's edit of that token. One step per bar rather than per slot: three readouts on one
+  bar at three sizes reads as a rendering fault, not a choice.
+  The bar owns them rather than its caller because the fill lives in a **child frame**, so
+  anything drawn in the bar's own layers would sit under it — an overlay raised above the
+  fill is the only arrangement that puts text over the coloured part.
+  Emits `VALUE_CHANGED`, `SIZE_CHANGED`, `VISIBILITY_CHANGED`, and
   `STATUSBAR_SIGNALS.FILL_SETTLED`. **Deliberately has no `SetEnabled`**: it is
   display-only, takes no mouse input, and is never a settings-page control, so it always
   sits inside a composite whose outer handle owns the enabled fade. Installing
@@ -1532,9 +1550,19 @@ document it here.
   test and drag. `Backdrop` uses `Line` for its edge and `Theme:GetControlHeight` uses
   `Ceil`, so a control never lands half a pixel short of its own text.
 - `TextMetrics` — non-visual helper: `SuuUI.TextMetrics.Measure(text, font, size, flags)`
-  returns the real width/height of a string. Use it for any fit-to-text sizing. A font
-  string's own `GetStringWidth` is clamped to the width its layout assigned, so
+  returns the real width/height of a string, and `Box(...)` returns the width to **reserve**
+  for it. Use `Box` wherever a font string's own box is sized from its text, and `Measure`
+  where the caller adds its own padding on top (`Button`, `NavItem`, `Dropdown`). They
+  differ by one physical pixel because the client truncates with **zero tolerance** — a box
+  short by any amount at all drops characters and draws an ellipsis — while whole-pixel
+  rasterisation means the metric and the rendered extent need not agree exactly.
+  A font string's own `GetStringWidth` is clamped to the width its layout assigned, so
   measuring a live label that is already truncated shrinks it further on every pass.
+  **Measurement happens inside the UI root**, never against `UIParent`: the client keeps
+  glyph advances per rasterised pixel size, so the same font at the same point size
+  measures differently under two different effective scales, and the pixel grid puts one on
+  the root. A probe on `UIParent` under-reports — which is all it takes. The probe re-homes
+  itself, since the first measurement can precede `UIRoot:Init`.
 
 **Component-specific signals:**
 

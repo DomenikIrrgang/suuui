@@ -73,7 +73,15 @@ end
 function TextMeta:_measure()
     if self._fixed then return end
     local h = self._fs:GetStringHeight()
-    if not h or h <= 0 then return end
+    if not h or h <= 0 then
+        -- The client reports nothing for a font string it has not laid out yet, which is
+        -- every label built inside a window that has never been shown. Measure it instead
+        -- of leaving the height at zero, where it would silently never draw.
+        local font, size, flags = self._fs:GetFont()
+        if not (font and size) then return end
+        h = select(2, SuuUI.TextMetrics.Box(self._fs:GetText() or "", font, size, flags))
+        if not h or h <= 0 then return end
+    end
     if abs((self._fs:GetHeight() or 0) - h) <= 0.5 then return end
     self._fs:SetHeight(h)
     S:Emit(self, S.SIGNALS.SIZE_CHANGED, self._fs:GetWidth(), h)
@@ -99,6 +107,26 @@ end
 -- @return string|nil
 function TextMeta:GetFontOverride()
     return self._font
+end
+
+--- Switches which font-size step the text renders at, and re-measures.
+--
+-- The step stays a token KEY rather than becoming a number: the pixel size still comes
+-- from the theme, so text set to "lg" follows a user's edit of `fontSizeLg` exactly as
+-- text built that way does. This is the sibling of SetFont — that one overrides the face,
+-- this one the step — and it exists because a size chosen by a setting has to be
+-- changeable after construction.
+-- @param size string  "sm" | "md" | "lg" | "xl"
+function TextMeta:SetFontSize(size)
+    if self._size == size then return end
+    self._size = size
+    self:ApplyTheme()
+end
+
+--- Returns the font-size step key the text renders at.
+-- @return string
+function TextMeta:GetFontSize()
+    return self._size
 end
 
 function TextMeta:ApplyTheme()

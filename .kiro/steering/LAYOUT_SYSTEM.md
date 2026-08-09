@@ -181,10 +181,13 @@ host:Remove(panel)
 A container with no `h` reports its content height through `SIZE_CHANGED`, so parents
 and scroll frames resize themselves without anyone tracking offsets.
 
-**Font strings re-measure.** Flow layout measures a font string child with
-`GetStringHeight()` after assigning it a width, rather than trusting a height pinned
-by an earlier pass. Text metrics depend on the `fontSize*` tokens, which change at
-runtime, so omit `height` on text children and let the layout measure them.
+**Font strings re-measure.** Flow layout measures a font string child's height with
+`GetStringHeight()` after assigning it a width, so multi-line text re-flows, and falls back
+to `TextMetrics.Box` when the client reports nothing — which it does for a font string it
+has never laid out, the state every label built inside a hidden window is in. It never
+falls through to the region's own rect: that reports zero and pins the label to zero
+height, where it draws nothing while every assertion about it still passes. Omit `height`
+on text children and let the layout measure them.
 
 **Hugging containers lay out twice.** A container with no `h` sets its height from
 content, then re-runs its strategy so `align` / `valign` resolve against the settled
@@ -288,11 +291,14 @@ nothing to `GetContentSize`, since a hugging container cannot be sized by a chil
 itself sized from the container.
 
 A non-stretched axis needs the child's natural size, and for a font string that comes
-from `TextMetrics.Measure` against its current font — never from its rect. A region the
+from `TextMetrics.Box` against its current font — never from its rect. A region the
 client has not laid out yet reports 0, and one sized by an earlier pass is stale as soon
 as a `fontSize*` token changes. Either way the string gets a box smaller than its glyphs
 and **the client clips rather than overflows**, which is invisible to every geometry
-assertion. So when a component changes a font string's font, re-run the host container:
+assertion. `Box` rather than `Measure` because the client truncates with **zero
+tolerance**: a box one pixel narrow does not shave a pixel off the glyphs, it drops three
+characters and draws an ellipsis. So when a component changes a font string's font, re-run
+the host container:
 
 ```lua
 label:SetFont(T:GetToken("fontFamilyMain"), T:GetToken("fontSizeLg"), "")
