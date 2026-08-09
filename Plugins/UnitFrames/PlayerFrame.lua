@@ -253,8 +253,20 @@ end
 -- @return table  The slot container the child landed in
 function PlayerFrame:AttachChild(child, opts)
     local slot = (opts and opts.position == "above") and self._slotAbove or self._slotBelow
-    slot:Add(child, { width = "fill" })
+    -- Shown BEFORE the child is added, and the order is the whole fix.
+    --
+    -- A hidden frame has no rect in this client, and a child anchored to a frame with no
+    -- rect never resolves one of its own: GetTop() stays nil for ever while the child
+    -- reports the size it was assigned, claims to be shown and visible, and draws nothing.
+    -- Adding first left the very first attached cast bar permanently invisible.
+    --
+    -- The failure was hard to see because it is first-attach only: the slot stays shown
+    -- afterwards, so every later attach anchors to a frame that already has a rect — which
+    -- is why detaching and re-attaching by hand always appeared to "fix" it, and why the
+    -- simulated client, which resolves an anchor chain the real one leaves unresolved, was
+    -- green throughout.
     if not slot:IsShown() then slot:Show() end
+    slot:Add(child, { width = "fill" })
     self:_syncSize()
     self._root:Layout()
     return slot

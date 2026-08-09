@@ -295,6 +295,13 @@ skipping or double-firing. Callbacks run through `pcall` and log failures via `S
 its frame, so consumers detach while the slot still exists. A consumer left holding a child
 inside a destroyed container is the failure this system exists to prevent.
 
+**A publisher must show its slot before adding the child.** The publisher hands out one frame
+as the child's **parent** and places it with a **different** container, so the usual escape
+does not apply: showing the container afterwards does not dirty a child that is not its own.
+A hidden frame has no rect, and a child anchored to one never resolves a position — it draws
+nothing while reporting the size it was assigned. See "Show a container before anchoring a
+foreign child to it" in `LAYOUT_SYSTEM.md`.
+
 **A moveable publisher must report a core inset.** Growing to hold a foreign child changes
 the frame's bounding box, which is what its stored position resolves against — so the
 frame's own content slides by the band's height on the edge its anchor does not pin. See

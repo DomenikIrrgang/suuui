@@ -237,6 +237,37 @@ Same rule as the layout engine: **extend the harness, do not skip the test.**
 
 ---
 
+## Known Gaps in the Simulated Client
+
+The harness is faithful enough that specs assert real pixel geometry, but it is not the
+client. Where it differs, write the assertion that survives the difference.
+
+**A hidden frame has a rect here and none in the client.** The solver resolves an anchor
+chain through a hidden frame; the real client returns nil from `GetTop()` / `GetLeft()` for a
+hidden frame and for anything anchored to one. A child anchored to a hidden container
+therefore looks perfectly placed in every spec and draws nothing in game — it still reports
+the size it was assigned, still says `IsShown()` and `IsVisible()`, and 18 assertions about
+its size, alpha, state and content pass. That is exactly how the first attached cast bar
+shipped invisible.
+
+So for anything that anchors a child to a frame it is **not parented to** — an attach point
+is the case in this codebase — assert the *invariant* rather than the consequence:
+
+```lua
+-- ❌ passes whether or not the child will ever draw in game
+H.expectSize(child, 336, 40)
+
+-- ✅ the rule the client actually enforces: the anchor target must have a rect already
+expect(shownAtAdd).as("slot visible when the child was anchored to it").eq(true)
+```
+
+`Tests/spec/35_attach_login_spec.lua` carries the worked example. Closing the gap properly
+means teaching the solver that a hidden frame has no rect, which would change what `H.box`
+returns for every deliberately-hidden child in the suite (`StackLayout` sizes a progress fill
+at 0% exactly that way) — worth doing, but not as a drive-by.
+
+---
+
 ## Pinning an Open Question
 
 When a test reveals behaviour that is arguably wrong but the correct answer needs a

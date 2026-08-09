@@ -157,6 +157,32 @@ describe("Plugins.CastBars – attached bar after a cold login", function()
         expect(bar:GetFrame():GetAlpha()).as("wrapper alpha").near(1, 0.001)
     end)
 
+    -- The invariant behind the whole bug, asserted directly because the simulated client
+    -- cannot show the consequence: it resolves an anchor chain the real one leaves
+    -- unresolved, so a child anchored to a hidden frame looks perfectly placed here and
+    -- draws nothing in game. Assert the ORDER instead — the slot must already have a rect
+    -- when the child is anchored to it.
+    it("shows the slot before adding the child", function()
+        local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+        -- slotAbove is still empty and hidden after a login that attached below.
+        local slot = pf._slotAbove
+        expect(slot:IsShown()).as("slot starts hidden").eq(false)
+
+        local shownAtAdd
+        local realAdd = slot.Add
+        slot.Add = function(self_, ...)
+            shownAtAdd = self_:IsShown()
+            return realAdd(self_, ...)
+        end
+
+        local probe = H.C.Frame({ w = 100, h = 10 }, pf:GetFrame())
+        pf:AttachChild(probe, { position = "above" })
+        slot.Add = realAdd
+
+        expect(shownAtAdd).as("slot visible when the child was anchored to it").eq(true)
+        expect(slot:IsShown()).as("still shown afterwards").eq(true)
+    end)
+
     it("the fill has width once a cast starts", function()
         local bar = ctl():GetBar()
         H.startCast({ name = "Fireball", duration = 4.0 })
