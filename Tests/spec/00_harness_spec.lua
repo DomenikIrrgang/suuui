@@ -578,4 +578,365 @@ describe("harness: WoW API simulation", function()
             expect(log).deepEq({ "a-lost", "b-gained" })
         end)
     end)
+
+    describe("spellcast simulation", function()
+        it("reports nothing for UnitCastingInfo and UnitChannelInfo while idle", function()
+            -- A caller treating nil name as an empty cast would show an empty bar forever.
+            expect(H.env.UnitCastingInfo("player")).isNil()
+            expect(H.env.UnitChannelInfo("player")).isNil()
+        end)
+
+        it("fires UNIT_SPELLCAST_START through event dispatch on H.startCast", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local received = {}
+            probe:RegisterEvent("UNIT_SPELLCAST_START")
+            probe:SetScript("OnEvent", function(_, ev, unit, ...)
+                received.event = ev
+                received.unit  = unit
+            end)
+            H.startCast({ unit = "player" })
+            expect(received.event).eq("UNIT_SPELLCAST_START")
+            expect(received.unit).eq("player")
+        end)
+
+        it("returns the positional shape: UnitCastingInfo has castID, UnitChannelInfo does not", function()
+            H.startCast({ name = "Frostbolt", spellId = 116, castID = "c7" })
+            local name, text, texture, startTime, endTime, isTrade, castID, notInt, spId
+                = H.env.UnitCastingInfo("player")
+            expect(name).eq("Frostbolt")
+            expect(castID).as("castID is the 7th positional value").eq("c7")
+            expect(spId).as("spellId is the 9th positional value").eq(116)
+
+            H.startChannel({ name = "Blizzard", spellId = 10, castID = "c8" })
+            local cn, ct, ctx, cs, ce, ciT, cNotInt, cSpId
+                = H.env.UnitChannelInfo("player")
+            expect(cn).eq("Blizzard")
+            -- Channel has no castID; the 7th value is notInterruptible, the 8th is spellId
+            expect(cNotInt).as("7th positional = notInterruptible, not castID").eq(false)
+            expect(cSpId).as("8th positional = spellId").eq(10)
+        end)
+
+        it("reports startTime and endTime in milliseconds matching GetTime()*1000", function()
+            H.tick(1.5)  -- advance clock to 1.5s
+            local rec = H.startCast({ duration = 3 })
+            local _, _, _, startTime, endTime = H.env.UnitCastingInfo("player")
+            local nowMS = H.env.GetTime() * 1000
+            expect(startTime).eq(nowMS)
+            expect(endTime - startTime).as("span = duration * 1000").eq(3 * 1000)
+        end)
+
+        it("does not report a player cast for a different unit token", function()
+            H.startCast({ unit = "player", name = "Fireball" })
+            expect(H.env.UnitCastingInfo("target")).as("target has no cast").isNil()
+            expect(H.env.UnitCastingInfo("player")).notNil()
+        end)
+
+        it("uses sensible defaults when H.startCast is called with no arguments", function()
+            local rec = H.startCast()
+            local name, text, texture, startTime, endTime, isTrade, castID, notInt, spId
+                = H.env.UnitCastingInfo("player")
+            expect(name).as("name defaults").notNil()
+            expect(texture).as("texture defaults").notNil()
+            expect(startTime).as("startTime defaults to clock").eq(H.env.GetTime() * 1000)
+            expect((endTime - startTime) > 0).as("positive duration").truthy()
+            expect(spId).as("spellId defaults").notNil()
+            expect(notInt).as("not interruptible by default").eq(false)
+        end)
+
+        it("honours every override field in H.startCast", function()
+            H.tick(2)
+            H.startCast({
+                unit = "target",
+                name = "Greater Heal",
+                texture = "Interface\\Icons\\Spell_Holy_GreaterHeal",
+                duration = 4,
+                spellId = 2060,
+                castID = "abc",
+                notInterruptible = true,
+                startTime = 5000,
+                endTime = 9000,
+            })
+            local name, _, tex, st, et, _, castID, notInt, spId
+                = H.env.UnitCastingInfo("target")
+            expect(name).eq("Greater Heal")
+            expect(tex).eq("Interface\\Icons\\Spell_Holy_GreaterHeal")
+            expect(st).eq(5000)
+            expect(et).eq(9000)
+            expect(castID).eq("abc")
+            expect(notInt).eq(true)
+            expect(spId).eq(2060)
+        end)
+
+        it("makes cast and channel mutually exclusive", function()
+            H.startCast({ name = "Fireball" })
+            expect(H.env.UnitCastingInfo("player")).notNil()
+            H.startChannel({ name = "Drain Life" })
+            expect(H.env.UnitCastingInfo("player")).as("cast cleared by channel").isNil()
+            expect(H.env.UnitChannelInfo("player")).notNil()
+
+            H.startCast({ name = "Frostbolt" })
+            expect(H.env.UnitChannelInfo("player")).as("channel cleared by cast").isNil()
+            expect(H.env.UnitCastingInfo("player")).notNil()
+        end)
+
+        it("clears state BEFORE firing stop events, matching the client's order", function()
+            -- From inside a listener for UNIT_SPELLCAST_STOP, UnitCastingInfo must
+            -- already report nil.
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local infoInsideHandler = "not called"
+            probe:RegisterEvent("UNIT_SPELLCAST_STOP")
+            probe:SetScript("OnEvent", function()
+                infoInsideHandler = H.env.UnitCastingInfo("player")
+            end)
+            H.startCast({ unit = "player" })
+            H.stopCast()
+            expect(infoInsideHandler).as("nil inside STOP handler").isNil()
+        end)
+
+        it("clears state before UNIT_SPELLCAST_SUCCEEDED", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local infoInside
+            probe:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+            probe:SetScript("OnEvent", function()
+                infoInside = H.env.UnitCastingInfo("player")
+            end)
+            H.startCast({ unit = "player" })
+            H.finishCast()
+            expect(infoInside).isNil()
+        end)
+
+        it("clears state before UNIT_SPELLCAST_INTERRUPTED", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local infoInside
+            probe:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+            probe:SetScript("OnEvent", function()
+                infoInside = H.env.UnitCastingInfo("player")
+            end)
+            H.startCast({ unit = "player" })
+            H.interruptCast()
+            expect(infoInside).isNil()
+        end)
+
+        it("clears state before UNIT_SPELLCAST_FAILED", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local infoInside
+            probe:RegisterEvent("UNIT_SPELLCAST_FAILED")
+            probe:SetScript("OnEvent", function()
+                infoInside = H.env.UnitCastingInfo("player")
+            end)
+            H.startCast({ unit = "player" })
+            H.failCast()
+            expect(infoInside).isNil()
+        end)
+
+        it("clears state before UNIT_SPELLCAST_CHANNEL_STOP", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local infoInside
+            probe:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
+            probe:SetScript("OnEvent", function()
+                infoInside = H.env.UnitChannelInfo("player")
+            end)
+            H.startChannel({ unit = "player" })
+            H.stopChannel()
+            expect(infoInside).isNil()
+        end)
+
+        it("H.delayCast extends endTime and fires UNIT_SPELLCAST_DELAYED", function()
+            H.tick(1)
+            H.startCast({ duration = 3 })
+            local _, _, _, _, endBefore = H.env.UnitCastingInfo("player")
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local delayFired = false
+            probe:RegisterEvent("UNIT_SPELLCAST_DELAYED")
+            probe:SetScript("OnEvent", function() delayFired = true end)
+            H.delayCast(0.5)
+            local _, _, _, _, endAfter = H.env.UnitCastingInfo("player")
+            expect(endAfter - endBefore).eq(500)
+            expect(delayFired).truthy()
+        end)
+
+        it("H.delayCast returns nil and fires nothing when idle", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            probe:RegisterEvent("UNIT_SPELLCAST_DELAYED")
+            probe:SetScript("OnEvent", function() fired = true end)
+            local result = H.delayCast(1)
+            expect(result).isNil()
+            expect(fired).falsy()
+        end)
+
+        it("H.updateChannel adjusts endTime including negative deltas", function()
+            H.tick(1)
+            H.startChannel({ duration = 5 })
+            local _, _, _, _, endBefore = H.env.UnitChannelInfo("player")
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local updateFired = false
+            probe:RegisterEvent("UNIT_SPELLCAST_CHANNEL_UPDATE")
+            probe:SetScript("OnEvent", function() updateFired = true end)
+            H.updateChannel(-1)
+            local _, _, _, _, endAfter = H.env.UnitChannelInfo("player")
+            expect(endAfter - endBefore).eq(-1000)
+            expect(updateFired).truthy()
+        end)
+
+        it("H.updateChannel returns nil and fires nothing when idle", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            probe:RegisterEvent("UNIT_SPELLCAST_CHANNEL_UPDATE")
+            probe:SetScript("OnEvent", function() fired = true end)
+            local result = H.updateChannel(1)
+            expect(result).isNil()
+            expect(fired).falsy()
+        end)
+
+        it("state.cast and state.channel are cleared by H.setup()", function()
+            H.startCast({ name = "Fireball" })
+            H.startChannel({ name = "Drain Soul" })
+            -- channel clears cast, so only channel should be set now
+            expect(H.env.UnitChannelInfo("player")).notNil()
+            H.setup()
+            expect(H.env.UnitCastingInfo("player")).isNil()
+            expect(H.env.UnitChannelInfo("player")).isNil()
+        end)
+
+        it("both player cast bar globals exist as frames", function()
+            -- The live client renamed this frame when Edit Mode arrived, so the harness
+            -- ships both names and the addon has to cope with either being the real one.
+            for _, name in ipairs({ "PlayerCastingBarFrame", "CastingBarFrame" }) do
+                expect(H.env[name]).as(name .. " exists").notNil()
+                expect(H.env[name]:GetWidth()).gt(0)
+            end
+        end)
+
+        it("castBarGlobals narrows which cast bar names the client has", function()
+            H.setup({ castBarGlobals = { "PlayerCastingBarFrame" } })
+            expect(H.env.PlayerCastingBarFrame).notNil()
+            expect(H.env.CastingBarFrame).as("legacy name withheld").isNil()
+        end)
+
+        it("INTERRUPTED and FAILED globals are defined", function()
+            expect(H.env.INTERRUPTED).eq("Interrupted")
+            expect(H.env.FAILED).eq("Failed")
+        end)
+    end)
+
+    describe("combat log simulation", function()
+        it("UnitGUID is stable per unit token and differs between units", function()
+            local a = H.env.UnitGUID("player")
+            expect(a).notNil()
+            expect(H.env.UnitGUID("player")).as("stable").eq(a)
+            expect(H.env.UnitGUID("target")).as("distinct per unit").neq(a)
+            expect(H.env.UnitGUID(nil)).isNil()
+        end)
+
+        it("CombatLogGetCurrentEventInfo returns nothing outside an event", function()
+            -- The client's own behaviour: the accessor is only meaningful inside the
+            -- handler, so code that caches it or reads it late must get nothing.
+            expect(H.env.CombatLogGetCurrentEventInfo()).isNil()
+        end)
+
+        it("delivers a SPELL_INTERRUPT payload in the client's positional order", function()
+            local seen
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            probe:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+            probe:SetScript("OnEvent", function()
+                seen = { H.env.CombatLogGetCurrentEventInfo() }
+            end)
+
+            H.combatLogInterrupt({ unit = "player", by = "Kaelthas",
+                                   interrupted = "Fireball" })
+
+            expect(seen).notNil()
+            expect(seen[2]).as("subevent").eq("SPELL_INTERRUPT")
+            expect(seen[5]).as("sourceName is the interrupter").eq("Kaelthas")
+            expect(seen[8]).as("destGUID is the interrupted unit").eq(H.env.UnitGUID("player"))
+            expect(seen[13]).as("the interrupting spell").eq("Counterspell")
+            expect(seen[16]).as("extraSpellName is the spell that was stopped").eq("Fireball")
+        end)
+
+        it("clears the payload again once the event has been dispatched", function()
+            H.combatLogInterrupt({ by = "Kaelthas" })
+            expect(H.env.CombatLogGetCurrentEventInfo())
+                .as("no longer readable after dispatch").isNil()
+        end)
+
+        it("H.interruptCast with `by` delivers the log line before the cast event", function()
+            local order = {}
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            probe:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+            probe:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+            probe:SetScript("OnEvent", function(_, ev)
+                order[#order + 1] = ev
+            end)
+            H.startCast({ name = "Fireball" })
+            H.interruptCast({ by = "Kaelthas" })
+            expect(order[1]).eq("COMBAT_LOG_EVENT_UNFILTERED")
+            expect(order[2]).eq("UNIT_SPELLCAST_INTERRUPTED")
+        end)
+
+        it("logAfter reverses that order, which the client also produces", function()
+            local order = {}
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            probe:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+            probe:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+            probe:SetScript("OnEvent", function(_, ev)
+                order[#order + 1] = ev
+            end)
+            H.startCast({ name = "Fireball" })
+            H.interruptCast({ by = "Kaelthas", logAfter = true })
+            expect(order[1]).eq("UNIT_SPELLCAST_INTERRUPTED")
+            expect(order[2]).eq("COMBAT_LOG_EVENT_UNFILTERED")
+        end)
+
+        it("H.interruptCast still accepts a bare unit token", function()
+            H.startCast({ unit = "player", name = "Fireball" })
+            expect(function() H.interruptCast("player") end).notThrows()
+            expect(H.env.UnitCastingInfo("player")).isNil()
+        end)
+
+        it("names the interrupted spell from the cast in flight", function()
+            local seen
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            probe:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+            probe:SetScript("OnEvent", function()
+                seen = { H.env.CombatLogGetCurrentEventInfo() }
+            end)
+            H.startCast({ name = "Pyroblast" })
+            H.interruptCast({ by = "Kaelthas" })
+            expect(seen[16]).eq("Pyroblast")
+        end)
+
+        it("state.combatLogEvent is cleared by H.setup()", function()
+            H.combatLogInterrupt({ by = "Kaelthas" })
+            H.setup()
+            expect(require("harness.wow.state").combatLogEvent).isNil()
+        end)
+    end)
+
+    describe("texture crop (SetTexCoord / GetTexCoord)", function()
+        it("round-trips a 4-argument SetTexCoord through GetTexCoord", function()
+            local p = H.parent(100, 100)
+            local tex = p:CreateTexture(nil, "ARTWORK")
+            tex:SetTexCoord(0.1, 0.9, 0.2, 0.8)
+            local l, r, t, b = tex:GetTexCoord()
+            expect(l).near(0.1, 1e-9)
+            expect(r).near(0.9, 1e-9)
+            expect(t).near(0.2, 1e-9)
+            expect(b).near(0.8, 1e-9)
+        end)
+
+        it("reports nil for an untouched texture", function()
+            local p = H.parent(100, 100)
+            local tex = p:CreateTexture(nil, "ARTWORK")
+            expect(tex:GetTexCoord()).isNil()
+        end)
+
+        it("accepts the 8-argument corner form without error", function()
+            local p = H.parent(100, 100)
+            local tex = p:CreateTexture(nil, "ARTWORK")
+            expect(function()
+                tex:SetTexCoord(0, 0, 0, 1, 1, 0, 1, 1)
+            end).notThrows()
+        end)
+    end)
 end)

@@ -91,6 +91,31 @@ local function colourRow(parent, def, editors)
     return row
 end
 
+-- Builds one boolean token row: label left, switch right.
+--
+-- The only non-visual token form in the editor. "Colour this by class" is a mode rather
+-- than a value, so it gets a switch instead of a swatch — and modelling it as a boolean is
+-- what keeps every colour token in this list a real colour.
+local function toggleRow(parent, def, editors)
+    local T   = SuuUI.Theme
+    local row = SuuUI._SettingsRow.Labelled(parent, def.label)
+
+    local tog = C.Toggle({ value = T:GetToken(def.key) == true }, row:GetFrame())
+    row:Add(tog)
+
+    S:Connect(tog, S.SIGNALS.VALUE_CHANGED, function(val)
+        setToken(def.key, val == true)
+    end)
+
+    editors[def.key] = {
+        controls = { tog },
+        -- SetValue is silent by contract, so writing the stored value back here cannot
+        -- loop into the VALUE_CHANGED handler above.
+        refresh = function() tog:SetValue(T:GetToken(def.key) == true) end,
+    }
+    return row
+end
+
 -- Builds one numeric token row: slider with inline label
 local function numberRow(parent, def, editors)
     local T   = SuuUI.Theme
@@ -323,6 +348,8 @@ local function Build(entry, parent)
             row = colourRow(root:GetFrame(), def, editors)
         elseif def.type == "font" then
             row = fontRow(root:GetFrame(), def, editors)
+        elseif def.type == "toggle" then
+            row = toggleRow(root:GetFrame(), def, editors)
         else
             row = numberRow(root:GetFrame(), def, editors)
         end

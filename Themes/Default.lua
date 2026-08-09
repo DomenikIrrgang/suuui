@@ -18,6 +18,10 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorBlue400     = {0.25, 0.55, 1.00, 1.00},
     colorBlue500     = {0.18, 0.44, 0.90, 1.00},
     colorGreen400    = {0.20, 0.80, 0.40, 1.00},
+    -- Health's own green rather than a reuse of Success: they are the same hue family but
+    -- answer to different things, and a user retinting "Success" to orange should not turn
+    -- their health bar orange.
+    colorGreen500    = {0.22, 0.78, 0.32, 1.00},
     colorRed400      = {0.90, 0.25, 0.25, 1.00},
     colorYellow400   = {0.95, 0.80, 0.20, 1.00},
 
@@ -50,6 +54,19 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
     -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
     colorMarker      = { ref = "colorGray100", alpha = 0.90 },
+    -- The empty part of a frameless bar — a unit frame's health track, a cast bar's.
+    -- Its own semantic rather than a panel colour: a bar sits over the game world, not
+    -- over a panel, so it takes the darkest neutral at the bar-track opacity.
+    colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" },
+    -- A unit's health, when it is not being coloured by class. See colorUseClassColors:
+    -- with that flag on this becomes the fallback for a unit whose class is unknown — an
+    -- NPC, a totem — rather than going unused.
+    colorHealth      = "colorGreen500",
+    -- The "you cannot stop this" cue: the hairline outline a cast bar draws around itself
+    -- and its icon while the spell is uninterruptible. A light neutral rather than an
+    -- intent colour — it is a property of the spell, not a warning, and it has to stay
+    -- legible against whatever fill colour the player picked.
+    colorShield      = "colorGray400",
 
     -- Tier 2: intent
     colorAccent      = "colorBlue400",
@@ -57,6 +74,15 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorSuccess     = "colorGreen400",
     colorDanger      = "colorRed400",
     colorWarning     = "colorYellow400",
+
+    -- Colour a unit by its class instead of by a fixed colour. A boolean rather than a
+    -- colour token because it is a mode, not a value: it selects WHICH source a unit's
+    -- colour comes from, while the class colours themselves are facts about the client and
+    -- live in SuuUI.Game. Read through Theme:GetUnitColor, never directly.
+    --
+    -- Off here so Default is the fixed-palette theme; Modern turns it on. That is the kind
+    -- of difference two built-in themes exist to carry.
+    colorUseClassColors = false,
 
     -- Tier 2: content
     colorText         = "colorGray100",

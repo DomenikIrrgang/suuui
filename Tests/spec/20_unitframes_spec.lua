@@ -6,6 +6,17 @@ local function setting(key)
     return H.SuuUI.Settings:Get("unit_frames", key)
 end
 
+-- The band an attached cast bar adds below the frame's own content. A cast bar ships
+-- attached by default, so the player frame really is taller than its own two bars —
+-- deriving the extra here keeps the expectation honest instead of measuring the frame
+-- against itself. Returns 0 whenever nothing is attached.
+local function castBand()
+    local plugin = H.SuuUI.Plugins:Get("cast_bars")
+    local ctl = plugin and plugin._controllers and plugin._controllers.player
+    if not (ctl and ctl:GetMode() == "attached") then return 0 end
+    return H.token("spaceXs") + H.SuuUI.Settings:Get("cast_bars", "player_height")
+end
+
 describe("Plugins.UnitFrames", function()
     local host, state
 
@@ -72,6 +83,58 @@ describe("Plugins.UnitFrames", function()
             local blizFrame = H.env.PlayerFrame
             expect(blizFrame:IsShown()).eq(false)
         end)
+
+        it("keeps its events so it can be handed back alive", function()
+            -- UnregisterAllEvents is a one-way door: nothing in the API enumerates a
+            -- frame's registered events, so a plugin that unregisters can never restore.
+            -- Suppression is the guarded OnShow hook instead.
+            local count = 0
+            if H.env.PlayerFrame._events then
+                for _ in pairs(H.env.PlayerFrame._events) do count = count + 1 end
+            end
+            expect(count).as("events left where Blizzard put them").gt(0)
+        end)
+
+        it("stays hidden when something shows it again", function()
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown()).as("re-show is defeated").eq(false)
+        end)
+
+        it("stays hidden when its own event handler shows it", function()
+            -- The realistic route, and the reason leaving the registrations in place
+            -- needs the hook: the frame shows itself from an event it registered.
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.PlayerFrame:IsShown())
+                .as("event-driven re-show is defeated").eq(false)
+        end)
+
+        it("is shown again when the plugin is disabled", function()
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            expect(H.env.PlayerFrame:IsShown())
+                .as("a programmatic Disable has no reload behind it").eq(true)
+        end)
+
+        it("stays shown after a disable, not re-hidden by the hook", function()
+            -- The hook cannot be uninstalled, so the guard flag is the only thing keeping
+            -- it from hiding the frame straight back on the next show.
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            H.env.PlayerFrame:Hide()
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown()).as("the hook is inert once restored").eq(true)
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.PlayerFrame:IsShown())
+                .as("and stays inert under event traffic").eq(true)
+        end)
+
+        it("is suppressed again on a re-enable", function()
+            local p = H.SuuUI.Plugins:Get("unit_frames")
+            p:Disable()
+            p:Enable()
+            expect(H.env.PlayerFrame:IsShown()).as("round-trip re-hides").eq(false)
+            H.env.PlayerFrame:Show()
+            expect(H.env.PlayerFrame:IsShown())
+                .as("the existing hook is reused, not stacked").eq(false)
+        end)
     end)
 
     describe("player frame creation", function()
@@ -105,7 +168,7 @@ describe("Plugins.UnitFrames", function()
             H.expectSize(frame, nil,
                 infoH + H.token("spaceXs")
                 + setting("player_health_height") + H.token("spaceXxs")
-                + setting("player_power_height"))
+                + setting("player_power_height") + castBand())
         end)
 
         it("GetFrame returns the wrapper that holds the info row and the bars", function()
@@ -125,7 +188,7 @@ describe("Plugins.UnitFrames", function()
             H.expectSize(frame, setting("player_width"),
                 infoH + H.token("spaceXs")
                 + setting("player_health_height") + H.token("spaceXxs")
-                + setting("player_power_height"))
+                + setting("player_power_height") + castBand())
         end)
 
         it("reports its intrinsic size, so the plugin needs no magic numbers", function()
@@ -207,10 +270,14 @@ describe("Plugins.UnitFrames", function()
                 .eq(hb.bottom + H.token("spaceXxs"))
         end)
 
-        it("bars reach the bottom of the frame", function()
+        it("bars reach the bottom of the frame's own content", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            expect(H.box(pf._resourceBar).bottom).eq(H.box(pf._wrapper).bottom)
+            -- No dead space below the resource bar. An attached cast bar occupies the band
+            -- under it, so the invariant is stated against the frame's own content edge
+            -- rather than the wrapper's, which now includes that band.
+            expect(H.box(pf._resourceBar).bottom)
+                .eq(H.box(pf._wrapper).bottom - castBand())
         end)
 
         it("re-lays out when the health bar height setting changes", function()
@@ -337,12 +404,31 @@ describe("Plugins.UnitFrames", function()
             expect(pf._healthBar:GetPercent()).near(0.8, 0.001)
         end)
 
-        it("uses green health colour", function()
+        -- Health colour resolves through Theme:GetUnitColor, so it has two branches and
+        -- both are real: the class colour is a fact from SuuUI.Game, the fallback is a
+        -- theme token. Asserting only one would let the other regress silently.
+        it("class-colours health when the theme asks for it", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            expect(pf._healthBar._fillColor[1]).near(0.22, 0.01)
-            expect(pf._healthBar._fillColor[2]).near(0.78, 0.01)
-            expect(pf._healthBar._fillColor[3]).near(0.32, 0.01)
+            -- Modern is the theme the suite boots into, and it ships class colouring on.
+            expect(H.token("colorUseClassColors")).as("Modern class-colours").eq(true)
+            local want = H.SuuUI.Game:ClassColor("WARRIOR")
+            expect(want).as("harness player is a warrior").notNil()
+            expect(pf._healthBar._fillColor[1]).near(want[1], 0.01)
+            expect(pf._healthBar._fillColor[2]).near(want[2], 0.01)
+            expect(pf._healthBar._fillColor[3]).near(want[3], 0.01)
+        end)
+
+        it("falls back to the health token when class colouring is off", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            -- Default ships the flag off, so switching theme exercises both the flag and
+            -- the repaint-on-theme-change path in one step.
+            H.SuuUI.Theme:SetActive("Default")
+            local want = H.token("colorHealth")
+            expect(pf._healthBar._fillColor[1]).near(want[1], 0.01)
+            expect(pf._healthBar._fillColor[2]).near(want[2], 0.01)
+            expect(pf._healthBar._fillColor[3]).near(want[3], 0.01)
         end)
     end)
 

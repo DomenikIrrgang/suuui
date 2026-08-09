@@ -69,7 +69,22 @@ end
 
 function TextureMeta:GetDrawLayer() return self._drawLayer, self._subLayer end
 
-function TextureMeta:SetTexCoord() end
+function TextureMeta:SetTexCoord(left, right, top, bottom, ...)
+    if select("#", ...) > 0 then
+        self._texCoord = { left, right, top, bottom, ... }
+    else
+        self._texCoord = { left, right, top, bottom }
+    end
+end
+
+--- Harness accessor: the crop set by SetTexCoord as left, right, top, bottom, or nil when
+--- the texture was never cropped. The client's own GetTexCoord returns eight corner
+--- values; this reports the four-argument form the addon actually sets.
+function TextureMeta:GetTexCoord()
+    local c = self._texCoord
+    if not c then return nil end
+    return c[1], c[2], c[3], c[4]
+end
 function TextureMeta:SetBlendMode(mode) self._blendMode = mode end
 function TextureMeta:SetRotation(r) self._rotation = r end
 

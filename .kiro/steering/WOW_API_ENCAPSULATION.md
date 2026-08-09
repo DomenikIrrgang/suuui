@@ -33,7 +33,7 @@ and signal system all get bypassed.
 | `Layout/{Flow,Grid,Stack,Anchor}Layout.lua` | Yes | **Yes — only here** |
 | `Layout/Container.lua` | Yes | Only to self-anchor its own frame |
 | `Core/UIRoot.lua` | Yes — owns the single `UIParent` anchor | Only that one anchor |
-| `Core/Pool.lua` | Yes | `ClearAllPoints` on release only |
+| `Core/Pool.lua` | Yes | `ClearAllPoints` + `SetScale(1)` on release |
 | `Core/Pixel.lua` | Yes — an invisible event watcher only, no visible UI | **No** |
 | `Core/MoveableFrame.lua` | Yes — drag overlay internals, as a component would | **No** — hosts containers |
 | `Animation/*` | Yes — one invisible `OnUpdate` driver frame | **No** — position animates through `container:SetChildAnchor`; `ScalePop` is the one sanctioned `SetScale` (transient, self-reverting to 1.0; see `coding-standards.md`) |
@@ -51,8 +51,10 @@ The three engine rows are narrow, and worth stating explicitly because a blanket
   `alpha`, `width`, `height` and `scale` through the client's setters, but **position is
   animated through the layout engine** — `x`/`y` require a container and drive
   `SetChildAnchor`, so a tween never fights a strategy for the same anchor. `ScalePop` is
-  the one sanctioned `SetScale`: transient, self-reverting to exactly 1.0, and never
-  nested. See `coding-standards.md` for the full carve-out rationale.
+  the one sanctioned *transient* `SetScale`: self-reverting to exactly 1.0, and never
+  nested. `Core/Pool.lua`'s `SetScale(1)` on release is the other sanctioned call — it
+  restores the identity the pixel grid assumes, the exact inverse of `ScalePop`'s
+  temporary departure. See `coding-standards.md` for the full carve-out rationale.
 - **`Core/MoveableFrame.lua`** builds an edit-mode drag overlay, which is component work in
   everything but its folder. It gets the component licence and the component restriction:
   raw `CreateFrame`/`CreateTexture` for its own internals, but its overlay, backdrop and

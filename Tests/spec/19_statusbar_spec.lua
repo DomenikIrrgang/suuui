@@ -733,4 +733,110 @@ describe("Components.StatusBar", function()
             expect(bar:GetPercent()).near(0.6, 0.001)
         end)
     end)
+
+    describe("border colour and visibility", function()
+        local host
+        before_each(function() host = H.parent(300, 200) end)
+
+        it("borderColor defaults to colorBorder", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20 }, host))
+            H.expectTokenColor(H.borderColor(bar), "colorBorder")
+        end)
+
+        it("a borderColor prop is honoured at construction", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20,
+                                               borderColor = "colorShield" }, host))
+            H.expectTokenColor(H.borderColor(bar), "colorShield")
+        end)
+
+        it("SetBorderColor recolours without changing whether a border is drawn", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20 }, host))
+            bar:SetBorderColor("colorShield")
+            expect(bar:IsBorderShown()).eq(true)
+            H.expectTokenColor(H.borderColor(bar), "colorShield")
+        end)
+
+        it("SetBorderShown adds a border to a frameless bar and insets the fill", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20, border = false,
+                                               value = 50, max = 100 }, host))
+            expect(bar:IsBorderShown()).eq(false)
+            local flush = H.box(bar._fillFrame).left - H.box(bar).left
+            expect(flush).as("borderless, so the fill starts at the edge").near(0, 0.5)
+
+            bar:SetBorderShown(true)
+            expect(bar:IsBorderShown()).eq(true)
+            local line = H.SuuUI.Pixel.Line(H.token("borderWidth"))
+            expect(H.box(bar._fillFrame).left - H.box(bar).left)
+                .as("inset by the border width").near(line, 0.5)
+        end)
+
+        it("SetBorderShown(false) removes it again and restores the flush fill", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20, value = 50, max = 100 }, host))
+            bar:SetBorderShown(false)
+            expect(bar:IsBorderShown()).eq(false)
+            expect(H.box(bar._fillFrame).left - H.box(bar).left).near(0, 0.5)
+        end)
+
+        it("toggling the border does not disturb the painted fraction", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20, value = 40, max = 100 }, host))
+            bar:SetBorderShown(false)
+            expect(bar:GetDisplayPercent()).as("geometry changed, value did not").near(0.4, 0.001)
+            expect(bar:IsTransitioning()).eq(false)
+        end)
+
+        it("an overridden border colour survives a theme change", function()
+            local bar = H.mount(H.C.StatusBar({ w = 100, h = 20 }, host))
+            bar:SetBorderColor("colorShield")
+            H.T:CreateUserTheme("BarTheme", "Modern")
+            H.T:SetActive("BarTheme")
+            H.expectTokenColor(H.borderColor(bar), "colorShield")
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Enabled-state omission (deliberate — display-only, no mouse input)
+    --
+    -- StatusBar is not a control. It takes no mouse input and is never a target
+    -- of Dependency.Bind. Removing SetEnabled ensures Dependency.lua's guard
+    -- (`if target.SetEnabled`) correctly skips it. The composite that owns a bar
+    -- (a unit frame, a cast bar) fades its own outer handle, and frame alpha
+    -- cascades — so a bar has no second fade of its own.
+    ---------------------------------------------------------------------------
+    describe("enabled-state omission", function()
+        it("does not expose SetEnabled — not a control; Dependency skips it", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16, max = 100, value = 50 }, host)
+            expect(bar.SetEnabled)
+                .as("StatusBar is display-only; Dependency.Bind must skip it").isNil()
+        end)
+
+        it("does not expose IsEnabled", function()
+            local bar = H.C.StatusBar({ w = 100, h = 16 }, host)
+            expect(bar.IsEnabled).isNil()
+        end)
+
+        it("Dependency.Bind leaves a StatusBar alone instead of pretending to grey it", function()
+            -- The consequence that matters, and the reason an InstallEnable with
+            -- _fade = false would be wrong here rather than merely redundant: Bind's
+            -- guard is `if target.SetEnabled`, so a bar carrying a SetEnabled that
+            -- fades nothing and drops no mouse would satisfy the guard while staying
+            -- fully lit. Absent, it is skipped honestly.
+            local bar = H.C.StatusBar({ w = 100, h = 16, max = 100, value = 50 }, host)
+            H.SuuUI.Settings:Register("dep_probe", {
+                { key = "gate", label = "Gate", type = "toggle", default = true },
+                { key = "bar",  label = "Bar",  type = "slider", default = 1,
+                  enabledIf = "gate" },
+            })
+            local entry = H.SuuUI.Settings:GetSchema("dep_probe")[2]
+
+            local ok = pcall(H.SuuUI._SettingsDeps.Bind, "dep_probe", entry, bar)
+            expect(ok).as("binding a bar is a no-op, not an error").eq(true)
+
+            -- Flipping the dependency off must not reach the bar at all.
+            H.SuuUI.Settings:Set("dep_probe", "gate", false)
+            expect(bar:GetFrame():GetAlpha()).as("never faded").eq(1)
+            expect(bar.SetEnabled).as("still no stub to satisfy the guard").isNil()
+
+            H.SuuUI.Settings:Unwatch(H.SuuUI.Settings.ControlOwner("dep_probe", "slider", "bar"))
+        end)
+    end)
 end)

@@ -26,7 +26,7 @@ Open the settings window in game with `/suuui`.
 
 | Directory | Contents |
 |---|---|
-| `Core/` | event bus, UI signals, profiles, settings registry, theme tokens, font registry, pixel grid, plugin lifecycle |
+| `Core/` | event bus, UI signals, attach points, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
 | `Components/` | ~20 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, … |
 | `Animation/` | tween easings, animation runner, named presets |
@@ -54,7 +54,7 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 1092 assertions with no external dependencies — no busted, no luarocks.
+runs 2124 assertions with no external dependencies — no busted, no luarocks.
 
 Full contracts live in `.kiro/steering/`: `architecture.md` for the subsystem reference,
 `LAYOUT_SYSTEM.md`, `UI_SIGNALS.md`, `WOW_API_ENCAPSULATION.md`, `coding-standards.md`,

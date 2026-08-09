@@ -101,6 +101,33 @@ function M:GetTokenRaw(key)
     return rawTokens[key]
 end
 
+--- The colour for a bar or text that paints a unit, class-coloured when the theme says so.
+--
+-- This is the one place the theme's look decision meets the client's fact. Whether a unit
+-- is coloured by class is design language and lives in the theme as the boolean token
+-- colorUseClassColors; WHICH colour a class gets is a fact and lives in SuuUI.Game. Keeping
+-- the policy here rather than in whichever plugin paints first is what stops a second unit
+-- frame, a nameplate or a party frame from each growing its own copy of the same two lines
+-- and drifting apart.
+--
+-- colorUseClassColors is a boolean rather than a colour token on purpose: "colour this by
+-- class" is a mode, and modelling it as a flag keeps every colour token a real colour, so
+-- nothing downstream can be handed a value it cannot paint with.
+--
+-- Falls back to the token whenever class colouring is off OR the class is unknown — an
+-- NPC, a totem, a unit that does not exist, or a login moment before the class is
+-- available — so a caller always gets a usable colour and never has to check.
+-- @param key string   Colour token to use when class colouring is off or unavailable
+-- @param unit string  Unit id, e.g. "player"
+-- @return table  {r,g,b,a}
+function M:GetUnitColor(key, unit)
+    if resolved.colorUseClassColors and SuuUI.Game then
+        local c = SuuUI.Game:UnitClassColor(unit)
+        if c then return c end
+    end
+    return resolved[key]
+end
+
 --- Returns a colour token as a WoW chat escape prefix, e.g. "|cffff4040".
 -- Lets chat output use the theme's intent colours instead of hardcoded literals.
 -- @param key string  Colour token key

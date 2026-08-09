@@ -517,6 +517,38 @@ host:Add(btn, { anchor = { point="TOPRIGHT", relativePoint="TOPRIGHT", x=-2, y=-
 
 ---
 
+### Show a container before anchoring a foreign child to it
+
+**A hidden frame has no rect.** A child anchored to one never resolves a position of its own:
+`GetTop()` returns nil for ever, while the child still reports the size it was assigned and
+still says it is shown and visible. Nothing draws, and no geometry assertion catches it.
+
+So a container that is hidden must be **shown before** a child is added to it, not after:
+
+```lua
+-- ❌ the child is anchored to a frame with no rect, and never resolves one
+slot:Add(child, { width = "fill" })
+if not slot:IsShown() then slot:Show() end
+
+-- ✅ the slot has a rect by the time the child is anchored to it
+if not slot:IsShown() then slot:Show() end
+slot:Add(child, { width = "fill" })
+```
+
+**This only bites when the child's parent is not the container it is anchored to.** A
+tooltip, a dropdown panel or a modal builds its children *inside* the frame that is hidden,
+so showing that frame dirties the whole subtree and every child resolves. `Tooltip`,
+`Dropdown`, `Modal` and `Window` are all safe for that reason. An attach point is the
+exception by design: the publisher hands out one frame as the **parent** and places the child
+with a **different** container, so showing that container does not dirty the child.
+
+The failure is also first-time only — the container stays shown afterwards — which makes it
+look like a load-order problem and makes "remove it and add it again" appear to fix it. That
+is what hid this for a whole session in `PlayerFrame:AttachChild`, where the first attached
+cast bar was permanently invisible and re-attaching by hand always worked.
+
+---
+
 ## Missing Feature? Discuss First!
 
 If you need layout behavior that doesn't exist:
