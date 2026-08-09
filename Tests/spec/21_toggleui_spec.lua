@@ -871,4 +871,161 @@ describe("Core.MoveableFrame", function()
                 .near(boxAfterDrag.top, 1)
         end)
     end)
+
+    describe("REGRESSION: coreInset keeps content still while the frame grows", function()
+        -- A frame that publishes an attach point grows around children it does not own.
+        -- Growth lands on whichever edge the anchor does NOT pin, so a band appearing on
+        -- the pinned edge displaces the frame's own content by that band's height. This is
+        -- the bug that moved the player unit frame's bars whenever a cast bar attached
+        -- below them, detached, or swapped between the above and below slot.
+        --
+        -- The frame is modelled directly rather than through the plugins: what is under
+        -- test is the placement rule, and a bare frame states it without a unit frame's
+        -- other height inputs in the way.
+        local BAND = 26   -- a band plus its row gap, in units
+
+        -- Builds a moveable frame whose reported core inset is whatever the returned
+        -- setter says, so a test can grow a band without a second plugin.
+        --
+        -- The position is WRITTEN to settings, not merely passed as `defaults`: a stored
+        -- value wins over the opt, and this key has a registered schema default of
+        -- TOPLEFT/-20. Relying on `defaults` alone silently ran every case below against a
+        -- TOPLEFT anchor, so the BOTTOM and CENTER branches were never reached.
+        local function moveable(point, y, coreH)
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            local above, below = 0, 0
+            f:SetSize(100, coreH)
+            H.SuuUI.Settings:Set("test_plugin", "frame_position",
+                { point = point, relPoint = point, x = 10, y = y })
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = point, relPoint = point, x = 10, y = y },
+                coreInset   = function() return above, below end,
+            })
+            expect(select(1, f:GetPoint())).as("anchor point under test is in force").eq(point)
+            -- Grows the frame the way an attach slot does: the band is INSIDE the frame,
+            -- so the frame gets taller and reports the inset that band creates.
+            local function setBands(a, b)
+                above, below = a, b
+                f:SetHeight(coreH + a + b)
+                H.SuuUI.MoveableFrame:RefreshAnchor(f)
+            end
+            return f, setBands
+        end
+
+        -- Where the frame's own content sits, given the bands around it: the core is the
+        -- slice of the frame's box left over after the insets.
+        local function coreTop(f, above)
+            local b = H.box(f)
+            return b and (b.top + above) or nil
+        end
+
+        it("BOTTOM anchor: a band below does not move the content", function()
+            local f, setBands = moveable("BOTTOMLEFT", 60, 50)
+            local before = coreTop(f, 0)
+            expect(before).notNil()
+
+            setBands(0, BAND)
+            expect(coreTop(f, 0)).as("content still after attaching below").near(before, 0.5)
+
+            setBands(BAND, 0)
+            expect(coreTop(f, BAND)).as("content still after moving the band above")
+                .near(before, 0.5)
+
+            setBands(0, 0)
+            expect(coreTop(f, 0)).as("content still after detaching").near(before, 0.5)
+        end)
+
+        it("TOP anchor: a band above does not move the content", function()
+            -- The mirror case, and the one the BOTTOM-anchored frame hid: with the top edge
+            -- pinned, growth goes downward, so it is the ABOVE band that would displace the
+            -- content. A fix that only shifted for one edge passes the test above and fails
+            -- this one.
+            local f, setBands = moveable("TOPLEFT", -60, 50)
+            local before = coreTop(f, 0)
+
+            setBands(BAND, 0)
+            expect(coreTop(f, BAND)).as("content still after attaching above").near(before, 0.5)
+
+            setBands(0, BAND)
+            expect(coreTop(f, 0)).as("content still after moving the band below")
+                .near(before, 0.5)
+        end)
+
+        it("CENTER anchor: the content stays centred on its own box", function()
+            local f, setBands = moveable("CENTER", 0, 50)
+            local before = coreTop(f, 0)
+
+            setBands(0, BAND)
+            expect(coreTop(f, 0)).as("content still after attaching below").near(before, 0.5)
+
+            setBands(BAND, 0)
+            expect(coreTop(f, BAND)).as("content still after moving the band above")
+                .near(before, 0.5)
+        end)
+
+        it("stores the content position, not the bounding box, so a drag cannot creep", function()
+            -- The compensation is applied on read and removed on write. If only one half
+            -- existed, every drag would bake the inset in again and the frame would walk
+            -- one band height per drag.
+            local f, setBands = moveable("BOTTOMLEFT", 60, 50)
+            setBands(0, BAND)
+            H.SuuUI.ToggleUI:Enable()
+
+            local overlay = f._suuui_moveable.overlay
+            local firstBox
+            for i = 1, 3 do
+                overlay:GetScript("OnDragStop")()
+                H.SuuUI.UIRoot:GetRootContainer():Layout()
+                local b = H.box(f)
+                firstBox = firstBox or b
+                expect(b.top).as("no vertical creep on drag " .. i).near(firstBox.top, 0.5)
+                expect(H.SuuUI.Settings:Get("test_plugin", "frame_position").y)
+                    .as("stored y is the content's, unchanged by drag " .. i).near(60, 0.5)
+            end
+        end)
+
+        it("leaves a frame without a coreInset provider untouched", function()
+            -- The detached cast bar and every other moveable frame take this path, so the
+            -- default must be a genuine no-op rather than a zero that still re-anchors.
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+            H.SuuUI.Settings:Set("test_plugin", "frame_position",
+                { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 10, y = 60 })
+            H.SuuUI.MoveableFrame:Apply(f, {
+                pluginId    = "test_plugin",
+                key         = "frame_position",
+                displayName = "Test",
+                defaults    = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 10, y = 60 },
+            })
+            local _, _, _, _, y = f:GetPoint()
+            expect(y).as("offset passes through unshifted").near(60, 0.5)
+        end)
+
+        it("survives a provider that errors instead of unwinding into the layout", function()
+            -- The provider belongs to a plugin and runs on every placement pass, so a
+            -- throwing one must degrade to no compensation rather than take the frame's
+            -- position — or the client's frame — with it.
+            local rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+            local f = H.env.CreateFrame("Frame", nil, rootFrame)
+            f:SetSize(100, 50)
+            H.SuuUI.Settings:Set("test_plugin", "frame_position",
+                { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 10, y = 60 })
+            expect(function()
+                H.SuuUI.MoveableFrame:Apply(f, {
+                    pluginId    = "test_plugin",
+                    key         = "frame_position",
+                    displayName = "Test",
+                    defaults    = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 10, y = 60 },
+                    coreInset   = function() error("plugin bug") end,
+                })
+            end).notThrows()
+            local _, _, _, _, y = f:GetPoint()
+            expect(y).as("falls back to no compensation").near(60, 0.5)
+        end)
+    end)
 end)

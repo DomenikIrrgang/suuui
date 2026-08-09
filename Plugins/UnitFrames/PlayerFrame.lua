@@ -5,28 +5,22 @@ local S = SuuUI.UISignals
 local T = SuuUI.Theme
 
 ---------------------------------------------------------------------------
--- Power type colour map (standard WoW colours)
+-- Bar colours
 ---------------------------------------------------------------------------
-local POWER_COLORS = {
-    [0] = {0.00, 0.44, 0.87, 1},  -- Mana (blue)
-    [1] = {0.77, 0.12, 0.23, 1},  -- Rage (red)
-    [2] = {1.00, 0.50, 0.25, 1},  -- Focus (orange)
-    [3] = {1.00, 0.96, 0.41, 1},  -- Energy (yellow)
-    [4] = {0.00, 0.44, 0.87, 1},  -- Combo Points (blue, fallback)
-    [5] = {0.50, 0.50, 0.50, 1},  -- Runes (grey)
-    [6] = {0.00, 0.82, 1.00, 1},  -- Runic Power (cyan)
-}
+-- Power colours are facts about the client, shared with anything else that paints one, so
+-- they come from SuuUI.Game rather than being restated here.
+--
+-- Health is the same shape one layer up. WHICH colour a class gets is also a fact in
+-- SuuUI.Game, but whether health is class-coloured at all is a look decision and lives in
+-- the theme as colorUseClassColors. Theme:GetUnitColor resolves the pair, so this plugin
+-- names the fallback token and nothing else — no class table, no flag check, and no second
+-- copy of that policy for the target frame to drift from.
+local HEALTH_COLOR = "colorHealth"
 
--- Health bar colour: a modern green
-local HEALTH_COLOR = {0.22, 0.78, 0.32, 1}
-
--- The empty part of a bar. Neutral black at a token opacity rather than a panel colour:
--- the frame has no backing plate, so this is the only surface behind the fill. It shares
--- the fill's box exactly (StatusBar insets nothing when there is no border), so a full bar
--- covers its track and an empty one occupies the same footprint.
-local function barTrackColor()
-    return {0, 0, 0, T:GetToken("opacityBarTrack")}
-end
+-- The empty part of a bar is the colorBarTrack semantic, passed to StatusBar as a token
+-- KEY rather than a resolved colour: the bar re-resolves it on every theme change, so
+-- editing the token or switching theme repaints the track with no work here.
+local BAR_TRACK = "colorBarTrack"
 
 ---------------------------------------------------------------------------
 -- Layout metrics
@@ -120,15 +114,66 @@ function PlayerFrame:_barsHeight()
     return m.health + m.barGap + m.resource
 end
 
---- The frame's intrinsic size, entirely token-derived: width from the size token, height
---- from the name row plus the bar group. Sizing flows one way — content sets the frame's
---- height, never the reverse — so there is no layout cycle to resolve.
+--- The height one attach slot contributes. An empty or hidden slot contributes nothing —
+--- flow layout skips it along with its gap, so reporting anything else would open a dead
+--- band in the frame.
+-- @param slot table  Container handle
+-- @return number
+function PlayerFrame:_slotHeight(slot)
+    if not (slot and slot:IsShown()) then return 0 end
+    local _, h = slot:GetContentSize()
+    return SuuUI.Pixel.Ceil(h or 0)
+end
+
+-- Accumulates one stacked band into a running height, adding the row gap only between
+-- bands that are actually present. Written as a plain function rather than a closure so
+-- GetPreferredSize allocates nothing: it runs on every layout pass.
+-- @return number, number  running total, count of bands added
+local function addBand(total, shown, h, gap)
+    if h <= 0 then return total, shown end
+    if shown > 0 then total = total + gap end
+    return total + h, shown + 1
+end
+
+--- The frame's intrinsic size: width from the plugin setting, height from whatever bands
+--- are currently present — an attach slot, the name row, the bars, another attach slot.
+--- Sizing flows one way, content setting the frame's height and never the reverse, so
+--- there is no layout cycle to resolve even once a foreign widget has attached.
 -- @return number, number  width, height
 function PlayerFrame:GetPreferredSize()
     local m = metrics()
-    local infoH = self:_infoHeight()
-    local gapAboveBars = infoH > 0 and m.infoGap or 0
-    return m.width, infoH + gapAboveBars + self:_barsHeight()
+    local total, shown = 0, 0
+    total, shown = addBand(total, shown, self:_slotHeight(self._slotAbove), m.infoGap)
+    total, shown = addBand(total, shown, self:_infoHeight(),                m.infoGap)
+    total, shown = addBand(total, shown, self:_barsHeight(),                m.infoGap)
+    total, shown = addBand(total, shown, self:_slotHeight(self._slotBelow), m.infoGap)
+    return m.width, total
+end
+
+--- How far the frame extends past its own content, top and bottom, because of attach
+--- bands. This is what keeps the player's chosen position meaning "where my bars are"
+--- rather than "where the bounding box is": a cast bar attaching below adds to the bottom
+--- inset, and MoveableFrame shifts the frame down by exactly that much so the bars do not
+--- move. Each band carries the row gap with it, matching GetPreferredSize.
+-- @return number, number  above inset, below inset
+function PlayerFrame:GetCoreInset()
+    local gap = metrics().infoGap
+    local above = self:_slotHeight(self._slotAbove)
+    local below = self:_slotHeight(self._slotBelow)
+    if above > 0 then above = above + gap end
+    if below > 0 then below = below + gap end
+    return above, below
+end
+
+--- Re-states placement when the attach bands changed, so the frame's own content stays
+--- put. Gated on the inset actually moving: the two slots swapping which one holds the
+--- band leaves the frame the same total height, so a size comparison would miss it, while
+--- re-anchoring on every layout pass would fight a drag in progress.
+function PlayerFrame:_syncAnchor()
+    local above, below = self:GetCoreInset()
+    if self._insetAbove == above and self._insetBelow == below then return end
+    self._insetAbove, self._insetBelow = above, below
+    SuuUI.MoveableFrame:RefreshAnchor(self._wrapper)
 end
 
 --- Resizes the wrapper to the current preferred size. The bar group fills what the name
@@ -139,6 +184,17 @@ function PlayerFrame:_syncSize()
        or math.abs((self._wrapper:GetHeight() or 0) - h) > 0.5 then
         self._wrapper:SetSize(w, h)
     end
+    self:_syncAnchor()
+end
+
+--- Re-resolves the health bar's fill colour.
+--
+-- Called from Relayout, so a theme switch or a live edit of either the Health primitive or
+-- the Use Class Colours toggle repaints without a reload; and from UpdateAll, because the
+-- player's class is not knowable until PLAYER_ENTERING_WORLD and the first paint would
+-- otherwise be stuck on the fallback for the rest of the session.
+function PlayerFrame:_applyHealthColor()
+    self._healthBar:SetFillColor(T:GetUnitColor(HEALTH_COLOR, "player"))
 end
 
 --- Re-reads every derived metric and re-lays the frame. Bound to both
@@ -149,11 +205,12 @@ function PlayerFrame:Relayout()
     self._root:SetGap(m.infoGap)
     self._infoRow:SetGap(m.infoGap)
     self._bars:SetGap(m.barGap)
+    self._slotAbove:SetGap(m.barGap)
+    self._slotBelow:SetGap(m.barGap)
     self._bars:SetChildProps(self._healthBar,   { width = "fill", height = m.health })
     self._bars:SetChildProps(self._resourceBar, { width = "fill", height = m.resource })
     self._root:SetChildProps(self._bars, { width = "fill", height = self:_barsHeight() })
-    self._healthBar:SetBgColor(barTrackColor())
-    self._resourceBar:SetBgColor(barTrackColor())
+    self:_applyHealthColor()
     self:_syncSize()
     self._root:Layout()
 end
@@ -171,6 +228,64 @@ function PlayerFrame:SyncVisibility()
     self:_syncSize()
 end
 
+-- One attach slot: an empty vertical band another plugin can place a widget into. Hidden
+-- while empty, because flow layout skips a hidden child together with its gap — a visible
+-- zero-height slot would still claim a gap and leave a dead band in the frame.
+function PlayerFrame:_createSlot()
+    local slot = SuuUI.Layout:CreateContainer({
+        parent = self._wrapper,
+        layout = "flow",
+        dir    = "vertical",
+        gap    = metrics().barGap,
+    })
+    slot:Hide()
+    return slot
+end
+
+--- Places a foreign widget into one of the frame's attach slots.
+--
+-- This frame keeps ownership of placement: a consumer hands over its child and never
+-- touches this plugin's containers, which is what keeps the two plugins uncoupled. The
+-- child is stretched to the frame's content width, so an attached widget is exactly as
+-- wide as the unit frame and follows the width slider without knowing it exists.
+-- @param child frame|table  Frame, component handle or container
+-- @param opts table|nil     { position = "above"|"below" } — default "below"
+-- @return table  The slot container the child landed in
+function PlayerFrame:AttachChild(child, opts)
+    local slot = (opts and opts.position == "above") and self._slotAbove or self._slotBelow
+    slot:Add(child, { width = "fill" })
+    if not slot:IsShown() then slot:Show() end
+    self:_syncSize()
+    self._root:Layout()
+    return slot
+end
+
+--- Removes a previously attached widget.
+--
+-- The child is left visible and parented where it was, exactly as Container:Remove
+-- leaves it — the consumer owns that widget and decides what becomes of it.
+-- @param child frame|table
+-- @return bool  Whether the child was found in a slot
+function PlayerFrame:DetachChild(child)
+    local target = (type(child) == "table" and child.GetFrame) and child:GetFrame() or child
+    local found = false
+    for i = 1, 2 do
+        local slot = (i == 1) and self._slotAbove or self._slotBelow
+        local children = slot:GetChildren()
+        for j = 1, #children do
+            if children[j] == target then
+                slot:Remove(child)
+                if #slot:GetChildren() == 0 and slot:IsShown() then slot:Hide() end
+                found = true
+                break
+            end
+        end
+    end
+    self:_syncSize()
+    self._root:Layout()
+    return found
+end
+
 function PlayerFrame:Create(parent)
     local self = setmetatable({}, { __index = PlayerFrame })
     local m = metrics()
@@ -181,13 +296,19 @@ function PlayerFrame:Create(parent)
     self._wrapper = CreateFrame("Frame", nil, parent)
     self._wrapper:SetSize(m.width, m.infoGap + m.health + m.barGap + m.resource)
 
-    -- Root column: info row on top, bar group below.
+    -- Root column: an attach slot, the info row, the bar group, another attach slot.
     self._root = SuuUI.Layout:CreateContainer({
         host   = self._wrapper,
         layout = "flow",
         dir    = "vertical",
         gap    = m.infoGap,
     })
+
+    -- Bands another plugin can place a widget into — a cast bar, say — through the attach
+    -- point this plugin publishes in onEnable. Created before the frame's own content so
+    -- the "above" slot really is above it: flow layout follows insertion order.
+    self._slotAbove = self:_createSlot()
+    self._slotBelow = self:_createSlot()
 
     -- Info row: name, then level immediately beside it. Both hug their own text, so the
     -- level sits against the name instead of being pushed to the far edge.
@@ -223,8 +344,8 @@ function PlayerFrame:Create(parent)
     })
 
     self._healthBar = C.StatusBar({
-        fillColor = HEALTH_COLOR,
-        bgColor   = barTrackColor(),
+        fillColor = T:GetUnitColor(HEALTH_COLOR, "player"),
+        bgColor   = BAR_TRACK,
         border    = false,
         -- Health moves in sparse, large steps, so a fixed-duration ease reads as the bar
         -- absorbing a hit.
@@ -232,8 +353,8 @@ function PlayerFrame:Create(parent)
     }, self._bars:GetFrame())
 
     self._resourceBar = C.StatusBar({
-        fillColor = POWER_COLORS[0],  -- default to mana
-        bgColor   = barTrackColor(),
+        fillColor = SuuUI.Game:PowerColor(0),  -- default to mana
+        bgColor   = BAR_TRACK,
         border    = false,
         -- Energy and rage tick faster than a fixed-duration ease completes, and each
         -- event would restart one — so the bar would trail its true value continuously
@@ -248,10 +369,22 @@ function PlayerFrame:Create(parent)
 
     -- No height on the info row: it hugs its own text, which is what makes the frame
     -- follow the font tokens. The wrapper then tracks the row through SIZE_CHANGED.
-    self._root:Add(self._infoRow, { width = "fill" })
-    self._root:Add(self._bars,    { width = "fill", height = self:_barsHeight() })
+    self._root:Add(self._slotAbove, { width = "fill" })
+    self._root:Add(self._infoRow,   { width = "fill" })
+    self._root:Add(self._bars,      { width = "fill", height = self:_barsHeight() })
+    self._root:Add(self._slotBelow, { width = "fill" })
 
     S:Connect(self._infoRow, S.SIGNALS.SIZE_CHANGED, function()
+        self:_syncSize()
+    end)
+
+    -- A slot's height is set by whatever attached into it, so the frame has to follow it
+    -- the same way it follows the name row — otherwise attaching a cast bar lays it out
+    -- correctly inside a wrapper that is still too short for it.
+    S:Connect(self._slotAbove, S.SIGNALS.SIZE_CHANGED, function()
+        self:_syncSize()
+    end)
+    S:Connect(self._slotBelow, S.SIGNALS.SIZE_CHANGED, function()
         self:_syncSize()
     end)
 
@@ -319,6 +452,7 @@ end
 --   that redefines what the bar means rather than moving it.
 function PlayerFrame:UpdateAll(immediate)
     self:UpdateInfo()
+    self:_applyHealthColor()
     self:UpdateHealth(immediate)
     self:UpdatePower(immediate)
 end
@@ -380,7 +514,7 @@ function PlayerFrame:UpdatePower(immediate)
     local powerType = UnitPowerType("player") or 0
     local cur = UnitPower("player") or 0
     local mx  = UnitPowerMax("player") or 1
-    local color = POWER_COLORS[powerType] or POWER_COLORS[0]
+    local color = SuuUI.Game:PowerColor(powerType)
     self._resourceBar:SetFillColor(color)
     self._resourceBar:SetMax(mx, opts)
     self._resourceBar:SetValue(cur, opts)
@@ -410,6 +544,8 @@ function PlayerFrame:Destroy()
     self._resourceBar:Destroy()
     self._infoRow:Destroy()
     self._bars:Destroy()
+    self._slotAbove:Destroy()
+    self._slotBelow:Destroy()
     self._root:Destroy()
     self._wrapper:Hide()
     self._wrapper = nil
@@ -514,17 +650,40 @@ local plugin = SuuUI:CreatePlugin({
             -- modal is guaranteed to draw over it.
             SuuUI.UIRoot:SetLayer(frame, "normal")
 
-            -- Make it moveable — position stored in plugin settings
+            -- Make it moveable — position stored in plugin settings.
+            --
+            -- coreInset is what keeps the stored position describing THIS frame's content
+            -- rather than its bounding box. The frame grows around whatever attaches to it,
+            -- and growth happens on the edge the anchor does not pin — so without this a
+            -- cast bar attaching below pushed the bars up by its own height, and detaching
+            -- pushed them back down.
+            local pfHandle = p._playerFrame
             SuuUI.MoveableFrame:Apply(frame, {
                 pluginId    = "unit_frames",
                 key         = "player_position",
                 displayName = "Player",
                 defaults    = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 20, y = 60 },
+                coreInset   = function() return pfHandle:GetCoreInset() end,
+            })
+
+            -- Offer the frame as an attach point. Another plugin can now place a widget
+            -- inside it — a cast bar attaches here — without either plugin knowing the
+            -- other exists: a consumer that loads first simply gets told when this
+            -- appears. Placement stays ours, so the frame still owns its own geometry.
+            local pf = p._playerFrame
+            SuuUI.AttachPoints:Publish("unitframe.player", {
+                frame  = frame,
+                Attach = function(child, opts) return pf:AttachChild(child, opts) end,
+                Detach = function(child) return pf:DetachChild(child) end,
             })
         end
     end,
 
     onDisable = function(p)
+        -- Revoked before anything is torn down: consumers detach on the nil notification,
+        -- so nothing foreign is still sitting in a slot when the containers go away.
+        SuuUI.AttachPoints:Revoke("unitframe.player")
+
         -- Destroy our player frame (cleanup before reload or if called programmatically)
         if p._playerFrame then
             SuuUI.MoveableFrame:Remove(p._playerFrame:GetFrame())

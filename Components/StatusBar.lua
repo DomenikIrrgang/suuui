@@ -92,7 +92,7 @@ end
 function StatusBarMeta:_paint()
     local B = SuuUI.Backdrop
     B.SetBg(self._f, self._bgColor or "colorBgAlt")
-    B.SetBorder(self._f, self._showBorder and "colorBorder" or false)
+    B.SetBorder(self._f, self._showBorder and (self._borderColor or "colorBorder") or false)
     local r, g, b, a = self._fillColor[1], self._fillColor[2], self._fillColor[3], self._fillColor[4] or 1
     self._bar:SetColorTexture(r, g, b, a)
 end
@@ -246,7 +246,7 @@ function StatusBarMeta:ApplyTheme()
     self._lastPx = nil
     SuuUI.Backdrop.Apply(self._f, {
         bg     = self._bgColor or "colorBgAlt",
-        border = self._showBorder and "colorBorder" or false,
+        border = self._showBorder and (self._borderColor or "colorBorder") or false,
         inset  = self:_inset(),
     })
     self:_anchorFill()
@@ -328,6 +328,37 @@ function StatusBarMeta:SetBgColor(color)
     self:_paint()
 end
 
+--- Sets the border colour token or literal, without changing whether a border is shown.
+-- For a bar that has to say something about its own state through its edge — a cast bar
+-- marking an uninterruptible spell — rather than through its fill, which the player owns.
+-- @param color string|table|false
+function StatusBarMeta:SetBorderColor(color)
+    if self._borderColor == color then return end
+    self._borderColor = color
+    self:_paint()
+end
+
+--- Shows or hides the border after construction.
+--
+-- Not just a repaint: the border decides how far the track and fill sit inside the frame
+-- (see _inset), so toggling it moves real geometry. ApplyTheme is the one path that
+-- restates all of it — backdrop, inset, fill anchor and the pixel guard — so it is reused
+-- here rather than duplicated. No-ops when the state is unchanged, which keeps a caller
+-- free to assert the current value on every paint.
+-- @param on bool
+function StatusBarMeta:SetBorderShown(on)
+    on = on and true or false
+    if self._showBorder == on then return end
+    self._showBorder = on
+    self:ApplyTheme()
+end
+
+--- Returns whether the border is currently drawn.
+-- @return bool
+function StatusBarMeta:IsBorderShown()
+    return self._showBorder and true or false
+end
+
 function StatusBarMeta:Destroy()
     -- Before anything is torn down: a transition left running keeps writing a fraction
     -- into a destroyed container on the shared ticker.
@@ -348,11 +379,12 @@ SuuUI.Components.InstallBase(StatusBarMeta, "_f")
 local WHITE = "Interface\\Buttons\\WHITE8x8"
 
 --- Creates a status bar (health/mana/energy/rage bar).
--- @param props table  { w, h, value, max, fillColor, bgColor, border,
+-- @param props table  { w, h, value, max, fillColor, bgColor, border, borderColor,
 --                       transition, transitionDuration }
 --   fillColor: {r,g,b,a} literal colour for the bar fill
 --   bgColor: token key or literal for the background (default "colorBgAlt")
 --   border: bool whether to show border (default true)
+--   borderColor: token key or literal for the border (default "colorBorder")
 --   transition: strategy name or inline table (default: the registry default)
 --   transitionDuration: seconds for a full sweep (default: the animBarFill token)
 -- @param parent frame
@@ -381,6 +413,7 @@ function SuuUI.Components.StatusBar(props, parent)
         _fillColor  = props.fillColor or {1, 1, 1, 1},
         _bgColor    = props.bgColor or "colorBgAlt",
         _showBorder = props.border ~= false,
+        _borderColor = props.borderColor or "colorBorder",
         _duration   = props.transitionDuration,
     }, StatusBarMeta)
 

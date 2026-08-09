@@ -669,6 +669,32 @@ describe("Layout.Window", function()
             expect(saved).as("no position saved for a centered window").falsy()
         end)
 
+        it("REGRESSION: dragged centered window does not snap back on root re-layout", function()
+            local w = window({ id = "norecentre", w = 400, h = 300, centered = true })
+            w:Show()
+            -- Window starts centered
+            local root = H.SuuUI.UIRoot:GetRoot()
+            H.expectCenteredH(w:GetFrame(), root)
+
+            -- Simulate a drag: StartMoving + StopMovingOrSizing with a manual SetPoint
+            w:GetFrame():SetPoint("TOPLEFT", root, "TOPLEFT", 20, -20)
+            H.mouseDown(w._drag)
+            H.mouseUp(w._drag)
+
+            -- After drag, the window should be at the dragged position
+            local afterDrag = H.box(w:GetFrame())
+            expect(afterDrag.left).as("window was dragged to 20").eq(20)
+
+            -- Now simulate another element triggering a root re-layout
+            -- (e.g. MoveableFrame:RefreshAnchor on the player frame)
+            H.SuuUI.UIRoot:GetRootContainer():Layout()
+
+            -- The window must stay where it was dragged, NOT snap back to center
+            local afterLayout = H.box(w:GetFrame())
+            expect(afterLayout.left).as("window did not snap back to center").eq(20)
+            expect(afterLayout.top).as("vertical position preserved").eq(afterDrag.top)
+        end)
+
         it("does not save position after a resize drag", function()
             local w = window({ id = "centered_resize", w = 400, h = 300,
                                centered = true, resizable = true })

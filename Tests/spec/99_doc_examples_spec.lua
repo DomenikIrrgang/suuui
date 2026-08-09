@@ -497,3 +497,69 @@ describe("steering doc examples: pixel grid", function()
             .as("the anti-example really is wrong").gt(-40)
     end)
 end)
+
+describe("steering doc examples: attach points", function()
+    before_each(function() H.setup() end)
+
+    it("plugin-authoring.md: the documented consumer form works, in either load order", function()
+        local A = H.SuuUI.AttachPoints
+        local seen, torn = {}, 0
+
+        -- Verbatim shape from the guide: subscribe by name, handle the nil case, and let
+        -- the publisher place the child.
+        A:Request("myplugin.panel", function(provider)
+            if not provider then
+                torn = torn + 1
+                return
+            end
+            local child = H.env.CreateFrame("Frame", nil, provider.frame)
+            child:SetSize(50, 10)
+            provider.Attach(child, { position = "below" })
+            seen[#seen + 1] = child
+        end, "doc_consumer")
+
+        expect(#seen).as("nothing published yet, so nothing attached").eq(0)
+        expect(torn).as("the immediate delivery already said 'nothing here'").eq(1)
+        torn = 0
+
+        local host = H.parent(120, 40)
+        local attached = {}
+        A:Publish("myplugin.panel", {
+            frame  = host,
+            Attach = function(child) attached[#attached + 1] = child end,
+            Detach = function() end,
+        })
+
+        expect(#seen).as("a consumer that registered FIRST still gets told").eq(1)
+        expect(#attached).as("the publisher, not the consumer, placed it").eq(1)
+
+        A:Revoke("myplugin.panel")
+        expect(torn).as("revoke reaches the consumer as nil").eq(1)
+
+        A:Release("doc_consumer")
+    end)
+
+    it("architecture.md 3b: Publish rejects a provider missing any of the three fields", function()
+        local A = H.SuuUI.AttachPoints
+        local frame = H.parent(10, 10)
+        expect(function() A:Publish("doc.bad", { Attach = function() end, Detach = function() end } ) end).throws()
+        expect(function() A:Publish("doc.bad", { frame = frame, Detach = function() end } ) end).throws()
+        expect(function() A:Publish("doc.bad", { frame = frame, Attach = function() end } ) end).throws()
+    end)
+
+    it("architecture.md 3b: an attached child is stretched to the publisher's width", function()
+        -- The reason the guide says to add with width = "fill": the consumer never reads
+        -- the publisher's width, and still matches it.
+        local A = H.SuuUI.AttachPoints
+        local pf = H.SuuUI.Plugins:Get("unit_frames")._playerFrame
+        local provider = A:Get("unitframe.player")
+        expect(provider).notNil()
+
+        local child = H.env.CreateFrame("Frame", nil, provider.frame)
+        child:SetSize(10, 8)
+        provider.Attach(child, { position = "below" })
+        expect(child:GetWidth()).as("stretched by the publisher's own layout")
+            .near(pf:GetFrame():GetWidth(), 1)
+        provider.Detach(child)
+    end)
+end)

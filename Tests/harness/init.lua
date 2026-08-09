@@ -44,6 +44,9 @@
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll
 --              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
 --              H.cursorOn H.setMouseDown H.mods
+-- Spellcasts:  H.startCast H.startChannel H.stopCast H.finishCast H.interruptCast
+--              H.failCast H.stopChannel H.delayCast H.updateChannel H.combatLogInterrupt
+--              H.combatLogSpell
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
 --
 -- H.setup() reloads the whole addon into a fresh sandbox against a fresh simulated
@@ -77,7 +80,8 @@ M.root = "."
 -- simple configuration by default, the real one where the spec is about it — pass
 -- barTransitions = true for that.
 -- @param opts table  { boot = true, debug = false, screenWidth, screenHeight,
---                      physicalWidth, physicalHeight, uiScale, barTransitions }
+--                      physicalWidth, physicalHeight, uiScale, barTransitions,
+--                      castBarGlobals }
 -- @return table  SuuUI
 function M.setup(opts)
     opts = opts or {}
@@ -86,6 +90,10 @@ function M.setup(opts)
     state.uiScale      = opts.uiScale or 1
     state.physicalWidth  = opts.physicalWidth  or state.screenWidth
     state.physicalHeight = opts.physicalHeight or state.screenHeight
+    -- Which player-cast-bar globals this client admits to having. nil means both
+    -- generations, which is the default the CastBars plugin has to cope with. Assigned on
+    -- every setup so a spec that narrows it cannot leak into the next one.
+    state.castBarGlobals = opts.castBarGlobals
 
     local loaded = addon.load({ root = M.root, boot = opts.boot, debug = opts.debug })
     M.env      = loaded.env
@@ -174,6 +182,201 @@ end
 -- @param passes number  Default 8
 function M.runAnimations(passes)
     for _ = 1, passes or 8 do M.tick(10) end
+end
+
+----------------------------------------------------------------------------------
+-- Spellcasts
+--
+-- The client reports a cast through UnitCastingInfo / UnitChannelInfo and announces the
+-- transitions through UNIT_SPELLCAST_* events. These helpers move both together, because
+-- a spec that fires the event without moving the state (or the reverse) tests a situation
+-- the client never produces.
+----------------------------------------------------------------------------------
+
+local function castRecord(opts)
+    opts = opts or {}
+    local nowMS = (state.clock or 0) * 1000
+    local dur   = (opts.duration or 2.5) * 1000
+    local start = opts.startTime or nowMS
+    return {
+        unit      = opts.unit or "player",
+        name      = opts.name or "Fireball",
+        text      = opts.text,
+        texture   = opts.texture or "Interface\\Icons\\Spell_Fire_FlameBolt",
+        startTime = start,
+        endTime   = opts.endTime or (start + dur),
+        castID    = opts.castID or "cast-1",
+        spellId   = opts.spellId or 133,
+        notInterruptible = opts.notInterruptible or false,
+        isTradeSkill     = opts.isTradeSkill or false,
+    }
+end
+
+--- Starts a cast and fires UNIT_SPELLCAST_START.
+-- @param opts table  { unit, name, texture, duration, startTime, endTime, spellId,
+--                      castID, notInterruptible, isTradeSkill }
+-- @return table  The cast record, so a spec can read startTime/endTime back
+function M.startCast(opts)
+    local c = castRecord(opts)
+    state.cast, state.channel = c, nil
+    M.fireEvent("UNIT_SPELLCAST_START", c.unit, c.castID, c.spellId)
+    return c
+end
+
+--- Starts a channel and fires UNIT_SPELLCAST_CHANNEL_START.
+-- @param opts table  Same shape as startCast
+-- @return table
+function M.startChannel(opts)
+    local c = castRecord(opts)
+    state.channel, state.cast = c, nil
+    M.fireEvent("UNIT_SPELLCAST_CHANNEL_START", c.unit, c.castID, c.spellId)
+    return c
+end
+
+-- Clears the cast BEFORE firing, which is the order the client uses: by the time a stop
+-- event arrives, UnitCastingInfo already reports nothing.
+local function endCast(unit, event)
+    local c = state.cast or state.channel
+    local u = unit or (c and c.unit) or "player"
+    local castID, spellId = c and c.castID, c and c.spellId
+    state.cast, state.channel = nil, nil
+    M.fireEvent(event, u, castID, spellId)
+end
+
+--- Ends a cast with UNIT_SPELLCAST_STOP.
+function M.stopCast(unit) endCast(unit, "UNIT_SPELLCAST_STOP") end
+
+--- Completes a cast with UNIT_SPELLCAST_SUCCEEDED.
+function M.finishCast(unit) endCast(unit, "UNIT_SPELLCAST_SUCCEEDED") end
+
+--- Delivers one SPELL_INTERRUPT combat log line against a unit.
+--
+-- The interrupter's name exists ONLY here: UNIT_SPELLCAST_INTERRUPTED does not carry it.
+-- The payload is laid out exactly as CombatLogGetCurrentEventInfo() returns it, and is
+-- cleared again afterwards, so code that reads it outside the handler gets nothing — the
+-- same failure it would hit in game.
+-- @param opts table  { unit, by, destName, spell, spellId, interrupted, interruptedId }
+--   by:          the interrupter's name (source)
+--   spell:       the interrupting spell (default "Counterspell")
+--   interrupted: the spell that was stopped (extraSpell in the client's payload)
+-- @return table  The payload delivered
+function M.combatLogInterrupt(opts)
+    opts = opts or {}
+    local unit = opts.unit or "player"
+    local payload = {
+        state.clock or 0,                                   -- 1  timestamp
+        "SPELL_INTERRUPT",                                  -- 2  subevent
+        false,                                              -- 3  hideCaster
+        "GUID-src-" .. tostring(opts.by or "interrupter"),  -- 4  sourceGUID
+        opts.by or "Interrupter",                           -- 5  sourceName
+        0, 0,                                               -- 6  sourceFlags, 7 raidFlags
+        M.env.UnitGUID(unit),                               -- 8  destGUID
+        opts.destName or "Testchar",                        -- 9  destName
+        0, 0,                                               -- 10 destFlags, 11 raidFlags
+        opts.spellId or 2139,                               -- 12 interrupting spell id
+        opts.spell or "Counterspell",                       -- 13 interrupting spell name
+        0,                                                  -- 14 school
+        opts.interruptedId or 133,                          -- 15 extraSpellId
+        opts.interrupted or "Fireball",                     -- 16 extraSpellName
+        0,                                                  -- 17 extraSchool
+    }
+    payload.n = #payload
+    state.combatLogEvent = payload
+    M.fireEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    state.combatLogEvent = nil
+    return payload
+end
+
+--- Delivers one spell-carrying combat log line.
+--
+-- This is the ONLY route by which a spell's school reaches the UI: no client API maps a
+-- spell to its school, so anything that colours by school has to learn it here. The
+-- subevent is a parameter because which one carries a given spell differs — a cast fires
+-- SPELL_CAST_START, a channel never does and is only described by its ticks.
+-- @param opts table  { unit, subevent, spellId, spell, school, destName }
+--   unit:     the CASTER, whose GUID lands in sourceGUID (default "player")
+--   subevent: default "SPELL_CAST_START"
+--   school:   the school mask (default 0x04, Fire)
+-- @return table  The payload delivered
+function M.combatLogSpell(opts)
+    opts = opts or {}
+    local unit = opts.unit or "player"
+    local payload = {
+        state.clock or 0,                        -- 1  timestamp
+        opts.subevent or "SPELL_CAST_START",     -- 2  subevent
+        false,                                   -- 3  hideCaster
+        M.env.UnitGUID(unit),                    -- 4  sourceGUID
+        opts.sourceName or "Testchar",           -- 5  sourceName
+        0, 0,                                    -- 6  sourceFlags, 7 raidFlags
+        opts.destGUID or M.env.UnitGUID("target"),  -- 8  destGUID
+        opts.destName or "Target",               -- 9  destName
+        0, 0,                                    -- 10 destFlags, 11 raidFlags
+        opts.spellId or 133,                     -- 12 spellId
+        opts.spell or "Fireball",                -- 13 spellName
+        opts.school or 0x04,                     -- 14 spellSchool
+    }
+    payload.n = #payload
+    state.combatLogEvent = payload
+    M.fireEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    state.combatLogEvent = nil
+    return payload
+end
+
+--- Interrupts a cast with UNIT_SPELLCAST_INTERRUPTED.
+--
+-- Pass `by` to also deliver the SPELL_INTERRUPT combat log line, which is the only source
+-- of the interrupter's name. The client does not guarantee which of the two arrives first,
+-- so `logAfter` produces the other order — anything that correlates them has to survive
+-- both.
+-- @param opts nil|string|table  unit token, or { unit, by, logAfter }
+function M.interruptCast(opts)
+    local unit, by, logAfter
+    if type(opts) == "string" then
+        unit = opts
+    elseif type(opts) == "table" then
+        unit, by, logAfter = opts.unit, opts.by, opts.logAfter
+    end
+    local active = state.cast or state.channel
+    unit = unit or (active and active.unit) or "player"
+    local spellName = active and active.name
+
+    if by and not logAfter then
+        M.combatLogInterrupt({ unit = unit, by = by, interrupted = spellName })
+    end
+    endCast(unit, "UNIT_SPELLCAST_INTERRUPTED")
+    if by and logAfter then
+        M.combatLogInterrupt({ unit = unit, by = by, interrupted = spellName })
+    end
+end
+
+--- Fails a cast with UNIT_SPELLCAST_FAILED.
+function M.failCast(unit) endCast(unit, "UNIT_SPELLCAST_FAILED") end
+
+--- Ends a channel with UNIT_SPELLCAST_CHANNEL_STOP.
+function M.stopChannel(unit) endCast(unit, "UNIT_SPELLCAST_CHANNEL_STOP") end
+
+--- Pushes a cast's end time out and fires UNIT_SPELLCAST_DELAYED, as spell pushback does.
+-- @param seconds number  Added to the end time (default 0.5)
+-- @param unit string
+-- @return table|nil  The cast record, or nil when nothing is casting
+function M.delayCast(seconds, unit)
+    local c = state.cast
+    if not c then return nil end
+    c.endTime = c.endTime + (seconds or 0.5) * 1000
+    M.fireEvent("UNIT_SPELLCAST_DELAYED", unit or c.unit, c.castID, c.spellId)
+    return c
+end
+
+--- Moves a channel's end time and fires UNIT_SPELLCAST_CHANNEL_UPDATE.
+-- @param seconds number  Added to the end time; negative shortens the channel
+-- @param unit string
+-- @return table|nil
+function M.updateChannel(seconds, unit)
+    local c = state.channel
+    if not c then return nil end
+    c.endTime = c.endTime + (seconds or 0.5) * 1000
+    M.fireEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", unit or c.unit, c.castID, c.spellId)
+    return c
 end
 
 ----------------------------------------------------------------------------------

@@ -344,11 +344,20 @@ Not every named number belongs in the theme. Ask what the value *is*:
 |---|---|---|
 | Design language the whole UI shares — spacing scale, font steps, border width, surface colours, animation timings, the size of a shared control | **theme token** | One edit retints or re-scales every consumer |
 | One plugin's own widget dimensions and behaviour — a unit frame's width, which bars it shows, where it sits | **plugin setting** (`Settings:Register`, with the number as the entry's `default`) | It describes that widget, not the design language, and a player wants it per profile and on that plugin's own page |
+| A fact about the client — a power type's colour, a spell school's colour, a class colour, a level cap | **`Core/Game.lua`** (`SuuUI.Game`) | It is not a choice anyone gets to make. In the theme it would be a control that is wrong to touch; in a plugin it would be a second copy of a fact, and copies drift |
 
 A plugin's own dimensions in the theme is a category error: the theme editor fills up with
 one plugin's controls, every other theme has to carry values it does not use, and the
 player cannot vary them per profile. A schema `default` is a perfectly good single
 declaration of a number — it is named, discoverable, and editable.
+
+A mode that selects between two value sources is a **token** (it is UI-wide design
+language), but it is a boolean rather than a colour, because what it decides is WHERE a
+colour comes from — the class table in `SuuUI.Game` or a colour primitive — not what the
+colour is. `colorUseClassColors` is this case: it lives in the theme because "class-colour
+units" is a look decision, while the class colours themselves are facts and live in
+`Core/Game.lua`. A plugin resolves the pair through `Theme:GetUnitColor(key, unit)` and
+never reads the flag directly.
 
 Both sources are live, and code must react to either:
 
@@ -376,8 +385,10 @@ SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
 ```
 
 **The narrow exceptions**, all of which must carry a comment saying why:
-1. **Game data, not design** — Blizzard's own power-type colours, class colours, level
-   caps. These are facts about the client, not choices the theme gets to make.
+1. **Game data, not design** — Blizzard's own power-type colours, spell school colours,
+   class colours, level caps. These are facts about the client, not choices the theme gets
+   to make. They are not local literals either: they live in `Core/Game.lua` so a resource
+   bar, a cast bar and a nameplate all read the same fact. See `architecture.md` §6d.
 2. **A structural constant with no visual meaning** — an array index, a loop bound, a
    pixel-grid divisor, `0` / `1` identities.
 3. **A defensive fallback** on a token read (`T:GetToken("spaceXs") or 4`), for code that

@@ -348,7 +348,13 @@ function SuuUI.Layout:CreateWindow(props)
     drag:SetScript("OnMouseDown", function() f:StartMoving() end)
     drag:SetScript("OnMouseUp", function()
         f:StopMovingOrSizing()
-        if not centered then savePos({ _frame = f, _id = props.id }) end
+        if centered then
+            -- Sync the anchor descriptor so a root re-layout does not snap back to
+            -- CENTER.  Don't persist to SuuUIConfig — the next Show() re-centers.
+            syncAnchor(f)
+        else
+            savePos({ _frame = f, _id = props.id })
+        end
     end)
 
     handle = setmetatable({

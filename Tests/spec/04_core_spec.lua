@@ -349,6 +349,110 @@ describe("Theme", function()
     end)
 end)
 
+
+describe("Theme class colouring (GetUnitColor)", function()
+    before_each(function()
+        H.setup()
+    end)
+
+    it("colorHealth resolves through its alias to the colorGreen500 primitive", function()
+        -- Modern is the active theme after setup
+        local health = H.token("colorHealth")
+        local green  = H.token("colorGreen500")
+        expect(health).as("colorHealth must be a 4-element colour table").notNil()
+        expect(#health).eq(4)
+        expect(health).deepEq(green)
+
+        -- Switch to Default and verify the same alias holds
+        H.T:SetActive("Default")
+        local healthD = H.token("colorHealth")
+        local greenD  = H.token("colorGreen500")
+        expect(healthD).notNil()
+        expect(#healthD).eq(4)
+        expect(healthD).deepEq(greenD)
+    end)
+
+    it("both built-in themes define colorUseClassColors as a boolean", function()
+        -- Modern ships true
+        expect(H.T:GetTokenRaw("colorUseClassColors")).eq(true)
+
+        H.T:SetActive("Default")
+        expect(H.T:GetTokenRaw("colorUseClassColors")).eq(false)
+    end)
+
+    it("on Modern, GetUnitColor returns the class colour for player", function()
+        -- Modern has colorUseClassColors = true and default class is WARRIOR
+        local result = H.T:GetUnitColor("colorHealth", "player")
+        local classColor = H.SuuUI.Game:UnitClassColor("player")
+        expect(classColor).as("harness must provide a class colour for player").notNil()
+        expect(result).deepEq(classColor)
+    end)
+
+    it("on Default, GetUnitColor returns the token colour", function()
+        H.T:SetActive("Default")
+        local result = H.T:GetUnitColor("colorHealth", "player")
+        local tokenColor = H.token("colorHealth")
+        expect(result).deepEq(tokenColor)
+    end)
+
+    it("falls back to the token when class is unknown (NPC/totem)", function()
+        -- Modern has colorUseClassColors = true, but unitClassless makes UnitClass nil
+        H.state.unitClassless = true
+        local result = H.T:GetUnitColor("colorHealth", "player")
+        local tokenColor = H.token("colorHealth")
+        expect(result).as("must not return nil for unknown class").notNil()
+        expect(result).deepEq(tokenColor)
+    end)
+
+    it("produces a different colour for a different class", function()
+        local warriorColor = H.T:GetUnitColor("colorHealth", "player")
+        H.state.unitClass = "MAGE"
+        local mageColor = H.T:GetUnitColor("colorHealth", "player")
+        expect(mageColor).notNil()
+        expect(warriorColor).notNil()
+        -- They must differ (WARRIOR and MAGE have different class colours)
+        local differs = (warriorColor[1] ~= mageColor[1])
+                     or (warriorColor[2] ~= mageColor[2])
+                     or (warriorColor[3] ~= mageColor[3])
+        expect(differs).as("WARRIOR and MAGE class colours must differ").truthy()
+    end)
+
+    it("GetUnitColor never returns nil for a valid colour token in either flag state", function()
+        -- Modern (flag on)
+        expect(H.T:GetUnitColor("colorHealth", "player")).notNil()
+        expect(H.T:GetUnitColor("colorHealth", "target")).notNil()
+
+        -- Default (flag off)
+        H.T:SetActive("Default")
+        expect(H.T:GetUnitColor("colorHealth", "player")).notNil()
+        expect(H.T:GetUnitColor("colorHealth", "target")).notNil()
+
+        -- Flag on but classless
+        H.T:SetActive("Modern")
+        H.state.unitClassless = true
+        expect(H.T:GetUnitColor("colorHealth", "player")).notNil()
+    end)
+
+    it("a user theme can override colorUseClassColors", function()
+        -- Create a user theme based on Modern (which ships true)
+        H.T:CreateUserTheme("ClassTest", "Modern")
+        H.T:SetActive("ClassTest")
+
+        -- Starts with inherited true — should return class colour
+        local classColor = H.SuuUI.Game:UnitClassColor("player")
+        expect(H.T:GetUnitColor("colorHealth", "player")).deepEq(classColor)
+
+        -- Override to false — should return token colour
+        H.T:SetUserToken("ClassTest", "colorUseClassColors", false)
+        local tokenColor = H.token("colorHealth")
+        expect(H.T:GetUnitColor("colorHealth", "player")).deepEq(tokenColor)
+
+        -- Flip back to true — should return class colour again
+        H.T:SetUserToken("ClassTest", "colorUseClassColors", true)
+        local classColor2 = H.SuuUI.Game:UnitClassColor("player")
+        expect(H.T:GetUnitColor("colorHealth", "player")).deepEq(classColor2)
+    end)
+end)
 describe("Profiles", function()
     before_each(function() H.setup() end)
 

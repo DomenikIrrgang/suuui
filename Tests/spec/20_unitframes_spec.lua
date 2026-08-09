@@ -6,6 +6,17 @@ local function setting(key)
     return H.SuuUI.Settings:Get("unit_frames", key)
 end
 
+-- The band an attached cast bar adds below the frame's own content. A cast bar ships
+-- attached by default, so the player frame really is taller than its own two bars —
+-- deriving the extra here keeps the expectation honest instead of measuring the frame
+-- against itself. Returns 0 whenever nothing is attached.
+local function castBand()
+    local plugin = H.SuuUI.Plugins:Get("cast_bars")
+    local ctl = plugin and plugin._controllers and plugin._controllers.player
+    if not (ctl and ctl:GetMode() == "attached") then return 0 end
+    return H.token("spaceXs") + H.SuuUI.Settings:Get("cast_bars", "player_height")
+end
+
 describe("Plugins.UnitFrames", function()
     local host, state
 
@@ -105,7 +116,7 @@ describe("Plugins.UnitFrames", function()
             H.expectSize(frame, nil,
                 infoH + H.token("spaceXs")
                 + setting("player_health_height") + H.token("spaceXxs")
-                + setting("player_power_height"))
+                + setting("player_power_height") + castBand())
         end)
 
         it("GetFrame returns the wrapper that holds the info row and the bars", function()
@@ -125,7 +136,7 @@ describe("Plugins.UnitFrames", function()
             H.expectSize(frame, setting("player_width"),
                 infoH + H.token("spaceXs")
                 + setting("player_health_height") + H.token("spaceXxs")
-                + setting("player_power_height"))
+                + setting("player_power_height") + castBand())
         end)
 
         it("reports its intrinsic size, so the plugin needs no magic numbers", function()
@@ -207,10 +218,14 @@ describe("Plugins.UnitFrames", function()
                 .eq(hb.bottom + H.token("spaceXxs"))
         end)
 
-        it("bars reach the bottom of the frame", function()
+        it("bars reach the bottom of the frame's own content", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            expect(H.box(pf._resourceBar).bottom).eq(H.box(pf._wrapper).bottom)
+            -- No dead space below the resource bar. An attached cast bar occupies the band
+            -- under it, so the invariant is stated against the frame's own content edge
+            -- rather than the wrapper's, which now includes that band.
+            expect(H.box(pf._resourceBar).bottom)
+                .eq(H.box(pf._wrapper).bottom - castBand())
         end)
 
         it("re-lays out when the health bar height setting changes", function()
@@ -337,12 +352,31 @@ describe("Plugins.UnitFrames", function()
             expect(pf._healthBar:GetPercent()).near(0.8, 0.001)
         end)
 
-        it("uses green health colour", function()
+        -- Health colour resolves through Theme:GetUnitColor, so it has two branches and
+        -- both are real: the class colour is a fact from SuuUI.Game, the fallback is a
+        -- theme token. Asserting only one would let the other regress silently.
+        it("class-colours health when the theme asks for it", function()
             local plugin = H.SuuUI.Plugins:Get("unit_frames")
             local pf = plugin._playerFrame
-            expect(pf._healthBar._fillColor[1]).near(0.22, 0.01)
-            expect(pf._healthBar._fillColor[2]).near(0.78, 0.01)
-            expect(pf._healthBar._fillColor[3]).near(0.32, 0.01)
+            -- Modern is the theme the suite boots into, and it ships class colouring on.
+            expect(H.token("colorUseClassColors")).as("Modern class-colours").eq(true)
+            local want = H.SuuUI.Game:ClassColor("WARRIOR")
+            expect(want).as("harness player is a warrior").notNil()
+            expect(pf._healthBar._fillColor[1]).near(want[1], 0.01)
+            expect(pf._healthBar._fillColor[2]).near(want[2], 0.01)
+            expect(pf._healthBar._fillColor[3]).near(want[3], 0.01)
+        end)
+
+        it("falls back to the health token when class colouring is off", function()
+            local plugin = H.SuuUI.Plugins:Get("unit_frames")
+            local pf = plugin._playerFrame
+            -- Default ships the flag off, so switching theme exercises both the flag and
+            -- the repaint-on-theme-change path in one step.
+            H.SuuUI.Theme:SetActive("Default")
+            local want = H.token("colorHealth")
+            expect(pf._healthBar._fillColor[1]).near(want[1], 0.01)
+            expect(pf._healthBar._fillColor[2]).near(want[2], 0.01)
+            expect(pf._healthBar._fillColor[3]).near(want[3], 0.01)
         end)
     end)
 

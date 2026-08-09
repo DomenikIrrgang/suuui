@@ -56,6 +56,19 @@ function M.install(env)
     PlayerFrame:SetSize(180, 70)
     PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
 
+    -- Blizzard cast bar stub (CastBars plugin hides it). A StatusBar in the live client;
+    -- a plain frame is enough here because the addon only unregisters and hides it.
+    --
+    -- The name is a property of the client generation, not a constant: an Edit Mode
+    -- client calls it PlayerCastingBarFrame, an older one CastingBarFrame. Both exist by
+    -- default so a spec sees whichever the addon reaches for, and a spec that is about
+    -- one generation narrows it through state.castBarGlobals.
+    for _, name in ipairs(state.castBarGlobals or { "PlayerCastingBarFrame", "CastingBarFrame" }) do
+        local bar = CreateFrame("Frame", name, UIParent)
+        bar:SetSize(195, 13)
+        bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 160)
+    end
+
     ------------------------------------------------------------------------------
     -- Font objects
     ------------------------------------------------------------------------------
@@ -155,7 +168,29 @@ function M.install(env)
 
     env.UnitName      = function(unit) return unit == "player" and "Testchar" or nil end
     env.GetRealmName  = function() return "TestRealm" end
-    env.UnitClass     = function() return "Warrior", "WARRIOR", 1 end
+    -- UnitClass returns the localised name first and the stable class token second. Specs
+    -- move state.unitClass to paint a different class; state.unitClassless models what an
+    -- NPC, a totem or a pet reports, which is the branch a class-colour fallback exists for.
+    env.UnitClass     = function()
+        if state.unitClassless then return nil end
+        local classFile = state.unitClass or "WARRIOR"
+        return classFile:sub(1, 1) .. classFile:sub(2):lower(), classFile, 1
+    end
+
+    -- The client's own class colour table, in the {r=,g=,b=} object shape it really uses.
+    -- Modelled because SuuUI prefers the client's values over its copied fallback, so a
+    -- spec has to be able to tell which source answered.
+    env.RAID_CLASS_COLORS = {
+        WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
+        PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
+        HUNTER  = { r = 0.67, g = 0.83, b = 0.45 },
+        ROGUE   = { r = 1.00, g = 0.96, b = 0.41 },
+        PRIEST  = { r = 1.00, g = 1.00, b = 1.00 },
+        SHAMAN  = { r = 0.00, g = 0.44, b = 0.87 },
+        MAGE    = { r = 0.41, g = 0.80, b = 0.94 },
+        WARLOCK = { r = 0.58, g = 0.51, b = 0.79 },
+        DRUID   = { r = 1.00, g = 0.49, b = 0.04 },
+    }
     env.UnitLevel     = function() return state.unitLevel or 60 end
     -- The level cap, as the anniversary client reports it. Specs move state.maxPlayerLevel
     -- to exercise the at-cap and below-cap branches of a unit frame.
@@ -175,6 +210,50 @@ function M.install(env)
     env.UnitPower     = function() return state.unitPower or 80 end
     env.UnitPowerMax  = function() return state.unitPowerMax or 100 end
     env.UnitPowerType = function() return state.unitPowerType or 0 end
+
+    -- Spellcast APIs. Both return nothing at all while the unit is idle, which is how the
+    -- client says "not casting" — a caller that treats a nil name as an empty cast rather
+    -- than as absence shows an empty bar forever, so the shape matters.
+    --
+    -- Times are MILLISECONDS since the epoch GetTime() reports in seconds. That mismatch
+    -- is the client's, not the harness's, and code that forgets to divide reads a cast as
+    -- having ended a thousand times over.
+    env.UnitCastingInfo = function(unit)
+        local c = state.cast
+        if not c or c.unit ~= unit then return nil end
+        return c.name, c.text or c.name, c.texture, c.startTime, c.endTime,
+               c.isTradeSkill or false, c.castID, c.notInterruptible or false, c.spellId
+    end
+
+    -- One value shorter than UnitCastingInfo: a channel has no castID. Reading either
+    -- positionally is what real addons do, so the difference is modelled.
+    env.UnitChannelInfo = function(unit)
+        local c = state.channel
+        if not c or c.unit ~= unit then return nil end
+        return c.name, c.text or c.name, c.texture, c.startTime, c.endTime,
+               c.isTradeSkill or false, c.notInterruptible or false, c.spellId
+    end
+
+    -- Localised strings the client ships for cast outcomes.
+    env.INTERRUPTED = "Interrupted"
+    env.FAILED      = "Failed"
+
+    -- A stable GUID per unit token. The combat log identifies units by GUID and never by
+    -- token, so anything correlating a log line with a unit frame has to go through this.
+    env.UnitGUID = function(unit)
+        if not unit then return nil end
+        return "GUID-" .. tostring(unit)
+    end
+
+    -- The combat log's one accessor: it returns the CURRENT event's payload and nothing at
+    -- any other time. Modelled faithfully because the interrupter's name exists only here
+    -- — UNIT_SPELLCAST_INTERRUPTED does not carry it — so a caller that read it late, or
+    -- outside the handler, would silently get no name.
+    env.CombatLogGetCurrentEventInfo = function()
+        local e = state.combatLogEvent
+        if not e then return nil end
+        return table.unpack(e, 1, e.n or #e)
+    end
 
     env.SlashCmdList = {}
     env.hooksecurefunc = function(tbl, name, fn)

@@ -511,3 +511,188 @@ describe("SettingsUI controls", function()
         end
     end)
 end)
+
+describe("ThemeManager toggle token control", function()
+    local host, scroll, capturedToggle
+
+    -- Wraps C.Toggle so we can capture the handle the theme manager creates
+    local function buildCapturingToggle()
+        local realToggle = H.C.Toggle
+        capturedToggle = nil
+        H.C.Toggle = function(...)
+            capturedToggle = realToggle(...)
+            return capturedToggle
+        end
+        H.SuuUI.Settings:Register("_tmgr_tog", {
+            { key = "_theme_mgr", type = "theme_manager" },
+        })
+        H.SuuUI._PageBuilder:Build("_tmgr_tog", scroll)
+        H.C.Toggle = realToggle
+        return capturedToggle
+    end
+
+    before_each(function()
+        H.setup()
+        host = H.parent(500, 600)
+        scroll = H.mount(H.C.ScrollFrame({ w = 460, h = 500 }, host))
+    end)
+
+    it("renders a toggle row with the correct label", function()
+        buildCapturingToggle()
+        local content = scroll:GetContent()
+        local found = {}
+        local function walk(frame)
+            for _, region in ipairs(frame._regions) do
+                if region:IsVisible() and region._kind == "FontString" and region:GetText() ~= "" then
+                    found[region:GetText()] = region
+                end
+            end
+            for _, child in ipairs(frame._childFrames) do
+                if child:IsVisible() then walk(child) end
+            end
+        end
+        walk(content)
+        expect(found["Use Class Colours"]).as("the toggle row label exists").notNil()
+    end)
+
+    it("the toggle has resolvable on-screen geometry", function()
+        local tog = buildCapturingToggle()
+        expect(tog).notNil()
+        local b = H.box(tog)
+        expect(b).as("toggle has a resolved box").notNil()
+        expect(b.width).gt(0)
+        expect(b.height).gt(0)
+    end)
+
+    it("seeds the toggle from the active theme's token value", function()
+        -- Default theme has colorUseClassColors = false
+        H.SuuUI.Theme:SetActive("Default")
+        local tog = buildCapturingToggle()
+        expect(tog:GetValue()).as("Default theme: token is false").eq(false)
+    end)
+
+    it("seeds the toggle as true when Modern theme is active", function()
+        H.SuuUI.Theme:SetActive("Modern")
+        local tog = buildCapturingToggle()
+        expect(tog:GetValue()).as("Modern theme: token is true").eq(true)
+    end)
+
+    describe("disabled on built-in themes", function()
+        it("is disabled while Default (built-in) is active", function()
+            H.SuuUI.Theme:SetActive("Default")
+            local tog = buildCapturingToggle()
+            expect(tog:IsEnabled()).as("disabled on Default").falsy()
+            expect(tog:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        end)
+
+        it("is disabled while Modern (built-in) is active", function()
+            H.SuuUI.Theme:SetActive("Modern")
+            local tog = buildCapturingToggle()
+            expect(tog:IsEnabled()).as("disabled on Modern").falsy()
+            expect(tog:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        end)
+
+        it("refuses mouse input while a built-in theme is active", function()
+            H.SuuUI.Theme:SetActive("Default")
+            local tog = buildCapturingToggle()
+            expect(H.click(tog)).as("click returns false on built-in").falsy()
+        end)
+
+        it("stays inert on forceClick while built-in", function()
+            H.SuuUI.Theme:SetActive("Default")
+            local tog = buildCapturingToggle()
+            local spy = H.signalSpy(tog, H.S.SIGNALS.VALUE_CHANGED)
+            H.forceClick(tog)
+            expect(spy.count).as("no value change emitted").eq(0)
+            expect(tog:GetValue()).eq(false)
+        end)
+    end)
+
+    describe("enabled on user themes", function()
+        before_each(function()
+            H.SuuUI.Theme:CreateUserTheme("Test", "Default")
+            H.SuuUI.Theme:SetActive("Test")
+        end)
+
+        it("is enabled on a user theme", function()
+            local tog = buildCapturingToggle()
+            expect(tog:IsEnabled()).as("enabled on user theme").truthy()
+            expect(tog:GetFrame():GetAlpha()).eq(1)
+        end)
+
+        it("clicking writes the token value", function()
+            local tog = buildCapturingToggle()
+            -- Default base has colorUseClassColors = false
+            expect(H.SuuUI.Theme:GetToken("colorUseClassColors")).eq(false)
+            H.click(tog)
+            expect(H.SuuUI.Theme:GetToken("colorUseClassColors"))
+                .as("token flipped to true")
+                .eq(true)
+        end)
+
+        it("round-trips: flipping twice restores the original", function()
+            local tog = buildCapturingToggle()
+            local original = H.SuuUI.Theme:GetToken("colorUseClassColors")
+            H.click(tog)
+            H.click(tog)
+            expect(H.SuuUI.Theme:GetToken("colorUseClassColors"))
+                .as("back to original after two clicks")
+                .eq(original)
+        end)
+
+        it("emits VALUE_CHANGED on user interaction", function()
+            local tog = buildCapturingToggle()
+            local spy = H.signalSpy(tog, H.S.SIGNALS.VALUE_CHANGED)
+            H.click(tog)
+            expect(spy.count).eq(1)
+            expect(spy:arg(1)).eq(true)
+            expect(spy:arg(2)).eq(false)
+        end)
+    end)
+
+    describe("refresh on theme switch", function()
+        it("updates the toggle when the active theme changes", function()
+            H.SuuUI.Theme:CreateUserTheme("Test", "Default")
+            H.SuuUI.Theme:SetActive("Test")
+            local tog = buildCapturingToggle()
+            -- Test inherits Default's false
+            expect(tog:GetValue()).eq(false)
+
+            -- Switch to Modern (true)
+            H.SuuUI.Theme:SetActive("Modern")
+            expect(tog:GetValue()).as("refreshed to Modern's value").eq(true)
+        end)
+
+        it("refresh does not emit VALUE_CHANGED (setters are silent)", function()
+            H.SuuUI.Theme:CreateUserTheme("Test", "Default")
+            H.SuuUI.Theme:SetActive("Test")
+            local tog = buildCapturingToggle()
+            local spy = H.signalSpy(tog, H.S.SIGNALS.VALUE_CHANGED)
+
+            H.SuuUI.Theme:SetActive("Modern")
+            expect(spy.count).as("SetValue is silent by contract").eq(0)
+        end)
+
+        it("becomes disabled when switching from user to built-in", function()
+            H.SuuUI.Theme:CreateUserTheme("Test", "Default")
+            H.SuuUI.Theme:SetActive("Test")
+            local tog = buildCapturingToggle()
+            expect(tog:IsEnabled()).truthy()
+
+            H.SuuUI.Theme:SetActive("Default")
+            expect(tog:IsEnabled()).as("disabled after switch to built-in").falsy()
+            expect(tog:GetFrame():GetAlpha()).eq(H.token("opacityDisabled"))
+        end)
+
+        it("becomes enabled when switching from built-in to user", function()
+            H.SuuUI.Theme:SetActive("Default")
+            local tog = buildCapturingToggle()
+            expect(tog:IsEnabled()).falsy()
+
+            H.SuuUI.Theme:CreateUserTheme("Test2", "Default")
+            H.SuuUI.Theme:SetActive("Test2")
+            expect(tog:IsEnabled()).as("enabled after switch to user theme").truthy()
+            expect(tog:GetFrame():GetAlpha()).eq(1)
+        end)
+    end)
+end)

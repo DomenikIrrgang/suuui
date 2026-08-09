@@ -16,6 +16,10 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorBlue400     = {0.30, 0.60, 1.00, 1.00},
     colorBlue500     = {0.20, 0.48, 0.92, 1.00},
     colorGreen400    = {0.22, 0.85, 0.45, 1.00},
+    -- See Themes/Default.lua: health's own green, brighter here to match this theme's
+    -- higher contrast. Only visible while colorUseClassColors is off, or on a unit whose
+    -- class is unknown.
+    colorGreen500    = {0.24, 0.84, 0.36, 1.00},
     colorRed400      = {0.95, 0.28, 0.28, 1.00},
     colorYellow400   = {1.00, 0.84, 0.22, 1.00},
 
@@ -42,6 +46,12 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
     -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
     colorMarker      = { ref = "colorGray100", alpha = 0.90 },
+    -- See Themes/Default.lua: the empty part of a frameless bar, over the game world.
+    colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" },
+    -- See Themes/Default.lua: the uninterruptible-cast outline.
+    colorShield      = "colorGray400",
+    -- See Themes/Default.lua: a unit's health when it is not class-coloured.
+    colorHealth      = "colorGreen500",
 
     -- Tier 2: intent
     colorAccent      = "colorBlue400",
@@ -49,6 +59,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorSuccess     = "colorGreen400",
     colorDanger      = "colorRed400",
     colorWarning     = "colorYellow400",
+
+    -- See Themes/Default.lua. On here: this is the shipped active theme, and class
+    -- colouring is the modern convention for a health bar. Turn it off to fall back to
+    -- colorHealth.
+    colorUseClassColors = true,
 
     -- Tier 2: content
     colorText         = "colorGray100",

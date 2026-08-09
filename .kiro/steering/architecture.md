@@ -17,10 +17,12 @@ SuuUI/
 ├── SuuUI.toc
 ├── Core/
 │   ├── Init.lua          -- bootstrap, version, global namespace
+│   ├── Game.lua          -- game facts: power colours, spell schools (never themeable)
 │   ├── EventBus.lua      -- addon-wide pub/sub (theme, profile, settings)
 │   ├── UISignals.lua     -- per-element signal system (Godot-style)
 │   ├── UIRoot.lua        -- single fullscreen root, layer management
 │   ├── Plugin.lua        -- plugin registry and lifecycle
+│   ├── AttachPoints.lua  -- named places one plugin offers another to attach UI to
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry, value I/O, reactive watchers
 │   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
@@ -76,6 +78,7 @@ SuuUI/
 │       └── Section.lua
 ├── Plugins/               -- bundled first-party plugins live here
 │   ├── UnitFrames/
+│   ├── CastBars/
 │   ├── ActionBars/
 │   └── ...
 ├── Themes/
@@ -185,6 +188,7 @@ something that genuinely cares about *any* setting changing, such as `ReloadGuar
 |---|---|
 | UI element notifying another UI element | `SuuUI.UISignals` |
 | Reacting to one setting's value | `SuuUI.Settings:Watch` |
+| One plugin offering another a place to put UI | `SuuUI.AttachPoints` |
 | Addon-wide state change | `SuuUI.Events` |
 | WoW game data | `frame:RegisterEvent` in a plugin |
 
@@ -225,6 +229,76 @@ instead, so it comes up identically without re-entering anyone else's `onInit`.
 SuuUI.Plugins:InitAll()            -- idempotent
 SuuUI.Plugins:IsInitialised(id)    -- whether onInit has run
 ```
+
+### 3b. Attach Points (`Core/AttachPoints.lua`)
+
+**How one plugin puts UI inside another plugin's frame without either knowing the other
+exists.** A cast bar has to become part of the player unit frame — take its width, move
+with it, grow it — while living in a different plugin. Reaching into `UnitFrames` for its
+frame would couple the two directly, and would break on load order: whichever plugin came
+up second would find nothing there.
+
+So the owner of a frame **publishes** a named point and keeps ownership of placement, and a
+consumer **requests** that name. The request is delivered immediately with the current
+state and again on every change, so a consumer never has to know who loads first — and is
+told when the point goes away.
+
+**API:**
+```lua
+SuuUI.AttachPoints:Publish(name, provider)   -- offer a point
+SuuUI.AttachPoints:Revoke(name)              -- withdraw it; consumers are notified with nil
+SuuUI.AttachPoints:Get(name)                 -- provider or nil
+SuuUI.AttachPoints:Has(name)
+SuuUI.AttachPoints:List()
+SuuUI.AttachPoints:Request(name, cb, owner)  -- subscribe; fires now and on every change
+SuuUI.AttachPoints:Release(owner)            -- drop one owner's requests
+SuuUI.AttachPoints:GetRequestCount()         -- live count; specs assert against leaks
+```
+
+**Provider shape.** The publisher exposes a parent frame and takes the child, rather than
+handing out its containers:
+
+```lua
+SuuUI.AttachPoints:Publish("unitframe.player", {
+    frame  = wrapper,                                    -- parent for an attaching child
+    Attach = function(child, opts) ... end,              -- opts is the publisher's own vocabulary
+    Detach = function(child) ... end,
+})
+```
+
+`Publish` asserts on a provider missing any of the three. Names are dotted and namespaced
+by the publisher: `"unitframe.player"`.
+
+**Why the publisher places the child.** The frame that owns a layout is the only thing that
+knows how to grow around a new band, and a consumer that added itself to someone else's
+container would have to know that container's strategy, its child order, and how the owner
+computes its own height. `Attach` is therefore the whole interface: the unit frame keeps
+two hidden slot containers (above and below its own content) and adds the child to one with
+`width = "fill"`, which is what makes an attached widget exactly as wide as the frame and
+follow its width slider without ever reading it.
+
+**Why a subscription rather than an event.** A broadcast fires once, so a consumer that
+registered late has to call `Get` as well — the same duplication `Settings:Watch` exists to
+remove. `Request` always delivers, and there is deliberately no `immediate` opt-out.
+
+Notification iterates a snapshot with a dead flag, so a callback may `Release` itself or a
+sibling mid-dispatch (a consumer that rebuilds its widget does exactly that) without
+skipping or double-firing. Callbacks run through `pcall` and log failures via `SuuUI.Debug`.
+
+**Published by the first-party plugins:**
+
+| Name | Publisher | `opts` |
+|---|---|---|
+| `unitframe.player` | `Plugins/UnitFrames/PlayerFrame.lua` | `{ position = "above"｜"below" }` |
+
+**Revoke before you tear down.** `UnitFrames` revokes in `onDisable` *before* destroying
+its frame, so consumers detach while the slot still exists. A consumer left holding a child
+inside a destroyed container is the failure this system exists to prevent.
+
+**A moveable publisher must report a core inset.** Growing to hold a foreign child changes
+the frame's bounding box, which is what its stored position resolves against — so the
+frame's own content slides by the band's height on the edge its anchor does not pin. See
+`coreInset` in 5c.
 
 ### 4. Profile System (`Core/Profile.lua`)
 
@@ -376,11 +450,43 @@ SuuUI.MoveableFrame:Apply(frame, {
   pluginId = "unit_frames", key = "player_position",
   displayName = "Player Frame",
   defaults = { point = "CENTER", relPoint = "CENTER", x = 0, y = -200 },
+  -- Only for a frame that grows around content it does not own (see below)
+  coreInset = function() return aboveInset, belowInset end,
 })
 SuuUI.MoveableFrame:RestorePosition(frame)
 SuuUI.MoveableFrame:ResetPosition(frame)
+SuuUI.MoveableFrame:RefreshAnchor(frame)  -- re-state placement after coreInset changed
 SuuUI.MoveableFrame:Remove(frame)     -- unwatches; required on teardown
 ```
+
+**`coreInset` is required for any frame that publishes an attach point.** A stored position
+describes an anchor point, and the client resolves it against the frame's **bounding box** —
+so a frame that grows around a foreign child moves everything it owns. Growth lands on the
+edge the anchor does *not* pin, which makes the failure asymmetric and easy to miss: with a
+`BOTTOMLEFT` anchor a band in the `above` slot fills the new space and nothing moves, while
+a band `below` sits inside the pinned edge and shoves the frame's own content up by the
+band's height. That is exactly what moved the player unit frame's bars 26 units whenever a
+cast bar attached below them, and moved them back on detach.
+
+The provider reports how far the frame extends past its own content, top and bottom, and
+`MoveableFrame` shifts the offset it hands the anchor strategy so the **content** stays
+where the player put it and bands extend outward. The shift depends only on the anchor's
+vertical family — `TOP*` pins the top, `BOTTOM*` the bottom, `LEFT`/`RIGHT`/`CENTER` the
+middle (which takes half the difference).
+
+Two things this must get right, and each has its own regression test:
+
+- **The compensation is applied on read and removed on write.** `OnDragStop` reads the
+  frame's bounding-box anchor from the client, so it converts back before saving. Skip that
+  half and the inset is baked in again on every drag — the frame walks one band height per
+  drag.
+- **Re-anchor on inset change, not on size change.** Moving a band from the `above` slot to
+  `below` leaves the total height identical, so a size comparison misses it entirely. The
+  publisher compares the inset itself and calls `RefreshAnchor`; re-anchoring on every
+  layout pass instead would fight a drag in progress.
+
+The provider is plugin code called on every placement pass, so it runs through `pcall` and a
+throwing one degrades to no compensation rather than unwinding into the layout engine.
 
 Positions live in the owning plugin's own settings namespace, so they are profile-aware
 for free and a plugin's frames travel with its settings. `/suuui toggle`, `/suuui lock`
@@ -431,6 +537,7 @@ colorGray900   = {0.08, 0.08, 0.10, 1.00}   -- 950 850 800 750 700 600 400 100 a
 colorBlue400   = {0.25, 0.55, 1.00, 1.00}
 colorBlue500   = {0.18, 0.44, 0.90, 1.00}
 colorGreen400  = {0.20, 0.80, 0.40, 1.00}
+colorGreen500  = {0.22, 0.78, 0.32, 1.00}   -- health's own green (see colorHealth below)
 colorRed400    = {0.90, 0.25, 0.25, 1.00}
 colorYellow400 = {0.95, 0.80, 0.20, 1.00}
 opacityPanel   = 0.95
@@ -442,13 +549,28 @@ colorBgAlt       = { ref = "colorGray850", alpha = "opacityPanel" }
 colorBgHover     = { ref = "colorGray800", alpha = "opacityPanel" }
 colorBgActive    = { ref = "colorGray750", alpha = "opacityPanel" }   -- selected
 colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" }   -- mouse down
-colorBgDisabled  = { ref = "colorGray850", alpha = "opacityPanel" }
+-- The empty part of a frameless bar: a unit frame's health track, a cast bar's. Its own
+-- semantic rather than a panel colour, because a bar sits over the game world.
+colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" }
+-- The "you cannot stop this" cue: the hairline outline a cast bar draws around itself and
+-- its icon while a spell is uninterruptible. A light neutral rather than an intent colour —
+-- it describes the spell, not a warning, and it has to stay readable over any fill colour.
+colorShield      = "colorGray400"
+-- A unit's health when class colouring is off or the class is unknown: an NPC, a totem,
+-- the login moment before the class is available. Its own hue rather than a reuse of
+-- Success — retinting "Success" to orange should not turn the health bar orange.
+colorHealth      = "colorGreen500"
 -- Tier 2: intent
 colorAccent      = "colorBlue400"
 colorAccentHover = "colorBlue500"
 colorSuccess     = "colorGreen400"
 colorDanger      = "colorRed400"
 colorWarning     = "colorYellow400"
+-- Whether a unit's colour comes from its class or from the Health primitive. A boolean
+-- rather than a colour because it is a mode: it selects the SOURCE of a unit's colour,
+-- and a flag keeps every colour token a real colour so nothing downstream is handed a
+-- value it cannot paint with. Read through Theme:GetUnitColor, never directly.
+colorUseClassColors = false   -- Modern: true. Default is the fixed-palette theme.
 -- Tier 2: content
 colorText         = "colorGray100"
 colorTextMuted    = "colorGray400"
@@ -513,10 +635,20 @@ consumers the resolved path — nothing downstream changes. A literal path still
 through, which is what a hand-edited SavedVariable may hold. `GetTokenRaw` returns the
 stored name, which is what the theme editor's dropdown displays.
 
+**`colorUseClassColors` is a fifth value form: a boolean.** It is a mode rather than a
+visual value — "colour units by class" selects the SOURCE of a unit's colour, not the
+colour itself — and modelling it as a flag keeps every colour token a real colour so nothing
+downstream can be handed a value it cannot paint with. It is not read directly: consumers
+call `Theme:GetUnitColor(key, unit)`, which resolves the flag against the class data in
+`SuuUI.Game` and always returns a usable `{r,g,b,a}`. The theme editor exposes it as a
+toggle next to the Health primitive, since the two form one decision. It is the editor's
+first non-colour, non-numeric control.
+
 **API:**
 ```lua
 SuuUI.Theme:GetToken(key)                       -- resolves aliases, derivations, fonts
 SuuUI.Theme:GetTokenRaw(key)                    -- stored value, before resolution
+SuuUI.Theme:GetUnitColor(key, unit)             -- class colour or token; always usable
 SuuUI.Theme:GetControlHeight(sizeKey, fontKey)  -- size token floored by font metrics
 SuuUI.Theme:SetActive(name)                     -- fires SUUUI_THEME_CHANGED
 SuuUI.Theme:GetActive()
@@ -670,6 +802,73 @@ combine a widget's own numbers with a screen-space constant.
 `Theme` listens for `SUUUI_PIXEL_GRID_CHANGED` and re-emits `SUUUI_THEME_CHANGED`, since
 a moved grid changes what every token-derived size snaps to — the same restyle a theme
 change needs. Same pattern as `SUUUI_FONTS_CHANGED`.
+
+### 6d. Game Facts (`Core/Game.lua`)
+
+Colours the client decides, not the theme. A power type's colour and a spell school's
+colour are what the game says those things **are** — "frost is cyan" and "mages are light
+blue" are as fixed as each other — so they are constants here rather than theme tokens.
+Putting them in the theme would fill the editor with controls that are wrong to touch and
+let a player retint frost to green, which would make the UI lie about the game.
+
+They live in Core rather than in whichever plugin paints them first, because a resource bar,
+a cast bar, a nameplate and a debuff border all describe the same facts, and two copies of a
+fact drift. This is the third home in the token-or-setting split: design language is a
+**token**, a widget's own dimensions are a **plugin setting**, and a fact about the client is
+here.
+
+Note the split this draws with the theme: whether a health bar is class-coloured at all is
+a look decision and lives in the theme as `colorUseClassColors`; WHICH colour a mage gets
+is a fact and lives here. `Theme:GetUnitColor` is the one place the two meet.
+
+**There is no API mapping a spell to its school in this client.** Neither `GetSpellInfo` nor
+`UnitCastingInfo` reports one, so the combat log is the only source, and the school arrives
+*after* a cast has already started the first time a spell is seen. The cache therefore lives
+here too: whoever is already reading the log calls `LearnFromCombatLog`, and everything else
+reads back out of `SchoolOf`.
+
+**API:**
+```lua
+SuuUI.Game:PowerColor(powerType)      -- falls back to mana for an unknown type
+SuuUI.Game:ClassColor(classFile)      -- {r,g,b,a} or nil; prefers CUSTOM_CLASS_COLORS
+SuuUI.Game:UnitClassColor(unit)       -- ClassColor(UnitClass(unit)), or nil
+SuuUI.Game.SCHOOL                     -- PHYSICAL HOLY FIRE NATURE FROST SHADOW ARCANE
+SuuUI.Game:SchoolColor(mask)          -- nil when the mask says nothing — callers fall back
+SuuUI.Game:SchoolOf(spellId)          -- cached mask, or nil
+SuuUI.Game:LearnSchool(spellId, mask) -- returns whether it changed what we knew
+SuuUI.Game:LearnFromCombatLog()       -- reads the line being dispatched; returns spellId, mask
+```
+
+Class colours prefer the client's `CUSTOM_CLASS_COLORS` then `RAID_CLASS_COLORS` over the
+internal copy, so SuuUI agrees with the rest of the player's UI (including a class-colour
+addon that retints them at runtime). The copy covers the login moment before either global
+exists. The converted `{r,g,b,a}` array is cached per class and the cache is validated
+against the live source, so a palette swap is picked up without allocating per call.
+
+`ClassColor` and `UnitClassColor` return nil for an unknown class — an NPC, a totem, a pet
+— exactly like `SchoolColor`. nil is a real answer; the caller's own fallback is the right
+response.
+
+The seven pure schools carry Blizzard's own values deliberately — the point of school
+colouring is that it matches what the player already reads everywhere else in the game, so
+they are copied rather than chosen. A multi-school mask that the client does not name
+outright is **blended** from its parts and memoised, because picking the lowest bit would
+paint a frost-fire spell as plain fire and hide exactly the distinction school colouring
+exists to show.
+
+Two details are load-bearing and neither is obvious:
+
+- **`SchoolColor` returns nil rather than a stand-in.** A mask of 0, or the absent mask of a
+  spell nothing has reported yet, means "not known" — and the caller's own fallback is the
+  right response. Inventing a colour for "unknown" gives the player a cue that means nothing.
+- **`LearnFromCombatLog` reports a school it already knew.** Two cast bars read the same
+  line; returning only on a fresh learn would mean whichever handler ran second never heard
+  about its own spell.
+
+`SPELL_ABSORBED` is skipped: after a swing it carries the absorbing caster's GUID where every
+other line carries a spell id, so reading it positionally caches nonsense against a nonsense
+key. Bit tests are arithmetic rather than `bit.band`, so the module behaves identically under
+the client's Lua and the test runner's.
 
 ### 7. Frame Pool (`Core/Pool.lua`)
 
@@ -1252,6 +1451,13 @@ document it here.
   tokens so a variant reads as emphasis rather than a different control. Disabled state
   overrides the variant.
 - `IconButton` — Button + texture slot.
+- `Icon` — display-only texture in a frame. `size` (square; `w`/`h` override per axis, omit
+  all three to follow `sizeIcon`), `border` draws the themed edge and insets the art inside
+  it, `borderColor` (and `SetBorderColor`) lets that edge carry state — a cast bar marks an
+  uninterruptible spell this way — and `trim` crops the bevel Blizzard bakes into its own
+  icon files so a themed border is the only one visible. `SetIcon` / `GetIcon`. Takes no
+  mouse input, which is what makes it safe to overlay or nest inside something that does —
+  for a clickable icon use `IconButton`.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox.
 - `Slider` — custom track + thumb, label, value display.
@@ -1269,11 +1475,13 @@ document it here.
 - `ScrollFrame` — custom scrollbar + masked content.
 - `StatusBar` — progress/resource bar (health, mana, energy, rage). Props: `w`, `h`,
   `value`, `max`, `fillColor` ({r,g,b,a} literal), `bgColor` (token or literal, default
-  `"colorBgAlt"`), `border` (bool, default true), `transition` (strategy name or inline
-  table, default: the registry default), `transitionDuration` (seconds for a full sweep,
-  default: the `animBarFill` token). API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
+  `"colorBgAlt"`), `border` (bool, default true), `borderColor` (token or literal, default
+  `"colorBorder"`), `transition` (strategy name or inline table, default: the registry
+  default), `transitionDuration` (seconds for a full sweep, default: the `animBarFill`
+  token). API: `SetValue`, `SetMax`, `GetValue`, `GetMax`,
   `GetPercent`, `GetDisplayPercent`, `IsTransitioning`, `SetTransition`,
-  `SetTransitionDuration`, `SnapToTarget`, `SetFillColor`, `SetBgColor`, `Destroy`. The
+  `SetTransitionDuration`, `SnapToTarget`, `SetFillColor`, `SetBgColor`, `SetBorderColor`,
+  `SetBorderShown`, `IsBorderShown`, `Destroy`. The
   fill is a **fractional stack child** of the track (`widthFraction`), so the layout
   engine owns the fill geometry — the component sets no points, and the fill stays correct
   across resizes and border-width changes without recomputation. A borderless bar insets

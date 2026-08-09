@@ -19,8 +19,14 @@ SuuUI._ThemeEditableTokens = {
     { key="colorBlue400",   label="Accent",                type="color" },
     { key="colorBlue500",   label="Accent Hover",          type="color" },
     { key="colorGreen400",  label="Success",               type="color" },
+    { key="colorGreen500",  label="Health",                type="color" },
     { key="colorRed400",    label="Danger",                type="color" },
     { key="colorYellow400", label="Warning",               type="color" },
+
+    -- The one boolean token, and the only editor control that is not editing a visual
+    -- value: it selects whether a unit's colour comes from its class or from the Health
+    -- primitive above. Sits next to that primitive so the pair reads as one decision.
+    { key="colorUseClassColors", label="Use Class Colours", type="toggle" },
 
     { key="opacityPanel",   label="Panel Opacity",   type="number", min=0.3,  max=1.0, step=0.05 },
     { key="opacityOverlay", label="Overlay Opacity", type="number", min=0.1,  max=1.0, step=0.05 },

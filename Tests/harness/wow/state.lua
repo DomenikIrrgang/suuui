@@ -23,6 +23,17 @@ M.mouseDown = {}   -- [buttonName] = true
 M.focused   = nil  -- focused EditBox
 M.debugLog  = {}
 
+-- In-flight spellcast, exactly as UnitCastingInfo / UnitChannelInfo report one. nil means
+-- the unit is idle. Times are milliseconds, like the client's, so a spec that forgets the
+-- unit conversion fails here the way it would in game.
+M.cast    = nil
+M.channel = nil
+
+-- The payload CombatLogGetCurrentEventInfo() returns for the event currently being
+-- dispatched, as an array. nil outside a combat log event, which is what the client does
+-- too — a handler that reads it at any other time gets nothing.
+M.combatLogEvent = nil
+
 local pending, pendingSet
 local dependents
 
@@ -38,6 +49,20 @@ function M.reset()
     M.mouseDown = {}
     M.focused   = nil
     M.debugLog  = {}
+    M.cast      = nil
+    M.channel   = nil
+    M.combatLogEvent = nil
+    -- The unit's class, read by UnitClass. Reset because a spec that paints an NPC sets
+    -- unitClassless and a spec that paints a mage sets unitClass, and neither is a value
+    -- the next spec file should inherit: a leaked unitClassless makes every class-colour
+    -- assertion downstream fall through to its fallback and pass for the wrong reason.
+    --
+    -- The unitHealth / unitLevel / unitPowerType family is deliberately NOT reset here.
+    -- Those are set BEFORE the client is built (see Tests/spec/35_attach_login_spec.lua,
+    -- which seeds them and then boots), so clearing them during reset would wipe the very
+    -- values the spec just staged.
+    M.unitClass      = nil
+    M.unitClassless  = nil
     M._settling = false
     M.settleIterations = 0
     pending    = {}

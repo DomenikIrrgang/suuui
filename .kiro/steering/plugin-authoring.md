@@ -144,6 +144,19 @@ cleared** — its stored value still applies the moment the dependency comes bac
 control that vanishes leaves the player unable to see what it was set to. The widget
 refuses the mouse, so the state is real rather than cosmetic.
 
+Truthiness is not always the condition you need. A control that is live only for one
+*value* of a dropdown, or only while a toggle is **off**, states that instead of inverting
+the setting it depends on:
+
+```lua
+enabledIf = "player_show_level"                             -- the key is truthy
+enabledIf = { key = "player_anchor", equals = "detached" }   -- the key equals a value
+enabledIf = { key = "player_anchor", notEquals = "detached" }
+```
+
+`equals` compares with `==`, so `equals = false` is a valid condition and means exactly
+what it says.
+
 Do not gate a control on itself, and do not gate the control that switches the dependency
 — that is the one the player needs in order to undo it.
 
@@ -251,6 +264,78 @@ C.Dropdown({ options = options }, parent)
 ```
 
 ---
+
+## Putting your UI inside another plugin's frame
+
+Never reach for another plugin's frame. Ask for an **attach point** instead: the owner of a
+frame publishes a named place, you subscribe to that name, and neither plugin needs to know
+the other exists. This is also the only version that survives load order — whichever of you
+loads second still gets told.
+
+```lua
+-- Consumer: a cast bar that wants to be part of the player unit frame
+SuuUI.AttachPoints:Request("unitframe.player", function(provider)
+  if not provider then
+    -- The point is gone (that plugin was disabled). Detach and tear down; you are holding
+    -- a child inside a frame that is about to be destroyed.
+    teardown()
+    return
+  end
+  local bar = buildBar(provider.frame)          -- parent it to the frame you are joining
+  provider.Attach(bar, { position = "below" })  -- the OWNER places it and resizes itself
+end, "my_plugin")
+
+-- On teardown
+SuuUI.AttachPoints:Release("my_plugin")
+```
+
+The callback runs **immediately** with the current provider (or nil) and again on every
+publish and revoke, so there is nothing to read separately and no ordering to get right.
+
+Publishing one is the mirror image. Keep placement yours — hand out a parent frame and take
+the child, never your containers:
+
+```lua
+SuuUI.AttachPoints:Publish("myplugin.panel", {
+  frame  = myWrapper,
+  Attach = function(child, opts) mySlot:Add(child, { width = "fill" }); self:_syncSize() end,
+  Detach = function(child) mySlot:Remove(child); self:_syncSize() end,
+})
+
+-- In onDisable, BEFORE destroying anything
+SuuUI.AttachPoints:Revoke("myplugin.panel")
+```
+
+**If your frame is moveable, tell `MoveableFrame` how far it now extends past your own
+content.** A stored position resolves against the frame's bounding box, so growing to hold
+someone else's widget moves everything you own — and only on the edge your anchor does not
+pin, so it looks fine in one configuration and broken in the other:
+
+```lua
+-- What the frame extends past its own content, per edge. Bands carry their gap with them.
+function MyWidget:GetCoreInset()
+  local gap = SuuUI.Theme:GetToken("spaceXs")
+  local above = self:_slotHeight(self._slotAbove)
+  local below = self:_slotHeight(self._slotBelow)
+  if above > 0 then above = above + gap end
+  if below > 0 then below = below + gap end
+  return above, below
+end
+
+SuuUI.MoveableFrame:Apply(frame, {
+  pluginId = "my_plugin", key = "position", defaults = { ... },
+  coreInset = function() return widget:GetCoreInset() end,
+})
+
+-- After Attach/Detach changed the inset — compare the INSET, not the frame's height:
+-- swapping a band from above to below leaves the height identical.
+SuuUI.MoveableFrame:RefreshAnchor(frame)
+```
+
+Name points dotted and namespaced by your plugin (`"unitframe.player"`). `opts` is your own
+vocabulary — document what you accept. Adding the child with `width = "fill"` is what makes
+an attached widget exactly as wide as your frame and follow your own width setting without
+the consumer ever reading it. See `architecture.md` §3b for the full contract.
 
 ## Event Bus
 
@@ -764,7 +849,10 @@ Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
     built-in themes and to `ThemeTokens.lua` if it is missing. Your widget's OWN
     dimensions are plugin settings instead, declared with a schema `default` so the
     player can tune them per profile on your page. React to both: `SUUUI_THEME_CHANGED`
-    and `Settings:Watch`. Game facts (class colours, power colours, level caps) are the
-    exception. See "No Magic Numbers" in `coding-standards.md`.
+    and `Settings:Watch`. Game facts (class colours, power colours, spell school colours,
+    level caps) are neither: read them from `SuuUI.Game` rather than copying them into your
+    plugin. To paint a unit's colour — class-coloured when the theme says so, falling back
+    to a token when it does not — call `Theme:GetUnitColor(token, unit)` rather than reading
+    the flag and class table yourself. See "No Magic Numbers" in `coding-standards.md`.
 13. **Test the UI you build.** A new component is not finished without a spec in
     `Tests/spec/`. Run `lua Tests/run.lua` before calling a change done. See `TESTING.md`.
