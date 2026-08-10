@@ -205,7 +205,9 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
                 .deepEq({
                     "player_power_text_left", "player_power_text_center",
                     "player_power_text_right", "player_power_text_size",
-                    "player_power_height",
+                    -- Placement above the pair, so Width and Height read as one decision
+                    -- about the bar's shape rather than being split by a dropdown.
+                    "player_power_anchor", "player_power_width", "player_power_height",
                 })
         end)
 
@@ -275,6 +277,18 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
                     expect(e.default).as(e.key .. " has a default").notNil()
                 end
             end
+        end)
+
+        it("lets the health bar grow well past its default", function()
+            -- Captured rather than asserted inside the loop: a loop that matches nothing
+            -- passes vacuously, which is how a renamed key would take this test with it.
+            local entry
+            for _, e in ipairs(playerTab().schema) do
+                if e.key == "player_health_height" then entry = e end
+            end
+            expect(entry).notNil()
+            expect(entry.max).as("60 ran out before people's taste did").gte(150)
+            expect(entry.max).as("still a slider, not a free number").lte(400)
         end)
     end)
 

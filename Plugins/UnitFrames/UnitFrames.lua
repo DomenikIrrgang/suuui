@@ -30,6 +30,10 @@ local UNITS = {
         always      = true,
         blizzard    = { "PlayerFrame" },
         position    = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 20, y = 60 },
+        -- Where the resource bar lands the first time it is detached. Centred low, clear of
+        -- the cast bar's own default, so a player who detaches it finds it rather than
+        -- discovering it underneath something else.
+        powerPosition = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 170 },
         defaults    = { width = 304, healthHeight = 39, powerHeight = 22,
                         healthCenter = "current_max" },
     },
@@ -46,6 +50,7 @@ local UNITS = {
         -- this plugin claiming to replace something it does not.
         blizzard    = { "TargetFrame" },
         position    = { point = "BOTTOMRIGHT", relPoint = "BOTTOMRIGHT", x = -20, y = 60 },
+        powerPosition = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 230 },
         defaults    = { width = 304, healthHeight = 39, powerHeight = 22,
                         healthCenter = "current_max" },
     },
@@ -131,6 +136,9 @@ local function buildUnit(p, def)
         displayName = def.displayName,
         always      = def.always,
         changeEvent = def.changeEvent,
+        -- Where a detached resource bar starts. The widget owns that bar's placement in
+        -- both modes, so the default travels with the unit rather than living in the widget.
+        powerPosition = def.powerPosition,
     })
     p[handleField(def)] = widget
 
@@ -217,10 +225,26 @@ local plugin = SuuUI:CreatePlugin({
             schema[#schema + 1] = {
                 key = def.prefix .. "position", type = "position", default = def.position,
             }
+            -- The detached resource bar's own position, written by MoveableFrame the same
+            -- way. It needs a home in the profile whether or not the bar is currently
+            -- detached, so the player's placement survives inlining it and detaching again.
+            schema[#schema + 1] = {
+                key = def.prefix .. "power_position", type = "position",
+                default = def.powerPosition,
+            }
             tabs[#tabs + 1] = {
                 id     = def.id,
                 label  = def.label,
-                schema = SuuUI._UnitFrames.UnitFrame.Schema(def.prefix, def.defaults),
+                schema = SuuUI._UnitFrames.UnitFrame.Schema(def.prefix, {
+                    width        = def.defaults.width,
+                    healthHeight = def.defaults.healthHeight,
+                    powerHeight  = def.defaults.powerHeight,
+                    healthCenter = def.defaults.healthCenter,
+                    -- What "attached" means for this unit, named after the frame the bar
+                    -- would be part of. Derived from the unit's label rather than stored,
+                    -- so it cannot drift from the label the tab already carries.
+                    attachLabel  = def.label .. " Frame",
+                }),
             }
         end
 

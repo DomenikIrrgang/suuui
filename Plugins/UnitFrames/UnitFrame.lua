@@ -47,7 +47,12 @@ local INFO_FONT = "lg"  -- font size token suffix, shared by name and level
 
 -- Settings key suffixes for a frame's dimensions, in one place so the watchers and the
 -- metrics read the same list. Each is prefixed with the unit's own prefix.
-local SIZE_KEYS = { "width", "health_height", "power_height" }
+--
+-- power_width is here rather than in a list of its own even though it only means anything
+-- while the resource bar is detached: Relayout is the single place that states geometry in
+-- either mode, so watching it alongside the rest costs one no-op pass while attached and
+-- removes a second watcher group that could drift from this one.
+local SIZE_KEYS = { "width", "health_height", "power_height", "power_width" }
 
 -- Suffixes that control visibility of sub-widgets. These get their own watchers rather
 -- than triggering a full relayout, because toggling a text widget doesn't change bar
@@ -170,6 +175,9 @@ local function metrics(cfg)
         width    = get("width"),
         health   = get("health_height"),
         resource = get("power_height"),
+        -- Only consulted while the resource bar is detached: attached, the bar fills the
+        -- frame and asking would let a stale slider override the frame's own width.
+        resourceWidth = get("power_width"),
         -- design language: theme tokens
         infoGap  = T:GetToken("spaceXs"),
         barGap   = T:GetToken("spaceXxs"),
@@ -222,10 +230,15 @@ function UnitFrame:_infoHeight()
     return SuuUI.Pixel.Ceil(m.fontSize + m.barGap)
 end
 
---- The bar group's height: both bar tokens plus the gap between them.
+--- The bar group's height: both bar tokens plus the gap between them, or the health bar
+--- alone once the resource bar has been detached out of the group.
+--
+-- Derived from the mode rather than from the group's own content size: the frame's height
+-- is what sizes the group, so measuring the group here would close the loop.
 -- @return number
 function UnitFrame:_barsHeight()
     local m = metrics(self._cfg)
+    if self:_resourceDetached() then return m.health end
     return m.health + m.barGap + m.resource
 end
 
@@ -303,6 +316,170 @@ function UnitFrame:_syncSize()
 end
 
 ---------------------------------------------------------------------------
+-- Resource bar placement
+--
+-- The resource bar is either INLINE — a child of the bar group, directly under the health
+-- bar, taking the frame's width and moving with it — or DETACHED, parented to the UI root
+-- with its own width and its own edit-mode position. Same split the cast bar draws, and
+-- for the same reason: a player who wants their resource somewhere else on the screen is
+-- not asking for a different bar, only for a different place to put it.
+--
+-- A mode change REBUILDS the bar rather than re-parenting it, which is the one thing here
+-- that is not a property patch: the bar's parent differs between the modes and no property
+-- expresses that. It is lossless — every value is re-read from the unit on the way out —
+-- and it only ever runs on a deliberate settings change, never on a game event.
+---------------------------------------------------------------------------
+
+--- Whether the resource bar is currently living outside the frame.
+-- @return bool
+function UnitFrame:_resourceDetached()
+    return self._resourceMode == "detached"
+end
+
+-- The mode the settings ask for. Anything other than "detached" is inline, so a
+-- hand-edited SavedVariable holding a value this version does not know still resolves to
+-- the bar being where the player can see it.
+function UnitFrame:_wantedResourceMode()
+    local anchor = SuuUI.Settings:Get(self._cfg.pluginId, self._cfg.prefix .. "power_anchor")
+    return anchor == "detached" and "detached" or "attached"
+end
+
+--- Re-derives everything about the resource bar that lives in Settings rather than on the
+--- bar itself: its readout font step, its three formatters, and its current value.
+--
+-- Needed because a rebuild replaces the widget the readout watchers already fired against.
+-- Nothing is cached here — both this and those watchers read the store — so the two paths
+-- cannot disagree about what the settings say.
+function UnitFrame:_adoptResourceBar()
+    local cfg = self._cfg
+    self._resourceBar:SetTextSize(
+        SuuUI.Settings:Get(cfg.pluginId, textSizeKey(cfg.prefix, "power")))
+    self:_syncTextModes("power")
+    -- Establishing values on a new bar, not moving them, so it adopts them outright rather
+    -- than sweeping up from empty.
+    self:UpdatePower(true)
+end
+
+--- Shows or hides a detached resource bar to match the frame's own presence.
+--
+-- An inline bar needs none of this: it is inside the wrapper, so hiding the wrapper takes
+-- it down as part of the subtree. A detached bar is parented to the root instead, which is
+-- exactly what puts it outside that guarantee — a target's resource bar left on screen
+-- with nothing targeted would be showing numbers for a unit that is not there.
+function UnitFrame:_syncResourcePresence()
+    if not (self:_resourceDetached() and self._resourceBar) then return end
+    if self._present then
+        self._resourceWrapper:Show()
+    else
+        self._resourceWrapper:Hide()
+    end
+end
+
+-- Destroys the current resource bar and releases whatever the mode it was in had claimed.
+function UnitFrame:_teardownResourceBar()
+    if not self._resourceBar then return end
+    if self:_resourceDetached() then
+        SuuUI.MoveableFrame:Remove(self._resourceWrapper)
+        SuuUI.UIRoot:RemoveElement(self._resourceWrapper)
+        -- Handle then container, as everywhere else in this file. The container destroys
+        -- its children too, so the bar takes a second Destroy — which StatusBar guards
+        -- every field access against, exactly as _healthBar and _bars already rely on.
+        self._resourceBar:Destroy()
+        self._resourceBox:Destroy()
+        self._resourceWrapper:Hide()
+        self._resourceWrapper, self._resourceBox = nil, nil
+    else
+        self._bars:Remove(self._resourceBar)
+        self._resourceBar:Destroy()
+    end
+    self._resourceBar  = nil
+    self._resourceMode = nil
+end
+
+-- The props every resource bar carries, in either mode. One table so detaching cannot
+-- quietly change how the bar looks — only where it is.
+function UnitFrame:_resourceBarProps()
+    return {
+        fillColor = SuuUI.Game:PowerColor(0),  -- default to mana; UpdatePower re-resolves
+        bgColor   = BAR_TRACK,
+        border    = false,
+        -- Energy and rage tick faster than a fixed-duration ease completes, and each
+        -- event would restart one — so the bar would trail its true value continuously
+        -- and never settle. Constant speed converges instead.
+        transition = "rate",
+    }
+end
+
+-- Builds the resource bar in the given mode. The caller has already torn down whatever
+-- was there.
+function UnitFrame:_buildResourceBar(mode)
+    local cfg = self._cfg
+    local m = metrics(cfg)
+
+    if mode ~= "detached" then
+        self._resourceBar = C.StatusBar(self:_resourceBarProps(), self._bars:GetFrame())
+        -- Membership only, no height: Relayout below is the single place that states it,
+        -- and it runs on the way out of every path that reaches here.
+        --
+        -- Added after the health bar, which never leaves the group, so insertion order puts
+        -- the resource bar back underneath it on every re-inline.
+        self._bars:Add(self._resourceBar, { width = "fill" })
+        self._resourceMode = "attached"
+        self:_adoptResourceBar()
+        self:Relayout()
+        return
+    end
+
+    -- Detached: a bare wrapper carries the drag and the saved position, and the bar fills
+    -- it. MoveableFrame hosts its own overlay container on the frame it is given, so it
+    -- gets a frame of its own rather than the bar's — which already hosts one.
+    local root = SuuUI.UIRoot:GetRootContainer()
+    self._resourceWrapper = CreateFrame("Frame", nil, root:GetFrame())
+    self._resourceWrapper:SetSize(m.resourceWidth, m.resource)
+
+    self._resourceBox = SuuUI.Layout:CreateContainer({
+        host   = self._resourceWrapper,
+        layout = "stack",
+    })
+
+    self._resourceBar = C.StatusBar(self:_resourceBarProps(), self._resourceWrapper)
+    self._resourceBox:Add(self._resourceBar)
+
+    -- Player-facing game UI, so the content rung — stated rather than inherited, so a
+    -- settings window or a modal is guaranteed to draw over it.
+    SuuUI.UIRoot:SetLayer(self._resourceWrapper, "normal")
+
+    -- Its own position key, so the bar remembers where it was dragged independently of the
+    -- frame it came out of. No coreInset: nothing attaches to this, so its bounding box and
+    -- its content are the same thing.
+    SuuUI.MoveableFrame:Apply(self._resourceWrapper, {
+        pluginId    = cfg.pluginId,
+        key         = cfg.prefix .. "power_position",
+        displayName = cfg.displayName .. " Resource Bar",
+        defaults    = cfg.powerPosition,
+    })
+
+    self._resourceMode = "detached"
+    self:_adoptResourceBar()
+    -- Presence is resolved for the frame already, and a bar built while the unit is absent
+    -- must not appear just because it was rebuilt.
+    self:_syncResourcePresence()
+    self:Relayout()
+end
+
+--- Brings the resource bar's placement into agreement with the settings.
+--
+-- Gated on the mode actually changing: this runs from a watcher that also fires on a
+-- profile switch, and rebuilding a bar that is already in the right place would drop the
+-- fill mid-transition for nothing.
+function UnitFrame:SyncResourcePlacement()
+    local want = self:_wantedResourceMode()
+    if want == self._resourceMode then return end
+    self:_teardownResourceBar()
+    self:_buildResourceBar(want)
+end
+
+---------------------------------------------------------------------------
 -- Presence
 --
 -- A frame for a unit that is not there is not an empty frame, it is no frame: the client
@@ -348,6 +525,8 @@ function UnitFrame:_syncPresence()
     else
         self._wrapper:Hide()
     end
+    -- A detached bar is not inside the wrapper, so hiding the wrapper does not reach it.
+    self:_syncResourcePresence()
 end
 
 --- Re-resolves the health bar's fill colour.
@@ -372,7 +551,16 @@ function UnitFrame:Relayout()
     self._slotAbove:SetGap(m.barGap)
     self._slotBelow:SetGap(m.barGap)
     self._bars:SetChildProps(self._healthBar,   { width = "fill", height = m.health })
-    self._bars:SetChildProps(self._resourceBar, { width = "fill", height = m.resource })
+    -- The resource bar's geometry depends on who owns its width. Inline it fills the frame
+    -- and only its height is stated; detached it owns both, so the wrapper carries them and
+    -- the bar fills that instead. Guarded because Relayout also runs from the theme hook,
+    -- which can fire before the placement watcher has built anything.
+    if self:_resourceDetached() then
+        self._resourceWrapper:SetSize(m.resourceWidth, m.resource)
+        self._resourceBox:Layout()
+    elseif self._resourceBar then
+        self._bars:SetChildProps(self._resourceBar, { width = "fill", height = m.resource })
+    end
     self._root:SetChildProps(self._bars, { width = "fill", height = self:_barsHeight() })
     self:_applyHealthColor()
     self:_syncSize()
@@ -469,6 +657,7 @@ end
 --   prefix:      settings key prefix, e.g. "target_"
 --   always:      true when the unit always exists, so presence is never in question
 --   changeEvent: the event announcing that the unit became a different one, if any
+--   powerPosition: default { point, relPoint, x, y } for a DETACHED resource bar
 -- @return table  UnitFrame handle
 function UnitFrame:Create(parent, cfg)
     local self = setmetatable({ _cfg = cfg }, { __index = UnitFrame })
@@ -543,15 +732,10 @@ function UnitFrame:Create(parent, cfg)
         -- copy stale the moment the player changed the setting.
     }, self._bars:GetFrame())
 
-    self._resourceBar = C.StatusBar({
-        fillColor = SuuUI.Game:PowerColor(0),  -- default to mana
-        bgColor   = BAR_TRACK,
-        border    = false,
-        -- Energy and rage tick faster than a fixed-duration ease completes, and each
-        -- event would restart one — so the bar would trail its true value continuously
-        -- and never settle. Constant speed converges instead.
-        transition = "rate",
-    }, self._bars:GetFrame())
+    -- No resource bar here: where it goes is a setting, so the placement watcher below is
+    -- the single place that builds it — inline in this group, or detached under the root.
+    -- Building one here as well would be a second declaration, and the construction copy is
+    -- the one that goes stale the moment the player detaches it.
 
     -- Bar heights are stated, not filled: the frame's height is derived FROM them, so a
     -- bar that sized itself from the frame would close the loop.
@@ -560,8 +744,7 @@ function UnitFrame:Create(parent, cfg)
     -- single place that states these heights. Repeating m.health here as well would be the
     -- duplication section 5b exists to remove -- two sites to keep in step, and the one
     -- that only runs at construction goes stale the moment a slider moves.
-    self._bars:Add(self._healthBar,   { width = "fill" })
-    self._bars:Add(self._resourceBar, { width = "fill" })
+    self._bars:Add(self._healthBar, { width = "fill" })
 
     -- No height on the info row: it hugs its own text, which is what makes the frame
     -- follow the font tokens. The wrapper then tracks the row through SIZE_CHANGED.
@@ -588,6 +771,15 @@ function UnitFrame:Create(parent, cfg)
     -- rather than holding the values it was built with.
     self._themeId = "unitframes_" .. cfg.unit .. "_" .. tostring(self._wrapper)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end, self._themeId)
+
+    -- Placement FIRST, and the order is load-bearing: this watcher is what builds the
+    -- resource bar, and every watcher below it states something about a bar that has to
+    -- exist already. `immediate` is therefore doing two jobs — it performs the initial
+    -- build, and it re-places the bar on a profile switch, which can move it without
+    -- anyone touching the dropdown.
+    SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. "power_anchor", function()
+        self:SyncResourcePlacement()
+    end, self._themeId .. "_power_anchor", { immediate = true })
 
     -- The dimension sliders are watched with immediate = true: the watcher callback IS
     -- the first paint — no separate seeding call. It also survives a profile switch,
@@ -875,7 +1067,10 @@ function UnitFrame:Destroy()
     self._nameText:Destroy()
     self._levelText:Destroy()
     self._healthBar:Destroy()
-    self._resourceBar:Destroy()
+    -- Goes through the placement teardown, not a bare Destroy: a detached bar also holds a
+    -- MoveableFrame registration and a root element, and leaking either leaves a draggable
+    -- ghost on screen after the plugin is disabled.
+    self:_teardownResourceBar()
     self._infoRow:Destroy()
     self._bars:Destroy()
     self._slotAbove:Destroy()
@@ -900,7 +1095,8 @@ end
 -- target frame is not the same size as the player's, while the RANGE of each slider is a
 -- property of the control and stays here.
 -- @param prefix string   Unit key prefix, e.g. "target_"
--- @param opts table      { label, width, healthHeight, powerHeight, healthCenter }
+-- @param opts table      { label, width, healthHeight, powerHeight, healthCenter,
+--                          attachLabel }
 -- @return table  Schema array for the tab
 function UnitFrame.Schema(prefix, opts)
     return {
@@ -939,8 +1135,12 @@ function UnitFrame.Schema(prefix, opts)
         -- still follows a theme font edit.
         { key = textSizeKey(prefix, "health"), label = "Text Size", type = "dropdown",
           default = BAR_TEXT_SIZE, options = textSizeOptions() },
+        -- Ranges are the control's own, so both units share them: what differs between a
+        -- player frame and a target frame is the DEFAULT, which arrives in opts. The ceiling
+        -- is generous deliberately — a health bar is the one bar people build a whole layout
+        -- around, and 60 was low enough that the slider ran out before the taste did.
         { key = prefix .. "health_height", label = "Height", type = "slider",
-          min = 8, max = 60, step = 1, default = opts.healthHeight },
+          min = 8, max = 150, step = 1, default = opts.healthHeight },
 
         { key = "", label = "Resource Bar", type = "section" },
         -- The same four controls as the health bar, from the same helpers: the two bars are
@@ -958,6 +1158,25 @@ function UnitFrame.Schema(prefix, opts)
           default = "none", options = textOptions() },
         { key = textSizeKey(prefix, "power"), label = "Text Size", type = "dropdown",
           default = BAR_TEXT_SIZE, options = textSizeOptions() },
+        -- Where the bar lives, in the same vocabulary the cast bar uses — "attached" means
+        -- part of this frame, under the health bar. A player detaching their resource is not
+        -- asking for a different bar, only for somewhere else to put it, so everything above
+        -- keeps applying in either mode.
+        --
+        -- Placement comes before the two size sliders so Width and Height end up adjacent:
+        -- they are one decision about the bar's shape, and the control that decides whether
+        -- Width is even live belongs above the pair rather than between them.
+        { key = prefix .. "power_anchor", label = "Attach To", type = "dropdown",
+          default = "attached", options = {
+            { value = "attached", label = opts.attachLabel },
+            { value = "detached", label = "Detached" },
+          } },
+        -- An inline bar takes its width from the frame it is part of, so the slider is
+        -- greyed out rather than silently ignored. Defaulted to the frame's own width so
+        -- detaching does not resize it.
+        { key = prefix .. "power_width", label = "Width", type = "slider",
+          min = 80, max = 500, step = 2, default = opts.width,
+          enabledIf = { key = prefix .. "power_anchor", equals = "detached" } },
         { key = prefix .. "power_height",  label = "Height", type = "slider",
           min = 4, max = 40, step = 1, default = opts.powerHeight },
     }
