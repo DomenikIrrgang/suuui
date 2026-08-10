@@ -1,5 +1,13 @@
--- UnitFrames plugin: replaces Blizzard's unit frames with a modern, minimal design.
--- This file implements the player frame; other units will follow.
+-- UnitFrames plugin: the unit frame widget.
+--
+-- One implementation serves every unit. A unit differs only by its config — which unit
+-- token to read, which settings prefix its keys carry, whether it is always there — so
+-- nothing about the player is baked in here and target, focus or party need no new widget
+-- code. This is the same split CastBar.lua uses, and for the same reason: the second copy
+-- is the one that drifts.
+--
+-- Layout, top to bottom: an attach band, a name/level row, the health and resource bars,
+-- another attach band.
 local format, floor = string.format, math.floor
 local ipairs, type = ipairs, type
 local C = SuuUI.Components
@@ -12,10 +20,11 @@ local T = SuuUI.Theme
 -- Power colours are facts about the client, shared with anything else that paints one, so
 -- they come from SuuUI.Game rather than being restated here.
 --
--- Health is the same shape one layer up. WHICH colour a class gets is also a fact in
--- SuuUI.Game, but whether health is class-coloured at all is a look decision and lives in
--- the theme as colorUseClassColors. Theme:GetUnitColor resolves the pair, so this plugin
--- names the fallback token and nothing else — no class table, no flag check, and no second
+-- Health is the same shape one layer up. WHICH colour a unit gets — its class, or its
+-- reaction when it has no class — is a fact in SuuUI.Game, while whether health is
+-- coloured that way at all is a look decision living in the theme as colorUseClassColors.
+-- Theme:GetUnitColor resolves the chain, so this widget names the fallback token and
+-- nothing else: no class table, no reaction table, no flag check, and therefore no second
 -- copy of that policy for the target frame to drift from.
 local HEALTH_COLOR = "colorHealth"
 
@@ -34,17 +43,22 @@ local BAR_TRACK = "colorBarTrack"
 --     design language shared with the rest of the UI.
 -- Nothing here is a literal: a width in code is a width nobody can change.
 ---------------------------------------------------------------------------
-local PLUGIN_ID = "unit_frames"
 local INFO_FONT = "lg"  -- font size token suffix, shared by name and level
 
--- Settings keys for the player frame's dimensions, in one place so the watchers and the
--- metrics read the same list.
-local SIZE_KEYS = { "player_width", "player_health_height", "player_power_height" }
+-- Settings key suffixes for a frame's dimensions, in one place so the watchers and the
+-- metrics read the same list. Each is prefixed with the unit's own prefix.
+local SIZE_KEYS = { "width", "health_height", "power_height" }
 
--- Settings keys that control visibility of sub-widgets. These get their own watchers
--- rather than triggering a full relayout, because toggling a text widget doesn't
--- change bar geometry.
-local VIS_KEYS = { "player_show_name", "player_show_level", "player_hide_level_at_max" }
+-- Suffixes that control visibility of sub-widgets. These get their own watchers rather
+-- than triggering a full relayout, because toggling a text widget doesn't change bar
+-- geometry.
+local VIS_KEYS = { "show_name", "show_level", "hide_level_at_max" }
+
+-- The level a unit reports when the client will not say — a mob far enough above the
+-- player that its level is hidden behind a skull. It is a sentinel from the client, not a
+-- number, so it is displayed as one.
+local LEVEL_UNKNOWN      = -1
+local LEVEL_UNKNOWN_TEXT = "??"
 
 ---------------------------------------------------------------------------
 -- Bar readouts
@@ -78,12 +92,15 @@ local BAR_TEXT = {
 
 -- The bars that carry readouts, and where each reads its numbers from. The `id` is also
 -- the settings key infix, so it matches the height keys already on the page
--- (`player_health_height`, `player_power_height`) rather than inventing a second spelling.
+-- (`<unit>_health_height`, `<unit>_power_height`) rather than inventing a second spelling.
+--
+-- The value readers take the unit, so one table serves every frame: baking "player" in
+-- here is exactly what made this file player-only.
 local READOUT_BARS = {
     { id = "health", field = "_healthBar", label = "Health Bar",
-      value = function() return UnitHealth("player") or 0, UnitHealthMax("player") or 1 end },
+      value = function(unit) return UnitHealth(unit) or 0, UnitHealthMax(unit) or 1 end },
     { id = "power",  field = "_resourceBar", label = "Resource Bar",
-      value = function() return UnitPower("player") or 0, UnitPowerMax("player") or 1 end },
+      value = function(unit) return UnitPower(unit) or 0, UnitPowerMax(unit) or 1 end },
 }
 
 -- Indexed by id for the update path, which is handed a bar name rather than iterating.
@@ -91,8 +108,8 @@ local READOUT_BARS_BY_ID = {}
 for _, def in ipairs(READOUT_BARS) do READOUT_BARS_BY_ID[def.id] = def end
 
 -- Fresh each call rather than one shared constant: the table is handed to a schema entry
--- and on to a Dropdown control — eight of them across the two bars — and a shared options
--- list is one aliased table away from those controls editing each other's state.
+-- and on to a Dropdown control — eight of them per unit — and a shared options list is one
+-- aliased table away from those controls editing each other's state.
 local function textOptions()
     return {
         { value = "none",        label = "None" },
@@ -103,11 +120,12 @@ local function textOptions()
 end
 
 --- The settings key holding one slot's readout mode.
--- @param bar string   "health" | "power"
--- @param slot string  "left" | "center" | "right"
+-- @param prefix string  Unit key prefix, e.g. "player_"
+-- @param bar string     "health" | "power"
+-- @param slot string    "left" | "center" | "right"
 -- @return string
-local function textKey(bar, slot)
-    return "player_" .. bar .. "_text_" .. slot
+local function textKey(prefix, bar, slot)
+    return prefix .. bar .. "_text_" .. slot
 end
 
 --- The settings key holding one bar's readout font step.
@@ -121,10 +139,11 @@ end
 -- Large follows a user's edit of `fontSizeLg`. A pixel value here would be this plugin
 -- holding a font size of its own, which is the duplication the token scale exists to
 -- prevent — and it would stop tracking the rest of the UI the moment the theme was scaled.
--- @param bar string  "health" | "power"
+-- @param prefix string  Unit key prefix, e.g. "player_"
+-- @param bar string     "health" | "power"
 -- @return string
-local function textSizeKey(bar)
-    return "player_" .. bar .. "_text_size"
+local function textSizeKey(prefix, bar)
+    return prefix .. bar .. "_text_size"
 end
 
 -- The step both bars start at, and the schema default. Declared once here so a default and
@@ -144,13 +163,13 @@ end
 -- on game events, and a fresh table per update would allocate under combat load.
 local IMMEDIATE = { immediate = true }
 
-local function metrics()
-    local get = function(key) return SuuUI.Settings:Get(PLUGIN_ID, key) end
+local function metrics(cfg)
+    local get = function(key) return SuuUI.Settings:Get(cfg.pluginId, cfg.prefix .. key) end
     return {
         -- widget dimensions: plugin settings
-        width    = get("player_width"),
-        health   = get("player_health_height"),
-        resource = get("player_power_height"),
+        width    = get("width"),
+        health   = get("health_height"),
+        resource = get("power_height"),
         -- design language: theme tokens
         infoGap  = T:GetToken("spaceXs"),
         barGap   = T:GetToken("spaceXxs"),
@@ -186,27 +205,27 @@ local function maxPlayerLevel()
 end
 
 ---------------------------------------------------------------------------
--- Player frame widget
+-- Unit frame widget
 ---------------------------------------------------------------------------
-local PlayerFrame = {}
+local UnitFrame = {}
 
 --- The height the name row needs at the current font tokens. The row hugs its measured
 --- text; before it has any text to measure, fall back to the font token so the frame is
 --- never built collapsed. A hidden row contributes nothing: flow layout skips it, gap
 --- included, so reporting 0 here is what keeps the height and the geometry in agreement.
 -- @return number
-function PlayerFrame:_infoHeight()
+function UnitFrame:_infoHeight()
     if not self._infoRow:IsShown() then return 0 end
     local measured = self._infoRow:GetHeight() or 0
     if measured > 0 then return SuuUI.Pixel.Ceil(measured) end
-    local m = metrics()
+    local m = metrics(self._cfg)
     return SuuUI.Pixel.Ceil(m.fontSize + m.barGap)
 end
 
 --- The bar group's height: both bar tokens plus the gap between them.
 -- @return number
-function PlayerFrame:_barsHeight()
-    local m = metrics()
+function UnitFrame:_barsHeight()
+    local m = metrics(self._cfg)
     return m.health + m.barGap + m.resource
 end
 
@@ -215,7 +234,7 @@ end
 --- band in the frame.
 -- @param slot table  Container handle
 -- @return number
-function PlayerFrame:_slotHeight(slot)
+function UnitFrame:_slotHeight(slot)
     if not (slot and slot:IsShown()) then return 0 end
     local _, h = slot:GetContentSize()
     return SuuUI.Pixel.Ceil(h or 0)
@@ -236,8 +255,8 @@ end
 --- Sizing flows one way, content setting the frame's height and never the reverse, so
 --- there is no layout cycle to resolve even once a foreign widget has attached.
 -- @return number, number  width, height
-function PlayerFrame:GetPreferredSize()
-    local m = metrics()
+function UnitFrame:GetPreferredSize()
+    local m = metrics(self._cfg)
     local total, shown = 0, 0
     total, shown = addBand(total, shown, self:_slotHeight(self._slotAbove), m.infoGap)
     total, shown = addBand(total, shown, self:_infoHeight(),                m.infoGap)
@@ -252,8 +271,8 @@ end
 --- inset, and MoveableFrame shifts the frame down by exactly that much so the bars do not
 --- move. Each band carries the row gap with it, matching GetPreferredSize.
 -- @return number, number  above inset, below inset
-function PlayerFrame:GetCoreInset()
-    local gap = metrics().infoGap
+function UnitFrame:GetCoreInset()
+    local gap = metrics(self._cfg).infoGap
     local above = self:_slotHeight(self._slotAbove)
     local below = self:_slotHeight(self._slotBelow)
     if above > 0 then above = above + gap end
@@ -265,7 +284,7 @@ end
 --- put. Gated on the inset actually moving: the two slots swapping which one holds the
 --- band leaves the frame the same total height, so a size comparison would miss it, while
 --- re-anchoring on every layout pass would fight a drag in progress.
-function PlayerFrame:_syncAnchor()
+function UnitFrame:_syncAnchor()
     local above, below = self:GetCoreInset()
     if self._insetAbove == above and self._insetBelow == below then return end
     self._insetAbove, self._insetBelow = above, below
@@ -274,7 +293,7 @@ end
 
 --- Resizes the wrapper to the current preferred size. The bar group fills what the name
 --- row leaves, so the bars keep their token heights and only the row absorbs a font change.
-function PlayerFrame:_syncSize()
+function UnitFrame:_syncSize()
     local w, h = self:GetPreferredSize()
     if math.abs((self._wrapper:GetWidth() or 0) - w) > 0.5
        or math.abs((self._wrapper:GetHeight() or 0) - h) > 0.5 then
@@ -283,21 +302,70 @@ function PlayerFrame:_syncSize()
     self:_syncAnchor()
 end
 
+---------------------------------------------------------------------------
+-- Presence
+--
+-- A frame for a unit that is not there is not an empty frame, it is no frame: the client
+-- has nothing to put in it, and Blizzard's own target frame disappears for the same
+-- reason. Edit mode is the exception — the player has to be able to find and drag the
+-- target frame while nothing is targeted — which is the same reason a cast bar shows a
+-- preview rather than vanishing.
+--
+-- A unit that always exists (the player) skips the whole question through cfg.always, so
+-- nothing about the player frame depends on UnitExists being answerable.
+---------------------------------------------------------------------------
+
+--- Whether the unit this frame describes is currently there.
+-- @return bool
+function UnitFrame:UnitPresent()
+    if self._cfg.always then return true end
+    return type(UnitExists) == "function" and UnitExists(self._cfg.unit) == true
+end
+
+--- Whether the frame should be on screen at all.
+-- @return bool
+function UnitFrame:_shouldShow()
+    if self:UnitPresent() then return true end
+    return SuuUI.ToggleUI:IsEditMode() == true
+end
+
+--- Shows or hides the whole frame to match the unit's presence.
+--
+-- The WRAPPER is what gets hidden, not the containers inside it. Hiding an inner container
+-- would leave the attach slots anchored to a frame with no rect, which is how an attached
+-- cast bar ends up permanently invisible; hiding the wrapper takes the slots and anything
+-- attached into them down as one subtree, and showing it dirties that whole subtree so
+-- every child resolves again.
+function UnitFrame:_syncPresence()
+    local show = self:_shouldShow()
+    if show == self._present then return end
+    self._present = show
+    if show then
+        self._wrapper:Show()
+        -- Every value is being established rather than changing, so the bars adopt them
+        -- outright instead of sweeping up from wherever the last unit left them.
+        self:UpdateAll(true)
+    else
+        self._wrapper:Hide()
+    end
+end
+
 --- Re-resolves the health bar's fill colour.
 --
 -- Called from Relayout, so a theme switch or a live edit of either the Health primitive or
--- the Use Class Colours toggle repaints without a reload; and from UpdateAll, because the
--- player's class is not knowable until PLAYER_ENTERING_WORLD and the first paint would
--- otherwise be stuck on the fallback for the rest of the session.
-function PlayerFrame:_applyHealthColor()
-    self._healthBar:SetFillColor(T:GetUnitColor(HEALTH_COLOR, "player"))
+-- the Use Class Colours toggle repaints without a reload; from UpdateAll, because a unit's
+-- class is not knowable until it exists and the first paint would otherwise be stuck on
+-- the fallback; and on UNIT_FACTION, because a unit's reaction can change under you — a
+-- neutral mob you attack becomes hostile without ever changing class.
+function UnitFrame:_applyHealthColor()
+    self._healthBar:SetFillColor(T:GetUnitColor(HEALTH_COLOR, self._cfg.unit))
 end
 
 --- Re-reads every derived metric and re-lays the frame. Bound to both
 --- SUUUI_THEME_CHANGED and the size settings, so moving a slider or editing a spacing
 --- token takes effect immediately instead of waiting for a reload.
-function PlayerFrame:Relayout()
-    local m = metrics()
+function UnitFrame:Relayout()
+    local m = metrics(self._cfg)
     self._root:SetGap(m.infoGap)
     self._infoRow:SetGap(m.infoGap)
     self._bars:SetGap(m.barGap)
@@ -312,14 +380,14 @@ function PlayerFrame:Relayout()
 end
 
 --- Theme hook. Same work as a settings change, so it shares one path.
-function PlayerFrame:ApplyTheme()
+function UnitFrame:ApplyTheme()
     self:Relayout()
 end
 
 --- Re-applies the name/level visibility settings and re-sizes the frame.
 --- UpdateInfo already resolves both settings, so this adds only the size pass: hiding
 --- both texts collapses the info row, which changes the frame's height.
-function PlayerFrame:SyncVisibility()
+function UnitFrame:SyncVisibility()
     self:UpdateInfo()
     self:_syncSize()
 end
@@ -327,12 +395,12 @@ end
 -- One attach slot: an empty vertical band another plugin can place a widget into. Hidden
 -- while empty, because flow layout skips a hidden child together with its gap — a visible
 -- zero-height slot would still claim a gap and leave a dead band in the frame.
-function PlayerFrame:_createSlot()
+function UnitFrame:_createSlot()
     local slot = SuuUI.Layout:CreateContainer({
         parent = self._wrapper,
         layout = "flow",
         dir    = "vertical",
-        gap    = metrics().barGap,
+        gap    = metrics(self._cfg).barGap,
     })
     slot:Hide()
     return slot
@@ -347,7 +415,7 @@ end
 -- @param child frame|table  Frame, component handle or container
 -- @param opts table|nil     { position = "above"|"below" } — default "below"
 -- @return table  The slot container the child landed in
-function PlayerFrame:AttachChild(child, opts)
+function UnitFrame:AttachChild(child, opts)
     local slot = (opts and opts.position == "above") and self._slotAbove or self._slotBelow
     -- Shown BEFORE the child is added, and the order is the whole fix.
     --
@@ -374,7 +442,7 @@ end
 -- leaves it — the consumer owns that widget and decides what becomes of it.
 -- @param child frame|table
 -- @return bool  Whether the child was found in a slot
-function PlayerFrame:DetachChild(child)
+function UnitFrame:DetachChild(child)
     local target = (type(child) == "table" and child.GetFrame) and child:GetFrame() or child
     local found = false
     for i = 1, 2 do
@@ -394,9 +462,17 @@ function PlayerFrame:DetachChild(child)
     return found
 end
 
-function PlayerFrame:Create(parent)
-    local self = setmetatable({}, { __index = PlayerFrame })
-    local m = metrics()
+--- Creates a unit frame.
+-- @param parent frame
+-- @param cfg table  { unit, pluginId, prefix, displayName, always, changeEvent }
+--   unit:        unit token to read, e.g. "target"
+--   prefix:      settings key prefix, e.g. "target_"
+--   always:      true when the unit always exists, so presence is never in question
+--   changeEvent: the event announcing that the unit became a different one, if any
+-- @return table  UnitFrame handle
+function UnitFrame:Create(parent, cfg)
+    local self = setmetatable({ _cfg = cfg }, { __index = UnitFrame })
+    local m = metrics(cfg)
     -- Resolved by the readout watchers below, before anything reads them. One slot table
     -- per bar, allocated here so a watcher never has to check whether its bar exists yet.
     self._fmt = {}
@@ -456,7 +532,7 @@ function PlayerFrame:Create(parent)
     })
 
     self._healthBar = C.StatusBar({
-        fillColor = T:GetUnitColor(HEALTH_COLOR, "player"),
+        fillColor = T:GetUnitColor(HEALTH_COLOR, cfg.unit),
         bgColor   = BAR_TRACK,
         border    = false,
         -- Health moves in sparse, large steps, so a fixed-duration ease reads as the bar
@@ -510,14 +586,14 @@ function PlayerFrame:Create(parent)
 
     -- Spacing and font tokens are user-editable, so the frame re-derives on a theme change
     -- rather than holding the values it was built with.
-    self._themeId = "unitframes_player_" .. tostring(self._wrapper)
+    self._themeId = "unitframes_" .. cfg.unit .. "_" .. tostring(self._wrapper)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end, self._themeId)
 
     -- The dimension sliders are watched with immediate = true: the watcher callback IS
     -- the first paint — no separate seeding call. It also survives a profile switch,
     -- which rewrites these values underneath us.
     for _, key in ipairs(SIZE_KEYS) do
-        SuuUI.Settings:Watch(PLUGIN_ID, key, function()
+        SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. key, function()
             self:Relayout()
         end, self._themeId .. "_" .. key, { immediate = true })
     end
@@ -526,7 +602,7 @@ function PlayerFrame:Create(parent)
     -- NOT immediate: UpdateAll(true) below already calls UpdateInfo, and it does strictly
     -- more (seeds bar values with snap). Adding immediate would just repeat that work.
     for _, key in ipairs(VIS_KEYS) do
-        SuuUI.Settings:Watch(PLUGIN_ID, key, function()
+        SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. key, function()
             self:SyncVisibility()
         end, self._themeId .. "_" .. key)
     end
@@ -537,21 +613,34 @@ function PlayerFrame:Create(parent)
     -- one that goes stale.
     for _, def in ipairs(READOUT_BARS) do
         for _, slot in ipairs(TEXT_SLOTS) do
-            SuuUI.Settings:Watch(PLUGIN_ID, textKey(def.id, slot), function()
+            SuuUI.Settings:Watch(cfg.pluginId, textKey(cfg.prefix, def.id, slot), function()
                 self:_syncTextModes(def.id)
                 self:UpdateReadouts(def.id)
-            end, self._themeId .. "_" .. textKey(def.id, slot), { immediate = true })
+            end, self._themeId .. "_" .. textKey(cfg.prefix, def.id, slot), { immediate = true })
         end
 
         -- One step for every slot on this bar, applied to the bar rather than per readout.
-        SuuUI.Settings:Watch(PLUGIN_ID, textSizeKey(def.id), function(val)
+        SuuUI.Settings:Watch(cfg.pluginId, textSizeKey(cfg.prefix, def.id), function(val)
             local widget = self[def.field]
             if widget then widget:SetTextSize(val) end
             -- The step decides the readouts' height, and a bar's own height does not follow
             -- it — so nothing else re-flows the frame after a size change.
             self:_syncSize()
-        end, self._themeId .. "_" .. textSizeKey(def.id), { immediate = true })
+        end, self._themeId .. "_" .. textSizeKey(cfg.prefix, def.id), { immediate = true })
     end
+
+    -- Edit mode decides whether a frame with no unit is shown, so the player can position
+    -- it. `immediate` matters twice over: a frame created while edit mode is already on has
+    -- to appear at once rather than wait for the next toggle, AND this callback is the
+    -- single place presence is ever resolved — including the first time. Reading the state
+    -- separately to seed it and then watching for changes is the duplication section 5b
+    -- exists to remove, and the seed is the copy that goes stale.
+    --
+    -- A unit that always exists still subscribes and the callback simply always resolves
+    -- to shown, which is cheaper than a branch that has to stay in step with cfg.always.
+    SuuUI.Settings:Watch("_layout", "edit_mode", function()
+        self:_syncPresence()
+    end, self._themeId .. "_edit_mode", { immediate = true })
 
     -- WoW event frame for data updates
     self._events = CreateFrame("Frame")
@@ -561,21 +650,43 @@ function PlayerFrame:Create(parent)
     self._events:RegisterEvent("UNIT_MAXPOWER")
     self._events:RegisterEvent("UNIT_DISPLAYPOWER")
     self._events:RegisterEvent("UNIT_LEVEL")
-    self._events:RegisterEvent("PLAYER_LEVEL_UP")
+    -- A unit's standing can change without its class changing: a neutral mob you attack
+    -- turns hostile, and a reaction-coloured bar that ignored this would keep painting it
+    -- yellow through the fight.
+    self._events:RegisterEvent("UNIT_FACTION")
     self._events:RegisterEvent("PLAYER_ENTERING_WORLD")
+    -- Player-only, and deliberately not registered for anything else: PLAYER_LEVEL_UP
+    -- carries the PLAYER's new level as its first argument, so a target frame handling it
+    -- would write the player's level into the target's row.
+    if cfg.unit == "player" then
+        self._events:RegisterEvent("PLAYER_LEVEL_UP")
+    end
+    -- The unit became a different unit. Everything on screen is now about someone else, so
+    -- this is a full re-read rather than a change to any one value.
+    if cfg.changeEvent then
+        self._events:RegisterEvent(cfg.changeEvent)
+    end
     self._events:SetScript("OnEvent", function(_, event, unit, ...)
         if event == "PLAYER_ENTERING_WORLD" then
             -- Every value is being established for the first time, not changing, so the
             -- bars adopt them outright instead of sweeping up from empty.
+            self:_syncPresence()
             self:UpdateAll(true)
+        elseif event == cfg.changeEvent then
+            self:_syncPresence()
+            -- _syncPresence only repaints when presence CHANGED, and swapping one target
+            -- for another leaves it unchanged while every value on screen is now wrong.
+            if self._present then self:UpdateAll(true) end
         elseif event == "PLAYER_LEVEL_UP" then
             -- Carries the new level as its first argument, ahead of UnitLevel updating.
             self:UpdateInfo(unit)
-        elseif unit == "player" or event == "UNIT_DISPLAYPOWER" then
+        elseif unit == cfg.unit then
             if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
                 self:UpdateHealth()
             elseif event == "UNIT_LEVEL" then
                 self:UpdateInfo()
+            elseif event == "UNIT_FACTION" then
+                self:_applyHealthColor()
             elseif event == "UNIT_DISPLAYPOWER" then
                 -- The resource changed identity — rage to energy on a form swap — so the
                 -- old fill and the new one measure different things. Sliding between them
@@ -587,6 +698,8 @@ function PlayerFrame:Create(parent)
         end
     end)
 
+    -- Presence is already resolved: the edit_mode watcher above ran immediately and is the
+    -- only place that decides it.
     self:UpdateAll(true)
     return self
 end
@@ -594,20 +707,43 @@ end
 --- Refreshes every displayed value.
 -- @param immediate bool  Skip bar transitions — for the first paint and for a change
 --   that redefines what the bar means rather than moving it.
-function PlayerFrame:UpdateAll(immediate)
+function UnitFrame:UpdateAll(immediate)
     self:UpdateInfo()
     self:_applyHealthColor()
     self:UpdateHealth(immediate)
     self:UpdatePower(immediate)
 end
 
---- Refreshes name and level. Visibility respects player_show_name / player_show_level,
---- and — while the level is shown — player_hide_level_at_max: at the cap the number
+--- The text the level slot should carry, or nil to hide it.
+--
+-- Three answers, not two. The client reports -1 for a unit whose level it will not tell
+-- you — a mob far enough above the player to show a skull — and that is a sentinel, not a
+-- number: printing it gives the player "-1" where the rest of their UI says "??".
+-- @param level number
+-- @return string|nil
+function UnitFrame:_levelDisplay(level)
+    if not SuuUI.Settings:Get(self._cfg.pluginId, self._cfg.prefix .. "show_level") then
+        return nil
+    end
+    if level == LEVEL_UNKNOWN then return LEVEL_UNKNOWN_TEXT end
+    local hideAtMax = SuuUI.Settings:Get(self._cfg.pluginId,
+                                         self._cfg.prefix .. "hide_level_at_max")
+    local cap = maxPlayerLevel()
+    if hideAtMax and cap ~= nil and level >= cap then return nil end
+    return tostring(level)
+end
+
+--- Refreshes name and level. Visibility respects <unit>_show_name / <unit>_show_level,
+--- and — while the level is shown — <unit>_hide_level_at_max: at the cap the number
 --- carries no information, but whether that is worth hiding is the player's call.
 -- @param level number|nil  Overrides UnitLevel, for PLAYER_LEVEL_UP's payload
-function PlayerFrame:UpdateInfo(level)
-    local showName = SuuUI.Settings:Get(PLUGIN_ID, "player_show_name")
-    local name = UnitName("player") or ""
+function UnitFrame:UpdateInfo(level)
+    local cfg = self._cfg
+    local showName = SuuUI.Settings:Get(cfg.pluginId, cfg.prefix .. "show_name")
+    -- The display name stands in while the unit is absent, so an edit-mode frame says what
+    -- it is instead of being an unlabelled pair of empty bars.
+    local name = (self:UnitPresent() and UnitName(cfg.unit)) or nil
+    if not name then name = self._present and cfg.displayName or "" end
     self._nameText:SetText(name)
     if showName then
         self._nameText:Show()
@@ -615,17 +751,16 @@ function PlayerFrame:UpdateInfo(level)
         self._nameText:Hide()
     end
 
-    local showLevel = SuuUI.Settings:Get(PLUGIN_ID, "player_show_level")
-    local hideAtMax = SuuUI.Settings:Get(PLUGIN_ID, "player_hide_level_at_max")
-    level = level or UnitLevel("player") or 0
-    local cap = maxPlayerLevel()
-    local atMax = hideAtMax and cap ~= nil and level >= cap
-    if not showLevel or atMax then
+    local text = nil
+    if self:UnitPresent() then
+        text = self:_levelDisplay(level or UnitLevel(cfg.unit) or 0)
+    end
+    if text then
+        self._levelText:SetText(text)
+        self._levelText:Show()
+    else
         self._levelText:SetText("")
         self._levelText:Hide()
-    else
-        self._levelText:SetText(tostring(level))
-        self._levelText:Show()
     end
 
     -- Both texts hug their content, so the row has to re-measure after a text change.
@@ -641,12 +776,22 @@ function PlayerFrame:UpdateInfo(level)
     end
 end
 
+-- What a bar reads while its unit is absent: full, so an edit-mode frame shows the shape
+-- the player is positioning rather than two empty tracks. A max of 1 and a value of 1
+-- rather than the unit's real numbers, because there are none to read.
+local ABSENT_VALUE, ABSENT_MAX = 1, 1
+
 --- Refreshes the health bar.
 -- @param immediate bool  Skip the fill transition
-function PlayerFrame:UpdateHealth(immediate)
+function UnitFrame:UpdateHealth(immediate)
     local opts = immediate and IMMEDIATE or nil
-    local cur = UnitHealth("player") or 0
-    local mx  = UnitHealthMax("player") or 1
+    local cur, mx = ABSENT_VALUE, ABSENT_MAX
+    if self:UnitPresent() then
+        cur = UnitHealth(self._cfg.unit) or 0
+        mx  = UnitHealthMax(self._cfg.unit) or 1
+    end
+    -- A dead or not-yet-loaded unit can report a max of 0, and every readout divides by it.
+    if mx <= 0 then mx = 1 end
     self._healthBar:SetMax(mx, opts)
     self._healthBar:SetValue(cur, opts)
     self:UpdateReadouts("health", cur, mx)
@@ -659,10 +804,11 @@ end
 -- read three settings, since UNIT_HEALTH and UNIT_POWER_UPDATE arrive several times a
 -- second under combat.
 -- @param bar string  "health" | "power"
-function PlayerFrame:_syncTextModes(bar)
+function UnitFrame:_syncTextModes(bar)
     local slots = self._fmt[bar]
     for _, slot in ipairs(TEXT_SLOTS) do
-        slots[slot] = BAR_TEXT[SuuUI.Settings:Get(PLUGIN_ID, textKey(bar, slot))]
+        slots[slot] = BAR_TEXT[SuuUI.Settings:Get(self._cfg.pluginId,
+                                                  textKey(self._cfg.prefix, bar, slot))]
     end
 end
 
@@ -673,44 +819,51 @@ end
 -- @param bar string     "health" | "power"
 -- @param cur number|nil Current value; read from the unit when omitted
 -- @param mx number|nil  Max value; read from the unit when omitted
-function PlayerFrame:UpdateReadouts(bar, cur, mx)
+function UnitFrame:UpdateReadouts(bar, cur, mx)
     local def = READOUT_BARS_BY_ID[bar]
     local widget = self[def.field]
     if not widget then return end
     if not (cur and mx) then
-        local c, m = def.value()
+        local c, m = def.value(self._cfg.unit)
         cur, mx = cur or c, mx or m
     end
     local slots = self._fmt[bar]
+    -- An absent unit has no numbers, so a readout showing any would be inventing them.
+    local blank = not self:UnitPresent()
     for _, slot in ipairs(TEXT_SLOTS) do
         local fmt = slots[slot]
-        widget:SetText(slot, fmt and fmt(cur, mx) or nil)
+        widget:SetText(slot, (fmt and not blank) and fmt(cur, mx) or nil)
     end
 end
 
 --- Refreshes the resource bar.
 -- @param immediate bool  Skip the fill transition
-function PlayerFrame:UpdatePower(immediate)
+function UnitFrame:UpdatePower(immediate)
     local opts = immediate and IMMEDIATE or nil
-    local powerType = UnitPowerType("player") or 0
-    local cur = UnitPower("player") or 0
-    local mx  = UnitPowerMax("player") or 1
-    local color = SuuUI.Game:PowerColor(powerType)
-    self._resourceBar:SetFillColor(color)
+    local cur, mx = ABSENT_VALUE, ABSENT_MAX
+    local powerType = 0
+    if self:UnitPresent() then
+        powerType = UnitPowerType(self._cfg.unit) or 0
+        cur = UnitPower(self._cfg.unit) or 0
+        mx  = UnitPowerMax(self._cfg.unit) or 1
+    end
+    -- A mob with no mana reports a max of 0, and every readout divides by it.
+    if mx <= 0 then mx = 1 end
+    self._resourceBar:SetFillColor(SuuUI.Game:PowerColor(powerType))
     self._resourceBar:SetMax(mx, opts)
     self._resourceBar:SetValue(cur, opts)
     self:UpdateReadouts("power", cur, mx)
 end
 
-function PlayerFrame:GetFrame()
+function UnitFrame:GetFrame()
     return self._wrapper
 end
 
-function PlayerFrame:GetContainer()
+function UnitFrame:GetContainer()
     return self._root
 end
 
-function PlayerFrame:Destroy()
+function UnitFrame:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._themeId)
     -- Every watcher this frame registered shares the id as its owner prefix, so one call
     -- retires the lot. Enumerating the key lists instead means a new group of watchers can
@@ -733,225 +886,82 @@ function PlayerFrame:Destroy()
 end
 
 ---------------------------------------------------------------------------
--- Blizzard frames to hide/restore
----------------------------------------------------------------------------
-local BLIZZARD_PLAYER_FRAMES = {
-    "PlayerFrame",
-}
-
--- Whether THIS plugin is currently suppressing a frame. The OnShow hook below is
--- permanent -- HookScript cannot be undone -- so it asks this table on every show rather
--- than assuming it should always hide. Without the flag, restoring the frame would be
--- impossible: Show() would fire the hook and the hook would hide it straight back.
-local suppressed = {}
-
--- Blizzard frames are permanent globals, so this never holds more than one entry per
--- name. It exists so a disable/enable cycle does not stack a second hook on the frame.
-local hooked = {}
-
--- Deliberately NOT UnregisterAllEvents(). Nothing in the API enumerates a frame's
--- registered events, so unregistering is a one-way door: onDisable could never hand the
--- frame back alive, which is what left Blizzard's player frame dead until a reload. The
--- hook is a complete suppression mechanism on its own -- a hidden frame can only become
--- visible through a show, and every show fires OnShow -- so the registrations stay where
--- Blizzard put them and the cost of suppressing is one Hide().
-local function suppress(frame)
-    suppressed[frame] = true
-    if not hooked[frame] then
-        hooked[frame] = true
-        frame:HookScript("OnShow", function(self)
-            if suppressed[self] then self:Hide() end
-        end)
-    end
-    frame:Hide()
-end
-
--- Never touches a frame this plugin did not hide: with the player frame switched off we
--- never suppressed anything, and showing it here would override whatever else hid it.
+-- Shared with the plugin file
 --
--- The flag is cleared BEFORE the Show, or the hook we cannot uninstall hides it again on
--- the way out.
-local function restore(frame)
-    if not suppressed[frame] then return end
-    suppressed[frame] = nil
-    frame:Show()
-end
-
-local function hideBlizzardPlayerFrame()
-    for _, name in ipairs(BLIZZARD_PLAYER_FRAMES) do
-        local frame = _G[name]
-        if frame then suppress(frame) end
-    end
-end
-
-local function restoreBlizzardPlayerFrame()
-    for _, name in ipairs(BLIZZARD_PLAYER_FRAMES) do
-        local frame = _G[name]
-        if frame then restore(frame) end
-    end
-end
-
+-- The schema builder lives beside the widget deliberately: the readout keys, their option
+-- lists and their defaults are the widget's own vocabulary, and a schema written in the
+-- plugin file would be a second declaration of them.
 ---------------------------------------------------------------------------
--- Plugin registration
----------------------------------------------------------------------------
-local plugin = SuuUI:CreatePlugin({
-    id      = "unit_frames",
-    name    = "Unit Frames",
-    version = "0.1",
 
-    onInit = function(p)
-        -- The frame's own dimensions are settings, not theme tokens: they describe one
-        -- plugin's widget rather than the design language, and a player wants them per
-        -- profile.
+--- Builds the settings schema for one unit's tab.
+--
+-- Every key is derived from the prefix, so a new unit is one entry in the plugin's UNITS
+-- list and nothing else. The defaults are arguments rather than constants here because a
+-- target frame is not the same size as the player's, while the RANGE of each slider is a
+-- property of the control and stays here.
+-- @param prefix string   Unit key prefix, e.g. "target_"
+-- @param opts table      { label, width, healthHeight, powerHeight, healthCenter }
+-- @return table  Schema array for the tab
+function UnitFrame.Schema(prefix, opts)
+    return {
+        { key = "", label = "General", type = "section" },
+        { key = prefix .. "enabled",    label = "Enable Frame", type = "toggle", default = true },
+        { key = prefix .. "show_name",  label = "Show Name",    type = "toggle", default = true },
+        { key = prefix .. "show_level", label = "Show Level",   type = "toggle", default = true },
+        -- Only a decision while the level is shown at all, so the control is greyed out
+        -- when it is not.
+        { key = prefix .. "hide_level_at_max", label = "Hide at Max Level",
+          type = "toggle", default = true, enabledIf = prefix .. "show_level" },
+        -- Last in the section: the toggles read as one block, and the slider is the only
+        -- control here that is not one. Frame-wide, not bar-specific — the bars and the
+        -- name row all take their width from it, so it does not belong under a single bar.
+        { key = prefix .. "width",      label = "Frame Width",  type = "slider",
+          min = 120, max = 420, step = 2, default = opts.width },
+
+        { key = "", label = "Health Bar", type = "section" },
+        -- One readout per position, each free to show any format. Three independent
+        -- dropdowns rather than one "show health text" toggle plus a format: the positions
+        -- are not alternatives, and a player who wants the number left and the percentage
+        -- right needs both at once.
         --
-        -- Per-unit settings live inside that unit's tab and are declared THERE, once.
-        -- Settings:Register indexes a tab's entries like top-level ones, so the default,
-        -- the range and the label all sit in a single declaration — a key repeated at the
-        -- top level as well would let the default and the slider range drift apart.
-        SuuUI.Settings:Register("unit_frames", {
-            { key = "enabled", label = "Enable Unit Frames", type = "toggle", default = true },
+        -- Dropdowns as a block with the slider last, matching the General section:
+        -- controls of one kind read as one group.
+        { key = textKey(prefix, "health", "left"), label = "Left Text", type = "dropdown",
+          default = "none", options = textOptions() },
+        -- The one default that shows something. A bar with no readout at all would ship
+        -- the feature invisible, and the centre is where a single readout belongs; the
+        -- flanks stay off so the default stays quiet.
+        { key = textKey(prefix, "health", "center"), label = "Center Text", type = "dropdown",
+          default = opts.healthCenter, options = textOptions() },
+        { key = textKey(prefix, "health", "right"), label = "Right Text", type = "dropdown",
+          default = "none", options = textOptions() },
+        -- One step for all three readouts. A token key rather than a pixel size, so it
+        -- still follows a theme font edit.
+        { key = textSizeKey(prefix, "health"), label = "Text Size", type = "dropdown",
+          default = BAR_TEXT_SIZE, options = textSizeOptions() },
+        { key = prefix .. "health_height", label = "Height", type = "slider",
+          min = 8, max = 60, step = 1, default = opts.healthHeight },
 
-            -- Placement is written by MoveableFrame, not edited on the page.
-            { key = "player_position", type = "position",
-              default = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 20, y = 60 } },
+        { key = "", label = "Resource Bar", type = "section" },
+        -- The same four controls as the health bar, from the same helpers: the two bars are
+        -- one question asked of two numbers, and a player who learns the health readouts
+        -- has already learnt these.
+        --
+        -- Every position defaults to None here. The resource bar is the shorter of the two
+        -- and the one a player is least often reading a number off, so it stays clean
+        -- unless asked otherwise.
+        { key = textKey(prefix, "power", "left"), label = "Left Text", type = "dropdown",
+          default = "none", options = textOptions() },
+        { key = textKey(prefix, "power", "center"), label = "Center Text", type = "dropdown",
+          default = "none", options = textOptions() },
+        { key = textKey(prefix, "power", "right"), label = "Right Text", type = "dropdown",
+          default = "none", options = textOptions() },
+        { key = textSizeKey(prefix, "power"), label = "Text Size", type = "dropdown",
+          default = BAR_TEXT_SIZE, options = textSizeOptions() },
+        { key = prefix .. "power_height",  label = "Height", type = "slider",
+          min = 4, max = 40, step = 1, default = opts.powerHeight },
+    }
+end
 
-            -- One tab per unit frame. Only the player exists today; the rest of the units
-            -- become further entries in this list.
-            { key = "unit", type = "subtabs", tabs = {
-                { id = "player", label = "Player", schema = {
-                    { key = "", label = "General", type = "section" },
-                    { key = "player_enabled",    label = "Enable Frame", type = "toggle", default = true },
-                    { key = "player_show_name",  label = "Show Name",    type = "toggle", default = true },
-                    { key = "player_show_level", label = "Show Level",   type = "toggle", default = true },
-                    -- Only a decision while the level is shown at all, so the control is
-                    -- greyed out when it is not. Default true keeps the previous behaviour.
-                    { key = "player_hide_level_at_max", label = "Hide at Max Level",
-                      type = "toggle", default = true, enabledIf = "player_show_level" },
-                    -- Last in the section: the toggles read as one block, and the slider
-                    -- is the only control here that is not one. Frame-wide, not
-                    -- bar-specific — the bars and the name row all take their width from
-                    -- it, so it does not belong under a single bar.
-                    { key = "player_width",      label = "Frame Width",  type = "slider",
-                      min = 120, max = 420, step = 2, default = 304 },
-
-                    { key = "", label = "Health Bar", type = "section" },
-                    -- One readout per position, each free to show any format. Three
-                    -- independent dropdowns rather than one "show health text" toggle plus
-                    -- a format: the positions are not alternatives, and a player who wants
-                    -- the number left and the percentage right needs both at once.
-                    --
-                    -- Dropdowns as a block with the slider last, matching the General
-                    -- section: controls of one kind read as one group.
-                    { key = textKey("health", "left"), label = "Left Text", type = "dropdown",
-                      default = "none", options = textOptions() },
-                    -- The one default that shows something. A bar with no readout at all
-                    -- would ship the feature invisible, and the centre is where a single
-                    -- readout belongs; the flanks stay off so the default stays quiet.
-                    { key = textKey("health", "center"), label = "Center Text", type = "dropdown",
-                      default = "current_max", options = textOptions() },
-                    { key = textKey("health", "right"), label = "Right Text", type = "dropdown",
-                      default = "none", options = textOptions() },
-                    -- One step for all three readouts. A token key rather than a pixel
-                    -- size, so it still follows a theme font edit.
-                    { key = textSizeKey("health"), label = "Text Size", type = "dropdown",
-                      default = BAR_TEXT_SIZE, options = textSizeOptions() },
-                    { key = "player_health_height", label = "Height", type = "slider",
-                      min = 8, max = 60, step = 1, default = 39 },
-
-                    { key = "", label = "Resource Bar", type = "section" },
-                    -- The same four controls as the health bar, from the same helpers: the
-                    -- two bars are one question asked of two numbers, and a player who
-                    -- learns the health readouts has already learnt these.
-                    --
-                    -- Every position defaults to None here. The resource bar is the shorter
-                    -- of the two and the one a player is least often reading a number off,
-                    -- so it stays clean unless asked otherwise.
-                    { key = textKey("power", "left"), label = "Left Text", type = "dropdown",
-                      default = "none", options = textOptions() },
-                    { key = textKey("power", "center"), label = "Center Text", type = "dropdown",
-                      default = "none", options = textOptions() },
-                    { key = textKey("power", "right"), label = "Right Text", type = "dropdown",
-                      default = "none", options = textOptions() },
-                    { key = textSizeKey("power"), label = "Text Size", type = "dropdown",
-                      default = BAR_TEXT_SIZE, options = textSizeOptions() },
-                    { key = "player_power_height",  label = "Height", type = "slider",
-                      min = 4, max = 40, step = 1, default = 22 },
-                }},
-            }},
-        })
-
-        -- Guard settings that require a reload
-        SuuUI.ReloadGuard:Register("unit_frames", "enabled", {
-            title   = "Reload Required",
-            message = "Enabling or disabling Unit Frames requires a UI reload. Reload now?",
-        })
-        SuuUI.ReloadGuard:Register("unit_frames", "player_enabled", {
-            title   = "Reload Required",
-            message = "Enabling or disabling the Player Frame requires a UI reload. Reload now?",
-        })
-    end,
-
-    onEnable = function(p)
-        -- Hide Blizzard player frame
-        if SuuUI.Settings:Get("unit_frames", "player_enabled") then
-            hideBlizzardPlayerFrame()
-
-            -- Create our player frame
-            local root = SuuUI.UIRoot:GetRootContainer()
-            p._playerFrame = PlayerFrame:Create(root:GetFrame())
-
-            -- Size comes from the widget's own layout metrics — no magic numbers here.
-            local frame = p._playerFrame:GetFrame()
-
-            -- Player-facing game UI, so it belongs on the content rung — stated through the
-            -- library's layer system rather than left to inherit, so a settings window or a
-            -- modal is guaranteed to draw over it.
-            SuuUI.UIRoot:SetLayer(frame, "normal")
-
-            -- Make it moveable — position stored in plugin settings.
-            --
-            -- coreInset is what keeps the stored position describing THIS frame's content
-            -- rather than its bounding box. The frame grows around whatever attaches to it,
-            -- and growth happens on the edge the anchor does not pin — so without this a
-            -- cast bar attaching below pushed the bars up by its own height, and detaching
-            -- pushed them back down.
-            local pfHandle = p._playerFrame
-            SuuUI.MoveableFrame:Apply(frame, {
-                pluginId    = "unit_frames",
-                key         = "player_position",
-                displayName = "Player",
-                defaults    = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 20, y = 60 },
-                coreInset   = function() return pfHandle:GetCoreInset() end,
-            })
-
-            -- Offer the frame as an attach point. Another plugin can now place a widget
-            -- inside it — a cast bar attaches here — without either plugin knowing the
-            -- other exists: a consumer that loads first simply gets told when this
-            -- appears. Placement stays ours, so the frame still owns its own geometry.
-            local pf = p._playerFrame
-            SuuUI.AttachPoints:Publish("unitframe.player", {
-                frame  = frame,
-                Attach = function(child, opts) return pf:AttachChild(child, opts) end,
-                Detach = function(child) return pf:DetachChild(child) end,
-            })
-        end
-    end,
-
-    onDisable = function(p)
-        -- Revoked before anything is torn down: consumers detach on the nil notification,
-        -- so nothing foreign is still sitting in a slot when the containers go away.
-        SuuUI.AttachPoints:Revoke("unitframe.player")
-
-        -- Destroy our player frame (cleanup before reload or if called programmatically)
-        if p._playerFrame then
-            SuuUI.MoveableFrame:Remove(p._playerFrame:GetFrame())
-            p._playerFrame:Destroy()
-            p._playerFrame = nil
-        end
-
-        -- Hand Blizzard's frame back. A programmatic Disable has no reload behind it, so
-        -- this is the only thing that undoes the suppression. Safe to call
-        -- unconditionally -- restore skips any frame this plugin did not hide.
-        restoreBlizzardPlayerFrame()
-    end,
-})
+SuuUI._UnitFrames = SuuUI._UnitFrames or {}
+SuuUI._UnitFrames.UnitFrame = UnitFrame

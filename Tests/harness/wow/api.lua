@@ -77,6 +77,21 @@ function M.install(env)
     PlayerFrame:SetSize(180, 70)
     PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
 
+    -- Blizzard TargetFrame stub (UnitFrames plugin hides it), and its cast bar, which the
+    -- CastBars plugin hides separately.
+    --
+    -- The spell bar is a CHILD of TargetFrame in the live client, and modelled as one here:
+    -- that is what makes "the unit frames plugin already takes it down" true, and it is why
+    -- the cast bars plugin suppressing it as well has to be tested rather than assumed —
+    -- with unit frames disabled, nothing else hides it.
+    local TargetFrame = blizzardSystemFrame(CreateFrame("Frame", "TargetFrame", UIParent))
+    TargetFrame:SetSize(180, 70)
+    TargetFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 250, -10)
+    local TargetSpellBar = blizzardSystemFrame(
+        CreateFrame("Frame", "TargetFrameSpellBar", TargetFrame))
+    TargetSpellBar:SetSize(150, 10)
+    TargetSpellBar:SetPoint("TOP", TargetFrame, "BOTTOM", 0, -2)
+
     -- Blizzard cast bar stub (CastBars plugin hides it). A StatusBar in the live client;
     -- a plain frame is enough here because the addon only hides it and watches it.
     --
@@ -187,14 +202,71 @@ function M.install(env)
         return col
     end
 
-    env.UnitName      = function(unit) return unit == "player" and "Testchar" or nil end
+    -- Per-unit data. Every Unit* accessor below reads through `unitField`, which prefers a
+    -- per-unit override and falls back to the flat state.unitX value.
+    --
+    -- The flat values came first, when the only unit frame was the player's, and they stay
+    -- because most specs are still about one unit and `state.unitHealth = 80` is the clearest
+    -- way to say so. A second unit frame is what forces the split: a spec painting a mob in
+    -- the target frame has to be able to give the target no class and a hostile reaction
+    -- while the player is still a warrior at full health, and one global cannot hold both.
+    -- @param unit string|nil
+    -- @param field string   Per-unit key, e.g. "health"
+    -- @param flat any       The flat state.unitX value to fall back to
+    -- @return any
+    local function unitField(unit, field, flat)
+        local u = unit and state.units and state.units[unit]
+        local v = u and u[field]
+        if v ~= nil then return v end
+        return flat
+    end
+
+    -- Whether the client would admit this unit exists at all.
+    --
+    -- The player always does; anything else exists only once a spec has staged it. That
+    -- default is what makes a target frame's "no target" branch the one a spec gets for
+    -- free, which is the state it spends most of its life in.
+    env.UnitExists = function(unit)
+        if unit == "player" then return true end
+        local u = unit and state.units and state.units[unit]
+        if not u then return false end
+        return u.exists ~= false
+    end
+
+    -- The reaction of the FIRST unit towards the second, which is the client's own
+    -- ordering. Only the first is keyed, so a caller that swaps the arguments reads the
+    -- player's own standing and gets nil — the harness reproduces the mistake rather than
+    -- hiding it behind a symmetric answer.
+    env.UnitReaction = function(unit, other)
+        if not unit or not other then return nil end
+        return unitField(unit, "reaction", nil)
+    end
+
+    -- The client's reaction colour table, in the {r=,g=,b=} object shape it really uses and
+    -- with its real values. Modelled for the same reason RAID_CLASS_COLORS is: SuuUI
+    -- prefers the client's values over its copied fallback, so a spec has to be able to
+    -- tell which source answered.
+    env.FACTION_BAR_COLORS = {
+        [1] = { r = 0.80, g = 0.30, b = 0.22 },
+        [2] = { r = 0.80, g = 0.30, b = 0.22 },
+        [3] = { r = 0.75, g = 0.27, b = 0.00 },
+        [4] = { r = 0.90, g = 0.70, b = 0.00 },
+        [5] = { r = 0.00, g = 0.60, b = 0.10 },
+        [6] = { r = 0.00, g = 0.60, b = 0.10 },
+        [7] = { r = 0.00, g = 0.60, b = 0.10 },
+        [8] = { r = 0.00, g = 0.60, b = 0.10 },
+    }
+
+    env.UnitName      = function(unit)
+        return unitField(unit, "name", unit == "player" and "Testchar" or nil)
+    end
     env.GetRealmName  = function() return "TestRealm" end
     -- UnitClass returns the localised name first and the stable class token second. Specs
     -- move state.unitClass to paint a different class; state.unitClassless models what an
     -- NPC, a totem or a pet reports, which is the branch a class-colour fallback exists for.
-    env.UnitClass     = function()
-        if state.unitClassless then return nil end
-        local classFile = state.unitClass or "WARRIOR"
+    env.UnitClass     = function(unit)
+        if unitField(unit, "classless", state.unitClassless) then return nil end
+        local classFile = unitField(unit, "class", state.unitClass) or "WARRIOR"
         return classFile:sub(1, 1) .. classFile:sub(2):lower(), classFile, 1
     end
 
@@ -212,7 +284,7 @@ function M.install(env)
         WARLOCK = { r = 0.58, g = 0.51, b = 0.79 },
         DRUID   = { r = 1.00, g = 0.49, b = 0.04 },
     }
-    env.UnitLevel     = function() return state.unitLevel or 60 end
+    env.UnitLevel     = function(unit) return unitField(unit, "level", state.unitLevel) or 60 end
     -- The level cap, as the anniversary client reports it. Specs move state.maxPlayerLevel
     -- to exercise the at-cap and below-cap branches of a unit frame.
     env.GetMaxLevelForPlayerExpansion = function() return state.maxPlayerLevel or 60 end
@@ -226,11 +298,11 @@ function M.install(env)
     end
 
     -- Unit resource APIs for UnitFrames plugin
-    env.UnitHealth    = function() return state.unitHealth or 100 end
-    env.UnitHealthMax = function() return state.unitHealthMax or 100 end
-    env.UnitPower     = function() return state.unitPower or 80 end
-    env.UnitPowerMax  = function() return state.unitPowerMax or 100 end
-    env.UnitPowerType = function() return state.unitPowerType or 0 end
+    env.UnitHealth    = function(unit) return unitField(unit, "health",    state.unitHealth)    or 100 end
+    env.UnitHealthMax = function(unit) return unitField(unit, "healthMax", state.unitHealthMax) or 100 end
+    env.UnitPower     = function(unit) return unitField(unit, "power",     state.unitPower)     or 80 end
+    env.UnitPowerMax  = function(unit) return unitField(unit, "powerMax",  state.unitPowerMax)  or 100 end
+    env.UnitPowerType = function(unit) return unitField(unit, "powerType", state.unitPowerType) or 0 end
 
     -- Spellcast APIs. Both return nothing at all while the unit is idle, which is how the
     -- client says "not casting" — a caller that treats a nil name as an empty cast rather
@@ -239,9 +311,14 @@ function M.install(env)
     -- Times are MILLISECONDS since the epoch GetTime() reports in seconds. That mismatch
     -- is the client's, not the harness's, and code that forgets to divide reads a cast as
     -- having ended a thousand times over.
+    -- Both are answered for a unit that EXISTS. Losing your target does not leave its cast
+    -- readable: the unit is gone, so the client has nothing to report about it. Modelled
+    -- because a cast bar's "the unit went away" path is otherwise untestable — a spec would
+    -- have to clear the staged cast by hand, which is the harness asking to be lied to.
     env.UnitCastingInfo = function(unit)
         local c = state.cast
         if not c or c.unit ~= unit then return nil end
+        if not env.UnitExists(unit) then return nil end
         return c.name, c.text or c.name, c.texture, c.startTime, c.endTime,
                c.isTradeSkill or false, c.castID, c.notInterruptible or false, c.spellId
     end
@@ -251,6 +328,7 @@ function M.install(env)
     env.UnitChannelInfo = function(unit)
         local c = state.channel
         if not c or c.unit ~= unit then return nil end
+        if not env.UnitExists(unit) then return nil end
         return c.name, c.text or c.name, c.texture, c.startTime, c.endTime,
                c.isTradeSkill or false, c.notInterruptible or false, c.spellId
     end

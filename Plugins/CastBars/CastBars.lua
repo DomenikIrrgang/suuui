@@ -9,16 +9,44 @@ local tconcat = table.concat
 
 local PLUGIN_ID = "cast_bars"
 
--- One entry per unit. Adding target or focus is an entry here plus a tab in the schema:
--- the widget itself is already unit-agnostic.
+-- One entry per unit. Adding focus is an entry here and nothing else: the widget is
+-- unit-agnostic and the schema is derived from the prefix.
 local UNITS = {
     {
         id          = "player",
         unit        = "player",
         prefix      = "player_",
+        label       = "Player",
         displayName = "Player Cast Bar",
         attachPoint = "unitframe.player",
+        attachLabel = "Player Frame",
+        -- The player cast bar's global name is a property of the client, not a constant: it
+        -- is `PlayerCastingBarFrame` once Edit Mode reaches a client generation and
+        -- `CastingBarFrame` before that. Both are listed because one addon has to run on
+        -- both, and the one that is absent is simply not there to hide.
+        --
+        -- Only the player's own bar: hiding the pet bar as well would suppress something
+        -- this plugin does not replace yet.
+        blizzard    = { "PlayerCastingBarFrame", "CastingBarFrame" },
         position    = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 200 },
+        defaults    = { width = 304, height = 22 },
+    },
+    {
+        id          = "target",
+        unit        = "target",
+        prefix      = "target_",
+        label       = "Target",
+        displayName = "Target Cast Bar",
+        attachPoint = "unitframe.target",
+        attachLabel = "Target Frame",
+        -- Everything on the bar is now someone else's cast, so the widget re-reads the unit.
+        changeEvent = "PLAYER_TARGET_CHANGED",
+        -- A child of TargetFrame, so the unit frames plugin already takes it down when it
+        -- replaces that frame — but suppressed here as well, because this plugin must not
+        -- depend on that one being enabled.
+        blizzard    = { "TargetFrameSpellBar" },
+        position    = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 260 },
+        defaults    = { width = 304, height = 22 },
     },
 }
 
@@ -74,15 +102,20 @@ function Controller:_build(mode)
     local def = self._def
     local CastBar = SuuUI._CastBars.CastBar
 
+    -- One cfg for both modes: they differ only in who owns the width, so building the table
+    -- twice would be two places to add the next field to.
+    local cfg = {
+        unit        = def.unit,
+        pluginId    = PLUGIN_ID,
+        prefix      = def.prefix,
+        displayName = def.displayName,
+        changeEvent = def.changeEvent,
+        attached    = mode == "attached",
+    }
+
     if mode == "attached" then
         local provider = self._provider
-        local bar = CastBar:Create(provider.frame, {
-            unit        = def.unit,
-            pluginId    = PLUGIN_ID,
-            prefix      = def.prefix,
-            displayName = def.displayName,
-            attached    = true,
-        })
+        local bar = CastBar:Create(provider.frame, cfg)
         -- The frame owns placement and sizing from here: it stretches the bar to its own
         -- width, so the width slider is greyed out and the bar needs no idea how wide it is.
         provider.Attach(bar, {
@@ -94,13 +127,7 @@ function Controller:_build(mode)
     end
 
     local root = SuuUI.UIRoot:GetRootContainer()
-    local bar = CastBar:Create(root:GetFrame(), {
-        unit        = def.unit,
-        pluginId    = PLUGIN_ID,
-        prefix      = def.prefix,
-        displayName = def.displayName,
-        attached    = false,
-    })
+    local bar = CastBar:Create(root:GetFrame(), cfg)
     local frame = bar:GetFrame()
     -- Player-facing game UI, so the content rung — stated rather than inherited, so a
     -- settings window or a modal is guaranteed to draw over it.
@@ -175,15 +202,10 @@ end
 
 ---------------------------------------------------------------------------
 -- Blizzard frames to hide
----------------------------------------------------------------------------
--- The player cast bar's global name is a property of the client, not a constant: it is
--- `PlayerCastingBarFrame` once Edit Mode reaches a client generation and
--- `CastingBarFrame` before that. Both are listed because one addon has to run on both,
--- and the one that is absent is simply not there to hide.
 --
--- Only the player's own bar: hiding the pet bar as well would suppress something this
--- plugin does not replace yet.
-local BLIZZARD_CAST_FRAMES = { "PlayerCastingBarFrame", "CastingBarFrame" }
+-- Which frames a unit replaces is a property of that unit, so the list lives in its UNITS
+-- entry. A name absent from this client generation is simply not there to hide.
+---------------------------------------------------------------------------
 
 -- Whether THIS plugin is currently suppressing a frame. The OnShow hook below is
 -- permanent -- HookScript cannot be undone -- so it asks this table on every show rather
@@ -227,9 +249,9 @@ local function restore(frame)
     frame:Show()
 end
 
-local function forEachBlizzardCastFrame(fn)
+local function forEachBlizzardCastFrame(def, fn)
     local found = false
-    for _, name in ipairs(BLIZZARD_CAST_FRAMES) do
+    for _, name in ipairs(def.blizzard or {}) do
         local frame = _G[name]
         if frame then
             fn(frame)
@@ -239,18 +261,18 @@ local function forEachBlizzardCastFrame(fn)
     return found
 end
 
-local function hideBlizzardCastBar()
+local function hideBlizzardCastBar(def)
     -- Say so rather than passing over it. A bare `if frame then` is what let this ship
     -- looking for the pre-Edit-Mode name alone: nothing errored, nothing happened, and
     -- Blizzard's cast bar stayed on screen underneath ours.
-    if not forEachBlizzardCastFrame(suppress) then
-        SuuUI.Debug("CastBars: no Blizzard player cast bar found to hide (looked for "
-            .. tconcat(BLIZZARD_CAST_FRAMES, ", ") .. ")")
+    if not forEachBlizzardCastFrame(def, suppress) then
+        SuuUI.Debug("CastBars: no Blizzard " .. def.unit .. " cast bar found to hide "
+            .. "(looked for " .. tconcat(def.blizzard or {}, ", ") .. ")")
     end
 end
 
-local function restoreBlizzardCastBar()
-    forEachBlizzardCastFrame(restore)
+local function restoreBlizzardCastBar(def)
+    forEachBlizzardCastFrame(def, restore)
 end
 
 ---------------------------------------------------------------------------
@@ -262,98 +284,53 @@ local plugin = SuuUI:CreatePlugin({
     version = "0.1",
 
     onInit = function(p)
-        -- Per-unit settings live inside that unit's tab and are declared THERE, once:
-        -- Settings:Register indexes a tab's entries exactly like top-level ones, so the
-        -- default, the range and the label all sit in a single declaration.
-        SuuUI.Settings:Register(PLUGIN_ID, {
+        -- Per-unit settings live inside that unit's tab and are declared THERE, once, by
+        -- CastBar.Schema: Settings:Register indexes a tab's entries exactly like top-level
+        -- ones, so the default, the range and the label all sit in a single declaration.
+        local schema = {
             { key = "enabled", label = "Enable Cast Bars", type = "toggle", default = true },
+        }
 
+        local tabs = {}
+        for _, def in ipairs(UNITS) do
             -- Written by MoveableFrame while detached, never edited on the page.
-            { key = "player_position", type = "position",
-              default = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 200 } },
+            schema[#schema + 1] = {
+                key = def.prefix .. "position", type = "position", default = def.position,
+            }
+            local opts = {
+                attachLabel = def.attachLabel,
+                width       = def.defaults.width,
+                height      = def.defaults.height,
+            }
+            tabs[#tabs + 1] = {
+                id     = def.id,
+                label  = def.label,
+                schema = SuuUI._CastBars.CastBar.Schema(def.prefix, opts),
+            }
+        end
 
-            { key = "unit", type = "subtabs", tabs = {
-                { id = "player", label = "Player", schema = {
-                    { key = "", label = "General", type = "section" },
-                    { key = "player_enabled",   label = "Enable Cast Bar", type = "toggle", default = true },
-                    { key = "player_show_icon", label = "Show Icon",       type = "toggle", default = true },
-                    { key = "player_show_name", label = "Show Spell Name", type = "toggle", default = true },
-                    { key = "player_show_time", label = "Show Cast Time",  type = "toggle", default = true },
-                    -- Information rather than decoration, so it defaults on — but a player
-                    -- who finds the outline noisy can switch it off.
-                    { key = "player_show_shield", label = "Mark Uninterruptible Casts",
-                      type = "toggle", default = true },
+        schema[#schema + 1] = { key = "unit", type = "subtabs", tabs = tabs }
 
-                    { key = "", label = "Placement", type = "section" },
-                    { key = "player_anchor", label = "Attach To", type = "dropdown",
-                      default = "attached", options = {
-                        { value = "attached", label = "Player Frame" },
-                        { value = "detached", label = "Detached" },
-                      } },
-                    -- Only meaningful while attached: a detached bar sits wherever it was
-                    -- dragged, so above/below has nothing to be relative to.
-                    { key = "player_attach_position", label = "Position", type = "dropdown",
-                      default = "below", options = {
-                        { value = "above", label = "Above Frame" },
-                        { value = "below", label = "Below Frame" },
-                      },
-                      enabledIf = { key = "player_anchor", equals = "attached" } },
-                    -- An attached bar takes its width from the frame it is part of, so the
-                    -- slider is greyed out rather than silently ignored. Defaulted to the
-                    -- player frame's own width so detaching does not resize it.
-                    { key = "player_width", label = "Width", type = "slider",
-                      min = 80, max = 500, step = 2, default = 304,
-                      enabledIf = { key = "player_anchor", equals = "detached" } },
-
-                    { key = "", label = "Appearance", type = "section" },
-                    { key = "player_icon_position", label = "Icon Side", type = "dropdown",
-                      default = "left", options = {
-                        { value = "left",  label = "Left" },
-                        { value = "right", label = "Right" },
-                      } },
-                    { key = "player_time_format", label = "Cast Time", type = "dropdown",
-                      default = "remaining", options = {
-                        { value = "remaining", label = "Remaining (1.4)" },
-                        { value = "elapsed",   label = "Elapsed (1.1)" },
-                        { value = "both",      label = "Elapsed / Total (1.1 / 2.5)" },
-                        { value = "percent",   label = "Percent (44%)" },
-                      } },
-                    { key = "player_height", label = "Height", type = "slider",
-                      min = 12, max = 48, step = 1, default = 22 },
-
-                    { key = "", label = "Colour", type = "section" },
-                    -- School colouring is the default because it carries information the
-                    -- fixed colours cannot. The pickers below stay, greyed, because they
-                    -- are still the fallback for a spell whose school nothing has reported
-                    -- — and because a fixed bar colour matching the rest of someone's UI is
-                    -- a legitimate taste rather than a worse choice.
-                    { key = "player_school_color", label = "Colour by Spell School",
-                      type = "toggle", default = true },
-                    { key = "player_cast_color",    label = "Cast",    type = "color",
-                      default = { 0.85, 0.63, 0.17, 1 },
-                      enabledIf = { key = "player_school_color", equals = false } },
-                    { key = "player_channel_color", label = "Channel", type = "color",
-                      default = { 0.25, 0.55, 0.85, 1 },
-                      enabledIf = { key = "player_school_color", equals = false } },
-                }},
-            }},
-        })
+        SuuUI.Settings:Register(PLUGIN_ID, schema)
 
         SuuUI.ReloadGuard:Register(PLUGIN_ID, "enabled", {
             title   = "Reload Required",
             message = "Enabling or disabling Cast Bars requires a UI reload. Reload now?",
         })
-        SuuUI.ReloadGuard:Register(PLUGIN_ID, "player_enabled", {
-            title   = "Reload Required",
-            message = "Enabling or disabling the Player Cast Bar requires a UI reload. Reload now?",
-        })
+        for _, def in ipairs(UNITS) do
+            SuuUI.ReloadGuard:Register(PLUGIN_ID, def.prefix .. "enabled", {
+                title   = "Reload Required",
+                message = "Enabling or disabling the " .. def.displayName ..
+                          " requires a UI reload. Reload now?",
+            })
+        end
     end,
 
     onEnable = function(p)
         p._controllers = {}
         for _, def in ipairs(UNITS) do
             if SuuUI.Settings:Get(PLUGIN_ID, def.prefix .. "enabled") then
-                if def.unit == "player" then hideBlizzardCastBar() end
+                hideBlizzardCastBar(def)
                 local ctl = newController(def)
                 p._controllers[def.id] = ctl
                 ctl:Start()
@@ -362,10 +339,12 @@ local plugin = SuuUI:CreatePlugin({
     end,
 
     onDisable = function(p)
-        -- Hand Blizzard's bar back before anything else: a programmatic Disable has no
+        -- Hand Blizzard's bars back before anything else: a programmatic Disable has no
         -- reload behind it, so this is the only thing that undoes the suppression. Safe to
         -- call unconditionally -- restore skips any frame this plugin did not hide.
-        restoreBlizzardCastBar()
+        for _, def in ipairs(UNITS) do
+            restoreBlizzardCastBar(def)
+        end
 
         if not p._controllers then return end
         for _, ctl in pairs(p._controllers) do ctl:Stop() end

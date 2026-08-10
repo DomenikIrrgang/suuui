@@ -114,15 +114,33 @@ end
 -- class" is a mode, and modelling it as a flag keeps every colour token a real colour, so
 -- nothing downstream can be handed a value it cannot paint with.
 --
--- Falls back to the token whenever class colouring is off OR the class is unknown — an
--- NPC, a totem, a unit that does not exist, or a login moment before the class is
--- available — so a caller always gets a usable colour and never has to check.
+-- Three sources, tried in order, and the middle one is why a target frame needs no code of
+-- its own:
+--
+--   1. the unit's CLASS — every player, and every pet or charmed unit the client reports a
+--      class for;
+--   2. its REACTION to the player — hostile, neutral or friendly. A mob, a critter, a quest
+--      giver and a totem have no class at all, so a class-only rule painted every one of
+--      them the same fallback green and threw away the one thing a player most wants a
+--      target's bar to tell them;
+--   3. the token, when class colouring is off or the unit is not there to ask about.
+--
+-- Reaction sits INSIDE the colorUseClassColors branch rather than behind a toggle of its
+-- own, because it is not a second feature: it is what "colour units by what they are"
+-- means for a unit that has no class, and it is what the client itself does. A separate
+-- toggle would be a control that does nothing whenever the first one is off, and a player
+-- who switched class colouring off asked for the flat palette — including for mobs.
+--
+-- Always returns something paintable, so a caller never has to check.
 -- @param key string   Colour token to use when class colouring is off or unavailable
 -- @param unit string  Unit id, e.g. "player"
 -- @return table  {r,g,b,a}
 function M:GetUnitColor(key, unit)
     if resolved.colorUseClassColors and SuuUI.Game then
         local c = SuuUI.Game:UnitClassColor(unit)
+        if c then return c end
+        -- No class is a real answer, not a failure: ask what the unit IS instead.
+        c = SuuUI.Game:UnitReactionColor(unit)
         if c then return c end
     end
     return resolved[key]

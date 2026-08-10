@@ -165,6 +165,17 @@ assertion reads naturally. That also means it hides scale bugs: pass
 an integer. Both configurations are worth a spec for anything that computes a position or
 reads the cursor — a mis-scaled hit test is invisible at 1:1.
 
+**Unit data is per unit token.** `UnitHealth`, `UnitName`, `UnitClass`, `UnitLevel` and the
+power family read a per-unit override first (`H.setUnit("target", { health = 40 })`) and fall
+back to the flat `state.unitX` value, so a spec about one unit never has to name one while a
+spec about two can give them different answers. `UnitExists` is true for `"player"` and false
+for anything not staged, which makes "no target" the state a target frame's spec gets for
+free. `H.setTarget(props｜nil)` stages or clears `"target"` **and** fires
+`PLAYER_TARGET_CHANGED`, because the state moving without the announcement is a situation the
+client never produces — and a frame that only reads on the event would look correct in a spec
+that skipped it. `UnitReaction(unit, other)` answers for the FIRST unit only, reproducing the
+client's asymmetry rather than hiding it: a caller that swaps the arguments gets nil.
+
 **Bar transitions default to `instant`** (`H.setup()` calls
 `Transitions:SetDefault("instant")` unless you pass `barTransitions = true`). The shipped
 default is `"smooth"`, which means a value written by `SetValue` arrives over several

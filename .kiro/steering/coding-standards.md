@@ -344,7 +344,7 @@ Not every named number belongs in the theme. Ask what the value *is*:
 |---|---|---|
 | Design language the whole UI shares — spacing scale, font steps, border width, surface colours, animation timings, the size of a shared control | **theme token** | One edit retints or re-scales every consumer |
 | One plugin's own widget dimensions and behaviour — a unit frame's width, which bars it shows, where it sits | **plugin setting** (`Settings:Register`, with the number as the entry's `default`) | It describes that widget, not the design language, and a player wants it per profile and on that plugin's own page |
-| A fact about the client — a power type's colour, a spell school's colour, a class colour, a level cap | **`Core/Game.lua`** (`SuuUI.Game`) | It is not a choice anyone gets to make. In the theme it would be a control that is wrong to touch; in a plugin it would be a second copy of a fact, and copies drift |
+| A fact about the client — a power type's colour, a spell school's colour, a class colour, a reaction colour, a level cap | **`Core/Game.lua`** (`SuuUI.Game`) | It is not a choice anyone gets to make. In the theme it would be a control that is wrong to touch; in a plugin it would be a second copy of a fact, and copies drift |
 
 A plugin's own dimensions in the theme is a category error: the theme editor fills up with
 one plugin's controls, every other theme has to carry values it does not use, and the
@@ -386,7 +386,8 @@ SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
 
 **The narrow exceptions**, all of which must carry a comment saying why:
 1. **Game data, not design** — Blizzard's own power-type colours, spell school colours,
-   class colours, level caps. These are facts about the client, not choices the theme gets
+   class colours, reaction colours, level caps. These are facts about the client, not choices
+   the theme gets
    to make. They are not local literals either: they live in `Core/Game.lua` so a resource
    bar, a cast bar and a nameplate all read the same fact. See `architecture.md` §6d.
 2. **A structural constant with no visual meaning** — an array index, a loop bound, a

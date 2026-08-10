@@ -913,6 +913,303 @@ describe("harness: WoW API simulation", function()
         end)
     end)
 
+    describe("per-unit API simulation", function()
+        it("per-unit override wins over the flat value for UnitHealth", function()
+            H.state.unitHealth = 50
+            H.setUnit("target", { health = 30 })
+            expect(H.env.UnitHealth("target")).as("override wins").eq(30)
+        end)
+
+        it("per-unit override wins over the flat value for UnitHealthMax", function()
+            H.state.unitHealthMax = 200
+            H.setUnit("target", { healthMax = 400 })
+            expect(H.env.UnitHealthMax("target")).as("override wins").eq(400)
+        end)
+
+        it("per-unit override wins over the flat value for UnitPower", function()
+            H.state.unitPower = 60
+            H.setUnit("target", { power = 20 })
+            expect(H.env.UnitPower("target")).as("override wins").eq(20)
+        end)
+
+        it("per-unit override wins over the flat value for UnitPowerMax", function()
+            H.state.unitPowerMax = 150
+            H.setUnit("target", { powerMax = 300 })
+            expect(H.env.UnitPowerMax("target")).as("override wins").eq(300)
+        end)
+
+        it("per-unit override wins over the flat value for UnitPowerType", function()
+            H.state.unitPowerType = 0
+            H.setUnit("target", { powerType = 3 })
+            expect(H.env.UnitPowerType("target")).as("override wins").eq(3)
+        end)
+
+        it("per-unit override wins over the flat value for UnitName", function()
+            H.setUnit("target", { name = "Onyxia" })
+            expect(H.env.UnitName("target")).eq("Onyxia")
+        end)
+
+        it("per-unit override wins over the flat value for UnitLevel", function()
+            H.state.unitLevel = 60
+            H.setUnit("target", { level = 42 })
+            expect(H.env.UnitLevel("target")).eq(42)
+        end)
+
+        it("per-unit override wins over the flat value for UnitClass", function()
+            H.state.unitClass = "WARRIOR"
+            H.setUnit("target", { class = "MAGE" })
+            local _, classFile = H.env.UnitClass("target")
+            expect(classFile).eq("MAGE")
+        end)
+
+        it("falls back to the flat value when per-unit record omits the field", function()
+            -- This property is what keeps every pre-existing spec passing: a spec that
+            -- stages a unit with { reaction = 2 } still reads health from the flat value.
+            H.state.unitHealth = 55
+            H.state.unitHealthMax = 110
+            H.state.unitPower = 33
+            H.state.unitPowerMax = 66
+            H.state.unitPowerType = 1
+            H.state.unitLevel = 45
+            H.state.unitClass = "ROGUE"
+            H.setUnit("target", { reaction = 4 })  -- only reaction staged
+
+            expect(H.env.UnitHealth("target")).as("health falls back").eq(55)
+            expect(H.env.UnitHealthMax("target")).as("healthMax falls back").eq(110)
+            expect(H.env.UnitPower("target")).as("power falls back").eq(33)
+            expect(H.env.UnitPowerMax("target")).as("powerMax falls back").eq(66)
+            expect(H.env.UnitPowerType("target")).as("powerType falls back").eq(1)
+            expect(H.env.UnitLevel("target")).as("level falls back").eq(45)
+            local _, classFile = H.env.UnitClass("target")
+            expect(classFile).as("class falls back").eq("ROGUE")
+        end)
+
+        it("falls back to hardcoded default when neither per-unit nor flat is set", function()
+            H.state.unitHealth = nil
+            H.state.unitHealthMax = nil
+            H.state.unitPower = nil
+            H.state.unitPowerMax = nil
+            H.state.unitPowerType = nil
+            H.state.unitLevel = nil
+            H.state.unitClass = nil
+            H.setUnit("target", { reaction = 2 })
+
+            expect(H.env.UnitHealth("target")).as("health default 100").eq(100)
+            expect(H.env.UnitHealthMax("target")).as("healthMax default 100").eq(100)
+            expect(H.env.UnitPower("target")).as("power default 80").eq(80)
+            expect(H.env.UnitPowerMax("target")).as("powerMax default 100").eq(100)
+            expect(H.env.UnitPowerType("target")).as("powerType default 0").eq(0)
+            expect(H.env.UnitLevel("target")).as("level default 60").eq(60)
+            -- UnitClass defaults to WARRIOR when unitClass is nil and not classless
+            local _, classFile = H.env.UnitClass("target")
+            expect(classFile).as("class default WARRIOR").eq("WARRIOR")
+        end)
+
+        it("UnitName defaults to Testchar for player and nil for an unstaged unit", function()
+            expect(H.env.UnitName("player")).eq("Testchar")
+            expect(H.env.UnitName("target")).as("unstaged target").isNil()
+        end)
+
+        it("UnitName per-unit override wins for both player and target", function()
+            H.setUnit("player", { name = "Arthas" })
+            H.setUnit("target", { name = "Illidan" })
+            expect(H.env.UnitName("player")).eq("Arthas")
+            expect(H.env.UnitName("target")).eq("Illidan")
+        end)
+
+        it("per-unit classless overrides the flat independently of class", function()
+            -- A classless unit returns nil while the player still reports its class.
+            H.state.unitClass = "PALADIN"
+            H.setUnit("target", { classless = true })
+            expect(H.env.UnitClass("target")).as("classless target").isNil()
+            local _, playerClass = H.env.UnitClass("player")
+            expect(playerClass).as("player still reports class").eq("PALADIN")
+        end)
+
+        it("per-unit class overrides independently of per-unit classless", function()
+            H.state.unitClass = "WARRIOR"
+            H.setUnit("player", { class = "DRUID" })
+            H.setUnit("target", { classless = true })
+            local _, playerClass = H.env.UnitClass("player")
+            expect(playerClass).eq("DRUID")
+            expect(H.env.UnitClass("target")).isNil()
+        end)
+    end)
+
+    describe("UnitExists simulation", function()
+        it("always true for player with nothing staged", function()
+            expect(H.env.UnitExists("player")).truthy()
+        end)
+
+        it("false for target with nothing staged", function()
+            expect(H.env.UnitExists("target")).falsy()
+        end)
+
+        it("true after H.setUnit", function()
+            H.setUnit("target", { health = 50 })
+            expect(H.env.UnitExists("target")).truthy()
+        end)
+
+        it("false again after H.clearUnit", function()
+            H.setUnit("target", { health = 50 })
+            H.clearUnit("target")
+            expect(H.env.UnitExists("target")).falsy()
+        end)
+
+        it("false when staged with exists = false", function()
+            H.setUnit("target", { exists = false })
+            expect(H.env.UnitExists("target")).falsy()
+        end)
+    end)
+
+    describe("UnitReaction simulation", function()
+        it("returns the staged reaction for the first argument", function()
+            H.setUnit("target", { reaction = 2 })
+            expect(H.env.UnitReaction("target", "player")).eq(2)
+        end)
+
+        it("returns nil for an unstaged unit", function()
+            expect(H.env.UnitReaction("target", "player")).isNil()
+        end)
+
+        it("is NOT symmetric: swapping the arguments gives nil", function()
+            H.setUnit("target", { reaction = 4 })
+            -- Reading reaction of "player" towards "target" gets nil because no per-unit
+            -- reaction was set on "player".
+            expect(H.env.UnitReaction("player", "target")).isNil()
+        end)
+
+        it("returns nil when either argument is missing", function()
+            H.setUnit("target", { reaction = 5 })
+            expect(H.env.UnitReaction(nil, "player")).isNil()
+            expect(H.env.UnitReaction("target", nil)).isNil()
+        end)
+    end)
+
+    describe("FACTION_BAR_COLORS", function()
+        it("exists with 8 rows in {r, g, b} object shape", function()
+            local fbc = H.env.FACTION_BAR_COLORS
+            expect(fbc).notNil()
+            for i = 1, 8 do
+                expect(fbc[i]).as("row " .. i .. " exists").notNil()
+                expect(type(fbc[i].r)).as("row " .. i .. " .r").eq("number")
+                expect(type(fbc[i].g)).as("row " .. i .. " .g").eq("number")
+                expect(type(fbc[i].b)).as("row " .. i .. " .b").eq("number")
+            end
+        end)
+    end)
+
+    describe("state.reset() clears state.units", function()
+        it("UnitExists becomes false after H.setup()", function()
+            H.setUnit("target", { health = 50 })
+            expect(H.env.UnitExists("target")).truthy()
+            H.setup()
+            expect(H.env.UnitExists("target")).as("cleared by reset").falsy()
+        end)
+
+        it("flat unit family is NOT cleared by reset", function()
+            -- This verifies that Tests/spec/35_attach_login_spec.lua pattern keeps working:
+            -- state.unitHealth set before H.setup() must survive the reset within setup.
+            H.state.unitHealth = 77
+            H.state.unitLevel = 55
+            H.setup()
+            -- The flat values are preserved because they are set before the client build
+            -- and reset does not touch them.
+            expect(H.state.unitHealth).as("flat unitHealth survives").eq(77)
+            expect(H.state.unitLevel).as("flat unitLevel survives").eq(55)
+        end)
+    end)
+
+    describe("H.setUnit field validation", function()
+        it("asserts on an unknown field name", function()
+            expect(function()
+                H.setUnit("target", { bogusField = 42 })
+            end).throws()
+        end)
+
+        it("accepts every known field without error", function()
+            expect(function()
+                H.setUnit("target", {
+                    exists = true, name = "Mob", level = 10, reaction = 4,
+                    class = "MAGE", classless = false,
+                    health = 100, healthMax = 100,
+                    power = 50, powerMax = 100, powerType = 0,
+                })
+            end).notThrows()
+        end)
+    end)
+
+    describe("H.setTarget event firing", function()
+        it("fires PLAYER_TARGET_CHANGED when acquiring a target", function()
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            probe:RegisterEvent("PLAYER_TARGET_CHANGED")
+            probe:SetScript("OnEvent", function(_, ev)
+                if ev == "PLAYER_TARGET_CHANGED" then fired = true end
+            end)
+            H.setTarget({ name = "Onyxia", health = 100, healthMax = 100 })
+            expect(fired).as("fires on acquire").truthy()
+        end)
+
+        it("fires PLAYER_TARGET_CHANGED when clearing the target", function()
+            H.setUnit("target", { name = "Ragnaros" })
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            probe:RegisterEvent("PLAYER_TARGET_CHANGED")
+            probe:SetScript("OnEvent", function(_, ev)
+                if ev == "PLAYER_TARGET_CHANGED" then fired = true end
+            end)
+            H.setTarget(nil)
+            expect(fired).as("fires on clear").truthy()
+            expect(H.env.UnitExists("target")).as("target gone").falsy()
+        end)
+
+        it("H.clearUnit does NOT fire PLAYER_TARGET_CHANGED", function()
+            H.setUnit("target", { name = "Nefarian" })
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            probe:RegisterEvent("PLAYER_TARGET_CHANGED")
+            probe:SetScript("OnEvent", function(_, ev)
+                if ev == "PLAYER_TARGET_CHANGED" then fired = true end
+            end)
+            H.clearUnit("target")
+            expect(fired).as("clearUnit is silent").falsy()
+        end)
+    end)
+
+    describe("TargetFrame and TargetFrameSpellBar stubs", function()
+        it("TargetFrame exists as a global frame", function()
+            expect(H.env.TargetFrame).notNil()
+            expect(H.env.TargetFrame:GetWidth()).gt(0)
+        end)
+
+        it("TargetFrameSpellBar exists and is a child of TargetFrame", function()
+            expect(H.env.TargetFrameSpellBar).notNil()
+            expect(H.env.TargetFrameSpellBar:GetParent()).eq(H.env.TargetFrame)
+        end)
+
+        it("TargetFrame re-shows itself from a Blizzard system event", function()
+            -- Disable the UnitFrames plugin so its suppression hook is not active.
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            H.env.TargetFrame:Hide()
+            expect(H.env.TargetFrame:IsShown()).falsy()
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.TargetFrame:IsShown()).as("re-shown by its own OnEvent").truthy()
+        end)
+
+        it("TargetFrameSpellBar re-shows itself from a Blizzard system event", function()
+            -- Disable both UnitFrames and CastBars plugins to remove suppression hooks.
+            H.SuuUI.Plugins:Get("unit_frames"):Disable()
+            local castBars = H.SuuUI.Plugins:Get("cast_bars")
+            if castBars then castBars:Disable() end
+            H.env.TargetFrameSpellBar:Hide()
+            expect(H.env.TargetFrameSpellBar:IsShown()).falsy()
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(H.env.TargetFrameSpellBar:IsShown())
+                .as("re-shown by its own OnEvent").truthy()
+        end)
+    end)
+
     describe("texture crop (SetTexCoord / GetTexCoord)", function()
         it("round-trips a 4-argument SetTexCoord through GetTexCoord", function()
             local p = H.parent(100, 100)

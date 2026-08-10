@@ -1,16 +1,18 @@
 -- Facts about the game, not choices about the look.
 --
--- A class colour, a power type's colour and a spell school's colour are not design
--- language: they are what the client says those things ARE. "Frost is cyan" and "mages are
--- light blue" are as fixed as each other, so the theme has nothing to offer here and the
--- theme editor would only present controls that are wrong to touch. They live in Core
+-- A class colour, a reaction colour, a power type's colour and a spell school's colour are
+-- not design language: they are what the client says those things ARE. "Frost is cyan",
+-- "mages are light blue" and "a mob that wants you dead is red" are as fixed as each
+-- other, so the theme has nothing to offer here and the theme editor would only present
+-- controls that are wrong to touch. They live in Core
 -- rather than in whichever plugin paints them first, because a resource bar, a cast bar, a
 -- nameplate and a debuff border all describe the same facts — and two copies of a fact
 -- drift.
 --
 -- Note the split this draws with the theme: whether a health bar is class-coloured at all
 -- is a look decision and lives in the theme as colorUseClassColors; WHICH colour a mage
--- gets is a fact and lives here. Theme:GetUnitColor is the one place the two meet.
+-- gets, and what colour a unit with no class falls back to, are facts and live here.
+-- Theme:GetUnitColor is the one place the two meet.
 --
 -- The spell-school cache lives here for the same reason, and exists at all because this
 -- client has no API mapping a spell to its school: neither GetSpellInfo nor UnitCastingInfo
@@ -122,6 +124,90 @@ function M:UnitClassColor(unit)
     if type(unit) ~= "string" or type(UnitClass) ~= "function" then return nil end
     local _, classFile = UnitClass(unit)
     return self:ClassColor(classFile)
+end
+
+---------------------------------------------------------------------------
+-- Reactions
+---------------------------------------------------------------------------
+
+-- What a unit is TO YOU, for the units that have no class to be coloured by: a mob, a
+-- critter, a quest giver, a totem. The client already answers this question everywhere
+-- else in its UI — a nameplate, a tooltip's name, the default target frame — so these are
+-- its values rather than chosen ones, for the same reason the class and school colours
+-- above are.
+--
+-- Three bands, not eight. UnitReaction reports a full reputation standing (1 hated to 8
+-- exalted), but a health bar is answering "can this thing hurt me" and the client's own
+-- colour table collapses the standings into exactly these three answers. Keeping eight
+-- would give the player five shades that all mean "friendly".
+--
+-- The rows are the FACTION_BAR_COLORS indices that carry each band, which is what makes
+-- the live global below a drop-in source rather than a coincidence.
+M.REACTION = {
+    HOSTILE  = 2,
+    NEUTRAL  = 4,
+    FRIENDLY = 5,
+}
+
+-- The fallback copy, for the login moment before FACTION_BAR_COLORS exists. Same role as
+-- the CLASS table above: the client's global is preferred whenever it is there, so SuuUI
+-- agrees with the rest of the player's UI including anything that retints it.
+local REACTION_COLORS = {
+    [1] = {0.80, 0.30, 0.22, 1},  -- Hated
+    [2] = {0.80, 0.30, 0.22, 1},  -- Hostile
+    [3] = {0.75, 0.27, 0.00, 1},  -- Unfriendly
+    [4] = {0.90, 0.70, 0.00, 1},  -- Neutral
+    [5] = {0.00, 0.60, 0.10, 1},  -- Friendly
+    [6] = {0.00, 0.60, 0.10, 1},  -- Honored
+    [7] = {0.00, 0.60, 0.10, 1},  -- Revered
+    [8] = {0.00, 0.60, 0.10, 1},  -- Exalted
+}
+
+-- Collapses a standing onto one of the three bands. Hostile takes everything at or below
+-- unfriendly because that is the set that will fight you; friendly takes everything from
+-- friendly up, since the reputation tiers above it change nothing about what the unit is.
+local function reactionRow(reaction)
+    if reaction <= 3 then return M.REACTION.HOSTILE end
+    if reaction == 4 then return M.REACTION.NEUTRAL end
+    return M.REACTION.FRIENDLY
+end
+
+-- Converted client colours, keyed by band row. Cached and validated against the source for
+-- the same reason the class cache is: this is read on every health repaint, and a table
+-- allocated per repaint for a value that never moves is waste.
+local reactionCache = {}
+
+--- The colour for a reaction standing, or nil when the standing is not one.
+--
+-- nil is a real answer, exactly as with ClassColor and SchoolColor: a unit that does not
+-- exist has no reaction, and the caller's own fallback is the right response.
+-- @param reaction number  UnitReaction's 1..8 standing, or a M.REACTION row
+-- @return table|nil  {r,g,b,a}
+function M:ReactionColor(reaction)
+    if type(reaction) ~= "number" or reaction < 1 or reaction > 8 then return nil end
+    local row = reactionRow(reaction)
+    local src = type(FACTION_BAR_COLORS) == "table" and FACTION_BAR_COLORS[row] or nil
+    if type(src) == "table" and type(src.r) == "number" then
+        local hit = reactionCache[row]
+        if hit and hit[1] == src.r and hit[2] == src.g and hit[3] == src.b then return hit end
+        hit = { src.r, src.g, src.b, 1 }
+        reactionCache[row] = hit
+        return hit
+    end
+    return REACTION_COLORS[row]
+end
+
+--- The colour for how a unit stands towards the player, or nil when that is unknown.
+--
+-- The unit is the FIRST argument deliberately: UnitReaction reports the first unit's
+-- reaction towards the second, and it is not symmetric in the general case. The question a
+-- unit frame paints is "what is this thing to me", so the unit asks and the player is asked
+-- about — the other way round reads the player's own standing and is nil for every unit.
+-- @param unit string  Unit id, e.g. "target"
+-- @return table|nil  {r,g,b,a}
+function M:UnitReactionColor(unit)
+    if type(unit) ~= "string" or type(UnitReaction) ~= "function" then return nil end
+    return self:ReactionColor(UnitReaction(unit, "player"))
 end
 
 ---------------------------------------------------------------------------

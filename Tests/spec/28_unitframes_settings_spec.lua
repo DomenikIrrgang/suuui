@@ -683,4 +683,74 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
             expect(H.box(frame._healthBar).top).eq(barTop)
         end)
     end)
+
+    describe("Target tab in settings schema", function()
+        local function targetTab()
+            local st = subtabsEntry()
+            for _, tab in ipairs(st.tabs) do
+                if tab.id == "target" then return tab end
+            end
+        end
+
+        it("two tabs render; player still opens first; the second is target", function()
+            local st = subtabsEntry()
+            expect(#st.tabs).eq(2)
+            expect(st.tabs[1].id).eq("player")
+            expect(st.tabs[2].id).eq("target")
+            expect(st.tabs[1].label).eq("Player")
+            expect(st.tabs[2].label).eq("Target")
+        end)
+
+        it("the Target tab's section labels mirror the Player tab's", function()
+            local pSections = sectionsOf(playerTab())
+            local tSections = sectionsOf(targetTab())
+            local pLabels, tLabels = {}, {}
+            for i, s in ipairs(pSections) do pLabels[i] = s.label end
+            for i, s in ipairs(tSections) do tLabels[i] = s.label end
+            expect(tLabels).deepEq(pLabels)
+        end)
+
+        it("the Target tab's per-section key order mirrors Player with target_ prefix", function()
+            local pSections = sectionsOf(playerTab())
+            local tSections = sectionsOf(targetTab())
+            for i, pSec in ipairs(pSections) do
+                local expected = {}
+                for j, key in ipairs(pSec.keys) do
+                    expected[j] = key:gsub("^player_", "target_")
+                end
+                expect(tSections[i].keys).as(pSec.label .. " section key order")
+                    .deepEq(expected)
+            end
+        end)
+
+        it("target_hide_level_at_max greys out while target_show_level is off", function()
+            for _, e in ipairs(targetTab().schema) do
+                if e.key == "target_hide_level_at_max" then
+                    expect(e.enabledIf).eq("target_show_level")
+                end
+            end
+        end)
+
+        it("resolves target defaults from the tab declaration", function()
+            expect(setting("target_show_name")).eq(true)
+            expect(setting("target_show_level")).eq(true)
+            expect(setting("target_hide_level_at_max")).eq(true)
+            expect(setting("target_width")).eq(304)
+            expect(setting("target_health_height")).eq(39)
+            expect(setting("target_power_height")).eq(22)
+        end)
+
+        it("tab strip shows two buttons", function()
+            local ctl = buildPage(host)
+            expect(ctl).notNil()
+            expect(#ctl:GetTabButtons()).eq(2)
+        end)
+
+        it("player opens first by default with target as the second tab", function()
+            local ctl = buildPage(host)
+            expect(ctl:GetActiveTab()).eq("player")
+            local btns = ctl:GetTabButtons()
+            expect(btns[2].nav._labelText:GetText()).as("second tab label").eq("Target")
+        end)
+    end)
 end)

@@ -44,6 +44,7 @@
 -- Input:       H.click H.forceClick H.mouseDown H.mouseUp H.hover H.unhover H.scroll
 --              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
 --              H.cursorOn H.setMouseDown H.mods
+-- Units:       H.setUnit H.clearUnit H.setTarget
 -- Spellcasts:  H.startCast H.startChannel H.stopCast H.finishCast H.interruptCast
 --              H.failCast H.stopChannel H.delayCast H.updateChannel H.combatLogInterrupt
 --              H.combatLogSpell
@@ -185,6 +186,76 @@ function M.runAnimations(passes)
 end
 
 ----------------------------------------------------------------------------------
+-- Units
+--
+-- The client answers every Unit* question per unit token. The harness models that with a
+-- per-unit override table over the flat state.unitX values, so a spec about one unit says
+-- nothing about units, and a spec about two says exactly which is which.
+----------------------------------------------------------------------------------
+
+-- Every per-unit field the simulated client reads. Listed so a typo is an error rather
+-- than a field the client silently never looks at — which would leave a spec asserting
+-- against the flat fallback and passing for the wrong reason.
+local UNIT_FIELDS = {
+    exists = true, name = true, level = true, reaction = true,
+    class = true, classless = true,
+    health = true, healthMax = true,
+    power = true, powerMax = true, powerType = true,
+}
+
+--- Stages a unit: makes UnitExists true for it and sets whatever fields are given.
+--
+-- Merges into whatever the unit already had, so a spec can stage a target once and then
+-- move its health alone. Fields omitted fall back to the flat state.unitX values, which is
+-- what keeps `H.setUnit("target", { reaction = 2 })` a complete statement of "a hostile
+-- something is targeted".
+-- @param unit string   Unit token, e.g. "target"
+-- @param props table|nil  { exists, name, level, reaction, class, classless,
+--                           health, healthMax, power, powerMax, powerType }
+-- @return table  The unit's stored record
+function M.setUnit(unit, props)
+    assert(type(unit) == "string" and unit ~= "", "H.setUnit: unit token required")
+    local u = state.units[unit]
+    if not u then
+        u = {}
+        state.units[unit] = u
+    end
+    for k, v in pairs(props or {}) do
+        assert(UNIT_FIELDS[k], "H.setUnit: unknown unit field '" .. tostring(k) .. "'")
+        u[k] = v
+    end
+    return u
+end
+
+--- Removes a unit, so UnitExists reports false for it again — losing a target.
+--
+-- Deliberately does NOT fire PLAYER_TARGET_CHANGED: the state and the announcement are
+-- separate in the client too, and a spec that wants both calls H.setTarget.
+-- @param unit string
+function M.clearUnit(unit)
+    state.units[unit] = nil
+end
+
+--- Selects or clears the target, announcing it the way the client does.
+--
+-- Pass a props table to acquire a target, or nil to lose one. Either way
+-- PLAYER_TARGET_CHANGED fires afterwards, because the state moving without the event is a
+-- situation the client never produces — and a frame that only reads on the event would
+-- look correct in a spec that skipped it.
+-- @param props table|nil  Same shape as setUnit's props
+-- @return table|nil  The target's record, or nil when cleared
+function M.setTarget(props)
+    local u = nil
+    if props == nil then
+        M.clearUnit("target")
+    else
+        u = M.setUnit("target", props)
+    end
+    M.fireEvent("PLAYER_TARGET_CHANGED", "player")
+    return u
+end
+
+----------------------------------------------------------------------------------
 -- Spellcasts
 --
 -- The client reports a cast through UnitCastingInfo / UnitChannelInfo and announces the
@@ -198,8 +269,14 @@ local function castRecord(opts)
     local nowMS = (state.clock or 0) * 1000
     local dur   = (opts.duration or 2.5) * 1000
     local start = opts.startTime or nowMS
+    local unit  = opts.unit or "player"
+    -- A unit that does not exist cannot be casting, and the client reports nothing about
+    -- one — so staging a cast on an unstaged unit would build a state it never produces.
+    -- Naming a unit in startCast IS saying that unit is there, so make it so. Harmless for
+    -- a unit already staged, and for the player, whose record falls back to the flat values.
+    if not M.env.UnitExists(unit) then M.setUnit(unit, {}) end
     return {
-        unit      = opts.unit or "player",
+        unit      = unit,
         name      = opts.name or "Fireball",
         text      = opts.text,
         texture   = opts.texture or "Interface\\Icons\\Spell_Fire_FlameBolt",

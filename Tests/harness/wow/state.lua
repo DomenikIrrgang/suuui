@@ -23,6 +23,12 @@ M.mouseDown = {}   -- [buttonName] = true
 M.focused   = nil  -- focused EditBox
 M.debugLog  = {}
 
+-- Per-unit data, keyed by unit token: state.units.target = { health = 40, reaction = 2 }.
+-- A field absent here falls back to the flat M.unitX value below, so a spec that only cares
+-- about one unit never has to name one. Set through H.setUnit / H.clearUnit rather than
+-- written directly, so a typo'd field name is caught rather than silently ignored.
+M.units = {}
+
 -- In-flight spellcast, exactly as UnitCastingInfo / UnitChannelInfo report one. nil means
 -- the unit is idle. Times are milliseconds, like the client's, so a spec that forgets the
 -- unit conversion fails here the way it would in game.
@@ -63,6 +69,14 @@ function M.reset()
     -- values the spec just staged.
     M.unitClass      = nil
     M.unitClassless  = nil
+    -- Same reasoning one unit wider. A leaked units.target would leave the next spec file
+    -- believing a target is selected, and a "no target" assertion that passes because
+    -- nothing staged one is exactly the kind that stops passing for the right reason.
+    --
+    -- Note this cannot be staged before boot the way the flat family can, because reset
+    -- runs first. Nothing needs it to be: a unit frame is built whether or not its unit is
+    -- there, which is what lets it appear the moment one is.
+    M.units          = {}
     M._settling = false
     M.settleIterations = 0
     pending    = {}

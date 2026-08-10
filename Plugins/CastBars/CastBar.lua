@@ -737,6 +737,13 @@ function CastBar:Create(parent, cfg)
     self._events:RegisterEvent("PLAYER_ENTERING_WORLD")
     -- The only source of the interrupter's name; UNIT_SPELLCAST_INTERRUPTED has none.
     self._events:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    -- The unit became a different unit, so whatever the bar is showing belongs to someone
+    -- who is no longer being watched. Refresh re-reads the unit and stops the bar when the
+    -- new one is idle, which is the same path a cast ending already takes — so losing a
+    -- target mid-cast clears the bar rather than freezing it at the old spell.
+    if cfg.changeEvent then
+        self._events:RegisterEvent(cfg.changeEvent)
+    end
     for _, event in ipairs({
         "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_SUCCEEDED",
         "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_DELAYED",
@@ -746,7 +753,7 @@ function CastBar:Create(parent, cfg)
         self._events:RegisterEvent(event)
     end
     self._events:SetScript("OnEvent", function(_, event, unit)
-        if event == "PLAYER_ENTERING_WORLD" then
+        if event == "PLAYER_ENTERING_WORLD" or event == cfg.changeEvent then
             self:Refresh()
             return
         end
@@ -768,6 +775,83 @@ function CastBar:Create(parent, cfg)
 
     self:Refresh()
     return self
+end
+
+--- Builds the settings schema for one unit's tab.
+--
+-- It lives beside the widget rather than in the plugin file because these keys, their
+-- option lists and their defaults are the widget's own vocabulary — metrics() and the three
+-- watcher key lists read exactly this set — and a schema written elsewhere would be a
+-- second declaration of them, free to drift.
+--
+-- Every key is derived from the prefix, so a new unit is one entry in the plugin's UNITS
+-- list and nothing else.
+-- @param prefix string  Unit key prefix, e.g. "target_"
+-- @param opts table     { attachLabel, width, height }
+-- @return table  Schema array for the tab
+function CastBar.Schema(prefix, opts)
+    return {
+        { key = "", label = "General", type = "section" },
+        { key = prefix .. "enabled",   label = "Enable Cast Bar", type = "toggle", default = true },
+        { key = prefix .. "show_icon", label = "Show Icon",       type = "toggle", default = true },
+        { key = prefix .. "show_name", label = "Show Spell Name", type = "toggle", default = true },
+        { key = prefix .. "show_time", label = "Show Cast Time",  type = "toggle", default = true },
+        -- Information rather than decoration, so it defaults on — but a player who finds
+        -- the outline noisy can switch it off.
+        { key = prefix .. "show_shield", label = "Mark Uninterruptible Casts",
+          type = "toggle", default = true },
+
+        { key = "", label = "Placement", type = "section" },
+        { key = prefix .. "anchor", label = "Attach To", type = "dropdown",
+          default = "attached", options = {
+            { value = "attached", label = opts.attachLabel },
+            { value = "detached", label = "Detached" },
+          } },
+        -- Only meaningful while attached: a detached bar sits wherever it was dragged, so
+        -- above/below has nothing to be relative to.
+        { key = prefix .. "attach_position", label = "Position", type = "dropdown",
+          default = "below", options = {
+            { value = "above", label = "Above Frame" },
+            { value = "below", label = "Below Frame" },
+          },
+          enabledIf = { key = prefix .. "anchor", equals = "attached" } },
+        -- An attached bar takes its width from the frame it is part of, so the slider is
+        -- greyed out rather than silently ignored. Defaulted to the unit frame's own width
+        -- so detaching does not resize it.
+        { key = prefix .. "width", label = "Width", type = "slider",
+          min = 80, max = 500, step = 2, default = opts.width,
+          enabledIf = { key = prefix .. "anchor", equals = "detached" } },
+
+        { key = "", label = "Appearance", type = "section" },
+        { key = prefix .. "icon_position", label = "Icon Side", type = "dropdown",
+          default = "left", options = {
+            { value = "left",  label = "Left" },
+            { value = "right", label = "Right" },
+          } },
+        { key = prefix .. "time_format", label = "Cast Time", type = "dropdown",
+          default = DEFAULT_FORMAT, options = {
+            { value = "remaining", label = "Remaining (1.4)" },
+            { value = "elapsed",   label = "Elapsed (1.1)" },
+            { value = "both",      label = "Elapsed / Total (1.1 / 2.5)" },
+            { value = "percent",   label = "Percent (44%)" },
+          } },
+        { key = prefix .. "height", label = "Height", type = "slider",
+          min = 12, max = 48, step = 1, default = opts.height },
+
+        { key = "", label = "Colour", type = "section" },
+        -- School colouring is the default because it carries information the fixed colours
+        -- cannot. The pickers below stay, greyed, because they are still the fallback for a
+        -- spell whose school nothing has reported — and because a fixed bar colour matching
+        -- the rest of someone's UI is a legitimate taste rather than a worse choice.
+        { key = prefix .. "school_color", label = "Colour by Spell School",
+          type = "toggle", default = true },
+        { key = prefix .. "cast_color",    label = "Cast",    type = "color",
+          default = { 0.85, 0.63, 0.17, 1 },
+          enabledIf = { key = prefix .. "school_color", equals = false } },
+        { key = prefix .. "channel_color", label = "Channel", type = "color",
+          default = { 0.25, 0.55, 0.85, 1 },
+          enabledIf = { key = prefix .. "school_color", equals = false } },
+    }
 end
 
 SuuUI._CastBars = SuuUI._CastBars or {}

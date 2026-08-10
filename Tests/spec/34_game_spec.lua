@@ -303,4 +303,234 @@ describe("Core.Game", function()
             expect(Game():UnitClassColor(true)).isNil()
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- 6. Reaction colours
+    ---------------------------------------------------------------------------
+    describe("reaction colours", function()
+        it("names the three band rows", function()
+            local R = Game().REACTION
+            expect(R.HOSTILE).eq(2)
+            expect(R.NEUTRAL).eq(4)
+            expect(R.FRIENDLY).eq(5)
+        end)
+
+        it("returns a four-component colour for each band, matching FACTION_BAR_COLORS", function()
+            local fbc = H.env.FACTION_BAR_COLORS
+            local R = Game().REACTION
+            for _, row in ipairs({ R.HOSTILE, R.NEUTRAL, R.FRIENDLY }) do
+                local c = Game():ReactionColor(row)
+                expect(type(c)).as("band " .. row).eq("table")
+                expect(#c).eq(4)
+                expect(c[1]).as("r for band " .. row).eq(fbc[row].r)
+                expect(c[2]).as("g for band " .. row).eq(fbc[row].g)
+                expect(c[3]).as("b for band " .. row).eq(fbc[row].b)
+                expect(c[4]).eq(1)
+            end
+        end)
+
+        it("collapses standings 1..3 onto HOSTILE", function()
+            local fbc = H.env.FACTION_BAR_COLORS
+            local hostileRow = Game().REACTION.HOSTILE
+            for standing = 1, 3 do
+                local c = Game():ReactionColor(standing)
+                expect(c[1]).as("standing " .. standing .. " r").eq(fbc[hostileRow].r)
+                expect(c[2]).as("standing " .. standing .. " g").eq(fbc[hostileRow].g)
+                expect(c[3]).as("standing " .. standing .. " b").eq(fbc[hostileRow].b)
+            end
+        end)
+
+        it("collapses standing 4 onto NEUTRAL", function()
+            local fbc = H.env.FACTION_BAR_COLORS
+            local neutralRow = Game().REACTION.NEUTRAL
+            local c = Game():ReactionColor(4)
+            expect(c[1]).eq(fbc[neutralRow].r)
+            expect(c[2]).eq(fbc[neutralRow].g)
+            expect(c[3]).eq(fbc[neutralRow].b)
+        end)
+
+        it("collapses standings 5..8 onto FRIENDLY", function()
+            local fbc = H.env.FACTION_BAR_COLORS
+            local friendlyRow = Game().REACTION.FRIENDLY
+            for standing = 5, 8 do
+                local c = Game():ReactionColor(standing)
+                expect(c[1]).as("standing " .. standing .. " r").eq(fbc[friendlyRow].r)
+                expect(c[2]).as("standing " .. standing .. " g").eq(fbc[friendlyRow].g)
+                expect(c[3]).as("standing " .. standing .. " b").eq(fbc[friendlyRow].b)
+            end
+        end)
+
+        it("returns nil for nil, non-number, 0, 9, and negatives", function()
+            expect(Game():ReactionColor(nil)).isNil()
+            expect(Game():ReactionColor("hostile")).isNil()
+            expect(Game():ReactionColor(true)).isNil()
+            expect(Game():ReactionColor(0)).isNil()
+            expect(Game():ReactionColor(9)).isNil()
+            expect(Game():ReactionColor(-1)).isNil()
+        end)
+
+        it("prefers the live FACTION_BAR_COLORS and picks up a runtime retint", function()
+            -- First call at the current source
+            local c1 = Game():ReactionColor(Game().REACTION.HOSTILE)
+            local fbc = H.env.FACTION_BAR_COLORS
+            expect(c1[1]).eq(fbc[2].r)
+            -- Retint the live global
+            fbc[2] = { r = 0.11, g = 0.22, b = 0.33 }
+            local c2 = Game():ReactionColor(Game().REACTION.HOSTILE)
+            expect(c2[1]).eq(0.11)
+            expect(c2[2]).eq(0.22)
+            expect(c2[3]).eq(0.33)
+            expect(c2[4]).eq(1)
+        end)
+
+        it("falls back to a usable internal copy when FACTION_BAR_COLORS is absent", function()
+            H.env.FACTION_BAR_COLORS = nil
+            for standing = 1, 8 do
+                local c = Game():ReactionColor(standing)
+                expect(type(c)).as("standing " .. standing).eq("table")
+                expect(#c).eq(4)
+                for i = 1, 3 do
+                    expect(type(c[i])).as("channel " .. i).eq("number")
+                    expect(c[i] >= 0 and c[i] <= 1).truthy()
+                end
+                expect(c[4]).eq(1)
+            end
+        end)
+
+        it("two consecutive calls for the same band return the same table (no allocation)", function()
+            local a = Game():ReactionColor(2)
+            local b = Game():ReactionColor(2)
+            expect(a).eq(b)
+        end)
+
+        it("different standings in the same band share identity", function()
+            local a = Game():ReactionColor(1)
+            local b = Game():ReactionColor(3)
+            expect(a).eq(b)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 7. UnitReactionColor
+    ---------------------------------------------------------------------------
+    describe("UnitReactionColor", function()
+        it("returns the staged reaction colour for a staged unit", function()
+            H.setUnit("target", { reaction = 2 })
+            local c = Game():UnitReactionColor("target")
+            local expected = Game():ReactionColor(2)
+            expect(c).notNil()
+            expect(c).eq(expected)
+        end)
+
+        it("returns nil for an unstaged unit", function()
+            expect(Game():UnitReactionColor("target")).isNil()
+        end)
+
+        it("returns nil for non-string arguments", function()
+            expect(Game():UnitReactionColor(nil)).isNil()
+            expect(Game():UnitReactionColor(123)).isNil()
+            expect(Game():UnitReactionColor(true)).isNil()
+        end)
+
+        it("asks with the unit FIRST — target's reaction is readable, player's is not", function()
+            -- UnitReaction(unit, other) reports the first's reaction toward the second.
+            -- Stage a reaction on target only.
+            H.setUnit("target", { reaction = 5 })
+            -- UnitReactionColor("target") calls UnitReaction("target", "player") -> 5
+            expect(Game():UnitReactionColor("target")).notNil()
+            -- UnitReactionColor("player") calls UnitReaction("player", "player") -> nil
+            -- because player has no staged per-unit reaction
+            expect(Game():UnitReactionColor("player")).isNil()
+        end)
+
+        it("reflects the correct band for each standing", function()
+            for standing = 1, 8 do
+                H.setUnit("target", { reaction = standing })
+                local c = Game():UnitReactionColor("target")
+                expect(c).as("standing " .. standing).eq(Game():ReactionColor(standing))
+            end
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- 8. Theme:GetUnitColor integration (class vs reaction vs token)
+    ---------------------------------------------------------------------------
+    describe("GetUnitColor with reactions", function()
+        it("class takes precedence over reaction when both are present", function()
+            -- Modern ships colorUseClassColors = true
+            -- Stage a unit with BOTH a class and a reaction
+            H.setUnit("target", { class = "MAGE", reaction = 2 })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local classColor = Game():ClassColor("MAGE")
+            local reactionColor = Game():ReactionColor(2)
+            expect(classColor).notNil()
+            expect(reactionColor).notNil()
+            expect(result).deepEq(classColor)
+            -- Must NOT be the reaction colour
+            local isReaction = (result[1] == reactionColor[1]
+                            and result[2] == reactionColor[2]
+                            and result[3] == reactionColor[3])
+            expect(isReaction).as("class must win over reaction").eq(false)
+        end)
+
+        it("classless unit with reaction gets the reaction colour", function()
+            -- Modern: colorUseClassColors = true
+            H.setUnit("target", { classless = true, reaction = 4 })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local reactionColor = Game():ReactionColor(4)
+            expect(result).deepEq(reactionColor)
+        end)
+
+        it("classless unit with no reaction falls back to the token", function()
+            -- Modern: colorUseClassColors = true, no reaction staged
+            H.setUnit("target", { classless = true })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local tokenColor = H.token("colorHealth")
+            expect(result).deepEq(tokenColor)
+        end)
+
+        it("with colorUseClassColors OFF, classed unit gets the token", function()
+            H.T:SetActive("Default")
+            H.setUnit("target", { class = "MAGE", reaction = 2 })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local tokenColor = H.T:GetToken("colorHealth")
+            expect(result).deepEq(tokenColor)
+        end)
+
+        it("with colorUseClassColors OFF, classless unit with reaction gets the token", function()
+            H.T:SetActive("Default")
+            H.setUnit("target", { classless = true, reaction = 5 })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local tokenColor = H.T:GetToken("colorHealth")
+            expect(result).deepEq(tokenColor)
+        end)
+
+        it("with colorUseClassColors OFF, classless unit without reaction gets the token", function()
+            H.T:SetActive("Default")
+            H.setUnit("target", { classless = true })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            local tokenColor = H.T:GetToken("colorHealth")
+            expect(result).deepEq(tokenColor)
+        end)
+
+        it("switching the flag via SetUserToken toggles reaction colouring", function()
+            -- Start from a user theme based on Modern (colorUseClassColors = true)
+            H.T:CreateUserTheme("ReactionTest", "Modern")
+            H.T:SetActive("ReactionTest")
+            H.setUnit("target", { classless = true, reaction = 2 })
+
+            -- Flag on: reaction colour
+            local reactionColor = Game():ReactionColor(2)
+            expect(H.T:GetUnitColor("colorHealth", "target")).deepEq(reactionColor)
+
+            -- Turn off: token
+            H.T:SetUserToken("ReactionTest", "colorUseClassColors", false)
+            local tokenColor = H.T:GetToken("colorHealth")
+            expect(H.T:GetUnitColor("colorHealth", "target")).deepEq(tokenColor)
+
+            -- Turn back on: reaction again
+            H.T:SetUserToken("ReactionTest", "colorUseClassColors", true)
+            expect(H.T:GetUnitColor("colorHealth", "target")).deepEq(reactionColor)
+        end)
+    end)
 end)

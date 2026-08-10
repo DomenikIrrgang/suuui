@@ -87,8 +87,8 @@ SuuUI/
 │       ├── ProfileManager.lua
 │       └── ThemeManager.lua
 ├── Plugins/               -- bundled first-party plugins live here
-│   ├── UnitFrames/
-│   ├── CastBars/
+│   ├── UnitFrames/        -- UnitFrame.lua (widget, one per unit) + UnitFrames.lua (plugin)
+│   ├── CastBars/          -- CastBar.lua (widget, one per unit) + CastBars.lua (plugin)
 │   └── ...
 ├── Themes/
 │   ├── Default.lua        -- read-only default dark theme
@@ -298,7 +298,11 @@ skipping or double-firing. Callbacks run through `pcall` and log failures via `S
 
 | Name | Publisher | `opts` |
 |---|---|---|
-| `unitframe.player` | `Plugins/UnitFrames/PlayerFrame.lua` | `{ position = "above"｜"below" }` |
+| `unitframe.player` | `Plugins/UnitFrames/UnitFrames.lua` | `{ position = "above"｜"below" }` |
+| `unitframe.target` | `Plugins/UnitFrames/UnitFrames.lua` | `{ position = "above"｜"below" }` |
+
+One point per unit, named `unitframe.<id>` from the plugin's `UNITS` list, so a new unit
+frame publishes its own without a line of code being written for it.
 
 **Revoke before you tear down.** `UnitFrames` revokes in `onDisable` *before* destroying
 its frame, so consumers detach while the slot still exists. A consumer left holding a child
@@ -576,6 +580,7 @@ colorShield      = "colorGray400"
 -- the login moment before the class is available. Its own hue rather than a reuse of
 -- Success — retinting "Success" to orange should not turn the health bar orange.
 colorHealth      = "colorGreen500"
+
 -- Tier 2: intent
 colorAccent      = "colorBlue400"
 colorAccentHover = "colorBlue500"
@@ -655,10 +660,25 @@ stored name, which is what the theme editor's dropdown displays.
 visual value — "colour units by class" selects the SOURCE of a unit's colour, not the
 colour itself — and modelling it as a flag keeps every colour token a real colour so nothing
 downstream can be handed a value it cannot paint with. It is not read directly: consumers
-call `Theme:GetUnitColor(key, unit)`, which resolves the flag against the class data in
-`SuuUI.Game` and always returns a usable `{r,g,b,a}`. The theme editor exposes it as a
-toggle next to the Health primitive, since the two form one decision. It is the editor's
+call `Theme:GetUnitColor(key, unit)`, which resolves the flag against the class and reaction
+data in `SuuUI.Game` and always returns a usable `{r,g,b,a}`. The theme editor exposes it as
+a toggle next to the Health primitive, since the two form one decision. It is the editor's
 first non-colour, non-numeric control.
+
+`GetUnitColor` tries **three** sources in order, and the middle one is why a target frame
+needs no colour code of its own:
+
+| Order | Source | Covers |
+|---|---|---|
+| 1 | the unit's class (`Game:UnitClassColor`) | every player, and anything the client reports a class for |
+| 2 | its reaction to the player (`Game:UnitReactionColor`) | a mob, a critter, a quest giver, a totem — everything with no class |
+| 3 | the named token | class colouring off, or no unit to ask about |
+
+Reaction sits **inside** the `colorUseClassColors` branch rather than behind a toggle of its
+own. It is not a second feature: it is what "colour units by what they are" means for a unit
+that has no class, and it is what the client itself does. A separate toggle would be a
+control that does nothing whenever the first one is off, and a player who switched class
+colouring off asked for the flat palette — mobs included.
 
 **API:**
 ```lua
@@ -823,11 +843,12 @@ change needs. Same pattern as `SUUUI_FONTS_CHANGED`.
 
 ### 6d. Game Facts (`Core/Game.lua`)
 
-Colours the client decides, not the theme. A power type's colour and a spell school's
-colour are what the game says those things **are** — "frost is cyan" and "mages are light
-blue" are as fixed as each other — so they are constants here rather than theme tokens.
-Putting them in the theme would fill the editor with controls that are wrong to touch and
-let a player retint frost to green, which would make the UI lie about the game.
+Colours the client decides, not the theme. A power type's colour, a class colour, a
+reaction colour and a spell school's colour are what the game says those things **are** —
+"frost is cyan", "mages are light blue" and "a mob that wants you dead is red" are as fixed
+as each other — so they are constants here rather than theme tokens. Putting them in the
+theme would fill the editor with controls that are wrong to touch and let a player retint
+frost to green, which would make the UI lie about the game.
 
 They live in Core rather than in whichever plugin paints them first, because a resource bar,
 a cast bar, a nameplate and a debuff border all describe the same facts, and two copies of a
@@ -850,12 +871,34 @@ reads back out of `SchoolOf`.
 SuuUI.Game:PowerColor(powerType)      -- falls back to mana for an unknown type
 SuuUI.Game:ClassColor(classFile)      -- {r,g,b,a} or nil; prefers CUSTOM_CLASS_COLORS
 SuuUI.Game:UnitClassColor(unit)       -- ClassColor(UnitClass(unit)), or nil
+SuuUI.Game.REACTION                   -- { HOSTILE = 2, NEUTRAL = 4, FRIENDLY = 5 }
+SuuUI.Game:ReactionColor(reaction)    -- the client's 1..8 standing -> {r,g,b,a}, or nil
+SuuUI.Game:UnitReactionColor(unit)    -- ReactionColor(UnitReaction(unit, "player")), or nil
 SuuUI.Game.SCHOOL                     -- PHYSICAL HOLY FIRE NATURE FROST SHADOW ARCANE
 SuuUI.Game:SchoolColor(mask)          -- nil when the mask says nothing — callers fall back
 SuuUI.Game:SchoolOf(spellId)          -- cached mask, or nil
 SuuUI.Game:LearnSchool(spellId, mask) -- returns whether it changed what we knew
 SuuUI.Game:LearnFromCombatLog()       -- reads the line being dispatched; returns spellId, mask
 ```
+
+**Reaction colours are the answer for every unit that has no class** — a mob, a critter, a
+quest giver, a totem. `UnitReaction` reports a full reputation standing (1 hated to 8
+exalted) and `ReactionColor` collapses it onto **three** bands, because a health bar is
+answering "can this thing hurt me" and the client's own colour table makes the same
+collapse: keeping eight would give the player five shades that all mean "friendly". Hostile
+takes everything at or below unfriendly, since that is the set that will fight you.
+
+`REACTION` names the `FACTION_BAR_COLORS` row that carries each band, which is what makes
+the live global a drop-in source rather than a coincidence — it is preferred over the
+internal copy exactly as `RAID_CLASS_COLORS` is, so SuuUI agrees with the rest of the
+player's UI including an addon that retints it. The converted array is cached per band and
+validated against the source, so a runtime retint is picked up without allocating per call.
+
+**The unit goes FIRST in `UnitReaction`.** The client reports the first unit's reaction
+towards the second, and it is not symmetric in general, so `UnitReaction(unit, "player")` is
+the question a unit frame paints: "what is this thing to me". Swapping the arguments reads
+the player's own standing and answers nil for every unit — the simulated client models that
+asymmetry deliberately rather than hiding it.
 
 Class colours prefer the client's `CUSTOM_CLASS_COLORS` then `RAID_CLASS_COLORS` over the
 internal copy, so SuuUI agrees with the rest of the player's UI (including a class-colour
@@ -1519,7 +1562,7 @@ document it here.
   `""` clears one, and an unchanged write is dropped, since a readout is rewritten on every
   game event and usually says the same thing. Slots are built on first use and take plain
   strings only: what a number *means* belongs to whoever owns the value, so no formatting
-  reaches the component (`Plugins/UnitFrames/PlayerFrame.lua` holds the formats its health
+  reaches the component (`Plugins/UnitFrames/UnitFrame.lua` holds the formats its health
   and resource bars share).
   `SetTextSize` moves every slot onto another font step at once — a token **key**, never a
   pixel size, so a plugin can expose the step as a setting and the readouts still follow a

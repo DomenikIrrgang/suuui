@@ -767,7 +767,7 @@ Three details are load-bearing, and each has a regression test:
   anything, and showing the frame anyway overrides whatever else did.
 
 Both first-party plugins that suppress a Blizzard frame follow exactly this shape —
-`Plugins/UnitFrames/PlayerFrame.lua` (`PlayerFrame`) and `Plugins/CastBars/CastBars.lua`
+`Plugins/UnitFrames/UnitFrames.lua` (`PlayerFrame`, `TargetFrame`) and `Plugins/CastBars/CastBars.lua`
 (`PlayerCastingBarFrame` / `CastingBarFrame`). Keep the existence check: a global whose name
 changed between client generations is simply absent on the other one.
 
@@ -895,10 +895,11 @@ Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
     built-in themes and to `ThemeTokens.lua` if it is missing. Your widget's OWN
     dimensions are plugin settings instead, declared with a schema `default` so the
     player can tune them per profile on your page. React to both: `SUUUI_THEME_CHANGED`
-    and `Settings:Watch`. Game facts (class colours, power colours, spell school colours,
-    level caps) are neither: read them from `SuuUI.Game` rather than copying them into your
-    plugin. To paint a unit's colour — class-coloured when the theme says so, falling back
-    to a token when it does not — call `Theme:GetUnitColor(token, unit)` rather than reading
-    the flag and class table yourself. See "No Magic Numbers" in `coding-standards.md`.
+    and `Settings:Watch`. Game facts (class colours, reaction colours, power colours, spell
+    school colours, level caps) are neither: read them from `SuuUI.Game` rather than copying
+    them into your plugin. To paint a unit's colour — class-coloured when the theme says so,
+    falling back to its reaction to the player for a unit with no class, and to a token when
+    class colouring is off — call `Theme:GetUnitColor(token, unit)` rather than resolving that
+    chain yourself. See "No Magic Numbers" in `coding-standards.md`.
 13. **Test the UI you build.** A new component is not finished without a spec in
     `Tests/spec/`. Run `lua Tests/run.lua` before calling a change done. See `TESTING.md`.
