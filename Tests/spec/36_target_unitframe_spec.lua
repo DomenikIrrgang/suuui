@@ -187,7 +187,7 @@ describe("Plugins.UnitFrames – target frame", function()
         it("classed target gets class colour", function()
             -- colorUseClassColors is on in Modern (the boot theme)
             expect(H.token("colorUseClassColors")).eq(true)
-            H.setTarget({ name = "Mage", level = 60, class = "MAGE",
+            H.setTarget({ name = "Mage", level = 60, class = "MAGE", isPlayer = true,
                           health = 70, healthMax = 100 })
             local want = H.SuuUI.Game:ClassColor("MAGE")
             expect(want).notNil()
@@ -196,15 +196,35 @@ describe("Plugins.UnitFrames – target frame", function()
             expect(tf()._healthBar._fillColor[3]).near(want[3], 0.01)
         end)
 
-        it("classless hostile target gets hostile reaction colour", function()
+        it("hostile mob gets hostile reaction colour, not its reported class", function()
             expect(H.token("colorUseClassColors")).eq(true)
-            H.setTarget({ name = "Boar", level = 5, classless = true, reaction = 2,
+            -- No `classless` and no `isPlayer`: a real mob, which the client answers
+            -- UnitClass for (WARRIOR). Reaction must win anyway.
+            H.setTarget({ name = "Boar", level = 5, reaction = 2,
                           health = 50, healthMax = 100 })
             -- Reaction 2 is HOSTILE in the game's faction table
             local src = H.env.FACTION_BAR_COLORS[2]
             expect(tf()._healthBar._fillColor[1]).near(src.r, 0.01)
             expect(tf()._healthBar._fillColor[2]).near(src.g, 0.01)
             expect(tf()._healthBar._fillColor[3]).near(src.b, 0.01)
+        end)
+
+        it("neutral mob is yellow, not warrior tan", function()
+            -- The reported bug, end to end: a neutral Vale Moth rendered brown because the
+            -- client reports WARRIOR for it and warrior tan is {0.78, 0.61, 0.43}.
+            expect(H.token("colorUseClassColors")).eq(true)
+            H.setTarget({ name = "Vale Moth", level = 1, reaction = 4,
+                          health = 42, healthMax = 42 })
+            local neutral = H.env.FACTION_BAR_COLORS[4]
+            local tan     = H.SuuUI.Game:ClassColor("WARRIOR")
+            local fill    = tf()._healthBar._fillColor
+            expect(fill[1]).near(neutral.r, 0.01)
+            expect(fill[2]).near(neutral.g, 0.01)
+            expect(fill[3]).near(neutral.b, 0.01)
+            local notTan = math.abs(fill[1] - tan[1]) > 0.05
+                        or math.abs(fill[2] - tan[2]) > 0.05
+                        or math.abs(fill[3] - tan[3]) > 0.05
+            expect(notTan).as("must not be the warrior class colour").truthy()
         end)
 
         it("classless target with no reaction falls back to colorHealth token", function()

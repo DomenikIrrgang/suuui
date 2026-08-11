@@ -199,7 +199,7 @@ end
 -- against the flat fallback and passing for the wrong reason.
 local UNIT_FIELDS = {
     exists = true, name = true, level = true, reaction = true,
-    class = true, classless = true,
+    class = true, classless = true, isPlayer = true,
     health = true, healthMax = true,
     power = true, powerMax = true, powerType = true,
 }
@@ -211,7 +211,7 @@ local UNIT_FIELDS = {
 -- what keeps `H.setUnit("target", { reaction = 2 })` a complete statement of "a hostile
 -- something is targeted".
 -- @param unit string   Unit token, e.g. "target"
--- @param props table|nil  { exists, name, level, reaction, class, classless,
+-- @param props table|nil  { exists, name, level, reaction, class, classless, isPlayer,
 --                           health, healthMax, power, powerMax, powerType }
 -- @return table  The unit's stored record
 function M.setUnit(unit, props)

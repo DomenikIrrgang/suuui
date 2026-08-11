@@ -894,6 +894,21 @@ SuuUI.Pixel.grid / .mult / .scale / .multiplier / .physicalHeight
 `Snap` is **idempotent**, which is load-bearing: `Container:Layout` re-runs its strategy
 after hugging, and a non-idempotent rounding would drift on every pass and never settle.
 
+**`Floor` and `Ceil` tolerate a hair of round-trip noise, and that tolerance is
+load-bearing.** Geometry does not come back out of the client the way it went in: the root's
+scale is derived from the physical height and is rarely a binary-exact fraction
+(768/1440 = 8/15), so `SetSize(w, 22)` reads back as `21.99996948242`. `Snap` absorbs that
+by rounding, but `Floor` and `Ceil` would turn one or two ULPs into a **whole unit** of
+error — `Floor(21.99996948242)` is 21, so every stretched child comes out a pixel short of
+the box it was told to fill. That shipped as a one-pixel gap under a detached resource bar
+that survived four rounds of position fixes, because the bug was in the child's *size* and
+every attempted fix moved the *frame*. `GRID_EPS` (0.01) sits orders of magnitude above the
+observed noise (3e-5) and far below any fraction a caller could mean.
+
+The diagnostic lesson generalises: when two frames look misaligned, measure the **child**
+rects, not just the moveable wrappers. A wrapper can be exactly flush while the bar inside
+it is a unit short, and the two look identical on screen.
+
 **Two coordinate spaces, and mixing them is the bug this module invites.** A widget
 reports its rect in its own *region units* — screen space divided by its effective scale —
 while `GetCursorPosition()` and `GetScreenHeight()` are in screen space and `UIParent`'s

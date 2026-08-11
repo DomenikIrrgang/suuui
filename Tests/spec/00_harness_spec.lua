@@ -1048,6 +1048,18 @@ describe("harness: WoW API simulation", function()
             expect(playerClass).eq("DRUID")
             expect(H.env.UnitClass("target")).isNil()
         end)
+
+        it("UnitIsPlayer is true for player and false for a staged creature", function()
+            expect(H.env.UnitIsPlayer("player")).as("the player always is").eq(true)
+            expect(H.env.UnitIsPlayer("target")).as("unstaged").eq(false)
+            H.setUnit("target", { name = "Vale Moth", reaction = 4 })
+            expect(H.env.UnitIsPlayer("target")).as("staged without isPlayer").eq(false)
+        end)
+
+        it("UnitIsPlayer honours the per-unit isPlayer override", function()
+            H.setUnit("target", { name = "Someone", isPlayer = true })
+            expect(H.env.UnitIsPlayer("target")).eq(true)
+        end)
     end)
 
     describe("UnitExists simulation", function()

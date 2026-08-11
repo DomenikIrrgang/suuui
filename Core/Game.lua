@@ -114,7 +114,17 @@ function M:ClassColor(classFile)
     return CLASS[classFile]
 end
 
---- The colour for a unit's class, or nil when the unit or its class is unknown.
+--- The colour for a unit's class, or nil when the unit has no class to be coloured by.
+--
+-- Only a PLAYER has one, and asking UnitClass is not how you find that out. A creature
+-- carries a class field of its own and the client answers UnitClass for it — almost always
+-- "WARRIOR", since that is what the overwhelming majority of creatures are internally — so
+-- trusting UnitClass alone paints every mob, critter and quest giver in warrior tan and
+-- never reaches the reaction fallback that exists for exactly those units. That shipped: a
+-- neutral Vale Moth rendered brown instead of yellow.
+--
+-- UnitIsPlayer is the question that actually separates a mage from a moth, which is why nil
+-- is a real answer here rather than a failure.
 --
 -- UnitClass returns the localised name first and the class file second; only the second
 -- is a stable key, so the first is deliberately discarded.
@@ -122,6 +132,9 @@ end
 -- @return table|nil  {r,g,b,a}
 function M:UnitClassColor(unit)
     if type(unit) ~= "string" or type(UnitClass) ~= "function" then return nil end
+    -- Guarded rather than assumed: a client with no UnitIsPlayer cannot answer the
+    -- question, and losing class colouring for every player is worse than the tan mob.
+    if type(UnitIsPlayer) == "function" and not UnitIsPlayer(unit) then return nil end
     local _, classFile = UnitClass(unit)
     return self:ClassColor(classFile)
 end

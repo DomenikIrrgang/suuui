@@ -233,6 +233,18 @@ function M.install(env)
         return u.exists ~= false
     end
 
+    -- Whether the client calls this unit a player rather than a creature.
+    --
+    -- The player always is; anything else is a creature unless a spec says otherwise, the
+    -- same default reasoning UnitExists uses — a target frame spends most of its life on
+    -- mobs. Modelled because UnitClass alone cannot answer it: the client reports a class
+    -- for a creature too (see below), so a class-colour rule that skips this test paints
+    -- every mob in warrior tan.
+    env.UnitIsPlayer = function(unit)
+        if unit == "player" then return true end
+        return unitField(unit, "isPlayer", false) == true
+    end
+
     -- The reaction of the FIRST unit towards the second, which is the client's own
     -- ordering. Only the first is keyed, so a caller that swaps the arguments reads the
     -- player's own standing and gets nil — the harness reproduces the mistake rather than
@@ -262,8 +274,13 @@ function M.install(env)
     end
     env.GetRealmName  = function() return "TestRealm" end
     -- UnitClass returns the localised name first and the stable class token second. Specs
-    -- move state.unitClass to paint a different class; state.unitClassless models what an
-    -- NPC, a totem or a pet reports, which is the branch a class-colour fallback exists for.
+    -- move state.unitClass to paint a different class; state.unitClassless models the
+    -- narrower case of a unit the client reports NO class for at all.
+    --
+    -- The "WARRIOR" default is not a convenience — it is what the live client answers for a
+    -- creature, which is why a mob must be told apart by UnitIsPlayer and not by asking for
+    -- its class. A spec staging a mob therefore leaves `class` unset and gets the same
+    -- misleading answer the real client gives.
     env.UnitClass     = function(unit)
         if unitField(unit, "classless", state.unitClassless) then return nil end
         local classFile = unitField(unit, "class", state.unitClass) or "WARRIOR"

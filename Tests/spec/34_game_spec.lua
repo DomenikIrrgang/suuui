@@ -297,6 +297,26 @@ describe("Core.Game", function()
             expect(Game():UnitClassColor("player")).isNil()
         end)
 
+        it("UnitClassColor returns nil for a creature the client calls a warrior", function()
+            -- The bug this guards: a mob is not classless. The client answers UnitClass for
+            -- a creature and almost always says WARRIOR, so trusting it painted a neutral
+            -- Vale Moth in warrior tan. Deliberately no `classless` here — that is the
+            -- narrower totem case and would test the wrong door.
+            H.setUnit("target", { name = "Vale Moth", reaction = 4 })
+            expect(H.env.UnitIsPlayer("target"))
+                .as("a staged unit is a creature unless the spec says otherwise").eq(false)
+            local _, classFile = H.env.UnitClass("target")
+            expect(classFile).as("the client still reports a class for it").eq("WARRIOR")
+            expect(Game():UnitClassColor("target")).isNil()
+        end)
+
+        it("UnitClassColor still answers for a player target", function()
+            H.setUnit("target", { name = "Someone", class = "MAGE", isPlayer = true })
+            local c = Game():UnitClassColor("target")
+            expect(c).notNil()
+            expect(c).deepEq(Game():ClassColor("MAGE"))
+        end)
+
         it("UnitClassColor returns nil for non-string unit", function()
             expect(Game():UnitClassColor(nil)).isNil()
             expect(Game():UnitClassColor(123)).isNil()
@@ -456,10 +476,12 @@ describe("Core.Game", function()
     -- 8. Theme:GetUnitColor integration (class vs reaction vs token)
     ---------------------------------------------------------------------------
     describe("GetUnitColor with reactions", function()
-        it("class takes precedence over reaction when both are present", function()
-            -- Modern ships colorUseClassColors = true
-            -- Stage a unit with BOTH a class and a reaction
-            H.setUnit("target", { class = "MAGE", reaction = 2 })
+        it("class takes precedence over reaction for a PLAYER with both", function()
+            -- Modern ships colorUseClassColors = true.
+            -- A hostile enemy player has a reaction too, and their class still wins — which
+            -- is why this rule exists at all. `isPlayer` is load-bearing: without it the
+            -- unit is a creature and reaction is the correct answer (see the mirror below).
+            H.setUnit("target", { class = "MAGE", reaction = 2, isPlayer = true })
             local result = H.T:GetUnitColor("colorHealth", "target")
             local classColor = Game():ClassColor("MAGE")
             local reactionColor = Game():ReactionColor(2)
@@ -471,6 +493,15 @@ describe("Core.Game", function()
                             and result[2] == reactionColor[2]
                             and result[3] == reactionColor[3])
             expect(isReaction).as("class must win over reaction").eq(false)
+        end)
+
+        it("reaction takes precedence for a CREATURE the client reports a class for", function()
+            -- The mirror, and the shipped bug: a creature carries a class field, so "both
+            -- are present" describes every mob in the game. Reaction is the only meaningful
+            -- answer for one.
+            H.setUnit("target", { class = "MAGE", reaction = 2 })
+            local result = H.T:GetUnitColor("colorHealth", "target")
+            expect(result).deepEq(Game():ReactionColor(2))
         end)
 
         it("classless unit with reaction gets the reaction colour", function()
