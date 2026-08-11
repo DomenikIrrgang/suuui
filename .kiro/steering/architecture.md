@@ -65,6 +65,7 @@ SuuUI/
 │   ├── ScrollFrame.lua   -- scroll container
 │   ├── Tooltip.lua       -- custom tooltip
 │   ├── Divider.lua
+│   ├── ResizeGrip.lua    -- corner drag handle; reports the gesture, resizes nothing
 │   ├── Modal.lua         -- dialog with optional input
 │   ├── Notice.lua        -- one-shot dismissible message, built on Modal
 │   └── StatusBar.lua     -- progress/resource bar; fill is a fractional stack child
@@ -1486,6 +1487,41 @@ document it here.
   background sits inside the frame and defaults to the border width; a borderless surface
   that must cover its whole box passes `inset = 0`, which is what keeps a frameless
   `StatusBar`'s track and fill on the same edges.
+
+  **A backdrop cannot be rounded** — its corners are its texture's corners — so the same
+  file carries the rounded surfaces, composed from textures and cut with an alpha mask.
+  They return a **handle** rather than painting a frame in place, and the frame must be a
+  plain `Frame` (a backdrop underneath would show its own square corners):
+
+  | Call | Draws |
+  |---|---|
+  | `Backdrop.CircleMask(frame, tex)` | attaches a circular mask to one texture; returns it for the caller's container to size onto the texture, or nil where the client has no mask API |
+  | `Backdrop.Circle(frame, { bg })` | a solid disc filling the frame → `{ SetBg, Destroy }` |
+  | `Backdrop.Pill(frame, { bg, border, borderWidth, inset })` | a stadium: a rectangle with a fully rounded cap at each end → `{ SetBg, SetBorder, Refresh, Destroy }` |
+
+  `Pill` mirrors `Apply`'s vocabulary, so swapping a square surface for a rounded one
+  changes the call and nothing else. `inset` is the visible ring thickness and defaults to
+  the border width, exactly as `Apply`'s does.
+
+  Three things about it are load-bearing:
+
+  - **The caps are half the height wide and their masks span the full height**, so each cap
+    shows the outer half of a true circle. One mask stretched across the whole frame would
+    draw an *ellipse*, which is why a wide `Circle` is not the same thing as a `Pill`.
+  - **The pieces meet edge to edge rather than overlapping.** Overlap is invisible for an
+    opaque colour and blends against itself at both ends for a translucent one — and every
+    surface token carrying `opacityPanel` is translucent.
+  - **Rounded surfaces are tinted, not recoloured.** `SetVertexColor` keeps the white fill
+    the mask is attached to; `SetColorTexture` replaces the texture and would take the
+    rounding with it. That is why `Circle`/`Pill` expose `SetBg` at all instead of letting
+    callers reach for the texture.
+
+  Cap width derives from the frame height, so `Pill` hooks the frame's own
+  `OnSizeChanged` (chaining any existing handler) and re-derives itself — a resize needs no
+  call from the owner. `Refresh()` covers the other input, a changed `borderWidth` token,
+  and belongs in the owner's `ApplyTheme`. Where the client has no mask API the caps stay
+  square and the control renders exactly as it did before rounding: a worse look, not a
+  broken widget.
 - `Base` — `SuuUI.Components.InstallBase(meta, field)` installs `GetWidth` `GetHeight`
   `IsShown` `GetFrame` `SetSize` `Show` `Hide` onto a component metatable, filling only
   the gaps so a custom override survives. `SetSize` never emits `SIZE_CHANGED`.
@@ -1523,8 +1559,11 @@ document it here.
   mouse input, which is what makes it safe to overlay or nest inside something that does —
   for a clickable icon use `IconButton`.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
-- `Toggle` — animated sliding switch, no Blizzard checkbox.
-- `Slider` — custom track + thumb, label, value display.
+- `Toggle` — animated sliding switch, no Blizzard checkbox. The track is a
+  `Backdrop.Pill` and the knob a `Backdrop.Circle`, so both ends are fully rounded; a
+  square knob inside a stadium reads as a rendering fault rather than a choice.
+- `Slider` — custom track + thumb, label, value display. The circular thumb rounds through
+  the same `Backdrop.CircleMask` the pill caps use.
 - `Dropdown` — custom panel, animated open/close. Shows the `colorBorderFocus` ring
   while hovered or open, like `Input`. Its arrow column is measured from the glyph via
   `TextMetrics`, not pinned to a space token, so it never truncates to an ellipsis. An
@@ -1581,6 +1620,19 @@ document it here.
   `Tooltip`, `Divider` and `ScrollFrame`.
 - `Tooltip` — cursor-following or frame-anchored, animated fade.
 - `Divider` — horizontal/vertical line, optional label.
+- `ResizeGrip` — the corner drag handle: three diagonal runs of one, two and three square
+  dots, growing towards the corner. Dots rather than diagonal art because a square lands
+  exactly on the pixel grid at any scale, while rotated or scaled line art is resampled
+  into a smear at the one size a grip is ever drawn. `size` pins the square; omit it to
+  follow `sizeIcon`. Dot side is `spaceXxs` and the pitch is `spaceXs` — one dot plus a
+  dot-sized gap on the same scale — and the lattice is centred in the box, so raising the
+  spacing scale or the icon token regrows the glyph without a second constant to tune.
+  Idle dots are `colorTextMuted`; hovered they take `colorAccent`, the same "you can act
+  on this" cue `Input`'s focus ring uses. **It resizes nothing.** It emits
+  `RESIZEGRIP_SIGNALS.DRAG_START` / `DRAG_STOP` and the owner decides what the gesture
+  means — which frame sizes, from which corner, and whether the result is saved. That is
+  what lets one grip serve `Window` and anything else with an edge to drag, rather than
+  being a component that knows how a window works.
 - `Modal` — dialog with optional input, container-composed. `confirmVariant` tints the
   confirm button with an intent token; `dismissOnly` drops the cancel button;
   `autoDestroy` frees the modal once it finishes hiding.
@@ -1595,11 +1647,18 @@ document it here.
   `Ceil`, so a control never lands half a pixel short of its own text.
 - `TextMetrics` — non-visual helper: `SuuUI.TextMetrics.Measure(text, font, size, flags)`
   returns the real width/height of a string, and `Box(...)` returns the width to **reserve**
-  for it. Use `Box` wherever a font string's own box is sized from its text, and `Measure`
-  where the caller adds its own padding on top (`Button`, `NavItem`, `Dropdown`). They
+  for it. Use `Box` whenever the number ends up as the font string's **own box**. `Measure`
+  is only for a caller that adds slack of its own on top of the metric — `Button` and
+  `Dropdown`'s arrow column, both `+2`. They
   differ by one physical pixel because the client truncates with **zero tolerance** — a box
   short by any amount at all drops characters and draws an ellipsis — while whole-pixel
   rasterisation means the metric and the rendered extent need not agree exactly.
+  **Outer padding does not make a caller a `Measure` caller.** A component that sizes
+  itself to `text + insets` and then lays the label out *with those same insets* has handed
+  the whole metric straight back to the label, so its box lands at exactly the metric and
+  the client truncates it. That is how `NavItem`'s hugging tab strip rendered `Play…` for
+  "Player": every geometry assertion passed, because the geometry was the bug. Ask what the
+  font string's own box ends up being, not whether the caller added a number.
   A font string's own `GetStringWidth` is clamped to the width its layout assigned, so
   measuring a live label that is already truncated shrinks it further on every pass.
   **Measurement happens inside the UI root**, never against `UIParent`: the client keeps
@@ -1617,6 +1676,8 @@ document it here.
 | `ColorPicker` | `Components.COLORPICKER_SIGNALS.REQUEST_CLOSE` | — |
 | `Modal` | `Components.MODAL_SIGNALS.CONFIRMED` | `inputValue` or `nil` |
 | `Modal` | `Components.MODAL_SIGNALS.CANCELLED` | — |
+| `ResizeGrip` | `Components.RESIZEGRIP_SIGNALS.DRAG_START` | — |
+| `ResizeGrip` | `Components.RESIZEGRIP_SIGNALS.DRAG_STOP` | — |
 
 ---
 

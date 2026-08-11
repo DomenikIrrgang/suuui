@@ -152,6 +152,21 @@ fill settles on the same call), so listeners do not need to special-case strateg
 StatusBar also emits the standard `VISIBILITY_CHANGED` signal (payload: `isVisible`) on
 show and hide, chained from the frame's own scripts.
 
+```lua
+-- Components/ResizeGrip.lua
+C.RESIZEGRIP_SIGNALS = {
+  DRAG_START = "resizegrip.drag_start",  -- Args: none
+  DRAG_STOP  = "resizegrip.drag_stop",   -- Args: none
+}
+```
+
+A resize grip reports the gesture and resizes nothing. Which frame sizes, from which
+corner, and whether the result is saved are the owner's decisions, so `Layout/Window.lua`
+connects `StartSizing` / `StopMovingOrSizing` to these rather than the grip reaching for a
+frame it does not own — which is what lets one grip serve any surface with an edge to drag.
+Signals, not the grip's own frame scripts: a consumer that reached through `GetFrame()` to
+`SetScript("OnMouseDown")` would replace the emit and silently take the hover paint with it.
+
 Rules for custom signals:
 1. Prefix with the component or plugin id.
 2. Document the payload in a comment on the same line.

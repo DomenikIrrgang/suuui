@@ -420,6 +420,243 @@ describe("Components.IconButton on the shared primitives", function()
     end)
 end)
 
+describe("Backdrop.CircleMask", function()
+    local host, f
+
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(20, 20)
+    end)
+
+    it("attaches a mask to the texture", function()
+        local tex = f:CreateTexture(nil, "ARTWORK")
+        local mask = H.SuuUI.Backdrop.CircleMask(f, tex)
+        expect(mask).notNil()
+        expect(tex:GetMaskTextures()).len(1)
+        expect(tex:GetMaskTextures()[1]).eq(mask)
+    end)
+
+    it("gives the texture the solid fill a mask needs in order to cut anything", function()
+        local tex = f:CreateTexture(nil, "ARTWORK")
+        H.SuuUI.Backdrop.CircleMask(f, tex)
+        expect(tex:GetTexture()).eq("Interface\\Buttons\\WHITE8x8")
+    end)
+
+    it("wraps the mask so it cuts rather than tiles", function()
+        local tex = f:CreateTexture(nil, "ARTWORK")
+        local mask = H.SuuUI.Backdrop.CircleMask(f, tex)
+        -- Without CLAMPTOBLACKADDITIVE on both axes the mask leaves the texture untouched,
+        -- which is a silently square control rather than a visible error.
+        expect(mask._wrapH).eq("CLAMPTOBLACKADDITIVE")
+        expect(mask._wrapV).eq("CLAMPTOBLACKADDITIVE")
+    end)
+end)
+
+describe("Backdrop.Circle", function()
+    local host, f
+
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(20, 20)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+    end)
+
+    it("fills the frame with a masked texture", function()
+        local c = H.SuuUI.Backdrop.Circle(f, { bg = "colorAccent" })
+        H.expectSize(c._tex, 20, 20)
+        expect(c._tex:GetMaskTextures()).len(1)
+    end)
+
+    it("keeps the mask exactly on the texture so the disc is a circle", function()
+        local c = H.SuuUI.Backdrop.Circle(f, { bg = "colorAccent" })
+        H.expectBox(c._mask, H.box(c._tex))
+    end)
+
+    it("tints rather than recolours, so the mask survives", function()
+        local c = H.SuuUI.Backdrop.Circle(f, { bg = "colorAccent" })
+        H.expectTokenColor(H.vertexColor(c._tex), "colorAccent")
+        expect(c._tex:GetMaskTextures()).as("still masked after tinting").len(1)
+    end)
+
+    it("passes a literal colour through and accepts false as transparent", function()
+        local c = H.SuuUI.Backdrop.Circle(f, { bg = { 0.1, 0.2, 0.3, 0.4 } })
+        expect(H.vertexColor(c._tex)).deepEq({ 0.1, 0.2, 0.3, 0.4 })
+        c:SetBg(false)
+        expect(H.vertexColor(c._tex)).deepEq({ 0, 0, 0, 0 })
+    end)
+
+    it("re-stretches onto a resized frame without being told", function()
+        local c = H.SuuUI.Backdrop.Circle(f, { bg = "colorAccent" })
+        f:SetSize(40, 40)
+        H.expectSize(c._tex, 40, 40)
+        H.expectBox(c._mask, H.box(c._tex))
+    end)
+end)
+
+describe("Backdrop.Pill", function()
+    local host, f, p
+
+    -- A stadium is a rectangle plus an outer half-disc at each end. The caps are half the
+    -- height wide; their masks span the full height, so each cap shows the outer half of a
+    -- true circle rather than a stretched ellipse.
+    local function build(w, h, opts)
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(w, h)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        p = H.SuuUI.Backdrop.Pill(f, opts or { bg = "colorBgAlt", border = "colorBorder" })
+        return p
+    end
+
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+    end)
+
+    describe("ring geometry", function()
+        it("caps the ring at half the height on each end", function()
+            build(60, 20)
+            H.expectSize(p._edgeL, 10, 20)
+            H.expectSize(p._edgeR, 10, 20)
+            H.expectOffset(p._edgeL, f, 0, 0)
+            expect(H.box(p._edgeR).right).eq(H.box(f).right)
+        end)
+
+        it("masks each cap with a full-height circle, not a stretched one", function()
+            build(60, 20)
+            local lm = p._edgeL:GetMaskTextures()[1]
+            H.expectSize(lm, 20, 20)
+            expect(H.box(lm).left).as("outer half of the circle shows").eq(H.box(f).left)
+        end)
+
+        it("meets the middle to the caps edge to edge, never overlapping", function()
+            build(60, 20)
+            local fb, lb, mb, rb = H.box(f), H.box(p._edgeL), H.box(p._edgeM), H.box(p._edgeR)
+            expect(mb.left).as("middle starts where the left cap ends").eq(lb.right)
+            expect(mb.right).as("middle ends where the right cap starts").eq(rb.left)
+            -- Overlap is invisible for an opaque colour and blends against itself at both
+            -- ends for a translucent one, which is why the caps are half-width.
+            expect(mb.left - fb.left).eq(10)
+        end)
+
+        it("spans the full height with every ring piece", function()
+            build(60, 20)
+            for name, piece in pairs({ L = p._edgeL, M = p._edgeM, R = p._edgeR }) do
+                expect(piece:GetHeight()).as("ring piece " .. name).eq(20)
+            end
+        end)
+    end)
+
+    describe("fill geometry", function()
+        it("insets the fill by the borderWidth token on every edge", function()
+            build(60, 20)
+            local bw = H.token("borderWidth")
+            H.expectOffset(p._fillL, f, bw, bw)
+            expect(p._fillL:GetHeight()).eq(20 - bw * 2)
+            expect(H.box(p._fillR).right).eq(H.box(f).right - bw)
+        end)
+
+        it("caps the fill at half its own inset height, keeping the caps square", function()
+            build(60, 20)
+            local hF = 20 - H.token("borderWidth") * 2
+            H.expectSize(p._fillL, math.floor(hF / 2), hF)
+            H.expectSize(p._fillL:GetMaskTextures()[1], hF, hF)
+        end)
+
+        it("keeps every fill piece inside the frame", function()
+            build(60, 20)
+            H.expectInside(p._fillL, f)
+            H.expectInside(p._fillM, f)
+            H.expectInside(p._fillR, f)
+        end)
+
+        it("meets the fill middle to the fill caps edge to edge", function()
+            build(60, 20)
+            local lb, mb, rb = H.box(p._fillL), H.box(p._fillM), H.box(p._fillR)
+            expect(mb.left).eq(lb.right)
+            expect(mb.right).eq(rb.left)
+        end)
+
+        it("covers the whole box when inset is 0", function()
+            build(60, 20, { bg = "colorBgAlt", border = false, inset = 0 })
+            local fb = H.box(f)
+            expect(H.box(p._fillL).left).eq(fb.left)
+            expect(p._fillL:GetHeight()).eq(20)
+        end)
+    end)
+
+    describe("colour", function()
+        it("tints all three fill pieces with one SetBg", function()
+            build(60, 20)
+            p:SetBg("colorAccent")
+            H.expectTokenColor(H.vertexColor(p._fillL), "colorAccent")
+            H.expectTokenColor(H.vertexColor(p._fillM), "colorAccent")
+            H.expectTokenColor(H.vertexColor(p._fillR), "colorAccent")
+        end)
+
+        it("tints all three ring pieces with one SetBorder", function()
+            build(60, 20)
+            H.expectTokenColor(H.vertexColor(p._edgeL), "colorBorder")
+            H.expectTokenColor(H.vertexColor(p._edgeM), "colorBorder")
+            H.expectTokenColor(H.vertexColor(p._edgeR), "colorBorder")
+        end)
+
+        it("keeps the caps masked across a recolour", function()
+            build(60, 20)
+            p:SetBg("colorAccent")
+            expect(p._fillL:GetMaskTextures()).len(1)
+            expect(p._fillR:GetMaskTextures()).len(1)
+        end)
+
+        it("draws the fill above the ring", function()
+            build(60, 20)
+            expect(p._edgeM:GetDrawLayer()).eq("BACKGROUND")
+            expect(p._fillM:GetDrawLayer()).eq("BORDER")
+        end)
+    end)
+
+    describe("reacting to size and tokens", function()
+        it("re-derives the caps from a new height with no call from the owner", function()
+            build(60, 20)
+            f:SetSize(80, 40)
+            H.expectSize(p._edgeL, 20, 40)
+            H.expectSize(p._edgeL:GetMaskTextures()[1], 40, 40)
+            expect(H.box(p._edgeM).left).eq(H.box(f).left + 20)
+        end)
+
+        it("follows the borderWidth token through Refresh", function()
+            build(60, 20)
+            H.T:CreateUserTheme("Thick", "Modern")
+            H.T:SetUserToken("Thick", "borderWidth", 3)
+            H.T:SetActive("Thick")
+            p:Refresh()
+            expect(p._fillL:GetHeight()).eq(20 - 6)
+            expect(H.box(p._fillL).left).eq(H.box(f).left + 3)
+        end)
+
+        it("chains onto a resize handler the frame already had", function()
+            local seen = 0
+            f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(60, 20)
+            f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            f:SetScript("OnSizeChanged", function() seen = seen + 1 end)
+            p = H.SuuUI.Backdrop.Pill(f, { bg = "colorBgAlt", border = "colorBorder" })
+            f:SetSize(80, 40)
+            expect(seen).as("the frame's own handler survived adoption").gte(1)
+            H.expectSize(p._edgeL, 20, 40)
+        end)
+
+        it("survives a height smaller than twice the border", function()
+            build(60, 1)
+            expect(p._fillL:GetHeight()).gte(0)
+            H.expectInside(p._fillM, f)
+        end)
+    end)
+end)
+
 describe("Components.Toggle on the shared primitives", function()
     local host
 
@@ -428,32 +665,45 @@ describe("Components.Toggle on the shared primitives", function()
         host = H.parent(300, 200)
     end)
 
-    it("recolours the track on a value change without rebuilding the backdrop", function()
+    it("recolours the track's fill on a value change without remasking it", function()
         local t = H.C.Toggle({ value = false }, host)
-        local before = t._track:GetBackdrop()
-        H.expectTokenColor(H.backdropColor(t._track), "colorBgAlt")
+        H.expectTokenColor(H.vertexColor(t._pill._fillM), "colorBgAlt")
         t:SetValue(true)
-        H.expectTokenColor(H.backdropColor(t._track), "colorAccent")
-        expect(t._track:GetBackdrop()).as("a value flip reuses the backdrop table").eq(before)
+        H.expectTokenColor(H.vertexColor(t._pill._fillM), "colorAccent")
+        expect(t._pill._fillL:GetMaskTextures())
+            .as("a value flip must not replace the masked texture").len(1)
     end)
 
     it("borders the track with the border token", function()
         local t = H.C.Toggle({}, host)
-        H.expectTokenColor(H.borderColor(t._track), "colorBorder")
+        H.expectTokenColor(H.vertexColor(t._pill._edgeM), "colorBorder")
     end)
 
-    it("follows the borderWidth token on the track and the knob", function()
+    it("follows the borderWidth token on the track", function()
         local t = H.C.Toggle({}, host)
+        local h = t:GetHeight()
         H.T:CreateUserTheme("Thick", "Modern")
         H.T:SetUserToken("Thick", "borderWidth", 3)
         H.T:SetActive("Thick")
-        expect(t._track:GetBackdrop().edgeSize).as("track edge").eq(3)
-        expect(t._knob:GetBackdrop().edgeSize).as("knob edge").eq(3)
+        expect(t._pill._fillL:GetHeight()).as("fill inset by the new width").eq(h - 6)
     end)
 
-    it("keeps the knob edge matching its fill so it reads as a solid dot", function()
-        local t = H.C.Toggle({}, host)
-        expect(H.borderColor(t._knob)).deepEq(H.backdropColor(t._knob))
+    it("draws the knob as a disc, not a square", function()
+        local t = H.mount(H.C.Toggle({}, host))
+        local disc = t._knobDisc
+        expect(disc._tex:GetMaskTextures()).as("knob is masked round").len(1)
+        H.expectBox(disc._mask, H.box(disc._tex))
+        expect(H.vertexColor(disc._tex)).as("a solid white dot").deepEq({ 1, 1, 1, 1 })
+    end)
+
+    it("rounds the track ends, so no piece is a full-width rectangle", function()
+        local t = H.mount(H.C.Toggle({}, host))
+        local w, h = t:GetWidth(), t:GetHeight()
+        -- The rounding lives in the caps: a single full-width piece would mean square ends.
+        expect(t._pill._edgeM:GetWidth()).as("middle stops short of both ends").lt(w)
+        expect(t._pill._edgeL:GetWidth()).eq(math.floor(h / 2))
+        expect(t._pill._edgeL:GetMaskTextures()).len(1)
+        expect(t._pill._edgeR:GetMaskTextures()).len(1)
     end)
 end)
 

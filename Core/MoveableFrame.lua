@@ -2,6 +2,7 @@
 -- Stores position in the plugin's Settings namespace so it is profile-aware.
 local C = SuuUI.Components
 local T = SuuUI.Theme
+local math_abs, math_floor = math.abs, math.floor
 
 local M = {}
 
@@ -15,16 +16,6 @@ local V_EDGE = {
 }
 
 --- How far a frame's positioned content is inset from the frame's own top and bottom edges.
---
--- A frame that grows around foreign children — an attach-point publisher — is larger than
--- the thing the player actually aimed at when they dragged it. Without this the saved
--- position describes the bounding box, so a band appearing on the ANCHORED edge pushes the
--- content across the screen: the unit frame's bars jumped 26 units the moment a cast bar
--- attached below them, and jumped back on detach.
---
--- The provider is the plugin's, so it runs through pcall: it is called on every layout pass
--- and an error here would unwind into the layout engine.
--- @return number, number  top inset, bottom inset (both 0 when no provider)
 local function coreInset(frame)
     local data = frame._suuui_moveable
     local fn = data and data.coreInset
@@ -37,9 +28,6 @@ local function coreInset(frame)
     return tonumber(top) or 0, tonumber(bottom) or 0
 end
 
--- Converts between the stored position (which describes the CONTENT) and the frame's own
--- anchor offset (which describes the bounding box). `sign` is 1 going out to the frame and
--- -1 coming back from it, so the two directions cannot drift apart.
 local function shiftY(frame, point, y, sign)
     local top, bottom = coreInset(frame)
     if top == 0 and bottom == 0 then return y end
@@ -55,14 +43,6 @@ end
 --- Applies moveable behaviour to a frame.
 -- @param frame table  The raw WoW frame (not a component wrapper)
 -- @param opts table   { pluginId, key, displayName, defaults, coreInset }
---   pluginId    - plugin id for Settings:Get/Set
---   key         - settings key for position storage
---   displayName - label shown on overlay during edit mode
---   defaults    - { point, relPoint, x, y } default position
---   coreInset   - optional function() -> topInset, bottomInset. Supply it when the frame
---                 grows around content it does not own (attach slots), so the saved
---                 position keeps describing the frame's own content and bands extend
---                 outward instead of displacing it.
 function M:Apply(frame, opts)
     local pluginId    = opts.pluginId
     local key         = opts.key
@@ -72,11 +52,7 @@ function M:Apply(frame, opts)
     -- Register with ToggleUI
     SuuUI.ToggleUI:Register(frame)
 
-    -- UIRoot owns placement. Registering the frame as a root element is what lets the
-    -- saved position be applied by the anchor strategy in the ROOT's unit space: the root
-    -- carries the addon's own scale (Pixel:Attach), so anchoring to UIParent instead would
-    -- resolve the same offsets against a different space and drop the frame in the wrong
-    -- place at any pixel multiplier other than 1.
+    -- UIRoot owns placement.
     if not frame._suuui_anchor and SuuUI.UIRoot:GetRoot() then
         SuuUI.UIRoot:AddElement(frame, SuuUI.UIRoot:GetLayer(frame) or "normal", {
             point         = defaults.point,
@@ -86,35 +62,61 @@ function M:Apply(frame, opts)
         })
     end
 
-    -- Create overlay (hidden by default). It stays on the frame's own layer and is only
-    -- raised above it: promoting it to a higher layer would draw the edit-mode overlay
-    -- over the settings window that carries the Edit Mode toggle.
-    local overlay = CreateFrame("Frame", nil, frame)
+    -- Create overlay (hidden by default). Uses BackdropTemplate for selection border.
+    local overlay = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     SuuUI.UIRoot:RaiseAbove(overlay, frame, 5)
     overlay:Hide()
 
-    -- The overlay covers the frame, and its backdrop and label sit inside it. All three
-    -- placements are the layout engine's: a stack child with no props fills its box, which
-    -- is what SetAllPoints used to say by hand.
     local overlayBox = SuuUI.Layout:CreateContainer({ host = frame, layout = "stack" })
     overlayBox:Add(overlay)
 
     local overlayBg = overlay:CreateTexture(nil, "BACKGROUND")
 
-    -- Accent-tinted, from a token: a hardcoded blue never follows the theme.
+    -- Selection border: a backdrop border drawn on the overlay when selected.
+    -- Applied via Backdrop so it uses the token system and border width.
+    SuuUI.Backdrop.Apply(overlay, { bg = false, border = false })
+
     local label = C.Text({
         text  = displayName,
         size  = "md",
         color = "text",
     }, overlay)
 
+    -- Lock badge: shown only when locked.
+    local lockBadge = C.Text({
+        text  = "\240\159\148\146",
+        size  = "md",
+        color = "text",
+    }, overlay)
+    lockBadge:Hide()
+
     local contentBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
     contentBox:Add(overlayBg)
     contentBox:Add(label, { align = "center", valign = "center" })
+    contentBox:Add(lockBadge, { align = "end", valign = "start", inset = { top = 2, right = 4 } })
 
     local function paintOverlay()
-        local c = T:GetToken("colorEditOverlay") or {0, 0.6, 1, 0.2}
+        local locked = M:IsLocked(frame)
+        local isSelected = SuuUI.EditPanel and SuuUI.EditPanel.GetSelected
+            and SuuUI.EditPanel:GetSelected() == frame
+
+        -- Fill colour: locked gets warning tint, otherwise standard edit overlay
+        local tokenKey = locked and "colorEditOverlayLocked" or "colorEditOverlay"
+        local c = T:GetToken(tokenKey) or {0, 0.6, 1, 0.2}
         overlayBg:SetColorTexture(c[1], c[2], c[3], c[4] or 0.2)
+
+        -- Selection border: accent border when selected, none otherwise
+        if isSelected then
+            SuuUI.Backdrop.SetBorder(overlay, "colorAccent")
+        else
+            SuuUI.Backdrop.SetBorder(overlay, false)
+        end
+
+        if locked then
+            lockBadge:Show()
+        else
+            lockBadge:Hide()
+        end
     end
     paintOverlay()
 
@@ -126,6 +128,7 @@ function M:Apply(frame, opts)
         overlay     = overlay,
         overlayBg   = overlayBg,
         label       = label,
+        lockBadge   = lockBadge,
         overlayBox  = overlayBox,
         contentBox  = contentBox,
         themeOwner  = themeOwner,
@@ -134,6 +137,7 @@ function M:Apply(frame, opts)
         defaults    = defaults,
         displayName = displayName,
         coreInset   = opts.coreInset,
+        paintOverlay = paintOverlay,
     }
 
     -- Drag setup (always configured, only active in edit mode)
@@ -142,40 +146,88 @@ function M:Apply(frame, opts)
 
     overlay:EnableMouse(true)
     overlay:RegisterForDrag("LeftButton")
-    overlay:SetScript("OnDragStart", function()
-        if SuuUI.ToggleUI:IsEditMode() then
-            frame:StartMoving()
+
+    -- Track drag state for click-to-select detection
+    local dragStartX, dragStartY = 0, 0
+    local dragActive = false
+
+    -- OnMouseDown/OnMouseUp for click-to-select: fires on every click regardless of
+    -- whether the drag threshold is crossed. OnDragStart/OnDragStop only fire after the
+    -- client's internal drag threshold (several pixels), so a short click never reaches
+    -- OnDragStop and the selection would never happen there.
+    overlay:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" then return end
+        local cx, cy = GetCursorPosition()
+        dragStartX, dragStartY = cx, cy
+    end)
+
+    overlay:SetScript("OnMouseUp", function(_, button)
+        if button ~= "LeftButton" then return end
+        if not SuuUI.ToggleUI:IsEditMode() then return end
+        local cx, cy = GetCursorPosition()
+        local dx = math_abs(cx - dragStartX)
+        local dy = math_abs(cy - dragStartY)
+        -- Treat as a click if movement was minimal (under the drag threshold)
+        if dx < 3 and dy < 3 then
+            if SuuUI.EditPanel and SuuUI.EditPanel.Select then
+                SuuUI.EditPanel:Select(frame)
+            end
         end
     end)
+
+    overlay:SetScript("OnDragStart", function()
+        if not SuuUI.ToggleUI:IsEditMode() then return end
+        if M:IsLocked(frame) then return end
+        dragActive = true
+        frame:StartMoving()
+        -- Show smart guides during drag
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.ShowGuides then
+            local guides = SuuUI.SnapGrid:FindGuides(frame)
+            SuuUI.SnapGrid:ShowGuides(guides)
+        end
+    end)
+
     overlay:SetScript("OnDragStop", function()
         frame:StopMovingOrSizing()
-        -- Save position. The position watcher below would echo this write straight
-        -- back into RestorePosition, so it is suppressed for the duration of our own
-        -- save; only changes from elsewhere (a profile switch, a reset) should move
-        -- the frame out from under the player.
+        -- Hide smart guides
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.HideGuides then
+            SuuUI.SnapGrid:HideGuides()
+        end
+        dragActive = false
+
+        -- If locked, no position saving (drag was blocked at start)
+        if M:IsLocked(frame) then return end
+
+        -- Save position. After StopMovingOrSizing the client sets the frame's anchor
+        -- to TOPLEFT with absolute offsets. We save exactly what the client gives us.
         local point, _, relPoint, x, y = frame:GetPoint()
-        -- The client dragged the whole frame, bands included, so GetPoint describes the
-        -- bounding box. Store what the position MEANS — where the frame's own content
-        -- sits — or the inset would be added a second time on the next restore and the
-        -- frame would creep by one band height per drag.
-        y = shiftY(frame, point, y, -1)
         local data = frame._suuui_moveable
+
+        -- Remove coreInset compensation for storage
+        y = shiftY(frame, point, y, -1)
+
+        -- Snap: grid or guides depending on snap_mode setting
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.Snap then
+            x, y = SuuUI.SnapGrid:Snap(x, y, frame)
+        end
+
+        -- Preserve locked state
+        local currentPos = SuuUI.Settings:Get(pluginId, key)
+        local locked = currentPos and currentPos.locked
+
         data._saving = true
         SuuUI.Settings:Set(pluginId, key, {
             point    = point,
             relPoint = relPoint,
             x        = x,
             y        = y,
+            locked   = locked,
         })
         data._saving = false
-        -- A client drag is the one geometry the layout engine did not write, so the root's
-        -- anchor descriptor is now stale. Restate it, or the next root re-layout snaps the
-        -- frame back to where the player dragged it from.
         M:_applyAnchor(frame, { point = point, relPoint = relPoint, x = x, y = y })
     end)
 
-    -- Edit mode drives the overlay. `immediate` matters: a frame created while edit
-    -- mode is already on must show its overlay at once, not wait for the next toggle.
+    -- Edit mode drives the overlay.
     SuuUI.Settings:Watch("_layout", "edit_mode", function(isEdit)
         if isEdit then
             overlay:Show()
@@ -189,20 +241,12 @@ function M:Apply(frame, opts)
         local data = frame._suuui_moveable
         if not data or data._saving then return end
         M:RestorePosition(frame)
+        -- Repaint overlay in case locked state changed via Settings:Set
+        data.paintOverlay()
     end, "moveable_pos_" .. pluginId .. "_" .. key, { immediate = true })
 end
 
 --- Pushes a stored position into the root's anchor descriptor.
--- The single place a moveable frame's placement is stated. It goes through UIRoot so the
--- offsets are resolved by AnchorLayout against the root container — the addon's own scaled
--- unit space — rather than against UIParent, which is a different space the moment the
--- pixel multiplier is not 1.
---
--- `pos` describes the frame's own CONTENT. A frame carrying attach bands is bigger than
--- that, so the offset handed to the anchor strategy is shifted by the band on the anchored
--- edge — which is what keeps the content still while a band grows outward.
--- @param frame frame
--- @param pos table  { point, relPoint, x, y }
 function M:_applyAnchor(frame, pos)
     local desc = {
         point         = pos.point,
@@ -214,9 +258,6 @@ function M:_applyAnchor(frame, pos)
         SuuUI.UIRoot:UpdateElementAnchor(frame, desc)
         return
     end
-    -- Not a root element (a bare frame in a spec, or a plugin that places itself). Hand the
-    -- descriptor to the anchor strategy directly against the frame's own parent, which is
-    -- still the right unit space — never UIParent.
     SuuUI._AnchorLayout.SetAnchor(frame, desc)
     local host = frame:GetParent()
     if host then
@@ -243,12 +284,6 @@ function M:RestorePosition(frame)
 end
 
 --- Re-states a frame's placement from the position it already has stored.
---
--- For a frame whose coreInset has changed without its position changing: a cast bar
--- attaching, detaching, or moving between the above and below slot alters how far the
--- frame extends past its own content, and the anchor offset has to follow or the content
--- shifts by that band's height. Nothing is written to Settings — the stored position is
--- still correct, it is only the derived offset that is stale.
 -- @param frame table
 function M:RefreshAnchor(frame)
     if not (frame and frame._suuui_moveable) then return end
@@ -263,6 +298,30 @@ function M:ResetPosition(frame)
 
     SuuUI.Settings:Set(data.pluginId, data.key, SuuUI.Utils.DeepCopy(data.defaults))
     M:RestorePosition(frame)
+end
+
+--- Sets the locked state for a moveable frame.
+-- @param frame table
+-- @param locked bool
+function M:SetLocked(frame, locked)
+    local data = frame._suuui_moveable
+    if not data then return end
+
+    local pos = SuuUI.Settings:Get(data.pluginId, data.key)
+    if not pos then pos = SuuUI.Utils.DeepCopy(data.defaults) end
+    pos.locked = locked and true or nil
+    SuuUI.Settings:Set(data.pluginId, data.key, pos)
+    data.paintOverlay()
+end
+
+--- Returns whether a moveable frame is locked.
+-- @param frame table
+-- @return bool
+function M:IsLocked(frame)
+    local data = frame._suuui_moveable
+    if not data then return false end
+    local pos = SuuUI.Settings:Get(data.pluginId, data.key)
+    return pos and pos.locked and true or false
 end
 
 --- Removes moveable behaviour from a frame and cleans up.
@@ -280,6 +339,7 @@ function M:Remove(frame)
     data.overlay:SetScript("OnDragStart", nil)
     data.overlay:SetScript("OnDragStop", nil)
 
+    if data.lockBadge then data.lockBadge:Destroy() end
     if data.contentBox then data.contentBox:Destroy() end
     if data.overlayBox then data.overlayBox:Destroy() end
     if frame._suuui_placeBox then

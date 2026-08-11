@@ -245,7 +245,16 @@ function FontStringMeta:IsTextClipped()
 
     local clipped = false
     if boxH and boxH + 0.5 < needH then clipped = true end
-    if boxW and needW > 0 and boxW + 0.5 < needW then clipped = true end
+    -- A box AT the metric width still clips. The client rasterises glyph advances to
+    -- whole pixels and accumulates them, so the rendered extent can exceed the metric by
+    -- up to one physical pixel — and it truncates with ZERO tolerance rather than
+    -- overflowing. Modelling that as "fits" is what let a tab strip ship rendering
+    -- "Play..." for "Player" with every geometry assertion passing, so the box has to
+    -- clear the metric by one physical pixel, expressed in this region's own units.
+    -- Width only: Measure already ceils the height, and padding it too would make every
+    -- label a pixel taller than the token-sized control containing it.
+    local allow = 1 / (self:GetEffectiveScale() or 1)
+    if boxW and needW > 0 and boxW + 0.5 < needW + allow then clipped = true end
     return clipped, boxW, boxH, needW, needH
 end
 

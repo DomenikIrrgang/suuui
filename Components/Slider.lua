@@ -19,22 +19,11 @@ local LABEL_MIN_H = 14
 local RING_WIDTH  = 1
 -- Width of the value readout column. No space or size token matches it.
 local VAL_W       = 40
-local WHITE       = "Interface\\Buttons\\WHITE8x8"
-local CIRCLE_MASK = "Interface\\Minimap\\UI-Minimap-Background"
-
--- Rounds a solid texture into a circle. The mask art is a round asset present on
--- Classic clients, and CLAMPTOBLACKADDITIVE wrapping is required for it to cut a
--- circle rather than leave the texture untouched. Returns the mask so the caller's
--- layout container can size it onto the texture; nil when masking is unavailable,
--- in which case the texture stays square rather than rendering nothing.
-local function circleMask(frame, tex)
-    tex:SetTexture(WHITE)
-    if not (frame.CreateMaskTexture and tex.AddMaskTexture) then return nil end
-    local mask = frame:CreateMaskTexture()
-    mask:SetTexture(CIRCLE_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    tex:AddMaskTexture(mask)
-    return mask
-end
+-- Rounds a solid texture into a circle. Shared with Toggle's knob and the caps of every
+-- stadium, so the mask asset and its wrap mode live in exactly one place. Returns the
+-- mask for the caller's layout container to size onto the texture, or nil when masking is
+-- unavailable, in which case the texture stays square rather than rendering nothing.
+local circleMask = SuuUI.Backdrop.CircleMask
 
 local SldMeta = {}
 SldMeta.__index = SldMeta

@@ -19,6 +19,9 @@ end
 function TogMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    self._pill:Destroy()
+    self._knobDisc:Destroy()
+    self._knobBox:Destroy()
     self._box:Destroy()
     -- The layout box is adopted, so destroying it does not hide the frame it lays out.
     -- Without this the widget stays painted on screen after teardown.
@@ -42,11 +45,11 @@ end
 -- @param snap bool  Place the knob immediately instead of animating (used on resize)
 function TogMeta:_render(snap)
     local T    = SuuUI.Theme
-    local B    = SuuUI.Backdrop
     local on   = self._value
-    -- Value flips recolour only, so the backdrop table is never rebuilt.
-    B.SetBg(self._track, on and "colorAccent" or "colorBgAlt")
-    B.SetBorder(self._track, "colorBorder")
+    -- Value flips recolour the existing pieces; no geometry is touched and no texture is
+    -- replaced, so the masks that round the track survive a flip.
+    self._pill:SetBg(on and "colorAccent" or "colorBgAlt")
+    self._pill:SetBorder("colorBorder")
 
     local tw       = self._f:GetWidth()
     local th       = self._f:GetHeight()
@@ -75,7 +78,7 @@ function TogMeta:_render(snap)
         }):Play()
     end
 
-    B.SetBg(self._knob, KNOB_WHITE)
+    self._knobDisc:SetBg(KNOB_WHITE)
 end
 
 function TogMeta:ApplyTheme()
@@ -89,10 +92,10 @@ function TogMeta:ApplyTheme()
             self._f:SetSize(w, h)
         end
     end
-    -- The full Apply picks up a changed borderWidth token; _render then recolours.
-    local B = SuuUI.Backdrop
-    B.Apply(self._track, { bg = "colorBgAlt", border = "colorBorder" })
-    B.Apply(self._knob,  { bg = KNOB_WHITE,   border = KNOB_WHITE })
+    -- Re-derives the stadium from the current height and a changed borderWidth token;
+    -- _render then recolours it. The knob's disc stretches to its frame, so it needs no
+    -- geometry pass of its own.
+    self._pill:Refresh()
     self:_render(true)
     -- A live edit to opacityDisabled must reach a widget that is already sitting faded.
     self:_applyEnabled()
@@ -136,12 +139,19 @@ function SuuUI.Components.Toggle(props, parent)
     -- Track fills the toggle; the knob is positioned by an anchor container
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
-    local track = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    -- A stadium rather than a backdrop: a backdrop's corners are its texture's corners,
+    -- so a rounded switch has to be composed from masked textures. Built before the track
+    -- joins the outer box so the first layout pass already has the pieces to size.
+    local track = CreateFrame("Frame", nil, f)
+    local pill = SuuUI.Backdrop.Pill(track, { bg = "colorBgAlt", border = "colorBorder" })
     box:Add(track)
 
     local knobBox = SuuUI.Layout:CreateContainer({ host = track, layout = "anchor" })
     local knobSize = h - 4
-    local knob = CreateFrame("Frame", nil, track, "BackdropTemplate")
+    -- The knob is square, so the same circular mask that rounds the track's caps makes
+    -- it a disc. A square knob inside a stadium reads as a rendering fault.
+    local knob = CreateFrame("Frame", nil, track)
+    local knobDisc = SuuUI.Backdrop.Circle(knob, { bg = KNOB_WHITE })
 
     local knobAnchor = {
         point = "LEFT", relativePoint = "LEFT",
@@ -151,7 +161,7 @@ function SuuUI.Components.Toggle(props, parent)
 
     local id = "tog_" .. tostring(f)
     handle = setmetatable({
-        _f=f, _track=track, _knob=knob,
+        _f=f, _track=track, _knob=knob, _pill=pill, _knobDisc=knobDisc,
         _box=box, _knobBox=knobBox, _knobAnchor=knobAnchor,
         _eid=id, _value=props.value == true, _enabled=true,
         _onChange=props.onChange,

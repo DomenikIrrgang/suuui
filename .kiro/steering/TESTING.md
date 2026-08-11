@@ -117,8 +117,11 @@ H.expectSize(btn, H.textWidth("OK", size) + 2 + padX * 2,
 move with it. `H.textBox` is the width the layout engine actually **reserves** for a
 string — `H.textWidth` plus the one-pixel render allowance `TextMetrics.Box` adds. Assert
 against `H.textBox` wherever a font string's own box is sized from its text (a
-`width = "auto"` child, a centred `Divider` label) and against `H.textWidth` where a
-component measures text and then adds its own padding. Never assert a raw glyph count.
+`width = "auto"` child, a centred `Divider` label, a hugging `NavItem` tab) and against
+`H.textWidth` only where a component adds slack of its own on top of the metric. A box at
+the bare metric **is a clip** — the simulated client reports it as one, exactly as the real
+one truncates it — so `.eq(H.textWidth(...))` on a font string's own width is an assertion
+that the label is one pixel short. Never assert a raw glyph count.
 
 **Each measuring helper takes an optional font path**, because faces have different glyph
 advances and line heights in the model just as they do in the client. Pass it whenever the

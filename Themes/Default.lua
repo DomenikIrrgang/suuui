@@ -38,6 +38,14 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- it has to read at a glance on every widget, in every value state; low enough to be
     -- unmistakable, high enough that the label is still readable.
     opacityDisabled  = 0.40,
+    -- Edit mode grid line visibility. Very faint so lines stay out of the way.
+    opacityGrid      = 0.08,
+    -- Edit mode grid lines: visible enough to guide placement, faint enough not to
+    -- distract from the frames being moved.
+    opacityGrid      = 0.15,
+    -- Smart guide lines (element-to-element alignment) are brighter than the grid so
+    -- they stand out as contextual feedback during a drag.
+    opacityGuide     = 0.40,
 
     -- Tier 2: surfaces. { ref, alpha } takes the primitive's RGB with a token alpha,
     -- so panel translucency is one slider instead of four colour edits.
@@ -51,6 +59,16 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- the accent hue so "you can move this" reads the same as every other affordance.
     colorOverlay     = { ref = "colorGray950", alpha = "opacityOverlay" },
     colorEditOverlay = { ref = "colorAccent",  alpha = "opacityEditOverlay" },
+    -- Edit mode grid lines: the accent colour at grid opacity.
+    colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
+    -- Locked frame overlay: a warning tint so "you cannot move this" reads at a glance.
+    colorEditOverlayLocked = { ref = "colorWarning", alpha = "opacityEditOverlay" },
+    -- Selected frame overlay: brighter accent so the selected element stands out.
+    colorEditOverlaySelected = { ref = "colorAccent", alpha = "opacityOverlay" },
+    -- Edit mode grid lines: the accent hue at grid opacity.
+    colorGrid        = { ref = "colorAccent", alpha = "opacityGrid" },
+    -- Smart guides (alignment lines to other elements) are brighter than the base grid.
+    colorGuide       = { ref = "colorAccent", alpha = "opacityGuide" },
     -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
     -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
     colorMarker      = { ref = "colorGray100", alpha = 0.90 },

@@ -347,6 +347,17 @@ return function(H)
         return { r, g, b, a }
     end
 
+    --- Convenience: a texture's vertex colour as a table. This is how a masked texture
+    --- carries its colour: a mask cuts the shape out of a solid white fill, and replacing
+    --- that fill with SetColorTexture would swap the texture the mask is attached to. Any
+    --- rounded surface is therefore tinted rather than recoloured, so it is this and not
+    --- H.backdropColor that reports what a stadium or a disc is painted.
+    function H.vertexColor(target)
+        local r, g, b, a = H.frameOf(target):GetVertexColor()
+        if r == nil then return nil end
+        return { r, g, b, a }
+    end
+
     --- Convenience: a font string's text colour as a table.
     function H.textColor(target)
         local f = H.frameOf(target)

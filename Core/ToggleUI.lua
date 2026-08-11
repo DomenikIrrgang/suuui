@@ -35,12 +35,14 @@ end
 -- @param frame table  The WoW frame to track
 function M:Register(frame)
     registry[frame] = true
+    SuuUI.Events:Emit("SUUUI_MOVEABLE_LIST_CHANGED")
 end
 
 --- Unregisters a frame from the toggle UI system.
 -- @param frame table  The WoW frame to remove
 function M:Unregister(frame)
     registry[frame] = nil
+    SuuUI.Events:Emit("SUUUI_MOVEABLE_LIST_CHANGED")
 end
 
 --- Returns all registered frames.
@@ -63,9 +65,19 @@ SuuUI.ToggleUI = M
 -- them back in with every frame draggable, and a profile switch would silently
 -- enter or leave it.
 SuuUI.Settings:Register("_layout", {
-    { key = "",          label = "Edit Mode",        type = "section" },
-    { key = "edit_mode", label = "Toggle Edit Mode", type = "toggle", default = false,
+    { key = "",             label = "Edit Mode",        type = "section" },
+    { key = "edit_mode",    label = "Toggle Edit Mode", type = "toggle", default = false,
       transient = true },
+    { key = "",             label = "Grid & Snap",      type = "section" },
+    { key = "snap_mode",    label = "Snap Mode",        type = "dropdown", default = "grid",
+      options = {
+        { value = "none",   label = "None" },
+        { value = "grid",   label = "Grid" },
+        { value = "guides", label = "Guides" },
+      }},
+    { key = "show_grid",    label = "Show Grid",        type = "toggle", default = true },
+    { key = "grid_size",    label = "Grid Size",        type = "slider", default = 16,
+      min = 4, max = 64, step = 4 },
 })
 
 -- Deprecated. SUUUI_EDIT_MODE_CHANGED was the public edit-mode event before edit mode

@@ -5,10 +5,9 @@ local S = SuuUI.UISignals
 
 -- Window chrome is token-driven. The title strip and the close button both carry text,
 -- so their heights are floored against the font metrics — a literal would clip once the
--- user raises a font token. The resize grip has no text of its own.
+-- user raises a font token. The resize grip sizes itself from the icon token.
 local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar") end
 local function closeSize()   return SuuUI.Theme:GetControlHeight("sizeControlMd") end
-local function gripSize()    return SuuUI.Theme:GetToken("sizeIcon") or 16 end
 local function borderWidth() return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1) end
 local function chromeGap()   return SuuUI.Theme:GetToken("spaceMd") or 12 end
 
@@ -58,6 +57,7 @@ local function applyTheme(self)
     self._titleStrip:ApplyTheme()
     self._titleT:ApplyTheme()
     self._closeBtn:ApplyTheme()
+    if self._gripComp then self._gripComp:ApplyTheme() end
 
 end
 
@@ -380,37 +380,33 @@ function SuuUI.Layout:CreateWindow(props)
         applyResizeBounds(f, minW, minH, maxW, maxH)
 
         local gripBox = SuuUI.Layout:CreateContainer({ host = f, layout = "anchor" })
-        local grip = CreateFrame("Frame", nil, f)
-        grip:EnableMouse(true)
-        SuuUI.UIRoot:RaiseAbove(grip, f, 10)
-        gripBox:Add(grip, {
+        -- The component owns its own size from the icon token, so the descriptor carries
+        -- position only: a raised sizeIcon regrows the grip and the container re-lays it
+        -- out off its SIZE_CHANGED, with no size to keep in step here.
+        local gripC = C.ResizeGrip({}, f)
+        SuuUI.UIRoot:RaiseAbove(gripC:GetFrame(), f, 10)
+        gripBox:Add(gripC, {
             anchor = {
-                point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT",
-                x = 0, y = 0, width = gripSize(), height = gripSize(),
+                point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT", x = 0, y = 0,
             },
         })
 
-        local gripTexBox = SuuUI.Layout:CreateContainer({ host = grip, layout = "stack" })
-        local tex = grip:CreateTexture(nil, "OVERLAY")
-        gripTexBox:Add(tex)
-
-        local function gripColor(hover)
-            local c = SuuUI.Theme:GetToken(hover and "colorTextMuted" or "colorBorder")
-                   or {0.5, 0.5, 0.5, 1}
-            tex:SetColorTexture(c[1], c[2], c[3], hover and 0.9 or 0.6)
-        end
-        gripColor(false)
-
-        grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
-        grip:SetScript("OnMouseUp", function()
+        -- The grip reports a gesture; the window decides what it means. Signals rather
+        -- than the grip's frame scripts, so the corner stays a reusable component instead
+        -- of something that knows how a window resizes.
+        local RG = C.RESIZEGRIP_SIGNALS
+        S:Connect(gripC, RG.DRAG_START, function() f:StartSizing("BOTTOMRIGHT") end)
+        S:Connect(gripC, RG.DRAG_STOP, function()
             f:StopMovingOrSizing()
             snapSize(f)
             if not centered then savePos({ _frame = f, _id = props.id }) end
         end)
-        grip:SetScript("OnEnter", function() gripColor(true) end)
-        grip:SetScript("OnLeave", function() gripColor(false) end)
-        handle._gripBox = gripBox
-        handle._grip    = grip
+
+        handle._gripBox  = gripBox
+        handle._gripComp = gripC
+        -- _grip stays the frame so callers and specs reach the same region the component
+        -- owns, as _titleText and _closeText do.
+        handle._grip     = gripC:GetFrame()
     end
 
     S:Connect(closeBtn, S.SIGNALS.CLICKED, function() handle:Hide() end)

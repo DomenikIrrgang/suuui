@@ -168,6 +168,8 @@ describe("Core.MoveableFrame", function()
     before_each(function()
         H.setup()
         host = H.parent(1024, 768)
+        -- Disable grid snap so position tests are not rounded to grid boundaries
+        H.SuuUI.Settings:Set("_layout", "snap_mode", "none")
         H.SuuUI.Settings:Register("test_plugin", {
             { key = "frame_position", type = "position", default = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 10, y = -20 } },
         })

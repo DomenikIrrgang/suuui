@@ -433,14 +433,28 @@ describe("harness: WoW API simulation", function()
             expect(H.font.hasFace("Fonts/transient.ttf")).falsy()
         end)
 
-        it("reports no clip when the box fits the text", function()
+        it("reports no clip when the box reserves the render allowance", function()
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("hello")
+            fs:SetSize(H.textBox("hello", 12), H.lineHeight(12))
+            expect(fs:IsTextClipped()).falsy()
+            expect(function() H.expectTextNotClipped(fs) end).notThrows()
+        end)
+
+        it("reports a clip for a box pinned to the bare metric width", function()
+            -- The client truncates with zero tolerance, so the metric is not a fitting
+            -- width — it is one physical pixel short of one. This is the whole reason
+            -- TextMetrics.Box exists next to Measure, and modelling the metric as "fits"
+            -- is what hid a real tab strip rendering "Play..." for "Player".
             local p = H.parent(400, 100)
             local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
             fs:SetText("hello")
             fs:SetSize(H.textWidth("hello", 12), H.lineHeight(12))
-            expect(fs:IsTextClipped()).falsy()
-            expect(function() H.expectTextNotClipped(fs) end).notThrows()
+            expect(fs:IsTextClipped()).as("metric width is a clip").truthy()
+            expect(function() H.expectTextNotClipped(fs) end).throws("clipped")
         end)
 
         it("reports a clip when the font grows past a pinned box", function()
@@ -474,8 +488,8 @@ describe("harness: WoW API simulation", function()
             fs:SetText("v")
             fs:SetSize(8, H.lineHeight(24))
             expect(fs:IsTextClipped()).truthy()
-            fs:SetWidth(H.textWidth("v", 24))
-            expect(fs:IsTextClipped()).as("a column as wide as the glyph fits").falsy()
+            fs:SetWidth(H.textBox("v", 24))
+            expect(fs:IsTextClipped()).as("a column that reserves the glyph fits").falsy()
         end)
 
         it("breaks inside a word once non-space wrap is enabled", function()

@@ -71,7 +71,14 @@ end
 -- extent need not agree exactly. One physical pixel of allowance covers the disagreement.
 --
 -- Use this wherever a font string's own box is sized from its text. Measure stays the raw
--- metric, for callers that add their own padding on top of it (Button, NavItem, Dropdown).
+-- metric, for callers that add slack of their OWN on top of it (Button, Dropdown's arrow
+-- column, both +2).
+--
+-- Outer padding does not make a caller a Measure caller. A component that sizes itself to
+-- `text + insets` and then lays the label out with those same insets has handed the whole
+-- metric back to the label, so the label's box lands at exactly the metric and the client
+-- truncates it — NavItem's hugging tab strip rendered "Play…" for "Player" that way, with
+-- every geometry assertion passing. Ask what the font string's own box ends up being.
 -- @param text string
 -- @param font string   Font file path
 -- @param size number

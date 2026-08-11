@@ -197,7 +197,9 @@ When a page needs a visual element the library does not have:
      `Destroy` `GetFrame` `ApplyTheme` — **no `SetPoint`**
    - Internal parts positioned by a host container, never by `SetPoint`
    - Backdrop via `SuuUI.Backdrop.Apply(f, { bg, border })`, recoloured with
-     `SetBg` / `SetBorder` — never a hand-built `SetBackdrop` table
+     `SetBg` / `SetBorder` — never a hand-built `SetBackdrop` table. A rounded surface goes
+     through `SuuUI.Backdrop.Pill` / `Circle` / `CircleMask` instead: a backdrop's corners
+     are square by construction, so rounding one is not a matter of styling it differently
    - Shared accessors installed with `SuuUI.Components.InstallBase(Meta, "_f")`, not
      retyped by hand
    - Enabled state installed with `SuuUI.Components.InstallEnable(Meta, "_f")` — never a

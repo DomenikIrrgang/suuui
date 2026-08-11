@@ -31,6 +31,10 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityEditOverlay = 0.20,
     -- See Themes/Default.lua: how far a disabled control fades.
     opacityDisabled  = 0.40,
+    -- Edit mode grid line visibility. Very faint so lines stay out of the way.
+    opacityGrid      = 0.15,
+    -- Smart guide lines (element alignment) are brighter than the base grid.
+    opacityGuide     = 0.40,
 
     -- Tier 2: surfaces
     colorBg          = { ref = "colorGray900", alpha = "opacityPanel" },
@@ -43,6 +47,14 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- the accent hue so "you can move this" reads the same as every other affordance.
     colorOverlay     = { ref = "colorGray950", alpha = "opacityOverlay" },
     colorEditOverlay = { ref = "colorAccent",  alpha = "opacityEditOverlay" },
+    -- Edit mode grid lines: the accent colour at grid opacity.
+    colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
+    -- Smart guides: brighter accent for element-to-element alignment lines.
+    colorGuide       = { ref = "colorAccent", alpha = "opacityGuide" },
+    -- See Themes/Default.lua: locked frame overlay.
+    colorEditOverlayLocked = { ref = "colorWarning", alpha = "opacityEditOverlay" },
+    -- See Themes/Default.lua: selected frame overlay.
+    colorEditOverlaySelected = { ref = "colorAccent", alpha = "opacityOverlay" },
     -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
     -- tracks the lightest neutral rather than the text colour it would otherwise borrow.
     colorMarker      = { ref = "colorGray100", alpha = 0.90 },

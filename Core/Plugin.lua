@@ -152,6 +152,9 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
         -- Before UIRoot: the grid has to be known when the first container lays out.
         SuuUI.Pixel:Init()
         SuuUI.UIRoot:Init()  -- Initialize global UI root
+        -- Edit mode subsystems: grid overlay and properties panel
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.Init then SuuUI.SnapGrid:Init() end
+        if SuuUI.EditPanel and SuuUI.EditPanel.Init then SuuUI.EditPanel:Init() end
         
         -- Core subsystems (profiles, theme, UI root) are now usable
         SuuUI.Events:Emit("SUUUI_CORE_READY")

@@ -32,11 +32,17 @@ end
 -- Opt-in via props.autoW, for a horizontal tab strip where a fixed nav width would make
 -- every tab as wide as the widest possible one. Measured on the shared probe, never on
 -- the label: a font string's GetStringWidth is clamped to the width it was given.
+--
+-- Box, not Measure. The label is a STRETCHED stack child, so the insets subtracted here
+-- are handed straight back to it: its own box lands at exactly this number rather than
+-- this number plus padding. The client truncates with zero tolerance, so a box at the
+-- bare metric drops the last characters for an ellipsis — "Player" renders "Play...".
+-- Measure is for a caller that adds slack of its own on top (Button, Dropdown's arrow).
 function NavMeta:_autosize()
     local T = SuuUI.Theme
     local fs = self._label
     local font, size, flags = fs:GetFont()
-    local tw = SuuUI.TextMetrics.Measure(fs:GetText() or "", font, size, flags)
+    local tw = SuuUI.TextMetrics.Box(fs:GetText() or "", font, size, flags)
     local insets = (T:GetToken("spaceSm") or 8) + (T:GetToken("spaceXs") or 4)
     self._f:SetWidth(SuuUI.Pixel.Ceil(tw + insets))
 end

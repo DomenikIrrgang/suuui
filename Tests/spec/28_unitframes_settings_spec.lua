@@ -314,6 +314,25 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
             expect(nav:GetWidth()).as("tab is still wide enough to read").gt(0)
         end)
 
+        it("REGRESSION: tab labels are not truncated to an ellipsis", function()
+            -- Shipped as "Play..." / "Targ...": the tab reserved the bare text metric,
+            -- and its label is a stretched stack child, so the label's own box landed at
+            -- exactly the metric. The client truncates with zero tolerance, so it dropped
+            -- the last characters. Asserting the width is under 160 passed throughout.
+            local ctl = buildPage(host)
+            for _, b in ipairs(ctl:GetTabButtons()) do
+                local fs = b.nav._label
+                local path, size = H.fontOf(fs)
+                -- The label's own assigned box, in its own units: the page is built
+                -- inside an unanchored scroll frame, so screen-space boxes do not
+                -- resolve here and the width the layout handed it is the real subject.
+                expect(fs:GetWidth())
+                    .as(("%s label box clears its render box"):format(b.id))
+                    .gte(H.textBox(fs:GetText(), size, path))
+                H.expectTextNotClipped(fs)
+            end
+        end)
+
         it("the control reports the height of the open tab's rows", function()
             local ctl = buildPage(host)
             local pane = ctl:GetActivePane()
