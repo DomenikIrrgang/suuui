@@ -229,6 +229,209 @@ describe("Grid Snap", function()
 end)
 
 -------------------------------------------------------------------------------
+-- Guide Snap (magnetic alignment to other elements)
+--
+-- The reported bug was asymmetric: the horizontal axis snapped to another
+-- element's left edge while the vertical axis ignored the bottom edge entirely.
+-- These specs pin BOTH axes independently so a regression on one is visible.
+-------------------------------------------------------------------------------
+describe("Guide Snap", function()
+    local rootFrame, other, dragged
+
+    -- Builds two moveable frames as siblings under the UI root. `offX`/`offY` place
+    -- the dragged frame relative to the other frame's TOPLEFT, so a test states the
+    -- misalignment it wants in one place.
+    --
+    -- The offset goes in the SCHEMA default, not just in Apply's `defaults`: the
+    -- position watcher restores from Settings, so the schema value is what actually
+    -- places the frame. Passing it only to Apply leaves both frames co-located, which
+    -- makes every snap delta zero and every assertion pass for the wrong reason.
+    local function stage(offX, offY)
+        H.SuuUI.Settings:Register("guide_plugin", {
+            { key = "other_pos", type = "position", default = {
+                point = "TOPLEFT", relPoint = "TOPLEFT", x = 200, y = -200 } },
+            { key = "dragged_pos", type = "position", default = {
+                point = "TOPLEFT", relPoint = "TOPLEFT",
+                x = 200 + offX, y = -200 + offY } },
+        })
+
+        rootFrame = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+
+        other = H.env.CreateFrame("Frame", nil, rootFrame)
+        other:SetSize(100, 50)
+        H.SuuUI.MoveableFrame:Apply(other, {
+            pluginId = "guide_plugin", key = "other_pos", displayName = "Other",
+            defaults = { point = "TOPLEFT", relPoint = "TOPLEFT", x = 200, y = -200 },
+        })
+
+        dragged = H.env.CreateFrame("Frame", nil, rootFrame)
+        dragged:SetSize(100, 50)
+        H.SuuUI.MoveableFrame:Apply(dragged, {
+            pluginId = "guide_plugin", key = "dragged_pos", displayName = "Dragged",
+            defaults = { point = "TOPLEFT", relPoint = "TOPLEFT",
+                         x = 200 + offX, y = -200 + offY },
+        })
+
+        H.SuuUI.Settings:Set("_layout", "snap_mode", "guides")
+        H.SuuUI.ToggleUI:Enable()
+    end
+
+    before_each(function()
+        H.setup()
+        H.parent(1024, 768)
+    end)
+
+    it("snaps the vertical axis onto another element's edge", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        -- Aligned horizontally, 4 units off vertically: only y has work to do.
+        stage(0, -4)
+
+        local _, y = H.SuuUI.SnapGrid:Snap(200, -204, dragged)
+        expect(y).as("y snapped onto the other element's edge").eq(-200)
+    end)
+
+    it("snaps the horizontal axis onto another element's edge", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        stage(4, 0)
+
+        local x = H.SuuUI.SnapGrid:Snap(204, -200, dragged)
+        expect(x).as("x snapped onto the other element's edge").eq(200)
+    end)
+
+    it("snaps BOTH axes in a single call", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        stage(3, -3)
+
+        local x, y = H.SuuUI.SnapGrid:Snap(203, -203, dragged)
+        expect(x).as("x snapped").eq(200)
+        -- This is the assertion the reported bug would fail: x lands, y is ignored.
+        expect(y).as("y snapped in the same call as x").eq(-200)
+    end)
+
+    it("leaves an axis alone when nothing is within the threshold", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        -- x is 3 off (snaps), y is 200 off (nothing to snap to).
+        stage(3, -200)
+
+        local x, y = H.SuuUI.SnapGrid:Snap(203, -400, dragged)
+        expect(x).as("x still snapped").eq(200)
+        expect(y).as("y left untouched, no guide in range").eq(-400)
+    end)
+
+    it("snap mode none leaves both axes untouched", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        stage(3, -3)
+        H.SuuUI.Settings:Set("_layout", "snap_mode", "none")
+
+        local x, y = H.SuuUI.SnapGrid:Snap(203, -203, dragged)
+        expect(x).eq(203)
+        expect(y).eq(-203)
+    end)
+
+    -- A drawn guide is a promise that releasing there lands on the line. These pin that
+    -- promise: only edges within magnet range are returned, so a line can never appear
+    -- without a snap behind it.
+    --
+    -- Assertions target the OTHER frame's specific edge rather than counting guides:
+    -- H.setup() boots the real addon, so ToggleUI also holds the shipped plugin frames
+    -- and a raw count would be measuring those too.
+    local function contains(list, v)
+        for i = 1, #list do
+            if math.abs(list[i] - v) < 0.001 then return true end
+        end
+        return false
+    end
+
+    it("offers a guide for an edge that is within magnet range", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.FindGuides) then return end
+        stage(3, -3)
+
+        local g = H.SuuUI.SnapGrid:FindGuides(dragged)
+        expect(contains(g.v, other:GetLeft()))
+            .as("the other frame's left edge is offered").eq(true)
+        expect(contains(g.h, other:GetTop()))
+            .as("the other frame's top edge is offered").eq(true)
+    end)
+
+    it("offers no guide for an edge that is out of range", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.FindGuides) then return end
+        stage(400, -300)
+
+        local g = H.SuuUI.SnapGrid:FindGuides(dragged)
+        expect(contains(g.v, other:GetLeft()))
+            .as("out-of-range left edge is not offered").eq(false)
+        expect(contains(g.h, other:GetTop()))
+            .as("out-of-range top edge is not offered").eq(false)
+    end)
+
+    it("guides follow the frame instead of staying frozen at pickup", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.FindGuides) then return end
+        -- Starts far away: the other frame's edge is not on offer.
+        stage(400, -300)
+        expect(contains(H.SuuUI.SnapGrid:FindGuides(dragged).v, other:GetLeft()))
+            .as("not offered at pickup").eq(false)
+
+        -- Move it next to the other element, as a drag would.
+        H.SuuUI.Settings:Set("guide_plugin", "dragged_pos", {
+            point = "TOPLEFT", relPoint = "TOPLEFT", x = 202, y = -202,
+        })
+
+        expect(contains(H.SuuUI.SnapGrid:FindGuides(dragged).v, other:GetLeft()))
+            .as("offered once the frame moved close").eq(true)
+    end)
+
+    it("the same threshold gates the drawn guide and the magnet", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.FindGuides) then return end
+        stage(3, -3)
+        expect(contains(H.SuuUI.SnapGrid:FindGuides(dragged).v, other:GetLeft()))
+            .as("guide offered").eq(true)
+        local x = H.SuuUI.SnapGrid:Snap(203, -203, dragged)
+        expect(x).as("the offered guide actually snapped").eq(200)
+    end)
+
+    -- The result is handed to AnchorLayout, which snaps everything it sends to SetPoint.
+    -- A fractional return therefore gets rounded downstream AFTER being aimed at the
+    -- guide, landing the frame a pixel short of the line it should sit flush against.
+    -- The result is handed to AnchorLayout, which snaps everything it sends to SetPoint.
+    -- A fractional return therefore gets rounded downstream AFTER being aimed at the
+    -- guide, landing the frame a pixel short of the line it should sit flush against.
+    it("returns a pixel-grid aligned offset from a fractional edge", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        stage(3, -3)
+        -- A fractional height puts the other frame's bottom edge off the grid, so the
+        -- raw delta needed to align to it is fractional too.
+        other:SetSize(100, 50.5)
+
+        local x, y = H.SuuUI.SnapGrid:Snap(203, -203, dragged)
+        expect(x).as("x lands on the pixel grid").eq(H.SuuUI.Pixel.Snap(x))
+        expect(y).as("y lands on the pixel grid").eq(H.SuuUI.Pixel.Snap(y))
+    end)
+
+    -- Stacking lands FLUSH, not overlapped. A one-physical-pixel seam does show at the
+    -- boundary in game, but it cannot be corrected from here: one unit is `multiplier`
+    -- physical pixels, so one pixel is a fraction of a unit, and AnchorLayout snaps every
+    -- coordinate to grid = 1. A whole-unit nudge overshoots by `multiplier` pixels and
+    -- turns the seam into a visible overlap — measured in game, both directions.
+    it("aligns flush when stacking our bottom against their top", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        -- offY = +47 puts the dragged frame ABOVE the other with its bottom 3 units
+        -- below the other's top, so the winning pairing is bottom-to-top.
+        stage(0, 47)
+
+        local _, y = H.SuuUI.SnapGrid:Snap(200, -153, dragged)
+        expect(y).as("stacked edge lands flush, no overlap nudge").eq(-150)
+    end)
+
+    it("matches exactly when aligning like-for-like edges", function()
+        if not (H.SuuUI.SnapGrid and H.SuuUI.SnapGrid.Snap) then return end
+        stage(0, -3)
+
+        local _, y = H.SuuUI.SnapGrid:Snap(200, -203, dragged)
+        expect(y).as("like-for-like matches exactly").eq(-200)
+    end)
+end)
+
+-------------------------------------------------------------------------------
 -- Click to Select
 -------------------------------------------------------------------------------
 describe("Click to Select", function()

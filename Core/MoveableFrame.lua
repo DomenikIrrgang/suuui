@@ -180,18 +180,17 @@ function M:Apply(frame, opts)
         if M:IsLocked(frame) then return end
         dragActive = true
         frame:StartMoving()
-        -- Show smart guides during drag
-        if SuuUI.SnapGrid and SuuUI.SnapGrid.ShowGuides then
-            local guides = SuuUI.SnapGrid:FindGuides(frame)
-            SuuUI.SnapGrid:ShowGuides(guides)
+        -- Live alignment guides: refreshed while the drag runs, not frozen at pickup.
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.BeginGuides then
+            SuuUI.SnapGrid:BeginGuides(frame)
         end
     end)
 
     overlay:SetScript("OnDragStop", function()
         frame:StopMovingOrSizing()
-        -- Hide smart guides
-        if SuuUI.SnapGrid and SuuUI.SnapGrid.HideGuides then
-            SuuUI.SnapGrid:HideGuides()
+        -- Stop the guide ticker and clear the lines
+        if SuuUI.SnapGrid and SuuUI.SnapGrid.EndGuides then
+            SuuUI.SnapGrid:EndGuides()
         end
         dragActive = false
 

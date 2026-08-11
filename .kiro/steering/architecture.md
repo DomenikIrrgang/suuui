@@ -31,6 +31,8 @@ SuuUI/
 │   ├── ReloadGuard.lua   -- confirmation modal for settings needing a UI reload
 │   ├── ToggleUI.lua      -- edit mode state + moveable-frame registry
 │   ├── MoveableFrame.lua -- mixin making a frame repositionable in edit mode
+│   ├── SnapGrid.lua      -- edit mode grid overlay, snap modes, alignment guides
+│   ├── EditPanel.lua     -- edit mode properties inspector (floating window)
 │   └── Pool.lua          -- typed frame pool
 ├── Animation/
 │   ├── Tween.lua         -- easing functions
@@ -177,7 +179,8 @@ vanish with them. Callbacks run through `pcall` and log failures via `SuuUI.Debu
 
 Built-in bus events: `SUUUI_PROFILE_LOADED`, `SUUUI_THEME_CHANGED`, `SUUUI_FONTS_CHANGED`,
 `SUUUI_PIXEL_GRID_CHANGED`, `SUUUI_SETTING_CHANGED`, `SUUUI_PLUGIN_ENABLED`,
-`SUUUI_PLUGIN_DISABLED`. Deprecated: `SUUUI_EDIT_MODE_CHANGED` — still emitted for
+`SUUUI_PLUGIN_DISABLED`. `SUUUI_MOVEABLE_LIST_CHANGED` fires when a moveable frame is
+registered or unregistered. Deprecated: `SUUUI_EDIT_MODE_CHANGED` — still emitted for
 third-party listeners, but new code watches the setting instead (see 5b).
 
 **To react to one setting, use `Settings:Watch`, not `SUUUI_SETTING_CHANGED`.** The event
@@ -466,6 +469,10 @@ flag of its own, and every surface that cares subscribes to the same key.
 SuuUI.ToggleUI:IsEditMode()          -- reads Settings("_layout", "edit_mode")
 SuuUI.ToggleUI:Toggle() / :Enable() / :Disable()
 SuuUI.ToggleUI:Register(frame) / :Unregister(frame) / :GetAll()
+-- Register/Unregister emit SUUUI_MOVEABLE_LIST_CHANGED. EditPanel rebuilds its element
+-- list from it: a frame that changes mode (a resource bar going attached -> detached)
+-- is Removed and re-Applied, and a panel that only rebuilt on edit-mode entry would go
+-- on listing a frame that no longer exists.
 
 SuuUI.MoveableFrame:Apply(frame, {
   pluginId = "unit_frames", key = "player_position",
@@ -476,6 +483,8 @@ SuuUI.MoveableFrame:Apply(frame, {
 })
 SuuUI.MoveableFrame:RestorePosition(frame)
 SuuUI.MoveableFrame:ResetPosition(frame)
+SuuUI.MoveableFrame:SetLocked(frame, bool)  -- writes `locked` into the stored position
+SuuUI.MoveableFrame:IsLocked(frame)
 SuuUI.MoveableFrame:RefreshAnchor(frame)  -- re-state placement after coreInset changed
 SuuUI.MoveableFrame:Remove(frame)     -- unwatches; required on teardown
 ```
@@ -526,6 +535,64 @@ frame. Any bidirectional binding needs this; it is not specific to dragging.
 edit mode became a watched setting, and ToggleUI still emits it from a watcher so
 third-party plugins keep working. New code watches the setting.
 
+### 5d. Snap Grid, Guides & The Properties Panel
+
+Two surfaces sit on top of 5c, both driven entirely by watchers on `_layout` keys so
+neither owns state of its own.
+
+`Core/SnapGrid.lua` draws the grid and decides where a dropped frame lands.
+`Core/EditPanel.lua` is the properties inspector: a moveable, non-resizable window
+listing every registered frame, with X/Y inputs, an anchor dropdown, a lock toggle and
+the grid controls. Closing it leaves edit mode, and it always keeps one element selected
+— a panel with nothing selected has no controls to offer.
+
+**Settings** (all on `_layout`, declared once in `ToggleUI.lua`):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `snap_mode` | dropdown | `none` ｜ `grid` ｜ `guides` |
+| `show_grid` | toggle | draw the grid overlay while in edit mode |
+| `grid_size` | slider | grid step, 4–64 |
+
+**API:**
+```lua
+SuuUI.SnapGrid:Snap(x, y, frame)   -- dispatches on snap_mode; returns possibly-moved x, y
+SuuUI.SnapGrid:FindGuides(frame)   -- { h = {y...}, v = {x...} } — NEAR guides only
+SuuUI.SnapGrid:BeginGuides(frame)  -- start the live guide ticker (drag start)
+SuuUI.SnapGrid:EndGuides()         -- stop it and clear the lines (drag stop)
+SuuUI.EditPanel:Select(frame) / :GetSelected() / :Refresh()
+```
+
+Four things here are load-bearing, and each cost an in-game round trip to find:
+
+- **A drawn guide is a promise.** `FindGuides` returns only edges within
+  `GUIDE_SNAP_THRESHOLD`, and the snap uses that same constant and the same `_edgesOf`
+  helper. Drawing every edge of every frame instead — which is what shipped first —
+  puts lines on screen with no magnet behind them, and they read as noise.
+- **Guides are recomputed while the drag runs**, on a throttled ticker whose `OnUpdate`
+  is unregistered on drag stop. Computing them once at drag start freezes them at the
+  position the frame was picked up from, so they describe where it *used to be*.
+- **The snap result is quantised with `Pixel.Snap` before it is returned.** The delta
+  that lands an edge on a guide is almost always fractional, and `AnchorLayout` snaps
+  every coordinate on its way to `SetPoint` — so a fractional return gets re-rounded
+  *after* being aimed, landing the frame up to half a step off the line it was aimed at.
+- **A one-pixel seam at a stacked edge is a rasterisation blend, not a placement error.**
+  Measured in game at `multiplier = 1`, where one unit is exactly one physical pixel: a
+  flush snap leaves a one-pixel seam, and nudging by one pixel produces a one-pixel
+  *overlap* instead. Those are adjacent integer offsets, so no placement makes the two
+  fills read as touching — the boundary row is blended by the rasteriser. `EDGE_PAIRINGS`
+  therefore enumerates the pairings, so stacking (our bottom to their top) is an explicit
+  candidate, and applies no correction to any of them. Both directions were tried in game.
+
+**A locked frame is locked in the position, not in a separate key.** `locked` lives
+inside the stored position table, so it travels with the position on a profile switch,
+a copy and a reset, and cannot desync from it. A locked frame refuses the drag, paints
+`colorEditOverlayLocked` instead of `colorEditOverlay`, and shows a lock badge.
+
+**The panel is built lazily, on first entry into edit mode.** Constructing it at login
+would create components — and fire their animations — during the `PLAYER_LOGIN` pass for
+a window the player may never open.
+
 ### 6. Theme & Token System (`Core/Theme.lua`)
 
 Flat token table, but organised in **two tiers**. Token names: camelCase with category
@@ -573,6 +640,15 @@ colorBgPressed   = { ref = "colorGray750", alpha = "opacityPanel" }   -- mouse d
 -- The empty part of a frameless bar: a unit frame's health track, a cast bar's. Its own
 -- semantic rather than a panel colour, because a bar sits over the game world.
 colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" }
+-- Edit mode. The overlay takes the accent hue so "you can move this" reads like every
+-- other affordance, and the locked variant takes Warning so "you cannot" reads at a
+-- glance. The grid is faint enough to ignore; a guide is brighter because it only
+-- appears when a magnet is armed behind it (see 5d).
+opacityEditOverlay = 0.20   opacityGrid = 0.15   opacityGuide = 0.40
+colorEditOverlay       = { ref = "colorAccent",  alpha = "opacityEditOverlay" }
+colorEditOverlayLocked = { ref = "colorWarning", alpha = "opacityEditOverlay" }
+colorGrid        = { ref = "colorAccent", alpha = "opacityGrid" }
+colorGuide       = { ref = "colorAccent", alpha = "opacityGuide" }
 -- The "you cannot stop this" cue: the hairline outline a cast bar draws around itself and
 -- its icon while a spell is uninterruptible. A light neutral rather than an intent colour —
 -- it describes the spell, not a warning, and it has to stay readable over any fill colour.

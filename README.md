@@ -26,7 +26,7 @@ Open the settings window in game with `/suuui`.
 
 | Directory | Contents |
 |---|---|
-| `Core/` | event bus, UI signals, attach points, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle |
+| `Core/` | event bus, UI signals, attach points, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
 | `Components/` | ~20 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, … |
 | `Animation/` | tween easings, animation runner, named presets |

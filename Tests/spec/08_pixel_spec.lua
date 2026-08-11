@@ -119,6 +119,34 @@ describe("Core.Pixel", function()
             expect(P.Line(nil)).eq(P.grid)
             expect(P.Line(2.6)).eq(3)
         end)
+
+        -- Geometry does not survive a round trip through the client unscathed: the root's
+        -- scale is rarely binary-exact (768/1440 = 8/15), so SetSize(w, 22) reads back as
+        -- 21.99996948242. Floor turned that into 21 — a stretched child a whole pixel short
+        -- of the box it was told to fill, which showed in game as a one-pixel gap against
+        -- the frame stacked beneath it. These are the values measured in game.
+        it("Floor does not lose a unit to scale round-trip noise", function()
+            local P = H.SuuUI.Pixel
+            expect(P.Floor(21.99996948242)).as("a hair under 22 is 22").eq(22)
+            expect(P.Floor(362.99996948242)).as("a hair under 363 is 363").eq(363)
+            expect(P.Floor(250.99998474121)).as("a hair under 251 is 251").eq(251)
+        end)
+
+        it("Ceil does not gain a unit to the same noise", function()
+            local P = H.SuuUI.Pixel
+            expect(P.Ceil(22.00001525879)).as("a hair over 22 is 22").eq(22)
+            expect(P.Ceil(194.00001525879)).as("a hair over 194 is 194").eq(194)
+        end)
+
+        it("Floor and Ceil still round real fractions", function()
+            local P = H.SuuUI.Pixel
+            -- The tolerance recovers round-trip noise without masking a fraction a
+            -- caller could have meant.
+            expect(P.Floor(21.5)).as("a real half still floors").eq(21)
+            expect(P.Floor(21.9)).as("a real 0.9 still floors").eq(21)
+            expect(P.Ceil(21.5)).as("a real half still ceils").eq(22)
+            expect(P.Ceil(21.1)).as("a real 0.1 still ceils").eq(22)
+        end)
     end)
 
     describe("with scaling disabled", function()

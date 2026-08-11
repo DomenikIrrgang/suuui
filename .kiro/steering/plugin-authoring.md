@@ -373,6 +373,7 @@ per-key listener has to filter it, gets no initial value, and needs a second
 | `SUUUI_SETTING_CHANGED` | `pluginId, key, value, oldValue` |
 | `SUUUI_PLUGIN_ENABLED` | `pluginId` |
 | `SUUUI_PLUGIN_DISABLED` | `pluginId` |
+| `SUUUI_MOVEABLE_LIST_CHANGED` | — (a moveable frame was registered or unregistered) |
 
 ---
 

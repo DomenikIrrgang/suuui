@@ -72,6 +72,23 @@ local function referenceScale()
     return 1
 end
 
+-- How far off a grid multiple a value may sit and still be treated as being ON it.
+--
+-- Geometry does not survive a round trip through the client unscathed: the root's scale is
+-- physH-derived and rarely a binary-exact fraction (768/1440 = 8/15), so the client stores
+-- a size in screen space and hands it back divided by that scale. SetSize(w, 22) reads back
+-- as 21.99996948242 — one or two ULPs short of 22.
+--
+-- Floor and Ceil are the two operations that turn that noise into a WHOLE UNIT of error:
+-- Floor(21.99996948242) is 21, so a stretched child comes out a pixel short of the box it
+-- was told to fill, and the missing row shows as a gap against whatever sits against that
+-- edge. Snap is immune, since rounding absorbs the noise.
+--
+-- The tolerance is orders of magnitude above the observed noise (3e-5) and far below any
+-- offset a caller could mean, so it recovers the intended integer without ever masking a
+-- real fraction.
+local GRID_EPS = 0.01
+
 --- Snaps a value to the pixel grid. Everything the layout engine hands SetPoint,
 --- SetSize or SetWidth passes through here.
 -- @param v number
@@ -84,23 +101,27 @@ function M.Snap(v)
 end
 
 --- Snaps down. Use for a size that must not overflow the space it was given.
+-- Tolerates GRID_EPS above the multiple, so a value the client handed back a hair short of
+-- a whole unit is not truncated by a full one.
 -- @param v number
 -- @return number
 function M.Floor(v)
     if not v or v == 0 then return 0 end
     local g = M.grid
-    if g == 1 then return floor(v) end
-    return g * floor(v / g)
+    if g == 1 then return floor(v + GRID_EPS) end
+    return g * floor(v / g + GRID_EPS)
 end
 
 --- Snaps up. Use for a size that must not clip its content.
+-- Tolerates GRID_EPS below the multiple, so a value a hair OVER a whole unit does not gain
+-- a full one — the same round-trip noise in the other direction.
 -- @param v number
 -- @return number
 function M.Ceil(v)
     if not v or v == 0 then return 0 end
     local g = M.grid
-    if g == 1 then return ceil(v) end
-    return g * ceil(v / g)
+    if g == 1 then return ceil(v - GRID_EPS) end
+    return g * ceil(v / g - GRID_EPS)
 end
 
 --- Cursor position expressed in a frame's own coordinate space.
