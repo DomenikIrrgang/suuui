@@ -747,9 +747,17 @@ needs no colour code of its own:
 
 | Order | Source | Covers |
 |---|---|---|
-| 1 | the unit's class (`Game:UnitClassColor`) | every player, and anything the client reports a class for |
-| 2 | its reaction to the player (`Game:UnitReactionColor`) | a mob, a critter, a quest giver, a totem — everything with no class |
+| 1 | the unit's class (`Game:UnitClassColor`) | players only — a hostile enemy player still shows their class |
+| 2 | its reaction to the player (`Game:UnitReactionColor`) | a mob, a critter, a quest giver, a totem — everything that is not a player |
 | 3 | the named token | class colouring off, or no unit to ask about |
+
+**Order 1 is gated on `UnitIsPlayer`, not on whether the client reports a class.** Asking
+`UnitClass` about a creature does not fail — it answers, and it almost always answers
+`WARRIOR`, because that is what the overwhelming majority of creatures are internally. So a
+chain that treated "has a class" as the test painted every mob, critter and quest giver in
+warrior tan and never reached step 2 at all. A neutral Vale Moth rendered brown instead of
+yellow, which is how the bug was found. `UnitIsPlayer` is the only question that separates a
+mage from a moth.
 
 Reaction sits **inside** the `colorUseClassColors` branch rather than behind a toggle of its
 own. It is not a second feature: it is what "colour units by what they are" means for a unit
@@ -962,7 +970,7 @@ reads back out of `SchoolOf`.
 ```lua
 SuuUI.Game:PowerColor(powerType)      -- falls back to mana for an unknown type
 SuuUI.Game:ClassColor(classFile)      -- {r,g,b,a} or nil; prefers CUSTOM_CLASS_COLORS
-SuuUI.Game:UnitClassColor(unit)       -- ClassColor(UnitClass(unit)), or nil
+SuuUI.Game:UnitClassColor(unit)       -- a PLAYER's class colour; nil for a creature
 SuuUI.Game.REACTION                   -- { HOSTILE = 2, NEUTRAL = 4, FRIENDLY = 5 }
 SuuUI.Game:ReactionColor(reaction)    -- the client's 1..8 standing -> {r,g,b,a}, or nil
 SuuUI.Game:UnitReactionColor(unit)    -- ReactionColor(UnitReaction(unit, "player")), or nil
@@ -979,6 +987,9 @@ exalted) and `ReactionColor` collapses it onto **three** bands, because a health
 answering "can this thing hurt me" and the client's own colour table makes the same
 collapse: keeping eight would give the player five shades that all mean "friendly". Hostile
 takes everything at or below unfriendly, since that is the set that will fight you.
+
+"Has no class" here means **is not a player**, and the difference is not academic: the client
+answers `UnitClass` for a creature too. See the gate on order 1 in `GetUnitColor` above.
 
 `REACTION` names the `FACTION_BAR_COLORS` row that carries each band, which is what makes
 the live global a drop-in source rather than a coincidence — it is preferred over the
@@ -1000,7 +1011,9 @@ against the live source, so a palette swap is picked up without allocating per c
 
 `ClassColor` and `UnitClassColor` return nil for an unknown class — an NPC, a totem, a pet
 — exactly like `SchoolColor`. nil is a real answer; the caller's own fallback is the right
-response.
+response. `UnitClassColor` decides "unknown" by `UnitIsPlayer` rather than by what
+`UnitClass` says, so a creature reads as nil however confidently the client calls it a
+warrior.
 
 The seven pure schools carry Blizzard's own values deliberately — the point of school
 colouring is that it matches what the player already reads everywhere else in the game, so

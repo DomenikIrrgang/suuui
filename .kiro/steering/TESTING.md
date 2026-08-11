@@ -179,6 +179,15 @@ client never produces — and a frame that only reads on the event would look co
 that skipped it. `UnitReaction(unit, other)` answers for the FIRST unit only, reproducing the
 client's asymmetry rather than hiding it: a caller that swaps the arguments gets nil.
 
+**A staged unit is a creature until a spec says `isPlayer = true`.** `UnitClass` answers for
+a creature in the real client — almost always `"WARRIOR"` — so the harness answers the same
+way, and `UnitIsPlayer` is the only thing that tells a mob from a player. A spec painting
+another *player* must therefore stage it (`H.setTarget({ class = "MAGE", isPlayer = true })`);
+one painting a mob stages neither and gets the misleading class the client really reports.
+`classless = true` is the narrower case of a unit the client reports **no** class for, so it
+is the wrong tool for modelling a mob — reaching for it is what let a bug ship where every
+creature rendered in warrior tan while the reaction fallback looked fully covered.
+
 **Bar transitions default to `instant`** (`H.setup()` calls
 `Transitions:SetDefault("instant")` unless you pass `barTransitions = true`). The shipped
 default is `"smooth"`, which means a value written by `SetValue` arrives over several
