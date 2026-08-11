@@ -77,6 +77,11 @@ function M.reset()
     -- runs first. Nothing needs it to be: a unit frame is built whether or not its unit is
     -- there, which is what lets it appear the moment one is.
     M.units          = {}
+    -- What the client's own secure handler did on the last click: which unit it targeted,
+    -- and which unit's context menu it opened. Reset because a leaked menu record makes
+    -- the next spec's right-click assertion pass before the click happens.
+    M.targetedUnit   = nil
+    M.unitMenu       = nil
     M._settling = false
     M.settleIterations = 0
     pending    = {}

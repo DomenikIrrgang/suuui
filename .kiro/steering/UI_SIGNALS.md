@@ -182,7 +182,10 @@ Every component you write must:
    `SIZE_CHANGED`; one with a value emits `VALUE_CHANGED`; one that can be toggled
    emits `VISIBILITY_CHANGED`.
 2. **Translate** Blizzard scripts into signals internally — the Blizzard script never
-   escapes the component file.
+   escapes the component file. One exception is not a choice: a frame built from a secure
+   template already owns its `OnClick`, and that handler is what performs the protected
+   action, so a secure component emits from `PostClick` instead. Overwriting `OnClick`
+   there breaks the action silently — see `Components/UnitClickArea.lua`.
 3. **Clean up** in `Destroy()` with `SuuUI.UISignals:DisconnectAll(self)`.
 4. **Test every signal it emits** — payload and emission count. Setters are silent by
    contract, so assert that too: `SetValue` must not emit `VALUE_CHANGED`. Use

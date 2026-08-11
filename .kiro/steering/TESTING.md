@@ -188,6 +188,28 @@ one painting a mob stages neither and gets the misleading class the client reall
 is the wrong tool for modelling a mob — reaching for it is what let a bug ship where every
 creature rendered in warrior tan while the reaction fallback looked fully covered.
 
+**A protected action is performed by the client, so that is what you assert.** Targeting a
+unit and opening its context menu are protected: an addon states secure attributes and the
+template's own click handler acts on them. The simulated client models that handler, so a
+spec reads back what the client *did* rather than looking for a callback that does not exist:
+
+```lua
+H.click(area, "RightButton")
+expect(H.unitMenu().unit).eq("target")   -- the client opened this unit's menu
+H.click(area)
+expect(H.targetedUnit()).eq("target")    -- and targeted it on a left click
+H.clearUnitActions()                     -- so a second click asserts independently
+```
+
+Two client behaviours here exist to make a mis-wired surface fail rather than pass:
+
+- **A `Button` fires its click handler for left-up alone until `RegisterForClicks` says
+  otherwise.** Forgetting it is invisible in every other assertion — the frame is still
+  there, still sized, still mouse-enabled — and the right click simply never arrives.
+- **The secure template's `OnClick` IS the action.** `SetScript("OnClick", ...)` on such a
+  frame replaces it and every action stops; the harness reproduces that, so the honest hooks
+  (`PreClick` / `PostClick`) are the only way a component observes its own clicks.
+
 **Bar transitions default to `instant`** (`H.setup()` calls
 `Transitions:SetDefault("instant")` unless you pass `barTransitions = true`). The shipped
 default is `"smooth"`, which means a value written by `SetValue` arrives over several

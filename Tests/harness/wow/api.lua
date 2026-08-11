@@ -40,6 +40,15 @@ function M.install(env)
         local f = widget.new(kind, name, parent, meta)
         f._template = template
         if template and template:find("Backdrop") then f._hasBackdropTemplate = true end
+        -- A secure action template brings its own OnClick handler, and that handler is the
+        -- whole mechanism: it reads the frame's attributes and performs the protected
+        -- action. Installed here rather than inside the click path so it behaves like the
+        -- real template in both directions — it runs on a click, and it is lost if
+        -- something overwrites OnClick.
+        if template and template:find("Secure") and f._canScript then
+            f._secure = true
+            f:SetScript("OnClick", function(self, button) frame.secureAction(self, button) end)
+        end
         if name then env[name] = f end
         return f
     end

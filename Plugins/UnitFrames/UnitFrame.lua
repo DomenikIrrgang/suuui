@@ -767,6 +767,22 @@ function UnitFrame:Create(parent, cfg)
         self:_syncSize()
     end)
 
+    -- A frame the player can click, the way the client's own unit frames answer one: left
+    -- to target, right for the unit's context menu. Both actions are protected, so neither
+    -- is a callback this plugin could write — the surface states them as secure attributes
+    -- and the client performs them. See Components/UnitClickArea.lua.
+    --
+    -- It covers the whole wrapper, attach bands included, because a right click anywhere on
+    -- a unit frame is expected to reach that unit. In edit mode it is a non-issue: the drag
+    -- overlay sits five frame levels above this, so a click while positioning the frame goes
+    -- to the drag rather than to the unit.
+    self._clickArea = C.UnitClickArea({
+        unit = cfg.unit,
+        name = "SuuUI_" .. cfg.pluginId .. "_click_" .. cfg.unit,
+    }, self._wrapper)
+    self._clickBox = SuuUI.Layout:CreateContainer({ host = self._wrapper, layout = "stack" })
+    self._clickBox:Add(self._clickArea)
+
     -- Spacing and font tokens are user-editable, so the frame re-derives on a theme change
     -- rather than holding the values it was built with.
     self._themeId = "unitframes_" .. cfg.unit .. "_" .. tostring(self._wrapper)
@@ -1071,10 +1087,12 @@ function UnitFrame:Destroy()
     -- MoveableFrame registration and a root element, and leaking either leaves a draggable
     -- ghost on screen after the plugin is disabled.
     self:_teardownResourceBar()
+    self._clickArea:Destroy()
     self._infoRow:Destroy()
     self._bars:Destroy()
     self._slotAbove:Destroy()
     self._slotBelow:Destroy()
+    self._clickBox:Destroy()
     self._root:Destroy()
     self._wrapper:Hide()
     self._wrapper = nil

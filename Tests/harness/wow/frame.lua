@@ -144,6 +144,73 @@ function FrameMeta:RegisterForDrag(...)   self._dragButtons = { ... } end
 function FrameMeta:RegisterForClicks(...) self._clickButtons = { ... } end
 
 ----------------------------------------------------------------------------------
+-- Secure attributes
+--
+-- Every frame carries an arbitrary key/value store, and a frame built from a secure
+-- template is DRIVEN by it: the template's own OnClick handler reads `unit` and a
+-- per-button `type` attribute and performs the action itself. That is what lets an addon
+-- target a unit or open its context menu at all — both are protected, so no addon call
+-- can do it — and it is why modelling the store alone is not enough. See M.secureAction
+-- below for the client half.
+----------------------------------------------------------------------------------
+
+function FrameMeta:SetAttribute(key, value)
+    self._attributes = self._attributes or {}
+    self._attributes[key] = value
+end
+
+function FrameMeta:GetAttribute(key)
+    return self._attributes and self._attributes[key]
+end
+
+-- The attribute vocabulary the client uses for a mouse button.
+local BUTTON_INDEX = {
+    LeftButton = "1", RightButton = "2", MiddleButton = "3",
+    Button4 = "4", Button5 = "5",
+}
+
+-- One attribute as the client resolves it for a given button. The real lookup also walks
+-- modifier prefixes ("shift-type1"); this covers the unmodified forms, which is the whole
+-- vocabulary a unit frame states.
+local function modifiedAttribute(f, name, button)
+    local idx = BUTTON_INDEX[button or "LeftButton"] or "1"
+    return f:GetAttribute("*" .. name .. idx)
+        or f:GetAttribute(name .. idx)
+        or f:GetAttribute("*" .. name .. "*")
+        or f:GetAttribute(name .. "*")
+        or f:GetAttribute(name)
+end
+
+--- The client's own handler for a frame built from a secure action template: read the
+--- attributes, perform the action. Installed as the frame's OnClick when it is created
+--- (see CreateFrame in api.lua), exactly as the real template installs it — so code that
+--- calls SetScript("OnClick") on a secure button replaces this and silently breaks every
+--- action, and a spec sees that break rather than passing on a frame that does nothing.
+-- @param f table       The secure button
+-- @param button string Which mouse button was clicked
+function M.secureAction(f, button)
+    local kind = modifiedAttribute(f, "type", button)
+    local unit = modifiedAttribute(f, "unit", button)
+    -- The template's own hooks, fired around the action exactly as the client fires them:
+    -- they are the only way to observe a click on a secure button without replacing the
+    -- handler that performs it.
+    f:_fire("PreClick", button, false)
+    if kind == "target" then
+        -- The client's own targeting. Recorded rather than simulated: what a spec is
+        -- asking is "did the frame ask the client to target this unit", and staging a new
+        -- target here would also have to fire PLAYER_TARGET_CHANGED and re-answer every
+        -- Unit* call, which is the client's job and not what the assertion is about.
+        state.targetedUnit = unit
+    elseif kind == "togglemenu" then
+        -- The client opens the unit's context menu itself, from the unit attribute. No
+        -- addon call is involved, which is exactly why the menu carries every entry the
+        -- client would offer.
+        state.unitMenu = { unit = unit }
+    end
+    f:_fire("PostClick", button, false)
+end
+
+----------------------------------------------------------------------------------
 -- Events
 ----------------------------------------------------------------------------------
 

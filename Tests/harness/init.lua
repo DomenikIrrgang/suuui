@@ -506,6 +506,25 @@ local function deliverable(f)
     return f and f:IsVisible() and f:IsMouseEnabled()
 end
 
+-- A Button fires OnClick only for the buttons and the phase it registered for, and it
+-- registers for left-up alone until told otherwise. That default is the point: a surface
+-- that wants a right-click has to opt in, and forgetting to is invisible in every other
+-- assertion — the frame is still there, still sized, still mouse-enabled, and the click
+-- simply never reaches the handler.
+local DEFAULT_CLICKS = { "LeftButtonUp" }
+
+local function firesClick(f, button, phase)
+    if f._kind ~= "Button" and f._kind ~= "CheckButton" then return false end
+    local list = f._clickButtons or DEFAULT_CLICKS
+    for i = 1, #list do
+        local entry = list[i]
+        if entry == "Any" .. phase or entry == button .. phase then return true end
+        -- The legacy spelling, which names the button and means the up phase.
+        if phase == "Up" and entry == button then return true end
+    end
+    return false
+end
+
 --- Presses and releases the mouse over a widget, as the client would.
 -- Returns false without firing anything when the widget cannot receive mouse input,
 -- which is how a disabled control behaves in game.
@@ -518,8 +537,10 @@ function M.click(target, button)
     button = button or "LeftButton"
     M.setMouseDown(button, true)
     f:_fire("OnMouseDown", button)
+    if firesClick(f, button, "Down") then f:_fire("OnClick", button, true) end
     M.setMouseDown(button, false)
     f:_fire("OnMouseUp", button)
+    if firesClick(f, button, "Up") then f:_fire("OnClick", button, false) end
     return true
 end
 
@@ -529,7 +550,9 @@ function M.forceClick(target, button)
     local f = M.frameOf(target)
     button = button or "LeftButton"
     f:_fire("OnMouseDown", button)
+    if firesClick(f, button, "Down") then f:_fire("OnClick", button, true) end
     f:_fire("OnMouseUp", button)
+    if firesClick(f, button, "Up") then f:_fire("OnClick", button, false) end
     return true
 end
 
@@ -579,6 +602,29 @@ function M.unhover(target)
     if not f then return false end
     f:_fire("OnLeave")
     return true
+end
+
+----------------------------------------------------------------------------------
+-- Unit actions the client performed itself
+--
+-- Targeting and the unit context menu are protected, so they are never an addon call:
+-- they happen inside the secure template's own click handler, driven by the frame's
+-- attributes. These read back what the client did, which is the only observable a spec
+-- has — and the right one, since the assertion is about what the frame ASKED for.
+----------------------------------------------------------------------------------
+
+--- The unit the client last targeted from a secure click, or nil.
+-- @return string|nil
+function M.targetedUnit() return state.targetedUnit end
+
+--- The unit context menu the client last opened, as { unit = ... }, or nil.
+-- @return table|nil
+function M.unitMenu() return state.unitMenu end
+
+--- Forgets both, so one spec can assert a second click without the first still standing.
+function M.clearUnitActions()
+    state.targetedUnit = nil
+    state.unitMenu     = nil
 end
 
 --- Sends a mouse wheel notch.
