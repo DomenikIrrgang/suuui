@@ -291,6 +291,10 @@ local SCRIPTABLE = {
     OnEditFocusGained=true, OnEditFocusLost=true, OnValueChanged=true, OnCursorChanged=true,
     OnAttributeChanged=true, OnReceiveDrag=true, OnHyperlinkClick=true, OnChar=true,
     OnSpacePressed=true, OnLoad=true, OnVerticalScroll=true, OnScrollRangeChanged=true,
+    -- The two hooks a secure action template offers around its own OnClick. They exist so
+    -- code can observe a click without replacing the handler that performs the action —
+    -- which is the only reason a secure button is observable at all.
+    PreClick=true, PostClick=true,
 }
 
 function Base:SetScript(name, fn)

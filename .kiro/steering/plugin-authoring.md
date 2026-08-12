@@ -707,6 +707,42 @@ SuuUI.Anim:Sequence({
 
 ---
 
+## Letting the player click a unit
+
+Targeting a unit and opening its context menu are **protected**: the client refuses both
+from addon code, so there is no `onClick` you could write that would work. Ask for a
+`UnitClickArea` instead — it states the secure attributes the client acts on, and the menu
+that opens is the client's own, with every entry that unit offers.
+
+```lua
+local area = SuuUI.Components.UnitClickArea({
+    unit = "target",
+    name = "SuuUI_my_plugin_click_target",   -- optional; follows the frame naming rule
+}, myWrapper)
+
+-- Placed like any component. A stack container hosted on the frame stretches the surface
+-- over all of it, so a right click anywhere on the frame reaches the unit.
+local box = SuuUI.Layout:CreateContainer({ host = myWrapper, layout = "stack" })
+box:Add(area)
+
+-- On teardown, alongside your other handles
+area:Destroy()
+```
+
+Left click targets, right click opens the menu. Connect `CLICKED` if your widget wants to
+react to the click as well — it is emitted after the client has acted.
+
+**Do not build the secure frame yourself.** `SecureUnitButtonTemplate`, `RegisterForClicks`
+and the `type` attributes are component territory (see `WOW_API_ENCAPSULATION.md`), and
+getting any of the three wrong fails silently: the surface still sizes, still takes the
+mouse, and does nothing.
+
+**Edit mode needs no work from you.** The drag overlay sits five frame levels above the
+frame's own children, so while the player is positioning a frame the click goes to the drag
+rather than to the unit.
+
+---
+
 ## Hiding Blizzard UI
 
 Do this in `onEnable`, undo in `onDisable`. Never nil a Blizzard frame and never

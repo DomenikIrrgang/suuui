@@ -53,6 +53,7 @@ SuuUI/
 │   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
 │   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
+│   ├── UnitClickArea.lua -- invisible secure surface: target a unit, open its context menu
 │   ├── Button.lua        -- full custom button (no Blizzard template)
 │   ├── Icon.lua          -- display-only texture, optional themed border, bevel trim
 │   ├── IconButton.lua
@@ -1745,6 +1746,37 @@ document it here.
   Self-destroying, so it is safe to call on every failure.
 - `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
   Reads the cursor with `Pixel.CursorIn(panel)`, not against `UIParent`.
+- `UnitClickArea` — an invisible surface that hands a click over a unit's frame to the
+  **client's own** unit actions: left click targets, right click opens that unit's context
+  menu, with every entry the client would offer. Props: `unit` (required), `name`
+  (optional global frame name). API: `GetUnit`. Emits `CLICKED` (button), `MOUSE_ENTER`,
+  `MOUSE_LEAVE`, `SIZE_CHANGED`. Position it by adding it to a container, like anything
+  else — a `stack` container hosted on the frame it covers stretches it over the whole
+  thing.
+
+  Both actions are **protected**: the client refuses them from addon code, so no handler we
+  could write would work. The only route is the secure template — a `Button` inheriting
+  `SecureUnitButtonTemplate` carrying a `unit` attribute plus a per-button `type`
+  attribute, which the template's OWN click handler reads and acts on. So this component
+  states attributes and never sees the click that matters, and the menu needs no code at
+  all: which entries a player, an NPC or a corpse offers is the client's decision.
+
+  Three things about it are load-bearing:
+
+  - **Never `SetScript("OnClick")` on a secure button.** That replaces the handler that
+    performs the action, and every action stops silently — the frame still sizes, still
+    takes the mouse, still reports as shown. Observe a click through `PostClick`, the hook
+    the template offers for exactly this, which is where `CLICKED` is emitted from.
+  - **`RegisterForClicks` is not optional.** A `Button` fires its handler for left-up alone
+    until told otherwise, so without `"AnyUp"` the right click never reaches the client.
+  - **Attributes are stated once, at construction.** A frame built from a secure template is
+    protected, and the client refuses to let an addon reshape a protected frame in combat —
+    so nothing is re-stated later and the component exposes no setter that would want to be.
+
+  Deliberately **no `SetEnabled`**: it paints nothing, so the disabled fade would be
+  invisible, and the only real disabling left — dropping mouse input — is a call the client
+  can refuse on a protected frame. A `SetEnabled` that cannot be honoured when it matters is
+  worse than none, for the same reason `StatusBar` has none.
 - `Pixel` — non-visual, in `Core/`: the pixel grid. `Snap` / `Floor` / `Ceil` for geometry,
   `Line` for a thickness that must never round to zero, `CursorIn(frame)` for every hit
   test and drag. `Backdrop` uses `Line` for its edge and `Theme:GetControlHeight` uses

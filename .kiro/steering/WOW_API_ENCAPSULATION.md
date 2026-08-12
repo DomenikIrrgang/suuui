@@ -182,6 +182,39 @@ Everything else needs a component.
 
 ---
 
+## Protected Actions Go Through A Secure Component
+
+Some things the client will not let an addon do at all: targeting a unit, opening its
+context menu, casting. They are **protected**, so there is no handler you can write — the
+only route is a frame built from a secure template, carrying attributes that the template's
+own click handler reads and acts on.
+
+That makes secure templates component work, and `Components/UnitClickArea.lua` is the one
+that owns it today. A plugin asks for the surface and places it; it never builds one.
+
+```lua
+-- ❌ FORBIDDEN in plugin code: a protected action the client will refuse anyway
+frame:SetScript("OnMouseUp", function(_, btn)
+    if btn == "RightButton" then TogglePlayerMenu() end   -- protected; does nothing
+end)
+
+-- ✅ REQUIRED: the component states the attributes, the CLIENT performs the action
+local area = SuuUI.Components.UnitClickArea({ unit = "target" }, wrapper)
+SuuUI.Layout:CreateContainer({ host = wrapper, layout = "stack" }):Add(area)
+```
+
+Two rules follow for anyone extending a secure component:
+
+- **Never `SetScript("OnClick")` on a secure button.** The template installs the handler
+  that performs the action, and replacing it breaks every action silently — the frame still
+  sizes, still takes the mouse, still reports as shown. Use `PreClick` / `PostClick`, the
+  hooks the template offers, and translate those into signals.
+- **State attributes once, at construction.** A frame built from a secure template is
+  protected, and the client refuses to let an addon reshape a protected frame in combat. A
+  setter that re-states an attribute is a setter that fails exactly when it is needed.
+
+---
+
 ## Missing a Component? Build It.
 
 When a page needs a visual element the library does not have:
