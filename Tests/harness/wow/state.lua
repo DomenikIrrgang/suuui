@@ -87,6 +87,15 @@ function M.reset()
     -- a divergent realm clock would otherwise leave every later clock assertion reading it.
     M.realmHour      = nil
     M.realmMinute    = nil
+    -- Performance readings for GetFramerate / GetNetStats. Reset so a spec staging a bad
+    -- framerate or a laggy connection cannot leave the next file's readout in its warning
+    -- state and pass for the wrong reason. netLatencyWorld = false models the older
+    -- three-return GetNetStats; nil means the four-return shape reporting 0.
+    M.framerate        = 60
+    M.netDown          = 0
+    M.netUp            = 0
+    M.netLatencyHome   = 0
+    M.netLatencyWorld  = nil
     -- The unit's class, read by UnitClass. Reset because a spec that paints an NPC sets
     -- unitClassless and a spec that paints a mage sets unitClass, and neither is a value
     -- the next spec file should inherit: a leaked unitClassless makes every class-colour

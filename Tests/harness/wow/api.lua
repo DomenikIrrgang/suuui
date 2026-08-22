@@ -332,6 +332,22 @@ function M.install(env)
         return os.date(fmt, t or state.wallClock or 0)
     end
 
+    -- Performance readouts. Both are polled rather than announced, which is why a widget
+    -- reading them declares an `update` interval instead of an event.
+    env.GetFramerate = function() return state.framerate or 60 end
+
+    -- Modelled with FOUR returns (in, out, latencyHome, latencyWorld), which is the newer
+    -- shape. The older API returns three, with a single latency in the third slot — so a
+    -- caller reading the third value works on both, and one reading the fourth has to cope
+    -- with it being absent. state.netLatencyWorld = false reproduces the three-value client
+    -- so a reader can be tested against it.
+    env.GetNetStats = function()
+        local down = state.netDown or 0
+        local up   = state.netUp or 0
+        local home = state.netLatencyHome or 0
+        if state.netLatencyWorld == false then return down, up, home end
+        return down, up, home, state.netLatencyWorld or 0
+    end
     -- Realm time, which the client reports separately because a realm need not agree with the
     -- player's own clock — that difference is the whole reason a clock widget shows both.
     -- Defaults to matching the wall clock, so a spec only stages it when the divergence is

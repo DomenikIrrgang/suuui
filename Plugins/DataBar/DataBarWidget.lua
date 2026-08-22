@@ -107,12 +107,16 @@ function Bar:_refresh(rec)
         end
         return
     end
-    local ok, text = pcall(def.GetText)
+    -- Explicit locals, not a chained call: GetText may return a second value (the tone), and a
+    -- multi-return expands only in the last argument position — passing it straight into
+    -- SetText would silently hand the tone over as SetText's second argument.
+    local ok, text, tone = pcall(def.GetText)
     if not ok then
         SuuUI.Debug("DataBar: widget " .. def.id .. " GetText error: " .. tostring(text))
         return
     end
     rec.field:SetText(type(text) == "string" and text or tostring(text or ""))
+    rec.field:SetTone(type(tone) == "string" and tone or nil)
 end
 
 local function callHook(def, name, ...)

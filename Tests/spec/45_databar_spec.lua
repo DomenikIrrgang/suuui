@@ -27,11 +27,17 @@ local function rootBox()      return H.box(H.SuuUI.UIRoot:GetRootContainer()) en
 local function barHeight()    return H.controlHeight("sizeRow") end
 local function sectionGap()   return H.token("spaceXxs") end
 
--- A fresh client with the clock out of the way. Debug is a parameter because SuuUI.Debug is a
--- no-op until it is switched on, and one spec here is about what the bar logs.
+-- A fresh client with every contributed widget out of the way. Debug is a parameter because
+-- SuuUI.Debug is a no-op until it is switched on, and one spec here is about what the bar logs.
+--
+-- Clears EVERY registered widget rather than naming the clock. Other plugins contribute to this
+-- bar — Performance registers a framerate and a latency field — so naming them one at a time
+-- would break this file each time one is added, which is exactly what happened. This spec is
+-- about the RENDERER, so it stages the widgets it wants and starts from nothing. List() returns
+-- a copy, which is what makes it safe to iterate while unregistering.
 local function boot(opts)
     H.setup(opts)
-    DB():UnregisterWidget(CLOCK_ID)
+    for _, def in ipairs(DB():List()) do DB():UnregisterWidget(def.id) end
 end
 
 -- Registers a readout. `text` may be a function, so a spec can move the value underneath it

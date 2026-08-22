@@ -9,6 +9,12 @@ local colmap  = {
     textMuted = "colorTextMuted",
     disable   = "colorTextDisabled",
     accent    = "colorAccent",
+    -- Intent colours, for a label whose value carries state: a readout that is fine, close
+    -- to a threshold, or past it. Named for the intent rather than the hue so a retint moves
+    -- them with every other warning in the UI.
+    success   = "colorSuccess",
+    warning   = "colorWarning",
+    danger    = "colorDanger",
 }
 
 local TextMeta = {}

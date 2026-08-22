@@ -2471,6 +2471,139 @@ describe("harness: WoW API simulation", function()
             expect(hour).as("a staged realm clock cannot leak into the next spec").eq(14)
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- The performance readings GetFramerate() and GetNetStats() report.
+    --
+    -- Same kind of coverage as the clock block above, for the same reason: a fixed reset
+    -- default is what lets an unconfigured readout render the same thing in every run, and
+    -- a staged one that leaked would put the next spec file's readout in its warning colour
+    -- and pass for the wrong reason.
+    --
+    -- Both are POLLED rather than announced — no event fires when either changes, which is
+    -- why a widget reading them declares an `update` interval instead of an event.
+    ---------------------------------------------------------------------------
+    describe("performance readouts (GetFramerate / GetNetStats)", function()
+        it("reports 60 fps on an unconfigured client", function()
+            expect(H.env.GetFramerate()).eq(60)
+        end)
+
+        it("moves with H.setFramerate", function()
+            H.setFramerate(12.5)
+            expect(H.env.GetFramerate()).eq(12.5)
+            H.setFramerate(144)
+            expect(H.env.GetFramerate()).as("and again, so it is read live not cached").eq(144)
+        end)
+
+        it("defaults to four returns, all zero", function()
+            expect(select("#", H.env.GetNetStats()))
+                .as("the newer client's four-value shape").eq(4)
+            local down, up, home, world = H.env.GetNetStats()
+            expect(down).eq(0)
+            expect(up).eq(0)
+            expect(home).eq(0)
+            expect(world).eq(0)
+        end)
+
+        it("stages all four values, each in its own position", function()
+            -- Four DISTINCT values on purpose. A test that only checked the set of values
+            -- would pass with home and world transposed, and a reader indexes these by
+            -- position — the third slot is the one that exists on both API generations.
+            H.setNetStats(11, 22, 33, 44)
+            local down, up, home, world = H.env.GetNetStats()
+            expect(down).as("1st return: bandwidth in").eq(11)
+            expect(up).as("2nd return: bandwidth out").eq(22)
+            expect(home).as("3rd return: home latency").eq(33)
+            expect(world).as("4th return: world latency").eq(44)
+        end)
+
+        it("falls back to zero in every slot when nothing is staged", function()
+            H.setNetStats(500, 400, 300, 200)
+            H.setNetStats()
+            expect(select("#", H.env.GetNetStats())).as("still four returns").eq(4)
+            local down, up, home, world = H.env.GetNetStats()
+            expect(down).eq(0)
+            expect(up).eq(0)
+            expect(home).eq(0)
+            expect(world).eq(0)
+        end)
+
+        it("returns exactly three values for world = false, the older client", function()
+            -- The shape a reader has to survive: one latency in the third slot and NOTHING
+            -- in the fourth. Asserted as an arity, because a reader has a branch for it and
+            -- "absent" is a different fact from "present and zero".
+            H.setNetStats(11, 22, 33, false)
+            expect(select("#", H.env.GetNetStats()))
+                .as("the older API has no fourth return").eq(3)
+            local down, up, home, world = H.env.GetNetStats()
+            expect(down).eq(11)
+            expect(up).eq(22)
+            expect(home).as("the single latency stays in the third slot").eq(33)
+            expect(world).as("absent, not zero").isNil()
+        end)
+
+        it("distinguishes an absent fourth return from a zero one", function()
+            -- The two cases are provably different, which is the whole reason `false` exists
+            -- as a value: passing 0 is a client reporting no world lag, passing false is a
+            -- client that cannot report one at all.
+            H.setNetStats(11, 22, 33, 0)
+            local zeroArity = select("#", H.env.GetNetStats())
+            local _, _, _, zeroWorld = H.env.GetNetStats()
+            expect(zeroArity).as("a zero world latency is still four returns").eq(4)
+            expect(zeroWorld).as("and it is a 0, not a nil").eq(0)
+
+            H.setNetStats(11, 22, 33, false)
+            expect(select("#", H.env.GetNetStats()))
+                .as("false is the only thing that drops the fourth return").eq(3)
+        end)
+
+        it("is reset by H.setup, so a warning-state reading cannot leak", function()
+            H.setFramerate(7)
+            H.setNetStats(900, 800, 640, false)
+            H.setup()
+            expect(H.env.GetFramerate()).as("framerate back to 60").eq(60)
+            -- The arity matters as much as the values: a leaked netLatencyWorld = false
+            -- would leave every later spec reading the three-return client.
+            expect(select("#", H.env.GetNetStats()))
+                .as("and back to the four-return shape").eq(4)
+            local down, up, home, world = H.env.GetNetStats()
+            expect(down).eq(0)
+            expect(up).eq(0)
+            expect(home).eq(0)
+            expect(world).eq(0)
+        end)
+
+        it("is polled, not announced: a staged change reads back with no event fired", function()
+            -- Every harness setter that announces does it through H.fireEvent (H.setTarget,
+            -- H.setAuras, H.setCombat all route there), so recording that call states
+            -- "silent" over the whole event vocabulary instead of against a guessed list of
+            -- names. H.setTarget is the positive control: without it a recorder that never
+            -- worked would make the silence assertion vacuous.
+            local seen = {}
+            local realFire = H.fireEvent
+            H.fireEvent = function(event, ...)
+                seen[#seen + 1] = event
+                return realFire(event, ...)
+            end
+            H.setFramerate(9)
+            H.setNetStats(1, 2, 3, 4)
+            local afterStaging = #seen
+            local framerate = H.env.GetFramerate()
+            local _, _, home = H.env.GetNetStats()
+            H.setTarget({ name = "Onyxia" })
+            local afterControl = #seen
+            -- Restored before anything can throw, so a failing assertion cannot leave the
+            -- patch installed for the rest of the file.
+            H.fireEvent = realFire
+
+            expect(afterStaging).as("neither setter announced anything").eq(0)
+            expect(framerate).as("yet the new framerate is there on the next read").eq(9)
+            expect(home).as("and so is the new latency").eq(3)
+            expect(afterControl)
+                .as("the recorder does catch an announcement, so the silence above is real")
+                .gt(0)
+        end)
+    end)
 end)
 
 -- The assertion framework itself, not the simulated client. Same reasoning as the block

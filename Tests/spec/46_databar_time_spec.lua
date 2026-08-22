@@ -38,6 +38,18 @@ local function field()
     return rec and rec.field
 end
 
+-- How many fields the bar holds FOR THE CLOCK. Deliberately not #bar()._records: other plugins
+-- contribute widgets to this bar — Performance registers a framerate and a latency readout — so
+-- the bar's total says nothing about this widget, and using it as a proxy made this file fail
+-- the moment a second contributor existed.
+local function recordCount()
+    local n = 0
+    for _, rec in ipairs(bar()._records) do
+        if rec.def.id == WIDGET_ID then n = n + 1 end
+    end
+    return n
+end
+
 -- Captures the Tooltip the widget builds. It is created lazily on the first hover and kept
 -- in a private upvalue, so wrapping the constructor is the only way a spec gets the handle —
 -- the same capture pattern the settings-page specs use for Dropdown and Slider.
@@ -131,8 +143,8 @@ describe("Plugins.DataBar – Clock widget", function()
             expect(def().events).as("no game event can announce the time").isNil()
         end)
 
-        it("gives the bar exactly one field, showing the clock", function()
-            expect(#bar()._records).eq(1)
+        it("gives the bar one field, showing the clock", function()
+            expect(recordCount()).as("exactly one field for the clock").eq(1)
             expect(record().def.id).eq(WIDGET_ID)
             expect(field():GetText()).eq("14:32")
         end)
@@ -338,7 +350,10 @@ describe("Plugins.DataBar – Clock widget", function()
             set("time_enabled", false)
             expect(H.SuuUI.DataBar:Has(WIDGET_ID)).as("gone from the registry").eq(false)
             expect(H.SuuUI.DataBar:GetWidget(WIDGET_ID)).isNil()
-            expect(#bar()._records).as("and gone from the bar").eq(0)
+            expect(recordCount()).as("and gone from the bar").eq(0)
+            expect(field()).as("no field for it any more").isNil()
+            -- Still a valid check because the clock is the only CENTRE contributor today; the
+            -- performance readouts sit in the right section.
             expect(#bar():GetSection("center"):GetChildren())
                 .as("the centre section is empty").eq(0)
         end)
@@ -347,7 +362,7 @@ describe("Plugins.DataBar – Clock widget", function()
             set("time_enabled", false)
             set("time_enabled", true)
             expect(H.SuuUI.DataBar:Has(WIDGET_ID)).eq(true)
-            expect(#bar()._records).as("exactly one field, not two").eq(1)
+            expect(recordCount()).as("exactly one field, not two").eq(1)
             expect(field():GetText()).eq("14:32")
         end)
 
@@ -603,7 +618,7 @@ describe("Plugins.DataBar – Clock widget", function()
         it("unregisters the widget", function()
             widget().Disable()
             expect(H.SuuUI.DataBar:Has(WIDGET_ID)).eq(false)
-            expect(#bar()._records).eq(0)
+            expect(recordCount()).eq(0)
         end)
 
         it("destroys the tooltip", function()

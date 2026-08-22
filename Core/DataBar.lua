@@ -117,7 +117,13 @@ end
 --   order    number    within the section, ascending (default 100)
 --   events   table     game events that should refresh this widget
 --   update   number    seconds between refreshes, for a widget nothing announces
---   GetText  function  returns the value string. Required unless Build is given
+--   GetText  function  returns the value string, and OPTIONALLY a tone as a second value:
+--                      nil | "success" | "warning" | "danger". The tone says what the READING
+--                      means and lets the theme decide what that looks like; a widget
+--                      composing its own colour escape would hardcode a hue and bypass a
+--                      retint. Returned together with the value rather than from a separate
+--                      hook, so the two come from one reading and cannot disagree.
+--                      Required unless Build is given
 --   Build    function(parent) -> handle   custom visuals instead of a text field
 --   Refresh  function(handle)             refresh hook for a Build widget, called
 --                                         where GetText would be

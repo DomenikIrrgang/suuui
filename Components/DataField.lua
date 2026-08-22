@@ -108,8 +108,29 @@ function DataMeta:GetText()
     return self._value or ""
 end
 
---- Sets the muted prefix drawn before the value. Pass nil or "" for none.
--- @param prefix string|nil
+--- Sets the value's intent colour, or clears it with nil.
+--
+-- The field owns the colour, not the widget. A widget declaring `"warning"` says what the
+-- READING means and lets the theme decide what that looks like — where a widget composing its
+-- own |cff escape would hardcode a hue, bypass a retint, and give every plugin author a
+-- different way of doing the same thing.
+-- @param tone string|nil  "success" | "warning" | "danger", or nil for the default colour
+function DataMeta:SetTone(tone)
+    if tone == false then tone = nil end
+    if self._tone == tone then return end
+    self._tone = tone
+    -- Text resolves these through its own colmap onto the intent tokens, so an unknown tone
+    -- degrades to the default colour rather than raising from inside a ticker callback.
+    self._labelText:SetColor(tone or "text")
+end
+
+--- Returns the value's intent colour, or nil.
+-- @return string|nil
+function DataMeta:GetTone()
+    return self._tone
+end
+
+--- Sets the muted prefix drawn before the value. Pass nil or "" for none.-- @param prefix string|nil
 function DataMeta:SetPrefix(prefix)
     prefix = prefix or ""
     if self._prefix == prefix then return end
@@ -152,6 +173,9 @@ function DataMeta:ApplyTheme()
     -- Recomposed, not just restyled: the prefix's colour is baked into the string as an
     -- escape, so a colorTextMuted edit reaches the screen only by rebuilding it.
     self._labelText:SetText(compose(self))
+    -- Re-asserted after ApplyTheme reset the handle's own colour, or a field sitting in its
+    -- warning state would silently drop back to colorText on any theme edit.
+    self._labelText:SetColor(self._tone or "text")
 
     local rc = T:GetToken("colorAccent")
     if rc then self._railTex:SetColorTexture(rc[1], rc[2], rc[3], rc[4]) end
@@ -257,6 +281,7 @@ function SuuUI.Components.DataField(props, parent)
         _eid        = id,
         _enabled    = true,
         _hovered    = false,
+        _tone       = props.tone or nil,
         _value      = props.text or "",
         _prefix     = props.prefix or "",
         _rail       = props.rail ~= false,

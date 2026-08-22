@@ -291,6 +291,29 @@ function M.setRealmTime(hour, minute)
     state.realmMinute = minute
 end
 
+--- Sets what GetFramerate() reports.
+-- @param fps number
+function M.setFramerate(fps)
+    state.framerate = fps
+end
+
+--- Sets what GetNetStats() reports.
+--
+-- Pass `world = false` to model the OLDER three-return client, which reports a single latency
+-- in the third slot and nothing in the fourth. That is the shape a reader has to survive, and
+-- it cannot be reproduced by passing 0 — a present-but-zero value is a different fact from an
+-- absent one.
+-- @param down number|nil   Bandwidth in
+-- @param up number|nil     Bandwidth out
+-- @param home number|nil   Home latency, ms
+-- @param world number|false|nil  World latency, ms; false to omit the fourth return entirely
+function M.setNetStats(down, up, home, world)
+    state.netDown         = down
+    state.netUp           = up
+    state.netLatencyHome  = home
+    state.netLatencyWorld = world
+end
+
 --- Removes a unit, so UnitExists reports false for it again — losing a target.
 --
 -- Deliberately does NOT fire PLAYER_TARGET_CHANGED: the state and the announcement are
