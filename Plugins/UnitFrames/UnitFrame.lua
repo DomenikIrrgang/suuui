@@ -373,7 +373,14 @@ function UnitFrame:_syncClickArea()
     self._clickDeferred = nil
 
     local root = SuuUI.UIRoot:GetRootContainer():GetFrame()
-    local wl, wt = self._wrapper:GetLeft(), self._wrapper:GetTop()
+    -- The BAR GROUP, not the wrapper. The surface answers "click the unit", and the things
+    -- around the bars are not the unit: the name row is a label, an aura icon has its own
+    -- tooltip and its own right-click, and the cast bar is a spell. Covering the whole
+    -- wrapper made all three of them target-and-menu surfaces, which is what the player
+    -- noticed. The resource bar is inside this group while it is attached and outside it once
+    -- detached, so "the frame itself" follows the player's own layout with no extra rule.
+    local core = self._bars:GetFrame()
+    local wl, wt = core:GetLeft(), core:GetTop()
     local rl, rt = root:GetLeft(), root:GetTop()
     -- A frame the client has not laid out yet reports nothing. Leaving the surface where it
     -- was is right: the next pass re-derives it, and a wrong rect is worse than a stale one.
@@ -382,7 +389,7 @@ function UnitFrame:_syncClickArea()
     -- Root space: x grows right, and AnchorLayout's y grows DOWN from the top edge, while
     -- the client's GetTop grows up -- hence wt - rt, which is zero or negative.
     local x, y = wl - rl, wt - rt
-    local w, h = self._wrapper:GetWidth() or 0, self._wrapper:GetHeight() or 0
+    local w, h = core:GetWidth() or 0, core:GetHeight() or 0
     local a = self._clickAnchor
     if a.x == x and a.y == y and a.width == w and a.height == h then return end
     a.x, a.y, a.width, a.height = x, y, w, h

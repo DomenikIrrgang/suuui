@@ -220,9 +220,17 @@ describe("Plugins.UnitFrames right-click menu", function()
         expect(H.unitMenu().unit).eq("target")
     end)
 
-    it("covers the whole frame, attach bands included", function()
+    it("covers the bar group and nothing around it", function()
+        -- "Click the unit" means the bars. The name row is a label, an aura icon carries its
+        -- own tooltip and right-click, and the cast bar is a spell -- none of them is the
+        -- unit, and covering the whole wrapper turned all three into target-and-menu
+        -- surfaces.
         local w = widgetFor("player")
-        H.expectBox(w._clickArea, H.box(w:GetFrame()))
+        H.expectBox(w._clickArea, H.box(w._bars))
+        -- H.box measures downward from the screen top, so the name row ending above the
+        -- surface means the surface's top is at or below the row's bottom.
+        expect(H.box(w._clickArea).top)
+            .as("the name row is not clickable").gte(H.box(w._infoRow).bottom)
     end)
 
     it("is NOT a descendant of the frame it covers", function()
@@ -293,17 +301,21 @@ describe("Plugins.UnitFrames right-click menu", function()
         local w = widgetFor("player")
         H.SuuUI.Settings:Set("unit_frames", "player_position",
             { point = "TOPLEFT", relPoint = "TOPLEFT", x = 300, y = -220 })
-        H.expectBox(w._clickArea, H.box(w:GetFrame()))
+        H.expectBox(w._clickArea, H.box(w._bars))
     end)
 
-    it("still covers the frame after a band grows it", function()
-        -- The surface is placed by an anchor against the wrapper, so growth has to carry it.
+    it("stays on the bars when a band grows the frame", function()
+        -- A band appearing must not drag the surface with it: coreInset keeps the bars where
+        -- they are, so the surface should not move either, and the band must stay unclickable.
         local w = widgetFor("player")
         H.SuuUI.Settings:Set("unit_frames", "player_buffs_position", "above")
         H.setAuras("player", { helpful = {
             { name = "B", icon = "i" }, { name = "B2", icon = "i" },
         } })
-        H.expectBox(w._clickArea, H.box(w:GetFrame()))
+        H.expectBox(w._clickArea, H.box(w._bars))
+        local band = w._bands.buffs:GetContainer()
+        expect(H.box(w._clickArea).top)
+            .as("an aura band is not clickable").gte(H.box(band).bottom)
     end)
 
     describe("the frame still grows in combat", function()
@@ -352,13 +364,13 @@ describe("Plugins.UnitFrames right-click menu", function()
             expect(#H.getBlockedActions()).as("it did not attempt the refused write").eq(0)
 
             H.setCombat(false)
-            H.expectBox(w._clickArea, H.box(w:GetFrame()))
+            H.expectBox(w._clickArea, H.box(w._bars))
         end)
     end)
 
     it("is the frame's topmost surface in normal play", function()
         local w = widgetFor("player")
-        local cx, cy = H.centerPoint(w:GetFrame())
+        local cx, cy = H.centerPoint(w._bars)
         expect(H.topmostAt(cx, cy)).as("a click reaches the unit surface")
             .eq(w._clickArea:GetFrame())
     end)
@@ -366,7 +378,7 @@ describe("Plugins.UnitFrames right-click menu", function()
     it("yields to the drag overlay in edit mode", function()
         local w = widgetFor("player")
         H.SuuUI.ToggleUI:Enable()
-        local cx, cy = H.centerPoint(w:GetFrame())
+        local cx, cy = H.centerPoint(w._bars)
         local overlay = w:GetFrame()._suuui_moveable.overlay
         expect(H.topmostAt(cx, cy)).as("positioning the frame must not target the unit")
             .eq(overlay)
