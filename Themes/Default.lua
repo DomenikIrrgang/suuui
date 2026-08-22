@@ -107,6 +107,12 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorTextMuted    = "colorGray400",
     colorTextDisabled = "colorGray600",
     colorBorder       = "colorGray700",
+    -- The ring around an icon's art, brighter than a panel's edge on purpose. A panel
+    -- border separates a dark surface from the game world, where a near-black hairline
+    -- reads fine; an icon border has to separate a tile from spell art that is itself
+    -- dark at the edges, and colorGray700 there is invisible. Its own semantic rather
+    -- than a retint of colorBorder, so making icons legible does not lighten every panel.
+    colorBorderIcon   = "colorGray400",
     colorBorderFocus  = "colorAccent",
 
     -- Typography

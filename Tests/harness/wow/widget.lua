@@ -74,20 +74,101 @@ function Base:SetParent(parent)
 end
 
 ----------------------------------------------------------------------------------
+-- Protection and combat lockdown
+--
+-- A frame built from a secure template is PROTECTED, and protection propagates DOWN: every
+-- descendant of a protected frame is protected too, implicitly.
+--
+-- The geometry refusal propagates the other way — UP. The client refuses an addon-driven
+-- geometry change on a protected frame, and also on any frame whose SUBTREE contains one,
+-- because moving the parent would move the protected child. So a plain frame with a single
+-- secure grandchild cannot be resized in combat, which is the whole shape of the bug this
+-- models: the unit frame wanted height 227, stayed at 188, and every spec passed.
+--
+-- The client does not raise on a refusal. The call returns having changed nothing and the
+-- player gets "Interface action failed because of an AddOn" in chat, so the harness records
+-- the refusal instead of erroring — see state.blockedActions.
+----------------------------------------------------------------------------------
+
+--- Whether this widget is protected, and whether that protection is its own.
+--
+-- Two return values, as the client's method has: `isProtected, isProtectedExplicitly`.
+-- Explicit means built from a secure template; a widget is implicitly protected when any
+-- ANCESTOR is explicitly protected. Regions answer too, because the client's do.
+-- @return bool isProtected
+-- @return bool isProtectedExplicitly
+function Base:IsProtected()
+    if self._secure then return true, true end
+    local p = self._parent
+    while p do
+        if p._secure then return true, false end
+        p = p._parent
+    end
+    return false, false
+end
+
+--- Whether any frame in this widget's subtree is explicitly protected.
+--
+-- Only explicit protection is searched for, and that is complete rather than a shortcut: an
+-- implicitly protected descendant is only protected because some ancestor between it and the
+-- root is explicit, and that ancestor is inside this subtree too unless it is the root — in
+-- which case IsProtected() already answers.
+-- @param w table
+-- @return bool
+local function hasProtectedDescendant(w)
+    local stack, top = { w }, 1
+    while top > 0 do
+        local f = stack[top]
+        top = top - 1
+        for _, child in ipairs(f._childFrames) do
+            if child._secure then return true end
+            top = top + 1
+            stack[top] = child
+        end
+    end
+    return false
+end
+M.hasProtectedDescendant = hasProtectedDescendant
+
+--- Whether the client would refuse this geometry call, recording it when it does.
+--
+-- Cheap out of combat: the flag is tested before anything walks a tree, so the guard costs
+-- one comparison for the whole suite while lockdown is off.
+-- @param w table
+-- @param action string  The method name, e.g. "SetSize"
+-- @return bool
+local function refused(w, action)
+    if not state.inCombat then return false end
+    local isProtected = w:IsProtected()
+    if not (isProtected or hasProtectedDescendant(w)) then return false end
+    local log = state.blockedActions
+    log[#log + 1] = {
+        action    = action,
+        frame     = w,
+        name      = w._name,
+        protected = isProtected,
+    }
+    return true
+end
+
+----------------------------------------------------------------------------------
 -- Size
 ----------------------------------------------------------------------------------
 
 function Base:SetWidth(w)
+    if refused(self, "SetWidth") then return end
     self._w = w
     state.invalidate(self)
 end
 
 function Base:SetHeight(h)
+    if refused(self, "SetHeight") then return end
     self._h = h
     state.invalidate(self)
 end
 
 function Base:SetSize(w, h)
+    if refused(self, "SetSize") then return end
     self._w, self._h = w, h
     state.invalidate(self)
 end
@@ -145,6 +226,7 @@ local function parsePoint(self, a, b, c, d, e)
 end
 
 function Base:SetPoint(a, b, c, d, e)
+    if refused(self, "SetPoint") then return end
     local point, relativeTo, relativePoint, x, y = parsePoint(self, a, b, c, d, e)
 
     point = tostring(point):upper()
@@ -169,6 +251,11 @@ function Base:SetPoint(a, b, c, d, e)
 end
 
 function Base:SetAllPoints(relativeTo)
+    -- Guarded in its own right rather than left to the SetPoint calls below: it clears the
+    -- existing anchors first, so a refusal that only stopped the SetPoint half would leave
+    -- the widget with NO anchors at all — a state change on a call that is supposed to have
+    -- changed nothing.
+    if refused(self, "SetAllPoints") then return end
     relativeTo = relativeTo or self._parent
     self._points = {}
     self:SetPoint("TOPLEFT", relativeTo, "TOPLEFT", 0, 0)
@@ -176,6 +263,7 @@ function Base:SetAllPoints(relativeTo)
 end
 
 function Base:ClearAllPoints()
+    if refused(self, "ClearAllPoints") then return end
     self._points = {}
     state.invalidate(self)
 end
@@ -220,6 +308,11 @@ local function fireVisibility(w, visible)
 end
 
 function Base:Show()
+    -- Protection is tested BEFORE the already-shown short circuit, the way the client tests
+    -- it: the refusal is a property of the frame and the lockdown, not of what it currently
+    -- looks like. A spec asserting "Show was refused" therefore does not have to know whether
+    -- the frame happened to be hidden first.
+    if refused(self, "Show") then return end
     if self._shown then return end
     self._shown = true
     local parentVisible = true
@@ -233,6 +326,7 @@ function Base:Show()
 end
 
 function Base:Hide()
+    if refused(self, "Hide") then return end
     if not self._shown then return end
     local wasVisible = self:IsVisible()
     self._shown = false

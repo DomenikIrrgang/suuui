@@ -188,27 +188,64 @@ one painting a mob stages neither and gets the misleading class the client reall
 is the wrong tool for modelling a mob — reaching for it is what let a bug ship where every
 creature rendered in warrior tan while the reaction fallback looked fully covered.
 
-**A protected action is performed by the client, so that is what you assert.** Targeting a
-unit and opening its context menu are protected: an addon states secure attributes and the
-template's own click handler acts on them. The simulated client models that handler, so a
-spec reads back what the client *did* rather than looking for a callback that does not exist:
+**Auras are staged per unit, and staging them fires the event.** The same shape as
+`H.setUnit` / `H.setTarget`, for the same reason: state moving without the announcement is a
+situation the client never produces, so a reader that only repaints on `UNIT_AURA` would look
+correct in a spec that skipped it.
 
 ```lua
-H.click(area, "RightButton")
-expect(H.unitMenu().unit).eq("target")   -- the client opened this unit's menu
-H.click(area)
-expect(H.targetedUnit()).eq("target")    -- and targeted it on a left click
-H.clearUnitActions()                     -- so a second click asserts independently
+H.setAuras(unit, lists, opts)   -- lists = { helpful = {…}, harmful = {…} }; fires UNIT_AURA
+H.clearAuras(unit, opts)        -- drops every aura on the unit; fires UNIT_AURA
+H.getCancelBuff()               -- { unit, index } from the last CancelUnitBuff, or nil
+H.resetCancelBuff()             -- clears that record
+H.getTooltipState()             -- { owner, anchor, aura = { unit, index, filter } }, or nil
+H.resetTooltipState()           -- clears that record
+H.GameTooltip                   -- the stub frame itself, for IsShown()
 ```
 
-Two client behaviours here exist to make a mis-wired surface fail rather than pass:
+`opts = { silent = true }` on either setter suppresses the event, which is what you want when
+the spec is *about* a reader that ignores it. An entry declares only the fields that matter
+and the rest are filled from defaults; an unknown field name raises rather than being silently
+dropped, so a typo is a failure and not a passing test asserting nothing:
 
-- **A `Button` fires its click handler for left-up alone until `RegisterForClicks` says
-  otherwise.** Forgetting it is invisible in every other assertion — the frame is still
-  there, still sized, still mouse-enabled — and the right click simply never arrives.
-- **The secure template's `OnClick` IS the action.** `SetScript("OnClick", ...)` on such a
-  frame replaces it and every action stops; the harness reproduces that, so the honest hooks
-  (`PreClick` / `PostClick`) are the only way a component observes its own clicks.
+```lua
+H.setAuras("player", {
+  helpful = { { name = "Blessing", icon = "x", duration = 300,
+                expirationTime = H.env.GetTime() + 120 } },
+  harmful = { { name = "Curse of Agony", debuffType = "Curse" } },
+})
+```
+
+Two traps sit in this corner of the harness, both found the hard way:
+
+**`H.box(...).top` measures downward from the screen top**, so it grows as a frame moves *down*
+the screen — the opposite of the client's own bottom-up `GetTop()`. A band **above** the frame
+therefore has the **smaller** `top`, and one further above has a smaller one still; a band
+below has a larger one. Reading it as a bottom-up coordinate inverts every comparison while the
+assertion still looks reasonable, which is what makes it expensive. State the direction in the
+message so the next reader cannot misread it:
+
+```lua
+-- ✅ "above" means closer to the screen top, which is a smaller .top
+expect(H.box(band).top).as("the band sits above the frame").lt(H.box(frame).top)
+```
+
+**The cast bar attaches below the player frame by default**, so a player-frame `GetCoreInset`
+spec never starts from `(0, 0)` — `anchor` defaults to `"attached"` and `attach_position` to
+`"below"`, which means the below inset already carries a bar and its gap before your band
+exists. Assert the **delta** across the change you are testing, not the absolute:
+
+```lua
+-- ❌ fails for a reason that has nothing to do with auras
+local _, below = frame:GetCoreInset()
+expect(below).eq(bandHeight + gap)
+
+-- ✅ what the band contributed, whatever else is already down there
+local _, before = frame:GetCoreInset()
+H.setAuras("player", { harmful = { { name = "Curse" } } })
+local _, after = frame:GetCoreInset()
+expect(after - before).eq(bandHeight + gap)
+```
 
 **Bar transitions default to `instant`** (`H.setup()` calls
 `Transitions:SetDefault("instant")` unless you pass `barTransitions = true`). The shipped
@@ -314,6 +351,73 @@ expect(shownAtAdd).as("slot visible when the child was anchored to it").eq(true)
 means teaching the solver that a hidden frame has no rect, which would change what `H.box`
 returns for every deliberately-hidden child in the suite (`StackLayout` sizes a progress fill
 at 0% exactly that way) — worth doing, but not as a drive-by.
+
+**Combat lockdown is modelled by frame identity, not by taint.** `InCombatLockdown()`,
+`frame:IsProtected()` and the geometry refusal are all real now: while in combat, `SetSize` /
+`SetWidth` / `SetHeight` / `SetPoint` / `SetAllPoints` / `ClearAllPoints` / `Show` / `Hide` return
+having changed nothing on any frame that is protected **or that holds a protected descendant**,
+and every refusal is recorded in `H.getBlockedActions()`. Drive it with
+`H.setCombat(true｜false)`, which fires `PLAYER_REGEN_DISABLED` / `PLAYER_REGEN_ENABLED` on a real
+transition only, and ask `H.hasProtectedDescendant(frameOrHandle)` for the exact question the
+refusal asks.
+
+What is missing is *why* the client refuses. The real decision is **taint**: an execution path
+that has touched insecure code is what gets refused, so the identical call succeeds from a
+Blizzard path and fails from an addon's. The harness refuses on the frame alone, so it cannot
+express that difference — and it does not yet gate every call the live client refuses on a
+protected frame in combat, `SetParent`, `SetScale` and `SetAttribute` among them. `SetAttribute`
+matters in particular: it is why a secure click surface cannot be re-pointed at a different unit
+mid-fight, which is why `UnitClickArea` states its attributes once at construction.
+`UnitAffectingCombat` is not modelled at all and is **not** a synonym for `InCombatLockdown()` —
+lockdown outlasts the player's own combat flag, so code reading the wrong one is still invisible
+here. The refusal is also silent: no `Interface action failed because of an AddOn` line exists to
+assert against. And `PLAYER_REGEN_ENABLED` fires synchronously inside `H.setCombat(false)` rather
+than a beat after combat drops, so a spec cannot tell work that was genuinely deferred to the
+event from work that merely ran on the way out.
+
+This gap is why a real bug survived **2728 passing assertions for ten days**. `UnitClickArea` was
+parented to the unit frame's wrapper; that wrapper resizes mid-combat by design (an aura band
+gaining a row, a cast bar attaching), so every one of those resizes was refused and the band was
+carved out of a box frozen at its pre-combat height, pushing the frame's own bars down by the
+band's height. In game, `GetPreferredSize` returned 227 against a `GetHeight` of 188, with
+`InCombatLockdown()` true on every mismatch and false on every match.
+
+So assert **both** halves. The structural invariant states the design rule and holds even where
+the model is thin; the behavioural one proves the client would actually allow the write:
+
+```lua
+-- The rule: a frame that resizes must not contain a protected one.
+expect(H.hasProtectedDescendant(w:GetFrame()))
+    .as("the secure surface must not sit inside the frame that resizes").falsy()
+
+-- The consequence: in combat, the growth is not refused.
+H.setCombat(true)
+H.resetBlockedActions()
+H.setAuras("target", { harmful = { { name = "D", icon = "i" } } })
+expect(#H.getBlockedActions()).as("nothing was refused").eq(0)
+```
+
+`Tests/spec/41_unit_click_area_spec.lua` carries the worked example of both.
+
+**Aura filters are matched whole, not tokenised.** `UnitAura` reads the harmful list only for
+the exact string `"HARMFUL"`; nil means `"HELPFUL"` as in the live client, and **everything
+else falls through to the helpful list**. So `"HARMFUL|RAID"` silently returns buffs. The
+client accepts pipe-separated sub-filters (`PLAYER`, `RAID`, `CANCELABLE`, …) and nothing here
+parses them, so a reader that starts using one needs `resolveAura` in `api.lua` extended
+first — a spec written against a compound filter today passes while asserting the wrong list.
+
+**`GameTooltip` records what it was pointed at and renders nothing.** The stub stores the
+owner, the anchor and the `{ unit, index, filter }` of the aura it was asked to describe, which
+is enough to assert that a mouseover reached the right aura by the right method. It produces no
+text lines and fires no tooltip scripts (`OnTooltipSetSpell`, `OnTooltipCleared`), so anything
+asserting tooltip *content* needs it extended. Assert the aura **index** rather than the icon's
+position for the same reason the code indexes by it: they agree only while nothing is filtered.
+
+**`Cooldown:GetCooldownTimes()` always returns 0 as its third value.** The live client returns
+1 while a cooldown is running; the stub returns `start, duration, 0`. Irrelevant to a swipe,
+which is driven entirely by start and duration — but a caller that gates behaviour on that
+`enable` flag would read "off" in every spec and "on" in game, so extend the stub before
+writing one.
 
 ---
 

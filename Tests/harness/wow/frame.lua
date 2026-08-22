@@ -435,6 +435,34 @@ function ButtonMeta:Click(button) self:_fire("OnClick", button or "LeftButton") 
 function ButtonMeta:SetNormalTexture(t) self._normalTexture = t end
 function ButtonMeta:GetNormalTexture()  return self._normalTexture end
 
+----------------------------------------------------------------------------------
+-- Cooldown
+----------------------------------------------------------------------------------
+
+local CooldownMeta = derive(FrameMeta)
+M.CooldownMeta = CooldownMeta
+
+function CooldownMeta:SetCooldown(start, duration)
+    self._cdStart    = start
+    self._cdDuration = duration
+end
+
+function CooldownMeta:GetCooldownTimes()
+    return self._cdStart or 0, self._cdDuration or 0, 0
+end
+
+function CooldownMeta:Clear()
+    self._cdStart, self._cdDuration = nil, nil
+end
+
+function CooldownMeta:SetDrawSwipe(on)       self._drawSwipe = on and true or false end
+function CooldownMeta:SetDrawEdge(on)        self._drawEdge = on and true or false end
+function CooldownMeta:SetHideCountdownNumbers(on) self._hideNumbers = on and true or false end
+function CooldownMeta:SetReverse(on)         self._reverse = on and true or false end
+function CooldownMeta:SetSwipeColor(r, g, b, a)
+    self._swipeColor = { r, g, b, a == nil and 1 or a }
+end
+
 M.metaFor = {
     Frame       = FrameMeta,
     EditBox     = EditBoxMeta,
@@ -443,6 +471,7 @@ M.metaFor = {
     CheckButton = ButtonMeta,
     StatusBar   = FrameMeta,
     Slider      = FrameMeta,
+    Cooldown    = CooldownMeta,
 }
 
 return M

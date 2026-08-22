@@ -24,12 +24,21 @@
 --     combat — so nothing here is re-stated later, and this component exposes no setter
 --     that would want to be.
 --
--- The same protection has one consequence worth knowing: the surface is placed by a
--- container, so a layout pass in combat is a protected write. Nothing in play triggers one —
--- a target swap does not resize the frame, and health and power updates never touch geometry
--- — but a player who drags a size slider mid-fight gets one refused call and the frame
--- catches up on the next pass. Deferring layout is the engine's problem to solve, not this
--- component's to work around.
+-- The same protection has one consequence that decides where this surface may live, and it
+-- is not a small one: protection propagates DOWN to descendants while the client's refusal
+-- propagates UP, so a plain frame is refused addon-driven geometry in combat merely for
+-- holding this one somewhere in its subtree. Parent it inside a frame that resizes at
+-- runtime and every one of that frame's mid-combat resizes is silently discarded, with
+-- "Interface action failed because of an AddOn" in the player's chat.
+--
+-- That shipped: this surface sat inside the unit frame's wrapper, which grows when an aura
+-- band gains a row or a cast bar attaches — both in combat by definition — and the growth
+-- was refused for ten days. Measured in game as GetPreferredSize 227 against a GetHeight of
+-- 188, with InCombatLockdown() true on every mismatch and false on every match.
+--
+-- So the owner parents this BESIDE the frame it covers and anchors it to that frame, and
+-- guards its own geometry with InCombatLockdown(), deferring to PLAYER_REGEN_ENABLED.
+-- Plugins/UnitFrames/UnitFrame.lua (_syncClickArea) is the reference implementation.
 local assert, type = assert, type
 local S = SuuUI.UISignals
 
@@ -66,8 +75,11 @@ SuuUI.Components.InstallBase(AreaMeta, "_f")
 --- Creates an invisible secure click surface for one unit.
 --
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, SIZE_CHANGED. Position it by adding it
--- to a container, as with any component — a stack container hosted on the frame it covers
--- stretches it over the whole thing.
+-- to a container, as with any component — but NOT a container hosted on the frame it covers
+-- if that frame resizes at runtime: hosting chains onto that frame's OnSizeChanged, so every
+-- mid-combat resize re-lays out a protected child. Host the container on something that only
+-- resizes with the screen and anchor this surface to the covered frame instead. See the
+-- parentage note at the top of this file.
 -- @param props table  { unit, name }
 --   unit: the unit token clicks act on, e.g. "player", "target"
 --   name: optional global frame name, so /framestack and a click-casting addon can name it

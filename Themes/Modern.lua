@@ -82,6 +82,9 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorTextMuted    = "colorGray400",
     colorTextDisabled = "colorGray600",
     colorBorder       = "colorGray700",
+    -- See Default.lua: an icon's ring has to read against spell art, not against the
+    -- game world, so it is brighter than a panel's edge and carries its own semantic.
+    colorBorderIcon   = "colorGray400",
     colorBorderFocus  = "colorAccent",
 
     fontSizeSm          = 11,

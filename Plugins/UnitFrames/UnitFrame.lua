@@ -6,13 +6,17 @@
 -- code. This is the same split CastBar.lua uses, and for the same reason: the second copy
 -- is the one that drifts.
 --
--- Layout, top to bottom: an attach band, a name/level row, the health and resource bars,
--- another attach band.
+-- Layout, top to bottom: the aura bands and an attach band, a name/level row, the health
+-- and resource bars, then the same bands again on the other side. Which side each aura band
+-- takes is a setting, so the column's order is restated rather than fixed -- see _stack.
 local format, floor = string.format, math.floor
 local ipairs, type = ipairs, type
 local C = SuuUI.Components
 local S = SuuUI.UISignals
 local T = SuuUI.Theme
+-- Loaded ahead of this file by the .toc, which is how every dependency in the addon is
+-- expressed. The band owns everything about an aura row; this file owns only where it sits.
+local AuraBand = SuuUI._UnitFrames.AuraBand
 
 ---------------------------------------------------------------------------
 -- Bar colours
@@ -263,33 +267,63 @@ local function addBand(total, shown, h, gap)
     return total + h, shown + 1
 end
 
+--- The height one entry of the stacking order contributes.
+--
+-- Dispatched on a string rather than a stored closure so the stack table can be built once
+-- and reused: this runs for every entry on every layout pass, and a closure per entry would
+-- allocate on each rebuild.
+-- @param e table  A _stack entry
+-- @return number
+function UnitFrame:_entryHeight(e)
+    local what = e.what
+    if what == "info" then return self:_infoHeight() end
+    if what == "bars" then return self:_barsHeight() end
+    if what == "aura" then return e.band:GetHeight() end
+    return self:_slotHeight(e.child)
+end
+
 --- The frame's intrinsic size: width from the plugin setting, height from whatever bands
---- are currently present — an attach slot, the name row, the bars, another attach slot.
---- Sizing flows one way, content setting the frame's height and never the reverse, so
---- there is no layout cycle to resolve even once a foreign widget has attached.
+--- are currently present. Sizing flows one way, content setting the frame's height and
+--- never the reverse, so there is no layout cycle to resolve even once a foreign widget has
+--- attached or the unit has picked up thirty buffs.
 -- @return number, number  width, height
 function UnitFrame:GetPreferredSize()
     local m = metrics(self._cfg)
     local total, shown = 0, 0
-    total, shown = addBand(total, shown, self:_slotHeight(self._slotAbove), m.infoGap)
-    total, shown = addBand(total, shown, self:_infoHeight(),                m.infoGap)
-    total, shown = addBand(total, shown, self:_barsHeight(),                m.infoGap)
-    total, shown = addBand(total, shown, self:_slotHeight(self._slotBelow), m.infoGap)
+    for i = 1, #self._stack do
+        total, shown = addBand(total, shown, self:_entryHeight(self._stack[i]), m.infoGap)
+    end
     return m.width, total
 end
 
---- How far the frame extends past its own content, top and bottom, because of attach
---- bands. This is what keeps the player's chosen position meaning "where my bars are"
---- rather than "where the bounding box is": a cast bar attaching below adds to the bottom
---- inset, and MoveableFrame shifts the frame down by exactly that much so the bars do not
---- move. Each band carries the row gap with it, matching GetPreferredSize.
+--- How far the frame extends past its own content, top and bottom, because of the bands
+--- stacked outside it. This is what keeps the player's chosen position meaning "where my
+--- bars are" rather than "where the bounding box is": a cast bar attaching below — or a
+--- second row of debuffs appearing mid-fight — adds to the inset, and MoveableFrame shifts
+--- the frame by exactly that much so the bars do not move.
+---
+--- Each present band carries the row gap with it, matching GetPreferredSize: flow layout
+--- puts one gap between each pair of present children, so a band's real contribution to the
+--- distance between the frame's edge and its content is its height plus one gap.
 -- @return number, number  above inset, below inset
 function UnitFrame:GetCoreInset()
     local gap = metrics(self._cfg).infoGap
-    local above = self:_slotHeight(self._slotAbove)
-    local below = self:_slotHeight(self._slotBelow)
-    if above > 0 then above = above + gap end
-    if below > 0 then below = below + gap end
+    local above, below, seenCore = 0, 0, false
+    for i = 1, #self._stack do
+        local e = self._stack[i]
+        if e.core then
+            seenCore = true
+        else
+            local h = self:_entryHeight(e)
+            if h > 0 then
+                if seenCore then
+                    below = below + h + gap
+                else
+                    above = above + h + gap
+                end
+            end
+        end
+    end
     return above, below
 end
 
@@ -313,6 +347,136 @@ function UnitFrame:_syncSize()
         self._wrapper:SetSize(w, h)
     end
     self:_syncAnchor()
+    self:_syncClickArea()
+end
+
+--- Re-derives the click surface's rect from the frame it covers.
+--
+--- Absolute rather than anchored, because an anchor to the wrapper is the same dependency as
+--- being its child: the client refuses to resize a frame whose movement would move a
+--- protected one, and it does not care whether the link is parentage or an anchor point.
+--- Proven in game by clearing that one anchor, after which the frame resized mid-combat for
+--- the first time -- preferred 227 against an actual 226.99996948242, InCombatLockdown() true.
+---
+--- The cost of absolute placement is that this has to be re-derived whenever the frame moves
+--- or resizes, which is why it is called from _syncSize AND from a watcher on the frame's
+--- stored position. Skipped in combat, since the surface is itself protected: an attempt
+--- costs the player a chat error for a call we already know is refused. Catching up on
+--- PLAYER_REGEN_ENABLED costs at most that a band strip which appeared mid-fight is not
+--- click-to-target until the fight ends; clicking the bars works throughout.
+function UnitFrame:_syncClickArea()
+    if not (self._clickArea and self._clickBox) then return end
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        self._clickDeferred = true
+        return
+    end
+    self._clickDeferred = nil
+
+    local root = SuuUI.UIRoot:GetRootContainer():GetFrame()
+    local wl, wt = self._wrapper:GetLeft(), self._wrapper:GetTop()
+    local rl, rt = root:GetLeft(), root:GetTop()
+    -- A frame the client has not laid out yet reports nothing. Leaving the surface where it
+    -- was is right: the next pass re-derives it, and a wrong rect is worse than a stale one.
+    if not (wl and wt and rl and rt) then return end
+
+    -- Root space: x grows right, and AnchorLayout's y grows DOWN from the top edge, while
+    -- the client's GetTop grows up -- hence wt - rt, which is zero or negative.
+    local x, y = wl - rl, wt - rt
+    local w, h = self._wrapper:GetWidth() or 0, self._wrapper:GetHeight() or 0
+    local a = self._clickAnchor
+    if a.x == x and a.y == y and a.width == w and a.height == h then return end
+    a.x, a.y, a.width, a.height = x, y, w, h
+    self._clickBox:SetChildAnchor(self._clickArea, a)
+end
+
+---------------------------------------------------------------------------
+-- Column order
+--
+-- The frame's own content — the name row and the bars — never moves in the column. What
+-- moves is what sits OUTSIDE it: two aura bands, each of which the player can put above the
+-- frame, below it, or nowhere. So the order is restated from the settings rather than fixed
+-- at construction, and it is stated ONCE: this list is what the column is built from, what
+-- the frame's height is summed from, and what the core inset is measured against. Three
+-- copies of a stacking order is three chances for the height to disagree with the layout.
+--
+-- Outward from the bars on each side: the attach slot first (a cast bar is a bar, so it
+-- belongs against the frame's own bars), then buffs, then debuffs. Buffs sit inside debuffs
+-- because that is where the player asked for them.
+---------------------------------------------------------------------------
+
+-- Ordered outermost-first for the "above" side. Reversed on the way out for "below", so one
+-- list states the nesting for both sides and they cannot drift apart.
+local BAND_NESTING = { "debuffs", "buffs" }
+
+--- Rebuilds the column and the stacking order from the current placement settings.
+--
+-- Cheap to call and only called when placement actually changes -- construction, a position
+-- dropdown, a profile switch. Container:Remove is a membership operation: it neither hides
+-- nor unparents, so a child that keeps its place is re-seated rather than disturbed.
+function UnitFrame:_restackRoot()
+    local stack, n = {}, 0
+    local function push(entry)
+        n = n + 1
+        stack[n] = entry
+    end
+
+    for i = 1, #BAND_NESTING do
+        local band = self._bands[BAND_NESTING[i]]
+        if band:Position() == "above" then push({ what = "aura", band = band }) end
+    end
+    push({ what = "slot", child = self._slotAbove })
+    push({ what = "info", child = self._infoRow, core = true })
+    push({ what = "bars", child = self._bars,    core = true })
+    push({ what = "slot", child = self._slotBelow })
+    for i = #BAND_NESTING, 1, -1 do
+        local band = self._bands[BAND_NESTING[i]]
+        if band:Position() == "below" then push({ what = "aura", band = band }) end
+    end
+
+    self._stack = stack
+
+    -- Re-seat the column. Removing by frame because that is what GetChildren reports.
+    local current = self._root:GetChildren()
+    for i = #current, 1, -1 do
+        self._root:Remove(current[i])
+    end
+    for i = 1, n do
+        local e = stack[i]
+        local child = e.band and e.band:GetContainer() or e.child
+        -- The bar group is the one child whose height is stated rather than hugged, and it
+        -- is stated here as well as in Relayout so a restack never leaves it collapsed
+        -- waiting for the next settings change.
+        if e.what == "bars" then
+            self._root:Add(child, { width = "fill", height = self:_barsHeight() })
+        else
+            self._root:Add(child, { width = "fill" })
+        end
+    end
+end
+
+--- Brings the aura bands into agreement with their placement settings.
+function UnitFrame:SyncAuraPlacement()
+    self:_restackRoot()
+    for i = 1, #AuraBand.KINDS do
+        local band = self._bands[AuraBand.KINDS[i].id]
+        -- A band above the frame stacks its rows bottom-up, so row one stays against the
+        -- frame and a new row grows away from it rather than shoving the first row along.
+        band:SetLineOrder(band:Position() == "above" and "reverse" or nil)
+        -- A band switched on may have been skipped by every update while it was hidden.
+        band:Update()
+    end
+    self:_syncSize()
+    self._root:Layout()
+end
+
+--- Re-reads both aura bands. Driven by UNIT_AURA and by anything that changes which unit
+--- the frame describes.
+function UnitFrame:UpdateAuras()
+    for i = 1, #AuraBand.KINDS do
+        self._bands[AuraBand.KINDS[i].id]:Update()
+    end
+    -- A band that gained or lost a row changed the frame's height, and the inset with it.
+    self:_syncSize()
 end
 
 ---------------------------------------------------------------------------
@@ -524,6 +688,14 @@ function UnitFrame:_syncPresence()
         self:UpdateAll(true)
     else
         self._wrapper:Hide()
+        -- The unit is gone and nothing else will say so: UNIT_AURA does not fire for a unit
+        -- that stopped existing, and the change event's own repaint is skipped precisely
+        -- because the frame is now absent. Left alone the bands keep the old unit's icons —
+        -- and, the part that costs something, keep their slots in the shared duration
+        -- ticker, so a dropped target goes on paying ten ticks a second to count down auras
+        -- on a unit nobody can see. The bars need no equivalent: they are read on their own
+        -- unit events, and a hidden bar showing a stale fill costs nothing.
+        self:UpdateAuras()
     end
     -- A detached bar is not inside the wrapper, so hiding the wrapper does not reach it.
     self:_syncResourcePresence()
@@ -550,6 +722,11 @@ function UnitFrame:Relayout()
     self._bars:SetGap(m.barGap)
     self._slotAbove:SetGap(m.barGap)
     self._slotBelow:SetGap(m.barGap)
+    -- The bands hold their own spacing token and their icon size, so they re-derive
+    -- themselves rather than being told what either is from out here.
+    for i = 1, #AuraBand.KINDS do
+        self._bands[AuraBand.KINDS[i].id]:Relayout()
+    end
     self._bars:SetChildProps(self._healthBar,   { width = "fill", height = m.health })
     -- The resource bar's geometry depends on who owns its width. Inline it fills the frame
     -- and only its height is stated; detached it owns both, so the wrapper carries them and
@@ -682,10 +859,21 @@ function UnitFrame:Create(parent, cfg)
     })
 
     -- Bands another plugin can place a widget into — a cast bar, say — through the attach
-    -- point this plugin publishes in onEnable. Created before the frame's own content so
-    -- the "above" slot really is above it: flow layout follows insertion order.
+    -- point this plugin publishes in onEnable.
     self._slotAbove = self:_createSlot()
     self._slotBelow = self:_createSlot()
+
+    -- One aura band per kind. Which side each takes is a setting, so they are created here
+    -- and placed by _restackRoot — nothing about their order is decided at construction.
+    self._bands = {}
+    for _, kind in ipairs(AuraBand.KINDS) do
+        self._bands[kind.id] = AuraBand:Create(self._wrapper, {
+            unit     = cfg.unit,
+            pluginId = cfg.pluginId,
+            prefix   = cfg.prefix,
+            kind     = kind,
+        })
+    end
 
     -- Info row: name, then level immediately beside it. Both hug their own text, so the
     -- level sits against the name instead of being pushed to the far edge.
@@ -748,10 +936,12 @@ function UnitFrame:Create(parent, cfg)
 
     -- No height on the info row: it hugs its own text, which is what makes the frame
     -- follow the font tokens. The wrapper then tracks the row through SIZE_CHANGED.
-    self._root:Add(self._slotAbove, { width = "fill" })
-    self._root:Add(self._infoRow,   { width = "fill" })
-    self._root:Add(self._bars,      { width = "fill" })
-    self._root:Add(self._slotBelow, { width = "fill" })
+    --
+    -- The column is seated by _restackRoot rather than by four Add calls here, because the
+    -- order is not a constant: two of its children are aura bands whose side is a setting.
+    -- It also builds _stack, which GetPreferredSize reads — so it has to run before any
+    -- watcher below can trigger a layout.
+    self:_restackRoot()
 
     S:Connect(self._infoRow, S.SIGNALS.SIZE_CHANGED, function()
         self:_syncSize()
@@ -767,21 +957,60 @@ function UnitFrame:Create(parent, cfg)
         self:_syncSize()
     end)
 
+    -- Same reasoning for the aura bands, and it matters more often: a band gains and loses
+    -- rows during a fight, not just when the player changes a setting.
+    for _, kind in ipairs(AuraBand.KINDS) do
+        S:Connect(self._bands[kind.id]:GetContainer(), S.SIGNALS.SIZE_CHANGED, function()
+            self:_syncSize()
+        end)
+    end
+
     -- A frame the player can click, the way the client's own unit frames answer one: left
     -- to target, right for the unit's context menu. Both actions are protected, so neither
     -- is a callback this plugin could write — the surface states them as secure attributes
     -- and the client performs them. See Components/UnitClickArea.lua.
     --
-    -- It covers the whole wrapper, attach bands included, because a right click anywhere on
-    -- a unit frame is expected to reach that unit. In edit mode it is a non-issue: the drag
-    -- overlay sits five frame levels above this, so a click while positioning the frame goes
-    -- to the drag rather than to the unit.
+    -- IT IS NEITHER A CHILD OF THE WRAPPER NOR ANCHORED TO IT, and both halves matter.
+    --
+    -- A frame built from a secure template is protected, and the client refuses addon-driven
+    -- geometry on anything whose movement would move that protected frame while in combat --
+    -- answering with "Interface action failed because of an AddOn". Parentage is the obvious
+    -- route, and it was the first one found: with the surface inside the wrapper, every
+    -- _syncSize during a fight was refused, so a debuff landing mid-combat could not grow the
+    -- frame and the band was carved out of a box frozen at its pre-combat height, shoving the
+    -- bars down by the band's height.
+    --
+    -- Moving it out was not enough, and that cost another round of in-game measurement: an
+    -- ANCHOR is the same dependency by another name. A surface still anchored to the wrapper
+    -- kept the wrapper frozen exactly as parentage had. Proven by clearing that one anchor in
+    -- game, whereupon the frame resized mid-combat for the first time: preferred 227 against
+    -- an actual 226.99996948242, with InCombatLockdown() true.
+    --
+    -- So the surface hangs off the ROOT at an absolute position instead, and _syncClickArea
+    -- re-derives that position from the wrapper's rect whenever it is legal to do so. Nothing
+    -- about the wrapper's geometry depends on this frame in either direction.
+    local rootFrame = SuuUI.UIRoot:GetRootContainer():GetFrame()
+    -- A container that mirrors the root, so a TOPLEFT child offset IS a root-space
+    -- coordinate. `fill` tracks the root, and the root only resizes with the screen.
+    self._clickBox = SuuUI.Layout:CreateContainer({
+        parent = rootFrame,
+        layout = "anchor",
+        fill   = true,
+    })
     self._clickArea = C.UnitClickArea({
         unit = cfg.unit,
         name = "SuuUI_" .. cfg.pluginId .. "_click_" .. cfg.unit,
-    }, self._wrapper)
-    self._clickBox = SuuUI.Layout:CreateContainer({ host = self._wrapper, layout = "stack" })
-    self._clickBox:Add(self._clickArea)
+    }, self._clickBox:GetFrame())
+    -- relativeTo stays nil: the container's own frame, never the wrapper.
+    self._clickAnchor = {
+        point         = "TOPLEFT",
+        relativePoint = "TOPLEFT",
+        x = 0, y = 0,
+    }
+    self._clickBox:Add(self._clickArea, { anchor = self._clickAnchor })
+    -- Same rung as the frame it covers. Stated rather than inherited, so a settings window
+    -- or a modal is guaranteed to draw over it, exactly as the wrapper does.
+    SuuUI.UIRoot:SetLayer(self._clickArea:GetFrame(), "normal")
 
     -- Spacing and font tokens are user-editable, so the frame re-derives on a theme change
     -- rather than holding the values it was built with.
@@ -796,6 +1025,30 @@ function UnitFrame:Create(parent, cfg)
     SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. "power_anchor", function()
         self:SyncResourcePlacement()
     end, self._themeId .. "_power_anchor", { immediate = true })
+
+    -- The click surface is placed in absolute root coordinates, so unlike an anchored one it
+    -- does not follow the frame for free: every move has to re-derive it. This key is written
+    -- by a drag, by a reset and by a profile switch, which is every way the frame moves.
+    SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. "position", function()
+        self:_syncClickArea()
+    end, self._themeId .. "_click_pos")
+
+    -- Aura bands. Placement first and immediate, for the same reason the resource bar's is:
+    -- this watcher is what seats the bands in the column and gives each its line order, and
+    -- it re-seats them on a profile switch, which can move them without the dropdown moving.
+    for _, kind in ipairs(AuraBand.KINDS) do
+        SuuUI.Settings:Watch(cfg.pluginId, AuraBand.PositionKey(cfg.prefix, kind.id),
+            function()
+                self:SyncAuraPlacement()
+            end, self._themeId .. "_" .. kind.id .. "_position", { immediate = true })
+
+        SuuUI.Settings:Watch(cfg.pluginId, AuraBand.SizeKey(cfg.prefix, kind.id), function()
+            local band = self._bands[kind.id]
+            band:Relayout()
+            -- A bigger icon can re-flow the rows, which changes the band's height.
+            self:_syncSize()
+        end, self._themeId .. "_" .. kind.id .. "_size", { immediate = true })
+    end
 
     -- The dimension sliders are watched with immediate = true: the watcher callback IS
     -- the first paint — no separate seeding call. It also survives a profile switch,
@@ -862,6 +1115,12 @@ function UnitFrame:Create(parent, cfg)
     -- turns hostile, and a reaction-coloured bar that ignored this would keep painting it
     -- yellow through the fight.
     self._events:RegisterEvent("UNIT_FACTION")
+    -- Every aura change on the unit arrives as one event, with no indication of what moved,
+    -- so the bands re-read rather than trying to patch a single icon.
+    self._events:RegisterEvent("UNIT_AURA")
+    -- Leaving combat is the moment a deferred click-surface resize becomes legal again.
+    -- The frame itself needs nothing here: it was resized correctly all along.
+    self._events:RegisterEvent("PLAYER_REGEN_ENABLED")
     self._events:RegisterEvent("PLAYER_ENTERING_WORLD")
     -- Player-only, and deliberately not registered for anything else: PLAYER_LEVEL_UP
     -- carries the PLAYER's new level as its first argument, so a target frame handling it
@@ -875,6 +1134,11 @@ function UnitFrame:Create(parent, cfg)
         self._events:RegisterEvent(cfg.changeEvent)
     end
     self._events:SetScript("OnEvent", function(_, event, unit, ...)
+        if event == "PLAYER_REGEN_ENABLED" then
+            -- Only catches up a surface that was refused mid-fight; a no-op otherwise.
+            if self._clickDeferred then self:_syncClickArea() end
+            return
+        end
         if event == "PLAYER_ENTERING_WORLD" then
             -- Every value is being established for the first time, not changing, so the
             -- bars adopt them outright instead of sweeping up from empty.
@@ -895,6 +1159,8 @@ function UnitFrame:Create(parent, cfg)
                 self:UpdateInfo()
             elseif event == "UNIT_FACTION" then
                 self:_applyHealthColor()
+            elseif event == "UNIT_AURA" then
+                self:UpdateAuras()
             elseif event == "UNIT_DISPLAYPOWER" then
                 -- The resource changed identity — rage to energy on a form swap — so the
                 -- old fill and the new one measure different things. Sliding between them
@@ -920,6 +1186,10 @@ function UnitFrame:UpdateAll(immediate)
     self:_applyHealthColor()
     self:UpdateHealth(immediate)
     self:UpdatePower(immediate)
+    -- The unit's auras are part of "everything displayed": a target swap replaces the whole
+    -- set, and nothing else re-reads them until the next UNIT_AURA — which may be a long
+    -- way off for a unit standing still.
+    self:UpdateAuras()
 end
 
 --- The text the level slot should carry, or nil to hide it.
@@ -1088,6 +1358,12 @@ function UnitFrame:Destroy()
     -- ghost on screen after the plugin is disabled.
     self:_teardownResourceBar()
     self._clickArea:Destroy()
+    -- Each band retires its own shared-ticker registration and its icons. Left alive, a
+    -- band would keep ticking against a destroyed frame after the plugin was disabled.
+    for i = 1, #AuraBand.KINDS do
+        self._bands[AuraBand.KINDS[i].id]:Destroy()
+    end
+    self._bands = nil
     self._infoRow:Destroy()
     self._bars:Destroy()
     self._slotAbove:Destroy()
@@ -1114,10 +1390,10 @@ end
 -- property of the control and stays here.
 -- @param prefix string   Unit key prefix, e.g. "target_"
 -- @param opts table      { label, width, healthHeight, powerHeight, healthCenter,
---                          attachLabel }
+--                          attachLabel, auraSize }
 -- @return table  Schema array for the tab
 function UnitFrame.Schema(prefix, opts)
-    return {
+    local schema = {
         { key = "", label = "General", type = "section" },
         { key = prefix .. "enabled",    label = "Enable Frame", type = "toggle", default = true },
         { key = prefix .. "show_name",  label = "Show Name",    type = "toggle", default = true },
@@ -1198,6 +1474,31 @@ function UnitFrame.Schema(prefix, opts)
         { key = prefix .. "power_height",  label = "Height", type = "slider",
           min = 4, max = 40, step = 1, default = opts.powerHeight },
     }
+
+    -- One section per aura band, derived from the same list the widget builds its bands
+    -- from: a third band would be one entry in AuraBand.KINDS and no schema edit at all.
+    --
+    -- Two controls, because there are only two decisions. How many rows a band takes is not
+    -- one of them -- it follows from the icon size and the frame's width, and the band wraps
+    -- to as many rows as the auras need.
+    for _, kind in ipairs(AuraBand.KINDS) do
+        local posKey = AuraBand.PositionKey(prefix, kind.id)
+        schema[#schema + 1] = { key = "", label = kind.label, type = "section" }
+        schema[#schema + 1] = {
+            key = posKey, label = "Position", type = "dropdown",
+            -- Buffs above and debuffs below by default: the arrangement most players
+            -- already read, and it keeps each side to one band until they ask otherwise.
+            default = kind.position, options = AuraBand.PositionOptions(),
+        }
+        schema[#schema + 1] = {
+            key = AuraBand.SizeKey(prefix, kind.id), label = "Icon Size", type = "slider",
+            min = 8, max = 48, step = 1, default = opts.auraSize,
+            -- Dead while the band is not on screen, rather than silently ignored.
+            enabledIf = { key = posKey, notEquals = "hidden" },
+        }
+    end
+
+    return schema
 end
 
 SuuUI._UnitFrames = SuuUI._UnitFrames or {}

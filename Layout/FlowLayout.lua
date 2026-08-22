@@ -123,6 +123,143 @@ end
 
 M.visibleChildren = visibleChildren
 
+-- Wrapping horizontal layout: positions children in lines, breaking when a child would
+-- overflow the content width. `lineGap` separates lines (defaults to `gap`). When
+-- `lineOrder` is "reverse" lines stack bottom-up so the first line is at the bottom
+-- and new lines grow upward — useful for an aura band above a frame that keeps row 1
+-- adjacent to the frame edge.
+--
+-- In a wrapping row, `width = "fill"` and `height = "fill"` are meaningless: fill
+-- distributes leftover main-axis space, but a wrapping line has no fixed right edge to
+-- distribute against. Both are treated as natural/auto width (the child's own size).
+local function applyWrap(container, children, n)
+    local pad     = container._padding
+    local gap     = snap(container._gap or 0)
+    local lineGap = snap(container._lineGap or gap)
+    local cw      = pxfloor(max(0, (container._frame:GetWidth()  or 0) - pad.left - pad.right))
+    local reverse = container._lineOrder == "reverse"
+
+    -- First pass: partition children into lines and measure each line's height.
+    local lines = {}          -- lines[i] = { children = {}, heights = {}, widths = {}, lineH = n }
+    local curLine = { children = {}, heights = {}, widths = {}, lineH = 0 }
+    local cursor = 0
+    local lineChildCount = 0
+
+    for _, child in ipairs(children) do
+        local props = child._layoutProps or {}
+        local align = props.align or container._align
+
+        -- In a wrapping row, fill is natural width (no space to distribute)
+        local childW
+        if props.width == "fill" or props.width == "auto" then
+            childW = M.NaturalWidth(child)
+        elseif type(props.width) == "number" then
+            childW = snap(props.width)
+        else
+            childW = snap(child:GetWidth() or 0)
+        end
+
+        local childH
+        if type(props.height) == "number" then
+            childH = snap(props.height)
+        elseif align == "stretch" then
+            childH = 0 -- resolved after line height is known
+        else
+            childH = naturalHeight(child, childW)
+        end
+
+        -- Break rule: if adding this child would exceed content width, start a new line.
+        -- Exception: if this is the first child on the line it gets its own line regardless
+        -- (a child wider than the container never infinite-loops).
+        local widthWithGap = (lineChildCount > 0) and (cursor + gap + childW) or childW
+        if lineChildCount > 0 and widthWithGap > cw then
+            -- Finalise current line
+            lines[#lines + 1] = curLine
+            curLine = { children = {}, heights = {}, widths = {}, lineH = 0 }
+            cursor = 0
+            lineChildCount = 0
+        end
+
+        local idx = #curLine.children + 1
+        curLine.children[idx] = child
+        curLine.widths[idx] = childW
+        curLine.heights[idx] = childH
+        if childH > curLine.lineH then curLine.lineH = childH end
+
+        cursor = (lineChildCount == 0) and childW or (cursor + gap + childW)
+        lineChildCount = lineChildCount + 1
+    end
+    -- Last line
+    if #curLine.children > 0 then
+        lines[#lines + 1] = curLine
+    end
+
+    -- Resolve stretch heights now that line heights are known
+    for _, line in ipairs(lines) do
+        for i, child in ipairs(line.children) do
+            local props = child._layoutProps or {}
+            local align = props.align or container._align
+            if align == "stretch" and line.heights[i] == 0 then
+                line.heights[i] = line.lineH
+            end
+        end
+    end
+
+    -- Compute total content height for the container
+    local totalH = pad.top + pad.bottom
+    for i, line in ipairs(lines) do
+        totalH = totalH + line.lineH
+        if i < #lines then totalH = totalH + lineGap end
+    end
+    -- Store for GetContentSize
+    container._wrapContentH = totalH
+
+    -- Second pass: position children. Lines are iterated top-down for normal order,
+    -- bottom-up for reversed order.
+    local ch = pxfloor(max(0, (container._frame:GetHeight() or 0) - pad.top - pad.bottom))
+    local lineCursor
+    if reverse then
+        -- First line at the bottom, new lines grow upward
+        lineCursor = snap(pad.top + ch)
+        for li = 1, #lines do
+            local line = lines[li]
+            lineCursor = lineCursor - line.lineH
+            local xCursor = snap(pad.left)
+            for i, child in ipairs(line.children) do
+                local props = child._layoutProps or {}
+                local align = props.align or container._align
+                local childW = line.widths[i]
+                local childH = line.heights[i]
+                -- Cross-axis alignment resolves against THIS line's height
+                local y = lineCursor + crossOffset(align, line.lineH, childH)
+                child:SetSize(childW, childH)
+                child:ClearAllPoints()
+                child:SetPoint("TOPLEFT", container._frame, "TOPLEFT", xCursor, -y)
+                xCursor = xCursor + childW + gap
+            end
+            if li < #lines then lineCursor = lineCursor - lineGap end
+        end
+    else
+        lineCursor = snap(pad.top)
+        for li = 1, #lines do
+            local line = lines[li]
+            local xCursor = snap(pad.left)
+            for i, child in ipairs(line.children) do
+                local props = child._layoutProps or {}
+                local align = props.align or container._align
+                local childW = line.widths[i]
+                local childH = line.heights[i]
+                local y = lineCursor + crossOffset(align, line.lineH, childH)
+                child:SetSize(childW, childH)
+                child:ClearAllPoints()
+                child:SetPoint("TOPLEFT", container._frame, "TOPLEFT", xCursor, -y)
+                xCursor = xCursor + childW + gap
+            end
+            lineCursor = lineCursor + line.lineH + lineGap
+        end
+    end
+end
+
 --- Applies flow layout to a container's children.
 -- Child layout props: { width="fill"|"auto"|number, height="fill"|number, align="start"|"center"|"end"|"stretch" }
 -- "fill" distributes remaining space on the main axis; "auto" hugs the child's own
@@ -132,6 +269,11 @@ M.visibleChildren = visibleChildren
 function M.Apply(container)
     local children, n = visibleChildren(container._children)
     if n == 0 then return end
+
+    -- Wrapping is horizontal only; vertical ignores the flag.
+    if container._wrap and container._dir == "horizontal" then
+        return applyWrap(container, children, n)
+    end
 
     local pad      = container._padding
     local gap      = snap(container._gap or 0)

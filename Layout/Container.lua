@@ -67,6 +67,24 @@ function ContMeta:GetGap()
     return self._gap
 end
 
+--- Sets which end of a wrapping flow the first line sits at.
+--
+-- A setter rather than a construction-only prop because placement can move at runtime: an
+-- aura band flipped from below a unit frame to above it wants its rows stacked from the
+-- other end, and rebuilding the container to say so would destroy its children.
+-- @param order string|nil  "reverse" stacks lines bottom-up; nil restores top-down
+function ContMeta:SetLineOrder(order)
+    if self._lineOrder == order then return end
+    self._lineOrder = order
+    self:Layout()
+end
+
+--- Returns the current wrapping line order.
+-- @return string|nil
+function ContMeta:GetLineOrder()
+    return self._lineOrder
+end
+
 --- Shows the container. Emits VISIBILITY_CHANGED.
 function ContMeta:Show()
     self._frame:Show()
@@ -292,6 +310,17 @@ function ContMeta:GetContentSize()
             return pxceil(maxW + pad.left + pad.right), pxceil(totalH)
         end
 
+        -- Wrapping flow: the strategy stores the computed content height, which already
+        -- includes padding. Return it rather than recomputing (idempotent on re-layout).
+        if self._wrap and self._wrapContentH then
+            local maxW = 0
+            for _, child in ipairs(children) do
+                local w = child:GetWidth() or 0
+                if w > maxW then maxW = w end
+            end
+            return pxceil(maxW + pad.left + pad.right), pxceil(self._wrapContentH)
+        end
+
         local maxH, totalW = 0, pad.left + pad.right
         for i, child in ipairs(children) do
             local props = child._layoutProps or {}
@@ -380,12 +409,15 @@ function SuuUI.Layout:GetFloatingHost()
 end
 
 --- Creates a new Container with a layout strategy.
--- @param props table  { parent, host, layout, dir, gap, padding, cols, align, valign, fill, w, h }
+-- @param props table  { parent, host, layout, dir, gap, lineGap, wrap, lineOrder, padding, cols, align, valign, fill, w, h }
 --   parent: frame the container is created inside
 --   host:   adopt an existing frame as the layout box instead of creating one.
 --           Components use this so internal layout costs no extra frame.
 --   fill:   mirror the parent's size and track its resizes
 --   layout: "flow" | "grid" | "anchor" | "stack"
+--   wrap:   (flow, horizontal only) break onto a new line when children overflow
+--   lineGap: (flow, wrap) gap between lines; defaults to `gap`
+--   lineOrder: (flow, wrap) "reverse" stacks lines bottom-up (first line at bottom)
 -- @return table  Container handle
 function SuuUI.Layout:CreateContainer(props)
     assert(props.parent or props.host, "SuuUI Container: parent or host required")
@@ -429,6 +461,9 @@ function SuuUI.Layout:CreateContainer(props)
         _layoutType  = props.layout or "flow",
         _dir         = props.dir or "vertical",
         _gap         = props.gap or 0,
+        _lineGap     = props.lineGap,
+        _wrap        = props.wrap or false,
+        _lineOrder   = props.lineOrder,
         _padding     = pad,
         _cols        = props.cols or 2,
         _align       = props.align,

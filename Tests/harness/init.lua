@@ -46,6 +46,10 @@
 --              H.dragResize H.key H.typeText H.pressEnter H.pressEscape H.cursor
 --              H.cursorOn H.setMouseDown H.mods
 -- Units:       H.setUnit H.clearUnit H.setTarget
+-- Combat:      H.setCombat H.inCombat H.getBlockedActions H.resetBlockedActions
+--              H.hasProtectedDescendant
+-- Auras:       H.setAuras H.clearAuras H.getCancelBuff H.resetCancelBuff
+--              H.getTooltipState H.resetTooltipState
 -- Spellcasts:  H.startCast H.startChannel H.stopCast H.finishCast H.interruptCast
 --              H.failCast H.stopChannel H.delayCast H.updateChannel H.combatLogInterrupt
 --              H.combatLogSpell
@@ -56,6 +60,7 @@
 local geometry = require("harness.wow.geometry")
 local state    = require("harness.wow.state")
 local font     = require("harness.wow.font")
+local widget   = require("harness.wow.widget")
 local addon    = require("harness.addon")
 
 local M = {}
@@ -103,6 +108,7 @@ function M.setup(opts)
     M.wow      = loaded.wow
     M.UIParent = loaded.wow.UIParent
     M.Minimap  = loaded.wow.Minimap
+    M.GameTooltip = loaded.wow.GameTooltip
     M.C        = loaded.SuuUI.Components
     M.S        = loaded.SuuUI.UISignals
     M.T        = loaded.SuuUI.Theme
@@ -254,6 +260,73 @@ function M.setTarget(props)
     end
     M.fireEvent("PLAYER_TARGET_CHANGED", "player")
     return u
+end
+
+----------------------------------------------------------------------------------
+-- Combat lockdown and protected frames
+--
+-- The client refuses addon-driven geometry on a protected frame, and on any frame whose
+-- SUBTREE holds one, while in combat. It refuses silently — the call returns having changed
+-- nothing — so a spec asserts the refusal through H.getBlockedActions() and the frame's
+-- unchanged size, never through an error.
+--
+-- Protection propagates DOWN (a descendant of a secure frame is protected). The REFUSAL
+-- propagates UP (a plain frame with one secure grandchild cannot be resized). That
+-- asymmetry is the bug: a unit frame with a secure click surface inside it could not grow
+-- mid-fight, so an arriving debuff band was carved out of its existing box instead.
+----------------------------------------------------------------------------------
+
+--- Enters or leaves combat, announcing it the way the client does.
+--
+-- Entering fires PLAYER_REGEN_DISABLED and leaving fires PLAYER_REGEN_ENABLED, for the same
+-- reason H.setTarget fires PLAYER_TARGET_CHANGED: the state moving without the announcement
+-- is a situation the client never produces, and code that defers work to the end of combat
+-- reads that event to know when to run it. Only a real transition announces, as in game —
+-- calling this twice with the same value fires once.
+--
+-- @param inCombat bool      true to enter combat, false to leave
+-- @param opts table|nil     { silent = true } to move the flag without firing, for a spec
+--                           specifically about a reader that ignores the event
+-- @return bool  The flag as it now stands
+function M.setCombat(inCombat, opts)
+    local want = inCombat and true or false
+    local changed = state.inCombat ~= want
+    state.inCombat = want
+    if changed and not (opts and opts.silent) then
+        M.fireEvent(want and "PLAYER_REGEN_DISABLED" or "PLAYER_REGEN_ENABLED")
+    end
+    return state.inCombat
+end
+
+--- Whether the simulated client is in combat, i.e. what InCombatLockdown() answers.
+-- @return bool
+function M.inCombat() return state.inCombat == true end
+
+--- Every geometry call the lockdown refused, oldest first.
+--
+-- Each entry is { action = "SetSize", frame = <widget>, name = <frame name or nil>,
+-- protected = <bool, whether the frame itself was protected rather than merely holding a
+-- protected descendant> }. Returns a copy, so a spec can hold the list across further calls.
+-- @return table
+function M.getBlockedActions()
+    local out = {}
+    for i, rec in ipairs(state.blockedActions) do out[i] = rec end
+    return out
+end
+
+--- Forgets the refusals so far, so one spec can assert a second call cleanly.
+function M.resetBlockedActions()
+    state.blockedActions = {}
+end
+
+--- Whether any frame in this widget's subtree is protected — the question the refusal asks.
+--
+-- The invariant a resizing frame has to hold: true here means every geometry change on it is
+-- refused for the duration of a fight.
+-- @param target table  A widget or a SuuUI component handle
+-- @return bool
+function M.hasProtectedDescendant(target)
+    return widget.hasProtectedDescendant(M.frameOf(target))
 end
 
 ----------------------------------------------------------------------------------
@@ -455,6 +528,81 @@ function M.updateChannel(seconds, unit)
     c.endTime = c.endTime + (seconds or 0.5) * 1000
     M.fireEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", unit or c.unit, c.castID, c.spellId)
     return c
+end
+
+----------------------------------------------------------------------------------
+-- Auras
+--
+-- Staged per-unit, mirroring the H.setUnit/H.setTarget pattern. Moving the aura state
+-- fires UNIT_AURA for that unit, because the state moving without the event is a
+-- situation the client never produces. Opt out with silent = true for testing a reader
+-- that explicitly ignores the event.
+----------------------------------------------------------------------------------
+
+-- Known aura entry fields. Listed so a typo is an error.
+local AURA_FIELDS = {
+    name = true, icon = true, count = true, debuffType = true,
+    duration = true, expirationTime = true, source = true, isStealable = true,
+    spellId = true, canApplyAura = true, isBossDebuff = true, castByPlayer = true,
+    timeMod = true, nameplateShowPersonal = true, nameplateShowAll = true,
+}
+
+--- Stages aura lists for a unit and fires UNIT_AURA.
+--
+-- @param unit string  Unit token, e.g. "player" or "target"
+-- @param lists table  { helpful = { {...}, ... }, harmful = { {...}, ... } }
+-- @param opts table|nil  { silent = true } to suppress the event
+function M.setAuras(unit, lists, opts)
+    assert(type(unit) == "string" and unit ~= "", "H.setAuras: unit token required")
+    lists = lists or {}
+    -- Validate entries
+    for _, key in ipairs({ "helpful", "harmful" }) do
+        local list = lists[key]
+        if list then
+            for _, entry in ipairs(list) do
+                for k in pairs(entry) do
+                    assert(AURA_FIELDS[k], "H.setAuras: unknown aura field '" .. tostring(k) .. "'")
+                end
+            end
+        end
+    end
+    state.auras[unit] = {
+        helpful = lists.helpful or {},
+        harmful = lists.harmful or {},
+    }
+    if not (opts and opts.silent) then
+        M.fireEvent("UNIT_AURA", unit)
+    end
+end
+
+--- Clears all auras for a unit and fires UNIT_AURA.
+-- @param unit string
+-- @param opts table|nil  { silent = true } to suppress the event
+function M.clearAuras(unit, opts)
+    state.auras[unit] = nil
+    if not (opts and opts.silent) then
+        M.fireEvent("UNIT_AURA", unit)
+    end
+end
+
+--- Returns the last CancelUnitBuff call record { unit, index }, or nil.
+function M.getCancelBuff()
+    return state.cancelBuff
+end
+
+--- Clears the CancelUnitBuff record (call between assertions in multi-step specs).
+function M.resetCancelBuff()
+    state.cancelBuff = nil
+end
+
+--- Returns the GameTooltip state: { owner, anchor, aura = { unit, index, filter } }, or nil.
+function M.getTooltipState()
+    return state.tooltip
+end
+
+--- Clears the tooltip state record.
+function M.resetTooltipState()
+    state.tooltip = nil
 end
 
 ----------------------------------------------------------------------------------

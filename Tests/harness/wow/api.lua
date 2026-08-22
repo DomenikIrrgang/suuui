@@ -316,6 +316,13 @@ function M.install(env)
     env.GetMaxLevelForPlayerExpansion = function() return state.maxPlayerLevel or 60 end
     env.MAX_PLAYER_LEVEL = 60
     env.GetTime       = function() return state.clock or 0 end
+    -- Combat lockdown. False unless a spec says otherwise (H.setCombat), because that is the
+    -- state an addon does all its setup in — and because turning it on by default would fail
+    -- every geometry spec in the suite for code that is correct.
+    --
+    -- The flag is not decoration: while it is true the widget layer refuses geometry on any
+    -- frame that is protected or holds a protected descendant, exactly as the client does.
+    -- See "Protection and combat lockdown" in wow/widget.lua.
     env.InCombatLockdown = function() return state.inCombat == true end
 
     -- ReloadUI stub for testing (records call rather than actually reloading)
@@ -380,6 +387,149 @@ function M.install(env)
         return table.unpack(e, 1, e.n or #e)
     end
 
+    --------------------------------------------------------------------------
+    -- Auras (UnitAura / UnitBuff / UnitDebuff)
+    --------------------------------------------------------------------------
+
+    -- The 2.5.4 client returns exactly 15 values from UnitAura. Defaults fill every slot
+    -- a real aura carries so a test entry need only declare what matters. A non-stacking
+    -- aura reports count = 0, and a BUFF can carry a debuffType ("Magic" on Righteous Fury).
+    local AURA_DEFAULTS = {
+        name = "Buff",
+        icon = "Interface\\Icons\\Ability_Warrior_Sunder",
+        count = 0,
+        debuffType = nil,
+        duration = 0,
+        expirationTime = 0,
+        source = "player",
+        isStealable = false,
+        nameplateShowPersonal = false,
+        spellId = 0,
+        canApplyAura = false,
+        isBossDebuff = false,
+        castByPlayer = true,
+        nameplateShowAll = false,
+        timeMod = 1,
+    }
+
+    local function resolveAura(entry)
+        if not entry then return nil end
+        return entry.name                  or AURA_DEFAULTS.name,
+               entry.icon                  or AURA_DEFAULTS.icon,
+               entry.count                 or AURA_DEFAULTS.count,
+               entry.debuffType            or AURA_DEFAULTS.debuffType,
+               entry.duration              or AURA_DEFAULTS.duration,
+               entry.expirationTime        or AURA_DEFAULTS.expirationTime,
+               entry.source                or AURA_DEFAULTS.source,
+               entry.isStealable == true,
+               entry.nameplateShowPersonal == true,
+               entry.spellId              or AURA_DEFAULTS.spellId,
+               entry.canApplyAura == true,
+               entry.isBossDebuff == true,
+               entry.castByPlayer ~= false,
+               entry.nameplateShowAll == true,
+               entry.timeMod              or AURA_DEFAULTS.timeMod
+    end
+
+    -- filter nil = "HELPFUL" per the live client
+    env.UnitAura = function(unit, index, filter)
+        if not env.UnitExists(unit) then return nil end
+        filter = filter or "HELPFUL"
+        local unitAuras = state.auras[unit]
+        if not unitAuras then return nil end
+        local list = filter == "HARMFUL" and unitAuras.harmful or unitAuras.helpful
+        if not list then return nil end
+        local entry = list[index]
+        if not entry then return nil end
+        return resolveAura(entry)
+    end
+
+    env.UnitBuff = function(unit, index)
+        return env.UnitAura(unit, index, "HELPFUL")
+    end
+
+    env.UnitDebuff = function(unit, index)
+        return env.UnitAura(unit, index, "HARMFUL")
+    end
+
+    -- Records the call so a spec can assert which buff was cancelled.
+    env.CancelUnitBuff = function(unit, index)
+        state.cancelBuff = { unit = unit, index = index }
+    end
+
+    --------------------------------------------------------------------------
+    -- DebuffTypeColor (same {r=,g=,b=} shape as RAID_CLASS_COLORS)
+    --------------------------------------------------------------------------
+    env.DebuffTypeColor = {
+        Magic   = { r = 0.20, g = 0.60, b = 1.00 },
+        Curse   = { r = 0.60, g = 0.00, b = 1.00 },
+        Disease = { r = 0.60, g = 0.40, b = 0.00 },
+        Poison  = { r = 0.00, g = 0.60, b = 0.00 },
+        none    = { r = 0.80, g = 0.00, b = 0.00 },
+    }
+
+    --------------------------------------------------------------------------
+    -- GameTooltip stub
+    --------------------------------------------------------------------------
+    local GameTooltip = CreateFrame("Frame", "GameTooltip", UIParent)
+    GameTooltip._tooltipShown = false
+
+    function GameTooltip:SetOwner(owner, anchor)
+        self._owner  = owner
+        self._anchor = anchor
+        state.tooltip = state.tooltip or {}
+        state.tooltip.owner  = owner
+        state.tooltip.anchor = anchor
+        state.tooltip.aura   = nil
+    end
+
+    function GameTooltip:SetUnitBuff(unit, index)
+        state.tooltip = state.tooltip or {}
+        state.tooltip.aura = { unit = unit, index = index, filter = "HELPFUL" }
+    end
+
+    function GameTooltip:SetUnitDebuff(unit, index)
+        state.tooltip = state.tooltip or {}
+        state.tooltip.aura = { unit = unit, index = index, filter = "HARMFUL" }
+    end
+
+    function GameTooltip:SetUnitAura(unit, index, filter)
+        state.tooltip = state.tooltip or {}
+        state.tooltip.aura = { unit = unit, index = index, filter = filter or "HELPFUL" }
+    end
+
+    function GameTooltip:ClearLines()
+        state.tooltip = state.tooltip or {}
+        state.tooltip.aura = nil
+    end
+
+    function GameTooltip:Show()
+        self._tooltipShown = true
+        self._shown = true
+    end
+
+    function GameTooltip:Hide()
+        self._tooltipShown = false
+        self._shown = false
+    end
+
+    function GameTooltip:IsShown()
+        return self._tooltipShown == true
+    end
+
+    -- ANCHOR constants the client ships
+    env.ANCHOR_NONE        = "ANCHOR_NONE"
+    env.ANCHOR_CURSOR      = "ANCHOR_CURSOR"
+    env.ANCHOR_LEFT        = "ANCHOR_LEFT"
+    env.ANCHOR_RIGHT       = "ANCHOR_RIGHT"
+    env.ANCHOR_TOP         = "ANCHOR_TOP"
+    env.ANCHOR_BOTTOM      = "ANCHOR_BOTTOM"
+    env.ANCHOR_TOPLEFT     = "ANCHOR_TOPLEFT"
+    env.ANCHOR_TOPRIGHT    = "ANCHOR_TOPRIGHT"
+    env.ANCHOR_BOTTOMLEFT  = "ANCHOR_BOTTOMLEFT"
+    env.ANCHOR_BOTTOMRIGHT = "ANCHOR_BOTTOMRIGHT"
+    env.ANCHOR_PRESERVE    = "ANCHOR_PRESERVE"
+
     env.SlashCmdList = {}
     env.hooksecurefunc = function(tbl, name, fn)
         if type(tbl) == "string" then tbl, name, fn = env, tbl, name end
@@ -422,6 +572,7 @@ function M.install(env)
         fireEvent  = fireEvent,
         fontObjects = fontObjects,
         addFontObject = addFontObject,
+        GameTooltip = GameTooltip,
     }
 end
 

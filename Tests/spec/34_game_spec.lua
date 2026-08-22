@@ -564,4 +564,161 @@ describe("Core.Game", function()
             expect(H.T:GetUnitColor("colorHealth", "target")).deepEq(reactionColor)
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- 9. Debuff dispel-type colours
+    --
+    -- Same three-layer shape as ClassColor and ReactionColor: the client's live global
+    -- first (so SuuUI agrees with an addon that has retinted debuff borders), an internal
+    -- copy for the login moment before the global exists, and nil for a question that has
+    -- no answer. nil is the interesting one — a debuff with no dispel type has no dispel
+    -- identity, and inventing a colour for it would give the player a cue meaning nothing.
+    ---------------------------------------------------------------------------
+    describe("untyped debuff colour", function()
+        it("reads the client's own none row", function()
+            expect(H.SuuUI.Game:UntypedDebuffColor())
+                .deepEq({ H.env.DebuffTypeColor.none.r, H.env.DebuffTypeColor.none.g,
+                          H.env.DebuffTypeColor.none.b, 1 })
+        end)
+
+        it("is red, and distinct from every dispel type", function()
+            local none = H.SuuUI.Game:UntypedDebuffColor()
+            expect(none[1]).as("red channel dominates").gt(0.5)
+            local function same(a, b)
+                return a ~= nil and b ~= nil
+                   and a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
+            end
+            for _, t in ipairs({ "Magic", "Curse", "Disease", "Poison" }) do
+                expect(same(none, H.SuuUI.Game:DebuffTypeColor(t)))
+                    .as(t .. " must not collide with untyped").falsy()
+            end
+        end)
+
+        it("never returns nil, unlike DebuffTypeColor", function()
+            -- A debuff display always has something to paint; "no type" is an answer here
+            -- rather than an absence to fall back from.
+            expect(H.SuuUI.Game:DebuffTypeColor(nil)).isNil()
+            expect(H.SuuUI.Game:UntypedDebuffColor()).notNil()
+        end)
+
+        it("follows a live retint of the global", function()
+            H.env.DebuffTypeColor.none = { r = 0.10, g = 0.20, b = 0.30 }
+            expect(H.SuuUI.Game:UntypedDebuffColor()).deepEq({ 0.10, 0.20, 0.30, 1 })
+        end)
+
+        it("falls back to its own copy when the global is unusable", function()
+            H.env.DebuffTypeColor = nil
+            local c = H.SuuUI.Game:UntypedDebuffColor()
+            expect(c).notNil()
+            expect(c[1]).gt(0.5)
+        end)
+    end)
+
+    describe("debuff type colours", function()
+        local TYPES = { "Magic", "Curse", "Disease", "Poison" }
+
+        it("answers for each of the four dispel types the client names", function()
+            local dtc = H.env.DebuffTypeColor
+            for _, kind in ipairs(TYPES) do
+                local c = Game():DebuffTypeColor(kind)
+                expect(type(c)).as(kind).eq("table")
+                expect(#c).as(kind .. " component count").eq(4)
+                expect(c[1]).as(kind .. " r").eq(dtc[kind].r)
+                expect(c[2]).as(kind .. " g").eq(dtc[kind].g)
+                expect(c[3]).as(kind .. " b").eq(dtc[kind].b)
+                expect(c[4]).as(kind .. " a").eq(1)
+            end
+        end)
+
+        it("gives every dispel type its own colour, so a border means one thing", function()
+            local seen = {}
+            for _, kind in ipairs(TYPES) do
+                local c = Game():DebuffTypeColor(kind)
+                local key = string.format("%.2f/%.2f/%.2f", c[1], c[2], c[3])
+                expect(seen[key]).as(kind .. " duplicates " .. tostring(seen[key])).isNil()
+                seen[key] = kind
+            end
+        end)
+
+        it("returns nil for nil, so the caller falls back to its own border", function()
+            expect(Game():DebuffTypeColor(nil)).isNil()
+        end)
+
+        it("returns nil for \"none\" even though the client's global names it", function()
+            -- The live DebuffTypeColor table carries a "none" row (a red), which is why the
+            -- guard has to run BEFORE the lookup: reaching the global would paint every
+            -- undispellable debuff red instead of leaving it on the theme's border.
+            expect(H.env.DebuffTypeColor.none).as("the client really does have this row").notNil()
+            expect(Game():DebuffTypeColor("none")).isNil()
+        end)
+
+        it("returns nil for an empty string and for a type this client does not name", function()
+            expect(Game():DebuffTypeColor("")).isNil()
+            expect(Game():DebuffTypeColor("Bleed")).isNil()
+            expect(Game():DebuffTypeColor("magic")).as("the client's keys are capitalised").isNil()
+        end)
+
+        it("returns nil for non-string arguments", function()
+            expect(Game():DebuffTypeColor(42)).isNil()
+            expect(Game():DebuffTypeColor(true)).isNil()
+            expect(Game():DebuffTypeColor({ r = 1, g = 0, b = 0 })).isNil()
+        end)
+
+        it("prefers the live global and picks up a runtime retint (cache validation)", function()
+            -- The path that rots: a cached array handed back after the source moved would
+            -- leave SuuUI painting last session's colour for the rest of the session.
+            local c1 = Game():DebuffTypeColor("Magic")
+            expect(c1[1]).eq(H.env.DebuffTypeColor.Magic.r)
+
+            H.env.DebuffTypeColor.Magic = { r = 0.11, g = 0.22, b = 0.33 }
+            local c2 = Game():DebuffTypeColor("Magic")
+            expect(c2[1]).eq(0.11)
+            expect(c2[2]).eq(0.22)
+            expect(c2[3]).eq(0.33)
+            expect(c2[4]).eq(1)
+        end)
+
+        it("revalidates per type, so retinting one leaves the others alone", function()
+            local curseBefore = Game():DebuffTypeColor("Curse")
+            H.env.DebuffTypeColor.Poison = { r = 0.05, g = 0.05, b = 0.05 }
+            expect(Game():DebuffTypeColor("Poison")[1]).eq(0.05)
+            expect(Game():DebuffTypeColor("Curse")).deepEq(curseBefore)
+        end)
+
+        it("hands out the same table every call, so nothing allocates per paint", function()
+            expect(Game():DebuffTypeColor("Disease")).eq(Game():DebuffTypeColor("Disease"))
+        end)
+
+        it("falls back to the internal copy when the global is absent", function()
+            H.env.DebuffTypeColor = nil
+            -- Pin the actual values rather than merely "a colour": asserting a table came
+            -- back would pass even if the internal copy had drifted to the wrong hue, which
+            -- is the only thing this branch exists to provide.
+            expect(Game():DebuffTypeColor("Magic")).deepEq({ 0.20, 0.60, 1.00, 1 })
+            expect(Game():DebuffTypeColor("Curse")).deepEq({ 0.60, 0.00, 1.00, 1 })
+            expect(Game():DebuffTypeColor("Disease")).deepEq({ 0.60, 0.40, 0.00, 1 })
+            expect(Game():DebuffTypeColor("Poison")).deepEq({ 0.00, 0.60, 0.00, 1 })
+            expect(Game():DebuffTypeColor("none")).as("still no answer").isNil()
+        end)
+
+        it("falls back when the global is present but the row is unusable", function()
+            H.env.DebuffTypeColor = {
+                Magic   = "blue",                          -- not a table
+                Curse   = { r = "purple", g = 0, b = 1 },  -- r is not a number
+                Disease = {},                              -- no channels at all
+            }
+            expect(Game():DebuffTypeColor("Magic")).deepEq({ 0.20, 0.60, 1.00, 1 })
+            expect(Game():DebuffTypeColor("Curse")).deepEq({ 0.60, 0.00, 1.00, 1 })
+            expect(Game():DebuffTypeColor("Disease")).deepEq({ 0.60, 0.40, 0.00, 1 })
+            expect(Game():DebuffTypeColor("Poison"))
+                .as("a row the shortened global omits entirely")
+                .deepEq({ 0.00, 0.60, 0.00, 1 })
+        end)
+
+        it("survives the global being replaced by something that is not a table", function()
+            H.env.DebuffTypeColor = "not a table"
+            expect(Game():DebuffTypeColor("Poison")).deepEq({ 0.00, 0.60, 0.00, 1 })
+            expect(Game():DebuffTypeColor("Bleed")).isNil()
+        end)
+    end)
 end)

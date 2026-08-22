@@ -1398,4 +1398,690 @@ describe("harness: WoW API simulation", function()
             expect(H.unitMenu()).isNil()
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- Combat lockdown
+    --
+    -- The client refuses addon-driven geometry on a protected frame, and on any frame whose
+    -- SUBTREE holds one, while in combat — silently, so the only symptom is a frame that
+    -- keeps the size it had. That is not a corner case: it is how a shipped bug survived
+    -- 2728 assertions. The unit frame held a secure click surface, so every mid-fight resize
+    -- was refused; a debuff band arriving in combat was carved out of the frame's existing
+    -- box and pushed the bars down by its own height. Measured in game: preferred 227
+    -- against an actual 188, InCombatLockdown() true on every mismatch, false on every match.
+    --
+    -- Note the two directions, because they are opposites and conflating them is the whole
+    -- mistake: protection propagates DOWN to descendants, the refusal propagates UP to
+    -- ancestors.
+    ---------------------------------------------------------------------------
+    describe("combat lockdown", function()
+        -- A plain wrapper holding a plain child holding a secure grandchild: the shape the
+        -- bug had. Nothing in the chain above the grandchild is protected.
+        local function secureGrandchildTree()
+            local wrapper = H.parent(300, 100)
+            local mid     = H.env.CreateFrame("Frame", nil, wrapper)
+            mid:SetAllPoints(wrapper)
+            local secure  = H.env.CreateFrame("Button", nil, mid, "SecureUnitButtonTemplate")
+            secure:SetAttribute("unit", "player")
+            return wrapper, mid, secure
+        end
+
+        -- Counts a raw client event, the way the setTarget specs above do. The addon's own
+        -- EventBus is a different bus and does not carry PLAYER_REGEN_*, so H.eventSpy would
+        -- report zero for a working announcement.
+        local function eventProbe(event)
+            local probe = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local seen = { n = 0 }
+            probe:RegisterEvent(event)
+            probe:SetScript("OnEvent", function(_, ev)
+                if ev == event then seen.n = seen.n + 1 end
+            end)
+            return seen
+        end
+
+        describe("the flag", function()
+            it("is out of combat by default", function()
+                expect(H.env.InCombatLockdown()).as("setup leaves the client at peace").eq(false)
+                expect(H.inCombat()).eq(false)
+            end)
+
+            it("reports through InCombatLockdown once entered", function()
+                H.setCombat(true)
+                expect(H.env.InCombatLockdown()).eq(true)
+                H.setCombat(false)
+                expect(H.env.InCombatLockdown()).eq(false)
+            end)
+
+            it("announces entering with PLAYER_REGEN_DISABLED", function()
+                local seen = eventProbe("PLAYER_REGEN_DISABLED")
+                H.setCombat(true)
+                expect(seen.n).as("state moving without the event never happens in game").eq(1)
+            end)
+
+            it("announces leaving with PLAYER_REGEN_ENABLED", function()
+                H.setCombat(true)
+                local seen = eventProbe("PLAYER_REGEN_ENABLED")
+                H.setCombat(false)
+                expect(seen.n).eq(1)
+            end)
+
+            it("announces only a real transition", function()
+                H.setCombat(true)
+                local seen = eventProbe("PLAYER_REGEN_DISABLED")
+                H.setCombat(true)
+                expect(seen.n).as("the client does not re-announce combat it is already in").eq(0)
+            end)
+
+            it("moves the flag silently when asked", function()
+                local seen = eventProbe("PLAYER_REGEN_DISABLED")
+                H.setCombat(true, { silent = true })
+                expect(H.env.InCombatLockdown()).as("the flag still moved").eq(true)
+                expect(seen.n).as("silent is for a spec about a reader ignoring the event").eq(0)
+            end)
+        end)
+
+        describe("IsProtected", function()
+            it("is false for a plain frame, in both values", function()
+                local p = H.parent(100, 50)
+                local isProtected, explicitly = p:IsProtected()
+                expect(isProtected).eq(false)
+                expect(explicitly).eq(false)
+            end)
+
+            it("is explicit for a frame built from a secure template", function()
+                local _, _, secure = secureGrandchildTree()
+                local isProtected, explicitly = secure:IsProtected()
+                expect(isProtected).eq(true)
+                expect(explicitly).as("its own protection, not inherited").eq(true)
+            end)
+
+            it("is inherited by a child of a protected frame", function()
+                local _, _, secure = secureGrandchildTree()
+                local child = H.env.CreateFrame("Frame", nil, secure)
+                local isProtected, explicitly = child:IsProtected()
+                expect(isProtected).as("protection propagates DOWN").eq(true)
+                expect(explicitly).as("inherited, so not explicit").eq(false)
+            end)
+
+            it("is inherited across more than one generation", function()
+                local _, _, secure = secureGrandchildTree()
+                local mid   = H.env.CreateFrame("Frame", nil, secure)
+                local deep  = H.env.CreateFrame("Frame", nil, mid)
+                expect(deep:IsProtected()).eq(true)
+            end)
+
+            it("does NOT propagate up to an ancestor", function()
+                local wrapper, mid = secureGrandchildTree()
+                expect(wrapper:IsProtected())
+                    .as("holding a secure descendant does not make a frame protected").eq(false)
+                expect(mid:IsProtected()).eq(false)
+            end)
+
+            it("is answered by a region too, from its parent", function()
+                local _, _, secure = secureGrandchildTree()
+                local tex = secure:CreateTexture(nil, "ARTWORK")
+                expect(tex:IsProtected()).eq(true)
+            end)
+        end)
+
+        describe("hasProtectedDescendant", function()
+            it("finds a secure grandchild", function()
+                local wrapper, mid = secureGrandchildTree()
+                expect(H.hasProtectedDescendant(wrapper))
+                    .as("the refusal propagates UP, so the search must too").eq(true)
+                expect(H.hasProtectedDescendant(mid)).eq(true)
+            end)
+
+            it("is false for a tree with none", function()
+                local p = H.parent(100, 50)
+                H.env.CreateFrame("Frame", nil, p)
+                expect(H.hasProtectedDescendant(p)).eq(false)
+            end)
+
+            it("is false for the secure frame's own subtree", function()
+                local _, _, secure = secureGrandchildTree()
+                expect(H.hasProtectedDescendant(secure))
+                    .as("the frame itself is not its own descendant").eq(false)
+            end)
+        end)
+
+        describe("geometry on a frame with a protected descendant", function()
+            it("resizes freely out of combat", function()
+                local wrapper = secureGrandchildTree()
+                wrapper:SetHeight(188)
+                wrapper:SetHeight(227)
+                expect(wrapper:GetHeight()).as("no lockdown, no refusal").eq(227)
+                expect(#H.getBlockedActions()).eq(0)
+            end)
+
+            it("is refused a resize in combat", function()
+                local wrapper = secureGrandchildTree()
+                wrapper:SetHeight(188)
+                H.setCombat(true)
+                wrapper:SetHeight(227)
+                expect(wrapper:GetHeight())
+                    .as("the client refuses the resize and the frame keeps its old height")
+                    .eq(188)
+            end)
+
+            it("refuses without raising", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                expect(function() wrapper:SetSize(300, 227) end)
+                    .as("the live client prints to chat, it does not error").notThrows()
+            end)
+
+            it("resizes again the moment combat ends", function()
+                local wrapper = secureGrandchildTree()
+                wrapper:SetHeight(188)
+                H.setCombat(true)
+                wrapper:SetHeight(227)
+                H.setCombat(false)
+                wrapper:SetHeight(227)
+                expect(wrapper:GetHeight())
+                    .as("which is why deferred work waits for PLAYER_REGEN_ENABLED").eq(227)
+            end)
+
+            it("refuses every geometry setter", function()
+                local wrapper, mid = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetWidth(400)
+                wrapper:SetHeight(400)
+                wrapper:SetSize(400, 400)
+                wrapper:SetPoint("TOP", H.UIParent, "TOP", 0, -5)
+                wrapper:ClearAllPoints()
+                wrapper:Show()
+                wrapper:Hide()
+                mid:SetAllPoints(wrapper)
+                local seen = {}
+                for _, rec in ipairs(H.getBlockedActions()) do seen[rec.action] = true end
+                for _, action in ipairs({ "SetWidth", "SetHeight", "SetSize", "SetPoint",
+                                         "ClearAllPoints", "Show", "Hide", "SetAllPoints" }) do
+                    expect(seen[action]).as(action .. " must be refused in combat").eq(true)
+                end
+            end)
+
+            it("leaves the anchors alone when a move is refused", function()
+                local wrapper = secureGrandchildTree()
+                local before = wrapper:GetNumPoints()
+                H.setCombat(true)
+                wrapper:ClearAllPoints()
+                expect(wrapper:GetNumPoints())
+                    .as("a refused call changes nothing at all").eq(before)
+            end)
+
+            it("keeps a hidden frame hidden when Show is refused", function()
+                local wrapper = secureGrandchildTree()
+                wrapper:Hide()
+                H.setCombat(true)
+                wrapper:Show()
+                expect(wrapper:IsShown()).as("Show is protected too").eq(false)
+            end)
+
+            it("is refused on the protected frame itself", function()
+                local _, _, secure = secureGrandchildTree()
+                secure:SetHeight(40)
+                H.setCombat(true)
+                secure:SetHeight(80)
+                expect(secure:GetHeight()).eq(40)
+            end)
+        end)
+
+        describe("geometry on a frame with no protected descendant", function()
+            it("resizes freely in combat", function()
+                local p = H.parent(300, 100)
+                local child = H.env.CreateFrame("Frame", nil, p)
+                child:SetAllPoints(p)
+                H.setCombat(true)
+                p:SetHeight(227)
+                expect(p:GetHeight())
+                    .as("lockdown restricts protected subtrees, not every frame").eq(227)
+                expect(#H.getBlockedActions()).as("and records nothing").eq(0)
+            end)
+
+            it("shows and hides freely in combat", function()
+                local p = H.parent(300, 100)
+                H.setCombat(true)
+                p:Hide()
+                expect(p:IsShown()).eq(false)
+                p:Show()
+                expect(p:IsShown()).eq(true)
+            end)
+        end)
+
+        describe("the refusal record", function()
+            it("records the call, the frame and why", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetSize(300, 227)
+                local log = H.getBlockedActions()
+                expect(#log).eq(1)
+                expect(log[1].action).eq("SetSize")
+                expect(log[1].frame).eq(wrapper)
+                expect(log[1].protected)
+                    .as("refused for its descendant, not for itself").eq(false)
+            end)
+
+            it("marks a refusal on the protected frame itself", function()
+                local _, _, secure = secureGrandchildTree()
+                H.setCombat(true)
+                secure:SetHeight(80)
+                expect(H.getBlockedActions()[1].protected).eq(true)
+            end)
+
+            it("records in call order", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetWidth(400)
+                wrapper:SetHeight(400)
+                local log = H.getBlockedActions()
+                expect(log[1].action).eq("SetWidth")
+                expect(log[2].action).eq("SetHeight")
+            end)
+
+            it("records nothing out of combat", function()
+                local wrapper = secureGrandchildTree()
+                wrapper:SetSize(300, 227)
+                expect(#H.getBlockedActions()).eq(0)
+            end)
+
+            it("clears on resetBlockedActions", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetHeight(227)
+                H.resetBlockedActions()
+                expect(#H.getBlockedActions())
+                    .as("so one spec can assert a second call cleanly").eq(0)
+            end)
+
+            it("hands back a copy, not the live list", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetHeight(227)
+                local log = H.getBlockedActions()
+                wrapper:SetWidth(400)
+                expect(#log).as("a held list does not grow underneath a spec").eq(1)
+            end)
+        end)
+
+        describe("reset", function()
+            it("leaves combat", function()
+                H.setCombat(true)
+                H.setup()
+                expect(H.env.InCombatLockdown())
+                    .as("a leaked flag makes the next spec file silently unresizable").eq(false)
+            end)
+
+            it("clears the refusal record", function()
+                local wrapper = secureGrandchildTree()
+                H.setCombat(true)
+                wrapper:SetHeight(227)
+                expect(#H.getBlockedActions()).eq(1)
+                H.setup()
+                expect(#H.getBlockedActions())
+                    .as("a leaked record lets an assertion pass before the call happens").eq(0)
+            end)
+
+            it("resizes freely again after a reset from combat", function()
+                H.setCombat(true)
+                H.setup()
+                local wrapper = secureGrandchildTree()
+                wrapper:SetHeight(227)
+                expect(wrapper:GetHeight()).eq(227)
+            end)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Auras (UnitAura / UnitBuff / UnitDebuff)
+    ---------------------------------------------------------------------------
+    describe("auras", function()
+        it("returns nil for a unit that does not exist", function()
+            expect(H.env.UnitAura("target", 1, "HELPFUL")).isNil()
+        end)
+
+        it("returns nil for a unit with no staged auras", function()
+            H.setUnit("target", { health = 50 })
+            expect(H.env.UnitAura("target", 1, "HELPFUL")).isNil()
+        end)
+
+        it("returns nil past the end of the aura list", function()
+            H.setAuras("player", { helpful = { { name = "Fortitude" } } })
+            expect(H.env.UnitAura("player", 2, "HELPFUL")).isNil()
+        end)
+
+        it("returns all 15 values in the 2.5.4 order", function()
+            H.setAuras("player", { helpful = { {
+                name = "Power Word: Fortitude",
+                icon = "Interface\\Icons\\Spell_Holy_WordFortitude",
+                count = 0,
+                debuffType = nil,
+                duration = 1800,
+                expirationTime = 2000,
+                source = "player",
+                isStealable = false,
+                spellId = 1243,
+                canApplyAura = true,
+                isBossDebuff = false,
+                castByPlayer = true,
+                timeMod = 1,
+            } } })
+            local name, icon, count, debuffType, duration, expirationTime,
+                  source, isStealable, nameplateShowPersonal, spellId,
+                  canApplyAura, isBossDebuff, castByPlayer, nameplateShowAll, timeMod =
+                  H.env.UnitAura("player", 1, "HELPFUL")
+            expect(name).eq("Power Word: Fortitude")
+            expect(icon).eq("Interface\\Icons\\Spell_Holy_WordFortitude")
+            expect(count).eq(0)
+            expect(debuffType).isNil()
+            expect(duration).eq(1800)
+            expect(expirationTime).eq(2000)
+            expect(source).eq("player")
+            expect(isStealable).eq(false)
+            expect(nameplateShowPersonal).eq(false)
+            expect(spellId).eq(1243)
+            expect(canApplyAura).eq(true)
+            expect(isBossDebuff).eq(false)
+            expect(castByPlayer).eq(true)
+            expect(nameplateShowAll).eq(false)
+            expect(timeMod).eq(1)
+        end)
+
+        it("treats nil filter as HELPFUL", function()
+            H.setAuras("player", {
+                helpful = { { name = "Buff" } },
+                harmful = { { name = "Debuff" } },
+            })
+            local name = H.env.UnitAura("player", 1, nil)
+            expect(name).eq("Buff")
+        end)
+
+        it("filters HARMFUL correctly", function()
+            H.setAuras("player", {
+                helpful = { { name = "Buff" } },
+                harmful = { { name = "Corruption", debuffType = "Magic" } },
+            })
+            local name, _, _, debuffType = H.env.UnitAura("player", 1, "HARMFUL")
+            expect(name).eq("Corruption")
+            expect(debuffType).eq("Magic")
+        end)
+
+        it("a non-stacking aura reports count = 0", function()
+            H.setAuras("player", { helpful = { { name = "Mark of the Wild", count = 0 } } })
+            local _, _, count = H.env.UnitAura("player", 1, "HELPFUL")
+            expect(count).eq(0)
+        end)
+
+        it("a buff can carry a debuffType", function()
+            -- Righteous Fury is a buff with Magic debuff type
+            H.setAuras("player", { helpful = { { name = "Righteous Fury", debuffType = "Magic" } } })
+            local name, _, _, debuffType = H.env.UnitBuff("player", 1)
+            expect(name).eq("Righteous Fury")
+            expect(debuffType).eq("Magic")
+        end)
+
+        it("UnitBuff is the HELPFUL form of UnitAura", function()
+            H.setAuras("player", { helpful = { { name = "Renew" } } })
+            local name = H.env.UnitBuff("player", 1)
+            expect(name).eq("Renew")
+        end)
+
+        it("UnitDebuff is the HARMFUL form of UnitAura", function()
+            H.setAuras("player", { harmful = { { name = "Shadow Word: Pain" } } })
+            local name = H.env.UnitDebuff("player", 1)
+            expect(name).eq("Shadow Word: Pain")
+        end)
+
+        it("fires UNIT_AURA with the unit when setAuras is called", function()
+            local fired = {}
+            local listener = H.env.CreateFrame("Frame", nil, H.UIParent)
+            listener:RegisterEvent("UNIT_AURA")
+            listener:SetScript("OnEvent", function(_, event, unit)
+                fired[#fired + 1] = { event = event, unit = unit }
+            end)
+            H.setAuras("player", { helpful = { { name = "Buff" } } })
+            expect(#fired).eq(1)
+            expect(fired[1].event).eq("UNIT_AURA")
+            expect(fired[1].unit).eq("player")
+        end)
+
+        it("fires UNIT_AURA when clearAuras is called", function()
+            H.setAuras("player", { helpful = { { name = "Buff" } } }, { silent = true })
+            local fired = {}
+            local listener = H.env.CreateFrame("Frame", nil, H.UIParent)
+            listener:RegisterEvent("UNIT_AURA")
+            listener:SetScript("OnEvent", function(_, event, unit)
+                fired[#fired + 1] = { event = event, unit = unit }
+            end)
+            H.clearAuras("player")
+            expect(#fired).eq(1)
+            expect(fired[1].unit).eq("player")
+        end)
+
+        it("suppresses UNIT_AURA with silent option", function()
+            local spy = H.eventSpy("UNIT_AURA")
+            H.setAuras("player", { helpful = { { name = "Buff" } } }, { silent = true })
+            expect(spy.count).eq(0)
+        end)
+
+        it("clearAuras makes UnitAura return nil", function()
+            H.setAuras("player", { helpful = { { name = "Buff" } } }, { silent = true })
+            H.clearAuras("player", { silent = true })
+            expect(H.env.UnitAura("player", 1, "HELPFUL")).isNil()
+        end)
+
+        it("rejects unknown aura fields", function()
+            expect(function()
+                H.setAuras("player", { helpful = { { bogusField = 1 } } })
+            end).throws()
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- CancelUnitBuff
+    ---------------------------------------------------------------------------
+    describe("CancelUnitBuff", function()
+        it("records the call with unit and index", function()
+            H.env.CancelUnitBuff("player", 3)
+            local rec = H.getCancelBuff()
+            expect(rec).notNil()
+            expect(rec.unit).eq("player")
+            expect(rec.index).eq(3)
+        end)
+
+        it("resetCancelBuff clears the record", function()
+            H.env.CancelUnitBuff("player", 1)
+            H.resetCancelBuff()
+            expect(H.getCancelBuff()).isNil()
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- DebuffTypeColor
+    ---------------------------------------------------------------------------
+    describe("DebuffTypeColor", function()
+        it("provides Magic/Curse/Disease/Poison/none entries", function()
+            local dtc = H.env.DebuffTypeColor
+            for _, key in ipairs({ "Magic", "Curse", "Disease", "Poison", "none" }) do
+                expect(dtc[key]).as(key).notNil()
+                expect(dtc[key].r).as(key .. ".r").notNil()
+                expect(dtc[key].g).as(key .. ".g").notNil()
+                expect(dtc[key].b).as(key .. ".b").notNil()
+            end
+        end)
+
+        it("can be retinted by a spec and the addon follows", function()
+            H.env.DebuffTypeColor.Magic = { r = 1, g = 0, b = 0 }
+            expect(H.env.DebuffTypeColor.Magic.r).eq(1)
+            expect(H.env.DebuffTypeColor.Magic.g).eq(0)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- GameTooltip
+    ---------------------------------------------------------------------------
+    describe("GameTooltip", function()
+        it("exists as a global frame", function()
+            expect(H.env.GameTooltip).notNil()
+        end)
+
+        it("records SetOwner", function()
+            local anchor = H.parent(100, 50)
+            H.GameTooltip:SetOwner(anchor, "ANCHOR_RIGHT")
+            local ts = H.getTooltipState()
+            expect(ts.owner).eq(anchor)
+            expect(ts.anchor).eq("ANCHOR_RIGHT")
+        end)
+
+        it("records SetUnitBuff", function()
+            H.GameTooltip:SetOwner(H.UIParent, "ANCHOR_CURSOR")
+            H.GameTooltip:SetUnitBuff("player", 2)
+            local ts = H.getTooltipState()
+            expect(ts.aura.unit).eq("player")
+            expect(ts.aura.index).eq(2)
+            expect(ts.aura.filter).eq("HELPFUL")
+        end)
+
+        it("records SetUnitDebuff", function()
+            H.GameTooltip:SetOwner(H.UIParent, "ANCHOR_CURSOR")
+            H.GameTooltip:SetUnitDebuff("target", 5)
+            local ts = H.getTooltipState()
+            expect(ts.aura.unit).eq("target")
+            expect(ts.aura.index).eq(5)
+            expect(ts.aura.filter).eq("HARMFUL")
+        end)
+
+        it("records SetUnitAura with explicit filter", function()
+            H.GameTooltip:SetOwner(H.UIParent, "ANCHOR_CURSOR")
+            H.GameTooltip:SetUnitAura("player", 1, "HARMFUL")
+            local ts = H.getTooltipState()
+            expect(ts.aura.filter).eq("HARMFUL")
+        end)
+
+        it("ClearLines removes the aura but keeps owner", function()
+            H.GameTooltip:SetOwner(H.UIParent, "ANCHOR_LEFT")
+            H.GameTooltip:SetUnitBuff("player", 1)
+            H.GameTooltip:ClearLines()
+            local ts = H.getTooltipState()
+            expect(ts.aura).isNil()
+            expect(ts.owner).eq(H.UIParent)
+        end)
+
+        it("Hide makes IsShown false", function()
+            H.GameTooltip:Show()
+            expect(H.GameTooltip:IsShown()).eq(true)
+            H.GameTooltip:Hide()
+            expect(H.GameTooltip:IsShown()).eq(false)
+        end)
+
+        it("provides ANCHOR_* globals", function()
+            expect(H.env.ANCHOR_NONE).eq("ANCHOR_NONE")
+            expect(H.env.ANCHOR_CURSOR).eq("ANCHOR_CURSOR")
+            expect(H.env.ANCHOR_BOTTOMRIGHT).eq("ANCHOR_BOTTOMRIGHT")
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Cooldown frame subtype
+    ---------------------------------------------------------------------------
+    describe("Cooldown frame", function()
+        it("CreateFrame with Cooldown type works", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            expect(cd).notNil()
+            expect(cd:GetObjectType()).eq("Cooldown")
+        end)
+
+        it("SetCooldown stores start and duration", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetCooldown(100, 30)
+            local start, dur = cd:GetCooldownTimes()
+            expect(start).eq(100)
+            expect(dur).eq(30)
+        end)
+
+        it("Clear resets cooldown state", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetCooldown(50, 10)
+            cd:Clear()
+            local start, dur = cd:GetCooldownTimes()
+            expect(start).eq(0)
+            expect(dur).eq(0)
+        end)
+
+        it("SetDrawSwipe/SetDrawEdge/SetHideCountdownNumbers/SetReverse store state", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetDrawSwipe(true)
+            cd:SetDrawEdge(false)
+            cd:SetHideCountdownNumbers(true)
+            cd:SetReverse(true)
+            expect(cd._drawSwipe).eq(true)
+            expect(cd._drawEdge).eq(false)
+            expect(cd._hideNumbers).eq(true)
+            expect(cd._reverse).eq(true)
+        end)
+
+        it("SetSwipeColor stores colour", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetSwipeColor(0.5, 0.3, 0.1, 0.8)
+            expect(cd._swipeColor[1]).near(0.5, 0.001)
+            expect(cd._swipeColor[4]).near(0.8, 0.001)
+        end)
+
+        it("can be armed and then cleared (aura with no duration case)", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetCooldown(200, 60)
+            -- The aura expires or is removed: clear the swipe
+            cd:Clear()
+            local start, dur = cd:GetCooldownTimes()
+            expect(start).eq(0)
+            expect(dur).eq(0)
+        end)
+
+        it("supports all Frame methods (anchors, scripts, strata)", function()
+            local cd = H.env.CreateFrame("Cooldown", nil, H.UIParent, "CooldownFrameTemplate")
+            cd:SetSize(20, 20)
+            cd:SetPoint("CENTER", H.UIParent, "CENTER", 0, 0)
+            expect(cd:GetWidth()).eq(20)
+            cd:SetFrameLevel(5)
+            expect(cd:GetFrameLevel()).eq(5)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- state.reset clears new fields
+    ---------------------------------------------------------------------------
+    describe("state.reset clears aura, tooltip and cancel records", function()
+        it("clears auras", function()
+            H.setAuras("player", { helpful = { { name = "Buff" } } }, { silent = true })
+            H.setup()
+            expect(H.env.UnitAura("player", 1, "HELPFUL")).isNil()
+        end)
+
+        it("clears tooltip state", function()
+            H.GameTooltip:SetOwner(H.UIParent, "ANCHOR_RIGHT")
+            H.GameTooltip:SetUnitBuff("player", 1)
+            H.setup()
+            expect(H.getTooltipState()).isNil()
+        end)
+
+        it("clears cancelBuff record", function()
+            H.env.CancelUnitBuff("player", 1)
+            H.setup()
+            expect(H.getCancelBuff()).isNil()
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- GetTime advances with the harness clock
+    ---------------------------------------------------------------------------
+    describe("GetTime and clock", function()
+        it("starts at 0", function()
+            expect(H.env.GetTime()).eq(0)
+        end)
+
+        it("advances with H.tick", function()
+            H.tick(1.5)
+            expect(H.env.GetTime()).near(1.5, 0.001)
+        end)
+    end)
 end)

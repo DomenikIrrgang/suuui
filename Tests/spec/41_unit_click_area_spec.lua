@@ -225,6 +225,92 @@ describe("Plugins.UnitFrames right-click menu", function()
         H.expectBox(w._clickArea, H.box(w:GetFrame()))
     end)
 
+    it("is NOT a descendant of the frame it covers", function()
+        -- The load-bearing invariant, and the reason this surface is parented to the root
+        -- instead of the wrapper. A frame built from a secure template is protected, and the
+        -- client refuses addon-driven geometry on any frame whose subtree contains a
+        -- protected one WHILE IN COMBAT. With the surface inside, every mid-combat resize of
+        -- the unit frame was silently refused -- so a debuff landing during a fight could not
+        -- grow the frame and the band was carved out of its existing box, pushing the bars
+        -- down by the band's height. Measured in game: preferred 227 against an actual 188,
+        -- with InCombatLockdown() true on every mismatch and false on every match.
+        --
+        -- The simulated client models no combat lockdown, so this parentage check is the only
+        -- thing standing between that bug and a green suite.
+        local w = widgetFor("player")
+        local wrapper = w:GetFrame()
+        local inside, cur = false, w._clickArea:GetFrame():GetParent()
+        while cur do
+            if cur == wrapper then
+                inside = true
+                break
+            end
+            cur = cur.GetParent and cur:GetParent() or nil
+        end
+        expect(inside)
+            .as("the secure surface must not sit inside the frame that resizes").falsy()
+    end)
+
+    it("still covers the frame after a band grows it", function()
+        -- The surface is placed by an anchor against the wrapper, so growth has to carry it.
+        local w = widgetFor("player")
+        H.SuuUI.Settings:Set("unit_frames", "player_buffs_position", "above")
+        H.setAuras("player", { helpful = {
+            { name = "B", icon = "i" }, { name = "B2", icon = "i" },
+        } })
+        H.expectBox(w._clickArea, H.box(w:GetFrame()))
+    end)
+
+    describe("the frame still grows in combat", function()
+        -- The behavioural half of the invariant above, and the test that would have caught
+        -- the original bug: with the surface inside the wrapper the client refuses every
+        -- mid-combat resize, so a debuff landing during a fight could not grow the frame.
+        it("is not refused a resize while in combat", function()
+            local w = widgetFor("player")
+            H.SuuUI.Settings:Set("unit_frames", "player_buffs_position", "above")
+            H.clearAuras("player")
+            local before = w:GetFrame():GetHeight()
+
+            H.setCombat(true)
+            H.resetBlockedActions()
+            H.setAuras("player", { helpful = { { name = "B", icon = "i" } } })
+
+            expect(#H.getBlockedActions())
+                .as("the client refused a geometry call on the unit frame").eq(0)
+            expect(w:GetFrame():GetHeight())
+                .as("the frame grew for the band despite combat").gt(before)
+        end)
+
+        it("keeps the bars still while it grows in combat", function()
+            -- The symptom the player actually reported: bars shoved down by the band height.
+            local w = widgetFor("player")
+            H.SuuUI.Settings:Set("unit_frames", "player_buffs_position", "above")
+            H.clearAuras("player")
+            local barTop = H.box(w._healthBar).top
+
+            H.setCombat(true)
+            H.setAuras("player", { helpful = { { name = "B", icon = "i" } } })
+
+            expect(H.box(w._healthBar).top)
+                .as("bars must not move when a band appears mid-fight").near(barTop, 0.5)
+        end)
+
+        it("defers its own surface resize to leaving combat", function()
+            -- The surface IS protected, so its geometry genuinely cannot be written in
+            -- combat. _syncClickArea skips rather than attempting and losing, then catches
+            -- up on PLAYER_REGEN_ENABLED -- which H.setCombat(false) fires.
+            local w = widgetFor("player")
+            H.SuuUI.Settings:Set("unit_frames", "player_buffs_position", "above")
+            H.setCombat(true)
+            H.resetBlockedActions()
+            H.setAuras("player", { helpful = { { name = "B", icon = "i" } } })
+            expect(#H.getBlockedActions()).as("it did not attempt the refused write").eq(0)
+
+            H.setCombat(false)
+            H.expectBox(w._clickArea, H.box(w:GetFrame()))
+        end)
+    end)
+
     it("is the frame's topmost surface in normal play", function()
         local w = widgetFor("player")
         local cx, cy = H.centerPoint(w:GetFrame())

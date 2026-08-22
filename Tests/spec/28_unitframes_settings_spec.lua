@@ -73,11 +73,15 @@ describe("Plugins.UnitFrames – settings tabs and visibility", function()
             expect(tab.label).eq("Player")
         end)
 
-        it("groups the Player tab into General, Health Bar and Resource Bar", function()
+        it("groups the Player tab into General, both bars, and the two aura bands", function()
             local sections = sectionsOf(playerTab())
             local labels = {}
             for i, s in ipairs(sections) do labels[i] = s.label end
-            expect(labels).deepEq({ "General", "Health Bar", "Resource Bar" })
+            -- Buffs before Debuffs, matching AuraBand.KINDS: the order the sections read in
+            -- is the order the bands nest in around the frame.
+            expect(labels).deepEq({
+                "General", "Health Bar", "Resource Bar", "Buffs", "Debuffs",
+            })
         end)
 
         it("puts the frame-wide settings under General, toggles first", function()

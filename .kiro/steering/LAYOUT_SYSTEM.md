@@ -157,6 +157,33 @@ row:Add(levelText, { width = "auto" })   -- one gap right of the name
 | `w` / `h` | Explicit size |
 | neither | Width defaults to the parent's width; height hugs content |
 
+**Wrapping (horizontal flow only):**
+
+| Prop | Values | Behaviour |
+|------|--------|-----------|
+| `wrap` | `true` | Break onto a new line when the next child would overflow the content width |
+| `lineGap` | `number` | Space between lines. Omit it and lines track `gap`, so rows and columns stay spaced alike without a second value to keep in step |
+| `lineOrder` | `"reverse"` | Stack lines bottom-up: the first line sits at the container's bottom edge and each new line grows upward |
+
+A child wider than the whole content box still gets a line of its own rather than being
+dropped, so an oversized child overflows visibly instead of vanishing — and the break rule
+cannot loop forever looking for a line it fits on.
+
+`lineOrder` exists because "which end does row one sit at" is a runtime question, not a
+construction one. A band of icons placed **above** something must lay its rows bottom-up, so
+row one stays against that thing and a new row grows away from it; laid top-down there,
+gaining a row shifts every icon already on screen. Set it with `container:SetLineOrder(order)`
+when the placement moves — rebuilding the container to say so would destroy its children.
+
+```lua
+local band = SuuUI.Layout:CreateContainer({
+  parent = wrapper, layout = "flow", dir = "horizontal",
+  gap = T:GetToken("spaceXxs"), wrap = true,
+})
+for _, icon in ipairs(icons) do band:Add(icon, { width = 24, height = 24 }) end
+band:SetLineOrder("reverse")   -- row one against the bottom edge
+```
+
 **Containers are always explicitly sized, never anchor-derived.** This matters: WoW does
 not resolve anchor-only geometry for frames that have never been laid out, so a container
 built inside a window that starts hidden would report width 0 and collapse every child.
@@ -598,7 +625,27 @@ both do.
 **Hugging is height-only.** A container without an explicit `w` takes its parent's width and
 never shrinks to content. Width hugging is not implemented.
 
-- No wrapping in flow layouts
+**Wrapping is horizontal only.** `wrap = true` on a vertical flow is ignored outright — the
+strategy checks `dir` before it checks the flag. Wrapping a column into columns is a
+different algorithm, not a transposition of this one: a column's break point depends on the
+container's *height*, which a hugging container derives from its content, so the two would
+define each other. Add it as its own pass if a caller needs it rather than loosening the
+`dir` check and getting a silent single line.
+
+**`width`/`height = "fill"` degrade to natural size inside a wrapping row.** Fill means
+"split the leftover main-axis space", and a wrapping line has no fixed end to leave anything
+over: the line's right edge is wherever the last child that fitted stopped. So a fill child
+is measured like `"auto"` instead of being stretched. This is a real degradation, not an
+error — worth knowing because a row that wraps and a row that does not will size the same
+child differently, and nothing warns you.
+
+**Cross-axis `align` resolves against each LINE's height, not the container's.** A `center`
+child is centred within its own line, so two lines of different heights centre their children
+independently. Against the container it would be wrong in the ordinary case: everything on a
+short first line would drift toward the middle of the whole box and leave a hole above it.
+`stretch` follows the same rule and fills its line, which is why a line's height is settled
+in a first pass before any child is positioned.
+
 - No percentage-based sizing (`width = "50%"`)
 - No min/max size constraints
 - No per-child margin (only container padding)
@@ -621,6 +668,8 @@ container:SetChildFraction(child, axis, f) -- stack layout: size one child as a 
 container:Remove(child)
 container:Clear()                          -- remove and hide every child
 container:Layout()                         -- auto-called on Add/Remove/resize
+container:SetGap(gap) / GetGap()
+container:SetLineOrder(order) / GetLineOrder()  -- wrapping flow: "reverse" or nil
 container:SetSize(w, h) / SetWidth / SetHeight
 container:GetWidth() / GetHeight()
 container:GetFrame()                       -- underlying WoW frame

@@ -8,8 +8,9 @@ party or third party — is built on top of it as a plugin. No external librarie
 is written from scratch.
 
 **Status: early development.** The framework layers (core, layout, components, settings UI)
-are in place and tested. The gameplay plugins have started: unit frames and cast bars cover
-the player and the target, suppressing Blizzard's own. Everything else is still to come.
+are in place and tested. The gameplay plugins have started: unit frames, cast bars, and
+buff/debuff bands cover the player and the target, suppressing Blizzard's own. Everything
+else is still to come.
 
 ## Install
 
@@ -32,7 +33,7 @@ Open the settings window in game with `/suuui`.
 | `Animation/` | tween easings, animation runner, named presets |
 | `SettingsUI/` | settings window that auto-builds a page from a plugin's schema |
 | `Themes/` | built-in read-only themes |
-| `Plugins/` | bundled first-party plugins — unit frames and cast bars, for the player and the target |
+| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target |
 | `Tests/` | test suite and a simulated WoW client (not shipped — absent from the `.toc`) |
 
 ## Development
@@ -54,7 +55,7 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 2501 assertions with no external dependencies — no busted, no luarocks.
+runs 2674 assertions with no external dependencies — no busted, no luarocks.
 
 Full contracts live in `.kiro/steering/`: `architecture.md` for the subsystem reference,
 `LAYOUT_SYSTEM.md`, `UI_SIGNALS.md`, `WOW_API_ENCAPSULATION.md`, `coding-standards.md`,

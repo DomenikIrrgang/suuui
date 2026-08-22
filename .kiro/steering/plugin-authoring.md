@@ -337,6 +337,38 @@ vocabulary — document what you accept. Adding the child with `width = "fill"` 
 an attached widget exactly as wide as your frame and follow your own width setting without
 the consumer ever reading it. See `architecture.md` §3b for the full contract.
 
+### Aura bands share that inset with you
+
+A unit frame's buff and debuff bands are placed by the same mechanism your attached widget
+is, and that matters to you: **a band is one more entry in the frame's `GetCoreInset`**, so a
+mob applying a second row of debuffs mid-fight grows the frame the same way your cast bar
+attaching does. The frame re-anchors by exactly that much, which is what keeps the player's
+stored position meaning "where my bars are" rather than "where the bounding box is". If it
+did not, gaining a debuff row would shove the bars up under the player's cursor in the middle
+of a pull.
+
+The consequence for you is the one already stated above, sharpened: **compare the inset, not
+the frame's height.** A band appearing above while your bar sits below changes both insets
+and can leave the total height untouched, so a height comparison misses it and the frame
+never re-anchors. `RefreshAnchor` is gated on the inset moving for that reason.
+
+Each band carries two settings and no more, per unit:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `<unit>_<kind>_position` | dropdown | `"above"` ｜ `"below"` ｜ `"hidden"` — which side of the frame the band sits on, or nowhere. Buffs default above, debuffs below |
+| `<unit>_<kind>_size` | slider | The icon edge in pixels (8–48, default 24). Dead while the band is hidden rather than silently ignored |
+
+`<kind>` is `buffs` or `debuffs`; build the keys with `AuraBand.PositionKey(prefix, kind)` and
+`AuraBand.SizeKey(prefix, kind)` rather than concatenating, so a third band is one entry in
+`AuraBand.KINDS` and no edit anywhere else.
+
+**How many rows a band takes is deliberately not a setting.** It follows from the icon size
+and the frame's width, and the band wraps to as many rows as the auras need — a row count the
+player could set would be a cap that silently hides auras, which is the one thing a debuff
+display must never do. The icon edge is a plugin setting because it is a widget dimension; the
+*gap* between icons comes from `spaceXxs`, because spacing is design language.
+
 ## Event Bus
 
 Plugins communicate via events, never by direct calls into each other.
@@ -715,15 +747,22 @@ from addon code, so there is no `onClick` you could write that would work. Ask f
 that opens is the client's own, with every entry that unit offers.
 
 ```lua
+-- Parented to the ROOT, not to your frame. The rule below says why.
+local root = SuuUI.UIRoot:GetRootContainer():GetFrame()
 local area = SuuUI.Components.UnitClickArea({
     unit = "target",
     name = "SuuUI_my_plugin_click_target",   -- optional; follows the frame naming rule
-}, myWrapper)
+}, root)
 
--- Placed like any component. A stack container hosted on the frame stretches the surface
--- over all of it, so a right click anywhere on the frame reaches the unit.
-local box = SuuUI.Layout:CreateContainer({ host = myWrapper, layout = "stack" })
-box:Add(area)
+-- Its own host, on a frame that only resizes with the screen, and an anchor descriptor
+-- carrying your frame's size — so the surface covers all of it and a right click anywhere
+-- reaches the unit.
+local host = CreateFrame("Frame", nil, root)
+local box  = SuuUI.Layout:CreateContainer({ host = host, layout = "anchor" })
+box:Add(area, { anchor = {
+    point = "TOPLEFT", relativeTo = myWrapper, relativePoint = "TOPLEFT", x = 0, y = 0,
+    width = myWrapper:GetWidth(), height = myWrapper:GetHeight(),
+} })
 
 -- On teardown, alongside your other handles
 area:Destroy()
@@ -732,10 +771,46 @@ area:Destroy()
 Left click targets, right click opens the menu. Connect `CLICKED` if your widget wants to
 react to the click as well — it is emitted after the client has acted.
 
+**If your frame resizes at runtime, the surface goes BESIDE it, not inside it.** This is the
+rule to take away from this section, and it is invisible in the code you write: the surface is
+built from a secure template, which makes it **protected**; protection propagates down to
+descendants, and the refusal propagates *up*. So while `InCombatLockdown()` is true the client
+refuses addon-driven geometry on any frame whose subtree holds the surface — your plain wrapper
+included, with one secure grandchild. Nothing throws. The size call returns, the frame keeps
+its old box, and the player gets `Interface action failed because of an AddOn` in chat.
+
+`UnitFrames` shipped with the surface inside the wrapper and it took ten days to find. That
+wrapper grows during a fight by design — an aura band gains a row when a debuff lands, a cast
+bar attaches when a cast starts — so every growth was refused, the band was carved out of a box
+frozen at its pre-combat height, and the frame's own bars were shoved down by the band's
+height. `GetPreferredSize` returned 227 while `GetHeight` stayed 188, with `InCombatLockdown()`
+true on every mismatch and false on every match.
+
+Two things follow, and both are in the example above:
+
+- **Parent the surface to the root container and anchor it to your frame.** The anchor is what
+  keeps it covering the frame as the frame grows, including any aura bands, without the frame
+  ever containing it. Its host container must sit on a frame that only resizes with the screen:
+  host it on your resizing wrapper and the container chains onto that wrapper's
+  `OnSizeChanged`, so every mid-combat resize re-lays out a protected child and sprays blocked
+  actions into the player's chat.
+- **Guard every geometry call on the surface with `InCombatLockdown()` and defer it to
+  `PLAYER_REGEN_ENABLED`.** Set a flag, return, and catch up on leaving combat — do not
+  attempt the call and lose, because a refused call costs the player a chat error you already
+  knew was coming. Skipping is cheap here: the surface is invisible, so a stale one costs at
+  most that a band strip which appeared mid-fight is not click-to-target until the fight ends.
+  Clicking the bars keeps working throughout. `UnitFrame:_syncClickArea` is the reference
+  implementation.
+
 **Do not build the secure frame yourself.** `SecureUnitButtonTemplate`, `RegisterForClicks`
 and the `type` attributes are component territory (see `WOW_API_ENCAPSULATION.md`), and
 getting any of the three wrong fails silently: the surface still sizes, still takes the
 mouse, and does nothing.
+
+**Your specs cannot catch the lockdown mistake.** The harness models no combat lockdown, so
+2728 assertions passed while this was broken in every fight. Assert the structure instead —
+that the surface is not a descendant of the frame it covers — the way
+`Tests/spec/41_unit_click_area_spec.lua` does.
 
 **Edit mode needs no work from you.** The drag overlay sits five frame levels above the
 frame's own children, so while the player is positioning a frame the click goes to the drag

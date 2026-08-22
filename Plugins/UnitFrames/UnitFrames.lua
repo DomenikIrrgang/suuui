@@ -35,7 +35,7 @@ local UNITS = {
         -- discovering it underneath something else.
         powerPosition = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 170 },
         defaults    = { width = 304, healthHeight = 39, powerHeight = 22,
-                        healthCenter = "current_max" },
+                        healthCenter = "current_max", auraSize = 24 },
     },
     {
         id          = "target",
@@ -52,7 +52,7 @@ local UNITS = {
         position    = { point = "BOTTOMRIGHT", relPoint = "BOTTOMRIGHT", x = -20, y = 60 },
         powerPosition = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 230 },
         defaults    = { width = 304, healthHeight = 39, powerHeight = 22,
-                        healthCenter = "current_max" },
+                        healthCenter = "current_max", auraSize = 24 },
     },
 }
 
@@ -240,6 +240,7 @@ local plugin = SuuUI:CreatePlugin({
                     healthHeight = def.defaults.healthHeight,
                     powerHeight  = def.defaults.powerHeight,
                     healthCenter = def.defaults.healthCenter,
+                    auraSize     = def.defaults.auraSize,
                     -- What "attached" means for this unit, named after the frame the bar
                     -- would be part of. Derived from the unit's label rather than stored,
                     -- so it cannot drift from the label the tab already carries.

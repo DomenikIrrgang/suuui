@@ -56,6 +56,7 @@ SuuUI/
 │   ├── UnitClickArea.lua -- invisible secure surface: target a unit, open its context menu
 │   ├── Button.lua        -- full custom button (no Blizzard template)
 │   ├── Icon.lua          -- display-only texture, optional themed border, bevel trim
+│   ├── AuraIcon.lua      -- Icon + cooldown swipe, stack count, duration, dispel border
 │   ├── IconButton.lua
 │   ├── NavItem.lua       -- selectable labelled row (nav lists)
 │   ├── Toggle.lua        -- custom checkbox/toggle
@@ -92,6 +93,7 @@ SuuUI/
 │       └── ThemeManager.lua
 ├── Plugins/               -- bundled first-party plugins live here
 │   ├── UnitFrames/        -- UnitFrame.lua (widget, one per unit) + UnitFrames.lua (plugin)
+│   │   └── AuraBand.lua   -- one wrapping band of aura icons, for one unit + one filter
 │   ├── CastBars/          -- CastBar.lua (widget, one per unit) + CastBars.lua (plugin)
 │   └── ...
 ├── Themes/
@@ -324,6 +326,20 @@ foreign child to it" in `LAYOUT_SYSTEM.md`.
 the frame's bounding box, which is what its stored position resolves against — so the
 frame's own content slides by the band's height on the edge its anchor does not pin. See
 `coreInset` in 5c.
+
+**Nothing protected may live inside a frame that grows.** Both growth paths on a unit frame
+happen *in combat by definition* — an aura band gains a row when a debuff lands, the cast bar
+attaches when a cast starts — and the client refuses addon-driven geometry on any frame whose
+subtree holds a protected frame while `InCombatLockdown()` is true. Protection propagates down
+to descendants and the refusal propagates up, so one secure grandchild freezes the whole
+wrapper: the growth is refused silently, the band is carved out of a box stuck at its
+pre-combat height, and the frame's own bars are pushed down by the band's height. `UnitFrames`
+shipped exactly that for ten days, with `GetPreferredSize` returning 227 against a `GetHeight`
+of 188 and `InCombatLockdown()` true on every mismatch. The secure click surface therefore
+lives *beside* the wrapper and is anchored to it — see the `UnitClickArea` entry in the
+Component Library, and "Protected Actions Go Through A Secure Component" in
+`WOW_API_ENCAPSULATION.md` for the full account. The rule generalises to anything a publisher
+puts in a growing frame: if a child is protected, the frame that grows may not contain it.
 
 ### 4. Profile System (`Core/Profile.lua`)
 
@@ -675,6 +691,11 @@ colorText         = "colorGray100"
 colorTextMuted    = "colorGray400"
 colorTextDisabled = "colorGray600"
 colorBorder       = "colorGray700"
+-- The ring around an ICON's art, brighter than a panel's edge on purpose: a panel border
+-- separates a dark surface from the game world, where a near-black hairline reads fine,
+-- while an icon border has to separate a tile from spell art that is itself dark at the
+-- edges. colorBorder there is invisible -- measured in game before this token existed.
+colorBorderIcon   = "colorGray400"
 colorBorderFocus  = "colorAccent"
 
 -- Typography
@@ -980,6 +1001,8 @@ SuuUI.Game:SchoolColor(mask)          -- nil when the mask says nothing — call
 SuuUI.Game:SchoolOf(spellId)          -- cached mask, or nil
 SuuUI.Game:LearnSchool(spellId, mask) -- returns whether it changed what we knew
 SuuUI.Game:LearnFromCombatLog()       -- reads the line being dispatched; returns spellId, mask
+SuuUI.Game:DebuffTypeColor(dispel)    -- "Magic"｜"Curse"｜"Disease"｜"Poison" -> {r,g,b,a}; nil otherwise
+SuuUI.Game:UntypedDebuffColor()       -- the client's own `none` row: red. Never nil
 ```
 
 **Reaction colours are the answer for every unit that has no class** — a mob, a critter, a
@@ -1036,6 +1059,48 @@ Two details are load-bearing and neither is obvious:
 other line carries a spell id, so reading it positionally caches nonsense against a nonsense
 key. Bit tests are arithmetic rather than `bit.band`, so the module behaves identically under
 the client's Lua and the test runner's.
+
+**Dispel colours are a fact for the same reason school colours are.** A debuff border answers
+"what removes this", and the player already knows what that colour means from their default
+raid frames and from every other addon that shows debuffs — so the four values are copied from
+the client rather than chosen, and `DebuffTypeColor` is preferred over the internal table
+exactly as `RAID_CLASS_COLORS` is, cache validated against the source so a retint is picked up
+without allocating per call. A theme that could decide Curse is blue would make the border a
+decoration instead of information. Whether a border is type-coloured **at all** is still a look
+decision, and it is one the caller makes: `AuraBand` passes nil for buffs.
+
+That nil is not an oversight, and it cost a debugging round to find out why it has to be there:
+**the client reports a `dispelType` for HELPFUL auras too.** Righteous Fury comes back as
+`"Magic"`. Colouring a buff's border by it would ring half a paladin's buffs in blue while
+meaning nothing — a dispel type answers "what removes this", which is only a thing you want to
+know about something you want removed. So the type is read for debuffs and deliberately
+discarded for buffs.
+
+`DebuffTypeColor` returns nil for nil, `""`, `"none"` and anything this client does not name,
+which is the same contract as `SchoolColor` and `ClassColor`: the caller's own default border
+is the right response, and inventing a colour for "unknown" gives the player a cue that means
+nothing. Note the client's own table *does* carry a `none` row — reading it would paint every
+untyped debuff red — so the guard is checked before the lookup, not after.
+
+**`UntypedDebuffColor` is that `none` row, exposed on purpose and separately.** Red for
+"nothing removes this" is a convention the player already reads from their default UI, and a
+debuff display always has something to paint — so unlike `DebuffTypeColor` this never returns
+nil. It stays a second accessor rather than a fifth row because the two questions differ: a
+buff with no dispel type must not go red, and neither must a cast bar, so only a caller that
+knows it is describing a debuff may reach for it.
+
+It is also not the rare case. **Most debuffs in this game carry no dispel type at all** —
+every physical one, plus plenty of spell DoTs (a mage's Fireball among them, measured in
+game) — so red is the common border and the four dispel colours are the exception.
+
+**A buff's border answers a different question, and so reads a different field.** It shows
+what a purge or a spellsteal would take, not what kind of magic something is, and the client
+answers that directly with `isStealable` — computed against the player's own class and that
+unit. Colouring buffs by dispel type instead would ring every blessing a paladin carries in
+blue while telling them nothing they can act on, which is what `isStealable` avoids: it is
+false across your own bar and true exactly where the purge would land. `Plugins/UnitFrames/AuraBand.lua`
+states both rules as a `border` function per kind rather than a shared flag, because the two
+bands genuinely disagree about what the pixel means.
 
 ### 7. Frame Pool (`Core/Pool.lua`)
 
@@ -1157,6 +1222,9 @@ local c = SuuUI.Layout:CreateContainer({
   align   = "center", -- default cross-axis alignment for children
   fill    = true,     -- anchor to all sides of parent, track parent resizes
   padding = {top=8, right=8, bottom=8, left=8},
+  wrap    = true,     -- flow, horizontal only: break onto a new line on overflow
+  lineGap = 2,        -- space between wrapped lines; omit to track gap
+  lineOrder = "reverse", -- wrapped lines stack bottom-up (first line at the bottom)
 })
 
 -- Add child with flexible sizing. Accepts a frame, component handle, or container.
@@ -1172,6 +1240,7 @@ c:SetSize(w, h)
 c:GetContentSize()     -- returns computed w, h of all children
 c:SetChildProps(child, layoutProps)       -- update a child's layout props and re-layout
 c:SetChildFraction(child, axis, fraction) -- axis = "width"|"height"; fraction 0..1
+c:SetLineOrder(order) / c:GetLineOrder()  -- wrapping flow: "reverse" for bottom-up, nil for top-down
 c:GetChildren()
 c:Destroy()            -- destroys children, drops all connections
 ```
@@ -1213,6 +1282,16 @@ Sizes use `Floor` where overflowing the parent would be worse than being a pixel
   - Font string children are measured with `GetStringHeight()` after their width is
     assigned, so text re-flows when a `fontSize*` token changes. Omit `height` on
     text children; a fixed height pins them to the old font's metrics.
+  - `wrap = true` (**horizontal only** — the strategy checks `dir` before the flag) breaks
+    onto a new line when the next child would overflow the content width, with `lineGap`
+    between lines and `lineOrder = "reverse"` stacking them bottom-up. Line heights are
+    settled in a first pass before anything is positioned, because cross-axis `align`
+    resolves against each **line's** height rather than the container's — centring against
+    the container would drift a short first line's children toward the middle of the whole
+    box. `"fill"` degrades to natural size in a wrapping row: there is no fixed line end to
+    distribute leftover space against. The container's hugging height comes from the same
+    pass, cached in `_wrapContentH`, so `GetContentSize` reports what was laid out rather
+    than re-deriving it and disagreeing.
 - **GridLayout** (`Layout/GridLayout.lua`): fixed columns, equal cells.
   - Column width derived from container width, padding, and gap
   - Widths are computed once for the whole grid, so a column is the same width in every
@@ -1663,6 +1742,33 @@ document it here.
   icon files so a themed border is the only one visible. `SetIcon` / `GetIcon`. Takes no
   mouse input, which is what makes it safe to overlay or nest inside something that does —
   for a clickable icon use `IconButton`.
+- `AuraIcon` — an `Icon` plus everything an aura has to say about itself: a radial cooldown
+  swipe, a stack count, a remaining-time readout, and a dispel-type border. Composes `Icon`
+  for the art and the edge, a Blizzard `Cooldown` frame for the sweep (a sanctioned template
+  exception, like `Input`'s `EditBox` — nothing else draws one), and two `Text` readouts in an
+  overlay frame raised above the sweep, because a font string parented to the root would sit
+  *behind* it. `SetIcon` / `SetCount` / `SetTimer(duration, expiration)` / `SetTimeLeft` /
+  `SetTypeColor` / `SetShowDuration`; size follows `sizeIcon` unless pinned. Takes mouse input
+  and emits `CLICKED` / `MOUSE_ENTER` / `MOUSE_LEAVE` — it knows nothing about tooltips or
+  which aura it shows, so the owner wires those off the signals and the component stays
+  general. Two details are load-bearing: the count shows only at **> 1**, because the client
+  reports `count = 0` for a non-stacking aura and a "0" on every buff is noise; and the
+  duration text takes `colorWarning` under 5 seconds so an expiring aura reads at a glance.
+  `SetTypeColor(nil)` returns the edge to `colorBorder`.
+
+  **The remaining time is centred on the icon and the count sits in the bottom-right corner.**
+  Both readouts used to share the bottom row, which put them through each other at every icon
+  size the settings allow — the readouts take `fontSizeSm`, whose line height does not scale
+  with the icon, so two of them cannot be vertically disjoint inside a 24-unit box. Centring
+  the timer is also the right emphasis: remaining time is what a player scans a debuff for.
+  It does not fully resolve the crowding at small sizes, and `Tests/spec/41_auraicon_spec.lua`
+  pins where the line still is plus an `xit` naming the routes past it.
+
+  **Decimals appear only below one second** — `2h` / `30m` / `45s` / `0.4s` — because that is
+  the one band where the whole-second form carries no information: it would read "0s" for the
+  entire final second. Every step floors rather than rounds, so a readout never shows time
+  that is already gone, and `"%.1f"` on 0.99 would print `"1.0s"` from the branch that had
+  just decided the value was under a second.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `Toggle` — animated sliding switch, no Blizzard checkbox. The track is a
   `Backdrop.Pill` and the knob a `Backdrop.Circle`, so both ends are fully rounded; a
@@ -1751,8 +1857,8 @@ document it here.
   menu, with every entry the client would offer. Props: `unit` (required), `name`
   (optional global frame name). API: `GetUnit`. Emits `CLICKED` (button), `MOUSE_ENTER`,
   `MOUSE_LEAVE`, `SIZE_CHANGED`. Position it by adding it to a container, like anything
-  else — a `stack` container hosted on the frame it covers stretches it over the whole
-  thing.
+  else — but **not a container hosted on the frame it covers**, and it must not be parented
+  inside that frame either. See the parentage rule below.
 
   Both actions are **protected**: the client refuses them from addon code, so no handler we
   could write would work. The only route is the secure template — a `Button` inheriting
@@ -1772,6 +1878,17 @@ document it here.
   - **Attributes are stated once, at construction.** A frame built from a secure template is
     protected, and the client refuses to let an addon reshape a protected frame in combat —
     so nothing is re-stated later and the component exposes no setter that would want to be.
+  - **It is never parented inside a frame that resizes at runtime.** Protection propagates
+    down to descendants and the refusal propagates up, so a plain wrapper holding this
+    surface cannot be resized during combat either — the client refuses silently and the
+    player gets `Interface action failed because of an AddOn`. The surface goes beside such a
+    frame, parented to the root container and **anchored** to the frame so it still covers
+    it, bands included. Its own host must be a frame that only resizes with the screen:
+    hosting it on the resizing wrapper would chain onto that wrapper's `OnSizeChanged` and
+    re-lay out a protected child on every mid-combat resize. Any geometry applied to it is
+    guarded with `InCombatLockdown()` and deferred to `PLAYER_REGEN_ENABLED`
+    (`UnitFrame:_syncClickArea`). Full account, including the measurements, in
+    "Protected Actions Go Through A Secure Component" in `WOW_API_ENCAPSULATION.md`.
 
   Deliberately **no `SetEnabled`**: it paints nothing, so the disabled fade would be
   invisible, and the only real disabling left — dropping mouse input — is a call the client

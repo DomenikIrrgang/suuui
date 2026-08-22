@@ -353,4 +353,89 @@ function M:LearnFromCombatLog()
     return spellId, mask
 end
 
+---------------------------------------------------------------------------
+-- Debuff types (dispel categories)
+---------------------------------------------------------------------------
+
+-- What kind of debuff this is — Magic, Curse, Disease, Poison — for the coloured border on
+-- an aura icon that tells the player whether they can dispel it. These are the client's own
+-- values for the same reason the school and class colours above are: a player reading a
+-- debuff border expects the same colour they see on their default raid frames and on every
+-- other addon that shows debuffs.
+--
+-- This is a game fact, not a theme token: changing these would lie about what a debuff IS,
+-- which is the same reason class and school colours are here rather than in Theme. A theme
+-- cannot decide that "Curse" is blue.
+--
+-- Preference order matches ClassColor / ReactionColor:
+--   1. DebuffTypeColor global (the client ships it; an addon may retint it)
+--   2. The internal copy below, for the login moment before the global exists
+
+local DEBUFF_TYPES = {
+    Magic   = {0.20, 0.60, 1.00, 1},
+    Curse   = {0.60, 0.00, 1.00, 1},
+    Disease = {0.60, 0.40, 0.00, 1},
+    Poison  = {0.00, 0.60, 0.00, 1},
+}
+
+-- What an UNTYPED debuff is worth showing as. The client ships this in the same table as
+-- the four dispel types, under "none", and its own debuff displays use it -- so red for
+-- "nothing removes this" is a convention the player already reads, not a colour we chose.
+--
+-- It is a separate accessor rather than a fifth row in DebuffTypeColor because the two
+-- questions are different: "what dispel type is this" must answer nil for an aura that has
+-- none, so a caller can fall back to whatever its own surface calls for. Only a debuff
+-- display wants red; a buff with no type must not go red, and neither must a cast bar.
+local DEBUFF_NONE = {0.80, 0.00, 0.00, 1}
+local noneCache
+
+-- Cached converted arrays, validated against the live source on each read.
+local debuffTypeCache = {}
+
+--- The border colour for a debuff's dispel type, or nil when the type is nil, "none" or
+--- anything this client does not name.
+--
+-- nil is a real answer, exactly as with SchoolColor and ClassColor: a debuff with no type
+-- or with type "none" has no dispel identity and the caller falls back to its own default
+-- border — inventing a colour for "unknown" would give the player a cue that means nothing.
+-- @param dispelType string|nil  e.g. "Magic", "Curse", "Disease", "Poison"
+-- @return table|nil  {r,g,b,a}
+function M:DebuffTypeColor(dispelType)
+    if type(dispelType) ~= "string" or dispelType == "" or dispelType == "none" then
+        return nil
+    end
+    -- Prefer the client's live global so SuuUI agrees with the rest of the player's UI
+    -- including an addon that retints debuff borders. Same pattern as ClassColor and
+    -- ReactionColor.
+    local src = type(DebuffTypeColor) == "table" and DebuffTypeColor[dispelType] or nil
+    if type(src) == "table" and type(src.r) == "number" then
+        local hit = debuffTypeCache[dispelType]
+        if hit and hit[1] == src.r and hit[2] == src.g and hit[3] == src.b then return hit end
+        hit = { src.r, src.g, src.b, 1 }
+        debuffTypeCache[dispelType] = hit
+        return hit
+    end
+    return DEBUFF_TYPES[dispelType]
+end
+
+--- The border colour for a debuff the client reports no dispel type for.
+--
+-- Prefers the live global's "none" row for the same reason every other fact here does: an
+-- addon that retints debuff borders should retint ours too. Unlike DebuffTypeColor this
+-- never returns nil -- a debuff display always has something to paint, and "no type" is a
+-- real answer worth showing rather than an absence to fall back from.
+-- @return table  {r,g,b,a}
+function M:UntypedDebuffColor()
+    local src = type(DebuffTypeColor) == "table" and DebuffTypeColor["none"] or nil
+    if type(src) == "table" and type(src.r) == "number" then
+        if noneCache and noneCache[1] == src.r and noneCache[2] == src.g
+           and noneCache[3] == src.b then
+            return noneCache
+        end
+        noneCache = { src.r, src.g, src.b, 1 }
+        return noneCache
+    end
+    return DEBUFF_NONE
+end
+
 SuuUI.Game = M

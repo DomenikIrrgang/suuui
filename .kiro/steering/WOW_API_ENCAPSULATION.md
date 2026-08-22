@@ -198,20 +198,71 @@ frame:SetScript("OnMouseUp", function(_, btn)
     if btn == "RightButton" then TogglePlayerMenu() end   -- protected; does nothing
 end)
 
--- ✅ REQUIRED: the component states the attributes, the CLIENT performs the action
-local area = SuuUI.Components.UnitClickArea({ unit = "target" }, wrapper)
-SuuUI.Layout:CreateContainer({ host = wrapper, layout = "stack" }):Add(area)
+-- ✅ REQUIRED: the component states the attributes, the CLIENT performs the action.
+-- Parented BESIDE the frame it covers, never inside it — see the parentage rule below.
+local root = SuuUI.UIRoot:GetRootContainer():GetFrame()
+local area = SuuUI.Components.UnitClickArea({ unit = "target" }, root)
+
+-- Its own host, on a frame that only resizes with the screen, and an anchor descriptor
+-- that carries the covered frame's size. Growing `wrapper` moves the surface with it.
+local host = CreateFrame("Frame", nil, root)
+local box  = SuuUI.Layout:CreateContainer({ host = host, layout = "anchor" })
+box:Add(area, { anchor = {
+    point = "TOPLEFT", relativeTo = wrapper, relativePoint = "TOPLEFT", x = 0, y = 0,
+    width = wrapper:GetWidth(), height = wrapper:GetHeight(),
+} })
 ```
 
-Two rules follow for anyone extending a secure component:
+Three rules follow for anyone extending a secure component. The first is the one that
+actually costs days:
+
+- **A secure component must never be parented inside a frame whose geometry changes at
+  runtime.** A frame built from a secure template is protected, protection propagates DOWN
+  to every descendant, and the refusal propagates UP: the client refuses addon-driven
+  geometry on *any* frame whose subtree holds a protected one while `InCombatLockdown()` is
+  true, so a plain wrapper with one secure grandchild is refused along with it. Nothing
+  throws. The size call returns, the frame keeps its old box, and the player gets
+  `Interface action failed because of an AddOn` in chat — a line most players have learned
+  to ignore.
+
+  This shipped. `UnitClickArea` was parented to the unit frame's wrapper, and that wrapper
+  resizes during a fight by design: an aura band grows it when a debuff lands, the cast bar
+  grows it when a cast starts. Every one of those resizes was refused, so the band was
+  carved out of a box frozen at its pre-combat height and pushed the frame's own bars down
+  by the band's height. Measured in the live client: `GetPreferredSize` returned 227 while
+  `GetHeight` stayed 188, with `InCombatLockdown()` true on every mismatch and false on
+  every match. Ten days of in-game debugging, because the mechanism is invisible in the
+  code — the parentage line reads like an implementation detail.
+
+  So the surface goes **beside** the resizing frame, parented to something stable (the root
+  container) and **anchored** to the frame, which is what keeps it covering it. Its host
+  matters too: hosting the surface's container on the resizing wrapper would chain onto that
+  wrapper's `OnSizeChanged`, so every mid-combat resize would re-lay out a protected child
+  and spray blocked-action lines into the player's chat. Give it a host that only resizes
+  with the screen.
+
+- **Geometry on a protected frame is guarded and deferred, not attempted.** Ask
+  `InCombatLockdown()` first and set a flag; catch up on `PLAYER_REGEN_ENABLED`. Attempting
+  it and losing is not free — it costs the player a chat error for a call you already knew
+  would fail. `UnitFrame:_syncClickArea` is the reference: it skips in combat, records
+  `_clickDeferred`, and re-runs on leaving combat. Skipping is honest rather than lossy
+  there because the surface is invisible, so a stale one costs at most that a band strip
+  which appeared mid-fight is not click-to-target until the fight ends.
 
 - **Never `SetScript("OnClick")` on a secure button.** The template installs the handler
   that performs the action, and replacing it breaks every action silently — the frame still
   sizes, still takes the mouse, still reports as shown. Use `PreClick` / `PostClick`, the
   hooks the template offers, and translate those into signals.
+
 - **State attributes once, at construction.** A frame built from a secure template is
   protected, and the client refuses to let an addon reshape a protected frame in combat. A
   setter that re-states an attribute is a setter that fails exactly when it is needed.
+
+**A green suite proves nothing here.** The simulated client models no combat lockdown, so
+2728 assertions passed while this was broken in every fight. What a spec *can* assert is the
+structural invariant — that the secure surface is not a descendant of the frame it covers —
+and that is what `Tests/spec/41_unit_click_area_spec.lua` does. See "Known Gaps in the
+Simulated Client" in `TESTING.md`.
 
 ---
 

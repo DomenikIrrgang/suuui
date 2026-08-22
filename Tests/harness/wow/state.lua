@@ -40,6 +40,24 @@ M.channel = nil
 -- too — a handler that reads it at any other time gets nothing.
 M.combatLogEvent = nil
 
+-- Combat lockdown, as InCombatLockdown() reports it. While this is true the client refuses
+-- addon-driven geometry on a PROTECTED frame — and on any frame whose subtree contains one,
+-- because moving the parent would move the protected child.
+--
+-- False by default, and deliberately so: out of combat is the state an addon does all its
+-- setup work in, and it is the state every geometry spec in this suite is written against.
+-- Turning lockdown on by default would fail specs about code that is correct.
+M.inCombat = false
+
+-- Every geometry call the client refused because of that lockdown, in call order.
+--
+-- Recorded rather than raised, because the live client does not raise either: the call
+-- returns having changed nothing and the player gets "Interface action failed because of an
+-- AddOn" in chat. A silent refusal is otherwise unassertable — the frame simply keeps the
+-- size it had, which is exactly how the aura-band drift bug survived 2728 assertions — so
+-- this record is the only observable a spec has. Read through H.getBlockedActions().
+M.blockedActions = {}
+
 local pending, pendingSet
 local dependents
 
@@ -58,6 +76,9 @@ function M.reset()
     M.cast      = nil
     M.channel   = nil
     M.combatLogEvent = nil
+    -- The clock tracks GetTime(); reset it so each test starts from 0. Cast bar specs
+    -- use relative timing (clock at startCast), so resetting is safe.
+    M.clock          = 0
     -- The unit's class, read by UnitClass. Reset because a spec that paints an NPC sets
     -- unitClassless and a spec that paints a mage sets unitClass, and neither is a value
     -- the next spec file should inherit: a leaked unitClassless makes every class-colour
@@ -82,6 +103,22 @@ function M.reset()
     -- the next spec's right-click assertion pass before the click happens.
     M.targetedUnit   = nil
     M.unitMenu       = nil
+    -- Per-unit aura lists, keyed by unit token. Each entry is a table with "helpful" and
+    -- "harmful" arrays. Set through H.setAuras / H.clearAuras.
+    M.auras          = {}
+    -- GameTooltip state: last owner/anchor/aura pointed at, so specs can assert
+    -- what a mouseover produced.
+    M.tooltip        = nil
+    -- CancelUnitBuff call log, so specs can assert it fired with the right args.
+    M.cancelBuff     = nil
+    -- Combat lockdown and the refusals it produced. Both cleared, for the same reason the
+    -- unit table is: a leaked inCombat would leave the next spec file's frames silently
+    -- unresizable, so its geometry assertions would fail somewhere far from the cause — and
+    -- a leaked refusal record would let a "the resize was blocked" assertion pass before the
+    -- call under test ever happened. A reset() that forgot a field is a bug this harness has
+    -- already shipped once.
+    M.inCombat       = false
+    M.blockedActions = {}
     M._settling = false
     M.settleIterations = 0
     pending    = {}
