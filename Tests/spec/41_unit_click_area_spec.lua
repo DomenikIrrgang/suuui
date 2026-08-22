@@ -251,6 +251,51 @@ describe("Plugins.UnitFrames right-click menu", function()
             .as("the secure surface must not sit inside the frame that resizes").falsy()
     end)
 
+    it("leaves NO protected frame anywhere in the unit frame's subtree", function()
+        -- The general form of the invariant, and the one that survives a future component.
+        -- The refusal only fires for a PROTECTED frame, so the aura bands, the cast bar and
+        -- the bars are all free to live inside the wrapper and be anchored to it -- none of
+        -- them comes from a secure template. UnitClickArea is the only secure frame in the
+        -- addon. This asserts the property rather than that one component's parentage, so a
+        -- second secure widget added later fails here instead of in someone's raid.
+        for _, unit in ipairs({ "player", "target" }) do
+            local w = widgetFor(unit)
+            expect(H.hasProtectedDescendant(w:GetFrame()))
+                .as(unit .. ": nothing protected may sit inside a frame that resizes")
+                .falsy()
+        end
+    end)
+
+    it("is NOT ANCHORED to the frame it covers either", function()
+        -- The half that parentage alone does not cover, and it cost a second round of
+        -- in-game measurement to find. The client refuses to resize a frame whose movement
+        -- would move a protected one, and it does not care whether the link is parentage or
+        -- an anchor point: a surface merely ANCHORED to the wrapper kept the wrapper frozen
+        -- in combat exactly as being its child had. Proven by clearing that one anchor in
+        -- game, after which the frame resized mid-combat for the first time -- preferred 227
+        -- against an actual 226.99996948242, with InCombatLockdown() true.
+        --
+        -- So the surface is placed in absolute root coordinates and re-derived out of combat.
+        local w = widgetFor("player")
+        local f = w._clickArea:GetFrame()
+        local wrapper = w:GetFrame()
+        for i = 1, f:GetNumPoints() do
+            local _, rel = f:GetPoint(i)
+            expect(rel == wrapper)
+                .as("anchor " .. i .. " must not target the frame that resizes").falsy()
+        end
+    end)
+
+    it("follows the frame when it is moved", function()
+        -- Absolute placement does not track the frame the way an anchor did, so a move has
+        -- to re-derive it. Without this the surface is left behind at the old position and
+        -- right-clicking the frame silently stops working after a drag or a profile switch.
+        local w = widgetFor("player")
+        H.SuuUI.Settings:Set("unit_frames", "player_position",
+            { point = "TOPLEFT", relPoint = "TOPLEFT", x = 300, y = -220 })
+        H.expectBox(w._clickArea, H.box(w:GetFrame()))
+    end)
+
     it("still covers the frame after a band grows it", function()
         -- The surface is placed by an anchor against the wrapper, so growth has to carry it.
         local w = widgetFor("player")

@@ -1030,6 +1030,13 @@ function UnitFrame:Create(parent, cfg)
     -- does not follow the frame for free: every move has to re-derive it. This key is written
     -- by a drag, by a reset and by a profile switch, which is every way the frame moves.
     SuuUI.Settings:Watch(cfg.pluginId, cfg.prefix .. "position", function()
+        -- Order matters here and watcher order is NOT ours to rely on: MoveableFrame watches
+        -- this same key and may run before or after us. Apply the placement explicitly first,
+        -- then derive the surface from the rect that produced -- otherwise we measure the
+        -- frame's old position and leave the surface behind. RefreshAnchor reads the stored
+        -- position and re-applies from scratch, so doing it here costs nothing when
+        -- MoveableFrame's own watcher does it again.
+        SuuUI.MoveableFrame:RefreshAnchor(self._wrapper)
         self:_syncClickArea()
     end, self._themeId .. "_click_pos")
 
