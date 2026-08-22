@@ -29,21 +29,41 @@ end
 -- Sizes the tip to its text plus padding and re-applies the stored anchor. Measured
 -- through TextMetrics, not the live font string: the layout has already assigned it the
 -- previous tip's width, and GetStringWidth is clamped to that, so a longer second tip
--- would report the shorter box and never grow. The height comes off the Text handle,
--- which re-measures itself whenever a font token changes.
+-- would report the shorter box and never grow.
+--
+-- Measured PER LINE, and the height taken from the line COUNT. A tip may carry explicit
+-- newlines — the data bar's clock shows local and realm time — and the font string's own
+-- GetStringHeight is the wrong source for two reasons: it is measured against whatever width
+-- the PREVIOUS tip left behind rather than the width this one is about to get, and with wrap
+-- off it reported a single line for a two-line string, which is how a two-line tip came to be
+-- sized for one.
 function TipMeta:_fit()
     local fs = self._text
     local font, size, flags = fs:GetFont()
-    local mw = SuuUI.TextMetrics.Measure(fs:GetText() or "", font, size, flags)
+    local T    = SuuUI.TextMetrics
     local padX = (SuuUI.Theme:GetToken("spaceSm") or 8) * 2
+
+    -- One reference measurement for the line height, so an EMPTY line still contributes a
+    -- row: Box("") is 0 wide and 0 tall, and a blank separator line is legitimate text.
+    local _, lineH = T.Box("A", font, size, flags)
+    local text = fs:GetText() or ""
+    local mw, lines = 0, 0
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+        lines = lines + 1
+        -- Box, not Measure: this number becomes the label's own box through StackLayout, and
+        -- the client truncates with zero tolerance.
+        local w = T.Box(line, font, size, flags)
+        if w > mw then mw = w end
+    end
+    if lines == 0 then lines = 1 end
 
     local a = self._anchor
     a.width  = mw + padX
-    a.height = (self._textT:GetHeight() or 0) + PAD_Y
+    a.height = lineH * lines + PAD_Y
     self._host:SetChildAnchor(self._f, a)
     -- A font token change resizes nothing on its own, so nothing else re-measures the
     -- centred label. Re-run the box so the client is never handed a stale text box.
-
+    self._box:Layout()
 end
 
 --- Shows the tooltip with text, following the cursor.
@@ -57,8 +77,34 @@ function TipMeta:ShowTip(text, anchorFrame)
     local T = SuuUI.Theme
     local a = self._anchor
     if anchorFrame then
-        a.point, a.relativeTo, a.relativePoint = "BOTTOM", anchorFrame, "TOP"
-        a.x, a.y = 0, T:GetToken("spaceXs") or 4
+        local gap = T:GetToken("spaceXs") or 4
+        -- Above by preference, below when there is no room. A tip anchored above a trigger
+        -- that is itself flush against the screen's top edge renders entirely off-screen and
+        -- the player sees nothing at all — measured on the data bar's clock, whose field has
+        -- top = 0 and whose tip landed at top = -42. Every other consumer sits inside a
+        -- mid-screen window, which is why the bar is the first trigger to expose it.
+        --
+        -- The needed height is known before placement because Text re-measures on SetText.
+        -- Both tops are read in the same space: the trigger is a descendant of the root, so
+        -- they share its scale and no conversion applies.
+        local needH = (self._textT:GetHeight() or 0) + PAD_Y + gap
+        local rootC = SuuUI.UIRoot:GetRootContainer()
+        local rootF = rootC and rootC:GetFrame()
+        local rootTop = rootF and rootF.GetTop and rootF:GetTop()
+        local trigTop = anchorFrame.GetTop and anchorFrame:GetTop()
+        -- GetTop measures upward from the screen bottom, so this is the space above.
+        local room = (rootTop and trigTop) and (rootTop - trigTop) or nil
+
+        if room and room < needH then
+            a.point, a.relativeTo, a.relativePoint = "TOP", anchorFrame, "BOTTOM"
+            a.x, a.y = 0, -gap
+        else
+            -- Unchanged default, and the fallback when either rect is unresolvable (a hidden
+            -- frame reports nil), so an unmeasurable trigger degrades to the old behaviour
+            -- rather than to a guess.
+            a.point, a.relativeTo, a.relativePoint = "BOTTOM", anchorFrame, "TOP"
+            a.x, a.y = 0, gap
+        end
     else
         -- The offset is applied inside the tooltip's own container, so the cursor has to
         -- be read in the tooltip's space rather than UIParent's.
@@ -121,7 +167,13 @@ function SuuUI.Components.Tooltip(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
     -- Text owns the font and colour tokens and re-measures itself when they change,
     -- which a hand-rolled font string does not.
-    local textT = C.Text({ size = "sm", color = "text", justify = "CENTER", wrap = false }, f)
+    --
+    -- wrap = true, and it is load-bearing: with wrap OFF the client renders a single row and
+    -- collapses an explicit newline into it, so a two-line tip drew both lines concatenated
+    -- and truncated with an ellipsis at the width of its widest line. Measured in game on the
+    -- data bar's clock — GetStringHeight reported 13 for a two-line string. Nothing wraps
+    -- unexpectedly as a result, because _fit sizes the box to the widest line.
+    local textT = C.Text({ size = "sm", color = "text", justify = "CENTER", wrap = true }, f)
     box:Add(textT, { align = "center", valign = "center" })
 
     local id = "tip_" .. tostring(f)

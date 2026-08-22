@@ -13,6 +13,7 @@
 --       before_each(function()
 --           H.setup()                 -- fresh addon in a fresh simulated client
 --           host = H.parent(300, 200)  -- a parent frame with real geometry
+--           host = H.backdropParent(300, 200)  -- ... that can also take a backdrop
 --       end)
 --
 --       it("hugs its label", function()
@@ -39,6 +40,8 @@
 -- Geometry:    H.box H.offset H.expectBox H.expectSize H.expectOffset H.expectInside
 --              H.expectNoOverlap H.expectStackedVertically H.expectRowHorizontally
 --              H.expectCenteredH H.expectCenteredV H.expectTokenColor H.expectDrawsAbove
+-- Clipping:    H.clipsChildren H.clipAncestor H.visibleBox H.isClipped
+--              (H.box reports the rect a widget was ASSIGNED; H.visibleBox what draws)
 -- Colour:      H.backdropColor H.borderColor H.vertexColor H.textColor
 -- Text:        H.textWidth H.textBox H.textHeight H.lineHeight H.fontOf H.expectTextNotClipped
 --              (each measuring helper takes an optional font path: faces differ)
@@ -142,6 +145,20 @@ function M.parent(w, h)
     return f
 end
 
+--- A test parent that can actually take a backdrop.
+-- The client only puts SetBackdrop on a frame created from BackdropTemplate, and the
+-- simulated client enforces that, so a spec calling SuuUI.Backdrop.Apply on a plain
+-- M.parent() is asserting something the client would refuse. Use this instead.
+-- @param w number|nil
+-- @param h number|nil
+-- @return table  frame
+function M.backdropParent(w, h)
+    local f = M.env.CreateFrame("Frame", nil, M.UIParent, "BackdropTemplate")
+    f:SetSize(w or 400, h or 300)
+    f:SetPoint("TOPLEFT", M.UIParent, "TOPLEFT", 0, 0)
+    return f
+end
+
 --- Unwraps a component handle or container to its frame. Passes frames through.
 -- @param target table
 -- @return table
@@ -232,6 +249,46 @@ function M.setUnit(unit, props)
         u[k] = v
     end
     return u
+end
+
+--- Moves the wall clock that time() and date() report, as a UTC instant.
+--
+-- Accepts an epoch number, or a table of UTC parts for readability. Deliberately UTC: the
+-- harness formats dates in UTC so an assertion about what a clock widget SAYS holds on every
+-- machine, which delegating to the local timezone would not.
+--
+-- This is not GetTime(). GetTime is uptime and starts at 0 (H.tick moves it); this is the
+-- epoch, and nothing about advancing one moves the other.
+-- @param when number|table  Epoch seconds, or { year, month, day, hour, min, sec } in UTC
+-- @return number  The epoch value now in force
+function M.setClock(when)
+    if type(when) == "table" then
+        local days = 0
+        -- Days since the epoch, computed rather than taken from os.time, which interprets a
+        -- table in the machine's local timezone and would reintroduce the dependency this
+        -- helper exists to remove.
+        local y = when.year or 1970
+        for yy = 1970, y - 1 do
+            days = days + ((yy % 4 == 0 and (yy % 100 ~= 0 or yy % 400 == 0)) and 366 or 365)
+        end
+        local leap = (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0))
+        local mdays = { 31, leap and 29 or 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+        for mm = 1, (when.month or 1) - 1 do days = days + mdays[mm] end
+        days = days + ((when.day or 1) - 1)
+        state.wallClock = days * 86400 + (when.hour or 0) * 3600
+            + (when.min or 0) * 60 + (when.sec or 0)
+    else
+        state.wallClock = tonumber(when) or 0
+    end
+    return state.wallClock
+end
+
+--- Sets the realm clock GetGameTime() reports, or clears it back to matching the wall clock.
+-- @param hour number|nil
+-- @param minute number|nil
+function M.setRealmTime(hour, minute)
+    state.realmHour   = hour
+    state.realmMinute = minute
 end
 
 --- Removes a unit, so UnitExists reports false for it again — losing a target.
@@ -886,6 +943,125 @@ end
 -- @return number, number  dx, dy
 function M.offset(child, ancestor)
     return geometry.offsetFrom(M.frameOf(child), M.frameOf(ancestor))
+end
+
+----------------------------------------------------------------------------------
+-- Clipping
+--
+-- `SetClipsChildren(true)` makes a frame a WINDOW: the client scissors its whole
+-- descendant subtree to that frame's rect, so a child taller than the window draws only
+-- the part that overlaps it. A shrinking window over a full-height body is how an
+-- Accordion collapses, and with no clip its rows would draw straight over whatever sits
+-- below.
+--
+-- These are QUERIES laid on top of the solver, which does not clip and must not start:
+-- H.box still reports the rect a widget was ASSIGNED, because that is what the suite
+-- measures — StackLayout sizes a progress fill at 0% deliberately, and dozens of specs
+-- assert deliberately-hidden or deliberately-oversized children. So ask H.box what a
+-- widget was given and H.visibleBox what would actually be drawn.
+--
+-- Clipping follows PARENTAGE, exactly as in the client: a frame merely ANCHORED to a
+-- window is not inside it and is not clipped by it.
+----------------------------------------------------------------------------------
+
+-- Intersection of two boxes in the top-down screen space H.box reports (`top` grows
+-- downward, so the surviving band starts at the LARGER top and ends at the smaller
+-- bottom). Returns nil for an empty result: a widget with no overlap left draws nothing.
+local function intersectBox(a, b)
+    local left   = math.max(a.left, b.left)
+    local right  = math.min(a.right, b.right)
+    local top    = math.max(a.top, b.top)
+    local bottom = math.min(a.bottom, b.bottom)
+    if right <= left or bottom <= top then return nil end
+    return {
+        left = left, top = top,
+        width = right - left, height = bottom - top,
+        right = right, bottom = bottom,
+    }
+end
+
+--- Whether a frame clips its children, i.e. what the client's DoesClipChildren() answers.
+--
+-- Regions (textures, font strings) have no children to clip, so they answer false rather
+-- than raising — a spec can ask about anything it holds.
+-- @param target table  Frame, region, component handle or container
+-- @return bool
+function M.clipsChildren(target)
+    local f = M.frameOf(target)
+    if not (f and f.DoesClipChildren) then return false end
+    return f:DoesClipChildren()
+end
+
+--- The nearest ancestor clipping this widget, or nil when nothing does.
+--
+-- EXCLUSIVE of the widget itself, because that is the client's rule: SetClipsChildren
+-- clips a frame's DESCENDANTS and never its own rect. So the window frame that clips a
+-- body is not clipped by its own clip — H.clipAncestor(window) answers what clips the
+-- window, and nil when it is free to draw its full rect. Ask H.clipsChildren(f) for the
+-- other question, "does this frame clip what is inside it".
+--
+-- Walks the whole parent chain, so a clip several generations up still answers, and a
+-- non-clipping frame in between is stepped over rather than ending the walk.
+-- @param target table  Frame, region, component handle or container
+-- @return table|nil  The clipping frame
+function M.clipAncestor(target)
+    local f = M.frameOf(target)
+    if not f then return nil end
+    local p = f:GetParent()
+    while p do
+        if M.clipsChildren(p) then return p end
+        p = p:GetParent()
+    end
+    return nil
+end
+
+--- The part of a widget's box that would actually be drawn: its box intersected with
+--- every clipping ancestor's box, so nested windows compose the way the client's scissor
+--- rects do.
+--
+-- Same shape H.box returns, so anything reading a box reads this one too. Returns nil
+-- when the widget is clipped away entirely, when it has no resolvable rect of its own,
+-- and when a clipping ancestor has none — an ancestor with no rect draws nothing, so
+-- nothing inside it draws either.
+-- @param target table  Frame, region, component handle or container
+-- @return table|nil  { left, top, width, height, right, bottom }
+function M.visibleBox(target)
+    local f = M.frameOf(target)
+    if not f then return nil end
+    local box = M.box(f)
+    if not box then return nil end
+    local p = f:GetParent()
+    while p do
+        if M.clipsChildren(p) then
+            local window = M.box(p)
+            if not window then return nil end
+            box = intersectBox(box, window)
+            if not box then return nil end
+        end
+        p = p:GetParent()
+    end
+    return box
+end
+
+--- Whether any part of a widget falls outside a clipping ancestor.
+--
+-- False when nothing clips it, and false for a widget with no resolvable rect: there is
+-- no geometry to cut, and H.box already reports that case as nil.
+-- @param target table  Frame, region, component handle or container
+-- @param tol number  Edge tolerance in pixels, default 0.01
+-- @return bool
+function M.isClipped(target, tol)
+    tol = tol or 0.01
+    local f = M.frameOf(target)
+    if not M.clipAncestor(f) then return false end
+    local box = M.box(f)
+    if not box then return false end
+    local vis = M.visibleBox(f)
+    if not vis then return true end
+    return math.abs(vis.left - box.left) > tol
+        or math.abs(vis.top - box.top) > tol
+        or math.abs(vis.width - box.width) > tol
+        or math.abs(vis.height - box.height) > tol
 end
 
 --- Measured text width using the harness font model. Use this instead of literals so

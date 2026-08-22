@@ -669,6 +669,8 @@ container:Remove(child)
 container:Clear()                          -- remove and hide every child
 container:Layout()                         -- auto-called on Add/Remove/resize
 container:SetGap(gap) / GetGap()
+container:SetPadding(padding) / GetPadding()    -- { top, right, bottom, left }; omitted edges
+                                               -- reset to 0, and GetPadding returns a copy
 container:SetLineOrder(order) / GetLineOrder()  -- wrapping flow: "reverse" or nil
 container:SetSize(w, h) / SetWidth / SetHeight
 container:GetWidth() / GetHeight()
@@ -678,6 +680,21 @@ container:GetContentSize()                 -- (width, height) of all children
 container:Show() / Hide() / IsShown()
 container:Destroy()                        -- destroys children, drops connections
 ```
+
+**`SetPadding` is a setter for the same reason `SetGap` is.** Padding comes from spacing and
+size tokens, both user-editable, so a container that reserves a gutter for a token-sized
+decoration — an `Accordion` keeps its accent rail inside its column's left padding, where it
+cannot overlap the rows — has to re-state that gutter when the token is edited. Rebuilding the
+container to say so would destroy its children. It **resets every edge you leave out to 0**,
+exactly as construction does: it states the padding rather than patching it, so a caller
+changing one edge passes the other three back. A call that changes nothing is dropped before the
+layout pass, because `ApplyTheme` runs on every theme edit and a pass per container per edit is
+work with nothing to show for it.
+
+`GetPadding` returns a **copy**. The live table is what the strategies read on every pass, so
+mutating it would move every child with no layout pass behind it, leaving the geometry and the
+numbers disagreeing about where the content box is — and nothing on screen to say which one is
+lying.
 
 Note there is **no** `SetPoint` or `ClearAllPoints` on the container API. That is
 intentional: a container is positioned by its parent container, or self-anchors to

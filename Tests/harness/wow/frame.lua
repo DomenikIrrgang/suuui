@@ -59,13 +59,33 @@ function FrameMeta:GetNumRegions()  return #self._regions end
 -- Backdrop
 ----------------------------------------------------------------------------------
 
+-- The client puts the backdrop methods on a frame ONLY when it was created from
+-- BackdropTemplate; on any other frame they are simply absent, so the call dies with
+-- "attempt to call method 'SetBackdrop' (a nil value)" and takes the whole calling stack
+-- with it. Modelled as a raise rather than a silent store, because the silent store is
+-- exactly what let a component paint a Layout container's own plain frame and ship green:
+-- the page build died on the real client while 2925 assertions here noticed nothing.
+--
+-- `_hasBackdropTemplate` is set in api.lua's CreateFrame and, until this guard existed, was
+-- written and never read. Only the SETTERS are gated: those are what production code calls,
+-- and a spec probing a getter on an unpainted frame is asking a fair question.
+local function requireBackdropTemplate(self, method)
+    if not self._hasBackdropTemplate then
+        error(("%s called on a frame created WITHOUT BackdropTemplate (template: %s). "):
+              format(method, tostring(self._template))
+              .. "The real client has no such method on this frame and would raise here.", 3)
+    end
+end
+
 function FrameMeta:SetBackdrop(backdrop)
+    requireBackdropTemplate(self, "SetBackdrop")
     self._backdrop = backdrop
 end
 
 function FrameMeta:GetBackdrop() return self._backdrop end
 
 function FrameMeta:SetBackdropColor(r, g, b, a)
+    requireBackdropTemplate(self, "SetBackdropColor")
     self._backdropColor = { r, g, b, a == nil and 1 or a }
 end
 
@@ -76,6 +96,7 @@ function FrameMeta:GetBackdropColor()
 end
 
 function FrameMeta:SetBackdropBorderColor(r, g, b, a)
+    requireBackdropTemplate(self, "SetBackdropBorderColor")
     self._backdropBorderColor = { r, g, b, a == nil and 1 or a }
 end
 
@@ -116,7 +137,13 @@ end
 function FrameMeta:SetToplevel(v) self._toplevel = v end
 function FrameMeta:Raise()  self._level = self:GetFrameLevel() + 1 end
 function FrameMeta:Lower()  self._level = math.max(0, self:GetFrameLevel() - 1) end
-function FrameMeta:SetClipsChildren(v) self._clipsChildren = v end
+-- A clipping frame is a WINDOW: the client scissors its whole descendant subtree to this
+-- frame's rect, so a child taller than the window draws only the overlapping part. The
+-- flag is readable, as in the client, because a write-only flag cannot be asserted — a
+-- spec claiming "these rows do not spill outside their window" would pass with clipping
+-- off. H.clipsChildren / H.visibleBox / H.isClipped are built on this getter.
+function FrameMeta:SetClipsChildren(v) self._clipsChildren = v and true or false end
+function FrameMeta:DoesClipChildren() return self._clipsChildren == true end
 function FrameMeta:SetIgnoreParentScale(v) self._ignoreParentScale = v end
 
 ----------------------------------------------------------------------------------

@@ -327,6 +327,34 @@ describe("Container", function()
         end)
     end)
 
+    describe("LayoutTree", function()
+        it("re-runs layout on this container and every descendant container", function()
+            local host  = H.parent(300, 200)
+            local outer = H.Layout:CreateContainer({ parent = host, layout = "flow",
+                                                     dir = "vertical" })
+            local mid   = H.Layout:CreateContainer({ parent = outer:GetFrame(),
+                                                     layout = "flow", dir = "horizontal" })
+            local leaf  = H.Layout:CreateContainer({ parent = mid:GetFrame(),
+                                                     layout = "flow", dir = "vertical" })
+            outer:Add(mid, { width = "fill" })
+            mid:Add(leaf, { width = "fill" })
+
+            local hits = {}
+            for name, c in pairs({ outer = outer, mid = mid, leaf = leaf }) do
+                local real = c.Layout
+                c.Layout = function(self, ...) hits[name] = (hits[name] or 0) + 1
+                                               return real(self, ...) end
+            end
+
+            outer:LayoutTree()
+            -- Depth-first: a row must settle its own content before the column above
+            -- measures it, which is why this exists rather than a bare Layout().
+            expect(hits.leaf).as("the deepest container was re-laid out").gte(1)
+            expect(hits.mid).as("and the one between").gte(1)
+            expect(hits.outer).as("and the container asked").gte(1)
+        end)
+    end)
+
     describe("Destroy", function()
         it("drops children and destroys the ones that can be", function()
             local c = H.Layout:CreateContainer({ parent = host, layout = "flow" })

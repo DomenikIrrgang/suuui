@@ -167,6 +167,39 @@ frame it does not own — which is what lets one grip serve any surface with an 
 Signals, not the grip's own frame scripts: a consumer that reached through `GetFrame()` to
 `SetScript("OnMouseDown")` would replace the emit and silently take the hover paint with it.
 
+```lua
+-- Components/Accordion.lua
+C.ACCORDION_SIGNALS = {
+  OPEN_CHANGED = "accordion.open_changed",  -- Args: openAccordion|nil, previouslyOpen|nil (nil = fully collapsed)
+}
+```
+
+Emitted by the **`AccordionGroup`**, never by a member: exclusivity is the group's policy, so
+the group is the only object that knows both halves of the change. Either argument may be nil.
+`previouslyOpen` is nil the first time a page opens a group, and `openAccordion` is nil when the
+group is now fully collapsed — which both `Open(nil)` and re-clicking the open member produce,
+since "one at a time" does not mean "one always". Both nil never arrives, because `Open` returns
+without emitting when nothing changed; a consumer never has to diff the payload against its own
+state to find out whether anything happened.
+
+It fires on the **decision**, not when the motion stops. The tween is still running at emit
+time, and the animated and the snapped path emit exactly once each. There is no accordion
+counterpart to `STATUSBAR_SIGNALS.FILL_SETTLED`, so a consumer that needs settled geometry reads
+`GetReveal()` rather than waiting for a signal that does not exist.
+
+Consumer: `SettingsUI/PageBuilder.lua`, which records the open group's label per page and per
+subtab pane so navigating away and back returns you to the group you were reading — session UI
+state, never written to the profile.
+
+**An accordion emits the standard `CLICKED` from its header and deliberately does not act on
+it.** A header click opens nothing; an owner decides what the gesture means, which is precisely
+what lets `AccordionGroup` arbitrate — it connects `CLICKED` on every member it is handed and
+turns the click into `Open(member)`, closing whichever was open in the same tween. The same
+division `ResizeGrip` draws above, for the same reason: a component that both reports a gesture
+and acts on it leaves its owner nothing to override. `SetOpen` is silent for the other half of
+that contract — only a header click emits — so driving an accordion from a watcher, from a
+group, or from remembered state cannot loop back into whatever asked for it.
+
 Rules for custom signals:
 1. Prefix with the component or plugin id.
 2. Document the payload in a comment on the same line.

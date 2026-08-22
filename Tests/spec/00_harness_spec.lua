@@ -118,6 +118,210 @@ describe("harness: WoW API simulation", function()
         end)
     end)
 
+    describe("frame clipping", function()
+        -- A short window over taller content: the shape an Accordion collapses through. The
+        -- body keeps its full height while the window shrinks over it, so with no clip its
+        -- rows would draw straight over whatever sits below the window.
+        local function windowAndBody(windowH, bodyH)
+            local host   = H.parent(200, 400)
+            local window = H.env.CreateFrame("Frame", nil, host)
+            window:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            window:SetSize(200, windowH or 40)
+            local body = H.env.CreateFrame("Frame", nil, window)
+            body:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+            body:SetSize(200, bodyH or 100)
+            return window, body, host
+        end
+
+        it("does not clip by default", function()
+            local window, body = windowAndBody(40, 100)
+            expect(H.clipsChildren(window)).as("clipping is opt-in, as in the client").eq(false)
+            expect(window:DoesClipChildren()).eq(false)
+            expect(H.clipAncestor(body)).isNil()
+            expect(H.isClipped(body)).as("a taller child spills when nothing clips it").eq(false)
+            expect(H.visibleBox(body)).deepEq(H.box(body))
+        end)
+
+        it("leaves a child that fits entirely inside its window unclipped", function()
+            local window, body = windowAndBody(100, 40)
+            window:SetClipsChildren(true)
+            expect(window:DoesClipChildren()).eq(true)
+            expect(H.clipAncestor(body)).eq(window)
+            expect(H.isClipped(body)).eq(false)
+            expect(H.visibleBox(body))
+                .as("wholly inside, so the visible box is the box").deepEq(H.box(body))
+        end)
+
+        it("cuts a child taller than its window down to the overlap", function()
+            local window, body = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            local wb, bb = H.box(window), H.box(body)
+            expect(bb.height).as("the body still reports the height it was assigned").eq(100)
+            expect(H.isClipped(body)).eq(true)
+            local vis = H.visibleBox(body)
+            expect(vis).notNil()
+            expect(vis.left).eq(bb.left)
+            expect(vis.width).eq(bb.width)
+            expect(vis.top).as("the window's top edge, measured downward").eq(wb.top)
+            expect(vis.height).as("only the band inside the window draws").eq(wb.height)
+            expect(vis.bottom).eq(wb.bottom)
+        end)
+
+        it("reports no visible box for a child pushed entirely outside its window", function()
+            local window, body = windowAndBody(40, 40)
+            window:SetClipsChildren(true)
+            body:ClearAllPoints()
+            body:SetPoint("TOPLEFT", window, "BOTTOMLEFT", 0, -10)
+            expect(H.box(body)).as("the solver still places it").notNil()
+            expect(H.visibleBox(body)).as("none of it draws").isNil()
+            expect(H.isClipped(body)).eq(true)
+        end)
+
+        it("intersects nested clips on both axes", function()
+            -- Outer clips vertically (60 tall), inner clips horizontally (120 wide). Either
+            -- clip alone leaves the body wrong on the other axis, so the answer has to be
+            -- the intersection of both.
+            local host  = H.parent(200, 400)
+            local outer = H.env.CreateFrame("Frame", nil, host)
+            outer:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            outer:SetSize(200, 60)
+            outer:SetClipsChildren(true)
+            local inner = H.env.CreateFrame("Frame", nil, outer)
+            inner:SetPoint("TOPLEFT", outer, "TOPLEFT", 0, 0)
+            inner:SetSize(120, 200)
+            inner:SetClipsChildren(true)
+            local body = H.env.CreateFrame("Frame", nil, inner)
+            body:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
+            body:SetSize(200, 200)
+
+            expect(H.clipAncestor(body)).as("nearest first").eq(inner)
+            local vis = H.visibleBox(body)
+            expect(vis).notNil()
+            expect(vis.width).as("width comes from the inner clip").eq(120)
+            expect(vis.height).as("height comes from the outer clip").eq(60)
+            expect(H.isClipped(body)).eq(true)
+        end)
+
+        it("applies a clip three generations up", function()
+            local window = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            local a = H.env.CreateFrame("Frame", nil, window)
+            a:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+            a:SetSize(200, 100)
+            local b = H.env.CreateFrame("Frame", nil, a)
+            b:SetPoint("TOPLEFT", a, "TOPLEFT", 0, 0)
+            b:SetSize(200, 100)
+            local leaf = H.env.CreateFrame("Frame", nil, b)
+            leaf:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+            leaf:SetSize(200, 100)
+
+            expect(H.clipAncestor(leaf))
+                .as("the walk does not stop at the direct parent").eq(window)
+            expect(H.isClipped(leaf)).eq(true)
+            expect(H.visibleBox(leaf).height).eq(40)
+        end)
+
+        it("walks past a non-clipping frame in between", function()
+            local window = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            local mid = H.env.CreateFrame("Frame", nil, window)
+            mid:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+            mid:SetSize(200, 100)
+            mid:SetClipsChildren(false)
+            local leaf = H.env.CreateFrame("Frame", nil, mid)
+            leaf:SetPoint("TOPLEFT", mid, "TOPLEFT", 0, 0)
+            leaf:SetSize(200, 100)
+
+            expect(H.clipsChildren(mid)).eq(false)
+            expect(H.clipAncestor(leaf))
+                .as("a frame that does not clip is stepped over, not the end of the walk").eq(window)
+            expect(H.visibleBox(leaf).height).eq(40)
+            expect(H.isClipped(leaf)).eq(true)
+        end)
+
+        it("restores the unclipped answer when the clip is turned off", function()
+            local window, body = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            expect(H.isClipped(body)).eq(true)
+            window:SetClipsChildren(false)
+            expect(H.clipsChildren(window)).eq(false)
+            expect(window:DoesClipChildren()).eq(false)
+            expect(H.clipAncestor(body)).isNil()
+            expect(H.isClipped(body)).eq(false)
+            expect(H.visibleBox(body)).deepEq(H.box(body))
+        end)
+
+        it("does not count a frame's own clip against itself", function()
+            local window = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            expect(H.clipsChildren(window)).as("it clips what is inside it").eq(true)
+            expect(H.clipAncestor(window))
+                .as("SetClipsChildren clips descendants, never the frame's own rect").isNil()
+            expect(H.isClipped(window)).eq(false)
+            expect(H.visibleBox(window)).deepEq(H.box(window))
+        end)
+
+        it("clips by parentage, not by the anchor chain", function()
+            local window = windowAndBody(40, 100)
+            local host = window:GetParent()
+            window:SetClipsChildren(true)
+            local outsider = H.env.CreateFrame("Frame", nil, host)
+            outsider:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+            outsider:SetSize(200, 100)
+            expect(H.clipAncestor(outsider))
+                .as("anchoring to a window does not put a frame inside it").isNil()
+            expect(H.isClipped(outsider)).eq(false)
+            expect(H.visibleBox(outsider)).deepEq(H.box(outsider))
+        end)
+
+        it("clips a region, which has no children of its own to clip", function()
+            local window = windowAndBody(40, 100)
+            window:SetClipsChildren(true)
+            local tex = window:CreateTexture(nil, "ARTWORK")
+            tex:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+            tex:SetSize(200, 100)
+            expect(H.clipsChildren(tex)).as("a texture answers false, it does not raise").eq(false)
+            expect(H.clipAncestor(tex)).eq(window)
+            expect(H.visibleBox(tex).height).eq(40)
+        end)
+
+        it("resolves a container and a component handle through GetFrame", function()
+            local host   = H.parent(200, 200)
+            local window = H.Layout:CreateContainer({
+                parent = host, layout = "anchor", w = 200, h = 10,
+            })
+            local wf = window:GetFrame()
+            wf:SetClipsChildren(true)
+            expect(H.clipsChildren(window)).as("a container handle answers for its frame").eq(true)
+
+            local btn = H.C.Button({ label = "OK" }, wf)
+            window:Add(btn, { anchor = {
+                point = "TOPLEFT", relativePoint = "TOPLEFT", x = 0, y = 0,
+            } })
+            expect(H.clipAncestor(btn)).as("a handle walks its own frame's parents").eq(wf)
+            expect(H.isClipped(btn)).as("a control taller than a 10px window").eq(true)
+            expect(H.visibleBox(btn).height).eq(H.box(wf).height)
+        end)
+
+        it("leaves H.box reporting the assigned rect, clip or no clip", function()
+            local window, body = windowAndBody(40, 100)
+            local before = H.box(body)
+            window:SetClipsChildren(true)
+            expect(H.box(body))
+                .as("the solver must not start clipping: specs measure assigned rects")
+                .deepEq(before)
+            H.expectSize(body, 200, 100)
+            -- The overflow is still THERE in the assigned rect, which is the whole point:
+            -- only H.visibleBox knows about the clip. Stated as the overflow rather than
+            -- with expectInside, which ASSERTS containment and would be asserting the
+            -- body does not overflow — the opposite of what this spec is about.
+            expect(H.box(body).bottom)
+                .as("bottom measures downward, so an overflowing child reports the larger value")
+                .gt(H.box(window).bottom)
+            expect(H.isClipped(body)).as("and the clip is reported separately").eq(true)
+        end)
+    end)
+
     describe("resize notification", function()
         it("fires OnSizeChanged on an explicit resize", function()
             local f = H.parent(100, 100)
@@ -502,6 +706,41 @@ describe("harness: WoW API simulation", function()
             fs:SetNonSpaceWrap(true)
             expect(fs:CanNonSpaceWrap()).truthy()
             expect(fs:GetNumLines()).as("the long word now splits").gt(unbroken)
+        end)
+
+        it("collapses an explicit newline onto one row when wrap is off", function()
+            -- The client's behaviour, measured in game: SetWordWrap(false) renders a SINGLE
+            -- row and folds an embedded newline into it rather than breaking on it. A
+            -- FontString holding "Local  22:21\nRealm  22:20" reported GetStringHeight() = 13
+            -- -- one row -- and drew both halves concatenated.
+            --
+            -- The model used to split on the newline whatever the flag said, which is how a
+            -- two-row tooltip shipped rendering "Local  22:17..." with every assertion about
+            -- its placement and its text content passing.
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("Local  22:21\nRealm  22:20")
+
+            fs:SetWordWrap(false)
+            expect(fs:GetNumLines()).as("one row: the newline buys nothing").eq(1)
+            expect(fs:GetStringHeight()).eq(H.lineHeight(12))
+
+            fs:SetWordWrap(true)
+            expect(fs:GetNumLines()).as("two rows once wrapping is allowed").eq(2)
+            expect(fs:GetStringHeight()).eq(H.lineHeight(12) * 2)
+        end)
+
+        it("needs the whole string on one row to be unclipped when wrap is off", function()
+            -- The width half of the same rule: with one row there is no newline relief, so a
+            -- box wide enough for the widest LINE is still a clip.
+            local p = H.parent(400, 100)
+            local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetFont("Fonts/FRIZQT__.TTF", 12, "")
+            fs:SetText("Local  22:21\nRealm  22:20")
+            fs:SetWordWrap(false)
+            fs:SetSize(H.textBox("Local  22:21", 12), H.lineHeight(12))
+            expect(fs:IsTextClipped()).as("the second half has nowhere to go").truthy()
         end)
 
         it("treats empty text as never clipped", function()
@@ -2082,6 +2321,210 @@ describe("harness: WoW API simulation", function()
         it("advances with H.tick", function()
             H.tick(1.5)
             expect(H.env.GetTime()).near(1.5, 0.001)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- The wall clock time() and date() report, and the realm clock GetGameTime does.
+    --
+    -- Load-bearing for any clock widget: date() is MODELLED rather than delegated, and it
+    -- forces UTC, so "what does the clock say" is the same answer on every machine. A spec
+    -- asserting "14:32" would otherwise pass in London and fail in Berlin.
+    ---------------------------------------------------------------------------
+    describe("wall clock and realm clock", function()
+        -- 2026-08-22 14:32:07 UTC, the reset default. Named once here so a change to
+        -- state.wallClock fails in this block rather than mysteriously in a widget spec.
+        local DEFAULT = 1787409127
+
+        it("starts at the documented default instant", function()
+            expect(H.env.time()).eq(DEFAULT)
+            expect(H.env.date("%Y-%m-%d %H:%M:%S")).eq("2026-08-22 14:32:07")
+        end)
+
+        it("reads 14:32 on an unconfigured clock", function()
+            -- The value every clock spec leans on, stated on its own so the dependency is
+            -- visible from here.
+            expect(H.env.date("%H:%M")).eq("14:32")
+        end)
+
+        it("formats in UTC, not in the timezone of the machine running the suite", function()
+            -- The invariant: every format is answered as though "!" had been prepended.
+            for _, fmt in ipairs({ "%H:%M", "%H:%M:%S", "%Y-%m-%d", "%I:%M %p", "%c" }) do
+                expect(H.env.date(fmt)).as(fmt).eq(os.date("!" .. fmt, DEFAULT))
+            end
+            -- And the non-vacuous half, which only bites when the machine is off UTC: a
+            -- delegating implementation would answer the local hour here. On a machine
+            -- already set to UTC the two agree and this can only pass, which is exactly why
+            -- the fixed "14:32" assertion above is stated as well.
+            if os.date("%H", DEFAULT) ~= os.date("!%H", DEFAULT) then
+                expect(H.env.date("%H")).as("the local hour is not what the harness reports")
+                    .neq(os.date("%H", DEFAULT))
+            end
+        end)
+
+        it("does not double-prefix a format that already asks for UTC", function()
+            expect(H.env.date("!%H:%M")).eq("14:32")
+        end)
+
+        it("formats an explicit instant rather than the wall clock", function()
+            expect(H.env.date("%H:%M", DEFAULT + 3600)).eq("15:32")
+            expect(H.env.time()).as("and reading one does not move the other").eq(DEFAULT)
+        end)
+
+        it("moves with H.setClock, which returns the epoch now in force", function()
+            expect(H.setClock(DEFAULT + 60)).eq(DEFAULT + 60)
+            expect(H.env.time()).eq(DEFAULT + 60)
+            expect(H.env.date("%H:%M")).eq("14:33")
+        end)
+
+        it("takes a table of UTC parts that agrees with the epoch form", function()
+            -- Both forms name the same instant, so they must produce the same number: the
+            -- table form exists for readability, not for a second definition of "now".
+            local fromTable = H.setClock({
+                year = 2026, month = 8, day = 22, hour = 14, min = 32, sec = 7,
+            })
+            expect(fromTable).as("the parts of the default instant").eq(DEFAULT)
+            local fromEpoch = H.setClock(DEFAULT)
+            expect(fromTable).eq(fromEpoch)
+            expect(H.env.date("%Y-%m-%d %H:%M:%S")).eq("2026-08-22 14:32:07")
+        end)
+
+        it("round-trips a table of parts back through date()", function()
+            -- Covers the month-length and leap-year arithmetic the table form does by hand
+            -- rather than through os.time, which would read the parts as local time.
+            local cases = {
+                { year = 1970, month = 1,  day = 1,  hour = 0,  min = 0,  sec = 0 },
+                { year = 2000, month = 2,  day = 29, hour = 12, min = 0,  sec = 0 },
+                { year = 2024, month = 2,  day = 29, hour = 23, min = 59, sec = 59 },
+                -- The day AFTER February, which is the only place February's own length is
+                -- read: a case inside February never consults it, so a spec built only from
+                -- leap DAYS asserts nothing about leap years.
+                { year = 2024, month = 3,  day = 1,  hour = 0,  min = 0,  sec = 1 },
+                { year = 2000, month = 3,  day = 1,  hour = 1,  min = 0,  sec = 0 },
+                { year = 2026, month = 12, day = 31, hour = 0,  min = 5,  sec = 0 },
+                -- 2100 is divisible by 100 but not 400, so it is NOT a leap year — the
+                -- century rule, in the direction opposite to 2000.
+                { year = 2100, month = 3,  day = 1,  hour = 6,  min = 30, sec = 15 },
+            }
+            for _, parts in ipairs(cases) do
+                H.setClock(parts)
+                local want = string.format("%04d-%02d-%02d %02d:%02d:%02d",
+                    parts.year, parts.month, parts.day, parts.hour, parts.min, parts.sec)
+                expect(H.env.date("%Y-%m-%d %H:%M:%S")).as(want).eq(want)
+            end
+        end)
+
+        it("defaults omitted parts to the start of the epoch", function()
+            expect(H.setClock({})).eq(0)
+            expect(H.env.date("%Y-%m-%d %H:%M:%S")).eq("1970-01-01 00:00:00")
+        end)
+
+        it("is not GetTime: neither clock moves the other", function()
+            local uptime = H.env.GetTime()
+            H.setClock(DEFAULT + 86400)
+            expect(H.env.GetTime()).as("uptime is untouched by the wall clock").eq(uptime)
+
+            local wall = H.env.time()
+            H.tick(5)
+            expect(H.env.time()).as("and a frame does not move the wall clock").eq(wall)
+            expect(H.env.GetTime()).near(uptime + 5, 0.001)
+        end)
+
+        it("is reset by H.setup, so a moved clock cannot leak into the next spec", function()
+            H.setClock(0)
+            H.setup()
+            expect(H.env.time()).eq(DEFAULT)
+        end)
+
+        it("has GetGameTime agree with the wall clock until a spec says otherwise", function()
+            local hour, minute = H.env.GetGameTime()
+            expect(hour).eq(14)
+            expect(minute).eq(32)
+            H.setClock({ year = 2026, month = 8, day = 22, hour = 3, min = 7, sec = 0 })
+            hour, minute = H.env.GetGameTime()
+            expect(hour).as("still following the wall clock").eq(3)
+            expect(minute).eq(7)
+        end)
+
+        it("diverges the realm clock with H.setRealmTime", function()
+            -- The divergence a clock widget's hover exists to show: a realm need not agree
+            -- with the player's own clock.
+            H.setRealmTime(3, 7)
+            local hour, minute = H.env.GetGameTime()
+            expect(hour).eq(3)
+            expect(minute).eq(7)
+            expect(H.env.date("%H:%M")).as("the wall clock did not move").eq("14:32")
+        end)
+
+        it("clears the realm clock back to the wall clock with a nil hour", function()
+            H.setRealmTime(3, 7)
+            H.setRealmTime(nil)
+            local hour, minute = H.env.GetGameTime()
+            expect(hour).eq(14)
+            expect(minute).eq(32)
+        end)
+
+        it("resets the realm clock on H.setup", function()
+            H.setRealmTime(3, 7)
+            H.setup()
+            local hour = H.env.GetGameTime()
+            expect(hour).as("a staged realm clock cannot leak into the next spec").eq(14)
+        end)
+    end)
+end)
+
+-- The assertion framework itself, not the simulated client. Same reasoning as the block
+-- above: a spec's failure MESSAGE is load-bearing, because a formatter that dies takes the
+-- diagnosis with it and leaves you debugging the harness instead of the code.
+describe("harness: assertion framework", function()
+    local fw = require("harness.framework")
+
+    before_each(function() H.setup() end)
+
+    describe("fmt", function()
+        it("renders scalars and shallow tables readably", function()
+            expect(fw.fmt(3)).eq("3")
+            expect(fw.fmt("hi")).eq('"hi"')
+            expect(fw.fmt({ 1, 2 })).eq("{1, 2}")
+            expect(fw.fmt({ a = 1 })).eq("{a=1}")
+        end)
+
+        it("stops at a depth cap instead of walking the whole tree", function()
+            local deep = { l1 = { l2 = { l3 = { l4 = { l5 = "too far" } } } }, }
+            local s = fw.fmt(deep)
+            expect(s:find("%.%.%.", 1) ~= nil)
+                .as("past the cap it prints an elision, not the next level").eq(true)
+            expect(s:find("too far", 1, true))
+                .as("the leaf beyond the cap is never reached").isNil()
+        end)
+
+        it("marks a cycle instead of following it", function()
+            local a = {}
+            a.self = a
+            expect(fw.fmt(a):find("<cycle>", 1, true))
+                .as("a table that contains itself terminates").notNil()
+        end)
+
+        it("formats a widget handle without overflowing the stack", function()
+            -- The regression this cap exists for. A handle's fields reach frames, which
+            -- point back at their parent and across at every sibling, so formatting one
+            -- naively recursed until the stack went — and `expect(handleA).eq(handleB)`
+            -- then reported "stack overflow" rather than a diagnosis, exactly when a spec
+            -- most needed one. Found while mutation-testing AccordionGroup.
+            local host = H.parent(300, 200)
+            local tog  = H.mount(H.C.Toggle({}, host))
+            local ok, out = pcall(fw.fmt, tog)
+            expect(ok).as("formatting a live handle must not raise").eq(true)
+            expect(type(out)).eq("string")
+            expect(#out < 4000)
+                .as("and it stays short enough to read in a failure line").eq(true)
+        end)
+
+        it("formats two frames well enough to tell them apart", function()
+            local a = H.parent(10, 10)
+            local b = H.parent(20, 20)
+            local ok = pcall(function() return fw.fmt(a) .. fw.fmt(b) end)
+            expect(ok).eq(true)
         end)
     end)
 end)

@@ -50,8 +50,9 @@ local function Build(entry, pluginId, parent)
     for _, tab in ipairs(tabs) do byId[tab.id] = tab end
 
     local buttons  = {}
-    local pane     = nil   -- container holding the active tab's rows
-    local activeId = nil
+    local pane      = nil   -- container holding the active tab's rows
+    local paneGroup = nil   -- that pane's AccordionGroup, one per tab
+    local activeId  = nil
 
     --- Swaps the visible tab. The outgoing pane is destroyed and its subscriptions
     --- retired; the incoming one is a fresh container added to root, so root re-hugs.
@@ -67,6 +68,13 @@ local function Build(entry, pluginId, parent)
             local outgoing = byId[activeId]
             if outgoing then
                 SuuUI.Settings:UnwatchControls(pluginId, outgoing.schema)
+            end
+            -- Same reasoning one layer down: the group holds a click subscription per
+            -- accordion and may have a transition in flight. The accordions themselves go
+            -- with the pane's cascade; this retires the arbitration around them.
+            if paneGroup then
+                paneGroup:Destroy()
+                paneGroup = nil
             end
             root:Remove(pane)
             pane:Destroy()
@@ -87,10 +95,13 @@ local function Build(entry, pluginId, parent)
             dir    = "vertical",
             gap    = gap,
         })
-        SuuUI._PageBuilder:BuildEntries(tabDef.schema, pluginId, pane:GetFrame(), pane)
+        -- Each tab gets its own group and its own memo, so which group is open in the
+        -- Player tab is remembered independently of the Target tab's.
+        paneGroup = SuuUI._PageBuilder:BuildEntries(tabDef.schema, pluginId,
+                                                   pane:GetFrame(), pane,
+                                                   { memoKey = pluginId .. ":" .. id })
         root:Add(pane, { width = "fill" })
     end
-
     for _, tabDef in ipairs(tabs) do
         -- autoW: a tab hugs its label. At the nav's fixed width every tab would be as
         -- wide as the widest nav row, and a strip of unit names would run off the page.
@@ -127,6 +138,10 @@ local function Build(entry, pluginId, parent)
     --- Returns the container holding the open tab's rows.
     -- @return table|nil
     function root:GetActivePane() return pane end
+
+    --- Returns the open tab's AccordionGroup, or nil when its schema had no sections.
+    -- @return table|nil
+    function root:GetActiveGroup() return paneGroup end
 
     return root
 end

@@ -128,6 +128,39 @@ validate = function(value) return true end
 -- or: return false, "Error message shown in UI"
 ```
 
+### A section is a collapsible group
+
+A `section` entry is not a row. It used to render a labelled divider; it now opens an
+**`Accordion`**, and every entry after it is built into that accordion's body until the next
+section. Grouping is derived from the schema you already declare, so order is the whole API:
+
+```lua
+SuuUI.Settings:Register("my_plugin", {
+  { key="enabled",   label="Enable",      type="toggle", default=true },  -- always visible
+  { key="",          label="General",     type="section" },
+  { key="showName",  label="Show Name",   type="toggle", default=true },  -- inside General
+  { key="",          label="Health Bar",  type="section" },
+  { key="barHeight", label="Height",      type="slider", default=39, min=8, max=60, step=1 },
+})
+```
+
+- **A setting belongs to the section that precedes it.** Move a section and everything under it
+  moves with it; insert one in the middle and you have re-homed every entry below it as far as
+  the next section. There is no end marker and no nesting.
+- **Entries before the first section stay on the page itself and are always visible.** That is
+  where a plugin-level enable toggle belongs: it is not part of any group, and a player must not
+  have to open a group to find the switch that turns the plugin off.
+- **One group is open at a time**, per page and per subtab pane. Clicking the open group's header
+  collapses it and leaves the page fully collapsed, which is how a long page is scanned by its
+  headers alone.
+- **The first section is open when a page is built** — snapped, not animated, so a page does not
+  open with something already sliding that the player did not ask for.
+- **Which group is open is session UI state**, remembered by label per page and per tab while the
+  client runs and never written to the profile. Same rule as the open subtab below.
+
+A schema with no sections builds a flat page exactly as before, so no plugin had to be edited to
+gain this.
+
 ### Settings that depend on another setting
 
 A control that only means something while another setting is on states that with
@@ -368,6 +401,123 @@ and the frame's width, and the band wraps to as many rows as the auras need — 
 player could set would be a cap that silently hides auras, which is the one thing a debuff
 display must never do. The icon edge is a plugin setting because it is a widget dimension; the
 *gap* between icons comes from `spaceXxs`, because spacing is design language.
+
+## Adding a widget to the data bar
+
+The data bar is a full-width strip along the top of the screen, divided into a left, centre and
+right section of fields. **A widget definition is data, not UI.** The bar owns the surface, the
+dividers, the hover rail, the font step, the padding and one shared ticker; you describe what
+your field should say and register it with `SuuUI.DataBar`, which is in Core so it answers
+whether or not the bar plugin is loaded, enabled, or came up before you. Same division the
+settings schema draws, and for the same reason: eight plugins each building their own field is
+eight different paddings.
+
+```lua
+-- onInit: your widget's settings are yours, declared under your own plugin id.
+SuuUI.Settings:Register("my_plugin", {
+    { key = "show_gold", label = "Show Gold", type = "toggle", default = true },
+})
+
+-- Cheap and allocation-free: see the rule under GetText below.
+local lastCopper, lastText
+local function goldText()
+    local copper = GetMoney() or 0
+    if copper ~= lastCopper then
+        lastCopper = copper
+        lastText   = string.format("%dg", math.floor(copper / 10000))
+    end
+    return lastText
+end
+
+local GOLD = {
+    id      = "my_plugin.gold",   -- namespaced, like a pool id or an event name
+    label   = "Gold",
+    prefix  = "GOLD",
+    section = "right",
+    order   = 100,
+    events  = { "PLAYER_MONEY" },
+    GetText = goldText,
+    OnClick = function(field, button) openCurrencyPanel() end,
+}
+
+-- onEnable: register through the setting rather than once, so switching the widget off
+-- removes the field immediately and exercises the unregister path the player actually uses.
+SuuUI.Settings:Watch("my_plugin", "show_gold", function(on)
+    if on then
+        SuuUI.DataBar:RegisterWidget(GOLD)
+    else
+        SuuUI.DataBar:UnregisterWidget(GOLD.id)
+    end
+end, "my_plugin.gold", { immediate = true })
+
+-- onDisable
+SuuUI.Settings:Unwatch("my_plugin.gold")
+SuuUI.DataBar:UnregisterWidget("my_plugin.gold")
+```
+
+Registering is enough. The bar subscribes to the registry rather than reading it once, so a
+widget added at any point — during login, from a settings toggle, from an addon that loads
+minutes later — appears without anyone being told about it.
+
+**The definition, field by field:**
+
+| Field | Meaning |
+|---|---|
+| `id` | **Required**, unique, namespaced with your plugin id. A duplicate id *replaces* the existing widget rather than raising, so a plugin re-registering on re-enable cannot take the client down from inside its own `onEnable` — the collision is logged through `SuuUI.Debug` instead |
+| `label` | Human name for the widget. Nothing renders it today (see the note below) |
+| `prefix` | Optional muted text drawn before the value — `"GOLD"`, `"FPS"`, `"MS"` |
+| `section` | `"left"` ｜ `"center"` ｜ `"right"`, default `"left"`. An unknown value raises rather than being quietly filed under one |
+| `order` | Ascending within the section, default 100. Ties break on `id`, so ordering is total and a bar's fields cannot swap places between logins |
+| `events` | Game events that should refresh the field. The bar registers the union of every widget's events on one frame and refreshes only the widgets that asked for the event that fired |
+| `update` | Seconds between refreshes, for a value **nothing announces**. Omit it whenever an event exists — a ticker where an event would do is a per-frame cost for nothing |
+| `GetText` | `function() -> string` — the value. **Required unless `Build` is given** |
+| `Build` | `function(parent) -> handle` — custom visuals instead of a text field. The escape hatch; see below |
+| `Refresh` | `function(field)` — refresh hook for a `Build` widget, called where `GetText` would be. Named `Refresh` rather than `Update` on purpose: a hook differing from the `update` interval by case alone is a footgun, and the convention here is that functions are PascalCase |
+| `OnClick` | `function(field, button)` |
+| `OnEnter` | `function(field)` — the field handle is passed, so `field:GetFrame()` is what you anchor a tooltip to |
+| `OnLeave` | `function(field)` |
+| `schema` | **There is no such field.** `Settings:Register` is called once per plugin in `onInit`, while a widget may register at any point — during login, from a toggle, from an addon that loads minutes later — so there is no moment at which this page could splice in a stranger's schema. Register your widget's settings under your OWN plugin id, on your own page, as the example above does. The built-in clock is the only exception, and only because one plugin owns both sides of it |
+
+Everything you hand over runs through `pcall` and logs through `SuuUI.Debug`, because it is
+plugin code on a shared path: one throwing `GetText` must not stop the tick loop and take every
+other widget's refresh with it.
+
+**`prefix` is optional, and the clock omits it deliberately.** `"14:32"` is self-evident, and a
+muted `TIME` in front of it is noise on a strip where horizontal space is the scarce thing. Use
+a prefix where the number alone is ambiguous — `1.2k` could be gold, honour or damage — and
+leave it off where the format already says what it is.
+
+**`GetText` must be cheap and allocation-free.** It is called by a shared `OnUpdate` ticker as
+well as on events, so it sits on the same per-frame path the performance rules cover: no table
+allocation, and no `string.format` unless the value behind the string actually moved.
+`Plugins/DataBar/TimeWidget.lua` is the reference. It computes an integer key naming the string
+that *should* be on screen — `time()` rather than `date("*t")`, because the former returns a
+number and allocates nothing where the latter allocates a table on every tick — compares that
+key against the last one, and formats only on a change. The clock ticks twice a second so a
+seconds display does not visibly stutter, which means most of those ticks format nothing at
+all; the field then drops the unchanged write on top of that. Fold your settings into the key
+as the clock does, or a format change waits for the next value change to appear.
+
+**A widget must not build frames.** No `CreateFrame`, no textures, no `SetPoint`, and no
+components of your own for the field itself: the bar owns the field, its tokens, its divider
+and its rail, which is what makes eight widgets from eight authors line up. `Build` is the
+escape hatch for visuals that genuinely have no textual form — a row of icons, a meter. It
+returns a handle the bar adds to the section stretched to the bar's height, and if it returns
+nothing the widget is skipped with a `Debug` line. Two things follow for a `Build` widget: the
+bar does **not** refresh it at construction, so paint it in `Build` itself, and `OnClick` /
+`OnEnter` / `OnLeave` are not wired for it — its handle is its own, so it owns its own input.
+
+**Drop what you registered.** `UnregisterWidget` in `onDisable` alongside your `Unwatch` and
+your `Events:Off`; a widget left registered keeps its `GetText` on the ticker after the plugin
+that owns it is gone.
+
+**Reading the bar's height.** Anything of yours that hugs the top of the screen has to move
+down by it. `SuuUI.DataBar:GetOccupiedHeight()` answers 0 when there is no bar rather than
+erroring, so you need no second code path, and `WatchHeight(cb, owner)` fires immediately and
+again whenever the height moves — a font or size token edit changes it. It is a length in the
+**UI root's** units: for one of your own frames that is the space you are already in, and for
+a frame anchored to `UIParent` you must convert it (see `Pixel.Convert` in `architecture.md`
+6c). Full registry contract in `architecture.md` 3c.
 
 ## Event Bus
 

@@ -111,6 +111,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
+    -- See Themes/Default.lua: the open accordion's accent rail.
+    sizeRail         = 2,
 
     borderWidth      = 1,
 

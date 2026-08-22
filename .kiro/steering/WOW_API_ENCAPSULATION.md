@@ -40,7 +40,7 @@ and signal system all get bypassed.
 | `Components/*` | Yes — internal frame/texture/fontstring construction, but z-order via `UIRoot:SetLayer` | **No** — use a host container |
 | `Layout/Window.lua` | Yes — z-order via `UIRoot:SetLayer`/`RaiseAbove` | **No** — use host containers |
 | `SettingsUI/*` | **No** — compose components and containers only | **No** |
-| `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** |
+| `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** — except on a BLIZZARD frame it repositions; see below |
 
 The three engine rows are narrow, and worth stating explicitly because a blanket "only
 `Components/`, `Layout/` and `UIRoot`" reads as though they were violations:
@@ -67,7 +67,9 @@ somewhere else at any pixel multiplier other than 1. A frame that positions itse
 its placement to `UIRoot` and lets `AnchorLayout` resolve it in root space.
 
 Hiding Blizzard's own frames (`MinimapCluster:Hide()`) is a plugin responsibility and
-stays allowed — that is not building our UI, it is suppressing theirs.
+stays allowed — that is not building our UI, it is suppressing theirs. **Moving one is the
+same carve-out**, and it is the one case where a plugin file calls `SetPoint`; see
+"Repositioning A Blizzard Frame" below.
 
 ## Z-order Goes Through the Layer System
 
@@ -179,6 +181,105 @@ These are the only cases where UI construction code may still call the WoW API:
 3. **Game data APIs** in plugins: `RegisterEvent`, `UnitName`, `GetSpellInfo`, and friends.
 
 Everything else needs a component.
+
+---
+
+## Repositioning A Blizzard Frame
+
+**A plugin MAY call `SetPoint` on a Blizzard frame it is moving.** This is the single exception
+to "`SetPoint` belongs to the four layout strategies", and it is the same carve-out as
+`frame:Hide()` in `onEnable` rather than a new one: a Blizzard frame is **not our UI**. It
+cannot be added to one of our containers, because a container positions its children and
+adopting a foreign frame means reparenting it, which taints it. The layout engine therefore has
+no way to place it at all — the rule that placement goes through a strategy is a rule about
+*our* frames, and there is no third option here.
+
+The case in the codebase is the data bar: it occupies the top strip of the screen, so whatever
+was hugging the top edge has to move down by its height. `Plugins/DataBar/DataBar.lua` moves
+`MinimapCluster` and `BuffFrame`, both measured on this client as anchored `TOPRIGHT` to
+`UIParent`'s `TOPRIGHT`. **Which frames go on that list is a measurement, not a guess** —
+`TemporaryEnchantFrame` is deliberately absent because it does not exist on this client, and on
+one that has it, it may well be anchored relative to `BuffFrame`, so moving both would offset
+it twice.
+
+Three things make the difference between a reposition that holds and one the player reads as
+"the addon randomly stopped working". Each is a line of code that looks removable.
+
+**It needs a `hooksecurefunc` re-assert, because these frames are layout-managed.** Edit Mode
+exists on this client — `EditModeManagerFrame` is present — so Blizzard re-anchors these frames
+itself: on login, on a layout change, and whenever `UIParent_ManageFramePositions` runs. A
+one-shot `SetPoint` in `onEnable` is silently reverted at a moment that has nothing to do with
+anything the player just did.
+
+**`hooksecurefunc` cannot be undone, so the hook asks a table on every call rather than
+assuming.** Exactly like `HookScript` in the suppression pattern (`plugin-authoring.md`, "A
+frame that re-shows itself"): the hook is installed for the rest of the session, so a hook that
+always re-offsets would make `onDisable` unable to hand the frame back. It consults a `managed`
+table keyed by frame — what *this* plugin is currently offsetting — and returns immediately for
+anything absent from it. A separate `applying` flag guards the recursion, since our own
+`SetPoint` re-enters the hook we just installed.
+
+**Clear the managed flag BEFORE restoring the original anchor.** Same ordering rule as clearing
+the suppression flag before `Show()`, and the same failure if you get it backwards: the hook you
+cannot uninstall sees the frame still marked managed, fires on your restoring `SetPoint`, and
+re-offsets the frame on the way out — so `onDisable` leaves it exactly where the player wanted
+it not to be.
+
+```lua
+local managed, hooked = {}, {}
+local applying = false
+
+local function reapply(frame)
+    local o = managed[frame]
+    if not o then return end
+    applying = true
+    frame:ClearAllPoints()
+    -- Always from the ORIGINAL y. Deriving the offset from the CURRENT anchor makes every
+    -- re-assert stack another bar height onto it, and there are several per login.
+    frame:SetPoint(o.point, o.relTo, o.relPoint, o.x, o.y - offsetIn(frame))
+    applying = false
+end
+
+local function claim(frame)
+    if hooked[frame] then return end
+    hooked[frame] = true
+    -- Permanent, so it asks `managed` instead of assuming it should always re-offset.
+    hooksecurefunc(frame, "SetPoint", function(f)
+        if applying or not managed[f] then return end
+        reapply(f)
+    end)
+end
+
+local function restore(frame)
+    local o = managed[frame]
+    if not o then return end
+    managed[frame] = nil          -- BEFORE the placement, or the hook undoes it
+    applying = true
+    frame:ClearAllPoints()
+    frame:SetPoint(o.point, o.relTo, o.relPoint, o.x, o.y)
+    applying = false
+end
+```
+
+Two more details that are not about hooks:
+
+- **Store the original anchor before touching it, and only for a frame that has one.** The
+  plugin reads `GetPoint(1)` once, when it first claims the frame, and refuses a frame reporting
+  `GetNumPoints() == 0` — there is nothing to restore it to.
+- **Convert the length at the boundary.** The bar's height is in the UI root's units and these
+  frames are anchored to `UIParent`, which is a different unit space once the pixel grid has put
+  a scale on the root. `SuuUI.Pixel.Convert(h, UIRoot:GetRoot(), frame)` is the conversion;
+  handing the raw number over is the vertical-only failure `architecture.md` 6c describes, and
+  it is invisible at the default multiplier. Re-assert on `DISPLAY_SIZE_CHANGED` and
+  `UI_SCALE_CHANGED` as well as `PLAYER_ENTERING_WORLD`, because the conversion itself moves
+  when the grid does.
+
+**The trigger for all of this is unprovable in the suite.** The simulated client models no Edit
+Mode re-anchoring, so nothing there ever fires the hook — see "Known Gaps in the Simulated
+Client" in `TESTING.md`. A spec that calls `SetPoint` itself to make the hook run is asserting
+against its own trigger, not against the client's. What a spec *can* assert is that the original
+anchor is restored on teardown and that the offset does not accumulate across repeated
+re-asserts.
 
 ---
 

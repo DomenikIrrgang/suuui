@@ -9,8 +9,9 @@ is written from scratch.
 
 **Status: early development.** The framework layers (core, layout, components, settings UI)
 are in place and tested. The gameplay plugins have started: unit frames, cast bars, and
-buff/debuff bands cover the player and the target, suppressing Blizzard's own. Everything
-else is still to come.
+buff/debuff bands cover the player and the target, suppressing Blizzard's own, and a
+full-width data bar along the top of the screen carries fields any plugin can register a
+widget into — a clock is the one built in so far. Everything else is still to come.
 
 ## Install
 
@@ -27,13 +28,13 @@ Open the settings window in game with `/suuui`.
 
 | Directory | Contents |
 |---|---|
-| `Core/` | event bus, UI signals, attach points, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
+| `Core/` | event bus, UI signals, attach points, data bar registry, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
-| `Components/` | ~20 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, … |
+| `Components/` | ~25 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, collapsible accordion, data bar field, … |
 | `Animation/` | tween easings, animation runner, named presets |
-| `SettingsUI/` | settings window that auto-builds a page from a plugin's schema |
+| `SettingsUI/` | settings window that auto-builds a page from a plugin's schema, grouped into collapsible sections |
 | `Themes/` | built-in read-only themes |
-| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target |
+| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target; the top data bar and its clock |
 | `Tests/` | test suite and a simulated WoW client (not shipped — absent from the `.toc`) |
 
 ## Development

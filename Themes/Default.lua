@@ -145,6 +145,10 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     sizeToggleW      = 36,
     sizeIcon         = 16,
     sizeScrollbar    = 8,
+    -- The accent rail down the left edge of an OPEN accordion. Deliberately thicker than
+    -- borderWidth: a border is a hairline that separates two surfaces, while this is a
+    -- state marker that has to answer "which group am I in" from across the panel.
+    sizeRail         = 2,
 
     borderWidth      = 1,
 

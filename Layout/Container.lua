@@ -67,6 +67,55 @@ function ContMeta:GetGap()
     return self._gap
 end
 
+--- Sets the container's padding. Omitted edges reset to 0, as at construction.
+--
+-- A setter for the same reason SetGap is one: padding comes from spacing and size tokens,
+-- both user-editable, so a container reserving a gutter for a token-sized decoration -- an
+-- Accordion's accent rail -- has to re-state it when that token is edited. Rebuilding the
+-- container to say so would destroy its children.
+-- @param padding table|nil  { top, right, bottom, left }
+function ContMeta:SetPadding(padding)
+    local p   = padding or {}
+    local cur = self._padding
+    local top,    right = p.top    or 0, p.right or 0
+    local bottom, left  = p.bottom or 0, p.left  or 0
+    -- No-change guard: this is called from ApplyTheme, which runs on every theme edit,
+    -- and a layout pass per edit per container is work with nothing to show for it.
+    if cur.top == top and cur.right == right
+       and cur.bottom == bottom and cur.left == left then return end
+    cur.top, cur.right, cur.bottom, cur.left = top, right, bottom, left
+    self:Layout()
+end
+
+--- Re-runs layout on this container and on every descendant container.
+--
+-- For a subtree that was built while an ANCESTOR was hidden. The client gives a hidden frame
+-- no rect, so anything measured then is measured blind — and `OnShow` fires only for the
+-- frame whose own visibility changed, never for a descendant when an ancestor is shown, so
+-- the per-container OnShow hook above cannot save it. An `Accordion`'s collapsed body is
+-- exactly that case: its rows are built at page-build time inside a hidden window, and
+-- without this nothing re-measures them when the window finally opens.
+--
+-- Depth-first, so a row settles its own content before the column above measures it.
+function ContMeta:LayoutTree()
+    for _, source in pairs(self._sources) do
+        if type(source) == "table" then
+            if source.LayoutTree then source:LayoutTree()
+            elseif source.Layout then source:Layout() end
+        end
+    end
+    self:Layout()
+end
+
+--- Returns a copy of the container's padding.
+-- A copy, not the live table: mutating the container's own padding would move every
+-- child without a layout pass, leaving the geometry and the numbers disagreeing.
+-- @return table  { top, right, bottom, left }
+function ContMeta:GetPadding()
+    local p = self._padding
+    return { top = p.top, right = p.right, bottom = p.bottom, left = p.left }
+end
+
 --- Sets which end of a wrapping flow the first line sits at.
 --
 -- A setter rather than a construction-only prop because placement can move at runtime: an

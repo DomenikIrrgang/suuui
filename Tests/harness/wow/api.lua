@@ -316,6 +316,33 @@ function M.install(env)
     env.GetMaxLevelForPlayerExpansion = function() return state.maxPlayerLevel or 60 end
     env.MAX_PLAYER_LEVEL = 60
     env.GetTime       = function() return state.clock or 0 end
+
+    -- Wall clock, distinct from GetTime(): GetTime reports seconds since the UI loaded and
+    -- starts at 0, while time() reports the epoch and is what a clock widget reads.
+    --
+    -- date() is MODELLED rather than delegated, and it forces UTC. Handing the format string
+    -- straight to os.date would make "what does the clock say" depend on the timezone of the
+    -- machine running the suite, so the same spec would pass in Berlin and fail in CI.
+    -- state.wallClock therefore names an instant in UTC, and the default is 14:32:07 on
+    -- 2026-08-22 so an unconfigured clock reads a recognisable "14:32".
+    env.time = function() return state.wallClock or 0 end
+    env.date = function(fmt, t)
+        fmt = fmt or "%c"
+        if fmt:sub(1, 1) ~= "!" then fmt = "!" .. fmt end
+        return os.date(fmt, t or state.wallClock or 0)
+    end
+
+    -- Realm time, which the client reports separately because a realm need not agree with the
+    -- player's own clock — that difference is the whole reason a clock widget shows both.
+    -- Defaults to matching the wall clock, so a spec only stages it when the divergence is
+    -- what it is testing.
+    env.GetGameTime = function()
+        if state.realmHour and state.realmMinute then
+            return state.realmHour, state.realmMinute
+        end
+        local t = state.wallClock or 0
+        return tonumber(os.date("!%H", t)), tonumber(os.date("!%M", t))
+    end
     -- Combat lockdown. False unless a spec says otherwise (H.setCombat), because that is the
     -- state an addon does all its setup in — and because turning it on by default would fail
     -- every geometry spec in the suite for code that is correct.

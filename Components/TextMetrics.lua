@@ -31,7 +31,13 @@ local function ensureProbe()
     host = CreateFrame("Frame", "SuuUI_textMetrics_probe", want)
     host:Hide()
     probe = host:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    probe:SetWordWrap(false)
+    -- Wrap ON, which sounds wrong for an unbounded measurement and is not: the probe is never
+    -- given a width, so there is no bound to wrap against and a single line is returned whole.
+    -- What it buys is that an explicit newline is measured as the rows it will actually render
+    -- as. With wrap off the client collapses a newline into one row, so the probe reported one
+    -- row's height for a two-row string and every caller sizing a multi-row element got a box
+    -- half as tall as it needed.
+    probe:SetWordWrap(true)
 end
 
 --- Measures a string at an explicit font, free of any layout-imposed width.

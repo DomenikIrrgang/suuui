@@ -264,6 +264,36 @@ every queued animation (including chained sequences) to complete. Specs for the 
 `PlayerFrame` plugin must use it because that plugin names its strategies explicitly and
 overrides the test default.
 
+**The wall clock is a separate clock from `GetTime()`, and mixing them up is the trap.**
+`GetTime()` is **uptime**: seconds since the UI loaded, starting at 0, and it is what `H.tick`
+advances. `time()` is the **epoch**, and it is what a clock widget reads. The two are entirely
+independent here — ticking the animation clock for a second does not move the wall clock by a
+second, or at all — so a spec about elapsed time drives `H.tick` and a spec about what a clock
+*says* drives `H.setClock`.
+
+```lua
+H.setClock(when)              -- epoch seconds, or { year, month, day, hour, min, sec } in UTC
+H.setRealmTime(hour, minute)  -- what GetGameTime() reports; nil, nil returns it to the wall clock
+```
+
+Three properties of the model are deliberate:
+
+- **`date()` is modelled rather than delegated, and it forces UTC.** Handing the format string
+  straight to `os.date` would make "what does the clock say" depend on the timezone of the
+  machine running the suite, so the same assertion would pass in Berlin and fail in CI.
+  `H.setClock`'s table form computes days since the epoch itself for the same reason —
+  `os.time` interprets a table in local time and would reintroduce exactly the dependency the
+  helper exists to remove.
+- **The default is fixed at 2026-08-22 14:32:07 UTC**, which reads as `"14:32"`, and it is
+  reset by every `H.setup()`. So an unconfigured clock widget renders the same string in every
+  run and on every machine, and a spec only calls `H.setClock` when the instant is what it is
+  testing — a midnight rollover, a 12-hour `%I` with its leading zero stripped.
+- **`GetGameTime()` defaults to agreeing with the wall clock**, derived from the same instant,
+  because a realm that agrees with the player is the ordinary case. Stage a divergence with
+  `H.setRealmTime` only where the divergence is the point — it is the whole reason a clock
+  widget shows both — and note the state resets between tests, so a staged realm clock cannot
+  leak into the next spec's assertions.
+
 Cursor coordinates belong to a space, so name it: `H.cursor(x, y, frame)` treats `x, y` as
 being in that frame's coordinate space. Omitting the frame means `UIParent`, which is only
 the same thing while nothing in the chain has a scale.
@@ -279,6 +309,48 @@ faces reset on every `H.setup()`.
 string to its box instead of overflowing it, so a label pinned to a stale or unmeasured
 size draws a half glyph while its position, size and colour all still assert clean. That
 failure mode is only visible through `H.expectTextNotClipped(fontString)`.
+
+### Clipping: what a widget was assigned vs what draws
+
+`SetClipsChildren(true)` makes a frame a **window**: the client scissors its whole descendant
+subtree to that frame's rect, so a child taller than the window draws only the band that
+overlaps it. A shrinking window over a full-height body is how an `Accordion` collapses, and
+with no clip its rows draw straight over whatever sits below it.
+
+| Helper | Answers |
+|---|---|
+| `H.clipsChildren(f)` | does this frame clip what is inside it — the client's `DoesClipChildren()` |
+| `H.clipAncestor(f)` | the nearest ancestor clipping it, or nil when nothing does |
+| `H.visibleBox(f)` | its box intersected with every clipping ancestor; nil when none of it draws |
+| `H.isClipped(f)` | whether any part of it falls outside a clipping ancestor |
+
+All four take a raw frame, a texture or font string, a component handle or a container, so a
+spec asks about whatever it already holds. A region answers `false` to `clipsChildren` rather
+than raising — it has no children of its own to clip.
+
+Three things about them are load-bearing:
+
+**`H.box` still reports the rect a widget was ASSIGNED; `H.visibleBox` reports what would
+actually be drawn.** The solver deliberately does not clip and must not start: dozens of specs
+measure deliberately-hidden or deliberately-zero-sized children — `StackLayout` sizes a progress
+fill at 0% exactly that way — so teaching `H.box` about clipping would break them wholesale. Ask
+`H.box` what a widget was given and `H.visibleBox` what survives. An overflowing child therefore
+reports the *larger* `bottom`, and that is the assertion to write; `H.expectInside` is the wrong
+tool, because it asserts containment and the point of the spec is that the body is not contained.
+
+**`clipAncestor` is exclusive of the widget itself**, because that is the client's rule:
+`SetClipsChildren` clips a frame's descendants and never its own rect. So the window that clips a
+body is not clipped by its own clip — `H.clipAncestor(window)` is nil and `H.isClipped(window)`
+is false while `H.clipsChildren(window)` is true. `clipsChildren` asks "does this clip what is
+inside it", `clipAncestor` asks "what clips this"; reading one as the other is how a spec ends up
+asserting the window itself has been cut away.
+
+**Clipping follows parentage, not the anchor chain** — a frame merely *anchored* to a window is
+not inside it and is not clipped by it, the same distinction the hidden-frame gap below turns on.
+Nested windows compose on both axes: the visible box is the intersection of every clip up the
+parent chain, and a non-clipping frame in between is stepped over rather than ending the walk.
+
+`Tests/spec/00_harness_spec.lua`'s `frame clipping` block is the worked example of all four.
 
 ---
 
@@ -399,6 +471,21 @@ expect(#H.getBlockedActions()).as("nothing was refused").eq(0)
 
 `Tests/spec/41_unit_click_area_spec.lua` carries the worked example of both.
 
+**Clipping is modelled as geometry and nothing else.** The helpers above answer where the
+scissor rect falls and stop there. A clipped-away child still routes input, still reports
+`IsShown()` and `IsVisible()`, and still contributes its full height to everything the layout
+strategies compute — flow skips a child for being *hidden*, never for being invisible behind a
+clip. The real client's clipping also interacts with draw layers and with a scroll frame's own
+scissoring in ways none of this reproduces. So a spec may assert that a row is cut off; it may
+not conclude from that that the row is unreachable, that its container shrank, or that nothing
+below it can be clicked.
+
+It exists because `SetClipsChildren` was a **write-only stub**: the harness stored the flag and
+nothing could read it back, so "the rows do not spill during the reveal" passed whether clipping
+was on or off — the same shape as the two gaps above, a model thin in exactly the direction the
+assertion was pointing. `DoesClipChildren()` now answers, and the helpers are built on that
+getter, so an assertion written through them can tell the two states apart.
+
 **Aura filters are matched whole, not tokenised.** `UnitAura` reads the harmful list only for
 the exact string `"HARMFUL"`; nil means `"HELPFUL"` as in the live client, and **everything
 else falls through to the helpful list**. So `"HARMFUL|RAID"` silently returns buffs. The
@@ -418,6 +505,22 @@ position for the same reason the code indexes by it: they agree only while nothi
 which is driven entirely by start and duration — but a caller that gates behaviour on that
 `enable` flag would read "off" in every spec and "on" in game, so extend the stub before
 writing one.
+
+**Edit Mode re-anchoring is not modelled.** `EditModeManagerFrame` exists on the live client and
+re-anchors the frames it manages — on login, on a layout change, whenever
+`UIParent_ManageFramePositions` runs — which is why moving a Blizzard frame needs a
+`hooksecurefunc` re-assert rather than a one-shot `SetPoint` (see "Repositioning A Blizzard
+Frame" in `WOW_API_ENCAPSULATION.md`). Nothing in the harness ever re-anchors anything, so
+**no spec can prove that re-assert fires in game.** A spec that installs the hook and then calls
+`SetPoint` itself is asserting against its own trigger, not against the client's.
+
+That is the same shape as the lockdown gap above, so treat it the same way: assert what *is*
+observable and do not read a green run as coverage. The observable parts are that the original
+anchor is stored before the frame is touched and restored exactly on teardown, that the flag is
+cleared before the restoring placement (drive the hook by hand and assert the frame did not move
+again), and that repeated re-asserts do not accumulate — the offset is derived from the stored
+original `y`, so calling the re-assert path five times must leave the frame where one call put
+it. What stays unprovable here is the trigger.
 
 ---
 

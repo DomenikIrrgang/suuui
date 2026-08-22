@@ -140,6 +140,33 @@ function M.CursorIn(frame)
     return (cx or 0) / scale, (cy or 0) / scale
 end
 
+--- Converts a length from one frame's coordinate space into another's.
+--
+-- A frame reports geometry in its own region units — screen space divided by its effective
+-- scale — so a length measured under our root is NOT the same number under UIParent once
+-- the pixel grid has put a scale on the root. Everything inside the addon shares the root's
+-- space and never needs this. It exists for the BOUNDARY: where a length of ours is handed
+-- to a frame that is not ours, which today means moving a Blizzard frame anchored to
+-- UIParent down by the height of our bar.
+--
+-- Without it that call is the signature failure this module warns about — an x offset needs
+-- no screen constant so it stays correct, while the y offset is wrong by the ratio between
+-- the two scales. The guidance has always been "measure between two frames that share a
+-- space, or convert explicitly" with nothing to do the second half with, so every caller
+-- open-coded it or got it wrong.
+-- @param v number     Length in `from`'s units
+-- @param from frame   The frame the length was measured in
+-- @param to frame     The frame the length is being handed to
+-- @return number      The same physical length, expressed in `to`'s units
+function M.Convert(v, from, to)
+    if not v or v == 0 then return 0 end
+    local a = from and from.GetEffectiveScale and from:GetEffectiveScale()
+    local b = to and to.GetEffectiveScale and to:GetEffectiveScale()
+    if type(a) ~= "number" or a <= 0 then a = 1 end
+    if type(b) ~= "number" or b <= 0 then b = 1 end
+    return v * a / b
+end
+
 --- Snaps a line thickness without ever rounding it out of existence.
 -- A border that snaps to zero is worse than a blurry one, so the grid quantum is the
 -- floor: the thinnest line the display can draw crisply.

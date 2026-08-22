@@ -36,16 +36,37 @@ describe("Components.Tooltip", function()
         local tip = H.C.Tooltip({}, host)
         tip:ShowTip("Hello")
         local size = H.token("fontSizeSm")
-        H.expectSize(tip, H.textWidth("Hello", size) + padX(), H.lineHeight(size) + PAD_Y)
+        H.expectSize(tip, H.textBox("Hello", size) + padX(), H.lineHeight(size) + PAD_Y)
     end)
 
     it("anchors above a trigger frame with spaceXs of clearance", function()
+        -- Placed well down the screen on purpose: above is the PREFERENCE, and it only
+        -- applies where there is room. A trigger left at the screen's top edge takes the
+        -- flip instead, which is the next test.
         local trigger = H.parent(60, 20)
+        H.SuuUI.Layout:GetFloatingHost():Add(trigger, { anchor = {
+            point = "TOPLEFT", relativePoint = "TOPLEFT", x = 100, y = -300,
+            width = 60, height = 20 } })
         local tip = H.C.Tooltip({}, host)
         tip:ShowTip("Info", trigger)
         local tb, tipBox = H.box(trigger), H.box(tip)
         expect(tipBox.bottom).as("bottom of tip meets top of trigger")
             .eq(tb.top - H.token("spaceXs"))
+        H.expectCenteredH(tip, trigger)
+    end)
+
+    it("flips below a trigger that has no room above it", function()
+        -- Where the data bar puts every one of its fields: flush against the screen's top
+        -- edge. Anchored above, the whole tip renders off-screen and the player sees nothing
+        -- at all -- measured on the clock, whose field has top = 0 and whose tip landed at
+        -- top = -42.
+        local trigger = H.parent(60, 20)
+        local tip = H.C.Tooltip({}, host)
+        tip:ShowTip("Info", trigger)
+        local tb, tipBox = H.box(trigger), H.box(tip)
+        expect(tb.top).as("the trigger really is against the top edge").eq(0)
+        expect(tipBox.top).as("top of tip meets bottom of trigger, plus the token gap")
+            .eq(tb.bottom + H.token("spaceXs"))
         H.expectCenteredH(tip, trigger)
     end)
 
@@ -117,10 +138,33 @@ describe("Components.Tooltip", function()
         H.expectTokenColor({ tip._text:GetTextColor() }, "colorText")
     end)
 
-    it("does not word wrap, so a tip stays on one line", function()
+    it("keeps a long single line on one line, growing instead of wrapping", function()
+        -- The intent this test has always had, now asserted as the CONSEQUENCE rather than as
+        -- the CanWordWrap flag. Wrap is enabled so an explicit newline renders as two rows,
+        -- and implicit wrapping still never happens: the tip is sized to its widest line, so
+        -- there is always room for it.
         local tip = H.C.Tooltip({}, host)
-        tip:ShowTip("a fairly long single line of tooltip text")
-        expect(tip._text:CanWordWrap()).falsy()
+        local size = H.token("fontSizeSm")
+        local long = "a fairly long single line of tooltip text"
+        tip:ShowTip(long)
+        expect(tip._text:GetNumLines()).as("one row, not a wrapped paragraph").eq(1)
+        H.expectSize(tip, H.textBox(long, size) + padX(), H.lineHeight(size) + PAD_Y)
+        H.expectTextNotClipped(tip._text)
+    end)
+
+    it("renders an explicit newline as two rows", function()
+        -- The data bar's clock shows local and realm time on separate rows. With wrap OFF the
+        -- client collapsed both onto one row and truncated at the width of the widest line --
+        -- measured in game, GetStringHeight reported 13 (a single row) for a two-row string,
+        -- and the tip rendered "Local  22:17...".
+        local tip = H.C.Tooltip({}, host)
+        local size = H.token("fontSizeSm")
+        -- Both lines are the same length in the harness font model, so either is the widest.
+        tip:ShowTip("Local  22:21\nRealm  22:20")
+        expect(tip._text:GetNumLines()).as("two rows").eq(2)
+        H.expectSize(tip, H.textBox("Local  22:21", size) + padX(),
+                          H.lineHeight(size) * 2 + PAD_Y)
+        H.expectTextNotClipped(tip._text)
     end)
 
     it("re-anchors on each ShowTip rather than accumulating anchors", function()
@@ -140,9 +184,9 @@ describe("Components.Tooltip", function()
         local size = H.token("fontSizeSm")
         local long = "a considerably longer tooltip caption than the first"
         tip:ShowTip("short")
-        H.expectSize(tip, H.textWidth("short", size) + padX(), nil)
+        H.expectSize(tip, H.textBox("short", size) + padX(), nil)
         tip:ShowTip(long)
-        H.expectSize(tip, H.textWidth(long, size) + padX(), nil)
+        H.expectSize(tip, H.textBox(long, size) + padX(), nil)
     end)
 
     it("draws its text uncut at the size it settles on", function()
@@ -163,7 +207,7 @@ describe("Components.Tooltip", function()
         H.T:SetActive("Big")
 
         local size = H.token("fontSizeSm")
-        H.expectSize(tip, H.textWidth("Resizable caption", size) + padX(),
+        H.expectSize(tip, H.textBox("Resizable caption", size) + padX(),
                           H.lineHeight(size) + PAD_Y)
         expect(H.box(tip).width).as("a bigger font needs a wider tip").gt(before.width)
         expect(H.box(tip).height).gt(before.height)

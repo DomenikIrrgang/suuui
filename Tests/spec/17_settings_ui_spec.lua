@@ -43,6 +43,17 @@ local function labels(rootFrame)
     return out
 end
 
+-- Walks up the frame tree. A grouped row is parented INTO its accordion's body, so
+-- "which group does this row belong to" is a parentage question and not a layout one.
+local function isDescendantOf(frame, ancestor)
+    local f = frame and frame:GetParent()
+    while f do
+        if f == ancestor then return true end
+        f = f:GetParent()
+    end
+    return false
+end
+
 describe("SettingsUI.Row", function()
     local host
     before_each(function()
@@ -158,14 +169,46 @@ describe("SettingsUI.PageBuilder", function()
         H.SuuUI.Settings:Register("page_spec", schema)
     end)
 
+    -- A `section` entry is an accordion boundary, not a row. So the page's own children
+    -- are the entries declared BEFORE the first section plus one Accordion per section,
+    -- and every entry after a section lives in that accordion's body. All three counts
+    -- are read off the schema rather than written down, so adding an entry to the fixture
+    -- above cannot leave a stale number behind.
+    local function pageLevelCount(schemaArray)
+        local n, grouped = 0, false
+        for _, entry in ipairs(schemaArray) do
+            if entry.type == "section" then n, grouped = n + 1, true
+            elseif not grouped then n = n + 1 end
+        end
+        return n
+    end
+
+    local function sectionLabels(schemaArray)
+        local out = {}
+        for _, entry in ipairs(schemaArray) do
+            if entry.type == "section" then out[#out + 1] = entry.label end
+        end
+        return out
+    end
+
+    -- Rows per section, in declaration order: how many entries each accordion's body owns.
+    local function bodyCounts(schemaArray)
+        local out = {}
+        for _, entry in ipairs(schemaArray) do
+            if entry.type == "section" then out[#out + 1] = 0
+            elseif #out > 0 then out[#out] = out[#out] + 1 end
+        end
+        return out
+    end
+
     local function build()
         H.SuuUI._PageBuilder:Build("page_spec", scroll)
         return scroll:GetContent()
     end
 
-    it("renders one row per schema entry", function()
+    it("renders one page-level row per ungrouped entry, plus one accordion per section", function()
         local _, rows = pageParts(build())
-        expect(#rows).eq(#schema)
+        expect(#rows).eq(pageLevelCount(schema))
     end)
 
     it("renders a control for every schema type", function()
@@ -262,6 +305,220 @@ describe("SettingsUI.PageBuilder", function()
         local _, rows = pageParts(scroll:GetContent())
         H.expectNoOverlap(rows)
     end)
+
+    describe("section grouping", function()
+        -- Two sections, so exclusivity and the session memo have something to arbitrate
+        -- between. The single-section fixture above cannot tell "opens the first" from
+        -- "opens all of them".
+        local grouped = {
+            { key = "enabled", label = "Enable",     type = "toggle", default = true },
+            { key = "",        label = "Appearance", type = "section" },
+            { key = "size",    label = "Size",       type = "slider", default = 14,
+              min = 8, max = 32, step = 1 },
+            { key = "",        label = "Behaviour",  type = "section" },
+            { key = "caption", label = "Caption",    type = "text",   default = "hello" },
+        }
+
+        -- The page's AccordionGroup is held privately by PageBuilder, so the spec captures
+        -- it the way the control specs capture a control handle: by wrapping the factory
+        -- the builder calls.
+        local function buildGrouped(pluginId)
+            local real, group = H.C.AccordionGroup, nil
+            H.C.AccordionGroup = function(...)
+                group = real(...)
+                return group
+            end
+            H.SuuUI._PageBuilder:Build(pluginId, scroll)
+            H.C.AccordionGroup = real
+            return group, scroll:GetContent()
+        end
+
+        before_each(function()
+            H.SuuUI.Settings:Register("grouped_spec", grouped)
+        end)
+
+        it("turns a section into an accordion labelled with the section label", function()
+            local realDivider, dividers = H.C.Divider, 0
+            H.C.Divider = function(...)
+                dividers = dividers + 1
+                return realDivider(...)
+            end
+            local group = buildGrouped("grouped_spec")
+            H.C.Divider = realDivider
+
+            local members, wanted = group:GetMembers(), sectionLabels(grouped)
+            expect(#members).as("one accordion per section").eq(#wanted)
+            for i, label in ipairs(wanted) do
+                expect(members[i]:GetLabel()).as("accordion " .. i).eq(label)
+                expect(labels(members[i]:GetHeader())[label])
+                    .as("the section label is painted on the accordion's own header")
+                    .notNil()
+            end
+            expect(dividers)
+                .as("a section is a group boundary now, not a labelled divider row").eq(0)
+        end)
+
+        it("builds the entries after a section into that accordion's body", function()
+            local group, content = buildGrouped("grouped_spec")
+            local _, rows = pageParts(content)
+            expect(#rows)
+                .as("the page holds the ungrouped rows plus one accordion per section")
+                .eq(pageLevelCount(grouped))
+
+            local counts = bodyCounts(grouped)
+            for i, acc in ipairs(group:GetMembers()) do
+                local body = acc:GetBody()
+                local children = body:GetChildren()
+                expect(#children).as("rows inside " .. acc:GetLabel()).eq(counts[i])
+                for _, rowFrame in ipairs(children) do
+                    expect(isDescendantOf(rowFrame, body:GetFrame()))
+                        .as("the row is parented into the body").truthy()
+                    expect(rowFrame:GetParent() == content)
+                        .as("...so it is not a direct child of the page").falsy()
+                end
+            end
+        end)
+
+        it("leaves the entries before the first section on the page itself", function()
+            local group, content = buildGrouped("grouped_spec")
+            local _, rows = pageParts(content)
+
+            local isAccordion = {}
+            for _, acc in ipairs(group:GetMembers()) do isAccordion[acc:GetFrame()] = true end
+            local ungrouped = {}
+            for _, row in ipairs(rows) do
+                if not isAccordion[row] then ungrouped[#ungrouped + 1] = row end
+            end
+
+            expect(#ungrouped).eq(pageLevelCount(grouped) - #sectionLabels(grouped))
+            expect(labels(ungrouped[1])[grouped[1].label])
+                .as("the entry declared before the first section is its own page row")
+                .notNil()
+            expect(ungrouped[1]:GetParent() == content)
+                .as("and is parented straight to the page's frame").truthy()
+        end)
+
+        it("opens exactly the first group, snapped rather than animated", function()
+            local group = buildGrouped("grouped_spec")
+            local members = group:GetMembers()
+            local open = group:GetOpen()
+
+            -- Compared by LABEL rather than by handle: the framework's failure formatter
+            -- walks a table it is given, and a widget handle is cyclic.
+            expect(open and open:GetLabel())
+                .as("the first section is the open one").eq(members[1]:GetLabel())
+            local opened = 0
+            for _, acc in ipairs(members) do
+                if acc:IsOpen() then opened = opened + 1 end
+            end
+            expect(opened).as("exactly one group open").eq(1)
+            expect(members[1]:GetReveal())
+                .as("already fully revealed, so nothing was left in flight").eq(1)
+            expect(members[2]:GetReveal()).as("the other stays collapsed").eq(0)
+            -- Scoped to the group: a settings Toggle seeds its stored value at
+            -- construction and slides its knob, so the global count is never 0 on a page
+            -- that holds one. The group's own count is what "opened mid-animation" means.
+            expect(H.SuuUI.Anim:GetActiveCount(group))
+                .as("a page must not open mid-animation").eq(0)
+        end)
+
+        it("closes the open group when another header is clicked", function()
+            local group = buildGrouped("grouped_spec")
+            local first, second = group:GetMembers()[1], group:GetMembers()[2]
+
+            expect(H.click(second:GetHeader())).as("the header takes mouse input").truthy()
+            H.runAnimations()
+
+            expect(group:GetOpen() and group:GetOpen():GetLabel()).eq(second:GetLabel())
+            expect(second:IsOpen()).truthy()
+            expect(second:GetReveal()).eq(1)
+            expect(first:IsOpen()).as("only one open at a time").falsy()
+            expect(first:GetReveal()).as("the first group collapsed away").eq(0)
+        end)
+
+        it("collapses the open group when its own header is clicked again", function()
+            local group = buildGrouped("grouped_spec")
+            local first = group:GetMembers()[1]
+
+            H.click(first:GetHeader())
+            H.runAnimations()
+
+            expect(group:GetOpen() and group:GetOpen():GetLabel())
+                .as("one at a time does not mean one always").isNil()
+            expect(first:IsOpen()).falsy()
+            expect(first:GetReveal()).eq(0)
+        end)
+
+        it("reopens the group that was open when the page is rebuilt", function()
+            local group = buildGrouped("grouped_spec")
+            local second = group:GetMembers()[2]
+            local remembered = second:GetLabel()
+
+            H.click(second:GetHeader())
+            H.runAnimations()
+
+            local rebuilt = buildGrouped("grouped_spec")
+            expect(rebuilt).as("a rebuild builds a group").notNil()
+            expect(#rebuilt:GetMembers())
+                .as("...a new one, holding this build's accordions")
+                .eq(#sectionLabels(grouped))
+
+            local open = rebuilt:GetOpen()
+            expect(open and open:GetLabel())
+                .as("the session memo reopens the group by label").eq(remembered)
+            expect(open and open:GetReveal())
+                .as("and snaps it open, same as a first build").eq(1)
+            expect(H.SuuUI.Anim:GetActiveCount(rebuilt)).eq(0)
+        end)
+
+        it("destroys the previous page's group, leaving its accordions inert", function()
+            local group = buildGrouped("grouped_spec")
+            local second = group:GetMembers()[2]
+            local watchers = H.SuuUI.Settings:GetWatcherCount()
+
+            -- Deliberately mid-transition: the reveal tween is targeted at the GROUP, so
+            -- only the group's own Destroy cancels it. The members' cascade would leave it
+            -- writing into a page that no longer exists.
+            H.click(second:GetHeader())
+            expect(H.SuuUI.Anim:GetActiveCount(group))
+                .as("a transition is in flight").eq(1)
+
+            buildGrouped("grouped_spec")
+
+            expect(H.SuuUI.Anim:GetActiveCount(group))
+                .as("the old group's transition was cancelled with it").eq(0)
+            expect(H.click(second:GetHeader()))
+                .as("the destroyed page takes no input").falsy()
+            expect(group:GetOpen() and group:GetOpen():GetLabel())
+                .as("clicking an accordion from the old page reopens nothing").isNil()
+            expect(#group:GetMembers()).as("the old group let go of its members").eq(0)
+            expect(H.SuuUI.Settings:GetWatcherCount())
+                .as("a rebuild is watcher-neutral").eq(watchers)
+        end)
+
+        it("renders rows straight onto the page and returns no group with no sections", function()
+            local flat = {
+                { key = "a", label = "A", type = "toggle", default = true },
+                { key = "b", label = "B", type = "text",   default = "hello" },
+            }
+            H.SuuUI.Settings:Register("flat_spec", flat)
+            local page = H.Layout:CreateContainer({
+                parent = host, layout = "flow", dir = "vertical", w = 400,
+            })
+
+            local group = H.SuuUI._PageBuilder:BuildEntries(flat, "flat_spec", host, page, {})
+
+            expect(group).as("no sections means there is no group to return").isNil()
+            expect(#page:GetChildren())
+                .as("every row went straight onto the page").eq(#flat)
+            for _, rowFrame in ipairs(page:GetChildren()) do
+                expect(rowFrame:GetParent() == host)
+                    .as("built against the page's own frame, not an accordion body")
+                    .truthy()
+            end
+        end)
+    end)
+
 end)
 
 describe("SettingsUI controls", function()
@@ -368,19 +625,29 @@ describe("SettingsUI controls", function()
     describe("section", function()
         local entry = { key = "", label = "Appearance", type = "section" }
 
-        it("renders a labelled divider at row height", function()
-            H.SuuUI.Settings:Register("ctrl_spec", { entry })
-            row = H.SuuUI._SettingsControls["section"](entry, host)
-            local found = labels(row:GetFrame())
-            expect(found["Appearance"]).notNil()
-            expect(row:GetChildren()[1]:GetHeight()).eq(H.controlHeight("sizeRow"))
+        -- A section has no builder any more: BuildEntries consumes the entry and opens an
+        -- Accordion in its place, so BuildEntries is what the spec has to drive.
+        local function buildSection(schemaArray)
+            H.SuuUI.Settings:Register("ctrl_spec", schemaArray)
+            local page = H.Layout:CreateContainer({
+                parent = host, layout = "flow", dir = "vertical", w = 400,
+            })
+            local group = H.SuuUI._PageBuilder:BuildEntries(
+                schemaArray, "ctrl_spec", host, page, {})
+            return group:GetMembers()[1], page
+        end
+
+        it("renders a labelled accordion header at row height", function()
+            local acc = buildSection({ entry })
+            expect(acc:GetLabel()).eq(entry.label)
+            local found = labels(acc:GetFrame())
+            expect(found[entry.label]).notNil()
+            expect(acc:GetHeader():GetHeight()).eq(H.controlHeight("sizeRow"))
         end)
 
         it("spans the row width", function()
-            H.SuuUI.Settings:Register("ctrl_spec", { entry })
-            row = H.SuuUI._SettingsControls["section"](entry, host)
-            local pad = H.token("spaceSm")
-            expect(row:GetChildren()[1]:GetWidth()).eq(400 - pad * 2)
+            local acc, page = buildSection({ entry })
+            expect(acc:GetWidth()).eq(page:GetWidth())
         end)
     end)
 
@@ -506,8 +773,37 @@ describe("SettingsUI controls", function()
 
     it("registers a builder for every schema type the docs list", function()
         for _, type_ in ipairs({ "toggle", "slider", "dropdown", "color", "text",
-                                 "keybind", "section", "profile_manager", "theme_manager" }) do
+                                 "keybind", "profile_manager", "theme_manager" }) do
             expect(type(H.SuuUI._SettingsControls[type_])).as(type_).eq("function")
+        end
+        -- `section` is still a valid schema type, but it is a grouping boundary rather
+        -- than a control: BuildEntries consumes it, so there is deliberately no builder.
+        expect(H.SuuUI._SettingsControls["section"])
+            .as("a section is consumed by BuildEntries, not built by a builder").isNil()
+    end)
+
+    it("consumes a section entry without logging a missing control type", function()
+        H.setup({ debug = true })
+        host = H.parent(500, 400)
+        local scroll = H.mount(H.C.ScrollFrame({ w = 400, h = 300 }, host))
+        H.SuuUI.Settings:Register("sec_spec", {
+            { key = "",  label = "Appearance", type = "section" },
+            { key = "a", label = "Known",      type = "toggle", default = true },
+        })
+
+        local real, group = H.C.AccordionGroup, nil
+        H.C.AccordionGroup = function(...)
+            group = real(...)
+            return group
+        end
+        H.SuuUI._PageBuilder:Build("sec_spec", scroll)
+        H.C.AccordionGroup = real
+
+        expect(group).as("the section opened a group").notNil()
+        expect(group:GetMembers()[1]:GetLabel()).eq("Appearance")
+        for _, line in ipairs(H.debugLog()) do
+            expect(line:find("no control for type"))
+                .as("no builder is missing: " .. line).isNil()
         end
     end)
 end)

@@ -457,7 +457,7 @@ describe("pixel snapping in the layout engine", function()
         before_each(function() H.setup() end)
 
         it("keeps a backdrop edge on the grid", function()
-            local p = H.parent(100, 40)
+            local p = H.backdropParent(100, 40)
             H.SuuUI.Backdrop.Apply(p, { bg = "colorBg", border = "colorBorder" })
             local bd = p:GetBackdrop()
             expect(bd.edgeSize).eq(H.SuuUI.Pixel.Line(H.token("borderWidth")))
@@ -465,7 +465,7 @@ describe("pixel snapping in the layout engine", function()
         end)
 
         it("never lets a hairline round away", function()
-            local p = H.parent(100, 40)
+            local p = H.backdropParent(100, 40)
             H.SuuUI.Backdrop.Apply(p, { bg = "colorBg", border = "colorBorder",
                                         borderWidth = 0.2 })
             expect(p:GetBackdrop().edgeSize).gte(H.SuuUI.Pixel.grid)
@@ -518,7 +518,7 @@ describe("pixel snapping in the layout engine", function()
         end)
 
         it("gives a border exactly one pixel rather than 1.4", function()
-            local p = H.parent(100, 40)
+            local p = H.backdropParent(100, 40)
             H.SuuUI.Backdrop.Apply(p, { bg = "colorBg", border = "colorBorder" })
             local edge = p:GetBackdrop().edgeSize
             expect(edge).lt(1)

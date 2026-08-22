@@ -61,6 +61,9 @@ SuuUI._ThemeEditableTokens = {
     { key="sizeToggleW",   label="Toggle Width",    type="number", min=24,   max=64,  step=1 },
     { key="sizeIcon",      label="Icon Size",       type="number", min=8,    max=32,  step=1 },
     { key="sizeScrollbar", label="Scrollbar Width", type="number", min=4,    max=20,  step=1 },
+    -- Floored at 1: the rail is the only thing distinguishing the open settings group
+    -- from the closed ones, so it must never round away to nothing.
+    { key="sizeRail",      label="Accent Rail",     type="number", min=1,    max=6,   step=1 },
 
     { key="borderWidth",  label="Border Width",     type="number", min=1,    max=4,   step=1 },
     { key="animFast",     label="Animation Fast",   type="number", min=0.05, max=0.5, step=0.05 },

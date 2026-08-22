@@ -60,22 +60,34 @@ function M.after_all(fn)   table.insert(current.afterAll, fn) end
 
 local DEFAULT_TOL = 0.001
 
-local function fmt(v)
+-- Depth and cycle capped. A widget handle is a table whose fields reach frames, which
+-- point back at their parent and at every sibling, so formatting one naively recurses
+-- until the stack goes -- and a spec comparing two handles then reports "stack overflow"
+-- instead of a diagnosis, exactly when it most needs one. Depth is capped rather than
+-- made cycle-safe alone: an acyclic frame tree is still far too deep to read.
+local FMT_MAX_DEPTH = 4
+
+local function fmt(v, depth, seen)
+    depth = depth or 0
     if type(v) == "number" then
         if v == math.floor(v) then return tostring(math.floor(v)) end
         return string.format("%.4f", v)
     elseif type(v) == "string" then
         return string.format("%q", v)
     elseif type(v) == "table" then
+        if depth >= FMT_MAX_DEPTH then return "{...}" end
+        seen = seen or {}
+        if seen[v] then return "<cycle>" end
+        seen[v] = true
         local parts = {}
         local n = 0
         for k, val in pairs(v) do
             n = n + 1
             if n > 8 then table.insert(parts, "...") break end
             if type(k) == "number" then
-                table.insert(parts, fmt(val))
+                table.insert(parts, fmt(val, depth + 1, seen))
             else
-                table.insert(parts, tostring(k) .. "=" .. fmt(val))
+                table.insert(parts, tostring(k) .. "=" .. fmt(val, depth + 1, seen))
             end
         end
         return "{" .. table.concat(parts, ", ") .. "}"

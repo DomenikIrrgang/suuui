@@ -79,6 +79,14 @@ function M.reset()
     -- The clock tracks GetTime(); reset it so each test starts from 0. Cast bar specs
     -- use relative timing (clock at startCast), so resetting is safe.
     M.clock          = 0
+    -- Wall clock for time()/date(), an instant in UTC. Reset to a fixed default so an
+    -- unconfigured clock widget renders the same string in every run and on every machine:
+    -- 2026-08-22 14:32:07 UTC, which reads as "14:32". See env.date in wow/api.lua.
+    M.wallClock      = 1787409127
+    -- Realm time, nil meaning "agrees with the wall clock". Reset because a spec that stages
+    -- a divergent realm clock would otherwise leave every later clock assertion reading it.
+    M.realmHour      = nil
+    M.realmMinute    = nil
     -- The unit's class, read by UnitClass. Reset because a spec that paints an NPC sets
     -- unitClassless and a spec that paints a mage sets unitClass, and neither is a value
     -- the next spec file should inherit: a leaked unitClassless makes every class-colour

@@ -23,6 +23,7 @@ SuuUI/
 │   ├── UIRoot.lua        -- single fullscreen root, layer management
 │   ├── Plugin.lua        -- plugin registry and lifecycle
 │   ├── AttachPoints.lua  -- named places one plugin offers another to attach UI to
+│   ├── DataBar.lua       -- data bar widget registry + the height the bar occupies
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry, value I/O, reactive watchers
 │   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
@@ -59,6 +60,8 @@ SuuUI/
 │   ├── AuraIcon.lua      -- Icon + cooldown swipe, stack count, duration, dispel border
 │   ├── IconButton.lua
 │   ├── NavItem.lua       -- selectable labelled row (nav lists)
+│   ├── DataField.lua     -- one data bar field: muted prefix + value, accent rail on hover
+│   ├── Accordion.lua     -- collapsible group of rows + AccordionGroup (one open at a time)
 │   ├── Toggle.lua        -- custom checkbox/toggle
 │   ├── Slider.lua        -- custom slider
 │   ├── Dropdown.lua      -- custom dropdown
@@ -81,7 +84,6 @@ SuuUI/
 │       ├── Dependency.lua
 │       ├── ColorPopup.lua
 │       ├── ThemeTokens.lua
-│       ├── Section.lua
 │       ├── Toggle.lua
 │       ├── Slider.lua
 │       ├── Dropdown.lua
@@ -95,6 +97,9 @@ SuuUI/
 │   ├── UnitFrames/        -- UnitFrame.lua (widget, one per unit) + UnitFrames.lua (plugin)
 │   │   └── AuraBand.lua   -- one wrapping band of aura icons, for one unit + one filter
 │   ├── CastBars/          -- CastBar.lua (widget, one per unit) + CastBars.lua (plugin)
+│   ├── DataBar/           -- DataBarWidget.lua (the bar itself, three sections of fields)
+│   │   ├── TimeWidget.lua -- the built-in clock: the reference widget definition
+│   │   └── DataBar.lua    -- plugin: owns the bar, moves Blizzard's top frames down
 │   └── ...
 ├── Themes/
 │   ├── Default.lua        -- read-only default dark theme
@@ -341,6 +346,87 @@ Component Library, and "Protected Actions Go Through A Secure Component" in
 `WOW_API_ENCAPSULATION.md` for the full account. The rule generalises to anything a publisher
 puts in a growing frame: if a child is protected, the frame that grows may not contain it.
 
+### 3c. Data Bar Registry (`Core/DataBar.lua`)
+
+**An ordered list of entries contributed by plugins that know nothing about each other.** The
+data bar is a full-width strip along the top of the screen whose fields come from whoever
+wants one — the bundled clock today, a gold readout or a durability meter later. A plugin
+registers a widget *definition*, which is data; the bar renders it. Neither side names the
+other, and registration order does not matter, so a plugin that loads after the bar is picked
+up exactly as one that loads before it.
+
+**It is deliberately not an attach point, and the difference is shape rather than intent.** An
+attach point is ONE provider per name (3b): `Publish` overwrites, `Get` answers with a single
+provider, and a consumer asks for a *place*. A bar field is one of MANY entries spread across
+three fixed sections and ordered within each, so expressing the same thing through a
+single-provider registry would take a point name per widget — `databar.field.clock`,
+`databar.field.gold` — which the bar would then have to discover without having been told
+them, and would still carry no ordering at all. Ordering across contributors is the thing
+this registry adds.
+
+**API:**
+```lua
+SuuUI.DataBar.SECTIONS                        -- { "left", "center", "right" }, in screen order
+SuuUI.DataBar:RegisterWidget(def)             -- add or replace a widget by its id
+SuuUI.DataBar:UnregisterWidget(id)
+SuuUI.DataBar:GetWidget(id)                   -- definition or nil
+SuuUI.DataBar:Has(id)
+SuuUI.DataBar:List()                          -- every widget, section then order then id
+SuuUI.DataBar:ListSection(section)            -- one section, in order
+SuuUI.DataBar:Subscribe(cb, owner)            -- fires now and on every register/unregister
+SuuUI.DataBar:Unsubscribe(owner)              -- returns how many were dropped
+SuuUI.DataBar:GetSubscriberCount()            -- live count; specs assert against leaks
+
+SuuUI.DataBar:SetOccupiedHeight(h)            -- the renderer publishes; nobody else calls this
+SuuUI.DataBar:GetOccupiedHeight()             -- root units, 0 when there is no bar
+SuuUI.DataBar:WatchHeight(cb, owner)          -- fires now and on every change
+SuuUI.DataBar:UnwatchHeight(owner)
+SuuUI.DataBar:GetHeightWatcherCount()
+```
+
+The definition's fields, and the contract each one carries, are in
+`plugin-authoring.md` — "Adding a widget to the data bar". `id` plus either `GetText` or
+`Build` is the whole requirement; `section` defaults to `"left"` and `order` to 100, and an
+unknown section raises rather than being silently filed under one.
+
+**Sorted by section, then order, then id.** The id is the last key so the ordering is *total*
+rather than merely partial: two widgets sharing a section and an order would otherwise come
+out in `pairs` order, which is hash order, which differs between runs — a bar whose fields
+swap places on some logins, and a spec that passes intermittently.
+
+**`Subscribe` delivers immediately and there is no opt-out**, for the same reason
+`AttachPoints:Request` has none: a subscriber that reads `List()` separately and *then*
+subscribes has two code paths for one fact, and its separate read happens before anyone else
+has had the chance to register. Notification iterates a snapshot with a dead flag, so a
+subscriber may unsubscribe itself or a sibling mid-dispatch — the renderer's rebuild does
+exactly that — and callbacks run through `pcall` and log failures via `SuuUI.Debug`.
+
+**Notification carries no payload.** A subscriber re-reads the set. Handing over the
+definition that changed would invite acting on one entry while the ordering it belongs to has
+moved, and the renderer's rebuild is a handful of frames rather than something worth
+optimising — every registration during login costs one rebuild, once, in microseconds.
+
+**A duplicate id overwrites rather than raising**, exactly as `Publish` does: a plugin that
+re-registers on re-enable would otherwise take the client down from inside its own `onEnable`.
+`SuuUI.Debug` still names the case that is a real bug, two owners claiming one id. `List`
+returns a fresh array for the reason `Container:GetPadding` returns a copy — the internal one
+is what the renderer's next pass reads, so a caller mutating it would reorder the bar with no
+rebuild behind it.
+
+**Why the occupied height lives in Core and not on the renderer.** Everything that used to hug
+the top of the screen has to move down by the bar's height — Blizzard's minimap and buff frame
+today, a SuuUI replacement for either later — and that answer has to exist when the bar does
+not. A consumer reading the renderer's frame breaks the moment the player switches the bar
+off, which is precisely when the correct answer is **0** rather than an error or a nil frame;
+the same holds while the plugin is disabled, absent from the load, or merely loaded later than
+whoever is asking. So the renderer publishes a number into Core, every consumer reads it from
+there, and "bar" and "no bar" are one code path instead of two.
+
+**The height is a length in the UI root's units**, so handing it straight to a frame anchored
+to `UIParent` is wrong by the ratio between the two effective scales — the vertical-only
+failure 6c describes, which looks like the minimap moving down by *almost* the right amount
+and only at some resolutions. Convert it with `Pixel.Convert` at that boundary.
+
 ### 4. Profile System (`Core/Profile.lua`)
 
 - Profiles stored in `SuuUIProfiles` SavedVariable (account-wide).
@@ -373,7 +459,9 @@ Schema entry shape:
 {
   key      = "showBorder",   -- unique within plugin
   label    = "Show Border",
-  type     = "toggle",       -- toggle|slider|dropdown|color|text|keybind|section
+  type     = "toggle",       -- toggle|slider|dropdown|color|text|keybind|section|subtabs
+                             -- plus position|internal: a key that needs a default and a
+                             -- home in the profile but no control (see plugin-authoring.md)
   default  = true,
   -- type-specific:
   min=, max=, step=          -- slider
@@ -914,6 +1002,7 @@ SuuUI.Pixel.Floor(v)             -- for a size that must not overflow its space
 SuuUI.Pixel.Ceil(v)              -- for a size that must not clip its content
 SuuUI.Pixel.Line(v)              -- line thickness, floored at one pixel so it never vanishes
 SuuUI.Pixel.CursorIn(frame)      -- cursor in that frame's coordinate space
+SuuUI.Pixel.Convert(v, from, to) -- a length in `from`'s units, expressed in `to`'s
 SuuUI.Pixel:Refresh()            -- recompute; emits SUUUI_PIXEL_GRID_CHANGED if it moved
 SuuUI.Pixel:Attach(frame)        -- drive a frame's scale (UIRoot attaches the root)
 SuuUI.Pixel:SetEnabled(bool)     -- scaling on/off; snapping stays on either way
@@ -957,6 +1046,26 @@ downward from the screen top does. Two places have already hit it:
 
 The rule: **measure between two frames that share a space, or convert explicitly.** Never
 combine a widget's own numbers with a screen-space constant.
+
+**`Convert` is the second half of that rule, and it exists for the BOUNDARY.** Everything
+inside the addon shares the root's space and never needs it. What needs it is the one place a
+length of ours is handed to a frame that is not ours: the data bar publishes its height in
+root units, and moving Blizzard's `MinimapCluster` down by that number puts it into a frame
+anchored to `UIParent`, which measures in different units the moment the pixel grid puts a
+scale on the root. `Convert(v, from, to)` multiplies by `from`'s effective scale and divides
+by `to`'s, so the same *physical* length comes out in the destination's units:
+
+```lua
+-- Our bar's height, expressed in the units of a frame anchored to UIParent
+local h = SuuUI.DataBar:GetOccupiedHeight()
+local y = SuuUI.Pixel.Convert(h, SuuUI.UIRoot:GetRoot(), MinimapCluster)
+```
+
+Skipping it produces the signature failure above rather than an obvious one: the `x` offset
+needs no scale so it stays correct, and only the vertical is wrong — by a ratio that is 1 at
+the default multiplier, so it looks perfect on the machine it was written on. Either scale
+reading as absent or non-positive is treated as 1, so a call during construction degrades to
+the identity rather than raising.
 
 `Refresh` is driven by `DISPLAY_SIZE_CHANGED`, `UI_SCALE_CHANGED` and `CVAR_UPDATE`.
 `Theme` listens for `SUUUI_PIXEL_GRID_CHANGED` and re-emits `SUUUI_THEME_CHANGED`, since
@@ -1770,6 +1879,149 @@ document it here.
   that is already gone, and `"%.1f"` on 0.99 would print `"1.0s"` from the branch that had
   just decided the value was under a second.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
+- `DataField` — one field on the data bar: a muted **prefix**, a **value**, and an accent
+  underline along the bottom edge while hovered. Props: `prefix`, `text`, `w`, `h`, `minW`,
+  `rail` (draw the underline on hover, default true), `size` (font step key for the value,
+  default `"md"`). API: `SetText` / `GetText` (the value alone, without the prefix or its
+  colour escape), `SetPrefix` / `GetPrefix`, `SetRail`, `IsHovered`. Emits `CLICKED` (button),
+  `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`, `TEXT_CHANGED`. It **hugs its own text** —
+  `TextMetrics.Box` plus `spaceMd` on each side, floored by `minW` — while its **height comes
+  from whatever lays it out**, which on the bar is a stretched flow child, so a field is
+  exactly as tall as the bar. `SetSize` opts out of the hug, for a caller that wants a fixed
+  column.
+
+  **The prefix and the value share ONE font string, coloured with an inline escape.** Two
+  `Text` handles at two font steps is the obvious build and it is subtly wrong: flow layout
+  centres their **boxes**, and a font's ascent is roughly three quarters of its line height
+  rather than half, so centring two different line heights leaves the two baselines about
+  `(h2 - h1) * 0.28` apart — a whole pixel once the grid rounds it, and it reads as a step
+  between the label and the number in every field on the bar. One font string has one baseline
+  by construction, needs no ascent metric the client does not expose, and halves the font
+  strings the shared ticker rewrites. The cost is that the separator can only be a space
+  character, since one string has one font: the gap between prefix and value is a space rather
+  than a spacing token. `ApplyTheme` therefore **recomposes** the string rather than only
+  restyling it — the prefix's colour is baked in as a `|cff…|r` escape, so a `colorTextMuted`
+  edit reaches the screen no other way.
+
+  Three more details are load-bearing:
+
+  - **At rest it paints nothing.** The bar already draws one continuous `colorBg` surface
+    underneath, so a field with a background of its own would either match that surface
+    exactly (a wasted draw) or blend a second translucent panel colour against it and leave a
+    visible seam at every field edge — the trap `Accordion`'s header and body avoid by being
+    siblings. Only the hover fill (`colorBgHover`) is painted, and the surface is borderless
+    with `inset = 0` so it covers the whole box and meets its own dividers, exactly as a
+    frameless `StatusBar` does.
+  - **The rail is a texture on `sizeRail`, and it is tied to the hovered state rather than to
+    a flag of its own** — a backdrop border draws on all four sides, and a rail driven by its
+    own flag can survive a `MOUSE_LEAVE` that some other paint path forgot about. It shares
+    `Accordion`'s token rather than adding one, because it is the same accent-rail cue.
+    A field only advertises a rail when its widget defines `OnClick` or `OnEnter`: the rail
+    means "you can act on this", so painting it on a pure readout promises an interaction
+    that is not there.
+  - **An unchanged `SetText` is dropped.** A readout is rewritten on every game event and on
+    every tick of the bar's shared ticker and usually says exactly what it said last time;
+    re-measuring and re-laying out for that would be the bar's entire cost. Same guard as
+    `StatusBar`'s overlay readouts. The width comes from `TextMetrics.Box`, never `Measure`,
+    because the label is a stretched stack child and the insets subtracted here are handed
+    straight back to it — its own box lands at exactly the metric, which is where the client
+    truncates with zero tolerance. That is how `NavItem`'s tab strip rendered `Play…` for
+    "Player" with every geometry assertion passing.
+- `Accordion` — a collapsible group of rows behind a clickable header, with an accent rail
+  down its left edge while it is open. Props: `label`, `open`. API: `GetBody`, `GetHeader`,
+  `SetOpen(open, { animate = false })`, `IsOpen`, `SetOpenState`, `SetReveal`, `GetReveal`,
+  `SetLabel`, `GetLabel`. **Rows go into `GetBody()`**, which is a container — so a row
+  appearing, vanishing or growing is an ordinary resize that travels outward on its own, and
+  the page above re-hugs and re-ranges its scrollbar on every tick of a reveal without
+  anyone driving it. Emits `CLICKED` from the header, plus `SIZE_CHANGED`,
+  `VISIBILITY_CHANGED`, `MOUSE_ENTER`, `MOUSE_LEAVE`, `TEXT_CHANGED`.
+
+  **It does not open itself on click.** The header emits `CLICKED` and an owner decides what
+  the gesture means — the same division `ResizeGrip` draws between reporting a gesture and
+  acting on it. That is precisely what lets `AccordionGroup` arbitrate between members, and
+  it is why `SetOpen` is silent: only a header click emits, so driving it from a watcher or a
+  group cannot loop back into whatever asked for it. `SetOpenState` flips the logical state
+  and repaints without touching geometry, for an owner animating the reveal itself.
+
+  Four things are load-bearing, and each is a trap this codebase has already paid for once
+  somewhere else:
+
+  - **The body's window is a separate container with an explicit height, never the body
+    itself.** A container with no height of its own hugs its content and re-states that
+    height from inside `Layout()` — on the very tick an animation set it. Animating a hugging
+    container is a fight the hug always wins.
+  - **The window is shown before it is animated, and hidden only once a close finishes.** The
+    animator skips intermediate writes on a hidden target and flow layout skips a hidden
+    child outright, so a reveal driven while hidden simply jumps. Collapsed means *hidden*,
+    not zero-height: flow skips it entirely, so a closed group contributes neither height nor
+    gap, and a zero-sized frame is a shape the client is entitled to treat oddly.
+  - **The root column's gap is zero**, with the spacing carried inside the header and the body
+    instead. A collapsed window contributes no height either way, but a shown one would still
+    contribute a gap — which then vanishes the instant it is hidden, popping every group below
+    it by `spaceXs` at the end of every close.
+  - **The header and the body surface are siblings painted with the same token.** Both carry
+    `opacityPanel`, so nesting one inside the other would blend the fill against itself and
+    put a visible seam across a group that is meant to read as one surface. The body surface
+    passes `inset = 0` for the same reason a frameless `StatusBar` does: a borderless surface
+    must cover its whole box, or the body sits a pixel inside the header's fill and the two
+    read as different colours where they meet.
+
+  **The window clips its children, and the clip is feature-detected.** Without it the body's
+  rows draw straight over the group below for the whole animation, which is worse than not
+  animating — so where `SetClipsChildren` is missing the reveal degrades to a snap. Same
+  degradation as `Backdrop.Pill` falling back to square caps where there is no mask API: a
+  worse look, not a broken widget. The window's height is `Pixel.Ceil`'d rather than floored
+  because it is a *window onto* content, and one unit short clips the last row's descenders at
+  full reveal.
+
+  **The chevron is ASCII** — `v` open, `>` closed — for the same reason `Dropdown` spends a
+  plain `v` on its arrow: the client's faces do not reliably carry the geometric-shape
+  triangles, and a face missing one draws a box or nothing at all. Its column is measured
+  from the **wider** of the two glyphs rather than the current one, so swapping them never
+  shifts the label sideways by the difference, and through `TextMetrics.Box` rather than
+  `Measure` because the number becomes the font string's own box. The rail goes through
+  `Pixel.Line`, and it is tied to the **reveal** rather than the logical state: it has to stay
+  lit for the whole of a close, and a body still 80% visible with no rail beside it reads as a
+  glitch.
+
+  Deliberately **no `SetEnabled`**: an accordion holds controls rather than being one, so
+  there is no value to grey, and a root-frame fade would multiply with the fade of any
+  disabled row inside it (0.40 × 0.40 = 0.16). Absent, `Dependency.Bind`'s
+  `if target.SetEnabled` guard skips it honestly instead of believing a stub greyed
+  something — the same reasoning as `StatusBar` and `UnitClickArea`.
+- `AccordionGroup` — `SuuUI.Components.AccordionGroup({ duration, easing })`: at most one  member open at a time. API: `Add(acc)`, `Open(acc, { animate = false })`, `GetOpen`,
+  `GetMembers`, `Destroy`. **Not a widget** — it owns no frame, is never laid out, and exists
+  only to arbitrate; `Add` takes over the member's header click. Emits
+  `ACCORDION_SIGNALS.OPEN_CHANGED`.
+
+  The reveal is timed by **`animFast`**, the token every panel reveal already uses —
+  `Dropdown`'s panel, `Modal`, `Tooltip`, `Window`. A section opening is the same gesture
+  as a dropdown opening, so it shares the timing rather than carrying one of its own;
+  `opts.duration` overrides it per group, and 0 degrades to a snap.
+
+  Exclusivity is policy, so it lives here rather than in `Accordion` — and so does the
+  **motion**. `Open` drives the whole group from **one** tween: two separate height
+  animations would write twice per tick and re-flow the whole page twice per frame, while one
+  moves every member in a single pass, perfectly in step. Each member's `from` is its
+  *current* reveal, so interrupting a half-finished transition continues from where it
+  actually is rather than snapping. Every member must be able to clip or the whole group
+  snaps, since the one that cannot would spill its rows over the group below for the tween's
+  duration.
+
+  **Every member is driven, not just the two the click named.** `Play` pre-empts any running
+  animation on `(group, "value")`, so a member the *previous* tween was still closing — click
+  one header, then a second, then a third mid-transition — is neither the new tween's
+  incoming nor its outgoing member, and driving only those two left it stranded at a
+  fractional reveal: window shown, height still contributed to the page, while `IsOpen()`
+  reported closed. The page disagreed with itself, and the group's own arbitration was what
+  hid it. The `from` table is reused across calls, so covering every member costs no
+  allocation per click.
+
+  **Opening the already-open member collapses it, and `Open(nil)` collapses everything**:
+  "one at a time" does not mean "one always", and an all-closed page is how a player scans a
+  long one for the group they want. `Destroy` drops the group's own subscriptions and cancels
+  a transition in flight but does **not** destroy the members — they are laid out by a
+  container, and that container's teardown owns them.
 - `Toggle` — animated sliding switch, no Blizzard checkbox. The track is a
   `Backdrop.Pill` and the knob a `Backdrop.Circle`, so both ends are fully rounded; a
   square knob inside a stadium reads as a rendering fault rather than a choice.

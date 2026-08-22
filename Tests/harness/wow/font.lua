@@ -170,8 +170,16 @@ function M.measure(text, size, wordWrap, bound, nonSpaceWrap, path)
                 lines[#lines + 1] = l
             end
         end
-    else
+    elseif wordWrap then
         lines = paragraphs
+    else
+        -- Wrap OFF renders a SINGLE row, collapsing an embedded newline into it rather than
+        -- breaking on it. Measured in game: a FontString with SetWordWrap(false) holding
+        -- "Local  22:21\nRealm  22:20" reported GetStringHeight() = 13 -- one line -- and
+        -- rendered both halves concatenated, truncating with an ellipsis at the width of the
+        -- widest line. Splitting on the newline here regardless of the flag is what let a
+        -- two-row tooltip ship broken with every assertion about it passing.
+        lines = { table.concat(paragraphs) }
     end
 
     local widest = 0
@@ -196,7 +204,9 @@ end
 function M.minWidth(text, size, wordWrap, nonSpaceWrap, path)
     local clean = M.strip(text)
     if clean == "" then return 0 end
-    if not wordWrap then return M.unbounded(clean, size, path) end
+    -- Wrap off is one row, so the whole string has to fit on it: an embedded newline buys no
+    -- width relief. Matches M.measure above.
+    if not wordWrap then return M.lineWidth((clean:gsub("\n", "")), size, path) end
     if nonSpaceWrap then return 0 end
     local widest = 0
     for word in clean:gmatch("%S+") do
