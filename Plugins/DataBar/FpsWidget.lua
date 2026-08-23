@@ -6,11 +6,11 @@
 -- accumulator rather than a single entry that can never disagree with the loop.
 local floor, type, tostring = math.floor, type, tostring
 
-SuuUI._Performance = SuuUI._Performance or {}
+SuuUI._DataBar = SuuUI._DataBar or {}
 
-local PLUGIN_ID = "performance"
-local WIDGET_ID = "performance.fps"
-local OWNER     = "performance.fps"
+local PLUGIN_ID = "data_bar"
+local WIDGET_ID = "databar.fps"
+local OWNER     = "databar.fps"
 
 local M = { ID = WIDGET_ID }
 
@@ -95,4 +95,4 @@ function M.Disable()
     lastValue, lastText, lastTone = nil, nil, nil
 end
 
-SuuUI._Performance.FpsWidget = M
+SuuUI._DataBar.FpsWidget = M

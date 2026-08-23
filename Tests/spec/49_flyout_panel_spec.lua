@@ -265,6 +265,133 @@ describe("Components.FlyoutPanel – the floating icon-and-name roster", functio
     end)
 
     -----------------------------------------------------------------------------
+    describe("staying on screen", function()
+        it("is a single column when the roster fits", function()
+            panel:SetMaxHeight(2000)
+            panel:SetRows(entriesOf(3, true))
+            panel:Open()
+            expect(panel:GetColumnCount()).as("a short roster is a plain list").eq(1)
+        end)
+
+        it("continues in another column instead of running off the bottom", function()
+            panel:SetRows(entriesOf(8, true))
+            panel:Open()
+            local full = H.box(panel:GetFrame()).height
+
+            panel:SetMaxHeight(full / 2)
+            expect(panel:GetColumnCount()).as("split rather than overflowing").gte(2)
+            expect(H.box(panel:GetFrame()).height)
+                .as("and no taller than the cap it was given").lte(full / 2 + 1)
+        end)
+
+        it("gets wider rather than taller when it splits", function()
+            panel:SetRows(entriesOf(8, true))
+            panel:Open()
+            local before = H.box(panel:GetFrame())
+
+            panel:SetMaxHeight(before.height / 2)
+            local after = H.box(panel:GetFrame())
+            expect(after.width).as("wider").gt(before.width)
+            expect(after.height).as("and shorter").lt(before.height)
+        end)
+
+        it("keeps every row inside the panel, so none has to be scrolled to", function()
+            -- The reason this is columns and not a scroll viewport: every row stays within the
+            -- panel's own box, so there is no clip for an adopted icon's re-stated strata to
+            -- escape, and nothing is unreachable.
+            panel:SetRows(entriesOf(9, true))
+            panel:Open()
+            panel:SetMaxHeight(H.box(panel:GetFrame()).height / 3)
+            for i = 1, 9 do
+                H.expectInside(panel._rows[i], panel:GetFrame())
+            end
+        end)
+
+        it("still places a row when the cap is smaller than one row", function()
+            panel:SetRows(entriesOf(3, true))
+            panel:Open()
+            panel:SetMaxHeight(1)
+            expect(panel:GetColumnCount())
+                .as("one row per column, never zero-row columns").eq(3)
+        end)
+
+        it("treats no cap as unlimited", function()
+            panel:SetMaxHeight(0)
+            panel:SetRows(entriesOf(12, true))
+            panel:Open()
+            expect(panel:GetColumnCount()).eq(1)
+        end)
+    end)
+
+    -----------------------------------------------------------------------------
+    describe("hovering", function()
+        it("paints the row's BACKGROUND, not only its rail", function()
+            -- The rail is a plain texture and works with no backdrop behind it, so asserting
+            -- only the rail is what let the highlight ship invisible: SetBg tints a backdrop,
+            -- and a row that never had Backdrop.Apply called on it has none to tint.
+            local list = entriesOf(1, true)
+            panel:SetRows(list)
+            panel:Open()
+            local row = panel._rows[1]
+
+            H.cursor(row:GetLeft() + 2, row:GetBottom() + 2, row)
+            H.hover(row)
+            H.expectTokenColor({ row:GetBackdropColor() }, "colorBgHover")
+        end)
+
+        it("paints the row when the cursor enters the adopted icon directly", function()
+            -- ONLY the hook on the adopted frame can satisfy this, which is what makes it the
+            -- discriminating test: the row's own OnEnter never fires when the cursor lands on
+            -- the icon, because the client gives mouse focus to the child. Approaching the
+            -- panel from outside and arriving on an icon is the ordinary way this happens.
+            local list = entriesOf(1, true)
+            panel:SetRows(list)
+            panel:Open()
+            local row, btn = panel._rows[1], list[1].frame
+
+            expect(row._rail:IsShown()).as("nothing painted to begin with").eq(false)
+            H.cursor(btn:GetLeft() + 1, btn:GetBottom() + 1, btn)
+            H.hover(btn)
+            expect(row._rail:IsShown())
+                .as("the icon's hook painted the whole row").eq(true)
+        end)
+
+        it("does not unpaint while the cursor is still within the row", function()
+            -- Crossing from the label onto the icon fires a leave on the row, in an order the
+            -- client does not promise relative to the icon's enter. Unpainting unconditionally
+            -- would drop the highlight mid-crossing, so the leave asks where the cursor is.
+            local list = entriesOf(1, true)
+            panel:SetRows(list)
+            panel:Open()
+            local row, btn = panel._rows[1], list[1].frame
+
+            H.cursor(row:GetLeft() + 2, row:GetBottom() + 2, row)
+            H.hover(row)
+            expect(row._rail:IsShown()).as("hovering the row paints it").eq(true)
+
+            H.cursor(btn:GetLeft() + 1, btn:GetBottom() + 1, btn)
+            H.unhover(row)
+            expect(row._rail:IsShown())
+                .as("the cursor is on the icon, which is still inside the row").eq(true)
+        end)
+
+        it("unpaints once the cursor is outside the row entirely", function()
+            local list = entriesOf(1, true)
+            panel:SetRows(list)
+            panel:Open()
+            local row = panel._rows[1]
+
+            H.cursor(row:GetLeft() + 2, row:GetBottom() + 2, row)
+            H.hover(row)
+            expect(row._rail:IsShown()).eq(true)
+
+            H.cursor(row:GetLeft() - 300, row:GetBottom() - 300, row)
+            H.unhover(row)
+            expect(row._rail:IsShown()).as("cursor left, highlight gone").eq(false)
+        end)
+    end)
+
+    -----------------------------------------------------------------------------
     describe("teardown", function()
         it("hides, and releases the adopted frames without restoring them", function()
             local list = entriesOf(2, true)

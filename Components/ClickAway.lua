@@ -102,6 +102,18 @@ function SuuUI.Components.ClickAway(props)
     return handle
 end
 
+--- Whether the cursor is currently inside a frame's rect.
+--- Shared rather than re-derived, so a component that needs the same question OUTSIDE a poll
+--- loop does not grow a second copy of the rect test. Reads the cursor in the frame's own
+--- space, which is the only reading that is correct under the scaled UI root.
+-- @param frame frame
+-- @return bool
+function SuuUI.Components.CursorInside(frame)
+    if not frame then return false end
+    local cx, cy = SuuUI.Pixel.CursorIn(frame)
+    return contains(frame, cx, cy)
+end
+
 ---------------------------------------------------------------------------
 -- Hover-away
 ---------------------------------------------------------------------------

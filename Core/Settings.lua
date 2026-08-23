@@ -154,6 +154,230 @@ function M:GetSchema(pluginId)
     return schemas[pluginId]
 end
 
+--- Logs the drift two declarations of one key would cause.
+-- Register states this rule inline for the array it is handed; entries that arrive later
+-- have to be judged the same way, because a key declared twice would take its default
+-- from one entry and its range from the other.
+local function noteConflict(pluginId, key, existing, entry)
+    if existing == entry then return end
+    if existing.default ~= nil and entry.default ~= nil
+       and not valuesEqual(existing.default, entry.default) then
+        SuuUI.Debug("Settings: conflicting defaults declared for "
+            .. tostring(pluginId) .. "." .. tostring(key))
+    end
+end
+
+--- Records one entry in a plugin's key index and transient set.
+local function indexOne(pluginId, idx, trans, entry)
+    local key = entry.key
+    if not key or key == "" then return end
+    local existing = idx[key]
+    if existing then
+        noteConflict(pluginId, key, existing, entry)
+        if existing.default == nil and entry.default ~= nil then idx[key] = entry end
+    else
+        idx[key] = entry
+    end
+    if entry.transient then trans[key] = true end
+end
+
+--- A plugin's schema, key index and transient set, created empty when absent.
+-- Extend may be the first declaration a plugin ever makes: a page whose rows all come
+-- from widgets has nothing to Register.
+local function ensureSchema(pluginId)
+    if not schemas[pluginId]       then schemas[pluginId]       = {} end
+    if not entryIndex[pluginId]    then entryIndex[pluginId]    = {} end
+    if not transientKeys[pluginId] then transientKeys[pluginId] = {} end
+    return schemas[pluginId], entryIndex[pluginId], transientKeys[pluginId]
+end
+
+--- A plugin's key index and transient set alone, created empty when absent.
+-- Deliberately does NOT create schemas[pluginId], unlike ensureSchema: pre-creating an
+-- empty schema for a contributor would make that plugin's own later Register fail its
+-- "schema already registered" assert, which is a landmine for anyone whose widget
+-- registers before their onInit has run.
+local function ensureIndex(pluginId)
+    if not entryIndex[pluginId]    then entryIndex[pluginId]    = {} end
+    if not transientKeys[pluginId] then transientKeys[pluginId] = {} end
+    return entryIndex[pluginId], transientKeys[pluginId]
+end
+
+--- Records an entry under its OWNER's key index as well as the hosting page's.
+--
+-- `owner` splits a setting in two: the CONTROL renders on the page that hosts it while the
+-- VALUE lives in the contributor's namespace. Indexed only under the page, those halves
+-- disagree -- Get(owner, key) finds no entry, so it resolves no default, and a widget doing
+-- the documented Settings:Get("my_plugin", key) reads nil instead of the default it
+-- declared. The control hides that, because it is seeded from the same nil and renders as
+-- off, which reads as a deliberate default rather than a missing one.
+--
+-- Only the INDEX is shared. The schema is not, because the entry belongs to the hosting
+-- page: GetSchema(owner) must not start claiming a row the owner does not render.
+local function indexForOwner(entry)
+    local owner = entry.owner
+    if type(owner) ~= "string" or owner == "" then return end
+    local key = entry.key
+    if not key or key == "" then return end
+    local idx, trans = ensureIndex(owner)
+    indexOne(owner, idx, trans, entry)
+end
+
+--- Whether an entry titles a group rather than being a setting of its own.
+local function isSection(entry)
+    return type(entry) == "table" and entry.type == "section"
+end
+
+--- Which section headers in a schema have at least one entry under them.
+-- A header owns everything after it up to the next header, so an empty group is a header
+-- this walk never reaches content for.
+local function headersWithContent(schema)
+    local found, header = {}, nil
+    for i = 1, #schema do
+        local entry = schema[i]
+        if isSection(entry) then
+            header = entry
+        elseif header then
+            found[header] = true
+        end
+    end
+    return found
+end
+
+--- Appends entries to a plugin's schema, creating the schema when there is none.
+--
+-- Register runs once per plugin, but a page has to be able to GROW: a widget contributes
+-- its own rows when it registers, and that happens at login, on a toggle, or when a late
+-- addon loads. This is that route.
+--
+-- An entry whose key is already declared anywhere in the plugin's schema — nested inside
+-- a subtabs tab included — is skipped rather than appended, and logged. A widget that
+-- re-registers on re-enable must not duplicate its own rows. Section headers carry an
+-- empty key and are exempt, because several sections legitimately share it.
+--
+-- Emits SUUUI_SCHEMA_CHANGED only when something was actually appended.
+-- @param pluginId string
+-- @param entries table  Array of schema entry tables, the shape Register takes
+-- @return number  How many entries were appended
+function M:Extend(pluginId, entries)
+    assert(type(pluginId) == "string", "SuuUI Settings: pluginId must be string")
+    if type(entries) ~= "table" or #entries == 0 then return 0 end
+
+    local schema, idx, trans = ensureSchema(pluginId)
+
+    -- Every key the page already declares, nested ones included. Taken from the schema
+    -- rather than the key index because the schema is what "already declared" means: a
+    -- retracted key leaves the index too, and has to be contributable again.
+    local declared = {}
+    eachEntry(schema, function(e)
+        if e.key then declared[e.key] = e end
+    end)
+
+    local added = 0
+    for _, entry in ipairs(entries) do
+        local key = entry.key
+        -- Section headers all carry the empty key on purpose, so it is never a duplicate.
+        local existing = (key ~= nil and key ~= "") and declared[key] or nil
+        if existing then
+            noteConflict(pluginId, key, existing, entry)
+            SuuUI.Debug("Settings:Extend skipped already-declared key "
+                .. pluginId .. "." .. key)
+        else
+            schema[#schema + 1] = entry
+            added = added + 1
+            eachEntry({ entry }, function(e)
+                if e.key then declared[e.key] = e end
+                indexOne(pluginId, idx, trans, e)
+                indexForOwner(e)
+            end)
+        end
+    end
+
+    if added > 0 then SuuUI.Events:Emit("SUUUI_SCHEMA_CHANGED", pluginId) end
+    return added
+end
+
+--- Removes a plugin's schema entries by key, plus any section header they emptied.
+--
+-- A widget that unregisters must not leave orphan rows on the page, and must not leave
+-- the empty titled group they sat under either — so a header this call left with nothing
+-- before the next header (or the end of the page) goes with them. A header that was
+-- ALREADY empty is kept: it belongs to whoever put it there, and something may be about
+-- to Extend into it.
+--
+-- The keys that leave are forgotten from the key index too, so a retracted setting stops
+-- resolving a default and stops being validated against a row that is no longer on the
+-- page. Its STORED value is untouched, which is what lets a widget's setting survive a
+-- disable and come back with the row on re-enable.
+--
+-- Only top-level entries are removed, which is the whole surface Extend appends to.
+--
+-- Emits SUUUI_SCHEMA_CHANGED only when something was actually removed.
+-- @param pluginId string
+-- @param keys table  Array of keys to remove
+-- @return number  How many entries were removed, orphaned section headers included
+function M:Retract(pluginId, keys)
+    local schema = schemas[pluginId]
+    if not schema or type(keys) ~= "table" then return 0 end
+
+    local wanted = {}
+    for _, key in ipairs(keys) do
+        if type(key) == "string" and key ~= "" then wanted[key] = true end
+    end
+
+    local hadContent = headersWithContent(schema)
+
+    local removed, dropped, droppedOwners = 0, {}, {}
+    for i = #schema, 1, -1 do
+        local entry = schema[i]
+        if entry.key and wanted[entry.key] then
+            eachEntry({ entry }, function(e)
+                if e.key and e.key ~= "" then
+                    dropped[e.key] = true
+                    if type(e.owner) == "string" and e.owner ~= "" then
+                        droppedOwners[e.key] = e.owner
+                    end
+                end
+            end)
+            tremove(schema, i)
+            removed = removed + 1
+        end
+    end
+    if removed == 0 then return 0 end
+
+    local hasContent = headersWithContent(schema)
+    for i = #schema, 1, -1 do
+        local entry = schema[i]
+        if isSection(entry) and hadContent[entry] and not hasContent[entry] then
+            tremove(schema, i)
+            removed = removed + 1
+        end
+    end
+
+    -- A key may be declared more than once, so forget only the ones no surviving entry
+    -- still declares.
+    eachEntry(schema, function(e)
+        if e.key and e.key ~= "" then dropped[e.key] = nil end
+    end)
+    local idx, trans = entryIndex[pluginId], transientKeys[pluginId]
+    for key in pairs(dropped) do
+        if idx then idx[key] = nil end
+        if trans then trans[key] = nil end
+        -- The OWNER's index too, or a retracted contributed setting keeps resolving a default
+        -- in the namespace its value lives in -- the mirror of the bug indexForOwner fixes.
+        -- Its stored VALUE is still untouched, which is what lets the setting survive the
+        -- widget being switched off and come back with the row.
+        local owner = droppedOwners[key]
+        if owner then
+            local oIdx, oTrans = entryIndex[owner], transientKeys[owner]
+            if oIdx then oIdx[key] = nil end
+            if oTrans then oTrans[key] = nil end
+        end
+    end
+
+    SuuUI.Events:Emit("SUUUI_SCHEMA_CHANGED", pluginId)
+    return removed
+end
+
 --- Returns the current value for a setting, falling back to schema default.
 -- @param pluginId string
 -- @param key string

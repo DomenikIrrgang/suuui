@@ -18,6 +18,11 @@
 local PLUGIN_ID = "data_bar"
 local CLOCK_ID  = "databar.time"
 
+-- The owner string the plugin subscribes its schema reconciler under, which is the second
+-- registry subscription an enabled data bar holds. Named here so a subscriber count can say
+-- WHICH subscription it is counting rather than leaving a bare number.
+local SCHEMA_OWNER = PLUGIN_ID .. ".schema"
+
 local function DB()  return H.SuuUI.DataBar end
 local function bar() return H.SuuUI.Plugins:Get(PLUGIN_ID)._bar end
 
@@ -26,6 +31,17 @@ local function barFrame()     return bar():GetFrame() end
 local function rootBox()      return H.box(H.SuuUI.UIRoot:GetRootContainer()) end
 local function barHeight()    return H.controlHeight("sizeRow") end
 local function sectionGap()   return H.token("spaceXxs") end
+
+-- The bar's settings page, as a schema. Read live rather than captured: a contributed slice
+-- arrives after Register has already run, so a copy taken at boot would answer for a page
+-- that no longer exists.
+local function pageSchema() return H.SuuUI.Settings:GetSchema(PLUGIN_ID) or {} end
+
+local function pageEntry(key)
+    for i, e in ipairs(pageSchema()) do
+        if e.key == key then return e, i end
+    end
+end
 
 -- A fresh client with every contributed widget out of the way. Debug is a parameter because
 -- SuuUI.Debug is a no-op until it is switched on, and one spec here is about what the bar logs.
@@ -735,6 +751,285 @@ describe("Plugins.DataBar – the bar", function()
         end)
     end)
 
+    -- The bar hosts settings contributed by widgets it does not own. The CONTROL renders on
+    -- this page, because a player looking for a setting about a strip of text they can see
+    -- comes to the bar; the VALUE stays the contributor's, which is what an entry's `owner`
+    -- says. Nothing in the bundle walks this path any more — the clock, framerate, latency and
+    -- tray widgets are built-ins registered by the plugin that owns the bar — so this block is
+    -- the only thing standing between a refactor and a boundary nobody crosses on login.
+    describe("a schema contributed by a foreign widget", function()
+        local FAKE_PLUGIN = "fake_plugin"
+        local FAKE_WIDGET = "fake.gold"
+        local FAKE_GROUP  = "Gold"
+
+        local host
+        before_each(function() host = H.parent(400, 200) end)
+
+        -- A FRESH slice on every call, so a re-registration cannot be deduped by table
+        -- identity: the keys are what has to be recognised.
+        local function slice()
+            return {
+                { key = "", label = FAKE_GROUP, type = "section" },
+                { key = "gold_enabled", label = "Show Gold", type = "toggle",
+                  default = true, owner = FAKE_PLUGIN },
+                { key = "gold_style", label = "Style", type = "dropdown", default = "short",
+                  options = { { value = "short", label = "Short" },
+                              { value = "long",  label = "Long" } },
+                  owner = FAKE_PLUGIN },
+            }
+        end
+
+        local function contribute(id)
+            return stage(id or FAKE_WIDGET, "left", "1234g", { schema = slice() })
+        end
+
+        -- Every settings key on the page and every group title, as counted sets. Compared
+        -- whole, so "exactly its own keys came out again" is one assertion rather than a list
+        -- of built-in entries someone has to remember to keep in step.
+        local function pageKeys()
+            local out = {}
+            for _, e in ipairs(pageSchema()) do
+                if e.key and e.key ~= "" then out[e.key] = (out[e.key] or 0) + 1 end
+            end
+            return out
+        end
+
+        local function pageGroups()
+            local out = {}
+            for _, e in ipairs(pageSchema()) do
+                if e.type == "section" then out[e.label] = (out[e.label] or 0) + 1 end
+            end
+            return out
+        end
+
+        local function groupAt(label)
+            for i, e in ipairs(pageSchema()) do
+                if e.type == "section" and e.label == label then return e, i end
+            end
+        end
+
+        -- Which namespace was WRITTEN to is the thing under test, and only the store shows
+        -- that: Get would answer from a schema default and hide the split entirely.
+        local function storedIn(pluginId, key)
+            local profile = H.SuuUI.Profiles:GetActive()
+            local ns = profile.plugins and profile.plugins[pluginId]
+            return ns and ns[key]
+        end
+
+        -- Built through the real control factory from the entry as it sits ON THE PAGE, so what
+        -- is under test is the entry the bar spliced rather than one this spec wrote. The page
+        -- id handed over is the bar's, exactly as PageBuilder does it.
+        local function toggleFor(key)
+            local entry = pageEntry(key)
+            expect(entry).as("an entry on the page for " .. key).notNil()
+            local real, made = H.SuuUI.Components.Toggle, {}
+            H.SuuUI.Components.Toggle = function(...)
+                local t = real(...)
+                made[#made + 1] = t
+                return t
+            end
+            local ok, err = pcall(H.SuuUI._SettingsControls["toggle"], entry, PLUGIN_ID, host)
+            H.SuuUI.Components.Toggle = real
+            if not ok then error(err, 0) end
+            expect(#made).as("one toggle built for " .. key).eq(1)
+            return made[1]
+        end
+
+        it("splices a widget's slice onto the bar's own page when it registers", function()
+            expect(pageEntry("gold_enabled"))
+                .as("nothing of the widget's is on the page before it exists").isNil()
+
+            local def = contribute()
+
+            local entry = pageEntry("gold_enabled")
+            expect(entry).as("the bar spliced it in; nobody called Extend by hand").notNil()
+            expect(entry).as("the contributor's own table, so its live fields are read")
+                .eq(def.schema[2])
+            expect(pageEntry("gold_style")).as("every entry in the slice, not just the first")
+                .notNil()
+        end)
+
+        it("brings the group title its entries sit under", function()
+            contribute()
+
+            local header, headerAt = groupAt(FAKE_GROUP)
+            expect(header).as("the widget titles its own group on the page").notNil()
+            local _, keyAt = pageEntry("gold_enabled")
+            expect(headerAt)
+                .as("a header owns what FOLLOWS it, so it has to arrive ahead of its entries")
+                .lt(keyAt)
+        end)
+
+        it("announces the page grew, so an open window rebuilds it", function()
+            local spy = H.eventSpy("SUUUI_SCHEMA_CHANGED")
+
+            contribute()
+            expect(spy.count).as("the splice was announced").eq(1)
+            expect(spy:arg(1)).as("naming the page that grew, which is the bar's")
+                .eq(PLUGIN_ID)
+
+            DB():UnregisterWidget(FAKE_WIDGET)
+            expect(spy.count).as("and the retraction too").eq(2)
+            expect(spy:arg(1)).eq(PLUGIN_ID)
+        end)
+
+        it("takes exactly its own keys and its emptied group back out", function()
+            local keysBefore, groupsBefore = pageKeys(), pageGroups()
+            expect(keysBefore["enabled"]).as("the bar's own entry is on the page").eq(1)
+            expect(keysBefore["time_enabled"]).as("and a built-in's").eq(1)
+
+            contribute()
+            expect(pageKeys()["gold_enabled"]).eq(1)
+            expect(pageGroups()[FAKE_GROUP]).eq(1)
+
+            DB():UnregisterWidget(FAKE_WIDGET)
+
+            expect(pageKeys())
+                .as("exactly the contributed keys came out again, and no other")
+                .deepEq(keysBefore)
+            expect(pageGroups())
+                .as("including the group the removal emptied, and no group it did not")
+                .deepEq(groupsBefore)
+        end)
+
+        it("does not duplicate its entries when the same widget re-registers", function()
+            contribute()
+            local size = #pageSchema()
+
+            contribute()
+            expect(pageKeys()["gold_enabled"]).as("one row per key on a re-register").eq(1)
+            expect(#pageSchema()).as("and nothing appended alongside it").eq(size)
+
+            -- The other route to the same page: retracted, then contributed again.
+            DB():UnregisterWidget(FAKE_WIDGET)
+            contribute()
+            expect(pageKeys()["gold_enabled"]).as("one row per key after a full cycle").eq(1)
+            expect(#pageSchema()).eq(size)
+        end)
+
+        it("skips a key a widget already on the page declared", function()
+            contribute()
+            stage("fake.rival", "left", "R", {
+                schema = { { key = "gold_enabled", label = "Rival Gold", type = "toggle",
+                             default = false, owner = "rival_plugin" } },
+            })
+
+            expect(pageKeys()["gold_enabled"])
+                .as("one row per key, whoever asks second").eq(1)
+            expect(pageEntry("gold_enabled").label)
+                .as("the declaration already on the page is the one that stands")
+                .eq("Show Gold")
+        end)
+
+        it("seeds a contributed control from the contributor's namespace", function()
+            contribute()
+            -- The two namespaces are made to DISAGREE, so the reading cannot be right by
+            -- coincidence: false is stored under the bar's id and true under the owner's.
+            H.SuuUI.Settings:Set(PLUGIN_ID, "gold_enabled", false)
+            H.SuuUI.Settings:Set(FAKE_PLUGIN, "gold_enabled", true)
+
+            expect(toggleFor("gold_enabled"):GetValue())
+                .as("the owner's value, not the same key under the page it renders on")
+                .eq(true)
+        end)
+
+        it("writes a contributed value into the contributor's namespace", function()
+            contribute()
+            H.SuuUI.Settings:Set(FAKE_PLUGIN, "gold_enabled", true)
+            local tog = toggleFor("gold_enabled")
+
+            expect(H.click(tog)).as("the row takes mouse input").truthy()
+
+            expect(storedIn(FAKE_PLUGIN, "gold_enabled"))
+                .as("the write landed in the contributor's namespace").eq(false)
+            expect(storedIn(PLUGIN_ID, "gold_enabled"))
+                .as("and nothing at all in the bar's, which is not its data").isNil()
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_enabled"))
+                .as("which is where the widget reads it back from").eq(false)
+        end)
+
+        it("keeps a contributed value across the widget going away and coming back", function()
+            contribute()
+            H.SuuUI.Settings:Set(FAKE_PLUGIN, "gold_style", "long")
+
+            DB():UnregisterWidget(FAKE_WIDGET)
+            expect(pageEntry("gold_style")).as("the row leaves the page").isNil()
+            expect(H.SuuUI.Settings:Get(PLUGIN_ID, "gold_style"))
+                .as("and the bar stops resolving a default for a row that is gone").isNil()
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_style"))
+                .as("the value is not the page's to take with it").eq("long")
+
+            contribute()
+            expect(pageEntry("gold_style")).as("the row is back").notNil()
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_style"))
+                .as("still carrying what the player chose, which is why ownership stays "
+                    .. "with the contributor").eq("long")
+        end)
+
+        it("stores a built-in widget's setting under the bar itself", function()
+            local entry = pageEntry("time_enabled")
+            expect(entry).as("the clock's slice is on the page").notNil()
+            expect(entry.owner)
+                .as("a built-in is not a contributor, so there is nowhere to redirect to")
+                .isNil()
+
+            local tog = toggleFor("time_enabled")
+            expect(tog:GetValue()).as("seeded from the bar's own namespace").eq(true)
+            expect(H.click(tog)).truthy()
+
+            expect(storedIn(PLUGIN_ID, "time_enabled"))
+                .as("a built-in's value is the bar's own data").eq(false)
+            expect(H.SuuUI.Settings:Get(PLUGIN_ID, "time_enabled")).eq(false)
+        end)
+
+        it("resolves a contributed default in BOTH the page's id and the owner's", function()
+            -- `owner` splits a setting in two: the CONTROL renders on the bar's page while the
+            -- VALUE lives in the contributor's namespace. Indexed only under the page -- which
+            -- is what shipped -- those halves disagree: a widget doing the documented
+            -- Settings:Get("my_plugin", key) before the player has ever opened the settings
+            -- window read nil rather than the default it declared, a threshold of nil instead
+            -- of 50. The control hid it, because it was seeded from the same nil and rendered
+            -- as off, which reads as a deliberate default rather than a missing one.
+            --
+            -- Resolved by indexing an owned entry under the owner's id as well, which makes Get
+            -- symmetric with the read path every control already uses. Only the INDEX is
+            -- shared; GetSchema(owner) still does not claim a row the owner does not render.
+            contribute()
+
+            expect(H.SuuUI.Settings:Get(PLUGIN_ID, "gold_style"))
+                .as("the page the control renders on resolves the default").eq("short")
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_style"))
+                .as("and so does the namespace the value lives in").eq("short")
+        end)
+
+        it("does not put a contributed row on the owner's own page", function()
+            -- The other half of the same rule: the default is shared, the SCHEMA is not. A
+            -- contributor whose page claimed a row it does not render would show a control
+            -- twice, and would collide with that plugin's own Settings:Register.
+            contribute()
+            local owned = H.SuuUI.Settings:GetSchema(FAKE_PLUGIN)
+            if owned then
+                for _, entry in ipairs(owned) do
+                    expect(entry.key ~= "gold_style")
+                        .as("the row belongs to the hosting page alone").eq(true)
+                end
+            end
+        end)
+
+        it("stops resolving that default once the widget unregisters", function()
+            -- The mirror of the fix: a retracted contributed setting must stop resolving a
+            -- default in the owner's namespace too, or the owner keeps reading a threshold for
+            -- a widget that is gone.
+            contribute()
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_style")).eq("short")
+
+            H.SuuUI.DataBar:UnregisterWidget("fake.gold")
+            expect(H.SuuUI.Settings:Get(FAKE_PLUGIN, "gold_style"))
+                .as("the declaration left with the row").isNil()
+        end)
+
+    end)
+
     describe("teardown", function()
         it("unsubscribes from the registry", function()
             stage("db.a", "left", "A")
@@ -801,13 +1096,28 @@ describe("Plugins.DataBar – the bar", function()
 
             p:Disable()
             expect(DB():GetOccupiedHeight()).eq(0)
-            expect(DB():GetSubscriberCount()).eq(subs - 1)
+            -- An enabled plugin holds TWO registry subscriptions, not one: the bar's own
+            -- rebuild, and the reconciler that splices a contributed widget's schema onto the
+            -- page. Both are the plugin's, so a disable drops both.
+            expect(DB():GetSubscriberCount())
+                .as("the bar's rebuild and the schema reconciler both go").eq(subs - 2)
+            expect(DB():Unsubscribe(SCHEMA_OWNER))
+                .as("nothing of the plugin's is left subscribed to drop").eq(0)
 
             p:Enable()
             expect(DB():GetSubscriberCount())
                 .as("one subscription per bar, not one per enable").eq(subs)
             expect(DB():GetOccupiedHeight()).eq(barHeight())
             H.expectSize(barFrame(), H.SuuUI.UIRoot:GetRootContainer():GetWidth(), barHeight())
+
+            -- Not merely counted: the reconciler is live again, so a widget registering after
+            -- the re-enable still reaches the page.
+            stage("db.late", "left", "L", {
+                schema = { { key = "late_key", label = "Late", type = "toggle",
+                             default = true, owner = "late_plugin" } },
+            })
+            expect(pageEntry("late_key"))
+                .as("a schema contributed after the re-enable is spliced in").notNil()
         end)
 
         it("leaves an unrelated root-container subscriber connected", function()

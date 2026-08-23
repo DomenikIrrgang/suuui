@@ -816,7 +816,7 @@ describe("Settings window", function()
         -- click is not deliverable and there is no ring position to measure. Switched off so
         -- these stay tests of the launcher; the interaction is asserted in
         -- 50_addon_buttons_spec.lua.
-        pcall(function() H.SuuUI.Settings:Set("addon_buttons", "enabled", false) end)
+        pcall(function() H.SuuUI.Settings:Set("data_bar", "tray_enabled", false) end)
     end)
 
     it("registers the /suuui slash command", function()

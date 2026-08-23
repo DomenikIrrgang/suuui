@@ -808,6 +808,312 @@ describe("SettingsUI controls", function()
     end)
 end)
 
+-- One plugin's setting RENDERED on another plugin's page. The data bar's page shows the
+-- settings of widgets contributed by other plugins, and those settings must stay in the
+-- CONTRIBUTOR's namespace — it is their data, profile-scoped to them, and it has to
+-- survive the widget being unregistered — while being rendered here. `owner` on a schema
+-- entry names the plugin whose namespace that entry's VALUE lives in.
+--
+-- What `owner` must NOT change is the watcher OWNER STRING. PageBuilder retires a
+-- rebuilt page's watchers with UnwatchPrefix(ControlOwnerPrefix(pluginId)) and SubTabs
+-- retires a swapped tab's with UnwatchControls(pluginId, schema), both derived from the
+-- PAGE's id — so a watcher keyed to the contributor is never matched and leaks one per
+-- rebuild, then fires into a destroyed widget on every write and every profile switch.
+describe("SettingsUI foreign-owned entries", function()
+    local host, scroll
+
+    -- The contributor's own declaration, under its own plugin id, as a plugin makes it in
+    -- onInit.
+    local contribSchema = {
+        { key = "show_gold",    label = "Show Gold", type = "toggle", default = true },
+        { key = "gold_label",   label = "Prefix",    type = "text",   default = "GOLD" },
+        { key = "gold_compact", label = "Compact",   type = "toggle", default = true,
+          enabledIf = "show_gold" },
+    }
+
+    -- The host page: one setting of its own plus the contributor's three rendered here.
+    -- The foreign entries deliberately declare a DIFFERENT default from the contributor's,
+    -- so the two namespaces answer differently for the same key. Without that every
+    -- assertion below would pass whichever namespace the control read.
+    local pageSchema = {
+        { key = "bar_enabled",  label = "Enable Bar", type = "toggle", default = true },
+        { key = "show_gold",    label = "Show Gold",  type = "toggle", default = false,
+          owner = "contrib" },
+        { key = "gold_label",   label = "Prefix",     type = "text",   default = "PAGE",
+          owner = "contrib" },
+        { key = "gold_compact", label = "Compact",    type = "toggle", default = false,
+          owner = "contrib", enabledIf = "show_gold" },
+    }
+
+    before_each(function()
+        H.setup()
+        host = H.parent(500, 400)
+        scroll = H.mount(H.C.ScrollFrame({ w = 400, h = 300 }, host))
+        H.SuuUI.Settings:Register("contrib", contribSchema)
+        H.SuuUI.Settings:Register("host_page", pageSchema)
+    end)
+
+    -- The raw store rather than Get: both namespaces answer for these keys, so Get cannot
+    -- tell "written to the owner" apart from "reading the page's own default". Which
+    -- namespace was WRITTEN to is the thing under test, and only the store shows that.
+    local function storedIn(pluginId, key)
+        local profile = H.SuuUI.Profiles:GetActive()
+        local ns = profile.plugins and profile.plugins[pluginId]
+        return ns and ns[key]
+    end
+
+    -- Captures every Toggle handle a build creates, in schema order: a settings row is an
+    -- anonymous container and does not expose its control.
+    local function capturingToggles(fn)
+        local real, made = H.SuuUI.Components.Toggle, {}
+        H.SuuUI.Components.Toggle = function(...)
+            local t = real(...)
+            made[#made + 1] = t
+            return t
+        end
+        local ok, err = pcall(fn)
+        H.SuuUI.Components.Toggle = real
+        if not ok then error(err, 0) end
+        return made
+    end
+
+    local function entryFor(key)
+        for _, e in ipairs(pageSchema) do
+            if e.key == key then return e end
+        end
+    end
+
+    local function buildToggleRow(key, pluginId)
+        local made = capturingToggles(function()
+            H.SuuUI._SettingsControls["toggle"](entryFor(key), pluginId, host)
+        end)
+        expect(#made).as("one toggle built for " .. key).eq(1)
+        return made[1]
+    end
+
+    it("writes a foreign-owned toggle into the owner's namespace, not the page's", function()
+        local tog = buildToggleRow("show_gold", "host_page")
+        expect(H.click(tog)).as("the toggle takes mouse input").truthy()
+
+        expect(storedIn("contrib", "show_gold"))
+            .as("the write landed in the contributor's namespace").eq(false)
+        expect(storedIn("host_page", "show_gold"))
+            .as("and nothing at all was written into the page's namespace").isNil()
+        expect(H.SuuUI.Settings:Get("contrib", "show_gold")).eq(false)
+    end)
+
+    local function sameValue(actual, want)
+        if type(want) == "table" then
+            expect(actual).deepEq(want)
+        else
+            expect(actual).eq(want)
+        end
+    end
+
+    -- One case per control file, covering BOTH directions: dropping the dataId resolution
+    -- from any single builder's read or its write fails here. Every case declares the key
+    -- in both namespaces with a different default, and writes a third value distinct from
+    -- both, so a builder reading or writing the page's namespace is visible whatever the
+    -- control type is.
+    for _, case in ipairs({
+        { type = "toggle", factory = "Toggle", owned = true, paged = false, wrote = false,
+          write = function(c) expect(H.click(c)).as("the toggle takes input").truthy() end },
+
+        { type = "slider", factory = "Slider", owned = 9, paged = 3, wrote = 5,
+          extra = { min = 0, max = 10, step = 1 },
+          write = function(c)
+              local tb = H.box(c._track)
+              H.cursor(tb.left + tb.width * 0.5, tb.top)
+              H.mouseDown(c._hit, "LeftButton")
+          end },
+
+        { type = "dropdown", factory = "Dropdown", owned = "flat", paged = "solid",
+          wrote = "glass",
+          extra = { options = { { value = "solid", label = "Solid" },
+                                { value = "flat",  label = "Flat" },
+                                { value = "glass", label = "Glass" } } },
+          write = function(c)
+              expect(H.click(c)).as("the field opens the panel").truthy()
+              expect(H.click(c._rows[3])).as("the option row takes input").truthy()
+          end },
+
+        { type = "text", factory = "Input", owned = "OWNED", paged = "PAGED",
+          wrote = "TYPED",
+          write = function(c) H.typeText(c, "TYPED") end },
+
+        { type = "keybind", factory = "KeyCapture", owned = "CTRL-G", paged = "ALT-P",
+          wrote = "F1",
+          write = function(c)
+              expect(H.click(c)).as("the button arms the capture").truthy()
+              expect(H.key(c._catcher, "F1")).truthy()
+          end },
+
+        { type = "color", factory = "ColorSwatch", owned = { 0, 1, 0, 1 },
+          paged = { 1, 0, 0, 1 }, expected = "00FF00", wrote = { 0, 0, 1, 1 },
+          read = function(c) return c:GetHex() end,
+          write = function(c, ownedValue)
+              -- Driven through the seam the control publishes to the shared popup rather
+              -- than through the picker's own widgets: Open receives the colour to seed
+              -- with and the onChange the control wants called back, and those two
+              -- arguments ARE the control's contract here. Both carry dataId.
+              local realOpen, seeded, handler = H.SuuUI._ColorPopup.Open, nil, nil
+              H.SuuUI._ColorPopup.Open = function(_, value, onChange)
+                  seeded, handler = value, onChange
+              end
+              expect(H.click(c)).as("the swatch takes input").truthy()
+              H.SuuUI._ColorPopup.Open = realOpen
+
+              expect(seeded).as("the popup was seeded from the OWNER's stored colour")
+                  .deepEq(ownedValue)
+              expect(handler).notNil()
+              handler(0, 0, 1, 1)
+          end },
+    }) do
+        it("reads and writes a foreign-owned " .. case.type .. "'s owner namespace", function()
+            local ownerId, pageId = "own_" .. case.type, "pg_" .. case.type
+            local function entryWith(default)
+                local e = { key = "val", label = "Value", type = case.type, default = default }
+                for k, v in pairs(case.extra or {}) do e[k] = v end
+                return e
+            end
+            H.SuuUI.Settings:Register(ownerId, { entryWith(case.owned) })
+            local foreign = entryWith(case.paged)
+            foreign.owner = ownerId
+            H.SuuUI.Settings:Register(pageId, { foreign })
+
+            local real, captured = H.SuuUI.Components[case.factory], nil
+            H.SuuUI.Components[case.factory] = function(...)
+                captured = real(...)
+                return captured
+            end
+            H.SuuUI._SettingsControls[case.type](foreign, pageId, host)
+            H.SuuUI.Components[case.factory] = real
+
+            expect(captured).as(case.factory .. " handle captured").notNil()
+            local read = case.read or function(c) return c:GetValue() end
+            local want = case.expected
+            if want == nil then want = case.owned end
+            expect(read(captured))
+                .as("seeded from the owner's default, not the page's own declaration of "
+                    .. "the same key")
+                .eq(want)
+
+            case.write(captured, case.owned)
+            sameValue(storedIn(ownerId, "val"), case.wrote)
+            expect(storedIn(pageId, "val"))
+                .as("nothing at all was written into the page's namespace").isNil()
+        end)
+    end
+
+    it("seeds a foreign-owned control from the owner's stored value", function()
+        -- Distinct from both defaults, so this cannot pass by reading either declaration.
+        H.SuuUI.Settings:Set("contrib", "gold_label", "STORED")
+        local row = H.SuuUI._SettingsControls["text"](entryFor("gold_label"), "host_page", host)
+
+        local boxes = collect(row:GetFrame(), function(w) return w._kind == "EditBox" end)
+        expect(#boxes).eq(1)
+        expect(boxes[1]:GetText())
+            .as("the owner's stored value, not its default and not the page's")
+            .eq("STORED")
+    end)
+
+    it("gates a foreign-owned enabledIf on the owner's key", function()
+        local child = buildToggleRow("gold_compact", "host_page")
+        expect(child:IsEnabled())
+            .as("live: the OWNER's master reads true, while the page's own copy of that "
+                .. "key reads false")
+            .truthy()
+
+        H.SuuUI.Settings:Set("contrib", "show_gold", false)
+        expect(child:IsEnabled()).as("greys when the owner's master goes off").falsy()
+
+        -- The page's own copy of the dependency key moves the other way. A binder watching
+        -- the page's namespace would light the control back up here.
+        H.SuuUI.Settings:Set("host_page", "show_gold", true)
+        expect(child:IsEnabled())
+            .as("the page's own copy of the key has no say over a foreign-owned entry")
+            .falsy()
+
+        H.SuuUI.Settings:Set("contrib", "show_gold", true)
+        expect(child:IsEnabled()).as("live again").truthy()
+    end)
+
+    it("leaves the page's own entries writing to the page's namespace", function()
+        local made = capturingToggles(function()
+            H.SuuUI._PageBuilder:Build("host_page", scroll)
+        end)
+        -- Schema order: bar_enabled (the page's own), show_gold, gold_compact. The text
+        -- entry builds an Input, not a Toggle.
+        expect(#made).as("one toggle per toggle entry").eq(3)
+        local own, foreign = made[1], made[2]
+
+        expect(H.click(own)).truthy()
+        expect(storedIn("host_page", "bar_enabled"))
+            .as("an entry with no owner still writes to the page").eq(false)
+        expect(storedIn("contrib", "bar_enabled"))
+            .as("and never leaks into the contributor's namespace").isNil()
+
+        -- The same build, through BuildEntries rather than a direct builder call: `owner`
+        -- has to survive the page builder handing the entry over.
+        expect(H.click(foreign)).truthy()
+        expect(storedIn("contrib", "show_gold")).eq(false)
+        expect(storedIn("host_page", "show_gold")).isNil()
+    end)
+
+    it("carries owner through a subtabs tab schema", function()
+        H.SuuUI.Settings:Register("tabbed_page", {
+            { key = "unit", type = "subtabs", tabs = {
+                { id = "gold", label = "Gold", schema = {
+                    { key = "show_gold", label = "Show Gold", type = "toggle",
+                      default = false, owner = "contrib" },
+                } },
+            } },
+        })
+
+        local made = capturingToggles(function()
+            H.SuuUI._PageBuilder:Build("tabbed_page", scroll)
+        end)
+        expect(#made).as("the open tab's single toggle").eq(1)
+        expect(made[1]:GetValue())
+            .as("seeded from the owner's default through the tab schema").eq(true)
+
+        expect(H.click(made[1])).truthy()
+        expect(storedIn("contrib", "show_gold")).eq(false)
+        expect(storedIn("tabbed_page", "show_gold"))
+            .as("the tab did not divert the write into the page's namespace").isNil()
+    end)
+
+    it("keeps a page holding a foreign-owned entry watcher-neutral across a rebuild", function()
+        H.SuuUI._PageBuilder:Build("host_page", scroll)
+        local afterFirst = H.SuuUI.Settings:GetWatcherCount()
+        expect(afterFirst).as("the page's controls did subscribe").gt(0)
+
+        H.SuuUI._PageBuilder:Build("host_page", scroll)
+        expect(H.SuuUI.Settings:GetWatcherCount())
+            .as("UnwatchPrefix matches the PAGE's owner prefix, so a watcher keyed to the "
+                .. "contributor instead would survive and leak one per rebuild")
+            .eq(afterFirst)
+
+        H.SuuUI._PageBuilder:Build("host_page", scroll)
+        expect(H.SuuUI.Settings:GetWatcherCount())
+            .as("and the leak would compound, not settle").eq(afterFirst)
+    end)
+
+    it("retires a foreign-owned entry's watchers when the page is torn down", function()
+        local baseline = H.SuuUI.Settings:GetWatcherCount()
+        H.SuuUI._PageBuilder:Build("host_page", scroll)
+        expect(H.SuuUI.Settings:GetWatcherCount()).gt(baseline)
+
+        H.SuuUI.Settings:Register("other_page",
+            { { key = "x", label = "X", type = "toggle", default = true } })
+        H.SuuUI._PageBuilder:Build("other_page", scroll)
+
+        expect(H.SuuUI.Settings:GetWatcherCount())
+            .as("nothing of the old page is left behind: only the new page's one control")
+            .eq(baseline + 1)
+    end)
+end)
+
 describe("ThemeManager toggle token control", function()
     local host, scroll, capturedToggle
 

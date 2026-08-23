@@ -87,6 +87,12 @@ function FrameMeta:GetBackdrop() return self._backdrop end
 
 function FrameMeta:SetBackdropColor(r, g, b, a)
     requireBackdropTemplate(self, "SetBackdropColor")
+    -- Colouring a backdrop that was never CREATED paints nothing in the client: SetBackdrop is
+    -- what makes the textures exist and SetBackdropColor only tints them. Modelled as a no-op
+    -- rather than an error, because silently nothing is exactly what the client does -- and
+    -- recording the colour anyway is what let a component ship a hover highlight that was
+    -- invisible in game while its spec read the colour back perfectly happily.
+    if not self._backdrop then return end
     self._backdropColor = { r, g, b, a == nil and 1 or a }
 end
 
@@ -98,6 +104,8 @@ end
 
 function FrameMeta:SetBackdropBorderColor(r, g, b, a)
     requireBackdropTemplate(self, "SetBackdropBorderColor")
+    -- Same rule as SetBackdropColor above: no backdrop, nothing to tint.
+    if not self._backdrop then return end
     self._backdropBorderColor = { r, g, b, a == nil and 1 or a }
 end
 

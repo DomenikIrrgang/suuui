@@ -10,7 +10,8 @@
 -- PARENTAGE does that. A frame merely anchored to the panel stays on screen after the panel
 -- goes away. The panel therefore reparents in SetRows and puts nothing back in Clear -- it
 -- never knew where the frame came from. Whoever handed it over owns the restore.
-local ipairs, max, type, tostring = ipairs, math.max, type, tostring
+local ipairs, max, floor, ceil, type, tostring =
+      ipairs, math.max, math.floor, math.ceil, type, tostring
 local S = SuuUI.UISignals
 
 local PanelMeta = {}
@@ -57,6 +58,14 @@ function PanelMeta:_row(index)
     if row then return row end
 
     row = CreateFrame("Frame", nil, self._panel, "BackdropTemplate")
+    -- The backdrop has to be CREATED here even though a row paints nothing at rest. SetBg only
+    -- TINTS an existing backdrop, so a row without this has nothing for the hover paint to
+    -- colour: the call succeeds, the colour reads back, and the client draws nothing. That is
+    -- exactly how the highlight shipped invisible while its spec passed.
+    --
+    -- Borderless with inset 0, so the fill covers the row's whole box and meets its neighbours
+    -- rather than sitting a pixel inside them -- the same rule a frameless StatusBar follows.
+    SuuUI.Backdrop.Apply(row, { bg = false, border = false, inset = 0 })
     row._box = SuuUI.Layout:CreateContainer({ host = row, layout = "stack" })
 
     -- The rail sits in the row's left gutter, where the label's inset keeps it clear of the
@@ -72,11 +81,86 @@ function PanelMeta:_row(index)
     row._box:Add(row._labelT, row._labelProps)
 
     row._iconProps = { align = "start", valign = "center", inset = { left = 0 } }
+    -- The panel this row belongs to, so the permanent hover hooks above can reach it without
+    -- capturing anything that would outlive a rebuild.
+    row._panel = self
 
     self._rows[index] = row
-    self._rowList:Add(row, { width = "fill", height = self:_rowHeight() })
     return row
 end
+
+-- Builds or reuses one column. Columns are what keep a long roster on screen: rows fill a
+-- column up to the panel's maximum height, then continue in a new one beside it.
+--
+-- Columns rather than a scrolling viewport, and that is not a style preference. A scroll frame
+-- clips by PARENTAGE, while an adopted icon has had its strata re-stated to sit above this
+-- panel's backdrop (see _raise) -- a frame lifted off its parent's rung is exactly the shape
+-- that escapes a scissor rect. Columns keep every row inside the panel's own box, so there is no
+-- clip to escape and nothing has to be scrolled to be reachable.
+function PanelMeta:_column(index)
+    local col = self._cols[index]
+    if col then return col end
+
+    col = SuuUI.Layout:CreateContainer({
+        parent = self._panel, layout = "flow", dir = "vertical",
+        gap = SuuUI.Theme:GetToken("spaceXxs") or 2,
+    })
+    self._cols[index] = col
+    -- Added with an explicit size in SetRows rather than stretched. A vertical flow with no
+    -- height hugs its content, and a stretched child is sized by its parent -- a container that
+    -- is both takes its height from the grid while the grid takes its height from it, and they
+    -- ping-pong forever. That hang is what the row's own comment above records.
+    self._grid:Add(col, { width = 1, height = 1 })
+    return col
+end
+
+-- How many rows fit in one column before the roster starts another.
+function PanelMeta:_rowsPerColumn(rowH, rowGap, pad, n)
+    if n <= 0 then return 1 end
+    local maxH = self._maxHeight or 0
+    -- No maximum means the whole roster is one column, which is what a short one should be.
+    if maxH <= 0 then return n end
+
+    local usable = maxH - pad * 2
+    local fits = floor((usable + rowGap) / (rowH + rowGap))
+    -- Floored at one: a maximum smaller than a single row must still place that row rather
+    -- than dividing the roster into zero-row columns.
+    if fits < 1 then fits = 1 end
+    if fits > n then fits = n end
+    return fits
+end
+
+--- Caps how tall the roster may grow. Past it, rows continue in a new column beside the first
+--- instead of running off the bottom of the screen. 0 or nil is unlimited.
+--- The cap is the CALLER's to compute -- it depends on where the panel hangs and what else is on
+--- screen, which the panel cannot know.
+-- @param h number
+function PanelMeta:SetMaxHeight(h)
+    local v = (type(h) == "number" and h > 0) and h or 0
+    if self._maxHeight == v then return end
+    self._maxHeight = v
+    self:SetRows(self._entries)
+    if self:IsOpen() then self:_place() end
+end
+
+--- The current cap, 0 when unlimited.
+-- @return number
+function PanelMeta:GetMaxHeight()
+    return self._maxHeight or 0
+end
+
+--- How many columns the roster is currently laid out in.
+-- @return number
+function PanelMeta:GetColumnCount()
+    return self._colCount or 0
+end
+
+-- Which row an adopted frame currently sits in, and which frames have already been hooked. The
+-- hook is permanent -- HookScript cannot be undone -- so it asks these maps on every call rather
+-- than assuming, the same discipline the collector's SetPoint hook follows. Weak keys, so a
+-- frame the owning addon discards does not keep a row alive.
+local hoverRow    = setmetatable({}, { __mode = "k" })
+local hoverHooked = setmetatable({}, { __mode = "k" })
 
 -- Hover paint only: bg plus the rail's alpha. Never rebuilds the backdrop table, since this
 -- runs on every cursor movement across the roster.
@@ -88,6 +172,36 @@ function PanelMeta:_paintRow(row, hovered)
         B.SetBg(row, false)
     end
     row._rail:SetShown(hovered and row._interactive == true)
+end
+
+-- Paints the row the cursor is over INCLUDING while the cursor is over the adopted icon.
+--
+-- Without this the highlight drops exactly where the player is pointing: an adopted button takes
+-- mouse input of its own, so the client moves mouse focus to it and the ROW receives OnLeave the
+-- instant the cursor reaches the icon. Hooked rather than SetScript, because that button's own
+-- OnEnter is the owning addon's tooltip and replacing it would silently break it.
+function PanelMeta:_bindHover(frame, row)
+    hoverRow[frame] = row
+    if hoverHooked[frame] or type(frame.HookScript) ~= "function" then return end
+    hoverHooked[frame] = true
+
+    pcall(frame.HookScript, frame, "OnEnter", function(f)
+        local r = hoverRow[f]
+        if r and r._panel then r._panel:_paintRow(r, true) end
+    end)
+    pcall(frame.HookScript, frame, "OnLeave", function(f)
+        local r = hoverRow[f]
+        if r and r._panel then r._panel:_leaveRow(r) end
+    end)
+end
+
+-- Leaving is not simply "unpaint". Crossing between a row and the icon inside it fires a leave
+-- on whichever the cursor left, in an order the client does not promise, so unpainting
+-- unconditionally can drop the highlight while the cursor is still on the row. Asking where the
+-- cursor actually is settles it without depending on that order.
+function PanelMeta:_leaveRow(row)
+    if SuuUI.Components.CursorInside(row) then return end
+    self:_paintRow(row, false)
 end
 
 --- Replaces the roster. Each entry is { key, label, frame, onClick }.
@@ -131,6 +245,7 @@ function PanelMeta:SetRows(entries)
     self._entries = entries or {}
 
     for _, row in ipairs(self._rows) do row:Hide() end
+    for _, col in ipairs(self._cols) do col:Hide() end
 
     local rowH   = self:_rowHeight()
     local labelW = self:_labelWidth()
@@ -139,10 +254,29 @@ function PanelMeta:SetRows(entries)
     local gap    = T:GetToken("spaceSm") or 8
     local rowGap = T:GetToken("spaceXxs") or 2
 
+    local n      = #self._entries
+    local colW   = gutter * 2 + self._iconSize + gap + labelW
+    local perCol = self:_rowsPerColumn(rowH, rowGap, pad, n)
+    local nCols  = (n > 0) and ceil(n / perCol) or 0
+
     for i, entry in ipairs(self._entries) do
         local row = self:_row(i)
         row._interactive = type(entry.onClick) == "function"
-        self._rowList:SetChildProps(row, { width = "fill", height = rowH })
+
+        local col = self:_column(floor((i - 1) / perCol) + 1)
+        -- Moved between columns only when that actually changed. Add is a MEMBERSHIP operation,
+        -- so re-adding on every rebuild would append the row again and grow the child list
+        -- without bound.
+        if row._col and row._col ~= col then
+            row._col:Remove(row)
+            row._col = nil
+        end
+        if row._col ~= col then
+            col:Add(row, { width = "fill", height = rowH })
+            row._col = col
+        else
+            col:SetChildProps(row, { width = "fill", height = rowH })
+        end
 
         row._iconProps.width      = self._iconSize
         row._iconProps.height     = self._iconSize
@@ -155,10 +289,9 @@ function PanelMeta:SetRows(entries)
         row._box:SetChildProps(row._labelT, row._labelProps)
         row._labelT:SetText(entry.label or "")
 
-        -- Swapped only when the frame actually differs. Add is a MEMBERSHIP operation, not an
-        -- upsert, so re-adding on every rebuild appends the same child again and again: the
-        -- child list grows without bound and each pass costs more than the last.
+        -- Swapped only when the frame actually differs, for the same reason as the column move.
         if row._held and row._held ~= entry.frame then
+            hoverRow[row._held] = nil
             row._box:Remove(row._held)
             row._held = nil
         end
@@ -175,13 +308,15 @@ function PanelMeta:SetRows(entries)
                 row._box:SetChildProps(entry.frame, row._iconProps)
             end
             self:_raise(entry.frame)
+            -- So the row stays highlighted when the cursor is on the icon rather than beside it.
+            self:_bindHover(entry.frame, row)
         end
 
         -- Mouse is enabled only for a row that can actually do something, so the highlight
         -- and the rail never promise an interaction that is not there.
         row:EnableMouse(row._interactive)
         row:SetScript("OnEnter", function() self:_paintRow(row, true) end)
-        row:SetScript("OnLeave", function() self:_paintRow(row, false) end)
+        row:SetScript("OnLeave", function() self:_leaveRow(row) end)
         row:SetScript("OnMouseUp", function(_, btn)
             if not row._interactive then return end
             entry.onClick(entry, btn or "LeftButton")
@@ -191,9 +326,22 @@ function PanelMeta:SetRows(entries)
         row:Show()
     end
 
-    local n = #self._entries
-    self._contentW = pad * 2 + gutter * 2 + self._iconSize + gap + labelW
-    self._contentH = pad * 2 + n * rowH + max(0, n - 1) * rowGap
+    -- Each column is sized explicitly from the rows it actually holds; the last one is short
+    -- whenever the roster does not divide evenly.
+    local tallest = 0
+    for ci = 1, nCols do
+        local col  = self:_column(ci)
+        local rows = (ci < nCols) and perCol or (n - perCol * (nCols - 1))
+        local h    = rows * rowH + max(0, rows - 1) * rowGap
+        if rows > tallest then tallest = rows end
+        col:SetSize(colW, h)
+        self._grid:SetChildProps(col, { width = colW, height = h })
+        col:Show()
+    end
+    self._colCount = nCols
+
+    self._contentW = pad * 2 + nCols * colW + max(0, nCols - 1) * gap
+    self._contentH = pad * 2 + tallest * rowH + max(0, tallest - 1) * rowGap
 end
 
 --- Number of rows currently in the roster.
@@ -285,11 +433,12 @@ function PanelMeta:ApplyTheme()
     local B = SuuUI.Backdrop
 
     B.Apply(self._panel, { bg = "colorBg", border = "colorBorder" })
-    self._rowList:SetPadding({ top = T:GetToken("spaceXs") or 4,
-                               right = T:GetToken("spaceXs") or 4,
-                               bottom = T:GetToken("spaceXs") or 4,
-                               left = T:GetToken("spaceXs") or 4 })
-    self._rowList:SetGap(T:GetToken("spaceXxs") or 2)
+    local pad = T:GetToken("spaceXs") or 4
+    self._grid:SetPadding({ top = pad, right = pad, bottom = pad, left = pad })
+    self._grid:SetGap(T:GetToken("spaceSm") or 8)
+    for _, col in ipairs(self._cols) do
+        col:SetGap(T:GetToken("spaceXxs") or 2)
+    end
 
     local railC = T:GetToken("colorAccent")
     for _, row in ipairs(self._rows) do
@@ -315,6 +464,7 @@ function PanelMeta:Destroy()
         -- Dropped from the layout but NOT restored: the panel never knew where the frame came
         -- from. Whoever handed it over owns putting it back, and does so after this.
         if row._held then
+            hoverRow[row._held] = nil
             row._box:Remove(row._held)
             row._held = nil
         end
@@ -322,7 +472,8 @@ function PanelMeta:Destroy()
         row._box:Destroy()
         row:Hide()
     end
-    self._rowList:Destroy()
+    for _, col in ipairs(self._cols) do col:Destroy() end
+    self._grid:Destroy()
     -- The floating host is shared by every transient panel in the addon: drop ours, never
     -- destroy the host.
     self._host:Remove(self._panel)
@@ -361,9 +512,12 @@ function SuuUI.Components.FlyoutPanel(props, parent)
     -- frame on whatever strata its owner gave it.
     SuuUI.UIRoot:SetLayer(panel, "tooltip")
 
-    local rowList = SuuUI.Layout:CreateContainer({
-        host = panel, layout = "flow", dir = "vertical",
-        gap = T:GetToken("spaceXxs") or 2,
+    -- A horizontal grid of columns rather than one vertical list, so a roster taller than the
+    -- screen continues sideways instead of running off the bottom. One column is the ordinary
+    -- case and looks identical to a plain list.
+    local grid = SuuUI.Layout:CreateContainer({
+        host = panel, layout = "flow", dir = "horizontal",
+        gap = T:GetToken("spaceSm") or 8,
         padding = { top = T:GetToken("spaceXs") or 4, right = T:GetToken("spaceXs") or 4,
                     bottom = T:GetToken("spaceXs") or 4, left = T:GetToken("spaceXs") or 4 },
     })
@@ -372,7 +526,11 @@ function SuuUI.Components.FlyoutPanel(props, parent)
     local handle = setmetatable({
         _panel    = panel,
         _host     = host,
-        _rowList  = rowList,
+        _grid     = grid,
+        _cols     = {},
+        _colCount = 0,
+        _maxHeight = (type(props.maxHeight) == "number" and props.maxHeight > 0)
+                     and props.maxHeight or 0,
         _rows     = {},
         _entries  = {},
         _eid      = id,

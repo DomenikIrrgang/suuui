@@ -2,12 +2,14 @@ local C = SuuUI.Components
 local S = SuuUI.UISignals
 
 --- Builds a keybind capture control row.
--- @param entry table    Schema entry { key, label, default }
+-- @param entry table    Schema entry { key, label, default, owner }
 -- @param pluginId string
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
     local row, label = SuuUI._SettingsRow.Labelled(parent, entry.label)
+    -- Data namespace only; the watcher owner stays the page's. See Controls/Toggle.lua.
+    local dataId = entry.owner or pluginId
 
     local bind = C.KeyCapture({
         minW = 120,
@@ -15,10 +17,10 @@ local function Build(entry, pluginId, parent)
     row:Add(bind)
 
     S:Connect(bind, S.SIGNALS.VALUE_CHANGED, function(val)
-        SuuUI.Settings:Set(pluginId, entry.key, val)
+        SuuUI.Settings:Set(dataId, entry.key, val)
     end)
 
-    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+    SuuUI.Settings:Watch(dataId, entry.key, function(val)
         bind:SetValue(val or "")
     end, SuuUI.Settings.ControlOwner(pluginId, "keybind", entry.key), { immediate = true })
 

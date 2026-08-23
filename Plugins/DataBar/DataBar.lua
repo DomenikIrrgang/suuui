@@ -105,6 +105,144 @@ local function restoreTop()
 end
 
 ---------------------------------------------------------------------------
+-- Built-in widgets
+---------------------------------------------------------------------------
+-- The clock, the framerate and latency readouts, and the addon-button tray. All four are
+-- BUILT-INS rather than plugins of their own, so their settings live under this plugin's id
+-- and their schema slices are spliced straight into the page. Resolved lazily rather than
+-- captured at file scope, so the .toc's load order is not a second thing to keep in step.
+local function builtins()
+    local D = SuuUI._DataBar
+    return { D.TimeWidget, D.FpsWidget, D.LatencyWidget, D.TrayWidget }
+end
+
+local function collector()
+    return SuuUI._DataBar.ButtonCollector
+end
+
+local function refreshTray()
+    local W = SuuUI._DataBar.TrayWidget
+    if W then W.Refresh() end
+end
+
+-- Whether the tray is on. The FIELD being registered is that fact: the `tray_enabled` watcher
+-- both registers and unregisters it, so asking the registry avoids a second flag that could
+-- drift from the setting. Without this gate the bar would keep collecting buttons off the ring
+-- for a tray that is switched off -- the mirror image of the bug the toggle fix removed.
+local function trayActive()
+    local W = SuuUI._DataBar.TrayWidget
+    return (W and W.ID and SuuUI.DataBar:Has(W.ID)) and true or false
+end
+
+-- Said once per session, and only when the conflict is real. MinimapButtonButton collects the
+-- same frames by the same mechanism, so two collectors reparenting one button take it in
+-- turns and the player watches an icon flicker between two homes. The tray stands down rather
+-- than fighting; this is what tells the player why the field reads nothing.
+local warned
+local function warnAboutRival()
+    if warned then return end
+    local C = collector()
+    if not C or not C.RivalLoaded() then return end
+    warned = true
+    SuuUI.Components.Notice({
+        title   = "Addon Buttons conflict",
+        message = C.RIVAL_ADDON .. " is loaded and collects the same minimap buttons.\n\n"
+               .. "Disable one of the two: either turn off " .. C.RIVAL_ADDON
+               .. ", or switch off Show Addon Buttons on this page. SuuUI has left the "
+               .. "buttons alone for now.",
+        tone    = "warning",
+    })
+end
+
+-- A sweep a moment later. Not every minimap button announces itself: a hand-rolled one is just
+-- a frame somebody parented to the minimap, with no event and no library callback behind it,
+-- and plenty of addons build theirs a beat after the login pass.
+local function sweepSoon(delay)
+    local timer = _G.C_Timer
+    if not (timer and type(timer.After) == "function") then return end
+    pcall(timer.After, delay, function()
+        local C = collector()
+        if C then C.Collect() end
+        refreshTray()
+    end)
+end
+
+---------------------------------------------------------------------------
+-- Settings contributed by widgets this plugin does not own
+---------------------------------------------------------------------------
+-- A widget registered by ANOTHER plugin may carry a `schema`, and those controls belong on
+-- THIS page rather than on the contributor's: a player looking for a setting about a strip of
+-- text they can see comes to the data bar. The VALUES stay in the contributor's own namespace,
+-- which is what each entry's `owner` field says -- this plugin splices entries in and takes
+-- them out again, and never reads or writes them.
+--
+-- Reconciled from the registry rather than stated once, because Settings:Register has already
+-- run by the time a widget registers. Keyed by widget id so an unregister retracts exactly its
+-- own keys and nothing else.
+local contributed = {}
+
+local function reconcileSchemas()
+    local present = {}
+
+    for _, def in ipairs(SuuUI.DataBar:List()) do
+        present[def.id] = true
+        if type(def.schema) == "table" and not contributed[def.id] then
+            local keys = {}
+            for _, entry in ipairs(def.schema) do
+                if type(entry) == "table" and entry.key and entry.key ~= "" then
+                    keys[#keys + 1] = entry.key
+                end
+            end
+            -- Extend skips a key the page already declares, so a widget re-registering on
+            -- re-enable cannot produce a page carrying two of every control.
+            SuuUI.Settings:Extend(PLUGIN_ID, def.schema)
+            contributed[def.id] = keys
+        end
+    end
+
+    for id, keys in pairs(contributed) do
+        if not present[id] then
+            -- Retract also drops a section header the removal emptied, so switching a widget
+            -- off does not leave a titled group with nothing inside it.
+            SuuUI.Settings:Retract(PLUGIN_ID, keys)
+            contributed[id] = nil
+        end
+    end
+end
+
+---------------------------------------------------------------------------
+-- Events
+---------------------------------------------------------------------------
+local function onEvent(event)
+    -- Blizzard re-runs its own layout on these, and the offset is scale-dependent, so the
+    -- reposition is re-asserted rather than computed once at login.
+    if event == "PLAYER_ENTERING_WORLD" or event == "DISPLAY_SIZE_CHANGED"
+       or event == "UI_SCALE_CHANGED" then
+        reapplyAll()
+    end
+
+    local C = collector()
+    if not C or not trayActive() then return end
+
+    if event == "PLAYER_ENTERING_WORLD" then
+        C.Collect()
+        warnAboutRival()
+        -- LibDBIcon builds anything registered before PLAYER_LOGIN only afterwards and
+        -- announces each one, which its callback covers. These two catch the buttons that
+        -- announce nothing at all.
+        sweepSoon(1)
+        sweepSoon(5)
+    elseif event == "ADDON_LOADED" or event == "PLAYER_REGEN_ENABLED" then
+        -- ADDON_LOADED is the likeliest moment for a new button. PLAYER_REGEN_ENABLED matters
+        -- because a button built from a secure template cannot be reparented in combat and the
+        -- client refuses silently, so that collection is deferred rather than attempted.
+        C.Collect()
+    end
+
+    refreshTray()
+end
+
+---------------------------------------------------------------------------
 -- Plugin
 ---------------------------------------------------------------------------
 local plugin = SuuUI:CreatePlugin({
@@ -118,10 +256,15 @@ local plugin = SuuUI:CreatePlugin({
             { key = "move_blizzard", label = "Move Minimap and Buffs Down",
               type = "toggle", default = true },
         }
-        -- The clock declares its own settings; the plugin only splices the slice in, so the
-        -- widget owns everything about itself including its section header.
-        for _, entry in ipairs(SuuUI._DataBar.TimeWidget.Schema()) do
-            schema[#schema + 1] = entry
+        -- Each built-in declares its own settings and this plugin only splices the slices in,
+        -- so a widget owns everything about itself including its section header. These are
+        -- built-ins, so their entries carry no `owner` and their values live under this
+        -- plugin's id; a third-party widget's schema arrives later through the registry (see
+        -- reconcileSchemas) and does carry one.
+        for _, widget in ipairs(builtins()) do
+            for _, entry in ipairs(widget.Schema()) do
+                schema[#schema + 1] = entry
+            end
         end
         SuuUI.Settings:Register(PLUGIN_ID, schema)
 
@@ -137,16 +280,32 @@ local plugin = SuuUI:CreatePlugin({
 
     onEnable = function(p)
         p._bar = SuuUI._DataBar.Bar:Create(SuuUI.UIRoot:GetRootContainer():GetFrame())
-        SuuUI._DataBar.TimeWidget.Enable()
+        for _, widget in ipairs(builtins()) do widget.Enable() end
 
-        -- Re-assert on the events that re-run Blizzard's own layout. PLAYER_ENTERING_WORLD
-        -- covers a login or a zone change applying a layout; the two display events cover the
-        -- conversion changing under us, since the offset is scale-dependent.
+        -- A widget from another plugin may register at any moment, so the page's schema is
+        -- reconciled from the registry rather than stated once. Subscribe delivers immediately
+        -- with whatever is already registered, so there is no separate initial pass.
+        SuuUI.DataBar:Subscribe(reconcileSchemas, OWNER .. ".schema")
+
+        local C = collector()
+        if C then
+            -- A held button that moves, shows or hides itself changes the roster, and the
+            -- panel may be open while it happens.
+            C.SetChangeCallback(refreshTray)
+        end
+        -- Deliberately no Watch() or Collect() here. Whether buttons are collected belongs to
+        -- the tray's own `tray_enabled` toggle, whose watcher fires immediately on enable --
+        -- arming it here as well would collect the ring for a tray the player has switched off.
+
+        -- One frame for every event this plugin cares about: the three that re-run Blizzard's
+        -- layout, plus the two that mean a minimap button may have appeared.
         p._evt = CreateFrame("Frame")
         p._evt:RegisterEvent("PLAYER_ENTERING_WORLD")
         p._evt:RegisterEvent("DISPLAY_SIZE_CHANGED")
         p._evt:RegisterEvent("UI_SCALE_CHANGED")
-        p._evt:SetScript("OnEvent", function() reapplyAll() end)
+        p._evt:RegisterEvent("ADDON_LOADED")
+        p._evt:RegisterEvent("PLAYER_REGEN_ENABLED")
+        p._evt:SetScript("OnEvent", function(_, event) onEvent(event) end)
 
         -- The height moves when a font or size token is edited, so the offset follows it
         -- rather than being computed once at login.
@@ -170,7 +329,21 @@ local plugin = SuuUI:CreatePlugin({
             p._evt = nil
         end
 
-        SuuUI._DataBar.TimeWidget.Disable()
+        SuuUI.DataBar:Unsubscribe(OWNER .. ".schema")
+
+        local C = collector()
+        if C then
+            C.SetChangeCallback(nil)
+            C.Unwatch()
+        end
+
+        for _, widget in ipairs(builtins()) do widget.Disable() end
+
+        -- The ring gets its buttons back. Not optional and not only a path to a reload: a
+        -- Disable from a settings watcher runs with nothing behind it, and a button left
+        -- parented into a destroyed panel is invisible for the rest of the session.
+        if C then C.Restore() end
+
         if p._bar then
             p._bar:Destroy()
             p._bar = nil

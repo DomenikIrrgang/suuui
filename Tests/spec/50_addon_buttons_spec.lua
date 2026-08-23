@@ -14,11 +14,17 @@ local H = require("harness")
 --
 -- The `applying` flag cannot cover this and should not have to: it is raised only while the
 -- collector itself is collecting or restoring, whereas the rebuild happens in the panel.
+--
+-- The collector and the tray are BUILT-INS of the data bar rather than a plugin of their own,
+-- so there is no `addon_buttons` plugin to enable or disable: the settings live under
+-- `data_bar`, the collector's events ride the bar's event frame, and Watch/Unwatch/Restore are
+-- driven from the bar's own onEnable/onDisable. That is why the ring is handed back by
+-- switching the DATA BAR off, and why the tray's `tray_enabled` toggle is a separate question.
 
-local PLUGIN_ID = "addon_buttons"
-local WIDGET_ID = "addon_buttons.tray"
+local PLUGIN_ID = "data_bar"
+local WIDGET_ID = "databar.addon_buttons"
 
-local function C() return H.SuuUI._AddonButtons.Collector end
+local function C() return H.SuuUI._DataBar.ButtonCollector end
 local function root() return H.SuuUI.UIRoot:GetRootContainer():GetFrame() end
 local function ring() return H.env.Minimap or root() end
 
@@ -28,7 +34,7 @@ local function button(name, parent)
     return f
 end
 
-describe("Plugins.AddonButtons – the collector", function()
+describe("Plugins.DataBar – the addon-button collector", function()
     before_each(function()
         H.setup()
     end)
@@ -321,8 +327,8 @@ describe("Plugins.AddonButtons – the collector", function()
         it("collects SuuUI's own launcher too, so nothing is left on the ring", function()
             -- Asked for explicitly: the ring empties completely, our own button included. It
             -- arrives through the LibDBIcon callback like any other, so no special case exists
-            -- for it -- which is also why 48_minimap_button_spec.lua has to switch this plugin
-            -- off to assert the launcher's own ring behaviour.
+            -- for it -- which is also why 48_minimap_button_spec.lua has to switch the tray
+            -- off (data_bar / tray_enabled) to assert the launcher's own ring behaviour.
             local own = H.SuuUI._MinimapButton and H.SuuUI._MinimapButton.GetButton()
             expect(own).as("the launcher's button exists after login").notNil()
             expect(C().IsManaged(own)).as("and the tray has taken it").eq(true)
@@ -335,13 +341,68 @@ describe("Plugins.AddonButtons – the collector", function()
             expect(H.SuuUI.DataBar:Has(WIDGET_ID)).eq(true)
         end)
 
-        it("hands the ring back when the plugin is disabled", function()
+        it("hands the ring back when the field is switched off", function()
+            -- This was shipped broken and is the resolution of the xit that pinned it:
+            -- `tray_enabled` governs COLLECTION, not just the field. A player who turns "Show
+            -- Addon Buttons" off has asked for the buttons not to be in the bar; what they got
+            -- was buttons in no bar AND off the minimap, which reads as icons that vanished.
+            --
+            -- Resolved by giving the toggle's own watcher the whole job -- register plus Watch
+            -- and Collect on the way on, unregister plus Unwatch and Restore on the way off --
+            -- and by gating the bar's event-driven Collect on the FIELD being registered rather
+            -- than on a second read of the setting. The field's presence IS the fact, so the
+            -- two cannot drift apart.
+            local btn = button("FieldOnlyMinimapButton")
+            C().Collect()
+            expect(C().IsManaged(btn)).as("collected while the field is on").eq(true)
+
+            H.SuuUI.Settings:Set(PLUGIN_ID, "tray_enabled", false)
+            expect(H.SuuUI.DataBar:Has(WIDGET_ID)).as("the field is gone").eq(false)
+            expect(C().IsManaged(btn)).as("and the button is no longer held").eq(false)
+            expect(btn:GetParent()).as("back on the ring, not stranded").eq(ring())
+
+            H.SuuUI.Settings:Set(PLUGIN_ID, "tray_enabled", true)
+            expect(H.SuuUI.DataBar:Has(WIDGET_ID)).as("the field returns").eq(true)
+            expect(C().IsManaged(btn))
+                .as("and switching it on picks the ring up again rather than waiting for a "
+                    .. "sweep").eq(true)
+
+            C().Restore()
+        end)
+
+        it("does not collect while the field is switched off", function()
+            -- The mirror-image bug the gate exists to prevent, and the reason the fix is not
+            -- just "restore on the off-branch": with the tray off, an event that would normally
+            -- sweep must not quietly take buttons off the ring for a tray that is not showing.
+            H.SuuUI.Settings:Set(PLUGIN_ID, "tray_enabled", false)
+            local btn = button("LateWhileOffMinimapButton")
+            H.fireEvent("ADDON_LOADED", "SomeAddon")
+            expect(C().IsManaged(btn))
+                .as("nothing is collected while the tray is off").eq(false)
+            expect(btn:GetParent()).as("still on the ring").eq(ring())
+
+            H.SuuUI.Settings:Set(PLUGIN_ID, "tray_enabled", true)
+            C().Restore()
+        end)
+
+        it("hands the ring back when the data bar is disabled", function()
+            -- There is no addon_buttons plugin to switch off any more: the bar's onDisable is
+            -- what calls Collector.Restore(), so this is the path that genuinely undoes the
+            -- collection. Not merely a route to a reload -- a Disable from a settings watcher
+            -- runs with nothing behind it, and a button left parented into a destroyed panel
+            -- is invisible for the rest of the session.
             local btn = button("DisableMeMinimapButton")
             C().Collect()
             expect(C().IsManaged(btn)).eq(true)
+
             H.SuuUI.Settings:Set(PLUGIN_ID, "enabled", false)
+            expect(H.SuuUI.Plugins:Get(PLUGIN_ID):IsEnabled())
+                .as("the watcher carried the setting into a real disable").eq(false)
             expect(C().IsManaged(btn))
-                .as("disabling the plugin restores the buttons").eq(false)
+                .as("disabling the bar restores the buttons").eq(false)
+            expect(btn:GetParent()).as("and the ring has it back").eq(ring())
+            expect(C().Count()).as("the roster is empty").eq(0)
+
             H.SuuUI.Settings:Set(PLUGIN_ID, "enabled", true)
         end)
     end)

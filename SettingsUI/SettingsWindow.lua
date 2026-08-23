@@ -31,6 +31,19 @@ local function selectPlugin(id)
     SuuUI.Anim.Presets.FadeIn(contentScroll:GetFrame(), SuuUI.Theme:GetToken("animFast"))
 end
 
+-- A page already on screen has no other way to learn that its schema has GROWN. The data bar's
+-- page does exactly that: a widget contributed by another plugin may register at any moment and
+-- splice its controls in, and without this the controls appear only on the player's next visit
+-- to the page -- which reads as the setting having failed to register at all.
+--
+-- Guarded on the page being the one that changed, so an unrelated plugin extending its own
+-- schema does not rebuild whatever the player is currently reading.
+SuuUI.Events:On("SUUUI_SCHEMA_CHANGED", function(pluginId)
+    if not (activeId and contentScroll) then return end
+    if pluginId ~= activeId then return end
+    SuuUI._PageBuilder:Build(activeId, contentScroll)
+end, "settings_window.schema")
+
 local function buildNav()
     local T   = SuuUI.Theme
     local gap = T:GetToken("spaceXs") or 4

@@ -64,12 +64,13 @@ SuuUI/
 │   ├── Base.lua          -- InstallBase / InstallEnable: shared handle behaviour
 │   ├── Frame.lua         -- styled base frame (border, bg, variant)
 │   ├── Text.lua          -- styled FontString wrapper
-│   ├── ClickAway.lua     -- shared click-outside watcher for transient panels
+│   ├── ClickAway.lua     -- shared click-outside and cursor-outside watchers for transient panels
 │   ├── UnitClickArea.lua -- invisible secure surface: target a unit, open its context menu
 │   ├── Button.lua        -- full custom button (no Blizzard template)
 │   ├── Icon.lua          -- display-only texture, optional themed border, bevel trim
 │   ├── AuraIcon.lua      -- Icon + cooldown swipe, stack count, duration, dispel border
 │   ├── IconButton.lua
+│   ├── FlyoutPanel.lua   -- floating vertical roster: one row per entry, adopted icon + name
 │   ├── NavItem.lua       -- selectable labelled row (nav lists)
 │   ├── DataField.lua     -- one data bar field: muted prefix + value, accent rail on hover
 │   ├── Accordion.lua     -- collapsible group of rows + AccordionGroup (one open at a time)
@@ -110,10 +111,11 @@ SuuUI/
 │   ├── CastBars/          -- CastBar.lua (widget, one per unit) + CastBars.lua (plugin)
 │   ├── DataBar/           -- DataBarWidget.lua (the bar itself, three sections of fields)
 │   │   ├── TimeWidget.lua -- the built-in clock: the reference widget definition
-│   │   └── DataBar.lua    -- plugin: owns the bar, moves Blizzard's top frames down
-│   ├── Performance/       -- FpsWidget.lua (framerate readout, polled once a second)
-│   │   ├── LatencyWidget.lua -- latency readout, polled every 5s, home/world hover breakdown
-│   │   └── Performance.lua   -- plugin: contributes both fields, owns no bar
+│   │   ├── FpsWidget.lua  -- built-in framerate readout, polled once a second
+│   │   ├── LatencyWidget.lua -- built-in latency readout, polled every 5s, home/world breakdown
+│   │   ├── AddonButtonsWidget.lua -- built-in tray: a flyout roster of collected minimap buttons
+│   │   ├── ButtonCollector.lua    -- finds and adopts those buttons; stands down for MBB
+│   │   └── DataBar.lua    -- plugin: owns the bar and every built-in, moves Blizzard's top frames down
 │   ├── MinimapButton/     -- MinimapButton.lua: the LDB launcher and its LibDBIcon button
 │   └── ...
 ├── Themes/
@@ -452,18 +454,50 @@ puts in a growing frame: if a child is protected, the frame that grows may not c
 
 **An ordered list of entries contributed by plugins that know nothing about each other.** The
 data bar is a full-width strip along the top of the screen whose fields come from whoever
-wants one — the bundled clock and the Performance plugin's framerate and latency readouts
-today, a gold readout or a durability meter later. A plugin registers a widget *definition*,
+wants one — a built-in clock, framerate and latency readouts and an addon-button tray today, a
+gold readout or a durability meter later. A plugin registers a widget *definition*,
 which is data; the bar renders it. Neither side names the other, and registration order does
 not matter, so a plugin that loads after the bar is picked up exactly as one that loads before
 it.
 
-**`Plugins/Performance` is the first contributor that does not own the bar**, and until it
-existed the thing this registry is for had never actually happened: the clock is registered
-from inside the `DataBar` plugin, which owns both sides of it, so no definition had yet crossed
-the boundary the registry draws. Note what `Performance.lua` does not contain — no reference to
-the `data_bar` plugin, its frame, or its load order. It hands two definitions to Core and
-stops, and the bar picks them up through its subscription.
+**No bundled plugin exercises the cross-plugin path any more, and the registry is still the
+right shape.** This used to lean on `Plugins/Performance` as the first contributor that did not
+own the bar — the one place a definition had actually crossed the boundary the registry draws,
+since the clock is registered from inside the `DataBar` plugin, which owns both sides of it.
+That claim is no longer true of anything shipped: the framerate, latency and addon-button
+widgets have been folded into `Plugins/DataBar` as **built-ins**, so every bundled definition
+is now registered by the plugin that owns the bar. What remains is honest to say plainly — the
+cross-plugin path is exercised by **third-party plugins and by the suite**, and by nothing in
+the bundle. That is a real loss of production proof, and it is the reason the specs covering
+registration from a foreign plugin id matter more than they used to rather than less: they are
+the only thing standing between a refactor and a boundary nobody walks over on login.
+
+The reason for keeping the registry after the fold is unchanged, and it is not the bundle's
+convenience. Ordering across contributors, a definition that survives its plugin loading late,
+and an answer that exists whether or not the bar is loaded at all are properties an author
+outside this repository depends on. Folding the bundled widgets in changed who happens to call
+`RegisterWidget`; it did not change what the call promises.
+
+**A definition may carry a `schema`.** Its entries are rendered on the **bar's own** settings
+page, next to the controls for the bar itself, which is where a player looks for a setting about
+a strip of text they can see. This was refused for a long time on a real objection:
+`Settings:Register` may be called only once per plugin, in `onInit`, while a widget may register
+at any point, so there was no moment at which the bar's page could splice in a stranger's
+schema. Two changes removed that objection — a plugin's schema is now **extendable** (`5`,
+`Settings:Extend` / `Retract`), and the page **reads the registry when it builds** rather than
+once at registration, so a widget arriving after `onInit` needs nothing spliced into a call that
+has already run. The contributor keeps ownership of the values; the full contract, including why
+the watcher owner stays keyed to the page's plugin id, is in `plugin-authoring.md` —
+"Where your widget's settings belong".
+
+**The addon-button tray stands down when MinimapButtonButton is loaded.** The two features are
+genuinely incompatible rather than merely redundant: both collect the same frames by the same
+mechanism, so two collectors reparenting one button take it in turns and the player watches an
+icon flicker between two homes. MBB also replaces `SetParent` and `SetPoint` on the buttons it
+holds with no-ops, which means a tray that collected anyway could never hand the ring back on
+disable. So the collector refuses to run while that addon is present and the field reads `—`
+until one of the two is switched off — a visible nothing rather than a silent half-collection,
+because a tray that quietly shows three of a player's nine buttons reads as a bug in this addon.
 
 **It is deliberately not an attach point, and the difference is shape rather than intent.** An
 attach point is ONE provider per name (3b): `Publish` overwrites, `Get` answers with a single
@@ -594,12 +628,16 @@ Schema entry shape:
   options={}                 -- dropdown: array of {value, label}
   validate = function(v) end -- optional, returns true or error string
   transient = true           -- optional: session state, never saved (see 5b)
+  owner    = "other_plugin"  -- optional: control renders on THIS page, value lives in that
+                             -- plugin's namespace (contributed entries; see below)
 }
 ```
 
 **API:**
 ```lua
 SuuUI.Settings:Register(pluginId, schemaArray)
+SuuUI.Settings:Extend(pluginId, entries)   -- append to a schema, creating it if absent
+SuuUI.Settings:Retract(pluginId, keys)     -- remove entries again
 SuuUI.Settings:GetSchema(pluginId)
 SuuUI.Settings:Get(pluginId, key)          -- stored value, else the schema default
 SuuUI.Settings:Set(pluginId, key, value)   -- writes, notifies watchers, fires the event
@@ -609,6 +647,46 @@ SuuUI.Settings:IsTransient(pluginId, key)
 ```
 
 Event payload: `"SUUUI_SETTING_CHANGED"` → `pluginId, key, value, oldValue`
+Event payload: `"SUUUI_SCHEMA_CHANGED"` → `pluginId`
+
+**A schema is not stated once and closed.** `Register` is called once per plugin in `onInit`,
+which for a long time meant a page could only ever show controls its own plugin had declared
+before anything else loaded. `Extend` appends entries afterwards — creating the schema when the
+plugin has none yet — and `Retract` takes them back out, which is what lets a surface owned by
+one plugin host a control contributed by another. The data bar is the case that needed it: a
+widget may register at any point, so there is no `onInit` moment at which the bar's page could
+have spliced in a stranger's schema, and `Extend` plus a page that reads the registry at build
+time is what replaces that missing moment.
+
+Three properties of the pair are load-bearing:
+
+- **`Extend` skips a key that already exists.** A re-register on re-enable hands over the same
+  entries again, and an append that did not de-duplicate would produce a page carrying two of
+  every control — the second one writing the same key as the first.
+- **It emits `SUUUI_SCHEMA_CHANGED`.** A settings window already on screen has no other way to
+  learn that the page it is showing has grown; without the event the new control appears on the
+  player's next visit, which reads as the setting having failed to register at all.
+- **`Retract` drops a section header the removal left empty.** A `section` entry opens an
+  accordion (5, `SettingsUI`), so a header whose entire body has been retracted is a control
+  that opens onto nothing — the player reads an empty group as a rendering fault rather than as
+  an absent widget.
+
+**An entry may name an `owner`, which decides where the VALUE lives.** `owner = "<pluginId>"`
+means the control renders on the hosting plugin's page while `Get` and `Set` address the
+*contributor's* namespace. Ownership stays with the contributor for two reasons that only show
+up later: the value is profile-scoped to the plugin that declared it, so a profile switch moves
+it with the rest of that plugin's state rather than with the host page's; and it survives the
+contribution being retracted, so a player who switches a widget off and on again does not find
+their tuned thresholds reset. Parking the value under the host would tie one plugin's
+configuration to the lifetime of another plugin's page.
+
+**The watcher owner, by contrast, stays keyed to the PAGE's plugin id.** A control the page
+builds watches under `Settings.ControlOwner(<page's pluginId>, kind, key)` even when the entry's
+`owner` is someone else, because `PageBuilder` drops a rebuilt page's watchers with
+`UnwatchPrefix` on that page's prefix (5b). Keying the watcher to the contributor puts it outside
+the prefix the rebuild sweeps: it survives, the rebuild adds another, and the page leaks one
+watcher per rebuild into destroyed controls. `owner` answers who owns the data; the watcher owner
+answers who cleans the control up, and those are different questions.
 
 **`Set` carries effective values, not raw stored ones.** A key that has never been
 written stores `nil` while reading as its schema default, so both the watcher payload and
@@ -2249,6 +2327,48 @@ document it here.
   Self-destroying, so it is safe to call on every failure.
 - `ClickAway` — non-visual helper; polls for clicks outside a panel only while armed.
   Reads the cursor with `Pixel.CursorIn(panel)`, not against `UIParent`.
+- `HoverAway` — the same file's second watcher, for a panel that closes when the cursor
+  **leaves** rather than when something is clicked. `{ frame, guards, onOutside }`, plus
+  `Arm` / `Disarm` / `AddGuard` / `Destroy`, and it polls the rect exactly as `ClickAway`
+  does. **`OnLeave` cannot express this and that is why the helper exists**: the client moves
+  mouse focus to a child the moment the cursor enters one, so a panel whose rows take mouse
+  input receives `OnLeave` on the way *in* to the thing the player is reaching for, and a
+  panel closing on its own `OnLeave` vanishes from under them. Polling is the only reading
+  that treats a panel and its contents as one region. `guards` are the extra frames that
+  count as inside — the anchor the panel hangs off, so crossing the seam between the two is
+  not "outside" — and a short grace period covers a sample taken mid-crossing. That grace is
+  deliberately a constant in the file rather than a theme token: no theme should be able to
+  set it to zero and make every flyout in the addon unreachable.
+- `FlyoutPanel` — a floating vertical roster, one row per entry, an adopted icon on the left
+  and its name to the right, closing when the cursor leaves. Props `{ anchorTo, align,
+  iconSize }`; API `SetRows(entries)` (`{ frame, label, onClick }` each), `GetRowCount`,
+  `SetIconSize` / `GetIconSize`, `Open` / `Close` / `IsOpen`, `Destroy`. It lives on the
+  shared floating host at the `tooltip` layer, wires its own `HoverAway` with the anchor as a
+  guard, and emits `VISIBILITY_CHANGED`. A row takes mouse input only when its entry declares
+  `onClick`, the same rule `DataField`'s hover rail follows: a highlight on a row that does
+  nothing promises an interaction that is not there.
+
+  Three things about it are load-bearing:
+
+  - **It ADOPTS the frames it shows** — `SetParent` onto the row that holds them — rather than
+    anchoring them in place. Only parentage makes the panel's visibility govern them: a frame
+    merely anchored to a hidden row stays on screen when the panel closes, and a hidden frame
+    has no rect, so a foreign frame parented anywhere else draws nothing while still reporting
+    the size it was assigned. Adoption is also why `SetRows` swaps a held frame only when it
+    actually differs: `Add` is a membership operation, not an upsert, so re-adding the same
+    child on every rebuild grows the child list without bound.
+  - **A pinned strata has to be RELEASED before it can be re-stated.** LibDBIcon creates its
+    buttons with `SetFrameStrata("MEDIUM")` followed by `SetFixedFrameStrata(true)`, and a
+    pinned frame does not re-inherit its new parent's strata — so an adopted button stays on
+    `MEDIUM` while the panel sits on the tooltip rung and draws *behind* a backdrop carrying
+    `opacityPanel`. The labels are ours and appear, the icons are theirs and do not, which
+    looks like a layout fault rather than a z-order one. Clear the pin first, then raise
+    through `UIRoot:RaiseAbove` — never a raw strata string — and re-assert on every rebuild,
+    since the owning addon is free to re-pin its own button at any point.
+  - **The layer is registered at construction, not at `Open`.** Raising adopted frames happens
+    from `SetRows`, which runs before the first open; with the layer registered later
+    `RaiseAbove` has no rung to resolve and silently leaves a pinned foreign frame wherever its
+    owner put it.
 - `UnitClickArea` — an invisible surface that hands a click over a unit's frame to the
   **client's own** unit actions: left click targets, right click opens that unit's context
   menu, with every entry the client would offer. Props: `unit` (required), `name`

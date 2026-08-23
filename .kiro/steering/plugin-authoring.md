@@ -128,6 +128,13 @@ validate = function(value) return true end
 -- or: return false, "Error message shown in UI"
 ```
 
+**`Register` states your schema; it is not the last word on it.** `Settings:Extend(pluginId,
+entries)` appends to a plugin's schema afterwards and `Settings:Retract(pluginId, keys)` takes
+entries back out, which is what lets a surface owned by one plugin carry a control contributed
+by another — the data bar's page is the case that needed it. You will rarely call either
+yourself: the surface doing the hosting makes those calls on your behalf from the data you
+registered with it. Full account in "Where your widget's settings belong" under the data bar.
+
 ### A section is a collapsible group
 
 A `section` entry is not a row. It used to render a labelled divider; it now opens an
@@ -504,11 +511,59 @@ minutes later — appears without anyone being told about it.
 | `OnClick` | `function(field, button)` |
 | `OnEnter` | `function(field)` — the field handle is passed, so `field:GetFrame()` is what you anchor a tooltip to |
 | `OnLeave` | `function(field)` |
-| `schema` | **There is no such field.** `Settings:Register` is called once per plugin in `onInit`, while a widget may register at any point — during login, from a toggle, from an addon that loads minutes later — so there is no moment at which this page could splice in a stranger's schema. Register your widget's settings under your OWN plugin id, on your own page, as the example above does. The built-in clock is the only exception, and only because one plugin owns both sides of it |
+| `schema` | Optional array of settings-schema entries, rendered on the **data bar's** settings page rather than on yours. This field used to read "there is no such field", and the objection behind that was real: `Settings:Register` may be called only once per plugin, in `onInit`, while a widget may register at any point — during login, from a toggle, from an addon that loads minutes later — so there was no moment at which the bar's page could splice in a stranger's schema. Two changes removed it. A plugin's schema is now **extendable** rather than stated once, and the bar's page **reads the registry when it builds** rather than once at registration, so a widget arriving after the bar's `onInit` is picked up by the next build with nothing having to be spliced into a call that already ran. See "Where your widget's settings belong" below — your own page is still the default answer |
 
 Everything you hand over runs through `pcall` and logs through `SuuUI.Debug`, because it is
 plugin code on a shared path: one throwing `GetText` must not stop the tick loop and take every
 other widget's refresh with it.
+
+**Where your widget's settings belong.** Your own page, for everything that is a preference
+about your feature — the example above declares `show_gold` under `my_plugin` and that is the
+default answer. The bar's page is for the smaller set of settings that are about **the field on
+the bar**: which section it sits in, what it reads there, the thresholds that decide its tone.
+A player looking for those goes to the data bar's page, because that is the thing they can see;
+sending them hunting through a plugin list for a control that governs one strip of text is the
+kind of split that makes a settings window feel arbitrary. Declare those as `schema` on the
+definition and the bar renders them alongside its own controls.
+
+**How the contribution actually reaches the page.** Two calls on the settings registry, and the
+bar makes both of them — you declare data and never call either yourself:
+
+```lua
+SuuUI.Settings:Extend(pluginId, entries)   -- append to a plugin's schema, creating it if absent
+SuuUI.Settings:Retract(pluginId, keys)     -- remove them again
+```
+
+`Extend` appends your entries to the named plugin's schema, creating the schema when that plugin
+has none yet, **skipping any key that is already present** — so the same definition arriving
+twice, which is exactly what a re-register on re-enable does, adds nothing the second time
+rather than producing a page with two of every control. It then fires `SUUUI_SCHEMA_CHANGED`,
+which is what tells an open settings window that the page it is showing has more on it than it
+did a moment ago. `Retract` takes the keys back out when your widget unregisters, and it also
+drops **a section header left empty by the removal**, because a collapsible section with nothing
+inside it is a control that opens onto nothing — the player reads it as a bug in the page rather
+than as an absent widget.
+
+**A schema entry may name an `owner`, and ownership stays with the contributor.** Set
+`owner = "my_plugin"` on an entry and the **control renders on the bar's page** while the
+**value lives in your own settings namespace** — `Settings:Get("my_plugin", key)` is still how
+you read it, and the page writes there rather than into `data_bar`. That split is deliberate and
+it is not a detail. It is your data: it stays profile-scoped to *you*, so a player switching
+profiles gets your value moving with the rest of your plugin's state instead of with the bar's;
+and it **survives the widget being unregistered**, so switching your field off and on again does
+not silently reset the thresholds the player tuned. Parking the value under `data_bar` would tie
+one plugin's configuration to the lifetime of another plugin's page, and the failure would show
+up as settings that quietly forget themselves.
+
+**The watcher owner string stays keyed to the PAGE's plugin id, not yours.** This is the subtle
+part, so take it as a rule: a control the bar's page builds for your entry watches under
+`Settings.ControlOwner("data_bar", kind, key)` even when the entry's `owner` is `my_plugin`.
+`PageBuilder` drops a rebuilt page's watchers by calling `UnwatchPrefix` with that page's
+prefix, so a watcher keyed to the contributor's id is outside the prefix the rebuild sweeps: it
+survives, the rebuild adds another, and the page leaks **one watcher per rebuild** — a leak that
+is invisible until every write and every profile switch is firing into a stack of destroyed
+controls. The `owner` field decides where the **value** lives; the watcher owner decides who
+**cleans the control up**, and those two answers are not the same one.
 
 **`prefix` is optional, and the clock omits it deliberately.** `"14:32"` is self-evident, and a
 muted `TIME` in front of it is noise on a strip where horizontal space is the scarce thing. Use
@@ -593,10 +648,12 @@ SuuUI.DataBar:RegisterWidget({
 })
 ```
 
-`Plugins/Performance/FpsWidget.lua` and `LatencyWidget.lua` are the shipped reference for this
+`Plugins/DataBar/FpsWidget.lua` and `LatencyWidget.lua` are the shipped reference for this
 shape, including the guards a client reading needs: both check the global exists before calling
 it, and both reject a non-finite number with `v ~= v`, since NaN is a number and every
-comparison against it is false — a `< 0` range check alone lets it through.
+comparison against it is false — a `< 0` range check alone lets it through. Both are **built-in
+widgets** rather than a separate plugin, so they read their own settings under the `data_bar`
+plugin id; a third-party widget does the same thing under its own id.
 
 **A widget must not build frames.** No `CreateFrame`, no textures, no `SetPoint`, and no
 components of your own for the field itself: the bar owns the field, its tokens, its divider

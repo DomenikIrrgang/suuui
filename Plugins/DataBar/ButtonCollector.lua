@@ -14,7 +14,7 @@
 -- minimap, which are children of it and look exactly like buttons.
 local ipairs, pairs, type, tostring, sort = ipairs, pairs, type, tostring, table.sort
 
-SuuUI._AddonButtons = SuuUI._AddonButtons or {}
+SuuUI._DataBar = SuuUI._DataBar or {}
 
 local M = {}
 
@@ -486,4 +486,4 @@ function M.IsManaged(frame)
     return managed[frame] == true
 end
 
-SuuUI._AddonButtons.Collector = M
+SuuUI._DataBar.ButtonCollector = M

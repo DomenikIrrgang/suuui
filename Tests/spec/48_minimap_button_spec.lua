@@ -2,14 +2,14 @@ local H = require("harness")
 
 -- Every test here goes through this rather than H.setup directly.
 --
--- The addon-button tray collects every LibDBIcon button off the minimap ring, and SuuUI's own
--- launcher is one of them -- deliberately, because that is what the tray is FOR. With the tray
--- enabled this button has no ring position left to assert, so these tests would be measuring
--- which plugin reached it first instead of measuring the launcher. Turned off here; the
--- interaction itself is asserted in 50_addon_buttons_spec.lua, where it belongs.
+-- The data bar's addon-button tray collects every LibDBIcon button off the minimap ring, and
+-- SuuUI's own launcher is one of them -- deliberately, because that is what the tray is FOR.
+-- With the tray enabled this button has no ring position left to assert, so these tests would
+-- be measuring which feature reached it first instead of measuring the launcher. Turned off
+-- here; the interaction itself is asserted in 50_addon_buttons_spec.lua, where it belongs.
 local function setup(opts)
     H.setup(opts)
-    pcall(function() H.SuuUI.Settings:Set("addon_buttons", "enabled", false) end)
+    pcall(function() H.SuuUI.Settings:Set("data_bar", "tray_enabled", false) end)
 end
 
 -- The MinimapButton plugin: SuuUI's launcher, owned by LibDBIcon-1.0 rather than

@@ -9,11 +9,11 @@
 -- offered only for a button the client would actually allow it on.
 local ipairs, type, tostring = ipairs, type, tostring
 
-SuuUI._AddonButtons = SuuUI._AddonButtons or {}
+SuuUI._DataBar = SuuUI._DataBar or {}
 
-local PLUGIN_ID = "addon_buttons"
-local WIDGET_ID = "addon_buttons.tray"
-local OWNER     = "addon_buttons.tray"
+local PLUGIN_ID = "data_bar"
+local WIDGET_ID = "databar.addon_buttons"
+local OWNER     = "databar.addon_buttons"
 
 local M = { ID = WIDGET_ID }
 
@@ -22,7 +22,7 @@ local anchorField
 local lastCount, lastText, lastTone
 
 local function Collector()
-    return SuuUI._AddonButtons.Collector
+    return SuuUI._DataBar.ButtonCollector
 end
 
 ---------------------------------------------------------------------------
@@ -102,6 +102,16 @@ local function openPanelInner(field)
     local p = ensurePanel(field)
     anchorField = field
 
+    -- The roster must not run off the bottom of the screen; past this cap it continues in a
+    -- second column beside the first. Computed here rather than inside the panel, because it
+    -- depends on where the panel hangs -- directly under the bar -- which only this caller
+    -- knows. Re-stated on every open, so a resolution change is picked up for free.
+    local root  = SuuUI.UIRoot:GetRootContainer()
+    local avail = (root and root:GetHeight() or 0)
+                - SuuUI.DataBar:GetOccupiedHeight()
+                - (SuuUI.Theme:GetToken("spaceLg") or 16)
+    p:SetMaxHeight(avail)
+
     if not C then
         p:SetRows(messageRow("Collector unavailable"))
         p:Open()
@@ -161,7 +171,10 @@ local def = {
     label   = "Addon Buttons",
     prefix  = "ADDONS",
     section = "right",
-    order   = 220,
+    -- Ahead of latency (200) and the framerate (210), so the right section reads
+    -- addons | latency | fps from left to right. A section places its fields in ascending
+    -- order, so a lower number is further left.
+    order   = 190,
     -- ADDON_LOADED is the one GAME event that coincides with buttons appearing, so the field
     -- re-reads on it. The rest of the time the count changes on LibDBIcon's own
     -- LibDBIcon_IconCreated callback, which the bar cannot subscribe to -- it registers game
@@ -206,12 +219,32 @@ function M.Schema()
 end
 
 --- Registers the widget and keeps it in step with its enable toggle.
+---
+--- The toggle governs COLLECTION, not just the field. Unregistering the field alone was the
+--- shipped bug: the buttons stayed collected with nothing on screen showing them -- off the
+--- ring, inside a panel that could no longer be reached -- so the player's icons simply
+--- vanished. Whether the tray is on is therefore one fact with one owner, this watcher.
 function M.Enable()
     SuuUI.Settings:Watch(PLUGIN_ID, "tray_enabled", function(on)
+        local C = Collector()
         if on then
             SuuUI.DataBar:RegisterWidget(def)
+            -- Picking the ring back up is not optional on this branch: the off-branch handed
+            -- every button back, so without this the field returns reading 0 until something
+            -- else happens to sweep.
+            if C then
+                C.Watch()
+                C.Collect()
+            end
         else
             SuuUI.DataBar:UnregisterWidget(WIDGET_ID)
+            -- Closed before the buttons leave, so the panel is not holding frames it is about
+            -- to lose.
+            if panel then panel:Close() end
+            if C then
+                C.Unwatch()
+                C.Restore()
+            end
         end
     end, OWNER, { immediate = true })
 end
@@ -236,4 +269,4 @@ function M.Refresh()
     end
 end
 
-SuuUI._AddonButtons.TrayWidget = M
+SuuUI._DataBar.TrayWidget = M

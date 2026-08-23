@@ -1,10 +1,20 @@
 local H = require("harness")
 
--- The Performance plugin: a framerate readout and a latency readout, and the first plugin
--- that contributes to the data bar WITHOUT owning it. So this file asserts three layers —
--- the STRINGS and TONES the two widgets answer (which is the whole of their logic), the
--- FIELDS the bar builds from them (placement, prefix, rail, repaint cadence), and the
--- plugin's own lifecycle.
+-- The framerate and latency readouts: two of the data bar's BUILT-IN widgets, alongside the
+-- clock and the addon-button tray. Neither owns a plugin — their settings live under the bar's
+-- id and their schema slices are spliced into the bar's page in onInit, exactly as the clock's
+-- always were. So this file asserts three layers — the STRINGS and TONES the two widgets answer
+-- (which is the whole of their logic), the FIELDS the bar builds from them (placement, prefix,
+-- rail, repaint cadence), and their lifecycle through their own toggles and the bar's.
+--
+-- Nothing bundled exercises the CROSS-PLUGIN contribution path any more. The registry is still
+-- open to a widget registered by another plugin, and the bar still splices such a widget's
+-- schema slice onto its own page, but every widget that ships is a built-in — so that path is
+-- exercised only by third-party plugins in the wild and by the registry's own spec
+-- (43_databar_registry_spec.lua). What survived the move, and is still asserted here, is the
+-- half that is about Core rather than about ownership: a widget registers a definition through
+-- the registry and never names the bar's plugin, frame or load order, so its definition can be
+-- registered and answer with no bar standing.
 --
 -- Readings and thresholds are asserted as numbers on purpose, and that is not the
 -- hardcoded-pixel trap: the reading IS the claim ("at exactly the warn threshold the field
@@ -12,24 +22,28 @@ local H = require("harness")
 -- rather than typed in, so moving a documented default moves the expectation with it. Every
 -- PIXEL and COLOUR expectation is derived from tokens.
 
-local PLUGIN_ID = "performance"
-local BAR_ID    = "data_bar"
-local FPS_ID    = "performance.fps"
-local MS_ID     = "performance.latency"
+local PLUGIN_ID = "data_bar"
+local FPS_ID    = "databar.fps"
+local MS_ID     = "databar.latency"
+
+-- The clock: a different built-in of the same plugin, and the neighbour these two must not
+-- disturb when one of their own toggles goes off.
+local CLOCK_ID = "databar.time"
 
 -- The placeholder the widgets answer when the client tells them nothing. Copied from the
 -- production files rather than spelled out, so it is the same code point (U+2014) and not a
 -- hyphen that looks like one at this font size.
 local DASH = "—"
 
-local function fpsWidget()     return H.SuuUI._Performance.FpsWidget end
-local function latencyWidget() return H.SuuUI._Performance.LatencyWidget end
+local function fpsWidget()     return H.SuuUI._DataBar.FpsWidget end
+local function latencyWidget() return H.SuuUI._DataBar.LatencyWidget end
 local function plugin()        return H.SuuUI.Plugins:Get(PLUGIN_ID) end
 local function def(id)         return H.SuuUI.DataBar:GetWidget(id) end
 
--- The bar belongs to the DataBar plugin, not to this one. That separation is the point of
--- the registry, and reaching for it through the other plugin is how this spec states it.
-local function bar() return H.SuuUI.Plugins:Get(BAR_ID)._bar end
+-- The bar and both widgets belong to the same plugin now, so a built-in reaches its own field
+-- through the plugin that renders it. The registry is still the only thing the widget FILES
+-- name — see the file header — and that separation is asserted below rather than assumed here.
+local function bar() return plugin()._bar end
 
 local function set(key, value) H.SuuUI.Settings:Set(PLUGIN_ID, key, value) end
 local function get(key)        return H.SuuUI.Settings:Get(PLUGIN_ID, key) end
@@ -46,10 +60,11 @@ local function field(id)
     return rec and rec.field
 end
 
--- How many fields the bar holds FOR ONE widget. Deliberately not #bar()._records: three
--- plugins contribute widgets to this bar now — the clock, the framerate and the latency — so
--- the bar's total says nothing about any one of them, and using it as a proxy is what broke
--- the clock's own spec the moment a second contributor existed.
+-- How many fields the bar holds FOR ONE widget. Deliberately not #bar()._records: the bar
+-- carries four built-in widgets — the clock, the framerate, the latency and the addon-button
+-- tray — plus anything a third-party plugin registers, so the bar's total says nothing about any
+-- one of them, and using it as a proxy is what broke the clock's own spec the moment a second
+-- widget existed.
 local function recordCount(id)
     local n = 0
     for _, rec in ipairs(bar()._records) do
@@ -167,7 +182,7 @@ local function countFormats(getText)
     return counter
 end
 
-describe("Plugins.Performance – framerate and latency readouts", function()
+describe("Plugins.DataBar – framerate and latency readouts", function()
     before_each(function() H.setup() end)
 
     -----------------------------------------------------------------------------
@@ -194,10 +209,10 @@ describe("Plugins.Performance – framerate and latency readouts", function()
         it("puts both in the right section", function()
             expect(def(FPS_ID).section).eq("right")
             expect(def(MS_ID).section).eq("right")
-            -- Scoped to the two readouts by id rather than counting the section. Any plugin
+            -- Scoped to the two readouts by id rather than counting the section. Any widget
             -- may contribute a right-section field -- the addon-button tray does -- so
             -- "the section holds exactly two things" is a claim about the whole addon and
-            -- breaks for a reason that has nothing to do with this plugin.
+            -- breaks for a reason that has nothing to do with these two.
             local seen = {}
             for _, entry in ipairs(H.SuuUI.DataBar:ListSection("right")) do
                 seen[entry.id] = true
@@ -243,10 +258,20 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             expect(def(FPS_ID).order).eq(210)
         end)
 
-        it("is listed first in the section", function()
+        it("is listed before the framerate in the section", function()
+            -- Positions RELATIVE to each other rather than absolute indices. The right section
+            -- also carries the addon tray (order 190, so ahead of both) and may carry a
+            -- third-party field, so an index pins this test to an unrelated widget's order and
+            -- fails for a reason that has nothing to do with these two.
             local right = H.SuuUI.DataBar:ListSection("right")
-            expect(right[1].id).eq(MS_ID)
-            expect(right[2].id).eq(FPS_ID)
+            local iMs, iFps
+            for i, entry in ipairs(right) do
+                if entry.id == MS_ID  then iMs  = i end
+                if entry.id == FPS_ID then iFps = i end
+            end
+            expect(iMs).as("latency is listed in the right section").notNil()
+            expect(iFps).as("and so is the framerate").notNil()
+            expect(iMs < iFps).as("latency comes before the framerate").eq(true)
         end)
 
         it("is actually drawn to the left of it", function()
@@ -906,10 +931,10 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             expect(#updateFrames())
                 .as("the clock still ticks on the same frame").eq(withAll)
 
-            H.SuuUI.Settings:Set(BAR_ID, "time_enabled", false)
+            H.SuuUI.Settings:Set(PLUGIN_ID, "time_enabled", false)
             -- And every OTHER ticking widget, driven off the registry rather than a named
             -- list: the claim is that the script is dropped when NOTHING is left to tick,
-            -- and any plugin may contribute a polled field -- the addon-button tray does.
+            -- and any widget may contribute a polled field -- the addon-button tray does.
             -- A hardcoded list here would silently re-break on the next one.
             for _, entry in ipairs(H.SuuUI.DataBar:List()) do
                 if type(entry.update) == "number" and entry.update > 0 then
@@ -985,17 +1010,24 @@ describe("Plugins.Performance – framerate and latency readouts", function()
     end)
 
     -----------------------------------------------------------------------------
-    describe("the plugin", function()
-        it("registers under its own id, not the data bar's", function()
-            expect(plugin()).notNil()
+    describe("built-ins of the bar, not a plugin of their own", function()
+        it("have no plugin of their own -- the data bar owns both", function()
+            -- Re-aimed from "registers under its own id, not the data bar's". The separate
+            -- plugin is gone, and this states that rather than leaving it implied: bringing
+            -- one back, so two owners disagreed about which of them registers these widgets,
+            -- would fail here instead of somewhere further downstream.
+            expect(H.SuuUI.Plugins:Get("performance"))
+                .as("no plugin of their own any more").isNil()
+            expect(plugin()).as("the data bar is the owner").notNil()
             expect(plugin().id).eq(PLUGIN_ID)
             expect(plugin():IsEnabled()).eq(true)
+            expect(fpsWidget()).as("each is a module on the bar's own table").notNil()
+            expect(latencyWidget()).notNil()
         end)
 
-        it("splices both widget slices into one schema, after its own key", function()
+        it("splice both widget slices into the bar's page, after the bar's own keys", function()
             local registered = H.SuuUI.Settings:GetSchema(PLUGIN_ID)
             expect(registered).notNil()
-            expect(#registered).as("one plugin key plus two four-entry slices").eq(9)
 
             local seen, order = {}, {}
             for i, entry in ipairs(registered) do
@@ -1007,16 +1039,34 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             for _, key in ipairs({ "fps_enabled", "fps_warn", "fps_danger",
                                    "ms_enabled", "ms_warn", "ms_danger" }) do
                 expect(seen[key]).as(key .. " registered exactly once").eq(1)
-                expect(order[key]).as(key .. " follows the plugin's own key")
-                    .gt(order["enabled"])
+                expect(order[key]).as(key .. " follows the bar's own keys")
+                    .gt(order["move_blizzard"])
             end
             expect(order["fps_danger"])
                 .as("the framerate slice comes before the latency slice")
                 .lt(order["ms_enabled"])
+
+            -- Replaces the old "#registered == 9", which was a total for a page these two
+            -- widgets used to have to themselves. The page is the bar's now and every
+            -- built-in splices into it, so a total would break for a reason that has nothing
+            -- to do with either readout. Contiguity is what the count was really reaching
+            -- for and is the stronger claim: each slice arrives whole, in its own order, and
+            -- headed by its own section entry.
+            for _, slice in ipairs({ fpsWidget().Schema(), latencyWidget().Schema() }) do
+                local head = order[slice[2].key] - 1
+                expect(registered[head].type)
+                    .as(slice[1].label .. " slice is headed by a section").eq("section")
+                expect(registered[head].label).eq(slice[1].label)
+                for i = 2, #slice do
+                    expect(registered[head + i - 1].key)
+                        .as(slice[1].label .. " entry " .. i .. " lands in slice order")
+                        .eq(slice[i].key)
+                end
+            end
         end)
 
         it("answers the documented defaults through the registry", function()
-            expect(get("enabled")).eq(true)
+            expect(get("enabled")).as("the bar's own toggle").eq(true)
             expect(get("fps_enabled")).eq(true)
             expect(get("fps_warn")).eq(50)
             expect(get("fps_danger")).eq(30)
@@ -1025,17 +1075,28 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             expect(get("ms_danger")).eq(300)
         end)
 
-        it("puts the keys under the plugin id, not the widget ids", function()
+        it("put the keys on the bar's page, not under the widget ids", function()
             expect(H.SuuUI.Settings:Get(FPS_ID, "fps_warn"))
                 .as("a widget id is not a settings namespace").isNil()
             expect(H.SuuUI.Settings:Get(MS_ID, "ms_warn")).isNil()
-            expect(H.SuuUI.Settings:Get(BAR_ID, "fps_warn"))
-                .as("and a widget cannot reach the data bar's page").isNil()
+            -- Re-aimed: the third assertion here used to be that the keys could NOT be
+            -- reached through the data bar's id, because they belonged to a page of their
+            -- own. The opposite is the point now -- a built-in's values live under the bar's
+            -- id, which is the page a player opens to find a setting about a strip of text
+            -- they can see -- and the namespace that has to be absent is the old one.
+            -- Read back off the slice rather than typed, so a moved default moves with it.
+            expect(H.SuuUI.Settings:Get(PLUGIN_ID, "fps_warn"))
+                .as("the bar's page owns the framerate keys now")
+                .eq(fpsWidget().Schema()[3].default)
+            expect(H.SuuUI.Settings:Get(PLUGIN_ID, "ms_warn"))
+                .eq(latencyWidget().Schema()[3].default)
+            expect(H.SuuUI.Settings:Get("performance", "fps_warn"))
+                .as("and no 'performance' namespace is left behind").isNil()
         end)
 
         it("namespaces each widget's keys with its own prefix", function()
-            -- Two widgets in one plugin share a settings namespace, so a widget's keys
-            -- carry its own prefix or the second one to ship silently collides.
+            -- Four built-ins now share this one settings namespace, so a widget's keys carry
+            -- its own prefix or the next one to ship silently collides with an existing key.
             for i = 2, #fpsWidget().Schema() do
                 expect(fpsWidget().Schema()[i].key).as("fps key " .. i).matches("^fps_")
             end
@@ -1104,27 +1165,51 @@ describe("Plugins.Performance – framerate and latency readouts", function()
                 .as("mutating a slice cannot reach the registry").eq(true)
         end)
 
-        it("takes both readouts down with the enable toggle", function()
+        it("go down one at a time with their OWN toggle, and take nothing else", function()
+            -- The first half of the re-aim from "takes both readouts down with the enable
+            -- toggle". There is no plugin-wide toggle for these two any more, so what takes
+            -- ONE readout down is its own key -- and the frame-identity check belongs here
+            -- rather than on the bar's toggle, because the bar is still standing to be read.
             local fpsFrame = field(FPS_ID):GetFrame()
             local msFrame  = field(MS_ID):GetFrame()
-            set("enabled", false)
-            expect(plugin():IsEnabled()).eq(false)
+
+            set("fps_enabled", false)
             expect(H.SuuUI.DataBar:Has(FPS_ID)).eq(false)
-            expect(H.SuuUI.DataBar:Has(MS_ID)).eq(false)
             expect(recordCount(FPS_ID)).eq(0)
+            expect(H.SuuUI.DataBar:Has(MS_ID)).as("its neighbour is untouched").eq(true)
+            expect(H.SuuUI.DataBar:Has(CLOCK_ID))
+                .as("the clock, which is a different widget, is untouched").eq(true)
+
+            set("ms_enabled", false)
+            expect(H.SuuUI.DataBar:Has(MS_ID)).eq(false)
             expect(recordCount(MS_ID)).eq(0)
+            expect(H.SuuUI.DataBar:Has(CLOCK_ID))
+                .as("and still untouched with both readouts gone").eq(true)
+
             -- Scoped to these two frames by identity rather than to the section's total.
-            -- Another plugin's field may legitimately still be there, and asserting an empty
-            -- section fails for a reason that has nothing to do with this enable toggle.
+            -- Another widget's field may legitimately still be there, and asserting an empty
+            -- section fails for a reason that has nothing to do with these two toggles.
             for _, child in ipairs(bar():GetSection("right"):GetChildren()) do
                 expect(child ~= fpsFrame and child ~= msFrame)
                     .as("neither readout's frame is left in the section").eq(true)
             end
-            expect(H.SuuUI.DataBar:Has("databar.time"))
-                .as("the clock, which belongs to another plugin, is untouched").eq(true)
         end)
 
-        it("brings both back when the toggle goes on again", function()
+        it("go down together with the BAR when its own enable toggle goes off", function()
+            -- The second half. `enabled` is the DATA BAR's key now, so it takes the whole
+            -- bar and every built-in on it -- the clock included, which is exactly why the
+            -- clock-is-untouched assertion lives on the per-widget toggles above and cannot
+            -- live here.
+            set("enabled", false)
+            expect(plugin():IsEnabled()).eq(false)
+            expect(bar()).as("the bar itself is gone, so there are no fields to read").isNil()
+            expect(H.SuuUI.DataBar:Has(FPS_ID)).eq(false)
+            expect(H.SuuUI.DataBar:Has(MS_ID)).eq(false)
+            expect(H.SuuUI.DataBar:Has(CLOCK_ID))
+                .as("a built-in cannot outlive the bar it is built into").eq(false)
+        end)
+
+        it("come back when the bar's toggle goes on again", function()
             set("enabled", false)
             set("enabled", true)
             expect(plugin():IsEnabled()).eq(true)
@@ -1133,25 +1218,52 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             expect(field(FPS_ID):GetText()).eq("60")
         end)
 
-        it("leaves the registry and the watcher count clean across a round trip", function()
+        it("leave the registry and the watcher count clean, two widgets at a time", function()
+            -- These deltas used to be read off plugin():Disable(), which was exactly two
+            -- widgets and two watchers while the plugin was theirs alone. Disabling the bar
+            -- now retires four built-ins plus the bar's own subscriptions, so the numeric
+            -- claim is scoped to the two widgets to keep saying what it said.
             local widgetsBefore  = #H.SuuUI.DataBar:List()
             local watchersBefore = H.SuuUI.Settings:GetWatcherCount()
-            local subsBefore     = H.SuuUI.DataBar:GetSubscriberCount()
 
-            plugin():Disable()
+            fpsWidget().Disable()
+            latencyWidget().Disable()
             expect(#H.SuuUI.DataBar:List())
                 .as("both widgets left the registry").eq(widgetsBefore - 2)
             expect(H.SuuUI.Settings:GetWatcherCount())
                 .as("and both widget watchers with them").eq(watchersBefore - 2)
 
+            fpsWidget().Enable()
+            latencyWidget().Enable()
+            expect(#H.SuuUI.DataBar:List()).eq(widgetsBefore)
+            expect(H.SuuUI.Settings:GetWatcherCount()).eq(watchersBefore)
+        end)
+
+        it("leave nothing behind across a bar round trip", function()
+            local widgetsBefore  = #H.SuuUI.DataBar:List()
+            local watchersBefore = H.SuuUI.Settings:GetWatcherCount()
+            local subsBefore     = H.SuuUI.DataBar:GetSubscriberCount()
+
+            plugin():Disable()
+            expect(H.SuuUI.DataBar:Has(FPS_ID))
+                .as("both readouts left the registry").eq(false)
+            expect(H.SuuUI.DataBar:Has(MS_ID)).eq(false)
+            expect(H.SuuUI.Settings:GetWatcherCount())
+                .as("with fewer watchers than before").lt(watchersBefore)
+
             plugin():Enable()
             expect(#H.SuuUI.DataBar:List()).eq(widgetsBefore)
             expect(H.SuuUI.Settings:GetWatcherCount()).eq(watchersBefore)
+            -- Re-aimed: the old claim was that a bar-widget plugin subscribes to nothing
+            -- itself, which was true of a plugin that only registered widgets into Core. The
+            -- owning plugin is the bar's now, and it DOES subscribe -- that is how a
+            -- third-party widget's schema slice is reconciled onto its page -- so what is
+            -- left to state is that the round trip does not leak or drop one.
             expect(H.SuuUI.DataBar:GetSubscriberCount())
-                .as("a bar-widget plugin subscribes to nothing itself").eq(subsBefore)
+                .as("and no subscriber gained or lost").eq(subsBefore)
         end)
 
-        it("does not stack watchers across repeated round trips", function()
+        it("do not stack watchers across repeated round trips", function()
             local before = H.SuuUI.Settings:GetWatcherCount()
             for _ = 1, 3 do
                 plugin():Disable()
@@ -1162,20 +1274,31 @@ describe("Plugins.Performance – framerate and latency readouts", function()
             expect(recordCount(MS_ID)).eq(1)
         end)
 
-        it("names the data bar nowhere, which is what the registry is for", function()
-            -- The structural claim of the whole plugin: it registers widgets into Core and
-            -- never reaches for the bar's plugin, frame or load order. Disabling the bar
-            -- must therefore leave the performance widgets registered and answering.
-            H.SuuUI.Plugins:Get(BAR_ID):Disable()
+        it("register through the registry, so a definition needs no bar", function()
+            -- What is left of "names the data bar nowhere, which is what the registry is
+            -- for". Half of that test is now false by construction: these are built-ins, so
+            -- the bar's onDisable takes them down with it, and the first assertion here is
+            -- the inverse of what this test used to claim.
+            --
+            -- The half that survived is the one about Core rather than about ownership.
+            -- Neither widget file names the bar's plugin, its frame or its load order -- it
+            -- hands a definition to SuuUI.DataBar -- so a widget whose Enable runs with no
+            -- bar standing still registers, and still answers. A widget that had reached for
+            -- the renderer would throw or register nothing here.
+            plugin():Disable()
             expect(H.SuuUI.DataBar:Has(FPS_ID))
-                .as("the widget outlives the renderer").eq(true)
-            expect(H.SuuUI.DataBar:Has(MS_ID)).eq(true)
+                .as("a built-in goes down with the bar that renders it").eq(false)
+
+            fpsWidget().Enable()
+            expect(bar()).as("there is genuinely no bar").isNil()
+            expect(H.SuuUI.DataBar:Has(FPS_ID))
+                .as("and the widget registers anyway").eq(true)
             expect(say(FPS_ID)).as("and still answers with no bar to draw it").eq("60")
         end)
 
-        it("renders both readouts again when the bar comes back", function()
-            H.SuuUI.Plugins:Get(BAR_ID):Disable()
-            H.SuuUI.Plugins:Get(BAR_ID):Enable()
+        it("render again when the bar comes back", function()
+            plugin():Disable()
+            plugin():Enable()
             expect(recordCount(FPS_ID)).eq(1)
             expect(recordCount(MS_ID)).eq(1)
             expect(field(FPS_ID):GetText()).eq("60")
@@ -1188,7 +1311,7 @@ describe("Plugins.Performance – framerate and latency readouts", function()
     -- LatencyWidget.OnLeave and the tip stayed visible over a frame the client had just
     -- hidden, self-healing only on the next hover because OnEnter re-anchors the cached tip.
     --
-    -- The mechanism was DataBar-wide rather than specific to this plugin — the clock's tooltip
+    -- The mechanism was DataBar-wide rather than specific to either readout — the clock's tooltip
     -- has the same shape — so the fix is in the bar: _clearFields now calls the widget's own
     -- OnLeave hook for a field that is still hovered, before it disconnects anything. Calling
     -- the hook rather than emitting a synthetic MOUSE_LEAVE matters, because the bar called

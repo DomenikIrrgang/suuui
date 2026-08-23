@@ -23,6 +23,10 @@
 -- Greyed, not hidden, and never cleared: the stored value still applies the moment the
 -- dependency comes back on, and a control that vanishes leaves the player unable to see
 -- what it was set to.
+--
+-- On an entry carrying `owner` — one plugin's setting rendered on another's page — the
+-- dependency key is read from the OWNER's namespace, because a condition and the value it
+-- gates belong to the same store.
 local ipairs, type = ipairs, type
 
 local M = {}
@@ -70,8 +74,16 @@ function M.Bind(pluginId, entry, ...)
         return
     end
 
+    -- A foreign-owned entry's dependency lives beside its value, in the OWNER's namespace:
+    -- both halves of "this control is only live while that one is on" have to be read from
+    -- the same store, or a contributed control would gate on a key the page happens to
+    -- share the name of. The watcher OWNER string stays derived from the PAGE's pluginId
+    -- for the reason spelled out in Controls/Toggle.lua — it is what UnwatchPrefix and
+    -- UnwatchControls match on, so keying it to the contributor leaks a watcher per rebuild.
+    local dataId = entry.owner or pluginId
+
     local targets = { ... }
-    SuuUI.Settings:Watch(pluginId, key, function(value)
+    SuuUI.Settings:Watch(dataId, key, function(value)
         local on = test(value)
         for _, target in ipairs(targets) do
             if target and target.SetEnabled then target:SetEnabled(on) end

@@ -18,8 +18,11 @@ machine wins and ours registers nothing.
 are in place and tested. The gameplay plugins have started: unit frames, cast bars, and
 buff/debuff bands cover the player and the target, suppressing Blizzard's own, and a
 full-width data bar along the top of the screen carries fields any plugin can register a
-widget into — a built-in clock, plus framerate and latency readouts that come from a separate
-Performance plugin which does not own the bar. Everything else is still to come.
+widget into — a built-in clock, framerate and latency readouts, and a tray that collects other
+addons' minimap buttons into a flyout roster. Those built-ins ship inside the data bar plugin;
+the registry they go through is the same one a third-party plugin uses, so a widget from an
+addon that loads minutes later is picked up exactly like one of ours. Everything else is still
+to come.
 
 ## Install
 
@@ -40,11 +43,11 @@ right-clicking that button enters edit mode.
 | `Libs/` | the only external code — LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, embedded for minimap-button interop and loaded first |
 | `Core/` | event bus, UI signals, attach points, data bar registry, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
-| `Components/` | ~25 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, collapsible accordion, data bar field, … |
+| `Components/` | ~30 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, collapsible accordion, data bar field, flyout panel, … |
 | `Animation/` | tween easings, animation runner, named presets |
 | `SettingsUI/` | settings window that auto-builds a page from a plugin's schema, grouped into collapsible sections |
 | `Themes/` | built-in read-only themes |
-| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target; the top data bar and its clock; framerate and latency readouts registered into that bar from a plugin that does not own it; the minimap button, a LibDataBroker launcher wearing LibDBIcon's stock ring art so other addons' collectors recognise it |
+| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target; the top data bar with its built-in clock, framerate and latency readouts and addon-button tray; the minimap button, a LibDataBroker launcher wearing LibDBIcon's stock ring art so other addons' collectors recognise it |
 | `Tests/` | test suite and a simulated WoW client (not shipped — absent from the `.toc`) |
 
 ## Development

@@ -237,6 +237,216 @@ describe("Settings", function()
     end)
 end)
 
+describe("Settings schema extension", function()
+    -- debug = true because three of these assertions are about what Extend LOGS, and
+    -- SuuUI.Debug is a no-op until it is switched on.
+    before_each(function()
+        H.setup({ debug = true })
+        H.SuuUI.Settings:Register("ext_plugin", {
+            { key = "",      label = "General", type = "section" },
+            { key = "shown", label = "Shown",   type = "toggle", default = true },
+            { key = "group", label = "Group",   type = "subtabs", tabs = {
+                { label = "Deep", schema = {
+                    { key = "nested", label = "Nested", type = "slider", default = 7 },
+                } },
+            } },
+        })
+    end)
+
+    -- Lines the log gained after `from`. Debug mode is chatty at boot, so a search over
+    -- the whole log would match something no test caused.
+    local function logHas(from, needle)
+        local log = H.debugLog()
+        for i = from + 1, #log do
+            if log[i]:find(needle, 1, true) then return true end
+        end
+        return false
+    end
+
+    local function keysOf(pluginId)
+        local out = {}
+        for _, e in ipairs(H.SuuUI.Settings:GetSchema(pluginId)) do out[#out + 1] = e.key end
+        return out
+    end
+
+    local function sectionLabels(pluginId)
+        local out = {}
+        for _, e in ipairs(H.SuuUI.Settings:GetSchema(pluginId)) do
+            if e.type == "section" then out[#out + 1] = e.label end
+        end
+        return out
+    end
+
+    it("appends onto an existing schema, in order, and reports what it added", function()
+        local n = H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "format", label = "Format", type = "dropdown", default = "24h" },
+        })
+        expect(n).eq(1)
+        expect(keysOf("ext_plugin")).deepEq({ "", "shown", "group", "format" })
+    end)
+
+    it("creates the schema when the plugin never registered one", function()
+        expect(H.SuuUI.Settings:GetSchema("late_plugin"))
+            .as("nothing has declared this page yet").isNil()
+        local n = H.SuuUI.Settings:Extend("late_plugin", {
+            { key = "",        label = "Clock",   type = "section" },
+            { key = "seconds", label = "Seconds", type = "toggle", default = false },
+        })
+        expect(n).eq(2)
+        expect(keysOf("late_plugin")).deepEq({ "", "seconds" })
+        expect(H.SuuUI.Settings:Get("late_plugin", "seconds"))
+            .as("a page built entirely by Extend still reads its defaults").eq(false)
+    end)
+
+    it("skips a key the page already declares, and names it in the log", function()
+        local from = #H.debugLog()
+        expect(H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "shown", label = "Shown again", type = "toggle", default = true },
+        })).as("a widget re-registering must not duplicate its own rows").eq(0)
+        expect(#H.SuuUI.Settings:GetSchema("ext_plugin")).eq(3)
+        expect(logHas(from, "ext_plugin.shown")).as("the skip is logged").truthy()
+    end)
+
+    it("detects a key declared inside a subtabs tab", function()
+        local from = #H.debugLog()
+        expect(H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "nested", label = "Nested again", type = "slider", default = 7 },
+        })).as("a nested key is a real setting, so a flat copy is a duplicate").eq(0)
+        expect(keysOf("ext_plugin")).deepEq({ "", "shown", "group" })
+        expect(logHas(from, "ext_plugin.nested")).truthy()
+    end)
+
+    it("appends every section header, because the empty key is not a duplicate", function()
+        local n = H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "",       label = "Clock",  type = "section" },
+            { key = "format", label = "Format", type = "dropdown", default = "24h" },
+            { key = "",       label = "Extra",  type = "section" },
+        })
+        expect(n).as("both headers land alongside the row").eq(3)
+        expect(sectionLabels("ext_plugin")).deepEq({ "General", "Clock", "Extra" })
+    end)
+
+    it("names conflicting defaults on a key it skips", function()
+        local from = #H.debugLog()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "shown", label = "Shown", type = "toggle", default = false },
+        })
+        expect(logHas(from, "conflicting defaults declared for ext_plugin.shown"))
+            .as("one key with two defaults is the drift Register warns about").truthy()
+    end)
+
+    it("reads an extended key's default and writes through it", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "size", label = "Size", type = "slider", default = 12, min = 8, max = 32 },
+        })
+        expect(H.SuuUI.Settings:Get("ext_plugin", "size"))
+            .as("the appended entry's default is readable").eq(12)
+        H.SuuUI.Settings:Set("ext_plugin", "size", 20)
+        expect(H.SuuUI.Settings:Get("ext_plugin", "size")).eq(20)
+    end)
+
+    it("honours transient on an extended entry", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "live", label = "Live", type = "toggle", default = false, transient = true },
+        })
+        expect(H.SuuUI.Settings:IsTransient("ext_plugin", "live")).truthy()
+    end)
+
+    it("retracts the entries it was named and reports the count", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "format",  label = "Format",  type = "dropdown", default = "24h" },
+            { key = "seconds", label = "Seconds", type = "toggle",   default = false },
+        })
+        expect(H.SuuUI.Settings:Retract("ext_plugin", { "format", "seconds" })).eq(2)
+        expect(keysOf("ext_plugin")).deepEq({ "", "shown", "group" })
+    end)
+
+    it("retracts a section header its own rows left empty", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "",       label = "Clock",  type = "section" },
+            { key = "format", label = "Format", type = "dropdown", default = "24h" },
+        })
+        expect(H.SuuUI.Settings:Retract("ext_plugin", { "format" }))
+            .as("the row plus the group it was the only content of").eq(2)
+        expect(keysOf("ext_plugin"))
+            .as("no empty titled group is left behind").deepEq({ "", "shown", "group" })
+    end)
+
+    it("keeps a section header that still has a row under it", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "",        label = "Clock",   type = "section" },
+            { key = "format",  label = "Format",  type = "dropdown", default = "24h" },
+            { key = "seconds", label = "Seconds", type = "toggle",   default = false },
+        })
+        expect(H.SuuUI.Settings:Retract("ext_plugin", { "format" })).eq(1)
+        expect(sectionLabels("ext_plugin")).deepEq({ "General", "Clock" })
+        expect(keysOf("ext_plugin")).deepEq({ "", "shown", "group", "", "seconds" })
+    end)
+
+    it("keeps a header that was already empty before the call", function()
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "",       label = "Empty",  type = "section" },
+            { key = "",       label = "Clock",  type = "section" },
+            { key = "format", label = "Format", type = "dropdown", default = "24h" },
+        })
+        expect(H.SuuUI.Settings:Retract("ext_plugin", { "format" }))
+            .as("only the row and the group this call emptied").eq(2)
+        expect(sectionLabels("ext_plugin"))
+            .as("a header nothing was ever under is not this call's to collect")
+            .deepEq({ "General", "Empty" })
+    end)
+
+    it("lets the same key be extended again after a retract", function()
+        local entry = { key = "format", label = "Format", type = "dropdown", default = "24h" }
+        H.SuuUI.Settings:Extend("ext_plugin", { entry })
+        H.SuuUI.Settings:Retract("ext_plugin", { "format" })
+        expect(H.SuuUI.Settings:Get("ext_plugin", "format"))
+            .as("a retracted key is no longer declared, so it resolves no default").isNil()
+        expect(H.SuuUI.Settings:Extend("ext_plugin", { entry }))
+            .as("a widget re-enabling contributes the same row again").eq(1)
+        expect(H.SuuUI.Settings:Get("ext_plugin", "format")).eq("24h")
+    end)
+
+    it("keeps a retracted key's stored value across the round trip", function()
+        local entry = { key = "format", label = "Format", type = "dropdown", default = "24h" }
+        H.SuuUI.Settings:Extend("ext_plugin", { entry })
+        H.SuuUI.Settings:Set("ext_plugin", "format", "12h")
+        H.SuuUI.Settings:Retract("ext_plugin", { "format" })
+        H.SuuUI.Settings:Extend("ext_plugin", { entry })
+        expect(H.SuuUI.Settings:Get("ext_plugin", "format"))
+            .as("Retract drops the declaration, never the player's choice").eq("12h")
+    end)
+
+    it("emits SUUUI_SCHEMA_CHANGED once per real change and never for a no-op", function()
+        local spy = H.eventSpy("SUUUI_SCHEMA_CHANGED")
+
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "format",  label = "Format",  type = "dropdown", default = "24h" },
+            { key = "seconds", label = "Seconds", type = "toggle",   default = false },
+        })
+        expect(spy.count).as("one event for the batch, not one per entry").eq(1)
+        expect(spy:arg(1)).eq("ext_plugin")
+
+        H.SuuUI.Settings:Extend("ext_plugin", {
+            { key = "shown", label = "Shown", type = "toggle", default = true },
+        })
+        expect(spy.count).as("an all-duplicate Extend appended nothing").eq(1)
+
+        H.SuuUI.Settings:Extend("ext_plugin", {})
+        expect(spy.count).as("an empty batch changed nothing").eq(1)
+
+        H.SuuUI.Settings:Retract("ext_plugin", { "format" })
+        expect(spy.count).eq(2)
+        expect(spy:arg(1)).eq("ext_plugin")
+
+        H.SuuUI.Settings:Retract("ext_plugin", { "not_a_key" })
+        expect(spy.count).as("nothing matched, so nothing changed").eq(2)
+
+        expect(H.SuuUI.Settings:Retract("no_such_plugin", { "format" })).eq(0)
+        expect(spy.count).as("no schema to retract from").eq(2)
+    end)
+end)
+
 describe("Theme", function()
     before_each(function() H.setup() end)
 

@@ -5,11 +5,11 @@
 -- it. The two intervals side by side are what put the shared ticker's accumulator under load.
 local floor, type, tostring, format = math.floor, type, tostring, string.format
 
-SuuUI._Performance = SuuUI._Performance or {}
+SuuUI._DataBar = SuuUI._DataBar or {}
 
-local PLUGIN_ID = "performance"
-local WIDGET_ID = "performance.latency"
-local OWNER     = "performance.latency"
+local PLUGIN_ID = "data_bar"
+local WIDGET_ID = "databar.latency"
+local OWNER     = "databar.latency"
 
 local M = { ID = WIDGET_ID }
 
@@ -132,4 +132,4 @@ function M.Disable()
     lastValue, lastText, lastTone = nil, nil, nil
 end
 
-SuuUI._Performance.LatencyWidget = M
+SuuUI._DataBar.LatencyWidget = M

@@ -2,12 +2,14 @@
 local S = SuuUI.UISignals
 
 --- Builds a text input control row.
--- @param entry table    Schema entry { key, label, default }
+-- @param entry table    Schema entry { key, label, default, owner }
 -- @param pluginId string
 -- @param parent frame
 -- @return table  Row container handle
 local function Build(entry, pluginId, parent)
     local row, label = SuuUI._SettingsRow.Labelled(parent, entry.label)
+    -- Data namespace only; the watcher owner stays the page's. See Controls/Toggle.lua.
+    local dataId = entry.owner or pluginId
 
     local inp = C.Input({
         w = 140,
@@ -16,10 +18,10 @@ local function Build(entry, pluginId, parent)
     row:Add(inp, { width = 140 })
 
     S:Connect(inp, S.SIGNALS.TEXT_CHANGED, function(text)
-        SuuUI.Settings:Set(pluginId, entry.key, text)
+        SuuUI.Settings:Set(dataId, entry.key, text)
     end)
 
-    SuuUI.Settings:Watch(pluginId, entry.key, function(val)
+    SuuUI.Settings:Watch(dataId, entry.key, function(val)
         inp:SetValue(val or "")
     end, SuuUI.Settings.ControlOwner(pluginId, "text", entry.key), { immediate = true })
 
