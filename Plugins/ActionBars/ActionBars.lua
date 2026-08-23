@@ -106,10 +106,56 @@ local function key(def, name)
     return "bar" .. def.id .. "_" .. name
 end
 
+-- One attach point per bar, so any bar can be a dock. Namespaced by plugin, as AttachPoints requires.
+local function dockPoint(id)
+    return "actionbar.dock." .. id
+end
+
 local function get(k, fallback)
     local v = SuuUI.Settings:Get(PLUGIN_ID, k)
     if v == nil then return fallback end
     return v
+end
+
+-- Which bar this one is set to attach to, as an id, or nil for free.
+local function attachTarget(def)
+    return tonumber(get(key(def, "attach"), "detached"))
+end
+
+-- Walks the attach graph as the SETTINGS describe it, which is what a validator has to do: it runs
+-- before the value is stored, so the live dock graph does not know about it yet.
+--
+-- Bounded as well as identity-checked. A stored graph that already contains a loop -- a hand-edited
+-- profile, a version that predates this validator -- must not spin here.
+local function wouldCycleInSettings(fromId, toId)
+    local node, steps = toId, 0
+    while node do
+        if node == fromId then return true end
+        local v = SuuUI.Settings:Get(PLUGIN_ID, "bar" .. node .. "_attach")
+        node = tonumber(v)
+        steps = steps + 1
+        if steps > #BARS + 1 then return true end
+    end
+    return false
+end
+
+-- Asks for a dock, and keeps asking: Request fires the callback immediately with whatever is there --
+-- including nil -- and again whenever it appears or goes away. So a bar set to attach to one that
+-- does not exist yet is not a special case, and neither is that bar being switched off underneath it.
+local function requestDock(p, def)
+    local targetId = attachTarget(def)
+    if not targetId then return end
+    SuuUI.AttachPoints:Request(dockPoint(targetId), function(provider)
+        local grid = p._bars[def.id]
+        if not grid then return end
+        if provider and provider.Attach then
+            provider.Attach(grid, {
+                -- Ordered by bar id so a stack is stable across the order settings happen to fire in.
+                order = def.id,
+                edge  = get(key(def, "attach_edge"), "above"),
+            })
+        end
+    end, OWNER .. ".dock." .. def.id)
 end
 
 local function slotsFor(def, count)
@@ -127,6 +173,35 @@ end
 ---------------------------------------------------------------------------
 -- Bar lifecycle
 ---------------------------------------------------------------------------
+
+-- Whether a bar is currently taking its position from another bar rather than owning it.
+local function isDocked(def)
+    return attachTarget(def) ~= nil
+end
+
+-- Gives a bar its own moveable frame, or takes it away.
+--
+-- A DOCKED BAR MUST NOT BE MOVEABLE, and not merely as a nicety: MoveableFrame installs a watcher on
+-- the stored position that re-anchors the frame whenever that value changes, so leaving it in place
+-- would have two owners writing the same frame's anchor -- the dock on every reflow, the watcher on
+-- every profile load -- and the winner would be whichever fired last.
+local function syncMoveable(p, def)
+    local grid = p._bars[def.id]
+    if not grid then return end
+    local frame = grid:GetFrame()
+    local docked = isDocked(def)
+
+    if docked and frame._suuui_moveable then
+        SuuUI.MoveableFrame:Remove(frame)
+    elseif not docked and not frame._suuui_moveable then
+        SuuUI.MoveableFrame:Apply(frame, {
+            pluginId    = PLUGIN_ID,
+            key         = key(def, "position"),
+            displayName = def.label,
+            defaults    = def.position,
+        })
+    end
+end
 
 local function buildBar(p, def)
     if p._bars[def.id] then return end
@@ -153,19 +228,28 @@ local function buildBar(p, def)
     -- rather than left to inherit, so a settings window or modal is guaranteed to draw over it.
     SuuUI.UIRoot:SetLayer(frame, "normal")
 
-    -- No coreInset: a bar is its buttons and nothing else, so its bounding box already describes
-    -- the thing the player positioned. That changes in phase 5b, where a docked bar grows the
-    -- dock's box around itself.
-    SuuUI.MoveableFrame:Apply(frame, {
-        pluginId    = PLUGIN_ID,
-        key         = key(def, "position"),
-        displayName = def.label,
-        defaults    = def.position,
+    -- EVERY bar offers itself as a dock, so any bar can carry any other. Published regardless of
+    -- whether anything is attached, because Request fires immediately with whatever is there: a bar
+    -- waiting on one that does not exist yet is then not a special case.
+    SuuUI.AttachPoints:Publish(dockPoint(def.id), {
+        frame  = frame,
+        Attach = function(child, opts)
+            return SuuUI._ActionBars.Dock.Attach(grid, child, opts)
+        end,
+        Detach = function(child)
+            return SuuUI._ActionBars.Dock.Detach(grid, child)
+        end,
     })
 
-    -- Only bar 1. The others are fixed to their measured block and need no driver at all.
+    -- Only bar 1 pages; the others are fixed to their measured block.
     if def.paged then
         SuuUI._ActionBars.Paging.Attach(grid, { pageSize = MAX_BUTTONS })
+    end
+
+    -- Moveable only while it owns its own position. A docked bar takes it from the dock.
+    syncMoveable(p, def)
+    if isDocked(def) then
+        requestDock(p, def)
     end
 end
 
@@ -173,10 +257,22 @@ local function destroyBar(p, def)
     local grid = p._bars[def.id]
     if not grid then return end
     p._bars[def.id] = nil
+
+    -- Revoked before anything is torn down: consumers detach on the nil notification, so nothing
+    -- foreign is still anchored to a frame that is about to go.
+    SuuUI.AttachPoints:Revoke(dockPoint(def.id))
+    -- Release drops OUR request; Release(dock) drops the bars attached to us. Both, because a bar can
+    -- be a dock and be docked at the same time.
+    SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
+    SuuUI._ActionBars.Dock.Release(grid)
+
     if def.paged then
         SuuUI._ActionBars.Paging.Detach(grid)
     end
-    SuuUI.MoveableFrame:Remove(grid:GetFrame())
+
+    if grid:GetFrame()._suuui_moveable then
+        SuuUI.MoveableFrame:Remove(grid:GetFrame())
+    end
     grid:Destroy()
 end
 
@@ -205,6 +301,38 @@ local READOUTS = {
     { name = "show_count",      apply = function(grid, v) grid:SetShowCount(v ~= false) end },
 }
 
+-- Applies a bar's dock/free choice: who owns its position, and whether it is in the stack.
+--
+-- DEFERRED IN COMBAT AS A WHOLE, not just the reflow. Handing a position over means calling
+-- MoveableFrame:Remove, which clears the frame's points and hides its drag overlay -- geometry on a
+-- frame that holds protected buttons, so the client refuses it. Deferring only the reflow left the
+-- transition half-applied: the moveable gone, the dock not yet anchoring, and the bar stranded.
+local function applyAttach(p, def)
+    local grid = p._bars[def.id]
+    if not grid then return end
+
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        p._pendingAttach = p._pendingAttach or {}
+        p._pendingAttach[def.id] = def
+        return
+    end
+    if p._pendingAttach then p._pendingAttach[def.id] = nil end
+
+    if isDocked(def) then
+        syncMoveable(p, def)
+        requestDock(p, def)
+    else
+        -- Released BEFORE the moveable goes back on, so the dock has stopped anchoring the frame by
+        -- the time the stored position starts driving it. The other order leaves both writing the
+        -- same anchor and the result depends on which fired last.
+        SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
+        -- Asked of the dock module rather than assumed to be bar 1: any bar can be the parent now.
+        local parent = SuuUI._ActionBars.Dock.ParentOf(grid)
+        if parent then SuuUI._ActionBars.Dock.Detach(parent, grid) end
+        syncMoveable(p, def)
+    end
+end
+
 local function watchBar(p, def)
     for _, group in ipairs({ SHAPE, READOUTS }) do
         for _, entry in ipairs(group) do
@@ -214,6 +342,12 @@ local function watchBar(p, def)
                 if grid then entry.apply(grid, v, def) end
             end, OWNER .. "." .. k)
         end
+    end
+    -- Every bar can attach now, bar 1 included, so there is no exception here any more.
+    for _, name in ipairs({ "attach", "attach_edge" }) do
+        SuuUI.Settings:Watch(PLUGIN_ID, key(def, name), function()
+            applyAttach(p, def)
+        end, OWNER .. "." .. key(def, name))
     end
     SuuUI.Settings:Watch(PLUGIN_ID, key(def, "enabled"), function(on)
         if on then buildBar(p, def) else destroyBar(p, def) end
@@ -226,6 +360,10 @@ local function unwatchBar(def)
             SuuUI.Settings:Unwatch(OWNER .. "." .. key(def, entry.name))
         end
     end
+    for _, name in ipairs({ "attach", "attach_edge" }) do
+        SuuUI.Settings:Unwatch(OWNER .. "." .. key(def, name))
+    end
+    SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
     SuuUI.Settings:Unwatch(OWNER .. "." .. key(def, "enabled"))
 end
 
@@ -266,7 +404,51 @@ local function barTab(def)
           default = true, enabledIf = key(def, "enabled") },
         { key = key(def, "show_count"), label = "Show Counts", type = "toggle",
           default = true, enabledIf = key(def, "enabled") },
+    }
 
+    -- Any bar can attach to any OTHER bar, on any edge. Placed before the sliders, with the other
+    -- placement decision, rather than mixed in among the dimensions.
+    --
+    -- The `validate` is the cycle guard, and it lives HERE rather than in the dock because a
+    -- validator runs before the value is stored: a rejected choice never reaches the profile, so the
+    -- dropdown cannot end up showing a state that is not in effect. The dock refuses a cycle too,
+    -- but that is a backstop for a profile written before this existed.
+    local options = { { value = "detached", label = "Free" } }
+    for _, other in ipairs(BARS) do
+        if other.id ~= def.id then
+            options[#options + 1] = { value = tostring(other.id), label = other.label }
+        end
+    end
+    schema[#schema + 1] = {
+        key = key(def, "attach"), label = "Attach To", type = "dropdown",
+        default = "detached", enabledIf = key(def, "enabled"), options = options,
+        validate = function(value)
+            if value == nil or value == "detached" then return true end
+            local target = tonumber(value)
+            if not target then return false end
+            -- A circular anchor is not a cosmetic fault: the client raises a hard error and leaves
+            -- the frame unplaced. So bar 4 on bar 5 on bar 4 is refused rather than attempted.
+            --
+            -- Attaching to ITSELF needs no separate check: it is a cycle of length zero, and the walk
+            -- below matches on its first step. An earlier draft tested for it explicitly and mutation
+            -- testing showed the clause could not be made to matter.
+            return not wouldCycleInSettings(def.id, target)
+        end,
+    }
+    schema[#schema + 1] = {
+        key = key(def, "attach_edge"), label = "Attached Edge", type = "dropdown",
+        default = "above",
+        -- Dead while the bar owns its own position, rather than silently ignored.
+        enabledIf = { key = key(def, "attach"), notEquals = "detached" },
+        options = {
+            { value = "above", label = "Above" },
+            { value = "below", label = "Below" },
+            { value = "left",  label = "Left"  },
+            { value = "right", label = "Right" },
+        },
+    }
+
+    local rest = {
         { key = key(def, "buttons"), label = "Buttons", type = "slider",
           min = 1, max = MAX_BUTTONS, step = 1, default = MAX_BUTTONS,
           enabledIf = key(def, "enabled") },
@@ -280,6 +462,9 @@ local function barTab(def)
         { key = key(def, "spacing"), label = "Spacing", type = "slider",
           min = 0, max = 12, step = 1, default = 0, enabledIf = key(def, "enabled") },
     }
+    for _, entry in ipairs(rest) do
+        schema[#schema + 1] = entry
+    end
     -- Deliberately no "this bar pages" note here. `internal` is a data-only type -- the page
     -- builder skips it by design -- so a label with that type renders nothing at all and would
     -- only mislead the next reader into thinking a player can see it. Paging belongs in the docs.
@@ -344,12 +529,29 @@ SuuUI:CreatePlugin({
 
     onEnable = function(p)
         p._bars = p._bars or {}
+        -- Catches up any dock transition the client refused mid-fight. One frame for the plugin
+        -- rather than one per bar, and registered only while the plugin is up.
+        p._evt = p._evt or CreateFrame("Frame")
+        p._evt:SetScript("OnEvent", function()
+            local pending = p._pendingAttach
+            if not pending then return end
+            p._pendingAttach = nil
+            for _, def in pairs(pending) do
+                applyAttach(p, def)
+            end
+        end)
+        p._evt:RegisterEvent("PLAYER_REGEN_ENABLED")
         -- Each bar's enabled watcher is immediate, so it builds on the way in.
         watchSettings(p)
     end,
 
     onDisable = function(p)
         unwatchSettings()
+        if p._evt then
+            p._evt:UnregisterAllEvents()
+            p._evt:SetScript("OnEvent", nil)
+        end
+        p._pendingAttach = nil
         -- Blizzard's cluster back BEFORE our own bars go, so there is never a frame where the
         -- player has neither. Restore is a no-op for anything this addon did not hide.
         SuuUI._ActionBars.Suppress.Restore()

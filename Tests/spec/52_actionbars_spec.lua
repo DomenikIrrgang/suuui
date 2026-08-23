@@ -930,3 +930,322 @@ describe("Plugins.ActionBars: secure paging", function()
         expect(P.HeaderFor(g)).isNil()
     end)
 end)
+
+describe("Plugins.ActionBars: bar-to-bar docking", function()
+    local PLUGIN = "action_bars"
+    local D
+
+    before_each(function()
+        H.setup()
+        D = H.SuuUI._ActionBars.Dock
+    end)
+
+    local function bars()
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars
+    end
+
+    local function enable(id)
+        H.SuuUI.Settings:Set(PLUGIN, "bar" .. id .. "_enabled", true)
+        return bars()[id]
+    end
+
+    -- Attaches bar `id` to bar `toId` on `edge`. Enables both first: bars 3 to 8 ship OFF, so setting
+    -- attach alone would leave nothing to dock and every assertion below would describe a bar that
+    -- does not exist.
+    local function attach(id, toId, edge)
+        enable(id)
+        if toId then enable(toId) end
+        if edge then H.SuuUI.Settings:Set(PLUGIN, "bar" .. id .. "_attach_edge", edge) end
+        H.SuuUI.Settings:Set(PLUGIN, "bar" .. id .. "_attach",
+            toId and tostring(toId) or "detached")
+        return bars()[id]
+    end
+
+    local function gap()
+        return H.token("spaceXxs") or 2
+    end
+
+    describe("any bar can be a dock", function()
+        it("publishes an attach point per bar, not one for bar 1", function()
+            -- Published regardless of whether anything is attached, because Request fires immediately
+            -- with whatever is there: a bar waiting on one that does not exist yet is then not a
+            -- special case.
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.1")).truthy()
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.2")).truthy()
+            enable(5)
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.5")).truthy()
+            expect(H.SuuUI.AttachPoints:Get("actionbar.dock.2").frame)
+                .eq(bars()[2]:GetFrame())
+        end)
+
+        it("attaches one bar to another that is not bar 1", function()
+            -- The whole point of the generalisation: bars 4 and 5 are vertical columns on the right
+            -- edge, and grouping THEM is the obvious thing to want.
+            local four = attach(4, 5, "left")
+            expect(D.ParentOf(four)).eq(bars()[5])
+            expect(D.Children(bars()[5])).len(1)
+            expect(D.Children(bars()[1])).as("bar 1 is not involved").len(0)
+        end)
+
+        it("lets bar 1 attach to another bar too", function()
+            -- Bar 1 used to be the only dock and could not itself attach. It is just a bar now.
+            local one = attach(1, 2, "below")
+            expect(D.ParentOf(one)).eq(bars()[2])
+        end)
+
+        it("moves a bar between docks rather than giving it two parents", function()
+            local three = attach(3, 1)
+            expect(D.Children(bars()[1])).len(1)
+            attach(3, 2)
+            expect(D.ParentOf(three)).eq(bars()[2])
+            expect(D.Children(bars()[1])).as("left the first dock").len(0)
+            expect(D.Children(bars()[2])).len(1)
+        end)
+    end)
+
+    describe("edges", function()
+        -- H.box measures DOWNWARD, so a smaller bottom/top is higher up the screen.
+        it("stacks above", function()
+            local child = attach(2, 1, "above")
+            expect(H.box(child).bottom).eq(H.box(bars()[1]).top - gap())
+        end)
+
+        it("stacks below", function()
+            local child = attach(2, 1, "below")
+            expect(H.box(child).top).eq(H.box(bars()[1]).bottom + gap())
+        end)
+
+        it("stacks left", function()
+            local child = attach(2, 1, "left")
+            expect(H.box(child).right).eq(H.box(bars()[1]).left - gap())
+        end)
+
+        it("stacks right", function()
+            local child = attach(2, 1, "right")
+            expect(H.box(child).left).eq(H.box(bars()[1]).right + gap())
+        end)
+
+        it("moves a bar to the other edge when the setting changes", function()
+            local child = attach(2, 1, "above")
+            expect(H.box(child).bottom).eq(H.box(bars()[1]).top - gap())
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach_edge", "below")
+            expect(H.box(child).top).eq(H.box(bars()[1]).bottom + gap())
+        end)
+
+        it("stacks each edge independently", function()
+            -- Two bars on one edge queue behind each other; a bar on a different edge starts fresh.
+            attach(2, 1, "above")
+            attach(3, 1, "above")
+            attach(4, 1, "below")
+            expect(H.box(bars()[3]).bottom).as("bar 3 queues above bar 2")
+                .eq(H.box(bars()[2]).top - gap())
+            expect(H.box(bars()[4]).top).as("bar 4 starts fresh below bar 1")
+                .eq(H.box(bars()[1]).bottom + gap())
+        end)
+
+        it("leaves a gap rather than butting the plates together", function()
+            -- Each bar carries its own glass plate with its own gradient, so flush plates show a seam
+            -- where one's fade meets the next one's dense edge.
+            local child = attach(2, 1, "above")
+            expect(H.box(bars()[1]).top - H.box(child).bottom).eq(gap())
+        end)
+    end)
+
+    describe("chains", function()
+        it("carries a whole chain when the root moves", function()
+            -- Nothing is recomputed for this: an anchor is a live relationship, so bar 1 moving moves
+            -- bar 2, which moves bar 3. That is why chains needed no extra machinery.
+            attach(2, 1, "above")
+            attach(3, 2, "above")
+            local before = H.box(bars()[3]).bottom
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_position",
+                { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 300 })
+            expect(H.box(bars()[3]).bottom).as("the tail followed the root upward").lt(before)
+            expect(H.box(bars()[3]).bottom).eq(H.box(bars()[2]).top - gap())
+        end)
+
+        it("re-stacks a chain when a bar in the middle changes height", function()
+            attach(2, 1, "above")
+            attach(3, 2, "above")
+            local before = H.box(bars()[3]).bottom
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_rows", 2)
+            expect(H.box(bars()[3]).bottom).as("bar 3 moved for bar 2's second row").lt(before)
+        end)
+
+        it("re-stacks TWO bars on ONE edge when the first changes height", function()
+            -- The case the SIZE_CHANGED subscription actually exists for, and the chain test above
+            -- does NOT cover it: in a chain each bar is anchored to the one below it, so a live anchor
+            -- carries the change for free. Two bars on the same edge of the same dock both anchor to
+            -- the DOCK, so the second one's offset is computed from the first one's span -- and only a
+            -- reflow recomputes that. Mutation testing found this hole.
+            attach(2, 1, "above")
+            attach(3, 1, "above")
+            local before = H.box(bars()[3]).bottom
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_rows", 2)
+            expect(H.box(bars()[3]).bottom).as("bar 3 made room for bar 2's second row").lt(before)
+            expect(H.box(bars()[3]).bottom).eq(H.box(bars()[2]).top - gap())
+        end)
+    end)
+
+    describe("cycles", function()
+        it("REJECTS a two-bar loop at the settings layer", function()
+            -- A circular anchor is not a cosmetic fault: the client raises a hard error and leaves the
+            -- frame unplaced. Rejected before the value is stored, so the dropdown can never show a
+            -- state that is not in effect.
+            attach(2, 1)
+            enable(1)
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_attach", "2")
+            expect(H.SuuUI.Settings:Get(PLUGIN, "bar1_attach"))
+                .as("the write was refused").eq("detached")
+            expect(D.ParentOf(bars()[1])).isNil()
+        end)
+
+        it("REJECTS a longer loop", function()
+            attach(2, 1)
+            attach(3, 2)
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_attach", "3")
+            expect(H.SuuUI.Settings:Get(PLUGIN, "bar1_attach")).eq("detached")
+        end)
+
+        it("REJECTS a bar attaching to itself", function()
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "2")
+            expect(H.SuuUI.Settings:Get(PLUGIN, "bar2_attach")).eq("detached")
+        end)
+
+        it("refuses one in the dock too, as a backstop for an old profile", function()
+            -- The validator guards new writes; a profile written before it existed could still carry
+            -- a loop, so Attach checks as well rather than trusting its caller.
+            local one, two = bars()[1], enable(2)
+            expect(D.Attach(one, two, {})).truthy()
+            expect(D.Attach(two, one, {})).as("the loop is refused").falsy()
+            expect(D.ParentOf(one)).isNil()
+        end)
+
+        it("still allows a legitimate re-parent that is not a loop", function()
+            attach(3, 2)
+            attach(2, 1)
+            expect(D.ParentOf(bars()[3])).eq(bars()[2])
+            expect(D.ParentOf(bars()[2])).eq(bars()[1])
+        end)
+    end)
+
+    describe("position ownership", function()
+        it("takes the moveable frame AWAY from an attached bar", function()
+            -- Not a nicety. MoveableFrame installs a watcher on the stored position that re-anchors
+            -- the frame whenever that value changes, so leaving it in place gives the frame TWO
+            -- owners -- the dock on every reflow, the watcher on every profile load -- and the winner
+            -- is whichever fired last.
+            local child = attach(2, 1)
+            expect(child:GetFrame()._suuui_moveable).isNil()
+        end)
+
+        it("gives it back when the bar goes free again", function()
+            local child = attach(2, 1)
+            expect(child:GetFrame()._suuui_moveable).isNil()
+            attach(2, nil)
+            expect(child:GetFrame()._suuui_moveable).as("owns its position again").notNil()
+            expect(D.ParentOf(child)).isNil()
+        end)
+
+        it("detaches from whichever bar it was on, not from bar 1", function()
+            -- Deliberately NOT bar 1: the detach path asks the dock module for the recorded parent,
+            -- and a test that always attached to bar 1 could not tell that from a hardcoded lookup.
+            -- Mutation testing found exactly that hole.
+            local four = attach(4, 5, "left")
+            expect(D.ParentOf(four)).eq(bars()[5])
+            attach(4, nil)
+            expect(D.ParentOf(four)).as("actually detached").isNil()
+            expect(D.Children(bars()[5])).as("and left bar 5's stack").len(0)
+            expect(four:GetFrame()._suuui_moveable).as("owns its position again").notNil()
+        end)
+    end)
+
+    describe("combat", function()
+        it("refuses nothing mid-fight, because it does not try", function()
+            -- An ANCHOR is the same dependency as parentage, and handing the position over is worse
+            -- still: MoveableFrame:Remove clears the frame's points. So the WHOLE transition defers.
+            --
+            -- Both bars are BUILT before combat starts, deliberately: creating a bar mid-fight is
+            -- refused on its own account and would drown this signal.
+            enable(2)
+            H.setCombat(true)
+            H.resetBlockedActions()
+
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "1")
+
+            expect(#H.getBlockedActions()).as("nothing was refused").eq(0)
+            expect(D.Children(bars()[1])).as("not attached yet").len(0)
+            expect(bars()[2]:GetFrame()._suuui_moveable)
+                .as("and it still owns its own position").notNil()
+        end)
+
+        it("catches up when the fight ends", function()
+            enable(2)
+            H.setCombat(true)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "1")
+            H.setCombat(false)
+            expect(D.Children(bars()[1])).as("attached now").len(1)
+            expect(bars()[2]:GetFrame()._suuui_moveable).isNil()
+            expect(H.box(bars()[2]).bottom).eq(H.box(bars()[1]).top - gap())
+        end)
+    end)
+
+    describe("teardown", function()
+        it("revokes the point when a bar is switched off", function()
+            enable(3)
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.3")).truthy()
+            H.SuuUI.Settings:Set(PLUGIN, "bar3_enabled", false)
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.3")).falsy()
+        end)
+
+        it("frees the bars attached to a dock that goes away", function()
+            local child = attach(2, 1)
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", false)
+            expect(D.ParentOf(child)).as("no longer pointing at a dead frame").isNil()
+            expect(function() H.SuuUI.Settings:Set(PLUGIN, "bar2_rows", 2) end).notThrows()
+        end)
+
+        it("takes a dock out of its OWN parent when released", function()
+            -- A dock can be docked. Releasing bar 2 has to leave bar 1's stack as well as freeing
+            -- bar 3.
+            attach(2, 1)
+            attach(3, 2)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_enabled", false)
+            expect(D.Children(bars()[1])).as("left bar 1's stack").len(0)
+            expect(D.ParentOf(bars()[3])).isNil()
+        end)
+
+        it("re-attaches when the dock comes back", function()
+            attach(2, 1)
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", false)
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", true)
+            expect(D.Children(bars()[1])).as("the request was still standing").len(1)
+        end)
+
+        it("drops the request when an attached bar is switched off", function()
+            attach(2, 1)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_enabled", false)
+            expect(D.Children(bars()[1])).len(0)
+        end)
+    end)
+
+    it("offers every bar but itself as a target", function()
+        local bars_ = H.SuuUI._ActionBars.BARS
+        for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+            if e.type == "subtabs" then
+                for i, tab in ipairs(e.tabs) do
+                    for _, entry in ipairs(tab.schema) do
+                        if entry.key == "bar" .. bars_[i].id .. "_attach" then
+                            -- Free plus every other bar.
+                            expect(#entry.options).as("tab " .. i .. " options").eq(#bars_)
+                            for _, opt in ipairs(entry.options) do
+                                expect(opt.value == tostring(bars_[i].id))
+                                    .as("cannot target itself").falsy()
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end)
