@@ -58,6 +58,9 @@
 --              H.combatLogSpell
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
 -- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
+-- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
+--              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
+--              H.getUsedAction H.resetUsedAction
 --
 -- H.setup() reloads the whole addon into a fresh sandbox against a fresh simulated
 -- client, so every test starts from a known state.
@@ -401,6 +404,114 @@ function M.inCombat() return state.inCombat == true end
 function M.setGradientSupported(on)
     regions.setGradientSupported(on and true or false)
 end
+
+--------------------------------------------------------------------------------
+-- Action bar slots
+--------------------------------------------------------------------------------
+
+-- Known action fields. Listed so a typo is an error rather than a silently ignored key.
+local ACTION_FIELDS = {
+    type = true, id = true, subType = true, texture = true, text = true, count = true,
+    cooldownStart = true, cooldownDuration = true, cooldownEnable = true,
+    usable = true, notEnoughMana = true, inRange = true, current = true, autoRepeat = true,
+}
+
+--- Stages one action slot and fires ACTIONBAR_SLOT_CHANGED.
+--
+-- Merges into whatever the slot already held, so a spec can put a spell in a slot and then
+-- start its cooldown without restating the spell.
+--
+-- @param slot number  Action slot, 1..72 on this client
+-- @param props table  Any subset of ACTION_FIELDS above
+-- @param opts table|nil  { silent = true } to stage without announcing
+-- @return table  the stored record
+function M.setAction(slot, props, opts)
+    assert(type(slot) == "number", "H.setAction: slot number required")
+    local a = state.actions[slot]
+    if not a then
+        a = {}
+        state.actions[slot] = a
+    end
+    for k, v in pairs(props or {}) do
+        assert(ACTION_FIELDS[k], "H.setAction: unknown action field '" .. tostring(k) .. "'")
+        a[k] = v
+    end
+    if not (opts and opts.silent) then
+        M.fireEvent("ACTIONBAR_SLOT_CHANGED", slot)
+    end
+    return a
+end
+
+--- Empties a slot, so HasAction answers false, and fires ACTIONBAR_SLOT_CHANGED.
+-- @param slot number
+-- @param opts table|nil  { silent = true }
+function M.clearAction(slot, opts)
+    assert(type(slot) == "number", "H.clearAction: slot number required")
+    state.actions[slot] = nil
+    if not (opts and opts.silent) then
+        M.fireEvent("ACTIONBAR_SLOT_CHANGED", slot)
+    end
+end
+
+--- Moves the main bar to a page and fires ACTIONBAR_PAGE_CHANGED.
+-- @param page number  1..NUM_ACTIONBAR_PAGES
+-- @param opts table|nil  { silent = true }
+function M.setActionBarPage(page, opts)
+    assert(type(page) == "number" and page >= 1, "H.setActionBarPage: page number required")
+    state.actionBarPage = page
+    if not (opts and opts.silent) then
+        M.fireEvent("ACTIONBAR_PAGE_CHANGED")
+    end
+end
+
+--- Binds a key to a command, so GetBindingKey answers it.
+-- @param command string  e.g. "ACTIONBUTTON1"
+-- @param key string|nil  nil unbinds
+function M.setBinding(command, key)
+    assert(type(command) == "string" and command ~= "", "H.setBinding: command required")
+    state.bindings[command] = key
+end
+
+--- Whether the client reports the bars locked, which gates drag-and-drop.
+-- Writes the plain global the client exposes, not a harness-only flag.
+-- @param locked boolean
+function M.setActionBarLocked(locked)
+    state.actionBarLocked = locked and "1" or "0"
+    if M.env then M.env.LOCK_ACTIONBAR = state.actionBarLocked end
+end
+
+--- What the cursor is carrying after a PickupAction, or nil.
+-- @return table|nil
+function M.getPickedUpAction() return state.pickedUpAction end
+
+--- Every override binding installed so far, in call order.
+-- Each entry is { owner, isPriority, key, button, mouseButton }.
+-- @return table
+function M.getOverrideBindings()
+    local out = {}
+    for i, b in ipairs(state.overrideBindings) do out[i] = b end
+    return out
+end
+
+--- The conditional string a frame registered for a secure state, or nil.
+--
+-- The harness records driver strings and never evaluates them, so this is the whole
+-- observable: assert the string, and check what the client does with it in game.
+-- @param frame table|handle
+-- @param stateName string  e.g. "page"
+-- @return string|nil
+function M.getStateDriver(frame, stateName)
+    local rec = state.stateDrivers[M.frameOf(frame)]
+    return rec and rec[stateName]
+end
+
+--- What the client's secure handler did with the last `action` click, or nil.
+-- { slot = <number>, button = <"LeftButton"> }.
+-- @return table|nil
+function M.getUsedAction() return state.usedAction end
+
+--- Forgets the last action click, so one spec can assert a second one cleanly.
+function M.resetUsedAction() state.usedAction = nil end
 
 --- Every geometry call the lockdown refused, oldest first.
 --

@@ -3316,6 +3316,386 @@ describe("harness: WoW API simulation", function()
             expect(f:HasFixedFrameLevel()).as("and clearing one leaves the other").eq(true)
         end)
     end)
+
+    -- Action slots. The shape here was measured in game, not assumed: 12 buttons across 6
+    -- pages, and GetActionInfo answering ("spell", 143, "spell") for slot 1.
+    describe("action slots", function()
+        before_each(function() H.setup() end)
+
+        -- H.eventSpy watches SuuUI's own EventBus, which does not carry CLIENT events -- the
+        -- same reason the combat lockdown block above cannot use it for PLAYER_REGEN_*. A
+        -- client event is observed the way the addon observes one: a frame with a handler.
+        local function clientEventSpy(event)
+            local rec = { count = 0, args = {} }
+            local f = H.env.CreateFrame("Frame")
+            f:RegisterEvent(event)
+            f:SetScript("OnEvent", function(_, _, ...)
+                rec.count = rec.count + 1
+                rec.args[rec.count] = { ... }
+            end)
+            return rec
+        end
+
+        describe("an empty slot", function()
+            it("answers no to HasAction and nil to every describing call", function()
+                expect(H.env.HasAction(1)).falsy()
+                expect(H.env.GetActionInfo(1)).isNil()
+                expect(H.env.GetActionTexture(1)).isNil()
+                expect(H.env.GetActionText(1)).isNil()
+            end)
+
+            it("answers 0, 0, 0 to GetActionCooldown rather than nil", function()
+                -- The client does, and a Cooldown frame handed nil errors instead of
+                -- clearing -- so nil here would fail in game and pass in a spec.
+                local start, duration, enable = H.env.GetActionCooldown(1)
+                expect(start).eq(0)
+                expect(duration).eq(0)
+                expect(enable).eq(0)
+            end)
+
+            it("is not usable, and is not short of mana either", function()
+                local usable, noMana = H.env.IsUsableAction(1)
+                expect(usable).falsy()
+                expect(noMana).as("an empty slot is not a mana problem").falsy()
+            end)
+
+            it("counts 0, and is neither current nor auto-repeating", function()
+                expect(H.env.GetActionCount(1)).eq(0)
+                expect(H.env.IsCurrentAction(1)).falsy()
+                expect(H.env.IsAutoRepeatAction(1)).falsy()
+            end)
+        end)
+
+        describe("a staged slot", function()
+            it("reports the type, id and subType it was given", function()
+                H.setAction(1, { type = "spell", id = 143, subType = "spell" })
+                expect(H.env.HasAction(1)).truthy()
+                local kind, id, sub = H.env.GetActionInfo(1)
+                expect(kind).eq("spell")
+                expect(id).eq(143)
+                expect(sub).eq("spell")
+            end)
+
+            it("fills unstated fields from the defaults", function()
+                H.setAction(2, { id = 99 })
+                local kind, id = H.env.GetActionInfo(2)
+                expect(kind).as("defaulted to a spell").eq("spell")
+                expect(id).eq(99)
+                expect(H.env.GetActionTexture(2)).notNil()
+            end)
+
+            it("has no macro text unless it is a macro", function()
+                H.setAction(3, { type = "spell", id = 5 })
+                expect(H.env.GetActionText(3)).as("a spell carries no name").isNil()
+                H.setAction(4, { type = "macro", id = 7, text = "Pull" })
+                expect(H.env.GetActionText(4)).eq("Pull")
+            end)
+
+            it("distinguishes out of range from range being no question at all", function()
+                -- The nil is load-bearing. A self buff has no range, and a button must not
+                -- paint that the same as a target standing too far away.
+                H.setAction(5, { id = 1 })
+                expect(H.env.IsActionInRange(5)).as("unstated means not a question").isNil()
+                H.setAction(6, { id = 2, inRange = false })
+                expect(H.env.IsActionInRange(6)).as("staged false is out of range").eq(false)
+                H.setAction(7, { id = 3, inRange = true })
+                expect(H.env.IsActionInRange(7)).eq(true)
+            end)
+
+            it("reports not-enough-mana separately from not-usable", function()
+                H.setAction(8, { id = 4, usable = false, notEnoughMana = true })
+                local usable, noMana = H.env.IsUsableAction(8)
+                expect(usable).falsy()
+                expect(noMana).truthy()
+            end)
+
+            it("carries a cooldown, with enable defaulting to 1", function()
+                H.setAction(9, { id = 5, cooldownStart = 100, cooldownDuration = 30 })
+                local start, duration, enable = H.env.GetActionCooldown(9)
+                expect(start).eq(100)
+                expect(duration).eq(30)
+                expect(enable).as("a cooldown is enabled unless said otherwise").eq(1)
+            end)
+        end)
+
+        describe("H.setAction", function()
+            it("fires ACTIONBAR_SLOT_CHANGED with the slot", function()
+                local seen
+                local f = H.env.CreateFrame("Frame")
+                f:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+                f:SetScript("OnEvent", function(_, _, slot) seen = slot end)
+                H.setAction(12, { id = 8 })
+                expect(seen).as("the slot came through as the payload").eq(12)
+            end)
+
+            it("stays quiet with the silent option", function()
+                local spy = clientEventSpy("ACTIONBAR_SLOT_CHANGED")
+                H.setAction(12, { id = 8 }, { silent = true })
+                expect(spy.count).eq(0)
+            end)
+
+            it("merges into what the slot already held", function()
+                -- So a spec can put a spell in a slot and then start its cooldown without
+                -- restating the spell.
+                H.setAction(1, { type = "macro", id = 4, text = "Pull" }, { silent = true })
+                H.setAction(1, { cooldownDuration = 10 }, { silent = true })
+                expect(H.env.GetActionText(1)).as("kept the macro name").eq("Pull")
+                local _, duration = H.env.GetActionCooldown(1)
+                expect(duration).eq(10)
+            end)
+
+            it("rejects an unknown field rather than ignoring it", function()
+                expect(function() H.setAction(1, { bogusField = 1 }) end).throws()
+            end)
+
+            it("clearAction empties the slot and announces it", function()
+                H.setAction(1, { id = 4 }, { silent = true })
+                local spy = clientEventSpy("ACTIONBAR_SLOT_CHANGED")
+                H.clearAction(1)
+                expect(H.env.HasAction(1)).falsy()
+                expect(spy.count).eq(1)
+            end)
+        end)
+
+        describe("drag and drop", function()
+            it("takes the slot's contents onto the cursor, leaving it empty", function()
+                H.setAction(1, { type = "spell", id = 143 }, { silent = true })
+                H.env.PickupAction(1)
+                expect(H.env.HasAction(1)).as("the slot emptied").falsy()
+                expect(H.getPickedUpAction()).notNil()
+                expect(H.getPickedUpAction().id).eq(143)
+            end)
+
+            it("SWAPS when dropped onto an occupied slot, rather than overwriting", function()
+                -- The cursor carries contents, not a reference, so PlaceAction hands back
+                -- whatever was already there. A button that assumed overwrite would lose an
+                -- action every time a player rearranged their bar.
+                H.setAction(1, { type = "spell", id = 143 }, { silent = true })
+                H.setAction(2, { type = "macro", id = 7 }, { silent = true })
+                H.env.PickupAction(1)
+                H.env.PlaceAction(2)
+                local _, id = H.env.GetActionInfo(2)
+                expect(id).as("slot 2 took the spell").eq(143)
+                expect(H.getPickedUpAction().id).as("the macro came back to the cursor").eq(7)
+            end)
+
+            it("announces both slots it touched", function()
+                H.setAction(1, { id = 1 }, { silent = true })
+                local spy = clientEventSpy("ACTIONBAR_SLOT_CHANGED")
+                H.env.PickupAction(1)
+                H.env.PlaceAction(2)
+                expect(spy.count).eq(2)
+            end)
+        end)
+
+        describe("paging", function()
+            it("starts on page 1 and reports the shape measured in game", function()
+                expect(H.env.GetActionBarPage()).eq(1)
+                expect(H.env.NUM_ACTIONBAR_BUTTONS).eq(12)
+                expect(H.env.NUM_ACTIONBAR_PAGES).eq(6)
+            end)
+
+            it("moves page and fires ACTIONBAR_PAGE_CHANGED", function()
+                local spy = clientEventSpy("ACTIONBAR_PAGE_CHANGED")
+                H.setActionBarPage(3)
+                expect(H.env.GetActionBarPage()).eq(3)
+                expect(spy.count).eq(1)
+            end)
+        end)
+
+        describe("bindings", function()
+            it("answers GetBindingKey only for a command that was bound", function()
+                expect(H.env.GetBindingKey("ACTIONBUTTON1")).isNil()
+                H.setBinding("ACTIONBUTTON1", "1")
+                expect(H.env.GetBindingKey("ACTIONBUTTON1")).eq("1")
+            end)
+
+            it("records override bindings in call order", function()
+                H.env.SetOverrideBindingClick(H.env.UIParent, true, "F1", "SuuUIButton1")
+                H.env.SetOverrideBindingClick(H.env.UIParent, false, "F2", "SuuUIButton2")
+                local list = H.getOverrideBindings()
+                expect(#list).eq(2)
+                expect(list[1].key).eq("F1")
+                expect(list[1].isPriority).truthy()
+                expect(list[2].button).eq("SuuUIButton2")
+            end)
+
+            it("clears only the bindings of the owner named", function()
+                local other = H.env.CreateFrame("Frame")
+                H.env.SetOverrideBindingClick(H.env.UIParent, true, "F1", "A")
+                H.env.SetOverrideBindingClick(other, true, "F2", "B")
+                H.env.ClearOverrideBindings(H.env.UIParent)
+                local list = H.getOverrideBindings()
+                expect(#list).eq(1)
+                expect(list[1].key).eq("F2")
+            end)
+
+            it("reports the bars unlocked by default, as a string", function()
+                -- A CVar-backed plain global, so "0"/"1" rather than a boolean. A component
+                -- testing it for truthiness would find "0" truthy in Lua.
+                expect(H.env.LOCK_ACTIONBAR).eq("0")
+                H.setActionBarLocked(true)
+                expect(H.env.LOCK_ACTIONBAR).eq("1")
+            end)
+        end)
+
+        describe("secure state drivers", function()
+            it("records the conditional string without evaluating it", function()
+                -- Deliberately a recorder. Resolving a macro conditional here would mean the
+                -- harness guessing what the client decides, and a spec would then be
+                -- asserting against the guess.
+                local header = H.env.CreateFrame("Frame", nil, H.env.UIParent,
+                    "SecureHandlerStateTemplate")
+                H.env.RegisterStateDriver(header, "page", "[bonusbar:1] 7; [shapeshift] 2; 1")
+                expect(H.getStateDriver(header, "page"))
+                    .eq("[bonusbar:1] 7; [shapeshift] 2; 1")
+            end)
+
+            it("keeps drivers apart per frame and per state name", function()
+                local a = H.env.CreateFrame("Frame", nil, H.env.UIParent, "SecureHandlerStateTemplate")
+                local b = H.env.CreateFrame("Frame", nil, H.env.UIParent, "SecureHandlerStateTemplate")
+                H.env.RegisterStateDriver(a, "page", "1")
+                H.env.RegisterStateDriver(b, "page", "2")
+                H.env.RegisterStateDriver(a, "visibility", "[combat] hide; show")
+                expect(H.getStateDriver(a, "page")).eq("1")
+                expect(H.getStateDriver(b, "page")).eq("2")
+                expect(H.getStateDriver(a, "visibility")).eq("[combat] hide; show")
+            end)
+
+            it("forgets one on unregister, leaving the others", function()
+                local h = H.env.CreateFrame("Frame", nil, H.env.UIParent, "SecureHandlerStateTemplate")
+                H.env.RegisterStateDriver(h, "page", "1")
+                H.env.RegisterStateDriver(h, "visibility", "show")
+                H.env.UnregisterStateDriver(h, "page")
+                expect(H.getStateDriver(h, "page")).isNil()
+                expect(H.getStateDriver(h, "visibility")).eq("show")
+            end)
+
+            it("answers nil for a frame that never registered one", function()
+                local plain = H.env.CreateFrame("Frame")
+                expect(H.getStateDriver(plain, "page")).isNil()
+            end)
+        end)
+
+        describe("the client's own handler for an action button", function()
+            local function actionButton(slot)
+                local b = H.env.CreateFrame("Button", nil, H.env.UIParent,
+                    "SecureActionButtonTemplate")
+                b:SetSize(32, 32)
+                b:SetPoint("TOPLEFT", H.env.UIParent, "TOPLEFT", 0, 0)
+                b:SetAttribute("type", "action")
+                b:SetAttribute("action", slot)
+                return b
+            end
+
+            it("uses the slot named by the action attribute", function()
+                local b = actionButton(7)
+                H.click(b)
+                local used = H.getUsedAction()
+                expect(used).as("the client was asked to use a slot").notNil()
+                expect(used.slot).eq(7)
+                expect(used.button).eq("LeftButton")
+            end)
+
+            it("is protected, being built from a Secure template", function()
+                local b = actionButton(1)
+                expect(b:IsProtected()).truthy()
+            end)
+
+            it("gets no right click at all until the button registers for one", function()
+                -- Found by this spec failing. A button receives LeftButtonUp by default and
+                -- NOTHING else, so an ActionButton that wants right-click must say so --
+                -- otherwise every secondary action silently does nothing, in game and here.
+                local b = actionButton(1)
+                b:SetAttribute("action2", 55)
+                H.click(b, "RightButton")
+                expect(H.getUsedAction()).as("no handler ran").isNil()
+            end)
+
+            it("honours a per-button action attribute once registered", function()
+                local b = actionButton(1)
+                b:RegisterForClicks("AnyUp")
+                b:SetAttribute("action2", 55)
+                H.click(b, "RightButton")
+                expect(H.getUsedAction().slot).as("right click took action2").eq(55)
+            end)
+
+            it("normalises a string slot, as a secure snippet would write it", function()
+                local b = actionButton("13")
+                H.click(b)
+                expect(H.getUsedAction().slot).eq(13)
+            end)
+
+            it("fires PreClick and PostClick around the action", function()
+                local order = {}
+                local b = actionButton(1)
+                b:SetScript("PreClick", function() order[#order + 1] = "pre" end)
+                b:SetScript("PostClick", function() order[#order + 1] = "post" end)
+                H.click(b)
+                expect(order).deepEq({ "pre", "post" })
+            end)
+
+            it("does nothing for a type it does not know", function()
+                local b = actionButton(1)
+                b:SetAttribute("type", "somethingelse")
+                H.click(b)
+                expect(H.getUsedAction()).isNil()
+            end)
+
+            it("resetUsedAction lets one spec assert a second click", function()
+                local b = actionButton(3)
+                H.click(b)
+                H.resetUsedAction()
+                expect(H.getUsedAction()).isNil()
+                H.click(b)
+                expect(H.getUsedAction().slot).eq(3)
+            end)
+        end)
+
+        describe("reset", function()
+            it("clears every action store, so nothing leaks into the next spec", function()
+                -- A leaked slot would let "the button drew an icon" pass before a spec staged
+                -- anything, and a leaked cursor would make the next PlaceAction appear to work.
+                H.setAction(1, { id = 4 }, { silent = true })
+                H.setAction(2, { id = 5 }, { silent = true })
+                H.setActionBarPage(4, { silent = true })
+                H.setBinding("ACTIONBUTTON1", "1")
+                H.setActionBarLocked(true)
+                -- Slot 2, deliberately NOT slot 1: PickupAction empties the slot it takes
+                -- from, so picking up slot 1 would leave the HasAction check below passing
+                -- because this test emptied it rather than because reset did. That exact
+                -- vacuity was caught by mutation testing, not by review.
+                H.env.PickupAction(2)
+                H.env.SetOverrideBindingClick(H.env.UIParent, true, "F1", "A")
+                local header = H.env.CreateFrame("Frame", nil, H.env.UIParent, "SecureHandlerStateTemplate")
+                H.env.RegisterStateDriver(header, "page", "1")
+                local b = H.env.CreateFrame("Button", nil, H.env.UIParent, "SecureActionButtonTemplate")
+                b:SetSize(32, 32)
+                b:SetPoint("TOPLEFT", H.env.UIParent, "TOPLEFT", 0, 0)
+                b:SetAttribute("type", "action")
+                b:SetAttribute("action", 9)
+                H.click(b)
+
+                -- Every store below is genuinely dirty at this point.
+                expect(H.env.HasAction(1)).as("staged before the reload").truthy()
+                expect(H.getPickedUpAction()).as("cursor loaded before the reload").notNil()
+                expect(H.getUsedAction()).as("a click happened before the reload").notNil()
+                expect(H.getOverrideBindings()).as("a binding was installed").len(1)
+                expect(H.getStateDriver(header, "page")).notNil()
+
+                H.setup()
+
+                expect(H.env.HasAction(1)).falsy()
+                expect(H.env.GetActionBarPage()).eq(1)
+                expect(H.env.GetBindingKey("ACTIONBUTTON1")).isNil()
+                expect(H.env.LOCK_ACTIONBAR).eq("0")
+                expect(H.getPickedUpAction()).isNil()
+                expect(H.getOverrideBindings()).len(0)
+                expect(H.getUsedAction()).isNil()
+                expect(H.getStateDriver(header, "page")).as("frame-keyed store dropped").isNil()
+            end)
+        end)
+    end)
 end)
 
 -- The assertion framework itself, not the simulated client. Same reasoning as the block

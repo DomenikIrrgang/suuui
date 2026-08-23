@@ -256,6 +256,18 @@ function M.secureAction(f, button)
         -- addon call is involved, which is exactly why the menu carries every entry the
         -- client would offer.
         state.unitMenu = { unit = unit }
+    elseif kind == "action" then
+        -- The client uses the slot named by the `action` attribute. Recorded rather than
+        -- executed, for the same reason targeting is: the spec's question is "did the button
+        -- ask the client to use this slot", and actually resolving the spell would mean
+        -- modelling cooldowns, range, reagents and the global cooldown -- the client's job.
+        --
+        -- The attribute is read through modifiedAttribute, so a per-button `action2` is
+        -- honoured. It arrives as whatever the addon set: SetAttribute stores a number as a
+        -- number, but a secure snippet writes strings, so both shapes are normalised here
+        -- rather than at every assertion.
+        local slot = modifiedAttribute(f, "action", button)
+        state.usedAction = { slot = tonumber(slot) or slot, button = button }
     end
     f:_fire("PostClick", button, false)
 end

@@ -432,6 +432,177 @@ function M.install(env)
     end
 
     --------------------------------------------------------------------------
+    -- Action bar slots
+    --------------------------------------------------------------------------
+
+    -- Measured in game during Phase 0 of the bottom-UI work, not assumed: 12 buttons across
+    -- 6 pages on this client. Pages 3..6 are the same slots the four multibars own, so a
+    -- paged bar 1 and a fixed bar 3 can legitimately address one slot at the same time.
+    env.NUM_ACTIONBAR_BUTTONS = 12
+    env.NUM_ACTIONBAR_PAGES   = 6
+
+    -- A CVar-backed plain global, so it is a string "0"/"1" rather than a boolean, and a
+    -- spec changes it by writing H.env.LOCK_ACTIONBAR the way the client's own options do.
+    env.LOCK_ACTIONBAR = state.actionBarLocked
+
+    -- One slot as the client describes one. Defaults fill every field a real action carries
+    -- so a staged entry declares only what its test is about.
+    --
+    -- Note what is NOT defaulted: `text` (a macro's name, which a spell does not have) and
+    -- `inRange`. Both are meaningfully nil, and defaulting either would hide a real
+    -- distinction -- see IsActionInRange below.
+    local ACTION_DEFAULTS = {
+        type = "spell", id = 0, subType = "spell",
+        texture = "Interface\\Icons\\INV_Misc_QuestionMark",
+        count = 0,
+        cooldownStart = 0, cooldownDuration = 0, cooldownEnable = 1,
+    }
+
+    local function slotRecord(slot)
+        if type(slot) ~= "number" then return nil end
+        return state.actions[slot]
+    end
+
+    env.HasAction = function(slot)
+        return slotRecord(slot) ~= nil
+    end
+
+    env.GetActionInfo = function(slot)
+        local a = slotRecord(slot)
+        if not a then return nil end
+        return a.type or ACTION_DEFAULTS.type,
+               a.id or ACTION_DEFAULTS.id,
+               a.subType or ACTION_DEFAULTS.subType
+    end
+
+    env.GetActionTexture = function(slot)
+        local a = slotRecord(slot)
+        if not a then return nil end
+        return a.texture or ACTION_DEFAULTS.texture
+    end
+
+    -- A macro's name, drawn under the icon. nil for a spell or an item, which is precisely
+    -- why a caller must not use this to decide whether a slot is occupied.
+    env.GetActionText = function(slot)
+        local a = slotRecord(slot)
+        if not a then return nil end
+        return a.text
+    end
+
+    env.GetActionCount = function(slot)
+        local a = slotRecord(slot)
+        if not a then return 0 end
+        return a.count or ACTION_DEFAULTS.count
+    end
+
+    -- start, duration, enable. An empty slot answers 0, 0, 0 rather than nil: the client
+    -- does, and a Cooldown frame handed nil errors instead of clearing.
+    env.GetActionCooldown = function(slot)
+        local a = slotRecord(slot)
+        if not a then return 0, 0, 0 end
+        return a.cooldownStart or ACTION_DEFAULTS.cooldownStart,
+               a.cooldownDuration or ACTION_DEFAULTS.cooldownDuration,
+               a.cooldownEnable == nil and ACTION_DEFAULTS.cooldownEnable or a.cooldownEnable
+    end
+
+    -- usable, notEnoughMana. An empty slot is not usable, and is not short of mana either.
+    env.IsUsableAction = function(slot)
+        local a = slotRecord(slot)
+        if not a then return false, false end
+        return a.usable ~= false, a.notEnoughMana == true
+    end
+
+    -- true, false, or NIL -- and the nil is load-bearing. It means range is not a question
+    -- for this action (a self buff, a macro with no target), which a button has to render
+    -- differently from genuinely out of range. Defaulting it to true would erase that.
+    env.IsActionInRange = function(slot)
+        local a = slotRecord(slot)
+        if not a then return nil end
+        return a.inRange
+    end
+
+    env.IsCurrentAction = function(slot)
+        local a = slotRecord(slot)
+        return a ~= nil and a.current == true
+    end
+
+    env.IsAutoRepeatAction = function(slot)
+        local a = slotRecord(slot)
+        return a ~= nil and a.autoRepeat == true
+    end
+
+    env.GetActionBarPage = function() return state.actionBarPage or 1 end
+
+    -- Drag and drop. The cursor carries a slot's CONTENTS, not a reference to the slot, which
+    -- is why dropping onto an occupied slot SWAPS: PlaceAction hands back what was there.
+    -- Both fire ACTIONBAR_SLOT_CHANGED, because the slot really did change.
+    env.PickupAction = function(slot)
+        if type(slot) ~= "number" then return end
+        state.pickedUpAction = state.actions[slot]
+        state.actions[slot] = nil
+        fireEvent("ACTIONBAR_SLOT_CHANGED", slot)
+    end
+
+    env.PlaceAction = function(slot)
+        if type(slot) ~= "number" then return end
+        local held = state.pickedUpAction
+        state.pickedUpAction = state.actions[slot]
+        state.actions[slot] = held
+        fireEvent("ACTIONBAR_SLOT_CHANGED", slot)
+    end
+
+    --------------------------------------------------------------------------
+    -- Bindings
+    --------------------------------------------------------------------------
+
+    env.GetBindingKey = function(command)
+        if type(command) ~= "string" then return nil end
+        return state.bindings[command]
+    end
+
+    -- Recorded rather than enacted: a spec's question is "did the button claim this key",
+    -- and simulating a keypress route would mean modelling the client's binding precedence.
+    env.SetOverrideBindingClick = function(owner, isPriority, key, buttonName, mouseButton)
+        state.overrideBindings[#state.overrideBindings + 1] = {
+            owner = owner, isPriority = isPriority and true or false,
+            key = key, button = buttonName, mouseButton = mouseButton,
+        }
+        return true
+    end
+
+    env.ClearOverrideBindings = function(owner)
+        local kept = {}
+        for _, b in ipairs(state.overrideBindings) do
+            if b.owner ~= owner then kept[#kept + 1] = b end
+        end
+        state.overrideBindings = kept
+    end
+
+    --------------------------------------------------------------------------
+    -- Secure state drivers
+    --------------------------------------------------------------------------
+
+    -- A RECORDER, deliberately not an evaluator. The conditional is a macro expression, and
+    -- resolving one here would be the harness guessing what the client decides -- a spec
+    -- would then assert against the guess. Record the string, assert the string, and check
+    -- the consequence in game. This is the one paging mechanism that works in combat, so
+    -- there is nothing else a spec could assert about it locally.
+    env.RegisterStateDriver = function(frame, stateName, conditional)
+        if not frame or type(stateName) ~= "string" then return end
+        local rec = state.stateDrivers[frame]
+        if not rec then
+            rec = {}
+            state.stateDrivers[frame] = rec
+        end
+        rec[stateName] = conditional
+    end
+
+    env.UnregisterStateDriver = function(frame, stateName)
+        local rec = frame and state.stateDrivers[frame]
+        if rec then rec[stateName] = nil end
+    end
+
+    --------------------------------------------------------------------------
     -- Auras (UnitAura / UnitBuff / UnitDebuff)
     --------------------------------------------------------------------------
 

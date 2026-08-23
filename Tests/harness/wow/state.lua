@@ -58,6 +58,43 @@ M.inCombat = false
 -- this record is the only observable a spec has. Read through H.getBlockedActions().
 M.blockedActions = {}
 
+-- Action bar slots, keyed by slot number: state.actions[1] = { type = "spell", id = 143 }.
+--
+-- An EMPTY slot is the ABSENCE of a record, not a record of zeroes, because HasAction has to
+-- be able to say no -- a button reading an all-zero record would render an icon for nothing.
+-- Set through H.setAction / H.clearAction so a typo'd field is caught rather than ignored.
+M.actions = {}
+
+-- Which page the main bar is on, as GetActionBarPage() reports it. Phase 0 measured 6 pages
+-- of 12 slots on this client, and pages 3..6 are the same slots the other four bars own.
+M.actionBarPage = 1
+
+-- What the cursor is carrying after a PickupAction, or nil. The client's drag model moves a
+-- slot's CONTENTS, which is why dropping onto an occupied slot swaps rather than overwrites.
+M.pickedUpAction = nil
+
+-- Whether the client considers the action bars locked, as the LOCK_ACTIONBAR global reports
+-- it. A string "0"/"1" rather than a boolean, matching the CVar-backed global.
+M.actionBarLocked = "0"
+
+-- Key bindings, keyed by command: state.bindings.ACTIONBUTTON1 = "1". Read by GetBindingKey.
+M.bindings = {}
+
+-- Override bindings installed through SetOverrideBindingClick, in call order.
+M.overrideBindings = {}
+
+-- Secure state drivers, keyed by frame: state.stateDrivers[header].page = "[bonusbar:1] 7; 1".
+--
+-- RECORDED, NEVER EVALUATED. A driver string is a macro conditional, and resolving one here
+-- would mean the harness guessing what the client decides -- after which a spec would be
+-- asserting against the guess rather than against the client. A spec asserts the string; the
+-- consequence is checked in game.
+M.stateDrivers = {}
+
+-- What the client's own secure handler did with an `action` click: which slot, which button.
+-- The action-slot counterpart to targetedUnit / unitMenu.
+M.usedAction = nil
+
 local pending, pendingSet
 local dependents
 
@@ -136,6 +173,22 @@ function M.reset()
     -- already shipped once.
     M.inCombat       = false
     M.blockedActions = {}
+    -- Action slots and everything keyed off them. Cleared for the reason every other store
+    -- here is: a leaked slot would let a "the button drew an icon" assertion pass before the
+    -- spec staged anything, and a leaked page would put bar 1 on someone else's slots. The
+    -- cursor is cleared too -- a spec that picks an action up and never drops it would
+    -- otherwise hand the next file a loaded cursor, and its first PlaceAction would appear
+    -- to work for the wrong reason.
+    M.actions         = {}
+    M.actionBarPage   = 1
+    M.pickedUpAction  = nil
+    M.actionBarLocked = "0"
+    M.bindings         = {}
+    M.overrideBindings = {}
+    -- Frame-keyed, so this also drops the only reference the harness holds to a torn-down
+    -- secure header.
+    M.stateDrivers    = {}
+    M.usedAction      = nil
     M._settling = false
     M.settleIterations = 0
     pending    = {}

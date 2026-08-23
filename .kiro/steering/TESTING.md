@@ -325,6 +325,60 @@ treats a zero *reading* as unmeasured and falls back anyway. Reaching for 0 to m
 client tests neither: the fourth return is still there, so the branch that has to cope with its
 absence is never entered.
 
+### Action slots
+
+```lua
+H.setAction(slot, props, opts)   -- merges into the slot; fires ACTIONBAR_SLOT_CHANGED
+H.clearAction(slot, opts)        -- empties it, so HasAction answers false
+H.setActionBarPage(page, opts)   -- fires ACTIONBAR_PAGE_CHANGED
+H.setBinding(command, key)       -- what GetBindingKey answers
+H.setActionBarLocked(locked)     -- writes the LOCK_ACTIONBAR global, "0"/"1"
+H.getPickedUpAction()            -- what the cursor carries after PickupAction
+H.getOverrideBindings()          -- every SetOverrideBindingClick, in call order
+H.getStateDriver(frame, state)   -- the conditional string a frame registered
+H.getUsedAction()                -- { slot, button } from the last secure action click
+H.resetUsedAction()
+```
+
+The shape was **measured in game**, not assumed: 12 buttons across 6 pages, and pages 3–6 are
+the same slots the four multibars own. So a paged bar 1 and a fixed bar 3 can legitimately
+address one slot at once, and a slot→button map is the wrong data structure — it has to be
+slot→**buttons**.
+
+**An empty slot is the absence of a record, not a record of zeroes.** `HasAction` has to be
+able to say no, and a button reading an all-zero record would draw an icon for nothing. Two
+fields are therefore meaningfully `nil` and are *not* defaulted:
+
+| Call | Empty slot | Why it matters |
+|---|---|---|
+| `GetActionText` | `nil` | a spell has no macro name, so this cannot be used to test occupancy |
+| `IsActionInRange` | `nil` | `nil` means range is not a question (a self buff); `false` means out of range, and a button must paint those differently |
+| `GetActionCooldown` | `0, 0, 0` | **not** `nil` — the client returns zeroes, and a `Cooldown` frame handed `nil` errors instead of clearing |
+
+`setAction` **merges**, so a spec can put a spell in a slot and then start its cooldown without
+restating the spell, and it rejects an unknown field rather than ignoring it. Every store
+resets on `H.setup()`.
+
+**Drag swaps, it does not overwrite.** The cursor carries a slot's *contents*, so
+`PlaceAction` onto an occupied slot hands the previous occupant back to the cursor. A button
+that assumed overwrite would destroy an action every time a player rearranged a bar.
+
+**A button receives `LeftButtonUp` and nothing else until it calls `RegisterForClicks`.** An
+action button wanting right-click has to say so, or its secondary action silently does nothing
+— in game and here. That is pinned in `00_harness_spec.lua`.
+
+**`RegisterStateDriver` is a RECORDER, never an evaluator.** A driver string is a macro
+conditional, and resolving one locally would mean the harness guessing what the client decides
+— after which a spec asserts against the guess rather than against the client. Assert the
+string; check the consequence in game. This is the only paging mechanism that works in combat,
+so there is nothing else a local spec could prove about it.
+
+**`SetAttribute` is still NOT gated by the lockdown model.** Only the eight geometry and
+visibility setters are (see *Combat lockdown* below), so "attributes are stated once, at
+construction" is a **structural** assertion only — a spec can prove where the call sits, not
+that the client would refuse it later. Do not read a green run as proof that a mid-combat
+`SetAttribute` is safe.
+
 Cursor coordinates belong to a space, so name it: `H.cursor(x, y, frame)` treats `x, y` as
 being in that frame's coordinate space. Omitting the frame means `UIParent`, which is only
 the same thing while nothing in the chain has a scale.
