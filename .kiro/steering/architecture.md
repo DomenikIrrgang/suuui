@@ -69,6 +69,7 @@ SuuUI/
 │   ├── Button.lua        -- full custom button (no Blizzard template)
 │   ├── Icon.lua          -- display-only texture, optional themed border, bevel trim
 │   ├── AuraIcon.lua      -- Icon + cooldown swipe, stack count, duration, dispel border
+│   ├── ActionButton.lua  -- secure action bar cell: icon, cooldown, count, hotkey, drag
 │   ├── IconButton.lua
 │   ├── FlyoutPanel.lua   -- floating vertical roster: one row per entry, adopted icon + name
 │   ├── NavItem.lua       -- selectable labelled row (nav lists)
@@ -2062,6 +2063,68 @@ document it here.
   icon files so a themed border is the only one visible. `SetIcon` / `GetIcon`. Takes no
   mouse input, which is what makes it safe to overlay or nest inside something that does —
   for a clickable icon use `IconButton`.
+- `ActionButton` — one action bar cell: the client's own action system wearing SuuUI's art.
+  A `Button` on `SecureActionButtonTemplate`, composing `Icon` for the art, a Blizzard
+  `Cooldown` for the sweep (the same sanctioned exception `AuraIcon` takes), and three `Text`
+  readouts in an overlay frame raised above the sweep. Props: `slot` and `size` — **both
+  required**, because a button's size is a *plugin setting* and the component must not invent
+  a theme token for it — plus `binding`, `showHotkey`, `showMacroText`, `showCount`, `name`.
+  API: `Refresh` / `GetSlot` / `HasAction` / `IsCurrent` / `IsAutoRepeat` / `IsOutOfRange` /
+  `SetShowHotkey` / `SetShowMacroText` / `SetShowCount` / `SetBinding`. Emits `CLICKED`,
+  `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`. Draws **no border** — the A2 look is one glass
+  plate under a whole grid with hairline dividers between cells, so a per-button border would
+  draw a second edge inside the first.
+
+  Everything below fails **silently in game** — the button still sizes, still takes the mouse,
+  still reports as shown — which is why each is pinned by a mutation-verified spec:
+
+  - **Never `SetScript("OnClick")`.** The template installs the handler that performs the
+    action. Observe through `PostClick`, exactly as `UnitClickArea` does.
+  - **`RegisterForClicks` is not optional.** A `Button` fires for left-up alone until told
+    otherwise, so a right-click action never reaches the client without it.
+  - **Attributes are stated once, at construction**, and the component exposes no `SetSlot`.
+    `SetAttribute` is refused on a protected frame in combat, so a setter that re-pointed a
+    live button would fail exactly while a player was fighting. Paging is the secure state
+    driver's job.
+  - **The slot is read from the ATTRIBUTE on every refresh, never cached in a field.** This is
+    the subtle one. Bar 1 pages through six blocks of twelve and the secure snippet rewrites
+    `action` *inside the secure environment*, where Lua cannot observe the write — so a cached
+    slot keeps drawing the spell the button had before the player changed stance. `GetAttribute`
+    is a read and is never refused.
+  - **Two buttons may address ONE slot.** Measured, not hypothetical: bar 1's page 3 is exactly
+    `MultiBarRight`'s block, so the module keeps a slot → **set of buttons** index and a slot
+    change repaints every watcher. A slot → single button map repaints whichever it finds and
+    leaves the other showing a stale spell.
+  - **`LOCK_ACTIONBAR` is a CVar-backed plain global**, so it is the string `"0"` or `"1"` —
+    and `"0"` is *truthy* in Lua. It must be compared, never tested.
+
+  One event frame and one throttled range ticker serve **every** button in the addon, both
+  registered only while at least one button exists — sixty event frames and sixty `OnUpdate`
+  scripts would be the alternative. Range is polled at 10/sec because nothing announces that a
+  target walked out of range; the tick allocates nothing and each button early-returns when its
+  state has not moved. `IsCurrent` / `IsAutoRepeat` are read but deliberately **not rendered
+  yet**: the "this is active" treatment belongs on the grid's glass plate, which does not exist
+  until `ActionBarGrid`.
+
+  There is deliberately **no `SetEnabled`**, for the reason `StatusBar` and `UnitClickArea`
+  have none: disabling means dropping mouse input, a call the client refuses on a protected
+  frame in combat. An action that should not be used renders as unusable instead.
+
+- `Icon` gained two art-state methods alongside `SetBorderColor`, and the split is deliberate:
+  a **border** carries a property *of* the thing (a cast is uninterruptible), while a tint on
+  the **art** carries whether the thing is usable *right now*. `SetArtTint(color, alpha)`
+  multiplies the texture — `nil` means untinted rather than black, and the optional `alpha`
+  dims without choosing a colour. `SetArtDesaturated(on)` drains the colour and returns
+  whether the client actually did it, since not every generation has the shader. Both are
+  re-asserted from `ApplyTheme`, so a tint naming a token follows a live token edit.
+
+  `ActionButton` composes them into three distinguishable states without inventing a palette
+  entry: **unusable** is desaturated *and* dimmed to `opacityDisabled`, **short of a resource**
+  is desaturated but *not* dimmed, and **out of range** takes `colorDanger` and wins over both
+  — walking closer is the action a player takes next. Blizzard tints the resource state blue;
+  matching that exactly would need a new token, so it is an open design question rather than a
+  silent approximation.
+
 - `AuraIcon` — an `Icon` plus everything an aura has to say about itself: a radial cooldown
   swipe, a stack count, a remaining-time readout, and a dispel-type border. Composes `Icon`
   for the art and the edge, a Blizzard `Cooldown` frame for the sweep (a sanctioned template

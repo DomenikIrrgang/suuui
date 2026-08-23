@@ -1,4 +1,5 @@
 local abs = math.abs
+local type = type
 local S = SuuUI.UISignals
 
 local IconMeta = {}
@@ -67,6 +68,44 @@ function IconMeta:SetBorderColor(color)
     self:ApplyTheme()
 end
 
+--- Tints the ART, leaving the border and the frame alone.
+--
+-- Separate from SetBorderColor because they answer different questions: a border carries a
+-- property OF the thing (a cast is uninterruptible), while a tint on the art carries whether
+-- the thing is USABLE right now. An action button needs the second and has no border at all.
+--
+-- The tint multiplies the texture, so nil -- full white -- is "no tint" rather than "black".
+-- @param color string|table|nil  token key, {r,g,b,a} literal, or nil for untinted
+-- @param alpha number|nil  optional multiplier applied on top, for dimming without a colour
+function IconMeta:SetArtTint(color, alpha)
+    local r, g, b, a = 1, 1, 1, 1
+    if color ~= nil then
+        local c = color
+        if type(c) == "string" then c = SuuUI.Theme:GetToken(c) end
+        if type(c) == "table" then
+            r, g, b = c[1] or 1, c[2] or 1, c[3] or 1
+            a = c[4] == nil and 1 or c[4]
+        end
+    end
+    if alpha ~= nil then a = alpha end
+    self._artTint = color
+    self._artAlpha = alpha
+    self._icon:SetVertexColor(r, g, b, a)
+end
+
+--- Drains the colour out of the art, as the client does for an unusable action.
+--
+-- Not every client generation has SetDesaturated on a texture, and the ones that do can
+-- refuse it on a machine without the shader; it returns false in that case. The tint is the
+-- fallback, so a caller pairing the two still gets a visibly different state either way.
+-- @param on bool
+-- @return bool  whether the client actually desaturated
+function IconMeta:SetArtDesaturated(on)
+    self._artDesaturated = on and true or false
+    if type(self._icon.SetDesaturated) ~= "function" then return false end
+    return self._icon:SetDesaturated(self._artDesaturated) ~= false
+end
+
 function IconMeta:ApplyTheme()
     if self._border then
         SuuUI.Backdrop.Apply(self._f, {
@@ -76,6 +115,11 @@ function IconMeta:ApplyTheme()
     end
     self:_applyInset()
     self:_autosize()
+    -- Re-assert the art tint: it may name a token, and a live token edit has to reach an
+    -- icon that is already sitting in a tinted state.
+    if self._artTint ~= nil or self._artAlpha ~= nil then
+        self:SetArtTint(self._artTint, self._artAlpha)
+    end
     -- opacityDisabled is user-editable, so re-assert the fade or a live token edit never
     -- reaches an icon that is already sitting disabled.
     self:_applyEnabled()
