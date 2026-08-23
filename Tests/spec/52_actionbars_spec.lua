@@ -310,16 +310,40 @@ describe("Plugins.ActionBars", function()
         expect(bar():GetButtons()[5]._hotkeyText:GetText()).eq("5")
     end)
 
-    it("hides NOTHING of Blizzard's this phase", function()
-        -- Phase 4a is additive on purpose: if suppression landed and the secure button path
-        -- did not, the player would be mid-session with no action bars at all.
-        for _, name in ipairs({ "MainMenuBar", "MainMenuBarArtFrame", "MultiBarBottomLeft",
-                                "MultiBarBottomRight", "MultiBarLeft", "MultiBarRight" }) do
-            local f = H.env[name]
-            if f then
-                expect(f:IsShown()).as(name .. " is untouched").truthy()
+    it("hides Blizzard's bottom cluster", function()
+        local S = H.SuuUI._ActionBars.Suppress
+        for _, name in ipairs({ "MainMenuBar", "MultiBarBottomLeft", "MultiBarBottomRight",
+                                "MultiBarLeft", "MultiBarRight", "MainMenuBarArtFrame",
+                                "MainMenuBarLeftEndCap", "MainMenuBarRightEndCap" }) do
+            if H.env[name] then
+                expect(H.env[name]:IsShown()).as(name .. " is hidden").falsy()
+                expect(S.IsSuppressed(name)).as(name .. " is claimed").truthy()
             end
         end
+    end)
+
+    it("leaves alone everything a later phase replaces", function()
+        -- Hiding these now would take away function the player still needs: the micro menu is
+        -- Phase 7, the bags Phase 9, the watch bars Phase 8, the class bars Phase 6.
+        for _, name in ipairs({ "MicroMenu", "MicroMenuContainer", "MicroButtonAndBagsBar",
+                                "StatusTrackingBarManager", "StanceBar", "PetActionBar",
+                                "MainMenuBarBackpackButton" }) do
+            local f = H.env[name]
+            if f then
+                expect(H.SuuUI._ActionBars.Suppress.IsSuppressed(name))
+                    .as(name .. " is not this phase's business").falsy()
+            end
+        end
+    end)
+
+    it("does not take the micro menu down with MainMenuBar", function()
+        -- MEASURED, not assumed: MicroMenu's parent is MicroMenuContainer, so hiding the bar
+        -- cluster spares it. Had it been a child of MainMenuBar this phase would have cost the
+        -- player their character pane, spellbook and bags until Phase 7 -- so the parentage is
+        -- pinned here rather than left as a fact someone once checked.
+        expect(H.env.MicroMenu:GetParent()).eq(H.env.MicroMenuContainer)
+        expect(H.env.MainMenuBar:IsShown()).as("the bar is hidden").falsy()
+        expect(H.env.MicroMenu:IsShown()).as("the micro menu is not").truthy()
     end)
 
     it("registers the bar as a moveable element", function()
@@ -379,5 +403,196 @@ describe("Plugins.ActionBars", function()
         expect(bar()).isNil()
         -- No watcher left to act on a stale handle.
         expect(function() H.SuuUI.Settings:Set(PLUGIN, "bar1_button_size", 50) end).notThrows()
+    end)
+end)
+
+describe("Plugins.ActionBars: suppression", function()
+    local PLUGIN = "action_bars"
+    local S
+
+    before_each(function()
+        H.setup()
+        S = H.SuuUI._ActionBars.Suppress
+    end)
+
+    local function bar(name)
+        return H.env[name]
+    end
+
+    describe("the guarded OnShow hook", function()
+        it("re-hides a frame that shows itself again", function()
+            -- MainMenuBar is layout-managed on this client, so it re-shows on a login, a layout
+            -- change, and whenever UIParent_ManageFramePositions runs. A one-shot Hide is
+            -- therefore reverted, which is the whole reason the hook exists.
+            local f = bar("MainMenuBar")
+            expect(f:IsShown()).falsy()
+            f:Show()
+            expect(f:IsShown()).as("the hook put it back").falsy()
+        end)
+
+        it("stops re-hiding once suppression is released", function()
+            -- HookScript cannot be undone, so the hook asks `suppressed` on every call rather
+            -- than assuming. Without that, onDisable could never hand the frame back.
+            local f = bar("MainMenuBar")
+            S.Restore()
+            expect(f:IsShown()).as("restored").truthy()
+            f:Hide()
+            f:Show()
+            expect(f:IsShown()).as("the hook is inert now").truthy()
+        end)
+
+        it("undoes any number of Applies with one Restore", function()
+            -- Not "installs no second hook": two hooks would both consult `suppressed` and both
+            -- decline, so a duplicate is unobservable from outside and asserting it would be
+            -- asserting nothing. What a player can actually tell is this.
+            S.Apply()
+            S.Apply()
+            local f = bar("MainMenuBar")
+            S.Restore()
+            expect(f:IsShown()).as("one Restore is enough").truthy()
+        end)
+
+        it("is why the deferral exists: the BARS are protected, the art is not", function()
+            -- Pins the asymmetry the whole combat path is built on. MainMenuBar holds the
+            -- CLIENT'S OWN secure buttons, so hiding it mid-fight is refused; the art frames are
+            -- their siblings rather than their parents, so hiding those never is. Without this
+            -- the harness could drop the secure buttons and nothing would notice.
+            expect(H.hasProtectedDescendant(bar("MainMenuBar")))
+                .as("the bar holds Blizzard's secure buttons").truthy()
+            expect(H.hasProtectedDescendant(bar("MainMenuBarArtFrame")))
+                .as("the art holds none").falsy()
+            expect(bar("MainMenuBarArtFrame"):IsProtected())
+                .as("and has no secure ancestor either").falsy()
+        end)
+    end)
+
+    describe("combat", function()
+        it("does not attempt a hide it knows will be refused", function()
+            -- Hiding a Blizzard action bar is PROTECTED: MainMenuBar holds ActionButton1..12,
+            -- which are secure, so the refusal propagates up to the bar. Attempting it costs
+            -- the player a chat error for a call we already knew would not land.
+            S.Restore()
+            H.setCombat(true)
+            H.resetBlockedActions()
+
+            S.Apply()
+
+            expect(#H.getBlockedActions()).as("nothing was refused").eq(0)
+            expect(S.IsDeferred()).as("it deferred instead").truthy()
+            expect(bar("MainMenuBar"):IsShown()).as("still visible for now").truthy()
+        end)
+
+        it("completes the hide when the fight ends", function()
+            S.Restore()
+            H.setCombat(true)
+            S.Apply()
+            H.setCombat(false)
+            expect(S.IsDeferred()).falsy()
+            expect(bar("MainMenuBar"):IsShown()).falsy()
+        end)
+
+        it("defers the RESTORE too, which is the escape hatch", function()
+            -- Show() is refused on the way back out for exactly the same reason Hide() is. A
+            -- player disabling this mid-fight must still get their bars back afterwards rather
+            -- than being left with neither.
+            H.setCombat(true)
+            H.resetBlockedActions()
+
+            S.Restore()
+
+            expect(#H.getBlockedActions()).eq(0)
+            expect(S.IsDeferred()).truthy()
+            H.setCombat(false)
+            expect(bar("MainMenuBar"):IsShown()).as("handed back after the fight").truthy()
+        end)
+
+        it("does not re-hide a frame released while the hide was still pending", function()
+            S.Restore()
+            H.setCombat(true)
+            S.Apply()          -- queued
+            S.Restore()        -- released before the queue drained
+            H.setCombat(false)
+            expect(bar("MainMenuBar"):IsShown())
+                .as("a released frame stays visible").truthy()
+        end)
+
+        it("lets the LAST instruction win when suppression is re-enabled mid-fight", function()
+            -- The reachable half of the pair above. Apply cancels a pending restore just as
+            -- Restore cancels a pending hide, so whichever the player asked for last is what
+            -- they get when the fight ends -- rather than an order-of-drain lottery.
+            H.setCombat(true)
+            S.Restore()        -- queues a restore
+            S.Apply()          -- cancels it and queues a hide instead
+            H.setCombat(false)
+            expect(bar("MainMenuBar"):IsShown())
+                .as("the later Apply won").falsy()
+        end)
+    end)
+
+    describe("the toggle", function()
+        it("hands Blizzard's bars back immediately when switched off", function()
+            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
+            expect(bar("MainMenuBar"):IsShown()).truthy()
+            expect(S.IsSuppressed("MainMenuBar")).falsy()
+        end)
+
+        it("takes them away again when switched back on", function()
+            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
+            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", true)
+            expect(bar("MainMenuBar"):IsShown()).falsy()
+        end)
+
+        it("leaves SuuUI's own bar up when suppression is off", function()
+            -- The point of a separate toggle: both bars on screen at once is a legitimate
+            -- state, and it is what a player debugging their own setup wants.
+            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
+            expect(H.SuuUI.Plugins:Get(PLUGIN)._bar).notNil()
+        end)
+
+        it("sits before any section, so it is findable", function()
+            local schema = H.SuuUI.Settings:GetSchema(PLUGIN)
+            local sawSection = false
+            for _, e in ipairs(schema) do
+                if e.type == "section" then sawSection = true end
+                if e.key == "hide_blizzard" then
+                    expect(sawSection).as("the escape hatch is not inside a group").falsy()
+                end
+            end
+        end)
+    end)
+
+    describe("disabling the plugin", function()
+        it("hands Blizzard's cluster back", function()
+            H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
+            expect(bar("MainMenuBar"):IsShown()).truthy()
+            expect(bar("MultiBarBottomLeft"):IsShown()).truthy()
+        end)
+
+        it("never leaves the player with neither bar", function()
+            H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
+            expect(H.SuuUI.Plugins:Get(PLUGIN)._bar).as("ours is gone").isNil()
+            expect(bar("MainMenuBar"):IsShown()).as("so theirs must be back").truthy()
+        end)
+    end)
+
+    describe("resolution", function()
+        it("resolves targets by candidate list, skipping what this client lacks", function()
+            -- The Phase 0 results are a snapshot of ONE build, and this client is already
+            -- mid-migration. A patch that renames a frame must degrade to "not hidden", never
+            -- to an error.
+            local found = S.Apply()
+            expect(#found).as("something resolved").gt(0)
+            for _, entry in ipairs(S.TARGETS) do
+                expect(type(entry.names)).as(entry.id .. " has a candidate list").eq("table")
+                expect(#entry.names).gte(1)
+            end
+        end)
+
+        it("does not raise for a target no client has", function()
+            local original = S.TARGETS[1].names
+            S.TARGETS[1].names = { "SuuUINoSuchFrameAnywhere" }
+            expect(function() S.Apply() end).notThrows()
+            S.TARGETS[1].names = original
+        end)
     end)
 end)

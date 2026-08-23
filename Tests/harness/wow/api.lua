@@ -432,6 +432,82 @@ function M.install(env)
     end
 
     --------------------------------------------------------------------------
+    -- Blizzard's bottom action bar cluster (the ActionBars plugin suppresses it)
+    --------------------------------------------------------------------------
+
+    -- MainMenuBar carries the CLIENT'S OWN action buttons, and those are secure. That is the
+    -- whole reason hiding the bar is a protected operation: protection propagates down to the
+    -- buttons and the client's refusal propagates back up to the bar. A stub without them would
+    -- let a suppression spec assert "hiding this mid-fight is fine", which is false in game --
+    -- and the deferral that makes it true would then be untested.
+    local MainMenuBar = blizzardSystemFrame(CreateFrame("Frame", "MainMenuBar", UIParent))
+    MainMenuBar:SetSize(512, 60)
+    MainMenuBar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+    for i = 1, 12 do
+        local b = CreateFrame("Button", "ActionButton" .. i, MainMenuBar,
+            "SecureActionButtonTemplate")
+        b:SetSize(36, 36)
+        b:SetPoint("BOTTOMLEFT", MainMenuBar, "BOTTOMLEFT", (i - 1) * 40, 4)
+        b:SetAttribute("type", "action")
+        b:SetAttribute("action", i)
+    end
+
+    -- The four multibars, each carrying the slot block MEASURED IN GAME during Phase 0 of the
+    -- bottom-UI work. Modelled with their real blocks so a spec reading a button's action
+    -- attribute gets the mapping the client actually has, rather than a guess.
+    for _, def in ipairs({
+        { name = "MultiBarBottomLeft",  first = 61 },
+        { name = "MultiBarBottomRight", first = 49 },
+        { name = "MultiBarLeft",        first = 37 },
+        { name = "MultiBarRight",       first = 25 },
+    }) do
+        local bar = blizzardSystemFrame(CreateFrame("Frame", def.name, UIParent))
+        bar:SetSize(512, 40)
+        bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 60)
+        for i = 1, 12 do
+            local b = CreateFrame("Button", def.name .. "Button" .. i, bar,
+                "SecureActionButtonTemplate")
+            b:SetSize(36, 36)
+            b:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", (i - 1) * 40, 2)
+            b:SetAttribute("type", "action")
+            b:SetAttribute("action", def.first + i - 1)
+        end
+    end
+
+    -- The bar art and the gryphons, children of MainMenuBar as in the live client. They hold no
+    -- secure frames of their own and no secure ANCESTOR -- the buttons are their siblings, not
+    -- their parents -- so hiding these is never refused, even mid-fight. That asymmetry is why
+    -- they are separate suppression targets from the bars themselves.
+    for _, name in ipairs({ "MainMenuBarArtFrame", "MainMenuBarLeftEndCap",
+                            "MainMenuBarRightEndCap", "MainMenuBarMaxLevelBar" }) do
+        local f = blizzardSystemFrame(CreateFrame("Frame", name, MainMenuBar))
+        f:SetSize(256, 60)
+        f:SetPoint("BOTTOMLEFT", MainMenuBar, "BOTTOMLEFT", 0, 0)
+    end
+
+    -- Neighbours in the same cluster that LATER phases own: the micro menu (7), the bags (9),
+    -- the watch bars (8), the class bars (6). Present so a spec asserting "phase 4b does not
+    -- touch these" is testing something rather than skipping an absent frame.
+    for _, name in ipairs({ "MicroMenuContainer", "MicroButtonAndBagsBar",
+                            "StatusTrackingBarManager",
+                            "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer",
+                            "StanceBar", "PetActionBar", "PossessActionBar",
+                            "MainMenuBarBackpackButton", "KeyRingButton" }) do
+        local f = blizzardSystemFrame(CreateFrame("Frame", name, UIParent))
+        f:SetSize(120, 30)
+        f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+    end
+
+    -- MicroMenu is a child of MicroMenuContainer, NOT of MainMenuBar. Measured in game, because
+    -- the answer decided whether Phase 4b could hide the bar cluster at all: under MainMenuBar
+    -- the player would have lost the character pane, the spellbook and the bags until Phase 7.
+    -- Modelled with the real parent so a Phase 7 spec hiding the container gets the real cascade.
+    local MicroMenu = blizzardSystemFrame(
+        CreateFrame("Frame", "MicroMenu", env.MicroMenuContainer))
+    MicroMenu:SetSize(120, 30)
+    MicroMenu:SetPoint("BOTTOMLEFT", env.MicroMenuContainer, "BOTTOMLEFT", 0, 0)
+
+    --------------------------------------------------------------------------
     -- Action bar slots
     --------------------------------------------------------------------------
 

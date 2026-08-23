@@ -1,11 +1,16 @@
 -- SuuUI's own action bars.
 --
--- PHASE 4a: bar 1 only, and NOTHING of Blizzard's is hidden. That split is deliberate. Phase
--- 4 as planned bundled "SuuUI's bar works" with "Blizzard's bottom cluster disappears", and
--- those have very different blast radii: if suppression lands and the secure button path does
--- not, the player is mid-session with no action bars at all. So this phase renders a working
--- bar ALONGSIDE the client's, which is additive and verifiable, and suppression follows once
--- the buttons are proven in game.
+-- PHASE 4b: bar 1 plus suppression of Blizzard's bottom cluster. Phase 4 as planned bundled
+-- "SuuUI's bar works" with "Blizzard's bottom cluster disappears", and those have very
+-- different blast radii: if suppression lands and the secure button path does not, the player
+-- is mid-session with no action bars at all. So 4a shipped the bar ADDITIVELY, alongside the
+-- client's, and this phase takes the client's away now that the buttons are confirmed in game.
+--
+-- Suppression has its OWN toggle rather than riding on the plugin's. It is the escape hatch: a
+-- player whose bar is misbehaving needs Blizzard's back without also giving up the settings
+-- page they are standing on. Plugins/ActionBars/Suppress.lua does the work, and every
+-- visibility change in it is deferred out of combat -- hiding a Blizzard action bar is itself
+-- protected, because the bar holds the client's own secure buttons.
 --
 -- Bars 2..5, the B3 dock and the attach points are Phase 5. The slot blocks they own were
 -- measured in game -- see the Round 3 table in .kiro/specs/bottom-ui-replacement.md.
@@ -24,9 +29,10 @@ local FIRST_SLOT   = 1
 local MAX_BUTTONS  = 12
 local DISPLAY_NAME = "Action Bar 1"
 
--- Bottom centre, above where Blizzard's own bar sits, so the two do not overlap while both
--- are on screen this phase. Phase 4b moves it down once the client's is gone.
-local DEFAULT_POSITION = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 120 }
+-- Where the bar sits on a profile that has never positioned it. Low, since the client's own bar
+-- and its gryphons are gone from under it -- clear of the very bottom edge so it does not sit
+-- flush against the screen. A position the player has already stored is untouched by this.
+local DEFAULT_POSITION = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 28 }
 
 local function slotsFor(count)
     local out = {}
@@ -132,6 +138,12 @@ local function watchSettings(p)
     SuuUI.Settings:Watch(PLUGIN_ID, "bar1_enabled", function(on)
         if on then buildBar(p) else destroyBar(p) end
     end, OWNER .. ".bar1_enabled", { immediate = true })
+    -- Immediate, so switching it off hands Blizzard's cluster back straight away rather than
+    -- at the next login. That is the whole point of it being separate from the plugin toggle.
+    SuuUI.Settings:Watch(PLUGIN_ID, "hide_blizzard", function(on)
+        local Suppress = SuuUI._ActionBars.Suppress
+        if on then Suppress.Apply() else Suppress.Restore() end
+    end, OWNER .. ".hide_blizzard", { immediate = true })
 end
 
 local function unwatchSettings()
@@ -142,6 +154,7 @@ local function unwatchSettings()
         SuuUI.Settings:Unwatch(OWNER .. "." .. entry.key)
     end
     SuuUI.Settings:Unwatch(OWNER .. ".bar1_enabled")
+    SuuUI.Settings:Unwatch(OWNER .. ".hide_blizzard")
 end
 
 ---------------------------------------------------------------------------
@@ -153,6 +166,12 @@ local function schema()
         -- Before the first section, so it stays on the page itself: a player must not have to
         -- open a group to find the switch that turns the plugin off.
         { key = "enabled", label = "Enable Action Bars", type = "toggle", default = true },
+        -- Its OWN toggle, deliberately alongside the plugin's rather than inside a group: it is
+        -- the escape hatch. A player whose bar is misbehaving needs Blizzard's cluster back
+        -- without having to disable the plugin whose settings page they are standing on, and a
+        -- switch you have to open a group to find is not an escape hatch.
+        { key = "hide_blizzard", label = "Hide Blizzard's Action Bars", type = "toggle",
+          default = true },
 
         -- No control of its own; the drag and the properties panel write it.
         { key = "bar1_position", type = "position", default = DEFAULT_POSITION },
@@ -210,6 +229,9 @@ SuuUI:CreatePlugin({
 
     onDisable = function(p)
         unwatchSettings()
+        -- Blizzard's cluster back BEFORE our own bar goes, so there is never a frame where the
+        -- player has neither. Restore is a no-op for anything this addon did not hide.
+        SuuUI._ActionBars.Suppress.Restore()
         destroyBar(p)
     end,
 })

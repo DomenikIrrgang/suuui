@@ -12,13 +12,33 @@ neighbour. That is the whole point: the layout engine's job is placement, so pla
 is what gets verified.
 
 ```bash
-lua Tests/run.lua                          # everything
+lua Tests/run.lua                          # everything, sequentially (~215s)
 lua Tests/run.lua --filter Button          # one suite or test name
 lua Tests/run.lua Tests/spec/11_button_spec.lua -v
 lua Tests/run.lua --trace                  # tracebacks on failure
+
+./Tests/parallel.sh                        # everything, across cores (~30s)
+./Tests/parallel.sh 8                      # ... with 8 jobs instead of 12
 ```
 
 Exit code is non-zero on failure. No external dependencies — no busted, no luarocks.
+
+**Iterate on one file, gate on the whole suite.** A single spec file is 1–3 seconds, so that
+is what a fix-and-check loop should run; the full suite is the phase gate, not the inner loop.
+Running everything after each small edit is where the time goes.
+
+`Tests/parallel.sh` runs one process per spec file rather than one at a time. That is safe
+because `Tests/run.lua` already rebuilds the addon in a fresh sandbox per test and keeps no
+state outside its own process — and the totals are the proof, since it reports the same
+passed/failed/skipped as the sequential runner. What it gives up is the per-test tree and the
+failure detail, so on a red run it prints the FILES that failed and you re-run one of those on
+its own for the diagnosis. The floor is the slowest single file (currently
+`Tests/spec/18_integration_spec.lua`, ~21s), so more jobs stop helping past that.
+
+Two things worth knowing before trusting a parallel result: confirm a FIRST failure
+sequentially before acting on it, and remember that mutation testing needs a **green
+baseline** — a suite that is already red makes every mutation look caught, which is a
+verification run that proves nothing.
 
 ---
 

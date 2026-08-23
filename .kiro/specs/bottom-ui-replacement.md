@@ -135,6 +135,26 @@ Unverified and deliberately deferred to its call site in Phase 6: whether druid 
 stealth swaps drive `bonusbar` (slots 73+) or a page. Read `GetBonusBarOffset` defensively
 there rather than adding another probe round now.
 
+### Round 4 result — the micro menu's parentage, recorded 2026-08-23
+
+Asked because Phase 4b hides `MainMenuBar`, and if the micro menu were a child of it the player
+would lose the character pane, the spellbook and the bags until Phase 7 — survivable via Esc, C
+and B, but not something to discover after the fact.
+
+```
+/run local m=MicroMenu or MicroButtonAndBagsBar print(m and m:GetName(), m and m:GetParent() and m:GetParent():GetName())
+```
+
+→ `MicroMenu MicroMenuContainer`
+
+- **The micro menu is NOT under `MainMenuBar`.** Hiding the bar cluster leaves it alone, so
+  Phase 4b suppresses the bars without collateral damage. Confirmed rather than assumed.
+- **`MicroMenuContainer` exists and is new information** — it appears in neither Phase 0 round.
+  It is the frame Phase 7 has to suppress, and `MicroMenu` is its child, so the candidate list
+  for that phase is `{ "MicroMenuContainer", "MicroMenu", "MicroButtonAndBagsBar" }` with the
+  container first. The harness models this parentage now, so a Phase 7 spec that hides the
+  container gets the real cascade rather than a guess.
+
 ---
 
 ## The glass plate
