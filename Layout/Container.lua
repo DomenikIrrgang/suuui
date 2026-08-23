@@ -67,6 +67,30 @@ function ContMeta:GetGap()
     return self._gap
 end
 
+--- Sets a grid container's column count and re-runs layout.
+--
+-- A setter for the same reason SetLineOrder is one: the count moves at runtime. An action
+-- bar's rows are a player setting, so twelve buttons in one row become six in two the moment
+-- it changes -- and rebuilding the container to say so would destroy its children, which for
+-- a bar means destroying protected buttons the client may currently refuse to touch.
+--
+-- No-change guarded, because this is re-stated from the owner's geometry sync and a layout
+-- pass per no-op is work with nothing to show for it.
+-- @param cols number  columns, floored at 1
+function ContMeta:SetColumns(cols)
+    local n = cols or 1
+    if n < 1 then n = 1 end
+    if self._cols == n then return end
+    self._cols = n
+    self:Layout()
+end
+
+--- Returns the current column count.
+-- @return number
+function ContMeta:GetColumns()
+    return self._cols
+end
+
 --- Sets the container's padding. Omitted edges reset to 0, as at construction.
 --
 -- A setter for the same reason SetGap is one: padding comes from spacing and size tokens,

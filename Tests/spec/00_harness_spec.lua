@@ -3317,6 +3317,63 @@ describe("harness: WoW API simulation", function()
         end)
     end)
 
+    -- Whether a region inside a protected frame is itself protected. It is NOT, and the
+    -- distinction decides whether a component may update a readout during a fight.
+    describe("regions inside a protected frame", function()
+        before_each(function() H.setup() end)
+
+        local function secureButton()
+            local b = H.env.CreateFrame("Button", nil, H.env.UIParent,
+                "SecureActionButtonTemplate")
+            b:SetSize(32, 32)
+            b:SetPoint("TOPLEFT", H.env.UIParent, "TOPLEFT", 0, 0)
+            return b
+        end
+
+        it("lets a font string be hidden mid-combat", function()
+            -- Blizzard's own action buttons rely on this: a potion's stack count appears and
+            -- disappears as it is used, which is a font string inside a protected button being
+            -- shown and hidden during a fight.
+            local b = secureButton()
+            local fs = b:CreateFontString(nil, "OVERLAY")
+            H.setCombat(true)
+            H.resetBlockedActions()
+            fs:Hide()
+            expect(#H.getBlockedActions()).as("a region carries no protection").eq(0)
+            expect(fs:IsShown()).falsy()
+        end)
+
+        it("lets a texture be resized and repositioned mid-combat", function()
+            local b = secureButton()
+            local tex = b:CreateTexture(nil, "ARTWORK")
+            H.setCombat(true)
+            H.resetBlockedActions()
+            tex:SetSize(8, 8)
+            tex:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+            expect(#H.getBlockedActions()).eq(0)
+        end)
+
+        it("still refuses a FRAME inside a protected frame", function()
+            -- The narrow half of the same rule, and the one that matters: this is what caught
+            -- ActionButton hiding its icon frame on every action pickup.
+            local b = secureButton()
+            local child = H.env.CreateFrame("Frame", nil, b)
+            H.setCombat(true)
+            H.resetBlockedActions()
+            child:Hide()
+            expect(#H.getBlockedActions()).as("a frame is protected by its ancestor").eq(1)
+            expect(H.getBlockedActions()[1].action).eq("Hide")
+        end)
+
+        it("still refuses geometry on the protected frame itself", function()
+            local b = secureButton()
+            H.setCombat(true)
+            H.resetBlockedActions()
+            b:SetSize(48, 48)
+            expect(#H.getBlockedActions()).eq(1)
+        end)
+    end)
+
     -- Action slots. The shape here was measured in game, not assumed: 12 buttons across 6
     -- pages, and GetActionInfo answering ("spell", 143, "spell") for slot 1.
     describe("action slots", function()

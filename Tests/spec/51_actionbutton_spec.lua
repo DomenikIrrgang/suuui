@@ -31,6 +31,10 @@ describe("Components.ActionButton", function()
 
     before_each(function()
         H.setup()
+        -- The ActionBars plugin builds twelve buttons at login, so every shared-index and
+        -- live-count assertion below would be measuring those too. Switched off here so these
+        -- specs describe the component alone; the plugin has its own file.
+        H.SuuUI.Settings:Set("action_bars", "enabled", false)
         host = H.parent(400, 200)
     end)
 
@@ -125,23 +129,33 @@ describe("Components.ActionButton", function()
             H.setAction(1, { texture = "Interface\\Icons\\Spell_Fire_FireBolt" }, { silent = true })
             local b = build({ slot = 1 })
             expect(b._iconComp:GetIcon()).eq("Interface\\Icons\\Spell_Fire_FireBolt")
-            expect(b._iconComp:IsShown()).truthy()
         end)
 
-        it("hides the art for an empty slot but stays live for a drop", function()
+        it("clears the texture for an empty slot rather than hiding a frame", function()
+            -- Hiding a frame inside a protected button is refused in combat, and an action
+            -- disappearing mid-fight is the ordinary case, so the hide would fire exactly when
+            -- it cannot land. A texture with no file draws nothing and costs no protected call.
             local b = build({ slot = 1 })
             expect(b:HasAction()).falsy()
-            expect(b._iconComp:IsShown()).as("no art").falsy()
+            expect(b._iconComp:GetIcon()).as("no art").isNil()
             -- Still mouse-enabled: dragging an action ONTO an empty slot is the whole point.
             expect(b:GetFrame():IsMouseEnabled()).as("still takes the mouse").truthy()
         end)
 
+        it("costs no refused call when an action appears during combat", function()
+            local b = build({ slot = 4 })
+            H.setCombat(true)
+            H.resetBlockedActions()
+            H.setAction(4, { texture = "Interface\\Icons\\B" })
+            expect(#H.getBlockedActions()).as("nothing protected was touched").eq(0)
+            expect(b._iconComp:GetIcon()).eq("Interface\\Icons\\B")
+        end)
+
         it("picks the art up when the slot is filled afterwards", function()
             local b = build({ slot = 4 })
-            expect(b._iconComp:IsShown()).falsy()
+            expect(b._iconComp:GetIcon()).isNil()
             H.setAction(4, { texture = "Interface\\Icons\\B" })
             expect(b._iconComp:GetIcon()).as("the event repainted it").eq("Interface\\Icons\\B")
-            expect(b._iconComp:IsShown()).truthy()
         end)
 
         it("draws no border of its own", function()

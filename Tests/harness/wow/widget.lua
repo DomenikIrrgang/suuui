@@ -168,6 +168,22 @@ M.hasProtectedDescendant = hasProtectedDescendant
 -- @return bool
 local function refused(w, action)
     if not state.inCombat then return false end
+    -- REGIONS ARE NOT PROTECTED OBJECTS. Protection is a property of FRAMES: a texture or a
+    -- font string inside a protected button carries none of its own, and the client lets an
+    -- addon retint, retext, show and hide one during a fight. Blizzard's own action buttons
+    -- depend on that -- a potion's stack count changes as it is used, which is a font string
+    -- being shown and hidden inside a protected button mid-combat.
+    --
+    -- Without this clause the ancestor walk in IsProtected() reports every region of a secure
+    -- button as protected, which pushes a component into deferring readout updates the client
+    -- would have accepted -- a setting that visibly does nothing until the fight ends.
+    --
+    -- NOTE: this makes the harness MORE PERMISSIVE, which is the direction that has burned
+    -- this project four times, so it is deliberately narrow. `_canScript` is false for exactly
+    -- Texture, MaskTexture and FontString, so nothing about FRAMES changes -- and hiding a
+    -- frame inside a protected button stays refused, which is what caught ActionButton hiding
+    -- its icon frame on every action pickup.
+    if not w._canScript then return false end
     local isProtected = w:IsProtected()
     if not (isProtected or hasProtectedDescendant(w)) then return false end
     local log = state.blockedActions

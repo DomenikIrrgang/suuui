@@ -397,3 +397,75 @@ describe("Container", function()
         end)
     end)
 end)
+
+describe("Layout.AnchorLayout: the no-change guard", function()
+    -- Re-anchoring is ClearAllPoints + SetPoint, and the client REFUSES both on a frame
+    -- holding a protected descendant during combat. Moving ONE root element lays out ALL of
+    -- them, so without this guard a unit frame growing for a debuff mid-fight re-states every
+    -- other element's unchanged anchor -- and an action bar full of secure buttons earns the
+    -- player an "Interface action failed because of an AddOn" for a move it never needed.
+    local host, box
+
+    before_each(function()
+        H.setup()
+        host = H.parent(400, 300)
+        box = H.SuuUI.Layout:CreateContainer({ host = host, layout = "anchor" })
+    end)
+
+    local function child(x, y)
+        local f = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+        f:SetSize(20, 20)
+        box:Add(f, { anchor = { point = "TOPLEFT", x = x, y = y } })
+        return f
+    end
+
+    it("does not re-anchor a child whose anchor has not moved", function()
+        local a = child(10, -10)
+        local b = child(50, -10)
+        H.setCombat(false)
+        box:Layout()
+
+        -- Nothing about b changed, so a second pass must not touch it.
+        local calls = 0
+        local realClear = b.ClearAllPoints
+        b.ClearAllPoints = function(self) calls = calls + 1 return realClear(self) end
+        box:Layout()
+        b.ClearAllPoints = realClear
+
+        expect(calls).as("an unmoved child is skipped entirely").eq(0)
+        expect(a).notNil()
+    end)
+
+    it("re-anchors the child that DID move", function()
+        local a = child(10, -10)
+        box:Layout()
+        box:SetChildAnchor(a, { point = "TOPLEFT", x = 80, y = -40 })
+        local ab = H.box(a)
+        expect(ab.left).eq(H.box(host).left + 80)
+    end)
+
+    it("re-anchors a child moved OUTSIDE the container, e.g. by a drag", function()
+        -- The guard compares against the frame's LIVE anchor rather than a remembered one,
+        -- because a dragged window has its points set directly and bypasses this container --
+        -- so "the descriptor did not change" does not mean "the frame is still where it put it".
+        local a = child(10, -10)
+        box:Layout()
+        a:ClearAllPoints()
+        a:SetPoint("TOPLEFT", host, "TOPLEFT", 200, -100)
+
+        box:Layout()
+
+        expect(H.box(a).left).as("put back where its descriptor says").eq(H.box(host).left + 10)
+    end)
+
+    it("never skips a child whose descriptor carries a size", function()
+        -- A width or height resolves against the child's CURRENT size, so it cannot be
+        -- compared against a requested one.
+        local f = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+        box:Add(f, { anchor = { point = "TOPLEFT", x = 0, y = 0, width = 30, height = 30 } })
+        box:Layout()
+        f:SetSize(99, 99)
+        box:Layout()
+        H.expectSize(f, 30, 30)
+    end)
+end)

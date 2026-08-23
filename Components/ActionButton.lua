@@ -215,14 +215,15 @@ end
 function ActionButtonMeta:_paintIcon()
     local slot = self:_slotNow()
     local texture = slot and HasAction(slot) and GetActionTexture(slot) or nil
+    -- Clears the TEXTURE rather than hiding the icon frame, and that is not a style choice.
+    -- Hiding a frame inside a protected button is refused in combat -- and an action appearing
+    -- or disappearing mid-fight is the ordinary case, so the hide would fire exactly when it
+    -- cannot land, costing the player a chat error every time. A texture with no file draws
+    -- nothing and costs no protected call. Found by the lockdown model: 80 refusals.
+    --
+    -- The button also stays live for an empty slot on purpose: a player drags an action ONTO
+    -- an empty cell, so it still has to take the mouse.
     self._iconComp:SetIcon(texture)
-    if texture then
-        self._iconComp:Show()
-    else
-        -- An empty cell shows the plate and nothing else. The button stays live: a player
-        -- drags an action ONTO an empty slot, so it still has to take the mouse.
-        self._iconComp:Hide()
-    end
 end
 
 function ActionButtonMeta:_paintCooldown()
@@ -428,6 +429,17 @@ end
 function ActionButtonMeta:SetShowCount(show)
     self._showCount = show ~= false
     self:_paintCount()
+end
+
+--- Sets the button's side. Called by its grid when the size setting changes.
+---
+--- A protected frame, so this is refused in combat like any other geometry -- the CALLER owns
+--- the deferral, because it is the caller that knows the whole grid has to move together.
+--- ActionBarGrid does it; see its header.
+-- @param w number
+-- @param h number
+function ActionButtonMeta:SetSize(w, h)
+    self._f:SetSize(w, h)
 end
 
 --- The binding command whose key this button displays, e.g. "ACTIONBUTTON3".

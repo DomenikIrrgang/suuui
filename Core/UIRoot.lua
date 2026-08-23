@@ -159,6 +159,11 @@ function M:RemoveElement(element)
 end
 
 --- Updates the anchor position of an element.
+--
+-- Lays out the whole root container, which re-states every other element's anchor as well.
+-- That is safe and cheap because AnchorLayout skips a child whose anchor has not actually
+-- moved -- see the no-change guard there, which exists because re-anchoring a frame that
+-- holds a protected descendant is refused during combat.
 -- @param element frame
 -- @param anchorDesc table  New anchor descriptor
 function M:UpdateElementAnchor(element, anchorDesc)
