@@ -40,16 +40,69 @@ because WoW's chat edit box truncates past 255 and fails with a syntax error.
 /run print(NUM_ACTIONBAR_BUTTONS,NUM_ACTIONBAR_PAGES,GetActionBarPage(),HasAction(1),GetActionInfo(1))
 ```
 
-Record the answers in this file before proceeding. Two of them change the design rather
-than merely confirming it:
+### Round 1 results — recorded 2026-08-23
 
-- **`MICRO_BUTTONS` is the canonical micro list.** The atlas covers the 13 glyphs drafted in
-  the concept; any button the probe reports that has no glyph falls back to a text-only field
-  rather than shipping a wrong icon.
-- **`SetGradient` vs `SetGradientAlpha`.** The signature changed across client generations
-  (`SetGradientAlpha` was removed in 10.0). Feature-detect and fall back to a flat translucent
-  fill — the same degradation `Backdrop.Pill` makes where there is no mask API: a worse look,
-  not a broken widget.
+| Probe | Result |
+|---|---|
+| Bars | `MainMenuBar` **Y** · `MainMenuBarArtFrame` **Y** · `MultiBarBottomLeft` **Y** · `MultiBarBottomRight` **Y** · `MultiBarLeft` **Y** · `MultiBarRight` **Y** |
+| Art / watch bars | `MainMenuBarLeftEndCap` **Y** · `MainMenuBarRightEndCap` **Y** · `MainMenuBarMaxLevelBar` **Y** · `MainMenuExpBar` **absent** · `ExhaustionTick` **absent** · `ReputationWatchBar` **absent** |
+| Class bars / bags | `KeyRingButton` **Y** · `MainMenuBarBackpackButton` **Y** · `StanceBarFrame` **absent** · `ShapeshiftBarFrame` **absent** · `PetActionBarFrame` **absent** · `PossessBarFrame` **absent** |
+| Micro list | `#MICRO_BUTTONS` = **0** |
+| Gradient / anchors | `SetGradient` **present**, `SetGradientAlpha` **absent** · `MainMenuBar:GetNumPoints()` = **1** |
+| Action API | `NUM_ACTIONBAR_BUTTONS` = **12** · `NUM_ACTIONBAR_PAGES` = **6** · `GetActionBarPage()` = **1** · `HasAction(1)` = **true** · `GetActionInfo(1)` = `"spell", 143, "spell"` |
+
+**Four of the six contradicted this plan, which is why Phase 0 exists.** This client is a
+hybrid: it carries the Classic bar-art names (`MainMenuBarArtFrame`, `MainMenuBarMaxLevelBar`,
+`KeyRingButton`) but *not* the Classic watch-bar or class-bar names — consistent with
+`EditModeManagerFrame` being present. Treat every "absent" above as **a dead line in this
+spec**, not as a frame to hide.
+
+Settled by round 1:
+
+- **The glass gradient works, in the modern form only.** `SetGradient` is present and
+  `SetGradientAlpha` is gone, so `Backdrop.Glass` uses
+  `SetGradient(orientation, CreateColor(…), CreateColor(…))`. Keep the flat-fill fallback in
+  the code for a client without it, but this client does not take that path.
+- **The action API is all there.** 12 buttons across 6 pages, and `GetActionInfo` returns
+  `(type, id, subType)`. `ActionButton` needs no shape probing.
+- **`MainMenuBar` has exactly one anchor point**, so the store-original-and-restore requirement
+  under Suppression is satisfiable.
+
+### Round 2 results — Phase 0 COMPLETE
+
+| Probe | Result |
+|---|---|
+| Watch bars | `StatusTrackingBarManager` **Y** · `MainStatusTrackingBarContainer` **Y** · `SecondaryStatusTrackingBarContainer` **Y** · `ReputationStatusBar` **absent** · `ExhaustionLevelFillBar` **absent** |
+| Class bars | `StanceBar` **Y** · `PetActionBar` **Y** · `PossessActionBar` **Y** · `OverrideActionBar` **Y** · `MainMenuBarVehicleLeaveButton` **Y** · `MultiCastActionBarFrame` **absent** |
+| Micro buttons | **12 present**: Character, Spellbook, Talent, QuestLog, Socials, Guild, LFG, PVP, WorldMap, MainMenu, Help, Collections. `LFDMicroButton` **absent** |
+| Containers / colour | `MicroMenu` **Y** · `MicroButtonAndBagsBar` **Y** · `CreateColor` **Y** · `type(MICRO_BUTTONS)` = **nil** · `UnitLevel("player")` = **11** |
+
+Four things this settles, and each removes a branch from the design:
+
+- **The XP and reputation bars are the modern status-tracking system, and the player is level
+  11** — so `MainMenuExpBar` being absent is the frame tree, not a max-level artifact. The
+  client owns one `StatusTrackingBarManager` with **two** containers and swaps XP / rep / honor
+  between them. Suppression targets the manager, which is also the frame that re-shows itself on
+  a level or reputation change, so the guarded-`OnShow` hook goes there.
+- **R1 is validated by the client's own architecture.** Two SuuUI bars is not a departure from
+  what the client does; it is the same two containers, always both visible instead of swapped.
+- **`MICRO_BUTTONS` is `nil`, not empty**, and `MicroMenu` / `MicroButtonAndBagsBar` exist. So
+  the micro menu is the modern container architecture: enumerate the 12 confirmed globals by
+  name rather than reading a list global that does not exist on this client.
+- **`CreateColor` is present**, closing the gradient question completely:
+  `SetGradient(orientation, CreateColor(…), CreateColor(…))` is the form to write.
+
+`MultiCastActionBarFrame` absent is correct rather than surprising — that is the WotLK shaman
+totem bar and this is TBC. `OverrideActionBar` and `MainMenuBarVehicleLeaveButton` existing means
+the vehicle/override path is real on this client and belongs in the S1 possess work.
+
+**One glyph is missing from the drafted set.** `CollectionsMicroButton` has no glyph in the
+concept's 13. It needs one — a paw print reads instantly at 16 units in a single-weight stroke
+and matches the rest of the set. See **Icon atlas** below for the corrected count.
+
+Still to verify, but at its call site in Phase 8 rather than as another probe round:
+`GetWatchedFactionInfo` changed shape across client generations (a multi-return classically, a
+table in 11.0). Read it defensively and branch on the shape.
 
 ---
 
@@ -201,12 +254,53 @@ Clear the suppression flag **before** the restoring `Show()`.
 `hooksecurefunc` re-assert pattern `Plugins/DataBar/DataBar.lua` already uses, consulting a
 `managed` table on every call because the hook cannot be uninstalled.
 
+**Resolve every frame by a CANDIDATE LIST, never by a literal name.** The Phase 0 results above
+are a snapshot of one client build, and the Classic clients have historically been given the
+modern APIs in stages — this build is already mid-migration, which is exactly why it answers to
+`MainMenuBarArtFrame` *and* `StatusTrackingBarManager` in the same breath. A patch that
+backports one more subsystem renames a frame out from under a literal, and the failure is
+silent: the suppression simply stops hiding something. So each entry is an ordered list of names
+and the first one that exists wins:
+
+```lua
+-- Ordered modern-first, classic-second. An entry that resolves to nothing is skipped with a
+-- SuuUI.Debug line rather than raising -- an absent frame is a client generation, not a bug.
+local TARGETS = {
+    exp_bar    = { "StatusTrackingBarManager", "MainMenuExpBar" },
+    rep_bar    = { "ReputationWatchBar" },
+    stance_bar = { "StanceBar", "StanceBarFrame", "ShapeshiftBarFrame" },
+    pet_bar    = { "PetActionBar", "PetActionBarFrame" },
+    possess    = { "PossessActionBar", "PossessBarFrame" },
+}
+```
+
+Confirmed on the build measured in Phase 0:
+
+| Group | Resolves to here |
+|---|---|
+| Bar art | `MainMenuBarArtFrame`, `MainMenuBarLeftEndCap`, `MainMenuBarRightEndCap`, `MainMenuBarMaxLevelBar` |
+| Action bars | `MainMenuBar`, `MultiBarBottomLeft`, `MultiBarBottomRight`, `MultiBarLeft`, `MultiBarRight` |
+| Micro menu | `MicroMenu`, `MicroButtonAndBagsBar`, and the 12 named `*MicroButton` globals |
+| Bags | `MainMenuBarBackpackButton`, `CharacterBag0..3Slot`, `KeyRingButton` |
+| XP / rep | `StatusTrackingBarManager` + its two containers (**not** `MainMenuExpBar`) |
+| Class bars | `StanceBar`, `PetActionBar`, `PossessActionBar`, `OverrideActionBar`, `MainMenuBarVehicleLeaveButton` |
+
+**Re-run the Phase 0 probes after any client patch** and diff the answers against the tables
+above before trusting this section.
+
 ### Micro menu ordering
 
-Each entry is its own widget in `section = "left"`, at `order` 10, 20, 30 … so a later
-reorder UI has room and the clock, FPS and latency fields keep their existing positions.
-**Read the current orders out of `TimeWidget.lua`, `FpsWidget.lua` and `LatencyWidget.lua`
-first** rather than assuming.
+Each entry is its own widget in `section = "left"`, at `order` 10, 20, 30 … so a later reorder
+UI has room. **The `left` section is currently empty**, so the micro menu owns it outright and
+collides with nothing — measured in the tree, not assumed. The existing built-ins all live
+elsewhere, and all four now sit in `Plugins/DataBar/` after the built-in widget fold:
+
+| Widget | File | Section | Order |
+|---|---|---|---|
+| Clock | `Plugins/DataBar/TimeWidget.lua` | `center` | 100 |
+| Addon buttons | `Plugins/DataBar/AddonButtonsWidget.lua` | `right` | 190 |
+| Latency | `Plugins/DataBar/LatencyWidget.lua` | `right` | 200 |
+| Framerate | `Plugins/DataBar/FpsWidget.lua` | `right` | 210 |
 
 ### Settings, per the schema conventions
 
@@ -233,8 +327,14 @@ claiming precision.
 - Monochrome white-on-transparent, drawn with `SetVertexColor` so the glyph follows
   `colorTextMuted` at rest and `colorAccent` on hover — the tint is what keeps the art
   theme-aware.
-- Glyph order fixed in the script and mirrored as a Lua coord table; the 13 drafted glyphs are
-  Char, Spells, Talents, Quests, Social, Guild, PvP, LFG, Map, Menu, Help, Bags, Keys.
+- Glyph order fixed in the script and mirrored as a Lua coord table. **14 glyphs**, which still
+  fits the 4×4 sheet: Char, Spells, Talents, Quests, Social, Guild, PvP, LFG, Map, Menu, Help,
+  **Collections**, plus Bags and Keys for section 8. Collections was missing from the concept's
+  13 and is drawn as a paw print.
+- **One glyph per micro button that exists, not per button that might.** `LFDMicroButton` is
+  absent on this build and `MICRO_BUTTONS` is `nil`, so the Lua side maps the 12 confirmed
+  globals to coords and any button a later client adds falls back to a text-only field until a
+  glyph is drawn for it.
 - Neither the `.tga` nor the `.py` goes in the `.toc` — the `.toc` takes `.lua` only.
 
 ---
@@ -309,7 +409,7 @@ Each phase ends green with its own specs and is independently verifiable in game
 
 | # | Phase | Acceptance |
 |---|---|---|
-| 0 | Probes | Every global in this file confirmed or corrected here |
+| 0 | Probes | **DONE 2026-08-23** — results recorded above. Re-run after any client patch |
 | 1 | `Backdrop.Glass` + tokens | Plate renders in both themes, degrades to flat fill with no gradient API, tokens appear in the theme editor |
 | 2 | Harness action API + state-driver recorder | `00_harness_spec.lua` covers each addition |
 | 3 | `ActionButton` | Icon, cooldown, count, hotkey, usable and range states; drag in and out; `PostClick` emits; not `SetScript("OnClick")` |
@@ -326,13 +426,24 @@ suppression mistake is visible immediately.
 
 ---
 
-## In-flight work to rebase on
+## Tree state at the time of writing
 
-Uncommitted at the time of writing, and this feature touches several of the same files:
+Verified on disk 2026-08-23, after the built-in widget fold landed. **The in-flight work this
+plan originally warned about is done and committed**, so the earlier list of uncommitted
+collisions no longer applies:
 
-- `Components/FlyoutPanel.lua`, `Plugins/AddonButtons/*` (new) — the addon-button tray
-- `Components/DataField.lua`, `Components/ClickAway.lua`, `Core/DataBar.lua`,
-  `Plugins/DataBar/*`, `Plugins/Performance/*`, `Plugins/MinimapButton/*` (modified)
-- `Libs/` and the harness additions that came with the minimap button
+- `Plugins/Performance/` and `Plugins/AddonButtons/` **no longer exist.** `FpsWidget.lua`,
+  `LatencyWidget.lua`, `ButtonCollector.lua` and `AddonButtonsWidget.lua` all live in
+  `Plugins/DataBar/` and register under the `data_bar` plugin id. Any path in an older draft
+  pointing at those two folders is dead.
+- `Components/FlyoutPanel.lua` exists and is the hover-list component the addon-button tray
+  uses. The micro menu does **not** need it — its entries are individual fields, not a roster.
+- `Libs/` is vendored and loaded from the `.toc`; the harness loads it the same way the client
+  does.
 
-Read the tree before starting. **Do not stage files you did not change.**
+The one coordination hazard that remains is the shared-primitive extension: `DataField` gaining
+an `icon`, and `StatusBar` gaining a secondary fill. Both files have specs
+(`Tests/spec/44_datafield_spec.lua`, the StatusBar spec) that other work has been editing, so
+re-read the tree and `git status --short --untracked-files=all` before touching either.
+
+**Do not stage files you did not change.**
