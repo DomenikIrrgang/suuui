@@ -6,7 +6,13 @@ SuuUI is a modular, full interface replacement addon for WoW Classic Anniversary
 It consists of a Core addon and any number of plugins — either bundled inside this
 folder or as separate addon folders that declare SuuUI as a dependency.
 
-No external libraries. Everything is built from scratch.
+Everything visible is built from scratch — the layout engine, the components, the animation
+runner, the theme and token system, the settings UI. The single exception is `Libs/`: four
+embedded third-party libraries that exist so the minimap button can be found by the button
+collectors and data-broker displays a player already runs, which is interop no hand-rolled
+icon can supply. The boundary is narrow and deliberate — nothing in `Core/`, `Layout/`,
+`Components/`, `SettingsUI/` or `Themes/` needs them to work, and exactly one bundled plugin
+uses them. See [Embedded Libraries](#embedded-libraries-libs).
 
 ---
 
@@ -15,6 +21,11 @@ No external libraries. Everything is built from scratch.
 ```
 SuuUI/
 ├── SuuUI.toc
+├── Libs/                  -- the ONLY external code; loads first (see Embedded Libraries)
+│   ├── LibStub/           -- version arbitration; a table with __call, never a function
+│   ├── CallbackHandler-1.0/ -- callback registry LibDataBroker is built on
+│   ├── LibDataBroker-1.1/ -- data object / launcher registry the collectors watch
+│   └── LibDBIcon-1.0/     -- the minimap button itself; errors at load without the three above
 ├── Core/
 │   ├── Init.lua          -- bootstrap, version, global namespace
 │   ├── Game.lua          -- game facts: power colours, spell schools (never themeable)
@@ -100,6 +111,10 @@ SuuUI/
 │   ├── DataBar/           -- DataBarWidget.lua (the bar itself, three sections of fields)
 │   │   ├── TimeWidget.lua -- the built-in clock: the reference widget definition
 │   │   └── DataBar.lua    -- plugin: owns the bar, moves Blizzard's top frames down
+│   ├── Performance/       -- FpsWidget.lua (framerate readout, polled once a second)
+│   │   ├── LatencyWidget.lua -- latency readout, polled every 5s, home/world hover breakdown
+│   │   └── Performance.lua   -- plugin: contributes both fields, owns no bar
+│   ├── MinimapButton/     -- MinimapButton.lua: the LDB launcher and its LibDBIcon button
 │   └── ...
 ├── Themes/
 │   ├── Default.lua        -- read-only default dark theme
@@ -111,6 +126,93 @@ SuuUI/
 ```
 
 `Tests/` is not listed in the `.toc`, so the client never loads it.
+
+---
+
+## Embedded Libraries (`Libs/`)
+
+`Libs/` is the only external code in the addon and the only exception to "everything is built
+from scratch": LibStub (v2), CallbackHandler-1.0 (v8), LibDataBroker-1.1 (v4) and LibDBIcon-1.0
+(v56, a thousand lines on its own). All four are there for one feature — the minimap button —
+and the reason is interop, not convenience.
+
+A minimap button is not hard to draw. It is hard to be *found*. Players already run button
+collectors and broker displays — ElvUI's button bar, MBB, SexyMap, Titan Panel, Bazooka,
+ChocolateBar — and every one of them discovers buttons by looking for a LibDataBroker data
+object and a LibDBIcon registration. An icon we hand-rolled onto the minimap's corner is
+invisible to all of them: it cannot be dragged around the ring, cannot be hidden with the rest,
+cannot be collected into anyone's bar. **That discoverability IS the library.** Writing it
+from scratch would not mean writing our own code, it would mean writing a bug-compatible copy
+of someone else's registration protocol — and a near-copy that drifts is worse than no button
+at all, because the player's collector silently stops seeing us.
+
+Embedding costs nothing at runtime, and that is the whole point of LibStub. `NewLibrary`
+version-arbitrates on the `MINOR` number: a library registers only if it is newer than the copy
+already in memory, so a player carrying a newer LibDBIcon in any other addon makes ours a
+silent no-op and *every* caller — theirs and ours — ends up on the newer one. Exactly one copy
+of each library exists in the client however many addons ship it, which is why embedding rather
+than declaring a dependency is what the whole ecosystem does.
+
+**The load order at the top of `SuuUI.toc` is not cosmetic.** LibDBIcon does not degrade
+without its dependencies, it *errors at load* — it resolves LibStub, CallbackHandler and
+LibDataBroker at file scope — and a `.toc` file that raises takes the addon down before
+`Core/Init.lua` has run at all. So the four load first, in dependency order, ahead of
+everything else. `Core/Fonts.lua` is the second reason for that placement: its scan probes
+LibStub for LibSharedMedia-3.0, and a probe that runs before LibStub exists finds nothing and
+says nothing about it.
+
+**`LibStub` is a table with a `__call` metamethod, never a function.** `type(_G.LibStub) ==
+"function"` is false with LibStub fully loaded, and that mistake meant the SharedMedia probe in
+`Core/Fonts.lua` had never once run — not in game, not in the suite — so no SharedMedia font
+was ever harvested and nothing failed to report it. Test for the table and call it through
+`pcall` with the silent flag, which returns `nil` for a library the player does not have
+instead of raising:
+
+```lua
+if _G.LibStub then
+    local ok, lib = pcall(_G.LibStub, "LibDBIcon-1.0", true)
+    if ok and lib then ... end
+end
+```
+
+That probe is also the line worth keeping straight, because it predates any of this: *reading*
+a library the player happens to own was already established practice here, and it is a
+dependency on nothing — `Core/Fonts.lua` harvests SharedMedia's font table when it is present
+and shrugs when it is not. *Shipping* a library is the new thing, and it stays fenced. No core,
+layout, component, theme or settings-UI file requires anything out of `Libs/`;
+`Plugins/MinimapButton/` is the only consumer, it reaches the libraries through the silent
+probe above, and an absent or unexpectedly old library costs a `SuuUI.Debug` line and a missing
+button rather than a broken login. Adding a fifth library is an architecture decision, not a
+convenience one — the bar is the same as it was here: the library must be an interop protocol
+other addons define, not functionality we could own.
+
+### The button itself (`Plugins/MinimapButton/`)
+
+The launcher is a plugin with id `minimap_button`, not a few lines inside
+`SettingsUI/SettingsWindow.lua` where it used to live. A launcher is not part of the settings
+window — it is one way *in* to it, and the window has no business owning something that
+outlives it on screen. As its own plugin it also gets a settings page and an off switch for
+free: `enabled` shows or hides the button, `locked` freezes its position on the ring. Left
+click opens the settings window, right click enters edit mode, and the tooltip says both, since
+a right click nobody advertises is a right click nobody uses.
+
+It keeps LibDBIcon's **stock ring art on purpose.** A themed button would be the one addon
+button on the minimap that does not look like an addon button, which loses the recognition that
+made the button worth shipping. The longer-term direction is the other way round anyway —
+pulling other addons' icons into the DataBar rather than making ours prettier where it sits.
+
+**LibDBIcon's position store must be a `plugin:GetProfile()` sub-table, never a value from
+`Settings:Get`.** The library mutates that table *in place* while the player drags the button,
+writing `db.minimapPos` on every tick of the drag. A table handed out by `Settings:Get` would
+be written straight past the settings layer, and the matching `Settings:Set` would then be a
+no-op, because its change check compares the table against itself and finds them equal.
+`GetProfile()` is the sanctioned route for exactly this shape of data — plugin-private state
+whose layout something else owns — and being a profile sub-table it stays profile-aware and
+reaches SavedVariables on logout with no write path of our own. Visibility is the opposite
+case: LibDBIcon keeps its own `hide` mirror and reads it at register time, so it is seeded from
+the `enabled` setting on every enable rather than persisted separately, because two stored
+copies of one fact drift apart. And note LibDBIcon exposes no unregister — `Hide` *is* the
+teardown, the button object survives a disable, and re-enabling re-shows the same one.
 
 ---
 
@@ -350,10 +452,18 @@ puts in a growing frame: if a child is protected, the frame that grows may not c
 
 **An ordered list of entries contributed by plugins that know nothing about each other.** The
 data bar is a full-width strip along the top of the screen whose fields come from whoever
-wants one — the bundled clock today, a gold readout or a durability meter later. A plugin
-registers a widget *definition*, which is data; the bar renders it. Neither side names the
-other, and registration order does not matter, so a plugin that loads after the bar is picked
-up exactly as one that loads before it.
+wants one — the bundled clock and the Performance plugin's framerate and latency readouts
+today, a gold readout or a durability meter later. A plugin registers a widget *definition*,
+which is data; the bar renders it. Neither side names the other, and registration order does
+not matter, so a plugin that loads after the bar is picked up exactly as one that loads before
+it.
+
+**`Plugins/Performance` is the first contributor that does not own the bar**, and until it
+existed the thing this registry is for had never actually happened: the clock is registered
+from inside the `DataBar` plugin, which owns both sides of it, so no definition had yet crossed
+the boundary the registry draws. Note what `Performance.lua` does not contain — no reference to
+the `data_bar` plugin, its frame, or its load order. It hands two definitions to Core and
+stops, and the bar picks them up through its subscription.
 
 **It is deliberately not an attach point, and the difference is shape rather than intent.** An
 attach point is ONE provider per name (3b): `Publish` overwrites, `Get` answers with a single
@@ -388,6 +498,22 @@ The definition's fields, and the contract each one carries, are in
 `plugin-authoring.md` — "Adding a widget to the data bar". `id` plus either `GetText` or
 `Build` is the whole requirement; `section` defaults to `"left"` and `order` to 100, and an
 unknown section raises rather than being silently filed under one.
+
+**`GetText` may return a TONE as a second value** — nil, `"success"`, `"warning"` or
+`"danger"` — which the field resolves onto the matching intent token. The widget says what the
+READING MEANS and the theme decides what that looks like, so a retint moves every threshold
+colour in the addon at once; a widget composing its own `|cff…|r` escape would hardcode a hue,
+bypass that retint, and give every plugin author a different way to do one thing. It is
+returned **with** the value rather than from a hook of its own, so the two come from a single
+reading and cannot disagree about what is on screen. An unrecognised string degrades to the
+default text colour rather than raising, which matters because this is resolved from inside a
+ticker callback.
+
+**Whatever renders a definition must capture the two into explicit locals.** A Lua multi-return
+expands only in the last argument position, so `field:SetText(def.GetText())` hands the tone
+over as `SetText`'s *second argument* — silently, since `SetText` takes one value and ignores
+the rest. `DataBarWidget:_refresh` therefore writes `local ok, text, tone = pcall(def.GetText)`
+and calls `SetText` and `SetTone` separately.
 
 **Sorted by section, then order, then id.** The id is the last key so the ordering is *total*
 rather than merely partial: two widgets sharing a section and an order would otherwise come
@@ -1834,7 +1960,14 @@ document it here.
   follow the token again. `SetFontSize(key)` / `GetFontSize()` switch which `fontSize*`
   step the element renders at, re-measuring and emitting `SIZE_CHANGED`. The step stays a
   token key, so a size chosen by a plugin setting still follows a user's edit of that
-  token; an unknown key degrades to `fontSizeMd` rather than raising.
+  token; an unknown key degrades to `fontSizeMd` rather than raising. `color` is likewise a
+  key rather than a token name — `"text"`, `"muted"` / `"textMuted"`, `"disable"`, `"accent"`,
+  plus the three **intent** keys `"success"`, `"warning"` and `"danger"` onto `colorSuccess` /
+  `colorWarning` / `colorDanger`, for a label whose value carries state: a readout that is
+  fine, close to a threshold, or past it. Named for the intent rather than the hue, so a retint
+  moves them with every other warning in the UI. An unknown key degrades to `colorText` rather
+  than raising, which is what lets a data bar field pass a widget's tone straight through
+  without validating it first.
 - `Button` — fully custom, animated hover/press states. Hugs its label: width and
   height are measured from the text plus token padding unless `w`/`h` are given
   (`minW`/`minH` set floors). Re-fits on `SetLabel` and on font token changes, and
@@ -1880,11 +2013,12 @@ document it here.
   just decided the value was under a second.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `DataField` — one field on the data bar: a muted **prefix**, a **value**, and an accent
-  underline along the bottom edge while hovered. Props: `prefix`, `text`, `w`, `h`, `minW`,
-  `rail` (draw the underline on hover, default true), `size` (font step key for the value,
-  default `"md"`). API: `SetText` / `GetText` (the value alone, without the prefix or its
-  colour escape), `SetPrefix` / `GetPrefix`, `SetRail`, `IsHovered`. Emits `CLICKED` (button),
-  `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`, `TEXT_CHANGED`. It **hugs its own text** —
+  underline along the bottom edge while hovered. Props: `prefix`, `text`, `tone`, `w`, `h`,
+  `minW`, `rail` (draw the underline on hover, default true), `size` (font step key for the
+  value, default `"md"`). API: `SetText` / `GetText` (the value alone, without the prefix or
+  its colour escape), `SetTone` / `GetTone`, `SetPrefix` / `GetPrefix`, `SetRail`, `IsHovered`.
+  Emits `CLICKED` (button), `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`, `TEXT_CHANGED`.
+  It **hugs its own text** —
   `TextMetrics.Box` plus `spaceMd` on each side, floored by `minW` — while its **height comes
   from whatever lays it out**, which on the bar is a stretched flow child, so a field is
   exactly as tall as the bar. `SetSize` opts out of the hug, for a caller that wants a fixed
@@ -1902,6 +2036,17 @@ document it here.
   than a spacing token. `ApplyTheme` therefore **recomposes** the string rather than only
   restyling it — the prefix's colour is baked in as a `|cff…|r` escape, so a `colorTextMuted`
   edit reaches the screen no other way.
+
+  **The tone rides on that same single font string.** `SetTone("warning")` colours the font
+  string itself, and only the value picks the colour up: the prefix carries its own escape, so
+  the restore at `|r` lands on whatever colour the string is currently set to. So one baseline
+  also buys one colour to set, with no substring bookkeeping. The tone is a **key**, never a
+  colour — `"success"` / `"warning"` / `"danger"` resolve through `Text`'s own colour map onto
+  the intent tokens, so a widget can state what a reading means and cannot state a hue, and an
+  unknown key degrades to `colorText` rather than raising from inside a ticker callback.
+  `ApplyTheme` restates it (`SetColor(self._tone or "text")`) rather than assuming the label
+  kept it, which is also what makes a `tone` given at construction reach the screen: the
+  field's own `_tone` is the single source of truth for the value's colour.
 
   Three more details are load-bearing:
 
@@ -2190,11 +2335,36 @@ document it here.
 
 ### Unified Window (`SettingsUI/SettingsWindow.lua`)
 
-Opened via: `/suuui`, keybind (configurable), minimap button.
-
 Layout: fixed left nav (plugin list) + right content area.
 Nav auto-populates from all registered plugins in registration order.
 Selecting a plugin renders its page via PageBuilder.
+
+### Opening it (`SuuUI.SettingsWindow`)
+
+```lua
+SuuUI.SettingsWindow.Open()      -- builds on first use, then shows
+SuuUI.SettingsWindow.Toggle()    -- what /suuui and the minimap button both call
+SuuUI.SettingsWindow.IsShown()   -- false while the window has never been opened
+```
+
+The window is built **lazily** — the first open registers the core schemas, creates the window
+and builds the nav — and that sequence used to live inside the slash handler. Anything else that
+wanted to open the window therefore had to call `SlashCmdList["SUUUI"]()`: reaching into a
+global command table for behaviour that had no other name, dragging the command's argument
+parsing along with it, and depending on a global some other addon is free to overwrite. Once
+the minimap launcher moved out into its own plugin it needed a seam that was actually part of
+the addon's API, so the lazy build now sits behind a single `ensureWindow()` and the two entry
+points — `/suuui` with no argument, and a left click on the minimap button — both go through
+it. There is one implementation of "build it if it does not exist yet", which is the property
+worth having.
+
+`IsShown()` is a function rather than a field because it has to answer for the not-yet-built
+case: before the first open there is no window object to ask, and it reports `false` instead of
+constructing one just to be interrogated. Anything that wants the window on screen should call
+`Open()` — do not test `IsShown()` first and build around it.
+
+The other slash arguments are edit-mode controls and do not touch the window at all:
+`/suuui toggle`, `/suuui lock` and `/suuui unlock` drive `SuuUI.ToggleUI` directly.
 
 ### Page Builder (`SettingsUI/PageBuilder.lua`)
 

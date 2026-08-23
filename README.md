@@ -4,14 +4,22 @@ Full World of Warcraft UI replacement for Classic Anniversary (TBC, interface `2
 
 SuuUI is a core addon plus a plugin system: the core ships a theme/token system, a layout
 engine, an animation runner and a component library, and every piece of visible UI — first
-party or third party — is built on top of it as a plugin. No external libraries; everything
-is written from scratch.
+party or third party — is built on top of it as a plugin. Everything visible is written from
+scratch, with one deliberate exception: `Libs/` embeds LibStub, CallbackHandler-1.0,
+LibDataBroker-1.1 and LibDBIcon-1.0 so the minimap button is discoverable by the button
+collectors and broker displays players already run — ElvUI's button bar, MBB, SexyMap, Titan
+Panel, Bazooka, ChocolateBar. That interop is the entire reason: a hand-rolled corner icon
+cannot be dragged around the ring, hidden, or collected by any of them. The boundary is
+narrow — no core, layout, component or settings-UI file needs those libraries, one bundled
+plugin uses them, and LibStub version-arbitrates, so a newer copy already on the player's
+machine wins and ours registers nothing.
 
 **Status: early development.** The framework layers (core, layout, components, settings UI)
 are in place and tested. The gameplay plugins have started: unit frames, cast bars, and
 buff/debuff bands cover the player and the target, suppressing Blizzard's own, and a
 full-width data bar along the top of the screen carries fields any plugin can register a
-widget into — a clock is the one built in so far. Everything else is still to come.
+widget into — a built-in clock, plus framerate and latency readouts that come from a separate
+Performance plugin which does not own the bar. Everything else is still to come.
 
 ## Install
 
@@ -22,19 +30,21 @@ cd "/path/to/World of Warcraft/_anniversary_/Interface/AddOns"
 git clone git@github.com:DomenikIrrgang/suuui.git SuuUI
 ```
 
-Open the settings window in game with `/suuui`.
+Open the settings window in game with `/suuui`, or with a left click on the minimap button;
+right-clicking that button enters edit mode.
 
 ## What is in here
 
 | Directory | Contents |
 |---|---|
+| `Libs/` | the only external code — LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, embedded for minimap-button interop and loaded first |
 | `Core/` | event bus, UI signals, attach points, data bar registry, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
 | `Components/` | ~25 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, collapsible accordion, data bar field, … |
 | `Animation/` | tween easings, animation runner, named presets |
 | `SettingsUI/` | settings window that auto-builds a page from a plugin's schema, grouped into collapsible sections |
 | `Themes/` | built-in read-only themes |
-| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target; the top data bar and its clock |
+| `Plugins/` | bundled first-party plugins — unit frames with buff/debuff bands, and cast bars, for the player and the target; the top data bar and its clock; framerate and latency readouts registered into that bar from a plugin that does not own it; the minimap button, a LibDataBroker launcher wearing LibDBIcon's stock ring art so other addons' collectors recognise it |
 | `Tests/` | test suite and a simulated WoW client (not shipped — absent from the `.toc`) |
 
 ## Development
@@ -56,7 +66,9 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 2674 assertions with no external dependencies — no busted, no luarocks.
+runs 3381 specs — all passing, three skipped — with no test dependencies at all: no busted,
+no luarocks. The embedded libraries in `Libs/` are shipped runtime code, not test tooling;
+the suite loads them the same way the client does.
 
 Full contracts live in `.kiro/steering/`: `architecture.md` for the subsystem reference,
 `LAYOUT_SYSTEM.md`, `UI_SIGNALS.md`, `WOW_API_ENCAPSULATION.md`, `coding-standards.md`,

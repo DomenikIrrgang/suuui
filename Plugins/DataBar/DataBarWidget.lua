@@ -181,6 +181,17 @@ function Bar:_clearFields()
     dropTicks(self)
 
     for _, rec in ipairs(self._records) do
+        -- The bar called OnEnter, so the bar owes OnLeave. Disconnecting first means no
+        -- MOUSE_LEAVE ever reaches the widget, which leaves anything it opened on that hover —
+        -- the latency readout's breakdown, the clock's — still on screen, anchored to a frame
+        -- about to be hidden, and self-healing only on the next hover. Any widget toggle
+        -- rebuilds the bar, so hovering a field and flipping a setting was enough to hit it.
+        --
+        -- Gated on the field actually being hovered, which is exactly the state that produced
+        -- the unmatched OnEnter: no MOUSE_LEAVE fired, so _hovered is still true here.
+        if not rec.custom and rec.field.IsHovered and rec.field:IsHovered() then
+            callHook(rec.def, "OnLeave", rec.field)
+        end
         S:DisconnectAll(rec.field)
         if rec.field.Destroy then rec.field:Destroy() end
     end

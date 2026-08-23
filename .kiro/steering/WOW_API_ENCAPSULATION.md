@@ -41,6 +41,7 @@ and signal system all get bypassed.
 | `Layout/Window.lua` | Yes — z-order via `UIRoot:SetLayer`/`RaiseAbove` | **No** — use host containers |
 | `SettingsUI/*` | **No** — compose components and containers only | **No** |
 | `Plugins/*` | **No** for UI. Yes for game data (`RegisterEvent`, `UnitHealth`, ...) | **No** — except on a BLIZZARD frame it repositions; see below |
+| `Libs/*` | Yes — **vendored, not ours**; exempt for that reason alone. See below | Yes — same reason |
 
 The three engine rows are narrow, and worth stating explicitly because a blanket "only
 `Components/`, `Layout/` and `UIRoot`" reads as though they were violations:
@@ -70,6 +71,40 @@ Hiding Blizzard's own frames (`MinimapCluster:Hide()`) is a plugin responsibilit
 stays allowed — that is not building our UI, it is suppressing theirs. **Moving one is the
 same carve-out**, and it is the one case where a plugin file calls `SetPoint`; see
 "Repositioning A Blizzard Frame" below.
+
+## Embedded Third-Party Libraries Are Exempt
+
+`Libs/` breaks every rule on this page. `LibDBIcon-1.0` calls `CreateFrame("Button", …, Minimap)`,
+`SetFrameStrata("MEDIUM")`, `SetFrameLevel(8)`, `CreateTexture` and `SetPoint` directly, and it is
+right to. The exemption is not "libraries are special" — it is that **this code is vendored rather
+than written here**, so the rules that exist to keep our own code consistent have nothing to act
+on. A rule you cannot enforce on the next copy of upstream is not a rule; it is a diff waiting to
+be lost.
+
+The boundary is therefore the folder, and it has three parts:
+
+- **We do not edit it.** A local fix turns the next version bump from a copy into a merge, and the
+  copy being trivial is the entire reason embedding a library is cheap. Something upstream gets
+  wrong is worked around on our side of the boundary, or reported upstream.
+- **We do not wrap our own UI in it.** A library is embedded for interop the player can see — a
+  minimap button the collectors find, an LDB launcher the displays pick up — never as a shortcut
+  past a component we would otherwise have to build.
+- **Anything built on top still goes through components and containers.** Crossing the boundary
+  does not carry the exemption back with it. Code of ours that talks to a library is still ours,
+  and `plugin:GetProfile()` rather than a settings schema is where a library-owned store goes
+  (see `plugin-authoring.md`, "When something else owns the shape of your table").
+
+**The minimap button's frame is LibDBIcon's, so SuuUI does not style it and must not reach into
+it.** Stock ring art is deliberate rather than a shortcut we did not get round to: a themed button
+stops looking like the addon button players scan the minimap ring for, and a collector addon
+(ElvUI's bar, MBB, SexyMap) is entitled to move, re-skin or hide it — reaching in to restyle it
+would be fighting the very interop the library was embedded for. It also means the button sits on
+the client's `MEDIUM` strata at level 8, parented to `Minimap`, outside `UIRoot`'s layer ladder.
+That is correct and not an exception to the section below: it is not in our root, so there is no
+rung for it to occupy. `Plugins/MinimapButton/MinimapButton.lua` accordingly describes a
+*launcher* — an icon path, click handlers, tooltip lines — and owns no frame at all. See
+`architecture.md` for the embedded set and how LibStub arbitrates against a player's own newer
+copy.
 
 ## Z-order Goes Through the Layer System
 

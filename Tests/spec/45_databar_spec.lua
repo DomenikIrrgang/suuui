@@ -599,6 +599,142 @@ describe("Plugins.DataBar – the bar", function()
         end)
     end)
 
+    ------------------------------------------------------------------------------
+    -- The tone a widget returns alongside its value: what the READING means, with the theme
+    -- deciding what that looks like. Read off the FONT STRING, not off GetTone -- a stored
+    -- tone that never reached the client is the failure this contract exists to prevent.
+    describe("the tone a widget returns", function()
+        local INTENT = { success = "colorSuccess", warning = "colorWarning",
+                         danger = "colorDanger" }
+
+        local function toneOf(id)  return fieldOf(id):GetTone() end
+        local function colorOf(id) return H.textColor(fieldOf(id)._label) end
+
+        it("puts the field in the tone GetText returned beside the value", function()
+            stage("db.hp", "left", function() return "42", "warning" end)
+            expect(shown("db.hp")).eq("42")
+            expect(toneOf("db.hp")).eq("warning")
+            H.expectTokenColor(colorOf("db.hp"), "colorWarning")
+        end)
+
+        it("carries each intent a widget may return", function()
+            local i = 0
+            for tone, token in pairs(INTENT) do
+                i = i + 1
+                local id = "db.t" .. i
+                stage(id, "left", function() return "42", tone end, { order = 10 * i })
+                H.expectTokenColor(colorOf(id), token)
+            end
+        end)
+
+        it("leaves the tone nil for a widget that returns only a value", function()
+            stage("db.plain", "left", function() return "42" end)
+            expect(toneOf("db.plain")).as("no second value, no tone").isNil()
+            H.expectTokenColor(colorOf("db.plain"), "colorText")
+        end)
+
+        it("ignores a non-string second value rather than passing it through", function()
+            -- GetTone is the discriminating half here, and deliberately so: Text's colmap
+            -- degrades ANY unrecognised key to colorText, so a number or a boolean reaching
+            -- SetTone would paint exactly the colour it paints now. Only the stored tone
+            -- betrays it, which is why both are asserted.
+            local bad = { 7, true, {}, 0 }
+            for i = 1, #bad do
+                local v  = bad[i]
+                local id = "db.bad" .. i
+                stage(id, "left", function() return "42", v end, { order = 10 * i })
+                expect(toneOf(id)).as("a " .. type(v) .. " is not a tone").isNil()
+                H.expectTokenColor(colorOf(id), "colorText")
+                expect(shown(id)).as("and the value is untouched by it").eq("42")
+            end
+        end)
+
+        it("re-tones on a refresh when the tone moves and the value does not", function()
+            -- The interesting direction. SetText's unchanged-value guard drops the text write
+            -- entirely, so a refresh that only changes what the reading MEANS reaches the
+            -- screen through SetTone alone or not at all.
+            local answer = { tone = nil }
+            stage("db.mv", "left", function() return "42", answer.tone end,
+                { events = { "DB_TONE" } })
+            H.expectTokenColor(colorOf("db.mv"), "colorText")
+
+            answer.tone = "danger"
+            H.fireEvent("DB_TONE")
+            expect(shown("db.mv")).as("the value never moved").eq("42")
+            expect(toneOf("db.mv")).eq("danger")
+            H.expectTokenColor(colorOf("db.mv"), "colorDanger")
+
+            answer.tone = nil
+            H.fireEvent("DB_TONE")
+            expect(toneOf("db.mv")).as("and clears again once the reading is fine").isNil()
+            H.expectTokenColor(colorOf("db.mv"), "colorText")
+        end)
+
+        it("re-reads the value on a refresh when the value moves and the tone does not", function()
+            local answer = { text = "10" }
+            stage("db.vv", "left", function() return answer.text, "warning" end,
+                { events = { "DB_TONE" } })
+            H.expectTokenColor(colorOf("db.vv"), "colorWarning")
+
+            answer.text = "9999"
+            H.fireEvent("DB_TONE")
+            expect(shown("db.vv")).eq("9999")
+            expect(toneOf("db.vv")).as("an unchanged tone is kept, not cleared").eq("warning")
+            H.expectTokenColor(colorOf("db.vv"), "colorWarning")
+        end)
+
+        it("never lets the tone ride into SetText as a second argument", function()
+            -- The Lua multi-return trap the refresh path is written around: a chained
+            -- rec.field:SetText(def.GetText()) expands BOTH returns in that last argument
+            -- position, and through pcall the `ok` boolean rides in front of them as well.
+            -- What the field shows is what settles it.
+            stage("db.trap", "left", function() return "42", "warning" end)
+            local f = fieldOf("db.trap")
+            expect(f:GetText()).as("exactly the value").eq("42")
+            expect(shown("db.trap")).as("and nothing appended on screen").eq("42")
+            expect(shown("db.trap"):find("warning", 1, true))
+                .as("the tone is not in the string").isNil()
+            expect(shown("db.trap"):find("true", 1, true))
+                .as("nor is pcall's own ok").isNil()
+            expect(toneOf("db.trap")).as("the tone arrived by its own route").eq("warning")
+            H.expectTokenColor(colorOf("db.trap"), "colorWarning")
+            H.expectTextNotClipped(f._label)
+        end)
+
+        it("follows a retint of the intent token end to end", function()
+            -- The reason a widget names an intent instead of composing its own |cff escape:
+            -- the theme owns the hue, so a retint moves every warning in the UI at once. A
+            -- widget that hardcoded the colour would not move here.
+            stage("db.hot", "left", function() return "42", "warning" end)
+            H.expectTokenColor(colorOf("db.hot"), "colorWarning")
+
+            H.T:CreateUserTheme("Hot", "Modern")
+            H.T:SetActive("Hot")
+            H.T:SetUserToken("Hot", "colorWarning", { 1, 0, 1, 1 })
+
+            H.expectTokenColor(colorOf("db.hot"), "colorWarning")
+            expect(colorOf("db.hot")[3]).as("the retint reached the bar's field").eq(1)
+            expect(toneOf("db.hot")).as("and the tone itself is unchanged").eq("warning")
+        end)
+
+        it("a Build widget is never handed a tone", function()
+            -- The custom branch returns before the readout path, so a handle that has no
+            -- SetTone at all must not be called with one.
+            local built
+            DB():RegisterWidget({
+                id = "db.custom", section = "left", events = { "DB_CUSTOM" },
+                Build = function(parent)
+                    built = H.C.Text({ text = "custom", size = "md" }, parent)
+                    return built
+                end,
+                Refresh = function(handle) handle:SetText("still custom") end,
+            })
+            expect(built.SetTone).as("a Text handle has no tone contract").isNil()
+            expect(function() H.fireEvent("DB_CUSTOM") end).notThrows()
+            expect(built:GetText()).eq("still custom")
+        end)
+    end)
+
     describe("teardown", function()
         it("unsubscribes from the registry", function()
             stage("db.a", "left", "A")

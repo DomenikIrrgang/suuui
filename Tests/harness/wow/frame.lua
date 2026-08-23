@@ -3,6 +3,7 @@ local state   = require("harness.wow.state")
 local widget  = require("harness.wow.widget")
 local regions = require("harness.wow.regions")
 local font    = require("harness.wow.font")
+local anim    = require("harness.wow.animation")
 
 local Base = widget.Base
 local M = {}
@@ -154,7 +155,10 @@ function FrameMeta:EnableMouse(on)  self._mouseEnabled = on and true or false en
 
 function FrameMeta:IsMouseEnabled()
     if self._mouseEnabled ~= nil then return self._mouseEnabled end
-    -- EditBox accepts mouse input without EnableMouse; a plain Frame does not
+    -- A Button and an EditBox accept mouse input without EnableMouse; a plain Frame does
+    -- not. This matters beyond tidiness: third-party code relies on the Button default and
+    -- never calls EnableMouse, so with the default withheld its clicks were dropped by the
+    -- harness's own input routing while working perfectly in game.
     return self._mouseEnabledByDefault == true
 end
 function FrameMeta:EnableMouseWheel(on) self._mouseWheelEnabled = on and true or false end
@@ -315,6 +319,37 @@ end
 function FrameMeta:IsDragging() return self._moving == true end
 
 ----------------------------------------------------------------------------------
+-- Animation groups
+----------------------------------------------------------------------------------
+
+-- SuuUI never calls this -- it runs its own shared-OnUpdate animator -- but embedded
+-- third-party code does, and the load dies without it. See wow/animation.lua for why the
+-- model records configuration rather than ticking.
+function FrameMeta:CreateAnimationGroup(name)
+    local g = anim.newGroup(self, name)
+    self._animGroups = self._animGroups or {}
+    self._animGroups[#self._animGroups + 1] = g
+    return g
+end
+
+--- Every animation group created on this frame, in creation order. Harness-only: the
+--- client offers GetAnimationGroups, but a spec wants the list without naming them.
+function FrameMeta:GetAnimationGroups() return self._animGroups or {} end
+
+----------------------------------------------------------------------------------
+-- Strata and level pinning
+----------------------------------------------------------------------------------
+
+-- The client uses these to stop its own layout passes from re-deriving a frame's place in
+-- the z-order. Stored and readable rather than enforced: nothing in the harness re-derives
+-- strata, so there is no automatic adjustment here for the flag to suppress. Modelled
+-- because third-party code calls them unconditionally.
+function FrameMeta:SetFixedFrameStrata(fixed) self._fixedStrata = fixed and true or false end
+function FrameMeta:HasFixedFrameStrata()      return self._fixedStrata == true end
+function FrameMeta:SetFixedFrameLevel(fixed)  self._fixedLevel = fixed and true or false end
+function FrameMeta:HasFixedFrameLevel()       return self._fixedLevel == true end
+
+----------------------------------------------------------------------------------
 -- EditBox
 ----------------------------------------------------------------------------------
 
@@ -450,6 +485,7 @@ function ScrollFrameMeta:UpdateScrollChildRect() anchorScrollChild(self) end
 ----------------------------------------------------------------------------------
 
 local ButtonMeta = derive(FrameMeta)
+ButtonMeta._mouseEnabledByDefault = true
 M.ButtonMeta = ButtonMeta
 
 function ButtonMeta:SetText(t)  self._buttonText = t end
@@ -461,6 +497,26 @@ function ButtonMeta:Disable() self:SetEnabled(false) end
 function ButtonMeta:Click(button) self:_fire("OnClick", button or "LeftButton") end
 function ButtonMeta:SetNormalTexture(t) self._normalTexture = t end
 function ButtonMeta:GetNormalTexture()  return self._normalTexture end
+
+-- The rest of a Button's texture slots, plus the highlight lock. Stored rather than drawn:
+-- the harness models geometry and state, and none of these change a rect. A drag
+-- implementation locks the highlight for the duration of the gesture, so the lock is
+-- readable -- a write-only flag could not be asserted.
+function ButtonMeta:SetPushedTexture(t)    self._pushedTexture = t end
+function ButtonMeta:GetPushedTexture()     return self._pushedTexture end
+function ButtonMeta:SetDisabledTexture(t)  self._disabledTexture = t end
+function ButtonMeta:GetDisabledTexture()   return self._disabledTexture end
+function ButtonMeta:SetHighlightTexture(t, blend)
+    self._highlightTexture = t
+    self._highlightBlend   = blend
+end
+function ButtonMeta:GetHighlightTexture()  return self._highlightTexture end
+function ButtonMeta:LockHighlight()        self._highlightLocked = true end
+function ButtonMeta:UnlockHighlight()      self._highlightLocked = false end
+function ButtonMeta:IsHighlightLocked()    return self._highlightLocked == true end
+function ButtonMeta:SetMotionScriptsWhileDisabled(on)
+    self._motionWhileDisabled = on and true or false
+end
 
 ----------------------------------------------------------------------------------
 -- Cooldown
@@ -490,6 +546,92 @@ function CooldownMeta:SetSwipeColor(r, g, b, a)
     self._swipeColor = { r, g, b, a == nil and 1 or a }
 end
 
+----------------------------------------------------------------------------------
+-- GameTooltip
+----------------------------------------------------------------------------------
+
+-- A frame TYPE rather than the one bolted-on singleton this used to be, because the client
+-- lets anyone create their own instance and embedded third-party code does exactly that
+-- (LibDBIcon makes LibDBIconTooltip at load, and CreateFrame refused the type outright).
+-- api.lua now builds the shared GameTooltip from this same meta, so there is ONE
+-- implementation instead of two drifting ones.
+--
+-- Text is recorded, never rendered: a spec can count lines and read them back, which is
+-- what an assertion about a tooltip's CONTENT needs, but no font metrics are involved and
+-- nothing here wraps or measures. state.tooltip records the LAST tooltip interaction from
+-- any instance, so H.getTooltipState() answers for whichever tooltip was used most recently.
+local GameTooltipMeta = derive(FrameMeta)
+M.GameTooltipMeta = GameTooltipMeta
+
+function GameTooltipMeta:SetOwner(owner, anchor)
+    self._owner  = owner
+    self._anchor = anchor
+    self._lines  = {}
+    state.tooltip = state.tooltip or {}
+    state.tooltip.owner  = owner
+    state.tooltip.anchor = anchor
+    state.tooltip.aura   = nil
+end
+
+function GameTooltipMeta:GetOwner()  return self._owner end
+function GameTooltipMeta:GetAnchorType() return self._anchor end
+
+function GameTooltipMeta:SetUnitBuff(unit, index)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.aura = { unit = unit, index = index, filter = "HELPFUL" }
+end
+
+function GameTooltipMeta:SetUnitDebuff(unit, index)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.aura = { unit = unit, index = index, filter = "HARMFUL" }
+end
+
+function GameTooltipMeta:SetUnitAura(unit, index, filter)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.aura = { unit = unit, index = index, filter = filter or "HELPFUL" }
+end
+
+function GameTooltipMeta:ClearLines()
+    self._lines = {}
+    state.tooltip = state.tooltip or {}
+    state.tooltip.aura = nil
+end
+
+function GameTooltipMeta:AddLine(text, r, g, b, wrap)
+    self._lines = self._lines or {}
+    self._lines[#self._lines + 1] = { text = text, r = r, g = g, b = b, wrap = wrap }
+end
+
+function GameTooltipMeta:AddDoubleLine(left, right, lr, lg, lb, rr, rg, rb)
+    self._lines = self._lines or {}
+    self._lines[#self._lines + 1] = { text = left, right = right, r = lr, g = lg, b = lb }
+end
+
+function GameTooltipMeta:SetText(text, r, g, b)
+    self._lines = { { text = text, r = r, g = g, b = b } }
+end
+
+function GameTooltipMeta:NumLines() return #(self._lines or {}) end
+
+--- The text of one line, 1-based, as the client's GameTooltipTextLeft<i> would carry it.
+-- Harness-only convenience: reading a global font string per line models nothing useful.
+function GameTooltipMeta:GetLine(i)
+    local line = (self._lines or {})[i]
+    return line and line.text, line and line.right
+end
+
+function GameTooltipMeta:Show()
+    self._tooltipShown = true
+    self._shown = true
+end
+
+function GameTooltipMeta:Hide()
+    self._tooltipShown = false
+    self._shown = false
+end
+
+function GameTooltipMeta:IsShown() return self._tooltipShown == true end
+
 M.metaFor = {
     Frame       = FrameMeta,
     EditBox     = EditBoxMeta,
@@ -499,6 +641,7 @@ M.metaFor = {
     StatusBar   = FrameMeta,
     Slider      = FrameMeta,
     Cooldown    = CooldownMeta,
+    GameTooltip = GameTooltipMeta,
 }
 
 return M

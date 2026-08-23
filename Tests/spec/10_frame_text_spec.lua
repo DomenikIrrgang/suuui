@@ -243,6 +243,74 @@ describe("Components.Text", function()
         end
     end)
 
+    -- Intent colours: a label whose VALUE carries state -- a readout that is fine, close to
+    -- a threshold, or past it. Named for the intent rather than the hue, so a retint moves
+    -- them with every other warning in the UI, which is why every expectation here resolves
+    -- the token through the theme instead of naming an RGB.
+    describe("intent colours", function()
+        local INTENT = { success = "colorSuccess", warning = "colorWarning",
+                         danger = "colorDanger" }
+
+        -- Every assertion below rests on the intent tokens actually DIFFERING from the
+        -- default one: "resolves colorWarning" and "degraded to colorText" would otherwise
+        -- be the same claim, and the whole block would pass with colmap gutted.
+        local function expectDistinctFromText(token)
+            local a, b = H.token(token), H.token("colorText")
+            local same = true
+            for i = 1, 4 do if a[i] ~= b[i] then same = false; break end end
+            expect(same).as(token .. " must differ from colorText for this to mean anything")
+                .falsy()
+        end
+
+        it("maps each intent key onto its intent token", function()
+            for key, token in pairs(INTENT) do
+                expectDistinctFromText(token)
+                local t = H.C.Text({ text = "42", color = key }, host)
+                H.expectTokenColor(H.textColor(t), token)
+            end
+        end)
+
+        it("repaints when SetColor names an intent", function()
+            local t = H.C.Text({ text = "42" }, host)
+            H.expectTokenColor(H.textColor(t), "colorText")
+            t:SetColor("danger")
+            H.expectTokenColor(H.textColor(t), "colorDanger")
+            t:SetColor("success")
+            H.expectTokenColor(H.textColor(t), "colorSuccess")
+            t:SetColor("text")
+            H.expectTokenColor(H.textColor(t), "colorText")
+        end)
+
+        it("degrades an unknown colour key to colorText rather than raising", function()
+            -- Load-bearing rather than tidy: an intent colour is set from a ticker callback,
+            -- where an error unwinds out of the refresh loop and takes every other widget's
+            -- readout with it.
+            local t
+            expect(function()
+                t = H.C.Text({ text = "42", color = "catastrophe" }, host)
+            end).notThrows()
+            H.expectTokenColor(H.textColor(t), "colorText")
+
+            expect(function() t:SetColor("also nonsense") end).notThrows()
+            H.expectTokenColor(H.textColor(t), "colorText")
+        end)
+
+        it("re-resolves an intent colour when the theme moves the token", function()
+            local t = H.C.Text({ text = "42", color = "warning" }, host)
+            H.T:CreateUserTheme("Hot", "Modern")
+            H.T:SetUserToken("Hot", "colorWarning", { 1, 0, 0, 1 })
+            H.T:SetActive("Hot")
+            H.expectTokenColor(H.textColor(t), "colorWarning")
+            expect(H.textColor(t)[1]).as("the switch really did move the token").eq(1)
+
+            -- And again with that theme already active, which is the path a user editing the
+            -- token takes: the subscription rather than the switch.
+            H.T:SetUserToken("Hot", "colorWarning", { 0, 1, 0, 1 })
+            H.expectTokenColor(H.textColor(t), "colorWarning")
+            expect(H.textColor(t)[2]).as("a live token edit reaches the font string").eq(1)
+        end)
+    end)
+
     it("defaults to left justification and middle vertical justification", function()
         local t = H.C.Text({ text = "x" }, host)
         expect(t:GetFrame():GetJustifyH()).eq("LEFT")

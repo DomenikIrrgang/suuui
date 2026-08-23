@@ -900,26 +900,47 @@ describe("Settings window", function()
         end
     end)
 
-    it("places a minimap launcher in the corner of the minimap", function()
-        local size = H.token("sizeControlSm")
-        local launcher
-        for _, child in ipairs(H.Minimap._childFrames) do
-            if math.abs(child:GetWidth() - size) < 0.5 then launcher = child end
-        end
-        expect(launcher).as("a token-sized button on the minimap").notNil()
-        local mb, lb = H.box(H.Minimap), H.box(launcher)
-        expect(lb.right).eq(mb.right - 2)
-        expect(lb.top).eq(mb.top + 2)
+    it("registers the minimap launcher with LibDBIcon", function()
+        local lib = H.env.LibStub("LibDBIcon-1.0")
+        expect(lib).as("LibDBIcon loaded from the toc").notNil()
+        expect(lib:IsRegistered("SuuUI"))
+            .as("the launcher is registered under the addon's name, so button collectors "
+                .. "and LDB displays can find it").truthy()
+
+        local btn = lib:GetMinimapButton("SuuUI")
+        expect(btn).as("LibDBIcon created the button").notNil()
+        expect(btn:GetParent()).eq(H.Minimap)
+        expect(btn:GetWidth()).as("the button is square").eq(btn:GetHeight())
     end)
 
-    it("opens the settings window from the minimap launcher", function()
-        local size = H.token("sizeControlSm")
-        local launcher
-        for _, child in ipairs(H.Minimap._childFrames) do
-            if math.abs(child:GetWidth() - size) < 0.5 then launcher = child end
-        end
-        H.click(launcher)
+    it("places the launcher on the minimap ring", function()
+        local lib = H.env.LibStub("LibDBIcon-1.0")
+        local btn = lib:GetMinimapButton("SuuUI")
+
+        -- LibDBIcon parks a button on a circle around the minimap centre, at the angle it
+        -- persists as `minimapPos`. Derived from the minimap's own size and the library's
+        -- own radius rather than a literal offset, so this still holds if either moves.
+        local bx, by = btn:GetCenter()
+        local mx, my = H.Minimap:GetCenter()
+        local dist = math.sqrt((bx - mx) ^ 2 + (by - my) ^ 2)
+        expect(dist).as("the button sits on the ring, not in the corner")
+            .near(H.Minimap:GetWidth() / 2 + lib.radius, 0.5)
+    end)
+
+    it("opens the settings window on a left click", function()
+        local btn = H.env.LibStub("LibDBIcon-1.0"):GetMinimapButton("SuuUI")
+        expect(H.SuuUI.SettingsWindow.IsShown()).as("closed to begin with").falsy()
+        H.click(btn, "LeftButton")
+        expect(H.SuuUI.SettingsWindow.IsShown()).truthy()
         expect(H.Layout:GetWindow("settings")).notNil()
-        expect(H.Layout:GetWindow("settings"):IsShown()).truthy()
+    end)
+
+    it("enters edit mode on a right click", function()
+        local btn = H.env.LibStub("LibDBIcon-1.0"):GetMinimapButton("SuuUI")
+        expect(H.SuuUI.ToggleUI:IsEditMode()).as("not in edit mode to begin with").falsy()
+        H.click(btn, "RightButton")
+        expect(H.SuuUI.ToggleUI:IsEditMode()).truthy()
+        expect(H.SuuUI.SettingsWindow.IsShown())
+            .as("a right click must not also open the window").falsy()
     end)
 end)

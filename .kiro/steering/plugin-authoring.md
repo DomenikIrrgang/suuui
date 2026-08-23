@@ -271,6 +271,34 @@ See `architecture.md` §5b for the full contract.
 
 ---
 
+## Opening the Settings Window
+
+`SuuUI.SettingsWindow` is the seam for anything that wants to put the settings window on
+screen:
+
+```lua
+SuuUI.SettingsWindow.Open()      -- opens it, building it on first use
+SuuUI.SettingsWindow.Toggle()    -- opens if closed, closes if open
+SuuUI.SettingsWindow.IsShown()   -- whether it exists and is currently shown
+```
+
+Until there was a second way in, there was no seam at all. The window is built lazily —
+register the core schemas, create the window, build the nav — and that sequence lived inside
+the `/suuui` handler, so the only route in from anywhere else was `SlashCmdList["SUUUI"]()`:
+reaching into a global command table for behaviour that had no other name. It also inherits
+the slash command's argument parsing, so the call is only "open the settings" by accident of
+which branch an empty string falls through to — pass the wrong string and you get edit mode
+instead.
+
+The minimap button is a separate plugin, so it needed something that is part of the addon's
+API rather than a side effect of a command. Both callers now go through these three
+functions, which is also what keeps the lazy build to a single implementation: a second
+caller that built the window itself would be a second nav, disagreeing with the first about
+which plugins exist. `Open` and `Toggle` build on first use, so there is nothing to wait for
+and no login ordering to get right — call them whenever your own UI says to.
+
+---
+
 ## Fonts
 
 The font face is a theme token, so text you build from `Components.Text` already follows
@@ -470,7 +498,7 @@ minutes later — appears without anyone being told about it.
 | `order` | Ascending within the section, default 100. Ties break on `id`, so ordering is total and a bar's fields cannot swap places between logins |
 | `events` | Game events that should refresh the field. The bar registers the union of every widget's events on one frame and refreshes only the widgets that asked for the event that fired |
 | `update` | Seconds between refreshes, for a value **nothing announces**. Omit it whenever an event exists — a ticker where an event would do is a per-frame cost for nothing |
-| `GetText` | `function() -> string` — the value. **Required unless `Build` is given** |
+| `GetText` | `function() -> string [, tone]` — the value, plus an OPTIONAL tone as a **second** return value: nil ｜ `"success"` ｜ `"warning"` ｜ `"danger"`. See "A tone says what the reading means" below. **Required unless `Build` is given** |
 | `Build` | `function(parent) -> handle` — custom visuals instead of a text field. The escape hatch; see below |
 | `Refresh` | `function(field)` — refresh hook for a `Build` widget, called where `GetText` would be. Named `Refresh` rather than `Update` on purpose: a hook differing from the `update` interval by case alone is a footgun, and the convention here is that functions are PascalCase |
 | `OnClick` | `function(field, button)` |
@@ -487,6 +515,13 @@ muted `TIME` in front of it is noise on a strip where horizontal space is the sc
 a prefix where the number alone is ambiguous — `1.2k` could be gold, honour or damage — and
 leave it off where the format already says what it is.
 
+**A field advertises a hover rail only when your definition declares `OnClick` or `OnEnter`.**
+The rail is the "you can act on this" cue, so a pure readout and an interactive one look
+different on purpose: painting it on a field that does nothing promises an interaction that is
+not there. You neither ask for it nor switch it on — the bar derives it from your definition, so
+what the field promises and what it does cannot drift apart. The clock and the latency readout
+get one, because both explain themselves on hover; the framerate readout does not.
+
 **`GetText` must be cheap and allocation-free.** It is called by a shared `OnUpdate` ticker as
 well as on events, so it sits on the same per-frame path the performance rules cover: no table
 allocation, and no `string.format` unless the value behind the string actually moved.
@@ -497,6 +532,71 @@ key against the last one, and formats only on a change. The clock ticks twice a 
 seconds display does not visibly stutter, which means most of those ticks format nothing at
 all; the field then drops the unchanged write on top of that. Fold your settings into the key
 as the clock does, or a format change waits for the next value change to appear.
+
+**A tone says what the reading MEANS; the theme decides what it looks like.** Return it as
+`GetText`'s second value and the field colours the value with the matching intent token —
+`"success"`, `"warning"`, `"danger"`, or nil for the default text colour. Those four are the
+whole vocabulary: you state that a reading is past a threshold and the theme states what past a
+threshold looks like, so one retint moves every threshold colour in the addon at once.
+Composing your own `|cff…|r` escape instead hardcodes a hue, bypasses that retint, and gives
+every plugin author a different way to do one thing. There is no separate tone hook, on purpose:
+returned together with the value, the two come from a single reading and cannot disagree about
+what is on screen. Hand back the two values and stop — the bar captures both into locals,
+because a Lua multi-return expands only in the last argument position (`architecture.md` 3c).
+
+**Thresholds are your SETTINGS, not constants.** "Bad" is not a fact about the client — a player
+on a laptop and a player on a desktop disagree about what 40 fps means, and someone on a 200 ms
+baseline should not sit permanently in red — so a fixed threshold is a number that is wrong for
+somebody. Declare them on your own page and read them in the tone decision:
+
+```lua
+local lastPct, lastText, lastTone
+
+-- Chest durability as a percentage. One client call, and nothing allocated on a tick that
+-- changes nothing.
+local function readPct()
+    local cur, max = GetInventoryItemDurability(5)   -- 5 = chest slot
+    if type(cur) ~= "number" or type(max) ~= "number" or max <= 0 then return nil end
+    return math.floor(cur / max * 100)
+end
+
+local function toneFor(pct)
+    local danger = SuuUI.Settings:Get("my_plugin", "dura_danger")
+    local warn   = SuuUI.Settings:Get("my_plugin", "dura_warn")
+    if type(danger) == "number" and pct <= danger then return "danger" end
+    if type(warn)   == "number" and pct <= warn   then return "warning" end
+    return "success"
+end
+
+local function duraText()
+    local pct = readPct()
+    if not pct then return "—", nil end
+    local tone = toneFor(pct)
+    -- The TONE is part of the cache key rather than derived separately, which is what makes
+    -- dragging a threshold slider repaint on the next refresh instead of waiting for the
+    -- percentage itself to move.
+    if pct ~= lastPct or tone ~= lastTone then
+        lastPct, lastTone = pct, tone
+        lastText = pct .. "%"
+    end
+    return lastText, lastTone
+end
+
+SuuUI.DataBar:RegisterWidget({
+    id      = "my_plugin.durability",
+    label   = "Durability",
+    prefix  = "DUR",
+    section = "right",
+    order   = 150,
+    events  = { "UPDATE_INVENTORY_DURABILITY" },
+    GetText = duraText,
+})
+```
+
+`Plugins/Performance/FpsWidget.lua` and `LatencyWidget.lua` are the shipped reference for this
+shape, including the guards a client reading needs: both check the global exists before calling
+it, and both reject a non-finite number with `v ~= v`, since NaN is a number and every
+comparison against it is false — a `< 0` range check alone lets it through.
 
 **A widget must not build frames.** No `CreateFrame`, no textures, no `SetPoint`, and no
 components of your own for the field itself: the bar owns the field, its tokens, its divider
@@ -607,7 +707,7 @@ local btn = SuuUI.Components.Button({
 local lbl = SuuUI.Components.Text({
   text  = "Hello",
   size  = "md",   -- "sm"|"md"|"lg"
-  color = "text", -- token suffix: "text"|"textMuted"|"accent"
+  color = "text", -- key: "text"|"muted"|"accent", or an intent: "success"|"warning"|"danger"
 }, parentFrame)
 
 -- All components share (note: no SetPoint — containers do the positioning):
@@ -1042,6 +1142,47 @@ Access via `SuuUI.Settings:Get/Set` for tracked settings, or directly via
 `plugin:GetProfile()` for arbitrary plugin-private data.
 
 Do not write raw tables to SVs yourself — they are written on PLAYER_LOGOUT.
+
+### When something else owns the shape of your table
+
+There is one case where `GetProfile()` is not merely permitted but **required**: a stored
+table whose shape belongs to a third party that **mutates it in place**. That table cannot
+live in the settings schema, and what makes it a rule rather than a preference is that both
+plausible ways of trying are silent no-ops.
+
+`Settings:Get` hands back the stored value itself, so a library that writes into the table it
+was given has written straight *past* the store — nothing was notified, no watcher fired, and
+the schema still believes the old contents. And `Settings:Set` cannot repair it afterwards,
+because the value you would pass **is** the stored table: the equality check that suppresses a
+redundant write compares it against itself, finds them equal, and returns having done nothing.
+Neither route errors, and neither leaves a trace to notice.
+
+`Plugins/MinimapButton/MinimapButton.lua` is the worked example. LibDBIcon owns its own
+position and visibility store, and it writes `self.db.minimapPos = pos` on **every tick** of a
+drag, so the table has to sit somewhere our change tracking is not in the path:
+
+```lua
+--- The LibDBIcon position/visibility store: plugin-private data whose shape something else
+--- owns, so it lives in the profile rather than behind Settings:Get.
+local function iconDB(p)
+    local profile = p:GetProfile()
+    profile.icon = profile.icon or {}
+    return profile.icon
+end
+```
+
+Being a profile sub-table, it is profile-aware for free and reaches SavedVariables on logout
+with no write path of our own — which is the whole reason the answer is `GetProfile()` and not
+a hand-rolled global.
+
+The companion rule is not to store the same fact twice. LibDBIcon keeps its own `hide` mirror
+in that table and reads it at register time, so the plugin **seeds** it from the `enabled`
+setting on enable rather than persisting it independently: two stored copies of "is the button
+shown" drift, and the one the player edits must win.
+
+Generalised: **a stored table that something other than you writes into belongs in
+`GetProfile()`, and any fact inside it that also exists as a setting is seeded from the
+setting rather than mirrored.** Settings are for values you own end to end.
 
 ---
 

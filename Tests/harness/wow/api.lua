@@ -512,53 +512,16 @@ function M.install(env)
     }
 
     --------------------------------------------------------------------------
-    -- GameTooltip stub
+    -- GameTooltip
     --------------------------------------------------------------------------
-    local GameTooltip = CreateFrame("Frame", "GameTooltip", UIParent)
+
+    -- Built from the GameTooltip frame type in wow/frame.lua rather than assembled here.
+    -- It used to be a plain Frame with tooltip verbs bolted on, which meant CreateFrame
+    -- refused the type ("does not simulate type GameTooltip") and no second instance was
+    -- possible -- so embedded code that creates its own tooltip could not load at all, and
+    -- the singleton had no AddLine for a spec to read content back from.
+    local GameTooltip = CreateFrame("GameTooltip", "GameTooltip", UIParent)
     GameTooltip._tooltipShown = false
-
-    function GameTooltip:SetOwner(owner, anchor)
-        self._owner  = owner
-        self._anchor = anchor
-        state.tooltip = state.tooltip or {}
-        state.tooltip.owner  = owner
-        state.tooltip.anchor = anchor
-        state.tooltip.aura   = nil
-    end
-
-    function GameTooltip:SetUnitBuff(unit, index)
-        state.tooltip = state.tooltip or {}
-        state.tooltip.aura = { unit = unit, index = index, filter = "HELPFUL" }
-    end
-
-    function GameTooltip:SetUnitDebuff(unit, index)
-        state.tooltip = state.tooltip or {}
-        state.tooltip.aura = { unit = unit, index = index, filter = "HARMFUL" }
-    end
-
-    function GameTooltip:SetUnitAura(unit, index, filter)
-        state.tooltip = state.tooltip or {}
-        state.tooltip.aura = { unit = unit, index = index, filter = filter or "HELPFUL" }
-    end
-
-    function GameTooltip:ClearLines()
-        state.tooltip = state.tooltip or {}
-        state.tooltip.aura = nil
-    end
-
-    function GameTooltip:Show()
-        self._tooltipShown = true
-        self._shown = true
-    end
-
-    function GameTooltip:Hide()
-        self._tooltipShown = false
-        self._shown = false
-    end
-
-    function GameTooltip:IsShown()
-        return self._tooltipShown == true
-    end
 
     -- ANCHOR constants the client ships
     env.ANCHOR_NONE        = "ANCHOR_NONE"
@@ -600,6 +563,54 @@ function M.install(env)
     end
     env.strtrim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
     env.wipe = function(t) for k in pairs(t) do t[k] = nil end return t end
+
+    --------------------------------------------------------------------------
+    -- Lua stdlib aliases the client predefines as globals
+    --------------------------------------------------------------------------
+
+    -- WoW ships these, so their absence was a harness inaccuracy rather than a choice: any
+    -- code written for the client may use them, and embedded libraries do (LibStub reaches
+    -- for strmatch). Sandbox reads fall through to real _G, where these do NOT exist, so
+    -- they have to be stated here.
+    env.strmatch = string.match
+    env.strfind  = string.find
+    env.strsub   = string.sub
+    env.strlower = string.lower
+    env.strupper = string.upper
+    env.strlen   = string.len
+    env.strrep   = string.rep
+    env.format   = string.format
+    env.gsub     = string.gsub
+    env.gmatch   = string.gmatch
+    env.tinsert  = table.insert
+    env.tremove  = table.remove
+    env.sort     = table.sort
+
+    -- Lua 5.1's math.atan2 was removed in 5.3. It survives on a build carrying the compat
+    -- flag, which is why this looked fine locally -- LibDBIcon's drag handler reads it, so
+    -- on a stricter Lua the drag would die for a reason nothing in SuuUI is responsible for.
+    if math.atan2 == nil then math.atan2 = math.atan end
+
+    -- Calls a function in a secure context. Nothing here is tainted, so it is a plain call;
+    -- modelled because third-party code calls it unconditionally.
+    env.securecallfunction = function(fn, ...) return fn(...) end
+
+    --------------------------------------------------------------------------
+    -- Which client this is
+    --------------------------------------------------------------------------
+
+    -- This matters more than it looks. Libraries branch on
+    -- `WOW_PROJECT_ID == WOW_PROJECT_MAINLINE` to pick retail behaviour, and with both
+    -- undefined that comparison is `nil == nil`, i.e. TRUE -- so the suite would exercise
+    -- the retail path while the game takes the Classic one, and a spec asserting the
+    -- Classic branch would pass for the wrong reason. SuuUI targets TBC Anniversary
+    -- (interface 20504), so the id is the Burning Crusade one.
+    env.WOW_PROJECT_MAINLINE                = 1
+    env.WOW_PROJECT_CLASSIC                 = 2
+    env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
+    env.WOW_PROJECT_WRATH_CLASSIC           = 11
+    env.WOW_PROJECT_CATACLYSM_CLASSIC       = 14
+    env.WOW_PROJECT_ID                      = 5
 
     --- Adds a client font object reporting a face, the way a locale client ships extra
     --- fonts. It becomes visible to GetFonts, so the addon's harvest can see it.

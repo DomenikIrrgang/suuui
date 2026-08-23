@@ -173,8 +173,14 @@ function DataMeta:ApplyTheme()
     -- Recomposed, not just restyled: the prefix's colour is baked into the string as an
     -- escape, so a colorTextMuted edit reaches the screen only by rebuilding it.
     self._labelText:SetText(compose(self))
-    -- Re-asserted after ApplyTheme reset the handle's own colour, or a field sitting in its
-    -- warning state would silently drop back to colorText on any theme edit.
+    -- This is what makes a `tone` passed as a PROP reach the screen: the label is constructed
+    -- with color = "text", props.tone lands straight on the handle table without going through
+    -- SetTone, and a later SetTone would short-circuit because _tone already equals it.
+    --
+    -- It is NOT protecting against a theme edit, despite how that reads. Text stores the colour
+    -- KEY and re-resolves it through its own colmap on every theme event, so a tone set via
+    -- SetTone survives a retint with this line deleted. Mutation testing pins it precisely:
+    -- removing the line turns exactly one spec red, the construction-prop one.
     self._labelText:SetColor(self._tone or "text")
 
     local rc = T:GetToken("colorAccent")
@@ -222,7 +228,8 @@ SuuUI.Components.InstallEnable(DataMeta, "_f")
 -- Hugs its own text unless `w` is given; its HEIGHT comes from whatever lays it out, which
 -- on the bar is a stretched flow child, so a field is exactly as tall as the bar.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, SIZE_CHANGED, TEXT_CHANGED.
--- @param props table  { prefix, text, w, h, minW, rail, size }
+-- @param props table  { prefix, text, tone, w, h, minW, rail, size }
+--   tone: initial intent colour for the value — "success" | "warning" | "danger"
 --   rail: draw the accent underline on hover (default true)
 --   size: font step key for the value (default "md")
 -- @param parent frame

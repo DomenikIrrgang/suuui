@@ -2493,6 +2493,11 @@ describe("harness: WoW API simulation", function()
             expect(H.env.GetFramerate()).eq(12.5)
             H.setFramerate(144)
             expect(H.env.GetFramerate()).as("and again, so it is read live not cached").eq(144)
+            -- The other 60 in the client: the reset default is one source, GetFramerate's own
+            -- `or 60` guard is the other, and only a nil reading reaches the second. Without
+            -- this line an assertion on 60 cannot tell the two apart.
+            H.setFramerate(nil)
+            expect(H.env.GetFramerate()).as("a cleared reading falls back to 60").eq(60)
         end)
 
         it("defaults to four returns, all zero", function()
@@ -2602,6 +2607,713 @@ describe("harness: WoW API simulation", function()
             expect(afterControl)
                 .as("the recorder does catch an announcement, so the silence above is real")
                 .gt(0)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- What embedded third-party code needs from the simulated client.
+    --
+    -- SuuUI embeds LibStub, CallbackHandler-1.0, LibDataBroker-1.1 and LibDBIcon-1.0 under
+    -- Libs/, listed at the top of the toc, so the harness loads them into its sandbox like
+    -- any other addon file. Six additions to the client were needed before that load
+    -- behaved, and each is pinned here rather than only covered by consequence through the
+    -- specs of the code that uses it. The harness is load-bearing: a regression in one of
+    -- these has to fail HERE, next to the rule it breaks, instead of surfacing as an
+    -- unexplained failure in a component spec — or, worse, as a green suite exercising a
+    -- branch the game never takes.
+    ---------------------------------------------------------------------------
+
+    describe("GameTooltip as a frame type", function()
+        -- It was a plain Frame with the tooltip verbs bolted onto api.lua's singleton, so
+        -- CreateFrame("GameTooltip", ...) raised ("does not simulate type GameTooltip") and
+        -- a second instance was impossible. Embedded code creates its own tooltip at load
+        -- (LibDBIcon makes LibDBIconTooltip), so the load died before the type existed.
+        local function ownTooltip(name)
+            return H.env.CreateFrame("GameTooltip", name, H.UIParent, "GameTooltipTemplate")
+        end
+
+        it("is a type CreateFrame accepts, and the shared global is one of them", function()
+            local tip = ownTooltip("SpecOwnTooltip")
+            expect(tip:GetObjectType())
+                .as("a real frame type, not a Frame with verbs added").eq("GameTooltip")
+            expect(tip:IsObjectType("GameTooltip")).eq(true)
+            expect(H.env.GameTooltip:GetObjectType())
+                .as("the shared tooltip is the same type as one an addon creates")
+                .eq(tip:GetObjectType())
+            expect(getmetatable(H.env.GameTooltip))
+                .as("and the same implementation, so the two cannot drift apart")
+                .eq(getmetatable(tip))
+            expect(H.env.SpecOwnTooltip).as("a named frame registers its global").eq(tip)
+            expect(H.GameTooltip)
+                .as("H.GameTooltip is that shared global").eq(H.env.GameTooltip)
+        end)
+
+        it("is a frame, so it anchors and sizes like one", function()
+            local tip = ownTooltip()
+            tip:SetSize(H.token("sizeTooltipMaxWidth") or 200, H.lineHeight(H.token("fontSizeMd")))
+            tip:SetPoint("TOPLEFT", H.UIParent, "TOPLEFT", 0, 0)
+            expect(tip:GetHeight())
+                .as("a GameTooltip inherits FrameMeta, so geometry works")
+                .eq(H.lineHeight(H.token("fontSizeMd")))
+            expect(H.box(tip)).notNil()
+        end)
+
+        it("round-trips its owner and anchor through the getters", function()
+            local tip    = ownTooltip()
+            local anchor = H.parent(100, 50)
+            tip:SetOwner(anchor, H.env.ANCHOR_RIGHT)
+            expect(tip:GetOwner()).eq(anchor)
+            expect(tip:GetAnchorType())
+                .as("the anchor constant the caller passed").eq(H.env.ANCHOR_RIGHT)
+        end)
+
+        it("accumulates a line per AddLine and reads each one back", function()
+            local tip = ownTooltip()
+            tip:SetOwner(H.UIParent, H.env.ANCHOR_CURSOR)
+            expect(tip:NumLines()).as("a fresh owner starts with no content").eq(0)
+
+            local texts = { "SuuUI", "Left-click to open settings", "Right-click for help" }
+            for i, text in ipairs(texts) do
+                tip:AddLine(text)
+                expect(tip:NumLines()).as("one line per AddLine, in order").eq(i)
+                expect((tip:GetLine(i))).eq(text)
+            end
+            expect(tip:GetLine(#texts + 1))
+                .as("nothing past the last line").isNil()
+        end)
+
+        it("records both halves of an AddDoubleLine", function()
+            local tip = ownTooltip()
+            tip:SetOwner(H.UIParent, H.env.ANCHOR_CURSOR)
+            tip:AddLine("SuuUI")
+            tip:AddDoubleLine("Latency", "42 ms")
+            expect(tip:NumLines()).as("a double line is still one line").eq(2)
+            local left, right = tip:GetLine(2)
+            expect(left).eq("Latency")
+            expect(right).as("the right half is the second return").eq("42 ms")
+            expect(select(2, tip:GetLine(1)))
+                .as("a plain AddLine has no right half").isNil()
+        end)
+
+        it("replaces every line with SetText and empties with ClearLines", function()
+            local tip = ownTooltip()
+            tip:SetOwner(H.UIParent, H.env.ANCHOR_CURSOR)
+            tip:AddLine("first")
+            tip:AddLine("second")
+            tip:SetText("only")
+            expect(tip:NumLines()).as("SetText is a reset, not an append").eq(1)
+            expect((tip:GetLine(1))).eq("only")
+            tip:ClearLines()
+            expect(tip:NumLines()).eq(0)
+            expect(tip:GetLine(1)).isNil()
+        end)
+
+        it("resets the lines on SetOwner, so a second hover starts clean", function()
+            -- The client's own contract, and the one a reader depends on: pointing a
+            -- tooltip at a new owner discards what the previous owner put in it. Without
+            -- it, a spec asserting a two-line tooltip passes after any earlier hover.
+            local tip = ownTooltip()
+            local a, b = H.parent(50, 20), H.parent(50, 20)
+            tip:SetOwner(a, H.env.ANCHOR_CURSOR)
+            tip:AddLine("about a")
+            tip:AddLine("more about a")
+            expect(tip:NumLines()).eq(2)
+            tip:SetOwner(b, H.env.ANCHOR_CURSOR)
+            expect(tip:NumLines()).as("the previous owner's lines are gone").eq(0)
+            expect(tip:GetOwner()).eq(b)
+        end)
+
+        it("tracks its own shown state", function()
+            local tip = ownTooltip()
+            expect(tip:IsShown()).as("a tooltip starts hidden, unlike a plain frame").eq(false)
+            tip:Show()
+            expect(tip:IsShown()).eq(true)
+            tip:Hide()
+            expect(tip:IsShown()).eq(false)
+        end)
+
+        it("still records the aura setters into the shared tooltip state", function()
+            -- Every aura spec reads H.getTooltipState() rather than the frame, so moving
+            -- the verbs onto a type had to keep that recording — from ANY instance, which
+            -- is the new part: state.tooltip is the last interaction, whichever tooltip
+            -- it came from.
+            local tip = ownTooltip()
+            tip:SetOwner(H.UIParent, H.env.ANCHOR_CURSOR)
+
+            tip:SetUnitBuff("player", 2)
+            local ts = H.getTooltipState()
+            expect(ts.owner).as("SetOwner recorded through an addon's own tooltip").eq(H.UIParent)
+            expect(ts.aura.unit).eq("player")
+            expect(ts.aura.index).eq(2)
+            expect(ts.aura.filter).as("SetUnitBuff means HELPFUL").eq("HELPFUL")
+
+            tip:SetUnitDebuff("target", 5)
+            ts = H.getTooltipState()
+            expect(ts.aura.index).eq(5)
+            expect(ts.aura.filter).as("SetUnitDebuff means HARMFUL").eq("HARMFUL")
+
+            tip:SetUnitAura("player", 1, "HARMFUL")
+            expect(H.getTooltipState().aura.filter)
+                .as("SetUnitAura takes the filter it is given").eq("HARMFUL")
+
+            tip:ClearLines()
+            expect(H.getTooltipState().aura)
+                .as("ClearLines drops the aura it was describing").isNil()
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- AnimationGroups.
+    --
+    -- SuuUI never creates one: it runs its own shared-OnUpdate animator by design. This
+    -- exists because embedded code does — LibDBIcon builds a fade group for its minimap
+    -- button at register time and the load dies without CreateAnimationGroup.
+    --
+    -- Deliberately a CONFIGURATION RECORDER: it stores what was asked for and tracks
+    -- whether the group is playing, and it does NOT tick. H.tick drives SuuUI's animator,
+    -- never this, so the only observable effect modelled is the client's SetToFinalAlpha
+    -- contract on Finish.
+    ---------------------------------------------------------------------------
+    describe("AnimationGroup", function()
+        it("is created by a frame, which owns it and lists it", function()
+            local f = H.parent(50, 50)
+            expect(#f:GetAnimationGroups()).as("a fresh frame has none").eq(0)
+            local a = f:CreateAnimationGroup("SpecFadeGroup")
+            local b = f:CreateAnimationGroup()
+            expect(a:GetObjectType()).eq("AnimationGroup")
+            expect(a:IsObjectType("AnimationGroup")).eq(true)
+            expect(a:GetParent()).as("the frame that created it").eq(f)
+            local groups = f:GetAnimationGroups()
+            expect(#groups).eq(2)
+            expect(groups[1]).as("creation order").eq(a)
+            expect(groups[2]).eq(b)
+        end)
+
+        it("round-trips an Alpha animation's whole configuration", function()
+            local f = H.parent(50, 50)
+            local g = f:CreateAnimationGroup()
+            local a = g:CreateAnimation("Alpha")
+            expect(a:GetObjectType()).as("the kind it was asked for").eq("Alpha")
+
+            -- A round-trip cares only that the getter answers what the setter was given;
+            -- the durations come from theme tokens so the file carries no magic numbers.
+            local dur, delay = H.token("animFast"), H.token("animFast") / 2
+            a:SetDuration(dur)
+            a:SetStartDelay(delay)
+            a:SetOrder(2)
+            a:SetFromAlpha(1)
+            a:SetToAlpha(0)
+            expect(a:GetDuration()).eq(dur)
+            expect(a:GetStartDelay()).eq(delay)
+            expect(a:GetOrder()).eq(2)
+            expect(a:GetFromAlpha()).eq(1)
+            expect(a:GetToAlpha()).eq(0)
+        end)
+
+        it("answers the client's defaults for an unconfigured animation", function()
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            local a = g:CreateAnimation("Alpha")
+            expect(a:GetDuration()).as("no duration set yet").eq(0)
+            expect(a:GetStartDelay()).eq(0)
+            expect(a:GetOrder()).as("the client's first order is 1, not 0").eq(1)
+            expect(a:GetFromAlpha()).as("unset rather than assumed").isNil()
+            expect(a:GetToAlpha()).isNil()
+            expect(g:GetDuration()).as("and the group's span is zero").eq(0)
+        end)
+
+        it("defaults CreateAnimation to Alpha, which is what the client does", function()
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            expect(g:CreateAnimation():GetObjectType()).eq("Alpha")
+        end)
+
+        it("tracks playing and done across Play, Pause and Stop", function()
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            expect(g:IsPlaying()).as("a fresh group is idle").eq(false)
+            expect(g:IsDone()).as("and therefore done").eq(true)
+            g:Play()
+            expect(g:IsPlaying()).eq(true)
+            expect(g:IsDone()).as("done is the negation of playing here").eq(false)
+            g:Pause()
+            expect(g:IsPlaying()).as("a paused group is not playing").eq(false)
+            g:Play()
+            g:Stop()
+            expect(g:IsPlaying()).eq(false)
+            expect(g:IsDone()).eq(true)
+        end)
+
+        it("fires OnPlay, OnStop and OnFinished with the group as self", function()
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            local order, selves = {}, {}
+            for _, name in ipairs({ "OnPlay", "OnStop", "OnFinished" }) do
+                g:SetScript(name, function(self)
+                    order[#order + 1] = name
+                    selves[name] = self
+                end)
+            end
+            g:Play()
+            g:Stop()
+            g:Play()
+            g:Finish()
+            expect(order).deepEq({ "OnPlay", "OnStop", "OnPlay", "OnFinished" })
+            expect(selves.OnFinished).as("the handler is called with the group").eq(g)
+            expect(selves.OnPlay).eq(g)
+            expect(g:GetScript("OnPlay")).as("and the script reads back").notNil()
+        end)
+
+        it("raises for a script name the client has no such thing as", function()
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            expect(function() g:SetScript("OnFinish", function() end) end)
+                .as("OnFinish is not OnFinished, and a typo must fail rather than never run")
+                .throws("AnimationGroup has no script")
+            expect(g:HasScript("OnFinished")).eq(true)
+            expect(g:HasScript("OnFinish")).eq(false)
+        end)
+
+        it("spans the longest delay-plus-duration, not the longest duration", function()
+            -- Three ways to compute this and only one is right: the longest duration
+            -- (misses the delay), the sum (double-counts parallel animations), and the
+            -- max of delay + duration. The numbers below tell all three apart — the
+            -- animation with the SHORTER duration finishes last because of its delay.
+            local fast = H.token("animFast")
+            local g = H.parent(50, 50):CreateAnimationGroup()
+            local first  = g:CreateAnimation("Alpha")
+            first:SetDuration(fast)
+            local second = g:CreateAnimation("Alpha")
+            second:SetDuration(fast / 2)
+            second:SetStartDelay(fast)
+
+            expect(second:GetDuration()).as("the shorter animation").lt(first:GetDuration())
+            expect(g:GetDuration())
+                .as("the group ends when its last animation ends")
+                .near(second:GetStartDelay() + second:GetDuration(), 1e-9)
+            expect(g:GetDuration()).as("which is longer than any single duration").gt(fast)
+            expect(g:GetDuration())
+                .as("and shorter than the sum, which would double-count")
+                .lt(first:GetDuration() + second:GetStartDelay() + second:GetDuration())
+        end)
+
+        it("leaves the end alpha on the parent when SetToFinalAlpha is on", function()
+            -- The one effect this model reproduces, and the reason it exists: LibDBIcon
+            -- fades its button out and expects the button to STAY faded.
+            local f = H.parent(50, 50)
+            local g = f:CreateAnimationGroup()
+            g:SetToFinalAlpha(true)
+            expect(g:IsSetToFinalAlpha()).eq(true)
+            local a = g:CreateAnimation("Alpha")
+            a:SetFromAlpha(f:GetAlpha())
+            a:SetToAlpha(0)
+
+            local before = f:GetAlpha()
+            g:Play()
+            g:Finish()
+            expect(f:GetAlpha())
+                .as("the target keeps the animation's end value").eq(a:GetToAlpha())
+            expect(f:GetAlpha()).as("which is not where it started").neq(before)
+            expect(g:IsPlaying()).as("Finish also ends the group").eq(false)
+        end)
+
+        it("leaves the parent's alpha untouched when SetToFinalAlpha is off", function()
+            local f = H.parent(50, 50)
+            local g = f:CreateAnimationGroup()
+            g:SetToFinalAlpha(false)
+            expect(g:IsSetToFinalAlpha()).eq(false)
+            local a = g:CreateAnimation("Alpha")
+            a:SetToAlpha(0)
+            local before = f:GetAlpha()
+            g:Play()
+            g:Finish()
+            expect(f:GetAlpha())
+                .as("without the flag the client reverts, so nothing is written")
+                .eq(before)
+            expect(f:GetAlpha()).neq(a:GetToAlpha())
+        end)
+
+        it("is not driven by H.tick, which is the whole shape of this model", function()
+            -- Stated as an assertion rather than only as a comment, because it is the
+            -- property every reader of this model has to know: ticking the clock moves
+            -- SuuUI's animator and does nothing at all here.
+            local f = H.parent(50, 50)
+            local g = f:CreateAnimationGroup()
+            g:SetToFinalAlpha(true)
+            local a = g:CreateAnimation("Alpha")
+            a:SetDuration(H.token("animFast"))
+            a:SetToAlpha(0)
+            local before = f:GetAlpha()
+            g:Play()
+            H.runAnimations()
+            expect(g:IsPlaying()).as("still playing: no clock advances this group").eq(true)
+            expect(f:GetAlpha()).as("and the target never moved").eq(before)
+        end)
+
+        xit("interpolates an animation over its duration", function()
+            -- NOT MODELLED, deliberately. There is no per-frame progress here: GetProgress
+            -- answers 0 while playing and 1 once stopped, and nothing between Play and
+            -- Finish ever changes the target. So no spec may read a mid-flight alpha,
+            -- scale, offset or rotation from this model and believe it — a value read
+            -- halfway through would be whatever the recorder happens to store, not what
+            -- the client would draw.
+            --
+            -- Closing the gap means driving groups from H.tick, which would make the
+            -- harness a second animator alongside SuuUI's own. Worth doing only if the
+            -- addon itself ever adopts client animation groups; today nothing but embedded
+            -- third-party code creates one, and that code only needs the configuration to
+            -- round-trip and the final alpha to stick.
+        end)
+    end)
+
+    describe("Lua stdlib globals the client predefines", function()
+        -- WoW ships these as globals, so their absence was a harness inaccuracy rather
+        -- than a choice: code written for the client may use any of them, and embedded
+        -- libraries do (LibStub reaches for strmatch). The sandbox falls through to the
+        -- real _G, where they do NOT exist, so each has to be stated in api.lua.
+        it("does not inherit them from the real Lua global table", function()
+            -- The premise. Without this line every assertion below could be passing on a
+            -- fallthrough rather than on anything api.lua states.
+            for _, name in ipairs({ "strmatch", "strfind", "strsub", "strlower", "strupper",
+                                    "strlen", "strrep", "format", "gsub", "gmatch",
+                                    "tinsert", "tremove", "sort" }) do
+                expect(rawget(_G, name))
+                    .as("_G." .. name .. " is a WoW invention, not a Lua one").isNil()
+                expect(rawget(H.env, name))
+                    .as("so the sandbox states " .. name .. " itself").notNil()
+            end
+        end)
+
+        it("aliases the string library, matching its behaviour exactly", function()
+            local s = "LibDBIcon-1.0"
+            expect(H.env.strmatch(s, "^(%a+)")).eq(s:match("^(%a+)"))
+            expect(H.env.strfind(s, "-", 1, true)).eq(s:find("-", 1, true))
+            expect(H.env.strsub(s, 1, 3)).eq(s:sub(1, 3))
+            expect(H.env.strlower(s)).eq(s:lower())
+            expect(H.env.strupper(s)).eq(s:upper())
+            expect(H.env.strlen(s)).eq(#s)
+            expect(H.env.strrep("ab", 3)).eq(("ab"):rep(3))
+            expect(H.env.format("%s v%d", s, 56)).eq(string.format("%s v%d", s, 56))
+            expect((H.env.gsub(s, "%-", "_"))).eq((s:gsub("%-", "_")))
+        end)
+
+        it("aliases gmatch as an iterator, not just as a value", function()
+            local parts = {}
+            for word in H.env.gmatch("LibStub CallbackHandler LibDBIcon", "%a+") do
+                parts[#parts + 1] = word
+            end
+            expect(#parts).as("one entry per match").eq(3)
+            expect(parts[1]).eq("LibStub")
+            expect(parts[#parts]).eq("LibDBIcon")
+        end)
+
+        it("aliases the table library, mutating the caller's table", function()
+            local t = { "b" }
+            H.env.tinsert(t, "c")
+            H.env.tinsert(t, 1, "a")
+            expect(t).as("appended and inserted in place").deepEq({ "a", "b", "c" })
+            expect(H.env.tremove(t)).as("tremove answers what it removed").eq("c")
+            expect(H.env.tremove(t, 1)).eq("a")
+            expect(t).deepEq({ "b" })
+
+            local unsorted = { 3, 1, 2 }
+            local reference = { 3, 1, 2 }
+            table.sort(reference)
+            H.env.sort(unsorted)
+            expect(unsorted).as("sort orders the same way table.sort does")
+                .deepEq(reference)
+        end)
+    end)
+
+    describe("which client this is (WOW_PROJECT_ID)", function()
+        -- The highest-value of the six. Libraries branch on
+        -- `WOW_PROJECT_ID == WOW_PROJECT_MAINLINE` to pick retail behaviour, and with BOTH
+        -- names undefined that comparison is `nil == nil` — TRUE. So the suite exercised
+        -- the retail path on every one of those branches while the game takes the Classic
+        -- one, and a spec asserting Classic behaviour would have passed for the wrong
+        -- reason. Defining only one of the two names would have been enough to fix the
+        -- comparison, which is exactly why the assertion below has to name both.
+        local function tocInterface()
+            local f = assert(io.open(H.root .. "/SuuUI.toc", "r"))
+            local body = f:read("*a")
+            f:close()
+            return tonumber(body:match("##%s*Interface:%s*(%d+)"))
+        end
+
+        it("agrees with the interface version the toc targets", function()
+            local interface = tocInterface()
+            expect(interface).as("the toc declares an interface version").notNil()
+            -- The client's own encoding: the leading digits are the expansion, so 20504 is
+            -- TBC. Derived from the toc rather than restated, so retargeting the addon
+            -- fails here instead of leaving the harness on the wrong client.
+            local expansion = math.floor(interface / 10000)
+            local projectForExpansion = {
+                [1]  = H.env.WOW_PROJECT_CLASSIC,
+                [2]  = H.env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC,
+                [3]  = H.env.WOW_PROJECT_WRATH_CLASSIC,
+                [4]  = H.env.WOW_PROJECT_CATACLYSM_CLASSIC,
+                [11] = H.env.WOW_PROJECT_MAINLINE,
+            }
+            expect(H.env.WOW_PROJECT_ID)
+                .as("the client the harness claims to be must match the toc's target")
+                .eq(projectForExpansion[expansion])
+            expect(H.env.WOW_PROJECT_ID)
+                .as("SuuUI targets TBC Anniversary")
+                .eq(H.env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC)
+        end)
+
+        it("is explicitly NOT mainline, and both names are defined", function()
+            expect(H.env.WOW_PROJECT_MAINLINE)
+                .as("undefined here is what made nil == nil read as retail").notNil()
+            expect(H.env.WOW_PROJECT_ID).notNil()
+            expect(H.env.WOW_PROJECT_ID)
+                .as("a library asking `is this retail?` must be told no")
+                .neq(H.env.WOW_PROJECT_MAINLINE)
+            expect(H.env.WOW_PROJECT_ID == H.env.WOW_PROJECT_MAINLINE)
+                .as("the comparison libraries actually write").eq(false)
+        end)
+
+        it("gives every project constant a distinct id", function()
+            local seen = {}
+            for _, name in ipairs({ "WOW_PROJECT_MAINLINE", "WOW_PROJECT_CLASSIC",
+                                    "WOW_PROJECT_BURNING_CRUSADE_CLASSIC",
+                                    "WOW_PROJECT_WRATH_CLASSIC",
+                                    "WOW_PROJECT_CATACLYSM_CLASSIC" }) do
+                local id = H.env[name]
+                expect(id).as(name .. " is defined").notNil()
+                expect(seen[id]).as(name .. " does not collide with another project").isNil()
+                seen[id] = name
+            end
+        end)
+    end)
+
+    describe("securecallfunction and math.atan2", function()
+        it("calls through securecallfunction, passing arguments and returns back", function()
+            -- Nothing in the harness is tainted, so this is a plain call — but third-party
+            -- code calls it unconditionally, so it has to exist and it has to be
+            -- transparent in both directions.
+            local seen
+            local a, b = H.env.securecallfunction(function(x, y)
+                seen = { x, y }
+                return y, x
+            end, "first", "second")
+            expect(seen).as("the arguments reached the function").deepEq({ "first", "second" })
+            expect(a).as("and both returns came back, in order").eq("second")
+            expect(b).eq("first")
+        end)
+
+        it("provides math.atan2, which Lua 5.3 removed", function()
+            -- LibDBIcon's drag handler reads it to turn a cursor offset into an angle.
+            --
+            -- This one has to be asserted the awkward way. The Lua this suite runs on may
+            -- ship atan2 natively -- a 5.4 built with the 5.1 compat flag does, and there
+            -- it is literally the same function object as math.atan -- so simply reading
+            -- math.atan2 proves nothing about the harness: the assertion passes with
+            -- api.lua's fallback deleted. Deleting it and rebuilding the client is what
+            -- exercises the fallback, and it is the only form of this spec that can fail.
+            local native = math.atan2
+            math.atan2 = nil
+            H.setup()
+            local restored = math.atan2
+            expect(type(restored))
+                .as("a client build without atan2 gets one from the harness").eq("function")
+            expect(type(H.env.math.atan2))
+                .as("and the sandbox sees the same math table").eq("function")
+            -- Against the mathematical definition, so it holds for the native function and
+            -- for the alias onto math.atan alike.
+            expect(restored(1, 1)).as("a 45 degree offset").near(math.pi / 4, 1e-9)
+            expect(restored(0, -1)).as("straight left is pi").near(math.pi, 1e-9)
+            expect(restored(1, 0))
+                .as("straight up is a quarter turn, with no divide by zero")
+                .near(math.pi / 2, 1e-9)
+            math.atan2 = native
+        end)
+    end)
+
+    describe("a Button is mouse-enabled by default", function()
+        -- The client's own default: only a plain Frame has to ask. Withholding it dropped
+        -- every click from any button that relies on the default — and third-party code
+        -- does, so its clicks were silently lost while the frame still reported as
+        -- present, sized and shown, and every other assertion about it passed.
+        it("reports a fresh Button as mouse-enabled and a fresh Frame as not", function()
+            local btn   = H.env.CreateFrame("Button", nil, H.UIParent)
+            local plain = H.env.CreateFrame("Frame", nil, H.UIParent)
+            expect(btn:IsMouseEnabled())
+                .as("a Button takes mouse input without EnableMouse").eq(true)
+            expect(plain:IsMouseEnabled())
+                .as("a plain Frame still has to opt in").eq(false)
+        end)
+
+        it("delivers a click to a Button that never called EnableMouse", function()
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            local clicks = 0
+            btn:SetScript("OnClick", function() clicks = clicks + 1 end)
+            expect(H.click(btn)).as("input routing accepts it").eq(true)
+            expect(clicks).as("and the handler ran").eq(1)
+        end)
+
+        it("does not deliver a click to a Frame that never called EnableMouse", function()
+            local plain = H.env.CreateFrame("Frame", nil, H.UIParent)
+            local fired = false
+            plain:SetScript("OnMouseUp", function() fired = true end)
+            expect(H.click(plain)).eq(false)
+            expect(fired).as("the default differs by type, which is the point").eq(false)
+        end)
+
+        it("lets an explicit EnableMouse(false) beat the Button default", function()
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            local clicks = 0
+            btn:SetScript("OnClick", function() clicks = clicks + 1 end)
+            btn:EnableMouse(false)
+            expect(btn:IsMouseEnabled())
+                .as("an explicit answer wins over the type's default").eq(false)
+            expect(H.click(btn)).eq(false)
+            expect(clicks).eq(0)
+            btn:EnableMouse(true)
+            expect(btn:IsMouseEnabled()).as("and back again").eq(true)
+            expect(H.click(btn)).eq(true)
+            expect(clicks).eq(1)
+        end)
+    end)
+
+    describe("RegisterForClicks is case-insensitive", function()
+        -- The client treats "anyUp", "AnyUp" and "ANYUP" as one registration, and
+        -- third-party code freely uses the lower-cased spelling (LibDBIcon registers
+        -- "anyUp"). Matching case-sensitively dropped every click from such a button while
+        -- it still reported as present, sized and mouse-enabled — the same silent shape as
+        -- the Button default above.
+        local function clickRecorder(...)
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            if select("#", ...) > 0 then btn:RegisterForClicks(...) end
+            local log = {}
+            btn:SetScript("OnClick", function(_, button, down)
+                log[#log + 1] = { button = button, down = down }
+            end)
+            return btn, log
+        end
+
+        it("takes the lower-cased spelling for both mouse buttons", function()
+            local btn, log = clickRecorder("anyUp")
+            H.click(btn, "LeftButton")
+            H.click(btn, "RightButton")
+            expect(#log).as("anyUp means any button, whatever its case").eq(2)
+            expect(log[1].button).eq("LeftButton")
+            expect(log[2].button).eq("RightButton")
+            expect(log[2].down).as("and Up means the release phase").eq(false)
+        end)
+
+        it("takes the shouted spelling too", function()
+            local btn, log = clickRecorder("ANYUP")
+            H.click(btn, "LeftButton")
+            H.click(btn, "RightButton")
+            expect(#log).eq(2)
+        end)
+
+        it("agrees with the canonical spelling, click for click", function()
+            -- The rule stated as an equivalence rather than as a count per casing: every
+            -- spelling has to behave identically to the one the harness always understood,
+            -- so the expectation comes from a canonical button given the same input rather
+            -- than from a number written here.
+            local buttons = { "LeftButton", "MiddleButton", "RightButton" }
+            for _, spelling in ipairs({ "anyUp", "ANYUP", "anyup", "AnYuP" }) do
+                local canonical, canonicalLog = clickRecorder("AnyUp")
+                local variant,   variantLog   = clickRecorder(spelling)
+                for _, button in ipairs(buttons) do
+                    H.click(canonical, button)
+                    H.click(variant, button)
+                end
+                expect(#canonicalLog)
+                    .as("the canonical button is the control, and it does deliver")
+                    .eq(#buttons)
+                expect(variantLog).as(spelling .. " delivers exactly what AnyUp delivers")
+                    .deepEq(canonicalLog)
+            end
+        end)
+
+        it("still delivers left-up only when nothing is registered", function()
+            local btn, log = clickRecorder()
+            H.click(btn, "RightButton")
+            expect(#log).as("a right click needs registering for").eq(0)
+            H.click(btn, "LeftButton")
+            expect(#log).as("left-up is the default").eq(1)
+            expect(log[1].down).as("the release phase, not the press").eq(false)
+        end)
+
+        it("keeps the legacy button-name-only spelling meaning the up phase", function()
+            for _, spelling in ipairs({ "RightButton", "rightbutton" }) do
+                local btn, log = clickRecorder(spelling)
+                H.click(btn, "LeftButton")
+                expect(#log).as(spelling .. " does not register the left button").eq(0)
+                H.click(btn, "RightButton")
+                expect(#log).as(spelling .. " names a button and means Up").eq(1)
+                expect(log[1].down).as("so the press does not fire, the release does").eq(false)
+            end
+        end)
+
+        it("does not fire the down phase for an Up registration, in any case", function()
+            -- The half a case-insensitive comparison could get wrong in the other
+            -- direction: lower-casing both sides must not make "anyUp" match the press.
+            local btn, log = clickRecorder("anyUp")
+            local atDown
+            btn:SetScript("OnMouseDown", function() atDown = #log end)
+            H.click(btn, "LeftButton")
+            expect(atDown).as("nothing had fired by the time the button went down").eq(0)
+            expect(#log).as("and exactly one click by the time it came up").eq(1)
+        end)
+    end)
+
+    describe("stored Button and strata state third-party code writes", function()
+        -- Stored, not drawn: none of these change a rect, and the harness models geometry.
+        -- They exist because embedded code calls them unconditionally, so a missing one is
+        -- a load failure. Readable rather than write-only, because a write-only flag
+        -- cannot be asserted — which is exactly how SetClipsChildren once hid a bug.
+        it("round-trips every Button texture slot", function()
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            local slots = {
+                { set = "SetNormalTexture",    get = "GetNormalTexture" },
+                { set = "SetHighlightTexture", get = "GetHighlightTexture" },
+                { set = "SetPushedTexture",    get = "GetPushedTexture" },
+                { set = "SetDisabledTexture",  get = "GetDisabledTexture" },
+            }
+            for _, slot in ipairs(slots) do
+                expect(btn[slot.get](btn)).as(slot.get .. " starts empty").isNil()
+                local path = "Interface\\AddOns\\SuuUI\\Media\\" .. slot.set
+                btn[slot.set](btn, path)
+                expect(btn[slot.get](btn)).as(slot.get .. " answers what was set").eq(path)
+            end
+            -- Each slot is its own store: one setter must not overwrite another, which a
+            -- shared field would do while every single-slot assertion still passed.
+            for _, slot in ipairs(slots) do
+                expect(btn[slot.get](btn))
+                    .as(slot.get .. " survived the other three")
+                    .eq("Interface\\AddOns\\SuuUI\\Media\\" .. slot.set)
+            end
+        end)
+
+        it("tracks the highlight lock a drag gesture holds", function()
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            expect(btn:IsHighlightLocked()).eq(false)
+            btn:LockHighlight()
+            expect(btn:IsHighlightLocked()).as("held for the duration of a drag").eq(true)
+            btn:UnlockHighlight()
+            expect(btn:IsHighlightLocked()).eq(false)
+        end)
+
+        it("round-trips SetMotionScriptsWhileDisabled", function()
+            local btn = H.env.CreateFrame("Button", nil, H.UIParent)
+            btn:SetMotionScriptsWhileDisabled(true)
+            expect(btn._motionWhileDisabled).eq(true)
+            btn:SetMotionScriptsWhileDisabled(false)
+            expect(btn._motionWhileDisabled).as("false, not nil").eq(false)
+        end)
+
+        it("round-trips the fixed strata and level flags independently", function()
+            local f = H.parent(20, 20)
+            expect(f:HasFixedFrameStrata()).eq(false)
+            expect(f:HasFixedFrameLevel()).eq(false)
+            f:SetFixedFrameStrata(true)
+            expect(f:HasFixedFrameStrata()).eq(true)
+            expect(f:HasFixedFrameLevel())
+                .as("the two flags are separate stores").eq(false)
+            f:SetFixedFrameLevel(true)
+            f:SetFixedFrameStrata(false)
+            expect(f:HasFixedFrameStrata()).eq(false)
+            expect(f:HasFixedFrameLevel()).as("and clearing one leaves the other").eq(true)
         end)
     end)
 end)

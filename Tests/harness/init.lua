@@ -744,11 +744,18 @@ local DEFAULT_CLICKS = { "LeftButtonUp" }
 local function firesClick(f, button, phase)
     if f._kind ~= "Button" and f._kind ~= "CheckButton" then return false end
     local list = f._clickButtons or DEFAULT_CLICKS
+    -- The client is CASE-INSENSITIVE here: "anyUp", "AnyUp" and "ANYUP" are the same
+    -- registration, and third-party code freely uses the lower-cased spelling. Comparing
+    -- case-sensitively dropped every click from such a button while the frame still
+    -- reported as present, sized and mouse-enabled.
+    local want = ("Any" .. phase):lower()
+    local wantButton = (button .. phase):lower()
+    local legacy = button:lower()
     for i = 1, #list do
-        local entry = list[i]
-        if entry == "Any" .. phase or entry == button .. phase then return true end
+        local entry = tostring(list[i]):lower()
+        if entry == want or entry == wantButton then return true end
         -- The legacy spelling, which names the button and means the up phase.
-        if phase == "Up" and entry == button then return true end
+        if phase == "Up" and entry == legacy then return true end
     end
     return false
 end

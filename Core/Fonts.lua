@@ -119,7 +119,10 @@ local function scan()
 
     -- LibSharedMedia-3.0 is not a dependency: it is read if the player already has it,
     -- which is how fonts from SharedMedia, ElvUI and friends show up here.
-    if type(_G.LibStub) == "function" then
+    -- LibStub is a TABLE with a __call metamethod, never a function, so the old
+    -- `type(_G.LibStub) == "function"` test was false even with LibStub loaded -- this branch
+    -- had never run, in game or in the suite, and no SharedMedia font was ever harvested.
+    if _G.LibStub then
         local ok, lsm = pcall(_G.LibStub, "LibSharedMedia-3.0", true)
         if ok and type(lsm) == "table" and lsm.HashTable then
             local gotHash, hash = pcall(lsm.HashTable, lsm, "font")

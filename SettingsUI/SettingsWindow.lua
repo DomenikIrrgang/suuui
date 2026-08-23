@@ -160,6 +160,41 @@ local function createWindow()
     pageBox:Add(contentScroll, { width = "fill", height = "fill" })
 end
 
+--- The settings window's public entry points.
+--
+-- Exists because the window is built LAZILY -- the first open registers the core schemas,
+-- creates the window and builds the nav -- and that sequence lived inside the slash
+-- handler. Anything else wanting to open the window therefore had to call
+-- `SlashCmdList["SUUUI"]()`, which is reaching into a global command table for behaviour
+-- that has no other name. The minimap button is a separate plugin now, so it needs a seam
+-- that is part of the addon's API; both callers go through this one, so the lazy build has
+-- a single implementation.
+SuuUI.SettingsWindow = {}
+
+local function ensureWindow()
+    if not win then
+        registerCoreSchemas()
+        createWindow()
+        buildNav()
+    end
+    return win
+end
+
+--- Opens the window, building it on first use.
+function SuuUI.SettingsWindow.Open()
+    ensureWindow():Show()
+end
+
+--- Opens the window if closed, closes it if open.
+function SuuUI.SettingsWindow.Toggle()
+    ensureWindow():Toggle()
+end
+
+--- Whether the window exists and is currently shown.
+function SuuUI.SettingsWindow.IsShown()
+    return win ~= nil and win:IsShown()
+end
+
 SLASH_SUUUI1 = "/suuui"
 SlashCmdList["SUUUI"] = function(msg)
     local cmd = (msg or ""):lower():match("^%s*(.-)%s*$")
@@ -170,34 +205,9 @@ SlashCmdList["SUUUI"] = function(msg)
     elseif cmd == "unlock" then
         SuuUI.ToggleUI:Enable()
     else
-        if not win then
-            registerCoreSchemas()
-            createWindow()
-            buildNav()
-        end
-        win:Toggle()
+        SuuUI.SettingsWindow.Toggle()
     end
 end
-
--- Minimap launcher. Built once core is up so it is themed from the start, and
--- placed by an anchor container rather than by hand.
-SuuUI.Events:On("SUUUI_CORE_READY", function()
-    local host = SuuUI.Layout:CreateContainer({ host = Minimap, layout = "anchor" })
-    local size = SuuUI.Theme:GetToken("sizeControlSm") or 18
-    local btn = C.IconButton({
-        icon = "Interface\\Icons\\INV_Misc_Gem_01",
-        w    = size,
-    }, Minimap)
-    host:Add(btn, {
-        anchor = {
-            point = "TOPRIGHT", relativePoint = "TOPRIGHT",
-            x = -2, y = -2, width = size, height = size,
-        },
-    })
-    S:Connect(btn, S.SIGNALS.CLICKED, function()
-        SlashCmdList["SUUUI"]()
-    end)
-end, "settings_minimap")
 
 -- Rebuild nav when plugin list changes
 SuuUI.Events:On("SUUUI_PLUGIN_ENABLED", function()

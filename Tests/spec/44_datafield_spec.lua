@@ -219,6 +219,201 @@ describe("Components.DataField", function()
     end)
 
     ------------------------------------------------------------------------------
+    -- The tone: what the READING means, with the theme deciding what that looks like.
+    --
+    -- Read off the FONT STRING throughout, never off GetTone. GetTone answers from a stored
+    -- field and would keep saying "warning" for a value painted colorText on screen, which
+    -- is the whole failure this contract exists to prevent -- so the stored value is only
+    -- ever asserted where it is the thing under test.
+    --
+    -- The tone reaches the screen through the inner Text handle's colmap, so an unknown tone
+    -- degrades to colorText instead of raising. That matters because the bar sets a tone from
+    -- a ticker callback, where an error unwinds out of the refresh loop.
+    describe("the value's intent tone", function()
+        local INTENT = { success = "colorSuccess", warning = "colorWarning",
+                         danger = "colorDanger" }
+
+        -- What the VALUE is painted. The prefix's colour is a |cff escape inside the string
+        -- and does not move this, which is exactly what the prefix spec below turns on.
+        local function valueColor(f) return H.textColor(f._label) end
+
+        -- Every expectation here rests on the intent tokens DIFFERING from the default one:
+        -- otherwise "resolved colorWarning" and "degraded to colorText" are the same claim
+        -- and the block passes with the mapping gutted.
+        local function expectDistinctFromText(token)
+            local a, b = H.token(token), H.token("colorText")
+            local same = true
+            for i = 1, 4 do if a[i] ~= b[i] then same = false; break end end
+            expect(same).as(token .. " must differ from colorText for this to mean anything")
+                .falsy()
+        end
+
+        -- Counts what the CLIENT was handed. A repaint emits no signal -- Text:SetColor is
+        -- silent by contract -- so whether SetTextColor was called again is the only
+        -- observable difference between the unchanged-tone guard and its absence. Shadowed on
+        -- the instance, so it cannot outlive the test.
+        local function repaintSpy(f)
+            local spy, fs = { count = 0 }, f._label
+            local real = fs.SetTextColor
+            fs.SetTextColor = function(...)
+                spy.count = spy.count + 1
+                return real(...)
+            end
+            return spy
+        end
+
+        it("paints the value in the intent's own token", function()
+            for tone, token in pairs(INTENT) do
+                expectDistinctFromText(token)
+                local f = field({ prefix = "HP", text = "42" })
+                f:SetTone(tone)
+                H.expectTokenColor(valueColor(f), token)
+            end
+        end)
+
+        it("SetTone(nil) returns the value to colorText", function()
+            local f = field({ prefix = "HP", text = "42" })
+            f:SetTone("warning")
+            H.expectTokenColor(valueColor(f), "colorWarning")
+            f:SetTone(nil)
+            H.expectTokenColor(valueColor(f), "colorText")
+            expect(f:GetTone()).isNil()
+        end)
+
+        it("SetTone(false) is treated as nil", function()
+            local f = field({ prefix = "HP", text = "42" })
+            f:SetTone("danger")
+            f:SetTone(false)
+            H.expectTokenColor(valueColor(f), "colorText")
+            expect(f:GetTone()).as("false is not stored as a tone of its own").isNil()
+
+            -- And from an untoned field it is the same write as SetTone(nil), so the guard
+            -- drops it rather than repainting for nothing.
+            local g = field({ prefix = "HP", text = "42" })
+            local spy = repaintSpy(g)
+            g:SetTone(false)
+            expect(spy.count).as("false against nil is not a change").eq(0)
+        end)
+
+        it("an unchanged tone is dropped: the client is not handed a colour again", function()
+            -- The same reasoning as SetText's guard. A readout is re-toned on every game
+            -- event and every tick of the shared ticker, and usually means exactly what it
+            -- meant last time; re-resolving the token and re-measuring for that would be the
+            -- bar's whole cost.
+            local f = field({ prefix = "HP", text = "42" })
+            f:SetTone("warning")
+            local spy = repaintSpy(f)
+
+            for _ = 1, 20 do f:SetTone("warning") end
+
+            expect(spy.count).as("nothing changed, so the font string is not repainted").eq(0)
+            H.expectTokenColor(valueColor(f), "colorWarning")
+
+            f:SetTone("danger")
+            expect(spy.count).as("a real change still gets through").eq(1)
+            H.expectTokenColor(valueColor(f), "colorDanger")
+        end)
+
+        it("GetTone reports what was set", function()
+            local f = field({ prefix = "HP", text = "42" })
+            expect(f:GetTone()).as("no tone by default").isNil()
+            for tone in pairs(INTENT) do
+                f:SetTone(tone)
+                expect(f:GetTone()).eq(tone)
+            end
+        end)
+
+        it("props.tone paints the value at construction", function()
+            -- This is the spec that holds ApplyTheme's re-assert up. SetTone is never called
+            -- on this path -- props.tone lands straight on the handle table -- so the ONLY
+            -- thing that paints it is ApplyTheme's `SetColor(self._tone or "text")`. Verified
+            -- by mutation: dropping that line renders the field colorText and fails here.
+            local f = field({ prefix = "HP", text = "42", tone = "warning" })
+            expect(f:GetTone()).eq("warning")
+            H.expectTokenColor(valueColor(f), "colorWarning")
+        end)
+
+        it("leaves the prefix colorTextMuted whatever the tone is", function()
+            -- The tone colours the VALUE. The prefix's colour is baked into the string as an
+            -- escape, so the two live in different places and a tone must not disturb it --
+            -- and must not add a second escape of its own, which would hardcode the hue the
+            -- theme is supposed to own.
+            local f = field({ prefix = "HP", text = "42" })
+            for tone, token in pairs(INTENT) do
+                f:SetTone(tone)
+                -- Then force a RECOMPOSE while the tone is set. Without it this asserts only
+                -- against the string built at construction, so a tone leaking into compose's
+                -- own escape would slip past -- SetTone repaints, it does not recompose.
+                f:SetText("42" .. tone)
+                local text = f._label:GetText()
+                expect(text).as("the muted escape is still the prefix's").contains(muted())
+                expect(text).as("and it is the ONLY escape in the string")
+                    .eq(composed("HP", "42" .. tone))
+                expect(text:find(H.T:GetColorCode(token), 1, true))
+                    .as("the tone is a text colour, not a second escape").isNil()
+                H.expectTokenColor(valueColor(f), token)
+            end
+        end)
+
+        it("RE-ASSERTS the tone through ApplyTheme", function()
+            -- A field sitting in its warning state must not silently drop back to colorText
+            -- on a theme edit.
+            --
+            -- Honest note on coverage: this passes with ApplyTheme's re-assert line removed,
+            -- because Text stores the colour key SetTone handed it and its OWN ApplyTheme
+            -- re-resolves it. The re-assert is what covers the construction path instead --
+            -- see the props.tone spec above, which is the one that goes red. Kept because it
+            -- states the end-to-end promise: a retint moves an existing warning.
+            local f = field({ prefix = "HP", text = "42" })
+            f:SetTone("warning")
+
+            H.T:CreateUserTheme("Hot", "Modern")
+            H.T:SetActive("Hot")
+            H.expectTokenColor(valueColor(f), "colorWarning")
+            expect(f:GetTone()).eq("warning")
+
+            -- A retint of the intent token itself, which is the point of naming the intent
+            -- rather than the hue: the value follows the theme.
+            H.T:SetUserToken("Hot", "colorWarning", { 1, 0, 1, 1 })
+            H.expectTokenColor(valueColor(f), "colorWarning")
+            expect(valueColor(f)[3]).as("the retint reached the font string").eq(1)
+        end)
+
+        it("survives a SetText and a SetPrefix", function()
+            local f = field({ prefix = "HP", text = "42" })
+            f:SetTone("danger")
+            f:SetText("9999")
+            expect(f:GetText()).eq("9999")
+            H.expectTokenColor(valueColor(f), "colorDanger")
+
+            f:SetPrefix("Health")
+            expect(f._label:GetText()).eq(composed("Health", "9999"))
+            H.expectTokenColor(valueColor(f), "colorDanger")
+            expect(f:GetTone()).eq("danger")
+        end)
+
+        it("degrades an unknown tone to colorText rather than raising", function()
+            -- A tone comes from plugin code, on a ticker callback. An error there stops the
+            -- whole tick loop, so an unrecognised key has to fall through the colmap.
+            local f = field({ prefix = "HP", text = "42" })
+            expect(function() f:SetTone("catastrophe") end).notThrows()
+            H.expectTokenColor(valueColor(f), "colorText")
+        end)
+
+        it("a tone costs the field nothing in width", function()
+            -- The colour is not part of the composed string, so a toned field hugs to
+            -- exactly the width an untoned one does. If a tone were ever implemented as an
+            -- escape this is what would move.
+            local f = field({ prefix = "HP", text = "42" })
+            local before = f:GetWidth()
+            f:SetTone("warning")
+            H.expectSize(f, before, nil)
+            H.expectSize(f, hugWidth(f), nil)
+            expectLabelClears(f)
+        end)
+    end)
+
+    ------------------------------------------------------------------------------
     describe("hugging geometry", function()
         it("is exactly its text's box plus the spaceMd inset on each side", function()
             local f = field({ prefix = "HP", text = "100" })

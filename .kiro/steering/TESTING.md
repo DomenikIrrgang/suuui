@@ -294,6 +294,37 @@ Three properties of the model are deliberate:
   widget shows both — and note the state resets between tests, so a staged realm clock cannot
   leak into the next spec's assertions.
 
+**Framerate and latency are staged as state, because nothing announces them.** No event fires
+when either moves, which is why a widget reading them declares an `update` interval rather than
+an `events` list — and it is why a spec has nothing to fire: stage the reading, advance the
+bar's ticker with `H.tick`, and assert what the field says.
+
+```lua
+H.setFramerate(fps)                    -- what GetFramerate() reports; default 60
+H.setNetStats(down, up, home, world)   -- what GetNetStats() reports; all four default to 0
+```
+
+Both reset on every `H.setup()`, for the same reason the unit state does: a spec staging a bad
+framerate or a laggy connection would otherwise leave the next file's readout sitting in its
+warning colour and passing for the wrong reason.
+
+**`world = false` models the OLDER three-return client, and `world = 0` does not.**
+`GetNetStats` has two shapes across client generations — three values carrying a single latency
+in the third slot, or four splitting home from world — so a reader has to survive both, and the
+two staged states are different facts:
+
+| Staged | Client shape | What a reader sees |
+|---|---|---|
+| `world = nil` (default) | four returns | a world latency of 0, i.e. present but **not measured** |
+| `world = 250` | four returns | a measured world latency |
+| `world = false` | three returns | no fourth value at all |
+
+So `H.setNetStats(0, 0, 90, false)` is the assertion that a reader falls back to home latency
+because the client never offered a world one, while `H.setNetStats(0, 0, 90, 0)` asserts it
+treats a zero *reading* as unmeasured and falls back anyway. Reaching for 0 to model the old
+client tests neither: the fourth return is still there, so the branch that has to cope with its
+absence is never entered.
+
 Cursor coordinates belong to a space, so name it: `H.cursor(x, y, frame)` treats `x, y` as
 being in that frame's coordinate space. Omitting the frame means `UIParent`, which is only
 the same thing while nothing in the chain has a scale.
@@ -392,6 +423,66 @@ Same rule as the layout engine: **extend the harness, do not skip the test.**
 4. **Cover it** in `Tests/spec/00_harness_spec.lua`. The harness is load-bearing: if it
    is wrong, every spec built on it is wrong and green.
 5. **Document it** here if it changes how specs are written.
+
+---
+
+## Embedded Libraries Run For Real
+
+`Libs/` loads in the suite exactly as it does in game, and that needed **no change to the
+loader**: `addon.lua`'s `readToc` takes any `.toc` line ending in `.lua`, so a vendored file is
+an addon file and nothing about it is special. The cost landed entirely in the simulated
+client — six additions, because third-party code reaches for parts of the API SuuUI itself
+never touches.
+
+Four of them were simply absent:
+
+- **`Tests/harness/wow/animation.lua` — AnimationGroups.** Nothing in SuuUI uses them: the
+  addon runs its own shared-`OnUpdate` animator by design, so the group API existed nowhere at
+  all and LibDBIcon's `CreateAnimationGroup` for its button fade killed the load outright. It
+  is deliberately a **configuration recorder that does not tick** — it stores what was asked
+  for and whether the group is playing, and `H.tick` drives SuuUI's animator rather than this,
+  so a spec must never read a mid-flight value here and believe it. The one real effect
+  modelled is the client's `SetToFinalAlpha` contract: on `Finish`, an Alpha animation's end
+  value is left on the target instead of reverting. Model what a caller can observe and model
+  nothing beyond it, so nothing invites an assertion the model cannot honour.
+- **`GameTooltip` became a real frame type.** It used to be a plain `Frame` with tooltip verbs
+  bolted onto the singleton, which cost two things: `CreateFrame("GameTooltip", …)` was refused
+  (*does not simulate type GameTooltip*), so embedded code that builds its own tooltip could
+  not load, and the singleton had no `AddLine`, so tooltip **content** was unreadable. It is
+  now derived from `GameTooltipMeta` in `wow/frame.lua` like any other subtype: a second
+  instance is possible, and `NumLines()` / `GetLine(i)` answer — so a spec can assert what a
+  tooltip *says*, not only what it was pointed at.
+- **WoW's Lua stdlib global aliases.** `strmatch`, `strfind`, `strsub`, `strlower`, `strupper`,
+  `format`, `gsub`, `tinsert`, `sort` and the rest. The client predefines them, so their
+  absence was an inaccuracy rather than a choice — and because a sandbox read falls through to
+  the real `_G`, where these do not exist either, nothing was ever going to supply them.
+  LibStub reaches for `strmatch` on its first line of work.
+- **`math.atan2`, aliased to `math.atan`.** Lua 5.1 had it, 5.3 removed it, and it survives on
+  a build carrying the compat flag — which is precisely why this looked fine locally and would
+  have died on a stricter Lua. LibDBIcon's drag handler reads it, so the symptom would have
+  been a minimap button that cannot be dragged, for a reason nothing in SuuUI is responsible
+  for.
+
+The other two additions were **present and wrong**, which is the more interesting pair; both
+are written up in "Known Gaps" below as newly-closed instances of the pattern this file already
+documents.
+
+### Why the real libraries and not stubs
+
+Hand-modelling the four libraries would have been less work and would have proved nothing. A
+stub encodes *our* assumptions about a library rather than the library's behaviour, so a spec
+asserting "the button registers and hides" passes against the model by construction — it
+asserts that the stub does what we wrote the stub to do, and it would keep passing while the
+real library failed on the client. The six defects above are the argument for the harder path:
+every one of them is a place our assumption about the client differed from the client, and only
+real library code walking those paths surfaced any of them.
+
+The honest cost is that the suite now depends on the **vendored version**: bumping a library
+can turn it red. That is the point rather than a regression — a bump that changes behaviour we
+rely on should be visible here before a player finds it — but it does mean a lib update is a
+change to test, not a file copy. What must not happen is patching `Libs/` to make the suite
+green again; that trades a red test for a merge conflict forever (see
+`WOW_API_ENCAPSULATION.md`, "Embedded Third-Party Libraries Are Exempt").
 
 ---
 
@@ -521,6 +612,49 @@ cleared before the restoring placement (drive the hook by hand and assert the fr
 again), and that repeated re-asserts do not accumulate — the offset is derived from the stored
 original `y`, so calling the re-assert path five times must leave the frame where one call put
 it. What stays unprovable here is the trigger.
+
+### Two of these gaps are now closed, and both were found by real library code
+
+Embedding third-party libraries walked paths no SuuUI file walks, and two of them landed in
+exactly the blind spot the gaps above describe: **the harness models geometry faithfully and the
+client's API *surface* loosely**, so a frame stayed present, sized and plausible while the
+behaviour underneath it was wrong. Neither produced a red test. That is what makes them worth
+writing down rather than quietly fixing.
+
+**`WOW_PROJECT_ID` and `WOW_PROJECT_MAINLINE` were both undefined.** A library branching on
+`WOW_PROJECT_ID == WOW_PROJECT_MAINLINE` to select retail behaviour was therefore comparing
+`nil == nil`, which is **true** — so the suite would have exercised the retail path while the
+game takes the Classic one. In a harness whose entire claim is geometry that is not academic:
+LibDBIcon's branches choose art *sizes*, a 50×50 border against 53×53, with different background
+and icon dimensions and a different anchor point, so an assertion would have measured a ring
+that does not exist on this client. The sharper edge is that a spec written deliberately to pin
+the **Classic** branch would have **passed for entirely the wrong reason**, and gone on passing.
+Both globals plus the rest of the family are now declared, and `WOW_PROJECT_ID` is
+`WOW_PROJECT_BURNING_CRUSADE_CLASSIC` — SuuUI targets TBC Anniversary, interface 20504.
+
+**A `Button` was not mouse-enabled by default, and `RegisterForClicks` was matched
+case-sensitively.** In the client a `Button` takes mouse input without anyone calling
+`EnableMouse`, and `"anyUp"`, `"AnyUp"` and `"ANYUP"` are one registration. Third-party code
+relies on both — LibDBIcon's button calls `RegisterForClicks("anyUp")` and never touches
+`EnableMouse` — so **every click from such a button was silently dropped by the harness's own
+input routing while working perfectly in game.** The frame was present, sized, visible and
+correctly registered throughout.
+
+The two halves differ in how much they hid, which is worth knowing when you go looking for the
+next one of these. The missing default at least left a readable discrepancy:
+`IsMouseEnabled()` answered `false`, so `H.click` refused the click and returned `false`, and
+anyone who thought to ask got a straight answer. The case-sensitive match left nothing at all:
+the button *was* mouse-enabled, so `H.click` ran the whole gesture, fired `OnMouseDown` and
+`OnMouseUp`, **returned `true`** — and never fired `OnClick`. A truthy return from `H.click`
+means the input was delivered, not that a handler ran, and there was no third reading to
+distinguish them. `IsMouseEnabled` now falls back to a per-subtype default (`Button`,
+`CheckButton` and `EditBox` accept the mouse; a plain `Frame` does not) and the click matcher
+lower-cases both sides before comparing.
+
+The lesson is the one every gap here keeps restating: **a model that is thin in exactly the
+direction an assertion points cannot fail.** Both of these were found by making real foreign
+code run, not by re-reading the harness — which is the argument for doing that rather than
+stubbing.
 
 ---
 

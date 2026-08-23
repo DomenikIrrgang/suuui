@@ -4,7 +4,7 @@
 -- contract exists for. It is the second ticking widget on the bar and runs at a different
 -- interval from the clock, which is what actually exercises the shared ticker's per-record
 -- accumulator rather than a single entry that can never disagree with the loop.
-local floor, type, tostring, ipairs = math.floor, type, tostring, ipairs
+local floor, type, tostring = math.floor, type, tostring
 
 SuuUI._Performance = SuuUI._Performance or {}
 
