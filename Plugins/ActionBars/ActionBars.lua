@@ -19,6 +19,9 @@ local PLUGIN_ID = "action_bars"
 local OWNER     = "action_bars"
 
 local MAX_BUTTONS = 12
+-- The client's own pet-slot count, with ElvUI's fallback. Read rather than hardcoded, but bounded:
+-- a client that renames the global must not silently give the bar zero cells.
+local PET_SLOTS = (type(NUM_PET_ACTION_SLOTS) == "number" and NUM_PET_ACTION_SLOTS) or 10
 
 -- One entry per bar. `first` is the slot the bar starts at; `paged` marks the only bar whose
 -- slots move at runtime.
@@ -100,18 +103,31 @@ local BARS = {
         position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 228 },
         enabled = false,
     },
-    -- The SHAPESHIFT bar, and it is listed here rather than given its own plugin because
-    -- everything around a bar is identical: a position, a moveable frame, a settings tab, and
-    -- bar-to-bar docking. Only the buttons differ, and that is one factory.
+    -- The two CLASS BARS. Listed here rather than given their own plugin because everything around a
+    -- bar is identical: a position, a moveable frame, a settings tab, and bar-to-bar docking. Only
+    -- the buttons differ, and that is one factory each.
     --
-    -- NOT "stances" -- this bar is whatever mechanic the client hangs on the shapeshift API:
-    -- warrior stances, druid forms, rogue stealth, priest shadowform, PALADIN AURAS. A paladin has
-    -- eight, which is the widest case it has to size for and was measured in game.
+    -- Both take a STRING id, deliberately. Slots 13-24 are still unclaimed and would naturally
+    -- become "Bar 9", so numbering either of these would collide with that later and silently share
+    -- its settings keys. `order` is separate and numeric because the dock sorts a stack by it, and
+    -- comparing a string with a number is a hard error in Lua.
+
+    -- The PET bar. Its buttons are our own ActionButtons with kind="pet" -- the same secure template
+    -- and the same `action` attribute as an action slot, only `type="pet"`. Verified from
+    -- LibActionButton, which does exactly that inside a live secure snippet on this client.
     --
-    -- A STRING id, deliberately. Slots 13-24 are still unclaimed and would naturally become "Bar 9",
-    -- so numbering this one 9 would collide with that later and silently share its settings keys.
-    -- `order` is separate and numeric because the dock sorts a stack by it, and comparing a string
-    -- with a number is a hard error in Lua.
+    -- Unlike the stance bar its slot count is FIXED, not derived: Blizzard's pet bar is always
+    -- NUM_PET_ACTION_SLOTS wide with the unused slots simply empty, so the count is a player setting
+    -- like every action bar rather than something read from the client.
+    {
+        id = "pet", label = "Pet", kind = "pet", order = 98,
+        bindingPrefix = "BONUSACTIONBUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 260, y = 28 },
+    },
+
+    -- The SHAPESHIFT bar. NOT "stances" -- it is whatever mechanic the client hangs on the
+    -- shapeshift API: warrior stances, druid forms, rogue stealth, priest shadowform, PALADIN AURAS.
+    -- A paladin has eight, which is the widest case it has to size for and was measured in game.
     {
         id = "stance", label = "Stance", kind = "stance", order = 99,
         bindingPrefix = "SHAPESHIFTBUTTON",
@@ -126,6 +142,30 @@ local BARS = {
 local function isStance(def)
     return def.kind == "stance"
 end
+
+-- Whether a bar's cells are pet commands.
+local function isPet(def)
+    return def.kind == "pet"
+end
+
+-- Whether a cell's identity IS its index, rather than an offset into a measured slot block. True for
+-- both class bars: form 2 lives in cell 2, pet command 2 in cell 2. Only the eight action bars map
+-- a cell onto a slot somewhere else in the client's 1-180 range.
+local function usesIndexSlots(def)
+    return isStance(def) or isPet(def)
+end
+
+-- The visibility macro conditional for the pet bar, evaluated by the CLIENT in its secure
+-- environment. This is the one thing on the pet bar that cannot be done from Lua: a pet is summoned,
+-- dismissed, killed and revived mid-combat, and hiding a frame holding protected buttons is refused
+-- while the player is in a fight. A state driver is evaluated inside the secure environment, so it
+-- works in combat and taints nothing.
+--
+-- The conditionals are ElvUI's TBC branch verbatim, and the omission is deliberate: `novehicleui` is
+-- present in its Retail and Wrath strings and absent here, because vehicles are not a mechanic on
+-- this client. `nooverridebar` and `nopossessbar` ARE, so a possessed unit's bar replaces the pet's
+-- rather than fighting it.
+local PET_VISIBILITY = "[pet,nooverridebar,nopossessbar] show; hide"
 
 -- How many cells a stance bar has: whatever the client says the player's form count is.
 --
@@ -204,9 +244,9 @@ end
 
 local function slotsFor(def, count)
     local out = {}
-    -- A stance bar's cell IS its form index, so the identity is 1..count rather than an offset
-    -- into a measured slot block.
-    if isStance(def) then
+    -- A class bar's cell IS its index -- form 2 in cell 2, pet command 2 in cell 2 -- rather than an
+    -- offset into a measured slot block.
+    if usesIndexSlots(def) then
         for i = 1, count do out[i] = i end
         return out
     end
@@ -269,6 +309,37 @@ local function stanceButtonFactory(bp, parent)
     }, parent)
 end
 
+-- Builds a pet-bar cell. Passed to ActionBarGrid as its buttonFactory.
+--
+-- This is an ordinary ActionButton with kind="pet", which is the whole point of the kind seam: the
+-- secure template, the click registration and the press-versus-release gate are shared with bars
+-- 1-8 rather than reimplemented, and that gate is the part that was got wrong once.
+local function petButtonFactory(bp, parent)
+    return SuuUI.Components.ActionButton({
+        kind       = "pet",
+        slot       = bp.slot,
+        size       = bp.size,
+        binding    = bp.binding,
+        showHotkey = bp.showHotkey,
+        name       = bp.name,
+        -- A pet command has no charge count and no macro name. The provider answers 0 and nil so
+        -- nothing would draw anyway; stated here so the intent is not mistaken for an omission.
+        showMacroText = false,
+        showCount     = false,
+    }, parent)
+end
+
+-- Hands the pet bar's visibility to the CLIENT, permanently.
+--
+-- Nothing in this plugin ever calls Show or Hide on the pet bar after this: the driver owns it. Two
+-- owners would fight, and ours would lose in combat anyway, which is exactly the case that matters.
+local function applyPetVisibility(p, def)
+    local grid = p._bars[def.id]
+    if not grid then return end
+    if type(RegisterStateDriver) ~= "function" then return end
+    RegisterStateDriver(grid:GetFrame(), "visibility", PET_VISIBILITY)
+end
+
 -- A stance bar with no forms is HIDDEN ENTIRELY -- a mage must not get an empty plate.
 --
 -- There is no class check anywhere, deliberately: the condition is purely a count of zero, which is
@@ -315,6 +386,8 @@ local function buildBar(p, def)
     local count
     if isStance(def) then
         count = stanceFormCount()
+    elseif isPet(def) then
+        count = get(key(def, "buttons"), PET_SLOTS)
     else
         count = get(key(def, "buttons"), MAX_BUTTONS)
     end
@@ -323,7 +396,9 @@ local function buildBar(p, def)
     local grid = SuuUI.Components.ActionBarGrid({
         slots         = slotsFor(def, count),
         bindings      = bindingsFor(def, count),
-        buttonFactory = isStance(def) and stanceButtonFactory or nil,
+        buttonFactory = (isStance(def) and stanceButtonFactory)
+                        or (isPet(def) and petButtonFactory)
+                        or nil,
         rows          = get(key(def, "rows"), def.rows or 1),
         buttonSize    = get(key(def, "button_size"), 32),
         spacing       = get(key(def, "spacing"), 0),
@@ -355,6 +430,8 @@ local function buildBar(p, def)
 
     if isStance(def) then
         syncStanceVisibility(p, def)
+    elseif isPet(def) then
+        applyPetVisibility(p, def)
     end
 
     -- Only bar 1 pages; the others are fixed to their measured block.
@@ -381,6 +458,12 @@ local function destroyBar(p, def)
     -- be a dock and be docked at the same time.
     SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
     SuuUI._ActionBars.Dock.Release(grid)
+
+    -- Released before the frame goes, or the client keeps evaluating a conditional against a frame
+    -- that no longer exists.
+    if isPet(def) and type(UnregisterStateDriver) == "function" then
+        UnregisterStateDriver(grid:GetFrame(), "visibility")
+    end
 
     if def.paged then
         SuuUI._ActionBars.Paging.Detach(grid)
@@ -520,7 +603,7 @@ local function barTab(def)
 
     -- Macro names and charge counts exist only for action slots. A form has neither, so the stance
     -- tab does not offer the toggles rather than showing two switches that do nothing.
-    if not isStance(def) then
+    if not usesIndexSlots(def) then
         schema[#schema + 1] = { key = key(def, "show_macro_text"), label = "Show Macro Names",
             type = "toggle", default = true, enabledIf = key(def, "enabled") }
         schema[#schema + 1] = { key = key(def, "show_count"), label = "Show Counts",
@@ -571,9 +654,14 @@ local function barTab(def)
     local rest = {}
     -- NO Buttons slider on the stance bar: its cell count is the player's form count, which the
     -- client owns. A slider would let a player set 12 and get 8, or set 3 and lose an aura.
+    --
+    -- The PET bar does get one, because its width genuinely is a preference: Blizzard's pet bar is
+    -- always ten slots wide with the unused ones empty, so a player with a four-ability imp can trim
+    -- it without losing anything.
     if not isStance(def) then
+        local maxN = isPet(def) and PET_SLOTS or MAX_BUTTONS
         rest[#rest + 1] = { key = key(def, "buttons"), label = "Buttons", type = "slider",
-            min = 1, max = MAX_BUTTONS, step = 1, default = MAX_BUTTONS,
+            min = 1, max = maxN, step = 1, default = maxN,
             enabledIf = key(def, "enabled") }
     end
     local more = {

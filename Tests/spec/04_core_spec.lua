@@ -1027,3 +1027,99 @@ describe("Utils", function()
         expect(keys.y).truthy()
     end)
 end)
+
+-- The visible-fault surface, in its own block because it needs debug mode OFF and an empty log --
+-- which is the default state of a fresh H.setup(), and not the state of the settings blocks above.
+describe("SuuUI.Fault", function()
+    before_each(function()
+        H.setup()
+    end)
+
+        -- The counterpart to Debug, and the distinction is the whole point. Debug is tracing, off by
+        -- default. Fault is "something the addon was asked to do did not happen", which leaves a
+        -- visible hole in the UI -- and a hole with no message is indistinguishable from a feature
+        -- that was never written.
+        --
+        -- Added after a stance button raised during construction, the exception was caught by a
+        -- Settings watcher's pcall and logged through Debug, and the player saw no bar and no error.
+
+        it("prints even with debug mode OFF, which is the entire reason it exists", function()
+            expect(H.SuuUI._debug).as("debug is off by default").falsy()
+            H.SuuUI.Fault("the bar did not build")
+            expect(#H.debugLog()).eq(1)
+            expect(H.debugLog()[1]:find("the bar did not build", 1, true)).notNil()
+        end)
+
+        it("stays quiet on a repeat, because a watcher can fire on every profile load", function()
+            H.SuuUI.Fault("same fault")
+            H.SuuUI.Fault("same fault")
+            H.SuuUI.Fault("a different fault")
+            expect(#H.debugLog()).as("deduplicated by message").eq(2)
+        end)
+
+        it("can be reset, so a reload reports a fault that is still happening", function()
+            H.SuuUI.Fault("recurring")
+            H.SuuUI.ClearFaults()
+            H.SuuUI.Fault("recurring")
+            expect(#H.debugLog()).eq(2)
+        end)
+
+        it("is DISTINCT from Debug, which stays silent", function()
+            H.SuuUI.Debug("tracing noise")
+            expect(#H.debugLog()).as("Debug is still gated").eq(0)
+            H.SuuUI.Fault("a real problem")
+            expect(#H.debugLog()).eq(1)
+        end)
+end)
+
+describe("Settings watcher errors are VISIBLE", function()
+    -- The regression this exists to prevent, stated as behaviour rather than as a comment: a plugin
+    -- whose build throws must SAY SO. Every watcher callback runs under pcall, which is right -- one
+    -- broken plugin must not stop the others -- but the exception used to go to the debug-gated log,
+    -- so the player got a missing bar and total silence.
+
+    before_each(function()
+        H.setup()
+    end)
+
+    it("reports a throwing immediate watcher, not just a debug line", function()
+        H.SuuUI.Settings:Register("fault_test", {
+            { key = "fault_test_on", label = "On", type = "toggle", default = true },
+        })
+        H.SuuUI.Settings:Watch("fault_test", "fault_test_on", function()
+            error("component blew up during build")
+        end, "fault_test.owner", { immediate = true })
+
+        expect(#H.debugLog()).as("the player was told").eq(1)
+        expect(H.debugLog()[1]:find("component blew up during build", 1, true)).notNil()
+        expect(H.debugLog()[1]:find("fault_test_on", 1, true))
+            .as("and told WHICH setting").notNil()
+    end)
+
+    it("reports a throwing change watcher too", function()
+        H.SuuUI.Settings:Register("fault_test2", {
+            { key = "fault_test2_on", label = "On", type = "toggle", default = false },
+        })
+        H.SuuUI.Settings:Watch("fault_test2", "fault_test2_on", function(on)
+            if on then error("blew up on change") end
+        end, "fault_test2.owner")
+        expect(#H.debugLog()).as("nothing yet").eq(0)
+        H.SuuUI.Settings:Set("fault_test2", "fault_test2_on", true)
+        expect(#H.debugLog()).eq(1)
+    end)
+
+    it("still isolates the failure, so one broken watcher does not stop the next", function()
+        local reached = false
+        H.SuuUI.Settings:Register("fault_test3", {
+            { key = "fault_test3_on", label = "On", type = "toggle", default = false },
+        })
+        H.SuuUI.Settings:Watch("fault_test3", "fault_test3_on", function()
+            error("first watcher fails")
+        end, "fault_test3.a")
+        H.SuuUI.Settings:Watch("fault_test3", "fault_test3_on", function()
+            reached = true
+        end, "fault_test3.b")
+        H.SuuUI.Settings:Set("fault_test3", "fault_test3_on", true)
+        expect(reached).as("the second watcher still ran").truthy()
+    end)
+end)

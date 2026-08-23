@@ -287,7 +287,15 @@ function M.secureAction(f, button, down)
     -- the CVar said act on the press, and the button had only registered for the release -- so it
     -- never received the phase the client would have acted on. Correct attributes, correct
     -- template, and no action.
-    if kind == "action" then
+    -- THE GATE APPLIES TO THE PET PATH TOO, and that was measured rather than assumed: a pet button
+    -- that registered only the release while stating `useOnKeyDown` from the CVar (which said "act on
+    -- the press") stopped working on BOTH mouse buttons in game. Before this line the harness gated
+    -- only the action path, so that failure was invisible to 3,900 tests -- the same shape of gap that
+    -- let the identical Phase 3 bug ship.
+    --
+    -- `click` is deliberately NOT gated: the forward runs once per registered phase, which is why a
+    -- pet button registers exactly one.
+    if kind == "action" or kind == "pet" then
         local attr = f:GetAttribute("useOnKeyDown")
         local wantDown
         if attr == nil then
@@ -299,6 +307,34 @@ function M.secureAction(f, button, down)
             f:_fire("PostClick", button, down)
             return
         end
+    end
+
+    if kind == "click" then
+        -- The client presses another button on this one's behalf, and it PRESERVES THE MOUSE BUTTON
+        -- -- which is the whole point for pet autocast, whose target handler branches on
+        -- `button == "RightButton"`. Read through modifiedAttribute so a per-button `clickbutton2`
+        -- resolves, exactly as `type2` does.
+        --
+        -- This is how an addon reaches a protected function legitimately: it never calls it, the
+        -- client does, from a handler the client itself trusts.
+        local target = modifiedAttribute(f, "clickbutton", button)
+        if type(target) == "table" and type(target.Click) == "function" then
+            target:Click(button, down)
+        end
+        f:_fire("PostClick", button, down)
+        return
+    end
+
+    if kind == "pet" then
+        -- Recorded, like the action path: the spec's question is whether the button asked the client
+        -- to use this pet slot, not what the pet then did.
+        state.usedPetAction = {
+            slot = tonumber(modifiedAttribute(f, "action", button)),
+            button = button,
+            down = down,
+        }
+        f:_fire("PostClick", button, down)
+        return
     end
 
     if kind == "target" then

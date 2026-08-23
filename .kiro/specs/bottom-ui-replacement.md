@@ -733,6 +733,77 @@ Worth stating, because it is a property of the specs rather than bad luck:
 `StanceButtonTemplate` itself is CONFIRMED to exist on this client — the error above came from
 `SetNormalTexture`, which runs after `CreateFrame`, so the button was created successfully.
 
+### Round 9 — the pet button mechanism, recorded 2026-08-23
+
+**Probed:** `PetActionButton1:GetAttribute("type")` on a warlock **with an imp summoned** → **empty**.
+Unambiguous, because the pet was out: Blizzard's pet buttons do not use the secure `type` attribute,
+exactly like its stance buttons.
+
+**But that is the wrong question**, and it nearly sent this phase down the harder path. Blizzard not
+using the attribute says nothing about whether `SecureActionButtonTemplate` SUPPORTS it for us.
+`LibActionButton-1.0` — bundled here as a sibling addon, and the library most bar addons use —
+answers it from disk. Inside a live secure snippet:
+
+```lua
+self:SetAttribute("type", type)                          -- type can be "pet"
+local action_field = (type == "pet") and "action" or type
+self:SetAttribute(action_field, action)                  -- action = the pet slot index
+```
+
+and its pickup path maps `kind == "pet"` to `"petaction"`. None of it is version-guarded.
+
+**So `type="pet"` + `action=<index>` works, and the pet bar builds its OWN buttons.** Consequences,
+all of which make this simpler than the stance bar rather than harder:
+
+- No reparenting of Blizzard's protected frames.
+- Our own names, so Blizzard's `PetActionBar_Update` cannot fight our styling — the thing ElvUI has
+  to re-apply on every event.
+- **`PetActionBar` becomes suppressible**, unlike what the earlier draft of this section said.
+- It is the SAME secure mechanism as an action slot: same template, same `action` attribute. So this
+  is a `kind` on `ActionButton`, not a third component.
+
+**Why a `kind` prop rather than a `PetButton.lua`:** the press-versus-release click gate
+(`RegisterForClicks("AnyDown","AnyUp")` plus `useOnKeyDown` plus the `PostClick` phase check) is
+subtle, was got wrong once already, and produced a button that looked perfect and did nothing.
+It must exist in exactly ONE place. The stance bar could not share it — it has no secure attribute at
+all — but pet can, so it does.
+
+Still pet-specific: the autocast overlay (`autoCastAllowed` shows it, `autoCastEnabled` spins it), the
+`isToken` `_G` resolution, no count, no macro text, no range, and `PetHasActionBar()` greying.
+
+### Round 10 — autocast, and the second protected function, recorded 2026-08-23
+
+**`TogglePetAutocast` is PROTECTED.** Calling it from a `PostClick` hook -- which genuinely does run
+in a hardware-event context, in response to a real click -- produced the popup:
+
+```
+SuuUI has been blocked from an action only available to the Blizzard UI.
+```
+
+That is the SECOND protected function this phase assumed was callable, after `CastShapeshiftForm`.
+The lesson is not about either function: **assume a client function that changes game state is
+protected until proven otherwise**, and prefer a route where the CLIENT performs the action.
+
+**The route that works is secure click forwarding.** `type2 = "click"` plus `clickbutton2` pointing at
+Blizzard's own `PetActionButtonN`. The client presses that button itself, and ITS handler is trusted,
+so it may call what ours may not. Evidence this is real on this client: Clique uses
+`type1`/`type2`/`*clickbutton2` for click-casting, and ElvUI's bags use `clickbutton` for the purchase
+tab. ElvUI's pet bar gets autocast for free by the same principle -- it only ever HookScripts
+Blizzard's buttons, so their trusted OnClick survives.
+
+`type2` also stops the right-click reaching the pet-cast path, so one click does one thing.
+
+**A pet button registers ONE click phase, and that is load-bearing.** With `AnyDown` and `AnyUp` both
+registered, one physical right-click runs the secure handler TWICE, forwards twice, and toggles
+autocast straight back -- a right-click that visibly does nothing. The press-versus-release preference
+exists to make CASTING feel responsive and has no meaning for a configuration click; Blizzard's own
+pet buttons act on the release anyway.
+
+**Consequence to watch: Blizzard's pet buttons must keep existing.** They are hidden along with
+`PetActionBar`, which is fine, but they must not be destroyed or unparented -- the forward targets
+them. If a hidden target turns out to refuse a forwarded click, the fallback is to suppress
+`PetActionBar` by moving it off-screen rather than hiding it.
+
 ### Still open
 - **The pet autocast overlay is a visual no existing component provides.** `autoCastAllowed` shows
   it, `autoCastEnabled` spins it. On this client ElvUI drives it via the overlay's own

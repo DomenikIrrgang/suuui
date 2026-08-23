@@ -38,11 +38,11 @@ local M = {}
 -- function the player still needs: the micro menu (Phase 7), the bags (Phase 9) and the XP and
 -- reputation bars (Phase 8).
 --
--- `PetActionBar` is NOT here either, and for a DIFFERENT reason that must not be tidied away: the
--- pet bar's replacement ADOPTS Blizzard's PetActionButton1..N and reparents them, so hiding their
--- container would take the buttons we are using with it. The stance bar has the opposite shape --
--- SuuUI creates its own buttons from StanceButtonTemplate, so Blizzard's stay in the container and
--- the container can go.
+-- BOTH class bars ARE here, and an earlier draft of this comment said the pet bar could not be,
+-- on the assumption that its replacement had to adopt Blizzard's PetActionButton1..N the way ElvUI
+-- does. It does not: `type="pet"` with the slot in `action` works on a plain
+-- SecureActionButtonTemplate (verified from LibActionButton), so SuuUI builds its own pet buttons
+-- and Blizzard's stay in their container, which can then go like any other.
 local TARGETS = {
     -- The BUTTONS. Measured in game by walking up from ActionButton1:
     --   ActionButton1 > MainActionBarButtonContainer1 > MainActionBar > UIParent
@@ -74,6 +74,10 @@ local TARGETS = {
     -- frames have coexisted under two names before -- MainMenuBar and MainActionBar did exactly
     -- that, and picking one cost a round of rework.
     { id = "stance_bar",   names = { "StanceBar", "StanceBarFrame", "ShapeshiftBarFrame" } },
+    -- The pet bar. `PetActionBar` is the live name on this Edit Mode build; `PetActionBarFrame` is
+    -- the Classic-Era spelling. Both listed for the same reason as the stance pair -- an absent name
+    -- is skipped, and these frames have coexisted under two names before.
+    { id = "pet_bar",      names = { "PetActionBar", "PetActionBarFrame" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
     { id = "bar_art",      names = { "MainMenuBarArtFrame" } },
@@ -96,6 +100,7 @@ local WITNESS_BUTTONS = {
     "MultiBar6Button1",
     "MultiBar7Button1",
     "StanceButton1",
+    "PetActionButton1",
 }
 
 M.WITNESS_BUTTONS = WITNESS_BUTTONS

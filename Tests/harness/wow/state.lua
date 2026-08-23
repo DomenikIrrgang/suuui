@@ -127,6 +127,12 @@ M.petActions = {}
 -- the two drive different outcomes -- greyed icons versus a hidden bar.
 M.petHasActionBar = false
 
+-- What the client's own secure handler did with a `pet` click: which slot, which button.
+M.usedPetAction = nil
+
+-- What CastPetAction was asked to cast, or nil.
+M.castPetAction = nil
+
 -- What TogglePetAutocast was asked to do, in call order.
 M.petAutocastToggles = {}
 
@@ -242,6 +248,8 @@ function M.reset()
     M.petActions         = {}
     M.petHasActionBar    = false
     M.petAutocastToggles = {}
+    M.castPetAction      = nil
+    M.usedPetAction      = nil
     M.bonusBarOffset     = 0
     -- Cleared for the usual reason: a leaked ActionButtonUseKeyDown would put every later spec's
     -- buttons on the press path, and their click assertions would fail somewhere far from here.

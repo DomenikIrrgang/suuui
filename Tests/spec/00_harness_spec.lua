@@ -3950,6 +3950,28 @@ describe("harness: WoW API simulation", function()
                 expect(H.getPetAutocastToggles()).len(2)
             end)
 
+            it("SETS the state when given one, rather than flipping", function()
+                -- TogglePetAutocast(slotID, enabled) takes two arguments on this client, per the
+                -- client's own API stub, and the second is a state not a nudge. A model that always
+                -- flipped would be indistinguishable from this as long as every caller passed the
+                -- opposite of the current value -- which ours does, so the difference has to be
+                -- asserted directly or it is untested.
+                H.setPetAction(1, { name = "Claw", autoCastEnabled = false }, { silent = true })
+                H.env.TogglePetAutocast(1, false)
+                local _, _, _, _, _, enabled = H.env.GetPetActionInfo(1)
+                expect(enabled).as("setting false on false leaves it false").falsy()
+                H.env.TogglePetAutocast(1, true)
+                local _, _, _, _, _, on = H.env.GetPetActionInfo(1)
+                expect(on).truthy()
+            end)
+
+            it("still flips when no state is given, for a one-argument caller", function()
+                H.setPetAction(1, { name = "Claw", autoCastEnabled = true }, { silent = true })
+                H.env.TogglePetAutocast(1)
+                local _, _, _, _, _, enabled = H.env.GetPetActionInfo(1)
+                expect(enabled).falsy()
+            end)
+
             it("fires UNIT_PET with unit player, which is what consumers filter on", function()
                 -- UNIT_PET is filtered on "player" and UNIT_FLAGS on "pet". The wrong way round
                 -- silently kills every update, so the unit this sends is pinned here.

@@ -86,7 +86,9 @@ local function notifyWatchers(pluginId, key, value)
         if not w._dead then
             local ok, err = pcall(w.cb, value)
             if not ok then
-                SuuUI.Debug("Settings:Watch callback error [" .. tostring(pluginId)
+                -- FAULT, not Debug. A watcher that raised did not do its job, and for a watcher
+                -- that builds UI that means a missing bar with no explanation. See SuuUI.Fault.
+                SuuUI.Fault("Settings:Watch callback error [" .. tostring(pluginId)
                     .. "." .. tostring(key) .. "]: " .. tostring(err))
             end
         end
@@ -451,7 +453,9 @@ function M:Watch(pluginId, key, cb, owner, opts)
     if opts and opts.immediate then
         local ok, err = pcall(cb, self:Get(pluginId, key))
         if not ok then
-            SuuUI.Debug("Settings:Watch immediate error [" .. tostring(pluginId)
+            -- The immediate pass is where a plugin BUILDS, so this is the one that hid a whole
+            -- missing bar behind a debug-only log.
+            SuuUI.Fault("Settings:Watch immediate error [" .. tostring(pluginId)
                 .. "." .. tostring(key) .. "]: " .. tostring(err))
         end
     end
@@ -576,7 +580,7 @@ SuuUI.Events:On("SUUUI_PROFILE_LOADED", function()
             if not w._dead and not isTransient(w.pluginId, w.key) then
                 local ok, err = pcall(w.cb, M:Get(w.pluginId, w.key))
                 if not ok then
-                    SuuUI.Debug("Settings:Watch profile-reload error ["
+                    SuuUI.Fault("Settings:Watch profile-reload error ["
                         .. tostring(w.pluginId) .. "." .. tostring(w.key) .. "]: " .. tostring(err))
                 end
             end

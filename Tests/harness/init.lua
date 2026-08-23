@@ -62,7 +62,7 @@
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
 --              H.setSpellTexture
 -- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
---              H.setBonusBarOffset
+--              H.setBonusBarOffset H.getUsedPetAction
 --              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
 --              H.getUsedAction H.resetUsedAction
 --
@@ -680,6 +680,10 @@ function M.setPetActionBar(has, opts)
         M.fireEvent("UNIT_PET", "player")
     end
 end
+
+--- What the client's secure handler did with the last `pet` click, or nil.
+-- @return table|nil  { slot, button, down }
+function M.getUsedPetAction() return state.usedPetAction end
 
 --- Every slot index TogglePetAutocast was called on, in order.
 -- @return table

@@ -590,3 +590,380 @@ describe("Components.ActionButton", function()
         end)
     end)
 end)
+
+-- kind = "pet".
+--
+-- A pet button is the SAME secure mechanism as an action slot -- `SecureActionButtonTemplate` with
+-- `type="pet"` and the slot index in the `action` attribute, which is what LibActionButton does
+-- inside a live secure snippet on this client. That shared mechanism is the whole reason pet is a
+-- `kind` here rather than a component of its own: the press-versus-release gate was got wrong once
+-- and produced a button that looked perfect and did nothing, so it exists in exactly one place.
+--
+-- These specs were written after a mutation pass: the provider had been smoke-tested by hand and had
+-- NO spec coverage at all, so eleven separate faults in it went undetected.
+describe("Components.ActionButton kind=pet", function()
+    local host
+    local SIZE = 32
+
+    local function pet(slot, props)
+        props = props or {}
+        props.kind = "pet"
+        props.slot = slot or 1
+        props.size = props.size or SIZE
+        local b = H.C.ActionButton(props, host)
+        b:GetFrame():SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        return b
+    end
+
+    before_each(function()
+        H.setup()
+        H.SuuUI.Settings:Set("action_bars", "enabled", false)
+        host = H.parent(400, 200)
+        H.setPetActionBar(true, { silent = true })
+        H.setPetAction(1, { name = "Attack", texture = "tex1", isActive = true }, { silent = true })
+        H.setPetAction(2, { name = "Firebolt", texture = "tex2",
+            autoCastAllowed = true, autoCastEnabled = true }, { silent = true })
+    end)
+
+    describe("the secure mechanism", function()
+        it("states type=pet with the slot in the SAME action attribute", function()
+            -- Same attribute name as an action slot, which is why _slotNow needs no branch and why
+            -- the paging machinery keeps working untouched.
+            local b = pet(2)
+            expect(b:GetFrame():GetAttribute("type")).eq("pet")
+            expect(b:GetFrame():GetAttribute("action")).eq(2)
+        end)
+
+        it("refuses an unknown kind rather than silently building an action button", function()
+            expect(function() H.C.ActionButton({ kind = "banana", slot = 1, size = 32 }, host) end)
+                .throws("unknown kind")
+        end)
+
+        it("does NOT register drag, because a pet slot is not the player's to rearrange", function()
+            -- LibActionButton excludes pet from its drag path for the same reason.
+            expect(pet(1):GetFrame()._dragButtons).isNil()
+            expect(H.C.ActionButton({ slot = 1, size = SIZE }, host):GetFrame()._dragButtons)
+                .as("an action button still drags").notNil()
+        end)
+
+        it("answers HasAction from the pet data, not the action slots", function()
+            -- The public accessor, which was reading the action global while every painter went
+            -- through the provider -- caught by a smoke test, not by a spec.
+            expect(pet(1):HasAction()).truthy()
+            expect(pet(9):HasAction()).as("slot 9 is unstaged").falsy()
+        end)
+    end)
+
+    describe("the isToken trap", function()
+        it("resolves name and texture through _G when isToken is set", function()
+            -- With isToken true the client hands back the NAMES OF GLOBALS, not a path and a label.
+            -- Missing this draws blank icons on exactly the commands that are tokens -- Attack,
+            -- Follow, Stay -- which is the most commonly missed detail in a pet bar.
+            H.env.SUUUI_TEST_PET_TEX = "Interface\\Icons\\RESOLVED"
+            H.setPetAction(3, { name = "SUUUI_TEST_PET_NAME", texture = "SUUUI_TEST_PET_TEX",
+                isToken = true }, { silent = true })
+            expect(pet(3)._iconComp:GetIcon()).eq("Interface\\Icons\\RESOLVED")
+        end)
+
+        it("uses the texture directly when isToken is not set", function()
+            expect(pet(1)._iconComp:GetIcon()).eq("tex1")
+        end)
+    end)
+
+    describe("usability", function()
+        it("greys EVERY icon when the pet's bar is unusable at all", function()
+            -- Two mechanisms that must not be collapsed: a pet whose bar is unusable greys
+            -- everything, while a single unusable slot greys only itself.
+            local b = pet(1)
+            expect(b._usable).truthy()
+            H.setPetActionBar(false)
+            expect(b._usable).as("the whole bar went unusable").falsy()
+        end)
+
+        it("greys one slot when only that slot is unusable", function()
+            H.setPetAction(1, { usable = false })
+            expect(pet(1)._usable).falsy()
+            expect(pet(2)._usable).as("its neighbour is fine").truthy()
+        end)
+    end)
+
+    describe("current action", function()
+        it("shows an active command as current", function()
+            expect(pet(1):IsCurrent()).truthy()
+        end)
+
+        it("EXCLUDES Follow, which the client reports active almost always", function()
+            -- Otherwise that button is permanently lit and stops meaning anything.
+            H.setPetAction(4, { name = "PET_ACTION_FOLLOW", texture = "t", isActive = true },
+                { silent = true })
+            expect(pet(4):IsCurrent()).falsy()
+        end)
+
+        it("never reports auto-repeat, which is an action-slot concept", function()
+            expect(pet(1):IsAutoRepeat()).falsy()
+        end)
+    end)
+
+    describe("the active state -- a pet's MODE", function()
+        -- Passive, Defensive and Aggressive are reported as the slot being ACTIVE. The component
+        -- always tracked that and never DREW it, so a player could not tell which mode their pet was
+        -- in -- reported in game after the bar was otherwise working.
+
+        it("marks the active mode and only that one", function()
+            H.setPetAction(6, { name = "PET_MODE_PASSIVE", texture = "t", isToken = true },
+                { silent = true })
+            H.setPetAction(7, { name = "PET_MODE_DEFENSIVE", texture = "t", isToken = true,
+                isActive = true }, { silent = true })
+            local passive, defensive = pet(6), pet(7)
+            expect(defensive._currentBar:IsShown()).as("defensive is on").truthy()
+            expect(passive._currentBar:IsShown()).falsy()
+        end)
+
+        it("moves the mark when the mode changes", function()
+            H.setPetAction(6, { name = "PET_MODE_PASSIVE", texture = "t", isToken = true },
+                { silent = true })
+            H.setPetAction(7, { name = "PET_MODE_DEFENSIVE", texture = "t", isToken = true,
+                isActive = true }, { silent = true })
+            local passive, defensive = pet(6), pet(7)
+            H.setPetAction(7, { isActive = false }, { silent = true })
+            H.setPetAction(6, { isActive = true })
+            expect(passive._currentBar:IsShown()).as("switched to passive").truthy()
+            expect(defensive._currentBar:IsShown()).as("and cleared defensive").falsy()
+        end)
+
+        it("draws it in the accent colour", function()
+            H.setPetAction(6, { name = "PET_MODE_PASSIVE", texture = "t", isToken = true,
+                isActive = true }, { silent = true })
+            local r, g, b = pet(6)._currentBar:GetColorTexture()
+            local c = H.token("colorAccent")
+            expect({ r, g, b }).deepEq({ c[1], c[2], c[3] })
+        end)
+
+        it("uses a DIFFERENT channel from autocast, so both can be read at once", function()
+            -- The overlay border is the autocast ring; the bar is the active state. Two states through
+            -- one channel could not be told apart, which is the whole reason this is an edge bar.
+            H.setPetAction(6, { name = "Firebolt", texture = "t", isActive = true,
+                autoCastAllowed = true, autoCastEnabled = true }, { silent = true })
+            local b = pet(6)
+            expect(b._currentBar:IsShown()).as("active").truthy()
+            -- DIFFERENT COLOURS, not just different shapes: gold for autocast, accent for the active
+            -- state. A player could not tell them apart when both were accent.
+            H.expectTokenColor(H.borderColor(b._overlay), "colorWarning")
+            local r, g, bl = b._currentBar:GetColorTexture()
+            local acc = H.token("colorAccent")
+            expect({ r, g, bl }).as("the mode bar stays accent").deepEq({ acc[1], acc[2], acc[3] })
+        end)
+
+        it("does NOT mark Follow, which the client reports active almost always", function()
+            H.setPetAction(6, { name = "PET_ACTION_FOLLOW", texture = "t", isToken = true,
+                isActive = true }, { silent = true })
+            expect(pet(6)._currentBar:IsShown()).falsy()
+        end)
+
+        it("clears the mark when the slot empties", function()
+            -- The early return in _readState has to repaint too, or a marked button keeps its bar
+            -- after the command behind it goes away.
+            H.setPetAction(6, { name = "Growl", texture = "t", isActive = true }, { silent = true })
+            local b = pet(6)
+            expect(b._currentBar:IsShown()).truthy()
+            H.clearPetAction(6)
+            expect(b._currentBar:IsShown()).as("no stale mark on an empty slot").falsy()
+        end)
+
+        it("has a real height, or it draws nothing at all", function()
+            -- A zero-height texture is shown and invisible, which is the failure mode that looks like
+            -- "the indicator does not work" while every state assertion passes.
+            H.setPetAction(6, { name = "Growl", texture = "t", isActive = true }, { silent = true })
+            expect(pet(6)._currentBar:GetHeight()).gt(0)
+        end)
+
+        it("re-resolves its colour on a theme change", function()
+            H.setPetAction(6, { name = "Growl", texture = "t", isActive = true }, { silent = true })
+            local b = pet(6)
+            -- Cleared behind the component's back, so only ApplyTheme can put it right.
+            b._currentBar:SetColorTexture(0, 0, 0, 0)
+            b:ApplyTheme()
+            local r, g, bl = b._currentBar:GetColorTexture()
+            local c = H.token("colorAccent")
+            expect({ r, g, bl }).deepEq({ c[1], c[2], c[3] })
+        end)
+
+        it("marks a channelling ACTION slot too, since it is the same state", function()
+            -- Same mechanism on bars 1-8: a channelled spell or a live aura. One code path.
+            local a = H.C.ActionButton({ slot = 1, size = SIZE }, host)
+            a:GetFrame():SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            expect(a._currentBar:IsShown()).falsy()
+            H.setAction(1, { id = 5, current = true }, { silent = true })
+            a:Refresh()
+            expect(a._currentBar:IsShown()).truthy()
+        end)
+    end)
+
+    describe("cooldown", function()
+        it("paints a pet cooldown even though the client sends only two values", function()
+            -- GetPetActionCooldown returns start and duration; the provider supplies the third
+            -- so the shared painter's enable check reads as running.
+            H.setPetAction(1, { cooldownStart = 500, cooldownDuration = 30 }, { silent = true })
+            local b = pet(1)
+            expect(b._cooldown._cdStart).eq(500)
+            expect(b._cooldown._cdDuration).eq(30)
+        end)
+    end)
+
+    describe("autocast", function()
+        it("rings a command that IS autocasting", function()
+            H.expectTokenColor(H.borderColor(pet(2)._overlay), "colorWarning")
+        end)
+
+        it("does NOT ring one that merely COULD autocast", function()
+            -- autoCastAllowed is true of most commands and would light half the bar. What a player
+            -- needs to see is which ones actually are.
+            H.setPetAction(5, { name = "Bite", texture = "t", autoCastAllowed = true },
+                { silent = true })
+            expect(H.borderColor(pet(5)._overlay)).deepEq({ 0, 0, 0, 0 })
+        end)
+
+        it("clears the ring when autocast is switched off", function()
+            local b = pet(2)
+            H.expectTokenColor(H.borderColor(b._overlay), "colorWarning")
+            H.env.TogglePetAutocast(2)
+            expect(H.borderColor(b._overlay)).deepEq({ 0, 0, 0, 0 })
+        end)
+
+        it("TOGGLES on right-click, by FORWARDING into Blizzard's own button", function()
+            -- `TogglePetAutocast` is PROTECTED. Calling it from a PostClick hook -- which does run in
+            -- a hardware-event context -- raised "SuuUI has been blocked from an action only
+            -- available to the Blizzard UI" in game. The only legitimate route is to let the CLIENT
+            -- press Blizzard's own pet button, whose handler is trusted: `type2 = "click"` plus
+            -- `clickbutton2`. Same mechanism Clique uses for click-casting.
+            local b = pet(5)
+            H.setPetAction(5, { name = "Bite", texture = "t", autoCastAllowed = true })
+            expect(b:GetFrame():GetAttribute("type2")).eq("click")
+            expect(b:GetFrame():GetAttribute("clickbutton2"))
+                .as("points at Blizzard's own button").eq(H.env.PetActionButton5)
+
+            local function enabled()
+                local _, _, _, _, _, e = H.env.GetPetActionInfo(5)
+                return e
+            end
+            expect(enabled()).falsy()
+            H.click(b:GetFrame(), "RightButton")
+            expect(enabled()).as("switched on").truthy()
+            H.expectTokenColor(H.borderColor(b._overlay), "colorWarning")
+            H.click(b:GetFrame(), "RightButton")
+            expect(enabled()).as("and back off").falsy()
+        end)
+
+        it("toggles ONCE per physical right-click, not twice", function()
+            -- The bug this cost a round to find. With both click phases registered, one physical
+            -- click runs the secure handler TWICE, forwards twice, and toggles straight back -- a
+            -- right-click that visibly does nothing. A pet button registers ONE phase.
+            local b = pet(5)
+            H.setPetAction(5, { name = "Bite", texture = "t", autoCastAllowed = true })
+            H.click(b:GetFrame(), "RightButton")
+            expect(H.getPetAutocastToggles()).as("exactly one toggle").len(1)
+        end)
+
+        it("registers one click phase for pet and two for an action slot", function()
+            expect(pet(1):GetFrame()._clickButtons).len(1)
+            local a = H.C.ActionButton({ slot = 1, size = SIZE }, host)
+            expect(a:GetFrame()._clickButtons).as("an action button still honours the CVar").len(2)
+        end)
+
+        it("STATES the release phase, so registration and useOnKeyDown agree", function()
+            -- THE INVARIANT THIS COMPONENT HAS NOW BROKEN TWICE.
+            --
+            -- Phase 3: registered AnyUp only while useOnKeyDown came from the CVar, which said "act
+            --          on the press" -- so every action button looked perfect and did nothing.
+            -- Phase 6: the identical mistake on pet buttons. Both mouse buttons stopped working.
+            --
+            -- A one-phase button must STATE the phase it registered rather than read a preference it
+            -- cannot honour.
+            expect(pet(1):GetFrame():GetAttribute("useOnKeyDown"))
+                .as("release, matching AnyUp").falsy()
+        end)
+
+        it("works on BOTH mouse buttons whichever way the client's CVar is set", function()
+            -- The regression test proper. With the CVar on, the client wants the press; a pet button
+            -- registers only the release, so it must not be reading that CVar.
+            for _, keyDown in ipairs({ true, false }) do
+                H.setup()
+                H.setCVarBool("ActionButtonUseKeyDown", keyDown)
+                H.SuuUI.Settings:Set("action_bars", "enabled", false)
+                host = H.parent(400, 200)
+                H.setPetActionBar(true, { silent = true })
+                H.setPetAction(1, { name = "Firebolt", texture = "t", autoCastAllowed = true },
+                    { silent = true })
+                local b = pet(1)
+
+                H.click(b:GetFrame(), "LeftButton")
+                expect(H.getUsedPetAction())
+                    .as("left-click cast, CVar keyDown=" .. tostring(keyDown)).notNil()
+
+                H.click(b:GetFrame(), "RightButton")
+                expect(H.getPetAutocastToggles())
+                    .as("right-click toggled exactly once, CVar keyDown=" .. tostring(keyDown)).len(1)
+            end
+        end)
+
+        it("does NOT reach the pet-cast path on a right-click", function()
+            -- type2 overrides the type for button 2, so one click does one thing rather than both
+            -- toggling autocast and ordering the pet about.
+            local b = pet(2)
+            H.click(b:GetFrame(), "RightButton")
+            expect(H.getUsedPetAction()).as("no cast on right-click").isNil()
+            H.click(b:GetFrame(), "LeftButton")
+            expect(H.getUsedPetAction().slot).as("but left-click casts").eq(2)
+        end)
+
+        it("leaves the forward unset when Blizzard's button is absent", function()
+            -- A client that does not ship PetActionButtonN must not take the bar down; the cast still
+            -- works and only the autocast toggle is unavailable.
+            H.env.PetActionButton7 = nil
+            local b = pet(7)
+            expect(b:GetFrame():GetAttribute("type2")).isNil()
+        end)
+
+        it("leaves an action button with no ring at all", function()
+            local a = H.C.ActionButton({ slot = 1, size = SIZE }, host)
+            expect(H.borderColor(a._overlay)).deepEq({ 0, 0, 0, 0 })
+        end)
+    end)
+
+    describe("events", function()
+        it("repaints on PET_BAR_UPDATE", function()
+            local b = pet(1)
+            H.setPetAction(1, { texture = "changed" })
+            expect(b._iconComp:GetIcon()).eq("changed")
+        end)
+
+        it("filters UNIT_PET on player and UNIT_FLAGS on pet, not the reverse", function()
+            -- Getting these the wrong way round silently kills every update. The client sends
+            -- UNIT_PET for "player" and UNIT_FLAGS for "pet".
+            local b = pet(1)
+            H.setPetAction(1, { texture = "a" }, { silent = true })
+            H.fireEvent("UNIT_PET", "pet")
+            expect(b._iconComp:GetIcon()).as("wrong unit, ignored").eq("tex1")
+            H.fireEvent("UNIT_PET", "player")
+            expect(b._iconComp:GetIcon()).as("right unit, repainted").eq("a")
+
+            H.setPetAction(1, { texture = "b" }, { silent = true })
+            H.fireEvent("UNIT_FLAGS", "player")
+            expect(b._iconComp:GetIcon()).as("wrong unit, ignored").eq("a")
+            H.fireEvent("UNIT_FLAGS", "pet")
+            expect(b._iconComp:GetIcon()).as("right unit, repainted").eq("b")
+        end)
+
+        it("does NOT repaint action buttons on a pet event", function()
+            -- One shared event frame is right; refreshing all ninety-six action buttons every time a
+            -- hunter's pet does anything is not.
+            local a = H.C.ActionButton({ slot = 1, size = SIZE }, host)
+            H.setAction(1, { texture = "Interface\\Icons\\ORIGINAL" }, { silent = true })
+            a:Refresh()
+            H.setAction(1, { texture = "Interface\\Icons\\CHANGED" }, { silent = true })
+            H.fireEvent("PET_BAR_UPDATE")
+            expect(a._iconComp:GetIcon())
+                .as("the action button was left alone").eq("Interface\\Icons\\ORIGINAL")
+        end)
+    end)
+end)

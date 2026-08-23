@@ -282,6 +282,123 @@ describe("Components.ActionBarGrid", function()
     end)
 end)
 
+    -- DIVIDERS. Reported in game as "the lines are misaligned, especially the horizontal ones, and
+    -- the vertical ones peek out a bit" -- and nothing in the suite was asserting their POSITION at
+    -- all, only their count. Two separate defects, both invisible to every existing spec.
+    describe("dividers", function()
+        local function grid(slots, rows)
+            local g = H.C.ActionBarGrid({
+                slots = slots, buttonSize = 32, rows = rows or 1, spacing = 0,
+            }, H.parent(600, 400))
+            g:GetFrame():SetPoint("TOPLEFT", H.env.UIParent, "TOPLEFT", 0, 0)
+            return g
+        end
+
+        it("puts a vertical divider exactly on each column boundary", function()
+            -- `y` follows SetPoint, where positive is UP. A positive offset lifted every vertical
+            -- divider by 2 * padding, so it stuck out above the plate and stopped short of the
+            -- bottom row -- which is the only reason any of them were visible at all.
+            local g = grid({ 1, 2, 3, 4 })
+            local b, d = g:GetButtons(), g._dividers
+            expect(#d).eq(3)
+            for col = 1, 3 do
+                local db, left, right = H.box(d[col]), H.box(b[col]), H.box(b[col + 1])
+                expect(db.left).as("divider " .. col .. " on the boundary").eq(left.right)
+                expect(db.left).eq(right.left)
+                expect(db.top).as("spans the button block, top").eq(left.top)
+                expect(db.bottom).as("spans the button block, bottom").eq(left.bottom)
+            end
+        end)
+
+        it("puts a horizontal divider exactly on each row boundary", function()
+            -- The worse half of the same bug: a positive `y` pushed these clean OFF the plate. They
+            -- drew in empty space above the bar while the bar itself had none.
+            local g = grid({ 1, 2, 3, 4 }, 4)
+            local b, d = g:GetButtons(), g._dividers
+            expect(#d).eq(3)
+            for row = 1, 3 do
+                local db, above, below = H.box(d[row]), H.box(b[row]), H.box(b[row + 1])
+                expect(db.top).as("divider " .. row .. " on the boundary").eq(above.bottom)
+                expect(db.top).eq(below.top)
+                expect(db.left).as("spans the button block, left").eq(above.left)
+                expect(db.right).as("spans the button block, right").eq(above.right)
+            end
+        end)
+
+        it("never draws outside the plate", function()
+            -- The direct form of "it peeks out". Asserted for both orientations, because the two
+            -- divider families are positioned by separate code and only one was checked by eye.
+            for _, rows in ipairs({ 1, 4 }) do
+                local g = grid({ 1, 2, 3, 4 }, rows)
+                local gb = H.box(g)
+                for i, tex in ipairs(g._dividers) do
+                    local db = H.box(tex)
+                    expect(db.top >= gb.top).as("divider " .. i .. " top inside, rows=" .. rows).truthy()
+                    expect(db.bottom <= gb.bottom).as("bottom inside, rows=" .. rows).truthy()
+                    expect(db.left >= gb.left).as("left inside, rows=" .. rows).truthy()
+                    expect(db.right <= gb.right).as("right inside, rows=" .. rows).truthy()
+                end
+            end
+        end)
+
+        it("spans the FULL block in both directions on a multi-row grid", function()
+            -- A single-row or single-column grid cannot catch a span bug, because there the block
+            -- size and one cell size are the same number. Six slots over two rows is the smallest
+            -- shape where `innerH` differs from `size` -- mutation testing found both spans were
+            -- untested until this case existed.
+            local g = grid({ 1, 2, 3, 4, 5, 6 }, 2)
+            local b, d = g:GetButtons(), g._dividers
+            local topLeft, bottomRight = H.box(b[1]), H.box(b[6])
+            expect(#d).as("2 column boundaries + 1 row boundary").eq(3)
+
+            -- The two vertical dividers must reach from the first row's top to the last row's bottom.
+            for i = 1, 2 do
+                local db = H.box(d[i])
+                expect(db.top).as("vertical divider " .. i .. " starts at the top row").eq(topLeft.top)
+                expect(db.bottom).as("and reaches the bottom row").eq(bottomRight.bottom)
+            end
+            -- The horizontal divider must reach across every column.
+            local hb = H.box(d[3])
+            expect(hb.left).as("horizontal divider starts at column 1").eq(topLeft.left)
+            expect(hb.right).as("and reaches the last column").eq(bottomRight.right)
+        end)
+
+        it("hosts the lines on the RAISED frame, not on the plate", function()
+            -- Asserting the host's level is not enough: a texture created on the plate instead would
+            -- leave that assertion true and the line still buried under a button. The parent is the
+            -- thing that decides.
+            local g = grid({ 1, 2, 3, 4 })
+            for i, tex in ipairs(g._dividers) do
+                expect(tex:GetParent()).as("divider " .. i .. " is on the raised host").eq(g._divHost)
+            end
+        end)
+
+        it("draws ABOVE the buttons, or it cannot be seen at all", function()
+            -- A texture on a parent frame can never draw above a child FRAME, and every button is
+            -- one. With the dividers on the plate, a hairline sitting exactly on a cell boundary was
+            -- covered by the button beside it -- so correcting their position made them vanish.
+            local g = grid({ 1, 2, 3, 4 })
+            expect(g._divHost:GetFrameLevel())
+                .gt(g:GetButtons()[1]:GetFrame():GetFrameLevel())
+        end)
+
+        it("stays above the buttons after a rebuild", function()
+            -- A rebuild destroys and recreates the buttons, which may land at a new level, so the
+            -- raise has to be re-applied rather than done once at construction.
+            local g = grid({ 1, 2, 3, 4 })
+            g:SetSlots({ 1, 2, 3, 4, 5, 6 })
+            expect(g._divHost:GetFrameLevel())
+                .gt(g:GetButtons()[1]:GetFrame():GetFrameLevel())
+        end)
+
+        it("draws none at all when the cells are spaced apart", function()
+            local g = H.C.ActionBarGrid({
+                slots = { 1, 2, 3 }, buttonSize = 32, rows = 1, spacing = 4,
+            }, H.parent(600, 400))
+            expect(g._dividers).len(0)
+        end)
+    end)
+
 describe("Plugins.ActionBars", function()
     local PLUGIN = "action_bars"
 
@@ -351,11 +468,8 @@ describe("Plugins.ActionBars", function()
         -- Hiding these now would take away function the player still needs: the micro menu is
         -- Phase 7, the bags Phase 9, the watch bars Phase 8.
         --
-        -- `PetActionBar` stays on this list for a DIFFERENT reason from the rest, and it is not a
-        -- deferral: its replacement ADOPTS Blizzard's PetActionButton1..N, so hiding the container
-        -- would take the buttons we use with it. That is permanent, not "not yet".
         for _, name in ipairs({ "MicroMenu", "MicroMenuContainer", "MicroButtonAndBagsBar",
-                                "StatusTrackingBarManager", "PetActionBar",
+                                "StatusTrackingBarManager",
                                 "MainMenuBarBackpackButton" }) do
             local f = H.env[name]
             if f then
@@ -365,12 +479,12 @@ describe("Plugins.ActionBars", function()
         end
     end)
 
-    it("DOES suppress the stance bar, because ours does not adopt its buttons", function()
-        -- The asymmetry with the pet bar is the point. SuuUI creates its own stance buttons from
-        -- StanceButtonTemplate, so Blizzard's stay in their container and the container can go.
+    it("suppresses BOTH class bars, because ours adopts neither's buttons", function()
+        -- No asymmetry after all. An earlier draft assumed the pet bar had to adopt Blizzard's
+        -- buttons and therefore keep its container alive; it does not -- `type="pet"` works on a
+        -- plain SecureActionButtonTemplate, so SuuUI builds its own and both containers can go.
         expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("StanceBar")).truthy()
-        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("PetActionBar"))
-            .as("but the pet bar's buttons are the ones we reparent").falsy()
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("PetActionBar")).truthy()
     end)
 
     it("does not take the micro menu down with MainMenuBar", function()
@@ -667,9 +781,10 @@ describe("Plugins.ActionBars: every bar", function()
         expect(bars()[1]).as("bar 1 on").notNil()
         expect(bars()[2]).as("bar 2 on").notNil()
         for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
-            -- The stance bar is deliberately ON by default and its id is not a number: a paladin's
-            -- auras and a warrior's stances are core class controls, not extra buttons.
-            if def.kind ~= "stance" and def.id > 2 then
+            -- The CLASS BARS are excluded: their ids are strings, not numbers, and the stance bar is
+            -- deliberately on by default because a paladin's auras and a warrior's stances are core
+            -- class controls rather than extra buttons.
+            if not def.kind and def.id > 2 then
                 expect(bars()[def.id]).as("bar " .. def.id .. " off").isNil()
             end
         end
@@ -707,9 +822,9 @@ describe("Plugins.ActionBars: every bar", function()
         }
         for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
             local want = measured[def.id]
-            -- The stance bar has no measured slot block: its cells are FORM INDICES, which the
-            -- client owns, so there is nothing to pin here.
-            if def.kind == "stance" then goto continue end
+            -- A CLASS BAR has no measured slot block: its cells are indices the client owns -- a form
+            -- index or a pet command index -- so there is nothing to pin here.
+            if def.kind then goto continue end
             expect(want).as("bar " .. def.id .. " is a known bar").notNil()
             expect(def.first).as("bar " .. def.id .. " slot block").eq(want.first)
             expect(def.bindingPrefix).as("bar " .. def.id .. " binding family").eq(want.prefix)
@@ -1522,5 +1637,161 @@ describe("Plugins.ActionBars: the stance bar", function()
                 expect(hasKey(tab, suffix)).as("barstance_" .. suffix).truthy()
             end
         end)
+    end)
+end)
+
+describe("Plugins.ActionBars: the pet bar", function()
+    local PLUGIN = "action_bars"
+
+    before_each(function()
+        H.setup()
+    end)
+
+    local function bars()
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars
+    end
+
+    local function petDef()
+        for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
+            if def.kind == "pet" then return def end
+        end
+    end
+
+    local function petBar()
+        return bars()[petDef().id]
+    end
+
+    it("exists and is on by default, like the stance bar", function()
+        expect(petDef()).notNil()
+        expect(petBar()).notNil()
+    end)
+
+    it("builds its cells as pet-kind ActionButtons, not stance buttons", function()
+        -- The whole point of the kind seam: the secure template, the click registration and the
+        -- press-versus-release gate are SHARED with bars 1-8 rather than reimplemented a third time.
+        local b = petBar():GetButtons()[1]
+        expect(b:GetFrame():GetAttribute("type")).eq("pet")
+        expect(b:GetFrame():GetAttribute("action")).as("the slot rides the same attribute").eq(1)
+    end)
+
+    it("is a FIXED width, not derived from what the pet can do", function()
+        -- Unlike the stance bar. Blizzard's pet bar is always NUM_PET_ACTION_SLOTS wide with the
+        -- unused slots empty, so this is a preference rather than a reading.
+        expect(#petBar():GetButtons()).eq(H.env.NUM_PET_ACTION_SLOTS)
+    end)
+
+    it("lets a player trim it, since an imp does not fill ten slots", function()
+        H.SuuUI.Settings:Set(PLUGIN, "barpet_buttons", 4)
+        expect(#petBar():GetButtons()).eq(4)
+    end)
+
+    it("puts pet command N in cell N", function()
+        local b = petBar():GetButtons()
+        expect(b[3]:GetFrame():GetAttribute("action")).eq(3)
+    end)
+
+    it("binds the BONUSACTIONBUTTON family, which the frame name does not suggest", function()
+        -- Measured from ElvUI. Not PETACTIONBUTTON, which is the obvious wrong guess.
+        expect(petDef().bindingPrefix).eq("BONUSACTIONBUTTON")
+        H.setBinding("BONUSACTIONBUTTON2", "F2")
+        H.fireEvent("UPDATE_BINDINGS")
+        expect(petBar():GetButtons()[2]._hotkeyText:GetText()).eq("F2")
+    end)
+
+    describe("visibility is the CLIENT's job, not ours", function()
+        it("hands it to a secure state driver", function()
+            -- The one thing on this bar that cannot be done from Lua. A pet is summoned, dismissed,
+            -- killed and revived mid-combat, and hiding a frame holding protected buttons is refused
+            -- during a fight. A state driver is evaluated inside the secure environment.
+            --
+            -- The harness RECORDS the driver string and never evaluates it, deliberately: resolving a
+            -- macro conditional here would mean asserting against the harness's guess at what the
+            -- client decides. The string is the assertion; the consequence is checked in game.
+            -- Asserted as the EXACT string, which is what the recorded-driver convention asks for:
+            -- the harness never evaluates a macro conditional, so a loose substring check would pass
+            -- on a string that means something different.
+            expect(H.getStateDriver(petBar():GetFrame(), "visibility"))
+                .eq("[pet,nooverridebar,nopossessbar] show; hide")
+        end)
+
+        it("omits novehicleui, because vehicles are not a mechanic on this client", function()
+            -- ElvUI's Retail and Wrath strings carry it and its TBC string does not. Copying the
+            -- Retail string would add a conditional the client cannot evaluate.
+            local driver = H.getStateDriver(petBar():GetFrame(), "visibility")
+            expect(driver:find("novehicleui", 1, true)).isNil()
+            expect(driver:find("nopossessbar", 1, true)).as("but possess IS real here").notNil()
+        end)
+
+        it("never calls Show or Hide itself, so there is only one owner", function()
+            -- Two owners would fight, and ours would lose in combat -- which is the case that
+            -- matters. The bar stays shown from Lua's point of view; the driver does the hiding.
+            expect(petBar():IsShown()).truthy()
+            H.setUnit("pet", { exists = false })
+            H.fireEvent("UNIT_PET", "player")
+            expect(petBar():IsShown()).as("Lua did not touch it").truthy()
+        end)
+
+        it("releases the driver when the bar is switched off", function()
+            local frame = petBar():GetFrame()
+            H.SuuUI.Settings:Set(PLUGIN, "barpet_enabled", false)
+            expect(H.getStateDriver(frame, "visibility"))
+                .as("no conditional left pointing at a dead frame").isNil()
+        end)
+    end)
+
+    describe("its settings tab", function()
+        local function petTab()
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                if e.type == "subtabs" then
+                    for _, tab in ipairs(e.tabs) do
+                        if tab.label == "Pet" then return tab end
+                    end
+                end
+            end
+        end
+
+        local function hasKey(tab, suffix)
+            for _, entry in ipairs(tab.schema) do
+                if entry.key == "barpet_" .. suffix then return true end
+            end
+            return false
+        end
+
+        it("exists and is labelled Pet", function()
+            expect(petTab()).notNil()
+        end)
+
+        it("KEEPS the Buttons slider, unlike the stance bar", function()
+            -- The distinction between the two class bars: a pet bar's width is a preference, a
+            -- stance bar's is a fact about the player's class.
+            expect(hasKey(petTab(), "buttons")).truthy()
+        end)
+
+        it("drops the macro-name and count toggles, which a pet command has neither of", function()
+            expect(hasKey(petTab(), "show_macro_text")).falsy()
+            expect(hasKey(petTab(), "show_count")).falsy()
+        end)
+
+        it("still offers placement and shape, including docking", function()
+            for _, suffix in ipairs({ "enabled", "show_hotkeys", "rows", "button_size",
+                                     "spacing", "attach", "attach_edge" }) do
+                expect(hasKey(petTab(), suffix)).as("barpet_" .. suffix).truthy()
+            end
+        end)
+    end)
+
+    it("docks to another bar like any other", function()
+        H.SuuUI.Settings:Set(PLUGIN, "barpet_attach", "1")
+        expect(H.SuuUI._ActionBars.Dock.ParentOf(petBar())).eq(bars()[1])
+    end)
+
+    it("can share a dock with the stance bar and sorts before it", function()
+        -- pet order 98, stance order 99, so the pet bar sits nearer the dock. Two children on one
+        -- dock is also the only shape that exercises the comparator at all.
+        H.SuuUI.Settings:Set(PLUGIN, "barpet_attach", "1")
+        H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
+        local kids = H.SuuUI._ActionBars.Dock.Children(bars()[1])
+        expect(kids).len(2)
+        expect(kids[1]).as("pet is nearer the dock").eq(petBar())
     end)
 end)

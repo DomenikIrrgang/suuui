@@ -151,13 +151,21 @@ function GridMeta:_syncDividers()
         -- OVERLAY so the line sits above every layer the glass plate drew. The buttons are
         -- child FRAMES and draw above all of it regardless, which is why a divider never
         -- covers an icon.
-        local tex = self._f:CreateTexture(nil, "OVERLAY")
+        local tex = self._divHost:CreateTexture(nil, "OVERLAY")
         tex:SetTexture("Interface\\Buttons\\WHITE8x8")
         lines[i] = tex
         self._divBox:Add(tex)
     end
 
     if wanted == 0 then return end
+
+    -- Raised on every sync, not once at construction: a rebuild destroys and recreates the buttons,
+    -- and the new ones may land at a different level. RaiseAbove is the only sanctioned z-order
+    -- mechanism outside Core/UIRoot.lua.
+    local first = self._buttons[1]
+    if first and self._divHost then
+        SuuUI.UIRoot:RaiseAbove(self._divHost, first:GetFrame(), 1)
+    end
 
     local hair = SuuUI.Pixel.Line(0)
     local pad  = self._padding
@@ -167,18 +175,25 @@ function GridMeta:_syncDividers()
     local c = SuuUI.Theme:GetToken("colorBorder") or { 0, 0, 0, 1 }
     local i = 0
 
+    -- `y` IS NEGATIVE BECAUSE IT FOLLOWS SetPoint, WHERE POSITIVE IS UP.
+    --
+    -- The offsets here are measured DOWN from the plate's top edge, so each one has to be negated.
+    -- Getting this wrong is not subtle once seen but it is easy to miss in review: a positive `y`
+    -- lifted every vertical divider 2 * padding, so they peeked out above the plate and stopped
+    -- short of the bottom row, and it pushed the horizontal dividers clean OFF the plate -- they
+    -- drew in empty space above the bar while the bar itself had none.
     for col = 1, cols - 1 do
         i = i + 1
         lines[i]:SetVertexColor(c[1], c[2], c[3], c[4] or 1)
         self._divBox:SetChildAnchor(lines[i], {
-            x = pad + col * size, y = pad, width = hair, height = innerH,
+            x = pad + col * size, y = -pad, width = hair, height = innerH,
         })
     end
     for row = 1, rows - 1 do
         i = i + 1
         lines[i]:SetVertexColor(c[1], c[2], c[3], c[4] or 1)
         self._divBox:SetChildAnchor(lines[i], {
-            x = pad, y = pad + row * size, width = innerW, height = hair,
+            x = pad, y = -(pad + row * size), width = innerW, height = hair,
         })
     end
 end
@@ -400,7 +415,17 @@ function SuuUI.Components.ActionBarGrid(props, parent)
     local gridBox = SuuUI.Layout:CreateContainer({
         host = f, layout = "grid", cols = 1, gap = 0,
     })
-    local divBox = SuuUI.Layout:CreateContainer({ host = f, layout = "anchor" })
+    -- The dividers live on their OWN frame, raised above the buttons -- not as textures on the
+    -- plate. A texture on a parent frame can never draw above a child FRAME, and every button is
+    -- one, so a hairline sitting exactly on a cell boundary was covered by the button beside it.
+    --
+    -- That is why the dividers looked "not fully visible": before the y sign was fixed they were
+    -- positioned outside the plate, and the only part a player could see was the part sticking out
+    -- where no button covered it. Correcting the position made them vanish entirely, which is the
+    -- honest result of drawing them underneath.
+    local divHost = CreateFrame("Frame", nil, f)
+    divHost:SetAllPoints(f)
+    local divBox = SuuUI.Layout:CreateContainer({ host = divHost, layout = "anchor" })
 
     local id = "actionbargrid_" .. tostring(f)
     handle = setmetatable({
@@ -408,6 +433,7 @@ function SuuUI.Components.ActionBarGrid(props, parent)
         _plate         = plate,
         _gridBox       = gridBox,
         _divBox        = divBox,
+        _divHost       = divHost,
         _buttons       = {},
         _dividers      = {},
         _slots         = props.slots,

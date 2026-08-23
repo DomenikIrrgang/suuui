@@ -581,6 +581,37 @@ function M.install(env)
         f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
     end
 
+    -- BLIZZARD'S OWN PET BUTTONS, with the handler that makes them worth modelling.
+    --
+    -- These exist so a consumer can FORWARD a click into them. `TogglePetAutocast` is protected, so
+    -- an addon cannot toggle autocast itself -- the only legitimate route is `type2 = "click"` plus
+    -- `clickbutton2` pointing here, after which the CLIENT presses this button and its own trusted
+    -- handler does the protected work.
+    --
+    -- The handler below is Blizzard's branch, modelled: right-click toggles autocast, anything else
+    -- casts. Without it the forward would land on an inert frame and the spec would assert nothing.
+    for i = 1, (env.NUM_PET_ACTION_SLOTS or 10) do
+        local b = CreateFrame("Button", "PetActionButton" .. i, env.PetActionBar)
+        b:SetSize(30, 30)
+        b:SetID(i)
+        b:RegisterForClicks("AnyUp")
+        b:SetScript("OnClick", function(self, button)
+            if button == "RightButton" then
+                if type(env.TogglePetAutocast) == "function" then
+                    env.TogglePetAutocast(self:GetID())
+                end
+            elseif type(env.CastPetAction) == "function" then
+                env.CastPetAction(self:GetID())
+            end
+        end)
+    end
+
+    -- Recorded, like every other client action: the spec's question is whether the button asked the
+    -- client to use this pet slot.
+    env.CastPetAction = function(index)
+        state.castPetAction = index
+    end
+
     -- MicroMenu is a child of MicroMenuContainer, NOT of MainMenuBar. Measured in game, because
     -- the answer decided whether Phase 4b could hide the bar cluster at all: under MainMenuBar
     -- the player would have lost the character pane, the spellbook and the bags until Phase 7.
@@ -868,11 +899,18 @@ function M.install(env)
 
     -- Recorded AND enacted, unlike CastShapeshiftForm -- because the consequence is unambiguous
     -- and local: toggling autocast flips exactly one flag on one slot and nothing else.
-    env.TogglePetAutocast = function(index)
+    -- TogglePetAutocast(slotID, enabled). TWO arguments on this client -- the signature comes from
+    -- the client's own API stub, and it is a SET rather than a blind flip. The one-argument form is
+    -- still honoured, because a caller that omits the state means "the other one".
+    env.TogglePetAutocast = function(index, enabled)
         local p = petRecord(index)
         state.petAutocastToggles[#state.petAutocastToggles + 1] = index
         if not p then return end
-        p.autoCastEnabled = not p.autoCastEnabled
+        if enabled == nil then
+            p.autoCastEnabled = not p.autoCastEnabled
+        else
+            p.autoCastEnabled = enabled and true or false
+        end
         fireEvent("PET_BAR_UPDATE")
     end
 

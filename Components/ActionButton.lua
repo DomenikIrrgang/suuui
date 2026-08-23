@@ -42,6 +42,104 @@ local S = SuuUI.UISignals
 -- would be sixty frames and sixty dispatches for the same six events -- the shape
 -- Plugins/DataBar/DataBarWidget.lua uses, and for the same reason.
 
+-- WHAT A "KIND" IS, and why pet lives here rather than in a component of its own.
+--
+-- A pet button uses the SAME secure mechanism as an action slot: `SecureActionButtonTemplate` with
+-- `type="pet"` and the slot index in the `action` attribute. That is not a guess -- it is what
+-- LibActionButton-1.0 does inside a live secure snippet on this client:
+--
+--     self:SetAttribute("type", type)                          -- type can be "pet"
+--     local action_field = (type == "pet") and "action" or type
+--     self:SetAttribute(action_field, action)
+--
+-- Because the attribute NAME is the same, `_slotNow()` needs no change at all, and neither does the
+-- press-versus-release gate. That gate is the reason this is a `kind` and not a `PetButton.lua`: it
+-- was got wrong once and produced a button that looked perfect and did nothing, so it must exist in
+-- exactly ONE place.
+--
+-- The stance bar could NOT share it -- a stance button has no secure attribute whatsoever -- which is
+-- why that one is a separate component. Pet can share, so it does.
+local PROVIDERS = {
+    action = {
+        attrType   = "action",
+        drag       = true,
+        has        = function(i) return HasAction(i) end,
+        texture    = function(i) return GetActionTexture(i) end,
+        cooldown   = function(i) return GetActionCooldown(i) end,
+        count      = function(i) return GetActionCount(i) end,
+        text       = function(i) return GetActionText(i) end,
+        usable     = function(i) return IsUsableAction(i) end,
+        inRange    = function(i) return IsActionInRange(i) end,
+        current    = function(i) return IsCurrentAction(i) end,
+        autoRepeat = function(i) return IsAutoRepeatAction(i) end,
+        autocast   = nil,
+        tooltip    = function(tt, i) tt:SetAction(i) end,
+    },
+    pet = {
+        attrType = "pet",
+        -- Drag is DISABLED for pet, matching LibActionButton, which excludes both action and pet
+        -- from its drag path. A pet slot's contents are not the player's to rearrange.
+        drag     = false,
+        has      = function(i) return GetPetActionInfo(i) ~= nil end,
+        texture  = function(i)
+            local _, texture, isToken = GetPetActionInfo(i)
+            if not texture then return nil end
+            -- THE TRAP. With isToken true, `texture` is the NAME OF A GLOBAL rather than a path,
+            -- and the same goes for the name. Resolving it is the consumer's job -- miss it and
+            -- Attack, Follow and Stay draw blank icons, which is the most commonly missed detail
+            -- in a pet bar.
+            if isToken then return _G[texture] end
+            return texture
+        end,
+        -- Two returns from the client, not three. A third of 1 is supplied so the shared painter's
+        -- `enable ~= 0` check reads as "running" whenever there is a duration.
+        cooldown = function(i)
+            local start, duration = GetPetActionCooldown(i)
+            return start, duration, 1
+        end,
+        -- A pet action has no charge count and no macro name. Answered rather than left nil so the
+        -- shared painters need no per-kind branch.
+        count      = function() return 0 end,
+        text       = function() return nil end,
+        usable     = function(i)
+            -- TWO mechanisms, and they must not be collapsed: a pet whose bar is unusable at all
+            -- greys every icon, while a single unusable slot greys only itself.
+            if type(PetHasActionBar) == "function" and not PetHasActionBar() then
+                return false, false
+            end
+            return GetPetActionSlotUsable(i), false
+        end,
+        -- Range is not a question for a pet command, and nil is how the shared painter says so.
+        inRange    = function() return nil end,
+        current    = function(i)
+            local name, _, _, isActive = GetPetActionInfo(i)
+            -- Follow is reported active whenever the pet is following, which is almost always, so
+            -- showing it as the current action would leave that button permanently lit. ElvUI
+            -- excludes it by the same token name.
+            if name == "PET_ACTION_FOLLOW" then return false end
+            return isActive
+        end,
+        autoRepeat = function() return false end,
+        -- allowed, enabled. The overlay shows on `allowed`; the ring lights on `enabled`.
+        autocast   = function(i)
+            local _, _, _, _, allowed, enabled = GetPetActionInfo(i)
+            return allowed, enabled
+        end,
+        -- NO Lua autocast toggle here. `TogglePetAutocast` is PROTECTED: calling it from a
+        -- PostClick hook -- which does run in a hardware-event context -- raised
+        --   "SuuUI has been blocked from an action only available to the Blizzard UI"
+        -- in game. That is the second protected function this phase assumed was callable, after
+        -- CastShapeshiftForm.
+        --
+        -- Right-click is handled instead by FORWARDING it into Blizzard's own pet button inside the
+        -- secure environment -- see the `type2` / `clickbutton2` pair in the constructor. Blizzard's
+        -- handler is trusted, so it may call the protected function; ours never has to.
+        tooltip    = function(tt, i)
+            if type(tt.SetPetAction) == "function" then tt:SetPetAction(i) end
+        end,
+    },
+}
+
 local EVENTS = {
     "ACTIONBAR_SLOT_CHANGED",
     "ACTIONBAR_UPDATE_COOLDOWN",
@@ -52,6 +150,21 @@ local EVENTS = {
     "UPDATE_SHAPESHIFT_FORM",
     "UPDATE_BINDINGS",
     "PLAYER_ENTERING_WORLD",
+}
+
+-- Pet events, kept separate so the dispatch can repaint ONLY pet buttons on them. Registering them
+-- in the shared list is fine; refreshing all ninety-six action buttons on every PET_BAR_UPDATE is
+-- not. Unit filters are applied in the dispatch, not at registration -- UNIT_PET carries "player"
+-- and UNIT_FLAGS carries "pet", and getting those the wrong way round silently kills every update.
+local PET_EVENTS = {
+    PET_BAR_UPDATE          = true,
+    PET_BAR_UPDATE_COOLDOWN = true,
+    PET_UI_UPDATE           = true,
+    UNIT_PET                = "player",
+    UNIT_FLAGS              = "pet",
+    PLAYER_CONTROL_GAINED   = true,
+    PLAYER_CONTROL_LOST     = true,
+    SPELLS_CHANGED          = true,
 }
 
 -- Every live button, and the slot index over it.
@@ -90,6 +203,21 @@ end
 -- mechanism that keeps the index honest is the one in Refresh.
 
 local function onEvent(_, event, arg1)
+    -- PET EVENTS FIRST, and they repaint ONLY pet buttons. A shared frame is right -- one frame for
+    -- every button in the addon -- but refreshing all ninety-six action buttons on every
+    -- PET_BAR_UPDATE would make a hunter's pet cost the whole bar set a repaint.
+    local petFilter = PET_EVENTS[event]
+    if petFilter then
+        -- The unit filter is applied HERE rather than at registration, because the client sends
+        -- UNIT_PET for "player" and UNIT_FLAGS for "pet". Reversing those silently kills every
+        -- update, which is why each is spelled out in PET_EVENTS rather than inferred.
+        if type(petFilter) == "string" and arg1 ~= petFilter then return end
+        for handle in pairs(live) do
+            if handle._kind == "pet" then handle:Refresh() end
+        end
+        return
+    end
+
     if event == "ACTIONBAR_SLOT_CHANGED" then
         -- The client fires this with no slot, or with 0, to mean "everything changed".
         local slot = tonumber(arg1)
@@ -131,6 +259,12 @@ local function syncEventFrame()
         for _, e in ipairs(EVENTS) do
             -- pcall because an event absent on this client generation must not take the
             -- whole bar down; DataBarWidget registers the same way.
+            pcall(evt.RegisterEvent, evt, e)
+        end
+        -- Registered unconditionally rather than only when a pet button exists: the set is small,
+        -- and gating registration on the live set would mean re-registering every time the last pet
+        -- button went away and came back.
+        for e in pairs(PET_EVENTS) do
             pcall(evt.RegisterEvent, evt, e)
         end
     elseif evt then
@@ -225,7 +359,8 @@ end
 
 function ActionButtonMeta:_paintIcon()
     local slot = self:_slotNow()
-    local texture = slot and HasAction(slot) and GetActionTexture(slot) or nil
+    local p = self._p
+    local texture = slot and p.has(slot) and p.texture(slot) or nil
     -- Clears the TEXTURE rather than hiding the icon frame, and that is not a style choice.
     -- Hiding a frame inside a protected button is refused in combat -- and an action appearing
     -- or disappearing mid-fight is the ordinary case, so the hide would fire exactly when it
@@ -239,11 +374,11 @@ end
 
 function ActionButtonMeta:_paintCooldown()
     local slot = self:_slotNow()
-    if not (slot and HasAction(slot)) then
+    if not (slot and self._p.has(slot)) then
         self._cooldown:SetCooldown(0, 0)
         return
     end
-    local start, duration, enable = GetActionCooldown(slot)
+    local start, duration, enable = self._p.cooldown(slot)
     if enable and enable ~= 0 and duration and duration > 0 then
         self._cooldown:SetCooldown(start, duration)
     else
@@ -254,7 +389,7 @@ end
 function ActionButtonMeta:_paintCount()
     if not self._countText then return end
     local slot = self:_slotNow()
-    local count = slot and HasAction(slot) and GetActionCount(slot) or 0
+    local count = slot and self._p.has(slot) and self._p.count(slot) or 0
     -- Above one, matching AuraIcon's stack threshold: the client reports 1 for a single
     -- charge and a "1" in the corner of every consumable is noise.
     if self._showCount and count and count > 1 then
@@ -268,7 +403,7 @@ end
 function ActionButtonMeta:_paintMacroText()
     if not self._macroText then return end
     local slot = self:_slotNow()
-    local text = slot and HasAction(slot) and GetActionText(slot) or nil
+    local text = slot and self._p.has(slot) and self._p.text(slot) or nil
     -- nil for a spell or an item -- which is why GetActionText cannot be used to decide
     -- whether the slot is occupied. HasAction answers that.
     if self._showMacroText and text and text ~= "" then
@@ -327,12 +462,12 @@ end
 
 function ActionButtonMeta:_paintUsable()
     local slot = self:_slotNow()
-    if not (slot and HasAction(slot)) then
+    if not (slot and self._p.has(slot)) then
         self._usable, self._noResource = true, false
         self:_applyTint()
         return
     end
-    local usable, noMana = IsUsableAction(slot)
+    local usable, noMana = self._p.usable(slot)
     self._usable = usable and true or false
     self._noResource = noMana and true or false
     self:_applyTint()
@@ -341,8 +476,8 @@ end
 function ActionButtonMeta:_paintRange()
     local slot = self:_slotNow()
     local inRange
-    if slot and HasAction(slot) then
-        inRange = IsActionInRange(slot)
+    if slot and self._p.has(slot) then
+        inRange = self._p.inRange(slot)
     end
     -- nil means range is not a question for this action -- a self buff, a macro with no
     -- target. That is NOT the same as being out of range, and painting it red would put a
@@ -353,14 +488,60 @@ function ActionButtonMeta:_paintRange()
     self:_applyTint()
 end
 
+--- Draws whether a pet command is set to cast itself.
+--
+-- Only `autoCastEnabled` gets a visual. `autoCastAllowed` merely means the command COULD autocast,
+-- which is true of most of them and would light up half the bar for no information -- what a player
+-- needs to see is which ones actually are.
+--
+-- A ring rather than Blizzard's spinning shine: nothing in SuuUI animates a border, and the shine is
+-- a Blizzard texture this component does not own.
+--
+-- GOLD, NOT ACCENT, and that was reported rather than designed. The first version used the accent
+-- colour for this AND for the active-mode bar, and a player looking at a pet button could not tell
+-- the two apart -- the bottom bar read as a broken border. Two indicators in one colour is one
+-- indicator as far as a reader is concerned.
+--
+-- Gold specifically because Blizzard's own autocast indicator is a golden shine, so it is the colour a
+-- WoW player already reads as "this casts itself". Accent stays reserved for "this is the live one",
+-- which is what it means on the stance bar too -- one vocabulary across both.
+function ActionButtonMeta:_paintAutocast()
+    if not self._overlay then return end
+    if not self._p.autocast then return end
+    local slot = self:_slotNow()
+    local enabled = false
+    if slot and self._p.has(slot) then
+        local _, on = self._p.autocast(slot)
+        enabled = on and true or false
+    end
+    SuuUI.Backdrop.SetBorder(self._overlay, enabled and "colorWarning" or false)
+end
+
+--- Draws whether this slot is the active one.
+--
+-- For a pet that is its MODE (Passive / Defensive / Aggressive) or a toggled command; for an action
+-- slot it is a channelled spell or a live aura. Same state, same indicator, one code path.
+function ActionButtonMeta:_paintCurrent()
+    if not self._currentBar then return end
+    if self._current then
+        local c = SuuUI.Theme:GetToken("colorAccent")
+        if c then self._currentBar:SetColorTexture(c[1], c[2], c[3], c[4] or 1) end
+        self._currentBar:Show()
+    else
+        self._currentBar:Hide()
+    end
+end
+
 function ActionButtonMeta:_readState()
     local slot = self:_slotNow()
-    if not (slot and HasAction(slot)) then
+    if not (slot and self._p.has(slot)) then
         self._current, self._autoRepeat = false, false
+        self:_paintCurrent()
         return
     end
-    self._current = IsCurrentAction(slot) and true or false
-    self._autoRepeat = IsAutoRepeatAction(slot) and true or false
+    self._current = self._p.current(slot) and true or false
+    self._autoRepeat = self._p.autoRepeat(slot) and true or false
+    self:_paintCurrent()
 end
 
 ---------------------------------------------------------------------------
@@ -383,13 +564,15 @@ end
 
 function ActionButtonMeta:_showTooltip()
     if not self._tooltip then return end
-    if type(GameTooltip) ~= "table" or type(GameTooltip.SetAction) ~= "function" then return end
+    if type(GameTooltip) ~= "table" then return end
     local slot = self:_slotNow()
-    -- Nothing to say about an empty cell, and SetAction on one shows an empty frame rather than
+    -- Nothing to say about an empty cell, and a setter on one shows an empty frame rather than
     -- nothing at all.
-    if not (slot and HasAction(slot)) then return end
+    if not (slot and self._p.has(slot)) then return end
     GameTooltip:SetOwner(self._f, self._tooltipAnchor)
-    GameTooltip:SetAction(slot)
+    -- Through the provider: an action slot uses SetAction, a pet slot SetPetAction. The pet setter
+    -- is guarded inside the provider, so an absent one costs a tooltip rather than an error.
+    self._p.tooltip(GameTooltip, slot)
     GameTooltip:Show()
 end
 
@@ -421,6 +604,7 @@ function ActionButtonMeta:Refresh()
     self:_paintMacroText()
     self:_paintHotkey()
     self:_paintUsable()
+    self:_paintAutocast()
     self:_readState()
     -- Range last: _applyTint reads _usable, which _paintUsable has just settled.
     self._outOfRange = nil
@@ -437,7 +621,7 @@ end
 -- @return bool
 function ActionButtonMeta:HasAction()
     local slot = self:_slotNow()
-    return (slot and HasAction(slot)) and true or false
+    return (slot and self._p.has(slot)) and true or false
 end
 
 --- Whether the client reports this action as the one currently being used.
@@ -501,6 +685,7 @@ function ActionButtonMeta:SetBinding(command)
 end
 
 function ActionButtonMeta:ApplyTheme()
+    self:_paintCurrent()
     self._iconComp:ApplyTheme()
     self:_applyCooldownInset()
     self:_applyTint()
@@ -578,6 +763,9 @@ function SuuUI.Components.ActionButton(props, parent)
     local T = SuuUI.Theme
 
     -- A Button, because only a button carries the secure template's click handler.
+    local provider = PROVIDERS[props.kind or "action"]
+    assert(provider, "SuuUI: ActionButton unknown kind '" .. tostring(props.kind) .. "'")
+
     local f = CreateFrame("Button", props.name, parent, "SecureActionButtonTemplate")
     f:SetSize(props.size, props.size)
     f:EnableMouse(true)
@@ -597,17 +785,65 @@ function SuuUI.Components.ActionButton(props, parent)
     -- disagrees with useOnKeyDown is discarded, so one physical click yields exactly one action. On
     -- an older client whose handler ignored `down` the same registration WOULD fire twice, which is
     -- why the library gates it on the client family.
-    f:RegisterForClicks("AnyDown", "AnyUp")
-    -- Left button only: dragging with the right button is how a player rotates the camera.
-    f:RegisterForDrag("LeftButton")
+    -- ONE PHASE FOR A PET BUTTON, TWO FOR AN ACTION SLOT -- and whichever it is, the registration
+    -- and `useOnKeyDown` MUST AGREE. That agreement is the whole invariant, and breaking it is how
+    -- this component has now failed twice:
+    --
+    --   Phase 3: registered AnyUp only, `useOnKeyDown` read from the CVar which said "act on the
+    --            press" -- so the button never received the phase the client acts on. Every action
+    --            button looked perfect and did nothing.
+    --   Phase 6: the identical mistake on pet buttons, for the identical reason.
+    --
+    -- A pet button takes ONE phase because the autocast right-click is FORWARDED (see type2 below)
+    -- and the client runs the handler once per registered phase -- two phases would forward twice and
+    -- toggle autocast straight back. So it registers the release and STATES the release, rather than
+    -- reading a preference it cannot honour. The press-versus-release setting exists to make casting
+    -- feel responsive; Blizzard's own pet buttons act on the release regardless.
+    local wantKeyDown
+    if provider.attrType == "pet" then
+        f:RegisterForClicks("AnyUp")
+        wantKeyDown = false
+    else
+        f:RegisterForClicks("AnyDown", "AnyUp")
+        -- Read from the client's OWN CVar so this button agrees with every other action button on
+        -- screen, rather than imposing a preference.
+        wantKeyDown = useKeyDown()
+    end
+    -- Left button only: dragging with the right button is how a player rotates the camera. Not
+    -- registered at all for a pet button -- a pet slot's contents are not the player's to rearrange,
+    -- and LibActionButton excludes pet from its drag path for the same reason.
+    if provider.drag then f:RegisterForDrag("LeftButton") end
 
     -- Stated once, here, and never again. See the note at the top of this file.
-    f:SetAttribute("type", "action")
+    -- The kind's own secure type. Both kinds carry the slot in the SAME `action` attribute, which
+    -- is why _slotNow needs no branch and why paging keeps working untouched.
+    f:SetAttribute("type", provider.attrType)
     f:SetAttribute("action", props.slot)
-    -- Which of the two events the client should act on. Read from the client's OWN CVar so this
-    -- button agrees with every other action button on screen, rather than imposing a preference: a
-    -- player who chose key-down elsewhere expects it here too.
-    f:SetAttribute("useOnKeyDown", useKeyDown())
+    -- Which phase the client should act on. Always consistent with RegisterForClicks above -- see
+    -- the note there for why that agreement is the invariant that matters.
+    f:SetAttribute("useOnKeyDown", wantKeyDown)
+
+    -- RIGHT-CLICK ON A PET COMMAND TOGGLES ITS AUTOCAST, and it has to be done in the secure
+    -- environment: `TogglePetAutocast` is protected, so an addon calling it from any Lua context --
+    -- including a PostClick hook during a real click -- is blocked outright.
+    --
+    -- `type2 = "click"` plus `clickbutton2` forwards the right-click to another button, which the
+    -- client performs itself. The target is Blizzard's OWN pet button, whose handler is trusted and
+    -- may therefore do what ours may not. This is the same mechanism Clique uses for click-casting
+    -- and ElvUI's bags use for the purchase tab.
+    --
+    -- It also means Blizzard's pet buttons must keep EXISTING -- they are hidden with their
+    -- container, which is fine, but they must not be destroyed or unparented.
+    --
+    -- Stated once, here, with the other attributes. `type2` also stops the right-click reaching the
+    -- pet-cast path, so one click does one thing.
+    if provider.attrType == "pet" then
+        local blizz = _G["PetActionButton" .. tostring(props.slot)]
+        if blizz then
+            f:SetAttribute("type2", "click")
+            f:SetAttribute("clickbutton2", blizz)
+        end
+    end
 
     local handle
     f:SetScript("OnSizeChanged", function(_, w, h)
@@ -635,9 +871,27 @@ function SuuUI.Components.ActionButton(props, parent)
     -- Text overlay above the swipe. A FontString on the root frame would sit behind the
     -- cooldown, because a child frame draws above its parent's layers. RaiseAbove is the
     -- only sanctioned z-order mechanism outside Core/UIRoot.lua.
-    local overlay = CreateFrame("Frame", nil, f)
+    -- BackdropTemplate so a pet button can carry the AUTOCAST RING -- see _paintAutocast. Harmless
+    -- for an action button, which simply never turns a border on.
+    local overlay = CreateFrame("Frame", nil, f, "BackdropTemplate")
     box:Add(overlay, { align = "stretch", valign = "stretch" })
     SuuUI.UIRoot:RaiseAbove(overlay, iconFrame, 2)
+    -- inset 0: this is a ring, not a plate, and must not paint over the icon.
+    SuuUI.Backdrop.Apply(overlay, { bg = false, border = false, inset = 0 })
+    -- THE ACTIVE-STATE BAR. A pet's mode -- Passive, Defensive, Aggressive -- is reported as the
+    -- slot being ACTIVE, and so is a channelled spell or a live aura on an action bar. The component
+    -- has always tracked that (`IsCurrent`) and never drawn it, which meant a player could not tell
+    -- which mode their pet was in.
+    --
+    -- An EDGE BAR rather than a wash or a ring, and the channel matters: the overlay's border is
+    -- already the autocast indicator, and two states expressed through one channel cannot be told
+    -- apart. A bar along the bottom also leaves the icon art unobscured, which a tint does not.
+    local currentBar = overlay:CreateTexture(nil, "OVERLAY")
+    currentBar:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, 0)
+    currentBar:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, 0)
+    currentBar:SetHeight(SuuUI.Pixel.Line(2))
+    currentBar:Hide()
+
     local overlayBox = SuuUI.Layout:CreateContainer({ host = overlay, layout = "stack" })
 
     local padXs = T:GetToken("spaceXxs") or 2
@@ -681,10 +935,13 @@ function SuuUI.Components.ActionButton(props, parent)
         _cdProps       = cdProps,
         _overlay       = overlay,
         _overlayBox    = overlayBox,
+        _currentBar    = currentBar,
         _hotkeyText    = hotkeyText,
         _countText     = countText,
         _macroText     = macroText,
         _eid           = id,
+        _kind          = props.kind or "action",
+        _p             = provider,
         _binding       = props.binding,
         _showHotkey    = props.showHotkey ~= false,
         _showMacroText = props.showMacroText ~= false,
