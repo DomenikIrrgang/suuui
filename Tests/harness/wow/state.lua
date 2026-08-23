@@ -105,6 +105,11 @@ M.usedAction = nil
 -- an empty table and a count of zero, which is the signal the whole bar hides on.
 M.stanceForms = {}
 
+-- Spell textures by spell id, as GetSpellTexture reports them. Separate from the action-slot
+-- textures because a shapeshift form carries a spellID rather than a slot, and ElvUI derives a
+-- stance icon from the SPELL rather than from the form's own texture return.
+M.spellTextures = {}
+
 -- What CastShapeshiftForm was asked to do, so a spec can assert the cast without the harness
 -- having to decide what changing form does to the rest of the client.
 M.castStance = nil
@@ -233,6 +238,7 @@ function M.reset()
     -- because they are what the bars are supposed to hide on.
     M.stanceForms        = {}
     M.castStance         = nil
+    M.spellTextures      = {}
     M.petActions         = {}
     M.petHasActionBar    = false
     M.petAutocastToggles = {}

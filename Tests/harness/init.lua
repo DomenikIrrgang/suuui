@@ -60,6 +60,7 @@
 -- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
 -- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
+--              H.setSpellTexture
 -- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
 --              H.setBonusBarOffset
 --              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
@@ -602,6 +603,14 @@ function M.clearStanceForms(opts)
     if not (opts and opts.silent) then
         M.fireEvent("UPDATE_SHAPESHIFT_FORMS")
     end
+end
+
+--- Stages a spell's icon, so GetSpellTexture answers it.
+-- @param spellID number
+-- @param texture string|nil  nil removes it
+function M.setSpellTexture(spellID, texture)
+    assert(type(spellID) == "number", "H.setSpellTexture: spell id required")
+    state.spellTextures[spellID] = texture
 end
 
 --- What CastShapeshiftForm was last asked to cast, or nil.

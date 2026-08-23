@@ -100,7 +100,42 @@ local BARS = {
         position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 228 },
         enabled = false,
     },
+    -- The SHAPESHIFT bar, and it is listed here rather than given its own plugin because
+    -- everything around a bar is identical: a position, a moveable frame, a settings tab, and
+    -- bar-to-bar docking. Only the buttons differ, and that is one factory.
+    --
+    -- NOT "stances" -- this bar is whatever mechanic the client hangs on the shapeshift API:
+    -- warrior stances, druid forms, rogue stealth, priest shadowform, PALADIN AURAS. A paladin has
+    -- eight, which is the widest case it has to size for and was measured in game.
+    --
+    -- A STRING id, deliberately. Slots 13-24 are still unclaimed and would naturally become "Bar 9",
+    -- so numbering this one 9 would collide with that later and silently share its settings keys.
+    -- `order` is separate and numeric because the dock sorts a stack by it, and comparing a string
+    -- with a number is a hard error in Lua.
+    {
+        id = "stance", label = "Stance", kind = "stance", order = 99,
+        bindingPrefix = "SHAPESHIFTBUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = -260, y = 28 },
+        -- ON by default, unlike bars 3-8. A paladin's auras and a warrior's stances are not extra
+        -- buttons a player opted into -- they are core class controls, and Blizzard shows this bar
+        -- by default too.
+    },
 }
+
+-- Whether a bar's cells are shapeshift forms rather than action slots.
+local function isStance(def)
+    return def.kind == "stance"
+end
+
+-- How many cells a stance bar has: whatever the client says the player's form count is.
+--
+-- READ, NEVER ASSUMED FROM A CONSTANT. NUM_STANCE_SLOTS is an array bound (10), not what a class
+-- has -- a mage has 0, a rogue 1, a warrior 3, a paladin 8. Sizing to the bound would leave a
+-- paladin correct by accident and everyone else with a row of empty cells.
+local function stanceFormCount()
+    if type(GetNumShapeshiftForms) ~= "function" then return 0 end
+    return GetNumShapeshiftForms() or 0
+end
 
 local function key(def, name)
     return "bar" .. def.id .. "_" .. name
@@ -117,9 +152,14 @@ local function get(k, fallback)
     return v
 end
 
--- Which bar this one is set to attach to, as an id, or nil for free.
+-- Which bar this one is set to attach to, as the id STRING it was stored as, or nil for free.
+--
+-- Not coerced to a number: bar ids are not all numeric (the stance bar's is "stance"), and a
+-- tonumber here silently turned that into nil, which reads as "not docked".
 local function attachTarget(def)
-    return tonumber(get(key(def, "attach"), "detached"))
+    local v = get(key(def, "attach"), "detached")
+    if v == nil or v == "detached" or v == "" then return nil end
+    return tostring(v)
 end
 
 -- Walks the attach graph as the SETTINGS describe it, which is what a validator has to do: it runs
@@ -128,11 +168,15 @@ end
 -- Bounded as well as identity-checked. A stored graph that already contains a loop -- a hand-edited
 -- profile, a version that predates this validator -- must not spin here.
 local function wouldCycleInSettings(fromId, toId)
-    local node, steps = toId, 0
+    local node, steps = tostring(toId), 0
     while node do
-        if node == fromId then return true end
+        if node == tostring(fromId) then return true end
         local v = SuuUI.Settings:Get(PLUGIN_ID, "bar" .. node .. "_attach")
-        node = tonumber(v)
+        if v == nil or v == "detached" or v == "" then
+            node = nil
+        else
+            node = tostring(v)
+        end
         steps = steps + 1
         if steps > #BARS + 1 then return true end
     end
@@ -151,7 +195,7 @@ local function requestDock(p, def)
         if provider and provider.Attach then
             provider.Attach(grid, {
                 -- Ordered by bar id so a stack is stable across the order settings happen to fire in.
-                order = def.id,
+                order = def.order or def.id,
                 edge  = get(key(def, "attach_edge"), "above"),
             })
         end
@@ -160,6 +204,12 @@ end
 
 local function slotsFor(def, count)
     local out = {}
+    -- A stance bar's cell IS its form index, so the identity is 1..count rather than an offset
+    -- into a measured slot block.
+    if isStance(def) then
+        for i = 1, count do out[i] = i end
+        return out
+    end
     for i = 1, count do out[i] = def.first + i - 1 end
     return out
 end
@@ -203,15 +253,77 @@ local function syncMoveable(p, def)
     end
 end
 
+-- Builds a shapeshift-bar cell. Passed to ActionBarGrid as its buttonFactory.
+--
+-- A stance button CANNOT be an ActionButton: it carries no `type` attribute and CastShapeshiftForm
+-- is blocked for addon code (both probed in game), so it has to inherit Blizzard's
+-- StanceButtonTemplate. The grid does not care -- the plate, layout, dividers, padding and resize
+-- deferral are identical either way.
+local function stanceButtonFactory(bp, parent)
+    return SuuUI.Components.StanceButton({
+        form       = bp.slot,
+        size       = bp.size,
+        binding    = bp.binding,
+        showHotkey = bp.showHotkey,
+        name       = bp.name,
+    }, parent)
+end
+
+-- A stance bar with no forms is HIDDEN ENTIRELY -- a mage must not get an empty plate.
+--
+-- There is no class check anywhere, deliberately: the condition is purely a count of zero, which is
+-- how the client itself expresses it and how ElvUI does it. A class list would be one more thing to
+-- keep in step with the game.
+--
+-- A plain Hide is enough here rather than a secure state driver, because the form COUNT only changes
+-- at a trainer -- never mid-fight. What changes in combat is which form is ACTIVE, and that repaints
+-- without touching geometry or visibility.
+local function syncStanceVisibility(p, def)
+    local grid = p._bars[def.id]
+    if not grid then return end
+    if stanceFormCount() > 0 then grid:Show() else grid:Hide() end
+end
+
+-- Re-derives the stance bar's cell count from the client and re-checks whether it should exist.
+--
+-- Called on the PLURAL shapeshift event only. The singular one means a different form became
+-- active, which the buttons handle themselves -- routing it here would run a geometry pass on
+-- every stance dance, and in combat that pass is refused.
+local function syncStanceForms(p)
+    for _, def in ipairs(BARS) do
+        if isStance(def) then
+            local grid = p._bars[def.id]
+            if grid then
+                local count = stanceFormCount()
+                -- SKIPPED WHEN THE COUNT HAS NOT MOVED, and this is not a micro-optimisation.
+                -- SetSlots has no equality short-circuit of its own, so it always runs a geometry
+                -- pass -- and the client fires this event on login and on other changes that leave
+                -- the count alone. In combat that pass is deferred, which would leave the bar
+                -- waiting on PLAYER_REGEN_ENABLED for no reason at all.
+                if count ~= #grid:GetSlots() then
+                    grid:SetSlots(slotsFor(def, count), bindingsFor(def, count))
+                end
+                syncStanceVisibility(p, def)
+            end
+        end
+    end
+end
+
 local function buildBar(p, def)
     if p._bars[def.id] then return end
 
-    local count = get(key(def, "buttons"), MAX_BUTTONS)
+    local count
+    if isStance(def) then
+        count = stanceFormCount()
+    else
+        count = get(key(def, "buttons"), MAX_BUTTONS)
+    end
     local root  = SuuUI.UIRoot:GetRootContainer()
 
     local grid = SuuUI.Components.ActionBarGrid({
         slots         = slotsFor(def, count),
         bindings      = bindingsFor(def, count),
+        buttonFactory = isStance(def) and stanceButtonFactory or nil,
         rows          = get(key(def, "rows"), def.rows or 1),
         buttonSize    = get(key(def, "button_size"), 32),
         spacing       = get(key(def, "spacing"), 0),
@@ -240,6 +352,10 @@ local function buildBar(p, def)
             return SuuUI._ActionBars.Dock.Detach(grid, child)
         end,
     })
+
+    if isStance(def) then
+        syncStanceVisibility(p, def)
+    end
 
     -- Only bar 1 pages; the others are fixed to their measured block.
     if def.paged then
@@ -400,11 +516,16 @@ local function barTab(def)
           default = def.enabled ~= false },
         { key = key(def, "show_hotkeys"), label = "Show Hotkeys", type = "toggle",
           default = true, enabledIf = key(def, "enabled") },
-        { key = key(def, "show_macro_text"), label = "Show Macro Names", type = "toggle",
-          default = true, enabledIf = key(def, "enabled") },
-        { key = key(def, "show_count"), label = "Show Counts", type = "toggle",
-          default = true, enabledIf = key(def, "enabled") },
     }
+
+    -- Macro names and charge counts exist only for action slots. A form has neither, so the stance
+    -- tab does not offer the toggles rather than showing two switches that do nothing.
+    if not isStance(def) then
+        schema[#schema + 1] = { key = key(def, "show_macro_text"), label = "Show Macro Names",
+            type = "toggle", default = true, enabledIf = key(def, "enabled") }
+        schema[#schema + 1] = { key = key(def, "show_count"), label = "Show Counts",
+            type = "toggle", default = true, enabledIf = key(def, "enabled") }
+    end
 
     -- Any bar can attach to any OTHER bar, on any edge. Placed before the sliders, with the other
     -- placement decision, rather than mixed in among the dimensions.
@@ -424,8 +545,7 @@ local function barTab(def)
         default = "detached", enabledIf = key(def, "enabled"), options = options,
         validate = function(value)
             if value == nil or value == "detached" then return true end
-            local target = tonumber(value)
-            if not target then return false end
+            local target = tostring(value)
             -- A circular anchor is not a cosmetic fault: the client raises a hard error and leaves
             -- the frame unplaced. So bar 4 on bar 5 on bar 4 is refused rather than attempted.
             --
@@ -448,10 +568,15 @@ local function barTab(def)
         },
     }
 
-    local rest = {
-        { key = key(def, "buttons"), label = "Buttons", type = "slider",
-          min = 1, max = MAX_BUTTONS, step = 1, default = MAX_BUTTONS,
-          enabledIf = key(def, "enabled") },
+    local rest = {}
+    -- NO Buttons slider on the stance bar: its cell count is the player's form count, which the
+    -- client owns. A slider would let a player set 12 and get 8, or set 3 and lose an aura.
+    if not isStance(def) then
+        rest[#rest + 1] = { key = key(def, "buttons"), label = "Buttons", type = "slider",
+            min = 1, max = MAX_BUTTONS, step = 1, default = MAX_BUTTONS,
+            enabledIf = key(def, "enabled") }
+    end
+    local more = {
         { key = key(def, "rows"), label = "Rows", type = "slider",
           min = 1, max = MAX_BUTTONS, step = 1, default = def.rows or 1,
           enabledIf = key(def, "enabled") },
@@ -462,6 +587,7 @@ local function barTab(def)
         { key = key(def, "spacing"), label = "Spacing", type = "slider",
           min = 0, max = 12, step = 1, default = 0, enabledIf = key(def, "enabled") },
     }
+    for _, entry in ipairs(more) do rest[#rest + 1] = entry end
     for _, entry in ipairs(rest) do
         schema[#schema + 1] = entry
     end
@@ -532,7 +658,11 @@ SuuUI:CreatePlugin({
         -- Catches up any dock transition the client refused mid-fight. One frame for the plugin
         -- rather than one per bar, and registered only while the plugin is up.
         p._evt = p._evt or CreateFrame("Frame")
-        p._evt:SetScript("OnEvent", function()
+        p._evt:SetScript("OnEvent", function(_, event)
+            if event == "UPDATE_SHAPESHIFT_FORMS" or event == "PLAYER_ENTERING_WORLD" then
+                syncStanceForms(p)
+                return
+            end
             local pending = p._pendingAttach
             if not pending then return end
             p._pendingAttach = nil
@@ -541,6 +671,22 @@ SuuUI:CreatePlugin({
             end
         end)
         p._evt:RegisterEvent("PLAYER_REGEN_ENABLED")
+        -- The PLURAL event: the SET of forms changed, so the bar needs a different number of cells.
+        -- The singular UPDATE_SHAPESHIFT_FORM is NOT registered here -- that is which form is
+        -- active, which the buttons repaint themselves and which must not touch geometry.
+        p._evt:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+        -- AND entering the world, which is the one that actually makes the bar appear at login.
+        --
+        -- At the moment a bar is built, GetNumShapeshiftForms can still answer 0 -- the client has
+        -- not populated them yet -- so the bar is created with no cells and hides itself. For a
+        -- WARRIOR nothing then rescues it: three stances are known from the start, so the client
+        -- never fires "the set of forms changed", and the bar stays hidden forever. A druid or a
+        -- paladin might get lucky on a later event; a warrior does not.
+        --
+        -- ElvUI registers this for the same reason. Found in game on a warrior, not by a spec: every
+        -- spec here staged its forms BEFORE building the bar, which is the one ordering login never
+        -- uses.
+        p._evt:RegisterEvent("PLAYER_ENTERING_WORLD")
         -- Each bar's enabled watcher is immediate, so it builds on the way in.
         watchSettings(p)
     end,

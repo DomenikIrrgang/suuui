@@ -683,8 +683,57 @@ press-versus-release bug already produced once.
   because our stance buttons are our own frames. `PetActionBar` **cannot** — we reparent its buttons
   out, and hiding the parent would take them with it.
 
-### Still open
+### Round 8 — 6a VERIFIED IN GAME on a warrior, recorded 2026-08-23
 
+The stance bar works: eight auras on a paladin, three stances on a warrior, correct icons, correct
+active form, working tooltip, clicking swaps stance. Four things went wrong first, and **none of them
+were catchable by the 3,800-test suite as it stood** — each one is recorded because each cost a
+round-trip and would cost another.
+
+**1. `SetNormalTexture(nil)` is REFUSED on this client.**
+```
+bad argument #2 to '?' (Usage: self:SetNormalTexture(asset))
+```
+The setter wants an asset and has no "clear it" argument. To clear one of the template's textures,
+take the Texture from the GETTER and hide it. The harness was permissive here and now raises exactly
+as the client does, so the next component making this mistake fails in the suite.
+
+**2. A construction error is SILENT.** `Core/Settings.lua` wraps every watcher callback in `pcall`
+and routes the error to `SuuUI.Debug`, which only prints when `SuuUI._debug` is set. `buildBar` runs
+inside that watcher, so the throw above produced **no bar and no message** — two rounds of wrong
+diagnosis went into that silence before `SuuUI._debug = true` revealed it in one line. A plugin
+failing to build is not a debug-level event; this is worth changing.
+
+**3. The template ALREADY provides a tooltip.** Adding a second setter did not add anything — it
+fought, and the tooltip flicked between the button and the screen corner on every hover, because two
+owners were anchoring one frame. `StanceButton` therefore has **no tooltip code at all**, which is
+the opposite of `ActionButton` and is pinned by a spec so the apparent omission is not "fixed".
+
+**4. Hiding the template's art removes the ACTIVE-FORM visual.** `SetChecked(true)` was correct the
+whole time and drew nothing, because the checked texture was hidden along with everything else. Which
+stance you are in is this bar's primary information, so it now draws a hairline `colorAccent` ring —
+deliberately not a brighter icon, since dimming is already spoken for by the uncastable state and two
+states through one channel cannot be told apart.
+
+**5. `PLAYER_ENTERING_WORLD` is required, not optional.** At build time `GetNumShapeshiftForms()` can
+still answer 0, so the bar is created with no cells and hides itself. A WARRIOR is then stuck
+forever: three stances are known from the start, so the client never fires "the set of forms changed".
+
+#### Why the suite missed all five
+
+Worth stating, because it is a property of the specs rather than bad luck:
+
+- Every spec staged its forms **before** building the bar. That is the one ordering login never uses.
+- The harness accepted `SetNormalTexture(nil)`; the client refuses it.
+- The harness's template shipped **no art**, so "we cleared Blizzard's border" asserted against an
+  already-nil value.
+- After fixing the ring and the tooltip the suite still reported the same test count, which is what
+  revealed that neither was covered at all.
+
+`StanceButtonTemplate` itself is CONFIRMED to exist on this client — the error above came from
+`SetNormalTexture`, which runs after `CreateFrame`, so the button was created successfully.
+
+### Still open
 - **The pet autocast overlay is a visual no existing component provides.** `autoCastAllowed` shows
   it, `autoCastEnabled` spins it. On this client ElvUI drives it via the overlay's own
   `:ShowAutoCastEnabled(bool)`; the `AutoCastShine_*` globals are the dead Classic branch.

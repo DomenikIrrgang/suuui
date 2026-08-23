@@ -65,6 +65,18 @@ function M.install(env)
             f.icon = f:CreateTexture(nil, "ARTWORK")
             f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
             f.HotKey = f:CreateFontString(nil, "OVERLAY")
+            -- The template ships its OWN border and highlight art, and a consumer that composes
+            -- its own visuals has to clear them. Modelled so that clearing is OBSERVABLE: with no
+            -- art here, "we removed Blizzard's border" asserts against nothing.
+            -- TEXTURE OBJECTS, not asset strings, because that is what the client's getters hand
+            -- back -- and hiding the object is the only legal way to clear one, since the setters
+            -- refuse nil. A spec asserting "we removed Blizzard's border" needs the object.
+            local normal = f:CreateTexture(nil, "BORDER")
+            normal:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+            f:SetNormalTexture(normal)
+            local hl = f:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+            f:SetHighlightTexture(hl)
             -- The cast reads GetID() and nothing else -- there is no attribute to consult. This
             -- lands in state.castStance via the recorded CastShapeshiftForm, so a spec asserts
             -- "clicking button 3 casts form 3" against the same observable the client would move.
@@ -75,10 +87,14 @@ function M.install(env)
             -- these buttons -- the template owns that decision -- so a wrong guess can only make a
             -- spec test the wrong phase, never make SuuUI behave wrongly.
             f:RegisterForClicks("AnyUp")
-            f:SetScript("OnClick", function(self)
+            f:SetScript("OnClick", function(self, button, down)
                 if type(env.CastShapeshiftForm) == "function" then
                     env.CastShapeshiftForm(self:GetID())
                 end
+                -- The client fires PostClick after any button's OnClick, and it is the only hook a
+                -- consumer may take without stealing the mechanism -- so a model that omitted it
+                -- would make "observe the click without replacing OnClick" untestable.
+                self:_fire("PostClick", button, down)
             end)
         end
         if name then env[name] = f end
@@ -730,6 +746,13 @@ function M.install(env)
         local n = 0
         while state.stanceForms[n + 1] do n = n + 1 end
         return n
+    end
+
+    -- A spell's icon by id. Modelled because a shapeshift form is identified by spellID, not by a
+    -- slot, and the stance icon is derived through here.
+    env.GetSpellTexture = function(spellID)
+        if type(spellID) ~= "number" then return nil end
+        return state.spellTextures[spellID]
     end
 
     env.GetNumShapeshiftForms = function()

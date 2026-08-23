@@ -349,9 +349,13 @@ describe("Plugins.ActionBars", function()
 
     it("leaves alone everything a later phase replaces", function()
         -- Hiding these now would take away function the player still needs: the micro menu is
-        -- Phase 7, the bags Phase 9, the watch bars Phase 8, the class bars Phase 6.
+        -- Phase 7, the bags Phase 9, the watch bars Phase 8.
+        --
+        -- `PetActionBar` stays on this list for a DIFFERENT reason from the rest, and it is not a
+        -- deferral: its replacement ADOPTS Blizzard's PetActionButton1..N, so hiding the container
+        -- would take the buttons we use with it. That is permanent, not "not yet".
         for _, name in ipairs({ "MicroMenu", "MicroMenuContainer", "MicroButtonAndBagsBar",
-                                "StatusTrackingBarManager", "StanceBar", "PetActionBar",
+                                "StatusTrackingBarManager", "PetActionBar",
                                 "MainMenuBarBackpackButton" }) do
             local f = H.env[name]
             if f then
@@ -359,6 +363,14 @@ describe("Plugins.ActionBars", function()
                     .as(name .. " is not this phase's business").falsy()
             end
         end
+    end)
+
+    it("DOES suppress the stance bar, because ours does not adopt its buttons", function()
+        -- The asymmetry with the pet bar is the point. SuuUI creates its own stance buttons from
+        -- StanceButtonTemplate, so Blizzard's stay in their container and the container can go.
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("StanceBar")).truthy()
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("PetActionBar"))
+            .as("but the pet bar's buttons are the ones we reparent").falsy()
     end)
 
     it("does not take the micro menu down with MainMenuBar", function()
@@ -655,10 +667,24 @@ describe("Plugins.ActionBars: every bar", function()
         expect(bars()[1]).as("bar 1 on").notNil()
         expect(bars()[2]).as("bar 2 on").notNil()
         for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
-            if def.id > 2 then
+            -- The stance bar is deliberately ON by default and its id is not a number: a paladin's
+            -- auras and a warrior's stances are core class controls, not extra buttons.
+            if def.kind ~= "stance" and def.id > 2 then
                 expect(bars()[def.id]).as("bar " .. def.id .. " off").isNil()
             end
         end
+    end)
+
+    it("ships the stance bar ON, because its buttons are class controls", function()
+        -- A paladin has eight auras and a warrior three stances. Hiding those behind a toggle the
+        -- way bars 3-8 are hidden would take away function the player expects to be there.
+        local stance
+        for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
+            if def.kind == "stance" then stance = def end
+        end
+        expect(stance).as("a stance bar is defined").notNil()
+        expect(stance.enabled ~= false).as("on by default").truthy()
+        expect(stance.bindingPrefix).as("measured family, not STANCEBUTTON").eq("SHAPESHIFTBUTTON")
     end)
 
     it("pairs every bar's slot block with the binding family MEASURED for it", function()
@@ -681,9 +707,13 @@ describe("Plugins.ActionBars: every bar", function()
         }
         for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
             local want = measured[def.id]
+            -- The stance bar has no measured slot block: its cells are FORM INDICES, which the
+            -- client owns, so there is nothing to pin here.
+            if def.kind == "stance" then goto continue end
             expect(want).as("bar " .. def.id .. " is a known bar").notNil()
             expect(def.first).as("bar " .. def.id .. " slot block").eq(want.first)
             expect(def.bindingPrefix).as("bar " .. def.id .. " binding family").eq(want.prefix)
+            ::continue::
         end
     end)
 
@@ -751,7 +781,9 @@ describe("Plugins.ActionBars: every bar", function()
             expect(subtabs).notNil()
             expect(#subtabs.tabs).eq(#bars)
             expect(subtabs.tabs[1].label).eq("Bar 1")
-            expect(subtabs.tabs[#bars].label).eq("Bar " .. bars[#bars].id)
+            -- Labelled from the definition rather than built from the id, because the last tab is
+            -- the stance bar and it is called "Stance", not "Bar stance".
+            expect(subtabs.tabs[#bars].label).eq(bars[#bars].label)
         end)
 
         it("declares every key exactly ONCE", function()
@@ -1247,5 +1279,248 @@ describe("Plugins.ActionBars: bar-to-bar docking", function()
                 end
             end
         end
+    end)
+end)
+
+describe("Plugins.ActionBars: the stance bar", function()
+    local PLUGIN = "action_bars"
+
+    before_each(function()
+        H.setup()
+    end)
+
+    local function bars()
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars
+    end
+
+    local function stanceDef()
+        for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
+            if def.kind == "stance" then return def end
+        end
+    end
+
+    -- Rebuilds the plugin against a staged form count, since the bar's cell count is DERIVED from
+    -- the client rather than from a setting -- so the forms have to exist before the bar is built.
+    local function withForms(n)
+        H.setup()
+        for i = 1, n do H.setStanceForm(i, { spellID = i * 100 }, { silent = true }) end
+        H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
+        H.SuuUI.Settings:Set(PLUGIN, "enabled", true)
+        return bars()[stanceDef().id]
+    end
+
+    it("sizes itself to the player's form count, not to a constant", function()
+        -- NUM_STANCE_SLOTS is 10 and is an array bound. A paladin has 8 auras, a warrior 3, a rogue
+        -- 1. Sizing to the bound leaves everyone but a paladin with a row of empty cells.
+        local grid = withForms(3)
+        expect(grid).notNil()
+        expect(#grid:GetButtons()).eq(3)
+    end)
+
+    it("handles a paladin's eight auras, the widest real case", function()
+        -- Measured in game: GetNumShapeshiftForms() answered 8 on a paladin, because this bar
+        -- carries AURAS, not just stances.
+        local grid = withForms(8)
+        expect(#grid:GetButtons()).eq(8)
+        expect(grid:GetButtons()[8]:GetForm()).eq(8)
+    end)
+
+    it("HIDES ITSELF for a class with no forms", function()
+        -- A mage. There is no class check anywhere -- the condition is a count of zero, which is how
+        -- the client expresses it too.
+        local grid = withForms(0)
+        expect(grid).notNil()
+        expect(grid:IsShown()).as("no empty plate for a mage").falsy()
+    end)
+
+    it("APPEARS AT LOGIN, when the bar is built before the client knows the forms", function()
+        -- THE BUG THIS PHASE SHIPPED, found in game on a warrior. Every other spec in this file
+        -- stages its forms BEFORE building the bar, which is the one ordering login never uses.
+        --
+        -- At build time GetNumShapeshiftForms can still answer 0, so the bar is created with no
+        -- cells and hides itself. A warrior is then stuck: three stances are known from the start,
+        -- so the client never fires "the set of forms changed" and nothing rescues it.
+        H.setup()                     -- no forms staged: this IS the login state
+        local grid = bars()[stanceDef().id]
+        expect(grid).as("the bar is built even with no forms yet").notNil()
+        expect(grid:IsShown()).as("and correctly hidden at that moment").falsy()
+
+        for i = 1, 3 do H.setStanceForm(i, { spellID = i * 100 }, { silent = true }) end
+        H.fireEvent("PLAYER_ENTERING_WORLD")
+
+        expect(#grid:GetButtons()).as("entering the world derived the count").eq(3)
+        expect(grid:IsShown()).as("and the warrior can see his stances").truthy()
+    end)
+
+    it("stays hidden at login for a class that really has no forms", function()
+        -- The other half: entering the world must not force the bar on for a mage.
+        H.setup()
+        local grid = bars()[stanceDef().id]
+        H.fireEvent("PLAYER_ENTERING_WORLD")
+        expect(grid:IsShown()).falsy()
+    end)
+
+    it("appears when forms are learned and re-sizes to them", function()
+        local grid = withForms(1)
+        expect(grid:IsShown()).truthy()
+        expect(#grid:GetButtons()).eq(1)
+        -- A druid at a trainer. The PLURAL event is what says the set changed.
+        H.setStanceForm(2, { spellID = 200 })
+        expect(#grid:GetButtons()).as("grew a cell").eq(2)
+    end)
+
+    it("goes away again when the last form is lost", function()
+        local grid = withForms(1)
+        expect(grid:IsShown()).truthy()
+        H.clearStanceForms()
+        expect(grid:IsShown()).falsy()
+    end)
+
+    it("does NOT re-run geometry when only the active form changes", function()
+        -- The distinction that keeps this bar legal in combat. A stance dance fires the SINGULAR
+        -- event constantly mid-fight; running a geometry pass on it would be refused every time.
+        local grid = withForms(3)
+        local rebuilds = 0
+        H.SuuUI.UISignals:Connect(grid, H.SuuUI.UISignals.SIGNALS.CHILDREN_CHANGED,
+            function() rebuilds = rebuilds + 1 end)
+        H.setStanceForm(2, { isActive = true })
+        expect(rebuilds).as("no rebuild for a stance dance").eq(0)
+        expect(grid:GetButtons()[2]:GetFrame():GetChecked()).as("but it did repaint").truthy()
+    end)
+
+    it("costs NOTHING mid-fight when the active form changes", function()
+        -- The sharper version of the test above, and the one that actually pins the requirement.
+        -- SetSlots has no equality short-circuit, so routing the singular event through it would
+        -- run a geometry pass -- which in combat is deferred, leaving the bar waiting on
+        -- PLAYER_REGEN_ENABLED after every single stance dance. IsDeferred is the observable:
+        -- untouched geometry cannot have deferred anything.
+        local grid = withForms(3)
+        H.setCombat(true)
+        H.resetBlockedActions()
+
+        H.setStanceForm(3, { isActive = true })
+
+        expect(grid:IsDeferred()).as("no geometry pass, so nothing to catch up on").falsy()
+        expect(#H.getBlockedActions()).as("and nothing was refused").eq(0)
+        expect(grid:GetButtons()[3]:GetFrame():GetChecked()).as("it still repainted").truthy()
+        H.setCombat(false)
+    end)
+
+    it("does not run geometry when the forms event fires with an unchanged count", function()
+        -- The client fires the plural event on login and on other changes that leave the count
+        -- alone. Without a short-circuit each one costs a deferred layout pass mid-fight.
+        local grid = withForms(3)
+        H.setCombat(true)
+        H.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+        expect(grid:IsDeferred()).as("count unchanged, so nothing to lay out").falsy()
+        H.setCombat(false)
+    end)
+
+    it("binds the SHAPESHIFTBUTTON family, which the frame name does not suggest", function()
+        -- Bound AFTER the bar is built: withForms resets the harness, so a binding staged before
+        -- it would be wiped and this would assert against an empty readout for the wrong reason.
+        local grid = withForms(3)
+        H.setBinding("SHAPESHIFTBUTTON2", "F2")
+        H.fireEvent("UPDATE_BINDINGS")
+        expect(grid:GetButtons()[2]._hotkeyText:GetText()).eq("F2")
+    end)
+
+    it("casts the form its cell names", function()
+        local grid = withForms(3)
+        H.click(grid:GetButtons()[3]:GetFrame())
+        expect(H.getCastStance()).eq(3)
+    end)
+
+    describe("it is a bar like any other", function()
+        it("publishes itself as a dock target", function()
+            withForms(3)
+            expect(H.SuuUI.AttachPoints:Has("actionbar.dock.stance")).truthy()
+        end)
+
+        it("can attach to an action bar", function()
+            -- The payoff from making the attach graph id-agnostic: a string id docks like a numeric
+            -- one, so the stance bar can sit under bar 1 with the rest.
+            local grid = withForms(3)
+            H.SuuUI.Settings:Set(PLUGIN, "barstance_attach_edge", "below")
+            H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
+            expect(H.SuuUI._ActionBars.Dock.ParentOf(grid)).eq(bars()[1])
+            expect(grid:GetFrame()._suuui_moveable).as("the dock owns its position now").isNil()
+        end)
+
+        it("can be a dock for an action bar", function()
+            withForms(3)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "stance")
+            expect(H.SuuUI._ActionBars.Dock.ParentOf(bars()[2]))
+                .eq(bars()[stanceDef().id])
+        end)
+
+        it("stacks beside a numeric bar on the same dock", function()
+            -- The stance bar's id is the string "stance" while every other is a number, and the dock
+            -- SORTS a stack by order. Two children on ONE dock is the only shape that makes the
+            -- comparison happen -- with a single child sort never compares, so an id used as the
+            -- sort key looks fine right up until a second bar joins.
+            withForms(3)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_enabled", true)
+            H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "1")
+            local kids = H.SuuUI._ActionBars.Dock.Children(bars()[1])
+            expect(kids).len(2)
+            -- ORDER is the observable, not just the count. The stack is sorted by `order`, and the
+            -- stance bar's is 99 while bar 2's is 2 -- so bar 2 sits nearest the dock. An `order`
+            -- taken from the id instead would compare the string "stance" with the number 2, and a
+            -- comparator that raises leaves the array in insertion order, which is the reverse.
+            expect(kids[1]).as("bar 2 is nearest the dock").eq(bars()[2])
+            expect(kids[2]).as("the stance bar sits beyond it").eq(bars()[stanceDef().id])
+        end)
+
+        it("refuses a cycle with the stance bar in it", function()
+            local grid = withForms(3)
+            H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "stance")
+            H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "2")
+            expect(H.SuuUI.Settings:Get(PLUGIN, "barstance_attach"))
+                .as("the loop was refused").eq("detached")
+            expect(H.SuuUI._ActionBars.Dock.ParentOf(grid)).isNil()
+        end)
+    end)
+
+    describe("its settings tab", function()
+        local function stanceTab()
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                if e.type == "subtabs" then
+                    for _, tab in ipairs(e.tabs) do
+                        if tab.label == "Stance" then return tab end
+                    end
+                end
+            end
+        end
+
+        local function hasKey(tab, suffix)
+            for _, entry in ipairs(tab.schema) do
+                if entry.key == "barstance_" .. suffix then return true end
+            end
+            return false
+        end
+
+        it("exists and is labelled Stance, not Bar stance", function()
+            expect(stanceTab()).notNil()
+        end)
+
+        it("offers no Buttons slider, because the client owns the count", function()
+            -- A slider would let a player ask for 12 and get 8, or ask for 3 and lose an aura.
+            expect(hasKey(stanceTab(), "buttons")).falsy()
+        end)
+
+        it("offers no macro-name or count toggles, which a form does not have", function()
+            expect(hasKey(stanceTab(), "show_macro_text")).falsy()
+            expect(hasKey(stanceTab(), "show_count")).falsy()
+        end)
+
+        it("still offers the shape and placement settings every bar has", function()
+            local tab = stanceTab()
+            for _, suffix in ipairs({ "enabled", "show_hotkeys", "rows", "button_size",
+                                     "spacing", "attach", "attach_edge" }) do
+                expect(hasKey(tab, suffix)).as("barstance_" .. suffix).truthy()
+            end
+        end)
     end)
 end)

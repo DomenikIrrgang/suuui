@@ -35,8 +35,14 @@ local M = {}
 -- client generation, not a bug.
 --
 -- Deliberately NOT here, because nothing replaces them yet and hiding them would take away
--- function the player still needs: the micro menu (Phase 7), the bags (Phase 9), the XP and
--- reputation bars (Phase 8), and the stance / pet / possess bars (Phase 6).
+-- function the player still needs: the micro menu (Phase 7), the bags (Phase 9) and the XP and
+-- reputation bars (Phase 8).
+--
+-- `PetActionBar` is NOT here either, and for a DIFFERENT reason that must not be tidied away: the
+-- pet bar's replacement ADOPTS Blizzard's PetActionButton1..N and reparents them, so hiding their
+-- container would take the buttons we are using with it. The stance bar has the opposite shape --
+-- SuuUI creates its own buttons from StanceButtonTemplate, so Blizzard's stay in the container and
+-- the container can go.
 local TARGETS = {
     -- The BUTTONS. Measured in game by walking up from ActionButton1:
     --   ActionButton1 > MainActionBarButtonContainer1 > MainActionBar > UIParent
@@ -59,6 +65,15 @@ local TARGETS = {
     { id = "multi_5",      names = { "MultiBar5" } },
     { id = "multi_6",      names = { "MultiBar6" } },
     { id = "multi_7",      names = { "MultiBar7" } },
+    -- The shapeshift bar. Safe to hide because SuuUI creates its OWN buttons from
+    -- StanceButtonTemplate rather than adopting Blizzard's -- which is also why Blizzard's own
+    -- StanceBar_Update, which walks StanceButton1..N by name, never touches ours.
+    --
+    -- `StanceBar` is the live name on this client (Edit Mode build); `StanceBarFrame` is the
+    -- Classic-Era spelling. Both are listed because an absent name is skipped, and because these
+    -- frames have coexisted under two names before -- MainMenuBar and MainActionBar did exactly
+    -- that, and picking one cost a round of rework.
+    { id = "stance_bar",   names = { "StanceBar", "StanceBarFrame", "ShapeshiftBarFrame" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
     { id = "bar_art",      names = { "MainMenuBarArtFrame" } },
@@ -80,6 +95,7 @@ local WITNESS_BUTTONS = {
     "MultiBar5Button1",
     "MultiBar6Button1",
     "MultiBar7Button1",
+    "StanceButton1",
 }
 
 M.WITNESS_BUTTONS = WITNESS_BUTTONS

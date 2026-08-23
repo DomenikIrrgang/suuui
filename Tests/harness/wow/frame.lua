@@ -592,18 +592,40 @@ function ButtonMeta:Click(button) self:_fire("OnClick", button or "LeftButton") 
 -- observable a spec asserts against rather than an internal flag on the component.
 function ButtonMeta:SetChecked(on) self._checked = on and true or false end
 function ButtonMeta:GetChecked()   return self._checked == true end
-function ButtonMeta:SetNormalTexture(t) self._normalTexture = t end
+-- The four texture setters REFUSE nil, exactly as the client does:
+--   bad argument #2 to '?' (Usage: self:SetNormalTexture(asset))
+--
+-- Modelled strictly because the permissive version hid a real bug: a component cleared the
+-- template's art by passing nil, every spec passed, and in game the call raised during construction
+-- and took the whole bar down. To CLEAR one of these, take the Texture from the getter and hide it.
+local function requireAsset(method, asset)
+    if asset == nil then
+        error(("bad argument #2 to '?' (Usage: self:%s(asset))"):format(method), 3)
+    end
+end
+
+function ButtonMeta:SetNormalTexture(t)
+    requireAsset("SetNormalTexture", t)
+    self._normalTexture = t
+end
 function ButtonMeta:GetNormalTexture()  return self._normalTexture end
 
 -- The rest of a Button's texture slots, plus the highlight lock. Stored rather than drawn:
 -- the harness models geometry and state, and none of these change a rect. A drag
 -- implementation locks the highlight for the duration of the gesture, so the lock is
 -- readable -- a write-only flag could not be asserted.
-function ButtonMeta:SetPushedTexture(t)    self._pushedTexture = t end
+function ButtonMeta:SetPushedTexture(t)
+    requireAsset("SetPushedTexture", t)
+    self._pushedTexture = t
+end
 function ButtonMeta:GetPushedTexture()     return self._pushedTexture end
-function ButtonMeta:SetDisabledTexture(t)  self._disabledTexture = t end
+function ButtonMeta:SetDisabledTexture(t)
+    requireAsset("SetDisabledTexture", t)
+    self._disabledTexture = t
+end
 function ButtonMeta:GetDisabledTexture()   return self._disabledTexture end
 function ButtonMeta:SetHighlightTexture(t, blend)
+    requireAsset("SetHighlightTexture", t)
     self._highlightTexture = t
     self._highlightBlend   = blend
 end
