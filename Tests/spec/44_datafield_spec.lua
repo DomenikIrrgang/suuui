@@ -1086,3 +1086,116 @@ describe("Components.DataField", function()
         end)
     end)
 end)
+
+-- The optional LEADING ICON, added for the micro menu (Phase 7): each entry is an icon plus a short
+-- label, or an icon alone.
+--
+-- The subtlety is that `_box` is a STACK container, so its children OVERLAY rather than flow -- the
+-- icon is not "before" the label by being added first. Both are placed by inset, and the label's left
+-- inset has to grow to clear the icon or the two draw on top of each other.
+describe("Components.DataField icon", function()
+    local host, pad
+
+    before_each(function()
+        H.setup()
+        host = H.parent(400, 60)
+        pad = H.token("spaceMd")
+    end)
+
+    local function field(props)
+        local f = H.C.DataField(props or {}, host)
+        f:GetFrame():SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        return f
+    end
+
+    it("draws no icon unless one is set", function()
+        local f = field({ text = "Hello" })
+        expect(f:IsIconShown()).falsy()
+        expect(f._iconTex:IsShown()).falsy()
+    end)
+
+    it("shows the icon once given a texture", function()
+        local f = field({ text = "Hello" })
+        f:SetIcon("Interface\\Icons\\X")
+        expect(f:IsIconShown()).truthy()
+        expect(f._iconTex:IsShown()).truthy()
+        expect(f._iconTex:GetTexture()).eq("Interface\\Icons\\X")
+    end)
+
+    it("applies atlas coordinates, which is how one sheet serves fourteen glyphs", function()
+        local f = field({ text = "" })
+        f:SetIcon("Interface\\AddOns\\SuuUI\\Media\\micro", { 0, 0.25, 0, 0.25 })
+        expect({ f._iconTex:GetTexCoord() }).deepEq({ 0, 0.25, 0, 0.25 })
+    end)
+
+    it("resets the coordinates for a plain texture, so no atlas crop leaks", function()
+        local f = field({ text = "" })
+        f:SetIcon("atlas", { 0.5, 0.75, 0.5, 0.75 })
+        f:SetIcon("plain")
+        expect({ f._iconTex:GetTexCoord() }).deepEq({ 0, 1, 0, 1 })
+    end)
+
+    it("PUSHES THE LABEL CLEAR of the icon, since a stack would overlay them", function()
+        local f = field({ text = "Hello" })
+        local before = f._labelProps.inset.left
+        f:SetIcon("Interface\\Icons\\X")
+        expect(f._labelProps.inset.left)
+            .as("label inset grew by the icon plus a gap").eq(before + f._iconSize + pad)
+        expect(H.box(f._label).left >= H.box(f._iconTex).right)
+            .as("and the two do not overlap").truthy()
+    end)
+
+    it("gives the inset back when the icon goes", function()
+        local f = field({ text = "Hello" })
+        local before = f._labelProps.inset.left
+        f:SetIcon("Interface\\Icons\\X")
+        f:SetIcon(nil)
+        expect(f._labelProps.inset.left).eq(before)
+        expect(f._iconTex:IsShown()).falsy()
+    end)
+
+    it("hugs to icon plus spaceMd either side when there is no label", function()
+        -- The exact width the plan specifies for an icon-only entry. Counting the icon-to-text gap
+        -- here too would make every micro-menu entry a spaceMd too wide, which compounds across a
+        -- row into a visibly loose strip.
+        local f = field({ text = "" })
+        f:SetIcon("Interface\\Icons\\Y")
+        expect(f:GetWidth()).eq(f._iconSize + pad * 2)
+    end)
+
+    it("widens by the icon AND a gap when there is a label", function()
+        local f = field({ text = "Hello" })
+        local before = f:GetWidth()
+        f:SetIcon("Interface\\Icons\\X")
+        expect(f:GetWidth()).eq(before + f._iconSize + pad)
+    end)
+
+    it("refuses to draw a block when asked to show an icon it does not have", function()
+        -- A shown texture with no file draws white, which reads as a rendering fault rather than a
+        -- missing setting.
+        local f = field({ text = "Hello" })
+        f:SetIconShown(true)
+        expect(f:IsIconShown()).falsy()
+        expect(f._iconTex:IsShown()).falsy()
+    end)
+
+    it("can hide and re-show without forgetting which icon it had", function()
+        local f = field({ text = "Hello" })
+        f:SetIcon("Interface\\Icons\\X")
+        f:SetIconShown(false)
+        expect(f:IsIconShown()).falsy()
+        f:SetIconShown(true)
+        expect(f._iconTex:GetTexture()).eq("Interface\\Icons\\X")
+    end)
+
+    it("keeps the label clear of the icon across a theme change", function()
+        -- ApplyTheme re-states the paddings, and doing that without re-applying the icon clearance
+        -- would drop the label back on top of the glyph on every theme change.
+        local f = field({ text = "Hello" })
+        f:SetIcon("Interface\\Icons\\X")
+        local want = f._labelProps.inset.left
+        f:ApplyTheme()
+        expect(f._labelProps.inset.left).eq(want)
+        expect(f._iconTex:IsShown()).truthy()
+    end)
+end)

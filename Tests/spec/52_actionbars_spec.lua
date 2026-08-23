@@ -479,6 +479,23 @@ describe("Plugins.ActionBars", function()
         end
     end)
 
+    it("LEAVES THE POSSESS BAR ALONE while it is DEFERRED", function()
+        -- Phase 6c is deferred, not dropped: possess is real on this client -- ElvUI's TBC pet
+        -- visibility string carries `nopossessbar`, which it withholds from Classic -- but replacing
+        -- it now is not defensible:
+        --   * It cannot be verified without a Mind Control or Eyes of the Beast.
+        --   * No addon installed here implements a possess bar, so there is no reference for the API.
+        --   * ElvUI HIDES `PossessActionBar` and never replaces it, so even a mature addon does not
+        --     consider it worth the risk.
+        --
+        -- Blizzard's bar therefore stays, working, until someone can test a replacement. This spec
+        -- exists so a future suppression sweep
+        -- that adds "every remaining bottom-cluster frame" cannot silently cost a priest the ability
+        -- to act while mind-controlling something.
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("PossessActionBar")).falsy()
+        expect(H.env.PossessActionBar:IsShown()).as("still usable").truthy()
+    end)
+
     it("suppresses BOTH class bars, because ours adopts neither's buttons", function()
         -- No asymmetry after all. An earlier draft assumed the pet bar had to adopt Blizzard's
         -- buttons and therefore keep its container alive; it does not -- `type="pet"` works on a

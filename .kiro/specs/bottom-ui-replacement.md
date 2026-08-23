@@ -804,6 +804,28 @@ pet buttons act on the release anyway.
 them. If a hidden target turns out to refuse a forwarded click, the fallback is to suppress
 `PetActionBar` by moving it off-screen rather than hiding it.
 
+### 6c — possess: DEFERRED, not dropped. Decided 2026-08-24
+
+Possess is real on this client and IS still wanted. It is deferred rather than declined, because
+nothing about a replacement could be trusted today:
+
+- **It cannot be verified.** A possess bar needs a Mind Control or Eyes of the Beast to appear, so
+  every claim about it would be untested. Four rounds went into the pet bar's click path even though
+  it WAS verifiable; the same work unverifiable is not a trade worth making.
+- **There is no reference implementation.** `GetPossessInfo(slot)` exists per the client's own API
+  stub, but nothing installed here calls it, so its returns are unknown.
+- **ElvUI hides `PossessActionBar` and never replaces it.** Even a mature addon judged this not worth
+  the risk.
+
+So Blizzard's possess bar stays, working, until it can be tested. `Suppress.lua` deliberately does NOT
+list it, and a spec asserts that -- otherwise a later "hide every remaining bottom-cluster frame"
+sweep would silently cost a priest the ability to act while mind-controlling something.
+
+**To pick this up:** get on a priest (Mind Control) or a hunter (Eyes of the Beast), possess something,
+and probe before writing anything -- `IsPossessBarVisible()`, then `GetPossessInfo(1)` and `(2)` for
+their real returns, and walk the parent chain from whatever button appears. Phase 0's frame names were
+wrong three times; this one has never been read at all.
+
 ### Still open
 - **The pet autocast overlay is a visual no existing component provides.** `autoCastAllowed` shows
   it, `autoCastEnabled` spins it. On this client ElvUI drives it via the overlay's own
@@ -890,7 +912,7 @@ Each phase ends green with its own specs and is independently verifiable in game
 | 3 | `ActionButton` | Icon, cooldown, count, hotkey, usable and range states; drag in and out; `PostClick` emits; not `SetScript("OnClick")` |
 | 4 | `ActionBarGrid` + `action_bars` bar 1, Blizzard cluster suppressed | Bottom cluster and gryphons gone, bar 1 functional, restored exactly on disable |
 | 5 | Bars 2..N + the B3 dock | `Attach To` moves a bar between dock and free; `coreInset` keeps the stored position meaning the buttons; the lockdown pair above passes |
-| 6 | Stance / pet / possess | Druid form swap, hunter pet, mind control exit all work; auto-hidden when empty |
+| 6 | Stance / pet | Stance + pet DONE and verified. Possess DEFERRED -- unverifiable without a possessing character |
 | 7 | Atlas + `DataField` icon + `micro_menu` | Every micro button opens its panel; labels toggle collapses to glyph-only; unglyphed buttons fall back to text |
 | 8 | `watch_bars` | XP with rested ghost fill and readouts; rep bar identical, faction-coloured from `Game.ReactionColor`; both hide when silent |
 | 9 | `bag_bar` | Free-slot count with settings-driven tone thresholds; click opens bags |

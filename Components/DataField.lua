@@ -61,8 +61,21 @@ function DataMeta:_autosize()
     local fs = self._label
     local font, size, flags = fs:GetFont()
     local tw = SuuUI.TextMetrics.Box(fs:GetText() or "", font, size, flags)
-    local pad = (SuuUI.Theme:GetToken("spaceMd") or 12) * 2
-    local w = SuuUI.Pixel.Ceil(tw + pad)
+    local space = SuuUI.Theme:GetToken("spaceMd") or 12
+    local pad = space * 2
+    -- An icon widens the hug by its own size, PLUS a gap only when there is text to separate it
+    -- from. Counting the gap unconditionally makes an icon-only field a whole `spaceMd` too wide,
+    -- which on a row of micro-menu entries compounds into a visibly loose strip.
+    --
+    -- So: label only        -> text + space either side
+    --     icon + label      -> space, icon, space, text, space
+    --     icon only         -> space, icon, space   (what the plan specifies)
+    local iconW = 0
+    if self._iconShown then
+        iconW = self._iconSize or 0
+        if (fs:GetText() or "") ~= "" then iconW = iconW + space end
+    end
+    local w = SuuUI.Pixel.Ceil(tw + pad + iconW)
     if self._minW and w < self._minW then w = self._minW end
     if math.abs((self._f:GetWidth() or 0) - w) <= 0.5 then return end
     -- Setting the width fires the frame's own OnSizeChanged, which the host container chains
@@ -85,6 +98,65 @@ function DataMeta:_autosizeH()
     if lh > h then h = SuuUI.Pixel.Ceil(lh) end
     if math.abs((self._f:GetHeight() or 0) - h) <= 0.5 then return end
     self._f:SetHeight(h)
+end
+
+--- Sets the leading icon, or clears it.
+--
+-- Showing or hiding an icon changes the field's width, so a hugging field re-measures and the label
+-- is pushed clear of it. Both happen here rather than being left to the caller: a field whose icon
+-- and label overlap is the failure this positioning exists to prevent.
+-- @param texture string|nil  texture path; nil hides the icon
+-- @param coords table|nil    { left, right, top, bottom } for an atlas
+function DataMeta:SetIcon(texture, coords)
+    self._icon = texture
+    -- COORDS ARE REPLACED, NEVER INHERITED. An earlier version kept the previous crop when none was
+    -- given, on the theory that re-stating the same atlas cell was noise -- but that makes the
+    -- dangerous case the default: setting a plain texture after an atlas one would crop the new image
+    -- to the old cell and draw a quarter of the wrong picture. A caller that wants the crop kept
+    -- passes it again.
+    self._iconCoords = coords
+    self:_applyIcon()
+end
+
+--- Shows or hides the icon without forgetting which one it is.
+-- @param on bool
+function DataMeta:SetIconShown(on)
+    self._iconWanted = on and true or false
+    self:_applyIcon()
+end
+
+function DataMeta:_applyIcon()
+    local tex = self._iconTex
+    if not tex then return end
+    -- Wanted AND present. An icon asked for with no texture would draw a white block, which reads as
+    -- a rendering fault rather than a missing setting.
+    local show = self._icon ~= nil and self._iconWanted ~= false
+    if show then
+        tex:SetTexture(self._icon)
+        local c = self._iconCoords
+        if c then
+            tex:SetTexCoord(c[1] or 0, c[2] or 1, c[3] or 0, c[4] or 1)
+        else
+            tex:SetTexCoord(0, 1, 0, 1)
+        end
+        tex:Show()
+    else
+        tex:Hide()
+    end
+    self._iconShown = show
+
+    -- The label clears the icon rather than sitting under it. `_box` is a stack, so nothing moves the
+    -- label out of the way on its own.
+    local space = SuuUI.Theme:GetToken("spaceMd") or 12
+    self._labelProps.inset.left = show and (space + (self._iconSize or 0) + space) or space
+    self:_autosize()
+    self._box:Layout()
+end
+
+--- Whether the icon is currently drawn.
+-- @return bool
+function DataMeta:IsIconShown()
+    return self._iconShown == true
 end
 
 --- Sets the value shown after the prefix. Emits TEXT_CHANGED.--
@@ -189,8 +261,12 @@ function DataMeta:ApplyTheme()
     self._railProps.height = self._railH
 
     local pad = T:GetToken("spaceMd") or 12
-    self._labelProps.inset.left  = pad
     self._labelProps.inset.right = pad
+    -- Re-stated through _applyIcon so the label's LEFT inset follows the icon's presence rather than
+    -- being reset to bare padding -- doing it here directly would drop the icon clearance on every
+    -- theme change and leave the label sitting on top of the glyph.
+    self._iconProps.inset.left = pad
+    self:_applyIcon()
 
     self._box:Layout()
     self:_paint()
@@ -204,6 +280,7 @@ end
 function DataMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._iconTex then self._iconTex:Hide() end
     self._labelText:Destroy()
     self._box:Destroy()
     -- The layout box is adopted, so destroying it does not hide the frame it lays out.
@@ -266,6 +343,27 @@ function SuuUI.Components.DataField(props, parent)
         wrap = false,
     }, f)
     local pad = T:GetToken("spaceMd") or 12
+
+    -- AN OPTIONAL LEADING ICON.
+    --
+    -- `_box` is a STACK container, so its children OVERLAY rather than flow -- the icon cannot be
+    -- "before" the label by being added first. Both are positioned by inset instead: the icon hugs
+    -- the left edge, and the label's left inset grows to clear it. That is also why the icon is a
+    -- texture rather than an Icon component: nothing needs to be measured or reflowed, only offset.
+    --
+    -- A texture also sidesteps the reason this field is deliberately ONE font string: the prefix and
+    -- value share it so they cannot land on different baselines. An icon has no baseline to disagree
+    -- with.
+    local iconSize = props.iconSize or T:GetToken("sizeIcon") or 14
+    local iconTex = f:CreateTexture(nil, "ARTWORK")
+    local iconProps = {
+        valign = "center", align = "start",
+        width = iconSize, height = iconSize,
+        inset = { left = pad },
+    }
+    box:Add(iconTex, iconProps)
+    iconTex:Hide()
+
     -- Kept as an upvalue so ApplyTheme can re-state the padding when the token moves,
     -- without allocating a props table per theme change.
     local labelProps = { valign = "center", inset = { left = pad, right = pad } }
@@ -279,6 +377,7 @@ function SuuUI.Components.DataField(props, parent)
     railTex:Hide()
 
     local id = "datafield_" .. tostring(f)
+
     handle = setmetatable({
         _f          = f,
         -- _label stays the font string so callers and specs reach the same region.
@@ -298,6 +397,12 @@ function SuuUI.Components.DataField(props, parent)
         _railTex    = railTex,
         _railProps  = railProps,
         _labelProps = labelProps,
+        _iconTex    = iconTex,
+        _iconProps  = iconProps,
+        _iconSize   = iconSize,
+        _icon       = props.icon,
+        _iconCoords = props.iconCoords,
+        _iconShown  = false,
     }, DataMeta)
 
     labelText:SetText(compose(handle))
