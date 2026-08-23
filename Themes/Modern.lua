@@ -35,6 +35,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityGrid      = 0.15,
     -- Smart guide lines (element alignment) are brighter than the base grid.
     opacityGuide     = 0.40,
+    -- See Themes/Default.lua: the action bar plate's dense edge, open edge and lit top
+    -- hairline. Denser here than in Default, matching this theme's higher contrast.
+    opacityGlass      = 0.85,
+    opacityGlassFade  = 0.30,
+    opacityGlassSheen = 0.10,
 
     -- Tier 2: surfaces
     colorBg          = { ref = "colorGray900", alpha = "opacityPanel" },
@@ -60,6 +65,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorMarker      = { ref = "colorGray100", alpha = 0.90 },
     -- See Themes/Default.lua: the empty part of a frameless bar, over the game world.
     colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" },
+    -- See Themes/Default.lua: the action bar plate. Its own tokens rather than a reuse of
+    -- colorBarTrack, and the sheen refs the lightest neutral because it is a highlight.
+    colorGlass       = { ref = "colorGray950", alpha = "opacityGlass" },
+    colorGlassFade   = { ref = "colorGray950", alpha = "opacityGlassFade" },
+    colorGlassSheen  = { ref = "colorGray100", alpha = "opacityGlassSheen" },
     -- See Themes/Default.lua: the uninterruptible-cast outline.
     colorShield      = "colorGray400",
     -- See Themes/Default.lua: a unit's health when it is not class-coloured.

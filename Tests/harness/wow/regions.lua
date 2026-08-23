@@ -56,6 +56,36 @@ end
 
 function TextureMeta:GetGradient() return self._gradient end
 
+-- Gradient support is a CLIENT GENERATION, so the harness has to be able to take it away.
+-- Phase 0 measured SetGradient present and SetGradientAlpha gone on this build, but the
+-- addon keeps a flat-fill fallback for a client with neither, and that fallback needs a
+-- reachable branch.
+--
+-- Absence is modelled by deleting the entry from the metatable rather than by stubbing it
+-- to return nil, because production decides which path to take with
+-- `type(tex.SetGradient) == "function"` -- a present-but-inert method sends it down the
+-- gradient path and leaves the fallback untestable, which is precisely the permissive
+-- harness this project has already shipped four bugs behind. Method lookup is dynamic, so
+-- textures created before the call observe the change too.
+local gradientMethods = {
+    SetGradient = TextureMeta.SetGradient,
+    GetGradient = TextureMeta.GetGradient,
+}
+
+--- Adds or removes the gradient API on every texture.
+-- @param on boolean  false models a client that never had it
+function M.setGradientSupported(on)
+    for name, fn in pairs(gradientMethods) do
+        TextureMeta[name] = on and fn or nil
+    end
+end
+
+--- Restores gradient support. Called from api.install, so a spec that forgets to put it
+--- back cannot leak an absent-API client into the next spec file.
+function M.resetGradientSupport()
+    M.setGradientSupported(true)
+end
+
 function TextureMeta:SetDesaturated(on)
     self._desaturated = on and true or false
     return true

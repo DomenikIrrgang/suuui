@@ -734,3 +734,292 @@ describe("Components.ColorSwatch on the shared primitives", function()
         H.expectOffset(s._swatch, s:GetFrame(), 4, 4)
     end)
 end)
+
+describe("Backdrop.Glass", function()
+    local host, f, gl
+
+    local DEFAULTS = {
+        from = "colorGlass", to = "colorGlassFade", sheen = "colorGlassSheen",
+    }
+
+    local function build(w, h, opts)
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(w, h)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        local o = opts or {}
+        for k, v in pairs(DEFAULTS) do
+            if o[k] == nil then o[k] = v end
+        end
+        gl = H.SuuUI.Backdrop.Glass(f, o)
+        return gl
+    end
+
+    -- A gradient endpoint as {r,g,b,a}, so it can go through expectTokenColor like any
+    -- other colour. The client hands these back as CreateColor objects, not arrays.
+    local function stop(c)
+        local r, g, b, a = c:GetRGBA()
+        return { r, g, b, a }
+    end
+
+    -- Draw order between two textures on ONE frame is the draw LAYER. H.expectDrawsAbove
+    -- compares frame strata and cannot answer this -- it fails on a texture, which has no
+    -- GetFrameStrata. Ranked low to high, in the client's own order.
+    local LAYER_RANK = { BACKGROUND = 1, BORDER = 2, ARTWORK = 3, OVERLAY = 4, HIGHLIGHT = 5 }
+    local function expectLayerAbove(above, below, note)
+        -- Parenthesised: GetDrawLayer returns layer AND sublayer, and an unparenthesised
+        -- call in an index position would carry both.
+        local a = LAYER_RANK[(above:GetDrawLayer())]
+        local b = LAYER_RANK[(below:GetDrawLayer())]
+        expect(a).as(note .. ": upper layer is a known one").notNil()
+        expect(b).as(note .. ": lower layer is a known one").notNil()
+        expect(a).as(note).gt(b)
+    end
+
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+    end)
+
+    describe("the gradient body", function()
+        it("runs the DENSE colour along the top edge, not the bottom", function()
+            build(200, 40, { inset = 0 })
+            local grad = gl._body:GetGradient()
+            expect(grad).as("the body took the gradient path").notNil()
+            expect(grad.orientation).eq("VERTICAL")
+            -- The whole point of this test. SetGradient's FIRST colour runs along the
+            -- BOTTOM for a VERTICAL gradient, so the faded end is passed first and the
+            -- dense end second. Swap them and the plate inverts -- still a gradient, still
+            -- looks deliberate, and wrong.
+            H.expectTokenColor(stop(grad.from), "colorGlassFade")
+            H.expectTokenColor(stop(grad.to), "colorGlass")
+        end)
+
+        it("leaves the vertex colour white, so the plate is not tinted twice", function()
+            build(200, 40, { inset = 0 })
+            -- A gradient multiplies with the vertex colour. Anything but white here
+            -- darkens the whole plate by a second factor.
+            expect(H.vertexColor(gl._body)).deepEq({ 1, 1, 1, 1 })
+            expect(gl:IsGradient()).truthy()
+        end)
+
+        it("covers the frame's whole box at inset 0", function()
+            build(200, 40, { inset = 0 })
+            H.expectBox(gl._body, H.box(f))
+        end)
+
+        it("insets the body by the borderWidth token when no inset is given", function()
+            build(200, 40)
+            local bw = H.token("borderWidth")
+            H.expectOffset(gl._body, f, bw, bw)
+            H.expectSize(gl._body, 200 - bw * 2, 40 - bw * 2)
+        end)
+    end)
+
+    describe("without the gradient API", function()
+        it("falls back to a flat fill at the midpoint alpha", function()
+            H.setGradientSupported(false)
+            build(200, 40, { inset = 0 })
+            expect(gl:IsGradient()).as("took the fallback path").falsy()
+            expect(gl._body.GetGradient).as("the client really has no gradient API").isNil()
+
+            local mid = (H.token("opacityGlass") + H.token("opacityGlassFade")) / 2
+            local c = H.vertexColor(gl._body)
+            expect(c[4]).as("alpha is the midpoint of the two ends").near(mid, 0.0001)
+            -- RGB comes from the dense end; both ends ref the same neutral, so this is the
+            -- plate's colour either way.
+            local dense = H.token("colorGlass")
+            expect(c[1]).near(dense[1], 0.0001)
+        end)
+
+        it("still draws a body, rather than nothing at all", function()
+            H.setGradientSupported(false)
+            build(200, 40, { inset = 0 })
+            H.expectBox(gl._body, H.box(f))
+            expect(H.vertexColor(gl._body)[4]).as("not transparent").gt(0)
+        end)
+
+        it("is restored for the next spec by setup, not left absent", function()
+            -- The leak this guards against: an absent API leaking forward turns every
+            -- later gradient assertion vacuous instead of failing.
+            H.setGradientSupported(false)
+            H.setup()
+            host = H.parent(300, 200)
+            build(200, 40, { inset = 0 })
+            expect(gl:IsGradient()).truthy()
+        end)
+    end)
+
+    describe("the sheen", function()
+        it("is one grid unit tall along the top edge", function()
+            build(200, 40, { inset = 0 })
+            local hair = H.SuuUI.Pixel.Line(0)
+            expect(gl._sheenTex:GetHeight()).eq(hair)
+            expect(H.box(gl._sheenTex).top).eq(H.box(f).top)
+            expect(gl._sheenTex:GetWidth()).eq(200)
+        end)
+
+        it("is LIGHTER than the body, which is what makes it read as a lit edge", function()
+            build(200, 40, { inset = 0 })
+            H.expectTokenColor(H.vertexColor(gl._sheenTex), "colorGlassSheen")
+            -- The semantic, not just the token: a sheen refs the lightest neutral while
+            -- the body refs the darkest. Copy gray950 into it and this fails.
+            local sheen, body = H.token("colorGlassSheen"), H.token("colorGlass")
+            expect(sheen[1]).as("sheen is brighter than the plate").gt(body[1])
+        end)
+
+        it("draws above the body", function()
+            build(200, 40, { inset = 0 })
+            expectLayerAbove(gl._sheenTex, gl._body, "sheen over body")
+            expect(gl._body:GetDrawLayer()).eq("BACKGROUND")
+            expect(gl._sheenTex:GetDrawLayer()).eq("BORDER")
+        end)
+
+        it("sits inside the border rather than over it", function()
+            build(200, 40, { border = "colorBorder" })
+            local bw = H.token("borderWidth")
+            expect(H.box(gl._sheenTex).top).eq(H.box(f).top + bw)
+            H.expectInside(gl._sheenTex, f)
+        end)
+    end)
+
+    describe("the border", function()
+        it("draws four hairline edges over everything else", function()
+            build(200, 40, { border = "colorBorder" })
+            local bw = H.token("borderWidth")
+            expect(gl._edgeT:GetHeight()).eq(bw)
+            expect(gl._edgeB:GetHeight()).eq(bw)
+            expect(gl._edgeL:GetWidth()).eq(bw)
+            expect(gl._edgeR:GetWidth()).eq(bw)
+            for _, e in ipairs(gl._edges) do
+                H.expectTokenColor(H.vertexColor(e), "colorBorder")
+                expectLayerAbove(e, gl._sheenTex, "border over sheen")
+            end
+        end)
+
+        it("spans the full box on each side", function()
+            build(200, 40, { border = "colorBorder" })
+            local fb = H.box(f)
+            expect(gl._edgeT:GetWidth()).eq(200)
+            expect(gl._edgeB:GetWidth()).eq(200)
+            expect(H.box(gl._edgeT).top).eq(fb.top)
+            expect(H.box(gl._edgeB).bottom).eq(fb.bottom)
+            expect(H.box(gl._edgeL).left).eq(fb.left)
+            expect(H.box(gl._edgeR).right).eq(fb.right)
+        end)
+
+        it("is transparent rather than absent when no border is asked for", function()
+            build(200, 40, { border = false, inset = 0 })
+            -- Same contract as Apply's border = false: a real 0,0,0,0 rather than a
+            -- missing texture, so there is no geometry branch to reason about.
+            for _, e in ipairs(gl._edges) do
+                expect(H.vertexColor(e)).deepEq({ 0, 0, 0, 0 })
+            end
+        end)
+    end)
+
+    describe("reacting to tokens", function()
+        it("re-derives the inset when borderWidth changes", function()
+            build(200, 40)
+            H.T:CreateUserTheme("Thick", "Modern")
+            H.T:SetUserToken("Thick", "borderWidth", 3)
+            H.T:SetActive("Thick")
+            gl:Refresh()
+            H.expectOffset(gl._body, f, 3, 3)
+            H.expectSize(gl._body, 194, 34)
+        end)
+
+        it("re-resolves the gradient after a theme change", function()
+            build(200, 40, { inset = 0 })
+            H.T:CreateUserTheme("Faint", "Modern")
+            H.T:SetUserToken("Faint", "opacityGlass", 0.5)
+            H.T:SetActive("Faint")
+            gl:Refresh()
+            local grad = gl._body:GetGradient()
+            expect(stop(grad.to)[4]).as("dense end followed the token").near(0.5, 0.0001)
+        end)
+
+        it("keeps a colour left out of SetColors", function()
+            build(200, 40, { inset = 0 })
+            gl:SetColors({ sheen = "colorAccent" })
+            H.expectTokenColor(H.vertexColor(gl._sheenTex), "colorAccent")
+            -- from/to were not named, so the body must be untouched.
+            H.expectTokenColor(stop(gl._body:GetGradient().to), "colorGlass")
+        end)
+    end)
+
+    it("takes no mouse input of its own", function()
+        build(200, 40, { inset = 0 })
+        -- The plate spans the gaps between buttons. Enabling mouse on it would make those
+        -- gaps swallow clicks meant for the world behind them.
+        expect(f:IsMouseEnabled()).falsy()
+    end)
+
+    it("drops its layout box on Destroy", function()
+        build(200, 40)
+        gl:Destroy()
+        expect(gl._box._destroyed).as("the container is gone").truthy()
+    end)
+end)
+
+describe("the glass tokens", function()
+    -- There is no other theme/token spec in this suite, and nothing validates that the two
+    -- shipped themes declare the same keys: RegisterBuiltin stores whatever it is handed and
+    -- GetToken answers nil in silence. Modern is the theme that actually loads, so a token
+    -- added to Default alone is nil in production and every glass surface renders
+    -- transparent with no error anywhere.
+    local PRIMITIVES = { "opacityGlass", "opacityGlassFade", "opacityGlassSheen" }
+    local DERIVATIONS = { "colorGlass", "colorGlassFade", "colorGlassSheen" }
+
+    before_each(function()
+        H.setup()
+    end)
+
+    for _, theme in ipairs({ "Default", "Modern" }) do
+        it("resolves every glass token in the " .. theme .. " theme", function()
+            H.T:SetActive(theme)
+            for _, key in ipairs(PRIMITIVES) do
+                local v = H.token(key)
+                expect(v).as(theme .. " is missing " .. key).notNil()
+                expect(type(v)).as(key .. " is a number").eq("number")
+                expect(v).as(key .. " is a usable alpha").between(0, 1)
+            end
+            for _, key in ipairs(DERIVATIONS) do
+                local c = H.token(key)
+                -- A derivation whose ref is missing resolves to nil, not to an error, so
+                -- this is the only place that failure becomes visible.
+                expect(c).as(theme .. " is missing " .. key).notNil()
+                expect(type(c)).as(key .. " resolved to a colour").eq("table")
+                expect(#c).as(key .. " has four components").eq(4)
+            end
+        end)
+
+        it("gives the " .. theme .. " plate a real gradient, not two equal ends", function()
+            H.T:SetActive(theme)
+            -- The plate's legibility is the DIFFERENCE between its ends. Equal alphas make
+            -- it a flat panel, which is the look it exists to replace.
+            expect(H.token("opacityGlass")).gt(H.token("opacityGlassFade"))
+            expect(H.token("opacityGlassSheen")).as("a sheen, not a white line").lt(0.25)
+        end)
+    end
+
+    it("drives the derivations from the primitives, so an edit cascades", function()
+        H.T:CreateUserTheme("Cascade", "Modern")
+        H.T:SetUserToken("Cascade", "opacityGlass", 0.42)
+        H.T:SetActive("Cascade")
+        expect(H.token("colorGlass")[4]).as("alpha followed the primitive").near(0.42, 0.0001)
+    end)
+
+    it("exposes the three opacities in the theme editor and none of the derivations", function()
+        local listed = {}
+        for _, def in ipairs(H.SuuUI._ThemeEditableTokens) do listed[def.key] = def end
+        for _, key in ipairs(PRIMITIVES) do
+            expect(listed[key]).as(key .. " is editable").notNil()
+            expect(listed[key].type).eq("number")
+        end
+        -- Deliberate: the editor's colour row reads the RESOLVED value and writes back a
+        -- flat literal, which would replace the { ref, alpha } cascade with a fixed colour.
+        for _, key in ipairs(DERIVATIONS) do
+            expect(listed[key]).as(key .. " must NOT be editable").isNil()
+        end
+    end)
+end)

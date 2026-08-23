@@ -15,6 +15,7 @@ function M.install(env)
     widget.resetSerial()
     state.reset()
     font.resetFaces()
+    regions.resetGradientSupport()
 
     ------------------------------------------------------------------------------
     -- Screen root

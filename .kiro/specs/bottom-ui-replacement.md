@@ -104,6 +104,37 @@ Still to verify, but at its call site in Phase 8 rather than as another probe ro
 `GetWatchedFactionInfo` changed shape across client generations (a multi-return classically, a
 table in 11.0). Read it defensively and branch on the shape.
 
+### Round 3 results — the action slot mapping, recorded 2026-08-23
+
+The plan originally named no slot mapping at all, which made every bar past bar 1 unwritable.
+Probe: `for _,n in ipairs({"ActionButton1","MultiBarBottomLeftButton1",…}) do local b=_G[n]
+print(n, b and b.action or "-") end`
+
+| Bar | Button 1's `action` | Block |
+|---|---|---|
+| `ActionButton1` (`MainMenuBar`) | **1** | 1–12, **paged** |
+| `MultiBarRightButton1` | **25** | 25–36 |
+| `MultiBarLeftButton1` | **37** | 37–48 |
+| `MultiBarBottomRightButton1` | **49** | 49–60 |
+| `MultiBarBottomLeftButton1` | **61** | 61–72 |
+
+This is the classic-era layout, and it carries **one consequence the plan had not stated: bar
+1's six pages overlap the other four bars' fixed blocks.** With `NUM_ACTIONBAR_PAGES = 6`,
+pages 1–6 are slots 1–12, 13–24, 25–36, 37–48, 49–60, 61–72 — so paging bar 1 to page 3 shows
+exactly the slots `MultiBarRight` owns. Three design consequences:
+
+- **Only bar 1 takes a state driver.** Bars 2–5 are fixed to their block and need no
+  `_onstate-page` snippet, which removes four secure headers from Phase 5.
+- **Two SuuUI buttons may legitimately address one slot**, so `ACTIONBAR_SLOT_CHANGED` must
+  repaint *every* button watching that slot, not the first one found. A slot→buttons multimap,
+  not a slot→button map.
+- **Slots 13–24 (page 2) have no dedicated bar**, reachable only by paging bar 1. That matches
+  Blizzard and is not a gap to fill.
+
+Unverified and deliberately deferred to its call site in Phase 6: whether druid form / rogue
+stealth swaps drive `bonusbar` (slots 73+) or a page. Read `GetBonusBarOffset` defensively
+there rather than adding another probe round now.
+
 ---
 
 ## The glass plate

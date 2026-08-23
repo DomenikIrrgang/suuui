@@ -36,6 +36,17 @@ SuuUI._ThemeEditableTokens = {
     -- and capped below 1 so the state stays visible at all.
     { key="opacityDisabled", label="Disabled Opacity", type="number", min=0.15, max=0.85, step=0.05 },
 
+    -- The action bar plate's dense end, its open end, and its lit top edge. Exposed as
+    -- three numbers because that is what they are: the colorGlass* tokens they drive are
+    -- tier 2 derivations and stay OUT of this list on purpose — see the header. Listing a
+    -- derivation here would have the colour row write back a flat literal, replacing the
+    -- { ref, alpha } cascade with a fixed colour that no longer tracks its primitive.
+    { key="opacityGlass",      label="Glass Opacity",       type="number", min=0.0, max=1.0,  step=0.05 },
+    { key="opacityGlassFade",  label="Glass Fade Opacity",  type="number", min=0.0, max=1.0,  step=0.05 },
+    -- Capped low: this is a catch of light along an edge, and above roughly 0.25 it stops
+    -- reading as an edge and becomes a white line drawn across the plate.
+    { key="opacityGlassSheen", label="Glass Sheen Opacity", type="number", min=0.0, max=0.25, step=0.01 },
+
     -- Stored as a font name, not a path; SuuUI.Fonts resolves it. Options come from the
     -- client's own faces plus anything LibSharedMedia-3.0 exposes, if the player has it.
     { key="fontFamilyMain", label="Font",           type="font" },

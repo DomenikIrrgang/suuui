@@ -263,4 +263,165 @@ function M.Pill(frame, opts)
     return self
 end
 
+--------------------------------------------------------------------------------
+-- Glass
+--------------------------------------------------------------------------------
+-- A translucent plate: a vertical gradient body, a hairline sheen along its top edge, and
+-- optionally a hairline border. Those three things together are what reads as glass on
+-- this client.
+--
+-- WoW HAS NO BLUR. There is no backdrop-filter equivalent, so frosted glass is not
+-- reachable and this primitive does not approximate it — the gradient and the lit top
+-- edge are the whole effect.
+--
+-- Composed from textures for the same reason Pill is: a backdrop paints one flat colour,
+-- and the gradient is the entire point.
+
+local GlassMeta = {}
+GlassMeta.__index = GlassMeta
+
+-- The sheen is a hairline by definition rather than a scaled border, so it takes the grid
+-- quantum: Line() floors at exactly one device pixel for any value at or below it.
+local function sheenHeight()
+    return SuuUI.Pixel.Line(0)
+end
+
+-- Paints the body, and reports whether it got a real gradient.
+--
+-- The trap here is orientation: for a VERTICAL gradient the client runs the FIRST colour
+-- along the BOTTOM edge — Components/ColorPicker.lua depends on exactly that to put black
+-- at the bottom of its value square. A glass plate's dense edge is its TOP, so `from` is
+-- passed SECOND. Swapping these silently inverts the plate, which still looks like a
+-- gradient and so survives a glance.
+local function paintBody(tex, from, to)
+    local fr, fg, fb, fa = resolveColor(from)
+    local tr, tg, tb, ta = resolveColor(to)
+    if type(tex.SetGradient) == "function" and type(CreateColor) == "function" then
+        -- A gradient multiplies with the vertex colour, so that has to be reset to white
+        -- or a plate built by the fallback path first would stay tinted twice.
+        tex:SetVertexColor(1, 1, 1, 1)
+        tex:SetGradient("VERTICAL", CreateColor(tr, tg, tb, ta), CreateColor(fr, fg, fb, fa))
+        return true
+    end
+    -- No gradient API: a flat fill at the midpoint alpha. It takes `from`'s RGB, which
+    -- costs nothing while both ends share a hue — and they are meant to, since the pair
+    -- exists to vary alpha rather than colour.
+    tex:SetVertexColor(fr, fg, fb, (fa + ta) / 2)
+    return false
+end
+
+--- Sets the plate's colours, keeping any key left out.
+-- @param opts table|nil  { from, to, sheen } — each a tokenKey|color|false
+function GlassMeta:SetColors(opts)
+    opts = opts or {}
+    if opts.from  ~= nil then self._from  = opts.from  end
+    if opts.to    ~= nil then self._to    = opts.to    end
+    if opts.sheen ~= nil then self._sheen = opts.sheen end
+    self._isGradient = paintBody(self._body, self._from, self._to)
+    self._sheenTex:SetVertexColor(resolveColor(self._sheen))
+end
+
+--- Sets the border colour, or false for no border.
+-- false resolves to a fully transparent edge rather than a missing one, exactly as
+-- Apply's border does, so there is no branch and no geometry difference to reason about.
+-- @param tokenKeyOrColor string|table|false
+function GlassMeta:SetBorder(tokenKeyOrColor)
+    self._border = tokenKeyOrColor
+    local r, g, b, a = resolveColor(tokenKeyOrColor)
+    for _, tex in ipairs(self._edges) do
+        tex:SetVertexColor(r, g, b, a)
+    end
+end
+
+--- True when the body is a real gradient, false when it fell back to a flat fill.
+-- Reported rather than inferred: nothing about the finished plate says which path a
+-- client took, and a spec has to be able to assert the fallback is reachable.
+function GlassMeta:IsGradient()
+    return self._isGradient == true
+end
+
+-- The props tables are the ones handed to Add, so mutating them in place is what the next
+-- Layout() pass reads — no allocation, and no SetChildProps per piece, which would run a
+-- whole layout each time.
+function GlassMeta:_geom()
+    local ins, bw = self._inset, self._bw
+
+    self._pBody.inset.left,  self._pBody.inset.right  = ins, ins
+    self._pBody.inset.top,   self._pBody.inset.bottom = ins, ins
+
+    -- On the body's own top edge, inside the border rather than over it.
+    self._pSheen.height = sheenHeight()
+    self._pSheen.inset.left, self._pSheen.inset.right = ins, ins
+    self._pSheen.inset.top = ins
+
+    self._pEdgeT.height = bw
+    self._pEdgeB.height = bw
+    self._pEdgeL.width  = bw
+    self._pEdgeR.width  = bw
+end
+
+--- Re-derives thickness from the borderWidth token and re-resolves every colour.
+-- Resizes are the container's job; call this after a theme change.
+function GlassMeta:Refresh()
+    self._bw = SuuUI.Pixel.Line(self._bwProp or SuuUI.Theme:GetToken("borderWidth") or 1)
+    self._inset = self._insetProp or self._bw
+    self:_geom()
+    self:SetColors()
+    self:SetBorder(self._border)
+    self._box:Layout()
+end
+
+--- Drops the layout box. Textures cannot be destroyed; they go when their frame does.
+function GlassMeta:Destroy()
+    self._box:Destroy()
+end
+
+--- Fills a frame with a translucent gradient plate.
+-- @param frame frame  plain Frame — a plate is drawn from textures, not from a backdrop
+-- @param opts table   { from = tokenKey|color, to = tokenKey|color,
+--                       sheen = tokenKey|color|false, border = tokenKey|color|false,
+--                       borderWidth = number|nil, inset = number|nil }
+--   from:  the colour at the plate's dense edge, which is its TOP.
+--   to:    the colour at its open edge, the bottom.
+--   inset: how far the body sits inside the frame, with the same meaning and the same
+--          default as Apply's — the border width, so a bordered plate does not paint
+--          under its own edge. Pass 0 for a borderless plate that has to cover its whole
+--          box, or its body is a pixel short on every side and anything drawn flush to
+--          the frame no longer lines up with it.
+-- @return table  handle { SetColors, SetBorder, IsGradient, Refresh, Destroy }
+function M.Glass(frame, opts)
+    opts = opts or {}
+    local self = setmetatable({
+        _f      = frame,
+        _from   = opts.from,  _to        = opts.to,     _sheen     = opts.sheen,
+        _border = opts.border, _bwProp   = opts.borderWidth, _insetProp = opts.inset,
+        _bw     = 0,          _inset     = 0,
+    }, GlassMeta)
+
+    local box = SuuUI.Layout:CreateContainer({ host = frame, layout = "stack" })
+    self._box = box
+
+    self._pBody  = { inset = {} }
+    self._pSheen = { valign = "start",   height = 0, inset = {} }
+    self._pEdgeT = { valign = "start",   height = 0 }
+    self._pEdgeB = { valign = "end",     height = 0 }
+    self._pEdgeL = { align  = "start",   valign = "stretch", width = 0 }
+    self._pEdgeR = { align  = "end",     valign = "stretch", width = 0 }
+
+    -- Three layers, bottom up: the body, the sheen on its top edge, then the border over
+    -- both. The border is last because it is the plate's outline — a sheen drawn over it
+    -- would put a lighter pixel on top of the edge in the top corners.
+    self._body     = midPiece(frame, box, "BACKGROUND", self._pBody)
+    self._sheenTex = midPiece(frame, box, "BORDER",     self._pSheen)
+    self._edgeT    = midPiece(frame, box, "ARTWORK",    self._pEdgeT)
+    self._edgeB    = midPiece(frame, box, "ARTWORK",    self._pEdgeB)
+    self._edgeL    = midPiece(frame, box, "ARTWORK",    self._pEdgeL)
+    self._edgeR    = midPiece(frame, box, "ARTWORK",    self._pEdgeR)
+    -- Named for the specs and iterable for SetBorder; the same four textures either way.
+    self._edges    = { self._edgeT, self._edgeB, self._edgeL, self._edgeR }
+
+    self:Refresh()
+    return self
+end
+
 SuuUI.Backdrop = M

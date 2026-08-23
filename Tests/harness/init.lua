@@ -57,12 +57,14 @@
 --              H.failCast H.stopChannel H.delayCast H.updateChannel H.combatLogInterrupt
 --              H.combatLogSpell
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
+-- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
 --
 -- H.setup() reloads the whole addon into a fresh sandbox against a fresh simulated
 -- client, so every test starts from a known state.
 local geometry = require("harness.wow.geometry")
 local state    = require("harness.wow.state")
 local font     = require("harness.wow.font")
+local regions  = require("harness.wow.regions")
 local widget   = require("harness.wow.widget")
 local addon    = require("harness.addon")
 
@@ -381,6 +383,24 @@ end
 --- Whether the simulated client is in combat, i.e. what InCombatLockdown() answers.
 -- @return bool
 function M.inCombat() return state.inCombat == true end
+
+--------------------------------------------------------------------------------
+-- Client capabilities
+--------------------------------------------------------------------------------
+
+--- Adds or removes the texture gradient API, modelling a client generation without it.
+--
+-- Phase 0 measured SetGradient present and SetGradientAlpha absent on this build, so the
+-- gradient path is the one the real client takes. Pass false to reach the flat-fill
+-- fallback a component keeps for a client that has neither: absence is real here, the
+-- method is deleted rather than stubbed, so `type(tex.SetGradient) == "function"` answers
+-- the way it would on that client.
+--
+-- Restored automatically on the next H.setup(), so a spec cannot leak it to the next file.
+-- @param on boolean
+function M.setGradientSupported(on)
+    regions.setGradientSupported(on and true or false)
+end
 
 --- Every geometry call the lockdown refused, oldest first.
 --

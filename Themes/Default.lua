@@ -38,14 +38,21 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- it has to read at a glance on every widget, in every value state; low enough to be
     -- unmistakable, high enough that the label is still readable.
     opacityDisabled  = 0.40,
-    -- Edit mode grid line visibility. Very faint so lines stay out of the way.
-    opacityGrid      = 0.08,
     -- Edit mode grid lines: visible enough to guide placement, faint enough not to
     -- distract from the frames being moved.
     opacityGrid      = 0.15,
     -- Smart guide lines (element-to-element alignment) are brighter than the grid so
     -- they stand out as contextual feedback during a drag.
     opacityGuide     = 0.40,
+    -- The glass plate behind an action bar: dense along its top edge, fading out towards
+    -- the bottom, with a lit hairline on the top edge. Three numbers rather than one
+    -- because the plate's whole legibility comes from the DIFFERENCE between its ends — a
+    -- single opacity makes it a flat panel, which is the look it exists to avoid.
+    opacityGlass      = 0.80,
+    opacityGlassFade  = 0.30,
+    -- The lit top edge. Deliberately very low: it reads as a catch of light, and much
+    -- above 0.15 it stops being an edge and becomes a white line drawn on the plate.
+    opacityGlassSheen = 0.10,
 
     -- Tier 2: surfaces. { ref, alpha } takes the primitive's RGB with a token alpha,
     -- so panel translucency is one slider instead of four colour edits.
@@ -65,8 +72,6 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorEditOverlayLocked = { ref = "colorWarning", alpha = "opacityEditOverlay" },
     -- Selected frame overlay: brighter accent so the selected element stands out.
     colorEditOverlaySelected = { ref = "colorAccent", alpha = "opacityOverlay" },
-    -- Edit mode grid lines: the accent hue at grid opacity.
-    colorGrid        = { ref = "colorAccent", alpha = "opacityGrid" },
     -- Smart guides (alignment lines to other elements) are brighter than the base grid.
     colorGuide       = { ref = "colorAccent", alpha = "opacityGuide" },
     -- A handle drawn ON TOP of arbitrary colour (a picker thumb over a hue bar), so it
@@ -76,6 +81,15 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- Its own semantic rather than a panel colour: a bar sits over the game world, not
     -- over a panel, so it takes the darkest neutral at the bar-track opacity.
     colorBarTrack    = { ref = "colorGray950", alpha = "opacityBarTrack" },
+    -- The glass plate an action bar's buttons sit on. Its own tokens rather than a reuse
+    -- of colorBarTrack: that token is a BAR'S EMPTY TRACK, so sharing it would mean
+    -- retinting a health bar's background silently retinted every action bar plate.
+    colorGlass       = { ref = "colorGray950", alpha = "opacityGlass" },
+    colorGlassFade   = { ref = "colorGray950", alpha = "opacityGlassFade" },
+    -- The only place in this palette where a light neutral and a dark one meet inside one
+    -- treatment: the sheen is a highlight ON the plate, so it refs the lightest neutral
+    -- rather than the darkest. Pairing it with colorGlass above is the whole effect.
+    colorGlassSheen  = { ref = "colorGray100", alpha = "opacityGlassSheen" },
     -- A unit's health, when it is not being coloured by class. See colorUseClassColors:
     -- with that flag on this becomes the fallback for a unit whose class is unknown — an
     -- NPC, a totem — rather than going unused.
