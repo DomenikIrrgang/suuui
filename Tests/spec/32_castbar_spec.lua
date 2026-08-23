@@ -662,6 +662,81 @@ describe("Plugins.CastBars – CastBar widget", function()
     end)
 
     ---------------------------------------------------------------------------
+    -- 7b. A SECOND spell attempt failing
+    --
+    -- Pressing another spell while already casting fails the NEW attempt, and the client
+    -- reports that failure against the unit while the original cast carries on. The bar
+    -- must not read it as its own: nothing stopped, so nothing arrives later to undo a
+    -- premature hide. The castID is the only thing separating the two.
+    ---------------------------------------------------------------------------
+    describe("a second spell attempt failing", function()
+        it("leaves the running cast on screen", function()
+            local b = bar()
+            H.startCast({ name = "Fireball", duration = 2.5, castID = "cast-fireball" })
+            H.tick(0.5)
+            H.failOtherCast({ castID = "cast-frostbolt" })
+            expect(b:GetState()).as("the cast in flight is untouched").eq("casting")
+            expect(b:IsCasting()).eq(true)
+            expect(b._row:IsShown()).eq(true)
+            expect(b._nameText:GetText()).eq("Fireball")
+        end)
+
+        it("keeps the fill running rather than pinning it full", function()
+            -- _end paints danger and holds the bar at 1. Reaching it wrongly is visible as
+            -- a full bar for a spell that is only part way through.
+            local b = bar()
+            H.startCast({ name = "Fireball", duration = 2.0, castID = "cast-fireball" })
+            H.tick(0.5)
+            H.failOtherCast()
+            expect(b._bar:GetPercent()).as("a quarter through, not held full").near(0.25, 0.02)
+            H.tick(0.5)
+            expect(b._bar:GetPercent()).as("still advancing").near(0.5, 0.02)
+        end)
+
+        it("does not end a channel, which has no castID of its own", function()
+            local b = bar()
+            H.startChannel({ name = "Drain Life", duration = 3 })
+            H.tick(0.5)
+            H.failOtherCast()
+            expect(b:GetState()).eq("channeling")
+            expect(b._row:IsShown()).eq(true)
+        end)
+
+        it("does not cut short the fade of an outcome already being shown", function()
+            -- Nothing is active during the fade, so there is no castID to compare and no
+            -- cast to end. Acting anyway hides the message the fade exists to carry.
+            local b = bar()
+            H.startCast({ name = "Polymorph", duration = 1.5 })
+            H.tick(0.3)
+            H.failCast()
+            expect(b:GetState()).eq("failed")
+            H.failOtherCast()
+            expect(b:GetState()).as("still fading the failure").eq("failed")
+            expect(b._row:IsShown()).eq(true)
+            expect(b._timeText:GetText()).eq("Failed")
+        end)
+
+        it("an interrupt naming another attempt leaves the cast alone", function()
+            local b = bar()
+            H.startCast({ name = "Fireball", duration = 2.5, castID = "cast-fireball" })
+            H.tick(0.5)
+            H.interruptOtherCast({ castID = "cast-frostbolt" })
+            expect(b:GetState()).eq("casting")
+            expect(b._row:IsShown()).eq(true)
+        end)
+
+        it("still ends the bar when the event names the cast on screen", function()
+            -- The guard must not swallow the real thing: same setup, matching castID.
+            local b = bar()
+            H.startCast({ name = "Fireball", duration = 2.5, castID = "cast-fireball" })
+            H.tick(0.5)
+            H.failOtherCast({ castID = "cast-fireball" })
+            expect(b:GetState()).eq("failed")
+            expect(b._timeText:GetText()).eq("Failed")
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
     -- 8. Normal end
     ---------------------------------------------------------------------------
     describe("normal end", function()

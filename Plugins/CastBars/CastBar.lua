@@ -392,6 +392,35 @@ function CastBarMeta:_begin(rec)
     self._textRow:Layout()
 end
 
+-- Routes UNIT_SPELLCAST_FAILED and UNIT_SPELLCAST_INTERRUPTED, the only two cast events
+-- that do NOT funnel through Refresh — they carry an outcome to paint, so they act on their
+-- own payload. That makes them the only two that can be wrong about WHOSE cast they
+-- describe, and they routinely are: pressing a second spell while already casting fails the
+-- NEW attempt, and the client reports that failure against the unit while the original cast
+-- carries on regardless. Ending the bar on it hid a cast that was still running, and since
+-- nothing had actually stopped, no later event arrived to put the bar back.
+--
+-- So the castID decides, which is what the client's own cast bar matches on. A mismatch is
+-- deliberately not treated as "nothing happened" either: the unit is re-read, so an event
+-- that genuinely did end something still clears the bar rather than freezing it.
+-- @param reason string  "interrupted" | "failed"
+-- @param castId string|nil  The attempt the event describes
+function CastBarMeta:_castEnded(reason, castId)
+    local rec = self._active
+    -- Nothing live to end. The bar may be part way through fading an earlier outcome, and
+    -- ending it again would cut that fade — and the message it is carrying — short.
+    if not rec then return end
+    -- Not the cast on screen. A channel lands here too, and correctly: it has no castID, so
+    -- a failure can never be its own, and a channel that really ends says so with
+    -- CHANNEL_STOP. Both nil means a client that told us nothing to match on, which falls
+    -- through to the outcome rather than swallowing it.
+    if castId ~= rec.castId then
+        self:Refresh()
+        return
+    end
+    self:_end(reason)
+end
+
 -- @param reason string  "stopped" | "interrupted" | "failed"
 function CastBarMeta:_end(reason)
     self:_stopTween()
@@ -518,7 +547,10 @@ end
 function CastBarMeta:Refresh()
     local unit = self._cfg.unit
     local channel = false
-    local name, _, texture, startMS, endMS, _, _, shielded, spellId = UnitCastingInfo(unit)
+    -- castID is the client's own handle for ONE cast attempt, and it is read here rather
+    -- than ignored because it is the only thing that tells a failure about this cast from a
+    -- failure about some other spell the player just pressed. See _castEnded.
+    local name, _, texture, startMS, endMS, _, castId, shielded, spellId = UnitCastingInfo(unit)
     if not name then
         -- One value shorter than a cast: a channel has no castID, so notInterruptible
         -- moves up a slot. Reading it at the cast's position would report every channel
@@ -539,6 +571,9 @@ function CastBarMeta:Refresh()
         endMS    = endMS,
         channel  = channel,
         spellId  = spellId,
+        -- nil for a channel, which has no castID. That is a real answer, not a gap: it is
+        -- why a channel can never own a UNIT_SPELLCAST_FAILED.
+        castId   = castId,
         shielded = shielded and true or false,
     })
 end
@@ -752,7 +787,7 @@ function CastBar:Create(parent, cfg)
     }) do
         self._events:RegisterEvent(event)
     end
-    self._events:SetScript("OnEvent", function(_, event, unit)
+    self._events:SetScript("OnEvent", function(_, event, unit, castId)
         if event == "PLAYER_ENTERING_WORLD" or event == cfg.changeEvent then
             self:Refresh()
             return
@@ -765,9 +800,9 @@ function CastBar:Create(parent, cfg)
         end
         if unit ~= cfg.unit then return end
         if event == "UNIT_SPELLCAST_INTERRUPTED" then
-            self:_end("interrupted")
+            self:_castEnded("interrupted", castId)
         elseif event == "UNIT_SPELLCAST_FAILED" then
-            self:_end("failed")
+            self:_castEnded("failed", castId)
         else
             self:Refresh()
         end

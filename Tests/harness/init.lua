@@ -583,6 +583,28 @@ end
 --- Fails a cast with UNIT_SPELLCAST_FAILED.
 function M.failCast(unit) endCast(unit, "UNIT_SPELLCAST_FAILED") end
 
+-- A SECOND spell attempt ending, while the cast already in flight carries on untouched.
+--
+-- This is the one place where leaving the state alone is the faithful model rather than a
+-- shortcut: press a spell while already casting and the client fails the new attempt and
+-- reports it against the unit, but the original cast is still running and UnitCastingInfo
+-- still reports it. So the state deliberately does not move, and the castID deliberately
+-- does not match the one in flight — that mismatch is the whole signal a reader has.
+local function foreignCastEnd(opts, event)
+    opts = opts or {}
+    local active = state.cast or state.channel
+    local unit = opts.unit or (active and active.unit) or "player"
+    M.fireEvent(event, unit, opts.castID or "cast-other", opts.spellId or 686)
+end
+
+--- Fires UNIT_SPELLCAST_FAILED for a DIFFERENT attempt, leaving the in-flight cast alone.
+-- @param opts nil|table  { unit, castID, spellId }
+function M.failOtherCast(opts) foreignCastEnd(opts, "UNIT_SPELLCAST_FAILED") end
+
+--- Fires UNIT_SPELLCAST_INTERRUPTED for a DIFFERENT attempt, leaving the cast alone.
+-- @param opts nil|table  { unit, castID, spellId }
+function M.interruptOtherCast(opts) foreignCastEnd(opts, "UNIT_SPELLCAST_INTERRUPTED") end
+
 --- Ends a channel with UNIT_SPELLCAST_CHANNEL_STOP.
 function M.stopChannel(unit) endCast(unit, "UNIT_SPELLCAST_CHANNEL_STOP") end
 
