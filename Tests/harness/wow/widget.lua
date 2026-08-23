@@ -54,7 +54,36 @@ function M.resetSerial() nextSerial = 1 end
 
 function Base:GetName()       return self._name end
 function Base:GetObjectType()  return self._kind end
-function Base:IsObjectType(t)  return self._kind == t end
+
+-- The client's widget inheritance, which IsObjectType answers against: a Button IS a Frame and
+-- says so, a CheckButton is both a Button and a Frame, and every widget is a Region.
+--
+-- Modelled rather than exact-matched because the exact-match version made an entire class of
+-- caller untestable: anything filtering foreign frames with IsObjectType("Frame") -- which is
+-- how you tell a widget from a plain table when scanning somebody else's children -- saw every
+-- Button answer false here and true in game. A spec written against it would have proved the
+-- opposite of what the client does.
+local INHERITS = {
+    Region      = {},
+    Frame       = { Region = true },
+    Button      = { Frame = true, Region = true },
+    CheckButton = { Button = true, Frame = true, Region = true },
+    EditBox     = { Frame = true, Region = true },
+    ScrollFrame = { Frame = true, Region = true },
+    StatusBar   = { Frame = true, Region = true },
+    Slider      = { Frame = true, Region = true },
+    Cooldown    = { Frame = true, Region = true },
+    GameTooltip = { Frame = true, Region = true },
+    Texture     = { Region = true },
+    FontString  = { Region = true },
+}
+
+function Base:IsObjectType(t)
+    if self._kind == t then return true end
+    local chain = INHERITS[self._kind]
+    return (chain ~= nil and chain[t] == true)
+end
+
 function Base:GetParent()      return self._parent end
 
 function Base:SetParent(parent)

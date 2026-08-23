@@ -118,8 +118,16 @@ local STRATA_ORDER = {
 
 M.STRATA_ORDER = STRATA_ORDER
 
+-- SetFixedFrameStrata / SetFixedFrameLevel PIN a frame: while pinned the client ignores further
+-- strata (or level) writes, and crucially the frame does not re-inherit its new parent's strata
+-- when reparented. Honoured here rather than stored and ignored, because a stored-only flag
+-- makes the interesting assertion vacuous: a caller that forgot to release the pin before
+-- re-stating the strata would have looked identical to one that released it, and the visible
+-- consequence in game -- an adopted icon drawing behind a panel that is above it -- would have
+-- been invisible to every spec. LibDBIcon pins every minimap button it creates.
 function FrameMeta:SetFrameStrata(s)
     assert(STRATA_ORDER[s], "harness: unknown frame strata " .. tostring(s))
+    if self._fixedStrata then return end
     self._strata = s
 end
 
@@ -128,7 +136,10 @@ function FrameMeta:GetFrameStrata()
     return self._parent and self._parent:GetFrameStrata() or "MEDIUM"
 end
 
-function FrameMeta:SetFrameLevel(n) self._level = n end
+function FrameMeta:SetFrameLevel(n)
+    if self._fixedLevel then return end
+    self._level = n
+end
 
 function FrameMeta:GetFrameLevel()
     if self._level then return self._level end
@@ -348,6 +359,11 @@ function FrameMeta:SetFixedFrameStrata(fixed) self._fixedStrata = fixed and true
 function FrameMeta:HasFixedFrameStrata()      return self._fixedStrata == true end
 function FrameMeta:SetFixedFrameLevel(fixed)  self._fixedLevel = fixed and true or false end
 function FrameMeta:HasFixedFrameLevel()       return self._fixedLevel == true end
+-- The Is… spelling as well, because the client's getter is named Is… on some generations and
+-- Has… on others while the SETTER is stable. Both answer here so code that probes either name
+-- is genuinely exercised rather than silently taking its "no getter" fallback in every spec.
+function FrameMeta:IsFixedFrameStrata()       return self._fixedStrata == true end
+function FrameMeta:IsFixedFrameLevel()        return self._fixedLevel == true end
 
 ----------------------------------------------------------------------------------
 -- EditBox

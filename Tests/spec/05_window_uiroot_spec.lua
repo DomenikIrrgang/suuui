@@ -808,7 +808,16 @@ describe("Layout.Window", function()
 end)
 
 describe("Settings window", function()
-    before_each(function() H.setup() end)
+    before_each(function()
+        H.setup()
+        -- The launcher tests below assert the button's ring parentage and click routing, and
+        -- the addon-button tray collects every LibDBIcon button off the ring -- SuuUI's own
+        -- included, deliberately. With the tray on, this button lives in a hidden holder, so a
+        -- click is not deliverable and there is no ring position to measure. Switched off so
+        -- these stay tests of the launcher; the interaction is asserted in
+        -- 50_addon_buttons_spec.lua.
+        pcall(function() H.SuuUI.Settings:Set("addon_buttons", "enabled", false) end)
+    end)
 
     it("registers the /suuui slash command", function()
         expect(H.env.SLASH_SUUUI1).eq("/suuui")

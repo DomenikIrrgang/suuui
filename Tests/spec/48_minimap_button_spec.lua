@@ -1,5 +1,17 @@
 local H = require("harness")
 
+-- Every test here goes through this rather than H.setup directly.
+--
+-- The addon-button tray collects every LibDBIcon button off the minimap ring, and SuuUI's own
+-- launcher is one of them -- deliberately, because that is what the tray is FOR. With the tray
+-- enabled this button has no ring position left to assert, so these tests would be measuring
+-- which plugin reached it first instead of measuring the launcher. Turned off here; the
+-- interaction itself is asserted in 50_addon_buttons_spec.lua, where it belongs.
+local function setup(opts)
+    H.setup(opts)
+    pcall(function() H.SuuUI.Settings:Set("addon_buttons", "enabled", false) end)
+end
+
 -- The MinimapButton plugin: SuuUI's launcher, owned by LibDBIcon-1.0 rather than
 -- hand-rolled. So this file asserts the SEAM between the plugin and two third-party
 -- libraries, which is where all of its behaviour lives — the plugin itself creates no
@@ -90,7 +102,7 @@ local function logMatching(needle)
 end
 
 describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
-    before_each(function() H.setup() end)
+    before_each(function() setup() end)
 
     -----------------------------------------------------------------------------
     describe("the settings schema", function()
@@ -190,7 +202,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
             -- NewDataObject answers nil — both of which Plugin:Enable's pcall would
             -- swallow, leaving a button that silently stops coming back. The log is what
             -- makes either visible.
-            H.setup({ debug = true })
+            setup({ debug = true })
             local btn, o = button(), obj()
             for _ = 1, 3 do
                 set("enabled", false)
@@ -290,7 +302,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
         it("watches locked immediately and enabled deferred", function()
             -- The immediate flag cannot be read back after the fact, and the two watchers
             -- deliberately disagree about it, so the registration is observed as it happens.
-            H.setup({ boot = false })
+            setup({ boot = false })
             local S = H.SuuUI.Settings
             local realWatch, seen = S.Watch, {}
             S.Watch = function(self, pid, key, cb, owner, opts)
@@ -328,7 +340,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
             -- Pins the ordering the immediate flag actually meets: onInit runs before
             -- onEnable, so the immediate callback finds nothing registered and returns
             -- without locking anything. See the xit below.
-            H.setup({ boot = false })
+            setup({ boot = false })
             local S = H.SuuUI.Settings
             local realWatch, atWatch = S.Watch, {}
             S.Watch = function(self, pid, key, cb, owner, opts)
@@ -568,7 +580,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
     -- own message means the guard fired, and a swallowed lifecycle error means it did not.
     describe("without LibDBIcon", function()
         it("logs and carries on when LibStub itself is gone", function()
-            H.setup({ debug = true })
+            setup({ debug = true })
             H.env.LibStub = nil
             plugin():Disable()
             plugin():Enable()
@@ -584,7 +596,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
         end)
 
         it("copes with a LibStub that raises", function()
-            H.setup({ debug = true })
+            setup({ debug = true })
             H.env.LibStub = setmetatable({}, { __call = function() error("boom", 0) end })
             plugin():Disable()
             plugin():Enable()
@@ -594,7 +606,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
         end)
 
         it("copes with a LibStub that simply has no such library", function()
-            H.setup({ debug = true })
+            setup({ debug = true })
             H.env.LibStub = setmetatable({}, { __call = function() return nil end })
             plugin():Disable()
             plugin():Enable()
@@ -603,7 +615,7 @@ describe("Plugins.MinimapButton – the LibDBIcon launcher", function()
         end)
 
         it("guards the lock watcher, whose callback is pcall'd too", function()
-            H.setup({ debug = true })
+            setup({ debug = true })
             H.env.LibStub = nil
             set("locked", true)
             expect(logMatching("Settings:Watch callback error"))

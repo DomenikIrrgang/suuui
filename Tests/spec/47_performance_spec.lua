@@ -194,8 +194,16 @@ describe("Plugins.Performance – framerate and latency readouts", function()
         it("puts both in the right section", function()
             expect(def(FPS_ID).section).eq("right")
             expect(def(MS_ID).section).eq("right")
-            local right = H.SuuUI.DataBar:ListSection("right")
-            expect(#right).as("the two performance readouts and nothing else").eq(2)
+            -- Scoped to the two readouts by id rather than counting the section. Any plugin
+            -- may contribute a right-section field -- the addon-button tray does -- so
+            -- "the section holds exactly two things" is a claim about the whole addon and
+            -- breaks for a reason that has nothing to do with this plugin.
+            local seen = {}
+            for _, entry in ipairs(H.SuuUI.DataBar:ListSection("right")) do
+                seen[entry.id] = true
+            end
+            expect(seen[FPS_ID]).as("the framerate is listed in the right section").eq(true)
+            expect(seen[MS_ID]).as("and so is latency").eq(true)
         end)
 
         it("gives the bar one field each", function()
@@ -899,6 +907,15 @@ describe("Plugins.Performance – framerate and latency readouts", function()
                 .as("the clock still ticks on the same frame").eq(withAll)
 
             H.SuuUI.Settings:Set(BAR_ID, "time_enabled", false)
+            -- And every OTHER ticking widget, driven off the registry rather than a named
+            -- list: the claim is that the script is dropped when NOTHING is left to tick,
+            -- and any plugin may contribute a polled field -- the addon-button tray does.
+            -- A hardcoded list here would silently re-break on the next one.
+            for _, entry in ipairs(H.SuuUI.DataBar:List()) do
+                if type(entry.update) == "number" and entry.update > 0 then
+                    H.SuuUI.DataBar:UnregisterWidget(entry.id)
+                end
+            end
             expect(#updateFrames())
                 .as("with nothing left to tick the script is dropped").eq(withAll - 1)
         end)
@@ -1088,14 +1105,21 @@ describe("Plugins.Performance – framerate and latency readouts", function()
         end)
 
         it("takes both readouts down with the enable toggle", function()
+            local fpsFrame = field(FPS_ID):GetFrame()
+            local msFrame  = field(MS_ID):GetFrame()
             set("enabled", false)
             expect(plugin():IsEnabled()).eq(false)
             expect(H.SuuUI.DataBar:Has(FPS_ID)).eq(false)
             expect(H.SuuUI.DataBar:Has(MS_ID)).eq(false)
             expect(recordCount(FPS_ID)).eq(0)
             expect(recordCount(MS_ID)).eq(0)
-            expect(#bar():GetSection("right"):GetChildren())
-                .as("the right section is empty").eq(0)
+            -- Scoped to these two frames by identity rather than to the section's total.
+            -- Another plugin's field may legitimately still be there, and asserting an empty
+            -- section fails for a reason that has nothing to do with this enable toggle.
+            for _, child in ipairs(bar():GetSection("right"):GetChildren()) do
+                expect(child ~= fpsFrame and child ~= msFrame)
+                    .as("neither readout's frame is left in the section").eq(true)
+            end
             expect(H.SuuUI.DataBar:Has("databar.time"))
                 .as("the clock, which belongs to another plugin, is untouched").eq(true)
         end)

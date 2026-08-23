@@ -101,3 +101,105 @@ function SuuUI.Components.ClickAway(props)
 
     return handle
 end
+
+---------------------------------------------------------------------------
+-- Hover-away
+---------------------------------------------------------------------------
+-- The same question ClickAway answers -- "is the cursor outside this set of frames" -- asked
+-- on a different edge, which is why it shares the rect test above rather than growing a
+-- second copy of it.
+--
+-- It exists because OnLeave CANNOT answer it for a panel whose children take mouse input.
+-- The client moves mouse focus to the child, so the parent receives OnLeave the instant the
+-- cursor enters one of its own rows -- a panel that closed on its own OnLeave would vanish
+-- the moment you reached for the thing you were reaching for. Polling the rect is the only
+-- reading that treats a panel and its contents as one region.
+
+-- How long the cursor may read as outside before the panel closes. Input tolerance, not
+-- design language: the cursor crosses a hairline seam between the anchor and the panel, and
+-- a sample taken mid-crossing says "outside" for a frame or two. Deliberately NOT a theme
+-- token -- no theme should be able to set this to 0 and make a panel unreachable.
+local HOVER_GRACE = 0.15
+
+local HoverMeta = {}
+HoverMeta.__index = HoverMeta
+
+--- Starts watching for the cursor leaving every guarded frame.
+function HoverMeta:Arm()
+    self._outside = 0
+    self._watcher:Show()
+end
+
+--- Stops watching.
+function HoverMeta:Disarm()
+    self._watcher:Hide()
+    self._outside = 0
+end
+
+--- Adds another frame that counts as "inside".
+-- @param frame frame
+function HoverMeta:AddGuard(frame)
+    self._guards[#self._guards + 1] = frame
+end
+
+--- Releases the watcher.
+function HoverMeta:Destroy()
+    self._watcher:SetScript("OnUpdate", nil)
+    self._watcher:Hide()
+    SuuUI.UISignals:DisconnectAll(self)
+end
+
+--- Creates a cursor-left-the-region watcher.
+-- @param props table  { frame, guards, onOutside }
+--   frame: the panel that must stay open while the cursor is over it
+--   guards: optional array of extra frames that count as inside (the anchor it hangs off)
+--   onOutside: called once when the cursor has been outside every guard for the grace period
+-- @return table  HoverAway handle
+function SuuUI.Components.HoverAway(props)
+    local watcher = CreateFrame("Frame")
+    watcher:Hide()
+
+    local guards = { props.frame }
+    if props.guards then
+        for i = 1, #props.guards do guards[#guards + 1] = props.guards[i] end
+    end
+
+    local handle = setmetatable({
+        _watcher = watcher,
+        _guards  = guards,
+        _frame   = props.frame,
+        _outside = 0,
+    }, HoverMeta)
+
+    watcher:SetScript("OnUpdate", function(_, dt)
+        if not handle._frame:IsShown() then
+            handle:Disarm()
+            return
+        end
+
+        -- Guard rects are in the panel's own space, so the cursor is read there rather than
+        -- against UIParent: the two differ under the scaled UI root.
+        local cx, cy = SuuUI.Pixel.CursorIn(handle._frame)
+
+        local inside = false
+        for i = 1, #handle._guards do
+            if contains(handle._guards[i], cx, cy) then
+                inside = true
+                break
+            end
+        end
+
+        if inside then
+            handle._outside = 0
+            return
+        end
+
+        handle._outside = handle._outside + (dt or 0)
+        if handle._outside >= HOVER_GRACE then
+            handle:Disarm()
+            if props.onOutside then props.onOutside() end
+        end
+    end)
+
+    return handle
+end
