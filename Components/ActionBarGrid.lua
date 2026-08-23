@@ -102,7 +102,7 @@ function GridMeta:_syncButtons()
             buttons[i] = nil
         end
         if not existing then
-            local b = SuuUI.Components.ActionButton({
+            local b = self._buttonFactory({
                 slot          = slot,
                 size          = self._buttonSize,
                 binding       = self._bindings and self._bindings[i] or nil,
@@ -353,7 +353,7 @@ SuuUI.Components.InstallBase(GridMeta, "_f")
 -- reads them off the handles in GetButtons().
 --
 -- @param props table  { slots, bindings, rows, buttonSize, spacing, padding,
---                       showHotkeys, showMacroText, showCount, namePrefix }
+--                       showHotkeys, showMacroText, showCount, namePrefix, buttonFactory }
 --   slots:         array of action slot numbers. Required, may be empty.
 --   buttonSize:    side of each square button. Required -- a PLUGIN SETTING, not a token.
 --   bindings:      parallel array of binding commands, e.g. { "ACTIONBUTTON1", ... }
@@ -364,6 +364,9 @@ SuuUI.Components.InstallBase(GridMeta, "_f")
 --                  covers its own plate completely
 --   namePrefix:    optional global name prefix for the buttons, so /framestack and
 --                  click-casting addons can name them
+--   buttonFactory: how a cell's button is built; defaults to ActionButton. The stance bar
+--                  passes its own, because its buttons must inherit Blizzard's
+--                  StanceButtonTemplate rather than SecureActionButtonTemplate
 -- @param parent frame
 -- @return table  ActionBarGrid handle
 function SuuUI.Components.ActionBarGrid(props, parent)
@@ -418,6 +421,13 @@ function SuuUI.Components.ActionBarGrid(props, parent)
         _showMacroText = props.showMacroText ~= false,
         _showCount     = props.showCount ~= false,
         _namePrefix    = props.namePrefix,
+        -- How a cell's button is built. Defaults to ActionButton, which is what bars 1-8 want.
+        -- The seam exists because the STANCE bar cannot use ActionButton at all: its buttons
+        -- must inherit Blizzard's StanceButtonTemplate, since a stance button carries no `type`
+        -- attribute and CastShapeshiftForm is blocked for addon code (both probed in game). The
+        -- plate, the grid, the dividers, the padding, the resize deferral and the theme wiring
+        -- are identical either way, so only the button construction is parameterised.
+        _buttonFactory = props.buttonFactory or SuuUI.Components.ActionButton,
         _eid           = id,
     }, GridMeta)
 

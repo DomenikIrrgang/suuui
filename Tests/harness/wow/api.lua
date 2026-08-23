@@ -52,6 +52,35 @@ function M.install(env)
                 frame.secureAction(self, button, down)
             end)
         end
+        -- StanceButtonTemplate. Modelled because SuuUI has no choice but to inherit it: the real
+        -- button carries NO `type` attribute (probed in game) and `CastShapeshiftForm` is BLOCKED
+        -- for tainted code (probed, bracketed -- form 7, cast 3, still form 7, silently), so an
+        -- addon cannot drive a stance change from its own handler. The template is the only path.
+        --
+        -- What it supplies is the three child regions its consumers address by field and the
+        -- OnClick that does the casting. The regions are the reason this is worth modelling at
+        -- all: a component built on this template PAINTS THROUGH THEM rather than creating its
+        -- own, so a spec that cannot see them cannot assert anything about the icon or cooldown.
+        if template == "StanceButtonTemplate" and f._canScript then
+            f.icon = f:CreateTexture(nil, "ARTWORK")
+            f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+            f.HotKey = f:CreateFontString(nil, "OVERLAY")
+            -- The cast reads GetID() and nothing else -- there is no attribute to consult. This
+            -- lands in state.castStance via the recorded CastShapeshiftForm, so a spec asserts
+            -- "clicking button 3 casts form 3" against the same observable the client would move.
+            --
+            -- REGISTRATION IS A GUESS AND IS DELIBERATELY CONTAINED HERE. GetRegisteredClicks was
+            -- not readable in game, so which phase the real template acts on is UNMEASURED. It is
+            -- safe to model it wrongly precisely because SuuUI never calls RegisterForClicks on
+            -- these buttons -- the template owns that decision -- so a wrong guess can only make a
+            -- spec test the wrong phase, never make SuuUI behave wrongly.
+            f:RegisterForClicks("AnyUp")
+            f:SetScript("OnClick", function(self)
+                if type(env.CastShapeshiftForm) == "function" then
+                    env.CastShapeshiftForm(self:GetID())
+                end
+            end)
+        end
         if name then env[name] = f end
         return f
     end
@@ -682,6 +711,146 @@ function M.install(env)
         state.pickedUpAction = state.actions[slot]
         state.actions[slot] = held
         fireEvent("ACTIONBAR_SLOT_CHANGED", slot)
+    end
+
+    --------------------------------------------------------------------------
+    -- Shapeshift / stance forms
+    --------------------------------------------------------------------------
+    -- Return ORDERS here are not guessed. They are taken from the destructuring sites in
+    -- ElvUI's StanceBar.lua, which runs correctly on this client -- the same route that
+    -- settled the eight-bar slot mapping. Where ElvUI captures fewer returns than the client
+    -- sends, only the captured ones are modelled, and that is called out.
+
+    -- The client's own cap. 10 rather than 4: NUM_STANCE_SLOTS is the array bound, not the
+    -- number of forms any class actually has, and a consumer that conflates the two sizes its
+    -- bar to the cap instead of to the player.
+    env.NUM_STANCE_SLOTS = 10
+
+    local function stanceCount()
+        local n = 0
+        while state.stanceForms[n + 1] do n = n + 1 end
+        return n
+    end
+
+    env.GetNumShapeshiftForms = function()
+        return stanceCount()
+    end
+
+    -- The ACTIVE form index, or 0 for none. DERIVED from the records' isActive rather than
+    -- stored alongside them, deliberately: the client cannot report form 2 active while form
+    -- 2's own info says otherwise, so the harness must not be able to either. A second stored
+    -- field would let a spec stage a disagreement and then assert against it.
+    env.GetShapeshiftForm = function()
+        for i = 1, stanceCount() do
+            if state.stanceForms[i].isActive then return i end
+        end
+        return 0
+    end
+
+    -- texture, isActive, isCastable, spellID -- FOUR returns, in that order.
+    -- ElvUI: `local texture, isActive, isCastable, spellID = GetShapeshiftFormInfo(i)`.
+    --
+    -- Note ElvUI ignores `texture` for the icon and derives it from spellID instead, using
+    -- texture only as a truthiness test. Both are modelled so a consumer can do either.
+    env.GetShapeshiftFormInfo = function(index)
+        local f = type(index) == "number" and state.stanceForms[index] or nil
+        if not f then return nil end
+        return f.texture or "Interface\\Icons\\INV_Misc_QuestionMark",
+               f.isActive == true,
+               f.isCastable ~= false,
+               f.spellID
+    end
+
+    -- start, duration, active -- THREE returns. ElvUI checks `active` against BOTH nil and 0
+    -- (`if (active and active ~= 0) and start > 0 and duration > 0`), so a number is modelled
+    -- rather than a boolean: answering true/false here would let a consumer that only tests
+    -- truthiness pass while the real client, sending 0, made it fail.
+    env.GetShapeshiftFormCooldown = function(index)
+        local f = type(index) == "number" and state.stanceForms[index] or nil
+        if not f then return 0, 0, 0 end
+        return f.cooldownStart or 0, f.cooldownDuration or 0, f.cooldownActive or 0
+    end
+
+    -- Recorded, not enacted. Actually changing form would mean the harness deciding what that
+    -- does to every other reading -- which form is active, what the bonus bar offset becomes,
+    -- which cooldowns start. A spec asserts the cast, then stages the consequence it cares about.
+    env.CastShapeshiftForm = function(index)
+        state.castStance = index
+    end
+
+    -- How a druid's form or a rogue's stealth moves the paged bar. Read DEFENSIVELY by the
+    -- caller: the plan parked "does form drive bonusbar or a page" as an open question, so a
+    -- consumer must cope with this being absent on a client that lacks it.
+    env.GetBonusBarOffset = function()
+        return state.bonusBarOffset or 0
+    end
+
+    --------------------------------------------------------------------------
+    -- Pet action bar
+    --------------------------------------------------------------------------
+
+    env.NUM_PET_ACTION_SLOTS = 10
+
+    local function petRecord(index)
+        if type(index) ~= "number" then return nil end
+        return state.petActions[index]
+    end
+
+    -- name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID
+    -- SEVEN returns, in that order. ElvUI PetBar.lua:35, verbatim:
+    --   local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID
+    --       = GetPetActionInfo(i)
+    --
+    -- THE TRAP, and the reason this comment is long: when `isToken` is true, `name` and
+    -- `texture` are the NAMES OF GLOBALS, not a display name and a texture path. The consumer
+    -- must resolve them through _G. Nothing is resolved here -- a harness that quietly did the
+    -- lookup would let a consumer that forgot it pass, and then show a blank icon in game.
+    env.GetPetActionInfo = function(index)
+        local p = petRecord(index)
+        if not p then return nil end
+        return p.name,
+               p.texture,
+               p.isToken == true,
+               p.isActive == true,
+               p.autoCastAllowed == true,
+               p.autoCastEnabled == true,
+               p.spellID
+    end
+
+    -- start, duration. ElvUI captures only two (`local start, duration = GetPetActionCooldown(i)`)
+    -- so only two are modelled; the client's third return is not something any consumer here reads.
+    env.GetPetActionCooldown = function(index)
+        local p = petRecord(index)
+        if not p then return 0, 0 end
+        return p.cooldownStart or 0, p.cooldownDuration or 0
+    end
+
+    env.GetPetActionSlotUsable = function(index)
+        local p = petRecord(index)
+        if not p then return false end
+        return p.usable ~= false
+    end
+
+    -- Whether the pet's bar is usable AT ALL. Distinct from whether a pet exists: a present pet
+    -- with an unusable bar greys its icons, an absent pet hides the bar. Collapsing the two is
+    -- the mistake this separation exists to prevent.
+    env.PetHasActionBar = function()
+        return state.petHasActionBar == true
+    end
+
+    env.IsPetAttackAction = function(index)
+        local p = petRecord(index)
+        return p ~= nil and p.attack == true
+    end
+
+    -- Recorded AND enacted, unlike CastShapeshiftForm -- because the consequence is unambiguous
+    -- and local: toggling autocast flips exactly one flag on one slot and nothing else.
+    env.TogglePetAutocast = function(index)
+        local p = petRecord(index)
+        state.petAutocastToggles[#state.petAutocastToggles + 1] = index
+        if not p then return end
+        p.autoCastEnabled = not p.autoCastEnabled
+        fireEvent("PET_BAR_UPDATE")
     end
 
     --------------------------------------------------------------------------

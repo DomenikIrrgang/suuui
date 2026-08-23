@@ -229,6 +229,147 @@ offered.
 
 ---
 
+### Round 7 — read from ElvUI's source, not the client, recorded 2026-08-23
+
+Phase 6's frame names were the fourth item on a list that had already been wrong three times, so
+this round did not probe. It read **ElvUI**, which is bundled here and demonstrably correct on this
+client — the same route that produced the Round 6 bar mapping. Four parallel read-only passes over
+`AddOns/ElvUI`; no in-game step needed for most of it.
+
+**The single finding that retro-explains every earlier surprise: this client has EDIT MODE.**
+
+`Game/Shared/General/Core.lua:76`
+```lua
+E.hasEditMode = E.Retail or E.TBC or E.Wrath or E.Mists
+```
+`Game/TBC/Skins/EditorManager.lua:68` reads `_G.EditModeManagerFrame`, and it is loaded on TBC.
+
+So this Anniversary build is a **modern-backend client wearing a TBC version number**, not the 2021
+2.5.4. That is why `MainActionBar` coexists with `MainMenuBar`, why bars 6–8 exist, and why the
+modern container names are the live ones. Every frame-name surprise in Rounds 1–6 has this one
+cause. ElvUI selects names off exactly this flag:
+
+```lua
+MainActionBar = E.hasEditMode or nil,
+[E.hasEditMode and 'StanceBar'   or 'StanceBarFrame']   = true,
+[E.hasEditMode and 'PetActionBar' or 'PetActionBarFrame'] = true,
+[E.hasEditMode and 'PossessActionBar' or 'PossessBarFrame'] = true
+```
+
+**The live names on this client are therefore `StanceBar`, `PetActionBar`, `PossessActionBar`** —
+the `*Frame` spellings are ElvUI's Classic-Era branch and are dead here. That matches Round 2 and
+contradicts Round 1, which is now explained rather than merely overruled.
+
+**Which of these bars are real, from ElvUI's per-expansion visibility ladder** (`Defaults/Profile.lua:3158`).
+The authors differentiated TBC from Classic on precisely this axis, which makes it the strongest
+evidence in the tree:
+
+| Conditional | Retail | Wrath | TBC | Classic | Conclusion |
+|---|---|---|---|---|---|
+| `vehicleui` | ✓ | ✓ | **✗** | ✗ | vehicles are NOT a TBC mechanic |
+| `nopossessbar` | ✓ | ✓ | **✓** | ✗ | **possess IS real on TBC** |
+| `nooverridebar` | ✓ | ✓ | ✓ | ✓ | indiscriminate — proves nothing |
+
+**But `MainMenuBarVehicleLeaveButton` still EXISTS**, and this is the trap. ElvUI's
+`CreateVehicleLeave()` is called unguarded at `ActionBars.lua:2043` and immediately does
+`holder:Size(button:GetSize())` — a hard error on nil. ElvUI works here, so the frame is real. The
+modern backend ships the button where the mechanic does not exist. Do not conclude "no vehicles" ⇒
+"no frame"; Round 2's measurement was right.
+
+`OverrideActionBar` is **UNCERTAIN** — every reference is either flavour-guarded away from TBC or
+nil-safe, so ElvUI loading proves nothing. Gate anything override-related on an EXISTENCE check
+rather than a flavour check.
+
+**Data APIs, with return orders taken from ElvUI's destructuring sites rather than assumed:**
+
+| Call | Returns |
+|---|---|
+| `GetShapeshiftFormInfo(i)` | `texture, isActive, isCastable, spellID` |
+| `GetShapeshiftFormCooldown(i)` | `start, duration, active` — `active` is a **number**, tested as `active and active ~= 0` |
+| `GetNumShapeshiftForms()` | count; forms are contiguous from 1 |
+| `GetShapeshiftForm()` | active index, `0` for none |
+| `GetPetActionInfo(i)` | `name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID` |
+| `GetPetActionCooldown(i)` | `start, duration` |
+
+**`isToken` is the detail that would have shipped a bug.** When true, `name` and `texture` are the
+**names of globals**, not a display name and a texture path — the consumer must resolve them through
+`_G`. Missing it draws blank icons on exactly the pet actions that are tokens (Attack, Follow, Stay).
+
+**Binding families are counter-intuitive and are not what the frame names suggest:**
+
+| Bar | Family |
+|---|---|
+| Stance | `SHAPESHIFTBUTTON1..N` — **not** `STANCEBUTTON` |
+| Pet | `BONUSACTIONBUTTON1..N` — **not** `PETACTIONBUTTON` |
+
+**Hiding rules.** The stance bar has **no class or spec check anywhere** — it is purely
+`GetNumShapeshiftForms() == 0`, so a mage is a count of zero. The pet bar hides on the macro
+conditional `[pet,nooverridebar,nopossessbar] show; hide`, never on a Lua `UnitExists` check. Pet
+present-but-unusable is a **separate** mechanism that greys icons rather than hiding anything
+(`PetHasActionBar()`), and collapsing the two gets one case wrong.
+
+#### The open question this round could NOT close
+
+**ElvUI does not build stance or pet buttons at all — it adopts Blizzard's and reskins them.** Zero
+`SetAttribute` calls, zero `RegisterForClicks`, no LibActionButton involvement (which is not even
+bundled inside ElvUI — it is a sibling addon folder). The entire working stance button is:
+
+```lua
+button = CreateFrame('CheckButton', name, bar, 'StanceButtonTemplate')
+button:SetID(i)
+```
+
+So **the secure attribute set SuuUI needs to build its own stance/pet buttons is not recoverable
+from disk** — it lives in Blizzard's templates, inside CASC, and there is no FrameXML dump on this
+machine. It has to be read off the live frames.
+
+Bind the button to a global once, then ask one short question per line — a long `/run` is awkward to
+paste and the edit box caps at 255 characters:
+
+```
+/run B=StanceButton1
+/dump B:GetAttribute("type")
+```
+
+**PROBED 2026-08-23: `StanceButton1:GetAttribute("type")` is EMPTY.** A real reading, not an error —
+the same session answered `GetNumShapeshiftForms()` with `8`, so the bar was populated and `B` was
+valid. Blizzard's stance button is **not** driven by the standard `SecureActionButtonTemplate`
+`type`/`action` mechanism at all, so there is no attribute set for SuuUI to state. That closes the
+question in the direction of the template, and is why the phase is built the way it is below.
+
+`CastShapeshiftForm(1)` from a `/run` ran without a Lua error and had no visible effect. **PROBED
+AGAIN 2026-08-23, bracketed, and the verdict is definitive: it is BLOCKED for tainted code.**
+`GetShapeshiftForm()` read `7`, then `CastShapeshiftForm(3)`, then `GetShapeshiftForm()` read `7`
+again — no error, no change, no action-blocked message. A silent no-op.
+
+`/run` executes as TAINTED code, exactly like an addon's own handler, so this rules out SuuUI driving
+a stance change from a plain `OnClick`. The template is not a convenience here, it is the only path.
+Note the failure shape: **no error and no message, just nothing** — which is why this had to be
+tested by reading the form back rather than by watching for a complaint.
+
+`GetShapeshiftFormInfo`'s return order remains **unverified against the live client** and rests on
+ElvUI's destructuring alone. `B:GetRegisteredClicks()` was not readable (the global had been cleared
+by then), so stance press-versus-release is also unmeasured.
+
+`8` forms was measured on a **PALADIN**, and the number is correct: on this client the shapeshift bar
+carries **paladin AURAS** — Devotion, Retribution, Concentration, Shadow Resistance, Frost
+Resistance, Fire Resistance, Crusader, Sanctity. Exactly eight.
+
+**This bar is not "stances". It is whatever class mechanic the client hangs on the shapeshift API** —
+warrior stances, druid forms, rogue stealth, priest shadowform, paladin auras. Naming it the stance
+bar follows Blizzard's and ElvUI's terminology, not its actual scope. Two consequences: the count
+must be READ and never assumed from a class (a paladin's 8 is as real as a warrior's 3), and the bar
+matters for far more classes than the plan's "druid form swap" acceptance line implies.
+
+`B:GetScript("OnClick") ~= nil` → **true**. Blizzard's stance button drives casting through a plain
+SCRIPT, which is consistent with `type` being empty: there is no secure attribute path here at all.
+
+The earlier `CastShapeshiftForm(1)` no-op is explained by the same finding — form 1 on a paladin is
+Devotion Aura, which was almost certainly already active, so the call was a legitimate no-op rather
+than a blocked one.
+
+---
+
 ## The glass plate
 
 "Glassy" is `Themes/` work, not a per-plugin literal. Reference is concept 02 of the chat
@@ -459,6 +600,97 @@ claiming precision.
   globals to coords and any button a later client adds falls back to a text-only field until a
   glyph is drawn for it.
 - Neither the `.tga` nor the `.py` goes in the `.toc` — the `.toc` takes `.lua` only.
+
+---
+
+## Stance, pet and possess bars — Phase 6
+
+Live frame names on this client, per Round 7: **`StanceBar`**, **`PetActionBar`**,
+**`PossessActionBar`**. Vehicles are not a mechanic here, but
+`MainMenuBarVehicleLeaveButton` exists anyway — there is nothing to replace, so Phase 6 leaves it
+alone rather than building a bar for a mechanic the client does not have. `OverrideActionBar` is
+gated on an **existence check**, never a flavour check.
+
+### The count must not vary — this is the constraint that shapes the phase
+
+A stance swap and a pet summon are **in-combat events by their nature**: a warrior swaps stance
+mid-fight, a hunter's pet dies and is revived mid-fight. `ActionBarGrid._apply()` refuses in combat
+and catches up on `PLAYER_REGEN_ENABLED`, which is correct for bars 1–8 — a player does not resize a
+bar mid-pull — and **wrong here**, because it would leave the bar showing the previous form's buttons
+until the fight ended.
+
+Creating a frame and calling `SetPoint` are both protected, so a bar whose button count changes
+cannot do it in combat at all. The resolution, which is what ElvUI does and is proven on this client:
+
+- **Build the maximum set once**, out of combat. `NUM_STANCE_SLOTS` (10) and
+  `NUM_PET_ACTION_SLOTS` (10) are array bounds, not what a class has.
+- **Surplus buttons are scaled to `0.00001` with alpha 0 — never `Hide()`n.** Hiding a secure button
+  is refused in combat; scaling is not.
+- **The container is shown and hidden by `RegisterStateDriver`**, inside the secure environment. The
+  pet bar's conditional on this client is `[pet,nooverridebar,nopossessbar] show; hide`.
+- The stance bar's hide condition is **`GetNumShapeshiftForms() == 0`** and nothing else. No class
+  check, no spec check — a mage is a count of zero.
+
+`Paging.lua` already owns exactly this mechanism (`SecureHandlerStateTemplate` + a driver + a
+snippet reading frame refs), so this is a second consumer of a proven pattern rather than new risk.
+
+### Button construction — SETTLED by the Round 7 probe
+
+`StanceButton1` has **no `type` attribute** (probed). So there is no secure attribute set to state,
+and `SecureActionButtonTemplate` — which every `ActionButton` in Phases 1–5 uses — has nothing to
+work with here. The two bars therefore differ, and the difference is not arbitrary:
+
+**Stance: create our OWN buttons from `StanceButtonTemplate`.** This is what ElvUI does, and it is
+NOT the same as adopting Blizzard's bar:
+
+```lua
+button = CreateFrame('CheckButton', ourName, ourBar, 'StanceButtonTemplate')
+button:SetID(i)
+```
+
+SuuUI creates the frame, owns its parent, position, size and place in the glass plate. Only the click
+plumbing is borrowed — precisely the part that is unrecoverable from disk. The template also supplies
+`.icon`, `.cooldown`, `.checked` and `.HotKey` as child references, which is what makes restyling to
+match bars 1–8 tractable.
+
+**Because we create our own, `StanceBar` CAN still be suppressed.** Blizzard's buttons stay inside
+the hidden container; ours are separate frames. An earlier draft of this section said suppression had
+to leave the frame alone — that was wrong, and it only applies to the pet bar.
+
+**Pet: ADOPT Blizzard's `PetActionButton1..N`** and reparent them into our container. There is no
+`PetActionButtonTemplate` route that gives a fresh button its slot the way `SetID` does for stance, so
+this is the one place SuuUI reskins rather than builds. **`PetActionBar` must therefore NOT be
+suppressed** — its buttons are the ones we are using, and hiding the parent would take them with it.
+Reparenting them out is what removes them from Blizzard's bar.
+
+**Autocast is a visual no existing component provides**: `autoCastAllowed` shows the overlay,
+`autoCastEnabled` spins it, via the overlay's own `:ShowAutoCastEnabled(bool)` on this client. The
+`AutoCastShine_*` globals are the dead Classic branch.
+
+Do NOT invent a secure attribute for either bar. A wrong frame name cost three rounds; a wrong secure
+attribute costs a bar that silently does nothing when clicked, which is exactly the failure Phase 3's
+press-versus-release bug already produced once.
+
+### What is already in place
+
+- The harness models the full surface: `GetNumShapeshiftForms`, `GetShapeshiftForm`,
+  `GetShapeshiftFormInfo`, `GetShapeshiftFormCooldown`, `CastShapeshiftForm`, `GetBonusBarOffset`,
+  `GetPetActionInfo`, `GetPetActionCooldown`, `GetPetActionSlotUsable`, `PetHasActionBar`,
+  `IsPetAttackAction`, `TogglePetAutocast`, plus `H.setStanceForm` / `H.setPetAction` staging. See
+  TESTING.md for the four traps it deliberately does not soften.
+- `ActionButton` already registers `UPDATE_SHAPESHIFT_FORM` and full-refreshes on it.
+- `Suppress.lua` reserves these frames. `StanceBar` and `PossessActionBar` **can** be suppressed,
+  because our stance buttons are our own frames. `PetActionBar` **cannot** — we reparent its buttons
+  out, and hiding the parent would take them with it.
+
+### Still open
+
+- **The pet autocast overlay is a visual no existing component provides.** `autoCastAllowed` shows
+  it, `autoCastEnabled` spins it. On this client ElvUI drives it via the overlay's own
+  `:ShowAutoCastEnabled(bool)`; the `AutoCastShine_*` globals are the dead Classic branch.
+- Whether druid form / rogue stealth drives `GetBonusBarOffset` or a page. The harness models the
+  call; read it defensively at the call site.
+- Possess is real but hard to test — it needs a Mind Control or Eyes of the Beast.
 
 ---
 

@@ -59,6 +59,9 @@
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
 -- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
 -- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
+-- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
+-- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
+--              H.setBonusBarOffset
 --              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
 --              H.getUsedAction H.resetUsedAction
 --
@@ -520,6 +523,169 @@ end
 --- What the cursor is carrying after a PickupAction, or nil.
 -- @return table|nil
 function M.getPickedUpAction() return state.pickedUpAction end
+
+-- Known stance-form fields. Listed so a typo is an error rather than a silently ignored key.
+local STANCE_FIELDS = {
+    texture = true, isActive = true, isCastable = true, spellID = true,
+    cooldownStart = true, cooldownDuration = true, cooldownActive = true,
+}
+
+--- Stages one shapeshift / stance form and announces it.
+--
+-- FORMS MUST BE CONTIGUOUS FROM 1. GetNumShapeshiftForms answers a count and every consumer
+-- loops 1..count, so a gap would make the count disagree with what is reachable -- a shape the
+-- client cannot produce. Staging form 3 with no form 2 is refused rather than modelled.
+--
+-- WHICH EVENT FIRES DEPENDS ON WHAT CHANGED, matching the client's own two events: creating a
+-- form changes the SET, so UPDATE_SHAPESHIFT_FORMS (plural) fires; updating an existing one
+-- changes which is active or castable, so UPDATE_SHAPESHIFT_FORM (singular) fires. The
+-- distinction is load-bearing -- a bar that listens only to the plural rebuilds its buttons but
+-- never restyles them, and a bar that listens only to the singular never grows a new button.
+-- Pass opts.event to override.
+--
+-- Setting isActive = true CLEARS it on every other form, because GetShapeshiftForm is derived
+-- from these records and two active forms is not a state the client can be in.
+--
+-- @param index number  Form index, contiguous from 1
+-- @param props table  Any subset of STANCE_FIELDS
+-- @param opts table|nil  { silent = true } to stage quietly, { event = "..." } to force one
+-- @return table  the stored record
+function M.setStanceForm(index, props, opts)
+    assert(type(index) == "number" and index >= 1, "H.setStanceForm: form index required")
+    assert(index == 1 or state.stanceForms[index - 1],
+        "H.setStanceForm: forms must be contiguous from 1 -- form " .. index ..
+        " needs form " .. (index - 1) .. " staged first")
+
+    local f = state.stanceForms[index]
+    local created = f == nil
+    if created then
+        f = {}
+        state.stanceForms[index] = f
+    end
+    for k, v in pairs(props or {}) do
+        assert(STANCE_FIELDS[k], "H.setStanceForm: unknown stance field '" .. tostring(k) .. "'")
+        f[k] = v
+    end
+
+    -- One active form at a time, or the derived GetShapeshiftForm would answer the lower index
+    -- while a consumer reading isActive saw both.
+    if props and props.isActive == true then
+        for i, other in pairs(state.stanceForms) do
+            if i ~= index then other.isActive = false end
+        end
+    end
+
+    if not (opts and opts.silent) then
+        M.fireEvent((opts and opts.event)
+            or (created and "UPDATE_SHAPESHIFT_FORMS" or "UPDATE_SHAPESHIFT_FORM"))
+    end
+    return f
+end
+
+--- Removes the highest stance form, so the count shrinks. Contiguity is preserved by only ever
+-- removing from the end -- removing from the middle would leave a gap the client cannot express.
+-- @param opts table|nil  { silent = true }
+function M.popStanceForm(opts)
+    local n = 0
+    while state.stanceForms[n + 1] do n = n + 1 end
+    if n == 0 then return end
+    state.stanceForms[n] = nil
+    if not (opts and opts.silent) then
+        M.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    end
+end
+
+--- Removes every stance form, which is the state a class with no forms is in.
+-- @param opts table|nil  { silent = true }
+function M.clearStanceForms(opts)
+    state.stanceForms = {}
+    if not (opts and opts.silent) then
+        M.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    end
+end
+
+--- What CastShapeshiftForm was last asked to cast, or nil.
+-- @return number|nil
+function M.getCastStance() return state.castStance end
+
+-- Known pet-action fields. Listed so a typo is an error rather than a silently ignored key.
+local PET_FIELDS = {
+    name = true, texture = true, isToken = true, isActive = true,
+    autoCastAllowed = true, autoCastEnabled = true, spellID = true,
+    cooldownStart = true, cooldownDuration = true, usable = true, attack = true,
+}
+
+--- Stages one pet action slot and fires PET_BAR_UPDATE.
+--
+-- ON isToken: setting it true means `name` and `texture` are the NAMES OF GLOBALS rather than a
+-- display name and a texture path. Nothing is resolved for you -- stage the globals too
+-- (H.env.PET_ACTION_FOLLOW = "Follow") if the consumer under test resolves them, because that
+-- resolution is exactly what such a test exists to check.
+--
+-- @param index number  Pet slot, 1..NUM_PET_ACTION_SLOTS
+-- @param props table  Any subset of PET_FIELDS
+-- @param opts table|nil  { silent = true } to stage without announcing
+-- @return table  the stored record
+function M.setPetAction(index, props, opts)
+    assert(type(index) == "number" and index >= 1, "H.setPetAction: pet slot number required")
+    local p = state.petActions[index]
+    if not p then
+        p = {}
+        state.petActions[index] = p
+    end
+    for k, v in pairs(props or {}) do
+        assert(PET_FIELDS[k], "H.setPetAction: unknown pet field '" .. tostring(k) .. "'")
+        p[k] = v
+    end
+    if not (opts and opts.silent) then
+        M.fireEvent("PET_BAR_UPDATE")
+    end
+    return p
+end
+
+--- Empties a pet slot, so GetPetActionInfo answers nil.
+-- @param index number
+-- @param opts table|nil  { silent = true }
+function M.clearPetAction(index, opts)
+    assert(type(index) == "number", "H.clearPetAction: pet slot number required")
+    state.petActions[index] = nil
+    if not (opts and opts.silent) then
+        M.fireEvent("PET_BAR_UPDATE")
+    end
+end
+
+--- Sets whether the pet's action bar is usable, as PetHasActionBar() reports it.
+--
+-- DELIBERATELY NOT the same thing as the pet existing -- use H.setUnit("pet", {...}) for that.
+-- A present pet with an unusable bar greys its icons; an absent pet hides the bar entirely. Two
+-- mechanisms, and a consumer that collapses them gets one of the two cases wrong.
+--
+-- @param has boolean
+-- @param opts table|nil  { silent = true }
+function M.setPetActionBar(has, opts)
+    state.petHasActionBar = has and true or false
+    if not (opts and opts.silent) then
+        -- Filtered on unit "player" by every consumer, which is what the client sends for a pet
+        -- gained or lost. UNIT_FLAGS is the one filtered on "pet" -- getting the two the wrong
+        -- way round silently kills every update.
+        M.fireEvent("UNIT_PET", "player")
+    end
+end
+
+--- Every slot index TogglePetAutocast was called on, in order.
+-- @return table
+function M.getPetAutocastToggles() return state.petAutocastToggles end
+
+--- Sets GetBonusBarOffset(), which is how a druid's form or a rogue's stealth moves the paged bar.
+-- @param offset number
+-- @param opts table|nil  { silent = true }
+function M.setBonusBarOffset(offset, opts)
+    assert(type(offset) == "number", "H.setBonusBarOffset: offset number required")
+    state.bonusBarOffset = offset
+    if not (opts and opts.silent) then
+        M.fireEvent("UPDATE_BONUS_ACTIONBAR")
+    end
+end
 
 --- Every override binding installed so far, in call order.
 -- Each entry is { owner, isPriority, key, button, mouseButton }.

@@ -415,6 +415,56 @@ string to its box instead of overflowing it, so a label pinned to a stale or unm
 size draws a half glyph while its position, size and colour all still assert clean. That
 failure mode is only visible through `H.expectTextNotClipped(fontString)`.
 
+### Stance forms and pet actions
+
+```
+H.setStanceForm(index, props, opts)  -- merges; contiguous from 1 only
+H.popStanceForm(opts)                -- removes the highest form
+H.clearStanceForms(opts)             -- the state a class with no forms is in
+H.getCastStance()                    -- what CastShapeshiftForm was asked to cast
+H.setPetAction(index, props, opts)   -- merges; fires PET_BAR_UPDATE
+H.clearPetAction(index, opts)
+H.setPetActionBar(has, opts)         -- PetHasActionBar(); fires UNIT_PET "player"
+H.getPetAutocastToggles()
+H.setBonusBarOffset(offset, opts)    -- GetBonusBarOffset()
+```
+
+Return orders here were recovered from **ElvUI's own destructuring sites**, not assumed — ElvUI runs
+correctly on this client, and Blizzard's templates are inside CASC and unreadable:
+
+- `GetShapeshiftFormInfo(i)` → `texture, isActive, isCastable, spellID`
+- `GetShapeshiftFormCooldown(i)` → `start, duration, active` — `active` is a **number**, because
+  consumers test `active and active ~= 0`. A boolean would let a truthiness-only consumer pass here
+  while the real client, sending `0`, made it fail.
+- `GetPetActionInfo(i)` → `name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID`
+
+Four deliberate properties, each of which a spec will otherwise trip over:
+
+**Forms must be contiguous from 1.** `GetNumShapeshiftForms` answers a count and consumers loop
+`1..count`, so a gap would leave a staged form unreachable. `H.setStanceForm(3, …)` with no form 2
+raises rather than modelling a state the client cannot produce.
+
+**The active form is derived, never stored.** `GetShapeshiftForm()` reads the records' `isActive`, so
+it cannot disagree with `GetShapeshiftFormInfo`. Staging one form active clears the rest.
+
+**Which stance event fires depends on what changed.** Creating a form changes the *set* and fires
+`UPDATE_SHAPESHIFT_FORMS` (plural); updating one fires `UPDATE_SHAPESHIFT_FORM` (singular). This
+mirrors the client and it matters — a bar listening only to the plural rebuilds its buttons but never
+restyles them, and one listening only to the singular never grows a button.
+
+**`isToken` is a trap and the harness does not soften it.** When `isToken` is true, `name` and
+`texture` are the *names of globals*, not a display name and a texture path. Nothing is resolved for
+you; stage the global too (`H.env.PET_ACTION_FOLLOW = "Follow"`). A harness that quietly resolved
+them would let a consumer that forgot the lookup pass, then draw a blank icon in game.
+
+`PetHasActionBar()` is kept separate from `UnitExists("pet")` on purpose: a present pet with an
+unusable bar greys its icons, an absent pet hides the bar entirely. Two mechanisms, two outcomes, and
+collapsing them gets one case wrong.
+
+`CastShapeshiftForm` is **recorded, not enacted** (`H.getCastStance()`) — for the same reason as the
+state drivers, enacting it would mean the harness deciding what changing form does to every other
+reading. `TogglePetAutocast` *is* enacted, because its consequence is exactly one flag on one slot.
+
 ### Clipping: what a widget was assigned vs what draws
 
 `SetClipsChildren(true)` makes a frame a **window**: the client scissors its whole descendant

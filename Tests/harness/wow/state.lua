@@ -95,6 +95,40 @@ M.stateDrivers = {}
 -- The action-slot counterpart to targetedUnit / unitMenu.
 M.usedAction = nil
 
+-- Shapeshift / stance forms, keyed by form index: state.stanceForms[1] = { spellID = 2458 }.
+--
+-- CONTIGUOUS FROM 1, because GetNumShapeshiftForms answers a COUNT and every consumer loops
+-- 1..count. A gap would make the count disagree with what is reachable, which the client
+-- cannot express -- so H.setStanceForm refuses one rather than modelling it.
+--
+-- Absence of a record is the empty state, as with actions: a class with no forms (a mage) has
+-- an empty table and a count of zero, which is the signal the whole bar hides on.
+M.stanceForms = {}
+
+-- What CastShapeshiftForm was asked to do, so a spec can assert the cast without the harness
+-- having to decide what changing form does to the rest of the client.
+M.castStance = nil
+
+-- Pet action slots, keyed by slot index: state.petActions[1] = { name = "Attack" }.
+--
+-- `isToken` is the field to understand here. When it is true, `name` and `texture` are NOT a
+-- display name and a texture path -- they are the NAMES OF GLOBALS holding those values, and
+-- the consumer has to resolve them through _G. The harness returns them exactly as staged and
+-- resolves nothing, because resolving here would hide the distinction the consumer must handle.
+M.petActions = {}
+
+-- Whether the pet has a usable action bar at all, as PetHasActionBar() reports it. DISTINCT from
+-- whether a pet exists (H.setUnit("pet", ...)): a pet can be present with its bar unusable, and
+-- the two drive different outcomes -- greyed icons versus a hidden bar.
+M.petHasActionBar = false
+
+-- What TogglePetAutocast was asked to do, in call order.
+M.petAutocastToggles = {}
+
+-- GetBonusBarOffset(), which is how a druid's form or a rogue's stealth shifts the paged bar.
+-- Zero means no offset. Parked as a deliberate unknown in the plan until Phase 6.
+M.bonusBarOffset = 0
+
 -- CVars the addon reads, by name. Only booleans are modelled; an unset name answers false, which
 -- is what the client does for one it does not know. Set through H.setCVarBool.
 M.cvars = {}
@@ -193,6 +227,16 @@ function M.reset()
     -- secure header.
     M.stateDrivers    = {}
     M.usedAction      = nil
+    -- Cleared for the same reason as the action slots: a leaked stance form would give the next
+    -- spec's bar a button count it never staged, and a leaked pet bar would make a class that has
+    -- no pet render one. A count of zero and an absent pet are the states these must reset TO,
+    -- because they are what the bars are supposed to hide on.
+    M.stanceForms        = {}
+    M.castStance         = nil
+    M.petActions         = {}
+    M.petHasActionBar    = false
+    M.petAutocastToggles = {}
+    M.bonusBarOffset     = 0
     -- Cleared for the usual reason: a leaked ActionButtonUseKeyDown would put every later spec's
     -- buttons on the press path, and their click assertions would fail somewhere far from here.
     M.cvars           = {}

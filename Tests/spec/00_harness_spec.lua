@@ -3751,6 +3751,220 @@ describe("harness: WoW API simulation", function()
                 expect(H.getUsedAction()).isNil()
                 expect(H.getStateDriver(header, "page")).as("frame-keyed store dropped").isNil()
             end)
+
+            it("clears the stance and pet stores too", function()
+                -- Same reasoning as the action stores, with a sharper failure mode: these two
+                -- decide whether a bar EXISTS AT ALL, so a leak would render a stance bar for a
+                -- mage and a pet bar for a warrior in the next spec file.
+                H.setStanceForm(1, { spellID = 2458 }, { silent = true })
+                H.setPetAction(1, { name = "Attack" }, { silent = true })
+                H.setPetActionBar(true, { silent = true })
+                H.setBonusBarOffset(2, { silent = true })
+                H.env.CastShapeshiftForm(1)
+                H.env.TogglePetAutocast(1)
+
+                expect(H.env.GetNumShapeshiftForms()).as("staged before the reload").eq(1)
+                expect(H.env.GetPetActionInfo(1)).notNil()
+                expect(H.env.PetHasActionBar()).truthy()
+                expect(H.getCastStance()).notNil()
+                expect(H.getPetAutocastToggles()).len(1)
+
+                H.setup()
+
+                expect(H.env.GetNumShapeshiftForms()).eq(0)
+                expect(H.env.GetShapeshiftForm()).eq(0)
+                expect(H.env.GetPetActionInfo(1)).isNil()
+                expect(H.env.PetHasActionBar()).falsy()
+                expect(H.env.GetBonusBarOffset()).eq(0)
+                expect(H.getCastStance()).isNil()
+                expect(H.getPetAutocastToggles()).len(0)
+            end)
+        end)
+
+        describe("shapeshift forms", function()
+            it("reports no forms for a class that has none", function()
+                -- The signal the whole stance bar hides on. There is no class check anywhere --
+                -- a mage is simply a count of zero.
+                expect(H.env.GetNumShapeshiftForms()).eq(0)
+                expect(H.env.GetShapeshiftForm()).eq(0)
+                expect(H.env.GetShapeshiftFormInfo(1)).isNil()
+            end)
+
+            it("counts staged forms and returns their info in the client's order", function()
+                H.setStanceForm(1, { spellID = 2457, texture = "battle" })
+                H.setStanceForm(2, { spellID = 2458, texture = "berserker" })
+                expect(H.env.GetNumShapeshiftForms()).eq(2)
+                -- texture, isActive, isCastable, spellID -- the order ElvUI destructures.
+                local texture, isActive, isCastable, spellID = H.env.GetShapeshiftFormInfo(2)
+                expect(texture).eq("berserker")
+                expect(isActive).falsy()
+                expect(isCastable).as("castable unless staged otherwise").truthy()
+                expect(spellID).eq(2458)
+            end)
+
+            it("derives the active form rather than storing it separately", function()
+                -- One source of truth: the client cannot report form 2 active while form 2's own
+                -- info disagrees, so the harness must not be able to either.
+                H.setStanceForm(1, { spellID = 1 })
+                H.setStanceForm(2, { spellID = 2, isActive = true })
+                expect(H.env.GetShapeshiftForm()).eq(2)
+                local _, isActive = H.env.GetShapeshiftFormInfo(2)
+                expect(isActive).truthy()
+            end)
+
+            it("makes a newly active form deactivate the others", function()
+                H.setStanceForm(1, { isActive = true })
+                H.setStanceForm(2, {})
+                expect(H.env.GetShapeshiftForm()).eq(1)
+                H.setStanceForm(2, { isActive = true })
+                expect(H.env.GetShapeshiftForm()).as("only one form at a time").eq(2)
+                local _, firstActive = H.env.GetShapeshiftFormInfo(1)
+                expect(firstActive).falsy()
+            end)
+
+            it("REFUSES a gap, because the client cannot express one", function()
+                -- GetNumShapeshiftForms answers a COUNT and consumers loop 1..count, so form 3
+                -- with no form 2 would be unreachable while still being staged.
+                expect(function() H.setStanceForm(3, { spellID = 9 }) end).throws("contiguous")
+            end)
+
+            it("fires the PLURAL event when the form set changes and the SINGULAR when it does not",
+                function()
+                    -- The distinction is load-bearing: a bar listening only to the plural rebuilds
+                    -- its buttons but never restyles them, and one listening only to the singular
+                    -- never grows a button.
+                    local forms, form = 0, 0
+                    local f = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+                    f:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+                    f:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+                    f:SetScript("OnEvent", function(_, e)
+                        if e == "UPDATE_SHAPESHIFT_FORMS" then forms = forms + 1 else form = form + 1 end
+                    end)
+
+                    H.setStanceForm(1, { spellID = 1 })
+                    expect(forms).as("creating a form changed the set").eq(1)
+                    expect(form).eq(0)
+
+                    H.setStanceForm(1, { isActive = true })
+                    expect(forms).as("updating one did not change the set").eq(1)
+                    expect(form).eq(1)
+
+                    H.popStanceForm()
+                    expect(forms).as("removing shrank the set").eq(2)
+                    expect(H.env.GetNumShapeshiftForms())
+                        .as("and the count actually dropped, not just the event").eq(0)
+                end)
+
+            it("returns a numeric cooldown active flag, not a boolean", function()
+                -- ElvUI tests `active and active ~= 0`, so answering false here would let a
+                -- consumer that only checks truthiness pass while the real client, sending 0,
+                -- made it fail.
+                local _, _, active = H.env.GetShapeshiftFormCooldown(1)
+                expect(active).eq(0)
+                H.setStanceForm(1, { cooldownStart = 100, cooldownDuration = 30, cooldownActive = 1 })
+                local start, duration, act = H.env.GetShapeshiftFormCooldown(1)
+                expect(start).eq(100)
+                expect(duration).eq(30)
+                expect(act).eq(1)
+            end)
+
+            it("records a cast rather than enacting it", function()
+                -- Enacting would mean the harness deciding what changing form does to every other
+                -- reading; a spec asserts the cast and stages the consequence it cares about.
+                H.setStanceForm(1, { spellID = 2458 })
+                H.env.CastShapeshiftForm(1)
+                expect(H.getCastStance()).eq(1)
+                expect(H.env.GetShapeshiftForm()).as("form did not change itself").eq(0)
+            end)
+        end)
+
+        describe("pet actions", function()
+            it("answers nil for an unstaged slot and false for no pet bar", function()
+                expect(H.env.GetPetActionInfo(1)).isNil()
+                expect(H.env.PetHasActionBar()).falsy()
+                expect(H.env.GetPetActionSlotUsable(1)).falsy()
+            end)
+
+            it("returns all seven values in the client's order", function()
+                H.setPetAction(1, {
+                    name = "Attack", texture = "tex", isActive = true,
+                    autoCastAllowed = true, autoCastEnabled = true, spellID = 6991,
+                })
+                local name, texture, isToken, isActive, allowed, enabled, spellID =
+                    H.env.GetPetActionInfo(1)
+                expect(name).eq("Attack")
+                expect(texture).eq("tex")
+                expect(isToken).as("not a token unless staged").falsy()
+                expect(isActive).truthy()
+                expect(allowed).truthy()
+                expect(enabled).truthy()
+                expect(spellID).eq(6991)
+            end)
+
+            it("treats a staged slot as usable unless told otherwise", function()
+                -- The default matters: a bar that greys every button because the harness answered
+                -- "not usable" for a perfectly good slot looks like a tint bug, not a data bug.
+                H.setPetAction(1, { name = "Claw" })
+                expect(H.env.GetPetActionSlotUsable(1)).as("usable by default").truthy()
+                H.setPetAction(1, { usable = false })
+                expect(H.env.GetPetActionSlotUsable(1)).falsy()
+            end)
+
+            it("does NOT resolve a token, because resolving it is the consumer's job", function()
+                -- The trap: with isToken true, name and texture are the NAMES OF GLOBALS. A
+                -- harness that quietly resolved them would let a consumer that forgot the lookup
+                -- pass here and then draw a blank icon in game.
+                H.env.PET_ACTION_FOLLOW_NAME = "Follow"
+                H.setPetAction(1, { name = "PET_ACTION_FOLLOW_NAME", isToken = true })
+                local name, _, isToken = H.env.GetPetActionInfo(1)
+                expect(isToken).truthy()
+                expect(name).as("handed back unresolved").eq("PET_ACTION_FOLLOW_NAME")
+                expect(H.env[name]).as("the consumer resolves it").eq("Follow")
+            end)
+
+            it("keeps the pet's existence separate from its bar being usable", function()
+                -- Two mechanisms with different outcomes: a present pet with an unusable bar greys
+                -- its icons, an absent pet hides the bar. Collapsing them gets one case wrong.
+                H.setUnit("pet", { exists = true })
+                expect(H.env.UnitExists("pet")).truthy()
+                expect(H.env.PetHasActionBar()).as("present but bar unusable").falsy()
+                H.setPetActionBar(true)
+                expect(H.env.PetHasActionBar()).truthy()
+            end)
+
+            it("toggles autocast and announces it, since the consequence is unambiguous", function()
+                H.setPetAction(1, { name = "Claw", autoCastAllowed = true })
+                local updates = 0
+                local f = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+                f:RegisterEvent("PET_BAR_UPDATE")
+                f:SetScript("OnEvent", function() updates = updates + 1 end)
+
+                H.env.TogglePetAutocast(1)
+                local _, _, _, _, _, enabled = H.env.GetPetActionInfo(1)
+                expect(enabled).as("flipped on").truthy()
+                expect(updates).eq(1)
+
+                H.env.TogglePetAutocast(1)
+                local _, _, _, _, _, again = H.env.GetPetActionInfo(1)
+                expect(again).as("flipped back off").falsy()
+                expect(H.getPetAutocastToggles()).len(2)
+            end)
+
+            it("fires UNIT_PET with unit player, which is what consumers filter on", function()
+                -- UNIT_PET is filtered on "player" and UNIT_FLAGS on "pet". The wrong way round
+                -- silently kills every update, so the unit this sends is pinned here.
+                local seen
+                local f = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+                f:RegisterEvent("UNIT_PET")
+                f:SetScript("OnEvent", function(_, _, unit) seen = unit end)
+                H.setPetActionBar(true)
+                expect(seen).eq("player")
+            end)
+
+            it("rejects an unknown field rather than ignoring it", function()
+                expect(function() H.setPetAction(1, { txture = "typo" }) end).throws("unknown pet field")
+                expect(function() H.setStanceForm(1, { spel = 1 }) end).throws("unknown stance field")
+            end)
         end)
     end)
 end)

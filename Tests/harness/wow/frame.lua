@@ -193,6 +193,13 @@ end
 function FrameMeta:RegisterForDrag(...)   self._dragButtons = { ... } end
 function FrameMeta:RegisterForClicks(...) self._clickButtons = { ... } end
 
+-- A frame's numeric id. Mundane everywhere else in the API, but LOAD-BEARING for a stance
+-- button: Blizzard's StanceButtonTemplate carries no `type` attribute (probed) and works out
+-- which form to cast entirely from GetID(). The id IS the wiring, so a button created without
+-- one silently casts nothing.
+function FrameMeta:SetID(id) self._id = id end
+function FrameMeta:GetID()   return self._id or 0 end
+
 ----------------------------------------------------------------------------------
 -- Secure attributes
 --
@@ -580,6 +587,11 @@ function ButtonMeta:IsEnabled()    return self._buttonEnabled ~= false end
 function ButtonMeta:Enable()  self:SetEnabled(true) end
 function ButtonMeta:Disable() self:SetEnabled(false) end
 function ButtonMeta:Click(button) self:_fire("OnClick", button or "LeftButton") end
+
+-- CheckButton's own state. A stance button uses this to show which form is active, so it is the
+-- observable a spec asserts against rather than an internal flag on the component.
+function ButtonMeta:SetChecked(on) self._checked = on and true or false end
+function ButtonMeta:GetChecked()   return self._checked == true end
 function ButtonMeta:SetNormalTexture(t) self._normalTexture = t end
 function ButtonMeta:GetNormalTexture()  return self._normalTexture end
 
