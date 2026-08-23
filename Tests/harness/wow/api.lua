@@ -48,7 +48,9 @@ function M.install(env)
         -- something overwrites OnClick.
         if template and template:find("Secure") and f._canScript then
             f._secure = true
-            f:SetScript("OnClick", function(self, button) frame.secureAction(self, button) end)
+            f:SetScript("OnClick", function(self, button, down)
+                frame.secureAction(self, button, down)
+            end)
         end
         if name then env[name] = f end
         return f
@@ -435,22 +437,36 @@ function M.install(env)
     -- Blizzard's bottom action bar cluster (the ActionBars plugin suppresses it)
     --------------------------------------------------------------------------
 
-    -- MainMenuBar carries the CLIENT'S OWN action buttons, and those are secure. That is the
-    -- whole reason hiding the bar is a protected operation: protection propagates down to the
-    -- buttons and the client's refusal propagates back up to the bar. A stub without them would
-    -- let a suppression spec assert "hiding this mid-fight is fine", which is false in game --
-    -- and the deferral that makes it true would then be untested.
-    local MainMenuBar = blizzardSystemFrame(CreateFrame("Frame", "MainMenuBar", UIParent))
-    MainMenuBar:SetSize(512, 60)
-    MainMenuBar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+    -- MEASURED IN GAME by walking up from the button:
+    --   ActionButton1 > MainActionBarButtonContainer1 > MainActionBar > UIParent
+    --
+    -- So this client has BOTH MainActionBar and MainMenuBar, and they are different frames: the
+    -- first holds the buttons, the second carries the art. Modelled that way because the earlier
+    -- model put the buttons inside MainMenuBar, which made "hiding MainMenuBar hides the buttons"
+    -- true here and false in game -- suppression removed the gryphons and left all twelve buttons
+    -- on screen while every spec passed.
+    --
+    -- MainActionBar carries the CLIENT'S OWN secure buttons, which is why hiding it is a protected
+    -- operation: protection propagates down to them and the refusal propagates back up.
+    local MainActionBar = blizzardSystemFrame(CreateFrame("Frame", "MainActionBar", UIParent))
+    MainActionBar:SetSize(512, 44)
+    MainActionBar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+    local MainButtonContainer = CreateFrame("Frame", "MainActionBarButtonContainer1", MainActionBar)
+    MainButtonContainer:SetSize(512, 44)
+    MainButtonContainer:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, 0)
     for i = 1, 12 do
-        local b = CreateFrame("Button", "ActionButton" .. i, MainMenuBar,
+        local b = CreateFrame("Button", "ActionButton" .. i, MainButtonContainer,
             "SecureActionButtonTemplate")
         b:SetSize(36, 36)
-        b:SetPoint("BOTTOMLEFT", MainMenuBar, "BOTTOMLEFT", (i - 1) * 40, 4)
+        b:SetPoint("BOTTOMLEFT", MainButtonContainer, "BOTTOMLEFT", (i - 1) * 40, 4)
         b:SetAttribute("type", "action")
         b:SetAttribute("action", i)
     end
+
+    -- The art frame, a SEPARATE top-level frame from the one above.
+    local MainMenuBar = blizzardSystemFrame(CreateFrame("Frame", "MainMenuBar", UIParent))
+    MainMenuBar:SetSize(512, 60)
+    MainMenuBar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
 
     -- The four multibars, each carrying the slot block MEASURED IN GAME during Phase 0 of the
     -- bottom-UI work. Modelled with their real blocks so a spec reading a button's action
@@ -464,6 +480,28 @@ function M.install(env)
         local bar = blizzardSystemFrame(CreateFrame("Frame", def.name, UIParent))
         bar:SetSize(512, 40)
         bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 60)
+        for i = 1, 12 do
+            local b = CreateFrame("Button", def.name .. "Button" .. i, bar,
+                "SecureActionButtonTemplate")
+            b:SetSize(36, 36)
+            b:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", (i - 1) * 40, 2)
+            b:SetAttribute("type", "action")
+            b:SetAttribute("action", def.first + i - 1)
+        end
+    end
+
+    -- Bars 6, 7 and 8. Present on this client -- measured, and Blizzard's own options list them --
+    -- with the slot blocks read off their own buttons: 145, 157, 169. The numbering follows the
+    -- frame name here, which it does NOT for bars 4 and 5, so each pairing was measured rather than
+    -- inferred from the one before it.
+    for _, def in ipairs({
+        { name = "MultiBar5", first = 145 },
+        { name = "MultiBar6", first = 157 },
+        { name = "MultiBar7", first = 169 },
+    }) do
+        local bar = blizzardSystemFrame(CreateFrame("Frame", def.name, UIParent))
+        bar:SetSize(512, 40)
+        bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 100)
         for i = 1, 12 do
             local b = CreateFrame("Button", def.name .. "Button" .. i, bar,
                 "SecureActionButtonTemplate")
@@ -506,6 +544,25 @@ function M.install(env)
         CreateFrame("Frame", "MicroMenu", env.MicroMenuContainer))
     MicroMenu:SetSize(120, 30)
     MicroMenu:SetPoint("BOTTOMLEFT", env.MicroMenuContainer, "BOTTOMLEFT", 0, 0)
+
+    -- CVars the addon reads. Only the boolean form is modelled, because that is all anything here
+    -- asks for, and an unset CVar answers false -- which is what the client does for one it does
+    -- not know. Staged through H.setCVarBool.
+    --
+    -- `ActionButtonUseKeyDown` matters more than it looks: an action button reads it to decide
+    -- whether the client acts on the press or the release, and getting that wrong produces a button
+    -- with correct attributes and no action. Left FALSE by default so the existing specs describe
+    -- the release path; a spec that cares about the press stages it.
+    env.GetCVarBool = function(name)
+        return state.cvars[name] and true or false
+    end
+
+    env.GetCVar = function(name)
+        local v = state.cvars[name]
+        if v == nil then return nil end
+        if v == true then return "1" elseif v == false then return "0" end
+        return tostring(v)
+    end
 
     --------------------------------------------------------------------------
     -- Action bar slots

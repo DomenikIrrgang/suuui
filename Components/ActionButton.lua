@@ -196,6 +196,17 @@ local function abbreviateKey(key)
     return upper(out)
 end
 
+-- Whether this client acts on the press rather than the release, as the player has it set.
+--
+-- Read from the CVar rather than assumed, and read DEFENSIVELY: GetCVarBool is absent on some
+-- client generations and the CVar itself may not exist, in which case the release is the safe
+-- answer -- it is what every client did before the setting was introduced.
+local function useKeyDown()
+    if type(GetCVarBool) ~= "function" then return false end
+    local ok, on = pcall(GetCVarBool, "ActionButtonUseKeyDown")
+    return (ok and on) and true or false
+end
+
 ---------------------------------------------------------------------------
 -- Component
 ---------------------------------------------------------------------------
@@ -353,6 +364,45 @@ function ActionButtonMeta:_readState()
 end
 
 ---------------------------------------------------------------------------
+-- Tooltip
+---------------------------------------------------------------------------
+-- OWNED BY THE COMPONENT, which is a deliberate departure from AuraIcon. AuraIcon emits
+-- MOUSE_ENTER and lets its owner wire a tooltip, because it does not know which aura it shows and
+-- the caller does. An action button DOES know: its slot is the whole answer, and
+-- GameTooltip:SetAction builds the entire tooltip from it -- name, cost, range, cast time, the
+-- lot. Nothing is left for an owner to supply.
+--
+-- It is owned here because the alternative was tried and failed. Phase 4a shipped this button
+-- emitting the signals and nobody wired them, so an action bar with no tooltips reached the game.
+-- A tooltip is not an optional garnish on an action button; leaving it to every owner invites
+-- exactly that omission.
+--
+-- GameTooltip directly, not Components/Tooltip: reproducing the client's own spell tooltip
+-- formatting is not on the table, and this is the same sanctioned client-widget exception the
+-- Cooldown frame already takes.
+
+function ActionButtonMeta:_showTooltip()
+    if not self._tooltip then return end
+    if type(GameTooltip) ~= "table" or type(GameTooltip.SetAction) ~= "function" then return end
+    local slot = self:_slotNow()
+    -- Nothing to say about an empty cell, and SetAction on one shows an empty frame rather than
+    -- nothing at all.
+    if not (slot and HasAction(slot)) then return end
+    GameTooltip:SetOwner(self._f, self._tooltipAnchor)
+    GameTooltip:SetAction(slot)
+    GameTooltip:Show()
+end
+
+function ActionButtonMeta:_hideTooltip()
+    if not self._tooltip then return end
+    if type(GameTooltip) ~= "table" then return end
+    -- Only if it is OURS. A tooltip the player moved onto something else in the same frame must
+    -- not be hidden out from under that thing.
+    if GameTooltip.GetOwner and GameTooltip:GetOwner() ~= self._f then return end
+    GameTooltip:Hide()
+end
+
+---------------------------------------------------------------------------
 -- Public API
 ---------------------------------------------------------------------------
 
@@ -505,7 +555,8 @@ SuuUI.Components.InstallBase(ActionButtonMeta, "_f")
 --
 -- Emits: CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, SIZE_CHANGED.
 --
--- @param props table  { slot, size, binding, showHotkey, showMacroText, showCount, name }
+-- @param props table  { slot, size, binding, showHotkey, showMacroText, showCount,
+--                       tooltip, tooltipAnchor, name }
 --   slot:          the action slot, 1..72 on this client. Required.
 --   size:          square side. Required -- a button's size is a PLUGIN SETTING, not a
 --                  theme token, so the component does not invent a default for it.
@@ -513,6 +564,8 @@ SuuUI.Components.InstallBase(ActionButtonMeta, "_f")
 --   showHotkey:    default true
 --   showMacroText: default true
 --   showCount:     default true
+--   tooltip:       show the client's action tooltip on hover (default true)
+--   tooltipAnchor: GameTooltip anchor point (default "ANCHOR_RIGHT")
 --   name:          optional global frame name, so /framestack and click-casting addons
 --                  can name it
 -- @param parent frame
@@ -528,15 +581,33 @@ function SuuUI.Components.ActionButton(props, parent)
     local f = CreateFrame("Button", props.name, parent, "SecureActionButtonTemplate")
     f:SetSize(props.size, props.size)
     f:EnableMouse(true)
-    -- AnyUp: the right button carries a real action on an action bar, and on the release so
-    -- a click that started here and ended elsewhere is not an action.
-    f:RegisterForClicks("AnyUp")
+    -- BOTH DOWN AND UP, and this is the difference between a button that works and one that looks
+    -- perfect and does nothing.
+    --
+    -- This client drives action buttons on the DOWN event: Blizzard's own ActionButton1 carries an
+    -- OnMouseDown handler, and the secure OnClick handler compares the `down` flag it is given
+    -- against `useOnKeyDown` and RETURNS EARLY when they disagree. Registered for AnyUp alone the
+    -- handler fired with down = false, disagreed, and bailed -- with the template, the attributes,
+    -- the mouse and the tooltip all correct, which is exactly why it survived a green suite and an
+    -- in-game session. Dragging kept working throughout, because drag never goes through that
+    -- handler; that is what narrowed it down.
+    --
+    -- Registering both is what LibActionButton-1.0 does for this client family, and it is safe
+    -- rather than double-firing precisely BECAUSE the handler checks `down`: whichever event
+    -- disagrees with useOnKeyDown is discarded, so one physical click yields exactly one action. On
+    -- an older client whose handler ignored `down` the same registration WOULD fire twice, which is
+    -- why the library gates it on the client family.
+    f:RegisterForClicks("AnyDown", "AnyUp")
     -- Left button only: dragging with the right button is how a player rotates the camera.
     f:RegisterForDrag("LeftButton")
 
     -- Stated once, here, and never again. See the note at the top of this file.
     f:SetAttribute("type", "action")
     f:SetAttribute("action", props.slot)
+    -- Which of the two events the client should act on. Read from the client's OWN CVar so this
+    -- button agrees with every other action button on screen, rather than imposing a preference: a
+    -- player who chose key-down elsewhere expects it here too.
+    f:SetAttribute("useOnKeyDown", useKeyDown())
 
     local handle
     f:SetScript("OnSizeChanged", function(_, w, h)
@@ -618,6 +689,8 @@ function SuuUI.Components.ActionButton(props, parent)
         _showHotkey    = props.showHotkey ~= false,
         _showMacroText = props.showMacroText ~= false,
         _showCount     = props.showCount ~= false,
+        _tooltip       = props.tooltip ~= false,
+        _tooltipAnchor = props.tooltipAnchor or "ANCHOR_RIGHT",
         _usable        = true,
         _noResource    = false,
         _outOfRange    = false,
@@ -628,14 +701,23 @@ function SuuUI.Components.ActionButton(props, parent)
     -- PostClick, not OnClick: the template owns OnClick and it is what performs the action.
     -- Hooked rather than set, for the same reason -- a template that grows a PostClick of its
     -- own must keep it.
-    f:HookScript("PostClick", function(_, btn)
+    --
+    -- Gated on the SAME press-or-release rule the client's handler uses. With both events
+    -- registered, OnClick fires twice for one physical click and so does PostClick -- so without
+    -- this a consumer would see two CLICKED signals per click, and anything counting them (a
+    -- flyout toggle, a cast counter) would be wrong in a way that looks like a double-click.
+    f:HookScript("PostClick", function(_, btn, down)
+        local acted = (down and true or false) == (f:GetAttribute("useOnKeyDown") and true or false)
+        if not acted then return end
         S:Emit(handle, S.SIGNALS.CLICKED, btn or "LeftButton")
     end)
     f:HookScript("OnEnter", function()
         S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
+        handle:_showTooltip()
     end)
     f:HookScript("OnLeave", function()
         S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
+        handle:_hideTooltip()
     end)
 
     -- Drag in and out. LOCK_ACTIONBAR is a CVar-backed PLAIN GLOBAL and therefore the string

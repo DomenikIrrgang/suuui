@@ -1298,3 +1298,86 @@ describe("ThemeManager toggle token control", function()
         end)
     end)
 end)
+
+describe("SettingsUI: every real plugin's page actually builds", function()
+    -- THE GAP THIS CLOSES. Phase 5a of the action bars shipped a subtabs entry whose tabs had no
+    -- `id`. SubTabs indexes them with `byId[tab.id] = tab`, so the build raised "table index is
+    -- nil" and the ENTIRE Action Bars page rendered zero rows -- top-level toggles included, which
+    -- took the suppression escape hatch with it. Every schema-shape spec passed the whole time,
+    -- because asserting a schema is not asserting that it RENDERS.
+    --
+    -- So this walks the plugins that really exist rather than a fixture, and asserts the two
+    -- things a shape assertion cannot: the build does not throw, and it produces rows.
+    local host, scroll
+
+    before_each(function()
+        H.setup({ debug = true })
+        host = H.parent(600, 500)
+        scroll = H.mount(H.C.ScrollFrame({ w = 500, h = 400 }, host))
+    end)
+
+    -- Counted off the harness's child list, NOT off GetChildren(): that returns VARARGS, so
+    -- `local kids = frame:GetChildren()` captures the first child only and `#kids` on a frame
+    -- table is 0 -- which reads exactly like "the page rendered nothing" and cost a round here.
+    local function rowsFor(pluginId)
+        local ok, err = pcall(function()
+            H.SuuUI._PageBuilder:Build(pluginId, scroll)
+        end)
+        expect(ok).as(pluginId .. " page build raised: " .. tostring(err)).truthy()
+        local content = scroll:GetContent()
+        local n = 0
+        for _, child in ipairs(content._childFrames) do
+            if child:IsVisible() then n = n + 1 end
+        end
+        return n
+    end
+
+    it("builds a page with rows for every plugin that registered a schema", function()
+        local checked = 0
+        for _, plugin in ipairs(H.SuuUI.Plugins:GetAll()) do
+            local schema = H.SuuUI.Settings:GetSchema(plugin.id)
+            if schema and #schema > 0 then
+                checked = checked + 1
+                expect(rowsFor(plugin.id))
+                    .as(plugin.id .. " rendered no rows at all").gt(0)
+            end
+        end
+        expect(checked).as("found plugins to check").gt(0)
+    end)
+
+    it("logs no missing-control complaint for any real plugin", function()
+        -- A type with no builder is skipped with a Debug line rather than raising, so an entry
+        -- naming a control that does not exist is invisible except here. `internal` and `position`
+        -- are data-only and skipped by design, so they never reach that branch.
+        for _, plugin in ipairs(H.SuuUI.Plugins:GetAll()) do
+            local schema = H.SuuUI.Settings:GetSchema(plugin.id)
+            if schema and #schema > 0 then
+                H.SuuUI._PageBuilder:Build(plugin.id, scroll)
+            end
+        end
+        local complaints = {}
+        for _, line in ipairs(H.debugLog()) do
+            if line:find("no control for type") then complaints[#complaints + 1] = line end
+        end
+        expect(complaints).as("unrenderable entries: " .. table.concat(complaints, " | ")).len(0)
+    end)
+
+    it("gives every subtab an id, since SubTabs indexes by it", function()
+        -- The specific failure above, pinned at the schema level too so the diagnosis is one line
+        -- rather than a stack trace out of a control.
+        for _, plugin in ipairs(H.SuuUI.Plugins:GetAll()) do
+            for _, entry in ipairs(H.SuuUI.Settings:GetSchema(plugin.id) or {}) do
+                if entry.type == "subtabs" then
+                    for i, tab in ipairs(entry.tabs or {}) do
+                        expect(tab.id)
+                            .as(plugin.id .. " subtab " .. i .. " has no id").notNil()
+                        expect(tab.label).as(plugin.id .. " subtab " .. i .. " has no label")
+                            .notNil()
+                        expect(tab.schema).as(plugin.id .. " subtab " .. i .. " has no schema")
+                            .notNil()
+                    end
+                end
+            end
+        end
+    end)
+end)

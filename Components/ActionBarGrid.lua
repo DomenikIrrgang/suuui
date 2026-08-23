@@ -80,11 +80,16 @@ end
 function GridMeta:_syncButtons()
     local buttons = self._buttons
     local want = #self._slots
+    -- Tracked so CHILDREN_CHANGED fires only when the set REALLY moved. A subscriber re-reads
+    -- every button on it -- secure paging re-states a frame reference per button -- so firing on
+    -- a no-op re-apply would make every unrelated setting change pay for it.
+    local rebuilt = false
 
     for i = #buttons, want + 1, -1 do
         self._gridBox:Remove(buttons[i])
         buttons[i]:Destroy()
         buttons[i] = nil
+        rebuilt = true
     end
 
     for i = 1, want do
@@ -108,6 +113,7 @@ function GridMeta:_syncButtons()
             }, self._f)
             buttons[i] = b
             self._gridBox:Add(b, { height = self._buttonSize })
+            rebuilt = true
         else
             -- GridLayout sets a cell's WIDTH from the container and READS the child's own
             -- height, so a size change has to reach the button itself -- the child prop alone
@@ -120,6 +126,8 @@ function GridMeta:_syncButtons()
             self._gridBox:SetChildProps(existing, { height = self._buttonSize })
         end
     end
+
+    self._rebuilt = rebuilt
 end
 
 -- Hairline dividers between cells, drawn only for a SEAMLESS grid.
@@ -205,6 +213,15 @@ function GridMeta:_apply()
     self:_syncDividers()
     self._gridBox:Layout()
     self._divBox:Layout()
+
+    -- Emitted LAST, after the layout has settled, so a subscriber reading a button's geometry
+    -- gets the finished rect rather than a half-applied one. A deferred apply reaches here on
+    -- PLAYER_REGEN_ENABLED, which is the case that makes the signal necessary at all: nothing
+    -- else tells a holder of button references when the fight-delayed rebuild finally happened.
+    if self._rebuilt then
+        self._rebuilt = false
+        S:Emit(self, S.SIGNALS.CHILDREN_CHANGED)
+    end
 end
 
 ---------------------------------------------------------------------------

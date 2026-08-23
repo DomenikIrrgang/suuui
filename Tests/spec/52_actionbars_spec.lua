@@ -289,8 +289,8 @@ describe("Plugins.ActionBars", function()
         H.setup()
     end)
 
-    local function bar()
-        return H.SuuUI.Plugins:Get(PLUGIN)._bar
+    local function bar(id)
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars[id or 1]
     end
 
     it("builds bar 1 on login", function()
@@ -308,6 +308,31 @@ describe("Plugins.ActionBars", function()
         H.setBinding("ACTIONBUTTON5", "5")
         H.fireEvent("UPDATE_BINDINGS")
         expect(bar():GetButtons()[5]._hotkeyText:GetText()).eq("5")
+    end)
+
+    it("gets the BUTTONS off the screen, not just their containers", function()
+        -- The end, not the means. This module shipped a version where every container it named was
+        -- hidden, IsSuppressed reported success for all of them, and all twelve buttons were still
+        -- on screen -- because the buttons live in MainActionBar and the list only knew
+        -- MainMenuBar. Verify() asks the buttons directly.
+        expect(H.SuuUI._ActionBars.Suppress.Verify())
+            .as("buttons still visible: " ..
+                table.concat(H.SuuUI._ActionBars.Suppress.Verify(), ", ")).len(0)
+        for _, name in ipairs(H.SuuUI._ActionBars.Suppress.WITNESS_BUTTONS) do
+            local b = H.env[name]
+            if b then
+                expect(b:IsVisible()).as(name .. " is off screen").falsy()
+            end
+        end
+    end)
+
+    it("hides EVERY name in a candidate list, not just the first", function()
+        -- MainActionBar and MainMenuBar coexist on this client -- one holds the buttons, the other
+        -- the art -- so first-match-wins hid one and left the other. A rename list is unaffected,
+        -- since only one of its names ever exists.
+        local S = H.SuuUI._ActionBars.Suppress
+        expect(S.IsSuppressed("MainActionBar")).as("the button container").truthy()
+        expect(S.IsSuppressed("MainMenuBar")).as("AND the art frame").truthy()
     end)
 
     it("hides Blizzard's bottom cluster", function()
@@ -452,17 +477,18 @@ describe("Plugins.ActionBars: suppression", function()
             expect(f:IsShown()).as("one Restore is enough").truthy()
         end)
 
-        it("is why the deferral exists: the BARS are protected, the art is not", function()
-            -- Pins the asymmetry the whole combat path is built on. MainMenuBar holds the
-            -- CLIENT'S OWN secure buttons, so hiding it mid-fight is refused; the art frames are
-            -- their siblings rather than their parents, so hiding those never is. Without this
-            -- the harness could drop the secure buttons and nothing would notice.
+        it("is why the deferral exists: the BUTTON container is protected, the art is not", function()
+            -- Pins the asymmetry the whole combat path is built on, and the measured tree moved it:
+            -- MainActionBar holds the client's own secure buttons, so hiding IT is refused
+            -- mid-fight, while MainMenuBar carries only art and is not protected at all. The
+            -- deferral covers both anyway -- see doHide -- because half a cluster vanishing mid-
+            -- fight reads as a bug.
+            expect(H.hasProtectedDescendant(bar("MainActionBar")))
+                .as("the button container holds Blizzard's secure buttons").truthy()
             expect(H.hasProtectedDescendant(bar("MainMenuBar")))
-                .as("the bar holds Blizzard's secure buttons").truthy()
-            expect(H.hasProtectedDescendant(bar("MainMenuBarArtFrame")))
-                .as("the art holds none").falsy()
+                .as("the art frame holds none").falsy()
             expect(bar("MainMenuBarArtFrame"):IsProtected())
-                .as("and has no secure ancestor either").falsy()
+                .as("and the art has no secure ancestor either").falsy()
         end)
     end)
 
@@ -546,7 +572,7 @@ describe("Plugins.ActionBars: suppression", function()
             -- The point of a separate toggle: both bars on screen at once is a legitimate
             -- state, and it is what a player debugging their own setup wants.
             H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
-            expect(H.SuuUI.Plugins:Get(PLUGIN)._bar).notNil()
+            expect(H.SuuUI.Plugins:Get(PLUGIN)._bars[1]).notNil()
         end)
 
         it("sits before any section, so it is findable", function()
@@ -570,7 +596,7 @@ describe("Plugins.ActionBars: suppression", function()
 
         it("never leaves the player with neither bar", function()
             H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
-            expect(H.SuuUI.Plugins:Get(PLUGIN)._bar).as("ours is gone").isNil()
+            expect(H.SuuUI.Plugins:Get(PLUGIN)._bars[1]).as("ours is gone").isNil()
             expect(bar("MainMenuBar"):IsShown()).as("so theirs must be back").truthy()
         end)
     end)
@@ -594,5 +620,313 @@ describe("Plugins.ActionBars: suppression", function()
             expect(function() S.Apply() end).notThrows()
             S.TARGETS[1].names = original
         end)
+    end)
+end)
+
+describe("Plugins.ActionBars: every bar", function()
+    local PLUGIN = "action_bars"
+
+    before_each(function() H.setup() end)
+
+    local function bars()
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars
+    end
+
+    local function enable(id)
+        H.SuuUI.Settings:Set(PLUGIN, "bar" .. id .. "_enabled", true)
+        return bars()[id]
+    end
+
+    it("points every bar at the slot block MEASURED in game", function()
+        -- Round 3 of the Phase 0 probes, not a guess: ActionButton1.action was 1,
+        -- MultiBarBottomLeftButton1 was 61, BottomRight 49, Left 37, Right 25.
+        local expected = { [1] = 1, [2] = 61, [3] = 49, [4] = 37, [5] = 25 }
+        for id, first in pairs(expected) do
+            local grid = enable(id)
+            expect(grid).as("bar " .. id .. " exists").notNil()
+            expect(grid:GetButtons()[1]:GetSlot()).as("bar " .. id .. " starts at " .. first)
+                .eq(first)
+            expect(grid:GetButtons()[12]:GetSlot()).eq(first + 11)
+        end
+    end)
+
+    it("ships with bars 1 and 2 on, every other one off", function()
+        -- Eight bars at first login is ninety-six buttons nobody asked for. Blizzard itself shows two.
+        expect(bars()[1]).as("bar 1 on").notNil()
+        expect(bars()[2]).as("bar 2 on").notNil()
+        for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
+            if def.id > 2 then
+                expect(bars()[def.id]).as("bar " .. def.id .. " off").isNil()
+            end
+        end
+    end)
+
+    it("pairs every bar's slot block with the binding family MEASURED for it", function()
+        -- Both halves came from in-game probes, and the binding half caught a real error: the
+        -- numbering does NOT follow the frame names in the order it looks like it should.
+        -- MultiBarLeft is MULTIACTIONBAR4 and MultiBarRight is MULTIACTIONBAR3, which is the
+        -- reverse of the obvious guess -- and the guess shipped until Blizzard's own buttonType
+        -- field was read. Pinned as a table so a "tidy-up" cannot quietly renumber them.
+        local measured = {
+            [1] = { first = 1,   prefix = "ACTIONBUTTON" },            -- MainActionBar
+            [2] = { first = 61,  prefix = "MULTIACTIONBAR1BUTTON" },   -- MultiBarBottomLeft
+            [3] = { first = 49,  prefix = "MULTIACTIONBAR2BUTTON" },   -- MultiBarBottomRight
+            [4] = { first = 37,  prefix = "MULTIACTIONBAR4BUTTON" },   -- MultiBarLeft  -> 4, not 3
+            [5] = { first = 25,  prefix = "MULTIACTIONBAR3BUTTON" },   -- MultiBarRight -> 3, not 4
+            -- Here the numbering DOES follow the frame name, which is why every pairing above and
+            -- below was read off Blizzard's own buttonType rather than inferred from a rule.
+            [6] = { first = 145, prefix = "MULTIACTIONBAR5BUTTON" },   -- MultiBar5
+            [7] = { first = 157, prefix = "MULTIACTIONBAR6BUTTON" },   -- MultiBar6
+            [8] = { first = 169, prefix = "MULTIACTIONBAR7BUTTON" },   -- MultiBar7
+        }
+        for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
+            local want = measured[def.id]
+            expect(want).as("bar " .. def.id .. " is a known bar").notNil()
+            expect(def.first).as("bar " .. def.id .. " slot block").eq(want.first)
+            expect(def.bindingPrefix).as("bar " .. def.id .. " binding family").eq(want.prefix)
+        end
+    end)
+
+    it("gives each bar its own binding command family", function()
+        H.setBinding("ACTIONBUTTON1", "1")
+        H.setBinding("MULTIACTIONBAR1BUTTON1", "F1")
+        H.fireEvent("UPDATE_BINDINGS")
+        expect(bars()[1]:GetButtons()[1]._hotkeyText:GetText()).eq("1")
+        expect(bars()[2]:GetButtons()[1]._hotkeyText:GetText()).eq("F1")
+    end)
+
+    it("reads bar 4 and bar 5's hotkeys from the swapped families", function()
+        H.setBinding("MULTIACTIONBAR4BUTTON1", "L")
+        H.setBinding("MULTIACTIONBAR3BUTTON1", "R")
+        enable(4)
+        enable(5)
+        H.fireEvent("UPDATE_BINDINGS")
+        expect(bars()[4]:GetButtons()[1]._hotkeyText:GetText()).as("bar 4 is family 4").eq("L")
+        expect(bars()[5]:GetButtons()[1]._hotkeyText:GetText()).as("bar 5 is family 3").eq("R")
+    end)
+
+    it("positions each bar independently", function()
+        local one, two = bars()[1]:GetFrame(), bars()[2]:GetFrame()
+        expect(one._suuui_moveable).notNil()
+        expect(two._suuui_moveable).notNil()
+        expect(one._suuui_moveable.key).eq("bar1_position")
+        expect(two._suuui_moveable.key).eq("bar2_position")
+        expect(H.box(one).top == H.box(two).top)
+            .as("and they do not sit on top of each other").falsy()
+    end)
+
+    it("stands bars 4 and 5 up as a single column", function()
+        local four = enable(4)
+        expect(four:GetButtons()[1]).notNil()
+        local a, b = H.box(four:GetButtons()[1]), H.box(four:GetButtons()[2])
+        expect(a.left).as("same column").eq(b.left)
+        expect(b.top).as("stacked downward").eq(a.bottom)
+    end)
+
+    it("sizes each bar independently of the others", function()
+        H.SuuUI.Settings:Set(PLUGIN, "bar2_button_size", 44)
+        H.expectSize(bars()[2]:GetButtons()[1], 44, 44)
+        H.expectSize(bars()[1]:GetButtons()[1], 32, 32)
+    end)
+
+    it("takes one bar down without touching the others", function()
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", false)
+        expect(bars()[1]).isNil()
+        expect(bars()[2]).as("bar 2 is unaffected").notNil()
+    end)
+
+    describe("the schema", function()
+        local function schema()
+            return H.SuuUI.Settings:GetSchema(PLUGIN)
+        end
+
+        it("gives every bar its own tab", function()
+            -- Counted off the bar table, not a literal: this spec said 5 until the client turned out
+            -- to have 8, and a hardcoded count in a spec is a second place to forget.
+            local bars = H.SuuUI._ActionBars.BARS
+            local subtabs
+            for _, e in ipairs(schema()) do
+                if e.type == "subtabs" then subtabs = e end
+            end
+            expect(subtabs).notNil()
+            expect(#subtabs.tabs).eq(#bars)
+            expect(subtabs.tabs[1].label).eq("Bar 1")
+            expect(subtabs.tabs[#bars].label).eq("Bar " .. bars[#bars].id)
+        end)
+
+        it("declares every key exactly ONCE", function()
+            -- Settings:Register indexes by key, so a key appearing twice would have one control
+            -- writing another's value -- and with five near-identical tabs built from one
+            -- template, a missing bar id in a key is exactly the typo that produces it.
+            local seen, dupes = {}, {}
+            local function visit(entries)
+                for _, e in ipairs(entries) do
+                    if e.type == "subtabs" then
+                        for _, tab in ipairs(e.tabs) do visit(tab.schema) end
+                    elseif e.key and e.key ~= "" then
+                        if seen[e.key] then dupes[#dupes + 1] = e.key end
+                        seen[e.key] = true
+                    end
+                end
+            end
+            visit(schema())
+            expect(dupes).as("duplicate keys: " .. table.concat(dupes, ", ")).len(0)
+        end)
+
+        it("carries a position entry per bar, with no control", function()
+            local found = 0
+            for _, e in ipairs(schema()) do
+                if e.type == "position" then found = found + 1 end
+            end
+            expect(found).eq(#H.SuuUI._ActionBars.BARS)
+        end)
+    end)
+end)
+
+describe("Plugins.ActionBars: secure paging", function()
+    local PLUGIN = "action_bars"
+    local P
+
+    before_each(function()
+        H.setup()
+        P = H.SuuUI._ActionBars.Paging
+    end)
+
+    local function grid(id)
+        return H.SuuUI.Plugins:Get(PLUGIN)._bars[id or 1]
+    end
+
+    it("drives ONLY bar 1, because only bar 1's slots move", function()
+        -- Round 3 again: the four multibars are fixed to their block, so a driver on them would
+        -- be a secure header doing nothing. That finding removed four of them from this phase.
+        expect(P.HeaderFor(grid(1))).as("bar 1 is paged").notNil()
+        H.SuuUI.Settings:Set(PLUGIN, "bar3_enabled", true)
+        expect(P.HeaderFor(grid(3))).as("bar 3 is not").isNil()
+    end)
+
+    it("registers a state driver on a secure header", function()
+        local header = P.HeaderFor(grid(1))
+        expect(header:IsProtected()).as("built from a Secure template").truthy()
+        expect(H.getStateDriver(header, "page")).eq(P.DRIVER)
+    end)
+
+    it("orders the driver highest page first, or it never leaves page 1", function()
+        -- A macro conditional list is FIRST-MATCH-WINS. Written low-to-high, [bar:1] would match
+        -- before anything else was tested and the bar would be stuck -- which looks identical to
+        -- paging never having been wired up.
+        local sixth = string.find(P.DRIVER, "%[bar:6%]")
+        local second = string.find(P.DRIVER, "%[bar:2%]")
+        expect(sixth).notNil()
+        expect(second).notNil()
+        expect(sixth).as("page 6 is tested before page 2").lt(second)
+        expect(P.DRIVER:sub(-2)).as("and 1 is the fallthrough").eq(";1")
+    end)
+
+    it("hands the snippet everything it needs as attributes and refs", function()
+        -- A snippet is a string the client compiles, so it captures no upvalue and can see
+        -- nothing from the Lua side except what was set out of combat.
+        local header = P.HeaderFor(grid(1))
+        expect(header:GetAttribute("_onstate-page")).eq(P.SNIPPET)
+        expect(header:GetAttribute("pageSize")).eq(12)
+        expect(header:GetAttribute("buttonCount")).eq(12)
+        for i = 1, 12 do
+            expect(header:GetFrameRef("button" .. i))
+                .as("ref for button " .. i).notNil()
+        end
+    end)
+
+    it("references the ACTUAL buttons, not stale ones", function()
+        local header = P.HeaderFor(grid(1))
+        expect(header:GetFrameRef("button1")).eq(grid(1):GetButtons()[1]:GetFrame())
+    end)
+
+    it("re-states its refs when the bar is rebuilt", function()
+        -- Shrinking REUSES the buttons whose slots did not move, so button 1 is deliberately the
+        -- same frame -- what has to follow is the COUNT, which is what bounds the snippet's loop.
+        local header = P.HeaderFor(grid(1))
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 6)
+        expect(header:GetAttribute("buttonCount")).as("count followed").eq(6)
+        for i = 1, 6 do
+            expect(header:GetFrameRef("button" .. i))
+                .as("ref " .. i .. " is the current button")
+                .eq(grid(1):GetButtons()[i]:GetFrame())
+        end
+    end)
+
+    it("re-states its refs when a bar GROWS, which creates new frames", function()
+        local header = P.HeaderFor(grid(1))
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 4)
+        local shrunk = header:GetFrameRef("button4")
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 12)
+        expect(header:GetAttribute("buttonCount")).eq(12)
+        expect(header:GetFrameRef("button12")).as("the new tail is referenced")
+            .eq(grid(1):GetButtons()[12]:GetFrame())
+        expect(shrunk).notNil()
+    end)
+
+    it("bounds the snippet by buttonCount, NOT by the ref set", function()
+        -- Shrinking leaves refs 5..12 pointing at destroyed frames. They are inert because the
+        -- snippet loops to buttonCount, and clearing them would mean SetFrameRef(name, nil),
+        -- whose behaviour on this client is unverified. The count is the contract; this pins that
+        -- the snippet actually reads it rather than iterating whatever refs happen to exist.
+        local header = P.HeaderFor(grid(1))
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 4)
+        expect(header:GetAttribute("buttonCount")).eq(4)
+        expect(P.SNIPPET:find("buttonCount")).as("the snippet reads the count").notNil()
+        expect(P.SNIPPET:find("for i = 1, count do")).as("and loops to it").notNil()
+    end)
+
+    it("re-states its refs after a rebuild DEFERRED by combat", function()
+        -- The case CHILDREN_CHANGED exists for. Watching the setting would fire while the old
+        -- buttons were still on screen; only the grid knows when the fight-delayed rebuild
+        -- actually happened.
+        local header = P.HeaderFor(grid(1))
+        H.setCombat(true)
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 4)
+        expect(header:GetAttribute("buttonCount")).as("nothing rebuilt yet").eq(12)
+
+        H.setCombat(false)
+
+        expect(header:GetAttribute("buttonCount")).as("caught up after the fight").eq(4)
+        expect(header:GetFrameRef("button1")).eq(grid(1):GetButtons()[1]:GetFrame())
+    end)
+
+    it("announces a rebuild ONLY when the button set actually moved", function()
+        -- Counted, not inferred from the refs: re-syncing writes the SAME frame for a button that
+        -- was reused, so comparing a ref before and after cannot tell a spurious re-sync from no
+        -- re-sync at all. Mutation testing is what exposed that -- the earlier version of this
+        -- test passed with the guard removed.
+        local g = grid(1)
+        local spy = H.signalSpy(g, H.S.SIGNALS.CHILDREN_CHANGED)
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_spacing", 4)
+        expect(spy.count).as("spacing rebuilt nothing").eq(0)
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_button_size", 40)
+        expect(spy.count).as("nor did a resize -- buttons are reused").eq(0)
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 6)
+        expect(spy.count).as("a count change did").eq(1)
+    end)
+
+    it("releases the driver and the subscription on detach", function()
+        local g = grid(1)
+        local header = P.HeaderFor(g)
+        local SIG = H.S.SIGNALS.CHILDREN_CHANGED
+        -- Asserted directly, because the callback's own `if h then` guard makes a LEAKED
+        -- subscription behave identically to a released one -- it just holds a closure forever.
+        -- HasConnections returns a real boolean, so this cannot fall for a zero-is-truthy count.
+        expect(H.SuuUI.UISignals:HasConnections(g, SIG)).as("subscribed while attached").truthy()
+
+        P.Detach(g)
+
+        expect(P.HeaderFor(g)).isNil()
+        expect(H.getStateDriver(header, "page")).isNil()
+        expect(H.SuuUI.UISignals:HasConnections(g, SIG))
+            .as("and unsubscribed after").falsy()
+        expect(function() g:SetSlots({ 1, 2 }) end).notThrows()
+    end)
+
+    it("goes away with the bar", function()
+        local g = grid(1)
+        H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", false)
+        expect(P.HeaderFor(g)).isNil()
     end)
 end)

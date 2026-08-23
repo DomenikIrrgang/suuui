@@ -155,6 +155,78 @@ and B, but not something to discover after the fact.
   container first. The harness models this parentage now, so a Phase 7 spec that hides the
   container gets the real cascade rather than a guess.
 
+### Round 5 result — the binding command families, recorded 2026-08-23
+
+Asked because a bar reads its hotkey text from the client's binding command, and a wrong family
+shows the WRONG KEY on a working button — a defect that survives every local test, because the
+harness only knows what the addon told it.
+
+```
+/run for _,n in ipairs({"ActionButton1","MultiBarBottomLeftButton1",…}) do local b=_G[n] print(n,b and b.buttonType) end
+```
+
+| Frame | `buttonType` | Slot block |
+|---|---|---|
+| `ActionButton1` | **nil** | 1–12 |
+| `MultiBarBottomLeftButton1` | `MULTIACTIONBAR1BUTTON` | 61–72 |
+| `MultiBarBottomRightButton1` | `MULTIACTIONBAR2BUTTON` | 49–60 |
+| `MultiBarLeftButton1` | **`MULTIACTIONBAR4BUTTON`** | 37–48 |
+| `MultiBarRightButton1` | **`MULTIACTIONBAR3BUTTON`** | 25–36 |
+
+**The numbering does not follow the frame names in the order it looks like it should.**
+`MultiBarLeft` is MULTIACTIONBAR**4** and `MultiBarRight` is MULTIACTIONBAR**3** — the reverse of
+the obvious pairing, and the obvious pairing is what Phase 5a shipped until this probe ran. The
+measured table is now pinned by a spec so a later tidy-up cannot renumber it back.
+
+`ActionButton1.buttonType` being nil is expected rather than missing: the main bar is the DEFAULT
+family, so its buttons set no override. `ACTIONBUTTON1` is the client's own binding name for it,
+and it is the only entry in the table resting on the documented name rather than on a reading.
+
+### Round 6 result — there are EIGHT bars, and the buttons are not where Phase 0 thought
+
+Two findings that between them invalidated the suppression list and the bar table.
+
+**1. The buttons live in `MainActionBar`, not `MainMenuBar`.** Walking up from the button:
+
+```
+/run local f=ActionButton1 while f do print(f:GetName() or "?", tostring(f:IsShown())) f=f:GetParent() end
+```
+→ `ActionButton1` → `MainActionBarButtonContainer1` → `MainActionBar` → `UIParent`
+
+Both `MainMenuBar` and `MainActionBar` exist on this client. Phase 0 probed for the first, found
+it, and the plan took it for the bar — but it only carries the art. Suppression removed the
+gryphons and left all twelve buttons on screen, while `IsSuppressed("MainMenuBar")` reported
+success. **Existing is not the same as holding the buttons**, and only the parent chain settles it.
+
+Two consequences beyond adding a name. Candidate lists must hide EVERY name that exists rather
+than the first: these two coexist, so first-match-wins hid one and left the other. And suppression
+now ends with a `Verify()` self-check that asks the WITNESS BUTTONS directly — hiding a container
+is the means, a button off the screen is the end, and nothing was checking the end.
+
+**2. This client has EIGHT bars, not five.**
+
+```
+/run for _,n in ipairs({"MultiBar5","MultiBar6","MultiBar7"}) do print(n,_G[n] and "Y" or "-") end print(NUM_ACTIONBAR_PAGES,tostring(HasAction(73)),tostring(HasAction(120)))
+```
+→ `MultiBar5 Y` · `MultiBar6 Y` · `MultiBar7 Y` · pages **6** · `HasAction(73)` **false**
+
+`MultiBar5`, `MultiBar6` and `MultiBar7` all exist, and Blizzard's own options list them, so they
+are real bars a player can enable. Phase 0 probed the five bars TBC is known for and stopped.
+They are now suppressed and in the witness list.
+
+**`HasAction(73)` being false bounds nothing** — it means slot 73 is EMPTY, not absent. So the slot
+blocks and binding families for bars 6–8 are still **UNMEASURED**, and the harness deliberately
+leaves their buttons' `action` attribute unset so no spec can assert a guess. Measure with the
+Round 3 / Round 5 probe shape before adding them to the plugin's bar table:
+
+```
+/run for _,n in ipairs({"MultiBar5Button1","MultiBar6Button1","MultiBar7Button1"}) do local b=_G[n] print(n,b and b.action,b and b.buttonType) end
+```
+
+**Also still unassigned: slots 13–24**, which is page 2 of the paged bar and the one block with no
+frame of its own. SuuUI draws its own buttons, so it can expose that block as a bar the client never
+offered.
+
 ---
 
 ## The glass plate

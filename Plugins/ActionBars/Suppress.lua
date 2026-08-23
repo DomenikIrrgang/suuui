@@ -38,18 +38,51 @@ local M = {}
 -- function the player still needs: the micro menu (Phase 7), the bags (Phase 9), the XP and
 -- reputation bars (Phase 8), and the stance / pet / possess bars (Phase 6).
 local TARGETS = {
-    { id = "main_bar",   names = { "MainMenuBar" } },
-    { id = "multi_bl",   names = { "MultiBarBottomLeft" } },
-    { id = "multi_br",   names = { "MultiBarBottomRight" } },
-    { id = "multi_l",    names = { "MultiBarLeft" } },
-    { id = "multi_r",    names = { "MultiBarRight" } },
+    -- The BUTTONS. Measured in game by walking up from ActionButton1:
+    --   ActionButton1 > MainActionBarButtonContainer1 > MainActionBar > UIParent
+    -- `MainActionBar` is a DIFFERENT frame from `MainMenuBar` and both exist on this client. Phase
+    -- 0 probed for MainMenuBar, found it, and this list took it for the bar -- so the art went and
+    -- every button stayed. Existing is not the same as holding the buttons, and only walking the
+    -- parent chain settles which is which.
+    { id = "main_buttons", names = { "MainActionBar", "MainMenuBarActionButtonContainer" } },
+    { id = "main_bar",     names = { "MainMenuBar" } },
+    { id = "multi_bl",     names = { "MultiBarBottomLeft" } },
+    { id = "multi_br",     names = { "MultiBarBottomRight" } },
+    { id = "multi_l",      names = { "MultiBarLeft" } },
+    { id = "multi_r",      names = { "MultiBarRight" } },
+    -- Bars 6, 7 and 8. Measured present on this client, and Blizzard's own options list them, so
+    -- they are real bars a player can turn on -- not retail-only frames that happen to exist. They
+    -- were missing from this list entirely because Phase 0 never asked about them: it probed the
+    -- five bars TBC is known for and stopped, which is the same mistake as taking MainMenuBar for
+    -- the button container. An absent name is skipped, so listing them costs nothing on a client
+    -- that lacks them.
+    { id = "multi_5",      names = { "MultiBar5" } },
+    { id = "multi_6",      names = { "MultiBar6" } },
+    { id = "multi_7",      names = { "MultiBar7" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
-    { id = "bar_art",    names = { "MainMenuBarArtFrame" } },
-    { id = "left_cap",   names = { "MainMenuBarLeftEndCap" } },
-    { id = "right_cap",  names = { "MainMenuBarRightEndCap" } },
-    { id = "max_level",  names = { "MainMenuBarMaxLevelBar" } },
+    { id = "bar_art",      names = { "MainMenuBarArtFrame" } },
+    { id = "left_cap",     names = { "MainMenuBarLeftEndCap" } },
+    { id = "right_cap",    names = { "MainMenuBarRightEndCap" } },
+    { id = "max_level",    names = { "MainMenuBarMaxLevelBar" } },
 }
+
+-- The buttons this module exists to get off the screen, one per bar family. Used by Verify() as a
+-- SELF-CHECK: hiding a container is a means, and these are the end. A container renamed out from
+-- under the list above leaves these visible while every other signal says the suppression worked,
+-- which is exactly what happened -- so it is checked rather than trusted.
+local WITNESS_BUTTONS = {
+    "ActionButton1",
+    "MultiBarBottomLeftButton1",
+    "MultiBarBottomRightButton1",
+    "MultiBarLeftButton1",
+    "MultiBarRightButton1",
+    "MultiBar5Button1",
+    "MultiBar6Button1",
+    "MultiBar7Button1",
+}
+
+M.WITNESS_BUTTONS = WITNESS_BUTTONS
 
 M.TARGETS = TARGETS
 
@@ -69,12 +102,24 @@ local function inCombat()
     return type(InCombatLockdown) == "function" and InCombatLockdown() and true or false
 end
 
-local function resolve(entry)
+-- Every name in an entry that EXISTS is hidden, not just the first.
+--
+-- This started as first-match-wins and that was silently, badly wrong. Candidate lists mix two
+-- different things: genuine RENAMES across client generations, where only one name ever exists and
+-- first-match is right, and frames that COEXIST. This client has both `MainMenuBar` and
+-- `MainActionBar` -- the first carries the art, the second holds the buttons -- so stopping at the
+-- first match hid the gryphons and left all twelve buttons on screen, while IsSuppressed() happily
+-- reported success. Hiding every match is identical for a rename and correct for a coexistence.
+local function resolveAll(entry, fn)
+    local found = 0
     for _, name in ipairs(entry.names) do
         local frame = _G[name]
-        if frame then return frame, name end
+        if frame then
+            found = found + 1
+            fn(frame, name)
+        end
     end
-    return nil
+    return found
 end
 
 -- Deferred UNCONDITIONALLY in combat, rather than only for the frames the client would
@@ -149,9 +194,7 @@ end
 function M.Apply()
     local found = {}
     for _, entry in ipairs(TARGETS) do
-        local frame, name = resolve(entry)
-        if frame then
-            found[#found + 1] = entry.id
+        local n = resolveAll(entry, function(frame)
             pendingRestore[frame] = nil
             suppressed[frame] = true
             if not hooked[frame] then
@@ -162,13 +205,41 @@ function M.Apply()
                 end)
             end
             doHide(frame)
+        end)
+        if n > 0 then
+            found[#found + 1] = entry.id
         elseif SuuUI.Debug then
             SuuUI.Debug("ActionBars: no frame for suppression target " .. entry.id)
         end
-        local _ = name
     end
     syncWatcher()
+
+    -- Self-check, and it is not decoration: hiding a container is the MEANS, a button off the
+    -- screen is the END, and this module already shipped a version where every other signal said
+    -- success while twelve buttons sat in plain view. Logged rather than raised -- a stray visible
+    -- button is a cosmetic fault, not a reason to take the plugin down mid-session.
+    local visible = M.Verify()
+    if #visible > 0 and SuuUI.Debug then
+        SuuUI.Debug("ActionBars: suppression missed " .. table.concat(visible, ", ") ..
+                    " -- their container is not in TARGETS")
+    end
     return found
+end
+
+--- Which witness buttons are still on screen after suppression, by name.
+--
+-- Empty is the answer that means it worked. A non-empty list names buttons whose container this
+-- module does not know about, which is the failure that hides behind a happy IsSuppressed().
+-- @return table  array of frame names
+function M.Verify()
+    local visible = {}
+    for _, name in ipairs(WITNESS_BUTTONS) do
+        local b = _G[name]
+        if b and b.IsVisible and b:IsVisible() then
+            visible[#visible + 1] = name
+        end
+    end
+    return visible
 end
 
 --- Shows everything this module hid, and stops claiming it.

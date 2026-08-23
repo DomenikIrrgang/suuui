@@ -70,6 +70,61 @@ describe("Components.ActionButton", function()
             expect(H.getUsedAction()).as("a right click reached the client").notNil()
         end)
 
+        it("registers for BOTH press and release, or the client's handler bails", function()
+            -- THE BUG THIS PINS, and it shipped. The secure handler compares the `down` flag it is
+            -- given against `useOnKeyDown` and returns early when they disagree. Registered for
+            -- AnyUp alone on a client that acts on the PRESS, the button had a correct template,
+            -- correct attributes, a working tooltip and working drag -- and did nothing at all.
+            -- Only reading Blizzard's own button (it carries an OnMouseDown handler) found it.
+            local b = build({ slot = 3 })
+            local clicks = b:GetFrame()._clickButtons or {}
+            local joined = table.concat(clicks, ",")
+            expect(joined:find("AnyDown")).as("press registered: " .. joined).notNil()
+            expect(joined:find("AnyUp")).as("release registered: " .. joined).notNil()
+        end)
+
+        it("acts on the RELEASE when the client is set that way", function()
+            H.setAction(3, { type = "spell", id = 143 }, { silent = true })
+            local b = build({ slot = 3 })
+            expect(b:GetFrame():GetAttribute("useOnKeyDown")).falsy()
+            H.clickDown(b:GetFrame())
+            expect(H.getUsedAction()).as("the press alone is discarded").isNil()
+            H.clickUp(b:GetFrame())
+            expect(H.getUsedAction()).as("the release acts").notNil()
+        end)
+
+        it("acts on the PRESS when the client is set that way", function()
+            -- Read from the client's own CVar so the button agrees with every other action button
+            -- on screen. Staged BEFORE construction, because attributes are stated once.
+            H.setCVarBool("ActionButtonUseKeyDown", true)
+            H.setAction(3, { type = "spell", id = 143 }, { silent = true })
+            local b = build({ slot = 3 })
+            expect(b:GetFrame():GetAttribute("useOnKeyDown")).truthy()
+            H.clickUp(b:GetFrame())
+            expect(H.getUsedAction()).as("the release alone is discarded now").isNil()
+            H.clickDown(b:GetFrame())
+            expect(H.getUsedAction()).as("the press acts").notNil()
+        end)
+
+        it("performs exactly ONE action per physical click, either way round", function()
+            -- The reason registering both events is safe rather than double-firing. H.click fires a
+            -- whole click -- press then release -- and the handler discards whichever half
+            -- disagrees with useOnKeyDown, so precisely one gets through.
+            for _, keyDown in ipairs({ false, true }) do
+                H.setup()
+                H.SuuUI.Settings:Set("action_bars", "enabled", false)
+                host = H.parent(400, 200)
+                H.setCVarBool("ActionButtonUseKeyDown", keyDown)
+                H.setAction(3, { type = "spell", id = 143 }, { silent = true })
+                local b = build({ slot = 3 })
+                local spy = H.signalSpy(b, H.S.SIGNALS.CLICKED)
+                H.click(b:GetFrame())
+                expect(spy.count)
+                    .as("one CLICKED with useOnKeyDown=" .. tostring(keyDown)).eq(1)
+                expect(H.getUsedAction()).as("and the action fired").notNil()
+            end
+        end)
+
         it("emits CLICKED through PostClick, without owning the click", function()
             local b = build({ slot = 1 })
             local spy = H.signalSpy(b, H.S.SIGNALS.CLICKED)
@@ -334,6 +389,68 @@ describe("Components.ActionButton", function()
             -- No event fires when a target walks away, so only the poll can catch it.
             H.tick(H.SuuUI._ActionButtonInternals.rangeThrottle + 0.01)
             expect(b:IsOutOfRange()).as("the ticker caught it").truthy()
+        end)
+    end)
+
+    describe("the tooltip", function()
+        -- Owned by the component rather than left to its owner, and that was learned the hard
+        -- way: phase 4a emitted MOUSE_ENTER and left the wiring to callers, so an action bar with
+        -- no tooltips at all reached the game. The slot is the whole answer -- SetAction builds
+        -- name, cost, range and cast time from it -- so there is nothing for an owner to supply.
+        it("points the client's tooltip at the slot on hover", function()
+            H.setAction(7, { texture = "i", id = 143 }, { silent = true })
+            local b = build({ slot = 7 })
+            H.hover(b:GetFrame())
+            expect(H.getTooltipState().action).as("pointed at slot 7").eq(7)
+            expect(H.env.GameTooltip:GetOwner()).eq(b:GetFrame())
+            expect(H.env.GameTooltip:IsShown()).truthy()
+        end)
+
+        it("hides it again on leave", function()
+            H.setAction(7, { texture = "i" }, { silent = true })
+            local b = build({ slot = 7 })
+            H.hover(b:GetFrame())
+            H.unhover(b:GetFrame())
+            expect(H.env.GameTooltip:IsShown()).falsy()
+        end)
+
+        it("says nothing about an empty slot", function()
+            -- SetAction on an empty slot shows an empty frame rather than nothing at all.
+            local b = build({ slot = 7 })
+            H.hover(b:GetFrame())
+            local t = H.getTooltipState()
+            expect(t and t.action).isNil()
+            expect(H.env.GameTooltip:IsShown()).falsy()
+        end)
+
+        it("follows the slot when a secure snippet re-points the button", function()
+            H.setAction(61, { texture = "i" }, { silent = true })
+            local b = build({ slot = 1 })
+            b:GetFrame():SetAttribute("action", 61)
+            b:Refresh()
+            H.hover(b:GetFrame())
+            expect(H.getTooltipState().action).eq(61)
+        end)
+
+        it("does not hide a tooltip that now belongs to something else", function()
+            -- The player moved onto another frame in the same frame update; hiding here would
+            -- take that frame's tooltip away from under it.
+            H.setAction(7, { texture = "i" }, { silent = true })
+            local b = build({ slot = 7 })
+            H.hover(b:GetFrame())
+            local other = H.env.CreateFrame("Frame", nil, H.env.UIParent)
+            H.env.GameTooltip:SetOwner(other, "ANCHOR_RIGHT")
+            H.env.GameTooltip:Show()
+            H.unhover(b:GetFrame())
+            expect(H.env.GameTooltip:IsShown()).as("left alone").truthy()
+        end)
+
+        it("can be turned off", function()
+            H.setAction(7, { texture = "i" }, { silent = true })
+            local b = build({ slot = 7, tooltip = false })
+            H.hover(b:GetFrame())
+            local t = H.getTooltipState()
+            expect(t and t.action).isNil()
         end)
     end)
 

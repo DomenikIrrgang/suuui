@@ -31,6 +31,15 @@ M.SIGNALS = {
     ENABLED_CHANGED    = "enabled_changed",     -- Emitted when enabled state changes. Args: isEnabled
     FOCUSED            = "focused",             -- Emitted when element gains focus. Args: none
     UNFOCUSED          = "unfocused",           -- Emitted when element loses focus. Args: none
+
+    -- Composition signals
+    --
+    -- CHILDREN_CHANGED exists for the case a subscriber cannot detect any other way: a component
+    -- that DESTROYS and REBUILDS its children holds anything referring to them stale, and the
+    -- rebuild may be deferred (an action bar defers every geometry change out of combat), so a
+    -- caller cannot know when to re-read by watching the setting that caused it. Emitted only
+    -- when the set actually changed, never on a no-op re-apply. Args: none
+    CHILDREN_CHANGED   = "children_changed",
 }
 
 local nextId = 1

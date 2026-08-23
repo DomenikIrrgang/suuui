@@ -95,6 +95,10 @@ M.stateDrivers = {}
 -- The action-slot counterpart to targetedUnit / unitMenu.
 M.usedAction = nil
 
+-- CVars the addon reads, by name. Only booleans are modelled; an unset name answers false, which
+-- is what the client does for one it does not know. Set through H.setCVarBool.
+M.cvars = {}
+
 local pending, pendingSet
 local dependents
 
@@ -189,6 +193,9 @@ function M.reset()
     -- secure header.
     M.stateDrivers    = {}
     M.usedAction      = nil
+    -- Cleared for the usual reason: a leaked ActionButtonUseKeyDown would put every later spec's
+    -- buttons on the press path, and their click assertions would fail somewhere far from here.
+    M.cvars           = {}
     M._settling = false
     M.settleIterations = 0
     pending    = {}

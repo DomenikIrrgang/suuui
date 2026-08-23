@@ -405,6 +405,43 @@ function M.setGradientSupported(on)
     regions.setGradientSupported(on and true or false)
 end
 
+--- Stages a boolean CVar, as GetCVarBool reports it.
+--
+-- `ActionButtonUseKeyDown` is the one that matters: an action button reads it to decide whether the
+-- client acts on the press or the release, and a button registered for the wrong event has correct
+-- attributes, a correct template, a working tooltip, working drag -- and no action at all.
+-- @param name string
+-- @param on boolean
+function M.setCVarBool(name, on)
+    assert(type(name) == "string" and name ~= "", "H.setCVarBool: cvar name required")
+    state.cvars[name] = on and true or false
+end
+
+--- Clicks a secure button on the PRESS only.
+--
+-- H.click fires a WHOLE click -- OnMouseDown, then OnClick(down=true) if the button registered for
+-- Down, then OnMouseUp, then OnClick(down=false) if it registered for Up -- so that is the tool for
+-- "what does one physical click do". These two drive a single half, which is what shows WHICH half
+-- the client acts on.
+-- @param target table|handle
+-- @param button string|nil  defaults to "LeftButton"
+function M.clickDown(target, button)
+    local f = M.frameOf(target)
+    local script = f and f.GetScript and f:GetScript("OnClick")
+    assert(script, "H.clickDown: target has no OnClick handler")
+    script(f, button or "LeftButton", true)
+end
+
+--- Clicks a secure button on the RELEASE only. See H.clickDown.
+-- @param target table|handle
+-- @param button string|nil  defaults to "LeftButton"
+function M.clickUp(target, button)
+    local f = M.frameOf(target)
+    local script = f and f.GetScript and f:GetScript("OnClick")
+    assert(script, "H.clickUp: target has no OnClick handler")
+    script(f, button or "LeftButton", false)
+end
+
 --------------------------------------------------------------------------------
 -- Action bar slots
 --------------------------------------------------------------------------------

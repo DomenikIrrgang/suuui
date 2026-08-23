@@ -213,6 +213,23 @@ function FrameMeta:GetAttribute(key)
     return self._attributes and self._attributes[key]
 end
 
+-- Frame references: the secure environment's ONLY way to reach another frame. A snippet is a
+-- string compiled by the client, so it captures no Lua upvalue and closes over nothing -- a
+-- header that has to touch its buttons is handed each one BY NAME out of combat and looks it up
+-- when the state driver fires.
+--
+-- Like SetAttribute, this is not gated by the lockdown model even though the live client refuses
+-- it on a protected frame in combat, so "references are set once, out of combat" is a structural
+-- assertion here rather than an enforced one. See TESTING.md.
+function FrameMeta:SetFrameRef(name, frame)
+    self._frameRefs = self._frameRefs or {}
+    self._frameRefs[name] = frame
+end
+
+function FrameMeta:GetFrameRef(name)
+    return self._frameRefs and self._frameRefs[name]
+end
+
 -- The attribute vocabulary the client uses for a mouse button.
 local BUTTON_INDEX = {
     LeftButton = "1", RightButton = "2", MiddleButton = "3",
@@ -236,15 +253,47 @@ end
 --- (see CreateFrame in api.lua), exactly as the real template installs it — so code that
 --- calls SetScript("OnClick") on a secure button replaces this and silently breaks every
 --- action, and a spec sees that break rather than passing on a frame that does nothing.
+---
+--- THE `down` GATE IS MODELLED, because leaving it out let a broken button pass. The live handler
+--- compares the flag it is given against the frame's `useOnKeyDown` attribute and RETURNS EARLY
+--- when they disagree — which is how an action button registered for the wrong event ends up with
+--- correct attributes, a correct template, a working tooltip, working drag, and no action at all.
+--- That shipped. Without this gate no assertion here could tell the two apart.
 -- @param f table       The secure button
 -- @param button string Which mouse button was clicked
-function M.secureAction(f, button)
+-- @param down boolean  True for the press, false for the release
+function M.secureAction(f, button, down)
     local kind = modifiedAttribute(f, "type", button)
     local unit = modifiedAttribute(f, "unit", button)
-    -- The template's own hooks, fired around the action exactly as the client fires them:
-    -- they are the only way to observe a click on a secure button without replacing the
-    -- handler that performs it.
-    f:_fire("PreClick", button, false)
+    down = down and true or false
+
+    -- PreClick fires either way: the template's hooks are about the click, not the action.
+    f:_fire("PreClick", button, down)
+
+    -- THE GATE APPLIES TO THE ACTION PATH ONLY. `useOnKeyDown` is an action-button setting -- the
+    -- client's ActionButtonUseKeyDown CVar, overridable per button -- while targeting and the unit
+    -- menu act on whichever click the button registered for. Gating those too would break a unit
+    -- button that deliberately registers one phase.
+    --
+    -- Resolved from the ATTRIBUTE if the button states one, else from the CVar. That order is what
+    -- the live client does, and it is why the shipped bug happened: the button stated no attribute,
+    -- the CVar said act on the press, and the button had only registered for the release -- so it
+    -- never received the phase the client would have acted on. Correct attributes, correct
+    -- template, and no action.
+    if kind == "action" then
+        local attr = f:GetAttribute("useOnKeyDown")
+        local wantDown
+        if attr == nil then
+            wantDown = state.cvars["ActionButtonUseKeyDown"] and true or false
+        else
+            wantDown = attr and true or false
+        end
+        if down ~= wantDown then
+            f:_fire("PostClick", button, down)
+            return
+        end
+    end
+
     if kind == "target" then
         -- The client's own targeting. Recorded rather than simulated: what a spec is
         -- asking is "did the frame ask the client to target this unit", and staging a new
@@ -269,7 +318,7 @@ function M.secureAction(f, button)
         local slot = modifiedAttribute(f, "action", button)
         state.usedAction = { slot = tonumber(slot) or slot, button = button }
     end
-    f:_fire("PostClick", button, false)
+    f:_fire("PostClick", button, down)
 end
 
 ----------------------------------------------------------------------------------
@@ -625,6 +674,16 @@ end
 function GameTooltipMeta:SetUnitAura(unit, index, filter)
     state.tooltip = state.tooltip or {}
     state.tooltip.aura = { unit = unit, index = index, filter = filter or "HELPFUL" }
+end
+
+-- The client builds an action's whole tooltip itself -- name, cost, range, cast time, the lot --
+-- from the slot alone. Recorded rather than rendered, for the same reason the aura setters are:
+-- the question a spec asks is "was the tooltip pointed at this slot", and reproducing the client's
+-- formatting here would be asserting against the harness's version of it.
+function GameTooltipMeta:SetAction(slot)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.action = slot
+    self._tooltipShown = true
 end
 
 function GameTooltipMeta:ClearLines()
