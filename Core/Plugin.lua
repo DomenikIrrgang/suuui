@@ -163,6 +163,9 @@ bootFrame:RegisterEvent("PLAYER_LOGOUT")
 bootFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == "SuuUI" then
         SuuUI.Profiles:Init()
+        -- Before anything reads it: the cache is account-wide SavedVariable state, and both the
+        -- inventory window and the tooltip's account section expect it to exist by CORE_READY.
+        if SuuUI.ItemCache and SuuUI.ItemCache.Init then SuuUI.ItemCache:Init() end
         SuuUI.Theme:Init()  -- This now loads activeTheme from profile
         -- Before UIRoot: the grid has to be known when the first container lays out.
         SuuUI.Pixel:Init()

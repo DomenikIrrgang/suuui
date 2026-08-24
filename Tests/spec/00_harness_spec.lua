@@ -4348,6 +4348,282 @@ describe("harness: WoW API simulation", function()
     end)
 end)
 
+-- Containers, the bank gate and the cursor. Every fact asserted here was MEASURED on this
+-- client 2026-08-24 (see .kiro/specs/inventory.md section 0), so these tests pin the client
+-- rather than a convenient model -- which is the whole reason the default mode changed.
+describe("harness: containers and the bank", function()
+    before_each(function() H.setup() end)
+
+    -- The defect this block exists for. The default used to be "legacy", which modelled a client
+    -- with the bare globals and NO C_Container -- the exact opposite of what was measured, so
+    -- every bags spec ran against a shape that does not exist.
+    describe("the default API mode is modern", function()
+        it("exposes C_Container", function()
+            expect(type(H.env.C_Container)).as("C_Container is a table").eq("table")
+            expect(type(H.env.C_Container.GetContainerItemInfo)).eq("function")
+        end)
+
+        it("does NOT expose the bare globals", function()
+            expect(H.env.GetContainerNumSlots).as("bare numSlots is nil").falsy()
+            expect(H.env.GetContainerItemInfo).as("bare itemInfo is nil").falsy()
+            expect(H.env.UseContainerItem).as("bare use is nil").falsy()
+            expect(H.env.PickupContainerItem).as("bare pickup is nil").falsy()
+        end)
+
+        it("swaps cleanly to legacy and back, with the other shape removed each time", function()
+            H.setBagApi("legacy")
+            expect(H.env.C_Container).as("no namespace on legacy").falsy()
+            expect(type(H.env.GetContainerItemInfo)).eq("function")
+            H.setBagApi("modern")
+            expect(H.env.GetContainerItemInfo).as("bare form gone again").falsy()
+            expect(type(H.env.C_Container)).eq("table")
+        end)
+
+        it("removes both shapes for 'none'", function()
+            H.setBagApi("none")
+            expect(H.env.C_Container).falsy()
+            expect(H.env.GetContainerItemInfo).falsy()
+        end)
+
+        -- The property that makes two modes worth modelling at all. A legacy mode handing back the
+        -- modern TABLE under an old name cannot exercise a positional reader, so a spec written
+        -- against it would pass while the real legacy client fed eleven values nothing unpacked.
+        it("legacy returns the POSITIONAL tuple, not the modern table", function()
+            H.setBagItem(0, 1, { itemID = 22832, itemName = "Arcane Powder", stackCount = 12,
+                                 iconFileID = 134129, quality = 1 })
+            local modern = H.env.C_Container.GetContainerItemInfo(0, 1)
+            expect(type(modern)).as("modern is a table").eq("table")
+
+            H.setBagApi("legacy")
+            local icon, count, locked, quality = H.env.GetContainerItemInfo(0, 1)
+            expect(type(icon)).as("legacy first return is the icon, not a table").eq("number")
+            expect(icon).eq(134129)
+            expect(count).eq(12)
+            expect(locked).eq(false)
+            expect(quality).eq(1)
+            -- The id sits at position 10, which is the whole reason a positional reader has to
+            -- count rather than guess.
+            expect(select(10, H.env.GetContainerItemInfo(0, 1))).as("itemID is 10th").eq(22832)
+        end)
+    end)
+
+    describe("GetContainerItemInfo", function()
+        it("answers nil for an empty slot rather than a record of zeroes", function()
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("empty slot").eq(nil)
+        end)
+
+        it("returns the measured field set", function()
+            H.setBagItem(0, 1, { itemID = 22832, itemName = "Arcane Powder",
+                                 hyperlink = "|cffffffff|Hitem:22832|h[Arcane Powder]|h|r",
+                                 iconFileID = 134129, quality = 1, stackCount = 12 })
+            local i = H.env.C_Container.GetContainerItemInfo(0, 1)
+            expect(i.itemID).eq(22832)
+            expect(i.itemName).eq("Arcane Powder")
+            expect(i.stackCount).eq(12)
+            expect(i.quality).eq(1)
+            expect(i.iconFileID).eq(134129)
+            -- Booleans are present-and-false rather than absent, as the client reports them.
+            expect(i.isLocked).as("isLocked defaults false, not nil").eq(false)
+            expect(i.hasNoValue).eq(false)
+        end)
+
+        it("returns a FRESH table per call, so a caller cannot reach into the store", function()
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 12 })
+            local a = H.env.C_Container.GetContainerItemInfo(0, 1)
+            a.stackCount = 999
+            local b = H.env.C_Container.GetContainerItemInfo(0, 1)
+            expect(b.stackCount).as("store untouched by a mutated copy").eq(12)
+        end)
+
+        it("MERGES on re-stage, so locking a slot keeps the item in it", function()
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 12 })
+            H.setBagItem(0, 1, { isLocked = true })
+            local i = H.env.C_Container.GetContainerItemInfo(0, 1)
+            expect(i.itemID).as("item survived the merge").eq(22832)
+            expect(i.isLocked).eq(true)
+        end)
+
+        it("raises on an unknown field rather than dropping it", function()
+            expect(function() H.setBagItem(0, 1, { stackCoutn = 4 }) end).throws()
+        end)
+
+        it("clearBagItem empties the slot", function()
+            H.setBagItem(0, 1, { itemID = 22832 })
+            H.clearBagItem(0, 1)
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).eq(nil)
+        end)
+    end)
+
+    -- The pair that matters: the slot COUNT survives a shut bank, the CONTENTS do not. That is
+    -- what makes "28 slots, 0 free" the signature of no data rather than of an empty bank.
+    describe("the bank is gated on its frame being open", function()
+        before_each(function()
+            H.setBagItem(-1, 1, { itemID = 22832, itemName = "Arcane Powder", stackCount = 20 },
+                         { silent = true })
+        end)
+
+        it("hides contents while shut and reveals them when open", function()
+            expect(H.env.C_Container.GetContainerItemInfo(-1, 1)).as("shut").eq(nil)
+            H.setBankOpen(true)
+            local i = H.env.C_Container.GetContainerItemInfo(-1, 1)
+            expect(i and i.itemID).as("open").eq(22832)
+            H.setBankOpen(false)
+            expect(H.env.C_Container.GetContainerItemInfo(-1, 1)).as("shut again").eq(nil)
+        end)
+
+        it("still answers the slot count while shut", function()
+            expect(H.env.C_Container.GetContainerNumSlots(-1)).as("shut").eq(28)
+            H.setBankOpen(true)
+            expect(H.env.C_Container.GetContainerNumSlots(-1)).as("open").eq(28)
+        end)
+
+        it("reports zero free while shut even with slots staged", function()
+            H.setBags({ [-1] = { free = 12, slots = 28 } }, { silent = true })
+            expect(H.env.C_Container.GetContainerNumFreeSlots(-1)).as("shut").eq(0)
+            H.setBankOpen(true)
+            expect(H.env.C_Container.GetContainerNumFreeSlots(-1)).as("open").eq(12)
+        end)
+
+        it("gates the bank BAGS too, not only container -1", function()
+            H.setBagItem(5, 3, { itemID = 21877 }, { silent = true })
+            expect(H.env.C_Container.GetContainerItemInfo(5, 3)).as("shut").eq(nil)
+            H.setBankOpen(true)
+            expect(H.env.C_Container.GetContainerItemInfo(5, 3)).as("open").truthy()
+        end)
+
+        it("leaves the player's own bags alone in both states", function()
+            H.setBagItem(0, 1, { itemID = 33470 }, { silent = true })
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("bags shut").truthy()
+            H.setBankOpen(true)
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("bags open").truthy()
+        end)
+
+        it("fires the bracketing events only on a real transition", function()
+            local seen = {}
+            local f = H.env.CreateFrame("Frame")
+            f:RegisterEvent("BANKFRAME_OPENED")
+            f:RegisterEvent("BANKFRAME_CLOSED")
+            f:SetScript("OnEvent", function(_, e) seen[#seen + 1] = e end)
+            H.setBankOpen(true)
+            H.setBankOpen(true)
+            H.setBankOpen(false)
+            expect(#seen).as("two transitions, not three calls").eq(2)
+            expect(seen[1]).eq("BANKFRAME_OPENED")
+            expect(seen[2]).eq("BANKFRAME_CLOSED")
+        end)
+    end)
+
+    describe("the cursor carries a slot's contents", function()
+        it("picks an item up and reports it as the client does", function()
+            H.setBagItem(0, 1, { itemID = 27860, stackCount = 5,
+                                 hyperlink = "|cffffffff|Hitem:27860|h[Purified Draenic Water]|h|r" })
+            H.env.C_Container.PickupContainerItem(0, 1)
+            expect(H.env.CursorHasItem()).truthy()
+            local kind, id, link = H.env.GetCursorInfo()
+            expect(kind).as("measured triple: item, id, link").eq("item")
+            expect(id).eq(27860)
+            expect(link).eq("|cffffffff|Hitem:27860|h[Purified Draenic Water]|h|r")
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("slot emptied").eq(nil)
+        end)
+
+        it("SWAPS onto an occupied slot instead of overwriting", function()
+            H.setBagItem(0, 1, { itemID = 111 })
+            H.setBagItem(0, 2, { itemID = 222 })
+            H.env.C_Container.PickupContainerItem(0, 1)
+            H.env.C_Container.PickupContainerItem(0, 2)
+            expect(H.env.C_Container.GetContainerItemInfo(0, 2).itemID).as("placed").eq(111)
+            -- The previous occupant came BACK to the cursor. A cell assuming overwrite would have
+            -- destroyed it, which is an item lost on every rearrange.
+            expect(select(2, H.env.GetCursorInfo())).as("previous occupant returned").eq(222)
+        end)
+
+        it("splits a stack onto the cursor and leaves the remainder", function()
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 20 })
+            H.env.C_Container.SplitContainerItem(0, 1, 5)
+            expect(select(2, H.env.GetCursorInfo())).eq(22832)
+            expect(H.getCursorItem().stackCount).eq(5)
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1).stackCount).as("remainder").eq(15)
+        end)
+
+        it("ClearCursor drops what it was holding", function()
+            H.setBagItem(0, 1, { itemID = 22832 })
+            H.env.C_Container.PickupContainerItem(0, 1)
+            H.env.ClearCursor()
+            expect(H.env.CursorHasItem()).falsy()
+            expect(H.env.GetCursorInfo()).eq(nil)
+        end)
+
+        it("refuses to pick up out of a shut bank", function()
+            H.setBagItem(-1, 1, { itemID = 22832 }, { silent = true })
+            H.env.C_Container.PickupContainerItem(-1, 1)
+            expect(H.env.CursorHasItem()).as("nothing lifted from a shut bank").falsy()
+        end)
+    end)
+
+    -- BOTH halves of the gate. UseContainerItem SELLS at a merchant and USES the item away from
+    -- one, and the use path is protected on this client -- so the same call has two outcomes and a
+    -- spec asserting only the working one would not notice the block at all.
+    describe("UseContainerItem has two protection profiles", function()
+        before_each(function()
+            H.setBagItem(0, 1, { itemID = 22832, quality = 0, stackCount = 1 })
+        end)
+
+        it("is REFUSED away from a merchant, and recorded as blocked", function()
+            H.resetBlockedActions()
+            H.env.C_Container.UseContainerItem(0, 1)
+            local blocked = H.getBlockedActions()
+            expect(#blocked).as("one refusal recorded").eq(1)
+            expect(blocked[1].action).eq("UseContainerItem")
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("item untouched").truthy()
+            expect(#H.getUsedContainerItems()).as("nothing sold").eq(0)
+        end)
+
+        it("is ACCEPTED at a merchant, and consumes the slot", function()
+            H.setMerchantOpen(true)
+            H.resetBlockedActions()
+            H.env.C_Container.UseContainerItem(0, 1)
+            expect(#H.getBlockedActions()).as("not refused at a merchant").eq(0)
+            local used = H.getUsedContainerItems()
+            expect(#used).eq(1)
+            expect(used[1].bag).eq(0)
+            expect(used[1].slot).eq(1)
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("slot emptied").eq(nil)
+        end)
+
+        it("hands back a COPY of the sale record", function()
+            H.setMerchantOpen(true)
+            H.env.C_Container.UseContainerItem(0, 1)
+            local a = H.getUsedContainerItems()
+            a[1].slot = 99
+            expect(H.getUsedContainerItems()[1].slot).as("record untouched").eq(1)
+        end)
+    end)
+
+    describe("reset clears the container stores", function()
+        it("drops contents, the cursor, the gates and the sale record", function()
+            H.setBagItem(0, 1, { itemID = 22832 })
+            H.env.C_Container.PickupContainerItem(0, 1)
+            H.setBankOpen(true)
+            H.setMerchantOpen(true)
+            H.setup()
+            expect(H.env.CursorHasItem()).as("cursor").falsy()
+            expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("contents").eq(nil)
+            expect(#H.getUsedContainerItems()).as("sales").eq(0)
+            -- The bank gate must reset to SHUT, because that is the state the snapshot design
+            -- depends on: a leaked open bank would make every later "not readable" assertion pass
+            -- for the wrong reason.
+            H.setBagItem(-1, 1, { itemID = 22832 }, { silent = true })
+            expect(H.env.C_Container.GetContainerItemInfo(-1, 1)).as("bank shut again").eq(nil)
+        end)
+
+        it("restores the modern API mode", function()
+            H.setBagApi("none")
+            H.setup()
+            expect(type(H.env.C_Container)).as("back to modern").eq("table")
+        end)
+    end)
+end)
+
 -- The assertion framework itself, not the simulated client. Same reasoning as the block
 -- above: a spec's failure MESSAGE is load-bearing, because a formatter that dies takes the
 -- diagnosis with it and leaves you debugging the harness instead of the code.

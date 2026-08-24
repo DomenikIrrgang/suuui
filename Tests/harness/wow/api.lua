@@ -369,6 +369,9 @@ function M.install(env)
         return unitField(unit, "name", unit == "player" and "Testchar" or nil)
     end
     env.GetRealmName  = function() return "TestRealm" end
+    -- Copper, as GetMoney() reports it. Staged rather than fixed because the inventory footer
+    -- prints it and the cache stores it per character.
+    env.GetMoney      = function() return state.money or 0 end
     -- UnitClass returns the localised name first and the stable class token second. Specs
     -- move state.unitClass to paint a different class; state.unitClassless models the
     -- narrower case of a unit the client reports NO class for at all.
@@ -922,9 +925,26 @@ function M.install(env)
     -- `state.bags` is an array indexed BY BAG ID FROM 0, each { free = n, slots = n, bagType = n }. A
     -- bagType other than 0 is a specialised container (quiver, ammo pouch, soul shard bag), whose free
     -- slots cannot hold loot -- which is why anything counting them has to be able to see the type.
-    env.NUM_BAG_SLOTS = 4
+    env.NUM_BAG_SLOTS         = 4
+    env.NUM_BANKBAGSLOTS      = 7
+    env.NUM_BANKGENERIC_SLOTS = 28
+    env.Enum = env.Enum or {}
+    env.Enum.BagIndex = env.Enum.BagIndex or { Backpack = 0, Bank = -1, Keyring = -2 }
+
+    local BANK_CONTAINER = -1
+    local BANK_BAG_FIRST, BANK_BAG_LAST = 5, 11
+
+    -- Is this a bank container whose CONTENTS the client will not read right now? The slot COUNT
+    -- survives a shut bank; the contents do not. See the note on state.bankOpen.
+    local function bankShut(bag)
+        if bag ~= BANK_CONTAINER and not (bag >= BANK_BAG_FIRST and bag <= BANK_BAG_LAST) then
+            return false
+        end
+        return not state.bankOpen
+    end
 
     local function bagFree(bag)
+        if bankShut(bag) then return 0, 0 end
         local b = state.bags and state.bags[bag]
         if not b then return 0, 0 end
         return b.free or 0, b.bagType or 0
@@ -932,12 +952,161 @@ function M.install(env)
 
     local function bagSlots(bag)
         local b = state.bags and state.bags[bag]
-        return b and b.slots or 0
+        if b then return b.slots or 0 end
+        -- The bank's own grid is a client constant, answered even with the frame shut -- which is
+        -- exactly what makes "28 slots, 0 free" the signature of no data rather than an empty bank.
+        if bag == BANK_CONTAINER then return env.NUM_BANKGENERIC_SLOTS end
+        return 0
     end
 
-    state.legacyBagFns = { free = bagFree, slots = bagSlots }
-    env.GetContainerNumFreeSlots = bagFree
-    env.GetContainerNumSlots = bagSlots
+    local function slotRecord(bag, slot)
+        if bankShut(bag) then return nil end
+        local perBag = state.containerItems and state.containerItems[bag]
+        return perBag and perBag[slot] or nil
+    end
+
+    -- Returns a FRESH table per call, as the client does, so a caller mutating what it got back
+    -- cannot reach into the store. nil for an empty slot -- never a record of zeroes, because
+    -- "is there anything here" has to be answerable.
+    local function getContainerItemInfo(bag, slot)
+        local it = slotRecord(bag, slot)
+        if not it then return nil end
+        return {
+            hasLoot    = it.hasLoot or false,
+            hasNoValue = it.hasNoValue or false,
+            hyperlink  = it.hyperlink,
+            iconFileID = it.iconFileID,
+            isBound    = it.isBound or false,
+            isFiltered = it.isFiltered or false,
+            isLocked   = it.isLocked or false,
+            isReadable = it.isReadable or false,
+            itemID     = it.itemID,
+            itemName   = it.itemName,
+            quality    = it.quality,
+            stackCount = it.stackCount,
+        }
+    end
+
+    local function getContainerItemLink(bag, slot)
+        local it = slotRecord(bag, slot)
+        return it and it.hyperlink or nil
+    end
+
+    local function getContainerItemID(bag, slot)
+        local it = slotRecord(bag, slot)
+        return it and it.itemID or nil
+    end
+
+    -- Drag and drop, the same contents-on-the-cursor model as PickupAction: the cursor carries a
+    -- slot's CONTENTS, so a pickup onto a loaded cursor SWAPS and hands the previous occupant back.
+    -- A cell that assumed overwrite would destroy an item every time the player rearranged a bag.
+    --
+    -- MEASURED 2026-08-24: this is NOT protected. pcall returned true and GetCursorInfo answered
+    -- `item 27860 [Purified Draenic Water]` from a tainted /run with no block.
+    local function pickupContainerItem(bag, slot)
+        if type(bag) ~= "number" or type(slot) ~= "number" then return end
+        if bankShut(bag) then return end
+        local perBag = state.containerItems[bag]
+        local there  = perBag and perBag[slot] or nil
+        local held   = state.cursorItem
+        if there == nil and held == nil then return end
+        state.containerItems[bag] = perBag or {}
+        state.containerItems[bag][slot] = held
+        state.cursorItem = there
+        fireEvent("BAG_UPDATE", bag)
+    end
+
+    local function splitContainerItem(bag, slot, count)
+        if type(count) ~= "number" or count <= 0 then return end
+        local it = slotRecord(bag, slot)
+        if not it or not it.stackCount or it.stackCount <= count then return end
+        local part = {}
+        for k, v in pairs(it) do part[k] = v end
+        part.stackCount = count
+        it.stackCount   = it.stackCount - count
+        state.cursorItem = part
+        fireEvent("BAG_UPDATE", bag)
+    end
+
+    -- UseContainerItem has TWO protection profiles and the harness models both, because the
+    -- difference was measured rather than inferred. At a MERCHANT it SELLS, which ElvUI drives from
+    -- an OnUpdate on this client. Away from one it USES the item -- and that is BLOCKED, measured
+    -- 2026-08-24 as `*** ForceTaint_Strong *** has been blocked from an action only available to
+    -- the Blizzard UI`, with pcall returning true and the stack count unchanged.
+    --
+    -- A refused call is therefore RECORDED in blockedActions rather than raising, exactly as a
+    -- refused geometry call is, because that is what the client does: it returns having changed
+    -- nothing. Recording is the only observable a spec has, and it makes calling this from Lua a
+    -- detectable defect instead of a silent no-op.
+    --
+    -- NOTE the merchant half is evidenced but not yet measured -- see the vendor probe in
+    -- .kiro/specs/inventory.md section 0. If selling turns out to be blocked too, this gate is
+    -- where that changes.
+    local function useContainerItem(bag, slot)
+        if type(bag) ~= "number" or type(slot) ~= "number" then return end
+        if not state.merchantOpen then
+            state.blockedActions[#state.blockedActions + 1] = {
+                action = "UseContainerItem", bag = bag, slot = slot,
+            }
+            return
+        end
+        local perBag = state.containerItems[bag]
+        if not (perBag and perBag[slot]) then return end
+        state.usedContainerItems[#state.usedContainerItems + 1] = { bag = bag, slot = slot }
+        perBag[slot] = nil
+        fireEvent("BAG_UPDATE", bag)
+    end
+
+    -- The cursor as the client reports it. GetCursorInfo's item form is `"item", itemID, itemLink`,
+    -- measured as `item 27860 [Purified Draenic Water]`.
+    env.GetCursorInfo = function()
+        local it = state.cursorItem
+        if not it then return nil end
+        return "item", it.itemID, it.hyperlink
+    end
+    env.CursorHasItem = function() return state.cursorItem ~= nil end
+    env.ClearCursor   = function() state.cursorItem = nil end
+
+    local containerApi = {
+        GetContainerNumFreeSlots = bagFree,
+        GetContainerNumSlots     = bagSlots,
+        GetContainerItemInfo     = getContainerItemInfo,
+        GetContainerItemLink     = getContainerItemLink,
+        GetContainerItemID       = getContainerItemID,
+        PickupContainerItem      = pickupContainerItem,
+        SplitContainerItem       = splitContainerItem,
+        UseContainerItem         = useContainerItem,
+    }
+
+    -- The LEGACY shape is POSITIONAL, not the modern table under an old name. That difference is
+    -- the entire reason both modes exist: a legacy mode handing back a table cannot exercise a
+    -- positional reader at all, so a spec written against it would pass while the real legacy
+    -- client fed the reader eleven values it never unpacked. Order taken from the shims three
+    -- installed addons ship on this machine (RXPGuides, Gargul, Questie), not from memory.
+    local function getContainerItemInfoLegacy(bag, slot)
+        local i = getContainerItemInfo(bag, slot)
+        if not i then return nil end
+        return i.iconFileID, i.stackCount, i.isLocked, i.quality, i.isReadable, i.hasLoot,
+               i.hyperlink, i.isFiltered, i.hasNoValue, i.itemID, i.isBound
+    end
+
+    local legacyApi = {}
+    for name, fn in pairs(containerApi) do legacyApi[name] = fn end
+    legacyApi.GetContainerItemInfo = getContainerItemInfoLegacy
+
+    -- ONE installer for every mode, shared with H.setBagApi and called by state.reset(), so the two
+    -- cannot drift about which globals a mode implies. Removal is REAL for the "none" case: a
+    -- version leaving the function in place returning nil is indistinguishable from an empty bag,
+    -- which is the conflation that hid the reputation bar in game.
+    function state.applyBagApi(mode)
+        local legacy = (mode == "legacy")
+        for name in pairs(containerApi) do
+            env[name] = legacy and legacyApi[name] or nil
+        end
+        env.C_Container = (mode == "modern") and containerApi or nil
+    end
+
+    state.applyBagApi(state.bagApi or "modern")
     -- The env itself, so reset can restore the API globals. The addon's chunks read from THIS table,
     -- not from the real _G, so anything touching _G is changing a table nothing under test reads.
     state.env = env

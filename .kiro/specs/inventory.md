@@ -174,14 +174,22 @@ two-state choices currently rendered as dropdowns.
 ## 4. Plugin files
 
 ```
+Core/ItemCache.lua         -- the account-wide cache: capture, queries, SuuUIItemCache
+
 Plugins/Inventory/
 ├── Inventory.lua          -- plugin: lifecycle, settings, suppression, the open/close hooks
 ├── InventoryWindow.lua    -- ONE window, parameterised by { character, container }
-├── ItemCache.lua          -- capture into SuuUIItemCache; read back for a snapshot
 ├── SellGreys.lua          -- the confirm modal and the throttled loop
 ├── Sort.lua               -- display sort orders
 └── AccountLedger.lua      -- the T3 tab
 ```
+
+**The cache is a CORE service, not a plugin file.** Two plugins consume it — the inventory
+window and the tooltip's account section — and a plugin may never call into another plugin. It
+is the same argument that put `Core/DataBar.lua` and `Core/Dock.lua` there: the answer has to
+exist whether or not the window that writes it is loaded, enabled, or came up first, and
+disabling the inventory plugin must not silently stop the tooltip lines updating. An earlier
+draft of this plan listed it under `Plugins/Inventory/`, which was wrong.
 
 `InventoryWindow` is instantiated **twice at most**: the bags window and, during a bank
 session, the bank window. It is the same renderer for live bags, a live bank and any snapshot —
@@ -213,17 +221,23 @@ SuuUIItemCache = {
   _version = 1,
   items = {                          -- account-wide, shared by every reader
     [22832] = { link = "|cff...|Hitem:22832...|h[Arcane Powder]|h|r",
-                icon = 134129, q = 1, stack = 20, sell = 2000, name = "Arcane Powder" },
+                icon = 134129, q = 1, name = "Arcane Powder" },
   },
   chars = {
     ["Sulisande-Thunderstrike"] = {
       class = "PRIEST", money = 12844218,
-      bags = { seen = 1755900000, [0] = { [1] = {22832, 12} }, [1] = { … } },
-      bank = { seen = 1755730000, [-1] = { [1] = {22832, 20} }, [5] = { … } },
+      -- `seen` sits BESIDE `slots` rather than inside it: mixing one string key into an
+      -- otherwise integer-keyed table invites an ipairs bug at every read site.
+      bags = { seen = 1755900000, slots = { [0] = { [1] = {22832, 12} }, [1] = { … } } },
+      bank = { seen = 1755730000, slots = { [-1] = { [1] = {22832, 20} }, [5] = { … } } },
     },
   },
 }
 ```
+
+Sell price and max stack are deliberately **not** cached. The sell feature needs a live price at
+the moment it sells, and the ledger does not show value in v1 — so caching them would be two
+fields kept fresh for no reader.
 
 - **Two tables, not one.** ~250 slots per character; a 60-byte link per slot per character is
   ~25 KB each and grows with every alt. An account-wide `items` table keyed by itemID plus

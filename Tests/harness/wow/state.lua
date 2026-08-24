@@ -146,7 +146,45 @@ M.tempShapeshiftBarIndex = 13
 -- The character's bags, indexed by bag id from 0. See H.setBags.
 M.bags = nil
 -- Which container API the simulated client has: "legacy" | "modern" | "none". See H.setBagApi.
-M.bagApi = "legacy"
+--
+-- MODERN by default, because that is what this client MEASURED as (2026-08-24): C_Container is a
+-- table and every bare container global -- GetContainerNumSlots, GetContainerItemInfo,
+-- UseContainerItem, PickupContainerItem, SplitContainerItem -- is nil. The default used to be
+-- "legacy", which modelled the exact opposite, so every bags spec ran against a client shape that
+-- does not exist. All three modes stay, because proving a reader survives either shape is still
+-- worth doing; only which one is the default changed.
+M.bagApi = "modern"
+
+-- The character's money in copper, as GetMoney() reports it. See H.setMoney.
+M.money = 0
+
+-- Container contents, keyed by bag id then slot: state.containerItems[0][1] = { itemID = 22832 }.
+--
+-- An EMPTY slot is the ABSENCE of a record, exactly as with action slots, because
+-- GetContainerItemInfo has to be able to answer nil -- a cell handed an all-zero record would draw
+-- an icon for nothing. Set through H.setBagItem so a typo'd field is caught rather than ignored.
+M.containerItems = {}
+
+-- Whether the bank frame is open, as BANKFRAME_OPENED / BANKFRAME_CLOSED bracket it.
+--
+-- It GATES bank contents, which is a measured fact rather than a convenience: with the frame shut,
+-- GetContainerNumSlots(-1) still answers 28 but every slot reads nil and free reads 0. An
+-- empty-but-readable bank would answer free 28, so zero free against 28 slots is only consistent
+-- with the client holding no data.
+M.bankOpen = false
+
+-- Whether a merchant window is open. It gates UseContainerItem, which SELLS at a merchant and USES
+-- the item away from one -- and the USE path is protected on this client, measured as the
+-- ForceTaint_Strong block. Selling is evidenced by ElvUI shipping a vendor-greys loop here but is
+-- NOT yet measured; see .kiro/specs/inventory.md section 0.
+M.merchantOpen = false
+
+-- What PickupContainerItem put on the cursor, or nil: one container slot's contents.
+M.cursorItem = nil
+
+-- Every UseContainerItem call the client ACCEPTED, in order, as { bag = n, slot = n }. The sell
+-- recorder. A call the client REFUSED goes to blockedActions instead, so the two are distinguishable.
+M.usedContainerItems = {}
 
 -- Panel toggle functions the addon called, in order: { name, arg }. The micro menu opens panels
 -- through these because Blizzard's micro buttons have no OnClick script on this client.
@@ -286,16 +324,20 @@ function M.reset()
     M.repApi             = "legacy"
     M.tempShapeshiftBarIndex = 13
     -- Bags, and the API mode with them: a spec that removed the container API must not leave the next
-    -- one testing a client with no bags at all.
+    -- one testing a client with no bags at all. Contents, the bank/merchant gates and the cursor go
+    -- too -- a spec that picks an item up and never drops it would otherwise hand the next file a
+    -- loaded cursor, and its first place would appear to work for the wrong reason.
     M.bags               = nil
-    M.bagApi             = "legacy"
-    if M.env then
-        M.env.C_Container = nil
-        if M.legacyBagFns then
-            M.env.GetContainerNumFreeSlots = M.legacyBagFns.free
-            M.env.GetContainerNumSlots     = M.legacyBagFns.slots
-        end
-    end
+    M.money              = 0
+    M.containerItems     = {}
+    M.bankOpen           = false
+    M.merchantOpen       = false
+    M.cursorItem         = nil
+    M.usedContainerItems = {}
+    M.bagApi             = "modern"
+    -- ONE installer, defined in wow/api.lua and shared with H.setBagApi, so reset and the helper
+    -- cannot disagree about which globals a mode implies.
+    if M.applyBagApi then M.applyBagApi(M.bagApi) end
     if M.env then
         M.env.C_Reputation = nil
         if M.legacyRepFn then M.env.GetWatchedFactionInfo = M.legacyRepFn end

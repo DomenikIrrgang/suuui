@@ -65,7 +65,9 @@
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
 --              H.setSpellTexture
 -- Watch bars:  H.setXP H.setWatchedFaction H.setRepApi
--- Bags:        H.setBags H.setBagApi
+-- Bags:        H.setBags H.setBagApi H.setBagItem H.clearBagItem H.setBankOpen
+--              H.setMerchantOpen H.getCursorItem H.getUsedContainerItems
+--              H.resetUsedContainerItems
 -- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
 --              H.setBonusBarOffset H.getUsedPetAction
 --
@@ -793,29 +795,120 @@ end
 -- Same three cases as H.setRepApi, and the same reason for "none": a missing API must be
 -- distinguishable from an empty result, or a silently blank field looks like a full inventory.
 -- Mutates M.env, NOT _G -- the addon's chunks resolve globals through the harness environment.
--- @param mode string  "legacy" (default) | "modern" | "none"
+--
+-- "modern" is the DEFAULT because that is what this client measured as: C_Container exists and
+-- every bare container global is nil. See state.bagApi for the measurement.
+-- @param mode string  "modern" (default) | "legacy" | "none"
 function M.setBagApi(mode)
-    mode = mode or "legacy"
+    mode = mode or "modern"
     assert(mode == "legacy" or mode == "modern" or mode == "none",
         "H.setBagApi: mode must be 'legacy', 'modern' or 'none', got '" .. tostring(mode) .. "'")
+    assert(state.applyBagApi, "H.setBagApi: call H.setup() first")
     state.bagApi = mode
+    state.applyBagApi(mode)
+end
 
-    local env = M.env
-    assert(env, "H.setBagApi: call H.setup() first")
-    local fns = state.legacyBagFns
+-- The fields a bag-slot record may carry: exactly the set GetContainerItemInfo returns on this
+-- client, measured 2026-08-24. An unknown name RAISES rather than being dropped, so a typo is a
+-- failure instead of a passing test asserting nothing.
+local BAG_ITEM_FIELDS = {
+    hasLoot = true, hasNoValue = true, hyperlink = true, iconFileID = true,
+    isBound = true, isFiltered = true, isLocked = true, isReadable = true,
+    itemID  = true, itemName   = true, quality  = true, stackCount = true,
+}
 
-    env.GetContainerNumFreeSlots = (mode == "legacy") and fns and fns.free or nil
-    env.GetContainerNumSlots     = (mode == "legacy") and fns and fns.slots or nil
+--- Stages one container slot's contents.
+--
+-- MERGES, so a spec can put an item in a slot and then lock it without restating the item -- the
+-- same shape as H.setAction and H.setUnit.
+--
+-- Bag ids: 0 the backpack, 1..4 the bag slots, -1 the bank, 5..11 the bank bags. Staging a BANK
+-- slot does not make it readable: that is gated on H.setBankOpen, which is the measured behaviour.
+-- @param bag number
+-- @param slot number
+-- @param props table  any subset of the measured field set
+-- @param opts table|nil  { silent = true } stages without firing BAG_UPDATE
+function M.setBagItem(bag, slot, props, opts)
+    assert(type(bag) == "number", "H.setBagItem: bag must be a number, got " .. type(bag))
+    assert(type(slot) == "number", "H.setBagItem: slot must be a number, got " .. type(slot))
+    props = props or {}
+    for k in pairs(props) do
+        assert(BAG_ITEM_FIELDS[k], "H.setBagItem: unknown field '" .. tostring(k) .. "'")
+    end
+    state.containerItems[bag] = state.containerItems[bag] or {}
+    local rec = state.containerItems[bag][slot] or {}
+    for k, v in pairs(props) do rec[k] = v end
+    -- Defaults an occupied slot always carries, so a spec staging only a name still yields a usable
+    -- record. The client never reports stackCount 0 for a slot that has something in it.
+    if rec.stackCount == nil then rec.stackCount = 1 end
+    if rec.quality    == nil then rec.quality    = 1 end
+    state.containerItems[bag][slot] = rec
+    if not (opts and opts.silent) then M.fireEvent("BAG_UPDATE", bag) end
+end
 
-    if mode == "modern" and fns then
-        env.C_Container = {
-            GetContainerNumFreeSlots = fns.free,
-            GetContainerNumSlots     = fns.slots,
-        }
-    else
-        env.C_Container = nil
+--- Empties one container slot, so GetContainerItemInfo answers nil for it.
+-- @param bag number
+-- @param slot number
+-- @param opts table|nil  { silent = true }
+function M.clearBagItem(bag, slot, opts)
+    local perBag = state.containerItems[bag]
+    if perBag then perBag[slot] = nil end
+    if not (opts and opts.silent) then M.fireEvent("BAG_UPDATE", bag) end
+end
+
+--- Opens or closes the bank frame.
+--
+-- This GATES bank contents rather than merely recording a flag, because that is what was measured:
+-- with the frame shut, GetContainerNumSlots(-1) answers 28 while every slot reads nil and free
+-- reads 0. Fires only on a real transition, so a spec cannot assert an event that did not happen.
+-- @param open boolean
+-- @param opts table|nil  { silent = true }
+function M.setBankOpen(open, opts)
+    open = not not open
+    local was = state.bankOpen
+    state.bankOpen = open
+    if was ~= open and not (opts and opts.silent) then
+        M.fireEvent(open and "BANKFRAME_OPENED" or "BANKFRAME_CLOSED")
     end
 end
+
+--- Opens or closes a merchant window.
+--
+-- This is what decides whether UseContainerItem sells or is refused as a protected use -- see the
+-- note in wow/api.lua. Fires only on a real transition.
+-- @param open boolean
+-- @param opts table|nil  { silent = true }
+function M.setMerchantOpen(open, opts)
+    open = not not open
+    local was = state.merchantOpen
+    state.merchantOpen = open
+    if was ~= open and not (opts and opts.silent) then
+        M.fireEvent(open and "MERCHANT_SHOW" or "MERCHANT_CLOSED")
+    end
+end
+
+--- What the cursor is carrying after a PickupContainerItem, or nil.
+-- @return table|nil
+function M.getCursorItem() return state.cursorItem end
+
+--- The character's money in copper, as GetMoney() reports it.
+-- @param copper number
+function M.setMoney(copper) state.money = copper or 0 end
+
+--- Every UseContainerItem call the client ACCEPTED, in order, as { bag, slot }.
+--
+-- Returns a COPY, so a spec reading it cannot mutate the record the next assertion reads. A call
+-- the client REFUSED is in H.getBlockedActions() instead, which is what keeps "sold" and "blocked"
+-- distinguishable.
+-- @return table
+function M.getUsedContainerItems()
+    local out = {}
+    for i, v in ipairs(state.usedContainerItems) do out[i] = { bag = v.bag, slot = v.slot } end
+    return out
+end
+
+--- Clears the accepted-sale record.
+function M.resetUsedContainerItems() state.usedContainerItems = {} end
 
 --- The page the client swaps bar 1 to for a temporary shapeshift, i.e. what
 --- GetTempShapeshiftBarIndex() answers. Pass nil to model a client that will not say.
