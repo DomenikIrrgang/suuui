@@ -1,0 +1,447 @@
+# Inventory Plugin — v1 Plan
+
+A combined inventory window: one flat grid of every bag slot, searchable, sortable, with a
+sell-grey-items button, a character dropdown for browsing any alt's bags or bank from
+anywhere, and a second live window at a banker for moving items between bank and bags.
+
+Visual reference: artifacts `suuui-inventory-concepts` (the four layout directions that were
+compared) and `suuui-inventory-character-browser` (the chosen S1 design in both modes). Slugs
+resolve in any future session — do not re-derive the look from this file alone.
+
+---
+
+## 0. Client facts — MEASURED IN GAME 2026-08-24
+
+Everything in this section was read off the live client, not inferred. Re-run these after any
+client patch; this is a snapshot of ONE build, exactly as the bottom-UI plan's Phase 0 is.
+
+| Fact | Measured value | What it forces |
+|---|---|---|
+| `C_Container` | `table` | present |
+| bare `GetContainerNumSlots` / `GetContainerItemInfo` / `UseContainerItem` / `PickupContainerItem` / `SplitContainerItem` | **all nil** | **`C_Container.X` is the ONLY path.** No dual-shape resolver, no `C_Container.X or X` fallback. This contradicts what RXPGuides and Gargul hedge for — they support both because they ship to several clients, not because this one has both |
+| `C_Container.GetContainerItemInfo(bag, slot)` | a **TABLE** | field access, never positional. Measured field set: `hasLoot, hasNoValue, hyperlink, iconFileID, isBound, isFiltered, isLocked, isReadable, itemID, itemName, quality, stackCount` |
+| `itemName` in that table | present | **the live grid needs no `GetItemInfo` at all** to render or search a name. `GET_ITEM_INFO_RECEIVED` only matters for the cached alt view |
+| `NUM_BAG_SLOTS` | `4` | bags are `0..4` (backpack + 4) |
+| `NUM_BANKBAGSLOTS` | `7` | bank bags are `5..11` |
+| `NUM_BANKGENERIC_SLOTS` | `28` | the bank's own grid |
+| `Enum.BagIndex.Bank` | `-1` | |
+| `Enum.BagIndex.Keyring` | `-2` | out of scope for v1 |
+| `C_MerchantFrame.SellAllJunkItems` | **nil** | no one-shot junk sell. A throttled per-item loop is required |
+| `UseItemByName` | `function` | exists, but the action underneath is protected — see below |
+| **`C_Container.UseContainerItem` from tainted Lua, away from a merchant** | **BLOCKED** | `pcall` returned `true`, the stack count did not change, no Hearthstone teleport, and the client raised `*** ForceTaint_Strong *** has been blocked from an action only available to the Blizzard UI`. **Using an item needs a secure/Blizzard template** |
+| **`C_Container.PickupContainerItem` from tainted Lua** | **WORKS** | `pcall` true and `GetCursorInfo()` returned `item 27860 [Purified Draenic Water]`. Moving items is unprotected, so a physical sort engine is possible |
+| `GetCursorInfo()` shape | `"item", itemID, itemLink` | |
+| `CreateFrame("Button", name, parent, "ContainerFrameItemButtonTemplate")` | **succeeds** (returned a frame) | the recommended cell base is instantiable here |
+| `ContainerFrame1Item1` | exists | Classic naming. `ContainerFrameItemButton1` is a RETAIL name and is nil — do not probe for it |
+| `BankFrameItem1` | `table` | bank cells have their own template family (`BankItemButtonGenericTemplate`) |
+| bank container `-1` with its frame CLOSED | `slots 28`, `items 0`, `free 0` | **contents are not readable while closed.** An empty-but-readable bank would report `free 28`; reporting zero free against 28 slots is only consistent with no data |
+| `ToggleAllBags` | exists; ElvUI secure-hooks it | already noted in `Plugins/DataBar/BagsWidget.lua` |
+
+### The one fact NOT measured, and it is load-bearing
+
+**Selling to a vendor via `UseContainerItem` while a merchant frame is open.** The probe above
+ran away from a merchant, where that same function *uses* the item. At a merchant it *sells*,
+and ElvUI ships a vendor-greys feature on this exact client driving it from an `OnUpdate` at
+0.2s intervals — so the sell path is well evidenced but not measured here.
+
+Verify it at the first vendor before Phase 8 is written:
+
+```
+/run local C=C_Container print(MerchantFrame and MerchantFrame:IsShown(), pcall(C.UseContainerItem,0,1))
+```
+
+If that is blocked too, sell-greys must route through the cell's own secure click instead of a
+Lua loop, and the confirm modal becomes a guided "click each one" flow rather than one button.
+Do not write the sell loop until this is answered — it is the same over-generalisation that
+produced the wrong "nothing here is secure" claim earlier in the design.
+
+---
+
+## 1. Locked decisions
+
+1. **Flat combined grid (A1).** One grid of every slot from every bag, as if you owned one
+   80-slot bag. No category headers.
+2. **Grouping is a later setting, not a second layout.** The grid is sorted quality-descending
+   then by name, which already clusters epics, potions and greys. A later `grouping` setting
+   inserts `Accordion` headers into that same order — one extra pass over the same cell pool.
+3. **Glass plate.** `Backdrop.Glass` with `from = "colorGlass"` (dense, top) → `to =
+   "colorGlassFade"` (open, bottom) plus the `colorGlassSheen` top hairline. Cells stay opaque
+   at `colorBgAlt` 0.92 so a quality border reads over grass. The footer gets its own denser
+   strip because the plate's open edge lands exactly where the gold readout goes.
+4. **S1 chrome.** Character `Dropdown` where the title would be, a two-way **Bags / Bank**
+   segment beside it, actions on the right, and search on its **own full-width row** below.
+5. **No "All" scope.** Bags means all five bag containers merged; Bank means the bank plus its
+   seven bag slots merged. The cross-container question is answered by search reporting both
+   counts, not by a third merged grid.
+6. **Two live windows at a banker.** `BANKFRAME_OPENED` shows a second instance; items move
+   between them. The scope segment hides while both are up and a muted `BAGS` / `BANK` tag
+   names each window.
+7. **Account knowledge: T1 + T3.** A tooltip section on every item tooltip in the game, plus a
+   ledger tab for items you are not currently holding. **T2 corner badges are rejected** — they
+   read as a second stack count and collide with the real one.
+8. **Display-only sort in v1.** Physical sort is now proven possible (pickup works) but ElvUI's
+   equivalent is a 1094-line move-list engine with lock verification and retries. Deferred, not
+   ruled out.
+9. **Cells inherit `ContainerFrameItemButtonTemplate`**, because using an item is protected.
+   Precedent: `Components/StanceButton.lua` on `StanceButtonTemplate`.
+
+---
+
+## 2. What already exists
+
+Almost nothing here is new machinery. Read these before writing anything.
+
+| Need | Existing |
+|---|---|
+| Window chrome, drag, resize bounds | `Layout/Window.lua` (`GetContentFrame`, `GetContentSize`, `minW`/`minH` via `SetResizeBounds`) |
+| The grid | `Layout/GridLayout.lua`, or wrapping `FlowLayout` — see §3 |
+| Cell recycling | `Core/Pool.lua` (`Register` / `Acquire` / `Release` / `ReleaseAll`), ids prefixed `inventory.` |
+| Search field | `Components/Input.lua` + `INPUT_SIGNALS.SUBMITTED`, plus `TEXT_CHANGED` for live filtering |
+| Character picker | `Components/Dropdown.lua`, `options` may be a **function** resolved at build time |
+| Scope segment | no component exists — see §3 |
+| Confirm dialog | `Components/Modal.lua` with `confirmVariant = "danger"` |
+| Glass plate | `SuuUI.Backdrop.Glass` |
+| Position memory | `Core/MoveableFrame.lua`, one `position` key per window |
+| Combat deferral | the pattern in `UnitFrame:_syncClickArea` and `ActionBarGrid._apply` |
+| Blizzard template precedent | `Components/StanceButton.lua` — inherit, clear the template's art through each getter, compose our own visuals |
+| Entry points | `Plugins/DataBar/BagsWidget.lua` (the `BAGS n` field) and `MicroMenuWidget.lua`'s `bags` entry, both currently calling `ToggleAllBags()` |
+| Tooltip lines | `Plugins/Tooltips/Content.lua` — read lines via `tt.TextLeft<i>`, **never** a harness-only `GetLine` |
+| Number formats | `Core/Readout.lua`. Do not invent a second k/M abbreviation |
+
+---
+
+## 3. New components
+
+### `Components/ItemSlot.lua`
+
+One bag cell. **A `Button` created from `ContainerFrameItemButtonTemplate`**, with our own
+visuals composed over it and the template's art cleared.
+
+Props: `bag`, `slot` (both required), `size`. API: `SetItem(info)`, `GetBag`, `GetSlot`,
+`SetReadOnly(bool)`, `Refresh`. Emits `CLICKED`, `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`.
+
+Five things this must get right, each of which fails silently:
+
+- **The template's own OnClick does the work.** Never `SetScript("OnClick")`. Observe through
+  `PostClick`, exactly as `UnitClickArea` and `ActionButton` do. That handler is what makes
+  use, pickup, place, split and the at-a-bank deposit shortcut work at all.
+- **Bag and slot are POSITIONAL and stated once.** `SetID(slot)` plus a parent whose `GetID()`
+  is the bag — the template reads both. Nothing is ever re-pointed as contents change, so there
+  is no `SetAttribute` churn and no mid-combat re-point to be refused. This is the discipline
+  `Components/ActionButton.lua` arrived at the hard way.
+- **Clear the art through each getter, never `SetNormalTexture(nil)`** — that call is refused
+  outright on this client (measured during the action bar work). Fetch the Texture, empty it,
+  hide *that*.
+- **The cell is protected**, so it must not sit inside a frame that resizes at runtime unless
+  that resize is combat-guarded. See §4.
+- **Read-only mode drops mouse input**, which is refused on a protected frame in combat — so
+  `SetReadOnly` is combat-guarded and deferred like any other protected mutation.
+
+Quality border colour comes from `Game:ItemQualityColor(info.quality)` at **uncommon and
+above** only, matching what `Plugins/Tooltips/Signal.lua` already decided: a white edge on a
+dark cell reads as a selected state.
+
+### `Components/ItemGrid.lua`
+
+A pooled flat grid of `ItemSlot`s. Props: `containers` (an ordered list of bag ids), `cols`,
+`cellSize`, `spacing`. API: `SetContainers`, `SetFilter(text)`, `SetSortMode`, `SetReadOnly`,
+`Refresh`, `GetCounts`. Emits `SIZE_CHANGED`, `CHILDREN_CHANGED`.
+
+- **Use wrapping `FlowLayout`, not `GridLayout`.** `GridLayout` derives column width from the
+  container width, which is wrong for fixed square cells; a wrapping horizontal flow with a
+  fixed cell size and `spaceXxs` gap gives exactly the intended geometry and already exists.
+- **Filtering dims, it does not remove.** A non-matching cell drops to `opacityDisabled`-ish
+  rather than being pulled from the layout, so the grid does not reflow under the cursor while
+  the player types. This also keeps slot positions meaningful.
+- **Every geometry change defers out of combat**, because the grid contains protected cells.
+  Same shape as `ActionBarGrid`, including an `IsDeferred()` accessor.
+- `CHILDREN_CHANGED` exists because the grid destroys and recreates cells when the container
+  set changes, and that rebuild can itself be deferred — nothing else can tell a holder of cell
+  references when they went stale.
+
+### `Components/SegmentedControl.lua`
+
+Two or three mutually exclusive labelled segments in one bordered strip. Props: `options`,
+`value`. API: `SetValue`, `GetValue`, `SetOptions`. Emits `VALUE_CHANGED` (silent on `SetValue`,
+per the setter contract).
+
+Small, but it does not exist, and inlining it in the plugin would be the raw-frames violation
+`WOW_API_ENCAPSULATION.md` forbids. It is reusable immediately — the settings UI has several
+two-state choices currently rendered as dropdowns.
+
+---
+
+## 4. Plugin files
+
+```
+Plugins/Inventory/
+├── Inventory.lua          -- plugin: lifecycle, settings, suppression, the open/close hooks
+├── InventoryWindow.lua    -- ONE window, parameterised by { character, container }
+├── ItemCache.lua          -- capture into SuuUIItemCache; read back for a snapshot
+├── SellGreys.lua          -- the confirm modal and the throttled loop
+├── Sort.lua               -- display sort orders
+└── AccountLedger.lua      -- the T3 tab
+```
+
+`InventoryWindow` is instantiated **twice at most**: the bags window and, during a bank
+session, the bank window. It is the same renderer for live bags, a live bank and any snapshot —
+so a fix to the grid fixes all three. That is the central structural decision of this plan.
+
+**The protected-cell parentage rule.** The grid holds protected cells, so the frame that
+resizes when the grid reflows must be combat-guarded. The window's own frame resizes when the
+grid does, which means `InventoryWindow` defers its resize exactly as `ActionBarGrid` defers
+its layout. Unlike the unit frames there is no foreign child to carve out, so the surface does
+not need to live beside the window — but the deferral is not optional, and a bag gaining a slot
+(a new bag equipped) in combat is a real trigger.
+
+---
+
+## 5. Data model — `SuuUIItemCache`
+
+A **third** account-wide SavedVariable. `SuuUI.toc` currently declares only:
+
+```
+## SavedVariables: SuuUIProfiles
+## SavedVariablesPerCharacter: SuuUIConfig
+```
+
+Add `SuuUIItemCache` to the account-wide line. It is not a preference, so it does not belong in
+a profile: a profile switch must not change what your alts are holding.
+
+```lua
+SuuUIItemCache = {
+  _version = 1,
+  items = {                          -- account-wide, shared by every reader
+    [22832] = { link = "|cff...|Hitem:22832...|h[Arcane Powder]|h|r",
+                icon = 134129, q = 1, stack = 20, sell = 2000, name = "Arcane Powder" },
+  },
+  chars = {
+    ["Sulisande-Thunderstrike"] = {
+      class = "PRIEST", money = 12844218,
+      bags = { seen = 1755900000, [0] = { [1] = {22832, 12} }, [1] = { … } },
+      bank = { seen = 1755730000, [-1] = { [1] = {22832, 20} }, [5] = { … } },
+    },
+  },
+}
+```
+
+- **Two tables, not one.** ~250 slots per character; a 60-byte link per slot per character is
+  ~25 KB each and grows with every alt. An account-wide `items` table keyed by itemID plus
+  per-character `{itemID, count}` pairs lands ten alts in tens of KB, and that item table is
+  shared by the tooltip, the search index and the ledger for free.
+- **Store the link AND the icon AND the name**, not just the id. `GetItemInfo` returns nil for
+  an item the client has never seen and fires `GET_ITEM_INFO_RECEIVED` later — 22 installed
+  addons handle that event, including TBC-specific code in
+  `ChonkyCharacterSheet/Modules/TBC.lua:2110`. An id-only cache renders a wall of blank cells
+  the first time you open an alt after logging in. Unresolved entries sort to the END and slide
+  into place when the event arrives, rather than reshuffling the whole grid.
+- **`seen` is per character AND per container.** Bags refresh whenever that character plays;
+  the bank only when they visit one. Hour-old bags beside three-week-old bank data is the
+  normal case, so one timestamp per character would be a lie. The window reports the age of the
+  container it is actually showing.
+- **`_version` is stamped** so a renamed key in a later build can be migrated on read, matching
+  how `Core/Theme.lua` stamps `_tokenVersion`.
+
+### Capture
+
+| Container | When |
+|---|---|
+| bags | debounced `BAG_UPDATE` (coalesce a burst into one sweep), plus a full sweep at `PLAYER_LOGOUT` |
+| bank | inside `BANKFRAME_OPENED` → `BANKFRAME_CLOSED`, which is the only window in which those slots are readable |
+
+The bank session **is** the capture moment, so there is no separate capture pass and the
+freshness stamp is simply "when you last stood there".
+
+---
+
+## 6. Live vs snapshot — one rule
+
+**A container is live only when it is YOUR character AND currently reachable.** Your bags:
+always. Your bank: only while the bank frame is open. Any other character, either container:
+never.
+
+That single rule covers every combination with no special cases, including pointing the *bank*
+window at an alt while standing at a banker — which correctly becomes read-only while your own
+bags beside it stay live.
+
+A snapshot must LOOK inert, because there is no API that reaches another character's inventory
+and no amount of clicking will ever work:
+
+- an amber strip naming the container and its age (`bank seen 3 weeks ago`)
+- sort and sell faded to `opacityDisabled`
+- cells in read-only mode: no hover ring, no mouse
+- the footer reads `N items cached` instead of `N free / M`
+
+**Search stays live on a snapshot.** Searching a cached alt's bank from the middle of nowhere is
+the single most useful thing in this feature.
+
+**The bank window carries no sell button at all** — not a disabled one. You cannot sell from a
+bank, and a greyed button says "not right now" when the truth is "never here". Sort does belong.
+
+---
+
+## 7. Opening, and suppressing Blizzard's bags
+
+`ToggleAllBags` exists on this client and ElvUI secure-hooks it (already noted in
+`BagsWidget.lua`). The bag-opening globals live in FrameXML and are replaceable Lua:
+`ToggleBackpack`, `OpenBackpack`, `CloseBackpack`, `ToggleBag`, `OpenBag`, `CloseBag`,
+`ToggleAllBags`, `OpenAllBags`, `CloseAllBags`.
+
+- Resolve each by **existence check**, replace only what exists, and **restore the original on
+  `onDisable`** — keep the originals in a table keyed by name. A plugin that cannot hand the
+  default UI back is not finished.
+- Suppress `ContainerFrame1..13` and `BankFrame` with the established **guarded-`OnShow`**
+  pattern from `plugin-authoring.md`: a `suppressed` table, a permanent `HookScript` that
+  consults it, and the flag cleared **before** the restoring `Show()`. Never
+  `UnregisterAllEvents`, never `SetParent(nil)`.
+- Route the existing entry points to the window once it exists: `BagsWidget`'s field click and
+  `MicroMenuWidget`'s `bags` entry both currently call `ToggleAllBags()`, which will land on our
+  replacement automatically — verify that rather than adding a second path.
+- **Verify with witness cells, not with the container's `IsShown()`.** Hiding a container is the
+  means; a bag cell being off the screen is the end. That distinction cost a diagnosis round in
+  the action bar work (`MainMenuBar` vs `MainActionBar`).
+
+---
+
+## 8. Sell greys, and sort
+
+### Sell greys
+
+Blocked on the vendor probe in §0. Assuming selling is allowed:
+
+1. Scan every bag slot for `quality == 0` **and** `hasNoValue ~= true` — a grey with no sell
+   price cannot be sold and must be skipped, never counted as a failure.
+2. Show a `Modal` with `confirmVariant = "danger"` naming **how many**, the **total value**, and
+   the item names. With a flat grid there is no JUNK section to inspect, so the modal is the
+   only place the player sees what is going, and selling is irreversible once buyback overflows
+   12 slots.
+3. On confirm, drain the list one item per tick from a shared `OnUpdate` at 0.2s (ElvUI's
+   measured interval; expose 0.1–1.0s later if it proves flaky). One ticker, registered only
+   while a sale is in flight.
+4. Refuse to start unless `MerchantFrame:IsShown()`.
+
+### Sort
+
+**Display-only in v1**: the grid's render order changes, the real bags do not. Instant, cannot
+fail, cannot be interrupted, works in combat, and it is what makes a flat 80-cell wall
+navigable. Modes: quality desc then name (default), name, item level, and the container order
+the client reports.
+
+**Physical sort is deferred but no longer blocked** — `PickupContainerItem` is measured working.
+When it lands it needs ElvUI's shape: a move list, one swap per tick, `isLocked` verification
+before each step, and a hard stop in combat. Budget it as its own phase, not a flag on this one.
+
+---
+
+## 9. Settings schema (`inventory`)
+
+Entries before the first `section` stay always-visible; everything after belongs to the
+preceding section (`plugin-authoring.md`).
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | toggle | true | no `immediate` on its own watcher — `autoEnable` already applies the stored value |
+| `suppress_blizzard` | toggle | true | its own top-level toggle, outside any group, so a player whose bags misbehave can get the default UI back without disabling the plugin |
+| — | section | | **Layout** |
+| `columns` | slider | 10 | 6–20 |
+| `cell_size` | slider | 34 | 24–48 |
+| `grouping` | dropdown | `flat` | `flat` ｜ `category` — the deferred grouping option, shipped as a stub returning `flat` in v1 |
+| `sort_mode` | dropdown | `quality` | |
+| — | section | | **Bank** |
+| `bank_side` | dropdown | `right` | which side the second window defaults to |
+| — | section | | **Account** |
+| `tooltip_counts` | toggle | true | the T1 tooltip section |
+| `tooltip_show_zero` | toggle | false | list characters holding none |
+| `account_badges` | toggle | false | T2, off by default and deliberately available |
+| — | section | | **Selling** |
+| `sell_confirm` | toggle | true | off means one click sells; keep the default on |
+| `sell_interval` | slider | 0.2 | 0.1–1.0, `enabledIf = "sell_confirm"` is **wrong** here — it applies always |
+| `position` / `bank_position` | position | — | written by `MoveableFrame`, no control |
+
+Every key needs a `Settings:Watch` in the same edit, and prefer a **live applier** over a
+rebuild: rebuilding drops the `MoveableFrame` registration and resets the stored position, so a
+column-count change would move the window as a side effect.
+
+---
+
+## 10. Harness work
+
+`Tests/harness/` has a PARTIAL container surface already, added by the bags data-bar widget
+after this plan's first draft — so re-read it before extending rather than trusting this list.
+What exists today: `state.bags` (indexed by bag id from 0, each `{ free, slots, bagType }`),
+`H.setBags`, `H.setBagApi` with three modes, `GetContainerNumFreeSlots`, `GetContainerNumSlots`,
+`env.NUM_BAG_SLOTS`, plus `state.items` / `H.setItemInfo` / `GetItemCount` from the tooltips
+work.
+
+**And it carries a defect that must be fixed first: `state.bagApi` defaults to `"legacy"`**,
+which models a client with the bare globals and no `C_Container` — the exact opposite of what
+§0 measured. Every existing bags spec therefore runs against a client shape that does not
+exist. Flip the default to `"modern"`, keep all three modes (they are still the right way to
+prove a reader survives either shape), and fix whatever specs assumed legacy. This is the same
+class as the `GetLine` leak: a harness generous in the wrong direction cannot fail.
+
+Follow the established `H.setAction` / `H.setAuras` conventions: staging **fires the event**,
+`opts = { silent = true }` suppresses it, and an **unknown field name raises** rather than being
+dropped.
+
+| Addition | Size | Notes |
+|---|---|---|
+| flip `bagApi` default to `"modern"` | small | do this before anything else reads a container |
+| `C_Container.GetContainerItemInfo` returning the measured table | medium | field set exactly as §0 lists it; nil for an empty slot, never a record of zeroes |
+| `H.setBagItem(bag, slot, props, opts)` / `H.clearBagItem` | medium | merges; fires `BAG_UPDATE` |
+| `H.setBankItem(bag, slot, props, opts)` | small | plus `H.setBankOpen(bool)` firing `BANKFRAME_OPENED`/`CLOSED` |
+| bank readability gate | small | `GetContainerItemInfo(-1, n)` answers **nil** while the bank is closed, and slot/free counts answer 0 — model the measured behaviour, not the convenient one |
+| `ContainerFrameItemButtonTemplate` as a frame subtype | medium | must model that its OnClick performs the action, and that `SetNormalTexture(nil)` is **refused** |
+| `H.setMerchantOpen(bool)` + a sell recorder | medium | record `UseContainerItem` calls; **do not enact** a sale, for the same reason `RegisterStateDriver` is a recorder |
+| `H.getCursorItem()` / cursor model | small | `PickupContainerItem` puts `{itemID, link}` on the cursor; placing onto an occupied slot **swaps** |
+| item info store | small | `GetItemInfo`, `GetItemQualityColor`, `C_Item.GetItemSpell`, plus a `GET_ITEM_INFO_RECEIVED` path with items deliberately **absent** at first |
+| SavedVariables round trip | large | there is currently no way for a spec to assert data survives a reload. Needed for the cache; scope it as its own phase if it grows |
+
+**What the harness cannot prove**, to be stated in `TESTING.md` alongside the existing gaps:
+that using an item is refused (the lockdown model gates eight geometry setters, not
+`UseContainerItem`), and that replacing a FrameXML global does not taint. Both are in-game
+checks.
+
+---
+
+## 11. Phases
+
+| # | Deliverable | Visible in game? |
+|---|---|---|
+| 0 | The vendor-sell probe in §0 | — |
+| 1 | Harness surface: `C_Container`, bags, bank gate, item info, cursor | **No** — `Tests/` is not in the `.toc` |
+| 2 | `Core/ItemCache.lua` + the `SuuUIItemCache` SavedVariable + capture hooks | **No** |
+| 3 | `Components/ItemSlot.lua` on the Blizzard template, art cleared, our visuals | **No** — nothing instantiates it yet |
+| 4 | `Components/ItemGrid.lua` + `Components/SegmentedControl.lua` | **No** |
+| 5 | `InventoryWindow.lua`: chrome, search row, footer. **Bags only, live, own character** | **YES — first pixel.** Open it from a slash command; do not suppress anything yet |
+| 6 | Suppression + the bag-opening replacements, so `B` opens ours | **YES** |
+| 7 | Bank session: the second instance on `BANKFRAME_OPENED`, item movement both ways | **YES** |
+| 8 | Sell greys: confirm modal + throttled loop | **YES** |
+| 9 | Display sort + the sort control | **YES** |
+| 10 | Snapshot mode: character dropdown, read-only state, amber strip, `GET_ITEM_INFO_RECEIVED` fill-in | **YES** |
+| 11 | T1 tooltip account section | **YES** |
+| 12 | T3 account ledger tab | **YES** |
+| 13 | Settings schema, `architecture.md`, `plugin-authoring.md`, `TESTING.md` | **No** |
+
+State at the end of every phase whether there is anything to look at, and when there is, name
+exactly what to click and what the WRONG result would look like — a green suite on invisible
+work reads as "this should be working".
+
+---
+
+## 12. Risks and open questions
+
+- **The vendor-sell probe (§0) gates Phase 8.** Do not write the loop first.
+- **`SplitContainerItem` is untested.** Pickup works, so it very likely does too, but shift-click
+  is a separate call — probe it when Phase 7 lands rather than assuming.
+- **Replacing FrameXML globals may taint.** ElvUI secure-*hooks* `ToggleAllBags` rather than
+  replacing it, which may be deliberate. If a replacement taints, hook instead and hide
+  Blizzard's frame from the hook.
+- **ElvUI is enabled on the test character** (its durability readout is on screen). Its bag
+  module will fight ours for the same Blizzard frames — disable ElvUI's bags before the first
+  in-game check, or the diagnosis is worthless.
+- **The keyring (`-2`) is out of scope.** It is a container with its own rules and no v1 caller.
+- **Bank bags 5..11 have per-bag slot counts** that must be read, not assumed; a player with
+  fewer than seven bank bags has containers reporting 0 slots.
+- **Cross-realm alts appear in the dropdown**, grouped by realm with the current one first.
+  Nothing may imply items can move between them.

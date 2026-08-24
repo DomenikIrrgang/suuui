@@ -325,6 +325,55 @@ re-asserts.
 
 ---
 
+## Restyling A Blizzard Tooltip
+
+**A plugin MAY call `SetBackdrop`, `SetPoint`, `SetText` and font-object setters on Blizzard's
+tooltip frames.** This is the same carve-out as hiding and repositioning a Blizzard frame, for the
+same reason: a tooltip is **not our UI**. It cannot be adopted into one of our containers, because
+adopting a foreign frame means reparenting it, which taints it — so the layout engine has no route
+to it at all. `Plugins/Tooltips/` is the consumer.
+
+**Nothing in this path needs a combat guard, and adding one would be wrong.** `GameTooltip` is not
+a protected frame and its backdrop is not a protected method; ElvUI restyles tooltips
+unconditionally with no taint comment and no `InCombatLockdown` check anywhere in its tooltip
+module. Mutation testing would show such a guard unreachable. The only protection concept to honour
+is `IsForbidden()`, which is checked at the top of every entry point.
+
+Five things this carve-out turns on, each measured on this client rather than assumed:
+
+- **Durability is one hook**: `hooksecurefunc('SharedTooltip_SetBackdropStyle', …)`, with the
+  `(tt, style, embedded)` signature so one function serves as both the handler and a direct call.
+  Blizzard re-stamps a tooltip's backdrop at moments unrelated to anything the player did, so a
+  one-shot pass in `onEnable` is silently reverted. It also covers tooltips in no list of ours.
+- **`TooltipDataProcessor.AddTooltipPostCall` EXISTS here and must NOT be used.** ElvUI explicitly
+  excludes TBC from it (`if AddTooltipPostCall and not (E.TBC or …)`) and falls back to the legacy
+  `OnTooltipSetItem` / `SetUnit` / `SetSpell` scripts. A design built on the modern API compiles
+  and silently does nothing.
+- **Blizzard's border is a `NineSlice`**, so `SetBackdrop` alone leaves it drawing underneath and
+  the player sees a double frame. Hiding it is mandatory, not defensive.
+- **The frame list is iterated with `next`, never `ipairs`.** A nil global leaves a hole in the
+  array part and `ipairs` stops dead at the first one, silently dropping every frame after it.
+- **Fonts go through the three global Font OBJECTS** — `GameTooltipText`,
+  `GameTooltipHeaderText`, `GameTooltipTextSmall` — never a `GameTooltipTextLeft<N>` walk. One
+  assignment covers lines that do not exist yet, because the client creates line objects on demand.
+
+**Reading or writing an individual line is the narrow exception to that last point.** Recolouring
+text the client itself wrote — the level line, by creature difficulty — has no other route, and the
+handle is `tt.TextLeft<i>` on the tooltip itself rather than the `GameTooltipTextLeft<i>` globals,
+which exist only for the shared tooltip. Two traps live here:
+
+- **There is no `GetLine` on a real tooltip.** It is a convenience the test harness provides for
+  specs, and calling it from shipped code raised on the first mouseover while the whole suite
+  stayed green — the harness was supplying exactly what the client lacked.
+  `Tests/spec/00_harness_spec.lua` now reads the `.toc` and fails if any shipped file calls a
+  harness-only name.
+- **A line appended from a hooked SETTER needs `tt:Show()` afterwards.** `SetUnitBuff` and
+  `SetUnitAura` show the tooltip themselves, so by the time the hook runs the box is already
+  measured and an added line falls outside it. A content *script* runs before the client shows the
+  tooltip and needs nothing. ElvUI ends every add-lines path with `tt:Show()` for this reason.
+
+---
+
 ## Protected Actions Go Through A Secure Component
 
 Some things the client will not let an addon do at all: targeting a unit, opening its

@@ -1191,3 +1191,162 @@ describe("Settings watcher errors are VISIBLE", function()
         expect(reached).as("the second watcher still ran").truthy()
     end)
 end)
+
+-- Core/Readout.lua — how a bar's value is SPELLED, shared by every bar that carries a readout.
+--
+-- It was a file-local BAR_TEXT in Plugins/UnitFrames/UnitFrame.lua until the tooltip health bar
+-- became a second consumer. That file's own comment named the hazard: "a second copy is the thing
+-- that drifts" — and it very nearly happened, with the tooltip abbreviating to "7.6k / 15.2k"
+-- while the unit frame beside it printed the exact figures.
+describe("SuuUI.Readout", function()
+    before_each(function() H.setup() end)
+
+    local function R() return H.SuuUI.Readout end
+
+    it("ships the three formats and the three slots", function()
+        expect(R().FORMATS.current_max).notNil()
+        expect(R().FORMATS.current).notNil()
+        expect(R().FORMATS.percent).notNil()
+        expect(R().SLOTS).deepEq({ "left", "center", "right" })
+    end)
+
+    it("spells current / max exactly, with no abbreviation", function()
+        -- No k or M anywhere: abbreviating in one bar and not another is precisely the drift
+        -- this module exists to prevent, and the tooltip's first version did exactly that.
+        expect(R().Format("current_max", 7620, 15240)).eq("7620 / 15240")
+        expect(R().Format("current_max", 4100000, 12400000)).eq("4100000 / 12400000")
+        expect(R().Format("current", 7620, 15240)).eq("7620")
+    end)
+
+    it("FLOORS a percentage, never rounds it", function()
+        -- Load-bearing, and the mutation that exposed it survived a spec asserting only 50%:
+        -- a unit one hit from dead must not read 100%, because the moment a bar stops saying
+        -- full is the entire reason to show a percentage.
+        expect(R().Format("percent", 999, 1000)).as("999/1000 is 99%, not 100%").eq("99%")
+        expect(R().Format("percent", 1, 1000)).eq("0%")
+        expect(R().Format("percent", 1000, 1000)).as("only actually full reads 100%").eq("100%")
+    end)
+
+    it("survives a zero max rather than dividing by it", function()
+        expect(R().Format("percent", 0, 0)).eq("0%")
+    end)
+
+    it("leaves 'none' unresolved, which is what CLEARS a slot", function()
+        -- Deliberately absent from FORMATS rather than a no-op function: the nil is the signal,
+        -- and a no-op would need its own branch at every caller.
+        expect(R().FORMATS.none).as("not a format").isNil()
+        expect(R().Format("none", 1, 2)).isNil()
+        expect(R().Formatter("none")).isNil()
+    end)
+
+    it("returns nil for a mode that is not a string, and for non-numbers", function()
+        expect(R().Format(nil, 1, 2)).isNil()
+        expect(R().Format(42, 1, 2)).isNil()
+        expect(R().Format("current_max", nil, 2)).isNil()
+        expect(R().Format("current_max", 1, "2")).isNil()
+    end)
+
+    it("builds a FRESH options table per call", function()
+        -- The table is handed to a schema entry and on to a Dropdown control — eight per unit on
+        -- the unit-frame page — and a shared list is one aliased table away from those controls
+        -- editing each other's state.
+        local a, b = R().Options(), R().Options()
+        expect(a).neq(b)
+        expect(a).deepEq(b)
+    end)
+
+    it("offers every format plus none, so no page can omit one", function()
+        local seen = {}
+        for _, o in ipairs(R().Options()) do seen[o.value] = true end
+        expect(seen.none).truthy()
+        for mode in pairs(R().FORMATS) do
+            expect(seen[mode]).as("Options offers " .. mode).truthy()
+        end
+    end)
+end)
+
+-- Difficulty colours: how dangerous a level is RELATIVE TO THE PLAYER. A fact about the client
+-- rather than a design choice — the player already reads these five in their quest log.
+describe("SuuUI.Game difficulty colours", function()
+    before_each(function()
+        H.setup()
+        H.setUnit("player", { level = 70 })
+    end)
+
+    local function G() return H.SuuUI.Game end
+    local D = function() return H.SuuUI.Game.DIFFICULTY end
+
+    local function near(a, b)
+        return a and b and math.abs(a[1] - b[1]) < 0.001
+            and math.abs(a[2] - b[2]) < 0.001 and math.abs(a[3] - b[3]) < 0.001
+    end
+
+    it("walks all five bands", function()
+        expect(near(G():DifficultyColor(78), D().deadly)).as("+8 red").eq(true)
+        expect(near(G():DifficultyColor(73), D().hard)).as("+3 orange").eq(true)
+        expect(near(G():DifficultyColor(70), D().fair)).as("equal yellow").eq(true)
+        expect(near(G():DifficultyColor(68), D().fair)).as("-2 still yellow").eq(true)
+        expect(near(G():DifficultyColor(67), D().easy)).as("-3 green").eq(true)
+        expect(near(G():DifficultyColor(60), D().trivial)).as("-10 grey").eq(true)
+    end)
+
+    it("treats an unknown level as DEADLY, like the client's own ??", function()
+        -- A boss reports -1 or 0, and "cannot tell" genuinely means dangerous.
+        expect(near(G():DifficultyColor(-1), D().deadly)).eq(true)
+        expect(near(G():DifficultyColor(0), D().deadly)).eq(true)
+    end)
+
+    it("never returns nil, unlike the other colour accessors here", function()
+        -- Deliberate: a level line always has something to paint, so there is no caller default
+        -- to fall back to. Same reasoning as UntypedDebuffColor.
+        expect(G():DifficultyColor("seventy")).notNil()
+        expect(G():DifficultyColor(nil)).notNil()
+    end)
+
+    it("prefers the client's own function", function()
+        H.env.GetCreatureDifficultyColor = function() return { r = 0.11, g = 0.22, b = 0.33 } end
+        local c = G():DifficultyColor(70)
+        expect(c[1]).eq(0.11)
+        expect(c[2]).eq(0.22)
+        expect(c[3]).eq(0.33)
+    end)
+
+    it("falls back to the formula when the client has no such function", function()
+        -- Every band is walked HERE rather than in the first test, because with the client's own
+        -- function present the formula is never reached — which is why band mutations survived a
+        -- spec that only asserted through the preferred path.
+        H.env.GetCreatureDifficultyColor = nil
+        expect(near(G():DifficultyColor(78), D().deadly)).as("+8 red").eq(true)
+        expect(near(G():DifficultyColor(75), D().deadly)).as("+5 still red").eq(true)
+        expect(near(G():DifficultyColor(74), D().hard)).as("+4 orange").eq(true)
+        expect(near(G():DifficultyColor(73), D().hard)).as("+3 orange").eq(true)
+        expect(near(G():DifficultyColor(72), D().fair)).as("+2 yellow").eq(true)
+        expect(near(G():DifficultyColor(70), D().fair)).as("equal yellow").eq(true)
+        expect(near(G():DifficultyColor(68), D().fair)).as("-2 STILL yellow").eq(true)
+        expect(near(G():DifficultyColor(67), D().easy)).as("-3 green").eq(true)
+        expect(near(G():DifficultyColor(66), D().easy)).as("-4 green").eq(true)
+        expect(near(G():DifficultyColor(60), D().trivial)).as("-10 grey").eq(true)
+    end)
+
+    it("survives a client function that raises", function()
+        H.env.GetCreatureDifficultyColor = function() error("nope") end
+        expect(near(G():DifficultyColor(78), D().deadly)).as("used the formula").eq(true)
+    end)
+
+    it("takes the GREY threshold from the client, not a fixed offset", function()
+        -- It widens as the player levels. Hardcoding one number makes low-level mobs read as
+        -- green for a level 70 player long after they stop giving experience.
+        H.env.GetCreatureDifficultyColor = nil
+        H.env.GetQuestGreenRange = function() return 20 end
+        expect(near(G():DifficultyColor(60), D().easy))
+            .as("still green with a wide green range").eq(true)
+        H.env.GetQuestGreenRange = function() return 3 end
+        expect(near(G():DifficultyColor(60), D().trivial))
+            .as("grey with a narrow one").eq(true)
+    end)
+
+    it("accepts an explicit player level, so it needs no unit at all", function()
+        expect(near(G():DifficultyColor(10, 5), D().deadly)).eq(true)
+        expect(near(G():DifficultyColor(5, 5), D().fair)).eq(true)
+    end)
+end)

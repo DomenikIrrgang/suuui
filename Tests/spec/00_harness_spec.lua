@@ -3989,6 +3989,363 @@ describe("harness: WoW API simulation", function()
             end)
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- StatusBar as a real type
+    ---------------------------------------------------------------------------
+    -- SuuUI's own StatusBar component never uses the client's -- it drives fractional stack
+    -- children through the layout engine on purpose -- so this type was a bare Frame with no
+    -- SetValue anywhere in the harness. It became load-bearing the moment a BLIZZARD status
+    -- bar had to be driven: GameTooltipStatusBar is the client's.
+    describe("StatusBar", function()
+        local function bar()
+            return H.env.CreateFrame("StatusBar", nil, H.env.UIParent)
+        end
+
+        it("carries the value verbs a bare Frame did not", function()
+            local b = bar()
+            expect(type(b.SetValue)).eq("function")
+            expect(type(b.SetMinMaxValues)).eq("function")
+            expect(type(b.SetStatusBarColor)).eq("function")
+        end)
+
+        it("reads a value back", function()
+            local b = bar()
+            b:SetMinMaxValues(0, 200)
+            b:SetValue(140)
+            expect(b:GetValue()).eq(140)
+            local min, max = b:GetMinMaxValues()
+            expect(min).eq(0)
+            expect(max).eq(200)
+        end)
+
+        it("CLAMPS to the range, as the client does", function()
+            -- Load-bearing: a consumer computing a fraction from GetValue would read past 1
+            -- for an over-max write, and a health bar handed a stale max does exactly that.
+            local b = bar()
+            b:SetMinMaxValues(0, 100)
+            b:SetValue(500)
+            expect(b:GetValue()).as("clamped to max").eq(100)
+            b:SetValue(-20)
+            expect(b:GetValue()).as("clamped to min").eq(0)
+        end)
+
+        it("re-clamps when the range narrows under a value", function()
+            local b = bar()
+            b:SetMinMaxValues(0, 1000)
+            b:SetValue(900)
+            b:SetMinMaxValues(0, 100)
+            expect(b:GetValue()).eq(100)
+        end)
+
+        it("fires OnValueChanged only when the value actually moves", function()
+            local n = 0
+            local b = bar()
+            b:SetMinMaxValues(0, 100)
+            b:SetScript("OnValueChanged", function() n = n + 1 end)
+            b:SetValue(50)
+            expect(n).eq(1)
+            b:SetValue(50)
+            expect(n).as("an unchanged write is silent").eq(1)
+            b:SetValue(60)
+            expect(n).eq(2)
+        end)
+
+        it("ignores a non-number and a NaN write", function()
+            local b = bar()
+            b:SetValue(40)
+            b:SetValue("70")
+            expect(b:GetValue()).eq(40)
+            b:SetValue(0 / 0)
+            expect(b:GetValue()).as("NaN left it alone").eq(40)
+        end)
+
+        it("reads its colour back", function()
+            local b = bar()
+            b:SetStatusBarColor(0.2, 0.4, 0.6)
+            local r, g, bl, a = b:GetStatusBarColor()
+            expect(r).eq(0.2)
+            expect(g).eq(0.4)
+            expect(bl).eq(0.6)
+            expect(a).as("alpha defaults to 1").eq(1)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Tooltip scripts actually fire
+    ---------------------------------------------------------------------------
+    -- The four tooltip scripts were stored by SetScript and fired by NOTHING, so the only way
+    -- a spec could reach a handler was to invoke it by hand -- which passes while nothing in
+    -- production ever calls it. That mistake shipped a dead micro-menu button once already.
+    describe("tooltip content setters fire the client's scripts", function()
+        local function tip() return H.env.GameTooltip end
+
+        local function watch(name)
+            local hits = { n = 0 }
+            tip():SetScript(name, function() hits.n = hits.n + 1 end)
+            return hits
+        end
+
+        it("SetUnit fires OnTooltipSetUnit and records the unit", function()
+            local hits = watch("OnTooltipSetUnit")
+            H.setUnit("target", { name = "Illidan" })
+            tip():SetUnit("target")
+            expect(hits.n).eq(1)
+            expect(H.getTooltipState().unit).eq("target")
+        end)
+
+        it("GetUnit answers a name and the unit id, in that order", function()
+            H.setUnit("target", { name = "Illidan" })
+            tip():SetUnit("target")
+            local name, unit = tip():GetUnit()
+            expect(name).eq("Illidan")
+            expect(unit).eq("target")
+        end)
+
+        it("GetUnit answers nothing before a unit is set", function()
+            local name, unit = tip():GetUnit()
+            expect(name).isNil()
+            expect(unit).isNil()
+        end)
+
+        it("SetHyperlink fires OnTooltipSetItem and records the link", function()
+            local hits = watch("OnTooltipSetItem")
+            tip():SetHyperlink("|cffa335ee|Hitem:12345|h[Thing]|h|r")
+            expect(hits.n).eq(1)
+            expect(H.getTooltipState().item).eq("|cffa335ee|Hitem:12345|h[Thing]|h|r")
+        end)
+
+        it("SetSpellByID fires OnTooltipSetSpell and GetSpell answers the id", function()
+            local hits = watch("OnTooltipSetSpell")
+            tip():SetSpellByID(27071)
+            expect(hits.n).eq(1)
+            local _, id = tip():GetSpell()
+            expect(id).eq(27071)
+        end)
+
+        it("ClearLines fires OnTooltipCleared", function()
+            -- A consumer resets its per-show state here -- a quality border, reserved
+            -- padding -- so a silent model would let the reset be asserted by hand while
+            -- production never reached it.
+            local hits = watch("OnTooltipCleared")
+            tip():AddLine("something")
+            tip():ClearLines()
+            expect(hits.n).eq(1)
+            expect(tip():NumLines()).eq(0)
+        end)
+
+        it("SetInventoryItem reports whether there was an item", function()
+            local hasItem = tip():SetInventoryItem("player", 5)
+            expect(type(hasItem)).eq("boolean")
+        end)
+
+        it("each setter fires only its OWN script", function()
+            local unitHits = watch("OnTooltipSetUnit")
+            local itemHits = watch("OnTooltipSetItem")
+            tip():SetHyperlink("|Hitem:1|h[x]|h")
+            expect(itemHits.n).eq(1)
+            expect(unitHits.n).as("an item did not fire the unit script").eq(0)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Tooltip padding, double lines, NineSlice
+    ---------------------------------------------------------------------------
+    describe("tooltip padding and structure", function()
+        local function tip() return H.env.GameTooltip end
+
+        it("reads padding back in the client's argument order", function()
+            -- Measured in game: both the two-arg and four-arg forms are accepted, and
+            -- GetPadding answers, which is what makes reserving space verifiable rather
+            -- than guessed.
+            tip():SetPadding(1, 24, 3, 4)
+            local right, bottom, left, top = tip():GetPadding()
+            expect(right).eq(1)
+            expect(bottom).eq(24)
+            expect(left).eq(3)
+            expect(top).eq(4)
+        end)
+
+        it("accepts the two-argument form and zeroes the rest", function()
+            tip():SetPadding(0, 24)
+            local right, bottom, left, top = tip():GetPadding()
+            expect(right).eq(0)
+            expect(bottom).eq(24)
+            expect(left).eq(0)
+            expect(top).eq(0)
+        end)
+
+        it("starts at no padding", function()
+            local right, bottom = tip():GetPadding()
+            expect(right).eq(0)
+            expect(bottom).eq(0)
+        end)
+
+        it("keeps AddDoubleLine's RIGHT-hand colours", function()
+            -- They used to be accepted and discarded, which made every assertion about a
+            -- right-hand value's colour vacuous -- and the right-hand slot is exactly where
+            -- a tone-coloured reading goes.
+            tip():AddDoubleLine("Item Level", "154", 1, 1, 1, 0.2, 0.4, 0.6)
+            local left, right = tip():GetLine(1)
+            expect(left).eq("Item Level")
+            expect(right).eq("154")
+            local lr, lg, lb, rr, rg, rb = tip():GetLineColor(1)
+            expect(lr).eq(1)
+            expect(lg).eq(1)
+            expect(lb).eq(1)
+            expect(rr).as("right r survived").eq(0.2)
+            expect(rg).as("right g survived").eq(0.4)
+            expect(rb).as("right b survived").eq(0.6)
+        end)
+
+        it("carries a NineSlice, so hiding it is a reachable branch", function()
+            -- MEASURED present on this client, against an earlier guess that it was absent.
+            -- A reskin that only calls SetBackdrop leaves this drawing underneath and the
+            -- player sees a double frame, so the hide must not be dead code.
+            expect(tip().NineSlice).truthy()
+            tip().NineSlice:SetAlpha(0)
+            expect(tip().NineSlice:GetAlpha()).eq(0)
+        end)
+
+        it("answers IsForbidden, which Blizzard checks at every entry point", function()
+            expect(tip():IsForbidden()).eq(false)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- GameTooltipStatusBar
+    ---------------------------------------------------------------------------
+    describe("GameTooltipStatusBar", function()
+        it("exists, is a StatusBar, and is parented to the tooltip", function()
+            local sb = H.env.GameTooltipStatusBar
+            expect(sb).truthy()
+            expect(type(sb.SetValue)).eq("function")
+            expect(sb:GetParent()).eq(H.env.GameTooltip)
+        end)
+
+        it("takes a value and a colour the addon supplies", function()
+            -- The client ships this bar with NO text and NO colour; both are the addon's to
+            -- provide, which is the whole reason a spec has to read them back.
+            local sb = H.env.GameTooltipStatusBar
+            sb:SetMinMaxValues(0, 15240)
+            sb:SetValue(7620)
+            sb:SetStatusBarColor(0.25, 0.78, 0.92)
+            expect(sb:GetValue()).eq(7620)
+            local r = select(1, sb:GetStatusBarColor())
+            expect(r).eq(0.25)
+        end)
+
+        it("is rebuilt per setup, so a staged value cannot leak between tests", function()
+            expect(H.env.GameTooltipStatusBar:GetValue()).eq(100)
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Tooltip Font objects
+    ---------------------------------------------------------------------------
+    describe("tooltip Font objects", function()
+        it("ships the three the client inherits tooltip text from", function()
+            expect(H.env.GameTooltipText).truthy()
+            expect(H.env.GameTooltipHeaderText).truthy()
+            expect(H.env.GameTooltipTextSmall).truthy()
+        end)
+
+        it("is settable, which is what makes one call cover unborn lines", function()
+            -- The sanctioned way to restyle tooltip text: assign these three once rather
+            -- than walking GameTooltipTextLeft1..N, because the client creates line objects
+            -- on demand and a walk has to be redone on every show forever.
+            H.env.GameTooltipText:SetFont("Fonts/ARIALN.TTF", 14, "")
+            local path, size = H.env.GameTooltipText:GetFont()
+            expect(path).eq("Fonts/ARIALN.TTF")
+            expect(size).eq(14)
+        end)
+
+        it("RAISES on an unloadable asset, exactly as FontString:SetFont does", function()
+            -- Same trap, same reason: modelling this as a return value once let an error
+            -- unwind out of a PLAYER_LOGIN handler. Anything probing paths must pcall.
+            expect(function()
+                H.env.GameTooltipHeaderText:SetFont("Fonts/NOPE.TTF", 12, "")
+            end).throws("Invalid font asset")
+        end)
+
+        it("keeps the three independent, so the header can carry its own size", function()
+            H.env.GameTooltipText:SetFont("Fonts/ARIALN.TTF", 11, "")
+            H.env.GameTooltipHeaderText:SetFont("Fonts/FRIZQT__.TTF", 17, "")
+            expect(select(2, H.env.GameTooltipText:GetFont())).eq(11)
+            expect(select(2, H.env.GameTooltipHeaderText:GetFont())).eq(17)
+        end)
+
+        it("is visible to the GetFonts harvest like every other font object", function()
+            local seen = {}
+            for _, n in ipairs(H.env.GetFonts()) do seen[n] = true end
+            expect(seen.GameTooltipText).truthy()
+            expect(seen.GameTooltipHeaderText).truthy()
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- Harness-only helpers must not leak into shipped code
+    ---------------------------------------------------------------------------
+    -- This exists because the leak ALREADY HAPPENED and a green suite could not see it.
+    -- `GetLine` is a convenience this harness provides so a spec can read a tooltip's text back.
+    -- The real GameTooltip has no such method -- so Plugins/Tooltips/Content.lua calling it
+    -- raised "attempt to call a nil value" on the first mouseover in game while 4325 assertions
+    -- stayed green, because the harness supplied exactly what production was missing.
+    --
+    -- That is the worst shape of harness bug: the model is not merely thin, it is GENEROUS, and a
+    -- generous model makes production look correct. No assertion about behaviour can catch it,
+    -- because in the harness the behaviour IS correct. So this reads the shipped files.
+    describe("harness-only helpers stay out of shipped code", function()
+        -- Methods that exist ONLY on the simulated client. Add to this list whenever a
+        -- harness-only convenience is introduced.
+        local HARNESS_ONLY = {
+            "GetLine", "GetLineColor", "_lineFontString", "_fire",
+        }
+
+        -- The files the client really loads, read from the .toc rather than globbed: a file that
+        -- is not in the .toc is not shipped, and Tests/ is deliberately absent from it.
+        local function shippedFiles()
+            local out = {}
+            local toc = io.open("SuuUI.toc", "r")
+            if not toc then return out end
+            for line in toc:lines() do
+                local path = line:match("^%s*([%w_/%.%-]+%.lua)%s*$")
+                -- Libs/ is vendored third-party code and exempt by the same rule that exempts it
+                -- from every other convention here.
+                if path and not path:match("^Libs/") then out[#out + 1] = path end
+            end
+            toc:close()
+            return out
+        end
+
+        it("reads a non-empty file list from the .toc", function()
+            -- Without this the whole block passes vacuously by checking nothing -- the exact
+            -- failure mode it exists to prevent.
+            expect(#shippedFiles()).gt(20)
+        end)
+
+        it("no shipped file CALLS a harness-only method", function()
+            local offenders = {}
+            for _, path in ipairs(shippedFiles()) do
+                local f = io.open(path, "r")
+                if f then
+                    local src = f:read("*a")
+                    f:close()
+                    -- Strip line comments first: these names are legitimately DISCUSSED in the
+                    -- comments that explain why they must not be called.
+                    src = src:gsub("%-%-[^\n]*", "")
+                    for _, name in ipairs(HARNESS_ONLY) do
+                        -- A CALL, not a definition: `:name(` or `.name(`. Our own methods of the
+                        -- same name defined with `function M.name(` are not matched.
+                        if src:find("[:%.]" .. name .. "%s*%(") then
+                            offenders[#offenders + 1] = path .. " calls " .. name
+                        end
+                    end
+                end
+            end
+            expect(table.concat(offenders, "; ")).as("harness-only calls in shipped code").eq("")
+        end)
+    end)
 end)
 
 -- The assertion framework itself, not the simulated client. Same reasoning as the block

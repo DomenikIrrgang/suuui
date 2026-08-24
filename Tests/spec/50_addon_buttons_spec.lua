@@ -406,4 +406,166 @@ describe("Plugins.DataBar – the addon-button collector", function()
             H.SuuUI.Settings:Set(PLUGIN_ID, "enabled", true)
         end)
     end)
+
+    -----------------------------------------------------------------------------
+    describe("forwarding a click into the adopted button", function()
+        -- The row's empty space forwards a synthetic click to the button it holds, which hands
+        -- control to the OWNING ADDON's handler. That handler is foreign code, and a great many
+        -- minimap-button handlers touch their own button -- Show it, Hide it, re-anchor it.
+        -- Every one of those is hooked by the collector, read as "the roster changed", and
+        -- answered with a full rebuild: SetParent onto a different row, ClearAllPoints,
+        -- SetPoint, and the strata pins released and re-stated -- all on the very frame whose
+        -- OnClick was still on the stack, once per touch.
+        --
+        -- Measured ordering before the guard existed:
+        --     click:enter | notify | SetRows | notify | SetRows | click:leave
+        -- The player saw it as the game freezing when they clicked some addons in the list and
+        -- not others -- "some" being the ones whose handler happens to touch its own button.
+        --
+        -- Neither pre-existing guard covers this and neither could: `notifying` and `building`
+        -- stop re-entry from SuuUI's own cascade, whereas this call left for foreign code and
+        -- came back through the front door.
+        local function trayField()
+            local bar = H.SuuUI.Plugins:Get(PLUGIN_ID)._bar
+            for _, rec in ipairs(bar and bar._records or {}) do
+                if rec.def and rec.def.id == WIDGET_ID then return rec.field end
+            end
+        end
+
+        -- Records every roster rebuild, by wrapping the shared FlyoutPanel metatable.
+        local function traceRebuilds(log)
+            local probe = H.SuuUI.Components.FlyoutPanel({}, root())
+            local meta = getmetatable(probe)
+            probe:Destroy()
+            if meta._traced then return meta end
+            meta._traced = true
+            local orig = meta.SetRows
+            meta.SetRows = function(self, entries)
+                log[#log + 1] = "rebuild"
+                return orig(self, entries)
+            end
+            return meta
+        end
+
+        -- A button whose handler touches itself twice, which is what makes the rebuild
+        -- re-entrant. One touch would still rebuild, so two proves the coalescing as well.
+        local function chattyButton(name, log)
+            local btn = button(name)
+            btn:SetScript("OnClick", function(self)
+                log[#log + 1] = "enter"
+                self:Show()
+                self:SetPoint("CENTER", ring(), "CENTER", 4, 4)
+                log[#log + 1] = "leave"
+            end)
+            return btn
+        end
+
+        local function clickRowOf(btn)
+            local row = btn:GetParent()
+            local script = row and row.GetScript and row:GetScript("OnMouseUp")
+            expect(script).as("the row forwards clicks on its empty space").notNil()
+            row:_fire("OnMouseUp", "LeftButton")
+        end
+
+        local function openRoster(log)
+            local field = trayField()
+            expect(field).as("the tray field is rendered on the bar").notNil()
+            C().SetChangeCallback(function()
+                H.SuuUI._DataBar.TrayWidget.Refresh()
+            end)
+            H.S:Emit(field, H.S.SIGNALS.MOUSE_ENTER)
+            for i = #log, 1, -1 do log[i] = nil end
+        end
+
+        it("never rebuilds the roster while the addon's handler is still running", function()
+            local log = {}
+            traceRebuilds(log)
+            local btn = chattyButton("ForwardChattyMinimapButton", log)
+            button("ForwardOtherMinimapButton")
+            C().Collect()
+            openRoster(log)
+
+            clickRowOf(btn)
+
+            local inside, within = false, false
+            for _, e in ipairs(log) do
+                if e == "enter" then within = true end
+                if e == "leave" then within = false end
+                if within and e == "rebuild" then inside = true end
+            end
+            expect(inside)
+                .as("reparenting the button whose OnClick is on the stack is the freeze")
+                .eq(false)
+
+            C().SetChangeCallback(nil)
+            C().Restore()
+        end)
+
+        it("coalesces every touch the handler makes into ONE later rebuild", function()
+            -- Not merely deferred: a handler that moves its button three times must still cost
+            -- one settle, or the deferral just moves the storm rather than removing it.
+            local log = {}
+            traceRebuilds(log)
+            local btn = chattyButton("ForwardCoalesceMinimapButton", log)
+            C().Collect()
+            openRoster(log)
+
+            clickRowOf(btn)
+
+            local rebuilds, after = 0, false
+            for _, e in ipairs(log) do
+                if e == "leave" then after = true end
+                if e == "rebuild" then
+                    rebuilds = rebuilds + 1
+                    expect(after).as("the settle happens after the click returns").eq(true)
+                end
+            end
+            expect(rebuilds).as("two touches, one rebuild").eq(1)
+
+            C().SetChangeCallback(nil)
+            C().Restore()
+        end)
+
+        it("still forwards the click itself, exactly once", function()
+            -- The guard must not cost the feature: the whole point of the row's empty space is
+            -- that it acts on the addon.
+            local clicks = 0
+            local btn = button("ForwardOnceMinimapButton")
+            btn:SetScript("OnClick", function() clicks = clicks + 1 end)
+            C().Collect()
+            openRoster({})
+
+            clickRowOf(btn)
+            expect(clicks).as("the addon heard the click").eq(1)
+
+            C().SetChangeCallback(nil)
+            C().Restore()
+        end)
+
+        it("does not latch: a later change still rebuilds", function()
+            -- The guard is cleared on the way out of the forward, including when the addon's
+            -- handler throws -- pcall'd, so a raising handler must not leave the door shut for
+            -- the rest of the session.
+            local log = {}
+            traceRebuilds(log)
+            local btn = button("ForwardThrowMinimapButton")
+            btn:SetScript("OnClick", function() error("addon blew up", 0) end)
+            C().Collect()
+            openRoster(log)
+
+            clickRowOf(btn)
+            for i = #log, 1, -1 do log[i] = nil end
+
+            btn:SetPoint("TOPLEFT", root(), "TOPLEFT", 3, 3)
+            local rebuilds = 0
+            for _, e in ipairs(log) do
+                if e == "rebuild" then rebuilds = rebuilds + 1 end
+            end
+            expect(rebuilds > 0)
+                .as("a move after the click is still answered").eq(true)
+
+            C().SetChangeCallback(nil)
+            C().Restore()
+        end)
+    end)
 end)

@@ -85,19 +85,18 @@ local LEVEL_UNKNOWN_TEXT = "??"
 -- formats, and the setting stores which one a slot uses rather than a format string: a
 -- stored pattern would be a value nothing validates and the dropdown could not describe.
 ---------------------------------------------------------------------------
-local TEXT_SLOTS = { "left", "center", "right" }
-
-local BAR_TEXT = {
-    current_max = function(cur, mx) return format("%d / %d", cur, mx) end,
-    current     = function(cur) return format("%d", cur) end,
-    -- Floored, never rounded: a unit one hit from dead must not read 100%, and the moment
-    -- a bar stops saying full is the whole reason to show a percentage.
-    percent     = function(cur, mx)
-        return format("%d%%", mx > 0 and floor(cur / mx * 100) or 0)
-    end,
-    -- "none" is deliberately absent: an unresolved mode leaves no formatter, which is what
-    -- clears the slot. A no-op function here would need its own branch at every call site.
-}
+-- The slots and the formats now live in Core/Readout.lua, shared with every other bar that
+-- carries a readout. They were file-local here, and the comment that used to sit on them named
+-- exactly why they could not stay: "a second copy is the thing that drifts, and the two bars
+-- would end up offering different formats after the first change to either." A second CONSUMER
+-- is the same hazard -- the tooltip health bar nearly shipped abbreviating to "7.6k / 15.2k"
+-- while this bar printed the exact figures beside it.
+--
+-- Aliased into locals because these are read on every readout write, and the "none" mode is
+-- still deliberately absent from FORMATS: an unresolved mode leaves no formatter, and that nil
+-- is what clears a slot.
+local TEXT_SLOTS = SuuUI.Readout.SLOTS
+local BAR_TEXT   = SuuUI.Readout.FORMATS
 
 -- The bars that carry readouts, and where each reads its numbers from. The `id` is also
 -- the settings key infix, so it matches the height keys already on the page
@@ -118,14 +117,10 @@ for _, def in ipairs(READOUT_BARS) do READOUT_BARS_BY_ID[def.id] = def end
 
 -- Fresh each call rather than one shared constant: the table is handed to a schema entry
 -- and on to a Dropdown control — eight of them per unit — and a shared options list is one
--- aliased table away from those controls editing each other's state.
+-- aliased table away from those controls editing each other's state. Readout.Options builds a
+-- new one per call for exactly that reason, so the property survives the move.
 local function textOptions()
-    return {
-        { value = "none",        label = "None" },
-        { value = "current_max", label = "Current / Max" },
-        { value = "current",     label = "Current" },
-        { value = "percent",     label = "Percent" },
-    }
+    return SuuUI.Readout.Options()
 end
 
 --- The settings key holding one slot's readout mode.

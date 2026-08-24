@@ -70,10 +70,36 @@ local function canForward(frame)
     return not isSecure(frame)
 end
 
+-- Set while a FORWARDED click is running, with any rebuild it asks for held over until it
+-- returns.
+--
+-- This is the freeze. `forward` hands control to the clicked addon's own handler, and a great
+-- many minimap-button handlers touch their own button -- Show it, Hide it, re-anchor it. Every
+-- one of those is hooked by the collector, which reads it as "the roster changed" and answers
+-- with a full rebuild: SetParent onto a different row, ClearAllPoints, SetPoint, and its strata
+-- pins released and re-stated. All of that ran on the very frame whose OnClick was still on the
+-- stack, from inside that handler, once per touch. Measured ordering before this guard existed:
+--     click:enter | notify | SetRows | notify | SetRows | click:leave
+--
+-- Neither existing guard covers it, and neither could: `notifying` and `building` both stop
+-- re-entry from OUR OWN cascade, whereas this call went out to foreign code and came back
+-- through the front door. Hence a third flag on the one path that leaves the addon.
+local clicking = false
+local pendingRebuild = false
+
 local function forward(entry, button)
     local frame = entry and entry.frame
     if not frame then return end
+    clicking = true
+    pendingRebuild = false
     pcall(frame.Click, frame, button)
+    clicking = false
+    -- Coalesced: however many times the handler touched its button, the roster settles once,
+    -- after the click has finished rather than underneath it.
+    if pendingRebuild then
+        pendingRebuild = false
+        M.Refresh()
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -153,6 +179,12 @@ end
 local building = false
 
 local function openPanel(field)
+    -- A forwarded click is foreign code holding a reference to a button we are about to
+    -- reparent. Note it and settle once the click returns; see `clicking` above.
+    if clicking then
+        pendingRebuild = true
+        return
+    end
     if building then return end
     building = true
     local ok, err = pcall(openPanelInner, field)

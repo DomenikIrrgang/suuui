@@ -574,6 +574,146 @@ describe("Core.Game", function()
     -- no answer. nil is the interesting one — a debuff with no dispel type has no dispel
     -- identity, and inventing a colour for it would give the player a cue meaning nothing.
     ---------------------------------------------------------------------------
+    ---------------------------------------------------------------------------
+    -- Item quality colours
+    ---------------------------------------------------------------------------
+    describe("item quality colours", function()
+        it("answers for every quality the client names", function()
+            for q = 0, 7 do
+                local c = Game():ItemQualityColor(q)
+                expect(type(c)).as("quality " .. q).eq("table")
+                expect(#c).as("quality " .. q).eq(4)
+                expect(c[4]).as("quality " .. q .. " alpha").eq(1)
+            end
+        end)
+
+        it("answers for Poor and Common too, rather than folding in a threshold", function()
+            -- Load-bearing, and it corrects an earlier draft of the tooltip spec. The
+            -- "only colour uncommon and above" rule is a LOOK decision owned by whichever
+            -- surface draws -- a tooltip border wants it, an item NAME in a bag grid does
+            -- not, because white is exactly what a common item's name should be. Folding it
+            -- in here would deny that second caller a colour that genuinely exists.
+            expect(Game():ItemQualityColor(0)).as("Poor").deepEq({ 0.62, 0.62, 0.62, 1 })
+            expect(Game():ItemQualityColor(1)).as("Common").deepEq({ 1.00, 1.00, 1.00, 1 })
+        end)
+
+        it("returns nil for a quality this client does not name", function()
+            expect(Game():ItemQualityColor(99)).isNil()
+            expect(Game():ItemQualityColor(-1)).isNil()
+        end)
+
+        it("returns nil for non-number arguments and for NaN", function()
+            expect(Game():ItemQualityColor("4")).isNil()
+            expect(Game():ItemQualityColor(nil)).isNil()
+            expect(Game():ItemQualityColor(true)).isNil()
+            expect(Game():ItemQualityColor({})).isNil()
+            -- NaN is a number and every comparison against it is false, so a range check
+            -- alone lets it through and it would be cached under a key nothing can hit.
+            expect(Game():ItemQualityColor(0 / 0)).as("NaN").isNil()
+        end)
+
+        it("reads r/g/b and never the .hex escape", function()
+            -- The trap this exists for: .hex is a |cff… string, so a caller grabbing it
+            -- gets something that silently swallows whatever it is concatenated into --
+            -- which is exactly what happened to the in-game Phase 0 probe.
+            local c = Game():ItemQualityColor(4)
+            expect(c[1]).eq(H.env.ITEM_QUALITY_COLORS[4].r)
+            expect(c[2]).eq(H.env.ITEM_QUALITY_COLORS[4].g)
+            expect(c[3]).eq(H.env.ITEM_QUALITY_COLORS[4].b)
+            for i = 1, 4 do
+                expect(type(c[i])).as("component " .. i .. " is a number").eq("number")
+            end
+        end)
+
+        it("prefers the live global and picks up a runtime retint (cache validation)", function()
+            local c1 = Game():ItemQualityColor(4)
+            expect(c1[1]).eq(H.env.ITEM_QUALITY_COLORS[4].r)
+
+            H.env.ITEM_QUALITY_COLORS[4] = { r = 0.11, g = 0.22, b = 0.33 }
+            local c2 = Game():ItemQualityColor(4)
+            expect(c2[1]).eq(0.11)
+            expect(c2[2]).eq(0.22)
+            expect(c2[3]).eq(0.33)
+            expect(c2[4]).eq(1)
+        end)
+
+        it("revalidates per quality, so retinting one leaves the others alone", function()
+            local epicBefore = Game():ItemQualityColor(4)
+            H.env.ITEM_QUALITY_COLORS[5] = { r = 0.05, g = 0.05, b = 0.05 }
+            expect(Game():ItemQualityColor(5)[1]).eq(0.05)
+            expect(Game():ItemQualityColor(4)).deepEq(epicBefore)
+        end)
+
+        it("hands out the same table every call, so nothing allocates per paint", function()
+            expect(Game():ItemQualityColor(3)).eq(Game():ItemQualityColor(3))
+        end)
+
+        it("falls back to the internal copy when the global is absent", function()
+            H.env.ITEM_QUALITY_COLORS = nil
+            -- Pin the values, not merely "a colour": a table coming back would pass even if
+            -- the internal copy had drifted to the wrong hue, which is the only thing this
+            -- branch exists to provide.
+            expect(Game():ItemQualityColor(2)).as("Uncommon").deepEq({ 0.12, 1.00, 0.00, 1 })
+            expect(Game():ItemQualityColor(3)).as("Rare").deepEq({ 0.00, 0.44, 0.87, 1 })
+            expect(Game():ItemQualityColor(4)).as("Epic").deepEq({ 0.64, 0.21, 0.93, 1 })
+            expect(Game():ItemQualityColor(5)).as("Legendary").deepEq({ 1.00, 0.50, 0.00, 1 })
+            expect(Game():ItemQualityColor(99)).as("still no answer").isNil()
+        end)
+
+        it("falls back when the global is present but the row is unusable", function()
+            H.env.ITEM_QUALITY_COLORS = {
+                [3] = "blue",                            -- not a table
+                [4] = { r = "purple", g = 0, b = 1 },    -- r is not a number
+                [5] = {},                                -- no channels at all
+            }
+            expect(Game():ItemQualityColor(3)).deepEq({ 0.00, 0.44, 0.87, 1 })
+            expect(Game():ItemQualityColor(4)).deepEq({ 0.64, 0.21, 0.93, 1 })
+            expect(Game():ItemQualityColor(5)).deepEq({ 1.00, 0.50, 0.00, 1 })
+            expect(Game():ItemQualityColor(2))
+                .as("a row the shortened global omits entirely")
+                .deepEq({ 0.12, 1.00, 0.00, 1 })
+        end)
+
+        it("survives the global being replaced by something that is not a table", function()
+            H.env.ITEM_QUALITY_COLORS = "not a table"
+            expect(Game():ItemQualityColor(4)).deepEq({ 0.64, 0.21, 0.93, 1 })
+        end)
+
+        it("survives a global whose metatable answers for any key, NaN included", function()
+            -- This is the guard's ONLY reachable justification, and it was found by
+            -- mutation testing: through the shipped tables a bad key simply misses both
+            -- lookups and returns nil, so deleting the type check changes nothing and the
+            -- mutation survives. It stops being dead the moment an addon wraps the global
+            -- with an __index that answers for everything -- which addons do, and which is
+            -- the same reason this module prefers live globals in the first place.
+            --
+            -- Then a NaN key reaches `qualityCache[quality] = hit`, and assigning under a
+            -- NaN key RAISES in Lua ("table index is NaN") from inside a paint path.
+            H.env.ITEM_QUALITY_COLORS = setmetatable({}, {
+                __index = function() return { r = 0.5, g = 0.5, b = 0.5 } end,
+            })
+            expect(Game():ItemQualityColor(0 / 0)).as("NaN still refused").isNil()
+            expect(Game():ItemQualityColor("4")).as("a string key still refused").isNil()
+            expect(Game():ItemQualityColor(4))
+                .as("a real quality still answers through the metatable")
+                .deepEq({ 0.5, 0.5, 0.5, 1 })
+        end)
+
+        it("keeps every coloured quality distinct from the neutral icon border", function()
+            -- Uncommon and above must be distinguishable from colorBorderIcon, or a quality
+            -- border reads as no border at all. Cheap invariant, but it is the one that
+            -- makes the whole signal-border treatment worth having.
+            local neutral = H.SuuUI.Theme:GetToken("colorBorderIcon")
+            for q = 2, 5 do
+                local c = Game():ItemQualityColor(q)
+                local same = math.abs(c[1] - neutral[1]) < 0.02
+                    and math.abs(c[2] - neutral[2]) < 0.02
+                    and math.abs(c[3] - neutral[3]) < 0.02
+                expect(same).as("quality " .. q .. " differs from colorBorderIcon").falsy()
+            end
+        end)
+    end)
+
     describe("untyped debuff colour", function()
         it("reads the client's own none row", function()
             expect(H.SuuUI.Game:UntypedDebuffColor())

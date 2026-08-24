@@ -237,6 +237,14 @@ local UNIT_FIELDS = {
     class = true, classless = true, isPlayer = true,
     health = true, healthMax = true,
     power = true, powerMax = true, powerType = true,
+    -- What UnitGroupRolesAssigned answers. The client's own strings are "TANK" / "HEALER" /
+    -- "DAMAGER" / "NONE" -- measured in game, and NOT "DPS", which is what a consumer that
+    -- guessed would print verbatim. Unstaged units read "NONE".
+    role = true,
+    -- What GetGuildInfo answers: name, rank name, rank index. Three fields rather than one,
+    -- because a guild with no rank staged is a real state -- the client returns the name and
+    -- leaves the rank nil for a unit it has not fully resolved.
+    guild = true, guildRank = true, guildRankIndex = true,
 }
 
 --- Stages a unit: makes UnitExists true for it and sets whatever fields are given.
@@ -1193,6 +1201,57 @@ end
 --- Returns the GameTooltip state: { owner, anchor, aura = { unit, index, filter } }, or nil.
 function M.getTooltipState()
     return state.tooltip
+end
+
+--- Stages what GetItemInfo answers for one link.
+--
+-- Field names are VALIDATED rather than merged blindly, for the reason every other staging
+-- helper here validates: a typo would silently stage nothing and the test would pass while
+-- asserting against an unstaged item.
+--
+-- `quality` is the field that matters most -- it drives the tooltip's signal border, and the
+-- threshold that border applies (uncommon and above) can only be tested by staging both sides
+-- of it.
+-- @param link string|number  The item link or id a consumer will look up
+-- @param props table  { name, quality, itemLevel, reqLevel, class, subclass, maxStack,
+--                       equipSlot, texture, sellPrice }
+function M.setItemInfo(link, props)
+    assert(state.env, "H.setup() must run before H.setItemInfo")
+    assert(type(link) == "string" or type(link) == "number", "link must be a string or number")
+    props = props or {}
+    local allowed = {
+        name = true, quality = true, itemLevel = true, reqLevel = true, class = true,
+        subclass = true, maxStack = true, equipSlot = true, texture = true, sellPrice = true,
+        -- What GetItemCount answers. Two numbers rather than one, because the client's
+        -- includeBank argument returns the TOTAL and a consumer wanting the bank's own figure
+        -- has to subtract -- so a spec has to be able to stage a case where those differ.
+        countBags = true, countBank = true,
+    }
+    for k in pairs(props) do
+        assert(allowed[k], "unknown item field: " .. tostring(k))
+    end
+    state.items = state.items or {}
+    state.items[link] = {
+        name      = props.name      or "Item " .. tostring(link),
+        link      = type(link) == "string" and link or ("|Hitem:" .. tostring(link) .. "|h"),
+        quality   = props.quality   or 1,
+        itemLevel = props.itemLevel or 1,
+        reqLevel  = props.reqLevel  or 1,
+        class     = props.class     or "Miscellaneous",
+        subclass  = props.subclass  or "Junk",
+        maxStack  = props.maxStack  or 1,
+        equipSlot = props.equipSlot or "",
+        texture   = props.texture   or "Interface\\Icons\\INV_Misc_QuestionMark",
+        sellPrice = props.sellPrice or 0,
+        countBags = props.countBags or 0,
+        countBank = props.countBank or 0,
+    }
+    return state.items[link]
+end
+
+--- Forgets every staged item, so GetItemInfo answers nothing -- the client's uncached state.
+function M.clearItems()
+    state.items = {}
 end
 
 --- Clears the tooltip state record.

@@ -386,6 +386,134 @@ local DEBUFF_TYPES = {
 -- questions are different: "what dispel type is this" must answer nil for an aura that has
 -- none, so a caller can fall back to whatever its own surface calls for. Only a debuff
 -- display wants red; a buff with no type must not go red, and neither must a cast bar.
+---------------------------------------------------------------------------
+-- Item quality
+---------------------------------------------------------------------------
+
+-- What an item's quality is worth showing as. A fact about the client, not a design
+-- choice: "epics are purple" is as fixed as "frost is cyan", and a theme that could
+-- retint it would make a quality border lie about the game.
+--
+-- Preference order matches ClassColor / ReactionColor / DebuffTypeColor:
+--   1. ITEM_QUALITY_COLORS global (the client ships it; an addon may retint it)
+--   2. The internal copy below, for the login moment before the global exists
+--
+-- NOTE the client's rows also carry a `.hex` field, which is a |cff… COLOUR ESCAPE and
+-- not a colour. Reading it by mistake yields a string that silently swallows the rest of
+-- whatever it is concatenated into -- which is exactly what happened to the Phase 0 probe
+-- that tried to print one. Only r/g/b are read here.
+local ITEM_QUALITY = {
+    [0] = {0.62, 0.62, 0.62, 1},   -- Poor
+    [1] = {1.00, 1.00, 1.00, 1},   -- Common
+    [2] = {0.12, 1.00, 0.00, 1},   -- Uncommon
+    [3] = {0.00, 0.44, 0.87, 1},   -- Rare
+    [4] = {0.64, 0.21, 0.93, 1},   -- Epic
+    [5] = {1.00, 0.50, 0.00, 1},   -- Legendary
+    [6] = {0.90, 0.80, 0.50, 1},   -- Artifact
+    [7] = {0.00, 0.80, 1.00, 1},   -- Heirloom
+}
+
+local qualityCache = {}
+
+--- The colour for an item quality, or nil for a quality this client does not name.
+--
+-- Answers for EVERY known quality including Poor and Common. It deliberately does NOT
+-- fold in "only colour uncommon and above" -- that rule belongs to whichever surface is
+-- drawing, because it is a look decision rather than a fact. A tooltip border wants it
+-- (a white 1px edge reads as a selected state, and it would fire on the majority of
+-- tooltips a player sees); an item NAME in a bag grid does not, since white is exactly
+-- what a common item's name should be. Putting the threshold here would deny the second
+-- caller a colour that genuinely exists.
+--
+-- nil is a real answer, as with SchoolColor and ClassColor: an unknown quality has no
+-- identity to paint and the caller's own default is the right response.
+-- @param quality number  The client's quality index, 0..7
+-- @return table|nil  {r,g,b,a}
+function M:ItemQualityColor(quality)
+    if type(quality) ~= "number" or quality ~= quality then return nil end
+    local src = type(ITEM_QUALITY_COLORS) == "table" and ITEM_QUALITY_COLORS[quality] or nil
+    if type(src) == "table" and type(src.r) == "number" then
+        local hit = qualityCache[quality]
+        if hit and hit[1] == src.r and hit[2] == src.g and hit[3] == src.b then return hit end
+        hit = { src.r, src.g, src.b, 1 }
+        qualityCache[quality] = hit
+        return hit
+    end
+    return ITEM_QUALITY[quality]
+end
+
+---------------------------------------------------------------------------
+-- Creature difficulty
+---------------------------------------------------------------------------
+
+-- How dangerous a level is RELATIVE TO THE PLAYER: grey, green, yellow, orange, red. A fact
+-- about the client for the same reason class and school colours are -- the player already reads
+-- these five in their quest log and on every mob they hover, so they are copied rather than
+-- chosen. A theme that could retint "red" would make the tooltip lie about the danger.
+--
+-- Unlike the other tables here this one is a FUNCTION of two levels, not a lookup, so the
+-- client's own GetCreatureDifficultyColor is preferred and the formula below is the fallback.
+local DIFFICULTY = {
+    trivial = {0.50, 0.50, 0.50, 1},   -- grey:   no experience left in it
+    easy    = {0.25, 0.75, 0.25, 1},   -- green
+    fair    = {1.00, 1.00, 0.00, 1},   -- yellow: within two levels either way
+    hard    = {1.00, 0.50, 0.25, 1},   -- orange
+    deadly  = {1.00, 0.10, 0.10, 1},   -- red
+}
+
+M.DIFFICULTY = DIFFICULTY
+
+--- The colour for a creature's level, from the player's point of view.
+--
+-- Prefers the client's own GetCreatureDifficultyColor so SuuUI agrees with the rest of the UI,
+-- including the quest log. The fallback reproduces the classic bands: red more than 4 above,
+-- orange more than 2 above, yellow within 2, then green down to the grey threshold.
+--
+-- The GREY threshold is not a fixed offset -- it widens as the player levels, which is what
+-- GetQuestGreenRange reports. Hardcoding a single number makes low-level mobs read as green for
+-- a level 70 player long after they have stopped giving experience.
+--
+-- A level of -1 or 0 is the client's "cannot tell" (a boss, or a unit too far above you). It
+-- takes `deadly` rather than nil, because "unknown" here genuinely means "dangerous" -- which is
+-- also what the client's own ?? does.
+-- @param level number  The creature's level
+-- @param playerLevel number|nil  Defaults to the player's own
+-- @return table  {r,g,b,a}; never nil
+function M:DifficultyColor(level, playerLevel)
+    if type(level) ~= "number" then return DIFFICULTY.fair end
+    if level <= 0 then return DIFFICULTY.deadly end
+
+    -- The client's own answer, but ONLY when no explicit player level was asked about: its
+    -- function can only ever answer about the ACTUAL player, so consulting it for a hypothetical
+    -- would ignore the argument and return the wrong band. A spec caught exactly that -- the
+    -- parameter was silently dead in game, where the client function always exists.
+    if playerLevel == nil and type(GetCreatureDifficultyColor) == "function" then
+        local ok, c = pcall(GetCreatureDifficultyColor, level)
+        if ok and type(c) == "table" and type(c.r) == "number" then
+            return { c.r, c.g, c.b, 1 }
+        end
+    end
+
+    local mine = playerLevel
+    if type(mine) ~= "number" and type(UnitLevel) == "function" then
+        mine = UnitLevel("player")
+    end
+    if type(mine) ~= "number" or mine <= 0 then return DIFFICULTY.fair end
+
+    local diff = level - mine
+    if diff > 4 then return DIFFICULTY.deadly end
+    if diff > 2 then return DIFFICULTY.hard end
+    if diff >= -2 then return DIFFICULTY.fair end
+
+    local green = 5
+    if type(GetQuestGreenRange) == "function" then
+        local ok, g = pcall(GetQuestGreenRange)
+        if ok and type(g) == "number" then green = g end
+    end
+    if level > mine - green then return DIFFICULTY.easy end
+    return DIFFICULTY.trivial
+end
+
 local DEBUFF_NONE = {0.80, 0.00, 0.00, 1}
 local noneCache
 

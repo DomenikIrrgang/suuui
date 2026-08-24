@@ -702,6 +702,69 @@ function CooldownMeta:SetSwipeColor(r, g, b, a)
 end
 
 ----------------------------------------------------------------------------------
+-- StatusBar
+----------------------------------------------------------------------------------
+
+-- A real type rather than the bare Frame this used to be. SuuUI's own StatusBar component
+-- does not use the client's -- it drives fractional stack children through the layout
+-- engine on purpose -- so nothing here needed it until a BLIZZARD status bar had to be
+-- driven: GameTooltipStatusBar is the client's, and a tooltip health bar is read through
+-- SetValue / GetValue / SetStatusBarColor and through nothing else.
+--
+-- The value is CLAMPED to the range, which is what the client does and what makes the
+-- difference between "the bar is full" and "the bar was handed a number larger than max".
+-- A consumer that computes a fraction from GetValue would otherwise read past 1.
+local StatusBarMeta = derive(FrameMeta)
+M.StatusBarMeta = StatusBarMeta
+
+function StatusBarMeta:SetMinMaxValues(min, max)
+    self._barMin = min
+    self._barMax = max
+    -- Re-clamp: the client does not leave a value stranded outside a newly narrowed range.
+    if self._barValue ~= nil then self:SetValue(self._barValue) end
+end
+
+function StatusBarMeta:GetMinMaxValues()
+    return self._barMin or 0, self._barMax or 100
+end
+
+function StatusBarMeta:SetValue(v)
+    if type(v) ~= "number" or v ~= v then return end
+    local min, max = self:GetMinMaxValues()
+    if v < min then v = min end
+    if v > max then v = max end
+    local old = self._barValue
+    self._barValue = v
+    if old ~= v then self:_fire("OnValueChanged", v) end
+end
+
+function StatusBarMeta:GetValue() return self._barValue or 0 end
+
+function StatusBarMeta:SetStatusBarTexture(tex)
+    self._barTexture = tex
+end
+
+function StatusBarMeta:GetStatusBarTexture()
+    return self._barTexture
+end
+
+function StatusBarMeta:SetStatusBarColor(r, g, b, a)
+    self._barColor = { r, g, b, a == nil and 1 or a }
+end
+
+function StatusBarMeta:GetStatusBarColor()
+    local c = self._barColor
+    if not c then return 1, 1, 1, 1 end
+    return c[1], c[2], c[3], c[4]
+end
+
+function StatusBarMeta:SetOrientation(o) self._barOrientation = o end
+function StatusBarMeta:GetOrientation() return self._barOrientation or "HORIZONTAL" end
+
+function StatusBarMeta:SetReverseFill(on) self._barReverse = not not on end
+function StatusBarMeta:GetReverseFill() return self._barReverse == true end
+
+----------------------------------------------------------------------------------
 -- GameTooltip
 ----------------------------------------------------------------------------------
 
@@ -754,26 +817,87 @@ function GameTooltipMeta:SetAction(slot)
     state.tooltip = state.tooltip or {}
     state.tooltip.action = slot
     self._tooltipShown = true
+
+    -- It DOES fire OnTooltipSetSpell, and GetSpell answers for the slot. MEASURED in game: an
+    -- action-button tooltip showed the spell id TWICE, once from a consumer's SetAction hook and
+    -- once from its OnTooltipSetSpell hook.
+    --
+    -- This model previously claimed the opposite, with a comment defending it -- and that wrong
+    -- claim is what hid the duplicate, since in the harness only one path could ever fire. Same
+    -- failure as a harness that is too generous, in reverse: a model that is too STINGY makes a
+    -- redundant code path look necessary.
+    local infoFn = state.env and state.env.GetActionInfo
+    if type(infoFn) == "function" then
+        local kind, id = infoFn(slot)
+        if kind == "spell" and type(id) == "number" then
+            self._ttSpell = id
+            self:_fire("OnTooltipSetSpell")
+        elseif kind == "item" and type(id) == "number" then
+            self._ttItem = tostring(id)
+            self:_fire("OnTooltipSetItem")
+        end
+    end
 end
 
 function GameTooltipMeta:ClearLines()
     self._lines = {}
     state.tooltip = state.tooltip or {}
     state.tooltip.aura = nil
+    -- The client fires this, and a consumer resetting per-show state (a quality-coloured
+    -- border, reserved padding) hangs its whole reset off it. A model that stayed silent
+    -- would let a spec assert the reset by calling the handler by hand -- which passes
+    -- while nothing in production ever reaches it.
+    self:_fire("OnTooltipCleared")
+end
+
+-- Publishes the per-line font strings the way the CLIENT does, in both shapes it ships:
+--
+--   tt.TextLeft<i>  -- an INSTANCE field, present on every tooltip. This is the one production
+--                      code should read, because it is correct for any instance.
+--   GameTooltipTextLeft<i>  -- a GLOBAL, and only for the shared tooltip.
+--
+-- Both are modelled because a consumer reading the wrong one is a real bug: the globals are nil
+-- for a ShoppingTooltip, so code that works on GameTooltip silently does nothing there.
+--
+-- Stale entries survive a ClearLines, exactly as the client's own pooled font strings do. A
+-- consumer iterating 1..NumLines() never reaches them; one indexing blindly past the line count
+-- gets the same wrong answer it would get in game.
+local function publishLineGlobals(tt)
+    local n = #(tt._lines or {})
+    for i = 1, n do
+        tt["TextLeft" .. i]  = tt:_lineFontString(i, "left")
+        tt["TextRight" .. i] = tt:_lineFontString(i, "right")
+    end
+    local env = state.env
+    if not env or env.GameTooltip ~= tt then return end
+    for i = 1, n do
+        env["GameTooltipTextLeft" .. i]  = tt["TextLeft" .. i]
+        env["GameTooltipTextRight" .. i] = tt["TextRight" .. i]
+    end
 end
 
 function GameTooltipMeta:AddLine(text, r, g, b, wrap)
     self._lines = self._lines or {}
     self._lines[#self._lines + 1] = { text = text, r = r, g = g, b = b, wrap = wrap }
+    publishLineGlobals(self)
 end
 
+-- The right-hand colours are RECORDED. They used to be accepted and thrown away, which made
+-- every assertion about a right-hand value's colour vacuous -- and a right-hand value is
+-- exactly where a tooltip puts a tone-coloured reading (an item level, a count, a latency).
 function GameTooltipMeta:AddDoubleLine(left, right, lr, lg, lb, rr, rg, rb)
     self._lines = self._lines or {}
-    self._lines[#self._lines + 1] = { text = left, right = right, r = lr, g = lg, b = lb }
+    self._lines[#self._lines + 1] = {
+        text = left, right = right,
+        r = lr, g = lg, b = lb,
+        rr = rr, rg = rg, rb = rb,
+    }
+    publishLineGlobals(self)
 end
 
 function GameTooltipMeta:SetText(text, r, g, b)
     self._lines = { { text = text, r = r, g = g, b = b } }
+    publishLineGlobals(self)
 end
 
 function GameTooltipMeta:NumLines() return #(self._lines or {}) end
@@ -784,6 +908,172 @@ function GameTooltipMeta:GetLine(i)
     local line = (self._lines or {})[i]
     return line and line.text, line and line.right
 end
+
+--- The colours of one line: left r,g,b then right r,g,b. Harness-only, and separate from
+--- GetLine so the existing two-value contract is untouched.
+function GameTooltipMeta:GetLineColor(i)
+    local l = (self._lines or {})[i]
+    if not l then return nil end
+    return l.r, l.g, l.b, l.rr, l.rg, l.rb
+end
+
+--- The per-line font string, as the client's GameTooltipTextLeft<i> global.
+--
+-- TESTING.md used to say NOT to model these, on the grounds that reading a global font string
+-- per line models nothing useful. That was true while nothing needed to WRITE one -- and it
+-- stopped being true the moment a reskin had to RECOLOUR a line the client itself wrote (the
+-- level line, by creature difficulty). There is no other route to that: the text belongs to
+-- Blizzard, so the only handle on it is its font string.
+--
+-- So these are real, and deliberately BACKED BY THE SAME LINE RECORD GetLine reads. A
+-- SetTextColor here is visible through GetLineColor, which means a spec asserts the colour
+-- through one channel however it was set -- rather than the two drifting apart, which is the
+-- failure the original rule was guarding against.
+function GameTooltipMeta:_lineFontString(i, side)
+    self._lines = self._lines or {}
+    local rec = self._lines[i]
+    if not rec then return nil end
+    local key = side == "right" and "_fsRight" or "_fsLeft"
+    if rec[key] then return rec[key] end
+
+    local fs = {
+        _kind = "FontString",
+        GetText = function() return side == "right" and rec.right or rec.text end,
+        SetText = function(_, t)
+            if side == "right" then rec.right = t else rec.text = t end
+        end,
+        SetTextColor = function(_, r, g, b)
+            if side == "right" then
+                rec.rr, rec.rg, rec.rb = r, g, b
+            else
+                rec.r, rec.g, rec.b = r, g, b
+            end
+        end,
+        GetTextColor = function()
+            if side == "right" then return rec.rr, rec.rg, rec.rb end
+            return rec.r, rec.g, rec.b
+        end,
+        Show = function() rec.hidden = nil end,
+        Hide = function() rec.hidden = true end,
+        IsShown = function() return not rec.hidden end,
+        SetFont = function() return true end,
+    }
+    rec[key] = fs
+    return fs
+end
+
+----------------------------------------------------------------------------------
+-- Tooltip content setters
+--
+-- Each one records what it was pointed at AND FIRES the client's matching script. The
+-- firing is the point: those four scripts were stored by SetScript and never fired by any
+-- harness path, so a spec could only reach a handler by invoking it by hand -- which passes
+-- while nothing in production ever calls it. That exact mistake shipped a dead micro-menu
+-- button, so the setters drive the scripts here instead.
+--
+-- Content is recorded, never formatted. Reproducing the client's own line layout would mean
+-- asserting against the harness's version of it rather than against the client's.
+----------------------------------------------------------------------------------
+
+function GameTooltipMeta:SetUnit(unit)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.unit = unit
+    self._ttUnit = unit
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetUnit")
+end
+
+function GameTooltipMeta:GetUnit()
+    -- The client answers a NAME and a unit id, in that order.
+    local unit = self._ttUnit
+    if not unit then return nil, nil end
+    local nameFn = state.env and state.env.UnitName
+    return (type(nameFn) == "function" and nameFn(unit)) or unit, unit
+end
+
+function GameTooltipMeta:SetHyperlink(link)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.item = link
+    self._ttItem = link
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetItem")
+end
+
+function GameTooltipMeta:SetBagItem(bag, slot)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.bagItem = { bag = bag, slot = slot }
+    self._ttItem = state.tooltip.item
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetItem")
+end
+
+--- Returns hasItem, hasCooldown, repairCost, matching the client's own return order.
+function GameTooltipMeta:SetInventoryItem(unit, slot)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.inventoryItem = { unit = unit, slot = slot }
+    local linkFn = state.env and state.env.GetInventoryItemLink
+    local link = type(linkFn) == "function" and linkFn(unit, slot) or nil
+    self._ttItem = link
+    state.tooltip.item = link
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetItem")
+    return link ~= nil, false, 0
+end
+
+--- The item this tooltip is showing: name, link. Both nil when it is not showing one.
+function GameTooltipMeta:GetItem()
+    local link = self._ttItem
+    if not link then return nil, nil end
+    local infoFn = state.env and state.env.GetItemInfo
+    local name = type(infoFn) == "function" and infoFn(link) or nil
+    return name or link, link
+end
+
+function GameTooltipMeta:SetSpellByID(spellId)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.spell = spellId
+    self._ttSpell = spellId
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetSpell")
+end
+
+function GameTooltipMeta:SetSpellBookItem(index, book)
+    state.tooltip = state.tooltip or {}
+    state.tooltip.spellBookItem = { index = index, book = book }
+    self._tooltipShown = true
+    self:_fire("OnTooltipSetSpell")
+end
+
+--- The spell this tooltip is showing: name, spellID. Removed in retail, present here.
+function GameTooltipMeta:GetSpell()
+    local id = self._ttSpell
+    if not id then return nil, nil end
+    return "Spell " .. tostring(id), id
+end
+
+----------------------------------------------------------------------------------
+-- Padding
+--
+-- Verified present on this client in both the two-arg and four-arg forms, along with
+-- GetPadding, so a caller reserving space at the bottom of a tooltip can read back what it
+-- reserved. Modelled as pure state: the harness does not lay tooltips out, so padding
+-- changes no geometry here and a spec must assert the VALUE rather than a height.
+----------------------------------------------------------------------------------
+
+function GameTooltipMeta:SetPadding(right, bottom, left, top)
+    self._padRight  = right  or 0
+    self._padBottom = bottom or 0
+    self._padLeft   = left   or 0
+    self._padTop    = top    or 0
+end
+
+function GameTooltipMeta:GetPadding()
+    return self._padRight or 0, self._padBottom or 0, self._padLeft or 0, self._padTop or 0
+end
+
+--- Blizzard's own guard, checked at the top of nearly every tooltip entry point. Always
+--- false here: a forbidden frame is a retail protected-frame concept with no model.
+function GameTooltipMeta:IsForbidden() return false end
 
 function GameTooltipMeta:Show()
     self._tooltipShown = true
@@ -803,7 +1093,7 @@ M.metaFor = {
     ScrollFrame = ScrollFrameMeta,
     Button      = ButtonMeta,
     CheckButton = ButtonMeta,
-    StatusBar   = FrameMeta,
+    StatusBar   = StatusBarMeta,
     Slider      = FrameMeta,
     Cooldown    = CooldownMeta,
     GameTooltip = GameTooltipMeta,

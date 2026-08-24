@@ -434,6 +434,11 @@ local SCRIPTABLE = {
     -- code can observe a click without replacing the handler that performs the action —
     -- which is the only reason a secure button is observable at all.
     PreClick=true, PostClick=true,
+    -- The tooltip content scripts. On THIS client these are the only route to tooltip
+    -- content: TooltipDataProcessor.AddTooltipPostCall exists but does not work here, so a
+    -- reskin hangs everything off these four and nothing else.
+    OnTooltipSetItem=true, OnTooltipSetSpell=true, OnTooltipSetUnit=true,
+    OnTooltipCleared=true,
 }
 
 function Base:SetScript(name, fn)

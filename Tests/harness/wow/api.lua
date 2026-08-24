@@ -171,8 +171,47 @@ function M.install(env)
     local fontObjects = {}
     local function fontObject(name, size, path)
         local o = { _name = name, _size = size, _path = path or "Fonts/FRIZQT__.TTF" }
-        function o:GetFont() return self._path, self._size, "" end
+        function o:GetFont() return self._path, self._size, self._flags or "" end
         function o:GetName() return self._name end
+
+        --- Font objects are SETTABLE in the client, and that is the whole point of them:
+        --- assigning one covers every FontString that inherits it, including ones created
+        --- later. Restyling tooltip text is done this way rather than by walking
+        --- GameTooltipTextLeft1..N, so without a settable model that decision would be
+        --- untestable and a per-line walk would look like the only option.
+        ---
+        --- **Raises** for an unloadable asset, exactly as FontString:SetFont does. Same
+        --- reason: modelling it as a return value once let a login-breaking error through,
+        --- so anything probing font paths has to protect the call.
+        function o:SetFont(p, s, flags)
+            if not font.hasFace(p) then
+                error("Font:SetFont(): Invalid font asset (" .. tostring(p)
+                      .. "): file not found", 2)
+            end
+            self._path, self._size, self._flags = p, s, flags
+            return true
+        end
+
+        function o:SetTextColor(r, g, b, a)
+            self._color = { r, g, b, a == nil and 1 or a }
+        end
+
+        function o:GetTextColor()
+            local c = self._color
+            if not c then return 1, 1, 1, 1 end
+            return c[1], c[2], c[3], c[4]
+        end
+
+        function o:SetShadowOffset(x, y) self._shadowX, self._shadowY = x, y end
+        function o:GetShadowOffset() return self._shadowX or 0, self._shadowY or 0 end
+        function o:SetShadowColor(r, g, b, a)
+            self._shadowColor = { r, g, b, a == nil and 1 or a }
+        end
+        function o:SetJustifyH(j) self._justifyH = j end
+        function o:GetJustifyH() return self._justifyH or "LEFT" end
+        function o:SetJustifyV(j) self._justifyV = j end
+        function o:GetJustifyV() return self._justifyV or "MIDDLE" end
+
         fontObjects[#fontObjects + 1] = name
         return o
     end
@@ -1150,13 +1189,26 @@ function M.install(env)
 
     local function resolveAura(entry)
         if not entry then return nil end
+        -- Computed BEFORE the return rather than inline: `x == false and nil or x or DEFAULT`
+        -- does NOT work, because nil and false are both falsy so the `or` chain falls straight
+        -- through to the default. That mistake made this look implemented while it was not.
+        --
+        -- `source = false` means the client names NO caster, which is a real and common state: an
+        -- environmental debuff has none, and neither does one from a unit the client has stopped
+        -- tracking. Without it the default masked the case, and a consumer that printed "Unknown"
+        -- for every such aura would have looked correct. Same false-clears convention as
+        -- H.setXP({ rested = false }).
+        local src
+        if entry.source ~= false then
+            src = entry.source or AURA_DEFAULTS.source
+        end
         return entry.name                  or AURA_DEFAULTS.name,
                entry.icon                  or AURA_DEFAULTS.icon,
                entry.count                 or AURA_DEFAULTS.count,
                entry.debuffType            or AURA_DEFAULTS.debuffType,
                entry.duration              or AURA_DEFAULTS.duration,
                entry.expirationTime        or AURA_DEFAULTS.expirationTime,
-               entry.source                or AURA_DEFAULTS.source,
+               src,
                entry.isStealable == true,
                entry.nameplateShowPersonal == true,
                entry.spellId              or AURA_DEFAULTS.spellId,
@@ -1205,6 +1257,102 @@ function M.install(env)
     }
 
     --------------------------------------------------------------------------
+    -- Creature difficulty and guild info
+    --------------------------------------------------------------------------
+    -- GetCreatureDifficultyColor is the client's own answer and is preferred by SuuUI.Game, so
+    -- it is modelled here rather than left absent -- otherwise every spec exercises the FALLBACK
+    -- formula and the branch production actually takes is never run.
+    env.GetCreatureDifficultyColor = function(level)
+        local mine = (state.units and state.units.player and state.units.player.level)
+                     or state.unitLevel or 70
+        if type(level) ~= "number" then return { r = 1, g = 1, b = 0 } end
+        local diff = level - mine
+        if diff > 4  then return { r = 1.00, g = 0.10, b = 0.10 } end
+        if diff > 2  then return { r = 1.00, g = 0.50, b = 0.25 } end
+        if diff >= -2 then return { r = 1.00, g = 1.00, b = 0.00 } end
+        if level > mine - (state.questGreenRange or 5) then
+            return { r = 0.25, g = 0.75, b = 0.25 }
+        end
+        return { r = 0.50, g = 0.50, b = 0.50 }
+    end
+
+    -- Widens as the player levels, which is why a fixed grey offset is wrong.
+    env.GetQuestGreenRange = function() return state.questGreenRange or 5 end
+
+    -- Returns guildName, rankName, rankIndex -- the order SuuUI reads positionally.
+    env.GetGuildInfo = function(unit)
+        local u = unit and state.units and state.units[unit]
+        if not u or not u.guild then return nil end
+        return u.guild, u.guildRank, u.guildRankIndex or 0
+    end
+
+    --------------------------------------------------------------------------
+    -- GetItemCount
+    --------------------------------------------------------------------------
+    -- Second argument is includeBank, and the client returns the TOTAL when it is true -- not
+    -- the bank's own figure. A consumer wanting the split has to subtract, which is what makes
+    -- staging the two numbers separately here worth doing: a model that returned the bank
+    -- directly would let a consumer that forgot the subtraction pass.
+    env.GetItemCount = function(link, includeBank)
+        local rec = state.items and state.items[link]
+        if not rec then return 0 end
+        local bags = rec.countBags or 0
+        if includeBank then return bags + (rec.countBank or 0) end
+        return bags
+    end
+
+    --------------------------------------------------------------------------
+    -- UnitGroupRolesAssigned
+    --------------------------------------------------------------------------
+    -- Answers the client's own strings: TANK / HEALER / DAMAGER / NONE. Measured in game --
+    -- notably "DAMAGER" and not "DPS", so a consumer printing the raw value verbatim shows the
+    -- wrong word. NONE for an unstaged unit, which is also what a solo player reports.
+    env.UnitGroupRolesAssigned = function(unit)
+        local u = unit and state.units and state.units[unit]
+        return (u and u.role) or "NONE"
+    end
+
+    --------------------------------------------------------------------------
+    -- GetItemInfo
+    --------------------------------------------------------------------------
+    -- Absent until now, which meant an item's QUALITY was unreachable in a spec -- so the
+    -- quality-coloured tooltip border, the whole point of the signal-border treatment, could
+    -- not be tested at all and its mutation would have survived.
+    --
+    -- Return ORDER matters and is the client's, recovered from on-disk consumers rather than
+    -- memory: field 3 is quality, field 4 is the item level, field 11 is the sell price. Those
+    -- three are the ones SuuUI reads; the rest are present so a positional `select` written
+    -- against the real client lands on the same slot here.
+    --
+    -- An UNSTAGED link returns nothing at all, which is what the client does for an item it has
+    -- not cached yet -- a real state a consumer has to survive, not an error.
+    env.GetItemInfo = function(link)
+        if type(link) ~= "string" and type(link) ~= "number" then return nil end
+        local rec = state.items and state.items[link]
+        if not rec then return nil end
+        return rec.name, rec.link, rec.quality, rec.itemLevel, rec.reqLevel,
+               rec.class, rec.subclass, rec.maxStack, rec.equipSlot, rec.texture,
+               rec.sellPrice
+    end
+
+    -- client's own `.hex` field -- which is a |cff… COLOUR ESCAPE and not a colour.
+    -- It is modelled deliberately, and deliberately WRONG-looking to read as a
+    -- colour, because a caller that grabs `.hex` expecting numbers produces a
+    -- string that silently swallows whatever it is concatenated into. Keeping it
+    -- here means a spec can prove Game:ItemQualityColor ignores it.
+    --------------------------------------------------------------------------
+    env.ITEM_QUALITY_COLORS = {
+        [0] = { r = 0.62, g = 0.62, b = 0.62, hex = "|cff9d9d9d" },
+        [1] = { r = 1.00, g = 1.00, b = 1.00, hex = "|cffffffff" },
+        [2] = { r = 0.12, g = 1.00, b = 0.00, hex = "|cff1eff00" },
+        [3] = { r = 0.00, g = 0.44, b = 0.87, hex = "|cff0070dd" },
+        [4] = { r = 0.64, g = 0.21, b = 0.93, hex = "|cffa335ee" },
+        [5] = { r = 1.00, g = 0.50, b = 0.00, hex = "|cffff8000" },
+        [6] = { r = 0.90, g = 0.80, b = 0.50, hex = "|cffe6cc80" },
+        [7] = { r = 0.00, g = 0.80, b = 1.00, hex = "|cff00ccff" },
+    }
+
+    --------------------------------------------------------------------------
     -- GameTooltip
     --------------------------------------------------------------------------
 
@@ -1213,8 +1361,88 @@ function M.install(env)
     -- refused the type ("does not simulate type GameTooltip") and no second instance was
     -- possible -- so embedded code that creates its own tooltip could not load at all, and
     -- the singleton had no AddLine for a spec to read content back from.
-    local GameTooltip = CreateFrame("GameTooltip", "GameTooltip", UIParent)
+    -- WITH BackdropTemplate, because the client's tooltips genuinely are backdrop frames --
+    -- they ship BACKDROP_TOOLTIP_16_16_5555 and ElvUI calls SetBackdrop straight onto them.
+    -- Created without it, SetBackdrop raises here, which is a state the real GameTooltip is
+    -- never in and which sent a reskin down its "this frame cannot take a backdrop" branch.
+    local GameTooltip = CreateFrame("GameTooltip", "GameTooltip", UIParent, "BackdropTemplate")
     GameTooltip._tooltipShown = false
+
+    -- The border Blizzard actually draws. MEASURED present on this client (interface 20504),
+    -- against an earlier guess that it was absent -- which matters because a reskin that only
+    -- calls SetBackdrop leaves this visible underneath and the player sees a double frame. It
+    -- is modelled so `if tt.NineSlice then tt.NineSlice:SetAlpha(0) end` is a REACHABLE branch
+    -- rather than dead code a mutation could delete unnoticed.
+    GameTooltip.NineSlice = CreateFrame("Frame", "GameTooltipNineSlice", GameTooltip)
+
+    -- The client's unit health bar. Its own frame, parented to the tooltip, and it ships with
+    -- NO text and NO colour -- both are the addon's to supply, which is why a spec has to be
+    -- able to read SetValue and SetStatusBarColor back off it.
+    local statusBar = CreateFrame("StatusBar", "GameTooltipStatusBar", GameTooltip)
+    statusBar:SetMinMaxValues(0, 100)
+    statusBar:SetValue(100)
+    env.GameTooltipStatusBar = statusBar
+
+    -- The three Font OBJECTS every tooltip FontString inherits from. Modelled because the
+    -- sanctioned way to restyle tooltip text is to assign these three once -- one call then
+    -- covers lines that do not exist yet -- and without them here that decision would be
+    -- untestable, leaving a per-line walk as the only shape a spec could describe.
+    --
+    -- GameTooltipHeaderText is line 1 and carries its own size; GameTooltipTextSmall is the
+    -- comparison tooltips'. They are separate objects in the client, so they are separate here.
+    env.GameTooltipText       = fontObject("GameTooltipText", 12)
+    env.GameTooltipHeaderText = fontObject("GameTooltipHeaderText", 14)
+    env.GameTooltipTextSmall  = fontObject("GameTooltipTextSmall", 11)
+
+    --------------------------------------------------------------------------
+    -- The two tooltip globals an addon HOOKS rather than calls
+    --------------------------------------------------------------------------
+    -- Both measured present on this client. They are modelled as real functions because
+    -- hooksecurefunc needs something to hook -- without them a plugin's durability hook and
+    -- its placement hook are never installed, and the branch that copes with their absence
+    -- fires instead, which is a different code path from the one production takes.
+    --
+    -- Deliberately near-empty: what a spec asserts is that OUR hook ran and what it did, not
+    -- Blizzard's own backdrop or its own anchor arithmetic. Reproducing either would mean
+    -- asserting against the harness's version of it.
+
+    --- Blizzard's shared backdrop restyle. Calling it is how a spec simulates the client
+    --- re-stamping a tooltip, which is the event the durability hook exists to survive.
+    env.SharedTooltip_SetBackdropStyle = function(tooltip, style, embedded)
+        if type(tooltip) ~= "table" then return end
+        tooltip._blizzBackdropStyle = style or "default"
+        tooltip._blizzEmbedded = embedded and true or false
+    end
+
+    --- Blizzard's default placement. A spec calls it to reach the placement hook.
+    env.GameTooltip_SetDefaultAnchor = function(tooltip, parent)
+        if type(tooltip) ~= "table" then return end
+        if type(tooltip.SetOwner) == "function" then
+            tooltip:SetOwner(parent or UIParent, "ANCHOR_NONE")
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- The other tooltip frames the client ships
+    --------------------------------------------------------------------------
+    -- All measured present on this client (Phase 0 probe 1). They exist here so a consumer's
+    -- FRAME LIST is a real list: with only GameTooltip modelled, a list iterated with ipairs
+    -- and one iterated with `next` behave identically, because there is nothing behind the
+    -- first hole for ipairs to drop. That made a real bug untestable.
+    --
+    -- Each is a GameTooltip carrying a backdrop, which is what they are for skinning purposes.
+    -- EmbeddedItemTooltip's inner icon and IconBorder are NOT modelled -- nothing reads them
+    -- yet, and inventing them would invite assertions against a shape that is not the client's.
+    for _, ttName in ipairs({
+        "ItemRefTooltip", "ItemRefShoppingTooltip1", "ItemRefShoppingTooltip2",
+        "ShoppingTooltip1", "ShoppingTooltip2", "EmbeddedItemTooltip",
+        "WorldMapTooltip", "FriendsTooltip",
+    }) do
+        env[ttName] = CreateFrame("GameTooltip", ttName, UIParent, "BackdropTemplate")
+    end
+
+    -- The close button on the hyperlink tooltip, skinned by name in every reskin that touches it.
+    env.ItemRefCloseButton = CreateFrame("Button", "ItemRefCloseButton", env.ItemRefTooltip)
 
     -- ANCHOR constants the client ships
     env.ANCHOR_NONE        = "ANCHOR_NONE"

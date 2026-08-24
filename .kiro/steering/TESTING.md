@@ -812,12 +812,55 @@ client accepts pipe-separated sub-filters (`PLAYER`, `RAID`, `CANCELABLE`, …) 
 parses them, so a reader that starts using one needs `resolveAura` in `api.lua` extended
 first — a spec written against a compound filter today passes while asserting the wrong list.
 
-**`GameTooltip` records what it was pointed at and renders nothing.** The stub stores the
-owner, the anchor and the `{ unit, index, filter }` of the aura it was asked to describe, which
-is enough to assert that a mouseover reached the right aura by the right method. It produces no
-text lines and fires no tooltip scripts (`OnTooltipSetSpell`, `OnTooltipCleared`), so anything
-asserting tooltip *content* needs it extended. Assert the aura **index** rather than the icon's
-position for the same reason the code indexes by it: they agree only while nothing is filtered.
+**`GameTooltip` records what it was pointed at, fires the client's scripts, and renders
+nothing.** The four content scripts — `OnTooltipSetItem`, `OnTooltipSetSpell`,
+`OnTooltipSetUnit`, `OnTooltipCleared` — **now fire**, driven by the setters
+(`SetUnit`, `SetHyperlink`, `SetBagItem`, `SetInventoryItem`, `SetSpellByID`,
+`SetSpellBookItem`, `ClearLines`). They used to be stored by `SetScript` and fired by nothing,
+so the only way a spec could reach a handler was to invoke it **by hand** — which passes while
+nothing in production ever calls it, the same shape of mistake that shipped a dead micro-menu
+button. Also modelled: `SetPadding` / `GetPadding` (both the two- and four-argument forms, as
+measured in game), `GetItem`, `GetSpell`, `GetUnit`, `IsForbidden`, a `NineSlice` child so
+hiding it is a reachable branch, and `GetLineColor(i)` — because `AddDoubleLine` now **keeps**
+its right-hand colours, which it previously accepted and discarded, making every assertion
+about a right-hand value's colour vacuous.
+
+What is still absent: it produces no text **layout**. Nothing wraps, measures, or positions a
+line. So a spec may assert what a tooltip *says* and what colour a line carries; it may not
+conclude anything about where that text sits or whether it fits. Assert the aura **index** rather
+than the icon's position for the same reason the code indexes by it: they agree only while nothing
+is filtered.
+
+**`GameTooltipTextLeft<N>` IS now modelled — this reverses an earlier rule in this file.** The rule
+said not to, on the grounds that reading a global font string per line models nothing useful. That
+was true while nothing needed to **write** one, and it stopped being true the moment a reskin had
+to RECOLOUR a line the client itself wrote: the level line, by creature difficulty. The text
+belongs to Blizzard, so its font string is the only handle on it and there is no append that
+achieves the same thing — a second, coloured level line leaves the client's uncoloured one above
+it.
+
+The reversal is safe because the font strings are **backed by the same line records `GetLine`
+reads**, so a `SetTextColor` is visible through `GetLineColor` and the two channels cannot drift —
+which is what the original rule was actually guarding against. They are published for the **shared
+tooltip only**, since that is where the client has them, and stale entries survive a `ClearLines`
+exactly as the client's pooled font strings do.
+
+**`GameTooltipStatusBar` exists and `StatusBar` is a real type.** Both were absent —
+`metaFor.StatusBar` was a bare `FrameMeta`, and `SetValue` / `SetMinMaxValues` /
+`SetStatusBarColor` had zero occurrences in the whole harness, because SuuUI's own `StatusBar`
+component never uses the client's (it drives fractional stack children through the layout
+engine on purpose). Driving a *Blizzard* bar is what needed it. The value **clamps** to the
+range as the client's does, `OnValueChanged` fires only on a real change, and the bar is
+parented to `GameTooltip` and rebuilt per `H.setup()`. It still has no fill geometry: a spec
+asserts the value and the colour, never a painted width.
+
+**Tooltip Font objects are settable.** `GameTooltipText`, `GameTooltipHeaderText` and
+`GameTooltipTextSmall` are real font objects with `SetFont` / `GetFont` / `SetTextColor`, and
+`SetFont` **raises** on an unloadable asset exactly as `FontString:SetFont` does. That matters
+because assigning those three is the sanctioned way to restyle tooltip text — one call covers
+lines that do not exist yet — and without a settable model the only shape a spec could describe
+was a per-line walk. What a spec cannot prove is that the assignment reaches a line: no
+FontString here inherits from a font object.
 
 **`Cooldown:GetCooldownTimes()` always returns 0 as its third value.** The live client returns
 1 while a cooldown is running; the stub returns `start, duration, 0`. Irrelevant to a swipe,

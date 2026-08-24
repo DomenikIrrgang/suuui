@@ -40,6 +40,10 @@ SuuUI/
 │   ├── Dock.lua          -- bar-to-bar docking: the anchor graph, four edges, the cycle guard,
 │   │                     --   and the cross-plugin participant registry
 │   ├── DataBar.lua       -- data bar widget registry + the height the bar occupies
+│   ├── Readout.lua       -- how a bar's value is SPELLED: the shared current/max, current and
+│   │                     --   percent formats, the slot list, the dropdown options. Neither a
+│   │                     --   game fact nor a token — a presentation choice the whole UI has to
+│   │                     --   make the same way, so a unit frame and a tooltip cannot disagree
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry, value I/O, reactive watchers
 │   ├── Fonts.lua         -- font registry: client faces, locale faces, LibSharedMedia
@@ -134,6 +138,13 @@ SuuUI/
 │   │   ├── ButtonCollector.lua    -- finds and adopts those buttons; stands down for MBB
 │   │   └── DataBar.lua    -- plugin: owns the bar and every built-in, moves Blizzard's top frames down
 │   ├── MinimapButton/     -- MinimapButton.lua: the LDB launcher and its LibDBIcon button
+│   ├── Tooltips/          -- reskins the CLIENT's tooltips; draws none of its own
+│   │   ├── Skin.lua       -- frame list, backdrop, Blizzard's NineSlice, the three font objects
+│   │   ├── Signal.lua     -- the border signal: quality, class/reaction, dispel type
+│   │   ├── HealthBar.lua  -- a SuuUI StatusBar inside the tooltip; suppresses Blizzard's
+│   │   ├── Content.lua    -- the lines it ADDS, plus the one line it rewrites (the level)
+│   │   ├── Anchor.lua     -- a moveable anchor, or cursor-follow
+│   │   └── Tooltips.lua   -- plugin: schema, watchers, and every hook installed once
 │   └── ...
 ├── Media/                 -- the icon atlas and the Python that generates it
 ├── Themes/
@@ -1457,6 +1468,7 @@ SuuUI.Game:LearnSchool(spellId, mask) -- returns whether it changed what we knew
 SuuUI.Game:LearnFromCombatLog()       -- reads the line being dispatched; returns spellId, mask
 SuuUI.Game:DebuffTypeColor(dispel)    -- "Magic"｜"Curse"｜"Disease"｜"Poison" -> {r,g,b,a}; nil otherwise
 SuuUI.Game:UntypedDebuffColor()       -- the client's own `none` row: red. Never nil
+SuuUI.Game:ItemQualityColor(quality)  -- 0..7 -> {r,g,b,a}; nil for a quality this client does not name
 ```
 
 **Reaction colours are the answer for every unit that has no class** — a mob, a critter, a
@@ -2844,6 +2856,48 @@ from the pet bar.
 same number for the band's floor and ceiling, so the bar draws **full** and reports `capped`; an
 earlier version returned nil there and hid itself, making an Exalted faction look identical to no
 faction at all.
+
+### `tooltips` (`Plugins/Tooltips/`)
+
+Reskins the CLIENT's tooltips and supplies the information colour the client withholds. It draws no
+tooltip of its own — `Components/Tooltip.lua` is unrelated and not reusable for this.
+
+**Three facts shape it, all measured on this client rather than assumed.** `GameTooltip` is **not
+protected**, so nothing here needs a combat guard and adding one would be wrong.
+`TooltipDataProcessor` **exists here and must not be used** — ElvUI excludes TBC from it, so a
+design built on the modern API compiles and silently does nothing. And Blizzard's border is a
+**NineSlice**, so `SetBackdrop` alone leaves a double frame.
+
+**There is essentially one tooltip, not nine.** Item, spell, buff, debuff, unit, vendor and world
+object are all the same `GameTooltip` with different lines, so one restyle covers them. Only
+`ShoppingTooltip1/2`, `ItemRefTooltip` and `EmbeddedItemTooltip` are separate frames, and only the
+last has different regions (an icon plus a real `IconBorder`).
+
+**The client supplies almost no colour**, which is why the border signal is the substance rather
+than decoration: name-line quality colour is all Blizzard provides. Quality comes from
+`Game:ItemQualityColor` at **uncommon and above only** — a white edge on a dark panel reads as a
+selected state and would fire on most tooltips — units from `Theme:GetUnitColor`, and auras from
+`AuraBand.KINDS`'s rules **verbatim**, because a buff's border answers "can I take this off them"
+(`isStealable`) while a debuff's answers "what removes this" (dispel type, red when untyped).
+A spell gets no signal: this client has no spell→school API.
+
+**The health bar is SuuUI's own `StatusBar`, inside the panel.** It drove Blizzard's
+`GameTooltipStatusBar` first, which needed `SetScript('OnValueChanged', nil)` plus a re-hook to stop
+its handler fighting ours — owning the bar deleted the only non-additive call in the plugin. The
+price is that Blizzard's bar is suppressed (guarded `OnShow`) and the value is driven from
+`UnitHealth`. It is a **stack** child, so it tracks the tooltip's width as lines are added, and it
+is `Add`ed once with later shows going through `SetChildProps`.
+
+**Readouts go through `Core/Readout.lua`.** An earlier version invented k/M abbreviation no other
+bar uses, so a tooltip read `7.6k / 15.2k` beside a unit frame printing `7620 / 15240`.
+
+Two things that cost real debugging time and are worth reading before touching this:
+
+- **`GetLine` does not exist on a real tooltip** — it is a harness convenience, and calling it from
+  shipped code raised on the first mouseover with the whole suite green. Lines are read through
+  `tt.TextLeft<i>`. `00_harness_spec.lua` now fails if any shipped file calls a harness-only name.
+- **A line appended from a hooked SETTER needs `tt:Show()`.** `SetUnitBuff` shows the tooltip
+  itself, so an added line falls outside an already-measured box. A content script needs nothing.
 
 ### `data_bar` built-ins (`Plugins/DataBar/`)
 

@@ -238,6 +238,7 @@ function M.reset()
     -- GameTooltip state: last owner/anchor/aura pointed at, so specs can assert
     -- what a mouseover produced.
     M.tooltip        = nil
+    M.items          = {}
     -- CancelUnitBuff call log, so specs can assert it fired with the right args.
     M.cancelBuff     = nil
     -- Combat lockdown and the refusals it produced. Both cleared, for the same reason the
