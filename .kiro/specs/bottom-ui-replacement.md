@@ -938,6 +938,66 @@ trying `ToggleBag(-2)`) or establish that a modern backend folds it into the bag
 
 ---
 
+## Bag bar — Phase 9, BUILT 2026-08-24
+
+Blizzard's six-button bag row is replaced by ONE data bar field reading `BAGS 27`. Clicking opens the
+bags; the count carries a tone from the player's own thresholds.
+**`Plugins/DataBar/BagsWidget.lua` — a BUILT-IN WIDGET, not a plugin.**
+
+**It shipped as its own `bag_bar` plugin first, and that was wrong twice over.** The field creates no
+frames at all — it is only a data bar entry — so a plugin wrapper bought nothing, and it put the settings
+on their own page instead of with every other field's, which is where a player would not think to look.
+
+**It also broke its own enable toggle, one-way.** The plugin registered the toggle's watcher under its
+owner prefix and then called `UnwatchPrefix` on that same prefix from `onDisable` — destroying the watcher
+that would switch it back on. Off worked; on never did, so the setting looked ignored. A built-in widget
+cannot make that mistake: its toggle is an ordinary setting in the data bar's schema and the plugin
+re-runs `Enable`, which rebuilds the watcher. The spec asserts the **round trip**, because the "off" half
+passed the whole time.
+
+**In the RIGHT section**, first at order 180 — ahead of addon buttons (190), latency (200) and fps (210),
+so the gameplay reading takes the inner edge and the diagnostics keep the far right.
+
+**The container API has the same two shapes reputation did**, and this is the second time on this client.
+The modern backend moved these onto `C_Container`; ElvUI dereferences
+`C_Container.GetContainerNumFreeSlots` at file scope with **no nil guard** and works here, so the
+namespace is present and the bare globals may not be. Read through `C_Container` first, then the globals,
+and `SuuUI.Fault` when neither exists — because a blank field and a full inventory are the same pixels,
+and silence would be the worst possible misreading.
+
+**Specialised bags are excluded, and in TBC that has teeth.** Quivers, ammo pouches and soul shard bags
+report free slots that cannot hold loot. `GetContainerNumFreeSlots` returns the bag's type as its second
+value; a type of 0 or absent means general-purpose, the same test ElvUI applies. Counting them would tell
+a hunter with an empty quiver they have room for twenty more items.
+
+**Tones are measured against FREE SLOTS, not a percentage.** Four slots left is the same problem with one
+bag or five, while a percentage would call a nearly-full 100-slot inventory fine. The danger threshold is
+refused above the warning one, or the warning band vanishes.
+
+**A threshold change has to notify the renderer.** No bag event fires when a slider moves, so the widget
+re-registers itself — which is the available refresh, since the registry has no per-widget refresh call and
+`RegisterWidget` overwrites by id and notifies. Mutation testing is what forced this assertion: the tone
+tests call `GetText` directly and re-read the settings every time, so deleting the watchers left them all
+green. The spec now observes the registry's own subscription.
+
+**Suppression is `BagsBar` plus `KeyRingButton`** — confirmed by Round 11's parent walk. NOT
+`MicroButtonAndBagsBar`, which is the ancestor and would cascade.
+
+### The framework bug this phase exposed: `plugin._def`
+
+While it was still a plugin, the widget definition was held on the plugin handle as `p._def` so a settings
+change could re-register it — and `_def` is **where Core/Plugin.lua stored the plugin's own definition**.
+Assigning to it destroyed the table the lifecycle reads its hooks from, so `onDisable` was never called.
+
+**It failed in total silence.** No error was thrown, because the hook was simply absent; and had one been
+thrown, `Disable` pcalls it and logs through `Debug`, which prints nothing with debug off. Diagnosis took
+four probes and only moved once debug was forced on and `type(p._def.onDisable)` came back `nil`.
+
+Plugin definitions now live in a **private weak-keyed table in `Core/Plugin.lua`** that a plugin holds no
+reference to, so the collision cannot recur. `18_integration_spec.lua` asserts it with a plugin that
+performs the exact hostile act — mutation-checked by making the lifecycle read the handle's field again,
+which the test catches. The fix outlived the plugin that prompted it, which is the point of making it.
+
 ## Watch bar docking — Phase 8c, BUILT 2026-08-24
 
 The watch bars dock to action bars and to each other, in **both directions**, through the same service.

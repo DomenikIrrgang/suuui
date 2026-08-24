@@ -348,6 +348,10 @@ describe("Plugins.WatchBars", function()
             for _, o in ipairs(D().OptionsFor("watch:xp")) do labels[#labels + 1] = o.label end
             expect(labels).deepEq({
                 "Free", "Bar 1", "Bar 2", "Bar 3", "Bar 4", "Bar 5", "Bar 6", "Bar 7", "Bar 8",
+                -- Bars 9-13 are the pages no Blizzard bar exposes (slots 13-24 and 73-120).
+                "Bar 9", "Bar 10", "Bar 11", "Bar 12", "Bar 13",
+                -- Pet and Stance carry an explicit order (98, 99) so they trail the numbered bars
+                -- rather than sorting among them.
                 "Pet", "Stance", "Reputation",
             })
         end)

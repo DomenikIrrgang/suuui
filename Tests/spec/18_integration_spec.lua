@@ -401,6 +401,30 @@ end)
 describe("Plugin lifecycle", function()
     before_each(function() H.setup() end)
 
+    it("survives a plugin storing its own state under _def", function()
+        -- THE BAG BAR DID EXACTLY THIS and lost its onDisable. The definition used to live on the
+        -- handle at `_def`, so a plugin keeping state under that name overwrote the very table the
+        -- lifecycle reads its hooks from -- and the failure was SILENT: onDisable was never called,
+        -- so there was no error to catch, and Disable's pcall logs through Debug, which prints
+        -- nothing with debug off. The definition lives in private storage now.
+        H.setup({ boot = false })
+        local disabled = 0
+        H.SuuUI:CreatePlugin({
+            id   = "clobber",
+            name = "Clobber",
+            onEnable = function(p)
+                -- The exact hostile act: a plugin claiming the framework's field for itself.
+                p._def = { something = "of my own" }
+            end,
+            onDisable = function() disabled = disabled + 1 end,
+        })
+        H.SuuUI.Plugins:InitAll()
+        local p = H.SuuUI.Plugins:Get("clobber")
+        p:Enable()
+        p:Disable()
+        expect(disabled).as("onDisable still ran").eq(1)
+    end)
+
     it("calls onInit on login", function()
         H.setup({ boot = false })
         local inits = 0

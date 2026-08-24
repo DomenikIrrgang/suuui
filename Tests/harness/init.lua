@@ -765,6 +765,48 @@ function M.setRepApi(mode)
     end
 end
 
+--- Stages the character's bags.
+--
+-- Indexed BY BAG ID FROM 0: bag 0 is the backpack, 1..4 the bag slots. Each entry is
+-- { free = n, slots = n, bagType = n }, where a bagType other than 0 marks a specialised container
+-- whose free slots cannot hold loot.
+-- @param bags table  { [0] = { free = 4, slots = 16 }, [1] = { free = 0, slots = 12, bagType = 2 } }
+function M.setBags(bags, opts)
+    state.bags = bags
+    if not (opts and opts.silent) then
+        M.fireEvent("BAG_UPDATE_DELAYED")
+    end
+end
+
+--- Which container API this simulated client has.
+--
+-- Same three cases as H.setRepApi, and the same reason for "none": a missing API must be
+-- distinguishable from an empty result, or a silently blank field looks like a full inventory.
+-- Mutates M.env, NOT _G -- the addon's chunks resolve globals through the harness environment.
+-- @param mode string  "legacy" (default) | "modern" | "none"
+function M.setBagApi(mode)
+    mode = mode or "legacy"
+    assert(mode == "legacy" or mode == "modern" or mode == "none",
+        "H.setBagApi: mode must be 'legacy', 'modern' or 'none', got '" .. tostring(mode) .. "'")
+    state.bagApi = mode
+
+    local env = M.env
+    assert(env, "H.setBagApi: call H.setup() first")
+    local fns = state.legacyBagFns
+
+    env.GetContainerNumFreeSlots = (mode == "legacy") and fns and fns.free or nil
+    env.GetContainerNumSlots     = (mode == "legacy") and fns and fns.slots or nil
+
+    if mode == "modern" and fns then
+        env.C_Container = {
+            GetContainerNumFreeSlots = fns.free,
+            GetContainerNumSlots     = fns.slots,
+        }
+    else
+        env.C_Container = nil
+    end
+end
+
 --- Panel toggles the addon called, in order, as { name = ..., arg = ... }.
 -- @return table
 function M.getPanelToggles() return state.panelToggles end

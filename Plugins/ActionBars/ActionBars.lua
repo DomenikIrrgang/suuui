@@ -103,6 +103,61 @@ local BARS = {
         position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 228 },
         enabled = false,
     },
+    -- BARS 9 TO 13: the action slots NO Blizzard bar exposes.
+    --
+    -- Measured in game, and this is the gap that mattered: of 72 abilities on the character, 27 sat in
+    -- slots SuuUI could not reach. Pages 2 and 7-10 (slots 13-24 and 73-120) have no Blizzard frame and
+    -- no Blizzard binding family, so a UI that only mirrors Blizzard's bars simply cannot show them --
+    -- yet the client stores actions there and every serious bar addon exposes them. ElvUI calls these
+    -- its bar2 and bar7-10, and page N is slots (N-1)*12+1 upward, which is how the two numbering
+    -- schemes line up:
+    --
+    --   page 1  = 1-12    Bar 1        page 6  = 61-72   Bar 2
+    --   page 2  = 13-24   Bar 9  <--   page 7  = 73-84   Bar 10 <--
+    --   page 3  = 25-36   Bar 5        page 8  = 85-96   Bar 11 <--
+    --   page 4  = 37-48   Bar 4        page 9  = 97-108  Bar 12 <--
+    --   page 5  = 49-60   Bar 3        page 10 = 109-120 Bar 13 <--
+    --   page 13 = 145-156 Bar 6        page 14/15 = 157-180  Bars 7, 8
+    --
+    -- NUMBERED 9 UPWARD RATHER THAN RENUMBERED TO MATCH THE PAGES. Bars 1-8 already correspond to
+    -- Blizzard's own Action Bar 1-8, which is the numbering a player reads in the client's keybinding
+    -- UI, and the ids are profile data as well as dock participant ids -- renumbering would move every
+    -- stored position and silently repoint every dock attachment.
+    --
+    -- `ownBindings` marks the ones whose binding names SuuUI declares itself, in Bindings.xml. A
+    -- Blizzard family acts on the SLOT, so bars 1-8 need no routing at all: whatever is bound to
+    -- ACTIONBUTTON1 fires UseAction(1) whether Blizzard's button is on screen or not. For these five
+    -- there is no such family, so the key has to be routed to a click on our own secure button.
+    {
+        id = 9, label = "Bar 9", first = 13, page = 2, ownBindings = true,
+        bindingPrefix = "SUUUIBAR9BUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 268 },
+        enabled = false,
+    },
+    {
+        id = 10, label = "Bar 10", first = 73, page = 7, ownBindings = true,
+        bindingPrefix = "SUUUIBAR10BUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 308 },
+        enabled = false,
+    },
+    {
+        id = 11, label = "Bar 11", first = 85, page = 8, ownBindings = true,
+        bindingPrefix = "SUUUIBAR11BUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 348 },
+        enabled = false,
+    },
+    {
+        id = 12, label = "Bar 12", first = 97, page = 9, ownBindings = true,
+        bindingPrefix = "SUUUIBAR12BUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 388 },
+        enabled = false,
+    },
+    {
+        id = 13, label = "Bar 13", first = 109, page = 10, ownBindings = true,
+        bindingPrefix = "SUUUIBAR13BUTTON",
+        position = { point = "BOTTOM", relPoint = "BOTTOM", x = 0, y = 428 },
+        enabled = false,
+    },
     -- The two CLASS BARS. Listed here rather than given their own plugin because everything around a
     -- bar is identical: a position, a moveable frame, a settings tab, and bar-to-bar docking. Only
     -- the buttons differ, and that is one factory each.
@@ -278,6 +333,49 @@ local function bindingsFor(def, count)
     local out = {}
     for i = 1, count do out[i] = def.bindingPrefix .. i end
     return out
+end
+
+--- Routes this bar's declared keys to clicks on its own buttons.
+--
+-- ONLY for bars whose binding names SuuUI declares itself. A Blizzard family acts on the SLOT, so bars
+-- 1-8 need nothing here: whatever is bound to ACTIONBUTTON1 fires UseAction(1) whether Blizzard's own
+-- button is on screen or not, which is why suppressing its bars never cost the player their keys.
+--
+-- Pages 2 and 7-10 have no such family. `Bindings.xml` gives the player a NAME to bind, and this turns
+-- the key they chose into a click on our secure button -- the only route an addon has to a protected
+-- UseAction. A Lua binding body calling UseAction directly would be refused.
+--
+-- Cleared and reapplied wholesale rather than diffed: the set is at most twelve keys, and a diff would
+-- have to track the player's rebinding to know what to remove.
+local function applyOwnBindings(p, def)
+    if not def.ownBindings then return end
+    local grid = p._bars[def.id]
+    if not grid then return end
+
+    -- SetOverrideBindingClick is refused in combat, like any other secure mutation. Deferred through the
+    -- same pending set the attach transition uses, so leaving combat drains both.
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        p._pendingBindings = p._pendingBindings or {}
+        p._pendingBindings[def.id] = def
+        return
+    end
+    if p._pendingBindings then p._pendingBindings[def.id] = nil end
+
+    local frame = grid:GetFrame()
+    if type(ClearOverrideBindings) == "function" then ClearOverrideBindings(frame) end
+    if type(SetOverrideBindingClick) ~= "function" then return end
+
+    local buttons = grid:GetButtons()
+    for i = 1, #buttons do
+        local command = def.bindingPrefix .. i
+        local key = GetBindingKey and GetBindingKey(command) or nil
+        -- The button's GLOBAL NAME, which is what the client resolves -- hence namePrefix being set on
+        -- every grid rather than only for /framestack.
+        local name = "SuuUIBar" .. def.id .. "Button" .. i
+        if key and key ~= "" then
+            SetOverrideBindingClick(frame, false, key, name, "LeftButton")
+        end
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -464,6 +562,22 @@ local function buildBar(p, def)
     if isDocked(def) then
         requestDock(p, def)
     end
+
+    -- Claims this bar's keys, for the bars whose binding names SuuUI declares itself. A no-op for the
+    -- eight that use a Blizzard family, since those act on the slot and need no routing.
+    --
+    -- ALSO SUBSCRIBED TO THE GRID'S OWN CHILDREN_CHANGED, rather than trusting the call above to be
+    -- enough. A bar built in combat has NO BUTTONS yet -- SetSlots defers its geometry pass -- so there
+    -- is nothing to bind a key to, and catching up on PLAYER_REGEN_ENABLED raced the grid's own
+    -- catch-up on the same event. The signal exists for exactly this: the buttons announce themselves,
+    -- and the keys follow whenever they appear instead of on a guess about ordering.
+    if def.ownBindings then
+        p._bindConns = p._bindConns or {}
+        p._bindConns[def.id] = SuuUI.UISignals:Connect(
+            grid, SuuUI.UISignals.SIGNALS.CHILDREN_CHANGED,
+            function() applyOwnBindings(p, def) end)
+    end
+    applyOwnBindings(p, def)
 end
 
 local function destroyBar(p, def)
@@ -474,6 +588,17 @@ local function destroyBar(p, def)
     -- Revoked before anything is torn down: consumers detach on the nil notification, so nothing
     -- foreign is still anchored to a frame that is about to go.
     SuuUI.AttachPoints:Revoke(dockPoint(def.id))
+    -- The keys go with the bar. Left in place they would point at a button that no longer exists, and
+    -- an override binding outlives the frame it was set on.
+    if def.ownBindings and type(ClearOverrideBindings) == "function" then
+        ClearOverrideBindings(grid:GetFrame())
+    end
+    if p._bindConns and p._bindConns[def.id] then
+        SuuUI.UISignals:Disconnect(grid, SuuUI.UISignals.SIGNALS.CHILDREN_CHANGED,
+            p._bindConns[def.id])
+        p._bindConns[def.id] = nil
+    end
+    if p._pendingBindings then p._pendingBindings[def.id] = nil end
     -- Release drops OUR request; Release(dock) drops the bars attached to us. Both, because a bar can
     -- be a dock and be docked at the same time.
     SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
@@ -773,7 +898,26 @@ SuuUI:CreatePlugin({
         p._evt:SetScript("OnEvent", function(_, event)
             if event == "UPDATE_SHAPESHIFT_FORMS" or event == "PLAYER_ENTERING_WORLD" then
                 syncStanceForms(p)
+                -- Entering the world is also the first moment the player's saved keys are readable,
+                -- so it is when the self-declared bars claim theirs.
+                if event == "PLAYER_ENTERING_WORLD" then
+                    for _, def in ipairs(BARS) do applyOwnBindings(p, def) end
+                end
                 return
+            end
+
+            -- The player rebound a key. Only the self-declared bars care: a Blizzard family acts on
+            -- the slot, so its keys need no routing from us.
+            if event == "UPDATE_BINDINGS" then
+                for _, def in ipairs(BARS) do applyOwnBindings(p, def) end
+                return
+            end
+
+            -- PLAYER_REGEN_ENABLED: drain everything combat refused, bindings as well as docks.
+            local pendingBinds = p._pendingBindings
+            if pendingBinds then
+                p._pendingBindings = nil
+                for _, def in pairs(pendingBinds) do applyOwnBindings(p, def) end
             end
             local pending = p._pendingAttach
             if not pending then return end
@@ -783,6 +927,10 @@ SuuUI:CreatePlugin({
             end
         end)
         p._evt:RegisterEvent("PLAYER_REGEN_ENABLED")
+        -- Rebinding is the only thing that can invalidate an override binding, and the client
+        -- announces it. Without this a player who moves a key sees the old one keep working until
+        -- the next reload.
+        p._evt:RegisterEvent("UPDATE_BINDINGS")
         -- The PLURAL event: the SET of forms changed, so the bar needs a different number of cells.
         -- The singular UPDATE_SHAPESHIFT_FORM is NOT registered here -- that is which form is
         -- active, which the buttons repaint themselves and which must not touch geometry.

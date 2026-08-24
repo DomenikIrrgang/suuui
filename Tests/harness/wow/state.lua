@@ -140,6 +140,10 @@ M.xp = { current = 0, max = 0, rested = nil, disabled = false }
 M.watchedFaction = nil
 -- Which reputation API the simulated client has: "legacy" | "modern" | "none". See H.setRepApi.
 M.repApi = "legacy"
+-- The character's bags, indexed by bag id from 0. See H.setBags.
+M.bags = nil
+-- Which container API the simulated client has: "legacy" | "modern" | "none". See H.setBagApi.
+M.bagApi = "legacy"
 
 -- Panel toggle functions the addon called, in order: { name, arg }. The micro menu opens panels
 -- through these because Blizzard's micro buttons have no OnClick script on this client.
@@ -276,6 +280,17 @@ function M.reset()
     -- the modern one must not leave the next test running against a client it did not ask for.
     -- Applied to the harness ENV, because that is the table the addon's chunks read.
     M.repApi             = "legacy"
+    -- Bags, and the API mode with them: a spec that removed the container API must not leave the next
+    -- one testing a client with no bags at all.
+    M.bags               = nil
+    M.bagApi             = "legacy"
+    if M.env then
+        M.env.C_Container = nil
+        if M.legacyBagFns then
+            M.env.GetContainerNumFreeSlots = M.legacyBagFns.free
+            M.env.GetContainerNumSlots     = M.legacyBagFns.slots
+        end
+    end
     if M.env then
         M.env.C_Reputation = nil
         if M.legacyRepFn then M.env.GetWatchedFactionInfo = M.legacyRepFn end

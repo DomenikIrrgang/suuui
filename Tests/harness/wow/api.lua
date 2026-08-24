@@ -872,6 +872,33 @@ function M.install(env)
     -- "no API" that leaves the function in place and merely returns nil is indistinguishable from "no
     -- faction is watched", which is the exact conflation that hid the bar in game.
     state.legacyRepFn = env.GetWatchedFactionInfo
+
+    -- Containers / bags
+    --------------------------------------------------------------------------
+    -- TWO SHAPES, same as reputation, and for the same reason: a modern backend moved these onto
+    -- `C_Container` and may not carry the bare globals. ElvUI dereferences
+    -- `C_Container.GetContainerNumFreeSlots` at file scope with no nil guard and works on this client,
+    -- so the namespace is present there. `state.bagApi` selects which one exists -- see H.setBagApi.
+    --
+    -- `state.bags` is an array indexed BY BAG ID FROM 0, each { free = n, slots = n, bagType = n }. A
+    -- bagType other than 0 is a specialised container (quiver, ammo pouch, soul shard bag), whose free
+    -- slots cannot hold loot -- which is why anything counting them has to be able to see the type.
+    env.NUM_BAG_SLOTS = 4
+
+    local function bagFree(bag)
+        local b = state.bags and state.bags[bag]
+        if not b then return 0, 0 end
+        return b.free or 0, b.bagType or 0
+    end
+
+    local function bagSlots(bag)
+        local b = state.bags and state.bags[bag]
+        return b and b.slots or 0
+    end
+
+    state.legacyBagFns = { free = bagFree, slots = bagSlots }
+    env.GetContainerNumFreeSlots = bagFree
+    env.GetContainerNumSlots = bagSlots
     -- The env itself, so reset can restore the API globals. The addon's chunks read from THIS table,
     -- not from the real _G, so anything touching _G is changing a table nothing under test reads.
     state.env = env

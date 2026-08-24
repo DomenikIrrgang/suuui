@@ -6,14 +6,26 @@ local registry  = {}  -- [id] = pluginHandle
 local order     = {}  -- insertion order array of ids
 local ready     = false  -- true once the core has finished its login pass
 
+-- Plugin definitions, keyed by handle, deliberately NOT stored on the handle.
+--
+-- They used to live at `plugin._def`, and the bag bar overwrote it while storing its own state under
+-- that name. The consequence was invisible: Disable reads the definition to find `onDisable`, so the
+-- plugin simply stopped tearing itself down -- no error, because the hook was never called, and even a
+-- thrown one would have gone to Debug, which prints nothing with debug off.
+--
+-- A plugin has no reference to this table, so the collision cannot happen again. Weak-keyed so a handle
+-- that is somehow dropped does not pin its definition.
+local defs = setmetatable({}, { __mode = "k" })
+
 -- Runs a plugin's onInit at most once. Init is a property of the plugin, not of the
 -- call that triggers it, so InitAll is safe to re-run and a late registration can be
 -- initialised on its own without re-entering anyone else's onInit.
 local function initPlugin(plugin)
     if plugin._inited then return end
     plugin._inited = true
-    if plugin._def.onInit then
-        local ok, err = pcall(plugin._def.onInit, plugin)
+    local def = defs[plugin]
+    if def and def.onInit then
+        local ok, err = pcall(def.onInit, plugin)
         if not ok then
             SuuUI.Debug("Plugin onInit error [" .. plugin.id .. "]: " .. tostring(err))
         end
@@ -55,8 +67,9 @@ end
 function PluginMeta:Enable()
     if self._enabled then return end
     self._enabled = true
-    if self._def.onEnable then
-        local ok, err = pcall(self._def.onEnable, self)
+    local def = defs[self]
+    if def and def.onEnable then
+        local ok, err = pcall(def.onEnable, self)
         if not ok then SuuUI.Debug("Plugin onEnable error [" .. self.id .. "]: " .. tostring(err)) end
     end
     SuuUI.Events:Emit("SUUUI_PLUGIN_ENABLED", self.id)
@@ -66,8 +79,9 @@ end
 function PluginMeta:Disable()
     if not self._enabled then return end
     self._enabled = false
-    if self._def.onDisable then
-        local ok, err = pcall(self._def.onDisable, self)
+    local def = defs[self]
+    if def and def.onDisable then
+        local ok, err = pcall(def.onDisable, self)
         if not ok then SuuUI.Debug("Plugin onDisable error [" .. self.id .. "]: " .. tostring(err)) end
     end
     SuuUI.Events:Emit("SUUUI_PLUGIN_DISABLED", self.id)
@@ -86,9 +100,10 @@ function SuuUI:CreatePlugin(def)
         id       = def.id,
         name     = def.name,
         version  = def.version or "",
-        _def     = def,
         _enabled = false,
     }, PluginMeta)
+    -- Off the handle on purpose -- see `defs`. A plugin storing its own state cannot reach this.
+    defs[plugin] = def
 
     registry[def.id] = plugin
     tinsert(order, def.id)

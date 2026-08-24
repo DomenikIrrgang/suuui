@@ -109,6 +109,17 @@ local TARGETS = {
     { id = "watch_bars",   names = { "StatusTrackingBarManager",
                                      "MainStatusTrackingBarContainer",
                                      "SecondaryStatusTrackingBarContainer" } },
+    -- The bag bar, replaced in Phase 9 by the data bar's BAGS field.
+    --
+    -- `BagsBar` is the frame that HOLDS the bag buttons -- established by walking the parent chain from
+    -- `MainMenuBarBackpackButton`, which answered "BagsBar". `MicroButtonAndBagsBar` is its ANCESTOR and
+    -- is deliberately absent: hiding it would cascade to everything beneath, and a Phase 7 note claiming
+    -- it carried the buttons was simply wrong. Same shape as `MainActionBar` versus `MainMenuBar`, which
+    -- cost a round in Phase 4b -- the frame that exists is not always the frame that holds the buttons.
+    --
+    -- `KeyRingButton` is listed separately because it is not inside `BagsBar` on every build, and an
+    -- absent name costs nothing.
+    { id = "bags",         names = { "BagsBar", "KeyRingButton" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
     { id = "bar_art",      names = { "MainMenuBarArtFrame" } },

@@ -849,6 +849,86 @@ describe("Plugins.ActionBars: every bar", function()
         expect(stance.bindingPrefix).as("measured family, not STANCEBUTTON").eq("SHAPESHIFTBUTTON")
     end)
 
+    describe("keys for the bars Blizzard has no binding family for", function()
+        -- Bars 9-13 sit on pages 2 and 7-10, which no Blizzard bar exposes -- so the client ships no
+        -- ACTIONBUTTON/MULTIACTIONBAR* names for those slots and SuuUI declares its own in
+        -- Bindings.xml. A declared name only gives the player something to bind; the key then has to be
+        -- ROUTED to a click on our secure button, because UseAction is protected and a Lua binding body
+        -- calling it would be refused.
+        local function enable(id)
+            H.SuuUI.Settings:Set("action_bars", "bar" .. id .. "_enabled", true)
+        end
+        local function routesFor(id)
+            local out = {}
+            for _, b in ipairs(H.getOverrideBindings()) do
+                if type(b.button) == "string" and b.button:find("SuuUIBar" .. id .. "Button", 1, true) then
+                    out[#out + 1] = b
+                end
+            end
+            return out
+        end
+
+        it("routes a bound key to a CLICK on its own secure button", function()
+            H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
+            enable(9)
+            local routes = routesFor(9)
+            expect(#routes).as("exactly the one bound key").eq(1)
+            expect(routes[1].key).eq("SHIFT-1")
+            expect(routes[1].button).as("the button's global name").eq("SuuUIBar9Button1")
+            expect(routes[1].mouseButton).as("a left click, which is the use path").eq("LeftButton")
+        end)
+
+        it("claims nothing for a button the player has not bound", function()
+            -- An override binding for an empty key would either error or steal a key the player never
+            -- assigned to us.
+            enable(9)
+            expect(#routesFor(9)).eq(0)
+        end)
+
+        it("does NOT route keys for the bars that use a Blizzard family", function()
+            -- Those act on the SLOT: whatever is bound to ACTIONBUTTON1 fires UseAction(1) whether
+            -- Blizzard's own button is on screen or not, which is exactly why suppressing its bars never
+            -- cost the player their keys. Routing them as well would be a second claim on one key.
+            H.setBinding("ACTIONBUTTON1", "1")
+            H.setBinding("MULTIACTIONBAR1BUTTON1", "CTRL-1")
+            enable(1)
+            enable(2)
+            expect(#routesFor(1)).as("bar 1 unrouted").eq(0)
+            expect(#routesFor(2)).as("bar 2 unrouted").eq(0)
+        end)
+
+        it("re-claims its keys when the player rebinds", function()
+            -- Without this the old key keeps working until the next reload, and the new one does
+            -- nothing -- which reads as the binding UI being broken.
+            H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
+            enable(9)
+            H.setBinding("SUUUIBAR9BUTTON1", "ALT-2")
+            H.fireEvent("UPDATE_BINDINGS")
+            local routes = routesFor(9)
+            expect(#routes > 0).as("something is claimed").truthy()
+            expect(routes[#routes].key).as("the new key").eq("ALT-2")
+        end)
+
+        it("DEFERS claiming keys in combat and catches up on leaving it", function()
+            -- SetOverrideBindingClick is refused in combat like any other secure mutation.
+            H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
+            H.setCombat(true)
+            enable(9)
+            expect(#routesFor(9)).as("nothing claimed mid-fight").eq(0)
+            H.setCombat(false)
+            H.fireEvent("PLAYER_REGEN_ENABLED")
+            expect(#routesFor(9)).as("claimed once the fight ended").eq(1)
+        end)
+
+        it("gives its keys back when the bar is switched off", function()
+            H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
+            enable(9)
+            expect(#routesFor(9)).eq(1)
+            H.SuuUI.Settings:Set("action_bars", "bar9_enabled", false)
+            expect(#routesFor(9)).as("an override binding outlives its frame unless cleared").eq(0)
+        end)
+    end)
+
     it("pairs every bar's slot block with the binding family MEASURED for it", function()
         -- Both halves came from in-game probes, and the binding half caught a real error: the
         -- numbering does NOT follow the frame names in the order it looks like it should.
@@ -866,6 +946,17 @@ describe("Plugins.ActionBars: every bar", function()
             [6] = { first = 145, prefix = "MULTIACTIONBAR5BUTTON" },   -- MultiBar5
             [7] = { first = 157, prefix = "MULTIACTIONBAR6BUTTON" },   -- MultiBar6
             [8] = { first = 169, prefix = "MULTIACTIONBAR7BUTTON" },   -- MultiBar7
+            -- BARS 9-13: the pages no Blizzard bar exposes, so there is no Blizzard family to pair
+            -- with and SuuUI declares its own in Bindings.xml. These blocks are arithmetic rather
+            -- than measured -- page N is slots (N-1)*12+1 upward -- but the arithmetic was CONFIRMED
+            -- against the client: a probe counting filled slots found actions in every one of these
+            -- blocks (11 in 13-24, then 4, 6, 5 and 1), on a character where 27 of 72 abilities were
+            -- invisible because SuuUI reached none of them.
+            [9]  = { first = 13,  prefix = "SUUUIBAR9BUTTON",  page = 2  },
+            [10] = { first = 73,  prefix = "SUUUIBAR10BUTTON", page = 7  },
+            [11] = { first = 85,  prefix = "SUUUIBAR11BUTTON", page = 8  },
+            [12] = { first = 97,  prefix = "SUUUIBAR12BUTTON", page = 9  },
+            [13] = { first = 109, prefix = "SUUUIBAR13BUTTON", page = 10 },
         }
         for _, def in ipairs(H.SuuUI._ActionBars.BARS) do
             local want = measured[def.id]
@@ -875,6 +966,14 @@ describe("Plugins.ActionBars: every bar", function()
             expect(want).as("bar " .. def.id .. " is a known bar").notNil()
             expect(def.first).as("bar " .. def.id .. " slot block").eq(want.first)
             expect(def.bindingPrefix).as("bar " .. def.id .. " binding family").eq(want.prefix)
+            -- The page is recorded on the self-declared bars, and it must agree with the slot block:
+            -- these two are the same fact written twice, so a typo in either is caught here.
+            if want.page then
+                expect(def.page).as("bar " .. def.id .. " page").eq(want.page)
+                expect((def.page - 1) * 12 + 1).as("bar " .. def.id .. " page matches its slots")
+                    .eq(def.first)
+                expect(def.ownBindings).as("bar " .. def.id .. " declares its own bindings").truthy()
+            end
             ::continue::
         end
     end)
