@@ -1047,6 +1047,20 @@ function M.install(env)
         return it and it.itemID or nil
     end
 
+    -- Item cooldowns, kept in their own store rather than on the slot record because they are not
+    -- part of what GetContainerItemInfo returns -- folding them in would invite a spec to stage a
+    -- field the real client never reports there.
+    --
+    -- Returns three values like the action-slot version, and `enable` is a NUMBER: 0 means no
+    -- cooldown. A consumer testing truthiness paints a permanent sweep over every item, because 0
+    -- is truthy in Lua.
+    local function getContainerItemCooldown(bag, slot)
+        local perBag = state.containerCooldowns and state.containerCooldowns[bag]
+        local cd = perBag and perBag[slot]
+        if not cd then return 0, 0, 0 end
+        return cd.start or 0, cd.duration or 0, cd.enable or 1
+    end
+
     -- Drag and drop, the same contents-on-the-cursor model as PickupAction: the cursor carries a
     -- slot's CONTENTS, so a pickup onto a loaded cursor SWAPS and hands the previous occupant back.
     -- A cell that assumed overwrite would destroy an item every time the player rearranged a bag.
@@ -1138,6 +1152,7 @@ function M.install(env)
         GetContainerItemInfo     = getContainerItemInfo,
         GetContainerItemLink     = getContainerItemLink,
         GetContainerItemID       = getContainerItemID,
+        GetContainerItemCooldown = getContainerItemCooldown,
         PickupContainerItem      = pickupContainerItem,
         SplitContainerItem       = splitContainerItem,
         UseContainerItem         = useContainerItem,

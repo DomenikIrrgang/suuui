@@ -226,6 +226,26 @@ function ItemSlotMeta:ApplyPending()
     return true
 end
 
+--- Whether this cell is dimmed as a search non-match.
+-- @return bool
+function ItemSlotMeta:IsDimmed()
+    return self._dimmed == true
+end
+
+--- Dims this cell, or restores it.
+--
+-- A search non-match is DIMMED rather than removed from the layout, so the grid does not reflow
+-- under the player's cursor while they type -- and so a slot keeps its position, which is the whole
+-- point of a positional grid. Alpha on the cell's own frame rather than on the art, because a
+-- dimmed cell should recede entirely, count and edge included.
+-- @param on bool
+function ItemSlotMeta:SetDimmed(on)
+    on = on and true or false
+    if self._dimmed == on then return end
+    self._dimmed = on
+    self._f:SetAlpha(on and (T:GetToken("opacityGrid") or 0.16) or 1)
+end
+
 --- @param w number
 --- @param h number|nil  defaults to w
 function ItemSlotMeta:SetSize(w, h)

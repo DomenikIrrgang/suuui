@@ -887,6 +887,25 @@ function M.setMerchantOpen(open, opts)
     end
 end
 
+--- Stages an item cooldown on one slot, as GetContainerItemCooldown reports it.
+--
+-- Pass duration 0 (or nil) to clear it. `enable` defaults to 1 and is a NUMBER on purpose: the
+-- client answers 0 for "no cooldown", and a consumer testing truthiness paints a permanent sweep.
+-- @param bag number
+-- @param slot number
+-- @param start number|nil
+-- @param duration number|nil
+-- @param enable number|nil
+function M.setBagCooldown(bag, slot, start, duration, enable)
+    state.containerCooldowns[bag] = state.containerCooldowns[bag] or {}
+    if not duration or duration <= 0 then
+        state.containerCooldowns[bag][slot] = nil
+        return
+    end
+    state.containerCooldowns[bag][slot] =
+        { start = start or 0, duration = duration, enable = enable or 1 }
+end
+
 --- What the cursor is carrying after a PickupContainerItem, or nil.
 -- @return table|nil
 function M.getCursorItem() return state.cursorItem end

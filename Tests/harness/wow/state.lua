@@ -165,6 +165,10 @@ M.money = 0
 -- an icon for nothing. Set through H.setBagItem so a typo'd field is caught rather than ignored.
 M.containerItems = {}
 
+-- Item cooldowns, keyed by bag then slot: { start, duration, enable }. Their own store rather than
+-- part of the slot record, because GetContainerItemInfo does not report them. See H.setBagCooldown.
+M.containerCooldowns = {}
+
 -- Whether the bank frame is open, as BANKFRAME_OPENED / BANKFRAME_CLOSED bracket it.
 --
 -- It GATES bank contents, which is a measured fact rather than a convenience: with the frame shut,
@@ -330,6 +334,7 @@ function M.reset()
     M.bags               = nil
     M.money              = 0
     M.containerItems     = {}
+    M.containerCooldowns = {}
     M.bankOpen           = false
     M.merchantOpen       = false
     M.cursorItem         = nil
