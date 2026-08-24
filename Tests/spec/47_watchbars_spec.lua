@@ -327,6 +327,145 @@ describe("Plugins.WatchBars", function()
         end)
     end)
 
+    describe("docking", function()
+        -- The watch bars use the SAME Core/Dock service the action bars do. The dock needed no change
+        -- to accept them: it only ever asks a participant for GetFrame, GetWidth/GetHeight and a
+        -- SIZE_CHANGED signal, all of which a StatusBar handle already had.
+        -- A FUNCTION, not a captured value: a describe body runs when the file is declared, before
+        -- H.setup() has built the addon, so H.SuuUI is still nil at that point.
+        local function D() return H.SuuUI.Dock end
+        local function ab(id) return H.SuuUI.Plugins:Get("action_bars")._bars[id] end
+        local function enableBar(id)
+            H.SuuUI.Settings:Set("action_bars", "bar" .. id .. "_enabled", true)
+        end
+
+        it("lists the options in a stable, natural order", function()
+            -- table.sort is NOT stable in Lua, and the action bars carry no explicit order -- so all
+            -- eight tied and the dropdown came out "Bar 4, Bar 6, Bar 5, Bar 2...". Registration order
+            -- is the final tiebreaker now. Asserted as an exact sequence because "looks about right"
+            -- is what let the jumble ship.
+            local labels = {}
+            for _, o in ipairs(D().OptionsFor("watch:xp")) do labels[#labels + 1] = o.label end
+            expect(labels).deepEq({
+                "Free", "Bar 1", "Bar 2", "Bar 3", "Bar 4", "Bar 5", "Bar 6", "Bar 7", "Bar 8",
+                "Pet", "Stance", "Reputation",
+            })
+        end)
+
+        it("labels the options WITHOUT a group prefix, and keeps them unique", function()
+            -- REPORTED FROM THE GAME: prefixing the group produced eight rows of "Action Bars: Ba..."
+            -- in a 140px dropdown -- every entry truncated to the same string. The prefix was meant to
+            -- disambiguate and instead made every option identical.
+            --
+            -- Uniqueness is what makes the prefix unnecessary, so it is asserted here rather than
+            -- trusted: a new participant whose label collides fails THIS test and gets a better name,
+            -- instead of every label carrying a prefix to cover a collision that does not exist.
+            local opts = D().OptionsFor("watch:xp")
+            local seen = {}
+            for _, o in ipairs(opts) do
+                expect(o.label:find(":", 1, true)).as(o.label .. " carries no group prefix").isNil()
+                expect(seen[o.label]).as("label '" .. o.label .. "' is not a duplicate").isNil()
+                seen[o.label] = true
+                -- Long enough to truncate at the control's width is a rendering bug waiting to happen.
+                expect(#o.label <= 16).as("'" .. o.label .. "' fits the dropdown").truthy()
+            end
+            expect(seen["Free"]).as("Free is offered").truthy()
+            expect(seen["Experience"]).as("its own label is excluded").isNil()
+        end)
+
+        it("registers both bars as participants under their own group", function()
+            local byId = {}
+            for _, e in ipairs(D().Participants()) do byId[e.id] = e.spec end
+            expect(byId["watch:xp"]).as("xp registered").notNil()
+            expect(byId["watch:rep"]).as("rep registered").notNil()
+            expect(byId["watch:xp"].group).eq("Watch Bars")
+            -- NAMESPACED, unlike the action bars' plain ids. Those were already in player profiles
+            -- before a second group existed, so they keep what they had.
+            expect(byId["1"]).as("action bar ids stay plain").notNil()
+        end)
+
+        it("attaches the XP bar to an action bar", function()
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(1)
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach_edge", "below")
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "1")
+            expect(D().ParentOf(xp())).eq(ab(1))
+            expect(D().EdgeOf(xp())).eq("below")
+        end)
+
+        it("takes the drag handle away while docked and gives it back on release", function()
+            -- Two things writing one anchor is the failure to avoid: while docked the dock owns the
+            -- frame's point, so a moveable left switched on would fight it and the winner would depend
+            -- on which wrote last.
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(1)
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "1")
+            expect(xp():GetFrame()._suuui_moveable).as("not draggable while docked").isNil()
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "detached")
+            expect(xp():GetFrame()._suuui_moveable).as("draggable again once free").notNil()
+            expect(D().ParentOf(xp())).as("and off the dock").isNil()
+        end)
+
+        it("lets an ACTION BAR attach to a watch bar -- the reverse direction", function()
+            -- This failed at first, and the reason is worth keeping: ActionBars built the target's
+            -- attach point name from its OWN prefix, so a watch-bar target became
+            -- "actionbar.dock.watch:xp" -- a point that never existed. Request's "not published yet"
+            -- path looks exactly like that, so it failed silently. Both plugins resolve the name
+            -- through Dock.PointFor now.
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(2)
+            H.SuuUI.Settings:Set("action_bars", "bar2_attach_edge", "above")
+            H.SuuUI.Settings:Set("action_bars", "bar2_attach", "watch:xp")
+            expect(D().ParentOf(ab(2))).as("docked to the XP bar").eq(xp())
+            expect(D().EdgeOf(ab(2))).eq("above")
+        end)
+
+        it("REFUSES a cycle that runs through two plugins", function()
+            -- Neither plugin can see this alone: bar 2 is attached to the XP bar in ActionBars'
+            -- settings, and the XP bar would be attached to bar 2 in WatchBars'. Each holds one half.
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(2)
+            H.SuuUI.Settings:Set("action_bars", "bar2_attach", "watch:xp")
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "2")
+            expect(H.SuuUI.Settings:Get("watch_bars", "xp_attach"))
+                .as("the cycle never reached the profile").eq("detached")
+            expect(D().WouldCycleIds("watch:xp", "2")).truthy()
+        end)
+
+        it("allows a legal chain across plugins", function()
+            H.setXP({ current = 230, max = 1000 })
+            H.setWatchedFaction({ name = "F", standing = 5, min = 3000, max = 6000, value = 4500 })
+            enableBar(1)
+            H.SuuUI.Settings:Set("watch_bars", "rep_attach", "watch:xp")
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "1")
+            expect(D().ParentOf(rep())).as("rep on xp").eq(xp())
+            expect(D().ParentOf(xp())).as("xp on bar 1").eq(ab(1))
+        end)
+
+        it("defers the whole transition in combat and catches up on leaving it", function()
+            -- An anchor is the same dependency as parentage: if this bar is a dock for an action bar,
+            -- moving it would move protected buttons and the client refuses that mid-fight. Rather
+            -- than reason about which direction is safe, the transition waits.
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(1)
+            H.setCombat(true)
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "1")
+            expect(D().ParentOf(xp())).as("nothing moved in combat").isNil()
+            H.setCombat(false)
+            H.fireEvent("PLAYER_REGEN_ENABLED")
+            expect(D().ParentOf(xp())).as("applied on leaving combat").eq(ab(1))
+        end)
+
+        it("gives up its dock membership when the bar is switched off", function()
+            H.setXP({ current = 230, max = 1000 })
+            enableBar(1)
+            H.SuuUI.Settings:Set("watch_bars", "xp_attach", "1")
+            local held = xp()
+            H.SuuUI.Settings:Set("watch_bars", "xp_enabled", false)
+            expect(D().ParentOf(held)).as("no longer anchored to anything").isNil()
+        end)
+    end)
+
     describe("readout slots", function()
         it("defaults to a percent in the centre and nothing either side", function()
             H.setXP({ current = 250, max = 1000 })

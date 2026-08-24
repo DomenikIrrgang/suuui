@@ -1131,7 +1131,7 @@ describe("Plugins.ActionBars: bar-to-bar docking", function()
 
     before_each(function()
         H.setup()
-        D = H.SuuUI._ActionBars.Dock
+        D = H.SuuUI.Dock
     end)
 
     local function bars()
@@ -1423,24 +1423,35 @@ describe("Plugins.ActionBars: bar-to-bar docking", function()
         end)
     end)
 
-    it("offers every bar but itself as a target", function()
+    it("offers every OTHER dockable thing as a target, resolved lazily", function()
+        -- `options` is a FUNCTION now, because the list spans plugins and cannot be frozen when this
+        -- plugin registers its schema -- the watch bars may not have registered yet. Resolved when the
+        -- settings panel is built instead, which is what this asserts by calling it.
         local bars_ = H.SuuUI._ActionBars.BARS
+        local participants = #H.SuuUI.Dock.Participants()
+        local checked = 0
         for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
             if e.type == "subtabs" then
                 for i, tab in ipairs(e.tabs) do
                     for _, entry in ipairs(tab.schema) do
                         if entry.key == "bar" .. bars_[i].id .. "_attach" then
-                            -- Free plus every other bar.
-                            expect(#entry.options).as("tab " .. i .. " options").eq(#bars_)
-                            for _, opt in ipairs(entry.options) do
+                            expect(type(entry.options)).as("resolved lazily").eq("function")
+                            local opts = entry.options()
+                            -- Free, plus every participant except this bar. Counted against the
+                            -- REGISTRY rather than against #BARS, so a watch bar registering as a
+                            -- participant shows up here instead of breaking the count.
+                            expect(#opts).as("tab " .. i .. " options").eq(participants)
+                            for _, opt in ipairs(opts) do
                                 expect(opt.value == tostring(bars_[i].id))
                                     .as("cannot target itself").falsy()
                             end
+                            checked = checked + 1
                         end
                     end
                 end
             end
         end
+        expect(checked).as("every bar's dropdown was checked").eq(#bars_)
     end)
 end)
 
@@ -1605,14 +1616,14 @@ describe("Plugins.ActionBars: the stance bar", function()
             local grid = withForms(3)
             H.SuuUI.Settings:Set(PLUGIN, "barstance_attach_edge", "below")
             H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
-            expect(H.SuuUI._ActionBars.Dock.ParentOf(grid)).eq(bars()[1])
+            expect(H.SuuUI.Dock.ParentOf(grid)).eq(bars()[1])
             expect(grid:GetFrame()._suuui_moveable).as("the dock owns its position now").isNil()
         end)
 
         it("can be a dock for an action bar", function()
             withForms(3)
             H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "stance")
-            expect(H.SuuUI._ActionBars.Dock.ParentOf(bars()[2]))
+            expect(H.SuuUI.Dock.ParentOf(bars()[2]))
                 .eq(bars()[stanceDef().id])
         end)
 
@@ -1625,7 +1636,7 @@ describe("Plugins.ActionBars: the stance bar", function()
             H.SuuUI.Settings:Set(PLUGIN, "bar2_enabled", true)
             H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
             H.SuuUI.Settings:Set(PLUGIN, "bar2_attach", "1")
-            local kids = H.SuuUI._ActionBars.Dock.Children(bars()[1])
+            local kids = H.SuuUI.Dock.Children(bars()[1])
             expect(kids).len(2)
             -- ORDER is the observable, not just the count. The stack is sorted by `order`, and the
             -- stance bar's is 99 while bar 2's is 2 -- so bar 2 sits nearest the dock. An `order`
@@ -1641,7 +1652,7 @@ describe("Plugins.ActionBars: the stance bar", function()
             H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "2")
             expect(H.SuuUI.Settings:Get(PLUGIN, "barstance_attach"))
                 .as("the loop was refused").eq("detached")
-            expect(H.SuuUI._ActionBars.Dock.ParentOf(grid)).isNil()
+            expect(H.SuuUI.Dock.ParentOf(grid)).isNil()
         end)
     end)
 
@@ -1829,7 +1840,7 @@ describe("Plugins.ActionBars: the pet bar", function()
 
     it("docks to another bar like any other", function()
         H.SuuUI.Settings:Set(PLUGIN, "barpet_attach", "1")
-        expect(H.SuuUI._ActionBars.Dock.ParentOf(petBar())).eq(bars()[1])
+        expect(H.SuuUI.Dock.ParentOf(petBar())).eq(bars()[1])
     end)
 
     it("can share a dock with the stance bar and sorts before it", function()
@@ -1837,7 +1848,7 @@ describe("Plugins.ActionBars: the pet bar", function()
         -- dock is also the only shape that exercises the comparator at all.
         H.SuuUI.Settings:Set(PLUGIN, "barpet_attach", "1")
         H.SuuUI.Settings:Set(PLUGIN, "barstance_attach", "1")
-        local kids = H.SuuUI._ActionBars.Dock.Children(bars()[1])
+        local kids = H.SuuUI.Dock.Children(bars()[1])
         expect(kids).len(2)
         expect(kids[1]).as("pet is nearer the dock").eq(petBar())
     end)

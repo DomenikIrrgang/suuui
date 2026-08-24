@@ -938,6 +938,63 @@ trying `ToggleBag(-2)`) or establish that a modern backend folds it into the bag
 
 ---
 
+## Watch bar docking — Phase 8c, BUILT 2026-08-24
+
+The watch bars dock to action bars and to each other, in **both directions**, through the same service.
+
+**The dock needed no functional change to accept them.** Probed against the live harness before designing
+anything: `Dock.Attach(bar1, xpBar, "above")` already returned true and placed the bar. The dock only ever
+asks a participant for `GetFrame`, `GetWidth`/`GetHeight`, a `_dockEdge` field and a `SIZE_CHANGED`
+signal — a `StatusBar` handle has all of it, and nothing in `Reflow`, `Attach` or the cycle walk knew what
+an action bar was. So `Plugins/ActionBars/Dock.lua` moved to **`Core/Dock.lua`** as `SuuUI.Dock`: a rename,
+not a rewrite. `Paging` and `Suppress` stayed behind, because those genuinely are action-bar concerns.
+
+**A participant registry, because the cycle guard cannot work per plugin.** A watch bar attached to bar 1
+while bar 1 is attached to that watch bar is a real loop the client hard-errors on, and **neither plugin
+can see it** — each holds one half of the graph. `Dock.RegisterParticipant` stores identity, the
+AttachPoints name, and an `attachedTo()` closure that reads *that* plugin's settings, so `WouldCycleIds`
+walks across plugins without knowing any plugin's key layout. Handle resolution stays with AttachPoints,
+which already handles a target that does not exist yet or gets switched off underneath.
+
+**Ids are profile data, so they are backward compatible by construction.** The action bars keep the plain
+ids already written into profiles (`"1".."8"`, plus `"stance"`/`"pet"` — which is why they were never
+coerced to numbers). Everything registering later namespaces: `"watch:xp"`, `"watch:rep"`.
+
+**Dropdown options became a FUNCTION**, resolved when the settings panel is built. A fixed list cannot
+work once the option set spans plugins, because whether the other plugin has registered depends on load
+order. `SettingsUI/Controls/Dropdown.lua` resolves a function form, `pcall`ed so a bad provider costs one
+empty dropdown rather than the whole settings page.
+
+**Labels are NOT prefixed with the group, and the order needs an explicit tiebreaker.** Two rendering
+faults found in game, both in the first version of `OptionsFor`:
+
+- It prefixed the group once a second group existed, reasoning that "Experience" beside "Bar 3" reads as
+  a bar named Experience. In a 140px dropdown that gave **eight consecutive rows of "Action Bars: Ba..."**
+  — every entry truncated to the same string, which is far worse than the ambiguity it guarded against.
+  The labels are unique on their own, and the spec now ASSERTS that uniqueness, so a future participant
+  with a colliding label gets a better name instead of every label paying a prefix.
+- **`table.sort` is not stable in Lua**, and the action bars carry no explicit `order`, so all eight tied
+  on 0 and the list came out "Bar 4, Bar 6, Bar 5, Bar 2…". Registration sequence is recorded at
+  registration and used as the final tiebreaker; the spec asserts the exact sequence, because "looks
+  about right" is what let the jumble ship.
+
+**The bug this phase produced, and it failed SILENTLY.** ActionBars built its target's attach point name
+from its own prefix, so a watch-bar target became `actionbar.dock.watch:xp` — a point that never existed.
+`Request`'s "not published yet" path looks identical to "will never exist", so an action bar simply never
+docked to a watch bar and said nothing. Both plugins resolve through `Dock.PointFor` now. Found by an
+end-to-end probe of all four directions, not by the suite.
+
+**Combat deferral runs in both directions, deliberately without reasoning about which is safe.** An anchor
+is the same dependency as parentage: if a watch bar is a dock for an action bar, moving it would move
+protected buttons. The whole transition defers on `InCombatLockdown` and drains on
+`PLAYER_REGEN_ENABLED` — added to this plugin's event list for that reason alone.
+
+**Docked means not draggable.** While docked the dock owns the frame's point, so `MoveableFrame` comes off
+and goes back on with the transition; leaving it on would let a drag fight the dock, with the winner
+decided by whichever wrote last. A bar rebuilt while docked comes back non-draggable for the same reason.
+
+Default is **free-floating** — no change for an existing profile.
+
 ## Watch bars — Phase 8, BUILT 2026-08-24
 
 `Plugins/WatchBars/WatchBars.lua`, two instances of one shape, plus `StatusBar`'s new secondary fill.

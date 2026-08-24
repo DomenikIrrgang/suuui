@@ -207,20 +207,34 @@ end
 --
 -- Bounded as well as identity-checked. A stored graph that already contains a loop -- a hand-edited
 -- profile, a version that predates this validator -- must not spin here.
+--
+-- Delegates to the shared registry rather than reading this plugin's own keys, because the graph now
+-- SPANS PLUGINS: a watch bar attached to bar 1 while bar 1 is attached to that watch bar is a real
+-- loop, and a walk that only knew about action bars would let it through. The registry asks each
+-- participant for its own target, whichever plugin owns it -- and keeps the bound and the
+-- identity check that were here.
 local function wouldCycleInSettings(fromId, toId)
-    local node, steps = tostring(toId), 0
-    while node do
-        if node == tostring(fromId) then return true end
-        local v = SuuUI.Settings:Get(PLUGIN_ID, "bar" .. node .. "_attach")
-        if v == nil or v == "detached" or v == "" then
-            node = nil
-        else
-            node = tostring(v)
-        end
-        steps = steps + 1
-        if steps > #BARS + 1 then return true end
+    return SuuUI.Dock.WouldCycleIds(fromId, toId)
+end
+
+--- Registers every bar as a dock participant.
+--
+-- Declarative, and done before any bar exists, because a participant entry needs no handle -- only
+-- identity, its attach point's name, and how to read its stored target. That is what lets the dropdown
+-- keep offering a bar that is currently switched off, exactly as the static list did.
+--
+-- Ids stay the PLAIN bar ids they have always been ("1".."8", "stance", "pet"), because those are
+-- already written into player profiles. Anything registering later namespaces its own.
+local function registerParticipants()
+    for _, def in ipairs(BARS) do
+        SuuUI.Dock.RegisterParticipant(def.id, {
+            label      = def.label,
+            group      = "Action Bars",
+            sort       = def.order or 0,
+            point      = dockPoint(def.id),
+            attachedTo = function() return attachTarget(def) end,
+        })
     end
-    return false
 end
 
 -- Asks for a dock, and keeps asking: Request fires the callback immediately with whatever is there --
@@ -229,7 +243,13 @@ end
 local function requestDock(p, def)
     local targetId = attachTarget(def)
     if not targetId then return end
-    SuuUI.AttachPoints:Request(dockPoint(targetId), function(provider)
+    -- Resolved through the REGISTRY rather than built from this plugin's own prefix. The target may
+    -- belong to another plugin -- a watch bar publishes "watchbar.dock.xp", not "actionbar.dock.watch:xp"
+    -- -- and building the name here is what made an action bar silently fail to dock to one: the request
+    -- went to a point that never existed, and Request's "not there yet" path looks identical to that.
+    local point = SuuUI.Dock.PointFor(targetId)
+    if not point then return end
+    SuuUI.AttachPoints:Request(point, function(provider)
         local grid = p._bars[def.id]
         if not grid then return end
         if provider and provider.Attach then
@@ -421,10 +441,10 @@ local function buildBar(p, def)
     SuuUI.AttachPoints:Publish(dockPoint(def.id), {
         frame  = frame,
         Attach = function(child, opts)
-            return SuuUI._ActionBars.Dock.Attach(grid, child, opts)
+            return SuuUI.Dock.Attach(grid, child, opts)
         end,
         Detach = function(child)
-            return SuuUI._ActionBars.Dock.Detach(grid, child)
+            return SuuUI.Dock.Detach(grid, child)
         end,
     })
 
@@ -457,7 +477,7 @@ local function destroyBar(p, def)
     -- Release drops OUR request; Release(dock) drops the bars attached to us. Both, because a bar can
     -- be a dock and be docked at the same time.
     SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
-    SuuUI._ActionBars.Dock.Release(grid)
+    SuuUI.Dock.Release(grid)
 
     -- Released before the frame goes, or the client keeps evaluating a conditional against a frame
     -- that no longer exists.
@@ -526,8 +546,8 @@ local function applyAttach(p, def)
         -- same anchor and the result depends on which fired last.
         SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
         -- Asked of the dock module rather than assumed to be bar 1: any bar can be the parent now.
-        local parent = SuuUI._ActionBars.Dock.ParentOf(grid)
-        if parent then SuuUI._ActionBars.Dock.Detach(parent, grid) end
+        local parent = SuuUI.Dock.ParentOf(grid)
+        if parent then SuuUI.Dock.Detach(parent, grid) end
         syncMoveable(p, def)
     end
 end
@@ -610,22 +630,21 @@ local function barTab(def)
             type = "toggle", default = true, enabledIf = key(def, "enabled") }
     end
 
-    -- Any bar can attach to any OTHER bar, on any edge. Placed before the sliders, with the other
-    -- placement decision, rather than mixed in among the dimensions.
+    -- Any bar can attach to any OTHER dockable thing, on any edge. Placed before the sliders, with the
+    -- other placement decision, rather than mixed in among the dimensions.
+    --
+    -- A FUNCTION, not a fixed list, because the option set now spans plugins: the watch bars register
+    -- as participants too, and whether they have done so yet depends on load order. Resolved when the
+    -- panel is built, by which point every plugin has registered.
     --
     -- The `validate` is the cycle guard, and it lives HERE rather than in the dock because a
     -- validator runs before the value is stored: a rejected choice never reaches the profile, so the
     -- dropdown cannot end up showing a state that is not in effect. The dock refuses a cycle too,
     -- but that is a backstop for a profile written before this existed.
-    local options = { { value = "detached", label = "Free" } }
-    for _, other in ipairs(BARS) do
-        if other.id ~= def.id then
-            options[#options + 1] = { value = tostring(other.id), label = other.label }
-        end
-    end
     schema[#schema + 1] = {
         key = key(def, "attach"), label = "Attach To", type = "dropdown",
-        default = "detached", enabledIf = key(def, "enabled"), options = options,
+        default = "detached", enabledIf = key(def, "enabled"),
+        options = function() return SuuUI.Dock.OptionsFor(def.id) end,
         validate = function(value)
             if value == nil or value == "detached" then return true end
             local target = tostring(value)
@@ -633,7 +652,7 @@ local function barTab(def)
             -- the frame unplaced. So bar 4 on bar 5 on bar 4 is refused rather than attempted.
             --
             -- Attaching to ITSELF needs no separate check: it is a cycle of length zero, and the walk
-            -- below matches on its first step. An earlier draft tested for it explicitly and mutation
+            -- matches on its first step. An earlier draft tested for it explicitly and mutation
             -- testing showed the clause could not be made to matter.
             return not wouldCycleInSettings(def.id, target)
         end,
@@ -730,6 +749,11 @@ SuuUI:CreatePlugin({
 
     onInit = function(p)
         p._bars = {}
+        -- BEFORE Settings:Register, so this plugin's own participants exist by the time anything reads
+        -- the registry. Cross-plugin visibility does not depend on this ordering -- the Attach To
+        -- options are resolved when the panel is built, not now -- but registering first keeps the
+        -- invariant simple: a plugin that has initialised has published its participants.
+        registerParticipants()
         SuuUI.Settings:Register(PLUGIN_ID, schema())
 
         -- No `immediate` here on purpose. Plugins:autoEnable already applies the stored value

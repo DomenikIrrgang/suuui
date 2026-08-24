@@ -3,6 +3,11 @@ local S = SuuUI.UISignals
 
 --- Builds a dropdown control row.
 -- @param entry table    Schema entry { key, label, options, default, owner }
+--   options: an array, OR a function returning one. The function form is resolved HERE, when the
+--   panel is built, which is the whole reason it exists: an option set spanning plugins cannot be
+--   frozen at schema-registration time, because whether the other plugin has registered yet depends
+--   on load order. Docking uses it -- a bar's "Attach To" list has to include participants from
+--   plugins that register after this one.
 -- @param pluginId string
 -- @param parent frame
 -- @return table  Row container handle
@@ -11,8 +16,19 @@ local function Build(entry, pluginId, parent)
     -- Data namespace only; the watcher owner stays the page's. See Controls/Toggle.lua.
     local dataId = entry.owner or pluginId
 
+    local options = entry.options
+    if type(options) == "function" then
+        -- pcall'd because this now runs third-party-ish code during panel construction, and a bad
+        -- provider must cost one empty dropdown rather than the whole settings page.
+        local ok, resolved = pcall(options)
+        options = (ok and type(resolved) == "table") and resolved or {}
+        if not ok then
+            SuuUI.Fault("Settings: options provider for '" .. tostring(entry.key) .. "' errored")
+        end
+    end
+
     local dd = C.Dropdown({
-        options = entry.options or {},
+        options = options or {},
         w       = 140,
     }, row:GetFrame())
     -- Height omitted: the dropdown derives it from its size and font tokens

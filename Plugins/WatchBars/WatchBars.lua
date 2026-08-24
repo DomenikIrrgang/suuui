@@ -300,6 +300,125 @@ local function applySize(p, def)
     bar:SetSize(get(key(def, "width"), 400), get(key(def, "height"), 10))
 end
 
+---------------------------------------------------------------------------
+-- Docking
+--
+-- The same Core/Dock service the action bars use, reached the same way: a bar PUBLISHES an attach
+-- point so anything can dock to it, and REQUESTS its target's point so it can dock to anything. Neither
+-- side needs to know what the other is -- the dock only ever asks a participant for GetFrame,
+-- GetWidth/GetHeight and a SIZE_CHANGED signal, all of which a StatusBar handle already has.
+---------------------------------------------------------------------------
+
+local function dockPoint(id)
+    return "watchbar.dock." .. id
+end
+
+--- Which participant this bar is set to attach to, as the id STRING, or nil for free.
+local function attachTarget(def)
+    local v = get(key(def, "attach"), "detached")
+    if v == nil or v == "detached" or v == "" then return nil end
+    return tostring(v)
+end
+
+local function isDocked(def)
+    return attachTarget(def) ~= nil
+end
+
+--- A docked bar must NOT be draggable, and a free one must be.
+--
+-- Two things writing the same anchor is the failure to avoid: while docked the dock owns the frame's
+-- point, so leaving the moveable on would let a drag fight the dock and the result would depend on
+-- which wrote last.
+local function syncMoveable(p, def)
+    local bar = p._bars[def.id]
+    if not bar then return end
+    local frame = bar:GetFrame()
+    local docked = isDocked(def)
+
+    if docked and frame._suuui_moveable then
+        SuuUI.MoveableFrame:Remove(frame)
+    elseif not docked and not frame._suuui_moveable then
+        SuuUI.MoveableFrame:Apply(frame, {
+            pluginId    = PLUGIN_ID,
+            key         = key(def, "position"),
+            displayName = def.label,
+            defaults    = def.position,
+        })
+    end
+end
+
+--- Asks for the target's dock, and keeps asking.
+--
+-- Request fires immediately with whatever is there -- including nil -- and again whenever it appears or
+-- goes away. So a bar set to attach to something that does not exist yet is not a special case, and
+-- neither is that target being switched off underneath it.
+local function requestDock(p, def)
+    local targetId = attachTarget(def)
+    if not targetId then return end
+    -- Resolved through the registry rather than built from a string, because the target may belong to
+    -- another plugin entirely: an action bar publishes "actionbar.dock.5" and a watch bar publishes
+    -- "watchbar.dock.rep". PointFor is what keeps this function ignorant of both.
+    local point = SuuUI.Dock.PointFor(targetId)
+    if not point then return end
+
+    SuuUI.AttachPoints:Request(point, function(provider)
+        local bar = p._bars[def.id]
+        if not bar then return end
+        if provider and provider.Attach then
+            provider.Attach(bar, { edge = get(key(def, "attach_edge"), "above") })
+        end
+    end, OWNER .. ".dock." .. def.id)
+end
+
+--- Moves a bar between docked and free.
+--
+-- DEFERRED IN COMBAT, in both directions. An anchor is the same dependency as parentage: if this bar
+-- is a dock for an action bar, moving it would move protected buttons, and the client refuses that
+-- mid-fight. Rather than reason about which direction is safe, the whole transition waits for
+-- PLAYER_REGEN_ENABLED -- so a player changing this in a fight sees it apply when the fight ends
+-- instead of "Interface action failed because of an AddOn".
+local function applyAttach(p, def)
+    local bar = p._bars[def.id]
+    if not bar then return end
+
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        p._pendingAttach = p._pendingAttach or {}
+        p._pendingAttach[def.id] = def
+        return
+    end
+    if p._pendingAttach then p._pendingAttach[def.id] = nil end
+
+    if isDocked(def) then
+        syncMoveable(p, def)
+        requestDock(p, def)
+    else
+        -- Released BEFORE the moveable goes back on, so the dock has stopped anchoring the frame by the
+        -- time the stored position starts driving it. The other order leaves both writing the same
+        -- anchor and the outcome depends on which fired last.
+        SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
+        local parent = SuuUI.Dock.ParentOf(bar)
+        if parent then SuuUI.Dock.Detach(parent, bar) end
+        syncMoveable(p, def)
+    end
+end
+
+--- Registers both bars as dock participants.
+--
+-- Namespaced ids ("watch:xp"), unlike the action bars' plain ones -- those were already written into
+-- player profiles before a second group existed, so they keep what they had and everything newer
+-- carries a prefix.
+local function registerParticipants()
+    for _, def in ipairs(BARS) do
+        SuuUI.Dock.RegisterParticipant("watch:" .. def.id, {
+            label      = def.label,
+            group      = "Watch Bars",
+            sort       = def.order or 0,
+            point      = dockPoint(def.id),
+            attachedTo = function() return attachTarget(def) end,
+        })
+    end
+end
+
 local function buildBar(p, def)
     if p._bars[def.id] then return end
     local root = SuuUI.UIRoot:GetRootContainer()
@@ -324,12 +443,23 @@ local function buildBar(p, def)
     p._bars[def.id] = bar
 
     SuuUI.UIRoot:SetLayer(bar:GetFrame(), "normal")
-    SuuUI.MoveableFrame:Apply(bar:GetFrame(), {
-        pluginId    = PLUGIN_ID,
-        key         = key(def, "position"),
-        displayName = def.label,
-        defaults    = def.position,
+
+    -- Published so ANYTHING can dock to this bar -- an action bar included. The provider closes over
+    -- this bar as the dock, so the requester never learns what it attached to.
+    SuuUI.AttachPoints:Publish(dockPoint(def.id), {
+        frame  = bar:GetFrame(),
+        Attach = function(child, opts)
+            return SuuUI.Dock.Attach(bar, child, opts)
+        end,
+        Detach = function(child)
+            return SuuUI.Dock.Detach(bar, child)
+        end,
     })
+
+    -- Through syncMoveable rather than an unconditional Apply: a bar rebuilt while docked must not come
+    -- back draggable, or it would spend the rest of the session fighting its own dock for the anchor.
+    syncMoveable(p, def)
+    applyAttach(p, def)
 
     paint(p, def)
 end
@@ -338,6 +468,15 @@ local function destroyBar(p, def)
     local bar = p._bars[def.id]
     if not bar then return end
     p._bars[def.id] = nil
+
+    -- Revoked before anything is torn down: consumers detach on the nil notification, so nothing
+    -- foreign is left anchored to a frame that is about to go.
+    SuuUI.AttachPoints:Revoke(dockPoint(def.id))
+    -- BOTH directions, because a bar can be docked AND be a dock at the same time. Release drops our
+    -- own request; Dock.Release drops whatever was attached to us.
+    SuuUI.AttachPoints:Release(OWNER .. ".dock." .. def.id)
+    SuuUI.Dock.Release(bar)
+
     if bar:GetFrame()._suuui_moveable then
         SuuUI.MoveableFrame:Remove(bar:GetFrame())
     end
@@ -356,6 +495,28 @@ local function barTab(def)
         -- Default OFF. A hairline box around a 10px bar reads as a panel rather than a progress
         -- track. Note the SCHEMA default is what takes effect -- Settings:Get resolves through it, so
         -- the fallback passed at the call site never runs once a key is declared here.
+        -- Docking. A FUNCTION for the options because the list spans plugins -- the action bars
+        -- register their own participants, and load order decides who got there first. Resolved when
+        -- the panel is built, by which point everyone has registered.
+        { key = key(def, "attach"), label = "Attach To", type = "dropdown", default = "detached",
+          enabledIf = key(def, "enabled"),
+          options = function() return SuuUI.Dock.OptionsFor("watch:" .. def.id) end,
+          validate = function(value)
+              if value == nil or value == "detached" then return true end
+              -- A circular anchor is a hard client error, not a cosmetic fault, and the loop can now
+              -- run through another plugin: this bar on bar 1 while bar 1 is on this bar. The shared
+              -- walk is the only thing that can see both halves.
+              return not SuuUI.Dock.WouldCycleIds("watch:" .. def.id, tostring(value))
+          end },
+        { key = key(def, "attach_edge"), label = "Attached Edge", type = "dropdown", default = "above",
+          -- Dead while the bar owns its own position, rather than silently ignored.
+          enabledIf = { key = key(def, "attach"), notEquals = "detached" },
+          options = {
+              { value = "above", label = "Above" },
+              { value = "below", label = "Below" },
+              { value = "left",  label = "Left"  },
+              { value = "right", label = "Right" },
+          } },
         { key = key(def, "border"), label = "Show Border", type = "toggle",
           default = false, enabledIf = key(def, "enabled") },
     }
@@ -399,6 +560,9 @@ local EVENTS = {
     "PLAYER_LEVEL_UP",
     "UPDATE_FACTION",
     "PLAYER_ENTERING_WORLD",
+    -- Not a reading event: it is how an attach change made mid-fight catches up. Without it a player
+    -- who re-docks a bar in combat would see nothing happen and assume the setting is broken.
+    "PLAYER_REGEN_ENABLED",
 }
 
 SuuUI:CreatePlugin({
@@ -408,6 +572,10 @@ SuuUI:CreatePlugin({
 
     onInit = function(p)
         p._bars = {}
+        -- Before the schema, so a plugin that has initialised has published its participants. Cross-
+        -- plugin visibility does not depend on this ordering, because the Attach To options resolve
+        -- when the panel is built rather than now.
+        registerParticipants()
         SuuUI.Settings:Register(PLUGIN_ID, schema())
         SuuUI.Settings:Watch(PLUGIN_ID, "enabled", function(on)
             if on then p:Enable() else p:Disable() end
@@ -421,7 +589,14 @@ SuuUI:CreatePlugin({
         -- time the client can still answer 0 for the level's max, and nothing else would fire for a
         -- character who is simply logging in already levelled.
         p._evt = p._evt or CreateFrame("Frame")
-        p._evt:SetScript("OnEvent", function()
+        p._evt:SetScript("OnEvent", function(_, event)
+            -- Leaving combat drains whatever was deferred, before the repaint, so the bar is in its
+            -- final place by the time its fill is re-asserted against the new width.
+            if event == "PLAYER_REGEN_ENABLED" and p._pendingAttach then
+                local pending = p._pendingAttach
+                p._pendingAttach = nil
+                for _, def in pairs(pending) do applyAttach(p, def) end
+            end
             for _, def in ipairs(BARS) do paint(p, def) end
         end)
         for _, e in ipairs(EVENTS) do
@@ -460,6 +635,13 @@ SuuUI:CreatePlugin({
                 local bar = p._bars[def.id]
                 if bar then bar:SetBorderShown(on and true or false) end
             end, OWNER .. "." .. def.id .. ".border")
+
+            -- Both attach settings go through applyAttach, which is where the combat deferral lives.
+            for _, name in ipairs({ "attach", "attach_edge" }) do
+                SuuUI.Settings:Watch(PLUGIN_ID, key(def, name), function()
+                    applyAttach(p, def)
+                end, OWNER .. "." .. def.id .. "." .. name)
+            end
         end
     end,
 

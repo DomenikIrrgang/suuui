@@ -251,5 +251,131 @@ function M.EdgeOf(child)
     return parentOf[child] and (child._dockEdge or "above") or nil
 end
 
-SuuUI._ActionBars = SuuUI._ActionBars or {}
-SuuUI._ActionBars.Dock = M
+---------------------------------------------------------------------------
+-- The participant registry
+--
+-- WHY THIS EXISTS AT ALL: the settings-level cycle guard cannot work per plugin. A watch bar attached
+-- to action bar 1 while bar 1 is attached to that watch bar is a real loop the client hard-errors on,
+-- and neither plugin can see it alone -- each holds only its own half of the graph. So the registry is
+-- the one place that knows every dockable thing and how to ask it what it is attached to.
+--
+-- IDS ARE STORED IN PROFILES, so they are backward compatible by construction. The action bars
+-- registered first and stored plain ids ("1".."8", and "stance"/"pet", which is why they were never
+-- coerced to numbers). Those keep exactly the ids they had; everything registering later carries a
+-- namespace ("watch:xp"), so an old profile keeps resolving and a new one is unambiguous.
+--
+-- Handle resolution is deliberately NOT here. AttachPoints already solves it: a participant publishes
+-- a point and its dependents Request it, so a bar attached to one that does not exist yet -- or that
+-- gets switched off underneath it -- is handled by machinery that already exists.
+---------------------------------------------------------------------------
+
+local participants = {}
+local order = {}
+
+--- Registers a dockable thing.
+-- @param id string  stable id, stored in profiles. Namespace anything new: "watch:xp".
+-- @param spec table {
+--   label string       what the dropdown shows
+--   group string       heading the dropdown groups it under, e.g. "Action Bars"
+--   sort number        order within the group
+--   point string       its AttachPoints name, so a dependent can Request it
+--   attachedTo func    -> the id it is currently set to attach to, or nil. Read from THAT plugin's
+--                        settings, which is the only reason a cross-plugin walk is possible.
+-- }
+function M.RegisterParticipant(id, spec)
+    id = tostring(id)
+    if not participants[id] then order[#order + 1] = id end
+    spec = spec or {}
+    -- Registration sequence, kept as the final tiebreaker. table.sort is NOT stable in Lua, so without
+    -- it any two participants with the same group and sort come out in an arbitrary order -- which is
+    -- exactly what happened: the action bars carry no explicit order, so all eight tied on 0 and the
+    -- dropdown listed them 4, 6, 5, 2, 3, 7, 1, 8.
+    spec.seq = #order
+    participants[id] = spec
+end
+
+--- Forgets a participant. For a plugin being disabled, so its bars stop being offered as docks.
+function M.UnregisterParticipant(id)
+    id = tostring(id)
+    if not participants[id] then return end
+    participants[id] = nil
+    for i, v in ipairs(order) do
+        if v == id then table.remove(order, i) break end
+    end
+end
+
+--- Every participant, in registration order within group/sort.
+-- @return table  array of { id = ..., spec = ... }
+function M.Participants()
+    local out = {}
+    for _, id in ipairs(order) do
+        if participants[id] then out[#out + 1] = { id = id, spec = participants[id] } end
+    end
+    table.sort(out, function(a, b)
+        local ga, gb = a.spec.group or "", b.spec.group or ""
+        if ga ~= gb then return ga < gb end
+        local sa, sb = a.spec.sort or 0, b.spec.sort or 0
+        if sa ~= sb then return sa < sb end
+        -- Registration order, so the list is deterministic even when nothing else distinguishes two
+        -- participants. Without this the dropdown reshuffled itself.
+        return (a.spec.seq or 0) < (b.spec.seq or 0)
+    end)
+    return out
+end
+
+--- The AttachPoints name a participant publishes, so a dependent can Request it.
+function M.PointFor(id)
+    local spec = participants[tostring(id)]
+    return spec and spec.point
+end
+
+--- Dropdown options for one participant: everything else that can be docked to.
+--
+-- LABELS ARE NOT PREFIXED WITH THE GROUP. An earlier version prefixed them once more than one group
+-- existed, reasoning that "Experience" next to "Bar 3" reads as a bar named Experience. In a 140px
+-- dropdown that produced eight consecutive rows of "Action Bars: Ba..." -- every entry truncated to the
+-- same string, which is worse than the ambiguity it was guarding against, and unusable.
+--
+-- The group still orders the list, so related entries sit together, and the labels are unique on their
+-- own ("Bar 1".."Bar 8", "Pet", "Stance", "Experience", "Reputation"). That uniqueness is ASSERTED in
+-- the spec rather than assumed: a future participant whose label collides fails a test and gets
+-- disambiguated at the source, instead of every label paying for it.
+-- @param excludeId string  the participant being configured, which cannot attach to itself
+-- @return table  { { value = id, label = ... }, ... }, "Free" first
+function M.OptionsFor(excludeId)
+    local out = { { value = "detached", label = "Free" } }
+    for _, e in ipairs(M.Participants()) do
+        if e.id ~= tostring(excludeId) then
+            out[#out + 1] = { value = e.id, label = e.spec.label or e.id }
+        end
+    end
+    return out
+end
+
+--- Whether attaching `fromId` to `toId` would close a loop, as the SETTINGS describe it.
+--
+-- Walks the STORED graph rather than the live one, because a validator runs before the value is
+-- stored -- the live dock graph does not know about the choice yet. Spans plugins by asking each
+-- participant for its own attach target instead of reading any one plugin's keys.
+--
+-- Bounded as well as identity-checked: a profile that already contains a loop -- hand-edited, or
+-- written by a version predating this guard -- must not spin here.
+function M.WouldCycleIds(fromId, toId)
+    local node, steps = toId and tostring(toId) or nil, 0
+    local limit = #order + 1
+    while node do
+        if node == tostring(fromId) then return true end
+        local spec = participants[node]
+        local nextId = spec and spec.attachedTo and spec.attachedTo() or nil
+        node = nextId and tostring(nextId) or nil
+        steps = steps + 1
+        if steps > limit then return true end
+    end
+    return false
+end
+
+-- Published as a CORE service rather than under _ActionBars, because the participants are no longer
+-- all action bars: the experience and reputation bars dock through this same code. Nothing here ever
+-- knew what an action bar was -- it asks a participant only for GetFrame, GetWidth/GetHeight and a
+-- SIZE_CHANGED signal -- so the move was a rename, not a rewrite.
+SuuUI.Dock = M
