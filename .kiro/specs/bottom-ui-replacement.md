@@ -104,6 +104,11 @@ Still to verify, but at its call site in Phase 8 rather than as another probe ro
 `GetWatchedFactionInfo` changed shape across client generations (a multi-return classically, a
 table in 11.0). Read it defensively and branch on the shape.
 
+> **RESOLVED, and it was not hypothetical.** The bar shipped invisible on a character with a faction
+> tracked, for exactly this reason plus a second one. `readWatchedFaction` now branches on the shape
+> — `C_Reputation.GetWatchedFactionData()` first, then the positional form, which turns out to
+> return **SIX** values and not five. See "The reputation bar was invisible" below.
+
 ### Round 3 results — the action slot mapping, recorded 2026-08-23
 
 The plan originally named no slot mapping at all, which made every bar past bar 1 unwritable.
@@ -215,9 +220,16 @@ are real bars a player can enable. Phase 0 probed the five bars TBC is known for
 They are now suppressed and in the witness list.
 
 **`HasAction(73)` being false bounds nothing** — it means slot 73 is EMPTY, not absent. So the slot
-blocks and binding families for bars 6–8 are still **UNMEASURED**, and the harness deliberately
-leaves their buttons' `action` attribute unset so no spec can assert a guess. Measure with the
-Round 3 / Round 5 probe shape before adding them to the plugin's bar table:
+blocks and binding families for bars 6–8 were still **UNMEASURED** at this point, and the harness
+deliberately left their buttons' `action` attribute unset so no spec could assert a guess.
+
+> **SETTLED IN ROUND 12, without needing this probe.** ElvUI's own bar table on this client reads
+> `bar13 = { page = 13, bindButtons = 'MULTIACTIONBAR5BUTTON' }`, and page 13 is slots 145–156 — so
+> `MultiBar5/6/7` → 145/157/169 with the `MULTIACTIONBAR5/6/7BUTTON` families is confirmed, which is
+> exactly what the bar table shipped. **Do not re-probe this.** The probe below is kept only as the
+> shape to copy for a future block.
+
+Measure with the Round 3 / Round 5 probe shape before adding a NEW block to the plugin's bar table:
 
 ```
 /run for _,n in ipairs({"MultiBar5Button1","MultiBar6Button1","MultiBar7Button1"}) do local b=_G[n] print(n,b and b.action,b and b.buttonType) end
@@ -1376,6 +1388,37 @@ Each phase ends green with its own specs and is independently verifiable in game
 either; the guild widget; and a per-bar fill-direction setting (ElvUI's `point` resolves
 `TOPRIGHT` to grow LEFTWARD, while SuuUI always grows right and down, so a right-edge bar reads
 mirrored against it). Deliberately left as-is.
+
+### Post-Phase-10 cleanup, 2026-08-24
+
+**`Core/Dock.lua` and `Components/ActionBarGrid.lua` got their own specs** —
+`54_dock_spec.lua` (24 tests) and `55_actionbargrid_spec.lua` (18). Both were previously covered
+only inside `52_actionbars_spec.lua`, which contradicted `TESTING.md`'s claim that every component
+and core subsystem has one, and was a real gap rather than a formal one: a service tested only
+through a single consumer breaks confusingly when a second arrives, which is exactly what the
+watch bars became.
+
+Both new specs use a **fake participant / stub button factory**, and that is the point. The dock's
+whole claim is that it asks a participant for `GetFrame`, a span and a `SIZE_CHANGED` signal and
+knows nothing about action bars; the grid's is that it owns the plate, layout, dividers and resize
+and knows nothing about action slots. A spec that docks real bars or builds real buttons cannot
+demonstrate either — one that docks a nine-line table can.
+
+**Two of the eight mutations survived at first, and both were weak assertions rather than dead
+code**, which is now recorded in the specs themselves:
+- `relativeTo` could be dropped from the anchor descriptor and the test still passed, because the
+  dock's box is hosted on the dock's own frame — so an omitted `relativeTo` resolves to that same
+  frame anyway. The real bug needs a SECOND container to appear. Fixed by asserting the
+  **descriptor** on `_layoutProps`, not the resolved anchor.
+- the registration-sequence tiebreaker could be deleted and the test still passed, because a
+  comparator returning `false` is still deterministic for one input inside one process — so
+  comparing repeated calls proved nothing. Fixed by asserting the **exact sequence**.
+
+**Spec numbering**: the three collisions introduced by this build were renumbered so the bottom-UI
+work reads contiguously (`51` action button, `52` action bars, `53` stance button, `54` dock, `55`
+grid, `56` micro menu, `57` watch bars, `58` bags). Three pre-existing collisions remain — `28`,
+`40`, `41` — and were left alone deliberately: renumbering them touches unrelated history for no
+functional gain, since the runner globs and sorts by full filename.
 
 Phase 4 is the first one worth a `/reload`: it is where Blizzard's art disappears and where a
 suppression mistake is visible immediately.

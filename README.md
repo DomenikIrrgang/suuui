@@ -101,7 +101,7 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 4116 specs across 60 files — all passing, five skipped — with no test dependencies at all:
+runs 4158 specs across 62 files — all passing, five skipped — with no test dependencies at all:
 no busted, no luarocks. The embedded libraries in `Libs/` are shipped runtime code, not test
 tooling; the suite loads them the same way the client does.
 
