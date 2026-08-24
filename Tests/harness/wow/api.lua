@@ -97,6 +97,56 @@ function M.install(env)
                 self:_fire("PostClick", button, down)
             end)
         end
+        -- ContainerFrameItemButtonTemplate. Modelled for the same reason StanceButtonTemplate is:
+        -- SuuUI has no choice but to inherit it. USING an item from tainted Lua is BLOCKED on this
+        -- client -- measured 2026-08-24 as the ForceTaint_Strong popup, with pcall returning true
+        -- and the stack count unchanged -- so a cell cannot use an item from a handler of its own.
+        -- The template's OWN OnClick is the whole mechanism, which is also why replacing it with
+        -- SetScript("OnClick") yields a cell that looks perfect and does nothing.
+        --
+        -- SLOT AND BAG ARE POSITIONAL: the slot is this frame's id, the bag is its PARENT's. That
+        -- is what lets a cell state both once at construction and never re-point them as contents
+        -- change -- the discipline ActionButton arrived at the hard way. Modelled this way round on
+        -- purpose: a model that read the bag off the button itself would let a consumer get the
+        -- parentage wrong and still pass.
+        if template == "ContainerFrameItemButtonTemplate" and f._canScript then
+            -- The regions a consumer addresses by field. They are the reason this is worth
+            -- modelling: a cell built on the template can paint through them, and a spec that
+            -- cannot see them cannot assert anything about the icon or the count.
+            f.icon       = f:CreateTexture(nil, "ARTWORK")
+            f.Count      = f:CreateFontString(nil, "OVERLAY")
+            f.Cooldown   = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+            f.IconBorder = f:CreateTexture(nil, "OVERLAY")
+            -- The template's own art, present so that CLEARING it is observable. With no art here,
+            -- "we removed Blizzard's border" asserts against nothing.
+            local normal = f:CreateTexture(nil, "BORDER")
+            normal:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+            f:SetNormalTexture(normal)
+            local hl = f:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+            f:SetHighlightTexture(hl)
+            -- One phase, and the guess is contained for the same reason as StanceButtonTemplate:
+            -- SuuUI never calls RegisterForClicks on these, so the template owns the decision.
+            f:RegisterForClicks("AnyUp")
+            f:SetScript("OnClick", function(self, button, down)
+                local C   = env.C_Container
+                local par = self:GetParent()
+                local bag  = par and par.GetID and par:GetID()
+                local slot = self:GetID()
+                if C and bag and slot then
+                    if env.CursorHasItem() then
+                        -- Place. Goes through the same pickup, so the swap is one implementation.
+                        C.PickupContainerItem(bag, slot)
+                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown() then
+                        C.SplitContainerItem(bag, slot, 1)
+                    else
+                        -- TRUSTED, so this is not the refused path a tainted caller takes.
+                        state.trustedUseContainerItem(bag, slot)
+                    end
+                end
+                self:_fire("PostClick", button, down)
+            end)
+        end
         if name then env[name] = f end
         return f
     end
@@ -1028,6 +1078,25 @@ function M.install(env)
         fireEvent("BAG_UPDATE", bag)
     end
 
+    -- The accepted path, shared by the merchant sale and by the TEMPLATE's own trusted handler.
+    -- `via` keeps the two distinguishable, because they are not the same event: one is a sale, the
+    -- other is the client using the item on our behalf.
+    local function acceptUse(bag, slot, via)
+        local perBag = state.containerItems[bag]
+        if not (perBag and perBag[slot]) then return false end
+        state.usedContainerItems[#state.usedContainerItems + 1] =
+            { bag = bag, slot = slot, via = via }
+        perBag[slot] = nil
+        fireEvent("BAG_UPDATE", bag)
+        return true
+    end
+
+    -- What ContainerFrameItemButtonTemplate's own OnClick does. It is TRUSTED code, so it is not
+    -- subject to the refusal a tainted caller gets -- and that asymmetry is the entire reason a
+    -- SuuUI cell inherits the template instead of calling the API itself. A model that routed both
+    -- through the same gate would make the template look as useless as the direct call.
+    state.trustedUseContainerItem = function(bag, slot) return acceptUse(bag, slot, "template") end
+
     -- UseContainerItem has TWO protection profiles and the harness models both, because the
     -- difference was measured rather than inferred. At a MERCHANT it SELLS, which ElvUI drives from
     -- an OnUpdate on this client. Away from one it USES the item -- and that is BLOCKED, measured
@@ -1050,11 +1119,7 @@ function M.install(env)
             }
             return
         end
-        local perBag = state.containerItems[bag]
-        if not (perBag and perBag[slot]) then return end
-        state.usedContainerItems[#state.usedContainerItems + 1] = { bag = bag, slot = slot }
-        perBag[slot] = nil
-        fireEvent("BAG_UPDATE", bag)
+        acceptUse(bag, slot, "merchant")
     end
 
     -- The cursor as the client reports it. GetCursorInfo's item form is `"item", itemID, itemLink`,

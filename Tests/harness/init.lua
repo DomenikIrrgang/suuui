@@ -903,7 +903,9 @@ function M.setMoney(copper) state.money = copper or 0 end
 -- @return table
 function M.getUsedContainerItems()
     local out = {}
-    for i, v in ipairs(state.usedContainerItems) do out[i] = { bag = v.bag, slot = v.slot } end
+    for i, v in ipairs(state.usedContainerItems) do
+        out[i] = { bag = v.bag, slot = v.slot, via = v.via }
+    end
     return out
 end
 
