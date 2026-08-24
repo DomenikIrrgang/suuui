@@ -936,6 +936,64 @@ from a button settles it.
 reason, which its two-condition check surfaced. Phase 9 needs to find how the keyring opens here (worth
 trying `ToggleBag(-2)`) or establish that a modern backend folds it into the bags entirely.
 
+### Round 12 — the slot coverage gap, measured 2026-08-24
+
+Reported from the game: abilities that exist on the character could not be found on any SuuUI bar.
+
+```
+/run for b=0,14 do local n=0 for i=b*12+1,b*12+12 do if HasAction(i) then n=n+1 end end if n>0 then print("slots "..(b*12+1).."-"..(b*12+12).." = "..n) end end
+```
+
+| slots | page | actions | covered by |
+|---|---|---|---|
+| 1-12 | 1 | 2 | Bar 1 |
+| **13-24** | **2** | **11** | **nothing** |
+| 25-36 | 3 | 12 | Bar 5 |
+| 37-48 | 4 | 8 | Bar 4 |
+| 49-60 | 5 | 9 | Bar 3 |
+| 61-72 | 6 | 5 | Bar 2 |
+| **73-84** | **7** | **4** | **nothing** |
+| **85-96** | **8** | **6** | **nothing** |
+| **97-108** | **9** | **5** | **nothing** |
+| **109-120** | **10** | **1** | **nothing** |
+| 145-156 | 13 | 9 | Bar 6 |
+
+**27 of 72 abilities were unreachable.** SuuUI's eight bars mirror Blizzard's own Action Bar 1-8, and
+Blizzard exposes no bar for pages 2 or 7-10 — so a UI that mirrors Blizzard cannot reach slots the client
+nonetheless stores actions in, and that every serious bar addon exposes. ElvUI calls these its `bar2` and
+`bar7`-`bar10`; its `bar13 = { page = 13, bindButtons = 'MULTIACTIONBAR5BUTTON' }` also **independently
+confirms** SuuUI's bars 6-8 at 145/157/169, which Round 6 had left recorded as unmeasured.
+
+**Fixed by adding bars 9-13** for pages 2, 7, 8, 9, 10 (page N is slots `(N-1)*12+1` upward). Numbered 9
+upward rather than renumbered to match the pages: bars 1-8 already agree with the numbering the player
+reads in Blizzard's own keybinding UI, and the ids are profile data **and** dock participant ids, so
+renumbering would move every stored position and silently repoint every dock attachment.
+
+**These bars needed SuuUI's first `Bindings.xml`.** A Blizzard binding family acts on the SLOT, which is
+why suppressing Blizzard's bars never cost the player their keys — whatever is bound to `ACTIONBUTTON1`
+fires `UseAction(1)` whether Blizzard's button is on screen or not. Pages 2 and 7-10 have no such family,
+so SuuUI declares `SUUUIBAR9BUTTON1`..`SUUUIBAR13BUTTON12` (60 bindings) purely to give the player a name
+to bind, and routes the chosen key to a **click on its own secure button** via `SetOverrideBindingClick`.
+That is the only route an addon has to a protected `UseAction`; a Lua binding body calling it would be
+refused.
+
+**The keys are applied from the grid's own `CHILDREN_CHANGED` signal, not on an event guess.** A bar built
+in combat has no buttons yet — `SetSlots` defers its geometry pass — so there is nothing to bind a key to,
+and catching up on `PLAYER_REGEN_ENABLED` *raced the grid's own catch-up on that same event*. The signal
+exists for precisely this case, so the keys follow the buttons whenever they appear. `UPDATE_BINDINGS`
+re-claims after a rebind, deferred in combat like any other secure mutation.
+
+**Four mutation survivors, all real test weaknesses rather than dead code:**
+- the Blizzard-family guard could be deleted, because bar 1 is enabled by default and was already built
+  before the test staged any keys — so there was nothing to claim either way. Fixed by firing
+  `UPDATE_BINDINGS` after staging.
+- clearing stale routes could be deleted, because asserting only the NEWEST route cannot tell "re-claimed"
+  from "claimed twice". Fixed by asserting the route count is exactly one.
+- the combat guard could be deleted, because the only combat test was a bar BUILT in combat, where the
+  absent buttons hid the guard's effect. Fixed by adding a mid-fight REBIND, where the buttons exist.
+- the `CHILDREN_CHANGED` subscription needed a clean mutation to test at all; the first attempt was
+  malformed, so its GREEN meant nothing.
+
 ---
 
 ## Bag bar — Phase 9, BUILT 2026-08-24

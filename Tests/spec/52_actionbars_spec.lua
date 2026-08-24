@@ -889,24 +889,56 @@ describe("Plugins.ActionBars: every bar", function()
             -- Those act on the SLOT: whatever is bound to ACTIONBUTTON1 fires UseAction(1) whether
             -- Blizzard's own button is on screen or not, which is exactly why suppressing its bars never
             -- cost the player their keys. Routing them as well would be a second claim on one key.
+            --
+            -- UPDATE_BINDINGS is fired AFTER staging the keys, and that is what makes this test mean
+            -- anything: bar 1 is enabled by default and was already built during setup, so at build time
+            -- there was no key to claim. Mutation testing showed that without this the guard could be
+            -- deleted and the test stayed green.
             H.setBinding("ACTIONBUTTON1", "1")
             H.setBinding("MULTIACTIONBAR1BUTTON1", "CTRL-1")
             enable(1)
             enable(2)
+            H.fireEvent("UPDATE_BINDINGS")
             expect(#routesFor(1)).as("bar 1 unrouted").eq(0)
             expect(#routesFor(2)).as("bar 2 unrouted").eq(0)
         end)
 
-        it("re-claims its keys when the player rebinds", function()
-            -- Without this the old key keeps working until the next reload, and the new one does
-            -- nothing -- which reads as the binding UI being broken.
+        it("re-claims its keys when the player rebinds, leaving NO stale route", function()
+            -- Without the re-claim the old key keeps working until the next reload and the new one does
+            -- nothing, which reads as the binding UI being broken. Without clearing first, BOTH keys
+            -- work -- and asserting only the newest route cannot tell those two apart, which is how a
+            -- missing clear survived mutation testing.
             H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
             enable(9)
             H.setBinding("SUUUIBAR9BUTTON1", "ALT-2")
             H.fireEvent("UPDATE_BINDINGS")
             local routes = routesFor(9)
-            expect(#routes > 0).as("something is claimed").truthy()
-            expect(routes[#routes].key).as("the new key").eq("ALT-2")
+            expect(#routes).as("exactly one route, not the old one plus the new").eq(1)
+            expect(routes[1].key).as("the new key").eq("ALT-2")
+        end)
+
+        it("DEFERS a mid-fight REBIND until the fight ends", function()
+            -- Distinct from deferring a bar's build: here the buttons already exist and the player moves
+            -- a key during combat, so applyOwnBindings is reached with something to do and
+            -- SetOverrideBindingClick would be refused. The build-time deferral is covered by the
+            -- buttons simply not existing yet, which is why this case needs its own test -- mutation
+            -- testing showed the combat guard could be deleted with only the build case asserted.
+            H.setBinding("SUUUIBAR9BUTTON1", "SHIFT-1")
+            enable(9)
+            expect(#routesFor(9)).as("claimed out of combat").eq(1)
+
+            H.setCombat(true)
+            H.setBinding("SUUUIBAR9BUTTON1", "ALT-2")
+            H.fireEvent("UPDATE_BINDINGS")
+            local mid = routesFor(9)
+            expect(#mid).as("still exactly one route").eq(1)
+            expect(mid[1].key).as("and still the OLD key -- nothing was touched mid-fight").eq("SHIFT-1")
+
+            H.setCombat(false)
+            H.fireEvent("PLAYER_REGEN_ENABLED")
+            local after = routesFor(9)
+            expect(#after).eq(1)
+            expect(after[1].key).as("the new key, once it was safe").eq("ALT-2")
         end)
 
         it("DEFERS claiming keys in combat and catches up on leaving it", function()
