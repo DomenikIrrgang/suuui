@@ -807,6 +807,16 @@ function M.setBagApi(mode)
     end
 end
 
+--- The page the client swaps bar 1 to for a temporary shapeshift, i.e. what
+--- GetTempShapeshiftBarIndex() answers. Pass nil to model a client that will not say.
+--
+-- Staged rather than fixed because the addon calls the client for it instead of hardcoding a number
+-- nothing has measured -- so a spec must be able to move it to prove that.
+-- @param page number|nil
+function M.setTempShapeshiftPage(page)
+    state.tempShapeshiftBarIndex = page
+end
+
 --- Panel toggles the addon called, in order, as { name = ..., arg = ... }.
 -- @return table
 function M.getPanelToggles() return state.panelToggles end

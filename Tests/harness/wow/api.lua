@@ -1062,6 +1062,17 @@ function M.install(env)
     end
 
     --------------------------------------------------------------------------
+    -- The page the client swaps bar 1 to for a TEMPORARY shapeshift -- the one a warlock's
+    -- Demonic Circle or a priest's Shadowform-like temporary bar uses, as distinct from the
+    -- bonus bars a form sets.
+    --
+    -- Called at runtime rather than hardcoded, exactly as ElvUI does, because its VALUE is a fact
+    -- about the client that nothing here has measured. Staged so a spec can assert the driver
+    -- without pinning a number the game owns.
+    env.GetTempShapeshiftBarIndex = function()
+        return state.tempShapeshiftBarIndex
+    end
+
     -- Bindings
     --------------------------------------------------------------------------
 

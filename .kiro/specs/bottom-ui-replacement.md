@@ -994,6 +994,48 @@ re-claims after a rebind, deferred in combat like any other secure mutation.
 - the `CHILDREN_CHANGED` subscription needed a clean mutation to test at all; the first attempt was
   malformed, so its GREEN meant nothing.
 
+### Round 13 — bar 1 did not follow forms or stances, 2026-08-24
+
+Reported from the game: switching stance or form swaps the bottom bar's abilities in both the default UI
+and ElvUI, and did nothing in SuuUI.
+
+**Two different axes, and the driver only understood one.** `[bar:N]` is the page the PLAYER paged to by
+hand. `[bonusbar:N]` is a class-driven bar — a druid's form, a warrior's stance, a rogue's stealth. The
+driver was `[bar:6]6;…[bar:2]2;1` with no bonusbar clause at all, so bar 1 stayed on slots 1-12 while the
+client had moved the abilities to pages 7-10. Those are the very slots Round 12 had just exposed as bars
+10-13, which is why that overlap exists: **pages 7-10 ARE the bonus bars.**
+
+**The composition, and the order, are ElvUI's on this client rather than invented:**
+
+```
+[shapeshift] <GetTempShapeshiftBarIndex()>; [bar:6]6 … [bar:2]2; [bonusbar:5]11; [possessbar]16; <class>; 1
+```
+
+`[bar:N]` is tested **BEFORE** the bonus bars, which is not the intuitive order — a page the player
+selected by hand outranks a form. Written the other way a druid could never page off its form bar. On TBC
+ElvUI's `fullConditions` is empty (its guard excludes this expansion), so there is no `[overridebar]` or
+`[vehicleui]` clause.
+
+**The per-class mapping is NOT bonusbar N → page 6+N**, which is exactly why it was taken from ElvUI's
+per-class strings instead of derived:
+
+| class | mapping |
+|---|---|
+| WARRIOR | `[bonusbar:1]7; [bonusbar:2]8; [bonusbar:3]9;` |
+| DRUID | `[bonusbar:1,nostealth]7; [bonusbar:1,stealth]8; [bonusbar:2]10; [bonusbar:3]9; [bonusbar:4]10;` |
+| ROGUE, PRIEST | `[bonusbar:1]7;` |
+| everything else | nothing — its bonusbar conditions never match |
+
+A druid's stealth takes a page of its own, and bonusbar 2 and 4 both land on 10 while 3 lands on 9.
+
+**No number in the driver is a guess.** The temporary-shapeshift page comes from
+`GetTempShapeshiftBarIndex()` at runtime, as ElvUI does, and the class from `UnitClass`. The harness
+stages both, so a spec can move them and prove the call is real rather than decorative.
+
+**A note for the DEFERRED possess bar (Phase 6c): `[possessbar]16` may remove the need for it.** ElvUI
+does not draw a possess bar either — it pages bar 1 to slots 181-192. Since this driver now carries that
+clause, possession may already work through bar 1.
+
 ---
 
 ## Bag bar — Phase 9, BUILT 2026-08-24

@@ -140,6 +140,9 @@ M.xp = { current = 0, max = 0, rested = nil, disabled = false }
 M.watchedFaction = nil
 -- Which reputation API the simulated client has: "legacy" | "modern" | "none". See H.setRepApi.
 M.repApi = "legacy"
+-- The page the client swaps bar 1 to for a temporary shapeshift. 13 on this client's family; staged
+-- rather than assumed, because the addon calls GetTempShapeshiftBarIndex() instead of hardcoding it.
+M.tempShapeshiftBarIndex = 13
 -- The character's bags, indexed by bag id from 0. See H.setBags.
 M.bags = nil
 -- Which container API the simulated client has: "legacy" | "modern" | "none". See H.setBagApi.
@@ -280,6 +283,7 @@ function M.reset()
     -- the modern one must not leave the next test running against a client it did not ask for.
     -- Applied to the harness ENV, because that is the table the addon's chunks read.
     M.repApi             = "legacy"
+    M.tempShapeshiftBarIndex = 13
     -- Bags, and the API mode with them: a spec that removed the container API must not leave the next
     -- one testing a client with no bags at all.
     M.bags               = nil

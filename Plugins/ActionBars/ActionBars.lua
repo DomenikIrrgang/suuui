@@ -739,12 +739,37 @@ end
 local function barTab(def)
     local schema = {
         { key = "", label = "General", type = "section" },
-        -- Toggles as one block, sliders after: mixing them reads as a broken list.
-        { key = key(def, "enabled"), label = "Enable Bar", type = "toggle",
-          default = def.enabled ~= false },
-        { key = key(def, "show_hotkeys"), label = "Show Hotkeys", type = "toggle",
-          default = true, enabledIf = key(def, "enabled") },
     }
+
+    -- WARNS THAT THIS BAR'S SLOTS ARE A STANCE BAR. Purely a warning -- nothing about how the bar
+    -- behaves changes, and the bar stays fully configurable.
+    --
+    -- A form or stance pages bar 1 onto one of these blocks, so anything the player puts here also
+    -- appears on bar 1 the moment they shift -- and whatever bar 1 already had in that form is what they
+    -- will find here. That is not a fault; it is how a stance bar is built. But discovering it by
+    -- accident, after arranging a bar that then seems to rearrange itself, is a bad afternoon.
+    --
+    -- MARKED FOR EVERY CLASS, not only the one logged in. A per-class warning would appear and vanish as
+    -- the player switched character on a shared profile, and a page that is a bonus bar for somebody is a
+    -- page to arrange deliberately for everybody. The classes are NAMED in the note rather than resolved,
+    -- so the text stays true whoever reads it.
+    if def.page then
+        local bonus = SuuUI._ActionBars.Paging.BonusPages()
+        if bonus[def.page] then
+            schema[#schema + 1] = {
+                key = "", type = "note", tone = "warning",
+                label = "STANCE BAR. On a druid, warrior, rogue or priest, bar 1 switches to these "
+                    .. "slots when you change form or stance -- so this bar and bar 1 share them. "
+                    .. "Arrange it deliberately or leave it off.",
+            }
+        end
+    end
+
+    -- Toggles as one block, sliders after: mixing them reads as a broken list.
+    schema[#schema + 1] = { key = key(def, "enabled"), label = "Enable Bar", type = "toggle",
+        default = def.enabled ~= false }
+    schema[#schema + 1] = { key = key(def, "show_hotkeys"), label = "Show Hotkeys", type = "toggle",
+        default = true, enabledIf = key(def, "enabled") }
 
     -- Macro names and charge counts exist only for action slots. A form has neither, so the stance
     -- tab does not offer the toggles rather than showing two switches that do nothing.

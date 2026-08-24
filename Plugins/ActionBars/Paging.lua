@@ -23,12 +23,99 @@ local S = SuuUI.UISignals
 
 local M = {}
 
--- The client's own page conditions, highest first, falling through to page 1. `bar:N` is true
--- while the main bar is showing page N.
+-- The bonus-bar pages each class's forms and stances map onto, for THIS client's expansion.
 --
--- Ordered highest-to-lowest because a macro conditional list is first-match-wins: written the
--- other way round, `[bar:1]` would match before anything else was tested and the bar would never
--- leave page 1 -- a failure that looks exactly like paging not being wired up at all.
+-- A `[bonusbar:N]` condition is true while a class-driven bar is active -- a druid's cat or bear form,
+-- a warrior's stance, a rogue's stealth. That is a DIFFERENT axis from `[bar:N]`, which is the page the
+-- player paged to by hand, and the original driver here only understood the second. So SuuUI's bar 1
+-- kept showing slots 1-12 through a stance change while Blizzard's and ElvUI's swapped -- the abilities
+-- were in slots 73-120 and nothing was looking at them.
+--
+-- TAKEN FROM ELVUI'S PER-CLASS STRINGS on this exact client rather than derived from a rule, because
+-- there ISN'T a clean rule: the naive mapping is bonusbar N -> page 6+N, and the druid's is not that.
+-- Stealth gets its own page, and bonusbar 2 and 4 both land on 10 while 3 lands on 9.
+--
+-- A class with no entry needs none: its bonusbar conditions never match, so the string would only ever
+-- fall through, and a shorter driver is one less thing the client evaluates on every state change.
+local CLASS_BONUS_PAGES = {
+    DRUID   = "[bonusbar:1,nostealth]7;[bonusbar:1,stealth]8;[bonusbar:2]10;[bonusbar:3]9;[bonusbar:4]10;",
+    WARRIOR = "[bonusbar:1]7;[bonusbar:2]8;[bonusbar:3]9;",
+    ROGUE   = "[bonusbar:1]7;",
+    PRIEST  = "[bonusbar:1]7;",
+}
+
+--- Every page that ANY class's forms or stances page bar 1 onto.
+--
+-- The UNION, deliberately, not the logged-in character's own set. A per-class answer would make the
+-- settings warning appear and vanish as the player switched character on one profile, and a bar that is
+-- safe on a paladin is a stance bar on the druid sharing that layout. A page that is a bonus bar for
+-- somebody is a page to arrange deliberately for everybody.
+--
+-- Derived from the SAME table the driver is built from, so the warning and the actual behaviour cannot
+-- drift apart -- two lists would eventually disagree, and a warning wrong about which bars are affected
+-- is worse than none. Read back out of the condition strings rather than kept as a second list, because
+-- the strings are what actually ship.
+-- @return table  { [page] = true }
+function M.BonusPages()
+    local out = {}
+    for _, fragment in pairs(CLASS_BONUS_PAGES) do
+        for page in fragment:gmatch("%]%s*(%d+);") do
+            out[tonumber(page)] = true
+        end
+    end
+    return out
+end
+
+--- Builds bar 1's page driver for the character that is logged in.
+--
+-- ORDER IS FIRST-MATCH-WINS AND IT IS NOT THE OBVIOUS ONE. `[bar:N]` is tested BEFORE the bonus bars,
+-- so a page the player selected by hand outranks a form -- which is what the client itself does, and
+-- the opposite of what "a form should win" intuition suggests. Written the other way a druid could
+-- never page off its form bar. Read off ElvUI's composition on this client, not invented.
+--
+-- Every uncertain NUMBER comes from a client call rather than a constant: the temporary-shapeshift page
+-- is whatever `GetTempShapeshiftBarIndex()` answers. Nothing here is a guess at a value the game owns.
+-- @return string
+function M.BuildDriver()
+    local parts = {}
+
+    -- The temporary shapeshift bar, when the client will say which page that is.
+    if type(GetTempShapeshiftBarIndex) == "function" then
+        local idx = GetTempShapeshiftBarIndex()
+        if type(idx) == "number" then
+            parts[#parts + 1] = "[shapeshift]" .. idx .. ";"
+        end
+    end
+
+    -- The player's own paging, highest first. `[bar:1]` is deliberately absent: it would match before
+    -- anything below it was tested and the bar could never leave page 1 -- a failure that looks exactly
+    -- like paging not being wired up at all. Page 1 is the fallthrough instead.
+    parts[#parts + 1] = "[bar:6]6;[bar:5]5;[bar:4]4;[bar:3]3;[bar:2]2;"
+
+    -- Bonus bar 5 sits on its own page for every class that has one.
+    parts[#parts + 1] = "[bonusbar:5]11;"
+
+    -- Possess: mind control and the like. Page 16 is slots 181-192.
+    --
+    -- Worth noting for the DEFERRED possess bar (Phase 6c): this is how ElvUI handles possession at all
+    -- -- it pages bar 1 rather than drawing a separate bar. So a possess bar may not need building.
+    parts[#parts + 1] = "[possessbar]16;"
+
+    local class
+    if type(UnitClass) == "function" then
+        local _, classFile = UnitClass("player")
+        class = classFile
+    end
+    local fragment = class and CLASS_BONUS_PAGES[class]
+    if fragment then parts[#parts + 1] = fragment end
+
+    -- The fallthrough. No condition, so it always matches once nothing above did.
+    parts[#parts + 1] = "1"
+    return table.concat(parts)
+end
+
+-- Kept as the DEFAULT for a client that answers nothing useful, and so a spec has something stable to
+-- compare a built driver against. The live driver comes from BuildDriver.
 M.DRIVER = "[bar:6]6;[bar:5]5;[bar:4]4;[bar:3]3;[bar:2]2;1"
 
 -- Runs INSIDE the secure environment on every page change. It can see no Lua upvalue and no
@@ -111,7 +198,10 @@ function M.Attach(grid, opts)
     header:SetAttribute("pageSize", pageSize)
     syncRefs(header, grid)
     header:SetAttribute("_onstate-page", M.SNIPPET)
-    RegisterStateDriver(header, "page", M.DRIVER)
+    -- Built per character rather than constant: the bonus-bar pages depend on the player's CLASS, and
+    -- the temporary-shapeshift page is whatever the client answers. Rebuilt on every Attach, which is
+    -- harmless -- the class cannot change within a session, so this is the same string every time.
+    RegisterStateDriver(header, "page", M.BuildDriver())
 
     return header
 end

@@ -961,6 +961,81 @@ describe("Plugins.ActionBars: every bar", function()
         end)
     end)
 
+    describe("the stance-bar warning", function()
+        -- A WARNING ONLY. Nothing about these bars behaves differently -- they stay fully configurable,
+        -- and the point is simply that the player should know the slots are shared before arranging them.
+        local function notesFor(label)
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                if e.type == "subtabs" then
+                    for _, tab in ipairs(e.tabs) do
+                        if tab.label == label then
+                            local out = {}
+                            for _, sub in ipairs(tab.schema) do
+                                if sub.type == "note" then out[#out + 1] = sub end
+                            end
+                            return out
+                        end
+                    end
+                end
+            end
+            return {}
+        end
+
+        it("warns on every bar a form or stance pages onto", function()
+            for _, label in ipairs({ "Bar 10", "Bar 11", "Bar 12", "Bar 13" }) do
+                local notes = notesFor(label)
+                expect(#notes).as(label .. " is warned").eq(1)
+                expect(notes[1].tone).as("and warned as a warning").eq("warning")
+                expect(notes[1].label:find("stance", 1, true) or notes[1].label:find("STANCE", 1, true))
+                    .as("the text says what the problem is").notNil()
+            end
+        end)
+
+        it("does NOT warn on bar 9, whose page is never a bonus bar", function()
+            -- Page 2 is simply a page Blizzard exposes no bar for. Warning about it would train the
+            -- player to ignore the warning that matters.
+            expect(#notesFor("Bar 9")).eq(0)
+        end)
+
+        it("does not warn on the bars that mirror Blizzard's own", function()
+            for _, label in ipairs({ "Bar 1", "Bar 2", "Bar 5", "Bar 6" }) do
+                expect(#notesFor(label)).as(label .. " unwarned").eq(0)
+            end
+        end)
+
+        it("marks the same pages for EVERY class, not just the one logged in", function()
+            -- A per-class warning would appear and vanish as the player switched character on a shared
+            -- profile. A paladin has no bonus bars at all, and must still see the mark.
+            H.setUnit("player", { class = "PALADIN" })
+            local pages = H.SuuUI._ActionBars.Paging.BonusPages()
+            expect(pages[7]).as("still marked on a paladin").truthy()
+            expect(pages[8]).truthy()
+            expect(pages[9]).truthy()
+            expect(pages[10]).truthy()
+        end)
+
+        it("derives the pages from the DRIVER's own strings, not a second list", function()
+            -- Two lists would eventually disagree, and a warning wrong about which bars are affected is
+            -- worse than none. Every page named in the warning must be one the driver can actually
+            -- resolve to.
+            local driver = H.SuuUI._ActionBars.Paging.BuildDriver()
+            for page in pairs(H.SuuUI._ActionBars.Paging.BonusPages()) do
+                expect(driver:find("%]" .. page .. ";"))
+                    .as("page " .. page .. " appears in the driver").notNil()
+            end
+        end)
+
+        it("changes nothing about the bars themselves", function()
+            -- The warning is prose. These bars take the same slots, the same bindings and the same
+            -- settings they did before it existed.
+            local byId = {}
+            for _, def in ipairs(H.SuuUI._ActionBars.BARS) do byId[def.id] = def end
+            expect(byId[10].first).eq(73)
+            expect(byId[10].bindingPrefix).eq("SUUUIBAR10BUTTON")
+            expect(byId[10].enabled).as("still opt-in, not forced off").eq(false)
+        end)
+    end)
+
     it("pairs every bar's slot block with the binding family MEASURED for it", function()
         -- Both halves came from in-game probes, and the binding half caught a real error: the
         -- numbering does NOT follow the frame names in the order it looks like it should.
@@ -1132,19 +1207,86 @@ describe("Plugins.ActionBars: secure paging", function()
     it("registers a state driver on a secure header", function()
         local header = P.HeaderFor(grid(1))
         expect(header:IsProtected()).as("built from a Secure template").truthy()
-        expect(H.getStateDriver(header, "page")).eq(P.DRIVER)
+        -- The BUILT driver, not the static fallback: it depends on the player's class and on what the
+        -- client answers for the temporary-shapeshift page.
+        expect(H.getStateDriver(header, "page")).eq(P.BuildDriver())
     end)
 
     it("orders the driver highest page first, or it never leaves page 1", function()
         -- A macro conditional list is FIRST-MATCH-WINS. Written low-to-high, [bar:1] would match
         -- before anything else was tested and the bar would be stuck -- which looks identical to
         -- paging never having been wired up.
-        local sixth = string.find(P.DRIVER, "%[bar:6%]")
-        local second = string.find(P.DRIVER, "%[bar:2%]")
+        local d = P.BuildDriver()
+        local sixth = string.find(d, "%[bar:6%]")
+        local second = string.find(d, "%[bar:2%]")
         expect(sixth).notNil()
         expect(second).notNil()
         expect(sixth).as("page 6 is tested before page 2").lt(second)
-        expect(P.DRIVER:sub(-2)).as("and 1 is the fallthrough").eq(";1")
+        expect(d:sub(-2)).as("and 1 is the fallthrough").eq(";1")
+        expect(string.find(d, "%[bar:1%]")).as("[bar:1] must never appear").isNil()
+    end)
+
+    describe("form and stance paging", function()
+        -- THE BUG THIS SHIPPED WITH. `[bar:N]` is the page the PLAYER paged to; `[bonusbar:N]` is a
+        -- class-driven bar -- a druid's form, a warrior's stance, a rogue's stealth. The driver only
+        -- understood the first, so switching form left bar 1 on slots 1-12 while the client had moved
+        -- the abilities to slots 73-120. Blizzard's own bar and ElvUI both swap; ours did not.
+        it("maps a warrior's stances onto their bonus bar pages", function()
+            H.setUnit("player", { class = "WARRIOR" })
+            local d = P.BuildDriver()
+            expect(d:find("[bonusbar:1]7;", 1, true)).as("stance 1 -> page 7").notNil()
+            expect(d:find("[bonusbar:2]8;", 1, true)).as("stance 2 -> page 8").notNil()
+            expect(d:find("[bonusbar:3]9;", 1, true)).as("stance 3 -> page 9").notNil()
+        end)
+
+        it("gives a druid its own mapping, which is NOT bonusbar N -> page 6+N", function()
+            -- There is no clean rule to infer here, which is the whole reason these came from ElvUI's
+            -- per-class strings on this client: stealth takes a page of its own, and bonusbar 2 and 4
+            -- both land on 10 while 3 lands on 9.
+            H.setUnit("player", { class = "DRUID" })
+            local d = P.BuildDriver()
+            expect(d:find("[bonusbar:1,nostealth]7;", 1, true)).as("cat -> 7").notNil()
+            expect(d:find("[bonusbar:1,stealth]8;", 1, true)).as("prowling -> 8, its own page").notNil()
+            expect(d:find("[bonusbar:3]9;", 1, true)).as("bonusbar 3 -> 9").notNil()
+            expect(d:find("[bonusbar:2]10;", 1, true)).as("bonusbar 2 -> 10, not 8").notNil()
+            expect(d:find("[bonusbar:4]10;", 1, true)).as("and 4 -> 10 as well").notNil()
+        end)
+
+        it("adds no bonus conditions for a class that has none", function()
+            -- A paladin's auras are not bonus bars. An unused condition would only ever fall through,
+            -- and the client evaluates this string on every state change.
+            H.setUnit("player", { class = "PALADIN" })
+            local d = P.BuildDriver()
+            expect(d:find("bonusbar:1", 1, true)).as("no bonusbar:1 for a paladin").isNil()
+            expect(d:find("[possessbar]16;", 1, true)).as("but possess still applies").notNil()
+        end)
+
+        it("tests the player's OWN paging before any form", function()
+            -- Not the obvious order, and worth pinning: a page the player selected by hand outranks a
+            -- form. Written the other way a druid could never page off its form bar. This is what the
+            -- client itself does.
+            H.setUnit("player", { class = "DRUID" })
+            local d = P.BuildDriver()
+            expect(string.find(d, "%[bar:2%]")).lt(string.find(d, "bonusbar:1"))
+        end)
+
+        it("asks the client for the temporary-shapeshift page instead of hardcoding it", function()
+            -- Its value is a fact about the client that nothing here has measured, so it is read at
+            -- runtime -- exactly as ElvUI does.
+            H.setTempShapeshiftPage(21)
+            expect(P.BuildDriver():find("[shapeshift]21;", 1, true)).notNil()
+        end)
+
+        it("omits the shapeshift clause when the client will not say", function()
+            H.setTempShapeshiftPage(nil)
+            expect(P.BuildDriver():find("shapeshift", 1, true)).isNil()
+        end)
+
+        it("pages to the possess bar, which is how possession is handled at all", function()
+            -- Recorded for the DEFERRED possess bar: ElvUI does not draw one either -- it pages bar 1
+            -- to slots 181-192. So that phase may need no bar of its own.
+            expect(P.BuildDriver():find("[possessbar]16;", 1, true)).notNil()
+        end)
     end)
 
     it("hands the snippet everything it needs as attributes and refs", function()
