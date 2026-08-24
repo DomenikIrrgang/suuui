@@ -601,6 +601,27 @@ claiming precision.
   glyph is drawn for it.
 - Neither the `.tga` nor the `.py` goes in the `.toc` — the `.toc` takes `.lua` only.
 
+**BUILT 2026-08-24.** `Media/generate_micro_icons.py` → `micro-icons.tga` (128×128 RGBA) plus a `.png`
+for eyeballing. 14 glyphs, all four `verify()` checks passing: inside the cell margin, big enough to
+read, roughly centred, and strictly monochrome so `SetVertexColor` decides the colour. Unused cells are
+asserted EMPTY so a coord table pointing at one shows nothing rather than debris.
+
+`verify()` earned its keep twice — it rejected `social` for bleeding 2px into its neighbour's cell, and
+`keys` for being only 12px tall next to glyphs that fill theirs.
+
+**Three glyphs took more than one attempt, and the reasons generalise to 32px art:**
+- **spells** — an OPEN book does not survive 32 pixels. An outline plus a centre stroke read as a
+  barrel; two leaning polygons read as a hexagonal gem, because `polygon(outline=...)` closes the shape
+  and the outer edges join. It is a closed book with a vertical spine.
+- **quests** — flush rolled ends made it a bordered rectangle with lines in it, which is what the
+  spellbook is too. The rolls now overhang the body: the SILHOUETTE is what separates two glyphs, not
+  the detail inside them.
+- **bags** — a drawstring pouch read as a shield. A handle over a trapezoid body is unmistakable.
+
+The generated Lua coord table is printed by the script; **glyph order is a contract**, mirrored by
+index on the Lua side, so a glyph inserted in the middle silently re-points every entry after it.
+Append only.
+
 ---
 
 ## Stance, pet and possess bars — Phase 6
@@ -827,16 +848,210 @@ their real returns, and walk the parent chain from whatever button appears. Phas
 wrong three times; this one has never been read at all.
 
 ### Still open
-- **The pet autocast overlay is a visual no existing component provides.** `autoCastAllowed` shows
-  it, `autoCastEnabled` spins it. On this client ElvUI drives it via the overlay's own
-  `:ShowAutoCastEnabled(bool)`; the `AutoCastShine_*` globals are the dead Classic branch.
 - Whether druid form / rogue stealth drives `GetBonusBarOffset` or a page. The harness models the
   call; read it defensively at the call site.
-- Possess is real but hard to test — it needs a Mind Control or Eyes of the Beast.
 
 ---
 
-## Watch bars
+## Phase 7 — the micro menu, DONE 2026-08-24
+
+Built and verified in game. Fourteen glyphs in a 128×128 atlas, one data-bar field per entry in the
+`left` section, Blizzard's strip suppressed.
+
+**Per-entry toggles, not one switch.** ON by default: Character, Spellbook, Quests, Options, Help.
+Available but off: Guild, Talents, Social, PvP, Group Finder, Map, Bags, Keys. Plus a **Show Labels**
+toggle, on by default -- with labels off the glyph is the whole field and `DataField` hugs to icon plus
+`spaceMd` either side.
+
+- **Guild is off by default** because a dedicated guild widget is planned and will be on -- two things
+  opening the same panel from one bar is one too many.
+- **Collections is removed entirely**, not merely defaulted off: it does not exist on TBC, and a toggle
+  for a button that is never coming reads as a broken setting. Its GLYPH stays in the atlas, because
+  renumbering the sheet would silently re-point every coord after it.
+
+### `frame:Click()` DOES NOT WORK on a micro button, and that cost a round
+
+The obvious mechanism -- forward the field's click into Blizzard's own button -- silently does nothing.
+Probed:
+
+```
+/dump CharacterMicroButton:GetScript("OnClick") ~= nil   -->  false
+/dump CharacterMicroButton:IsEnabled()                   -->  true
+```
+
+There is **no OnClick script to fire**. The button is enabled and reachable; `Click()` simply has
+nothing to invoke, because these buttons act through a mixin or mouse handlers. ElvUI never calls
+`Click()` on one either -- it only reparents them and HookScripts their hover, which was the tell.
+
+**Each entry therefore names the panel function it calls, and BOTH the button frame and that function
+must exist before the entry renders.** Two conditions answering different questions: the frame says the
+feature exists on this client, the function says we can trigger it. A wrong function name then costs a
+MISSING glyph, never a dead one -- which matters because this cluster's names have been wrong three
+times. The harness proves the rule by deliberately omitting `ToggleKeyRing`, so Keys is skipped even
+when its toggle is on.
+
+### Suppression: WHICH frame, and why it is safe here
+
+`MicroMenuContainer` (with `MicroMenu` its child) is suppressed. **`MicroButtonAndBagsBar` is NOT** --
+it carries the bag buttons as well, and Phase 9 owns those, so hiding it would cost the player their
+bags for a whole phase.
+
+Safe to hide at all *because* the replacement calls the panel APIs rather than forwarding clicks into
+these buttons: nothing SuuUI draws depends on them being on screen. Had the fields forwarded clicks,
+this would have been the pet bar's hidden-target problem again.
+
+**After suppression, the seven off-by-default entries are only reachable by keybind or by switching
+their toggle on.** That is the intended trade, not an oversight.
+
+### Two coverage holes this phase exposed
+
+- **A spec that called `def.OnClick()` directly proved nothing.** It skipped the field, the CLICKED
+  signal and the bar's wiring, so it passed green while a real click did nothing. The specs now drive
+  the rendered field's `OnMouseUp`, and one asserts we do NOT attempt `Click()`.
+- **The harness created the micro buttons before their parent existed**, so they were parented to
+  `UIParent` and hiding the container left them all visible. Caught by the suppression witness, and now
+  guarded by an assert in the harness so the ordering mistake cannot recur silently.
+
+### Round 11 — the bag container, probed 2026-08-24
+
+```
+/dump MicroButtonAndBagsBar ~= nil, BagsBar ~= nil, MainMenuBarBackpackButton:GetParent():GetName()
+  [1] = true
+  [2] = true
+  [3] = "BagsBar"
+```
+
+**Both frames exist, and the bag buttons are under `BagsBar`.** This corrects a claim written during
+Phase 7, which said `MicroButtonAndBagsBar` carries the bag buttons. It does not -- it is an ANCESTOR
+of the container that does.
+
+Leaving it unsuppressed is still correct, but for the cascade rather than its contents. **Phase 9's
+suppression target is `BagsBar` plus `KeyRingButton`**, not `MicroButtonAndBagsBar`.
+
+This is the same shape as `MainActionBar` versus `MainMenuBar`, which cost a round in Phase 4b: the
+frame that exists is not always the frame that holds the buttons, and only walking the parent chain
+from a button settles it.
+
+**`ToggleKeyRing` does not exist on this client** -- the micro menu's Keys entry is skipped for that
+reason, which its two-condition check surfaced. Phase 9 needs to find how the keyring opens here (worth
+trying `ToggleBag(-2)`) or establish that a modern backend folds it into the bags entirely.
+
+---
+
+## Watch bars — Phase 8, BUILT 2026-08-24
+
+`Plugins/WatchBars/WatchBars.lua`, two instances of one shape, plus `StatusBar`'s new secondary fill.
+Blizzard's `StatusTrackingBarManager` is suppressed.
+
+**The two hide conditions are NOT the same shape**, and that is the part worth remembering:
+- **Experience** hides at max level (the client reports a max of 0) OR when experience is switched off
+  (`IsXPUserDisabled` -- a trial account). Two separate reasons for one outcome, and a bar checking only
+  the level would still show for the second.
+- **Reputation** hides when nothing is watched, and also when the standing's band has no span, which
+  would otherwise divide by zero.
+
+**Reputation is measured WITHIN the standing's band.** The client reports the band's own `min` and
+`max`, so the bar's span is `max - min` and the value is offset into it. Using `value` against `max`
+directly makes every standing above Neutral look nearly full -- 4500 of 6000 is 75%, but inside the
+3000-6000 Revered band it is halfway.
+
+**The ghost reaches from current progress**, `(value + rested) / max`, not from zero -- drawn from zero
+it would claim banked progress the player has not earned. `GetXPExhaustion` returns **nil, not 0**, when
+there is no bonus, and the difference is visible: a ghost of zero width still occupies the first pixel.
+The rested READOUT is blank for both nil and 0, because "0" reads as "you have no rested experience
+left", which is a different statement from "resting is not a factor".
+
+### The colour defect, found in game — two bugs stacked, 2026-08-24
+
+The bar shipped **white**, then shipped **blue**. Both got through a green suite, and both were caught
+by looking at the game.
+
+**1. White: the prop did not exist.** `StatusBar` takes `fillColor` as a **literal `{r,g,b,a}`**, and the
+plugin passed a token KEY as `fill`. Wrong name and wrong type, silently ignored, so the bar kept its
+white default. `border` was `showBorder` for the same reason. Neither setter validates, so nothing said
+a word. The spec at `19_statusbar_spec.lua` **used the same phantom `fill` prop**, which is where the
+plugin copied it from — its ghost tests ran against a white bar while their comments claimed blue.
+
+**2. Blue: the colour meant something.** In WoW, **purple is experience and blue is RESTED**. Reaching
+for `colorAccent` to fix the white bar produced a blue progress bar, which tells every player they have
+a rested bonus — a **lie about game state**, not a palette preference. New tokens `colorXp`
+(→ `colorPurple400`, added to both palettes) and `colorXpRested` (blue at 0.55 alpha) now carry it, and
+`04_core_spec.lua` asserts **no theme may point `colorXp` at the accent**, checked across every theme
+rather than only the active one.
+
+**The ghost must be able to carry its own colour.** It previously always derived from the fill at
+`opacityBarGhost`, defended in a comment as letting one primitive serve both watch bars. That reasoning
+was wrong: **the reputation bar has no rested concept and never sets a secondary at all**, so there was
+no second case, and derivation made rested a paler purple — reading as more progress. `SetSecondaryColor`
+now overrides it, applied **as given** with no `opacityBarGhost` multiplied in.
+
+**Two settings lessons.** The **schema default is what takes effect** — `Settings:Get` resolves through
+it, so a fallback passed at the call site never runs once a key is declared, which is why flipping the
+border off meant editing the schema. And **`StatusBar` stores colours as literals captured when set**, so
+following a theme change is the *plugin's* job: re-resolve in `paint`, and test it by switching to a
+theme whose token value genuinely differs. Re-emitting the change event on the same theme cannot tell a
+bar that re-resolves from one that never does — that assertion passed while proving nothing, as did the
+original ghost test comparing ghost against fill when **both were white**.
+
+### The reputation bar was invisible — two causes, both silent, 2026-08-24
+
+Reported from the game: a character with a faction tracked saw **no reputation bar at all**. Two separate
+defects produced the same blank screen, and the suite could see neither.
+
+**1. There are TWO reputation APIs and this backend may only have the new one.** The modern client
+replaced positional `GetWatchedFactionInfo()` with **`C_Reputation.GetWatchedFactionData()`, which
+returns a TABLE**. ElvUI carries a shim for exactly this on this client — and it dereferences
+`C_Reputation.GetWatchedFactionData` **with no nil guard**, which is how we know `C_Reputation` exists
+here. Its shim also gives the legacy order, which is **SIX** values, not five:
+
+```
+name, reaction, currentReactionThreshold, nextReactionThreshold, currentStanding, factionID
+```
+
+The old five-value read mapped onto that correctly by luck of ordering (`min` = the band's floor, `max` =
+its ceiling, `value` = the raw total). But against the table form, `name` came back as the table itself —
+truthy — with everything else nil, collapsing the span to zero and hiding the bar.
+
+**2. Max standing collapses the band, and the bar hid on it.** At the top standing the client reports the
+**same number** for the band's floor and its ceiling. The guard `if span <= 0 then return nil end` turned
+that into a hidden bar, so an **Exalted faction looked identical to no faction at all**. ElvUI forces the
+floor to 0 for the same reason and says so in its own comment: *"the min will match max when a rep is
+maxed and cause the bar to be 0%"*. SuuUI now reports `capped` and draws full, and the `current / max`
+and `remaining` readouts go blank rather than printing "1 / 1" and "0".
+
+**A missing API is now a FAULT, not a hide.** "No API" and "no faction watched" produce an identical empty
+screen but are completely different problems — conflating them is what let this sit unnoticed.
+`SuuUI.Fault` fires on the first, which prints even with debug off.
+
+**Three testing lessons, and the first is the sharpest.** The old spec **asserted the defect as intended
+behaviour** — a test named "hides a band with no span rather than dividing by zero" did not merely miss
+the bug, it locked it in. Second, the harness only ever modelled the legacy API, so no test could reach
+the table path; `H.setRepApi("legacy"|"modern"|"none")` now switches which one exists, and `"none"`
+genuinely REMOVES the global, because a stub that stays and returns nil is indistinguishable from an
+unwatched faction. Third, that helper first mutated **`_G`** and appeared to work while changing nothing:
+the addon's chunks resolve globals through the **harness env**, so a bare `C_Reputation` lookup is correct
+in both worlds and an explicit `_G.` reaches past the table under test.
+
+### Probe — which reputation API this client actually has
+
+Still worth running, to record the fact rather than rely on handling both:
+
+```
+/run print("GWFI",type(GetWatchedFactionInfo),"C_Rep",type(C_Reputation),"GWFD",C_Reputation and type(C_Reputation.GetWatchedFactionData))
+/run if GetWatchedFactionInfo then print("returns",select("#",GetWatchedFactionInfo())) print(GetWatchedFactionInfo()) end
+/run local d=C_Reputation and C_Reputation.GetWatchedFactionData and C_Reputation.GetWatchedFactionData() if d then for k,v in pairs(d) do print(k,tostring(v)) end else print("no table") end
+```
+
+**The standing colour is the CLIENT's**, through `Core/Game.lua`'s `ReactionColor`. Not a theme token:
+the bands are a game fact a player knows by sight, and our own palette for them would be worse than
+matching. This is also why `StatusBar`'s ghost derives its colour from the fill rather than owning a
+token -- one primitive serves an accent-blue XP bar and a faction-coloured rep bar.
+
+Readout slots are per bar and deliberately NOT the same set: `rested` has no meaning for a faction and
+`faction` none for a level, and a slot that reads as broken half the time is worse than one fewer
+option.
+
+## Watch bars (original plan)
 
 One widget, two instances. Rested XP and the reputation standing are the only differences
 that reach the component.

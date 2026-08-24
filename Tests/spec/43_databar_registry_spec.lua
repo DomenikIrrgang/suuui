@@ -753,7 +753,14 @@ describe("Core/DataBar", function()
             expect(DB:GetWidget("spec.dup2")).eq(second)
             expect(ids(DB:ListSection("right"))).as("re-placed into the new section")
                 .contains("spec.dup2")
-            expect(#DB:ListSection("left")).eq(0)
+            -- Asserts THIS widget left its old section, not that the section is globally empty. It
+            -- used to assert emptiness, which held only while nothing shipped in `left` -- the micro
+            -- menu now owns that section with fourteen entries, which is what it is for.
+            local stillLeft = false
+            for _, id in ipairs(ids(DB:ListSection("left"))) do
+                if id == "spec.dup2" then stillLeft = true end
+            end
+            expect(stillLeft).as("gone from the old section").falsy()
         end)
 
         it("does not duplicate the entry in List", function()

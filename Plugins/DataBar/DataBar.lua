@@ -113,7 +113,7 @@ end
 -- captured at file scope, so the .toc's load order is not a second thing to keep in step.
 local function builtins()
     local D = SuuUI._DataBar
-    return { D.TimeWidget, D.FpsWidget, D.LatencyWidget, D.TrayWidget }
+    return { D.TimeWidget, D.FpsWidget, D.LatencyWidget, D.TrayWidget, D.MicroMenu }
 end
 
 local function collector()

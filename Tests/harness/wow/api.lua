@@ -575,10 +575,31 @@ function M.install(env)
                             "StatusTrackingBarManager",
                             "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer",
                             "StanceBar", "PetActionBar", "PossessActionBar",
-                            "MainMenuBarBackpackButton", "KeyRingButton" }) do
+                            }) do
         local f = blizzardSystemFrame(CreateFrame("Frame", name, UIParent))
         f:SetSize(120, 30)
         f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+    end
+
+    -- THE PANEL TOGGLES the micro menu calls.
+    --
+    -- Recorded rather than enacted: a spec's question is whether the field asked the client to open
+    -- this panel, and actually building a character sheet is the client's job. Modelled because
+    -- `CharacterMicroButton:Click()` is a NO-OP on this client -- it has no OnClick script (probed) --
+    -- so the panel API is the only route, and a consumer checks each function EXISTS before offering
+    -- the entry at all.
+    --
+    -- `ToggleKeyRing` is deliberately ABSENT so a spec can prove an entry whose action is missing is
+    -- skipped rather than rendered as a control that does nothing.
+    env.BOOKTYPE_SPELL = "spell"
+    for _, name in ipairs({
+        "ToggleCharacter", "ToggleSpellBook", "ToggleQuestLog", "ToggleGameMenu",
+        "ToggleHelpFrame", "ToggleGuildFrame", "ToggleTalentFrame", "ToggleFriendsFrame",
+        "TogglePVPFrame", "ToggleLFGParentFrame", "ToggleWorldMap", "ToggleAllBags",
+    }) do
+        env[name] = function(arg)
+            state.panelToggles[#state.panelToggles + 1] = { name = name, arg = arg }
+        end
     end
 
     -- BLIZZARD'S OWN PET BUTTONS, with the handler that makes them worth modelling.
@@ -620,6 +641,48 @@ function M.install(env)
         CreateFrame("Frame", "MicroMenu", env.MicroMenuContainer))
     MicroMenu:SetSize(120, 30)
     MicroMenu:SetPoint("BOTTOMLEFT", env.MicroMenuContainer, "BOTTOMLEFT", 0, 0)
+
+    -- BLIZZARD'S OWN MICRO BUTTONS.
+    --
+    -- Modelled as real Buttons with a recording OnClick, because the micro menu REPLACES the strip
+    -- with data-bar fields and each field triggers the matching Blizzard button. Without these there
+    -- is nothing to resolve and nothing for a click to reach.
+    --
+    -- THE LIST IS DELIBERATELY INCOMPLETE. `LFDMicroButton` and every retail-only name ElvUI carries
+    -- (ProfessionMicroButton, PlayerSpellsMicroButton, AchievementMicroButton, EJMicroButton,
+    -- StoreMicroButton, HousingMicroButton) are LEFT OUT, so a spec can prove the consumer skips a
+    -- button that does not exist rather than rendering a dead field. Phase 0 measured MICRO_BUTTONS
+    -- as nil on this client, so nothing enumerates them for us.
+    -- CREATED AFTER MicroMenu, and that ordering is load-bearing: the first version of this block sat
+    -- above it, so `env.MicroMenu` was nil and every button was parented to UIParent instead. Hiding
+    -- the container then left them all visible, and the suppression witness caught it.
+    assert(env.MicroMenu, "harness: micro buttons must be created after MicroMenu exists")
+    for _, name in ipairs({
+        "CharacterMicroButton", "SpellbookMicroButton", "TalentMicroButton",
+        "QuestLogMicroButton", "SocialsMicroButton", "GuildMicroButton",
+        "PVPMicroButton", "LFGMicroButton", "WorldMapMicroButton",
+        "MainMenuMicroButton", "HelpMicroButton", "CollectionsMicroButton",
+    }) do
+        local b = CreateFrame("Button", name, env.MicroMenu)
+        b:SetSize(28, 36)
+        b:RegisterForClicks("AnyUp")
+        b:SetScript("OnClick", function(self)
+            state.microClicks[#state.microClicks + 1] = self:GetName()
+        end)
+    end
+    -- The bag and keyring buttons are BUTTONS on the real client, not plain frames -- a consumer
+    -- checks for a Click method before wiring a field to one, so modelling them as Frames would make
+    -- the consumer skip them and the spec would agree with the wrong answer.
+    for _, name in ipairs({ "MainMenuBarBackpackButton", "KeyRingButton" }) do
+        local b = blizzardSystemFrame(CreateFrame("Button", name, UIParent))
+        b:SetSize(32, 32)
+        b:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+        b:RegisterForClicks("AnyUp")
+        b:SetScript("OnClick", function(self)
+            state.microClicks[#state.microClicks + 1] = self:GetName()
+        end)
+    end
+
 
     -- CVars the addon reads. Only the boolean form is modelled, because that is all anything here
     -- asks for, and an unset CVar answers false -- which is what the client does for one it does
@@ -761,6 +824,63 @@ function M.install(env)
     end
 
     --------------------------------------------------------------------------
+    --------------------------------------------------------------------------
+    -- Experience and the watched faction
+    --------------------------------------------------------------------------
+
+    -- Experience. An unset store answers 0/0, which is what a max-level character looks like to a
+    -- consumer -- and the bar's whole hide condition is "nothing to say", so that default matters.
+    env.UnitXP = function(unit)
+        if unit ~= "player" then return 0 end
+        return state.xp.current or 0
+    end
+    env.UnitXPMax = function(unit)
+        if unit ~= "player" then return 0 end
+        return state.xp.max or 0
+    end
+
+    -- RESTED is nil, not 0, when there is none. The client distinguishes "no rested bonus" from "a
+    -- bonus of zero", and a consumer that treats nil as 0 draws a ghost fill of nothing rather than no
+    -- ghost fill -- which is a visible difference.
+    env.GetXPExhaustion = function()
+        return state.xp.rested
+    end
+
+    -- Experience switched off deliberately (a trial account, or /xpoff on some builds). Distinct from
+    -- being max level, and a bar that only checked the level would still show for one of these.
+    env.IsXPUserDisabled = function()
+        return state.xp.disabled == true
+    end
+
+    -- TWO SHAPES, because this client could present either and the addon must survive both.
+    --
+    -- `state.repApi` selects which one exists:
+    --   "legacy" (default) -- only the positional GetWatchedFactionInfo
+    --   "modern"           -- only C_Reputation.GetWatchedFactionData, returning a TABLE
+    --   "none"             -- NEITHER, which is a real possibility on a modern backend and must be
+    --                         distinguishable from "no faction is watched"
+    --
+    -- The legacy order is SIX values, taken from ElvUI's shim on this client rather than from memory:
+    -- name, reaction, currentReactionThreshold, nextReactionThreshold, currentStanding, factionID.
+    -- The old model returned five and stopped at `value`, which is why nothing caught the table form.
+    env.GetWatchedFactionInfo = function()
+        local w = state.watchedFaction
+        if not w then return nil end
+        return w.name, w.standing or 4, w.min or 0, w.max or 0, w.value or 0, w.factionID or 1168
+    end
+    -- Kept so H.setRepApi can REMOVE this global and put it back. Removal has to be real: a version of
+    -- "no API" that leaves the function in place and merely returns nil is indistinguishable from "no
+    -- faction is watched", which is the exact conflation that hid the bar in game.
+    state.legacyRepFn = env.GetWatchedFactionInfo
+    -- The env itself, so reset can restore the API globals. The addon's chunks read from THIS table,
+    -- not from the real _G, so anything touching _G is changing a table nothing under test reads.
+    state.env = env
+
+    -- `C_Reputation` itself is installed and removed by H.setRepApi rather than here, so there is ONE
+    -- place that decides which API exists. Default (no helper call) is legacy-only, matching a client
+    -- that never had the table form.
+    env.C_Reputation = nil
+
     -- Shapeshift / stance forms
     --------------------------------------------------------------------------
     -- Return ORDERS here are not guessed. They are taken from the destructuring sites in

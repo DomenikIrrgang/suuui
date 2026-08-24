@@ -1114,6 +1114,15 @@ describe("Components.DataField icon", function()
         expect(f._iconTex:IsShown()).falsy()
     end)
 
+    it("shows an icon passed at CONSTRUCTION, without a later SetIcon", function()
+        -- The path the data bar actually uses: a widget states its glyph once at registration and
+        -- nothing calls SetIcon afterwards. It works because the constructor runs ApplyTheme, which
+        -- re-applies the icon -- so this pins that dependency rather than leaving it incidental.
+        local f = field({ text = "", icon = "Interface\\Icons\\X" })
+        expect(f:IsIconShown()).truthy()
+        expect(f._iconTex:GetTexture()).eq("Interface\\Icons\\X")
+    end)
+
     it("shows the icon once given a texture", function()
         local f = field({ text = "Hello" })
         f:SetIcon("Interface\\Icons\\X")

@@ -465,11 +465,12 @@ describe("Plugins.ActionBars", function()
     end)
 
     it("leaves alone everything a later phase replaces", function()
-        -- Hiding these now would take away function the player still needs: the micro menu is
-        -- Phase 7, the bags Phase 9, the watch bars Phase 8.
+        -- Hiding these now would take away function the player still needs: the bags are Phase 9.
+        -- `MicroButtonAndBagsBar` stays because it is an ANCESTOR of `BagsBar`
+        -- (measured: MainMenuBarBackpackButton's parent is BagsBar, and both frames exist), so hiding
+        -- it would cascade to the bags even though it does not hold them itself.
         --
-        for _, name in ipairs({ "MicroMenu", "MicroMenuContainer", "MicroButtonAndBagsBar",
-                                "StatusTrackingBarManager",
+        for _, name in ipairs({ "MicroButtonAndBagsBar",
                                 "MainMenuBarBackpackButton" }) do
             local f = H.env[name]
             if f then
@@ -496,6 +497,31 @@ describe("Plugins.ActionBars", function()
         expect(H.env.PossessActionBar:IsShown()).as("still usable").truthy()
     end)
 
+    it("WITNESSES one button per suppressed family", function()
+        -- The witness list IS the self-check's coverage, so its membership is the assertion. Dropping
+        -- an entry does not fail anything on its own -- it just stops checking -- which is exactly how
+        -- a renamed container would slip through while every other signal said suppression worked.
+        local witnesses = {}
+        for _, n in ipairs(H.SuuUI._ActionBars.Suppress.WITNESS_BUTTONS) do witnesses[n] = true end
+        for _, want in ipairs({ "ActionButton1", "MultiBarBottomLeftButton1", "StanceButton1",
+                                "PetActionButton1", "CharacterMicroButton" }) do
+            expect(witnesses[want]).as(want .. " is witnessed").truthy()
+        end
+    end)
+
+    it("DOES suppress Blizzard's watch bars, now that Phase 8 replaced them", function()
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("StatusTrackingBarManager")).truthy()
+    end)
+
+    it("DOES suppress the micro menu, now that the data bar carries it", function()
+        -- Safe because the replacement calls the panel APIs rather than forwarding clicks into these
+        -- buttons -- nothing SuuUI draws needs them on screen. The bag container is a separate frame
+        -- and stays until Phase 9.
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("MicroMenuContainer")).truthy()
+        expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("MicroButtonAndBagsBar"))
+            .as("bags are still Phase 9").falsy()
+    end)
+
     it("suppresses BOTH class bars, because ours adopts neither's buttons", function()
         -- No asymmetry after all. An earlier draft assumed the pet bar had to adopt Blizzard's
         -- buttons and therefore keep its container alive; it does not -- `type="pet"` works on a
@@ -504,14 +530,18 @@ describe("Plugins.ActionBars", function()
         expect(H.SuuUI._ActionBars.Suppress.IsSuppressed("PetActionBar")).truthy()
     end)
 
-    it("does not take the micro menu down with MainMenuBar", function()
-        -- MEASURED, not assumed: MicroMenu's parent is MicroMenuContainer, so hiding the bar
-        -- cluster spares it. Had it been a child of MainMenuBar this phase would have cost the
-        -- player their character pane, spellbook and bags until Phase 7 -- so the parentage is
-        -- pinned here rather than left as a fact someone once checked.
+    it("keeps the micro menu OUT of MainMenuBar's parentage", function()
+        -- MEASURED, not assumed: MicroMenu's parent is MicroMenuContainer. That mattered in Phase 4b
+        -- because had it been a child of MainMenuBar, hiding the bar cluster would have cost the player
+        -- their character pane and spellbook until Phase 7.
+        --
+        -- The visibility half of this spec is GONE, not weakened: Phase 7 now suppresses the micro menu
+        -- deliberately, so asserting it stays shown would assert the opposite of the current design.
+        -- The parentage is still the fact worth pinning -- it is what makes the two suppressions
+        -- independent of each other.
         expect(H.env.MicroMenu:GetParent()).eq(H.env.MicroMenuContainer)
-        expect(H.env.MainMenuBar:IsShown()).as("the bar is hidden").falsy()
-        expect(H.env.MicroMenu:IsShown()).as("the micro menu is not").truthy()
+        expect(H.env.MicroMenu:GetParent() == H.env.MainMenuBar)
+            .as("not under the bar cluster").falsy()
     end)
 
     it("registers the bar as a moveable element", function()

@@ -104,6 +104,30 @@ function StatusBarMeta:_paint()
     B.SetBorder(self._f, self._showBorder and (self._borderColor or "colorBorder") or false)
     local r, g, b, a = self._fillColor[1], self._fillColor[2], self._fillColor[3], self._fillColor[4] or 1
     self._bar:SetColorTexture(r, g, b, a)
+
+    -- THE GHOST DERIVES FROM THE FILL *UNLESS* GIVEN A COLOUR OF ITS OWN.
+    --
+    -- Derivation is the default because it needs no token: a ghost reads as a paler version of whatever
+    -- progress looks like on that bar.
+    --
+    -- But it is WRONG when the ghost means something the fill does not, and experience is exactly that
+    -- case: in WoW blue IS the rested colour, so a blue-derived ghost on a blue fill tells the player
+    -- they are rested whenever they have any progress at all. An explicit colour is used AS GIVEN,
+    -- alpha included, so the theme controls it outright rather than having opacityBarGhost applied on
+    -- top of a value the theme already chose.
+    --
+    -- (An earlier version of this comment argued derivation must be forced so one primitive could serve
+    -- both watch bars. That was wrong: the reputation bar has no rested concept and never sets a
+    -- secondary at all, so there was no second case to serve.)
+    if self._secTex then
+        local sc = self._secColor
+        if sc then
+            self._secTex:SetColorTexture(sc[1], sc[2], sc[3], sc[4] or 1)
+        else
+            local ga = a * (SuuUI.Theme:GetToken("opacityBarGhost") or 0.35)
+            self._secTex:SetColorTexture(r, g, b, ga)
+        end
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -131,6 +155,48 @@ function StatusBarMeta:_fillDuration()
     return SuuUI.Theme:GetToken("animBarFill") or 0
 end
 
+--- Sets the secondary (ghost) fraction, e.g. how far rested experience reaches.
+--
+-- CLAMPED TO AT LEAST THE MAIN FILL. A ghost that fell behind progress would be drawn entirely under
+-- it and read as absent, which is indistinguishable from a bug -- so the floor is stated here rather
+-- than left to every caller to remember.
+-- @param f number|nil  0..1; nil or 0 hides it
+function StatusBarMeta:SetSecondary(f)
+    f = f or 0
+    if f < 0 then f = 0 elseif f > 1 then f = 1 end
+    self._secondary = f
+    self:_paintSecondary()
+end
+
+--- The secondary fraction as last set.
+-- @return number
+function StatusBarMeta:GetSecondary()
+    return self._secondary or 0
+end
+
+function StatusBarMeta:_paintSecondary()
+    if not (self._fillBox and self._secFrame) then return end
+    local f = self._secondary or 0
+    -- Never behind the main fill -- see SetSecondary.
+    local main = self._display or 0
+    if f > 0 and f < main then f = main end
+
+    -- Its own quantisation guard, same reasoning as the main fill's and its own cache.
+    local px = self:_fillPixels(f)
+    if px ~= self._secLastPx then
+        self._secLastPx = px
+        self._fillBox:SetChildFraction(self._secFrame, "width", f)
+    end
+
+    -- Hidden at zero rather than left as a zero-width frame: a zero-width child still costs the
+    -- container a cell, and a hidden one is skipped.
+    if f <= 0 or (self._secFrame:GetWidth() or 0) < 0.5 then
+        self._secFrame:Hide()
+    else
+        self._secFrame:Show()
+    end
+end
+
 --- Paints one fraction. Every write to the fill goes through here — the transition
 --- strategies, the immediate paths, and the geometry restatements alike.
 -- @param f number  0..1, clamped
@@ -151,6 +217,9 @@ function StatusBarMeta:_paintFraction(f)
             self._lastPx = px
             self._fillBox:SetChildFraction(self._fillFrame, "width", f)
             self:_syncFillVisibility()
+            -- The ghost's floor is the main fill, so progress moving can push it -- re-asserted here
+            -- rather than only when the caller sets it.
+            self:_paintSecondary()
         end
     end
 
@@ -465,6 +534,16 @@ function StatusBarMeta:SetFillColor(color)
     self:_paint()
 end
 
+--- Sets the secondary (ghost) fill's own colour, or clears it back to deriving from the fill.
+-- Pass nil to go back to the derived paler-fill behaviour. The colour is used exactly as given,
+-- including its alpha -- opacityBarGhost is NOT applied on top, because a theme that names this
+-- colour has already decided how present it should be.
+-- @param color table|nil  {r, g, b, a}
+function StatusBarMeta:SetSecondaryColor(color)
+    self._secColor = color
+    self:_paint()
+end
+
 --- Sets the background colour token or literal.
 -- @param color string|table|false
 function StatusBarMeta:SetBgColor(color)
@@ -556,6 +635,19 @@ function SuuUI.Components.StatusBar(props, parent)
 
     -- Fill frame: a child frame holding the fill texture. Both are placed by host
     -- containers below, never by hand — the fill is a fractional child of the track.
+    -- THE SECONDARY FILL, behind the main one. Rested experience is the case it exists for: a second
+    -- fraction that is always at least the first, drawn in a dimmer tone so the player reads "this is
+    -- how far the rested bonus reaches" without it competing with actual progress.
+    --
+    -- A second fractional child rather than a stacked second bar. A stacked pair would need its own
+    -- alignment, its own resize handling and its own theme plumbing, all kept in step with the first --
+    -- three things to get wrong instead of none.
+    local secondaryFrame = CreateFrame("Frame", nil, f)
+    local secondaryTex = secondaryFrame:CreateTexture(nil, "ARTWORK")
+    secondaryTex:SetTexture(WHITE)
+    secondaryTex:SetAllPoints(secondaryFrame)
+    secondaryFrame:Hide()
+
     local fillFrame = CreateFrame("Frame", nil, f)
 
     local bar = fillFrame:CreateTexture(nil, "ARTWORK")
@@ -565,6 +657,13 @@ function SuuUI.Components.StatusBar(props, parent)
     local handle = setmetatable({
         _f          = f,
         _fillFrame  = fillFrame,
+        _secFrame   = secondaryFrame,
+        _secTex     = secondaryTex,
+        -- Its OWN pixel cache. Sharing `_lastPx` would make a sub-pixel change to one fill invalidate
+        -- the other's guard, and the whole point of that guard is that a change too small to move a
+        -- pixel costs no layout pass -- a spec pins exactly that.
+        _secLastPx  = nil,
+        _secondary  = 0,
         _bar        = bar,
         _eid        = id,
         _value      = props.value or 0,
@@ -594,6 +693,15 @@ function SuuUI.Components.StatusBar(props, parent)
     -- The track hosts the fill; the fill hosts its texture. Two adopted containers, no
     -- extra frames, and not one point set by this component.
     handle._fillBox = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+    -- Added BEFORE the main fill, so the main fill draws over it. In a stack container the later child
+    -- is the higher one, which is the only ordering that makes a ghost fill read as a backdrop to
+    -- progress rather than a stripe on top of it.
+    handle._fillBox:Add(secondaryFrame, {
+        inset         = handle:_inset(),
+        align         = "start",
+        valign        = "stretch",
+        widthFraction = 0,
+    })
     handle._fillBox:Add(fillFrame, {
         inset         = handle:_inset(),
         align         = "start",
@@ -615,6 +723,12 @@ function SuuUI.Components.StatusBar(props, parent)
         if not handle._inResize then
             handle._inResize = true
             handle._lastPx = nil
+            -- Mirrors the main cache above. Mutation testing could NOT construct a case where
+            -- removing this changes the outcome -- a width change almost always moves the ghost's
+            -- pixel count too, so the guard re-writes anyway. Kept for symmetry rather than deleted:
+            -- the two caches are the same mechanism, and an asymmetry here would read as an oversight
+            -- and get "fixed" in one direction or the other.
+            handle._secLastPx = nil
             handle:_paintFraction(handle._display or 0)
             handle._inResize = false
         end

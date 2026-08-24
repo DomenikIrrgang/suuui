@@ -17,6 +17,16 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- Tier 1: hues
     colorBlue400     = {0.25, 0.55, 1.00, 1.00},
     colorBlue500     = {0.18, 0.44, 0.90, 1.00},
+    -- MAGENTA, not purple, and the name matters: "purple" is how the first attempt drifted into a
+    -- violet ({0.64, 0.29, 0.86}) that reads as the WARLOCK class colour, which is a blue-dominant
+    -- lavender ({0.58, 0.51, 0.79}).
+    --
+    -- Experience is a saturated fuchsia -- near-zero GREEN, and red at least as strong as blue. The
+    -- client's own bar is {0.58, 0.00, 0.55}; this keeps that structure and lifts the brightness,
+    -- because Blizzard's value goes muddy on a dark surface. Blue-dominance is what makes a purple look
+    -- like a class colour, so it is the thing to avoid here.
+    colorMagenta400  = {0.78, 0.12, 0.72, 1.00},
+    colorMagenta500  = {0.66, 0.08, 0.61, 1.00},
     colorGreen400    = {0.20, 0.80, 0.40, 1.00},
     -- Health's own green rather than a reuse of Success: they are the same hue family but
     -- answer to different things, and a user retinting "Success" to orange should not turn
@@ -32,6 +42,11 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- frame bar has, so at 0 rage this is the whole widget: too low and the bar vanishes
     -- against the game world.
     opacityBarTrack  = 0.60,
+    -- How faint a StatusBar's SECONDARY fill is, as a multiple of the main fill's own alpha. Rested
+    -- experience is the case: visible enough to read as reach, faint enough not to compete with actual
+    -- progress. A multiplier rather than a colour, because the ghost derives from whatever the bar's
+    -- fill is -- XP blue on one watch bar, a faction colour on the other.
+    opacityBarGhost  = 0.35,
     -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
     opacityEditOverlay = 0.20,
     -- How far a disabled control fades. It is the ONLY signal that a control is inert, so
@@ -106,6 +121,16 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorSuccess     = "colorGreen400",
     colorDanger      = "colorRed400",
     colorWarning     = "colorYellow400",
+
+    -- Experience, and the rested bonus that extends past it.
+    --
+    -- These are SEPARATE tokens rather than the accent, because in WoW their colours MEAN something:
+    -- purple is progress, blue is rested. Painting progress in the accent made the bar claim a rested
+    -- bonus that was not there. The rested region is drawn past current progress rather than under it,
+    -- so it can be near-solid without muddying the fill -- the alpha only marks it as potential rather
+    -- than earned.
+    colorXp          = "colorMagenta400",
+    colorXpRested    = { ref = "colorBlue400", alpha = 0.55 },
 
     -- Colour a unit by its class instead of by a fixed colour. A boolean rather than a
     -- colour token because it is a mode, not a value: it selects WHICH source a unit's

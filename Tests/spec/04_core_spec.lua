@@ -448,6 +448,74 @@ describe("Settings schema extension", function()
 end)
 
 describe("Theme", function()
+    describe("experience colour semantics", function()
+        -- Checked for EVERY built-in theme, not just the active one. A per-theme mutation survived the
+        -- watch bars spec precisely because that spec can only see whichever theme happens to be
+        -- active, so a theme shipping a blue colorXp would have gone unnoticed.
+        --
+        -- The rule is a fact about WoW rather than a taste: blue means RESTED. An experience bar painted
+        -- in the accent claims a rested bonus the character may not have, which is a lie about game
+        -- state, so no theme may point colorXp at the accent.
+        it("never paints progress in the accent, in any theme", function()
+            local names = H.SuuUI.Theme:List()
+            expect(#names > 1).as("more than one theme to check").truthy()
+            for _, name in ipairs(names) do
+                H.T:SetActive(name)
+                local xpC = H.SuuUI.Theme:GetToken("colorXp")
+                local acc = H.SuuUI.Theme:GetToken("colorAccent")
+                expect(xpC).as(name .. " defines colorXp").truthy()
+                expect(xpC[1] == acc[1] and xpC[2] == acc[2] and xpC[3] == acc[3])
+                    .as(name .. ": colorXp must not be the accent blue").falsy()
+            end
+        end)
+
+        it("is a MAGENTA rather than a violet, in any theme", function()
+            -- The second colour attempt was {0.64, 0.29, 0.86} -- a violet that reads as the WARLOCK
+            -- class colour, so the bar looked like a class resource instead of experience. "Not the
+            -- accent" did not catch it, because a violet is not the accent.
+            --
+            -- What separates the two is STRUCTURE, not a specific value: experience is a fuchsia with
+            -- near-zero green and red at least as strong as blue, while every purple class colour is
+            -- BLUE-DOMINANT with a lot of green in it. Asserted as that structure so any future retune
+            -- stays in the family, rather than pinning an exact triple no one may adjust.
+            for _, name in ipairs(H.SuuUI.Theme:List()) do
+                H.T:SetActive(name)
+                local c = H.SuuUI.Theme:GetToken("colorXp")
+                local r, g, b = c[1], c[2], c[3]
+                expect(g < math.min(r, b) * 0.5)
+                    .as(name .. ": green must be well below red and blue -- green is what makes it lavender")
+                    .truthy()
+                expect(r >= b * 0.9)
+                    .as(name .. ": red must hold against blue -- blue-dominance is what reads as a class colour")
+                    .truthy()
+            end
+        end)
+
+        it("is not confusable with the warlock class colour, in any theme", function()
+            -- Compared against the CLIENT's own warlock colour out of SuuUI.Game rather than a value
+            -- copied into the test, so the guard tracks the game if the game ever changes it.
+            local wl = H.SuuUI.Game:ClassColor("WARLOCK")
+            expect(wl).as("the client knows warlock's colour").truthy()
+            for _, name in ipairs(H.SuuUI.Theme:List()) do
+                H.T:SetActive(name)
+                local c = H.SuuUI.Theme:GetToken("colorXp")
+                local d = math.sqrt((c[1] - wl[1]) ^ 2 + (c[2] - wl[2]) ^ 2 + (c[3] - wl[3]) ^ 2)
+                expect(d > 0.35).as(name .. ": too close to warlock (distance " .. string.format("%.2f", d) .. ")").truthy()
+            end
+        end)
+
+        it("keeps rested visibly distinct from progress, in any theme", function()
+            for _, name in ipairs(H.SuuUI.Theme:List()) do
+                H.T:SetActive(name)
+                local xpC = H.SuuUI.Theme:GetToken("colorXp")
+                local rest = H.SuuUI.Theme:GetToken("colorXpRested")
+                expect(rest).as(name .. " defines colorXpRested").truthy()
+                local sameHue = xpC[1] == rest[1] and xpC[2] == rest[2] and xpC[3] == rest[3]
+                expect(sameHue).as(name .. ": rested is a different hue, not the fill faded").falsy()
+            end
+        end)
+    end)
+
     before_each(function() H.setup() end)
 
     it("resolves a literal token", function()

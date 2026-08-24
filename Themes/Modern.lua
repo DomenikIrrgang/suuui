@@ -15,6 +15,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- Tier 1: hues
     colorBlue400     = {0.30, 0.60, 1.00, 1.00},
     colorBlue500     = {0.20, 0.48, 0.92, 1.00},
+    -- See Default: MAGENTA (near-zero green, red at least as strong as blue), not a violet. A
+    -- blue-dominant purple reads as the warlock class colour rather than as experience. Modern's is a
+    -- touch brighter, like its blues.
+    colorMagenta400  = {0.84, 0.16, 0.78, 1.00},
+    colorMagenta500  = {0.72, 0.11, 0.66, 1.00},
     colorGreen400    = {0.22, 0.85, 0.45, 1.00},
     -- See Themes/Default.lua: health's own green, brighter here to match this theme's
     -- higher contrast. Only visible while colorUseClassColors is off, or on a unit whose
@@ -27,6 +32,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityOverlay   = 0.45,
     -- See Themes/Default.lua: the empty part of a frameless bar.
     opacityBarTrack  = 0.60,
+    -- How faint a StatusBar's SECONDARY fill is, as a multiple of the main fill's own alpha. Rested
+    -- experience is the case: visible enough to read as reach, faint enough not to compete with actual
+    -- progress. A multiplier rather than a colour, because the ghost derives from whatever the bar's
+    -- fill is -- XP blue on one watch bar, a faction colour on the other.
+    opacityBarGhost  = 0.35,
     -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
     opacityEditOverlay = 0.20,
     -- See Themes/Default.lua: how far a disabled control fades.
@@ -81,6 +91,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorSuccess     = "colorGreen400",
     colorDanger      = "colorRed400",
     colorWarning     = "colorYellow400",
+
+    -- See Default: purple is progress, blue is rested, and they are separate tokens because those
+    -- colours carry meaning to the player rather than being decoration.
+    colorXp          = "colorMagenta400",
+    colorXpRested    = { ref = "colorBlue400", alpha = 0.55 },
 
     -- See Themes/Default.lua. On here: this is the shipped active theme, and class
     -- colouring is the modern convention for a health bar. Turn it off to fall back to

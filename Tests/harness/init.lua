@@ -61,6 +61,7 @@
 -- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
 --              H.setSpellTexture
+-- Watch bars:  H.setXP H.setWatchedFaction
 -- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
 --              H.setBonusBarOffset H.getUsedPetAction
 --              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
@@ -680,6 +681,97 @@ function M.setPetActionBar(has, opts)
         M.fireEvent("UNIT_PET", "player")
     end
 end
+
+-- Known experience fields, so a typo raises rather than being ignored.
+local XP_FIELDS = { current = true, max = true, rested = true, disabled = true }
+
+--- Stages the player's experience and fires PLAYER_XP_UPDATE.
+--
+-- Merges, so a spec can set the level's progress and then add a rested bonus without restating it.
+-- Pass rested = false to clear it -- nil would be indistinguishable from "leave it alone", and the
+-- difference between no rested bonus and a bonus of zero is visible on the bar.
+--
+-- @param props table  any subset of XP_FIELDS
+-- @param opts table|nil  { silent = true }
+function M.setXP(props, opts)
+    for k, v in pairs(props or {}) do
+        assert(XP_FIELDS[k], "H.setXP: unknown xp field '" .. tostring(k) .. "'")
+        if k == "rested" and v == false then
+            state.xp.rested = nil
+        else
+            state.xp[k] = v
+        end
+    end
+    if not (opts and opts.silent) then
+        M.fireEvent("PLAYER_XP_UPDATE", "player")
+    end
+    return state.xp
+end
+
+--- Stages the watched faction, or clears it with nil, and fires UPDATE_FACTION.
+-- @param props table|nil  { name, standing, min, max, value }; nil watches nothing
+-- @param opts table|nil  { silent = true }
+function M.setWatchedFaction(props, opts)
+    state.watchedFaction = props
+    if not (opts and opts.silent) then
+        M.fireEvent("UPDATE_FACTION")
+    end
+end
+
+--- Which reputation API this simulated client has.
+--
+-- The addon must survive all three, and they are genuinely different situations: a modern backend may
+-- carry only the table-returning `C_Reputation.GetWatchedFactionData`, and "no API at all" must NOT
+-- look like "no faction watched" -- conflating those two is what hid the bar on a character that had a
+-- faction tracked.
+--
+-- Installs and removes the actual global, because the addon tests for its presence rather than
+-- consulting harness state.
+-- @param mode string  "legacy" (default) | "modern" | "none"
+function M.setRepApi(mode)
+    mode = mode or "legacy"
+    assert(mode == "legacy" or mode == "modern" or mode == "none",
+        "H.setRepApi: mode must be 'legacy', 'modern' or 'none', got '" .. tostring(mode) .. "'")
+    state.repApi = mode
+
+    -- M.env, NOT _G. The addon's chunks run against the harness environment, so nil-ing the real _G
+    -- changes a table nothing under test ever reads -- the switch looked like it worked and the addon
+    -- carried on seeing the old API.
+    local env = M.env
+    assert(env, "H.setRepApi: call H.setup() first")
+
+    -- A modern client does not carry BOTH. Removing the legacy global in "modern" mode is what makes
+    -- the modern test meaningful: if it stayed, the addon's legacy branch would answer first and the
+    -- table path would never run.
+    env.GetWatchedFactionInfo = (mode == "legacy") and state.legacyRepFn or nil
+
+    if mode == "modern" then
+        env.C_Reputation = {
+            GetWatchedFactionData = function()
+                local w = state.watchedFaction
+                if not w then return nil end
+                return {
+                    name = w.name,
+                    reaction = w.standing or 4,
+                    currentReactionThreshold = w.min or 0,
+                    nextReactionThreshold = w.max or 0,
+                    currentStanding = w.value or 0,
+                    factionID = w.factionID or 1168,
+                }
+            end,
+        }
+    else
+        env.C_Reputation = nil
+    end
+end
+
+--- Panel toggles the addon called, in order, as { name = ..., arg = ... }.
+-- @return table
+function M.getPanelToggles() return state.panelToggles end
+
+--- Micro buttons whose OnClick fired, by global name, in order.
+-- @return table
+function M.getMicroClicks() return state.microClicks end
 
 --- What the client's secure handler did with the last `pet` click, or nil.
 -- @return table|nil  { slot, button, down }

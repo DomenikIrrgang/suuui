@@ -35,8 +35,20 @@ local M = {}
 -- client generation, not a bug.
 --
 -- Deliberately NOT here, because nothing replaces them yet and hiding them would take away
--- function the player still needs: the micro menu (Phase 7), the bags (Phase 9) and the XP and
--- reputation bars (Phase 8).
+-- function the player still needs: the bags (Phase 9).
+--
+-- THE MICRO MENU IS NOW HERE, because Phase 7 replaced it. Note WHICH frame: `MicroMenuContainer`
+-- holds the micro buttons and `MicroMenu` is its child.
+--
+-- `MicroButtonAndBagsBar` stays, and the reason was MEASURED after an earlier draft of this comment
+-- got it wrong. It does not hold the bag buttons itself -- walking up from the backpack gives
+-- `MainMenuBarBackpackButton > BagsBar`, and BOTH `BagsBar` and `MicroButtonAndBagsBar` exist on this
+-- client. So `MicroButtonAndBagsBar` is an ANCESTOR of the bag container, which is why hiding it would
+-- still cost the player their bags: the cascade, not the contents.
+--
+-- Phase 9's target is therefore `BagsBar` plus `KeyRingButton`, NOT `MicroButtonAndBagsBar`. Same
+-- shape of mistake as MainActionBar versus MainMenuBar: the frame that exists is not always the frame
+-- that holds the buttons.
 --
 -- BOTH class bars ARE here, and an earlier draft of this comment said the pet bar could not be,
 -- on the assumption that its replacement had to adopt Blizzard's PetActionButton1..N the way ElvUI
@@ -78,6 +90,25 @@ local TARGETS = {
     -- the Classic-Era spelling. Both listed for the same reason as the stance pair -- an absent name
     -- is skipped, and these frames have coexisted under two names before.
     { id = "pet_bar",      names = { "PetActionBar", "PetActionBarFrame" } },
+    -- The micro menu. Replaced by the data bar's `left` section in Phase 7.
+    --
+    -- Safe to hide precisely BECAUSE the replacement calls the panel APIs rather than forwarding
+    -- clicks into these buttons: nothing SuuUI draws depends on them existing on screen. Had the
+    -- fields forwarded clicks (the first attempt), hiding their targets would have been the pet bar's
+    -- problem all over again.
+    --
+    -- `MicroButtonAndBagsBar` is NOT listed: it carries the bag buttons as well, and Phase 9 owns
+    -- those. Hiding it here would cost the player their bags for a whole phase.
+    { id = "micro_menu",   names = { "MicroMenuContainer", "MicroMenu" } },
+    -- The experience and reputation bars, replaced in Phase 8.
+    --
+    -- `StatusTrackingBarManager` is the container; the two inner containers are listed as well because
+    -- this client is a hybrid and has produced coexisting frames three times now. An absent name costs
+    -- nothing, and hiding only the manager on a build that anchors its children elsewhere would leave
+    -- Blizzard's bars on screen under ours.
+    { id = "watch_bars",   names = { "StatusTrackingBarManager",
+                                     "MainStatusTrackingBarContainer",
+                                     "SecondaryStatusTrackingBarContainer" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
     { id = "bar_art",      names = { "MainMenuBarArtFrame" } },
@@ -101,6 +132,9 @@ local WITNESS_BUTTONS = {
     "MultiBar7Button1",
     "StanceButton1",
     "PetActionButton1",
+    -- The micro menu's first button. A container renamed out from under the list above would leave
+    -- this visible while every other signal said the suppression worked.
+    "CharacterMicroButton",
 }
 
 M.WITNESS_BUTTONS = WITNESS_BUTTONS

@@ -130,6 +130,25 @@ M.petHasActionBar = false
 -- What the client's own secure handler did with a `pet` click: which slot, which button.
 M.usedPetAction = nil
 
+-- The player's experience, as UnitXP / UnitXPMax / GetXPExhaustion report it.
+--
+-- `rested` is nil rather than 0 when there is none, because the client distinguishes the two and a
+-- consumer treating nil as 0 draws an empty ghost fill instead of no ghost fill.
+M.xp = { current = 0, max = 0, rested = nil, disabled = false }
+
+-- The watched faction, or nil for none -- which is the reputation bar's hide condition.
+M.watchedFaction = nil
+-- Which reputation API the simulated client has: "legacy" | "modern" | "none". See H.setRepApi.
+M.repApi = "legacy"
+
+-- Panel toggle functions the addon called, in order: { name, arg }. The micro menu opens panels
+-- through these because Blizzard's micro buttons have no OnClick script on this client.
+M.panelToggles = {}
+
+-- Micro buttons whose OnClick fired, by global name, in order. The micro menu replaces the strip
+-- with data-bar fields, so 'did the field reach the right Blizzard button' is the assertion.
+M.microClicks = {}
+
 -- What CastPetAction was asked to cast, or nil.
 M.castPetAction = nil
 
@@ -249,6 +268,18 @@ function M.reset()
     M.petHasActionBar    = false
     M.petAutocastToggles = {}
     M.castPetAction      = nil
+    M.microClicks        = {}
+    M.panelToggles       = {}
+    M.xp                 = { current = 0, max = 0, rested = nil, disabled = false }
+    M.watchedFaction     = nil
+    -- Back to legacy-only, and BOTH globals go with it -- a test that removed the legacy API or added
+    -- the modern one must not leave the next test running against a client it did not ask for.
+    -- Applied to the harness ENV, because that is the table the addon's chunks read.
+    M.repApi             = "legacy"
+    if M.env then
+        M.env.C_Reputation = nil
+        if M.legacyRepFn then M.env.GetWatchedFactionInfo = M.legacyRepFn end
+    end
     M.usedPetAction      = nil
     M.bonusBarOffset     = 0
     -- Cleared for the usual reason: a leaked ActionButtonUseKeyDown would put every later spec's

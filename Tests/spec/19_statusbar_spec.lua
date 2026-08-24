@@ -1131,3 +1131,163 @@ describe("Components.StatusBar", function()
         end)
     end)
 end)
+
+-- The SECONDARY (ghost) fill, added for the watch bars: rested experience reaching past current
+-- progress. A second fractional child of the same container rather than a stacked second bar -- a
+-- stacked pair would need its own alignment, resize handling and theme plumbing kept in step.
+describe("Components.StatusBar secondary fill", function()
+    local host
+
+    before_each(function()
+        H.setup()
+        host = H.parent(400, 60)
+    end)
+
+    local function bar(props)
+        props = props or {}
+        props.w = props.w or 200
+        props.h = props.h or 20
+        props.max = props.max or 100
+        props.transition = props.transition or "instant"
+        local b = H.C.StatusBar(props, host)
+        b:GetFrame():SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        return b
+    end
+
+    it("draws nothing until asked", function()
+        -- A bar with no rested experience must look exactly like a bar that has no concept of it.
+        local b = bar()
+        b:SetValue(30)
+        expect(b:GetSecondary()).eq(0)
+        expect(b._secFrame:IsShown()).falsy()
+    end)
+
+    it("reaches past the main fill", function()
+        local b = bar()
+        b:SetValue(30)
+        b:SetSecondary(0.7)
+        expect(b._secFrame:IsShown()).truthy()
+        expect(b._secFrame:GetWidth() > b._fillFrame:GetWidth())
+            .as("the ghost is wider than progress").truthy()
+    end)
+
+    it("CLAMPS to the main fill rather than falling behind it", function()
+        -- A ghost narrower than progress would be drawn entirely underneath it and read as absent,
+        -- which is indistinguishable from a bug. The floor lives in the component so no caller has to
+        -- remember it.
+        local b = bar()
+        b:SetValue(50)
+        b:SetSecondary(0.1)
+        expect(b._secFrame:GetWidth()).eq(b._fillFrame:GetWidth())
+    end)
+
+    it("is PUSHED when progress overtakes it", function()
+        -- Experience gained past the rested threshold. Re-asserted when the main fill moves, not only
+        -- when the caller sets the ghost.
+        local b = bar()
+        b:SetValue(30)
+        b:SetSecondary(0.5)
+        local before = b._secFrame:GetWidth()
+        b:SetValue(90)
+        expect(b._secFrame:GetWidth() > before).truthy()
+        expect(b._secFrame:GetWidth()).eq(b._fillFrame:GetWidth())
+    end)
+
+    it("clamps above 1, so an over-full fraction cannot overhang the track", function()
+        -- Rested experience can legitimately be reported past the end of the level, and a fraction
+        -- over 1 would draw the ghost wider than the bar it belongs to.
+        local b = bar()
+        b:SetSecondary(1.5)
+        expect(b:GetSecondary()).eq(1)
+        expect(b._secFrame:GetWidth() <= b:GetWidth()).as("inside the track").truthy()
+    end)
+
+    it("hides again at zero", function()
+        local b = bar()
+        b:SetValue(30)
+        b:SetSecondary(0.7)
+        b:SetSecondary(0)
+        expect(b._secFrame:IsShown()).as("a zero-width child still costs a cell").falsy()
+    end)
+
+    it("draws BEHIND the main fill, not over it", function()
+        -- In a stack container the later child is the higher one, so the ghost is added first. The
+        -- other order would put a stripe on top of progress instead of a backdrop behind it.
+        local b = bar()
+        expect(H.drawLayerRank or true).truthy()
+        b:SetValue(30)
+        b:SetSecondary(0.9)
+        expect(b._fillFrame:GetFrameLevel() >= b._secFrame:GetFrameLevel())
+            .as("main fill is not below the ghost").truthy()
+    end)
+
+    it("FOLLOWS the fill colour at a reduced alpha when given no colour of its own", function()
+        -- `fillColor`, taking a LITERAL -- there is no `fill` prop, and no token-key form. This spec
+        -- used to say `fill = "colorAccent"`, which StatusBar silently ignored, so every assertion here
+        -- ran against a WHITE bar while the comment claimed blue. That phantom prop is also what the
+        -- watch bars plugin copied, shipping a white experience bar.
+        local b = bar({ fillColor = { 0.25, 0.55, 1.00, 1.00 } })
+        b:SetValue(30)
+        b:SetSecondary(0.7)
+        local mr, mg, mb, ma = b._bar:GetColorTexture()
+        local gr, gg, gb, ga = b._secTex:GetColorTexture()
+        expect({ gr, gg, gb }).as("same hue").deepEq({ mr, mg, mb })
+        expect(ga).eq(ma * H.token("opacityBarGhost"))
+        expect(ga < ma).as("and fainter").truthy()
+    end)
+
+    it("takes a colour of its OWN when set, ignoring the fill and opacityBarGhost", function()
+        -- Derivation is wrong whenever the ghost means something the fill does not. Experience is that
+        -- case: blue IS rested in WoW, so a paler-purple ghost reads as more progress rather than as a
+        -- rested bonus. The colour is applied exactly as given -- opacityBarGhost is NOT multiplied in,
+        -- because a theme naming this colour has already decided how present it should be.
+        local b = bar({ fillColor = { 1, 0, 1, 1 } })
+        b:SetValue(30)
+        b:SetSecondary(0.7)
+        b:SetSecondaryColor({ 0, 0.5, 1, 0.55 })
+        local gr, gg, gb, ga = b._secTex:GetColorTexture()
+        expect({ gr, gg, gb }).as("its own hue, not the fill's").deepEq({ 0, 0.5, 1 })
+        expect(ga).as("its own alpha, not scaled by the ghost token").eq(0.55)
+    end)
+
+    it("goes back to deriving when its own colour is cleared", function()
+        local b = bar({ fillColor = { 1, 0, 1, 1 } })
+        b:SetSecondary(0.7)
+        b:SetSecondaryColor({ 0, 0.5, 1, 0.55 })
+        b:SetSecondaryColor(nil)
+        local gr, gg, gb = b._secTex:GetColorTexture()
+        expect({ gr, gg, gb }).as("the fill's hue again").deepEq({ 1, 0, 1 })
+    end)
+
+    it("re-derives its colour on a theme change", function()
+        local b = bar({ fillColor = { 0.25, 0.55, 1.00, 1.00 } })
+        b:SetSecondary(0.7)
+        b._secTex:SetColorTexture(0, 0, 0, 0)
+        b:ApplyTheme()
+        local _, _, _, ga = b._secTex:GetColorTexture()
+        expect(ga > 0).truthy()
+    end)
+
+    it("keeps its OWN pixel guard, so one fill cannot invalidate the other's", function()
+        -- The guard exists so a change too small to move a pixel costs no layout pass. Sharing one
+        -- cache between the two fills would make a sub-pixel change to either invalidate both.
+        local b = bar()
+        b:SetValue(30)
+        b:SetSecondary(0.7)
+        local mainPx, ghostPx = b._lastPx, b._secLastPx
+        expect(mainPx).notNil()
+        expect(ghostPx).notNil()
+        expect(mainPx == ghostPx).as("two different fractions, two different pixel counts").falsy()
+    end)
+
+    it("survives a resize with both fills correct", function()
+        -- The guard caches a pixel count against the old width, so both caches have to be invalidated
+        -- or a skipped write leaves a fraction up to a pixel stale at the new width.
+        local b = bar()
+        b:SetValue(50)
+        b:SetSecondary(0.75)
+        b:GetFrame():SetWidth(400)
+        expect(b._secFrame:GetWidth() > b._fillFrame:GetWidth()).truthy()
+        expect(b._secFrame:GetWidth() > 200).as("scaled with the bar").truthy()
+    end)
+end)

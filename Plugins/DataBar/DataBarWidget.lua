@@ -148,10 +148,16 @@ function Bar:_buildField(def, group)
         -- promise an interaction that is not there.
         local interactive = type(def.OnClick) == "function"
             or type(def.OnEnter) == "function"
+        -- `icon` / `iconCoords` / `iconSize` are passed straight through from the widget def. A
+        -- widget that wants a glyph instead of a prefix -- the micro menu is fourteen of them --
+        -- states them once at registration; the field owns the placement and the hug.
         local field = SuuUI.Components.DataField({
-            prefix = def.prefix,
-            rail   = interactive,
-            h      = self:GetBarHeight(),
+            prefix     = def.prefix,
+            rail       = interactive,
+            h          = self:GetBarHeight(),
+            icon       = def.icon,
+            iconCoords = def.iconCoords,
+            iconSize   = def.iconSize,
         }, parent)
         rec.field = field
         group:Add(field, { align = "stretch" })
