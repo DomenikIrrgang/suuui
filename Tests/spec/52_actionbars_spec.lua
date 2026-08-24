@@ -1014,14 +1014,26 @@ describe("Plugins.ActionBars: every bar", function()
             expect(pages[10]).truthy()
         end)
 
-        it("derives the pages from the DRIVER's own strings, not a second list", function()
+        it("covers every page ANY class's driver pages onto", function()
+            -- The invariant that matters, and the direction matters too. The union is per-class-agnostic
+            -- while a driver is per-class, so asserting the current character's driver contains every
+            -- marked page is simply false -- page 10 is a druid's and a warrior never sees it.
+            --
+            -- What must hold is the other way round: no class may have a bonus page the warning misses.
             -- Two lists would eventually disagree, and a warning wrong about which bars are affected is
-            -- worse than none. Every page named in the warning must be one the driver can actually
-            -- resolve to.
-            local driver = H.SuuUI._ActionBars.Paging.BuildDriver()
-            for page in pairs(H.SuuUI._ActionBars.Paging.BonusPages()) do
-                expect(driver:find("%]" .. page .. ";"))
-                    .as("page " .. page .. " appears in the driver").notNil()
+            -- worse than none.
+            local marked = H.SuuUI._ActionBars.Paging.BonusPages()
+            for _, class in ipairs({ "DRUID", "WARRIOR", "ROGUE", "PRIEST", "PALADIN", "MAGE" }) do
+                H.setUnit("player", { class = class })
+                local driver = H.SuuUI._ActionBars.Paging.BuildDriver()
+                for page in driver:gmatch("%[bonusbar:[^%]]*%]%s*(%d+);") do
+                    local n = tonumber(page)
+                    -- bonusbar:5 pages onto 11, which no bar covers -- so it is legitimately unmarked.
+                    if n ~= 11 then
+                        expect(marked[n]).as(class .. " pages onto " .. n .. ", which must be marked")
+                            .truthy()
+                    end
+                end
             end
         end)
 

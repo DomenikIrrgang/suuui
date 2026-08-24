@@ -1036,6 +1036,27 @@ stages both, so a spec can move them and prove the call is real rather than deco
 does not draw a possess bar either — it pages bar 1 to slots 181-192. Since this driver now carries that
 clause, possession may already work through bar 1.
 
+**The settings now mark which bars a stance uses.** Bars 10-13 (pages 7-10) carry a warning-toned note
+saying the slots are shared with bar 1's form and stance paging. Nothing about those bars behaves
+differently — they take the same slots, bindings and settings they did before, stay opt-in, and stay fully
+configurable. The note is prose, and it exists because arranging one of these bars and then watching it
+seem to rearrange itself is a bad afternoon.
+
+Marked for **every class rather than the logged-in one**: a per-class warning would appear and vanish as
+the player switched character on a shared profile, and a page that is a bonus bar for somebody is a page to
+arrange deliberately for everybody. The classes are named in the note text instead, so it stays true
+whoever reads it. Bar 9 is deliberately NOT marked — page 2 is simply a page Blizzard exposes no bar for,
+and warning about it would train the player to ignore the warning that matters.
+
+The marked set is derived from the same `CLASS_BONUS_PAGES` table the driver is built from, by parsing the
+condition strings that actually ship — two lists would eventually disagree. The spec asserts the invariant
+in the direction that matters: **no class may have a bonus page the warning misses.** The reverse is false
+and was written that way first — the union spans classes while a driver is per-class, so page 10 is a
+druid's and a warrior's driver never contains it.
+
+This needed a new schema control, `note` (`SettingsUI/Controls/Note.lua`): read-only prose with an optional
+tone. `text` is an INPUT and a section is a heading, so nothing could state a fact next to a setting.
+
 ---
 
 ## Bag bar — Phase 9, BUILT 2026-08-24
