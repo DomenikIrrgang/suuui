@@ -15,6 +15,7 @@
 -- The component never sees any of this. A StatusBar takes plain strings, so what a number MEANS
 -- stays with whoever owns the value -- these are just the agreed spellings.
 local format, floor = string.format, math.floor
+local type, ipairs = type, ipairs
 
 local M = {}
 
@@ -67,6 +68,104 @@ function M.Options()
         { value = "current",     label = "Current" },
         { value = "percent",     label = "Percent" },
     }
+end
+
+---------------------------------------------------------------------------
+-- Money
+---------------------------------------------------------------------------
+
+-- WHY MONEY LIVES HERE. I argued in Plugins/Inventory that it does not -- that Readout spells a
+-- BAR's value while money is three units with fixed divisors rather than a fraction. That reasoning
+-- was about the SHAPE of the value and it missed the point of this module, which is stated at the top
+-- of architecture.md's entry for it: a presentation choice the whole UI has to make the same way, so
+-- two surfaces cannot disagree. Money is exactly that, and the divergence had already happened --
+-- Plugins/Tooltips/Content.lua and Plugins/Inventory/InventoryWindow.lua each grew their own
+-- formatter, one dropping zero units and one always printing all three. The k/M abbreviation bug this
+-- module exists to prevent is the same bug: a tooltip reading `7.6k` beside a bar reading `7620`.
+--
+-- DROPPING A LEADING ZERO UNIT IS RIGHT AND DROPPING A TRAILING ONE IS NOT, and the asymmetry is
+-- load-bearing rather than tidy: "12g 0s 88c" is noise, but "12g 88c" and "12g 88s" are DIFFERENT
+-- PRICES, so once a larger denomination is present every smaller one keeps its letter. That rule was
+-- learned in the tooltip and is pinned by Tests/spec/51_tooltips_spec.lua; it is preserved verbatim
+-- here rather than re-derived.
+local COIN_UNITS = {
+    { key = "GOLD",   div = 10000, suffix = "g" },
+    { key = "SILVER", div = 100,   suffix = "s" },
+    { key = "COPPER", div = 1,     suffix = "c" },
+}
+
+-- Stands in for an omitted opts table so the reads below need no nil guard, and so a footer refresh
+-- allocates nothing. Never written to.
+local EMPTY = {}
+
+--- Splits copper into gold, silver and copper.
+-- @param copper number
+-- @return number, number, number
+function M.MoneyParts(copper)
+    if type(copper) ~= "number" or copper ~= copper or copper < 0 then return 0, 0, 0 end
+    copper = floor(copper)
+    return floor(copper / 10000), floor((copper % 10000) / 100), copper % 100
+end
+
+--- Groups a number with the client's own thousands separator.
+--
+-- LARGE_NUMBER_SEPERATOR is Blizzard's global (misspelled in the client, kept verbatim) and it is
+-- locale-correct -- a German client separates with ".", so hardcoding "," would be wrong for exactly
+-- the players least likely to report it. Bare global lookup, never _G, so the harness can stage it.
+-- @param n number
+-- @return string
+function M.GroupNumber(n)
+    if type(n) ~= "number" or n ~= n then return "0" end
+    local sep = LARGE_NUMBER_SEPERATOR
+    if type(sep) ~= "string" or sep == "" then sep = "," end
+    local out = tostring(floor(n))
+    -- Insert from the right in threes. The anchor requires a digit AFTER the group so the leading
+    -- run is not itself separated, and the loop repeats because one pass only moves one group.
+    local count
+    repeat
+        out, count = out:gsub("^(-?%d+)(%d%d%d)", "%1" .. sep .. "%2")
+    until count == 0
+    return out
+end
+
+--- Spells an amount of copper as gold/silver/copper.
+--
+-- @param copper number
+-- @param opts table|nil
+--   colored        wrap each UNIT LETTER in its coin colour. The LETTER only, not the figure: the
+--                  amount is the reading and stays in the caller's own text colour, while the letter
+--                  is the label saying which denomination it is. Colouring the whole segment paints
+--                  the number gold too, which is louder than the concept and buries the figure.
+--                  The colour is a GAME FACT from SuuUI.Game, not a theme token -- see CoinColorCode.
+--   groupThousands "1,284" rather than "1284", via the client's own separator.
+--   spaceUnits     "1,284 g" rather than "1,284g".
+--
+-- All three default OFF, so a caller that wants the dense inline form -- a vendor price inside a
+-- tooltip line -- gets it without asking, and only a readout where the money IS the subject opts in.
+-- @return string|nil  nil for a non-number or a negative amount, so a caller can omit the line
+function M.Money(copper, opts)
+    if type(copper) ~= "number" or copper ~= copper or copper < 0 then return nil end
+    opts = opts or EMPTY
+    local g, s, c = M.MoneyParts(copper)
+    local amounts = { g, s, c }
+    local out, started = {}, false
+    for i, unit in ipairs(COIN_UNITS) do
+        local amount = amounts[i]
+        -- Copper is always emitted: a purse of 0 has to read as "0c" rather than as an empty string.
+        if amount > 0 or started or i == #COIN_UNITS then
+            started = true
+            local figure = opts.groupThousands and M.GroupNumber(amount) or tostring(amount)
+            local suffix = unit.suffix
+            if opts.colored then
+                local code = SuuUI.Game and SuuUI.Game:CoinColorCode(unit.key)
+                -- Degrades to uncoloured rather than raising: this runs from a footer refresh, and a
+                -- missing colour is worth less than a missing readout.
+                if code then suffix = code .. suffix .. "|r" end
+            end
+            out[#out + 1] = figure .. (opts.spaceUnits and " " or "") .. suffix
+        end
+    end
+    return table.concat(out, " ")
 end
 
 SuuUI.Readout = M

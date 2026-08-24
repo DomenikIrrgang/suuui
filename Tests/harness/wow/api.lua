@@ -125,6 +125,24 @@ function M.install(env)
             local hl = f:CreateTexture(nil, "HIGHLIGHT")
             hl:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
             f:SetHighlightTexture(hl)
+            -- THE REGIONS NO FIELD NAME REACHES, and they are the point of this block rather than a
+            -- detail. Measured in game 2026-08-24: after a consumer cleared `icon`, `Count`,
+            -- `IconBorder` and the four texture getters, the real cell STILL had three visible
+            -- textures -- fileID 969828 twice and 902180 once. 969828 is
+            -- `Interface\Common\WhiteIconFrame`, a white square outline vertex-tinted for item
+            -- quality, and it ships at a FIXED 37x37 instead of being anchored to the button, which
+            -- is why it read as a cell border at one size and pulled inward at a larger one.
+            --
+            -- They are deliberately UNREACHABLE by field and SHOWN by default, because a model whose
+            -- every region carries a name the consumer already knows cannot fail: the hand-written
+            -- list that shipped the bug would pass against it. Clearing these requires ENUMERATING
+            -- GetRegions, which is the property worth pinning.
+            local quality = f:CreateTexture(nil, "OVERLAY")
+            quality:SetTexture(969828)
+            quality:SetVertexColor(0.12, 0.44, 0.87, 1)
+            quality:SetSize(37, 37)
+            local overlay2 = f:CreateTexture(nil, "OVERLAY")
+            overlay2:SetTexture(902180)
             -- One phase, and the guess is contained for the same reason as StanceButtonTemplate:
             -- SuuUI never calls RegisterForClicks on these, so the template owns the decision.
             f:RegisterForClicks("AnyUp")

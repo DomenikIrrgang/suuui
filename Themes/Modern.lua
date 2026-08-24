@@ -140,6 +140,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     sizeRail         = 2,
 
     borderWidth      = 1,
+    -- See Themes/Default.lua: the rounded-surface corner radius.
+    borderRadius     = 3,
 
     animFast         = 0.10,
     animMid          = 0.20,

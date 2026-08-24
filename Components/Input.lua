@@ -31,9 +31,44 @@ function InpMeta:_autosize()
     self._f:SetHeight(h)
 end
 
+-- The placeholder is a SEPARATE muted Text child, never the EditBox's own text. Putting
+-- the hint in the box would make GetValue/GetText return it, so a consumer that filters
+-- on the value (the inventory search field) would filter for the literal hint string.
+-- It reads as "in the field" purely because it occupies the same stack cell as the box.
+--
+-- Shown only while the field is empty AND unfocused: a caret sitting on top of grey hint
+-- text reads as content the user has to delete before typing.
+function InpMeta:_updatePlaceholder()
+    if self._placeholder ~= "" and not self._hasFocus
+        and (self._eb:GetText() or "") == "" then
+        self._phText:Show()
+    else
+        self._phText:Hide()
+    end
+end
+
+--- Sets the hint shown while the field is empty and unfocused.
+-- Silent by contract: setters never emit, so this makes no TEXT_CHANGED.
+-- @param text string|nil  nil clears the placeholder
+function InpMeta:SetPlaceholder(text)
+    self._placeholder = text or ""
+    self._phText:SetText(self._placeholder)
+    self:_updatePlaceholder()
+end
+
+--- Returns the placeholder hint, or "" when none is set.
+-- @return string
+function InpMeta:GetPlaceholder()
+    return self._placeholder
+end
+
 function InpMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    -- Explicit, per "destroy every handle you own", even though box:Destroy() cascades into
+    -- children added as handles: a component must not depend on the container's teardown
+    -- order for its own cleanup. Text:Destroy is idempotent, so the double call is safe.
+    self._phText:Destroy()
     self._box:Destroy()
     -- The layout box is adopted, so destroying it does not hide the frame it lays out.
     -- Without this the widget stays painted on screen after teardown.
@@ -95,6 +130,13 @@ function InpMeta:ApplyTheme()
     self._eb:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
         T:GetToken("fontSizeMd") or 13, "")
     if tc then self._eb:SetTextColor(tc[1], tc[2], tc[3], tc[4]) end
+    -- The bus fires listeners newest-first, so the placeholder's own subscription has not run
+    -- yet when this does. Applying it here is the ordering the component anatomy requires;
+    -- the end state is identical either way (Text restyles itself a moment later), so
+    -- mutation testing cannot observe this line — dropping it would silently make Input
+    -- depend on the child's own subscription surviving. The colour token is declared once at
+    -- construction and re-asserted by this call rather than by a second SetColor here.
+    self._phText:ApplyTheme()
     self:_autosize()
     -- A live opacityDisabled edit reaches an already-disabled widget.
     self:_applyEnabled()
@@ -110,7 +152,9 @@ SuuUI.Components.InstallEnable(InpMeta, "_f")
 -- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
 -- Height defaults to the sizeControlMd token floored against the font size, and
 -- tracks token changes. Pass h to pin it.
--- @param props table  { value, onChange, onEnter, w, h, maxChars }
+-- @param props table  { value, placeholder, onChange, onEnter, w, h, maxChars }
+--   placeholder: muted hint shown while the field is empty and unfocused. It is a
+--   separate Text child, so GetValue never returns it.
 -- @param parent frame
 -- @return table  Input handle
 function SuuUI.Components.Input(props, parent)
@@ -141,16 +185,38 @@ function SuuUI.Components.Input(props, parent)
     eb:SetMaxLetters(props.maxChars or 255)
     if props.value then eb:SetText(props.value) end
 
+    -- Same stack cell and same horizontal inset as the edit box, so the hint sits exactly
+    -- where the user's first character will land. Parented to f rather than eb: the box is
+    -- a child frame and draws above f's regions, but it carries no backdrop of its own, so
+    -- the hint underneath it is visible — the same relationship f's own backdrop has.
+    local phText = SuuUI.Components.Text({
+        text = props.placeholder or "", size = "md", justify = "LEFT", color = "muted",
+        -- One line, like the single-line box it hints at. Word wrap is on by default, and a
+        -- hint too long for the field would grow to two lines and overflow the input's
+        -- height instead of truncating horizontally the way the typed text does.
+        wrap = false,
+    }, f)
+    -- The handle, not the region: the box re-flows off its SIZE_CHANGED when a font token
+    -- change re-measures the hint, so no manual Layout call is owed anywhere.
+    box:Add(phText, {
+        valign = "center",
+        inset  = { left = insetX, right = insetX },
+    })
+
     local id = "inp_" .. tostring(f)
     handle = setmetatable({
         _f=f, _eb=eb, _box=box, _eid=id, _enabled=true,
         _hasFocus=false, _hasHover=false, _silent=false,
         _autoH=props.h == nil,
+        _phText=phText, _placeholder=props.placeholder or "",
     }, InpMeta)
 
     local function updateBorder() handle:_paint() end
 
     eb:SetScript("OnTextChanged", function()
+        -- Ahead of the silent guard: visibility is not an emission, and a silent SetValue
+        -- still has to drop the hint. The client fires this for a programmatic SetText too.
+        handle:_updatePlaceholder()
         if handle._silent then return end
         local text = eb:GetText()
         if props.onChange then props.onChange(text) end
@@ -166,11 +232,13 @@ function SuuUI.Components.Input(props, parent)
     eb:SetScript("OnEditFocusGained", function()
         handle._hasFocus = true
         updateBorder()
+        handle:_updatePlaceholder()
         S:Emit(handle, S.SIGNALS.FOCUSED)
     end)
     eb:SetScript("OnEditFocusLost", function()
         handle._hasFocus = false
         updateBorder()
+        handle:_updatePlaceholder()
         S:Emit(handle, S.SIGNALS.UNFOCUSED)
     end)
 
@@ -193,6 +261,9 @@ function SuuUI.Components.Input(props, parent)
     eb:SetScript("OnLeave", hoverOff)
 
     handle:ApplyTheme()
+    -- props.value is set before the scripts exist, so the first visibility decision has to
+    -- be made here rather than ridden in on OnTextChanged.
+    handle:_updatePlaceholder()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
     return handle
 end

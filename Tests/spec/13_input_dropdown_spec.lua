@@ -144,6 +144,193 @@ describe("Components.Input", function()
         end)
     end)
 
+    describe("placeholder", function()
+        local HINT = "Search items..."
+
+        it("shows the hint while the field is empty", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT }, host))
+            expect(i:GetPlaceholder()).eq(HINT)
+            expect(i._phText:GetText()).eq(HINT)
+            expect(i._phText:IsShown()).truthy()
+        end)
+
+        it("reports an empty placeholder when none is given", function()
+            local i = H.C.Input({}, host)
+            expect(i:GetPlaceholder()).eq("")
+            expect(i._phText:IsShown()).as("nothing to hint with").falsy()
+        end)
+
+        it("stays hidden for an input built with a value", function()
+            local i = H.C.Input({ placeholder = HINT, value = "boots" }, host)
+            expect(i._phText:IsShown()).falsy()
+        end)
+
+        it("NEVER puts the hint in the edit box, so GetValue stays empty", function()
+            -- The whole point: a search filter reads GetValue, and a hint living in the
+            -- EditBox would make it filter for the literal string "Search items...".
+            local i = H.C.Input({ placeholder = HINT }, host)
+            expect(i:GetValue()).as("the hint is not the value").eq("")
+            expect(i._eb:GetText()).as("the hint is not the edit box's text").eq("")
+            expect(i._phText:GetFrame()).as("a separate region, not the box")
+                .neq(i._eb)
+        end)
+
+        it("keeps GetValue clean after SetPlaceholder on a live input", function()
+            local i = H.C.Input({}, host)
+            i:SetPlaceholder(HINT)
+            expect(i:GetPlaceholder()).eq(HINT)
+            expect(i._phText:GetText()).as("the hint reaches its own region").eq(HINT)
+            expect(i:GetValue()).eq("")
+            expect(i._eb:GetText()).eq("")
+            expect(i._phText:IsShown()).truthy()
+        end)
+
+        it("replaces an earlier hint rather than keeping the old text", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            i:SetPlaceholder("Filter by name")
+            expect(i._phText:GetText()).eq("Filter by name")
+            expect(i:GetPlaceholder()).eq("Filter by name")
+        end)
+
+        it("hides once the user types, and comes back when the field is cleared", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            H.typeText(i, "boots")
+            expect(i._phText:IsShown()).falsy()
+            expect(i:GetValue()).eq("boots")
+            H.typeText(i, "")
+            i._eb:ClearFocus()
+            expect(i._phText:IsShown()).as("empty again, so the hint returns").truthy()
+        end)
+
+        it("hides on a silent SetValue and returns on a silent clear", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            i:SetValue("boots")
+            expect(i._phText:IsShown()).falsy()
+            i:SetValue(nil)
+            expect(i._phText:IsShown()).truthy()
+        end)
+
+        it("SetPlaceholder is silent (no TEXT_CHANGED, no onChange)", function()
+            local changes = 0
+            local i = H.C.Input({ onChange = function() changes = changes + 1 end }, host)
+            local spy = H.signalSpy(i, H.S.SIGNALS.TEXT_CHANGED)
+            i:SetPlaceholder(HINT)
+            expect(spy.count).as("setters are silent by contract").eq(0)
+            expect(changes).eq(0)
+        end)
+
+        it("clears the hint when SetPlaceholder is given nil", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            i:SetPlaceholder(nil)
+            expect(i:GetPlaceholder()).eq("")
+            expect(i._phText:IsShown()).falsy()
+        end)
+
+        it("hides on focus and restores on blur while still empty", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            i:SetFocus()
+            expect(i._phText:IsShown()).as("a caret over grey text reads as content")
+                .falsy()
+            i._eb:ClearFocus()
+            expect(i._phText:IsShown()).truthy()
+        end)
+
+        it("does NOT restore on blur when the field holds a value", function()
+            local i = H.C.Input({ placeholder = HINT }, host)
+            i:SetFocus()
+            H.typeText(i, "boots")
+            i._eb:ClearFocus()
+            expect(i._phText:IsShown()).falsy()
+        end)
+
+        it("sits inside the input, insetted like the edit box's own text", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT, w = 160 }, host))
+            H.expectInside(i._phText, i:GetFrame())
+            H.expectOffset(i._phText, i:GetFrame(), H.token("spaceXs"), nil)
+            expect(H.box(i._phText).left).as("aligned with the typed text")
+                .eq(H.box(i._eb).left)
+            H.expectTextNotClipped(i._phText)
+        end)
+
+        it("follows the spaceXs token for its inset", function()
+            H.T:CreateUserTheme("Roomy", "Modern")
+            H.T:SetUserToken("Roomy", "spaceXs", 9)
+            H.T:SetActive("Roomy")
+            local i = H.mount(H.C.Input({ placeholder = HINT, w = 160 }, host))
+            H.expectOffset(i._phText, i:GetFrame(), H.token("spaceXs"), nil)
+            H.expectInside(i._phText, i:GetFrame())
+        end)
+
+        it("renders muted, distinct from the value's own text colour", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT }, host))
+            H.expectTokenColor(H.textColor(i._phText), "colorTextMuted")
+            local hint, value = H.textColor(i._phText), { i._eb:GetTextColor() }
+            local same = true
+            for c = 1, 3 do
+                if math.abs(hint[c] - value[c]) > 0.001 then same = false end
+            end
+            expect(same).as("a hint must not read as a typed value").falsy()
+        end)
+
+        it("survives a theme change: still shown, still muted, still unclipped", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT }, host))
+            H.T:CreateUserTheme("Other", "Default")
+            H.T:SetActive("Other")
+            expect(i._phText:IsShown()).truthy()
+            H.expectTokenColor(H.textColor(i._phText), "colorTextMuted")
+            H.expectInside(i._phText, i:GetFrame())
+            H.expectTextNotClipped(i._phText)
+        end)
+
+        it("re-measures the hint on one line when the font token grows", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT, w = 160 }, host))
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 22)
+            H.T:SetActive("Big")
+            local _, size = i._phText:GetFrame():GetFont()
+            expect(size).eq(H.token("fontSizeMd"))
+            -- A hint too long for a fixed-width field truncates horizontally, exactly as the
+            -- typed value does — that is the width the caller asked for. What must never
+            -- happen is a box short of the line height, or a hint that wraps onto a second
+            -- line and overflows the field.
+            local _, _, boxH, _, needH = i._phText:GetFrame():IsTextClipped()
+            expect(needH).as("still one line").eq(H.lineHeight(22))
+            expect(boxH).as("tall enough for the face").gte(needH)
+            H.expectInside(i._phText, i:GetFrame())
+        end)
+
+        it("keeps a short hint fully legible when the font token grows", function()
+            local i = H.mount(H.C.Input({ placeholder = "Go", w = 160 }, host))
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 22)
+            H.T:SetActive("Big")
+            expect(i._phText:GetHeight()).eq(H.lineHeight(22))
+            H.expectTextNotClipped(i._phText)
+        end)
+
+        it("stays hidden across a theme change when the field has a value", function()
+            local i = H.mount(H.C.Input({ placeholder = HINT, value = "boots" }, host))
+            H.T:CreateUserTheme("Other", "Default")
+            H.T:SetActive("Other")
+            expect(i._phText:IsShown()).as("a restyle must not resurrect the hint").falsy()
+        end)
+
+        it("frees the hint handle on Destroy", function()
+            -- Contract, not mechanism: the hint must be dead afterwards. Input destroys it
+            -- explicitly AND box:Destroy() cascades, so no assertion can tell which route
+            -- ran — mutation testing confirmed the explicit call is unobservable on its own.
+            local i = H.mount(H.C.Input({ placeholder = HINT }, host))
+            local ph = i._phText
+            local spy = H.signalSpy(ph, H.S.SIGNALS.TEXT_CHANGED)
+            i:Destroy()
+            -- Destroy drops the theme subscription, so a later token edit must not reach it.
+            H.T:CreateUserTheme("Other", "Default")
+            H.T:SetActive("Other")
+            ph:SetText("still wired?")
+            expect(spy.count).as("DisconnectAll ran on the hint handle").eq(0)
+        end)
+    end)
+
     describe("editing", function()
         it("emits TEXT_CHANGED and calls onChange as the user types", function()
             local seen

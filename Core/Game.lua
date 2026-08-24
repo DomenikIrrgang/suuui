@@ -20,6 +20,7 @@
 -- calls LearnFromCombatLog; everything else reads back out of SchoolOf.
 local type, ipairs = type, ipairs
 local floor = math.floor
+local format = string.format
 
 local M = {}
 
@@ -453,8 +454,63 @@ end
 --
 -- Unlike the other tables here this one is a FUNCTION of two levels, not a lookup, so the
 -- client's own GetCreatureDifficultyColor is preferred and the formula below is the fallback.
-local DIFFICULTY = {
-    trivial = {0.50, 0.50, 0.50, 1},   -- grey:   no experience left in it
+-- COIN COLOURS. Facts for the same reason quality colours are: gold is yellow, silver is grey and
+-- copper is bronze in every gold addon, auction house and vendor frame the player has ever used, so
+-- a theme that could decide copper is blue would make the UI lie about the game. That is why these
+-- are here rather than as tokens -- the argument is identical to ItemQualityColor's.
+--
+-- The client exposes no coin COLOUR global (only GetCoinTextureString, which returns embedded coin
+-- ICONS rather than coloured text), so unlike RAID_CLASS_COLORS there is nothing live to prefer.
+-- The values are ElvUI's, read off this install rather than recalled: Game/Shared/General/Math.lua
+-- carries `'|cffeda55f', '|cffc7c7cf', '|cffffd700'` for copper/silver/gold, and Gargul
+-- independently agrees on FFD700 for gold. Same method as the stance and pet return orders.
+-- Stated to four decimals rather than two, and that is not fussiness: at two decimals 0.84 * 255 is
+-- 214.2, which rounds to d6 and prints ffd600 -- a value ElvUI never had. Copying a source hex and
+-- then quietly emitting a different one discards the only reason to copy it, so each channel is the
+-- exact eighth-bit fraction and the escape round-trips to the value in the comment.
+local COIN = {
+    GOLD   = {1.0000, 0.8431, 0.0000, 1},   -- ffd700
+    SILVER = {0.7804, 0.7804, 0.8118, 1},   -- c7c7cf
+    COPPER = {0.9294, 0.6471, 0.3725, 1},   -- eda55f
+}
+M.COIN = COIN
+
+local coinCodeCache = {}
+
+--- The colour for a coin denomination.
+-- @param kind string  "GOLD" | "SILVER" | "COPPER" (case-insensitive)
+-- @return table|nil  {r,g,b,a}; nil for anything that is not a denomination
+function M:CoinColor(kind)
+    if type(kind) ~= "string" then return nil end
+    return COIN[kind:upper()]
+end
+
+--- A coin denomination as a |cffRRGGBB escape, for composing into a money string.
+--
+-- The escape rather than the table is what a caller actually needs here, because money is spelled as
+-- ONE font string -- three denominations cannot be three separately-coloured Text handles without
+-- putting three baselines on one line, which is the mistake DataField documents at length. Cached
+-- per denomination because this is called from a footer refresh.
+-- @param kind string  "GOLD" | "SILVER" | "COPPER"
+-- @return string|nil
+function M:CoinColorCode(kind)
+    if type(kind) ~= "string" then return nil end
+    local key = kind:upper()
+    local cached = coinCodeCache[key]
+    if cached then return cached end
+    local c = COIN[key]
+    if not c then return nil end
+    -- Rounded to integers explicitly. "%02x" on 214.2 raises "number has no integer representation"
+    -- under the test runner's Lua 5.3 while the client's 5.1 would truncate silently -- the same
+    -- version split this file already handles by doing its bit tests arithmetically. Rounding rather
+    -- than truncating, so 0.84 lands on d7 as the source hex intends rather than d6.
+    local code = format("|cff%02x%02x%02x",
+        floor(c[1] * 255 + 0.5), floor(c[2] * 255 + 0.5), floor(c[3] * 255 + 0.5))
+    coinCodeCache[key] = code
+    return code
+end
+
+local DIFFICULTY = {    trivial = {0.50, 0.50, 0.50, 1},   -- grey:   no experience left in it
     easy    = {0.25, 0.75, 0.25, 1},   -- green
     fair    = {1.00, 1.00, 0.00, 1},   -- yellow: within two levels either way
     hard    = {1.00, 0.50, 0.25, 1},   -- orange

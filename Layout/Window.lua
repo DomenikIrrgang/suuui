@@ -1,5 +1,5 @@
 local assert, type = assert, type
-local tinsert = table.insert
+local tinsert, tremove = table.insert, table.remove
 local C = SuuUI.Components
 local S = SuuUI.UISignals
 
@@ -10,6 +10,17 @@ local function titleHeight() return SuuUI.Theme:GetControlHeight("sizeTitleBar")
 local function closeSize()   return SuuUI.Theme:GetControlHeight("sizeControlMd") end
 local function borderWidth() return SuuUI.Pixel.Line(SuuUI.Theme:GetToken("borderWidth") or 1) end
 local function chromeGap()   return SuuUI.Theme:GetToken("spaceMd") or 12 end
+
+-- Title-bar accessories are icon controls, so they take the raw size token rather than
+-- GetControlHeight: flooring against the font metrics is what a text-bearing control
+-- needs, and it would grow a bare icon for no reason. Same reading as ColorSwatch and
+-- Toggle, which size their squares from sizeControlSm too.
+local function accessorySize() return SuuUI.Theme:GetToken("sizeControlSm") or 18 end
+
+-- Separates one accessory from the next, and the first from the close button. Tighter
+-- than chromeGap so a run of icon buttons reads as one cluster in the chrome rather than
+-- as separate controls.
+local function accessoryGap() return SuuUI.Theme:GetToken("spaceXs") or 4 end
 
 -- ASCII only. FRIZQT__.TTF has no glyph for U+00D7 (the multiplication sign that reads
 -- as a nicer close mark in a text editor), so it drew as blank in the client.
@@ -33,23 +44,66 @@ local WinMeta = {}
 WinMeta.__index = WinMeta
 local registry = {}
 
+-- An accessory's square, resolved at layout time rather than stored at add time so a
+-- token edit moves it. Floored against the strip: sizeControlSm reaches 32 while
+-- sizeTitleBar starts at 18 and the two are edited independently, so a raised control
+-- token would otherwise hang the icon out of the chrome it lives in.
+local function accessoryBox(entry)
+    local size = entry.size or accessorySize()
+    local strip = titleHeight()
+    return size < strip and size or strip
+end
+
+-- Places the accessories and re-derives the two gutters that have to clear them.
+--
+-- The single place either is computed. An add, a remove and a theme change all route
+-- through here, so the title text's gutter, the drag surface's gutter and the accessory
+-- offsets can never be recomputed from different premises — which is the failure mode
+-- when a caller updates the strip and ApplyTheme later restates the old numbers.
+local function layoutAccessories(self)
+    local cs, gap, agap = closeSize(), chromeGap(), accessoryGap()
+
+    -- align = "end" plus a right inset puts a child's RIGHT edge that far in from the
+    -- strip's right edge, so each accessory clears the close button and every accessory
+    -- added before it. band accumulates the strip that has been consumed so far, which
+    -- makes the order added read outward-to-inward from the close button.
+    local band = 0
+    for i = 1, #self._accessories do
+        local entry = self._accessories[i]
+        local size  = accessoryBox(entry)
+        self._titleBox:SetChildProps(entry.handle, {
+            align = "end", valign = "center",
+            width = size, height = size,
+            inset = { right = CLOSE_EDGE_GAP + cs + agap + band },
+        })
+        band = band + size + agap
+    end
+
+    -- Both gutters were already expressed from the close button's token size; the
+    -- accessories sit between it and the title, so both grow by the whole band. chromeGap
+    -- exceeds CLOSE_EDGE_GAP, which is what keeps the drag surface short of the leftmost
+    -- accessory by the same margin it already kept off the close button.
+    self._titleBox:SetChildProps(self._titleT, {
+        valign = "center",
+        inset  = { left = TITLE_PAD_L, right = cs + CLOSE_EDGE_GAP + gap + band },
+    })
+    self._titleBox:SetChildProps(self._drag, { inset = { right = cs + gap + band } })
+end
+
 local function applyTheme(self)
     SuuUI.Backdrop.Apply(self._frame, { bg = "colorBg", border = "colorBorder" })
 
     -- Chrome geometry moves with the size and font tokens. The title text and the drag
     -- region both have to clear the close button, so both insets are expressed from its
     -- token size rather than from a magic width.
-    local cs, gap = closeSize(), chromeGap()
+    local cs = closeSize()
     self._shell:SetChildProps(self._titleStrip, { width = "fill", height = titleHeight() })
-    self._titleBox:SetChildProps(self._titleT, {
-        valign = "center",
-        inset  = { left = TITLE_PAD_L, right = cs + CLOSE_EDGE_GAP + gap },
-    })
-    self._titleBox:SetChildProps(self._drag, { inset = { right = cs + gap } })
     self._titleBox:SetChildProps(self._closeBtn, {
         align = "end", valign = "center",
         width = cs, height = cs, inset = { right = CLOSE_EDGE_GAP },
     })
+    -- Title gutter, drag gutter and accessory offsets, from one arithmetic.
+    layoutAccessories(self)
 
     -- The chrome components own their own tokens, but the event bus fires listeners
     -- newest-first: left to their own handlers they would restyle after the window had
@@ -59,6 +113,10 @@ local function applyTheme(self)
     self._closeBtn:ApplyTheme()
     if self._gripComp then self._gripComp:ApplyTheme() end
 
+    -- Accessories are deliberately NOT re-themed here. The window sizes them (above) but
+    -- does not own them: each is a component the caller built, with its own
+    -- SUUUI_THEME_CHANGED subscription, and re-applying it from here would paint a handle
+    -- this window is not responsible for.
 end
 
 -- Hands the size limits to the client so a drag stops dead at the bound instead of
@@ -199,6 +257,78 @@ end
 -- @param text string
 function WinMeta:SetTitle(text)
     self._titleT:SetText(text)
+end
+
+--- Adds a small control to the title bar, immediately left of the close button.
+--
+-- Accessories are right-aligned and stack inward from the close button in the order they
+-- were added, so the first one added sits nearest it. The title text and the drag surface
+-- each give up exactly the width the accessories take, so neither is overlapped and the
+-- rest of the strip still drags the window.
+--
+-- Sized from sizeControlSm and re-derived on every theme change, so a token edit moves
+-- the whole cluster. Pass opts.size only for a control that genuinely is not that scale.
+--
+-- OWNERSHIP: the window does not own the handle. It is never destroyed and never
+-- re-themed by the window, because the caller created it — call RemoveTitleAccessory
+-- before destroying it yourself. The frame IS reparented into the title strip, so it
+-- hides and shows with the window.
+--
+-- @param handle table  A component handle (an IconButton is the intended shape)
+-- @param opts table    Optional { size = number } overriding the token square
+-- @return table  The handle, so a caller can chain off the call
+function WinMeta:AddTitleAccessory(handle, opts)
+    assert(type(handle) == "table" and handle.GetFrame,
+        "SuuUI Window: AddTitleAccessory needs a component handle")
+    for i = 1, #self._accessories do
+        assert(self._accessories[i].handle ~= handle,
+            "SuuUI Window: accessory already added to this window")
+    end
+    opts = opts or {}
+
+    -- Reparent so the accessory belongs to the strip's subtree: the client hides and hit-
+    -- tests a whole subtree together, and an accessory left under its original parent
+    -- would stay clickable after the window closed.
+    handle:GetFrame():SetParent(self._titleStrip:GetFrame())
+
+    tinsert(self._accessories, { handle = handle, size = opts.size })
+    self._titleBox:Add(handle)
+
+    -- The drag surface spans the strip and the client gives a click to the topmost
+    -- mouse-enabled frame, so an accessory that merely ties with it on frame level is
+    -- decided by creation order — which is not something to depend on. Raised for the
+    -- same reason and by the same step as the close button. After SetParent, which
+    -- re-derives the level from the new parent.
+    SuuUI.UIRoot:RaiseAbove(handle:GetFrame(), self._frame, 10)
+
+    layoutAccessories(self)
+    return handle
+end
+
+--- Removes a title-bar accessory and gives the title and drag gutters back.
+-- The handle is not destroyed — the caller owns it and may re-add or destroy it.
+-- @param handle table
+-- @return bool  Whether the handle was an accessory of this window
+function WinMeta:RemoveTitleAccessory(handle)
+    for i = 1, #self._accessories do
+        if self._accessories[i].handle == handle then
+            tremove(self._accessories, i)
+            self._titleBox:Remove(handle)
+            layoutAccessories(self)
+            return true
+        end
+    end
+    return false
+end
+
+--- Returns the accessory handles in the order they were added.
+-- A copy, as Container:GetPadding is: handing out the live table would let a caller
+-- reorder or empty the strip without the gutters ever being recomputed.
+-- @return table  Array of component handles
+function WinMeta:GetTitleAccessories()
+    local out = {}
+    for i = 1, #self._accessories do out[i] = self._accessories[i].handle end
+    return out
 end
 
 --- Returns the inner content frame for attaching children.
@@ -373,6 +503,9 @@ function SuuUI.Layout:CreateWindow(props)
         _content   = content,
         _layer     = layer,
         _centered  = centered,
+        -- Handles the caller owns, in add order. Entries are { handle, size }: the size is
+        -- the opts override, nil meaning the token owns it.
+        _accessories = {},
     }, WinMeta)
 
     -- Resize grip, placed by an anchor container on the window frame

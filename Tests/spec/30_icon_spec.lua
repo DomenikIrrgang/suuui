@@ -396,3 +396,58 @@ describe("Components.Icon", function()
         end)
     end)
 end)
+
+-- The bag grid's cells are rounded Icons. Opt-in for the same reason Frame's is: every aura and
+-- action button in the addon is an Icon, and rounding all of them is a separate design decision.
+describe("Components/Icon rounded", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.mountHost and H.mountHost() or H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+    end)
+
+    it("is square by default", function()
+        local i = H.C.Icon({ border = true, size = 34 }, host)
+        expect(i._panel).eq(nil)
+    end)
+
+    it("draws a rounded border when asked, and NEVER applies a backdrop as well", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 34 }, host)
+        expect(i._panel).as("a panel handle was built").truthy()
+        -- See the Frame equivalent: GetBackdrop() is vacuous in the simulated client, so the call
+        -- count is what discriminates and it pins the branch that actually matters.
+        local calls, real = 0, H.SuuUI.Backdrop.Apply
+        H.SuuUI.Backdrop.Apply = function(...) calls = calls + 1 return real(...) end
+        i:ApplyTheme()
+        H.SuuUI.Backdrop.Apply = real
+        expect(calls).as("a rounded border must not also get a square backdrop").eq(0)
+    end)
+
+    it("still applies a backdrop for a square bordered icon", function()
+        local i = H.C.Icon({ border = true, size = 34 }, host)
+        local calls, real = 0, H.SuuUI.Backdrop.Apply
+        H.SuuUI.Backdrop.Apply = function(...) calls = calls + 1 return real(...) end
+        i:ApplyTheme()
+        H.SuuUI.Backdrop.Apply = real
+        expect(calls).as("the square path is the one that uses a backdrop").gte(1)
+    end)
+
+    -- There is nothing to round without a border, so the prop is inert rather than half-applied.
+    it("ignores rounded on a borderless icon", function()
+        local i = H.C.Icon({ rounded = true, size = 34 }, host)
+        expect(i._panel).as("no border, nothing to round").eq(nil)
+    end)
+
+    it("still carries the quality edge colour through SetBorderColor", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 34 }, host)
+        i:SetBorderColor({ 0.64, 0.21, 0.93, 1 })
+        expect(i._borderColor).truthy()
+        expect(i._borderColor[3]).as("epic purple survived the rounding path").near(0.93, 0.01)
+    end)
+
+    it("frees the panel on Destroy", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 34 }, host)
+        i:Destroy()
+        expect(i:IsShown()).falsy()
+    end)
+end)

@@ -704,3 +704,56 @@ describe("Components.Divider", function()
         H.expectSize(d, 300, 1)
     end)
 end)
+
+-- Rounding is opt-in per surface, because turning it on by default would restyle every panel in the
+-- addon at once and a full-bleed strip like the data bar wants square corners against the screen edge.
+describe("Components/Frame rounded", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.mountHost and H.mountHost() or H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+    end)
+
+    it("is square by default, drawn with a backdrop", function()
+        local f = H.C.Frame({ w = 60, h = 40 }, host)
+        expect(f._panel).as("no panel unless asked for").eq(nil)
+        expect(f:GetFrame().GetBackdrop and f:GetFrame():GetBackdrop() ~= nil)
+            .as("a plain frame keeps its backdrop").truthy()
+    end)
+
+    it("draws a rounded surface when asked, and NEVER applies a backdrop as well", function()
+        local f = H.C.Frame({ w = 60, h = 40, rounded = true }, host)
+        expect(f._panel).as("a panel handle was built").truthy()
+        -- A backdrop's corners are its texture's corners, so applying one as well would show square
+        -- corners through the rounding. Asserting GetBackdrop() here was VACUOUS -- the simulated
+        -- client answers nil either way, so the test passed with the guard removed. Counting the call
+        -- is what actually discriminates, and it pins the load-bearing half: the ApplyTheme branch.
+        local calls, real = 0, H.SuuUI.Backdrop.Apply
+        H.SuuUI.Backdrop.Apply = function(...) calls = calls + 1 return real(...) end
+        f:ApplyTheme()
+        H.SuuUI.Backdrop.Apply = real
+        expect(calls).as("a rounded surface must not also get a square backdrop").eq(0)
+    end)
+
+    it("still applies a backdrop for a square frame", function()
+        local f = H.C.Frame({ w = 60, h = 40 }, host)
+        local calls, real = 0, H.SuuUI.Backdrop.Apply
+        H.SuuUI.Backdrop.Apply = function(...) calls = calls + 1 return real(...) end
+        f:ApplyTheme()
+        H.SuuUI.Backdrop.Apply = real
+        expect(calls).as("the square path is the one that uses a backdrop").gte(1)
+    end)
+
+    it("recolours the rounded surface on a theme change rather than rebuilding it", function()
+        local f = H.C.Frame({ w = 60, h = 40, rounded = true }, host)
+        local panel = f._panel
+        H.SuuUI.Theme:SetActive("Default")
+        expect(f._panel).as("same panel handle after a restyle").eq(panel)
+    end)
+
+    it("frees the panel on Destroy", function()
+        local f = H.C.Frame({ w = 60, h = 40, rounded = true }, host)
+        f:Destroy()
+        expect(f:IsShown()).falsy()
+    end)
+end)

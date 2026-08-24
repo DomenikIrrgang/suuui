@@ -430,6 +430,233 @@ describe("Layout.Window", function()
         end)
     end)
 
+    describe("title bar accessories", function()
+        -- The accessory handle is created OUTSIDE the window's subtree on purpose:
+        -- AddTitleAccessory reparents it into the title strip, and "hides with the window"
+        -- below is what proves it did. A handle left under the root would stay visible —
+        -- and clickable — after the window closed.
+        local function accessory(win, opts)
+            local h = H.C.IconButton({ w = 24 }, H.SuuUI.UIRoot:GetRoot())
+            return win:AddTitleAccessory(h, opts)
+        end
+
+        -- The gutter each chrome part keeps clear, in strip-right-edge terms. Derived from
+        -- the same tokens the window uses, so a theme edit moves the expectation with it.
+        local function gutters(n)
+            local cs   = H.controlHeight("sizeControlMd")
+            local gap  = H.token("spaceMd")
+            local agap = H.token("spaceXs")
+            local size = math.min(H.token("sizeControlSm"), H.controlHeight("sizeTitleBar"))
+            local band = n * (size + agap)
+            return {
+                size  = size,
+                acc1  = 6 + cs + agap,          -- first accessory's right edge
+                title = cs + 6 + gap + band,    -- title text's right edge
+                drag  = cs + gap + band,        -- drag surface's right edge
+            }
+        end
+
+        it("places an accessory in the strip, left of the close button", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            local g = gutters(1)
+            H.expectInside(acc, w._titleStrip)
+            H.expectNoOverlap({ acc, w._closeBtn })
+            local sb, ab = H.box(w._titleStrip), H.box(acc)
+            expect(ab.right).as("right edge sits a gap in from the close button")
+                .eq(sb.right - g.acc1)
+        end)
+
+        it("sizes an accessory from the control token and centres it in the strip",
+        function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            local g = gutters(1)
+            H.expectSize(acc, g.size, g.size)
+            H.expectCenteredV(acc, w._titleStrip)
+        end)
+
+        -- sizeControlSm reaches 32 while sizeTitleBar starts at 18 and the two are edited
+        -- independently, so an unclamped square hangs out of the chrome it lives in.
+        it("keeps an accessory inside a title bar smaller than the control token",
+        function()
+            H.T:CreateUserTheme("Squat", "Modern")
+            H.T:SetUserToken("Squat", "sizeControlSm", 32)
+            H.T:SetUserToken("Squat", "sizeTitleBar", 18)
+            H.T:SetActive("Squat")
+            local strip = H.controlHeight("sizeTitleBar")
+            expect(H.token("sizeControlSm")).as("the control token really is bigger").gt(strip)
+
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            H.expectSize(acc, strip, strip)
+            H.expectInside(acc, w._titleStrip)
+        end)
+
+        it("honours an explicit accessory size", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w, { size = 12 })
+            H.expectSize(acc, 12, 12)
+            H.expectCenteredV(acc, w._titleStrip)
+        end)
+
+        it("keeps the title text clear of an accessory", function()
+            local w = window({ w = 400, title = "A rather long window title here" })
+            local acc = accessory(w)
+            local g = gutters(1)
+            H.expectNoOverlap({ w._titleText, acc, w._closeBtn })
+            local sb, tb = H.box(w._titleStrip), H.box(w._titleText)
+            expect(sb.right - tb.right).eq(g.title)
+        end)
+
+        it("stops the drag surface short of an accessory", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            local g = gutters(1)
+            H.expectNoOverlap({ w._drag, acc, w._closeBtn })
+            local sb, db = H.box(w._titleStrip), H.box(w._drag)
+            expect(db.right).eq(sb.right - g.drag)
+        end)
+
+        -- The bug this whole feature has to avoid: an accessory the player cannot click
+        -- because the drag surface took the press. expectClickable resolves the point the
+        -- way the client does, so occlusion is what it reports.
+        it("delivers a click to an accessory, not to the drag surface", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            w:Show()
+            H.runAnimations()
+            local spy = H.signalSpy(acc, H.S.SIGNALS.CLICKED)
+            H.expectClickable(acc)
+            expect(H.click(acc)).as("the accessory takes mouse input").truthy()
+            expect(spy.count).eq(1)
+        end)
+
+        -- Geometry alone leaves the accessory and the drag surface on the SAME frame level,
+        -- where the client decides by creation order. That is not something to depend on,
+        -- so the accessory is raised the way the close button is.
+        it("draws an accessory above the drag surface rather than tying with it", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            expect(acc:GetFrame():GetFrameStrata()).eq(w:GetFrame():GetFrameStrata())
+            H.expectDrawsAbove(acc:GetFrame(), w._drag)
+            H.expectDrawsAbove(acc:GetFrame(), w:GetFrame())
+        end)
+
+        it("stacks a second accessory inward from the first", function()
+            local w = window({ w = 400, title = "A rather long window title here" })
+            local first, second = accessory(w), accessory(w)
+            local g = gutters(2)
+            -- Two lists, not one: the drag surface deliberately spans the strip UNDERNEATH
+            -- the title text, so the whole strip drags. Only the accessories and the close
+            -- button have to be clear of both.
+            H.expectNoOverlap({ w._titleText, second, first, w._closeBtn })
+            H.expectNoOverlap({ w._drag, second, first, w._closeBtn })
+            local sb = H.box(w._titleStrip)
+            expect(H.box(first).right).as("first added stays nearest the close button")
+                .eq(sb.right - g.acc1)
+            expect(H.box(second).right)
+                .eq(sb.right - (g.acc1 + g.size + H.token("spaceXs")))
+            H.expectInside(second, w._titleStrip)
+            -- Both gutters give up the whole band, not just one accessory's worth
+            expect(sb.right - H.box(w._titleText).right).eq(g.title)
+            expect(sb.right - H.box(w._drag).right).eq(g.drag)
+        end)
+
+        it("restores the title and drag gutters when an accessory is removed", function()
+            local w = window({ w = 400, title = "A rather long window title here" })
+            local sb = H.box(w._titleStrip)
+            local bare = { title = sb.right - H.box(w._titleText).right,
+                           drag  = sb.right - H.box(w._drag).right }
+            local acc = accessory(w)
+            expect(sb.right - H.box(w._drag).right).as("the gutter grew").gt(bare.drag)
+
+            expect(w:RemoveTitleAccessory(acc)).as("the handle was an accessory").truthy()
+            expect(sb.right - H.box(w._titleText).right).eq(bare.title)
+            expect(sb.right - H.box(w._drag).right).eq(bare.drag)
+            expect(#w:GetTitleAccessories()).eq(0)
+            -- The caller owns the handle: removing it must not destroy it
+            expect(acc:GetFrame()._destroyed).falsy()
+        end)
+
+        it("reports a handle it never held", function()
+            local w = window()
+            local orphan = H.C.IconButton({ w = 24 }, H.SuuUI.UIRoot:GetRoot())
+            expect(w:RemoveTitleAccessory(orphan)).falsy()
+        end)
+
+        -- Token sizes are user-editable, so ApplyTheme restates the strip. It must restate
+        -- the accessory offsets and both gutters from the SAME arithmetic, or a theme
+        -- change silently puts the pre-accessory numbers back.
+        it("keeps the accessory layout through a theme change", function()
+            local w = window({ w = 400, title = "A rather long window title here" })
+            local acc = accessory(w)
+            w:Show()
+            H.runAnimations()
+
+            H.T:CreateUserTheme("Big", "Modern")
+            H.T:SetUserToken("Big", "fontSizeMd", 24)
+            H.T:SetUserToken("Big", "sizeControlSm", 26)
+            H.T:SetActive("Big")
+
+            local g = gutters(1)
+            expect(g.size).as("the accessory token really moved").eq(26)
+            H.expectSize(acc, g.size, g.size)
+            H.expectCenteredV(acc, w._titleStrip)
+            H.expectInside(acc, w._titleStrip)
+            H.expectNoOverlap({ w._titleText, acc, w._closeBtn })
+            H.expectNoOverlap({ w._drag, acc, w._closeBtn })
+            local sb = H.box(w._titleStrip)
+            expect(H.box(acc).right).eq(sb.right - g.acc1)
+            expect(sb.right - H.box(w._titleText).right).eq(g.title)
+            expect(sb.right - H.box(w._drag).right).eq(g.drag)
+            H.expectClickable(acc)
+        end)
+
+        it("returns a copy of the accessory list", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            local list = w:GetTitleAccessories()
+            expect(#list).eq(1)
+            expect(list[1]).eq(acc)
+            list[1] = nil
+            expect(#w:GetTitleAccessories()).as("the live strip is unchanged").eq(1)
+        end)
+
+        it("still drags the window by the strip with accessories present", function()
+            local w = window({ id = "acc_drag", w = 400 })
+            accessory(w)
+            accessory(w)
+            w:Show()
+            H.runAnimations()
+            H.expectClickable(w._drag)
+            expect(H.mouseDown(w._drag)).as("the drag strip takes mouse input").truthy()
+            H.mouseUp(w._drag)
+            expect(H.env.SuuUIConfig.windows["acc_drag"]).notNil()
+        end)
+
+        it("hides an accessory with the window", function()
+            local w = window({ w = 400 })
+            local acc = accessory(w)
+            expect(H.click(acc)).as("a hidden window's accessory takes no input").falsy()
+            w:Show()
+            H.runAnimations()
+            expect(H.click(acc)).truthy()
+        end)
+
+        it("rejects anything that is not a component handle", function()
+            local w = window()
+            expect(function() w:AddTitleAccessory(w:GetFrame()) end)
+                .throws("needs a component handle")
+        end)
+
+        it("rejects the same accessory twice", function()
+            local w = window()
+            local acc = accessory(w)
+            expect(function() w:AddTitleAccessory(acc) end).throws("already added")
+        end)
+    end)
+
     describe("resize grip", function()
         it("adds no grip unless resizable", function()
             expect(window()._gripBox).isNil()

@@ -42,14 +42,30 @@ local T = SuuUI.Theme
 -- information -- the same threshold Plugins/Tooltips/Signal.lua settled on for the same reason.
 local QUALITY_EDGE_FROM = 2
 
+-- How much of the border an EMPTY slot keeps. Low enough that a half-empty bag reads as mostly
+-- background rather than as a grid, high enough that the slot is still findable when you go to drop
+-- something into it -- which is the one time an empty cell matters.
+local EMPTY_EDGE_ALPHA = 0.35
+
 local ItemSlotMeta = {}
 ItemSlotMeta.__index = ItemSlotMeta
 
 -- Hides one of the template's own regions without caring what kind it is.
+--
+-- SetAlpha(0) as well as Hide, and the two are not redundant. Hiding a region inside a button the
+-- client treats as protected is a call it can refuse, and a refusal here is silent -- whereas alpha
+-- is never refused, so the region is invisible either way. Alpha also covers a texture set through
+-- SetAtlas, which SetTexture(nil) does not reliably clear on every client generation.
+--
+-- DELIBERATELY NO SetVertexColor RESET. These textures are tinted for item quality -- a leftover
+-- tint is what made the artefact blue rather than white -- so resetting it looks like the fix and is
+-- not: clearing the TEXTURE removes the tint with it, and mutation testing confirmed a vertex reset
+-- here changes nothing any consumer can observe. Do not re-add it.
 local function silence(region)
     if not region then return end
     if type(region.SetTexture) == "function" then region:SetTexture(nil) end
     if type(region.SetText) == "function" then region:SetText("") end
+    if type(region.SetAlpha) == "function" then region:SetAlpha(0) end
     if type(region.Hide) == "function" then region:Hide() end
 end
 
@@ -91,7 +107,32 @@ function ItemSlotMeta:_paintEdge()
             return
         end
     end
-    self._iconComp:SetBorderColor(nil)
+    if info then
+        -- An occupied slot below the quality threshold takes the standard neutral edge.
+        self._iconComp:SetBorderColor(nil)
+        return
+    end
+    -- AN EMPTY SLOT RECEDES. Giving it the same edge weight as an item means the empty tail of a
+    -- bag -- often half of it -- draws as hard a lattice as the things you are looking for, which is
+    -- what makes a flat grid read as a spreadsheet. Derived from colorBorder at reduced alpha rather
+    -- than a surface token, so it is visibly the SAME edge, quieter, and it tracks a theme edit
+    -- because this runs from ApplyTheme.
+    local base = T:GetToken("colorBorder")
+    if type(base) == "table" then
+        local dim = self._dimEdge
+        if not dim then
+            dim = {}
+            self._dimEdge = dim
+        end
+        dim[1], dim[2], dim[3] = base[1], base[2], base[3]
+        dim[4] = (base[4] or 1) * EMPTY_EDGE_ALPHA
+        -- Reference-compared by Icon's setter, so the reused table would early-return. Clear it
+        -- first, which also means a theme change re-applies rather than being swallowed.
+        self._iconComp:SetBorderColor(nil)
+        self._iconComp:SetBorderColor(dim)
+    else
+        self._iconComp:SetBorderColor(nil)
+    end
 end
 
 function ItemSlotMeta:_paintCount()
@@ -309,10 +350,30 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- right slot rather than slot 0.
     f:SetID(props.slot)
 
-    -- Everything the template draws, silenced in favour of ours.
-    silence(f.icon)
-    silence(f.Count)
-    silence(f.IconBorder)
+    -- EVERYTHING THE TEMPLATE DRAWS, SILENCED IN FAVOUR OF OURS -- ENUMERATED, NOT NAMED.
+    --
+    -- This was a hand-written list of the regions I knew about (`icon`, `Count`, `IconBorder`) plus
+    -- the four texture getters, and it shipped a blue lattice over every cell. Measured on this
+    -- client: after that list ran, the cell still had THREE visible textures -- fileID 969828 twice
+    -- and 902180 once. 969828 is `Interface\Common\WhiteIconFrame`, a white square OUTLINE the
+    -- template carries to be vertex-tinted for item quality, and it ships at a FIXED 37x37 rather
+    -- than anchored to the button. That fixed size is why the artefact looked like a border at all:
+    -- at a cell near 37 units the outline lands exactly on the cell's edge, and growing the cell
+    -- past 37 makes it visibly pull inward and "disappear" -- which is how the bug was finally
+    -- identified, since no border of ours could behave that way.
+    --
+    -- So a name list is the wrong shape here. StanceButtonTemplate got away with one because its art
+    -- is three known textures; a container button's region set differs between client generations,
+    -- and any name I do not know about draws over our cell at full opacity. Enumerate instead: at
+    -- this point in construction NONE of our own visuals exist yet -- the Icon, the Cooldown, the
+    -- overlay and its readouts are all created further down, in their own child frames -- so every
+    -- region on this frame is Blizzard's by definition and the sweep cannot blank anything of ours.
+    -- KEEP IT THAT WAY: creating one of our regions above this line would silence it.
+    if type(f.GetRegions) == "function" then
+        for _, region in ipairs({ f:GetRegions() }) do
+            silence(region)
+        end
+    end
     if f.Cooldown and type(f.Cooldown.Hide) == "function" then f.Cooldown:Hide() end
     -- HIDE THE TEXTURE OBJECTS -- do NOT pass nil to the setters. `SetNormalTexture(nil)` is
     -- REFUSED on this client ("bad argument #2 to '?' (Usage: self:SetNormalTexture(asset))"), and
@@ -342,7 +403,7 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- cell the edge carries the item's QUALITY, which is the single most scannable thing in a wall
     -- of eighty icons. trim crops the bevel Blizzard bakes into its own icon files so ours is the
     -- only edge visible.
-    local iconComp = SuuUI.Components.Icon({ icon = nil, border = true, trim = true }, f)
+    local iconComp = SuuUI.Components.Icon({ icon = nil, border = true, trim = true, rounded = true }, f)
     iconComp._fade = false
     box:Add(iconComp, { align = "stretch", valign = "stretch" })
 

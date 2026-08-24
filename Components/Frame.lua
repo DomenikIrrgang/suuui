@@ -25,16 +25,27 @@ end
 function FrameMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._panel then self._panel:Destroy() end
     if self._box then self._box:Destroy() end
     self._f:Hide()
 end
 
 function FrameMeta:ApplyTheme()
     local bgKey = variantMap[self._variant]
-    SuuUI.Backdrop.Apply(self._f, {
-        bg     = bgKey,
-        border = self._border ~= false and "colorBorder" or false,
-    })
+    local borderKey = self._border ~= false and "colorBorder" or false
+    -- A ROUNDED frame is drawn from masked textures rather than a backdrop, because a backdrop's
+    -- corners are its texture's corners. The two are mutually exclusive: applying a backdrop as well
+    -- would show its square corners through the rounding, which is why nothing calls Apply here.
+    if self._panel then
+        self._panel:Refresh()
+        self._panel:SetBg(bgKey)
+        self._panel:SetBorder(borderKey)
+    else
+        SuuUI.Backdrop.Apply(self._f, {
+            bg     = bgKey,
+            border = borderKey,
+        })
+    end
     -- Re-apply the fade because opacityDisabled is a user-editable token and may have
     -- changed alongside the theme switch.
     self:_applyEnabled()
@@ -49,13 +60,23 @@ SuuUI.Components.InstallBase(FrameMeta, "_f")
 SuuUI.Components.InstallEnable(FrameMeta, "_f")
 
 --- Creates a styled frame container.
--- @param props table  { w, h, alpha, variant, border }
+-- @param props table  { w, h, alpha, variant, border, rounded, radius }
 --   variant: "bg"|"bgAlt"|"bgActive"|"transparent" (default "bg")
 --   border: false to hide the border
+--   rounded: true to draw a rounded surface (Backdrop.Panel) instead of a square backdrop.
+--     Opt-in rather than the default: turning it on everywhere would restyle every panel in the
+--     addon at once, and rounding is a per-surface decision -- a full-bleed strip like the data bar
+--     wants square corners against the screen edge.
+--   radius: corner radius override; defaults to the borderRadius token.
 -- @param parent frame
 -- @return table  Frame handle
 function SuuUI.Components.Frame(props, parent)
-    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    -- A rounded frame is built as a PLAIN frame. This is DEFENSIVE rather than the actual guard, and
+    -- mutation testing proved it: restoring the template changes nothing observable, because the
+    -- rounded branch in ApplyTheme never calls Backdrop.Apply, so no backdrop is ever set on it. The
+    -- ApplyTheme branch is the load-bearing half and is what the spec pins. Kept anyway -- a frame
+    -- carrying no backdrop template cannot later be handed one by accident.
+    local f = CreateFrame("Frame", nil, parent, not props.rounded and "BackdropTemplate" or nil)
     -- Each axis is applied on its own: a caller that pins only one leaves the other for
     -- the containing layout to decide.
     if props.w then f:SetWidth(props.w) end
@@ -69,6 +90,10 @@ function SuuUI.Components.Frame(props, parent)
         _variant = props.variant or "bg",
         _border  = props.border,
     }, FrameMeta)
+
+    if props.rounded then
+        handle._panel = SuuUI.Backdrop.Panel(f, { radius = props.radius })
+    end
 
     -- Translate the Blizzard resize script into a signal
     f:SetScript("OnSizeChanged", function(_, w, h)

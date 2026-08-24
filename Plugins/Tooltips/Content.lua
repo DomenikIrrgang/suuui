@@ -96,20 +96,22 @@ end
 
 --- Formats copper as gold/silver/copper, dropping the units that would read as zero.
 --
--- Leading zeroes are dropped rather than padded: "12g 0s 88c" is noise, and a price under a
--- gold has no business showing a gold figure at all. The trailing units are KEPT once a larger
--- one is present, because "12g 88c" and "12g 88s" are different prices and a reader needs the
--- letter to tell them apart.
+-- Delegates to Core/Readout, which is where money is spelled for the whole addon: this function and
+-- the inventory footer had each grown their own copy, which is the divergence Readout exists to
+-- prevent. The rule it applies is the one learned HERE and pinned by this plugin's spec -- leading
+-- zero units are dropped as noise, trailing ones are KEPT because "12g 88c" and "12g 88s" are
+-- different prices.
+--
+-- The nil-on-nothing contract stays local rather than moving into Readout: a PRICE of zero is not a
+-- price and the caller omits the line, whereas a PURSE of zero is a real reading that has to render
+-- as "0c". Same number, two meanings, so the caller decides which it is.
+--
+-- Uncoloured on purpose. A vendor price sits in a tooltip line whose colour already carries meaning,
+-- and three coin colours inside it would fight the line's own; the inventory footer asks for
+-- `colored` because there the money IS the readout.
 function M.FormatMoney(copper)
     if type(copper) ~= "number" or copper <= 0 then return nil end
-    local g = math.floor(copper / 10000)
-    local s = math.floor((copper % 10000) / 100)
-    local c = copper % 100
-    local out = {}
-    if g > 0 then out[#out + 1] = g .. "g" end
-    if s > 0 or g > 0 then out[#out + 1] = s .. "s" end
-    out[#out + 1] = c .. "c"
-    return table.concat(out, " ")
+    return SuuUI.Readout.Money(copper)
 end
 
 ---------------------------------------------------------------------------

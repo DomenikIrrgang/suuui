@@ -657,6 +657,315 @@ describe("Backdrop.Pill", function()
     end)
 end)
 
+describe("Backdrop.Panel", function()
+    local host, f, p
+
+    -- A rounded rectangle is seven pieces per layer: four r x r corners, a strip spanning
+    -- the gap between them along the top and the bottom, and a band filling the full width
+    -- in between. Each corner's mask is 2r square on the SAME outer corner, so the corner
+    -- shows a true quarter circle -- Pill's cap technique with the radius no longer tied to
+    -- the height.
+    local function build(w, h, opts)
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(w, h)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        p = H.SuuUI.Backdrop.Panel(f, opts or { bg = "colorBgAlt", border = "colorBorder" })
+        return p
+    end
+
+    -- Inside + no overlap + exactly the frame's own area means the seven pieces TILE the
+    -- box: no seam from an overlap, and no hairline gap showing whatever sits behind.
+    -- 4r^2 + 2r(w-2r) + w(h-2r) reduces to w*h for every r, so this holds at any radius.
+    local function expectTiles(layer, w, h)
+        local area = 0
+        for _, tex in ipairs(layer.texes) do
+            H.expectInside(tex, f)
+            local b = H.box(tex)
+            area = area + b.width * b.height
+        end
+        H.expectNoOverlap(layer.texes)
+        expect(area).as("the seven pieces sum to the area they cover").eq(w * h)
+    end
+
+    -- Each corner's mask must be 2r square AND share the piece's OUTER corner. Size alone is
+    -- not enough: a correctly-sized mask offset from that corner shows a slice that is not
+    -- centred on the circle's centre, so the corner is not circular either.
+    local function expectQuarterCircles(layer, r)
+        local outer = {
+            TL = { "left", "top" },    TR = { "right", "top" },
+            BL = { "left", "bottom" }, BR = { "right", "bottom" },
+        }
+        for _, key in ipairs({ "TL", "TR", "BL", "BR" }) do
+            local tex = layer[key]
+            local m = tex:GetMaskTextures()[1]
+            expect(m).as(key .. " is masked").notNil()
+            -- 2r square, so the r x r piece covers one QUARTER of it. Sized to the piece's
+            -- own box instead, the mask would be a circle of radius r/2 and the corner would
+            -- not be round at all -- the trap Pill's caps document.
+            H.expectSize(m, r * 2, r * 2)
+            for _, edge in ipairs(outer[key]) do
+                expect(H.box(m)[edge])
+                    .as(key .. " mask shares the piece's " .. edge .. " edge")
+                    .eq(H.box(tex)[edge])
+            end
+        end
+    end
+
+    before_each(function()
+        H.setup()
+        host = H.parent(300, 200)
+    end)
+
+    it("returns the same handle shape as Pill", function()
+        build(34, 34)
+        for _, name in ipairs({ "SetBg", "SetBorder", "Refresh", "Destroy" }) do
+            expect(p[name]).as(name).notNil()
+        end
+    end)
+
+    describe("ring geometry", function()
+        it("rounds each corner with an r x r piece from the borderRadius token", function()
+            build(34, 34)
+            local r = H.token("borderRadius")
+            expect(r).as("the token is wired, not nil").gt(0)
+            for _, key in ipairs({ "TL", "TR", "BL", "BR" }) do
+                H.expectSize(p._ring[key], r, r)
+            end
+            local fb = H.box(f)
+            expect(H.box(p._ring.TL).left).eq(fb.left)
+            expect(H.box(p._ring.TL).top).eq(fb.top)
+            expect(H.box(p._ring.BR).right).eq(fb.right)
+            expect(H.box(p._ring.BR).bottom).eq(fb.bottom)
+        end)
+
+        it("masks each corner with a 2r circle on its own outer corner, not a stretched one", function()
+            build(34, 34)
+            local r, fb = H.token("borderRadius"), H.box(f)
+            expectQuarterCircles(p._ring, r)
+            -- The ring spans the full box, so its corner masks sit on the frame's own corners.
+            expect(H.box(p._ring.TL:GetMaskTextures()[1]).left).eq(fb.left)
+            expect(H.box(p._ring.BR:GetMaskTextures()[1]).bottom).eq(fb.bottom)
+        end)
+
+        it("meets every ring piece edge to edge, never overlapping", function()
+            build(34, 34)
+            local r, fb = H.token("borderRadius"), H.box(f)
+            local tl, t, tr = H.box(p._ring.TL), H.box(p._ring.T), H.box(p._ring.TR)
+            expect(t.left).as("top strip starts where the TL corner ends").eq(tl.right)
+            expect(t.right).as("top strip ends where the TR corner starts").eq(tr.left)
+            expect(t.left - fb.left).eq(r)
+            local mb = H.box(p._ring.M)
+            expect(mb.top).as("the band starts where the top row ends").eq(tl.bottom)
+            expect(mb.bottom).as("the band ends where the bottom row starts")
+                .eq(H.box(p._ring.BL).top)
+            expect(mb.left).as("the band spans the full width").eq(fb.left)
+            expect(mb.right).eq(fb.right)
+            -- Overlap is invisible for an opaque colour and blends against itself along every
+            -- join for a translucent one, which every surface token here is.
+            expectTiles(p._ring, 34, 34)
+        end)
+    end)
+
+    describe("fill geometry", function()
+        it("insets the fill by the borderWidth token and rounds it concentrically", function()
+            build(34, 34)
+            local bw, r, fb = H.token("borderWidth"), H.token("borderRadius"), H.box(f)
+            expect(H.box(p._fill.TL).left).eq(fb.left + bw)
+            expect(H.box(p._fill.TL).top).eq(fb.top + bw)
+            expect(H.box(p._fill.BR).right).eq(fb.right - bw)
+            -- Concentric: r - bw, so the ring stays bw thick all the way round a corner
+            -- instead of pinching at 45 degrees.
+            H.expectSize(p._fill.TL, r - bw, r - bw)
+            -- The fill's masks must be pinned to the INSET corner, not the frame's. Asserting
+            -- only the mask's size let a mutation that dropped the inset survive: the slice
+            -- showing is then off-centre from the circle, so the corner is not round.
+            expectQuarterCircles(p._fill, r - bw)
+            expect(H.box(p._fill.TL:GetMaskTextures()[1]).left).eq(fb.left + bw)
+            expectTiles(p._fill, 34 - bw * 2, 34 - bw * 2)
+        end)
+
+        it("covers the whole box when inset is 0", function()
+            build(34, 34, { bg = "colorBgAlt", border = false, inset = 0 })
+            local r = H.token("borderRadius")
+            H.expectSize(p._fill.TL, r, r)
+            expect(H.box(p._fill.TL).left).eq(H.box(f).left)
+            expectTiles(p._fill, 34, 34)
+        end)
+
+        it("draws the fill above the ring", function()
+            build(34, 34)
+            expect(p._ring.M:GetDrawLayer()).eq("BACKGROUND")
+            expect(p._fill.M:GetDrawLayer()).eq("BORDER")
+        end)
+    end)
+
+    describe("the radius clamp", function()
+        it("clamps to half the smaller dimension on a frame too small for the radius", function()
+            build(34, 10, { bg = "colorBgAlt", border = "colorBorder", radius = 8 })
+            -- Half the smaller dimension. Any larger and the corner art would be taller than
+            -- the frame it is rounding, and the top and bottom corners would overlap.
+            H.expectSize(p._ring.TL, 5, 5)
+            H.expectSize(p._ring.TL:GetMaskTextures()[1], 10, 10)
+            expectTiles(p._ring, 34, 10)
+        end)
+
+        it("degrades to a disc rather than corner art larger than the frame", function()
+            build(8, 8, { bg = "colorBgAlt", border = "colorBorder", radius = 12 })
+            -- At the clamp the four corners meet: the strips and the band are zero-sized and
+            -- the four quarter circles are the whole surface.
+            H.expectSize(p._ring.TL, 4, 4)
+            expect(p._ring.T:GetWidth()).as("no flat run left between the corners").eq(0)
+            expect(p._ring.M:GetHeight()).eq(0)
+            expectTiles(p._ring, 8, 8)
+        end)
+
+        it("takes a radius of 0 as square corners", function()
+            build(34, 34, { bg = "colorBgAlt", border = "colorBorder", radius = 0 })
+            H.expectSize(p._ring.TL, 0, 0)
+            H.expectBox(p._ring.M, H.box(f))
+            expectTiles(p._ring, 34, 34)
+        end)
+    end)
+
+    describe("colour", function()
+        it("tints all seven fill pieces with one SetBg", function()
+            build(34, 34)
+            p:SetBg("colorAccent")
+            for i, tex in ipairs(p._fill.texes) do
+                H.expectTokenColor(H.vertexColor(tex), "colorAccent")
+                expect(tex:GetColorTexture())
+                    .as("fill piece " .. i .. " is tinted, never recoloured").isNil()
+            end
+        end)
+
+        it("tints all seven ring pieces with one SetBorder", function()
+            build(34, 34)
+            for i, tex in ipairs(p._ring.texes) do
+                H.expectTokenColor(H.vertexColor(tex), "colorBorder")
+                expect(tex:GetColorTexture()).as("ring piece " .. i).isNil()
+            end
+        end)
+
+        it("recolours without rebuilding the pieces or losing the masks", function()
+            build(34, 34)
+            local before = p._fill.TL
+            p:SetBg("colorAccent")
+            p:SetBorder("colorAccentHover")
+            expect(p._fill.TL).as("the same texture, not a fresh one").eq(before)
+            -- SetColorTexture would REPLACE the texture and take the mask with it, which is a
+            -- silently square surface rather than a visible error.
+            for _, key in ipairs({ "TL", "TR", "BL", "BR" }) do
+                expect(p._fill[key]:GetMaskTextures()).as("fill " .. key .. " still masked").len(1)
+                expect(p._ring[key]:GetMaskTextures()).as("ring " .. key .. " still masked").len(1)
+            end
+            H.expectTokenColor(H.vertexColor(p._fill.M), "colorAccent")
+            H.expectTokenColor(H.vertexColor(p._ring.M), "colorAccentHover")
+        end)
+
+        it("passes a literal colour through and accepts false as transparent", function()
+            build(34, 34, { bg = { 0.1, 0.2, 0.3, 0.4 }, border = false })
+            expect(H.vertexColor(p._fill.M)).deepEq({ 0.1, 0.2, 0.3, 0.4 })
+            expect(H.vertexColor(p._ring.M)).deepEq({ 0, 0, 0, 0 })
+        end)
+    end)
+
+    describe("reacting to size and tokens", function()
+        it("re-derives the geometry from a new size with no call from the owner", function()
+            build(34, 34, { bg = "colorBgAlt", border = "colorBorder", radius = 8 })
+            expect(p._ring.T:GetWidth()).eq(34 - 16)
+            f:SetSize(60, 40)
+            H.expectSize(p._ring.TL, 8, 8)
+            expect(p._ring.T:GetWidth()).as("the flat run followed the new width").eq(60 - 16)
+            expect(H.box(p._ring.T).left).eq(H.box(f).left + 8)
+            expect(H.box(p._ring.BR).bottom).eq(H.box(f).bottom)
+            expectTiles(p._ring, 60, 40)
+        end)
+
+        it("re-clamps the radius when a resize makes the frame too small for it", function()
+            build(60, 40, { bg = "colorBgAlt", border = "colorBorder", radius = 8 })
+            H.expectSize(p._ring.TL, 8, 8)
+            f:SetSize(60, 10)
+            H.expectSize(p._ring.TL, 5, 5)
+            expectTiles(p._ring, 60, 10)
+        end)
+
+        it("chains onto a resize handler the frame already had", function()
+            local seen = 0
+            f = H.env.CreateFrame("Frame", nil, host)
+            f:SetSize(34, 34)
+            f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            f:SetScript("OnSizeChanged", function() seen = seen + 1 end)
+            p = H.SuuUI.Backdrop.Panel(f, { bg = "colorBgAlt", border = "colorBorder", radius = 8 })
+            f:SetSize(60, 40)
+            expect(seen).as("the frame's own handler survived adoption").gte(1)
+            expect(p._ring.T:GetWidth()).as("and the panel still re-derived").eq(60 - 16)
+        end)
+
+        it("follows the borderRadius token through Refresh", function()
+            build(34, 34)
+            H.expectSize(p._ring.TL, H.token("borderRadius"), H.token("borderRadius"))
+            H.T:CreateUserTheme("Round", "Modern")
+            H.T:SetUserToken("Round", "borderRadius", 8)
+            H.T:SetActive("Round")
+            expect(H.token("borderRadius")).as("the token really moved").eq(8)
+            H.expectSize(p._ring.TL, 3, 3)
+            p:Refresh()
+            H.expectSize(p._ring.TL, 8, 8)
+            H.expectSize(p._ring.TL:GetMaskTextures()[1], 16, 16)
+            expect(H.box(p._ring.T).left).eq(H.box(f).left + 8)
+            expectTiles(p._ring, 34, 34)
+        end)
+
+        it("follows the borderWidth token through Refresh", function()
+            build(34, 34, { bg = "colorBgAlt", border = "colorBorder", radius = 8 })
+            H.T:CreateUserTheme("Thick", "Modern")
+            H.T:SetUserToken("Thick", "borderWidth", 3)
+            H.T:SetActive("Thick")
+            p:Refresh()
+            expect(H.box(p._fill.TL).left).eq(H.box(f).left + 3)
+            H.expectSize(p._fill.TL, 8 - 3, 8 - 3)
+            expectTiles(p._fill, 34 - 6, 34 - 6)
+        end)
+
+        it("survives a frame smaller than twice the border", function()
+            build(2, 1)
+            H.expectInside(p._fill.M, f)
+            for _, tex in ipairs(p._fill.texes) do
+                expect(tex:GetWidth()).gte(0)
+                expect(tex:GetHeight()).gte(0)
+            end
+        end)
+    end)
+
+    it("degrades to square corners when the client has no mask API", function()
+        f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(34, 34)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        -- The harness has no switch for this and a spec may not add one, so the method is
+        -- shadowed on the instance: CircleMask guards on frame.CreateMaskTexture being
+        -- truthy, which is exactly the state a client missing it produces.
+        f.CreateMaskTexture = false
+        p = H.SuuUI.Backdrop.Panel(f, { bg = "colorBgAlt", border = "colorBorder" })
+        for _, key in ipairs({ "TL", "TR", "BL", "BR" }) do
+            expect(p._ring[key]:GetMaskTextures()).as(key .. " is unmasked").len(0)
+        end
+        -- A worse look, not a broken widget: the pieces still tile the box, so the surface is
+        -- a plain rectangle rather than nothing at all.
+        expectTiles(p._ring, 34, 34)
+        H.expectTokenColor(H.vertexColor(p._ring.M), "colorBorder")
+        H.expectTokenColor(H.vertexColor(p._fill.M), "colorBgAlt")
+        expect(p._ring.TL:GetTexture()).as("still a solid fill to tint").contains("WHITE8x8")
+    end)
+
+    it("drops its layout box on Destroy", function()
+        build(34, 34)
+        p:Destroy()
+        expect(p._box._destroyed).as("the container is gone").truthy()
+        expect(function() f:SetSize(60, 40) end)
+            .as("a later resize must not reach through the dead box").notThrows()
+    end)
+end)
+
 describe("Components.Toggle on the shared primitives", function()
     local host
 
@@ -1021,5 +1330,46 @@ describe("the glass tokens", function()
         for _, key in ipairs(DERIVATIONS) do
             expect(listed[key]).as(key .. " must NOT be editable").isNil()
         end
+    end)
+end)
+
+describe("the borderRadius token", function()
+    -- Same reasoning as the glass tokens above: RegisterBuiltin stores whatever it is handed
+    -- and GetToken answers nil in silence, so a radius added to Default alone leaves every
+    -- Panel in production with square corners and no error anywhere.
+    before_each(function()
+        H.setup()
+    end)
+
+    for _, theme in ipairs({ "Default", "Modern" }) do
+        it("resolves borderRadius in the " .. theme .. " theme", function()
+            H.T:SetActive(theme)
+            local v = H.token("borderRadius")
+            expect(v).as(theme .. " is missing borderRadius").notNil()
+            expect(type(v)).as("borderRadius is a number").eq("number")
+            expect(v).as("a soft corner, not a stadium").between(1, 8)
+        end)
+    end
+
+    it("is editable in the theme editor", function()
+        local listed = {}
+        for _, def in ipairs(H.SuuUI._ThemeEditableTokens) do listed[def.key] = def end
+        expect(listed.borderRadius).as("borderRadius is editable").notNil()
+        expect(listed.borderRadius.type).eq("number")
+        -- 0 must be reachable: it is how the rounding is turned off UI-wide without a code
+        -- change, the same escape hatch animPopScale = 1 gives the press animation.
+        expect(listed.borderRadius.min).eq(0)
+    end)
+
+    it("drives Panel's corners, so an edit reaches the surface", function()
+        local host = H.parent(300, 200)
+        local f = H.env.CreateFrame("Frame", nil, host)
+        f:SetSize(34, 34)
+        f:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+        H.T:CreateUserTheme("Sharp", "Modern")
+        H.T:SetUserToken("Sharp", "borderRadius", 6)
+        H.T:SetActive("Sharp")
+        local p = H.SuuUI.Backdrop.Panel(f, { bg = "colorBgAlt", border = "colorBorder" })
+        H.expectSize(p._ring.TL, 6, 6)
     end)
 end)

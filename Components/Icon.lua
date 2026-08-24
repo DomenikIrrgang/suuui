@@ -108,10 +108,18 @@ end
 
 function IconMeta:ApplyTheme()
     if self._border then
-        SuuUI.Backdrop.Apply(self._f, {
-            bg     = "colorBgAlt",
-            border = self._borderColor or "colorBorder",
-        })
+        -- A ROUNDED border is drawn from masked textures, never a backdrop: a backdrop's corners are
+        -- its texture's corners, and one underneath would show square corners through the rounding.
+        if self._panel then
+            self._panel:Refresh()
+            self._panel:SetBg("colorBgAlt")
+            self._panel:SetBorder(self._borderColor or "colorBorder")
+        else
+            SuuUI.Backdrop.Apply(self._f, {
+                bg     = "colorBgAlt",
+                border = self._borderColor or "colorBorder",
+            })
+        end
     end
     self:_applyInset()
     self:_autosize()
@@ -128,6 +136,7 @@ end
 function IconMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._panel then self._panel:Destroy() end
     self._box:Destroy()
     self._f:Hide()
 end
@@ -144,7 +153,11 @@ SuuUI.Components.InstallEnable(IconMeta, "_f")
 -- makes it safe to overlay or nest inside something that does.
 --
 -- Emits SIZE_CHANGED, VISIBILITY_CHANGED, ENABLED_CHANGED.
--- @param props table  { icon, size, w, h, border, borderColor, trim }
+-- @param props table  { icon, size, w, h, border, borderColor, trim, rounded, radius }
+--   rounded: true to draw the border as a rounded surface (Backdrop.Panel). Requires border = true,
+--     since there is nothing to round without one. Opt-in rather than default: turning it on for
+--     every icon would restyle every aura, action and bag cell in the addon at once.
+--   radius: corner radius override; defaults to the borderRadius token.
 --   icon:   texture path
 --   size:   square size; w/h override it per axis. Omit all three to follow sizeIcon.
 --   border: draw the themed border and inset the art inside it (default false)
@@ -158,9 +171,12 @@ function SuuUI.Components.Icon(props, parent)
     local size   = props.size or SuuUI.Theme:GetToken("sizeIcon") or 16
     local border = props.border == true
 
-    -- The backdrop template only comes along when there is a border to draw; a plain icon
-    -- is the texture and nothing else.
-    local f = CreateFrame("Frame", nil, parent, border and "BackdropTemplate" or nil)
+    -- The backdrop template only comes along when there is a border to draw AND that border is
+    -- square; a plain icon is the texture and nothing else, and a rounded one draws its own surface
+    -- from masked textures, which a backdrop underneath would show square corners through.
+    local rounded = border and props.rounded == true
+    local f = CreateFrame("Frame", nil, parent,
+                          (border and not rounded) and "BackdropTemplate" or nil)
     f:SetSize(props.w or size, props.h or props.w or size)
 
     -- Registered before the host container adopts the frame so the container chains onto
@@ -193,6 +209,12 @@ function SuuUI.Components.Icon(props, parent)
         _path       = props.icon,
         _autoSize   = pinned == nil,
     }, IconMeta)
+
+    -- Built BEFORE the first ApplyTheme, which is what paints it: a panel created afterwards would
+    -- sit uncoloured until the next theme change.
+    if rounded then
+        handle._panel = SuuUI.Backdrop.Panel(f, { radius = props.radius })
+    end
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

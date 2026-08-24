@@ -77,6 +77,9 @@ SuuUI._ThemeEditableTokens = {
     { key="sizeRail",      label="Accent Rail",     type="number", min=1,    max=6,   step=1 },
 
     { key="borderWidth",  label="Border Width",     type="number", min=1,    max=4,   step=1 },
+    -- Floored at 0 on purpose: 0 is "square corners", which is a legitimate preference and
+    -- the way to turn the rounding off UI-wide without a code change.
+    { key="borderRadius", label="Corner Radius",    type="number", min=0,    max=16,  step=1 },
     { key="animFast",     label="Animation Fast",   type="number", min=0.05, max=0.5, step=0.05 },
     { key="animMid",      label="Animation Mid",    type="number", min=0.1,  max=0.8, step=0.05 },
     { key="animSlow",     label="Animation Slow",   type="number", min=0.2,  max=1.0, step=0.05 },

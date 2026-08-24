@@ -190,6 +190,11 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     sizeRail         = 2,
 
     borderWidth      = 1,
+    -- borderRadius: the corner radius of a rounded surface (Backdrop.Panel). Its own token
+    -- rather than a derivation of borderWidth, which is a thickness: a hairline border and
+    -- a softly rounded corner are separate design decisions and move independently. 0 is
+    -- square corners, so the rounding is disableable UI-wide without touching code.
+    borderRadius     = 3,
 
     animFast         = 0.12,
     animMid          = 0.22,

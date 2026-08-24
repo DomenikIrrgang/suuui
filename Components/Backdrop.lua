@@ -1,4 +1,4 @@
-local type, ipairs, setmetatable = type, ipairs, setmetatable
+local type, ipairs, setmetatable, min = type, ipairs, setmetatable, math.min
 
 local WHITE = "Interface\\Buttons\\WHITE8x8"
 
@@ -256,6 +256,181 @@ function M.Pill(frame, opts)
     self._fillM = midPiece(frame, box, "BORDER", self._pFillM)
     self._fillL = capPiece(frame, box, "BORDER", self._pFillL, self._pFillLM)
     self._fillR = capPiece(frame, box, "BORDER", self._pFillR, self._pFillRM)
+
+    self:Refresh()
+    self:SetBg(opts.bg)
+    self:SetBorder(opts.border)
+    return self
+end
+
+--------------------------------------------------------------------------------
+-- Panel
+--------------------------------------------------------------------------------
+-- A rounded RECTANGLE, as opposed to Pill's stadium. Pill's radius is half its height by
+-- construction, which is the wrong shape for a 34x34 cell that wants a 3-unit corner, so
+-- the radius here is its own value and the flat run between the corners is what varies.
+
+local PanelMeta = {}
+PanelMeta.__index = PanelMeta
+
+--- Sets the colour of the rounded interior.
+-- @param tokenKeyOrColor string|table|false
+function PanelMeta:SetBg(tokenKeyOrColor)
+    local r, g, b, a = resolveColor(tokenKeyOrColor)
+    -- SetVertexColor, never SetColorTexture: the latter replaces the texture and takes the
+    -- corner mask with it, which is a silently square surface rather than a visible error.
+    for _, tex in ipairs(self._fill.texes) do tex:SetVertexColor(r, g, b, a) end
+end
+
+--- Sets the colour of the ring around the interior.
+-- @param tokenKeyOrColor string|table|false
+function PanelMeta:SetBorder(tokenKeyOrColor)
+    local r, g, b, a = resolveColor(tokenKeyOrColor)
+    for _, tex in ipairs(self._ring.texes) do tex:SetVertexColor(r, g, b, a) end
+end
+
+-- The four corners, each named for the box edges it hugs. `h` and `v` are the inset keys
+-- those edges use, so one loop places every corner with no branch per corner.
+local CORNERS = {
+    { key = "TL", align = "start", valign = "start", h = "left",  v = "top"    },
+    { key = "TR", align = "end",   valign = "start", h = "right", v = "top"    },
+    { key = "BL", align = "start", valign = "end",   h = "left",  v = "bottom" },
+    { key = "BR", align = "end",   valign = "end",   h = "right", v = "bottom" },
+}
+
+-- Seven pieces on one draw layer: four square corners, a strip spanning the gap between
+-- them along the top and along the bottom, and a band filling the full width in between.
+-- Both layers are the same seven, so they are built by one function and differ only in
+-- draw layer and in how far in from the frame's edges they sit.
+local function buildLayer(frame, box, layer)
+    local L = { corners = {}, texes = {} }
+    for _, c in ipairs(CORNERS) do
+        local p = { align = c.align, valign = c.valign, width = 0, height = 0, inset = {} }
+        local m = { align = c.align, valign = c.valign, width = 0, height = 0, inset = {} }
+        L[c.key] = capPiece(frame, box, layer, p, m)
+        L.corners[#L.corners + 1] = { p = p, m = m, h = c.h, v = c.v }
+        L.texes[#L.texes + 1] = L[c.key]
+    end
+    L.pT = { valign = "start", height = 0, inset = {} }
+    L.pB = { valign = "end",   height = 0, inset = {} }
+    L.pM = { inset = {} }
+    L.T = midPiece(frame, box, layer, L.pT)
+    L.B = midPiece(frame, box, layer, L.pB)
+    L.M = midPiece(frame, box, layer, L.pM)
+    L.texes[#L.texes + 1] = L.T
+    L.texes[#L.texes + 1] = L.B
+    L.texes[#L.texes + 1] = L.M
+    return L
+end
+
+-- Places one layer at corner radius r, inset ins from every edge of the frame. The props
+-- tables are the ones handed to Add, so mutating them in place is what the next Layout()
+-- pass reads — no allocation, and no SetChildProps per piece, which would run a whole
+-- layout each time.
+--
+-- The seven pieces TILE the box and meet EDGE TO EDGE. Overlap would be invisible for an
+-- opaque colour and blend against itself along every join for a translucent one, which is
+-- what a surface opacity token makes of every panel here — the same reason Pill's caps are
+-- half-width rather than laid over its middle.
+--
+-- Each corner's mask is 2r square on the SAME outer corner as its piece, so the piece
+-- shows one true quarter of a circle. A mask stretched over the piece's own r x r box
+-- would be an ellipse of radius r/2 instead: exactly the trap Pill's caps document.
+local function shapeLayer(L, r, ins)
+    local d = r * 2
+    for _, c in ipairs(L.corners) do
+        c.p.width,  c.p.height  = r, r
+        c.m.width,  c.m.height  = d, d
+        c.p.inset[c.h], c.p.inset[c.v] = ins, ins
+        c.m.inset[c.h], c.m.inset[c.v] = ins, ins
+    end
+    L.pT.height, L.pB.height = r, r
+    L.pT.inset.top,    L.pT.inset.left, L.pT.inset.right = ins, ins + r, ins + r
+    L.pB.inset.bottom, L.pB.inset.left, L.pB.inset.right = ins, ins + r, ins + r
+    L.pM.inset.left, L.pM.inset.right  = ins, ins
+    L.pM.inset.top,  L.pM.inset.bottom = ins + r, ins + r
+end
+
+-- A radius over half the smaller dimension would ask for corner art larger than the frame
+-- it is rounding, so it is clamped there: at the clamp the corners meet and the surface
+-- degrades to a pill or a disc, which is a shape rather than a defect.
+local function clampRadius(r, w, h)
+    local cap = SuuUI.Pixel.Floor(min(w, h) / 2)
+    if r > cap then r = cap end
+    if r < 0 then r = 0 end
+    return r
+end
+
+-- Every piece is derived from the frame's current size, so all fourteen are re-derived
+-- together.
+function PanelMeta:_geom()
+    local w, h = self._f:GetWidth() or 0, self._f:GetHeight() or 0
+    local ins = self._inset
+
+    -- Ring: the full box.
+    shapeLayer(self._ring, clampRadius(self._radius, w, h), 0)
+
+    -- Fill: the same shape inset on every edge, which is what leaves the ring visible.
+    local wF, hF = w - ins * 2, h - ins * 2
+    if wF < 0 then wF = 0 end
+    if hF < 0 then hF = 0 end
+    -- Concentric — the inner radius is the outer one less the ring it sits inside, so the
+    -- ring keeps an even thickness round a corner instead of pinching at 45 degrees.
+    shapeLayer(self._fill, clampRadius(self._radius - ins, wF, hF), ins)
+end
+
+--- Re-derives every piece from the current size, the borderWidth and borderRadius tokens.
+-- Resizes are picked up on their own; call this after a theme change.
+function PanelMeta:Refresh()
+    local T = SuuUI.Theme
+    local bw = SuuUI.Pixel.Line(self._bwProp or T:GetToken("borderWidth") or 1)
+    self._inset = self._insetProp or bw
+    -- Floored onto the grid: a radius half a pixel off it rounds the corner art and the
+    -- strip that meets it to different edges, which shows as a notch at the join.
+    self._radius = SuuUI.Pixel.Floor(self._radiusProp or T:GetToken("borderRadius") or 0)
+    self:_geom()
+    self._box:Layout()
+end
+
+--- Drops the layout box. Textures cannot be destroyed; they go when their frame does.
+function PanelMeta:Destroy()
+    self._box:Destroy()
+end
+
+--- Fills a frame with a rounded rectangle: a rectangle with a quarter-circle at each corner.
+-- Mirrors Apply's vocabulary, so a component swapping a square surface for a rounded one
+-- changes the call and nothing else.
+-- @param frame frame  plain Frame — a rounded surface is drawn from textures, and a
+--   backdrop underneath it would show its own square corners through the rounding
+-- @param opts table   { bg = tokenKey|color|false, border = tokenKey|color|false,
+--                       borderWidth = number|nil, inset = number|nil, radius = number|nil }
+--   inset:  how far the fill sits inside the frame, which is the visible ring thickness.
+--           Defaults to the border width, exactly as Apply's does. Pass 0 for a
+--           borderless surface that has to cover its whole box.
+--   radius: corner radius, defaulting to the borderRadius token. Clamped to half the
+--           smaller dimension; 0 is square corners.
+-- @return table  handle { SetBg, SetBorder, Refresh, Destroy }
+function M.Panel(frame, opts)
+    opts = opts or {}
+    local self = setmetatable({
+        _f = frame, _bwProp = opts.borderWidth, _insetProp = opts.inset,
+        _radiusProp = opts.radius, _inset = 0, _radius = 0,
+    }, PanelMeta)
+
+    -- Corner size follows the frame, so re-derive on resize. Registered BEFORE the host
+    -- container adopts the frame: the container chains onto this handler, so its own
+    -- Layout() pass applies whatever this mutated without a second pass of its own.
+    local prev = frame:GetScript("OnSizeChanged")
+    frame:SetScript("OnSizeChanged", function(f_, w, h)
+        if prev then prev(f_, w, h) end
+        self:_geom()
+    end)
+
+    local box = SuuUI.Layout:CreateContainer({ host = frame, layout = "stack" })
+    self._box = box
+
+    self._ring = buildLayer(frame, box, "BACKGROUND")
+    self._fill = buildLayer(frame, box, "BORDER")
 
     self:Refresh()
     self:SetBg(opts.bg)

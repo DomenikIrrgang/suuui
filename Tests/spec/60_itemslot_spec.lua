@@ -166,19 +166,63 @@ describe("Components/ItemSlot", function()
             expect(epic._iconComp._borderColor).eq(H.SuuUI.Game:ItemQualityColor(4))
         end)
 
-        it("drops back to neutral when the item goes", function()
+        it("recedes to a DIMMED border when the item goes", function()
             stage(0, 1, { itemID = 22832, quality = 4 })
             local c = cell(0, 1)
-            expect(c._iconComp._borderColor).truthy()
+            expect(c._iconComp._borderColor).as("epic edge while occupied").truthy()
             c:SetItem(nil)
-            expect(c._iconComp._borderColor).as("edge cleared with the item").eq(nil)
+            local edge = c._iconComp._borderColor
+            local base = H.token("colorBorder")
+            expect(type(edge)).as("an empty slot keeps an edge, just quieter").eq("table")
+            expect(edge[1]).as("same hue as the border").near(base[1], 0.001)
+            expect(edge[4]).as("at reduced alpha").lt(base[4] or 1)
+        end)
+
+        -- The distinction is the point: 40 empty slots drawing as hard an edge as the items is what
+        -- makes a flat grid read as a spreadsheet rather than as an inventory.
+        it("gives an occupied slot MORE edge weight than an empty one", function()
+            stage(0, 1, { itemID = 111, quality = 1 })
+            local occupied = cell(0, 1)
+            local empty = cell(0, 2)
+            -- nil is Icon's own default, i.e. full-weight colorBorder.
+            expect(occupied._iconComp._borderColor).as("full weight").eq(nil)
+            expect(empty._iconComp._borderColor).as("dimmed").truthy()
         end)
     end)
 
     -- The template contract. Each of these fails SILENTLY when broken, which is why they are
     -- asserted through a real click rather than by reading the code.
-    describe("the Blizzard template's own handler is left intact", function()
-        it("uses the item on a plain click, through the trusted path", function()
+    -- The regression that shipped a blue lattice over every cell in game. The old code silenced a
+    -- HAND-WRITTEN list of region names, and the real template carries regions no name of ours
+    -- reaches -- so this asserts by ENUMERATION, which is the only shape that can catch the next
+    -- region a client generation adds. Naming the fields here instead would re-introduce the bug.
+    describe("the template's own art", function()
+        it("leaves NO visible Blizzard texture on the cell, including unnamed ones", function()
+            local c = cell(0, 1)
+            local visible = {}
+            for _, region in ipairs({ c:GetFrame():GetRegions() }) do
+                if region.GetObjectType and region:GetObjectType() == "Texture"
+                   and region:IsShown() and (region:GetAlpha() or 1) > 0
+                   and region:GetTexture() then
+                    visible[#visible + 1] = tostring(region:GetTexture())
+                end
+            end
+            expect(#visible)
+                .as("Blizzard art still drawing over the cell: " .. table.concat(visible, ", "))
+                .eq(0)
+        end)
+
+        -- Our own visuals live in child frames, so the sweep must not have reached them. Without
+        -- this, "silence everything" would pass by blanking the cell entirely.
+        it("keeps our own icon and readouts, which are not regions of the cell", function()
+            stage(0, 1, { itemID = 4306, stackCount = 12, quality = 2 })
+            local c = cell(0, 1)
+            expect(c._iconComp:GetFrame():IsShown()).as("our icon survived the sweep").truthy()
+            expect(c._countText:GetText()).as("our count survived the sweep").eq("12")
+        end)
+    end)
+
+    describe("the Blizzard template's own handler is left intact", function()        it("uses the item on a plain click, through the trusted path", function()
             stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
             H.resetUsedContainerItems()
