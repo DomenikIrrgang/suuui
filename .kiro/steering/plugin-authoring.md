@@ -1192,6 +1192,291 @@ changed between client generations is simply absent on the other one.
 
 ---
 
+## Secure Action Bars
+
+Everything else in this document assumes the client will do what you ask. A **secure** frame — one
+built from `SecureActionButtonTemplate` or holding buttons that are — inverts that: the client
+refuses calls it would normally accept, refuses them *only in combat*, and mostly refuses them
+**silently**. A bar that works perfectly at a target dummy and does nothing in a fight is the
+normal failure here, not an exotic one.
+
+If you are building anything that casts a spell, uses an item, or shows the player's action slots,
+read this section first. `Components/ActionButton.lua`, `Components/StanceButton.lua` and
+`Plugins/ActionBars/` are the worked examples.
+
+### Three failure modes, all silent
+
+This is the single most useful thing to know, because it changes how you diagnose:
+
+1. **A refused call in combat.** `SetAttribute`, `SetFrameRef`, geometry, `Show`/`Hide`,
+   `SetOverrideBindingClick` — all refused while `InCombatLockdown()` is true. The player gets
+   "Interface action failed because of an AddOn" at best, and nothing at all at worst.
+2. **A throw inside a Settings watcher.** Watcher callbacks are `pcall`'d and logged through
+   `SuuUI.Debug`, **which prints nothing with debug off**. A constructor that raises leaves the
+   player with no bar and no message. Two separate bugs cost multiple rounds of wrong diagnosis to
+   exactly this silence — use `SuuUI.Fault` for anything the player must know about.
+3. **A protected function that is a no-op rather than an error.** `CastShapeshiftForm` was probed
+   bracketed — read form 7, cast form 3, read form 7 again. No error, no message, no change.
+
+**Assume any client function that changes game state is PROTECTED until you have proved otherwise,
+and prove it by reading the state back rather than by watching for a complaint.** Two functions
+were assumed callable this build and were not: `CastShapeshiftForm` and `TogglePetAutocast`.
+
+### Attributes: state them once, and never cache the slot
+
+```lua
+f:SetAttribute("type", "action")
+f:SetAttribute("action", props.slot)
+f:SetAttribute("useOnKeyDown", wantKeyDown)
+```
+
+State every secure attribute **once, at construction**, and expose no way to re-point a live
+button from Lua — the client refuses `SetAttribute` on a protected frame in combat, so a setter
+that re-states an attribute is a setter that fails exactly when it is needed. Re-pointing is the
+state driver's job (see the state-driver carve-out in `WOW_API_ENCAPSULATION.md`).
+
+**Read the action slot from the `action` attribute on every refresh. Never cache it.** The secure
+snippet rewrites that attribute *inside* the secure environment, where Lua cannot observe the
+write. A button caching its slot in a local keeps drawing the spell it had before the player
+changed stance. `GetAttribute` is a read and is never refused.
+
+### `RegisterForClicks` and `useOnKeyDown` MUST agree
+
+This invariant has been broken twice, in two different phases, with the identical symptom: **every
+button looked perfect and did nothing.**
+
+A `Button` fires for left-up alone until told otherwise, so `RegisterForClicks` is not optional.
+But registering a phase is only half of it — the secure handler compares the `down` flag it is
+given against `useOnKeyDown` and returns early when they disagree. Register release only while
+`useOnKeyDown` says "act on the press", and the button never receives the phase the client acts
+on.
+
+- **Action buttons**: `RegisterForClicks("AnyDown", "AnyUp")`, `useOnKeyDown` from the
+  `ActionButtonUseKeyDown` CVar (read through `pcall`; default to release, since `GetCVarBool` is
+  absent on some client generations).
+- **Pet buttons**: `RegisterForClicks("AnyUp")` and `useOnKeyDown = false` — one phase, because
+  the right-click is forwarded and the client runs the handler once per registered phase. Two
+  phases would forward twice and toggle autocast straight back.
+
+A green suite will not catch this. Dragging keeps working throughout, because drag never goes
+through that handler.
+
+**Gate your `PostClick` observer on the same rule**, or a consumer sees two `CLICKED` signals per
+click and anything counting them is wrong in a way that looks like a double-click.
+
+**Never `SetScript("OnClick")` on a secure button.** The template owns that handler; replacing it
+breaks the button silently — it still sizes, still takes the mouse, still reports as shown. Use
+`HookScript("PostClick")` to observe.
+
+### Reaching a protected function you cannot call
+
+Forward the click into a trusted Blizzard button inside the secure environment. Pet autocast is
+the worked example: `TogglePetAutocast` raised "blocked from an action only available to the
+Blizzard UI" even from a hardware-event context, so instead
+
+```lua
+f:SetAttribute("type2", "click")
+f:SetAttribute("clickbutton2", _G["PetActionButton" .. index])
+```
+
+and the *client* presses Blizzard's button, whose own trusted handler does the protected work.
+This is the mechanism Clique uses for click-casting.
+
+**A forwarded target must keep existing.** Blizzard's pet buttons are hidden with their container
+— never destroyed, never unparented.
+
+### Clearing art on a protected button
+
+**`SetNormalTexture(nil)` is REFUSED**: `bad argument #2 to '?' (Usage: self:SetNormalTexture(asset))`.
+Clear the art by fetching the Texture object through its getter, emptying it, and hiding *that*:
+
+```lua
+for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture" }) do
+    local tex = f[get] and f[get](f)
+    if tex then tex:SetTexture(nil) tex:Hide() end
+end
+```
+
+That throw happened during construction, which meant the bar was never built — and per failure
+mode 2 above, the player saw nothing at all.
+
+**Clear the texture, do not hide the region.** Hiding a frame inside a protected button is refused
+in combat, and an action appearing or disappearing mid-fight is the ordinary case — so the hide
+fires exactly when it cannot land. Keep the button live and mouse-enabled even for an empty slot:
+a player drags an action *onto* an empty cell.
+
+**Do not install `SetEnabled` on a secure button.** Disabling drops mouse input, which the client
+refuses on a protected frame in combat — and `Dependency.Bind`'s `if target.SetEnabled` guard
+would pass while nothing was actually inert. Render unusable instead.
+
+**On teardown, `Hide()`.** Do not clear attributes and do not `SetParent(nil)`; both are calls the
+client can refuse on a protected frame.
+
+### Combat deferral is the caller's job, and it is all-or-nothing
+
+The component refuses to guess. `ActionButton:SetSize` is refused in combat like any other
+geometry, and the **caller** owns the deferral, because only the caller knows the whole grid has
+to move together.
+
+The pattern, from `ActionBars.lua`:
+
+```lua
+if type(InCombatLockdown) == "function" and InCombatLockdown() then
+    p._pendingAttach = p._pendingAttach or {}
+    p._pendingAttach[def.id] = def       -- a SET keyed by bar id, so repeats collapse
+    return
+end
+```
+
+then drain the set on `PLAYER_REGEN_ENABLED`.
+
+**Defer the WHOLE transition, not just the visible part.** Deferring only the reflow left a bar
+stranded: the moveable removed, the dock not yet anchoring, nothing holding it.
+
+**Short-circuit a no-op before deferring it.** `SetSlots` has no equality check of its own, so it
+always runs a geometry pass — and the client fires the form-count event on login and on changes
+that leave the count alone. Deferring that would leave the bar waiting on the end of a fight for
+no reason.
+
+**Only protected things need deferring.** A font string showing or hiding is not protected, so
+readout toggles apply immediately; only shape settings defer.
+
+**Where a trigger can occur in combat, use a secure state driver instead of deferring.** A pet is
+summoned, dismissed, killed and revived mid-fight, so pet-bar visibility is
+`RegisterStateDriver(frame, "visibility", "[pet,nooverridebar,nopossessbar] show; hide")` — and
+once a driver owns visibility, **never call `Show`/`Hide` on that frame from Lua**. Two owners
+fight, and yours loses in combat anyway. Contrast the stance bar, where a plain `Hide` is enough
+because the form *count* only changes at a trainer.
+
+**Order matters on release.** Release the attach point and detach the dock *before* the moveable
+goes back on, or both write the same anchor and the winner is whichever fired last. Revoke a
+published point *before* teardown. `UnregisterStateDriver` *before* the frame goes, or the client
+keeps evaluating a conditional against a frame that no longer exists.
+
+### Keybindings
+
+**A Blizzard binding family acts on the SLOT, not on the button.** Whatever is bound to
+`ACTIONBUTTON1` fires `UseAction(1)` whether Blizzard's own button is on screen or not — which is
+why suppressing Blizzard's bars never costs the player their keys, and why bars using a Blizzard
+family need no binding code at all.
+
+**Slots with no Blizzard family need your own names and explicit routing.** Declare them in
+`Bindings.xml` (SuuUI declares `SUUUIBAR9BUTTON1`..`SUUUIBAR13BUTTON12` for the pages Blizzard
+exposes no bar for), then route the key the player chose to a **click** on your secure button:
+
+```lua
+SetOverrideBindingClick(frame, false, key, "SuuUIBar9Button1", "LeftButton")
+```
+
+That is the only route to a protected `UseAction`; a Lua binding body calling it directly is
+refused. Which means **every secure button needs a global name**, because the client resolves the
+override binding by name — set `namePrefix` on the grid.
+
+**Apply the keys from the grid's `CHILDREN_CHANGED` signal, not from an event.** A bar built in
+combat has no buttons yet, so there is nothing to bind to — and catching up on
+`PLAYER_REGEN_ENABLED` *races the grid's own catch-up on that same event*. The signal exists for
+this.
+
+**Clear and reapply the whole set; do not diff.** And `ClearOverrideBindings` when the bar is
+destroyed: an override binding outlives the frame it was set on.
+
+Register `UPDATE_BINDINGS` (or the old key keeps working until the next reload) and
+`PLAYER_ENTERING_WORLD` (the first moment saved keys are readable).
+
+### Suppressing Blizzard's own bars
+
+**Hiding a Blizzard action bar is itself protected**, so it defers like everything else — including
+the restoring `Show()`, which matters more than it sounds because that is the escape hatch.
+
+**Resolve targets by candidate LIST and hide every name that exists**, not the first match. This
+client has both `MainMenuBar` and `MainActionBar`: the first carries the art, the second holds the
+buttons. Stopping at the first hid the gryphons and left twelve buttons on screen while the check
+reported success. **Establish which frame holds the buttons by walking the parent chain from a
+button** — the frame that exists is not always the frame that holds them.
+
+**Never `UnregisterAllEvents`** — nothing in the API enumerates a frame's registered events, so it
+is a one-way door and `onDisable` could never hand the frame back. **Never `SetParent(nil)`** —
+reparenting a frame with protected children is protected too.
+
+**Hook `OnShow` and consult your suppressed table on every call.** `HookScript` cannot be undone,
+which is exactly what makes `Restore` possible — so **clear the flag before the restoring `Show()`**,
+or the hook you cannot uninstall hides it again on the way out.
+
+**Verify with witness buttons.** Hiding a container is the means; a button off the screen is the
+end. Log the failure rather than raising: a stray visible button is cosmetic, not a reason to take
+the plugin down mid-session.
+
+### Participating in the dock
+
+`SuuUI.Dock` asks a participant for exactly three things: `GetFrame()`, `GetWidth()`/`GetHeight()`,
+and a `SIZE_CHANGED` signal. Anything satisfying that can dock — which is how the experience and
+reputation bars joined a service written for action bars without the service changing.
+
+**An anchor is the same dependency as parentage.** The client refuses geometry on a frame whose
+movement would move a protected one, and does not care whether the link is a parent or a point. So
+the *plugin* defers the dock/free transition; the dock itself carries no combat guard.
+
+**Anchor, never contain.** Containing makes the dock's frame resize when a bar attaches — and the
+dock holds protected buttons, so that resize is refused in combat.
+
+**State `relativeTo` explicitly in every anchor descriptor.** Layout props live on the *frame*, so
+a frame in two containers has one props table, and an anchor without `relativeTo` resolves against
+whichever container applies it. That pinned every docked bar to the top of the screen once.
+
+**Resolve a target's attach point through `Dock.PointFor(id)`.** Building the name from your own
+prefix is what made an action bar silently fail to dock to a watch bar: the request went to a point
+that never existed, and `Request`'s "not published yet" path looks identical.
+
+**Refuse cycles in the settings validator, and bound the walk.** A circular anchor is a hard client
+error, not a cosmetic fault. The walk must be bounded as well as identity-checked, because a
+hand-edited profile may already contain a loop. Use `Dock.WouldCycleIds`, which spans plugins — a
+walk that only knows about your own settings cannot see the half held by someone else.
+
+**Do not coerce a participant id with `tonumber`.** Ids are not all numeric (`"stance"`, `"pet"`,
+`"watch:xp"`), and coercing silently yields nil, which reads as "not docked".
+
+### Two plugin-handle traps
+
+**Never store your own state under `_def` on your plugin handle.** That name used to hold the
+framework's own plugin definition, and a plugin that claimed it destroyed its own `onDisable` — no
+error, because the hook was simply never called. Definitions now live in a private weak-keyed table
+`Core/Plugin.lua` keeps off the handle, so the collision cannot recur, but the lesson stands: name
+your state distinctly (`p._widgetDef`, `p._bars`).
+
+**Do not pass `immediate = true` on the plugin's own top-level `enabled` watcher.**
+`Plugins:autoEnable` already applies the stored value during the login pass, and an immediate
+callback would run `onEnable` from inside the init pass — before other plugins' `onInit` had run,
+which is the ordering the two phases exist to guarantee.
+
+### Settings-schema traps that break a bar page
+
+**Every subtab needs a non-nil `id`.** `SubTabs` builds `byId[tab.id]`, so a nil id raises "table
+index is nil" and the **entire page build throws** — taking the top-level toggles with it,
+including the suppression escape hatch. That shipped once and was caught by looking at the settings
+window, not by a spec: asserting a schema is not asserting that it renders.
+
+**Give suppression its own top-level toggle, outside any group.** A player whose bars are
+misbehaving needs Blizzard's cluster back without disabling the plugin whose settings page they are
+standing on.
+
+**Never offer a control for a value the client owns.** The stance bar has no button-count slider,
+because a slider would let a player set 12 and get 8. Read `GetNumShapeshiftForms()`; do not read
+`NUM_STANCE_SLOTS`, which is an array bound (10), not what a class has.
+
+### Scaling: share the event frame and the ticker
+
+Ninety-six buttons with an event frame each would be ninety-six frames and ninety-six dispatches
+for the same handful of events, and a per-button `OnUpdate` is ninety-six scripts running every
+frame forever. Use **one** shared event frame and **one** shared ticker, registered while at least
+one button is live and dropped with the last one. `pcall` every `RegisterEvent`: an event absent on
+this client generation must not take the bar down.
+
+Range has to be polled because nothing announces it — throttle it, and treat `inRange == nil` as
+"range is not a question" rather than out of range, or every self-cast on the bar gets a danger
+tint.
+
+---
+
 ## Profile Data
 
 Plugin-scoped data lives at `profile.plugins["my_plugin"]`.
@@ -1363,3 +1648,9 @@ Disconnect every signal in `onDisable` alongside `SuuUI.Events:Off`.
     chain yourself. See "No Magic Numbers" in `coding-standards.md`.
 13. **Test the UI you build.** A new component is not finished without a spec in
     `Tests/spec/`. Run `lua Tests/run.lua` before calling a change done. See `TESTING.md`.
+14. **Secure frames refuse calls, in combat, silently.** If your plugin casts a spell, uses an
+    item, or shows the player's action slots, read "Secure Action Bars" above before writing any
+    of it. In particular: state secure attributes once at construction, read the action slot from
+    the attribute rather than caching it, make `RegisterForClicks` agree with `useOnKeyDown`,
+    never `SetScript("OnClick")` on a secure button, and assume any client function that changes
+    game state is protected until you have proved otherwise by reading the state back.

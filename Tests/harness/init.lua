@@ -59,13 +59,15 @@
 -- Observation: H.signalSpy H.eventSpy H.debugLog H.tick H.runAnimations
 -- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
 -- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
+--              H.getPickedUpAction H.getUsedAction H.resetUsedAction
+-- Bindings:    H.setBinding H.getOverrideBindings H.getStateDriver
+--              H.setTempShapeshiftPage  (the page a temporary shapeshift uses)
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
 --              H.setSpellTexture
--- Watch bars:  H.setXP H.setWatchedFaction
+-- Watch bars:  H.setXP H.setWatchedFaction H.setRepApi
+-- Bags:        H.setBags H.setBagApi
 -- Pet:         H.setPetAction H.clearPetAction H.setPetActionBar H.getPetAutocastToggles
 --              H.setBonusBarOffset H.getUsedPetAction
---              H.setBinding H.getOverrideBindings H.getStateDriver H.getPickedUpAction
---              H.getUsedAction H.resetUsedAction
 --
 -- H.setup() reloads the whole addon into a fresh sandbox against a fresh simulated
 -- client, so every test starts from a known state.

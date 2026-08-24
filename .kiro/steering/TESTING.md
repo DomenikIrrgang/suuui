@@ -465,6 +465,110 @@ collapsing them gets one case wrong.
 state drivers, enacting it would mean the harness deciding what changing form does to every other
 reading. `TogglePetAutocast` *is* enacted, because its consequence is exactly one flag on one slot.
 
+### Watch bars: experience and reputation
+
+```lua
+H.setXP({ current = 230, max = 1000, rested = 200 })  -- MERGES; fires PLAYER_XP_UPDATE
+H.setXP({ rested = false })                           -- false CLEARS; nil means "leave alone"
+H.setWatchedFaction({ name = "Sporeggar", standing = 5,
+                      min = 3000, max = 6000, value = 4500 })  -- REPLACES; fires UPDATE_FACTION
+H.setWatchedFaction(nil)                              -- watch nothing
+```
+
+Both take `opts = { silent = true }` to stage without firing.
+
+**`setXP` merges and `setWatchedFaction` replaces.** That asymmetry is deliberate — experience is
+several independent facts a spec moves one at a time, while a watched faction is one thing that is
+either there or not — but it is a real trap, and only `setXP` validates its field names.
+
+**An unset XP store reads as max level.** `UnitXPMax` answers 0, which is how the client reports a
+capped character, so a spec that forgets to stage XP is testing the hidden case. `UnitXP`/`UnitXPMax`
+also answer 0 for any unit other than `"player"`.
+
+**`GetXPExhaustion()` returns nil, not 0**, when there is no rested bonus, and the two are different
+statements — a bar must distinguish "no bonus" from "a bonus of zero".
+
+**Reputation's legacy call returns SIX values**, not five:
+`name, reaction, currentReactionThreshold, nextReactionThreshold, currentStanding, factionID`. An
+earlier model returned five and stopped at `value`, which is precisely why nothing caught the table
+form described below.
+
+### Bags
+
+```lua
+H.setBags({
+    [0] = { free = 4, slots = 16 },                 -- the backpack
+    [1] = { free = 8, slots = 16 },
+    [2] = { free = 0, slots = 20, bagType = 2 },    -- a quiver
+})                                                   -- REPLACES; fires BAG_UPDATE_DELAYED
+```
+
+**Indexed by bag id FROM 0.** Bag 0 is the backpack, 1..4 the bag slots (`NUM_BAG_SLOTS` is 4).
+
+**A `bagType` other than 0 is a specialised container** — quiver, ammo pouch, soul shard bag — whose
+free slots cannot hold loot. `GetContainerNumFreeSlots` returns the type as its second value
+specifically so a consumer can exclude them, and a spec that stages one is testing whether the
+consumer does. A bag id that was never staged answers `0, 0` rather than nil.
+
+### The simulated client's APIs come in two shapes
+
+This client is a hybrid, and two data sources are reachable by either a namespaced call or a bare
+global. The harness can be **either, or neither**:
+
+```lua
+H.setRepApi("legacy")   -- only GetWatchedFactionInfo (the default)
+H.setRepApi("modern")   -- only C_Reputation.GetWatchedFactionData, returning a TABLE
+H.setRepApi("none")     -- NEITHER
+H.setBagApi(mode)       -- the same three, for C_Container / GetContainerNumFreeSlots
+```
+
+Three rules make these mean something, and each was learned by getting it wrong:
+
+**`"none"` genuinely REMOVES the global.** A version of "no API" that leaves the function in place
+and merely returns nil is indistinguishable from "no faction is watched" — the exact conflation that
+hid a bar in game. Removal has to be real or the test proves nothing.
+
+**`"modern"` also removes the legacy global.** If it stayed, the addon's legacy branch would answer
+first and the table path would never run.
+
+**They mutate `M.env`, NOT `_G`.** The addon's chunks run against the harness environment, which
+shadows the real globals and falls through to them (`env._G = env`, then
+`setmetatable(env, { __index = _G })`). Writing to the real `_G` therefore *appears* to work — reads
+still resolve, just to a table nothing under test consults. A helper that made that mistake looked
+correct while the addon carried on seeing the old API. Anything staging a client global must go
+through `M.env`, and both helpers assert that `H.setup()` has run.
+
+Reset restores both pairs: modes back to `"legacy"`, the namespaced tables cleared, the legacy
+functions restored from the copies the harness kept.
+
+### Observing a Fault
+
+`SuuUI.Fault` prints even with debug off — that is the whole reason it exists — so a spec reads it
+through the debug log:
+
+```lua
+H.setRepApi("none")
+H.setWatchedFaction(WATCHED)
+for _, line in ipairs(H.debugLog()) do
+    if line:find("reputation API", 1, true) then found = true end
+end
+```
+
+**Faults are deduplicated by message.** A second identical fault emits nothing, so a spec asserting
+a count sees one line however many times the code faulted. `SuuUI.ClearFaults()` resets that.
+`H.debugLog()` returns the **live** table, unlike `H.getOverrideBindings()`, which returns a copy.
+
+### Paging: the page a temporary shapeshift uses
+
+```lua
+H.setTempShapeshiftPage(21)   -- what GetTempShapeshiftBarIndex() answers
+H.setTempShapeshiftPage(nil)  -- a client that will not say
+```
+
+Pure state: no event, no `opts`. It is staged rather than fixed because the addon **asks the client**
+instead of hardcoding a page number nothing has measured — so a spec must be able to move it to
+prove the call is real rather than decorative.
+
 ### Clipping: what a widget was assigned vs what draws
 
 `SetClipsChildren(true)` makes a frame a **window**: the client scissors its whole descendant
@@ -804,12 +908,58 @@ instead of in someone's memory.
 
 ---
 
+## Mutation Testing
+
+"New behaviour has a spec that would fail without the change" is a claim, and the only way to know
+it is true is to break the code and watch the spec go red. Every non-trivial change in this codebase
+is checked that way, and it has repeatedly found assertions that passed while proving nothing.
+
+The procedure, run from a throwaway script rather than committed tooling:
+
+1. **Confirm a green baseline first.** A suite that is already red makes every mutation look caught.
+   Refuse to run otherwise.
+2. For each mutation: back up the file, apply one targeted edit, run the spec, record RED (caught)
+   or GREEN (survived).
+3. **Restore the file and verify the restore** — compare a hash of the bytes before and after, and
+   re-apply the original mode. A mutation run that leaves the tree modified is worse than none.
+4. **Gate per spec FILE, not on concatenated output.** Running several spec files and grepping the
+   combined result lets one green file mask another's failure. That produced a false "all 21
+   survived" reading once.
+
+A mutation that anchors on text appearing zero or several times must be reported as **SKIPPED**, not
+counted as caught — a bad anchor silently applies nothing, and its RED means only that the file was
+untouched.
+
+### A survivor is information, not necessarily a bug
+
+Roughly half the survivors found in this codebase were **weak assertions rather than dead code**.
+Worked examples, all real:
+
+- A test compared a bar's ghost fill against its main fill and passed — because *both* were white.
+  Comparing two values that are wrong in the same way proves nothing; assert the absolute value
+  against its source of truth.
+- A test re-emitted a theme-change event on the *same* theme and asserted the colour. That cannot
+  distinguish a widget that re-resolves from one that never does. Switch to a theme whose token
+  value genuinely differs.
+- A guard could be deleted because the bar it guarded was enabled by default and already built
+  before the test staged any keys, so there was nothing to claim either way. Fixed by firing the
+  event *after* staging.
+- A combat guard could be deleted because the only combat test built the bar in combat, where the
+  absent buttons hid the guard's effect. Fixed by adding a case where the buttons already exist.
+
+When a mutation survives, decide which it is before acting: if the code is genuinely unreachable,
+**delete it**; if the test is weak, **strengthen the test**. Both outcomes have happened here, and
+recording which one it was in the spec comment is what stops the next person re-litigating it.
+
+---
+
 ## Definition of Done
 
 A change to `Components/`, `Layout/`, `Core/` or `SettingsUI/` is done when:
 
 - [ ] `lua Tests/run.lua` passes with no failures
 - [ ] New behaviour has a spec that would fail without the change
+- [ ] **That claim is mutation-checked** — the change was broken deliberately and the spec went red
 - [ ] Changed behaviour has its existing spec updated, not deleted
 - [ ] Geometry assertions derive from tokens, not literals
 - [ ] Anything left undecided is pinned with a passing test plus an `xit`

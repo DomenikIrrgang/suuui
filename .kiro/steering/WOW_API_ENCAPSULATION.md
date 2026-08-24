@@ -214,6 +214,13 @@ These are the only cases where UI construction code may still call the WoW API:
    needs cursor math. This belongs in `Components/`, not in page code.
 
 3. **Game data APIs** in plugins: `RegisterEvent`, `UnitName`, `GetSpellInfo`, and friends.
+   Note that a game-data API may exist in **two shapes** on this client — see "A Client API May
+   Have Two Shapes" below.
+
+4. **Secure state drivers** in a plugin: `RegisterStateDriver`, `SecureHandlerStateTemplate`,
+   `SetFrameRef`, and `_onstate-*` attributes. The conditional a driver evaluates is a fact about
+   the plugin's own domain, and a Lua handler cannot do the work at all — see "State Drivers Are
+   A Plugin-Level Carve-Out" below.
 
 Everything else needs a component.
 
@@ -399,6 +406,171 @@ actually costs days:
 structural invariant — that the secure surface is not a descendant of the frame it covers —
 and that is what `Tests/spec/41_unit_click_area_spec.lua` does. See "Known Gaps in the
 Simulated Client" in `TESTING.md`.
+
+---
+
+## State Drivers Are A Plugin-Level Carve-Out
+
+`RegisterStateDriver`, `SecureHandlerStateTemplate` and `SetFrameRef` are Blizzard API, and they
+appear in a plugin file — `Plugins/ActionBars/Paging.lua`. That is deliberate, and it is the
+third carve-out in this document rather than a violation of the first rule.
+
+**Why a component cannot own this.** The previous section's rule is that a protected action goes
+through a secure component. A state driver is not an action; it is a standing instruction to the
+client about a frame's attributes, and the conditional it evaluates is a fact about the PLUGIN's
+domain — which action bar pages onto which slots for which class. A component that owned it would
+have to be told the whole page map, which is to say it would become the plugin.
+
+**Why it cannot be a Lua event handler.** Paging means rewriting each button's `action`
+attribute, and `SetAttribute` on a protected frame is refused while `InCombatLockdown()` is true.
+Every trigger for a page change is an in-combat transition by definition — a warrior swapping
+stance, a druid shifting form, a rogue entering stealth — so a Lua handler would be refused at
+exactly the moment it was needed, **every time**. The client evaluates the conditional itself and
+runs the snippet inside the secure environment, where rewriting the attribute is allowed.
+
+### The snippet sees nothing
+
+A secure snippet is a string the client compiles. It can see **no Lua upvalue and no global from
+the file it was written in**, so everything it needs must arrive as an attribute or a frame
+reference, set out of combat:
+
+```lua
+M.SNIPPET = [[
+    local page = tonumber(newstate) or 1
+    local size = tonumber(self:GetAttribute("pageSize")) or 12
+    local count = tonumber(self:GetAttribute("buttonCount")) or 0
+    local first = (page - 1) * size + 1
+    for i = 1, count do
+        local button = self:GetFrameRef("button" .. i)
+        if button then
+            button:SetAttribute("action", first + i - 1)
+        end
+    end
+]]
+```
+
+`newstate` is what the driver resolved to, **as a string** — hence the `tonumber`. Its three
+inputs are the `pageSize` attribute, the `buttonCount` attribute, and one `button<i>` frame ref
+per button.
+
+**`SetFrameRef` is refused in combat too**, exactly like `SetAttribute`. The grid destroys and
+recreates its buttons when the count or a slot changes, so the refs must be re-stated on every
+rebuild — and a rebuild can itself be deferred to the end of a fight. Nothing but the grid knows
+when that happened, which is why `ActionBarGrid` emits `CHILDREN_CHANGED` and this module
+subscribes to it. Watching the *setting* that caused the rebuild fires too early, while the old
+buttons are still on screen.
+
+**`buttonCount` is the bound, and that is load-bearing.** Shrinking a bar from twelve buttons to
+four leaves refs 5..12 pointing at destroyed frames. They are inert because the snippet loops to
+`buttonCount` — but they are not cleared, and a caller must not read the ref set as describing
+the current bar. Clearing would mean `SetFrameRef(name, nil)`, and whether this client accepts a
+nil frame there is unverified; guessing wrong would raise inside a secure setter at login. The
+count is the honest contract.
+
+### The conditional is first-match-wins, and the order is not the obvious one
+
+`Paging.M.BuildDriver()` composes the string in this order:
+
+| # | Fragment | Why |
+|---|---|---|
+| 1 | `[shapeshift]<GetTempShapeshiftBarIndex()>;` | Only when the client answers a number |
+| 2 | `[bar:6]6;[bar:5]5;[bar:4]4;[bar:3]3;[bar:2]2;` | The page the PLAYER paged to |
+| 3 | `[bonusbar:5]11;` | Its own page for every class that has one |
+| 4 | `[possessbar]16;` | Mind control — page 16 is slots 181-192 |
+| 5 | `CLASS_BONUS_PAGES[class]` | The class's forms and stances |
+| 6 | `1` | The fallthrough |
+
+**`[bar:N]` is tested BEFORE the bonus bars**, so a page the player selected by hand outranks a
+form. That is what the client itself does and the opposite of what "a form should win" intuition
+suggests — written the other way, a druid could never page off its form bar.
+
+**`[bar:1]` must never appear.** It would match before anything below it was tested and the bar
+could never leave page 1 — a failure that looks exactly like paging not being wired up at all.
+Page 1 is the fallthrough instead.
+
+**No number in the string is a constant the addon invented.** The temporary-shapeshift page comes
+from `GetTempShapeshiftBarIndex()` at runtime and the class from `UnitClass`. That is the same
+principle as the rest of this document applied to values rather than calls: if the game owns the
+fact, ask the game.
+
+### Class conditions are measured, not derived
+
+```lua
+local CLASS_BONUS_PAGES = {
+    DRUID   = "[bonusbar:1,nostealth]7;[bonusbar:1,stealth]8;[bonusbar:2]10;[bonusbar:3]9;[bonusbar:4]10;",
+    WARRIOR = "[bonusbar:1]7;[bonusbar:2]8;[bonusbar:3]9;",
+    ROGUE   = "[bonusbar:1]7;",
+    PRIEST  = "[bonusbar:1]7;",
+}
+```
+
+There is no clean rule to infer. The naive mapping is bonusbar N → page 6+N, and the druid's is
+not that: stealth takes a page of its own, and bonusbar 2 and 4 both land on 10 while 3 lands
+on 9. These came from ElvUI's per-class strings on this exact client. A class with no entry needs
+none — its conditions never match, and a shorter driver is one less thing the client evaluates on
+every state change.
+
+Anything that needs to know which pages a form uses reads `M.BonusPages()`, which parses those
+same strings rather than keeping a second list. Two lists would eventually disagree. Note it
+returns only the pages inside that table, so 11 (`[bonusbar:5]`) and 16 (`[possessbar]`) are not
+in it — they are appended directly by `BuildDriver`.
+
+### What a spec can and cannot prove
+
+**The harness records driver strings and never evaluates them**, deliberately: resolving a macro
+conditional locally would mean asserting against the harness's guess at what the client decides.
+So a spec asserts the driver string, the frame references and the attributes — the STRUCTURE —
+and paging's actual behaviour is an in-game check. **A stance swap on a warrior or a druid is the
+verification.** See "Known Gaps in the Simulated Client" in `TESTING.md`.
+
+---
+
+## A Client API May Have Two Shapes — Handle Both
+
+Game-data reads in plugins are already exception 3 above. What that exception does not say is
+that **the same datum may be reachable by two different APIs on the same client**, and this one
+is a hybrid: a modern backend wearing an older expansion's UI. Two of them have already bitten.
+
+| Datum | Modern | Legacy |
+|---|---|---|
+| Watched faction | `C_Reputation.GetWatchedFactionData()` → **a table** | `GetWatchedFactionInfo()` → **six positional values** |
+| Free bag slots | `C_Container.GetContainerNumFreeSlots(bag)` | `GetContainerNumFreeSlots(bag)` |
+
+The pattern, from `WatchBars.readWatchedFaction` and `BagsWidget.containerApi`:
+
+```lua
+local C = C_Reputation                                   -- 1. namespaced form FIRST
+if C and type(C.GetWatchedFactionData) == "function" then -- 2. TWO guards, not one
+    ...                                                  --    normalise to one shape
+end
+if type(GetWatchedFactionInfo) == "function" then         -- 3. positional fallback
+    ...                                                  --    same field names out
+end
+return nil, "no_api"                                      -- 4. and say so
+```
+
+**Two guards, not one.** The namespace table may be absent, and it may exist without the member.
+
+**A BARE global lookup, never `_G.X`.** A chunk resolves a bare name through its own environment
+— the real globals in game, and the harness's table under test. An explicit `_G.` reaches past
+that environment to a table the tests do not control, so the branch becomes untestable. This is
+not a style preference: a staging helper that mutated `_G` once appeared to work while changing
+nothing the addon could see.
+
+**Both branches must return the SAME shape**, so the caller has one thing to read. The legacy
+reputation call returns six values — `name, reaction, currentReactionThreshold,
+nextReactionThreshold, currentStanding, factionID` — which is one more than an older reading of
+it assumed. Those names came from ElvUI's shim on this client, not from memory.
+
+**Neither present is a `SuuUI.Fault`, not a silent empty.** This is the load-bearing rule. "No
+API" and "legitimately nothing to show" render identically — a hidden bar, a blank field — and
+that conflation is exactly how a broken reputation bar shipped unnoticed. So the shim reports
+*why* it has nothing (`"unwatched"` versus `"no_api"`) and the caller decides which is a fault.
+The fault message names **both** API forms, because the next person to read it needs to know what
+was looked for.
+
+Note the shim itself never raises. `WatchBars` faults one level up in `readRep`; `BagsWidget`
+faults at the render boundary in `currentText`. The shim's job is to report what it found.
 
 ---
 

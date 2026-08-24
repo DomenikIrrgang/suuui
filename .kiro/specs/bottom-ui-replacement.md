@@ -1369,7 +1369,13 @@ Each phase ends green with its own specs and is independently verifiable in game
 | 7 | Atlas + `DataField` icon + `micro_menu` | Every micro button opens its panel; labels toggle collapses to glyph-only; unglyphed buttons fall back to text |
 | 8 | `watch_bars` | XP with rested ghost fill and readouts; rep bar identical, faction-coloured from `Game.ReactionColor`; both hide when silent |
 | 9 | `bag_bar` | Free-slot count with settings-driven tone thresholds; click opens bags |
-| 10 | Docs | `architecture.md` (components, plugins, new tokens), `plugin-authoring.md` (secure bars), `WOW_API_ENCAPSULATION.md` (the state-driver carve-out), `TESTING.md` (harness additions), `README.md` |
+| 10 | Docs | **DONE 2026-08-24** — `architecture.md` (Dock as a Core service, ActionBarGrid + StanceButton, the StatusBar ghost fill, `Backdrop.Glass`, 11 new tokens, the `note` schema type, the plugin-definition rule, and a Bundled Plugins inventory); `plugin-authoring.md` (a Secure Action Bars section); `WOW_API_ENCAPSULATION.md` (the state-driver carve-out and the dual-shape client API pattern); `TESTING.md` (watch bar / bag / dual-API / fault staging, and a Mutation Testing section); `README.md` (what actually ships, and where the keybindings are) |
+
+**Three things remain outside the numbered plan:** the DEFERRED possess bar — which
+`[possessbar]16` in bar 1's driver may already have solved, since ElvUI draws no possess bar
+either; the guild widget; and a per-bar fill-direction setting (ElvUI's `point` resolves
+`TOPRIGHT` to grow LEFTWARD, while SuuUI always grows right and down, so a right-edge bar reads
+mirrored against it). Deliberately left as-is.
 
 Phase 4 is the first one worth a `/reload`: it is where Blizzard's art disappears and where a
 suppression mistake is visible immediately.

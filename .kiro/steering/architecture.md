@@ -21,6 +21,9 @@ uses them. See [Embedded Libraries](#embedded-libraries-libs).
 ```
 SuuUI/
 ├── SuuUI.toc
+├── Bindings.xml           -- the 60 binding NAMES SuuUI declares for the action slots no
+│                          --   Blizzard bar exposes (bars 9-13). Loaded by the client from the
+│                          --   addon root automatically; deliberately NOT in the .toc
 ├── Libs/                  -- the ONLY external code; loads first (see Embedded Libraries)
 │   ├── LibStub/           -- version arbitration; a table with __call, never a function
 │   ├── CallbackHandler-1.0/ -- callback registry LibDataBroker is built on
@@ -34,6 +37,8 @@ SuuUI/
 │   ├── UIRoot.lua        -- single fullscreen root, layer management
 │   ├── Plugin.lua        -- plugin registry and lifecycle
 │   ├── AttachPoints.lua  -- named places one plugin offers another to attach UI to
+│   ├── Dock.lua          -- bar-to-bar docking: the anchor graph, four edges, the cycle guard,
+│   │                     --   and the cross-plugin participant registry
 │   ├── DataBar.lua       -- data bar widget registry + the height the bar occupies
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
 │   ├── Settings.lua      -- settings schema registry, value I/O, reactive watchers
@@ -88,7 +93,11 @@ SuuUI/
 │   ├── ResizeGrip.lua    -- corner drag handle; reports the gesture, resizes nothing
 │   ├── Modal.lua         -- dialog with optional input
 │   ├── Notice.lua        -- one-shot dismissible message, built on Modal
-│   └── StatusBar.lua     -- progress/resource bar; fill is a fractional stack child
+│   ├── ActionButton.lua  -- secure action/pet cell; slot read from the `action` attribute
+│   ├── StanceButton.lua  -- secure shapeshift-form cell, on Blizzard's StanceButtonTemplate
+│   ├── ActionBarGrid.lua -- rows x columns of buttons on one glass plate, hairline dividers
+│   └── StatusBar.lua     -- progress/resource bar; TWO fractional stack children, a primary
+│                         --   fill and a secondary "ghost" fill beneath it
 ├── SettingsUI/
 │   ├── SettingsWindow.lua -- unified settings window (left nav + content)
 │   ├── PageBuilder.lua    -- auto-builds a settings page from schema
@@ -102,11 +111,16 @@ SuuUI/
 │       ├── Dropdown.lua
 │       ├── Color.lua
 │       ├── Text.lua
+│       ├── Note.lua       -- read-only prose; the one control that edits nothing
 │       ├── Keybind.lua
 │       ├── SubTabs.lua
 │       ├── ProfileManager.lua
 │       └── ThemeManager.lua
 ├── Plugins/               -- bundled first-party plugins live here
+│   ├── ActionBars/        -- ActionBars.lua (plugin: 13 bars + pet + stance)
+│   │   ├── Suppress.lua   -- hides Blizzard's bottom cluster and hands it back exactly
+│   │   └── Paging.lua     -- bar 1's page driver: a secure snippet, not an event handler
+│   ├── WatchBars/         -- WatchBars.lua: experience and reputation, one shape twice
 │   ├── UnitFrames/        -- UnitFrame.lua (widget, one per unit) + UnitFrames.lua (plugin)
 │   │   └── AuraBand.lua   -- one wrapping band of aura icons, for one unit + one filter
 │   ├── CastBars/          -- CastBar.lua (widget, one per unit) + CastBars.lua (plugin)
@@ -114,11 +128,14 @@ SuuUI/
 │   │   ├── TimeWidget.lua -- the built-in clock: the reference widget definition
 │   │   ├── FpsWidget.lua  -- built-in framerate readout, polled once a second
 │   │   ├── LatencyWidget.lua -- built-in latency readout, polled every 5s, home/world breakdown
+│   │   ├── MicroMenuWidget.lua -- the micro menu, one field per entry, in the `left` section
+│   │   ├── BagsWidget.lua -- one field reading `BAGS 27`; replaces the six-button bag row
 │   │   ├── AddonButtonsWidget.lua -- built-in tray: a flyout roster of collected minimap buttons
 │   │   ├── ButtonCollector.lua    -- finds and adopts those buttons; stands down for MBB
 │   │   └── DataBar.lua    -- plugin: owns the bar and every built-in, moves Blizzard's top frames down
 │   ├── MinimapButton/     -- MinimapButton.lua: the LDB launcher and its LibDBIcon button
 │   └── ...
+├── Media/                 -- the icon atlas and the Python that generates it
 ├── Themes/
 │   ├── Default.lua        -- read-only default dark theme
 │   └── Modern.lua         -- read-only modern theme (ships as default active)
@@ -341,6 +358,20 @@ plugin:IsEnabled()
 plugin:Enable()         -- no-op when already enabled
 plugin:Disable()        -- no-op when already disabled
 ```
+
+**The definition is NOT stored on the handle.** `Core/Plugin.lua` keeps it in a module-private
+weak-keyed table (`local defs = setmetatable({}, { __mode = "k" })`), written once at
+`CreatePlugin` and read by `InitAll`, `Enable` and `Disable`. The handle carries only `id`, `name`,
+`version` and its methods, so **every other field on it belongs to the plugin** and cannot collide
+with the framework.
+
+It used to live at `plugin._def`, and a plugin storing its own state under that name destroyed its
+own `onDisable` — `Disable` reads the definition to find the hook, so the plugin simply stopped
+tearing itself down. **The failure was silent in both directions**: no error, because the hook was
+never called; and had one been thrown, `Disable` `pcall`s it into `SuuUI.Debug`, which prints
+nothing with debug off. That silence is a general hazard, not a one-off — `onInit`, `onEnable` and
+`onDisable` are all `pcall`'d into a debug-gated log, so never rely on seeing a throw from a
+plugin hook. Use `SuuUI.Fault` for anything the player must know about.
 
 On `PLAYER_LOGIN` the core runs every `onInit`, then every `onEnable`, in two separate
 passes — so an `onEnable` may rely on another plugin's settings and events already
@@ -588,6 +619,85 @@ to `UIParent` is wrong by the ratio between the two effective scales — the ver
 failure 6c describes, which looks like the minimap moving down by *almost* the right amount
 and only at some resolutions. Convert it with `Pixel.Convert` at that boundary.
 
+### 3d. Dock (`Core/Dock.lua`)
+
+Bar-to-bar arrangement: any bar can attach to any other bar, on any of four edges. Published as
+`SuuUI.Dock`.
+
+**It is a Core service because its participants are no longer all action bars.** It began as
+`Plugins/ActionBars/Dock.lua`, published under `SuuUI._ActionBars.Dock`, and the experience and
+reputation bars now dock through the same code. The move was a rename, not a rewrite, because the
+dock never knew what an action bar was — it asks a participant for exactly three things:
+
+| Required of a participant | Why |
+|---|---|
+| `GetFrame()` | to anchor |
+| `GetWidth()` / `GetHeight()` | the span the next child on that edge stacks past |
+| a `SIZE_CHANGED` signal | a bar gaining a row moves everything past it, and nothing else would notice — `Attach` and `Detach` are the only other reflow triggers, and neither fires for a resize |
+
+Anything satisfying that can dock. A `StatusBar` handle already did.
+
+**ANCHORED, NOT CONTAINED**, and that is the load-bearing decision. Containing would make the
+dock's frame resize whenever a bar attaches — and the dock holds protected buttons, so the client
+refuses that resize in combat. Nothing here resizes, so there is nothing to refuse, and no
+`coreInset` to keep in step with a stored position. **Chains work for free**, because an anchor is
+a live relationship: bar 4 on bar 5 on bar 1 needs no extra machinery, since moving bar 1 moves
+bar 5, which moves bar 4. Only a *size* change needs a reflow.
+
+**Cycles are the one thing that must not get through.** A circular anchor is not a cosmetic fault
+— the client raises a hard error and leaves the frame unplaced. So `Attach` refuses one outright
+rather than half-applying it, and the settings layer rejects the choice before it is ever stored.
+
+**An anchor is the same dependency as parentage.** The client refuses geometry on a frame whose
+movement would move a protected one, and does not care whether the link is a parent or a point.
+Which is why the *plugin* defers the whole dock/free transition out of combat, and why `Reflow`
+carries no combat guard of its own — nothing can ask for a reflow during a fight, and mutation
+testing showed such a guard unreachable.
+
+**The graph half:**
+
+| Call | Notes |
+|---|---|
+| `Dock.EDGES` | `{ "above", "below", "left", "right" }` |
+| `Dock.Attach(dock, child, opts)` | `opts = { order, edge }`, edge defaults `"above"`. Idempotent; returns **false** when refused as a cycle. Moving between docks is Detach + re-attach |
+| `Dock.Detach(dock, child)` | Leaves the bar where it was until its owner re-positions it |
+| `Dock.Release(dock)` | Detaches the dock from **its own** parent first and unconditionally — a bar with nothing attached to it has no record here, so an early return once left it anchored to a destroyed parent |
+| `Dock.Reflow(dock)` | Stacks each edge independently; the gap between plates is `spaceXxs` |
+| `Dock.WouldCycle(dock, child)` | Walks upward from the candidate dock; **step-bounded** as well as identity-checked, so an already-corrupt graph cannot spin |
+| `Dock.Children` / `ParentOf` / `EdgeOf` | Read-only queries; `Children` returns a copy |
+
+`Reflow` states `relativeTo` **explicitly** in every descriptor. Layout props live on the FRAME,
+so a frame belonging to two containers has one props table — and an anchor with no `relativeTo`
+resolves against whichever container applies it. The root container re-applied this very
+descriptor with itself as the relative frame and pinned every docked bar to the top of the screen.
+
+**The participant registry half**, and it exists for one reason: **the settings-level cycle guard
+cannot work per plugin.** A watch bar attached to bar 1 while bar 1 is attached to that watch bar
+is a real loop, and neither plugin can see it — each holds one half of the graph.
+
+| Call | Notes |
+|---|---|
+| `Dock.RegisterParticipant(id, spec)` | `spec = { label, group, sort, point, attachedTo }`. `attachedTo` is a closure returning the id this participant is *currently set* to attach to, read from **that plugin's** settings — which is the whole trick |
+| `Dock.UnregisterParticipant(id)` | For a plugin going down, so its bars stop being offered |
+| `Dock.Participants()` | Sorted group → sort → registration sequence |
+| `Dock.PointFor(id)` | The participant's `AttachPoints` name, so a dependent can `Request` it |
+| `Dock.OptionsFor(excludeId)` | Dropdown options, `"Free"` first |
+| `Dock.WouldCycleIds(fromId, toId)` | Walks the **STORED** graph, because a validator runs before the value is stored |
+
+Handle resolution is deliberately **not** here — `AttachPoints` already solves it, including a
+target that does not exist yet or is switched off underneath.
+
+Two details that were learned the hard way. **Ids are profile data**: the action bars keep the
+plain ids already written into profiles (`"1".."8"`, plus `"stance"` and `"pet"`, which is why
+they were never coerced with `tonumber`), and everything registering later namespaces its own
+(`"watch:xp"`). And **`table.sort` is not stable in Lua**, so `RegisterParticipant` stamps a
+registration sequence as the final tiebreaker — without it the eight action bars, all tied on the
+same sort key, listed as 4, 6, 5, 2, 3, 7, 1, 8.
+
+Labels are **not** group-prefixed. Prefixing them looked like disambiguation and produced eight
+consecutive rows of `"Action Bars: Ba..."` in a 140px dropdown; the labels are unique on their
+own, and the spec asserts that uniqueness so a future collision is caught at the source.
+
 ### 4. Profile System (`Core/Profile.lua`)
 
 - Profiles stored in `SuuUIProfiles` SavedVariable (account-wide).
@@ -620,7 +730,7 @@ Schema entry shape:
 {
   key      = "showBorder",   -- unique within plugin
   label    = "Show Border",
-  type     = "toggle",       -- toggle|slider|dropdown|color|text|keybind|section|subtabs
+  type     = "toggle",       -- toggle|slider|dropdown|color|text|keybind|note|section|subtabs
                              -- plus position|internal: a key that needs a default and a
                              -- home in the profile but no control (see plugin-authoring.md)
   default  = true,
@@ -967,6 +1077,25 @@ colorShield      = "colorGray400"
 -- the login moment before the class is available. Its own hue rather than a reuse of
 -- Success — retinting "Success" to orange should not turn the health bar orange.
 colorHealth      = "colorGreen500"
+-- The glass plate an action bar draws itself on. THREE opacities rather than one, because
+-- the plate's legibility comes from the DIFFERENCE between its ends -- a single opacity
+-- makes it a flat panel, which is the look it exists to avoid. WoW has no blur, so
+-- "frosted" is unavailable; a translucent vertical gradient plus a lit hairline top edge
+-- plus an optional hairline border is what actually reads as glass.
+--
+-- Its own tokens rather than reusing colorBarTrack: that token is a BAR'S EMPTY TRACK, so
+-- sharing would mean retinting a health bar silently retinted every action bar plate.
+opacityGlass = 0.80   opacityGlassFade = 0.30   opacityGlassSheen = 0.10
+colorGlass       = { ref = "colorGray950", alpha = "opacityGlass" }      -- the DENSE end, at the TOP
+colorGlassFade   = { ref = "colorGray950", alpha = "opacityGlassFade" }
+-- The only place in the palette where a light neutral and a dark one meet inside one
+-- treatment: the sheen is a highlight ON the plate, so it refs the lightest neutral. Kept
+-- very low deliberately -- above about 0.15 it stops being an edge and becomes a white line
+-- drawn on the plate.
+colorGlassSheen  = { ref = "colorGray100", alpha = "opacityGlassSheen" }
+-- How faint a StatusBar's SECONDARY ("ghost") fill is, as a MULTIPLE of the main fill's own
+-- alpha rather than an absolute -- because the ghost derives from whatever the bar's fill is.
+opacityBarGhost  = 0.35
 
 -- Tier 2: intent
 colorAccent      = "colorBlue400"
@@ -974,6 +1103,17 @@ colorAccentHover = "colorBlue500"
 colorSuccess     = "colorGreen400"
 colorDanger      = "colorRed400"
 colorWarning     = "colorYellow400"
+-- Experience, and the rested bonus that extends past it. SEPARATE from the accent because in
+-- WoW these colours MEAN something: purple is progress and blue is rested, so painting
+-- progress in the accent made the bar claim a rested bonus that was not there.
+--
+-- The magenta primitives behind colorXp are a fuchsia -- near-zero GREEN, red at least as
+-- strong as blue. Blue-dominance is what makes a purple read as the WARLOCK class colour,
+-- which is exactly what the first attempt looked like.
+colorXp          = "colorMagenta400"
+-- The rested region is drawn PAST current progress rather than under it, so it can be
+-- near-solid without muddying the fill; the alpha marks it as potential rather than earned.
+colorXpRested    = { ref = "colorBlue400", alpha = 0.55 }
 -- Whether a unit's colour comes from its class or from the Health primitive. A boolean
 -- rather than a colour because it is a mode: it selects the SOURCE of a unit's colour,
 -- and a flag keeps every colour token a real colour so nothing downstream is handed a
@@ -1996,6 +2136,7 @@ document it here.
   | `Backdrop.CircleMask(frame, tex)` | attaches a circular mask to one texture; returns it for the caller's container to size onto the texture, or nil where the client has no mask API |
   | `Backdrop.Circle(frame, { bg })` | a solid disc filling the frame → `{ SetBg, Destroy }` |
   | `Backdrop.Pill(frame, { bg, border, borderWidth, inset })` | a stadium: a rectangle with a fully rounded cap at each end → `{ SetBg, SetBorder, Refresh, Destroy }` |
+  | `Backdrop.Glass(frame, { from, to, sheen, border, inset })` | the plate an action bar draws itself on: a translucent vertical gradient, a lit hairline top edge, and an optional hairline border → `{ SetColors, SetBorder, IsGradient, Refresh, Destroy }`. Those three things **together** are what reads as glass — WoW has no `backdrop-filter`, so frosted is unavailable. `from` is the DENSE end and it is the **TOP**, which inverts the usual convention that a gradient's `from` is the bottom of a value square. Degrades to a flat fill where the client has no gradient API, which `IsGradient` reports |
 
   `Pill` mirrors `Apply`'s vocabulary, so swapping a square surface for a rounded one
   changes the call and nothing else. `inset` is the visible ring thickness and defaults to
@@ -2102,13 +2243,70 @@ document it here.
   registered only while at least one button exists — sixty event frames and sixty `OnUpdate`
   scripts would be the alternative. Range is polled at 10/sec because nothing announces that a
   target walked out of range; the tick allocates nothing and each button early-returns when its
-  state has not moved. `IsCurrent` / `IsAutoRepeat` are read but deliberately **not rendered
-  yet**: the "this is active" treatment belongs on the grid's glass plate, which does not exist
-  until `ActionBarGrid`.
+  state has not moved. `IsCurrent` and autocast **are rendered now, on the button rather than on
+  the plate**, and they use two different channels on purpose: active is an **edge bar** (a texture
+  on the raised overlay, `Pixel.Line(2)` tall, anchored across the bottom, `colorAccent`), while
+  autocast recolours the overlay's **border** to `colorWarning` — gold, matching Blizzard's own
+  golden autocast shine. Two states through one channel cannot be told apart, and the bottom bar
+  also leaves the icon art unobscured. The motivating bug is a pet detail: a pet's mode
+  (Passive/Defensive/Aggressive) is reported as the slot being *current*, so without a distinct
+  treatment a player could not tell which mode their pet was in. Only `autoCastEnabled` draws —
+  `autoCastAllowed` merely means the command *could* autocast. There is no Lua autocast toggle:
+  `TogglePetAutocast` is protected, so a right-click is forwarded into Blizzard's own pet button
+  inside the secure environment.
 
   There is deliberately **no `SetEnabled`**, for the reason `StatusBar` and `UnitClickArea`
   have none: disabling means dropping mouse input, a call the client refuses on a protected
   frame in combat. An action that should not be used renders as unusable instead.
+
+  Props: `slot`, `size`, `binding`, `showHotkey`, `showMacroText`, `showCount`, `name`, and
+  **`kind`** — `"action"` or `"pet"`. A pet button is the same secure template addressing the
+  same `action` attribute, only with `type = "pet"`; it lives as a `kind` rather than as its own
+  `PetButton.lua` because the press-versus-release gate must exist in exactly **one** place. That
+  gate was got wrong twice, and each time produced a bar that looked perfect and did nothing.
+
+- `StanceButton` — one shapeshift-form cell. `form` and `size` are asserted; also takes
+  `binding`, `showHotkey`, `name`. Emits `CLICKED` (always `"LeftButton"`), `MOUSE_ENTER`,
+  `MOUSE_LEAVE`, `SIZE_CHANGED`.
+
+  **It is the only SuuUI button built on a Blizzard template, and both reasons were measured
+  rather than assumed.** `StanceButton1:GetAttribute("type")` is **empty** on this client, so
+  there is no attribute to state — and `CastShapeshiftForm` is blocked for tainted code, probed
+  bracketed: read form 7, cast form 3, read form 7 again. No error, no message, no change, a
+  silent no-op. So `CreateFrame("CheckButton", name, parent, "StanceButtonTemplate")` plus
+  `f:SetID(form)` is not a shortcut, it is the only path — **`SetID` is the wiring**, because the
+  template's own OnClick reads `GetID()`. SuuUI still composes its own visuals; only the click
+  plumbing is borrowed, and the template's art is cleared by emptying each Texture through its
+  getter and hiding *that* (`SetNormalTexture(nil)` is refused outright).
+
+  `SetShowMacroText()` and `SetShowCount()` are deliberate **no-op stubs**: a form has neither, and
+  interface parity means `ActionBarGrid`'s shared painters need no per-kind branch. "Stance"
+  follows Blizzard's and ElvUI's naming rather than the scope — it covers warrior stances, druid
+  forms, rogue stealth, priest shadowform and paladin auras.
+
+- `ActionBarGrid` — rows × columns of buttons on one glass plate. `slots` and `buttonSize` are
+  asserted; `bindings`, `rows` (default 1), `spacing` (default 0), `padding`, `showHotkeys` /
+  `showMacroText` / `showCount` (default true), `namePrefix`, and `buttonFactory` (default
+  `Components.ActionButton`). Emits `SIZE_CHANGED` and `CHILDREN_CHANGED`.
+
+  **Every geometry change defers out of combat.** A grid contains protected buttons by
+  construction, so the client refuses `SetSize` on the grid *and* `SetPoint` on each button while
+  `InCombatLockdown()` — a settings change arriving mid-fight sets a flag and catches up on
+  `PLAYER_REGEN_ENABLED`. `IsDeferred()` reports that state.
+
+  `CHILDREN_CHANGED` exists for one consumer: the grid **destroys and recreates** its buttons when
+  the count or a slot changes, and that rebuild can itself be deferred to the end of a fight — so
+  nothing else can tell a holder of button references when they went stale. Secure paging and
+  keybinding routing both subscribe to it.
+
+  **The plate takes no mouse input.** A plate that swallowed clicks would make the gaps between
+  buttons unclickable in the world behind them. Hairline dividers are drawn **only** for a
+  seamless grid (`spacing == 0`), on their own frame raised above the buttons, placed by a second
+  container on the same host: a `grid` container places the buttons and an `anchor` container
+  places the dividers, because a divider sits *between* cells rather than in one.
+
+  `buttonFactory` is what lets the same grid host stance cells — the grid owns the plate, the
+  layout, the dividers, the padding and the resize, and knows nothing about action slots.
 
 - `Icon` gained two art-state methods alongside `SetBorderColor`, and the split is deliberate:
   a **border** carries a property *of* the thing (a cast is uninterruptible), while a tint on
@@ -2352,6 +2550,28 @@ document it here.
   strings only: what a number *means* belongs to whoever owns the value, so no formatting
   reaches the component (`Plugins/UnitFrames/UnitFrame.lua` holds the formats its health
   and resource bars share).
+
+  **A SECOND fractional fill — the "ghost" — for a value that extends past progress.**
+  `SetSecondary(f)` takes `0..1` (nil or 0 hides it), `GetSecondary()` reads it back, and
+  `SetSecondaryColor(color)` overrides its colour. It is a second fractional stack child of the
+  same fill box, added so it sits **below** the primary fill in draw order — the only ordering
+  that makes a ghost read as a backdrop to progress rather than as a second bar. It carries its
+  own pixel-quantisation cache, and is **hidden at zero** rather than left zero-width, because a
+  zero-width child still costs the container a cell.
+
+  Two behaviours are load-bearing. The ghost is **clamped to at least the main fill**: one that
+  fell behind progress would be drawn entirely underneath it and read as absent, which is
+  indistinguishable from a bug — so it is also re-asserted whenever the main fill moves, since the
+  main fill is its floor. And **`SetSecondaryColor(nil)` returns it to deriving from the fill** at
+  `fillAlpha × opacityBarGhost`, while an explicit `{r,g,b,a}` is used **exactly as given, alpha
+  included** — `opacityBarGhost` is not applied on top, because a theme that names this colour has
+  already decided how present it should be.
+
+  Derivation is the default because it needs no token. It is *wrong* whenever the ghost means
+  something the fill does not, and experience is exactly that case: in WoW blue **is** the rested
+  colour, so a blue-derived ghost on a blue fill tells the player they are rested whenever they
+  have any progress at all. There are deliberately no `secondary` props — a ghost is a runtime
+  value, not a construction-time one.
   `SetTextSize` moves every slot onto another font step at once — a token **key**, never a
   pixel size, so a plugin can expose the step as a setting and the readouts still follow a
   user's edit of that token. One step per bar rather than per slot: three readouts on one
@@ -2554,6 +2774,96 @@ The other slash arguments are edit-mode controls and do not touch the window at 
 Reads schema, maps each entry to a control renderer, mounts in a ScrollFrame.
 Schema order = render order. Controls read/write through Settings API.
 No plugin writes any UI code for standard settings.
+
+---
+
+## Bundled Plugins
+
+The sections above document the *machinery*. This one is an inventory of what ships on top of it,
+because several first-party plugins carry decisions that only make sense written down.
+
+### `action_bars` (`Plugins/ActionBars/`)
+
+Thirteen action bars plus two class bars, on SuuUI's own secure buttons. Exports
+`SuuUI._ActionBars.BARS`, `.slotsFor`, `.bindingsFor`, `.Paging`, `.Suppress`.
+
+**Every slot block was measured in game, and the mapping has no rule to infer.** Bar 1 is slots
+1–12 and *pages*; the four multibars are fixed to 61–72, 49–60, 37–48 and 25–36. `MultiBarLeft` is
+`MULTIACTIONBAR4` while `MultiBarRight` is `MULTIACTIONBAR3` — the reverse of the obvious guess,
+and the guess shipped until Blizzard's own `buttonType` field was read.
+
+Because pages 3–6 of bar 1 land on the very slots the other bars own, **two SuuUI buttons can
+legitimately address one slot** — which is why the button index maps a slot to a *set* of buttons,
+and why **only bar 1 gets a state driver**.
+
+**Bars 9–13 cover the sixty slots no Blizzard bar exposes** (pages 2 and 7–10, slots 13–24 and
+73–120). They carry `ownBindings = true` and SuuUI's own `bindingPrefix`, because the client ships
+no binding family for slots it has no bar for. On a real character, 27 of 72 abilities lived in
+that range and were unreachable before those bars existed.
+
+The two class bars take **string** ids (`"pet"`, `"stance"`) deliberately: slots 13–24 would
+naturally become "Bar 9", and a numeric id would have silently shared its settings keys. They also
+carry a separate numeric `order`, because the dock sorts a stack by it and comparing a string with
+a number is a hard error in Lua.
+
+- **`pet`** — `ActionButton`s with `kind = "pet"`; slot count fixed at `NUM_PET_ACTION_SLOTS`.
+  Visibility is a **secure state driver** (`[pet,nooverridebar,nopossessbar] show; hide`), because
+  a pet is summoned, dismissed, killed and revived mid-combat and hiding a frame holding protected
+  buttons is refused during a fight.
+- **`stance`** — sized for a paladin's **eight** auras, the widest case, measured. On by default
+  unlike bars 3–8, because it is a class control Blizzard also shows by default. A plain `Hide` is
+  enough here rather than a driver: the form *count* only changes at a trainer.
+
+**`Suppress.lua`** hides Blizzard's bottom cluster and hands it back exactly. The constraint the
+plan did not anticipate: **hiding a Blizzard action bar is itself protected**, since `MainMenuBar`
+holds buttons inheriting `SecureActionButtonTemplate` and refusal propagates back up. So does the
+restoring `Show()`, which matters more — that is the escape hatch. Targets are **candidate lists**,
+never literals, and every matching name is hidden: this client has both `MainMenuBar` (the art) and
+`MainActionBar` (the buttons), and stopping at the first match hid the gryphons while twelve buttons
+stayed on screen. `Verify()` then asks **witness buttons** directly, because hiding a container is
+the means and a button off the screen is the end.
+
+**`Paging.lua`** is bar 1's page driver — a secure snippet, not an event handler. See "State Drivers
+Are A Plugin-Level Carve-Out" in `WOW_API_ENCAPSULATION.md`.
+
+### `watch_bars` (`Plugins/WatchBars/`)
+
+Experience and reputation: **one widget shape, two instances**. Rested experience and the reputation
+standing are the only differences that reach the component — which is why `StatusBar` grew a
+secondary fill rather than this plugin stacking a second bar of its own.
+
+Both hide when they have nothing to say, and **the conditions are not the same shape**: experience
+hides at max level *or* when experience is switched off (a trial account) — two separate reasons for
+one outcome, and a bar checking only the level would still show for the second. Reputation hides
+when nothing is watched. Hiding is a plain `Show`/`Hide`, not a state driver: neither bar holds a
+protected button, so there is nothing the client would refuse mid-combat. That is the difference
+from the pet bar.
+
+**Reputation is measured within the standing's band**, not against a 0..max range — 4500 of 6000 is
+75%, but inside the 3000–6000 Revered band it is halfway. At max standing the client reports the
+same number for the band's floor and ceiling, so the bar draws **full** and reports `capped`; an
+earlier version returned nil there and hid itself, making an Exalted faction look identical to no
+faction at all.
+
+### `data_bar` built-ins (`Plugins/DataBar/`)
+
+The clock, framerate and latency readouts and the addon-button tray, plus two surfaces that replace
+Blizzard clusters outright:
+
+- **`MicroMenuWidget`** — the micro menu as one field per entry in the `left` section, which was
+  measured empty (every other built-in is `center` or `right`), so the micro menu owns it.
+  **Resolution is by candidate list and an unresolvable entry is SKIPPED**, never rendered as a dead
+  field: `MICRO_BUTTONS` is nil on this client so nothing enumerates the strip, and `LFDMicroButton`
+  is absent while `LFGMicroButton` is present. Entries call **panel APIs** rather than forwarding
+  clicks into Blizzard's buttons — `frame:Click()` on a micro button is a silent no-op here — which
+  is also what makes hiding those buttons safe.
+- **`BagsWidget`** — one field reading `BAGS 27` in the `right` section, replacing the six-button
+  bag row. It is a **built-in widget rather than a plugin of its own, and that is a correctness
+  decision**: its first version was a separate `bag_bar` plugin, which put its settings on their own
+  page instead of with every other field's *and* broke its own enable toggle one-way — it registered
+  the toggle's watcher under its owner prefix, then called `UnwatchPrefix` on that same prefix when
+  disabled, destroying the watcher that would switch it back on. A built-in cannot make that
+  mistake: its toggle is an ordinary data-bar setting and the plugin re-runs `Enable` for it.
 
 ---
 
