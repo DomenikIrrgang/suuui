@@ -636,7 +636,18 @@ describe("Plugins/Inventory", function()
             local w = IW.New({ container = "bags" })
             w:Show()
             local win = w:GetWindow()
-            expect(win:GetTitleWidget()).as("it occupies the title slot").eq(w._charDrop)
+            -- THE SLOT NOW HOLDS A CONTAINER, not the dropdown itself: the concept's title bar carries
+            -- the character dropdown AND the Bags/Bank segment side by side, and the slot takes one
+            -- handle. What matters is unchanged -- both controls are where the TITLE was, rather than
+            -- stacked inward from the close button where an accessory would land.
+            local slot = win:GetTitleWidget()
+            expect(slot).as("something occupies the title slot").truthy()
+            local kids = slot.GetChildren and slot:GetChildren() or {}
+            local found = false
+            for _, k in ipairs(kids) do
+                if k == w._charDrop:GetFrame() or k == w._charDrop then found = true end
+            end
+            expect(found).as("the dropdown is in it").truthy()
             local drop = H.box(w._charDrop:GetFrame())
             local close = H.box(win._closeBtn:GetFrame())
             expect(drop.left).as("on the LEFT of the strip").lt(close.left)
@@ -960,6 +971,175 @@ describe("Plugins/Inventory", function()
 
         it("confirms before selling by default", function()
             expect(getS("sell_confirm")).as("irreversible, so it defaults on").eq(true)
+        end)
+    end)
+
+    -- THE BAGS / BANK SWITCH, and the state it exists to reach: your own bank when you are nowhere near
+    -- a banker. Without it one window could only ever show one container, so the bank was unreachable
+    -- unless you were standing at a teller -- which is when you least need to look it up.
+    describe("the scope switch", function()
+        local function win()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            return w
+        end
+
+        it("starts on the window's own container", function()
+            local w = win()
+            expect(w:GetScope()).eq("bags")
+            expect(w._scopeSeg:GetValue()).as("and the control agrees").eq("bags")
+            w:Destroy()
+        end)
+
+        it("switches the window's container", function()
+            local w = win()
+            expect(w:SetScope("bank")).truthy()
+            expect(w:GetScope()).eq("bank")
+            -- AND RE-POINTS THE GRID, which the scope value alone does not prove: dropping the
+            -- SetContainers call survived a mutation run against the assertions above, leaving a window
+            -- that reported itself as the bank while still reading bag containers.
+            local ids = w._grid:GetContainers()
+            local sawBank = false
+            for _, id in ipairs(ids) do
+                if id == -1 then sawBank = true end
+            end
+            expect(sawBank).as("the grid is over the bank's own container").truthy()
+            w:Destroy()
+        end)
+
+        it("makes your OWN bank a read-only snapshot away from a banker", function()
+            -- The concept's single rule: live only when it is you AND the container is reachable. Bank
+            -- slots are unreadable away from the frame, so this side has to come from the cache.
+            local w = win()
+            expect(w:IsSnapshot()).as("bags are live").falsy()
+            w:SetScope("bank")
+            expect(w:IsSnapshot()).as("the bank away from a teller is not").truthy()
+            expect(w._grid:IsReadOnly()).as("and cannot be moved from").truthy()
+            w:Destroy()
+        end)
+
+        it("goes back to live when it returns to the bags", function()
+            local w = win()
+            w:SetScope("bank")
+            w:SetScope("bags")
+            expect(w:IsSnapshot()).falsy()
+            expect(w._grid:IsReadOnly()).falsy()
+            w:Destroy()
+        end)
+
+        it("drops a repeated switch", function()
+            -- Switching container destroys and rebuilds every cell, because a cell's KIND is fixed at
+            -- construction. A rebuild that ran for nothing would throw away 80 cells for no reason.
+            local w = win()
+            expect(w:SetScope("bags")).as("already there").falsy()
+            w:Destroy()
+        end)
+
+        it("refuses a container it does not have", function()
+            local w = win()
+            expect(w:SetScope("keyring")).falsy()
+            expect(w:GetScope()).eq("bags")
+            w:Destroy()
+        end)
+
+        it("clicking the segment switches the window", function()
+            -- Through the SIGNAL, which is the path a player takes -- asserting SetScope alone would
+            -- leave the control itself unproven.
+            local w = win()
+            H.click(w._scopeSeg._segs[2].f)
+            expect(w:GetScope()).as("the click reached the window").eq("bank")
+            w:Destroy()
+        end)
+
+        it("keeps the selected character when the scope changes", function()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-TestRealm"] = { class = "MAGE",
+                bags = { seen = 1755900000, slots = { [0] = { [1] = { 22832, 3 } } } },
+                bank = { seen = 1755900000, slots = { [-1] = { [1] = { 22832, 9 } } } } }
+            local w = win()
+            w:SetCharacter("Thalira-TestRealm")
+            w:SetScope("bank")
+            -- Switching container must not silently jump back to your own character: the player asked to
+            -- see a different container, not a different person.
+            expect(w._grid:GetCharacter()).eq("Thalira-TestRealm")
+            w:Destroy()
+        end)
+    end)
+
+    -- SAID OUTRIGHT, because the alternative is an empty grid -- which is indistinguishable from a bank
+    -- that IS empty and from a bug. A bank is only readable while its frame is open, so a character who
+    -- has never stood at a banker has no bank record at all.
+    describe("a container that was never captured", function()
+        it("explains itself for your own bank", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetScope("bank")
+            expect(w._emptyNote:IsShown()).as("the message is up").truthy()
+            expect(w._emptyNote:GetText():lower():find("banker", 1, true) ~= nil)
+                .as("and names the action that would fix it").truthy()
+            w:Destroy()
+        end)
+
+        it("names the character when it is someone else's", function()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            -- Bags cached, bank never: the ordinary state for an alt you have played but not banked on.
+            store.chars["Thalira-TestRealm"] = { class = "MAGE",
+                bags = { seen = 1755900000, slots = { [0] = { [1] = { 22832, 3 } } } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-TestRealm")
+            w:SetScope("bank")
+            expect(w._emptyNote:IsShown()).truthy()
+            expect(w._emptyNote:GetText():find("Thalira", 1, true) ~= nil)
+                .as("the character is named").truthy()
+            w:Destroy()
+        end)
+
+        it("says nothing when the container WAS captured", function()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-TestRealm"] = { class = "MAGE",
+                bags = { seen = 1755900000, slots = { [0] = { [1] = { 22832, 3 } } } },
+                bank = { seen = 1755900000, slots = { [-1] = { [1] = { 22832, 9 } } } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-TestRealm")
+            w:SetScope("bank")
+            expect(w._emptyNote:IsShown()).as("there is data, so no explanation").falsy()
+            w:Destroy()
+        end)
+
+        it("says nothing for an EMPTY bank that was captured", function()
+            -- A character can genuinely have an empty bank, and that must keep saying nothing -- which is
+            -- why the test is the freshness STAMP rather than the item count, exactly as Capture's own
+            -- guard is.
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-TestRealm"] = { class = "MAGE",
+                bags = { seen = 1755900000, slots = { [0] = {} } },
+                bank = { seen = 1755900000, slots = { [-1] = {} } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-TestRealm")
+            w:SetScope("bank")
+            expect(w._emptyNote:IsShown()).falsy()
+            w:Destroy()
+        end)
+
+        it("hides the message again when the scope goes back to live bags", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetScope("bank")
+            expect(w._emptyNote:IsShown()).truthy()
+            w:SetScope("bags")
+            expect(w._emptyNote:IsShown()).falsy()
+            w:Destroy()
         end)
     end)
 

@@ -63,6 +63,26 @@ describe("Plugins/Inventory bank session", function()
         --
         -- Asserted as a real SWAP rather than as a stored value: a schema entry nothing reads renders as
         -- a control that silently does nothing, and only the geometry can tell those apart.
+        -- THE SWITCH GIVES WAY TO A TAG once both windows are up: there is nothing left to switch, and a
+        -- live control whose container is fixed is how you ship something that appears to do nothing.
+        it("hides the scope switch and names each window instead", function()
+            H.setBankOpen(true)
+            local bags = H.env.SuuUI.Inventory_GetWindow("bags")
+            local bank = H.env.SuuUI.Inventory_GetWindow("bank")
+            expect(bags._scopeSeg:IsShown()).as("nothing to switch").falsy()
+            expect(bags._scopeTag:IsShown()).as("a tag names it instead").truthy()
+            expect(bags._scopeTag:GetText()).eq("BAGS")
+            expect(bank._scopeTag:GetText()).eq("BANK")
+        end)
+
+        it("brings the switch back when the bank closes", function()
+            H.setBankOpen(true)
+            local bags = H.env.SuuUI.Inventory_GetWindow("bags")
+            H.setBankOpen(false)
+            expect(bags._scopeSeg:IsShown()).as("one window again, so the choice returns").truthy()
+            expect(bags._scopeTag:IsShown()).falsy()
+        end)
+
         it("swaps the pair when bank_side says right", function()
             H.SuuUI.Settings:Set("inventory", "bank_side", "right")
             H.setBankOpen(true)

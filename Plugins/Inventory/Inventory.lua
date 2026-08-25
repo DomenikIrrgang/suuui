@@ -51,6 +51,13 @@ local function pairWindows()
     -- them, which looks like the window drifted. Animated visibility is never a sound input to a
     -- layout decision; the flag says what we ASKED for, which is what the layout should follow.
     local bankUp = bankOpen and bankWindow ~= nil
+    -- EACH WINDOW IS TOLD WHETHER IT IS PAIRED, which is what swaps the Bags/Bank switch for a muted
+    -- BAGS / BANK tag: with both windows on screen there is nothing left to switch, and a live control
+    -- whose container is fixed is how you ship something that appears to do nothing. Told from here
+    -- because this function already owns the answer.
+    local paired = bagsUp and bankUp
+    if bagsWindow and bagsWindow.SetPaired then bagsWindow:SetPaired(paired) end
+    if bankWindow and bankWindow.SetPaired then bankWindow:SetPaired(paired) end
     if not (bagsUp and bankUp) then
         if bagsUp then bagsWindow:GetWindow():Center() end
         if bankUp then bankWindow:GetWindow():Center() end

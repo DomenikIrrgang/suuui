@@ -32,6 +32,7 @@ SuuUI._ThemeEditableTokens = {
     { key="opacityOverlay", label="Overlay Opacity", type="number", min=0.1,  max=1.0, step=0.05 },
     { key="opacityBarTrack", label="Bar Track Opacity", type="number", min=0.0, max=1.0, step=0.05 },
     { key="opacityEditOverlay", label="Edit Overlay Opacity", type="number", min=0.0, max=0.8, step=0.05 },
+    { key="opacityAccentSubtle", label="Selected Segment Wash", type="number", min=0.0, max=0.6, step=0.02 },
     -- Floored well above 0: at 0 a disabled control vanishes instead of reading as inert,
     -- and capped below 1 so the state stays visible at all.
     { key="opacityDisabled", label="Disabled Opacity", type="number", min=0.15, max=0.85, step=0.05 },

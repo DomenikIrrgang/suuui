@@ -39,6 +39,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityBarGhost  = 0.35,
     -- Edit mode's drag overlay. Low enough to read the frame underneath while dragging it.
     opacityEditOverlay = 0.20,
+    -- A SELECTED SEGMENT'S WASH: the accent at low alpha, so a chosen segment reads as chosen
+    -- without becoming a second button. Its own token rather than a reuse of
+    -- opacityEditOverlay, which is the same value today by coincidence -- retinting edit mode
+    -- must not retint every segmented control in the addon.
+    opacityAccentSubtle = 0.18,
     -- See Themes/Default.lua: how far a disabled control fades.
     opacityDisabled  = 0.40,
     -- Edit mode grid line visibility. Very faint so lines stay out of the way.
@@ -68,6 +73,9 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- the accent hue so "you can move this" reads the same as every other affordance.
     colorOverlay     = { ref = "colorGray950", alpha = "opacityOverlay" },
     colorEditOverlay = { ref = "colorAccent",  alpha = "opacityEditOverlay" },
+    -- The wash behind a selected segment (Components/SegmentedControl.lua). The concept names this
+    -- colour itself, as `--accent-subtle`.
+    colorAccentSubtle = { ref = "colorAccent", alpha = "opacityAccentSubtle" },
     -- Edit mode grid lines: the accent colour at grid opacity.
     colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
     -- Smart guides: brighter accent for element-to-element alignment lines.

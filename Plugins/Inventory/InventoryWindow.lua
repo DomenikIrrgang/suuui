@@ -205,6 +205,54 @@ function WindowMeta:SetCharacter(key)
     self:_fit()
 end
 
+--- Switches which container this window shows: "bags" or "bank".
+--
+-- THE AWAY-FROM-A-BANKER HALF OF THE FEATURE. One window can show one container, so without this the
+-- bank is unreachable unless you are standing at a banker -- which is exactly when you least need to
+-- look it up. Your own bank away from the frame is a read-only snapshot, by the same single rule
+-- SetCharacter applies: live only when it is you AND the container is reachable.
+--
+-- Delegates to SetCharacter rather than duplicating that rule. Changing container changes a cell's KIND
+-- (a live bags cell carries the Blizzard template; a snapshot bank cell carries none), and SetCharacter
+-- already owns the destroy-and-rebuild that a kind change requires.
+-- @param which string  "bags" | "bank"
+-- @return bool  whether anything changed
+function WindowMeta:SetScope(which)
+    if which ~= "bags" and which ~= "bank" then return false end
+    if self._which == which then return false end
+    self._which = which
+    self._grid:SetContainers(M.containerIds(which))
+    -- Re-derives live-vs-snapshot for the NEW container against whoever is selected. Passing the stored
+    -- key rather than nil matters: switching scope must not silently jump back to your own character.
+    self:SetCharacter(self._characterKey)
+    if self._scopeSeg then self._scopeSeg:SetValue(which) end
+    return true
+end
+
+--- Which container this window is showing.
+-- @return string
+function WindowMeta:GetScope() return self._which end
+
+--- Shows the muted BAGS / BANK tag instead of the switch, for a live bank session.
+--
+-- The concept hides the segment once both windows are up: there is nothing left to switch, and leaving a
+-- live control whose container is fixed is how you ship something that appears to do nothing.
+-- @param paired bool
+function WindowMeta:SetPaired(paired)
+    self._paired = paired and true or false
+    if self._scopeSeg then
+        if self._paired then self._scopeSeg:Hide() else self._scopeSeg:Show() end
+    end
+    if self._scopeTag then
+        if self._paired then
+            self._scopeTag:SetText(self._which == "bank" and "BANK" or "BAGS")
+            self._scopeTag:Show()
+        else
+            self._scopeTag:Hide()
+        end
+    end
+end
+
 --- Whether this window is showing a cached snapshot.
 -- @return bool
 function WindowMeta:IsSnapshot() return self._grid:IsSnapshot() end
@@ -217,6 +265,36 @@ function WindowMeta:_applySnapshotState(snapshot)
     end
     if self._snapAge and snapshot then
         self._snapAge:SetText(SuuUI.Readout.Age(self._grid:SeenAt()))
+    end
+
+    -- "THIS CHARACTER HAS NEVER BEEN TO A BANK", said outright. A bank is only readable while its frame
+    -- is open, so a character who has not stood at a banker since the cache existed has no bank record
+    -- at all -- and Readout.Age already spells that `never` in the strip. The strip is not enough on its
+    -- own: what the player is looking at is an empty grid, which is indistinguishable from a bank that
+    -- IS empty and from a bug. Both readings are wrong, and only one sentence separates them.
+    --
+    -- Keyed on SeenAt being absent rather than on the item count, exactly as Capture's own guard is: a
+    -- character can genuinely have an empty bank, and that case must keep saying nothing.
+    if self._emptyNote then
+        local never = snapshot and self._grid:SeenAt() == nil
+        if never then
+            local who = self._characterKey and self._characterKey:match("^(.-)%-") or nil
+            local text
+            if self._which == "bank" then
+                -- Named as the ACTION the player would have to take, since that is the only way this
+                -- data can ever exist: a bank is readable only while its frame is open.
+                text = who and (who .. " has not visited a bank yet.")
+                    or ("You have not visited a bank on this character yet.\n"
+                        .. "Stand at a banker once and it will be cached here.")
+            else
+                text = who and (who .. "'s bags have not been cached yet.")
+                    or "These bags have not been cached yet."
+            end
+            self._emptyNote:SetText(text)
+            self._emptyNote:Show()
+        else
+            self._emptyNote:Hide()
+        end
     end
     -- FADED, NOT HIDDEN. The concept dims sort and sell to opacityDisabled on a snapshot rather than
     -- removing them: their absence would read as a different window, while a greyed control says "not
@@ -386,6 +464,11 @@ end
 
 function WindowMeta:ApplyTheme()
     if self._grid then self._grid:ApplyTheme() end
+    -- The event bus fires listeners newest-first, so a child handle's own subscription may not have run
+    -- yet -- these are applied explicitly or the strip measures the old font.
+    if self._scopeSeg then self._scopeSeg:ApplyTheme() end
+    if self._scopeTag then self._scopeTag:ApplyTheme() end
+    if self._emptyNote then self._emptyNote:ApplyTheme() end
     -- DROP THE CACHED CHROME. It is measured once and reused because re-deriving it per fit fed back
     -- into itself, but sizeTitleBar and borderWidth are user-editable -- so a theme change is exactly
     -- when the delta has to be taken again.
@@ -421,6 +504,9 @@ function WindowMeta:Destroy()
     if self._snapLabel then self._snapLabel:Destroy() end
     if self._snapAge then self._snapAge:Destroy() end
     if self._snapStrip then self._snapStrip:Destroy() end
+    if self._scopeSeg then self._scopeSeg:Destroy() end
+    if self._scopeTag then self._scopeTag:Destroy() end
+    if self._emptyNote then self._emptyNote:Destroy() end
     if self._footDivider then self._footDivider:Destroy() end
     if self._plateBox then self._plateBox:Destroy() end
     if self._plate then self._plate:Destroy() end
@@ -569,6 +655,33 @@ function M.New(props)
     snapStrip:Add(snapAge, { width = "auto" })
     snapStrip:Hide()
 
+    -- THE BAGS / BANK SWITCH, the concept's `.seg`, and the whole point of the away-from-a-banker mode:
+    -- one window can only show one container, so this is what makes the bank reachable at all when you
+    -- are nowhere near a banker. Bank slots are unreadable away from the frame, so that side is a
+    -- read-only snapshot of whatever the cache last saw -- which the amber strip already announces.
+    --
+    -- It is hidden during a bank SESSION rather than left live: with both windows on screen there is
+    -- nothing left to switch, and a control whose two states look identical is how you get a control
+    -- that appears to do nothing. A muted BAGS / BANK tag names each window instead.
+    local scopeSeg = C.SegmentedControl({
+        name    = "SuuUI_inventory_" .. (props.container or "bags") .. "_scope",
+        options = { { value = "bags", label = "Bags" }, { value = "bank", label = "Bank" } },
+        value   = props.container or "bags",
+    }, content)
+
+    -- The muted tag that replaces it during a bank session, at the concept's letter-spaced weight.
+    local scopeTag = C.Text({
+        text = "", size = "sm", color = "muted", justify = "LEFT", wrap = false,
+    }, content)
+    scopeTag:Hide()
+
+    -- The message for a container that has never been captured. Centred and muted: it is an explanation
+    -- rather than a warning -- nothing is wrong, the data has simply never existed.
+    local emptyNote = C.Text({
+        text = "", size = "sm", color = "muted", justify = "CENTER", wrap = true,
+    }, content)
+    emptyNote:Hide()
+
     local sortPath, sortCoords = SuuUI.Icons:Get("sort")
     local sortBtn = C.IconButton({
         icon      = sortPath,
@@ -638,6 +751,14 @@ function M.New(props)
     -- is AUTHORITATIVE (columns times cell size) and the window is sized from it, so stretching either
     -- one would make the two define each other. That produced a 16px window once.
     col:Add(plate)
+    -- THE "NEVER BEEN TO A BANK" ROW, between the grid and the footer and hidden almost always. A bank
+    -- is only readable while its frame is open, so a character who has not stood at a banker since the
+    -- cache existed has NO bank record at all -- and the grid for that state is legitimately empty.
+    --
+    -- An empty lattice is the wrong answer to give a player who just asked to see a bank: it looks
+    -- identical to a bank that IS empty, and to a bug. Flow layout skips a hidden child entirely, so
+    -- this row costs nothing while it is not needed.
+    col:Add(emptyNote, { width = "fill" })
     col:Add(footDivider, { width = "fill" })
     col:Add(footer, { width = "fill" })
 
@@ -657,6 +778,9 @@ function M.New(props)
         _footer    = footer,
         _charDrop  = charDrop,
         _snapStrip = snapStrip,
+        _scopeSeg  = scopeSeg,
+        _scopeTag  = scopeTag,
+        _emptyNote = emptyNote,
         _snapLabel = snapLabel,
         _snapAge   = snapAge,
         _which     = which,
@@ -682,6 +806,13 @@ function M.New(props)
         S:Connect(sellBtn, S.SIGNALS.CLICKED, function() handle:SellJunk() end)
     end
 
+    -- The switch drives the window's container. Connected to the SIGNAL rather than read back on a
+    -- timer, and SetValue stays silent, so the window syncing the segment (a bank session opening
+    -- underneath it) cannot loop back into a scope change.
+    S:Connect(scopeSeg, S.SIGNALS.VALUE_CHANGED, function(value)
+        handle:SetScope(value)
+    end)
+
     -- Into the title bar, which reparents it and raises it above the drag surface. Done AFTER the
     -- handle exists, because the click needs a handle to cycle.
     if sellBtn then win:AddTitleAccessory(sellBtn) end
@@ -689,7 +820,23 @@ function M.New(props)
     -- THE TITLE SLOT, not an accessory. Accessories stack inward from the close button, so the dropdown
     -- landed crushed against the X and pushed the sort and coin icons out of the band entirely --
     -- reported from a screenshot. The concept puts the character name where the TITLE is.
-    win:SetTitleWidget(charDrop)
+    --
+    -- BOTH CONTROLS GO IN TOGETHER, in one horizontal container, because the concept's title bar carries
+    -- the character dropdown AND the Bags/Bank segment side by side on the left. The slot takes one
+    -- handle, and a container IS frame-like -- GetFrame, GetWidth, GetHeight -- so it satisfies the slot
+    -- without a second API. Sized explicitly rather than left to hug: the slot captures the widget's
+    -- width BEFORE adding it, so a container that had not settled its own width would be pinned at
+    -- whatever it reported first.
+    local titleGap = T:GetToken("spaceXs") or 4
+    local titleBar = SuuUI.Layout:CreateContainer({
+        parent = win:GetFrame(), layout = "flow", dir = "horizontal",
+        gap = titleGap, align = "center",
+        w = (charDrop:GetWidth() or 0) + titleGap + (scopeSeg:GetWidth() or 0),
+        h = math.max(charDrop:GetHeight() or 0, scopeSeg:GetHeight() or 0),
+    })
+    titleBar:Add(charDrop, { width = charDrop:GetWidth() })
+    titleBar:Add(scopeSeg, { width = scopeSeg:GetWidth() })
+    win:SetTitleWidget(titleBar)
 
     -- The window follows the grid: a settings change moves the grid's size, and the window has to
     -- re-fit or it clips the last column.
