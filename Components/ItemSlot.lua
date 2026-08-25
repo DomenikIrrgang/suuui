@@ -299,19 +299,29 @@ end
 
 --- Dims this cell, or restores it.
 --
--- A search non-match is DIMMED rather than removed from the layout, so the grid does not reflow
--- under the player's cursor while they type -- and so a slot keeps its position, which is the whole
--- point of a positional grid. Alpha on the cell's own frame rather than on the art, because a
--- dimmed cell should recede entirely, count and edge included.
+-- A search non-match is DIMMED rather than removed from the layout, so the grid does not reflow under
+-- the player's cursor while they type -- and so a slot keeps its position, which is the whole point of
+-- a positional grid.
+--
+-- NO EARLY RETURN on an unchanged value, deliberately. The previous version returned early when the
+-- flag already matched, and that is how the defect below survived: the template reset the alpha, the
+-- flag still said "dimmed", and every later call short-circuited before re-applying it. Re-asserting
+-- two SetAlpha calls per cell is cheaper than a state that lies about what is on screen.
 -- @param on bool
 function ItemSlotMeta:SetDimmed(on)
     on = on and true or false
-    if self._dimmed == on then return end
     self._dimmed = on
-    -- opacityDimmed, NOT opacityGrid. This read the EDIT-MODE grid overlay's opacity, which is an
-    -- unrelated token that happened to hold a usable number -- so the two were coupled by accident and
-    -- a change to one silently moved the other.
-    self._f:SetAlpha(on and (T:GetToken("opacityDimmed") or 0.35) or 1)
+    local a = on and (T:GetToken("opacityDimmed") or 0.35) or 1
+    -- FADES OUR OWN CHILDREN, NEVER THE TEMPLATE'S BUTTON FRAME. Measured in game 2026-08-25:
+    -- f:SetAlpha(0.3) followed immediately by f:GetAlpha() returned 1 -- the frame does not hold an
+    -- alpha at all, because the template ships animation groups (the new-item glow and flash) that own
+    -- it. So the search dim set a flag, reported itself dimmed, and changed nothing on screen.
+    --
+    -- The Icon and the readout overlay are frames WE created and nothing else writes, so they hold it.
+    -- Fading both rather than just the art, or a dimmed cell would keep a full-strength stack count
+    -- floating over faded art.
+    if self._iconComp then self._iconComp:GetFrame():SetAlpha(a) end
+    if self._overlay then self._overlay:SetAlpha(a) end
 end
 
 --- @param w number

@@ -254,10 +254,34 @@ describe("Components/ItemGrid", function()
             end
             expect(dimmed).as("something was dimmed").truthy()
             expect(bright).as("and something was not").truthy()
-            expect(dimmed:GetFrame():GetAlpha())
-                .as("a dimmed cell is visibly faded").lt(1)
-            expect(bright:GetFrame():GetAlpha())
+            -- OUR OWN CHILDREN, not the cell frame. Measured in game: the template's button frame does
+            -- not hold an alpha -- SetAlpha(0.3) then GetAlpha() returned 1, because the template's
+            -- animation groups own it -- so asserting the frame would assert the thing that cannot work.
+            expect(dimmed._iconComp:GetFrame():GetAlpha())
+                .as("a dimmed cell's art is visibly faded").lt(1)
+            expect(dimmed._overlay:GetAlpha())
+                .as("and its readouts fade with it, or the count floats at full strength").lt(1)
+            expect(bright._iconComp:GetFrame():GetAlpha())
                 .as("a matching cell is full strength").near(1, 0.001)
+            expect(dimmed:GetFrame():GetAlpha())
+                .as("the template's own frame is deliberately left alone").near(1, 0.001)
+        end)
+
+        -- The flag and the pixels must not be able to disagree. SetDimmed re-applies unconditionally
+        -- because an early return on an unchanged flag is exactly how the in-game defect hid: the
+        -- template reset the alpha and every later call short-circuited before restoring it.
+        it("re-applies the fade even when the flag has not changed", function()
+            stageThree()
+            local g = grid()
+            g:SetFilter("amber")
+            local c
+            for _, e in ipairs(g._entries) do if e.cell:IsDimmed() then c = e.cell break end end
+            expect(c).truthy()
+            -- Something else stomps the alpha, exactly as the template's animation did.
+            c._iconComp:GetFrame():SetAlpha(1)
+            g:SetFilter("amber")
+            expect(c._iconComp:GetFrame():GetAlpha())
+                .as("re-asserted rather than skipped").lt(1)
         end)
 
         it("returns every cell to full alpha when the filter is cleared", function()
@@ -266,7 +290,8 @@ describe("Components/ItemGrid", function()
             g:SetFilter("amber")
             g:SetFilter(nil)
             for _, e in ipairs(g._entries) do
-                expect(e.cell:GetFrame():GetAlpha()).as("all bright again").near(1, 0.001)
+                expect(e.cell._iconComp:GetFrame():GetAlpha()).as("all bright again").near(1, 0.001)
+                expect(e.cell._overlay:GetAlpha()).as("readouts too").near(1, 0.001)
             end
         end)
 
