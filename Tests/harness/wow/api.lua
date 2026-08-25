@@ -705,11 +705,102 @@ function M.install(env)
     for _, name in ipairs({
         "ToggleCharacter", "ToggleSpellBook", "ToggleQuestLog", "ToggleGameMenu",
         "ToggleHelpFrame", "ToggleGuildFrame", "ToggleTalentFrame", "ToggleFriendsFrame",
-        "TogglePVPFrame", "ToggleLFGParentFrame", "ToggleWorldMap", "ToggleAllBags",
+        "TogglePVPFrame", "ToggleLFGParentFrame", "ToggleWorldMap",
     }) do
         env[name] = function(arg)
             state.panelToggles[#state.panelToggles + 1] = { name = name, arg = arg }
         end
+    end
+
+    -- BLIZZARD'S OWN BAG CONTAINERS AND THE FUNCTIONS THAT OPEN THEM.
+    --
+    -- Modelled so SUPPRESSION is observable. A guarded OnShow hook can only be proven to work if
+    -- something actually shows the frame, and a witness cell can only prove "a bag slot is off the
+    -- screen" if the cell exists -- hiding a container is the MEANS, a cell being gone is the END, and
+    -- the action bar work already shipped a version where every signal said success while twelve
+    -- buttons sat in plain view.
+    --
+    -- ContainerFrame1..13: thirteen because that is backpack + 4 bags + 7 bank bags + the bank's own
+    -- grid, which is what the client allocates. `ContainerFrame1Item1` is the CLASSIC cell name and is
+    -- the one measured present on this build; `ContainerFrameItemButton1` is the retail spelling and is
+    -- deliberately NOT modelled, because probing for it was already a mistake once.
+    --
+    -- These are PLAIN Buttons, not a secure template, which is itself the fact a spec should be able
+    -- to rely on: unlike an action bar, hiding a bag container is not protected and needs no combat
+    -- deferral. Modelling them as plain frames is what keeps that true here as well as in game.
+    for i = 1, 13 do
+        local cf = CreateFrame("Frame", "ContainerFrame" .. i, env.UIParent)
+        cf:SetSize(200, 300)
+        cf:Hide()
+        local cell = CreateFrame("Button", "ContainerFrame" .. i .. "Item1", cf)
+        cell:SetSize(37, 37)
+        cell:SetID(1)
+    end
+
+    env.BankFrame = CreateFrame("Frame", "BankFrame", env.UIParent)
+    env.BankFrame:SetSize(400, 300)
+    env.BankFrame:Hide()
+    local bankCell = CreateFrame("Button", "BankFrameItem1", env.BankFrame)
+    bankCell:SetSize(37, 37)
+    bankCell:SetID(1)
+
+    -- The bag-opening globals. REAL FUNCTIONS THAT SHOW THE FRAMES, not recorders, and that choice is
+    -- the whole point: a consumer REPLACES these to make the `B` key open its own window, so a spec
+    -- has to be able to tell "our replacement ran" from "Blizzard's original ran". A recorder would
+    -- look identical either way, because neither would put a container on screen.
+    --
+    -- ToggleAllBags is defined HERE rather than in the panel-toggle list above for the same reason --
+    -- it needs a real effect. It is also the one ElvUI secure-hooks in game, which is why the
+    -- suppression module has to cope with its global being wrapped underneath it.
+    local function bagFrame(id)
+        return _G["ContainerFrame" .. ((id or 0) + 1)]
+    end
+    env.OpenBackpack = function()
+        local f = bagFrame(0)
+        if f then f:Show() end
+    end
+    env.CloseBackpack = function()
+        local f = bagFrame(0)
+        if f then f:Hide() end
+    end
+    env.ToggleBackpack = function()
+        local f = bagFrame(0)
+        if not f then return end
+        if f:IsShown() then f:Hide() else f:Show() end
+    end
+    env.OpenBag = function(id)
+        local f = bagFrame(id)
+        if f then f:Show() end
+    end
+    env.CloseBag = function(id)
+        local f = bagFrame(id)
+        if f then f:Hide() end
+    end
+    env.ToggleBag = function(id)
+        local f = bagFrame(id)
+        if not f then return end
+        if f:IsShown() then f:Hide() else f:Show() end
+    end
+    env.OpenAllBags = function()
+        for i = 0, (env.NUM_BAG_SLOTS or 4) do
+            local f = bagFrame(i)
+            if f then f:Show() end
+        end
+    end
+    env.CloseAllBags = function()
+        for i = 0, (env.NUM_BAG_SLOTS or 4) do
+            local f = bagFrame(i)
+            if f then f:Hide() end
+        end
+    end
+    env.ToggleAllBags = function()
+        -- RECORDED AS WELL AS ACTED ON. Plugins/DataBar/BagsWidget's spec asserts this call lands in
+        -- the panel-toggle log -- its question is "did the field ask the client to open the bags",
+        -- which is answered by the request rather than by the outcome. The real effect is added for
+        -- the suppression work without taking that away.
+        state.panelToggles[#state.panelToggles + 1] = { name = "ToggleAllBags" }
+        local first = bagFrame(0)
+        if first and first:IsShown() then env.CloseAllBags() else env.OpenAllBags() end
     end
 
     -- BLIZZARD'S OWN PET BUTTONS, with the handler that makes them worth modelling.

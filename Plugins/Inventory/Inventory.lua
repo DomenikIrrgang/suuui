@@ -5,6 +5,7 @@ local type = type
 
 local PLUGIN_ID = "inventory"
 local W = SuuUI._InventoryWindow
+local S = SuuUI._Inventory and SuuUI._Inventory.Suppress
 
 local plugin
 local bagsWindow
@@ -36,6 +37,15 @@ function SuuUI.Inventory_Toggle()
     window():Toggle()
 end
 
+--- Closes it.
+--
+-- Deliberately does NOT build the window first: CloseBackpack / CloseAllBags are called by the client
+-- on plenty of occasions the player never sees -- entering combat, a loot window closing, a vendor
+-- shutting -- and building a whole window in order to hide it would create it during login.
+function SuuUI.Inventory_Close()
+    if bagsWindow then bagsWindow:Hide() end
+end
+
 local function teardown()
     if bagsWindow then
         bagsWindow:Destroy()
@@ -51,6 +61,12 @@ plugin = SuuUI:CreatePlugin({
     onInit = function(p)
         SuuUI.Settings:Register(PLUGIN_ID, {
             { key = "enabled", label = "Enable Inventory", type = "toggle", default = true },
+            -- TOP LEVEL, OUTSIDE ANY SECTION, deliberately. A player whose bags are misbehaving
+            -- needs Blizzard's own back without hunting through a collapsed group and without
+            -- disabling the whole plugin -- the same escape-hatch rule the action bars' suppression
+            -- toggle follows.
+            { key = "suppress_blizzard", label = "Replace Blizzard's Bags", type = "toggle",
+              default = true },
             { key = "", label = "Layout", type = "section" },
             { key = "columns", label = "Columns", type = "slider",
               default = 10, min = 6, max = 20, step = 1 },
@@ -77,10 +93,34 @@ plugin = SuuUI:CreatePlugin({
                 if bagsWindow and value ~= nil then apply(bagsWindow:GetGrid(), value) end
             end, PLUGIN_ID .. ".shape")
         end
+
+        -- The handler is set BEFORE suppression is applied. Apply installs the replacements, and a
+        -- replacement with nothing listening falls through to Blizzard's own function -- so setting it
+        -- second would leave a window between the two where the B key opened the frames we had just
+        -- hidden, and the guarded OnShow would hide them again mid-open.
+        S.SetHandler({
+            Toggle = function() SuuUI.Inventory_Toggle() end,
+            Open   = function() SuuUI.Inventory_Open() end,
+            Close  = function() SuuUI.Inventory_Close() end,
+        })
+
+        -- Driven THROUGH the setting rather than called once, so switching it off restores Blizzard's
+        -- bags immediately and exercises the same Restore path onDisable uses. `immediate` is right
+        -- here, unlike on the plugin's own `enabled` key: this watcher runs inside onEnable, which is
+        -- already past the init pass.
+        SuuUI.Settings:Watch(PLUGIN_ID, "suppress_blizzard", function(on)
+            if on then S.Apply() else S.Restore() end
+        end, PLUGIN_ID .. ".suppress", { immediate = true })
     end,
 
     onDisable = function()
         SuuUI.Settings:Unwatch(PLUGIN_ID .. ".shape")
+        SuuUI.Settings:Unwatch(PLUGIN_ID .. ".suppress")
+        -- Restore BEFORE dropping the handler, and unconditionally: a plugin that cannot hand the
+        -- default UI back is not finished, and this runs for a settings-driven Disable as well as for
+        -- a reload, with nothing behind it either way.
+        S.Restore()
+        S.SetHandler(nil)
         teardown()
     end,
 })

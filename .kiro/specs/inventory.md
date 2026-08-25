@@ -29,6 +29,7 @@ client patch; this is a snapshot of ONE build, exactly as the bottom-UI plan's P
 | `C_MerchantFrame.SellAllJunkItems` | **nil** | no one-shot junk sell. A throttled per-item loop is required |
 | `UseItemByName` | `function` | exists, but the action underneath is protected — see below |
 | **`C_Container.UseContainerItem` from tainted Lua, away from a merchant** | **BLOCKED** | `pcall` returned `true`, the stack count did not change, no Hearthstone teleport, and the client raised `*** ForceTaint_Strong *** has been blocked from an action only available to the Blizzard UI`. **Using an item needs a secure/Blizzard template** |
+| **`C_Container.UseContainerItem` from tainted Lua, AT a merchant** | **WORKS** | Measured 2026-08-25: the item left the bag. Same function, two meanings — *use* away from a vendor (protected), *sell* at one (not). Phase 8's sell loop is plain Lua. See the note below on why a synchronous count read cannot confirm it |
 | **`C_Container.PickupContainerItem` from tainted Lua** | **WORKS** | `pcall` true and `GetCursorInfo()` returned `item 27860 [Purified Draenic Water]`. Moving items is unprotected, so a physical sort engine is possible |
 | `GetCursorInfo()` shape | `"item", itemID, itemLink` | |
 | `CreateFrame("Button", name, parent, "ContainerFrameItemButtonTemplate")` | **succeeds** (returned a frame) | the recommended cell base is instantiable here |
@@ -37,23 +38,32 @@ client patch; this is a snapshot of ONE build, exactly as the bottom-UI plan's P
 | bank container `-1` with its frame CLOSED | `slots 28`, `items 0`, `free 0` | **contents are not readable while closed.** An empty-but-readable bank would report `free 28`; reporting zero free against 28 slots is only consistent with no data |
 | `ToggleAllBags` | exists; ElvUI secure-hooks it | already noted in `Plugins/DataBar/BagsWidget.lua` |
 
-### The one fact NOT measured, and it is load-bearing
+### The fact that was NOT measured until Phase 8 was due — now ANSWERED
 
-**Selling to a vendor via `UseContainerItem` while a merchant frame is open.** The probe above
-ran away from a merchant, where that same function *uses* the item. At a merchant it *sells*,
-and ElvUI ships a vendor-greys feature on this exact client driving it from an `OnUpdate` at
-0.2s intervals — so the sell path is well evidenced but not measured here.
+**Selling to a vendor via `UseContainerItem` while a merchant frame is open: WORKS.**
+Measured in game 2026-08-25 with a common-quality item (`Flint and Tinder`) in bag 0 slot 1 at a
+vendor: `pcall` returned `true` and the item left the bag. So the sell loop is a plain Lua loop and
+Phase 8 needs no secure template.
 
-Verify it at the first vendor before Phase 8 is written:
+**The distinction that reconciles this with the BLOCKED row above is the merchant, not the item.**
+One function means two things: away from a vendor `UseContainerItem` *uses* the item, which is
+protected; at a vendor it *sells*, which is not. Quality is irrelevant to either — a grey is easier
+to test with only because it is worthless, and the sell-greys button restricts itself to quality 0
+as a FEATURE decision, not because the API would refuse anything else.
+
+**The probe that produced this was itself flawed, and the flaw is worth keeping.** It read
+`stackCount` back in a second `/run` and printed `after 1` — the item still present — which reads
+as a silent no-op and is exactly the signature of the blocked case. It is not: `UseContainerItem`
+sends a request and the slot only clears when the SERVER confirms, so a synchronous count read
+cannot observe a successful sale. Anything verifying an item movement must wait for
+`BAG_UPDATE` / `ITEM_UNLOCKED` rather than reading the count on the next line.
+
+For a re-measurement after a client patch, use a probe that says whether the merchant was even
+open, since a closed one silently changes what the call means:
 
 ```
 /run local C=C_Container print(MerchantFrame and MerchantFrame:IsShown(), pcall(C.UseContainerItem,0,1))
 ```
-
-If that is blocked too, sell-greys must route through the cell's own secure click instead of a
-Lua loop, and the confirm modal becomes a guided "click each one" flow rather than one button.
-Do not write the sell loop until this is answered — it is the same over-generalisation that
-produced the wrong "nothing here is secure" claim earlier in the design.
 
 ---
 

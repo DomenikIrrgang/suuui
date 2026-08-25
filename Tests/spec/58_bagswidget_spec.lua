@@ -222,8 +222,27 @@ describe("DataBar.BagsWidget", function()
     end)
 
     describe("clicking", function()
-        it("opens the bags through the client's own toggle", function()
+        -- IT STILL CALLS ToggleAllBags, and that global is now REPLACED by the inventory plugin, so the
+        -- field opens SuuUI's own window rather than Blizzard's containers. That is the whole point of
+        -- routing at the global rather than adding a second path here: this widget needed no edit, and
+        -- the plan asked for it to be verified rather than assumed.
+        --
+        -- The panel-toggle log is deliberately NOT asserted any more. Our replacement does not call the
+        -- client's original, so nothing is recorded -- and asserting the recording would be asserting
+        -- that the routing had FAILED.
+        it("opens SuuUI's inventory through the client's own toggle", function()
             H.setBags(BAGS)
+            local opened = 0
+            H.SuuUI._Inventory.Suppress.SetHandler({ Toggle = function() opened = opened + 1 end })
+            B.OnClick(nil, "LeftButton")
+            expect(opened).as("the field reached the inventory window").eq(1)
+        end)
+
+        -- With the inventory plugin absent or its suppression switched off, the same click must still
+        -- reach the client's own toggle -- the widget has no second path and must not need one.
+        it("falls back to the client's own bags when nothing has routed them", function()
+            H.setBags(BAGS)
+            H.SuuUI.Settings:Set("inventory", "suppress_blizzard", false)
             B.OnClick(nil, "LeftButton")
             local toggles = H.getPanelToggles()
             expect(#toggles > 0).as("something was called").truthy()
