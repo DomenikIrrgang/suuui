@@ -106,8 +106,105 @@ end
 --- Enables the sell button only where selling is possible.
 function WindowMeta:_syncSell()
     if not self._sellBtn then return end
+    -- A SNAPSHOT CAN NEVER SELL, whatever the merchant says: the items are another character's and are
+    -- not in your bags to sell. Checked first, so standing at a vendor while browsing an alt does not
+    -- offer to sell their junk.
+    if self:IsSnapshot() then
+        self._sellBtn:SetEnabled(false)
+        return
+    end
     local Sell = SuuUI._Inventory and SuuUI._Inventory.Sell
     self._sellBtn:SetEnabled(Sell and Sell.AtMerchant() and not Sell.IsRunning() or false)
+end
+
+--- Rebuilds the character dropdown's options from the cache.
+--
+-- THE DROPDOWN IS WHERE THE TITLE WAS, which is the concept's own arrangement: a window showing one
+-- character's bags does not need a word saying "Inventory" as well as the name of the character whose
+-- bags they are. Its options come from ItemCache:Characters(), already ordered current-character first,
+-- then the current realm, then everyone else -- so the ordering is not restated here.
+--
+-- CLASS-COLOURED, and the colour is a GAME FACT rather than a theme token: `Game:ClassColor` prefers
+-- the client's own CUSTOM_CLASS_COLORS / RAID_CLASS_COLORS, so SuuUI agrees with the rest of the
+-- player's UI including a retinting addon. A character whose class the cache never recorded takes the
+-- plain text colour rather than a guess.
+function WindowMeta:_rebuildCharacters()
+    local dd = self._charDrop
+    if not dd then return end
+    local IC = SuuUI.ItemCache
+    local list = (IC and type(IC.Characters) == "function") and IC:Characters() or {}
+    local options, current = {}, nil
+    for _, c in ipairs(list) do
+        local label = c.name
+        local col = c.class and SuuUI.Game:ClassColor(c.class) or nil
+        if col then
+            label = string.format("|cff%02x%02x%02x%s|r",
+                math.floor(col[1] * 255 + 0.5), math.floor(col[2] * 255 + 0.5),
+                math.floor(col[3] * 255 + 0.5), c.name)
+        end
+        -- CROSS-REALM IS SHOWN BUT NEVER IMPLIED TO BE REACHABLE. "Do I have this on my other realm"
+        -- is worth answering, so the realm is named on anything that is not the current one -- and
+        -- nothing in this window offers to move an item, so naming it cannot promise a transfer.
+        if not c.isCurrent and c.realm and c.realm ~= self._realm then
+            label = label .. " |cff808594(" .. c.realm .. ")|r"
+        end
+        options[#options + 1] = { value = c.key, label = label }
+        if c.isCurrent then current = c.key end
+    end
+    dd:SetOptions(options)
+    dd:SetValue(self._characterKey or current or nil)
+end
+
+--- Points this window at a character's cached contents, or back at the live client.
+--
+-- ONE RULE DECIDES LIVE VS SNAPSHOT, and it is the concept's: your own bags are always live, your own
+-- bank is live only while the bank frame is open, and any other character is always a snapshot. This
+-- function is only told WHICH character; the rule is applied here so a caller cannot get it wrong, and
+-- so the odd combination the concept calls out -- pointing the BANK window at an alt while standing at
+-- a banker -- correctly becomes a read-only snapshot rather than a special case.
+-- @param key string|nil  character key, or nil for the current character
+function WindowMeta:SetCharacter(key)
+    local IC = SuuUI.ItemCache
+    local currentKey = (IC and type(IC.CurrentKey) == "function") and IC:CurrentKey() or nil
+    local isSelf = (key == nil) or (key == currentKey)
+    local live = isSelf and (self._which == "bags"
+        or (IC and type(IC.IsBankOpen) == "function" and IC:IsBankOpen()))
+
+    self._characterKey = (not isSelf) and key or nil
+    -- NOT `live and nil or key`. That idiom cannot express nil: `x and nil` is falsy, so the `or`
+    -- branch always runs and a live window was handed a character key -- which made "go back to my own
+    -- bags" silently stay on the alt.
+    if live then
+        self._grid:SetCharacter(nil)
+    else
+        self._grid:SetCharacter(key or currentKey, self._which)
+    end
+    self:_applySnapshotState(not live)
+    self:_rebuildCharacters()
+    self:_updateFooter()
+    self:_updateMatchCount()
+    -- The strip adds a row and a snapshot's grid can be a different size, so the window re-fits.
+    self:_fit()
+end
+
+--- Whether this window is showing a cached snapshot.
+-- @return bool
+function WindowMeta:IsSnapshot() return self._grid:IsSnapshot() end
+
+-- Shows or hides the read-only chrome. Separate from SetCharacter so the bank session can re-run it
+-- when the bank CLOSES underneath a window that was live a moment ago.
+function WindowMeta:_applySnapshotState(snapshot)
+    if self._snapStrip then
+        if snapshot then self._snapStrip:Show() else self._snapStrip:Hide() end
+    end
+    if self._snapAge and snapshot then
+        self._snapAge:SetText(SuuUI.Readout.Age(self._grid:SeenAt()))
+    end
+    -- FADED, NOT HIDDEN. The concept dims sort and sell to opacityDisabled on a snapshot rather than
+    -- removing them: their absence would read as a different window, while a greyed control says "not
+    -- for this character" -- which is the truth, and is temporary the moment the dropdown moves back.
+    if self._sortBtn then self._sortBtn:SetEnabled(not snapshot) end
+    self._grid:SetReadOnly(snapshot)
 end
 
 function WindowMeta:_updateFooter()
@@ -115,10 +212,36 @@ function WindowMeta:_updateFooter()
     -- Concept spelling: "1,284 g 42 s 18 c" -- the figure in the footer's own text colour and only
     -- the UNIT LETTER in its coin colour, grouped and spaced. This is the readout where money is the
     -- subject, so it opts into all three; a vendor price in a tooltip stays dense and uncoloured.
-    self._moneyText:SetText(SuuUI.Readout.Money(GetMoney and GetMoney() or 0, {
-        colored = true, groupThousands = true, spaceUnits = true,
-    }))
-    self._slotsText:SetText(free .. " free / " .. total)
+    --
+    -- A SNAPSHOT READS THE CACHED MONEY, not GetMoney(), which would show YOUR gold under an alt's
+    -- name -- a number that looks authoritative and is about the wrong character.
+    local copper
+    if self:IsSnapshot() then
+        local IC = SuuUI.ItemCache
+        copper = (IC and type(IC.MoneyOf) == "function")
+            and IC:MoneyOf(self._grid:GetCharacter()) or nil
+    else
+        copper = GetMoney and GetMoney() or 0
+    end
+    if copper then
+        self._moneyText:SetText(SuuUI.Readout.Money(copper, {
+            colored = true, groupThousands = true, spaceUnits = true,
+        }))
+        self._moneyText:Show()
+    else
+        -- Nothing cached rather than zero: an alt captured before money was stored has no figure, and
+        -- printing "0g" would state a fact the cache does not have.
+        self._moneyText:SetText("")
+        self._moneyText:Hide()
+    end
+    -- FREE SLOTS ARE A LIVE FACT. A cached grid cannot say how many slots are free -- the cache stores
+    -- only occupied ones -- so the concept swaps the readout for what a snapshot DOES know: how many
+    -- items are in it. Printing "22 free / 80" from a snapshot would be an invented number.
+    if self:IsSnapshot() then
+        self._slotsText:SetText(used .. " items cached")
+    else
+        self._slotsText:SetText(free .. " free / " .. total)
+    end
     self:_syncSell()
     self._used = used
 end
@@ -212,6 +335,10 @@ function WindowMeta:GetGrid() return self._grid end
 -- and no loot in flight -- which is also why every bag addon sorts on open rather than on update.
 function WindowMeta:Show()
     self._win:Show()
+    -- REBUILT ON EVERY OPEN, not once at construction. The cache gains a character the first time you
+    -- log into one, so a list built at login would be missing whoever you played since -- and the
+    -- window is built once per session while the cache keeps growing under it.
+    self:_rebuildCharacters()
     self:Refresh()
     self._grid:Sort()
     self:_fit()
@@ -250,6 +377,13 @@ function WindowMeta:Destroy()
         self._sortBtn:Destroy()
     end
     if self._searchDivider then self._searchDivider:Destroy() end
+    if self._charDrop then
+        if self._win.SetTitleWidget then self._win:SetTitleWidget(nil) end
+        self._charDrop:Destroy()
+    end
+    if self._snapLabel then self._snapLabel:Destroy() end
+    if self._snapAge then self._snapAge:Destroy() end
+    if self._snapStrip then self._snapStrip:Destroy() end
     if self._footDivider then self._footDivider:Destroy() end
     if self._plateBox then self._plateBox:Destroy() end
     if self._plate then self._plate:Destroy() end
@@ -349,6 +483,55 @@ function M.New(props)
         }, content)
     end
 
+    -- THE CHARACTER DROPDOWN GOES WHERE THE TITLE WAS, which is the concept's arrangement: the name of
+    -- the character whose bags these are IS the title, so a separate word saying "Inventory" beside it
+    -- is a second label for the same thing.
+    --
+    -- Parented to the content frame and then handed to the window, exactly as the icons are:
+    -- AddTitleAccessory reparents it into the title strip and raises it above the drag surface, which
+    -- something merely anchored there would sit underneath and never receive a click.
+    -- FORWARD-DECLARED, because the closures below capture it. A Lua closure only captures a local
+    -- that is already in scope where the closure is CREATED -- so with `local handle` further down,
+    -- `onChange` captured the GLOBAL `handle`, which is nil, and selecting a character raised
+    -- "attempt to index global 'handle'". The window built fine and only the callback was broken,
+    -- which is why nothing at construction time complained.
+    local handle
+
+    local charDrop = C.Dropdown({
+        options = {}, w = 110,
+        -- SIZED AND SURFACED FOR A TITLE STRIP, both from the concept and both reported in game as
+        -- looking wrong. `.dd` is 18 units tall in a 26-unit bar, so it sits INSIDE the strip with
+        -- visible clearance rather than filling it edge to edge; and its surface is DARKER than the
+        -- strip, which is what gives the field a box of its own. Left on the default colorBgAlt -- the
+        -- same token the strip uses -- the field is invisible until hovered, and then it reads as a
+        -- bright outline floating on the title bar rather than a control lighting up.
+        h  = T:GetControlHeight("sizeControlSm", "sm"),
+        bg = "colorBg",
+        -- Named for the frame-naming convention, and because a title-bar control that misbehaves is
+        -- one an in-game probe needs to be able to reach: "SuuUI_" .. pluginId .. "_" .. role.
+        name = "SuuUI_inventory_" .. which .. "_character",
+        onChange = function(value) handle:SetCharacter(value) end,
+    }, content)
+
+    -- THE AMBER STRIP, between the title bar and the search row, shown only on a snapshot. Its colour
+    -- is the WARNING intent rather than a colour of its own: "this is not live" is exactly the "blocked
+    -- but expected" tone the intent tokens exist for, so a retint moves it with every other warning.
+    local snapStrip = SuuUI.Layout:CreateContainer({
+        parent = content, layout = "flow", dir = "horizontal",
+        gap = gap, align = "center",
+        padding = { top = 2, right = pad, bottom = 2, left = pad },
+    })
+    local snapLabel = C.Text({
+        text = "SNAPSHOT - read only", size = "sm", color = "warning", wrap = false,
+    }, snapStrip:GetFrame())
+    -- The age sits at the far right in muted text, so the strip reads as one statement: what this is,
+    -- and how old it is.
+    local snapAge = C.Text({ text = "", size = "sm", color = "muted", justify = "RIGHT",
+                             wrap = false }, snapStrip:GetFrame())
+    snapStrip:Add(snapLabel, { width = "fill" })
+    snapStrip:Add(snapAge, { width = "auto" })
+    snapStrip:Hide()
+
     local sortPath, sortCoords = SuuUI.Icons:Get("sort")
     local sortBtn = C.IconButton({
         icon      = sortPath,
@@ -411,6 +594,7 @@ function M.New(props)
     footer:Add(moneyText, { width = "fill" })
     footer:Add(slotsText, { width = "auto" })
 
+    col:Add(snapStrip, { width = "fill" })
     col:Add(searchRow, { width = "fill" })
     col:Add(searchDivider, { width = "fill" })
     -- The PLATE goes in, not the grid: the grid is inside it. Still no width prop -- the grid's width
@@ -421,7 +605,7 @@ function M.New(props)
     col:Add(footer, { width = "fill" })
 
     local id = "inventorywindow_" .. which
-    local handle = setmetatable({
+    handle = setmetatable({
         _win       = win,
         _col       = col,
         _plate     = plateFrame,
@@ -434,6 +618,12 @@ function M.New(props)
         _matchText = matchText,
         _moneyText = moneyText,
         _footer    = footer,
+        _charDrop  = charDrop,
+        _snapStrip = snapStrip,
+        _snapLabel = snapLabel,
+        _snapAge   = snapAge,
+        _which     = which,
+        _realm     = (GetRealmName and GetRealmName()) or "?",
         _slotsText = slotsText,
         _sellBtn   = sellBtn,
         _which     = which,
@@ -459,6 +649,10 @@ function M.New(props)
     -- handle exists, because the click needs a handle to cycle.
     if sellBtn then win:AddTitleAccessory(sellBtn) end
     win:AddTitleAccessory(sortBtn)
+    -- THE TITLE SLOT, not an accessory. Accessories stack inward from the close button, so the dropdown
+    -- landed crushed against the X and pushed the sort and coin icons out of the band entirely --
+    -- reported from a screenshot. The concept puts the character name where the TITLE is.
+    win:SetTitleWidget(charDrop)
 
     -- The window follows the grid: a settings change moves the grid's size, and the window has to
     -- re-fit or it clips the last column.

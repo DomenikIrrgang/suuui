@@ -565,6 +565,72 @@ describe("Components/ItemSlot", function()
         end)
     end)
 
+    -- A SNAPSHOT CELL IS THE OTHER KIND OF CELL, and the assertions here are all about what it must
+    -- NOT be able to do. Its (bag, slot) describe another character's cached bag, but those same
+    -- numbers address whoever is logged in -- so a snapshot cell that reached the client at all would
+    -- act on YOUR item at that position. Inert by construction beats inert by having its mouse taken
+    -- away, because the latter also removes the tooltip that makes browsing an alt worth doing.
+    describe("a snapshot cell", function()
+        local function snap(bag, slot, props)
+            local p = { bag = bag, slot = slot, size = 34, snapshot = true }
+            for k, v in pairs(props or {}) do p[k] = v end
+            return H.C.ItemSlot(p, holder(bag))
+        end
+
+        it("takes no Blizzard template at all", function()
+            expect(snap(0, 1):GetFrame()._template)
+                .as("no container template, so no handler that could act").eq(nil)
+        end)
+
+        it("carries no container id for anything to resolve", function()
+            -- A live cell's id IS its wiring. An id here would make the cell look addressable to any
+            -- code walking the grid for a container position.
+            expect(snap(0, 1):GetFrame():GetID()).as("no slot id").eq(0)
+        end)
+
+        it("cannot act on the client even when clicked", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, stackCount = 3, quality = 1,
+                        hyperlink = "|Hitem:22832|h[Arcane Powder]|h" })
+            H.resetUsedContainerItems()
+            H.click(c, "RightButton")
+            H.click(c, "LeftButton")
+            expect(#H.getUsedContainerItems()).as("nothing used or sold").eq(0)
+            expect(H.env.CursorHasItem()).as("and nothing picked up").falsy()
+        end)
+
+        it("still shows the item's tooltip, from the cached link", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, stackCount = 3, quality = 1,
+                        hyperlink = "|Hitem:22832|h[Arcane Powder]|h" })
+            H.resetTooltipState()
+            c:GetFrame():_fire("OnEnter")
+            -- The whole reason this kind exists rather than EnableMouse(false): a cached grid with no
+            -- tooltips is close to useless for "what does my alt have".
+            expect(H.GameTooltip:IsShown()).as("the tooltip is up").truthy()
+            c:GetFrame():_fire("OnLeave")
+            expect(H.GameTooltip:IsShown()).as("and goes away again").falsy()
+        end)
+
+        it("shows no tooltip for a slot whose item is not resolved yet", function()
+            local c = snap(0, 1)
+            -- The GET_ITEM_INFO_RECEIVED case: the id is cached but the link is not known yet.
+            c:SetItem({ itemID = 22832, stackCount = 1 })
+            H.resetTooltipState()
+            c:GetFrame():_fire("OnEnter")
+            expect(H.GameTooltip:IsShown()).as("nothing to show, so nothing shown").falsy()
+        end)
+
+        it("paints art and count exactly as a live cell does", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, iconFileID = 134129, stackCount = 12, quality = 3 })
+            expect(c._iconComp:GetIcon()).as("same painting path").eq(134129)
+            expect(c._countText:GetText()).eq("12")
+            expect(c._iconComp._borderColor)
+                .as("and the same quality edge").eq(H.SuuUI.Game:ItemQualityColor(3))
+        end)
+    end)
+
     describe("signals", function()
         it("emits MOUSE_ENTER and MOUSE_LEAVE", function()
             local c = cell(0, 1)

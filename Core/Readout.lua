@@ -168,4 +168,35 @@ function M.Money(copper, opts)
     return table.concat(out, " ")
 end
 
+--- How long ago something was read, spelled for a human.
+--
+-- HERE RATHER THAN IN THE INVENTORY, for the reason Money is here: it is neither a game fact nor a
+-- theme token but a PRESENTATION CHOICE the whole UI has to make the same way. The snapshot strip is
+-- the first consumer; the account tooltip section and the ledger tab both show the same freshness and
+-- must not disagree about how to say it.
+--
+-- COARSE ON PURPOSE. The question a freshness stamp answers is "should I trust this", and that is
+-- answered by "3 weeks ago" exactly as well as by a timestamp -- while a precise one invites the
+-- reader to believe the contents are precise too, which for a cached bag they are not. Anything under
+-- a minute reads "just now" rather than counting seconds nobody acts on.
+--
+-- @param when number|nil  a unix time, or nil when the thing was never read
+-- @param now number|nil   override for the current time; tests pass it, callers do not
+-- @return string
+function M.Age(when, now)
+    if type(when) ~= "number" then return "never" end
+    now = now or (time and time()) or when
+    local secs = now - when
+    if secs < 0 then secs = 0 end
+    if secs < 60 then return "just now" end
+    local mins = floor(secs / 60)
+    if mins < 60 then return mins == 1 and "1 minute ago" or (mins .. " minutes ago") end
+    local hours = floor(mins / 60)
+    if hours < 24 then return hours == 1 and "1 hour ago" or (hours .. " hours ago") end
+    local days = floor(hours / 24)
+    if days < 7 then return days == 1 and "1 day ago" or (days .. " days ago") end
+    local weeks = floor(days / 7)
+    return weeks == 1 and "1 week ago" or (weeks .. " weeks ago")
+end
+
 SuuUI.Readout = M

@@ -24,6 +24,8 @@ describe("Components/ItemGrid", function()
             spacing    = props.spacing or 2,
             sortMode   = props.sortMode,
             readOnly   = props.readOnly,
+            character  = props.character,
+            which      = props.which,
         }, root)
         H.SuuUI.UIRoot:GetRootContainer():Add(g, { anchor = {
             point = "TOPLEFT", relativeTo = root, relativePoint = "TOPLEFT", x = 0, y = 0,
@@ -403,6 +405,123 @@ describe("Components/ItemGrid", function()
             for _, e in ipairs(g._entries) do
                 expect(e.cell:IsReadOnly()).truthy()
             end
+        end)
+    end)
+
+    describe("a snapshot source", function()
+        -- Writes a character record straight into the cache's store, which is what a real capture on
+        -- that character would have left behind.
+        local function cacheChar(key, which, slots, seen)
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars[key] = store.chars[key] or { class = "MAGE" }
+            store.chars[key][which] = { seen = seen or 1755900000, slots = slots }
+            return IC
+        end
+
+        local function cacheItem(id, info)
+            H.env.SuuUIItemCache.items[id] = info
+        end
+
+        it("reads the slot COUNT from the cache, not from the live client", function()
+            -- THE TRAP THIS EXISTS FOR. Asking the client how many slots bag 3 has answers for whoever
+            -- is logged in, so an alt's 20-slot bag rendered against your own 16 would silently drop
+            -- four items -- with nothing on screen to say anything was missing.
+            H.setBags({ [0] = { free = 0, slots = 4 } })
+            cacheChar("Thalira-Thunderstrike", "bags", {
+                [0] = { [1] = { 111, 1 }, [2] = { 222, 1 }, [7] = { 333, 1 } },
+            })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            -- Seven, from the highest cached index -- not four, which is what this character has.
+            expect(#g._entries).as("the alt's own slot count").eq(7)
+        end)
+
+        it("fills a cell from the account-wide item table", function()
+            cacheItem(22832, { icon = 134129, q = 3, link = "|Hitem:22832|h[Arcane]|h",
+                               name = "Arcane Powder" })
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 12 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local c = g._entries[1].cell
+            expect(c._iconComp:GetIcon()).as("icon from the shared item table").eq(134129)
+            expect(c._countText:GetText()).as("count from the slot record").eq("12")
+            expect(c._iconComp._borderColor)
+                .as("quality edge, painted by the same code as a live cell")
+                .eq(H.SuuUI.Game:ItemQualityColor(3))
+        end)
+
+        it("renders a slot whose item is not resolved yet, rather than dropping it", function()
+            -- GetItemInfo answers nil until GET_ITEM_INFO_RECEIVED fires, so an id with no info is a
+            -- real state on a fresh login. The concept draws it as a `?` cell; what must not happen is
+            -- the slot vanishing, which would make the grid reflow when the name arrives.
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 99999, 2 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local c = g._entries[1].cell
+            expect(c:GetItem()).as("the slot is occupied").truthy()
+            expect(c:GetItem().itemID).eq(99999)
+            expect(c:GetItem().hyperlink).as("but nothing is known about it yet").eq(nil)
+        end)
+
+        it("builds snapshot-kind cells, which cannot reach the client", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local c = g._entries[1].cell
+            expect(c:GetFrame()._template).as("no container template").eq(nil)
+            H.resetUsedContainerItems()
+            H.click(c, "RightButton")
+            expect(#H.getUsedContainerItems())
+                .as("an alt's cached cell must never act on YOUR bags").eq(0)
+        end)
+
+        it("reports when the container was last read", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } }, 1755730000)
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            expect(g:SeenAt()).eq(1755730000)
+        end)
+
+        it("has no timestamp while live, because it IS the current reading", function()
+            H.setBags({ [0] = { free = 4, slots = 8 } })
+            local g = grid({ containers = { 0 } })
+            expect(g:IsSnapshot()).falsy()
+            expect(g:SeenAt()).as("a freshness claim would be meaningless here").eq(nil)
+        end)
+
+        it("REBUILDS its cells when the character changes, never re-points them", function()
+            H.setBags({ [0] = { free = 4, slots = 8 } })
+            local g = grid({ containers = { 0 } })
+            local liveCell = g._entries[1].cell
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } })
+            expect(g:SetCharacter("Thalira-Thunderstrike", "bags")).truthy()
+            local snapCell = g._entries[1].cell
+            -- The kind is fixed at construction, so re-pointing would leave an alt's slot wired to a
+            -- template handler that acts on the logged-in character.
+            expect(snapCell == liveCell).as("a different cell object entirely").falsy()
+            expect(snapCell:GetFrame()._template).as("and the new one is template-free").eq(nil)
+        end)
+
+        it("goes back to live when the character is cleared", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } })
+            H.setBags({ [0] = { free = 4, slots = 8 } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            expect(g:IsSnapshot()).truthy()
+            g:SetCharacter(nil)
+            expect(g:IsSnapshot()).falsy()
+            expect(g._entries[1].cell:GetFrame()._template)
+                .as("a live cell carries the container template again").truthy()
+        end)
+
+        it("drops a repeated SetCharacter rather than rebuilding for nothing", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } })
+            local g = grid({ containers = { 0 } })
+            expect(g:SetCharacter("Thalira-Thunderstrike", "bags")).truthy()
+            expect(g:SetCharacter("Thalira-Thunderstrike", "bags"))
+                .as("a rebuild destroys every cell, so an unchanged call must not").falsy()
         end)
     end)
 

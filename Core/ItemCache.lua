@@ -215,6 +215,18 @@ function M:SeenAt(key, which)
     return rec and rec.seen or nil
 end
 
+--- The money that character had when it was last captured, in copper, or nil.
+--
+-- Nil rather than 0 for a character captured before money was stored, because "no figure" and "no
+-- gold" are different statements and a footer printing 0g under an alt's name states the second.
+-- @param key string|nil
+-- @return number|nil
+function M:MoneyOf(key)
+    local s = store()
+    local rec = s and key and s.chars[key]
+    return rec and rec.money or nil
+end
+
 --- Everything known about one item id, or nil.
 -- @return table|nil  { link, icon, q, name }
 function M:ItemInfo(id)

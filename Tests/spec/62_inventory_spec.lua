@@ -396,6 +396,254 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
+    -- SNAPSHOT MODE, the concept's second state for one window. Every assertion here is about the
+    -- window telling the truth about WHOSE bags it is showing and HOW OLD they are -- a cached grid
+    -- that looks live is the failure this whole state exists to prevent.
+    describe("snapshot mode", function()
+        local function cacheAlt(key, slots, money, seen)
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars[key] = { class = "MAGE", money = money }
+            store.chars[key].bags = { seen = seen or 1755900000, slots = slots }
+            return IC
+        end
+
+        it("starts live, with no strip", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w:IsSnapshot()).falsy()
+            expect(w._snapStrip:IsShown()).as("nothing to warn about").falsy()
+            w:Destroy()
+        end)
+
+        it("shows the amber strip and its age when pointed at an alt", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 3 } } }, 8421100)
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-Thunderstrike")
+            expect(w:IsSnapshot()).truthy()
+            expect(w._snapStrip:IsShown()).as("the read-only strip is up").truthy()
+            expect(w._snapAge:GetText()).as("and it says how stale it is").truthy()
+            expect(w._snapAge:GetText() ~= "").truthy()
+            w:Destroy()
+        end)
+
+        it("swaps free-slots for a cached item count", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 3 }, [2] = { 111, 1 } } })
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-Thunderstrike")
+            -- A cache stores only OCCUPIED slots, so it cannot say how many are free. Printing
+            -- "22 free / 80" from a snapshot would be an invented number.
+            expect(w._slotsText:GetText()).eq("2 items cached")
+            w:Destroy()
+        end)
+
+        it("shows the ALT's money, not yours", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } }, 8421100)
+            H.env.SuuUIConfig = H.env.SuuUIConfig or {}
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local mine = w._moneyText:GetText()
+            w:SetCharacter("Thalira-Thunderstrike")
+            local theirs = w._moneyText:GetText()
+            -- GetMoney() under an alt's name is a number that looks authoritative and describes the
+            -- wrong character.
+            expect(theirs == mine).as("a different figure entirely").falsy()
+            expect(theirs:find("842", 1, true)).as("842g, from the cache").truthy()
+            w:Destroy()
+        end)
+
+        it("hides the money readout when the cache has no figure", function()
+            -- An alt captured before money was stored has no figure. Printing 0g would state a fact
+            -- the cache does not have.
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } }, nil)
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-Thunderstrike")
+            expect(w._moneyText:IsShown()).as("no invented zero").falsy()
+            w:Destroy()
+        end)
+
+        it("fades sort and sell rather than removing them", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } })
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-Thunderstrike")
+            -- Their absence would read as a different window; greyed says "not for this character",
+            -- which is true and is temporary.
+            expect(w._sortBtn:IsEnabled()).as("sort is dead here").falsy()
+            expect(w._sellBtn:IsEnabled()).as("and so is sell").falsy()
+            w:Destroy()
+        end)
+
+        it("cannot sell an alt's junk even standing at a vendor", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } })
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            H.setMerchantOpen(true)
+            w:SetCharacter("Thalira-Thunderstrike")
+            expect(w._sellBtn:IsEnabled())
+                .as("the items are not in YOUR bags to sell").falsy()
+            w:Destroy()
+        end)
+
+        it("goes back to live when pointed at the current character", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } })
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-Thunderstrike")
+            w:SetCharacter(nil)
+            expect(w:IsSnapshot()).falsy()
+            expect(w._snapStrip:IsShown()).as("the strip goes with it").falsy()
+            expect(w._sortBtn:IsEnabled()).as("and sort comes back").truthy()
+            w:Destroy()
+        end)
+
+        it("lists the cached characters in the dropdown", function()
+            cacheAlt("Thalira-Thunderstrike", { [0] = { [1] = { 22832, 1 } } })
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local opts = w._charDrop._options
+            expect(#opts).as("at least the alt we cached").gt(0)
+            local found = false
+            for _, o in ipairs(opts) do
+                if o.value == "Thalira-Thunderstrike" then found = true end
+            end
+            expect(found).truthy()
+            w:Destroy()
+        end)
+
+        it("rebuilds the character list on every open, not once at construction", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local before = #w._charDrop._options
+            -- A character the cache gains between opens -- which is what logging into an alt does.
+            cacheAlt("Newalt-Thunderstrike", { [0] = { [1] = { 22832, 1 } } })
+            w:Hide()
+            w:Show()
+            expect(#w._charDrop._options)
+                .as("a list built once would never see the new character").gt(before)
+            w:Destroy()
+        end)
+    end)
+
+        -- REPORTED FROM A SCREENSHOT, and the specs could not have caught it: the dropdown was handed
+        -- to AddTitleAccessory, which stacks inward from the CLOSE BUTTON, so it landed crushed against
+        -- the X and pushed the sort and coin icons out of the band. Nothing asserted where in the strip
+        -- it sat, only that it existed.
+        -- REPORTED IN GAME: the dropdown sat in exactly the right place and would not open, because the
+        -- title bar's DRAG SURFACE spans the strip and the client gives a click to the topmost
+        -- mouse-enabled frame. Position was asserted; reachability was not, and "it looks right" is
+        -- precisely the state a z-order bug leaves a control in.
+        -- REPORTED IN GAME as "the highlight clips out of the window", and the measurement said it was
+        -- 11 units inside -- so the geometry was right and the LOOK was wrong. Two causes, both concept
+        -- deviations: the field filled the 26-unit strip edge to edge, and it carried the same surface
+        -- token as the strip, so it had no visible box and hovering produced a bare outline.
+        it("sits inside the title bar with clearance, not filling it", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local drop = H.box(w._charDrop:GetFrame())
+            local strip = H.box(w:GetWindow()._titleStrip:GetFrame())
+            expect(drop.height).as("shorter than the bar").lt(strip.height)
+            -- .top measures DOWNWARD, so being inside means a LARGER top and a SMALLER bottom.
+            expect(drop.top).as("clear of the bar's top edge").gt(strip.top)
+            expect(drop.bottom).as("and of its bottom").lt(strip.bottom)
+            w:Destroy()
+        end)
+
+        it("does not wear the title strip's own surface colour", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- Same token as the strip means an invisible field: the concept's `.dd` is darker than the
+            -- bar it sits on, which is what makes the control readable at rest.
+            expect(w._charDrop._bg).as("an explicit surface").truthy()
+            expect(w._charDrop._bg == "colorBgAlt")
+                .as("and not the strip's own token").falsy()
+            w:Destroy()
+        end)
+
+        -- OPENING IS NOT SELECTING, and that gap shipped a live error: `onChange` captured the GLOBAL
+        -- `handle` because `local handle` was declared further down the constructor, so picking a
+        -- character raised "attempt to index global 'handle'". The window built fine and the panel
+        -- opened fine -- only the callback was broken, and only a spec that clicks a ROW reaches it.
+        it("switches character when a row is actually chosen", function()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Suwarrior-Thunderstrike"] = { class = "WARRIOR", money = 500 }
+            store.chars["Suwarrior-Thunderstrike"].bags =
+                { seen = 1755900000, slots = { [0] = { [1] = { 22832, 1 } } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            H.click(w._charDrop)
+            -- A row keeps its option value in its click closure rather than on the frame, so the row
+            -- is found by its INDEX in the options list -- the two are built in step.
+            local picked = false
+            for i, opt in ipairs(w._charDrop._options or {}) do
+                if opt.value == "Suwarrior-Thunderstrike" then
+                    local row = (w._charDrop._rows or {})[i]
+                    expect(row).as("the option has a rendered row").truthy()
+                    H.click(row)
+                    picked = true
+                    break
+                end
+            end
+            expect(picked).as("the alt has a row to click").truthy()
+            expect(w:IsSnapshot()).as("choosing it switched the window").truthy()
+            w:Destroy()
+        end)
+
+        it("can actually be clicked, not just placed", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(H.click(w._charDrop)).as("the click reaches it").truthy()
+            expect(w._charDrop._open).as("and its panel opens").truthy()
+            w:Destroy()
+        end)
+
+        it("keeps the window's drag region clear of the dropdown", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- Raising it wins the click, but a press a pixel off the control would otherwise start
+            -- dragging the window -- so the drag region is inset past it too.
+            H.expectNoOverlap({ w._charDrop:GetFrame(), w:GetWindow()._drag })
+            w:Destroy()
+        end)
+
+        it("puts the character dropdown where the TITLE is, not beside the close button", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local win = w:GetWindow()
+            expect(win:GetTitleWidget()).as("it occupies the title slot").eq(w._charDrop)
+            local drop = H.box(w._charDrop:GetFrame())
+            local close = H.box(win._closeBtn:GetFrame())
+            expect(drop.left).as("on the LEFT of the strip").lt(close.left)
+            -- The title text stands down rather than sitting behind it.
+            expect(win._titleT:IsShown()).as("no second label for the same thing").falsy()
+            w:Destroy()
+        end)
+
+        it("leaves room for the sort and coin icons beside the close button", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- The icons vanished entirely in the screenshot. Assert they are on screen AND clear of
+            -- both the dropdown and each other.
+            expect(w._sortBtn:IsShown()).truthy()
+            expect(w._sellBtn:IsShown()).truthy()
+            H.expectNoOverlap({ w._charDrop:GetFrame(), w._sortBtn:GetFrame(),
+                                w._sellBtn:GetFrame(), w:GetWindow()._closeBtn:GetFrame() })
+            w:Destroy()
+        end)
+
+        it("keeps the dropdown inside the title bar", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            H.expectInside(w._charDrop:GetFrame(), w:GetWindow()._titleStrip:GetFrame())
+            w:Destroy()
+        end)
+
     describe("the sell control", function()
         it("is a title-bar accessory, not a footer button", function()
             local w = IW.New({ container = "bags" })

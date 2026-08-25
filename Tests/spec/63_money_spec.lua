@@ -178,4 +178,44 @@ describe("Core/Game coin colours", function()
         expect(Game:CoinColorCode("SILVER")).eq("|cffc7c7cf")
         expect(Game:CoinColorCode("COPPER")).eq("|cffeda55f")
     end)
+
+    -- COARSE ON PURPOSE. A freshness stamp answers "should I trust this", which "3 weeks ago" answers
+    -- exactly as well as a timestamp -- while a precise one invites the reader to believe the CONTENTS
+    -- are precise too, which for a cached bag they are not.
+    describe("Readout.Age", function()
+        local NOW = 1755900000
+
+        it("says never when nothing was ever read", function()
+            expect(H.SuuUI.Readout.Age(nil, NOW)).eq("never")
+        end)
+
+        it("does not count seconds nobody acts on", function()
+            expect(H.SuuUI.Readout.Age(NOW - 5, NOW)).eq("just now")
+            expect(H.SuuUI.Readout.Age(NOW - 59, NOW)).eq("just now")
+        end)
+
+        it("steps through minutes, hours, days and weeks", function()
+            expect(H.SuuUI.Readout.Age(NOW - 60, NOW)).eq("1 minute ago")
+            expect(H.SuuUI.Readout.Age(NOW - 300, NOW)).eq("5 minutes ago")
+            expect(H.SuuUI.Readout.Age(NOW - 3600, NOW)).eq("1 hour ago")
+            expect(H.SuuUI.Readout.Age(NOW - 18000, NOW)).eq("5 hours ago")
+            expect(H.SuuUI.Readout.Age(NOW - 86400, NOW)).eq("1 day ago")
+            expect(H.SuuUI.Readout.Age(NOW - 172800, NOW)).eq("2 days ago")
+            expect(H.SuuUI.Readout.Age(NOW - 604800, NOW)).eq("1 week ago")
+            expect(H.SuuUI.Readout.Age(NOW - 1814400, NOW)).eq("3 weeks ago")
+        end)
+
+        it("singularises rather than saying 1 minutes", function()
+            -- The kind of thing that reads as a bug in a polished UI even though nothing is broken.
+            expect(H.SuuUI.Readout.Age(NOW - 86400, NOW):find("1 days")).eq(nil)
+            expect(H.SuuUI.Readout.Age(NOW - 3600, NOW):find("1 hours")).eq(nil)
+        end)
+
+        it("does not go negative for a stamp from the future", function()
+            -- A clock change or a hand-edited SavedVariable can produce one, and "-3 hours ago" is
+            -- worse than a harmless "just now".
+            expect(H.SuuUI.Readout.Age(NOW + 5000, NOW)).eq("just now")
+        end)
+    end)
+
 end)

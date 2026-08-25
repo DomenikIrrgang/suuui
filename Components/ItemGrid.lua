@@ -85,6 +85,89 @@ local function numSlots(bag)
     return 0
 end
 
+--- One character's cached container record, or nil.
+--
+-- The snapshot counterpart to numSlots + GetContainerItemInfo: everything a snapshot grid knows comes
+-- from here, and it answers nil rather than an empty table for a character the cache has never seen,
+-- so "no record" and "a record of an empty bag" stay distinguishable.
+local function cachedRecord(key, which)
+    local IC = SuuUI.ItemCache
+    if not (key and which and IC and type(IC.Get) == "function") then return nil end
+    return IC:Get(key, which)
+end
+
+--- A cached slot expressed in the SAME SHAPE the live client returns.
+--
+-- The cache stores only `{ itemID, count }` per slot -- deliberately, since a link per slot per
+-- character is tens of KB -- so the rest is filled in from the account-wide item table. Returning the
+-- client's own field names is what lets ItemSlot paint a snapshot with the identical code path: a
+-- second painting path would drift from the live one the first time either changed.
+--
+-- An item the cache has an id for but no INFO yet is a real state, not an error: GetItemInfo answers
+-- nil until GET_ITEM_INFO_RECEIVED fires. Such a slot comes back with an itemID and nothing else,
+-- which is what the concept draws as a `?` cell.
+local function cachedInfo(entry)
+    if type(entry) ~= "table" then return nil end
+    local id = entry[1] or entry.itemID
+    if not id then return nil end
+    local IC = SuuUI.ItemCache
+    local meta = IC and type(IC.ItemInfo) == "function" and IC:ItemInfo(id) or nil
+    return {
+        itemID     = id,
+        stackCount = entry[2] or entry.count or 1,
+        iconFileID = meta and meta.icon or nil,
+        quality    = meta and meta.q or nil,
+        hyperlink  = meta and meta.link or nil,
+        itemName   = meta and meta.name or nil,
+    }
+end
+
+--- Points this grid at a character's CACHED contents, or back at the live client.
+--
+-- @param key string|nil  character key, or nil for the live client
+-- @param which string|nil  "bags" | "bank"; required with a key
+--
+-- REBUILDS EVERY CELL, and that is not laziness. A cell's kind is fixed at construction -- a live cell
+-- inherits a Blizzard container template whose handler acts on whoever is logged in, a snapshot cell
+-- has no template at all -- so re-pointing an existing cell would leave an alt's cached slot 1 wired to
+-- YOUR bag 0 slot 1. Destroying is the only way to change kind, and switching character is a
+-- deliberate user action rather than something on a hot path.
+function GridMeta:SetCharacter(key, which)
+    local snapshot = key ~= nil
+    if self._snapshot == snapshot and self._characterKey == key and self._which == which then
+        return false
+    end
+    self._snapshot     = snapshot
+    self._characterKey = key
+    self._which        = which
+    -- The grid's own teardown and rebuild path, rather than a hand-rolled loop: _destroyCells also
+    -- clears the entry list and the cell container, and _apply("rebuild") is what defers geometry when
+    -- the call lands in combat.
+    self:_destroyCells()
+    self:_apply("rebuild")
+    return true
+end
+
+--- Whether this grid is showing a cached snapshot rather than the live client.
+-- @return bool
+function GridMeta:IsSnapshot() return self._snapshot == true end
+
+--- The character key this grid is showing, or nil when it is live.
+-- @return string|nil
+function GridMeta:GetCharacter() return self._characterKey end
+
+--- When the shown container was last read, as a unix time, or nil.
+--
+-- Only ever answers for a snapshot: a live grid IS the current reading, so a timestamp on it would
+-- invite a caller to render "seen just now", which is a freshness claim about something that needs no
+-- freshness claim.
+-- @return number|nil
+function GridMeta:SeenAt()
+    if not self._snapshot then return nil end
+    local rec = cachedRecord(self._characterKey, self._which)
+    return rec and rec.seen or nil
+end
+
 --- The bag ids this grid shows, in order.
 -- @return table
 function GridMeta:GetContainers()
@@ -143,6 +226,9 @@ function GridMeta:_cell(bag, slot)
     if c then return c end
     c = SuuUI.Components.ItemSlot({
         bag = bag, slot = slot, size = self._cellSize,
+        -- The KIND is fixed at construction, because a snapshot cell has no template and a live one
+        -- does. That is why SetCharacter destroys the cells rather than re-pointing them.
+        snapshot = self._snapshot or nil,
         name = self._namePrefix and (self._namePrefix .. bag .. "Item" .. slot) or nil,
     }, self:_holder(bag))
     if self._readOnly then c:SetReadOnly(true) end
@@ -153,12 +239,31 @@ end
 -- Re-reads every slot the containers report and rebuilds the entry list. Does NOT re-order.
 function GridMeta:_readEntries()
     local seen = {}
+    -- A SNAPSHOT READS THE CACHE, and it reads the SLOT COUNT from there too. Asking the client how
+    -- many slots bag 3 has would answer for whoever is logged in, so an alt with a 20-slot bag would
+    -- render against your own 16 -- four items silently missing, with nothing on screen to say so.
+    local snap = self._snapshot and cachedRecord(self._characterKey, self._which) or nil
+    local snapSlots = snap and snap.slots or nil
     for _, bag in ipairs(self._containers) do
-        local n = numSlots(bag) or 0
+        local n
+        if self._snapshot then
+            n = 0
+            local perBag = snapSlots and snapSlots[bag]
+            if perBag then
+                -- The cache stores only occupied slots, so the count is the highest index present.
+                for slot in pairs(perBag) do if slot > n then n = slot end end
+            end
+        else
+            n = numSlots(bag) or 0
+        end
         seen[bag] = n
         for slot = 1, n do
             local c = self:_cell(bag, slot)
-            c:Refresh()
+            if self._snapshot then
+                c:SetItem(cachedInfo(snapSlots and snapSlots[bag] and snapSlots[bag][slot]))
+            else
+                c:Refresh()
+            end
         end
     end
     -- Drop cells for slots that no longer exist -- a smaller bag was equipped.
@@ -438,6 +543,12 @@ function SuuUI.Components.ItemGrid(props, parent)
         _padding    = padding,
         _sortMode   = SORTS[props.sortMode] and props.sortMode or "quality",
         _readOnly   = props.readOnly and true or false,
+        -- The SOURCE. nil character means the live client; a key means that character's cached record,
+        -- and `which` names the container inside it. Both are construction-time defaults that
+        -- SetCharacter then owns.
+        _snapshot     = props.character ~= nil,
+        _characterKey = props.character,
+        _which        = props.which,
         _namePrefix = props.namePrefix,
         _filter     = nil,
         _eid        = id,

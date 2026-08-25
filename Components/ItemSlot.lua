@@ -458,6 +458,18 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- while the bank generic one hardcodes BANK_CONTAINER and reads only the slot from GetID(). So the
     -- holder's id is load-bearing for one and ignored by the other, which is why matching the
     -- reference matters more than reasoning about it.
+    -- A SNAPSHOT CELL IS A DIFFERENT KIND OF CELL, and it is deliberately the SIMPLER one. It shows a
+    -- cached reading of another character's bag, so there is no container behind it to act on and
+    -- nothing for the client to do -- which means no Blizzard template at all.
+    --
+    -- WHY IT MUST NOT INHERIT THE TEMPLATE, even though that would cost less code. A cell's identity is
+    -- its (bag, slot), and those are resolved against whoever is LOGGED IN -- so a template cell
+    -- showing an alt's cached slot 1 would happily pick up, use or sell YOUR OWN item in bag 0 slot 1.
+    -- Blocking that with EnableMouse(false) works, and it also kills the tooltip, which is most of the
+    -- point of browsing an alt's bags. Two kinds of cell resolves both at once: the live one is
+    -- hands-off and the client owns it, the snapshot one is inert and we own it.
+    local snapshot = props.snapshot and true or false
+
     local template = props.bag == BANK_CONTAINER
         and "BankItemButtonGenericTemplate"
         or "ContainerFrameItemButtonTemplate"
@@ -483,14 +495,26 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- that needs attributes this client does not dispatch for the item or macro types.
     --
     -- ElvUI creates its slots from exactly this template and nothing else, on this exact client.
-    local ok, f = pcall(CreateFrame, "ItemButton", props.name, parent, template)
-    if not ok or not f then
-        f = CreateFrame("Button", props.name, parent, template)
+    local f
+    if snapshot then
+        -- No template, so no Blizzard art to clear and no handler to leave alone. A plain Button
+        -- rather than a Frame because it still wants hover, for the tooltip.
+        f = CreateFrame("Button", props.name, parent)
+    else
+        local ok
+        ok, f = pcall(CreateFrame, "ItemButton", props.name, parent, template)
+        if not ok or not f then
+            f = CreateFrame("Button", props.name, parent, template)
+        end
     end
     f:SetSize(props.size, props.size)
-    -- The id IS the wiring, and it is set before anything paints so the first Refresh reads the
+    -- The id IS the wiring for a LIVE cell -- the template's own handler reads the slot from it and
+    -- the bag from the parent's -- and it is set before anything paints so the first Refresh reads the
     -- right slot rather than slot 0.
-    f:SetID(props.slot)
+    --
+    -- A snapshot cell deliberately gets NO id. There is no handler to feed, and an id would make the
+    -- cell look addressable to any code that walked the grid looking for a container position.
+    if not snapshot then f:SetID(props.slot) end
 
     -- EVERYTHING THE TEMPLATE DRAWS, SILENCED IN FAVOUR OF OURS -- ENUMERATED, NOT NAMED.
     --
@@ -511,7 +535,10 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- overlay and its readouts are all created further down, in their own child frames -- so every
     -- region on this frame is Blizzard's by definition and the sweep cannot blank anything of ours.
     -- KEEP IT THAT WAY: creating one of our regions above this line would silence it.
-    if type(f.GetRegions) == "function" then
+    -- Skipped entirely for a snapshot cell: with no template there is no Blizzard art, and the sweep's
+    -- own precondition -- that every region on the frame at this point is Blizzard's -- would still
+    -- hold but buy nothing.
+    if not snapshot and type(f.GetRegions) == "function" then
         for _, region in ipairs({ f:GetRegions() }) do
             silence(region)
         end
@@ -605,6 +632,10 @@ function SuuUI.Components.ItemSlot(props, parent)
         _eid        = id,
         _info       = nil,
         _readOnly   = false,
+        -- Which KIND of cell this is. A snapshot cell shows a cached reading of another character and
+        -- has no container behind it, so it owns its tooltip and is inert by construction rather than
+        -- by having its mouse taken away.
+        _snapshot   = snapshot,
     }, ItemSlotMeta)
 
     -- WE DO NOT TOUCH THE CLICK PATH. The template's own OnClick performs the whole interaction --
@@ -641,15 +672,40 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- control that looks perfect and does nothing. The template registers what its handler expects;
     -- there is nothing here for us to improve on.
 
-    -- CLICKS AND DRAGS ARE OBSERVED, NEVER OWNED. HookScript runs after the template's handler and
-    -- cannot displace it, which is the only safe way to emit a signal from a frame whose behaviour
-    -- belongs to the client. Same reason OnEnter is hooked rather than set: the template's OnEnter is
-    -- where the item tooltip comes from.
-    f:HookScript("OnClick", function(_, button)
-        S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
-    end)
-    f:HookScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
-    f:HookScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
+    -- A SNAPSHOT CELL OWNS ITS TOOLTIP, because there is no template OnEnter to inherit one from. The
+    -- live cell deliberately has no tooltip code at all -- the template's own OnEnter supplies it, and
+    -- a second owner anchoring the same frame makes it flick -- so this is the one kind of cell where
+    -- writing one is correct rather than duplication.
+    --
+    -- FROM THE CACHED LINK, not from the container: there is no container to ask. `SetHyperlink` is
+    -- what makes a stored link render as the real item tooltip, which is the whole reason the cache
+    -- stores links rather than ids alone.
+    if snapshot then
+        f:SetScript("OnEnter", function(self)
+            S:Emit(handle, S.SIGNALS.MOUSE_ENTER)
+            local link = handle._info and handle._info.hyperlink
+            local tt = GameTooltip
+            if not (link and tt and type(tt.SetHyperlink) == "function") then return end
+            tt:SetOwner(self, "ANCHOR_RIGHT")
+            tt:SetHyperlink(link)
+            tt:Show()
+        end)
+        f:SetScript("OnLeave", function()
+            S:Emit(handle, S.SIGNALS.MOUSE_LEAVE)
+            local tt = GameTooltip
+            if tt and type(tt.Hide) == "function" then tt:Hide() end
+        end)
+    else
+        -- CLICKS AND DRAGS ARE OBSERVED, NEVER OWNED. HookScript runs after the template's handler and
+        -- cannot displace it, which is the only safe way to emit a signal from a frame whose behaviour
+        -- belongs to the client. Same reason OnEnter is hooked rather than set: the template's OnEnter
+        -- is where the item tooltip comes from.
+        f:HookScript("OnClick", function(_, button)
+            S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
+        end)
+        f:HookScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
+        f:HookScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
+    end
 
     handle:Refresh()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

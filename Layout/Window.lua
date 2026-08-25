@@ -87,7 +87,28 @@ local function layoutAccessories(self)
         valign = "center",
         inset  = { left = TITLE_PAD_L, right = cs + CLOSE_EDGE_GAP + gap + band },
     })
-    self._titleBox:SetChildProps(self._drag, { inset = { right = cs + gap + band } })
+    -- A TITLE WIDGET SITS WHERE THE TEXT DOES, and takes its natural width rather than filling the
+    -- strip: it is a control the player aims at, so it must not stretch to the close button and it
+    -- must not be measured against the accessory band the way the text is.
+    if self._titleWidget then
+        self._titleBox:SetChildProps(self._titleWidget, {
+            align = "start", valign = "center",
+            width = self._titleWidgetW,
+            height = self._titleWidgetH,
+            inset = { left = TITLE_PAD_L },
+        })
+    end
+    -- THE DRAG REGION STOPS SHORT OF A TITLE WIDGET. Raising the widget above it is what makes the
+    -- click land, but leaving the drag underneath means a press that misses the control by a pixel
+    -- starts moving the window instead -- so the region is inset past it as well. Belt and braces on
+    -- purpose: one of the two is a z-order guarantee and the other is a geometry one.
+    local dragLeft = 0
+    if self._titleWidget then
+        dragLeft = TITLE_PAD_L + (self._titleWidgetW or 0) + gap
+    end
+    self._titleBox:SetChildProps(self._drag, {
+        inset = { left = dragLeft, right = cs + gap + band },
+    })
 end
 
 local function applyTheme(self)
@@ -387,6 +408,56 @@ function WinMeta:SavePosition()
 end
 
 --- Re-applies theme tokens to this window.
+--- Puts a component where the title TEXT normally goes, hiding the text.
+--
+-- For a window whose title IS a control -- the inventory's character dropdown is the case: the name of
+-- the character whose bags you are looking at is the title, so a separate word beside it labels the
+-- same thing twice.
+--
+-- NOT AddTitleAccessory, which is the other end of the strip. Accessories stack inward from the CLOSE
+-- BUTTON, so a dropdown handed to it lands squeezed against the X and pushes the icons out of the band
+-- -- which is exactly what shipped before this existed.
+--
+-- The text is hidden rather than emptied, so SetTitle keeps working and a caller can drop the widget
+-- later and get the title back.
+-- @param handle table|nil  a component handle, or nil to restore the text
+function WinMeta:SetTitleWidget(handle)
+    if self._titleWidget and self._titleWidget ~= handle then
+        self._titleBox:Remove(self._titleWidget)
+    end
+    self._titleWidget = handle or nil
+    if handle then
+        -- REPARENTED, so the widget belongs to the strip's subtree: the client hides and hit-tests a
+        -- whole subtree together, and a widget left under its original parent would stay clickable
+        -- after the window closed.
+        handle:GetFrame():SetParent(self._titleStrip:GetFrame())
+        -- CAPTURED BEFORE THE ADD. A stack child with no width stretches, so reading GetWidth() after
+        -- adding returns the width of the whole strip -- which then gets pinned as the "natural" width
+        -- and the dropdown covers the title bar, icons and all.
+        -- BOTH AXES, captured before the add for the same reason: a stack child pins neither by
+        -- default, so an unstated height stretches the widget to the full strip -- which made a
+        -- title-bar dropdown exactly as tall as the bar, with no clearance and no visible box.
+        self._titleWidgetW = handle:GetWidth()
+        self._titleWidgetH = handle:GetHeight()
+        self._titleBox:Add(handle)
+        -- RAISED ABOVE THE DRAG SURFACE, which is the whole reason a title widget needs more than a
+        -- layout slot. The drag region SPANS the strip from the left edge to the accessory band -- so
+        -- it covers exactly where the title sits -- and the client gives a click to the topmost
+        -- mouse-enabled frame. Reported in game: the dropdown was in the right place and would not
+        -- open, because the drag surface was taking every click. Same step as the close button and the
+        -- accessories, and after SetParent, which re-derives the level from the new parent.
+        SuuUI.UIRoot:RaiseAbove(handle:GetFrame(), self._frame, 10)
+        self._titleT:Hide()
+    else
+        self._titleT:Show()
+    end
+    applyTheme(self)
+end
+
+--- The widget currently standing in for the title, or nil.
+-- @return table|nil
+function WinMeta:GetTitleWidget() return self._titleWidget end
+
 function WinMeta:ApplyTheme()
     applyTheme(self)
 end

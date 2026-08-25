@@ -150,7 +150,11 @@ end
 -- flip never rebuilds the backdrop table.
 function DdMeta:_paint()
     local B = SuuUI.Backdrop
-    B.SetBg(self._f, "colorBgAlt")
+    -- The surface is overridable because a dropdown is not always on the page's own background. On a
+    -- window's TITLE STRIP -- which is itself colorBgAlt -- the default makes the field invisible: you
+    -- get a focus ring with nothing behind it, which reads as a stray outline rather than a control.
+    -- The concept's own `.dd` is darker than the strip it sits on, for exactly this reason.
+    B.SetBg(self._f, self._bg or "colorBgAlt")
     B.SetBorder(self._f, (self._hovered or self._open)
         and "colorBorderFocus" or "colorBorder")
 end
@@ -310,7 +314,10 @@ SuuUI.Components.InstallEnable(DdMeta, "_f")
 -- @param parent frame
 -- @return table  Dropdown handle
 function SuuUI.Components.Dropdown(props, parent)
-    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    -- An optional global name, following "SuuUI_" .. pluginId .. "_" .. role. Anonymous by default,
+    -- as every pooled or throwaway frame is -- but a control in a window's chrome is one an in-game
+    -- probe has to be able to reach by name when it misbehaves, and there is no other route to it.
+    local f = CreateFrame("Frame", props.name, parent, "BackdropTemplate")
     f:SetSize(props.w or 160, props.h or SuuUI.Theme:GetControlHeight("sizeControlLg"))
     f:EnableMouse(true)
 
@@ -357,7 +364,7 @@ function SuuUI.Components.Dropdown(props, parent)
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,
         _value=props.value, _onChange=props.onChange, _enabled=true,
-        _autoH=props.h == nil, _hovered=false, _open=false,
+        _autoH=props.h == nil, _hovered=false, _open=false, _bg=props.bg,
     }, DdMeta)
 
     if props.value then handle:SetValue(props.value) end
