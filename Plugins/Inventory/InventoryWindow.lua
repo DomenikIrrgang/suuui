@@ -88,18 +88,36 @@ function WindowMeta:SellJunk()
     -- have cached a price this session, and a total that is silently short is worse than a hedged one.
     local value = SuuUI.Readout.Money(total, { groupThousands = true, spaceUnits = true })
     local worth = unknown and ("at least " .. (value or "0c")) or (value or "0c")
+
+    local function sell()
+        Sell.Start(list, function()
+            if self._grid then self:Refresh() end
+            self:_updateFooter()
+        end)
+    end
+
+    -- SKIPPING THE DIALOG IS A REAL CHOICE, not a shortcut we talked the player out of. Someone who
+    -- clears greys after every run has already read this dialog fifty times, and a confirmation that is
+    -- always accepted trains the reflex that makes the one dangerous case slip through. The setting
+    -- defaults ON and the schema says why.
+    --
+    -- The count and the value still reach them, in chat rather than in a modal: with no dialog, that
+    -- line is the only record of what just went, and "sold 14 greys for 3g 22s" is what a player checks
+    -- when they realise something is missing.
+    if get("sell_confirm") == false then
+        SuuUI.Fault(("SuuUI: selling %d grey item%s for %s.")
+            :format(#list, #list == 1 and "" or "s", worth))
+        sell()
+        return
+    end
+
     C.Modal({
         title          = "Sell Junk",
         message        = ("Sell %d grey item%s for %s?\n\nThe vendor keeps only 12 buyback slots.")
                             :format(#list, #list == 1 and "" or "s", worth),
         confirmText    = "Sell",
         confirmVariant = "danger",
-        onConfirm      = function()
-            Sell.Start(list, function()
-                if self._grid then self:Refresh() end
-                self:_updateFooter()
-            end)
-        end,
+        onConfirm      = sell,
     }):Show()
 end
 

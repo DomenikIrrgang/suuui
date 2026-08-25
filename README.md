@@ -29,13 +29,17 @@ machine wins and ours registers nothing.
   the client's own standing colours on the reputation bar.
 - **Bar-to-bar docking.** Any bar can attach to any other on any of four edges, chains work, and
   the dropdown spans plugins — an experience bar can dock to an action bar.
+- **Bags.** One flat searchable, sortable grid of every bag slot in place of Blizzard's five frames,
+  a second live window at a banker with items moving both ways, a sell-greys button, and an
+  **account-wide cache**: a dropdown browses any character's bags read-only, and every item tooltip
+  in the game gains a line per other character holding it.
 
 Those built-ins ship inside their plugins; the registries they go through are the same ones a
 third-party plugin uses, so a widget from an addon that loads minutes later is picked up exactly
 like one of ours.
 
-Still to come: bag *frames*, chat, minimap, nameplates, tooltips, loot, and the rest of the
-gameplay surface.
+Still to come: chat, minimap, nameplates, loot, and the rest of the gameplay surface. Tooltips are
+reskinned already; what is missing there is a tooltip of SuuUI's own rather than the client's.
 
 > **Blizzard's action bars are hidden by default.** If you want them back without turning SuuUI
 > off, the switch is the first thing on the Action Bars settings page — "Hide Blizzard's Action
@@ -70,13 +74,13 @@ matching button.
 | Directory | Contents |
 |---|---|
 | `Libs/` | the only external code — LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, embedded for minimap-button interop and loaded first |
-| `Core/` | event bus, UI signals, attach points, the bar dock, data bar registry, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
+| `Core/` | event bus, UI signals, attach points, the bar dock, data bar registry, profiles, settings registry, theme tokens, font registry, pixel grid, game facts, the account-wide item cache, plugin lifecycle, edit mode (moveable frames, snap grid, properties panel) |
 | `Layout/` | window, container, and the four layout strategies (flow, grid, stack, anchor) |
 | `Components/` | ~30 components — button, slider, dropdown, colour picker, scroll frame, modal, tooltip, collapsible accordion, data bar field, status bar, secure action button, action bar grid, stance button, flyout panel, … |
 | `Animation/` | tween easings, animation runner, named presets |
 | `SettingsUI/` | settings window that auto-builds a page from a plugin's schema, grouped into collapsible sections |
 | `Themes/` | built-in read-only themes |
-| `Plugins/` | bundled first-party plugins — action bars (thirteen bars plus pet and stance, with Blizzard's cluster suppressed); unit frames with buff/debuff bands, and cast bars, for the player and the target; the experience and reputation watch bars; the top data bar with its clock, framerate and latency readouts, micro menu, bag field and addon-button tray; the minimap button, a LibDataBroker launcher wearing LibDBIcon's stock ring art so other addons' collectors recognise it |
+| `Plugins/` | bundled first-party plugins — action bars (thirteen bars plus pet and stance, with Blizzard's cluster suppressed); unit frames with buff/debuff bands, and cast bars, for the player and the target; the experience and reputation watch bars; the top data bar with its clock, framerate and latency readouts, micro menu, bag field and addon-button tray; the minimap button, a LibDataBroker launcher wearing LibDBIcon's stock ring art so other addons' collectors recognise it; the bag windows, their sell-greys loop and the account snapshot browser |
 | `Media/` | the icon atlas and its generator |
 | `Bindings.xml` | the sixty keybinding names SuuUI declares for the action slots Blizzard exposes no bar for |
 | `Tests/` | test suite and a simulated WoW client (not shipped — absent from the `.toc`) |
@@ -101,7 +105,7 @@ lua Tests/run.lua --filter Slider # one suite or test name
 
 The suite loads the real addon into a sandbox against a simulated client that solves the
 actual anchor graph, so specs assert real pixel geometry rather than intent. It currently
-runs 4158 specs across 62 files — all passing, five skipped — with no test dependencies at all:
+runs 4803 specs across 72 files — all passing, eight skipped — with no test dependencies at all:
 no busted, no luarocks. The embedded libraries in `Libs/` are shipped runtime code, not test
 tooling; the suite loads them the same way the client does.
 

@@ -40,6 +40,10 @@ SuuUI/
 │   ├── Dock.lua          -- bar-to-bar docking: the anchor graph, four edges, the cycle guard,
 │   │                     --   and the cross-plugin participant registry
 │   ├── DataBar.lua       -- data bar widget registry + the height the bar occupies
+│   ├── ItemCache.lua     -- the ACCOUNT-WIDE record of which character holds what, and where. A Core
+│   │                     --   service rather than a plugin file: two plugins read it (the inventory
+│   │                     --   window and the tooltip's account section), and the answer has to exist
+│   │                     --   whether or not the window that writes it is loaded
 │   ├── Readout.lua       -- how a bar's value is SPELLED: the shared current/max, current and
 │   │                     --   percent formats, the slot list, the dropdown options. Neither a
 │   │                     --   game fact nor a token — a presentation choice the whole UI has to
@@ -2856,6 +2860,99 @@ from the pet bar.
 same number for the band's floor and ceiling, so the bar draws **full** and reports `capped`; an
 earlier version returned nil there and hid itself, making an Exalted faction look identical to no
 faction at all.
+
+### `inventory` (`Plugins/Inventory/`)
+
+One flat searchable grid of every bag slot, replacing Blizzard's five separate bag frames — plus a
+second live window at a banker, a sell-greys button, and a read-only browser for every other
+character on the account. `Inventory.lua` owns the plugin, `InventoryWindow.lua` is the renderer,
+`Sell.lua` the throttled sale loop, `Suppress.lua` the bag-frame replacement.
+
+**`InventoryWindow` is instantiated at most twice and is the same renderer three times over**: live
+bags, a live bank during a session, and any character's snapshot. That is the central structural
+decision — a fix to the grid fixes all three — and it is why the window is parameterised by
+`{ character, container }` rather than existing in three variants.
+
+**Nothing here is secure, which is the big simplification.** Unlike the action bars, item buttons are
+ordinary frames and every call the window makes is unprotected: `PickupContainerItem` and its pair
+are callable, verified on this client (ElvUI's sorter drives them from an `OnUpdate`). So no combat
+lockdown, no deferred geometry, no attributes-once rule. Do not carry that machinery over out of
+habit.
+
+**But the cells DO inherit `ContainerFrameItemButtonTemplate`, and SuuUI must not touch their click
+path.** Using an item is protected, so the template's own untainted `OnClick` is the only thing that
+can perform a pickup, place, split, sell, deposit or use. A cell therefore calls `SetID`, observes
+with `HookScript`, and calls **no** `RegisterForClicks`, no `SetScript("OnClick")`, and adds no
+secure template — each of those was tried and each silently destroyed the working handler. Full
+account, including the three failed approaches and the taint-source diagnostic, in
+`.kiro/specs/inventory.md` §0.
+
+**A cell's KIND is fixed at construction, and there are two.** A live cell carries the template; a
+**snapshot** cell carries none, gets no `SetID`, and owns its own tooltip from the cached link. That
+is not symmetry for its own sake: an alt's cached `(bag, slot)` are real coordinates addressing
+**whoever is logged in**, so one template cell showing an alt's slot 1 would sell *your* item in bag
+0 slot 1. Two kinds makes that impossible by construction, which is also why read-only does not drop
+a snapshot cell's mouse — it has no handler to stop, and taking its mouse would remove the hover its
+tooltip needs.
+
+### The account cache (`Core/ItemCache.lua`)
+
+The account-wide record of which character holds what, and where. **A Core service rather than a
+plugin file**, for the reason `DataBar` and `Dock` are: two plugins read it — the inventory window
+and the tooltip's account section — a plugin may never call into another plugin, and disabling the
+inventory window must not silently stop the tooltip lines working.
+
+```lua
+SuuUI.ItemCache:Capture(which)      -- "bags" | "bank"; refuses an unreadable read
+SuuUI.ItemCache:Get(key, which)     -- one character's stored container
+SuuUI.ItemCache:SeenAt(key, which)  -- freshness, per container
+SuuUI.ItemCache:MoneyOf(key)        -- nil, not 0, for a character captured before money was stored
+SuuUI.ItemCache:Characters()        -- ordered: current, then this realm, then others
+SuuUI.ItemCache:ItemInfo(id)        -- the shared item table's entry
+SuuUI.ItemCache:Find(id)            -- { { key, container, count } }, memoised
+SuuUI.ItemCache:Total(id)           -- account-wide count
+SuuUI.ItemCache:Resolve(id)         -- fill in an item the client finally named
+SuuUI.ItemCache.NameFromLink(link)  -- the name inside an item link
+SuuUI.ItemCache:Forget(key)
+```
+
+**Two tables, not one.** An account-wide `items` table keyed by item id holds the link, icon and
+quality once; per-character slots are just `itemID × count`. At ~250 slots per character a 60-byte
+link stored per slot per character is ~25 KB each and grows with every alt, and the shared table is
+reused by the tooltip, the search index and the ledger for free.
+
+Five properties are load-bearing, and each was learned by getting it wrong:
+
+- **Upsert only ever fills in.** A live read can be thin, and blanking a name that already worked is
+  invisible until a player opens an alt and finds a wall of nothing.
+- **Capture REFUSES a read reporting no slots at all.** The `PLAYER_LOGOUT` sweep runs when the
+  container API is already torn down, and it wrote `money = 0` and an empty slot table over a good
+  snapshot — so a cached alt appeared in the dropdown with nothing in it. The discriminator is the
+  SLOT count, not the item count: a character can genuinely have empty bags, but every character has
+  a backpack.
+- **The container API returns NO ITEM NAME.** `GetContainerItemInfo` answers icon, count, quality,
+  link and id, so nothing stored a name and a cached character could not be searched at all — the
+  filter matched zero items, silently. `NameFromLink` parses it out of the link, needing neither
+  `GetItemInfo` nor an event.
+- **`GET_ITEM_INFO_RECEIVED` fills in, and only for an id some character already holds.** The event
+  fires for every item the client resolves for any reason — a tooltip, a chat link, an auction search
+  — so acting on all of them would grow the account table with thousands of items nobody owns. The
+  announcement (`SUUUI_ITEMS_RESOLVED`) is coalesced through the capture debounce, because the event
+  fires once per item and a fresh login resolves dozens in a few frames.
+- **`Find` is memoised, and the invalidation is the whole risk.** It walks characters × containers ×
+  bags × slots, and it is on a hover path: the tooltip's account section calls it per item, so moving
+  the cursor across an 80-cell grid calls it 80 times. Cleared by `Capture` and `Forget` and nothing
+  else — resolving an item's name cannot move it between characters — and it hands out a copy, since
+  the memo is what the next caller reads.
+
+**The bank is only readable while the bank frame is open**, which is exactly when the second window
+is on screen — so the live bank session *is* the capture window, and the freshness stamp is simply
+"when you last stood here". A consequence worth stating: another character's bank is absent from the
+cache until that character has visited a banker at least once, and there is no way to read it
+retroactively.
+
+**`BankFrame` must never be hidden** — neuter it (alpha 0, mouse off, `ClearAllPoints`). Its
+`IsShown()` is meaningless as a state signal; ask `ItemCache:IsBankOpen()`.
 
 ### `tooltips` (`Plugins/Tooltips/`)
 

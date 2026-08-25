@@ -21,7 +21,32 @@ local M = {}
 
 -- 0.2s, ElvUI's interval on this client. Its own constant rather than a theme token: this is a
 -- SERVER pacing figure, not design language, and a theme has no business setting it.
+--
+-- It IS a plugin setting, though, which is a different thing: what paces safely depends on the
+-- player's latency, and someone on 250ms wants a longer gap than someone on 20ms. TICK is the default
+-- and the floor of what we recommend; SetInterval overrides it.
 local TICK = 0.2
+local interval = TICK
+
+--- Overrides the seconds between sales. nil or a non-positive value returns to the default.
+--
+-- Clamped rather than trusted, because a hand-edited SavedVariable reaching 0 would turn the ticker
+-- into a per-frame sell loop -- which is exactly the burst the interval exists to avoid.
+-- @param seconds number|nil
+function M.SetInterval(seconds)
+    if type(seconds) ~= "number" or seconds <= 0 then
+        interval = TICK
+        return interval
+    end
+    if seconds < 0.05 then seconds = 0.05 end
+    if seconds > 5 then seconds = 5 end
+    interval = seconds
+    return interval
+end
+
+--- The interval currently in force.
+-- @return number
+function M.GetInterval() return interval end
 
 local ticker
 local queue = {}
@@ -116,7 +141,7 @@ end
 
 local function tick(_, dt)
     elapsed = elapsed + (dt or 0)
-    if elapsed < TICK then return end
+    if elapsed < interval then return end
     elapsed = 0
 
     -- RE-CHECKED EVERY TICK, not once at the start. The player can walk away from the vendor or close

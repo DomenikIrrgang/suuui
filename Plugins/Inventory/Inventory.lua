@@ -60,11 +60,23 @@ local function pairWindows()
     local gap = SuuUI.Theme:GetToken("spaceMd") or 12
     local bagsW = bagsWindow:GetWindow():GetWidth() or 0
     local bankW = bankWindow:GetWindow():GetWidth() or 0
-    -- Bank on the LEFT, bags on the RIGHT: the bags are what the player drags FROM most of the time,
-    -- and the sort control sits in the bags window's title bar, so keeping it on the outer edge means
-    -- the two title bars are not adjacent.
-    bankWindow:GetWindow():Center(-((bankW + gap) / 2))
-    bagsWindow:GetWindow():Center((bagsW + gap) / 2)
+    -- Bank on the LEFT by default: the bags are what the player drags FROM most of the time, and the
+    -- sort control sits in the bags window's title bar, so keeping the bags on the right puts that
+    -- control on the outer edge and stops the two title bars being adjacent. `bank_side` exists because
+    -- that is a preference rather than a fact -- a left-handed layout, or a player whose other addons
+    -- live on the right, wants the opposite.
+    --
+    -- Read here rather than cached, and each window is offset by the OTHER one's half-width plus the
+    -- gap: the two are not the same width (the bank has more slots) so a single fixed offset would
+    -- leave a gap on one side and an overlap on the other.
+    local bankLeft = SuuUI.Settings:Get(PLUGIN_ID, "bank_side") ~= "right"
+    if bankLeft then
+        bankWindow:GetWindow():Center(-((bankW + gap) / 2))
+        bagsWindow:GetWindow():Center((bagsW + gap) / 2)
+    else
+        bankWindow:GetWindow():Center((bankW + gap) / 2)
+        bagsWindow:GetWindow():Center(-((bagsW + gap) / 2))
+    end
 end
 
 --- Opens the inventory window, building it on first use.
@@ -171,6 +183,40 @@ plugin = SuuUI:CreatePlugin({
               default = 34, min = 24, max = 48, step = 1 },
             { key = "sort_mode", label = "Sort By", type = "dropdown",
               default = "quality", options = W.SORT_OPTIONS },
+            -- TWO ENTRIES FROM THE PLAN'S TABLE ARE DELIBERATELY ABSENT, and their absence is the
+            -- decision rather than an oversight.
+            --
+            -- `grouping` was to ship "as a stub returning flat in v1" -- a dropdown with one working
+            -- option and no effect. That is precisely the failure the theme rule names: a control that
+            -- silently does nothing is worse than an absent one, because the player reads it as broken
+            -- rather than as unbuilt. It arrives with the feature.
+            --
+            -- `account_badges` (T2 corner badges) contradicts this plan's own §1, which REJECTS them:
+            -- they read as a second stack count and collide with the real one. A toggle for a rejected
+            -- feature is a control that either does nothing or turns on something we decided against.
+            { key = "", label = "Bank", type = "section" },
+            -- The DEFAULT IS LEFT, not the plan table's `right`, because left is what ships today and
+            -- has a stated reason: the bags are what a player drags FROM, and the sort control sits in
+            -- the bags window's title bar, so bags-on-the-right keeps that control on the outer edge and
+            -- the two title bars apart. Defaulting to `right` would silently move both windows for
+            -- anyone already using them, to no benefit.
+            { key = "bank_side", label = "Bank Window Side", type = "dropdown", default = "left",
+              options = {
+                  { value = "left",  label = "Left of the bags" },
+                  { value = "right", label = "Right of the bags" },
+              } },
+            { key = "", label = "Selling", type = "section" },
+            -- ON BY DEFAULT AND MEANT TO STAY THAT WAY. Selling greys is irreversible once the vendor's
+            -- twelve buyback slots overflow, a flat grid has no junk section to inspect first, and a
+            -- grey can be a quest item or a vendor-recipe carrier. Off means one click sells.
+            { key = "sell_confirm", label = "Confirm Before Selling", type = "toggle",
+              default = true },
+            -- NO `enabledIf = "sell_confirm"` HERE, which is the trap worth naming: the interval paces
+            -- the sale itself, so it applies whether or not a dialog preceded it. Gating it on the
+            -- confirmation would grey out the one control that still matters when the confirmation is
+            -- off -- which is exactly when a player is selling fastest.
+            { key = "sell_interval", label = "Seconds Between Sales", type = "slider",
+              default = 0.2, min = 0.1, max = 1.0, step = 0.05 },
         })
 
         -- No `immediate` on the plugin's own enable watcher: Plugins:autoEnable already applies the
@@ -205,6 +251,23 @@ plugin = SuuUI:CreatePlugin({
         -- bags immediately and exercises the same Restore path onDisable uses. `immediate` is right
         -- here, unlike on the plugin's own `enabled` key: this watcher runs inside onEnable, which is
         -- already past the init pass.
+        -- RE-PAIRS THE OPEN WINDOWS, rather than waiting for the next visit to a banker. Same
+        -- live-applier rule the column and cell-size sliders follow: a setting whose effect appears only
+        -- after the surface is rebuilt reads as a setting that did not take. No `immediate` -- pairing
+        -- runs on open anyway, and firing it during onInit would place windows that do not exist yet.
+        SuuUI.Settings:Watch(PLUGIN_ID, "bank_side", function()
+            pairWindows()
+        end, PLUGIN_ID .. ".bankside")
+
+        -- THE SELL INTERVAL IS APPLIED THROUGH A WATCHER, not read at each sale, because Sell owns the
+        -- clamp: a hand-edited SavedVariable reaching 0 would turn the ticker into a per-frame sell loop.
+        -- Immediate, so the stored value is in force before the first sale rather than after the first
+        -- change -- the same reason every bound widget passes it.
+        SuuUI.Settings:Watch(PLUGIN_ID, "sell_interval", function(value)
+            local Sell = SuuUI._Inventory and SuuUI._Inventory.Sell
+            if Sell and Sell.SetInterval then Sell.SetInterval(value) end
+        end, PLUGIN_ID .. ".sell", { immediate = true })
+
         SuuUI.Settings:Watch(PLUGIN_ID, "suppress_blizzard", function(on)
             if on then S.Apply() else S.Restore() end
         end, PLUGIN_ID .. ".suppress", { immediate = true })
@@ -225,6 +288,8 @@ plugin = SuuUI:CreatePlugin({
 
     onDisable = function()
         SuuUI.Settings:Unwatch(PLUGIN_ID .. ".shape")
+        SuuUI.Settings:Unwatch(PLUGIN_ID .. ".sell")
+        SuuUI.Settings:Unwatch(PLUGIN_ID .. ".bankside")
         SuuUI.Settings:Unwatch(PLUGIN_ID .. ".suppress")
         -- Restore BEFORE dropping the handler, and unconditionally: a plugin that cannot hand the
         -- default UI back is not finished, and this runs for a settings-driven Disable as well as for

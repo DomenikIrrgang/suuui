@@ -913,6 +913,56 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
+    -- THE SETTINGS THAT ARRIVED WITH PHASE 13. Each asserts the value REACHES something, because a
+    -- schema entry is not a feature: a registered key that nothing reads renders as a control that
+    -- silently does nothing, which a player reads as broken rather than as unbuilt. That is also why
+    -- `grouping` and `account_badges` from the plan's table are deliberately absent -- the first would
+    -- have shipped as a stub with no effect, the second toggles a feature §1 of the plan rejects.
+    describe("the settings", function()
+        local function getS(key) return H.SuuUI.Settings:Get("inventory", key) end
+        local function setS(key, v) H.SuuUI.Settings:Set("inventory", key, v) end
+
+        it("declares no control that nothing reads", function()
+            local schema = H.SuuUI.Settings:GetSchema("inventory")
+            expect(schema).truthy()
+            -- Named explicitly rather than derived, so ADDING a key without wiring it fails here rather
+            -- than shipping as a dead control.
+            local wired = {
+                enabled = true, suppress_blizzard = true,
+                columns = true, cell_size = true, sort_mode = true,
+                bank_side = true, sell_confirm = true, sell_interval = true,
+            }
+            for _, e in ipairs(schema) do
+                if e.key and e.key ~= "" and e.type ~= "section"
+                   and e.type ~= "position" and e.type ~= "internal" then
+                    expect(wired[e.key]).as("'" .. tostring(e.key) .. "' is read by something").truthy()
+                end
+            end
+        end)
+
+        it("keeps the bank on the left by default", function()
+            -- The default preserves what shipped: bags on the right keeps the sort control on the outer
+            -- edge and the two title bars apart. Defaulting the other way would silently move both.
+            expect(getS("bank_side")).eq("left")
+        end)
+
+        it("paces selling from the setting, clamped", function()
+            local Sell = H.SuuUI._Inventory.Sell
+            setS("sell_interval", 0.5)
+            expect(Sell.GetInterval()).as("the watcher applied it").near(0.5, 0.001)
+            -- A hand-edited SavedVariable reaching 0 would turn the ticker into a per-frame sell loop,
+            -- which is the burst the interval exists to prevent.
+            Sell.SetInterval(0)
+            expect(Sell.GetInterval()).as("zero falls back to the default").near(0.2, 0.001)
+            Sell.SetInterval(99)
+            expect(Sell.GetInterval()).as("and an absurd value is capped").near(5, 0.001)
+        end)
+
+        it("confirms before selling by default", function()
+            expect(getS("sell_confirm")).as("irreversible, so it defaults on").eq(true)
+        end)
+    end)
+
     describe("container ids", function()
         it("covers the backpack and every bag slot", function()
             local ids = IW.containerIds("bags")

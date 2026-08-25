@@ -510,6 +510,47 @@ free slots cannot hold loot. `GetContainerNumFreeSlots` returns the type as its 
 specifically so a consumer can exclude them, and a spec that stages one is testing whether the
 consumer does. A bag id that was never staged answers `0, 0` rather than nil.
 
+### Container slots, and the one field the client does NOT return
+
+```lua
+H.setBagItem(bag, slot, props, opts)   -- MERGES; fires BAG_UPDATE unless opts.silent
+H.clearBagItem(bag, slot, opts)        -- empties it, so GetContainerItemInfo answers nil
+H.setBankOpen(bool)                    -- drives BANKFRAME_OPENED / _CLOSED and bank readability
+H.getUsedContainerItems()              -- every UseContainerItem call, in order
+H.resetUsedContainerItems()
+```
+
+**There is no `name` field, and that is the client's shape rather than a thin model.**
+`GetContainerItemInfo` answers icon, count, locked, quality, readable, lootable, link, filtered,
+noValue, id and bound — and no name. An item's name is only ever available from `GetItemInfo` (which
+answers nil until `GET_ITEM_INFO_RECEIVED`) or by parsing the link. `setBagItem` therefore also
+defaults **no** `itemName` and **no** `hyperlink`: an uncached item genuinely reports neither, and
+`59_itemcache_spec` needs that exact state. Defaulting them was tried and it broke that spec.
+
+**That absence is what let a real bug ship green, and the lesson generalises past bags.** Every
+snapshot-search spec staged item names by writing them straight into the cache's item table — a thing
+the capture path cannot do, because the container API has no name to give it. So the specs asserted
+against a state production never reaches, search on a cached character matched zero items in game, and
+every assertion involved was individually sound.
+
+**When a feature passes in the suite and fails in reality, suspect the SETUP before the assertions.**
+Ask what writes the state in production, and drive that writer from staged CLIENT data instead of
+writing its output yourself:
+
+```lua
+-- ❌ asserts the staging: nothing in production can put a name here
+cacheItem(22832, { name = "Arcane Powder", q = 1, icon = "i" })
+expect(grid:CountMatches()).eq(1)
+
+-- ✅ drives the real writer from client state, and fails when the writer is wrong
+H.setBagItem(0, 1, { itemID = 22832, stackCount = 12, quality = 1, iconFileID = "i",
+                     hyperlink = "|cffffffff|Hitem:22832|h[Arcane Powder]|h|r" })
+H.clearItems()                 -- the client has never cached this item
+SuuUI.ItemCache:Capture("bags")
+expect(grid:CountMatches()).eq(1)
+```
+
+
 ### The simulated client's APIs come in two shapes
 
 This client is a hybrid, and two data sources are reachable by either a namespaced call or a bare

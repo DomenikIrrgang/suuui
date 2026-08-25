@@ -55,6 +55,31 @@ describe("Plugins/Inventory bank session", function()
             local bags, bank = frames()
             expect(H.box(bank).left).as("bank is the left of the pair").lt(H.box(bags).left)
         end)
+
+        -- THE SIDE IS A PREFERENCE, NOT A FACT, which is why it became a setting. Left is the default
+        -- and has a reason -- the bags are what a player drags FROM, and the sort control sits in the
+        -- bags window's title bar, so bags-on-the-right keeps that control on the outer edge and the two
+        -- title bars apart -- but a player whose other addons live on the right wants the opposite.
+        --
+        -- Asserted as a real SWAP rather than as a stored value: a schema entry nothing reads renders as
+        -- a control that silently does nothing, and only the geometry can tell those apart.
+        it("swaps the pair when bank_side says right", function()
+            H.SuuUI.Settings:Set("inventory", "bank_side", "right")
+            H.setBankOpen(true)
+            local bags, bank = frames()
+            expect(H.box(bank).left).as("bank is now the right of the pair").gt(H.box(bags).left)
+            H.expectNoOverlap({ bags, bank })
+        end)
+
+        it("re-pairs when the side changes while both are open", function()
+            H.setBankOpen(true)
+            local bags, bank = frames()
+            expect(H.box(bank).left).lt(H.box(bags).left)
+            -- Changing it with the windows already up must move them, not wait for the next visit to a
+            -- banker -- the same live-applier rule the column and cell-size sliders follow.
+            H.SuuUI.Settings:Set("inventory", "bank_side", "right")
+            expect(H.box(bank).left).as("the change reached the open windows").gt(H.box(bags).left)
+        end)
     end)
 
     describe("what each window is over", function()
