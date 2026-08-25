@@ -666,6 +666,138 @@ describe("Plugins.Tooltips", function()
             end)
         end)
 
+        -- THE ACCOUNT SECTION (T1): which OTHER characters hold this item, read from the Core cache.
+        --
+        -- The cache is staged by RUNNING A REAL CAPTURE against staged client state, not by writing the
+        -- store by hand. That is not fussiness: the last bug in this feature area survived every spec
+        -- because the specs wrote item names straight into the item table, which the container API
+        -- cannot do -- so they asserted against a state production never reaches.
+        describe("the account section", function()
+            local ID = 22832
+            local ITEM = "|cffffffff|Hitem:22832|h[Arcane Powder]|h|r"
+
+            -- Captures the CURRENT character with the given bag contents, then renames the record so it
+            -- belongs to someone else -- which is how a second character gets into the cache in a
+            -- single-character test client. The rename is the only shortcut, and it copies a record
+            -- that a genuine capture produced.
+            local function cacheOther(name, class, bags, bank)
+                local IC = H.SuuUI.ItemCache
+                IC:Init()
+                H.setBags({ [0] = { free = 6, slots = 8 } })
+                H.setBagItem(0, 1, { itemID = ID, stackCount = bags or 1, quality = 1,
+                                     iconFileID = "i", hyperlink = ITEM })
+                IC:Capture("bags")
+                local store = H.env.SuuUIItemCache
+                local mine = store.chars[IC:CurrentKey()]
+                local key = name .. "-TestRealm"
+                store.chars[key] = {
+                    class = class or "MAGE",
+                    bags = { seen = mine.bags.seen, slots = mine.bags.slots },
+                }
+                if bank then
+                    store.chars[key].bank =
+                        { seen = mine.bags.seen, slots = { [-1] = { [1] = { ID, bank } } } }
+                end
+                -- The current character's own record is cleared so the section has only the alt to
+                -- report -- the live `Carrying` line already answers for whoever is logged in.
+                store.chars[IC:CurrentKey()] = nil
+                IC:Forget("nobody")   -- clears the Find memo, which the capture above populated
+                return key
+            end
+
+            local function showThisItem()
+                H.setItemInfo(ITEM, { quality = 1, itemLevel = 1, countBags = 0, countBank = 0 })
+                tip():SetOwner(H.env.UIParent, "ANCHOR_NONE")
+                tip()._ttItem = ITEM
+                tip():SetHyperlink(ITEM)
+            end
+
+            it("names a character holding the item, with the count", function()
+                cacheOther("Thalira", "MAGE", 8)
+                showThisItem()
+                expect(lineValue("Thalira")).as("one line per holder").eq("8")
+            end)
+
+            it("merges a character's bags and bank onto ONE line", function()
+                -- Find returns bags and bank as SEPARATE hits. Two consecutive lines for one character
+                -- would read as two characters, and the format matches the Carrying line above it.
+                cacheOther("Thalira", "MAGE", 8, 20)
+                showThisItem()
+                expect(lineValue("Thalira")).eq("8 (bank 20)")
+            end)
+
+            it("says 'bank N' rather than '0 (bank N)' for a bank-only holding", function()
+                -- "0 (bank 20)" makes a player check their bags for nothing.
+                local IC = H.SuuUI.ItemCache
+                cacheOther("Thalira", "MAGE", 8, 20)
+                local store = H.env.SuuUIItemCache
+                store.chars["Thalira-TestRealm"].bags = nil
+                IC:Forget("nobody")
+                showThisItem()
+                expect(lineValue("Thalira")).eq("bank 20")
+            end)
+
+            it("class-colours the character's name", function()
+                cacheOther("Thalira", "MAGE", 8)
+                showThisItem()
+                local want = H.SuuUI.Game:ClassColor("MAGE")
+                local found
+                for i = 1, tip():NumLines() do
+                    if (tip():GetLine(i)) == "Thalira" then
+                        local lr, lg, lb = tip():GetLineColor(i)
+                        found = { lr, lg, lb }
+                    end
+                end
+                expect(found).as("the line was found").truthy()
+                expect(found[1]).as("same fact the dropdown paints with").near(want[1], 0.001)
+                expect(found[3]).near(want[3], 0.001)
+            end)
+
+            it("never lists the character you are playing", function()
+                -- The live `Carrying` line above already answers for you, and from the client rather
+                -- than from a cache that is only as fresh as your last capture. Two figures for one
+                -- character invite the player to compare them and find them disagreeing.
+                local IC = H.SuuUI.ItemCache
+                IC:Init()
+                H.setBags({ [0] = { free = 6, slots = 8 } })
+                H.setBagItem(0, 1, { itemID = ID, stackCount = 5, quality = 1,
+                                     iconFileID = "i", hyperlink = ITEM })
+                IC:Capture("bags")
+                showThisItem()
+                local me = IC:CurrentKey():match("^(.-)%-")
+                expect(hasLine(me)).as("you are not in the account section").falsy()
+            end)
+
+            it("adds nothing when nobody else holds it", function()
+                H.SuuUI.ItemCache:Init()
+                showThisItem()
+                expect(hasLine("Account total")).falsy()
+            end)
+
+            it("is silent while switched off", function()
+                cacheOther("Thalira", "MAGE", 8)
+                H.SuuUI.Settings:Set("tooltips", "account_counts", false)
+                showThisItem()
+                expect(hasLine("Thalira")).falsy()
+            end)
+
+            it("lists a character holding none only when asked", function()
+                local key = cacheOther("Thalira", "MAGE", 8)
+                local store = H.env.SuuUIItemCache
+                store.chars["Broke-TestRealm"] = { class = "PRIEST",
+                                                   bags = { seen = 1, slots = { [0] = {} } } }
+                H.SuuUI.ItemCache:Forget("nobody")
+                showThisItem()
+                expect(hasLine("Broke")).as("off by default").falsy()
+
+                H.SuuUI.Settings:Set("tooltips", "account_zero", true)
+                tip():ClearLines()
+                showThisItem()
+                expect(lineValue("Broke")).as("and an em dash rather than a bare 0").eq("—")
+                expect(key).truthy()
+            end)
+        end)
+
         describe("money formatting", function()
             it("drops the units that would read as zero", function()
                 -- "12g 0s 88c" is noise, and a price under a gold has no business showing a

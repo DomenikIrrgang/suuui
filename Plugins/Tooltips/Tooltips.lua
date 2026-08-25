@@ -166,6 +166,17 @@ local plugin = SuuUI:CreatePlugin({
               default = true },
             { key = "item_count_bank", label = "Include The Bank", type = "toggle",
               default = true, enabledIf = "item_count" },
+            -- THE ACCOUNT SECTION'S SETTINGS LIVE HERE, not on the inventory plugin's page where the
+            -- plan's settings table put them. Every other tooltip LINE's toggle is here, and more
+            -- importantly the section must survive the inventory plugin being switched off: the data is
+            -- a Core service precisely so that disabling the window does not stop the tooltip working,
+            -- and parking the toggle under `inventory` would reintroduce exactly that coupling through
+            -- the settings layer instead of the data layer. Renamed from the plan's `tooltip_counts` /
+            -- `tooltip_show_zero`, since a `tooltip_` prefix is redundant on the tooltips page.
+            { key = "account_counts", label = "Show What Your Other Characters Hold",
+              type = "toggle", default = true },
+            { key = "account_zero", label = "Include Characters Holding None",
+              type = "toggle", default = false, enabledIf = "account_counts" },
             { key = "sell_price", label = "Show Sell Price", type = "toggle", default = false },
             { key = "unit_target", label = "Show What A Unit Is Targeting", type = "toggle",
               default = true },

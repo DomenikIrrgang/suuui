@@ -424,6 +424,141 @@ describe("Components/ItemGrid", function()
             H.env.SuuUIItemCache.items[id] = info
         end
 
+        -- UNRESOLVED ITEMS, which are the ordinary state on a fresh login rather than an edge case: the
+        -- cache stores ids and counts, and GetItemInfo answers nil for anything this client has not seen
+        -- yet. Three separate behaviours hang off that, and each fails differently.
+        -- THE BUG THIS SET EXISTS FOR, asserted end to end through the REAL capture path rather than by
+        -- writing the name into the item table by hand. Searching a cached character matched zero items
+        -- whatever you typed, because the container API returns no name and nothing derived one. Every
+        -- other search spec here stages the name directly, which is why they all passed.
+        it("can be SEARCHED after a real capture, with no item info staged", function()
+            H.setBags({ [0] = { free = 6, slots = 8 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 12, quality = 1,
+                                 iconFileID = "icon-ap",
+                                 hyperlink = "|cffffffff|Hitem:22832|h[Arcane Powder]|h|r" })
+            H.setBagItem(0, 2, { itemID = 21877, stackCount = 5, quality = 1,
+                                 iconFileID = "icon-nw",
+                                 hyperlink = "|cffffffff|Hitem:21877|h[Netherweave Cloth]|h|r" })
+            H.clearItems()   -- the client has never cached either item
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            IC:Capture("bags")
+
+            local g = grid({ containers = { 0 }, character = IC:CurrentKey(), which = "bags" })
+            g:SetFilter("arcane")
+            expect(g:CountMatches()).as("the search finds it by name").eq(1)
+            g:SetFilter("cloth")
+            expect(g:CountMatches()).as("and finds the other one").eq(1)
+            g:SetFilter("zzz")
+            expect(g:CountMatches()).as("and still says no when it means no").eq(0)
+        end)
+
+        -- OPEN QUESTION, deliberately left undecided rather than quietly resolved. The specs above pin
+        -- what the code does TODAY; this names the invariant nobody has agreed to yet.
+        --
+        -- The concept draws unresolved items as `?` cells, and its premise is an ID-ONLY cache: "an
+        -- ID-only cache renders a wall of blank cells the first time you open an alt on a fresh login".
+        -- That premise does not hold on this client. GetContainerItemInfo returns the icon, quality and
+        -- link straight from the CONTAINER rather than from the item cache, so a captured item always
+        -- has its art -- and now its name too, parsed from the link -- which means `pending` requires a
+        -- record with no link and no icon at all. Confirmed in game: no `?` cell ever appeared, on a
+        -- cold client, immediately after a restart.
+        --
+        -- So the options are: keep IsPending as a defensive path (a hand-edited or truncated record
+        -- renders honestly instead of as a blank cell, and it costs one field), or delete it under
+        -- TESTING.md's "if the code is genuinely unreachable, delete it". Deleting also removes the one
+        -- thing that would make a future partial-capture bug visible rather than silent, which is the
+        -- argument for keeping it. Not decided; raised with Domenik 2026-08-25 and parked.
+        xit("decides whether a ? cell is reachable on this client at all", function()
+            -- Whichever way this goes, the assertion belongs here: either a constructed case that
+            -- genuinely produces a pending cell in production, or the absence of IsPending entirely.
+        end)
+
+        it("marks a cached item pending when the client cannot name it", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 12 } } })
+            -- Deliberately NOT cacheItem'd: no entry in the shared item table at all.
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local cell = g._entries[1].cell
+            expect(cell:IsPending()).as("drawn as the concept's ? cell").truthy()
+        end)
+
+        it("does NOT mark an item pending merely for having no icon", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 12 } } })
+            -- A known item with a name but no icon is resolved, just thin. Inferring pending from a
+            -- missing icon would put a `?` on it and claim the client knows nothing about it.
+            cacheItem(22832, { name = "Arcane Powder", q = 1 })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            expect(g._entries[1].cell:IsPending()).falsy()
+        end)
+
+        -- THE ORDERING RULE THE CONCEPT STATES: unresolved items "sort to the end and slide into place
+        -- rather than reshuffling the grid". Without it an unnamed item sorts on an empty name, which
+        -- under name order is the FRONT -- so resolving it makes it jump the length of the grid and
+        -- shove everything else along.
+        it("sorts unresolved items to the end of the occupied run", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = {
+                [1] = { 111, 1 },   -- unresolved
+                [2] = { 222, 1 },   -- a grey: the LOWEST quality, so it loses to everything but pending
+            } })
+            cacheItem(222, { name = "Broken Fang", q = 0, icon = "i" })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            g:SetSortMode("quality")
+            g:Sort()
+            local first, second = g._entries[1].cell, g._entries[2].cell
+            expect(first:IsPending()).as("the resolved grey comes first").falsy()
+            expect(second:IsPending()).as("the unresolved item is parked at the end").truthy()
+        end)
+
+        it("keeps pending items ahead of empty slots", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [2] = { 111, 1 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            g:SetSortMode("quality")
+            g:Sort()
+            -- A pending cell is still an ITEM. Past the free-slot tail it would read as one stranded
+            -- beyond the end of the bag.
+            expect(g._entries[1].cell:IsPending()).as("before the empties, not after").truthy()
+        end)
+
+        -- THE FILL-IN. Without this a cached alt keeps its `?` cells until the window is closed and
+        -- reopened -- and "reopen it" should never be how a player fixes anything.
+        it("resolves its cells when the cache announces new item info", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 12 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            expect(g._entries[1].cell:IsPending()).as("unresolved to begin with").truthy()
+            -- What the client answering GET_ITEM_INFO_RECEIVED leaves behind, plus the announcement
+            -- the cache coalesces onto it.
+            cacheItem(22832, { name = "Arcane Powder", q = 1, icon = "icon-ap" })
+            H.SuuUI.Events:Emit("SUUUI_ITEMS_RESOLVED")
+            expect(g._entries[1].cell:IsPending()).as("filled in, no reopen needed").falsy()
+            expect(g._entries[1].cell:GetItem().itemName).eq("Arcane Powder")
+        end)
+
+        it("ignores the announcement while live", function()
+            H.setBags({ [0] = { free = 4, slots = 8 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 12 })
+            local g = grid({ containers = { 0 } })
+            local shown = g._entries[1].cell:GetItem()
+            expect(shown and shown.itemID).as("staged item is on screen").eq(22832)
+
+            -- Staged SILENTLY, so nothing but a re-read could pick it up. A live cell reads the client
+            -- directly and the client knows what is in your own bags by definition, so this
+            -- announcement is not news to a live grid -- and acting on it would re-read and RE-SORT
+            -- the player's bags because of an item resolution somewhere else entirely.
+            --
+            -- Asserted this way because the obvious version proved nothing: a re-sort does not change
+            -- the sort MODE, so comparing GetSortMode across the emit passed whether the guard was
+            -- there or not. Mutation testing caught that, not review.
+            H.setBagItem(0, 1, { itemID = 21877, stackCount = 5 }, { silent = true })
+            H.SuuUI.Events:Emit("SUUUI_ITEMS_RESOLVED")
+            local after = g._entries[1].cell:GetItem()
+            expect(after and after.itemID).as("no re-read happened").eq(22832)
+        end)
+
         it("reads the slot COUNT from the cache, not from the live client", function()
             -- THE TRAP THIS EXISTS FOR. Asking the client how many slots bag 3 has answers for whoever
             -- is logged in, so an alt's 20-slot bag rendered against your own 16 would silently drop

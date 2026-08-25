@@ -50,24 +50,42 @@ local function occupiedFirst(cmp)
     end
 end
 
+-- UNRESOLVED ITEMS SORT LAST, which the concept states directly: they "sort to the end and slide into
+-- place rather than reshuffling the grid". That is the whole reason it is worth doing -- an unresolved
+-- item has no name and no quality, so left to the mode's own comparison it lands wherever an empty
+-- name sorts (the FRONT under name order) and then JUMPS across the grid when the client answers. At
+-- the end, the only cells that move on a resolve are the ones that just became sortable.
+--
+-- Inside occupiedFirst rather than outside it: a pending cell is still an ITEM, so it belongs before
+-- the free-slot tail. Putting it after the empties would read as an item stranded past the end of the
+-- bag.
+local function pendingLast(cmp)
+    return function(a, b)
+        local pa = (a.info and a.info.pending) == true
+        local pb = (b.info and b.info.pending) == true
+        if pa ~= pb then return pb end
+        return cmp(a, b)
+    end
+end
+
 local function byPosition(a, b)
     if a.bag ~= b.bag then return a.bag < b.bag end
     return a.slot < b.slot
 end
 
 local SORTS = {
-    quality = occupiedFirst(function(a, b)
+    quality = occupiedFirst(pendingLast(function(a, b)
         local qa, qb = a.info and a.info.quality or -1, b.info and b.info.quality or -1
         if qa ~= qb then return qa > qb end
         local na, nb = a.info and a.info.itemName or "", b.info and b.info.itemName or ""
         if na ~= nb then return na < nb end
         return byPosition(a, b)
-    end),
-    name = occupiedFirst(function(a, b)
+    end)),
+    name = occupiedFirst(pendingLast(function(a, b)
         local na, nb = a.info and a.info.itemName or "", b.info and b.info.itemName or ""
         if na ~= nb then return na < nb end
         return byPosition(a, b)
-    end),
+    end)),
     -- The client's own order: container then slot. The escape hatch for a player who navigates by
     -- muscle memory rather than by looking. Empty slots stay in place here rather than being pushed
     -- to the end, because "the client's order" is the whole point of this mode.
@@ -118,7 +136,14 @@ local function cachedInfo(entry)
         iconFileID = meta and meta.icon or nil,
         quality    = meta and meta.q or nil,
         hyperlink  = meta and meta.link or nil,
-        itemName   = meta and meta.name or nil,
+        itemName   = meta and (meta.name or (IC and IC.NameFromLink and IC.NameFromLink(meta.link)))
+                     or nil,
+        -- UNRESOLVED, which the cell draws as the concept's `?` placeholder. GetItemInfo answers nil
+        -- for an item this client has never seen, so a character captured on a fresh login stores an
+        -- id and a count with nothing behind them. Kept as its own flag rather than left for the cell
+        -- to infer from a missing icon: an item can legitimately have no icon while being perfectly
+        -- well known, and those two states must not paint the same.
+        pending    = (meta == nil or (meta.icon == nil and meta.name == nil)) or nil,
     }
 end
 
@@ -481,6 +506,7 @@ end
 function GridMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    SuuUI.Events:Off("SUUUI_ITEMS_RESOLVED", self._eid)
     if self._events then
         self._events:UnregisterAllEvents()
         self._events:SetScript("OnEvent", nil)
@@ -580,5 +606,24 @@ function SuuUI.Components.ItemGrid(props, parent)
 
     handle:SetContainers(props.containers)
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)
+    -- THE FILL-IN. The cache announces once per coalesced burst of GET_ITEM_INFO_RECEIVED, and a
+    -- SNAPSHOT grid is the only thing that needs it: a live cell reads the client directly, and the
+    -- client knows what is in your own bags by definition. Without this a cached alt keeps its `?`
+    -- cells until the window is closed and reopened, which is exactly the "reopening fixes it"
+    -- symptom that should never be how a player fixes anything.
+    --
+    -- Sort rather than Refresh, because resolving is precisely what makes these items SORTABLE --
+    -- they were parked at the end of the occupied run with no name to order by. This is the one
+    -- place a re-sort is not the player being second-guessed: the alternative is a grid that stays
+    -- wrong.
+    SuuUI.Events:On("SUUUI_ITEMS_RESOLVED", function()
+        if not handle:IsSnapshot() then return end
+        -- BOTH CALLS, in this order, and neither is redundant. Refresh RE-READS the cache, which is
+        -- what turns a `?` cell into a real item -- Sort only reorders what the entries already hold,
+        -- so sorting alone would rearrange stale info and leave every placeholder in place. Sort then
+        -- moves the newly-sortable items out of the parked tail into their proper position.
+        handle:Refresh()
+        handle:Sort()
+    end, id)
     return handle
 end

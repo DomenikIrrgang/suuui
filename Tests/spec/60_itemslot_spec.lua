@@ -582,6 +582,45 @@ describe("Components/ItemSlot", function()
         -- would act on the logged-in character -- and wrong for a snapshot, which has no handler to
         -- stop and loses its hover with it. Browsing an alt's bags without tooltips is close to
         -- useless, and this pair is the whole reason the two kinds of cell exist.
+        -- THE CONCEPT'S `.cell.pend`, and it is deliberately austere: it shares `.empty`'s background
+        -- and border and carries a centred muted `?` and NOTHING else. No icon, no stack count, no
+        -- quality edge -- because none of those are known yet, and a count alone in a blank cell is a
+        -- number with nothing to say what it counts.
+        it("draws an unresolved item as the concept's ? placeholder", function()
+            -- MOUNTED, because the ? is asserted POSITIONALLY and a component never places itself:
+            -- an unmounted cell has no resolvable rect for anything inside it.
+            local c = H.mount(snap(0, 1))
+            c:SetItem({ itemID = 22832, stackCount = 12, pending = true })
+            expect(c:IsPending()).truthy()
+            expect(c._pendText:IsShown()).as("the ? is up").truthy()
+            expect(c._pendText:GetText()).eq("?")
+            expect(c._countText:IsShown()).as("no count while pending").falsy()
+            H.expectCenteredH(c._pendText, c:GetFrame())
+            H.expectCenteredV(c._pendText, c:GetFrame())
+        end)
+
+        it("takes the empty edge while pending, not an item edge", function()
+            local c = snap(0, 1)
+            -- A quality arriving alongside `pending` is the awkward case: the edge must still recede,
+            -- because the cell is claiming not to know what it holds.
+            c:SetItem({ itemID = 22832, stackCount = 12, quality = 4, pending = true })
+            local pendEdge = c._iconComp._borderColor
+            c:SetItem(nil)
+            local emptyEdge = c._iconComp._borderColor
+            expect(pendEdge).as("pending takes the same edge an empty slot does").eq(emptyEdge)
+            expect(pendEdge == H.SuuUI.Game:ItemQualityColor(4))
+                .as("and NOT the epic colour it was handed alongside pending").falsy()
+        end)
+
+        it("drops the ? the moment the item resolves", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, stackCount = 12, pending = true })
+            c:SetItem({ itemID = 22832, stackCount = 12, quality = 1,
+                        itemName = "Arcane Powder", iconFileID = "icon-ap" })
+            expect(c._pendText:IsShown()).as("resolved, so no placeholder").falsy()
+            expect(c._countText:IsShown()).as("and the count appears").truthy()
+        end)
+
         it("still shows its tooltip while read-only", function()
             local c = snap(0, 1)
             c:SetItem({ itemID = 22832, stackCount = 3, quality = 1,

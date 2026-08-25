@@ -27,6 +27,9 @@ local DEBOUNCE = 0.35
 
 local frame
 local bankOpen = false
+-- Memoised Find results, keyed by item id. Cleared whenever HOLDINGS change -- a capture or a
+-- Forget -- and never persisted: it is derived from the store, so rebuilding it costs one walk.
+local findMemo = {}
 
 --------------------------------------------------------------------------------
 -- The client's container API
@@ -109,6 +112,29 @@ end
 -- ONLY EVER FILLS IN, never erases. A live read can be thin -- GetContainerItemInfo answers
 -- before the client has resolved a name it has never seen -- and overwriting a richer entry
 -- captured earlier would blank a name that was already working.
+--- The display name carried inside an item link, or nil.
+--
+-- THE CONTAINER API DOES NOT RETURN A NAME. GetContainerItemInfo answers icon, count, quality, link
+-- and id -- and no name at all -- so a capture had nothing to store, and a cached character could not
+-- be SEARCHED: the filter matched zero items whatever you typed, while your own live bags searched
+-- fine because a live cell reads the client. Measured with a real capture: icon, quality and link all
+-- present, `name` nil, `CountMatches()` 0.
+--
+-- The name is in the link, between the brackets, so it needs no GetItemInfo call and no event -- which
+-- also means it is available for an item the client has never cached, exactly the case that would
+-- otherwise have to wait for GET_ITEM_INFO_RECEIVED.
+--
+-- Matched non-greedily on the bracketed span rather than parsed as a whole link, because the link is
+-- wrapped in a colour escape (`|cffffffff…|r`) whose contents are not ours to depend on.
+-- @param link string|nil
+-- @return string|nil
+function M.NameFromLink(link)
+    if type(link) ~= "string" then return nil end
+    local name = link:match("%[(.-)%]")
+    if name == nil or name == "" then return nil end
+    return name
+end
+
 local function upsertItem(info)
     local id = info and info.itemID
     if not id then return end
@@ -119,6 +145,10 @@ local function upsertItem(info)
     if info.iconFileID then e.icon = info.iconFileID end
     if info.quality    then e.q    = info.quality end
     if info.itemName   then e.name = info.itemName end
+    -- Derived from the link when nothing supplied one, which for a container read is ALWAYS --
+    -- see NameFromLink. Filling in here rather than at the call site means every writer gets it,
+    -- including the resolve path and any future one.
+    if not e.name then e.name = M.NameFromLink(e.link or info.hyperlink) end
 end
 
 --- The key a character is stored under: "Name-Realm".
@@ -213,6 +243,8 @@ function M:Capture(which)
     -- time that character plays; the bank only when they visit one, so hour-old bags beside
     -- three-week-old bank data is the normal case and a single stamp would be a lie.
     rec[which] = { seen = time(), slots = slots }
+    -- Holdings moved, so every memoised answer about who holds what is now suspect.
+    findMemo = {}
     return true
 end
 
@@ -249,6 +281,39 @@ end
 
 --- Everything known about one item id, or nil.
 -- @return table|nil  { link, icon, q, name }
+--- Fills in an item's details once the client has finally resolved them.
+--
+-- GetItemInfo answers NIL for an item this client has never seen, and fires GET_ITEM_INFO_RECEIVED
+-- later -- so a character captured on a fresh login stores ids and counts with no name, icon or
+-- quality behind them, and a grid built from that cache renders unresolved cells. This is the other
+-- half of that: the client tells us, we write it into the shared item table, and every view reading
+-- the cache is correct from then on without recapturing anything.
+--
+-- ONLY FOR AN ID WE ALREADY HOLD. The event fires for every item the client resolves for any reason
+-- -- a tooltip, a chat link, an auction search, someone else's inspect -- so acting on all of them
+-- would grow the account-wide item table without bound and store thousands of items no character
+-- owns. The `items[id]` check is what keeps this a fill-in rather than a harvester.
+-- @param id number
+-- @return bool  whether anything was learned
+function M:Resolve(id)
+    if type(id) ~= "number" then return false end
+    local s = store()
+    local e = s and s.items and s.items[id]
+    if not e then return false end
+    if e.name and e.icon and e.q then return false end
+    if type(GetItemInfo) ~= "function" then return false end
+    -- Positional, and only the four fields a cell paints from. A pcall because this runs from an
+    -- event handler and an unresolvable id must not unwind into the client's dispatch.
+    local ok, name, link, quality, _, _, _, _, _, _, texture = pcall(GetItemInfo, id)
+    if not ok or not name then return false end
+    upsertItem({ itemID = id, itemName = name, hyperlink = link,
+                 quality = quality, iconFileID = texture })
+    return true
+end
+
+--- The item table's entry for an id, or nil.
+-- @param id number
+-- @return table|nil
 function M:ItemInfo(id)
     local s = store()
     return s and s.items[id] or nil
@@ -289,6 +354,18 @@ end
 function M:Find(id)
     local out = {}
     if not id then return out end
+    -- MEMOISED, because this is now on a HOVER path rather than only a window path. Every walk is
+    -- characters x containers x bags x slots -- around 2,500 iterations for ten alts -- and moving the
+    -- cursor across an 80-cell grid fires 80 item tooltips, one per cell. The answer only changes when
+    -- holdings change, so the memo is cleared by Capture and Forget and by nothing else; resolving an
+    -- item's NAME cannot move it between characters.
+    if findMemo[id] then
+        local hit = findMemo[id]
+        -- A COPY, for the reason Container:GetPadding returns one: the memo is what the next caller
+        -- reads, so handing out the internal table lets one consumer's edit become another's answer.
+        for i = 1, #hit do out[i] = hit[i] end
+        return out
+    end
     for _, c in ipairs(self:Characters()) do
         for _, which in ipairs({ "bags", "bank" }) do
             local rec = self:Get(c.key, which)
@@ -305,6 +382,9 @@ function M:Find(id)
             end
         end
     end
+    local keep = {}
+    for i = 1, #out do keep[i] = out[i] end
+    findMemo[id] = keep
     return out
 end
 
@@ -322,6 +402,7 @@ function M:Forget(key)
     local s = store()
     if not (s and s.chars[key]) then return false end
     s.chars[key] = nil
+    findMemo = {}
     return true
 end
 
@@ -335,18 +416,41 @@ function M:IsBankOpen() return bankOpen end
 
 -- Debounced bags capture. The OnUpdate is registered only while a capture is pending and
 -- unregistered the moment it fires, per the addon's "no idle OnUpdate" rule.
+-- Debounced bags capture, and a debounced "items resolved" announcement sharing the same timer.
+-- The OnUpdate is registered only while something is pending and unregistered the moment it fires,
+-- per the addon's "no idle OnUpdate" rule.
+--
+-- THE ANNOUNCEMENT IS COALESCED FOR A REAL REASON: GET_ITEM_INFO_RECEIVED fires once PER ITEM, so a
+-- fresh login browsing an alt with 58 unresolved stacks fires 58 times in a few frames. Emitting per
+-- event would make every listening grid re-sort and re-place 80 cells 58 times. One announcement
+-- after the burst settles is indistinguishable to the player and is a single pass.
 local elapsed = 0
+local wantCapture, wantResolve = false, false
 
 local function onUpdate(_, dt)
     elapsed = elapsed + (dt or 0)
     if elapsed < DEBOUNCE then return end
     frame:SetScript("OnUpdate", nil)
-    M:Capture("bags")
+    local capture, resolve = wantCapture, wantResolve
+    wantCapture, wantResolve = false, false
+    if capture then M:Capture("bags") end
+    -- Emitted AFTER the capture, so a listener that reads the cache sees both effects at once.
+    if resolve then SuuUI.Events:Emit("SUUUI_ITEMS_RESOLVED") end
+end
+
+local function arm()
+    elapsed = 0
+    frame:SetScript("OnUpdate", onUpdate)
 end
 
 local function markDirty()
-    elapsed = 0
-    frame:SetScript("OnUpdate", onUpdate)
+    wantCapture = true
+    arm()
+end
+
+local function markResolved()
+    wantResolve = true
+    arm()
 end
 
 function M:_watch()
@@ -363,8 +467,17 @@ function M:_watch()
     frame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
     frame:RegisterEvent("PLAYERBANKBAGSLOTS_CHANGED")
     frame:RegisterEvent("PLAYER_LOGOUT")
-    frame:SetScript("OnEvent", function(_, event)
-        if event == "BAG_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+    -- The client answering a question we asked earlier: an item nothing had seen when it was
+    -- captured. Registered unconditionally rather than only while a window is open, because the
+    -- answers arrive during login and the point is that the cache is already correct by the time
+    -- anyone looks at it.
+    frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+    frame:SetScript("OnEvent", function(_, event, arg1)
+        if event == "GET_ITEM_INFO_RECEIVED" then
+            -- Announce only when something was actually learned, so the burst of events for items no
+            -- character holds costs one table lookup each and wakes no view at all.
+            if M:Resolve(arg1) then markResolved() end
+        elseif event == "BAG_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
             markDirty()
         elseif event == "BANKFRAME_OPENED" then
             bankOpen = true

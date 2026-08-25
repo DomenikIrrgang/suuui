@@ -160,14 +160,17 @@ function ItemSlotMeta:_paintEdge()
     --
     -- Game:ItemQualityColor already answers for all eight qualities and deliberately does NOT fold in a
     -- threshold, precisely so each surface can make this decision for itself. This is that decision.
-    if q then
+    -- A PENDING CELL TAKES THE EMPTY EDGE, which is what the concept's `.pend` uses -- it shares
+    -- `.empty`'s background and border rather than an item's. An unresolved item has no quality to
+    -- report, and a neutral item-weight edge would claim the slot holds something identifiable.
+    if q and not self:IsPending() then
         local c = SuuUI.Game:ItemQualityColor(q)
         if c then
             self._iconComp:SetBorderColor(c)
             return
         end
     end
-    if info then
+    if info and not self:IsPending() then
         -- Occupied but the client does not name this quality: the neutral edge is the honest answer.
         self._iconComp:SetBorderColor(nil)
         return
@@ -195,12 +198,33 @@ function ItemSlotMeta:_paintEdge()
     end
 end
 
+--- Whether this cell holds an item the client has not resolved yet.
+--
+-- The concept draws these as `.cell.pend`: an EMPTY-looking cell carrying a centred muted `?`, and
+-- deliberately nothing else -- no icon, no stack count, no quality edge. That is honest about what is
+-- actually known: the cache has an id and a count, and until GetItemInfo answers, a count on its own
+-- would be a number floating in a blank cell with nothing to say what it counts.
+-- @return bool
+function ItemSlotMeta:IsPending()
+    return (self._info and self._info.pending) == true
+end
+
+function ItemSlotMeta:_paintPending()
+    local pend = self:IsPending()
+    if pend then
+        self._pendText:Show()
+    else
+        self._pendText:Hide()
+    end
+end
+
 function ItemSlotMeta:_paintCount()
     local info = self._info
     local n = info and info.stackCount or 0
     -- Only above one, exactly as AuraIcon does for stacks: the client reports 1 for a single item
     -- and a "1" on every occupied slot is noise rather than information.
-    if n > 1 then
+    -- SUPPRESSED ENTIRELY WHILE PENDING, per the concept's `.pend`, which renders no count.
+    if n > 1 and not self:IsPending() then
         self._countText:SetText(tostring(n))
         self._countText:Show()
     else
@@ -256,6 +280,7 @@ function ItemSlotMeta:SetItem(info)
     self:_paintCount()
     self:_paintEdge()
     self:_paintCooldown()
+    self:_paintPending()
 end
 
 --- Re-reads this slot from the client and repaints.
@@ -401,6 +426,7 @@ end
 function ItemSlotMeta:ApplyTheme()
     if self._iconComp and self._iconComp.ApplyTheme then self._iconComp:ApplyTheme() end
     if self._countText and self._countText.ApplyTheme then self._countText:ApplyTheme() end
+    if self._pendText and self._pendText.ApplyTheme then self._pendText:ApplyTheme() end
     -- Re-resolve the edge: a quality colour comes from SuuUI.Game, but the NEUTRAL fallback is a
     -- token, so a theme change has to re-run this or an empty cell keeps the old theme's edge.
     self:_paintEdge()
@@ -413,6 +439,7 @@ function ItemSlotMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     if self._countText then self._countText:Destroy() end
+    if self._pendText then self._pendText:Destroy() end
     if self._iconComp then self._iconComp:Destroy() end
     if self._overlayBox then self._overlayBox:Destroy() end
     if self._box then self._box:Destroy() end
@@ -628,6 +655,21 @@ function SuuUI.Components.ItemSlot(props, parent)
     })
     countText:Hide()
 
+    -- THE PENDING GLYPH, the concept's `.cell.pend:after`: a centred `?` in the muted colour at the
+    -- small font step, which is the 11px the concept spends on it. In the overlay rather than the
+    -- frame's own layers so it sits above the cooldown sweep, exactly as the count does -- a font
+    -- string on the base frame would draw behind it.
+    --
+    -- Built once at construction rather than on demand: a cell becomes pending and un-pending as the
+    -- client answers, and creating a font string inside a paint path would allocate during the
+    -- resolve burst that this state exists to represent.
+    local pendText = SuuUI.Components.Text({
+        text = "?", size = "sm", color = "muted", justify = "CENTER", wrap = false,
+    }, overlay)
+    pendText._fade = false
+    overlayBox:Add(pendText, { align = "center", valign = "center" })
+    pendText:Hide()
+
     local id = "itemslot_" .. tostring(f)
     handle = setmetatable({
         _f          = f,
@@ -638,6 +680,7 @@ function SuuUI.Components.ItemSlot(props, parent)
         _overlay    = overlay,
         _overlayBox = overlayBox,
         _countText  = countText,
+        _pendText   = pendText,
         _eid        = id,
         _info       = nil,
         _readOnly   = false,

@@ -120,6 +120,122 @@ end
 
 --- Appends this plugin's item lines.
 -- @return number  how many lines were added
+--- How many OTHER characters' lines the account section will draw before it summarises.
+--
+-- A cap rather than "all of them", because this section appears on EVERY item tooltip in the game and
+-- a player with fifteen alts holding a stack of cloth would otherwise double the height of the
+-- tooltip. Five names answer "who has this" and a total answers "how much is there"; the sixth name
+-- onwards is a list, and a list belongs in the ledger tab rather than under the cursor.
+local ACCOUNT_MAX = 5
+
+--- The account section: which OTHER characters hold this item, and where.
+--
+-- WHY THE CURRENT CHARACTER IS EXCLUDED. The `Carrying` line directly above already answers for you,
+-- read live from the client, and it is the more trustworthy of the two -- the cache is only as fresh
+-- as your last capture. Listing yourself twice invites the player to compare the two numbers and
+-- discover they disagree, which is a bug report about the cache being stale rather than the answer to
+-- the question they asked.
+--
+-- Reads Core/ItemCache directly and never touches the inventory plugin, which is the whole reason the
+-- cache is a Core service: this section must keep working with the inventory window disabled, absent,
+-- or loaded after the tooltips plugin.
+-- @param tt table  the tooltip frame
+-- @param id number  the item id
+-- @return number  lines added
+function M.AccountLines(tt, id)
+    if not get("account_counts") then return 0 end
+    local IC = SuuUI.ItemCache
+    if not (IC and type(IC.Find) == "function") then return 0 end
+    if type(id) ~= "number" then return 0 end
+
+    local hits = IC:Find(id)
+    if #hits == 0 and not get("account_zero") then return 0 end
+
+    -- Merged per character, so one line reads "Thalira  8 (bank 20)" exactly as the Carrying line
+    -- above it does. Find returns bags and bank as SEPARATE hits, and two consecutive lines for one
+    -- character would read as two characters.
+    local order, byKey = {}, {}
+    local cur = IC:CurrentKey()
+    for _, hit in ipairs(hits) do
+        if hit.key ~= cur then
+            local e = byKey[hit.key]
+            if not e then
+                e = { bags = 0, bank = 0 }
+                byKey[hit.key] = e
+                order[#order + 1] = hit.key
+            end
+            e[hit.container] = (e[hit.container] or 0) + hit.count
+        end
+    end
+
+    -- Find's order is Characters()' order -- current first, then this realm, then others -- so the
+    -- names come out in the same sequence as the inventory window's dropdown rather than in a second
+    -- arbitrary one.
+    local meta = {}
+    for _, c in ipairs(IC:Characters()) do meta[c.key] = c end
+
+    if get("account_zero") then
+        for _, c in ipairs(IC:Characters()) do
+            if c.key ~= cur and not byKey[c.key] then
+                byKey[c.key] = { bags = 0, bank = 0 }
+                order[#order + 1] = c.key
+            end
+        end
+    end
+
+    local mr, mg, mb = mutedRGB()
+    local curRealm = (GetRealmName and GetRealmName()) or "?"
+    local added, shown = 0, 0
+
+    for _, key in ipairs(order) do
+        if shown >= ACCOUNT_MAX then break end
+        local e = byKey[key]
+        local c = meta[key] or { name = key, realm = "?" }
+        -- The realm only when it differs, matching the dropdown: printing it on every line spends the
+        -- tooltip's width on a word that is the same for almost everybody.
+        local label = c.name
+        if c.realm and c.realm ~= curRealm then label = label .. " (" .. c.realm .. ")" end
+        local value
+        if e.bags == 0 and e.bank == 0 then
+            value = "—"
+        else
+            value = tostring(e.bags)
+            if e.bank > 0 then
+                -- Both figures when both exist, and the bank ALONE reads as a bank figure rather than
+                -- as zero-in-bags: "0 (bank 20)" would make a player check their bags for nothing.
+                value = e.bags > 0 and (value .. " (bank " .. e.bank .. ")")
+                        or ("bank " .. e.bank)
+            end
+        end
+        -- CLASS-COLOURED, through Game:ClassColor rather than a palette of our own -- the same fact
+        -- the character dropdown paints with, so the two surfaces cannot disagree about what a mage
+        -- looks like. A class the client does not name falls back to the muted label colour.
+        local cc = c.class and SuuUI.Game and SuuUI.Game:ClassColor(c.class) or nil
+        tt:AddDoubleLine(label, value,
+            cc and cc[1] or mr, cc and cc[2] or mg, cc and cc[3] or mb, mr, mg, mb)
+        added = added + 1
+        shown = shown + 1
+    end
+
+    local hidden = #order - shown
+    if hidden > 0 then
+        tt:AddDoubleLine(" ", "+" .. hidden .. " more", mr, mg, mb, mr, mg, mb)
+        added = added + 1
+    end
+
+    -- The total only once more than one character is involved, counting YOU as well -- with a single
+    -- holder it would restate the line directly above it.
+    if #order > 0 and type(IC.Total) == "function" then
+        local total = IC:Total(id)
+        if #order + 1 > 1 and total > 0 and shown > 0 then
+            tt:AddDoubleLine("Account total", tostring(total), mr, mg, mb, mr, mg, mb)
+            added = added + 1
+        end
+    end
+
+    return added
+end
+
 function M.OnItem(tt)
     if type(tt) ~= "table" or type(tt.AddDoubleLine) ~= "function" then return 0 end
     if not get("enabled") then return 0 end
@@ -159,6 +275,10 @@ function M.OnItem(tt)
             added = added + 1
         end
     end
+
+    -- DIRECTLY AFTER `Carrying`, which answers for the character you are playing. Yours first and read
+    -- live, then everyone else from the cache -- so the tooltip reads outward from what is certain.
+    added = added + M.AccountLines(tt, tonumber(link:match("item:(%d+)")))
 
     if get("sell_price") then
         local money = M.FormatMoney(sellPrice)

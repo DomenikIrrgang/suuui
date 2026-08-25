@@ -16,6 +16,181 @@ describe("Core/ItemCache", function()
         IC = H.SuuUI.ItemCache
     end)
 
+    -- THE OTHER HALF OF THE CACHE. GetItemInfo answers nil for an item this client has never seen, so
+    -- a character captured on a fresh login stores ids and counts with no name, icon or quality --
+    -- which the grid draws as the concept's `?` cells. The client answers later via
+    -- GET_ITEM_INFO_RECEIVED, and this is what turns that answer into a permanently better cache
+    -- rather than a repaint that is lost on the next login.
+    describe("filling in an item the client resolves later", function()
+        it("writes the resolved fields into the shared item table", function()
+            H.env.SuuUIItemCache.items[22832] = { }
+            H.setItemInfo(22832, { name = "Arcane Powder", quality = 1, texture = "icon-ap" })
+            expect(IC:Resolve(22832)).as("it learned something").truthy()
+            local e = IC:ItemInfo(22832)
+            expect(e.name).eq("Arcane Powder")
+            expect(e.q).eq(1)
+            expect(e.icon).eq("icon-ap")
+        end)
+
+        -- A HARVESTER IS THE FAILURE MODE HERE. The event fires for every item the client resolves for
+        -- ANY reason -- a tooltip, a chat link, an auction search, an inspect -- so acting on all of
+        -- them would grow the account-wide table without bound with items no character owns, in a file
+        -- that is already the biggest thing this feature writes.
+        it("refuses an id no character holds", function()
+            H.setItemInfo(19019, { name = "Thunderfury", quality = 5 })
+            expect(IC:Resolve(19019)).as("not ours, not stored").falsy()
+            expect(IC:ItemInfo(19019)).as("and nothing was created").falsy()
+        end)
+
+        it("does nothing for an id the client still cannot name", function()
+            H.env.SuuUIItemCache.items[12345] = { }
+            H.clearItems()
+            expect(IC:Resolve(12345)).falsy()
+            expect(IC:ItemInfo(12345).name).as("left unresolved, not blanked").falsy()
+        end)
+
+        it("never blanks a field it already had", function()
+            H.env.SuuUIItemCache.items[22832] = { name = "Arcane Powder", icon = "good", q = 1 }
+            -- A resolve that answers thinly must not undo a capture that answered fully; upsertItem
+            -- only ever fills in, and this is the path that would have exposed it otherwise.
+            H.setItemInfo(22832, { name = "Arcane Powder" })
+            IC:Resolve(22832)
+            expect(IC:ItemInfo(22832).icon).as("icon survived").eq("good")
+        end)
+
+        -- COALESCED ON PURPOSE. This event fires once PER ITEM, so a fresh login browsing an alt with
+        -- 58 unresolved stacks fires 58 times in a few frames. One announcement after the burst
+        -- settles is one re-sort instead of 58.
+        it("announces once for a burst, not once per item", function()
+            for _, id in ipairs({ 22832, 21877, 22833 }) do
+                H.env.SuuUIItemCache.items[id] = { }
+                H.setItemInfo(id, { name = "Item " .. id, quality = 1, texture = "i" })
+            end
+            local fired = 0
+            H.SuuUI.Events:On("SUUUI_ITEMS_RESOLVED", function() fired = fired + 1 end, "spec")
+            for _, id in ipairs({ 22832, 21877, 22833 }) do
+                H.fireEvent("GET_ITEM_INFO_RECEIVED", id)
+            end
+            expect(fired).as("nothing announced yet -- still debouncing").eq(0)
+            H.tick(1.0)
+            expect(fired).as("exactly one announcement for the burst").eq(1)
+            expect(IC:ItemInfo(21877).name).as("and all three were written").eq("Item 21877")
+        end)
+
+        it("announces nothing when the burst taught it nothing", function()
+            local fired = 0
+            H.SuuUI.Events:On("SUUUI_ITEMS_RESOLVED", function() fired = fired + 1 end, "spec")
+            -- Items nobody holds: the common case by volume, and it must not wake a single view.
+            H.fireEvent("GET_ITEM_INFO_RECEIVED", 19019)
+            H.tick(1.0)
+            expect(fired).eq(0)
+        end)
+    end)
+
+    -- THE NAME IS NEVER RETURNED BY THE CONTAINER API. GetContainerItemInfo answers icon, count,
+    -- quality, link and id -- and no name -- so a capture stored none, and a cached character could not
+    -- be SEARCHED at all: the filter matched zero items whatever you typed, silently, while your own
+    -- live bags searched fine because a live cell reads the client directly.
+    --
+    -- Every existing search spec staged the name with cacheItem() straight into the item table, which
+    -- is a thing capture cannot do -- so the specs asserted against a state production never reached.
+    -- That is the failure mode worth remembering here: a spec that stages what the real path cannot
+    -- produce tests the staging.
+    describe("the item name comes out of the link", function()
+        it("extracts the bracketed name", function()
+            expect(IC.NameFromLink("|cffffffff|Hitem:22832|h[Arcane Powder]|h|r")).eq("Arcane Powder")
+        end)
+
+        it("answers nil rather than an empty string for junk", function()
+            expect(IC.NameFromLink(nil)).eq(nil)
+            expect(IC.NameFromLink("")).eq(nil)
+            expect(IC.NameFromLink("[]")).as("empty brackets are not a name").eq(nil)
+            expect(IC.NameFromLink(22832)).as("a number is not a link").eq(nil)
+        end)
+
+        it("stores a name on capture, with GetItemInfo answering nothing", function()
+            H.setBags({ [0] = { free = 6, slots = 8 } })
+            -- Exactly what the client hands over for an item it has never cached: a full container read
+            -- and no GetItemInfo entry at all.
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 12, quality = 1,
+                                 iconFileID = "icon-ap",
+                                 hyperlink = "|cffffffff|Hitem:22832|h[Arcane Powder]|h|r" })
+            H.clearItems()
+            IC:Capture("bags")
+            expect(IC:ItemInfo(22832).name).as("searchable without any event").eq("Arcane Powder")
+        end)
+
+        it("never overwrites a real name with a parsed one", function()
+            -- A name that was properly resolved once must survive a later capture whose link text
+            -- disagrees, for the same reason upsertItem only ever fills in: a live read can be thin,
+            -- and blanking or rewriting a name that already worked is invisible until a player opens an
+            -- alt and cannot find anything.
+            H.env.SuuUIItemCache.items[22832] = { name = "Arcane Powder" }
+            H.setBags({ [0] = { free = 6, slots = 8 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 1, quality = 1,
+                                 iconFileID = "i",
+                                 hyperlink = "|Hitem:22832|h[Wrong Name]|h" })
+            IC:Capture("bags")
+            expect(IC:ItemInfo(22832).name).as("the stored name wins").eq("Arcane Powder")
+        end)
+    end)
+
+    -- THE FIND MEMO. Find walks characters x containers x bags x slots -- around 2,500 iterations for
+    -- ten alts -- and it is now on a HOVER path: the tooltip's account section calls it per item, so
+    -- moving the cursor across an 80-cell grid calls it 80 times. Memoised by id, and the invalidation
+    -- is the whole risk: a stale memo tells a player an item is on a character who no longer has it,
+    -- which is worse than the walk being slow.
+    describe("the Find memo", function()
+        local function holdings(id, count)
+            H.setBags({ [0] = { free = 6, slots = 8 } })
+            H.setBagItem(0, 1, { itemID = id, stackCount = count, quality = 1,
+                                 iconFileID = "i",
+                                 hyperlink = "|Hitem:" .. id .. "|h[Thing]|h" })
+            IC:Capture("bags")
+        end
+
+        it("is invalidated by a capture, so a moved item is not reported twice", function()
+            holdings(22832, 5)
+            expect(IC:Total(22832)).eq(5)
+            -- The item is gone from the bags now. Without invalidation the memo keeps answering 5 --
+            -- a tooltip claiming a character holds something they spent.
+            H.clearBagItem(0, 1)
+            IC:Capture("bags")
+            expect(IC:Total(22832)).as("the memo did not outlive the change").eq(0)
+        end)
+
+        it("is invalidated by Forget", function()
+            holdings(22832, 5)
+            expect(IC:Total(22832)).eq(5)
+            IC:Forget(IC:CurrentKey())
+            expect(IC:Total(22832)).as("a forgotten character holds nothing").eq(0)
+        end)
+
+        it("hands out a COPY, never the memo itself", function()
+            holdings(22832, 5)
+            -- THE FIRST CALL IS NOT THE TEST. That one builds the answer and returns its own fresh
+            -- table whether or not the memo hands out copies, so mutating it proves nothing -- the
+            -- copy-out only happens on a memo HIT. The second call is the one that reads the memo.
+            IC:Find(22832)
+            local fromMemo = IC:Find(22832)
+            expect(#fromMemo).eq(1)
+            -- Same reasoning as Container:GetPadding returning a copy: the memo is what the NEXT caller
+            -- reads, so one consumer's edit must not become another's answer. The tooltip section
+            -- merges hits per character into its own table, and a consumer that sorted or trimmed the
+            -- result in place would corrupt every later hover.
+            fromMemo[1] = nil
+            local third = IC:Find(22832)
+            expect(#third).as("the next caller still gets the real answer").eq(1)
+            expect(third[1].count).eq(5)
+        end)
+
+        it("still answers correctly for an id nobody holds", function()
+            holdings(22832, 5)
+            expect(#IC:Find(19019)).eq(0)
+            expect(IC:Total(19019)).eq(0)
+        end)
+    end)
+
     describe("the store", function()
         it("exists after boot, stamped and shaped", function()
             local s = H.env.SuuUIItemCache
