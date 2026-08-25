@@ -173,7 +173,7 @@ describe("Plugins.UnitFrames – aura bands", function()
             expect(b2.left).as("second icon sits one gap right of the first")
                 .near(a.left + 24 + H.token("spaceXxs"), 0.5)
             expect(c.left).gt(b2.left)
-            H.expectNoOverlap(icons[1], icons[2])
+            H.expectNoOverlap({ icons[1], icons[2] })
         end)
 
         it("wraps onto a second row when the row would overflow the frame", function()

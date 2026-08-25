@@ -398,6 +398,31 @@ function ActionButtonMeta:_paintCount()
     else
         self._countText:Hide()
     end
+    self:_reserveCountColumn()
+end
+
+--- Keeps the macro name clear of the count's corner.
+--
+-- Centring the macro name does NOT achieve this, which is what the code claimed for a long time:
+-- a name wide enough spreads out of the centre in both directions and straight into the count.
+-- Measured on a 36-unit button, a macro name occupied x 5..28 while the count sat at 23..30, on
+-- the same row -- the two drew through each other. Its own spec asserted they must not and could
+-- not fail, because H.expectNoOverlap was being called with two positional arguments instead of
+-- an array.
+--
+-- The column is only reserved while the count is actually SHOWN. Reserving it permanently would
+-- narrow every macro name on the bar for a stack size that is not there -- and most slots have no
+-- count at all.
+function ActionButtonMeta:_reserveCountColumn()
+    if not (self._macroText and self._countText and self._overlayBox) then return end
+    local pad = SuuUI.Theme:GetToken("spaceXxs") or 2
+    local right = pad
+    if self._countText:IsShown() then
+        right = pad + (self._countText:GetWidth() or 0) + pad
+    end
+    self._overlayBox:SetChildProps(self._macroText, {
+        align = "center", valign = "end", inset = { bottom = pad, right = right },
+    })
 end
 
 function ActionButtonMeta:_paintMacroText()
@@ -412,6 +437,8 @@ function ActionButtonMeta:_paintMacroText()
     else
         self._macroText:Hide()
     end
+    -- Both paths, because either readout changing moves the boundary between them.
+    self:_reserveCountColumn()
 end
 
 function ActionButtonMeta:_paintHotkey()

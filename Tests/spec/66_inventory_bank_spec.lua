@@ -47,7 +47,7 @@ describe("Plugins/Inventory bank session", function()
         it("does not overlap the two windows", function()
             H.setBankOpen(true)
             local bags, bank = frames()
-            H.expectNoOverlap(bank, bags)
+            H.expectNoOverlap({ bank, bags })
         end)
 
         it("puts the bank on the left and the bags on the right", function()

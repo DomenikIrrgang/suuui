@@ -101,8 +101,8 @@ describe("Components.FlyoutPanel – the floating icon-and-name roster", functio
         it("stacks the rows without overlapping each other", function()
             panel:SetRows(entriesOf(3, true))
             panel:Open()
-            H.expectNoOverlap(panel._rows[1], panel._rows[2])
-            H.expectNoOverlap(panel._rows[2], panel._rows[3])
+            H.expectNoOverlap({ panel._rows[1], panel._rows[2] })
+            H.expectNoOverlap({ panel._rows[2], panel._rows[3] })
         end)
     end)
 
@@ -194,7 +194,7 @@ describe("Components.FlyoutPanel – the floating icon-and-name roster", functio
             local list = entriesOf(1, true)
             panel:SetRows(list)
             panel:Open()
-            H.expectNoOverlap(list[1].frame, panel._rows[1]._label)
+            H.expectNoOverlap({ list[1].frame, panel._rows[1]._label })
         end)
     end)
 

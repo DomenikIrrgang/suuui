@@ -69,6 +69,9 @@ function InpMeta:Destroy()
     -- children added as handles: a component must not depend on the container's teardown
     -- order for its own cleanup. Text:Destroy is idempotent, so the double call is safe.
     self._phText:Destroy()
+    if self._iconComp then self._iconComp:Destroy() end
+    if self._clearBtn then self._clearBtn:Destroy() end
+    if self._pill then self._pill:Destroy() end
     self._box:Destroy()
     -- The layout box is adopted, so destroying it does not hide the frame it lays out.
     -- Without this the widget stays painted on screen after teardown.
@@ -116,15 +119,37 @@ end
 -- flip never rebuilds the backdrop table.
 function InpMeta:_paint()
     local B = SuuUI.Backdrop
-    B.SetBg(self._f, "colorBgAlt")
-    B.SetBorder(self._f, (self._hasFocus or self._hasHover)
-        and "colorBorderFocus" or "colorBorder")
+    local edge = (self._hasFocus or self._hasHover) and "colorBorderFocus" or "colorBorder"
+    -- A pill has no backdrop to recolour: its surface is textures cut by a mask, so it is tinted
+    -- through its own handle. Calling SetBg on the frame here would silently do nothing, since
+    -- nothing ever applied a backdrop to it.
+    if self._pill then
+        self._pill:SetBg("colorBgAlt")
+        self._pill:SetBorder(edge)
+    else
+        B.SetBg(self._f, "colorBgAlt")
+        B.SetBorder(self._f, edge)
+    end
+    if self._clearBtn then
+        -- The clear affordance exists only while there is something to clear. A permanent one is a
+        -- control that does nothing on an empty field, which is the state the field spends most of
+        -- its life in.
+        local has = (self._eb:GetText() or "") ~= ""
+        if has then self._clearBtn:Show() else self._clearBtn:Hide() end
+    end
 end
 
 function InpMeta:ApplyTheme()
     local T  = SuuUI.Theme
     local tc = T:GetToken("colorText")
-    SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    if self._pill then
+        -- Refresh covers the other input a pill has: a changed borderWidth token.
+        self._pill:Refresh()
+    else
+        SuuUI.Backdrop.Apply(self._f, { bg = "colorBgAlt", border = "colorBorder" })
+    end
+    if self._iconComp then self._iconComp:ApplyTheme() end
+    if self._clearBtn then self._clearBtn:ApplyTheme() end
     -- Re-assert the live state: a theme change must not drop the focus ring.
     self:_paint()
     self._eb:SetFont(T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
@@ -152,9 +177,15 @@ SuuUI.Components.InstallEnable(InpMeta, "_f")
 -- Emits TEXT_CHANGED (text), FOCUSED, UNFOCUSED, SUBMITTED via TEXT_CHANGED on enter.
 -- Height defaults to the sizeControlMd token floored against the font size, and
 -- tracks token changes. Pass h to pin it.
--- @param props table  { value, placeholder, onChange, onEnter, w, h, maxChars }
+-- @param props table  { value, placeholder, onChange, onEnter, w, h, maxChars,
+--                        pill, icon, iconCoords, clearable }
 --   placeholder: muted hint shown while the field is empty and unfocused. It is a
 --   separate Text child, so GetValue never returns it.
+--   pill: draw the surface as a stadium (Backdrop.Pill) instead of a square backdrop, for a
+--     search field. Fixed at construction -- a pill is textures plus a mask, not a colour.
+--   icon / iconCoords: a leading glyph inside the field, which insets the text after it. Atlas
+--     art rather than a pictograph character, because the client's faces do not all carry one.
+--   clearable: show a small X at the trailing edge while the field is non-empty.
 -- @param parent frame
 -- @return table  Input handle
 function SuuUI.Components.Input(props, parent)
@@ -175,12 +206,66 @@ function SuuUI.Components.Input(props, parent)
         S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
     end)
 
+    -- The stadium surface, before any child is added so it sits underneath them.
+    local pill
+    if props.pill then
+        pill = SuuUI.Backdrop.Pill(f, { bg = "colorBgAlt", border = "colorBorder" })
+    end
+
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local eb = CreateFrame("EditBox", nil, f)
     -- The vertical inset has no matching space token (2px), so it stays a literal.
     local insetX = SuuUI.Theme:GetToken("spaceXs") or 4
-    box:Add(eb, { inset = { left = insetX, right = insetX, top = 2, bottom = 2 } })
+    local gapX = SuuUI.Theme:GetToken("spaceXs") or 4
+
+    -- LEADING GLYPH. Sized from the FONT step rather than from sizeIcon: it sits beside text and
+    -- has to read as part of the line, and sizeIcon (16) in a 22-unit field leaves no room for the
+    -- text it is labelling. A glyph matched to the text's own size is what makes the two read as
+    -- one field rather than as an icon with a box next to it.
+    local iconComp, iconSize
+    if props.icon then
+        iconSize = SuuUI.Theme:GetFontSize("md")
+        iconComp = SuuUI.Components.Icon({
+            icon = props.icon, coords = props.iconCoords, size = iconSize,
+            border = false, iconColor = "colorTextMuted",
+        }, f)
+        box:Add(iconComp, { align = "start", valign = "center",
+                            width = iconSize, height = iconSize,
+                            inset = { left = insetX } })
+    end
+
+    -- TRAILING CLEAR. An ASCII X, exactly as Window's close button spends one: the geometric
+    -- multiplication sign is not carried by every face this client can load, and a face missing it
+    -- draws a box.
+    local clearBtn, clearSize
+    if props.clearable then
+        clearSize = SuuUI.Theme:GetFontSize("sm")
+        clearBtn = SuuUI.Components.Button({
+            label = "X", w = clearSize + 4, h = clearSize + 4, padX = 0, padY = 0,
+            border = false, bg = false,
+        }, f)
+        box:Add(clearBtn, { align = "end", valign = "center",
+                            width = clearSize + 4, height = clearSize + 4,
+                            inset = { right = insetX } })
+        clearBtn:Hide()
+        S:Connect(clearBtn, S.SIGNALS.CLICKED, function()
+            eb:SetText("")
+            eb:ClearFocus()
+            if handle then
+                handle:_paint()
+                handle:_updatePlaceholder()
+                if props.onChange then props.onChange("") end
+                S:Emit(handle, S.SIGNALS.TEXT_CHANGED, "")
+            end
+        end)
+    end
+
+    -- The text starts after the glyph and stops before the clear button, so neither can be drawn
+    -- over by what the player types.
+    local textLeft = insetX + (iconSize and (iconSize + gapX) or 0)
+    local textRight = insetX + (clearSize and (clearSize + 4 + gapX) or 0)
+    box:Add(eb, { inset = { left = textLeft, right = textRight, top = 2, bottom = 2 } })
     eb:SetAutoFocus(false)
     eb:SetMaxLetters(props.maxChars or 255)
     if props.value then eb:SetText(props.value) end
@@ -200,12 +285,13 @@ function SuuUI.Components.Input(props, parent)
     -- change re-measures the hint, so no manual Layout call is owed anywhere.
     box:Add(phText, {
         valign = "center",
-        inset  = { left = insetX, right = insetX },
+        inset  = { left = textLeft, right = textRight },
     })
 
     local id = "inp_" .. tostring(f)
     handle = setmetatable({
         _f=f, _eb=eb, _box=box, _eid=id, _enabled=true,
+        _pill=pill, _iconComp=iconComp, _clearBtn=clearBtn,
         _hasFocus=false, _hasHover=false, _silent=false,
         _autoH=props.h == nil,
         _phText=phText, _placeholder=props.placeholder or "",
@@ -217,6 +303,10 @@ function SuuUI.Components.Input(props, parent)
         -- Ahead of the silent guard: visibility is not an emission, and a silent SetValue
         -- still has to drop the hint. The client fires this for a programmatic SetText too.
         handle:_updatePlaceholder()
+        -- The clear affordance is driven by whether there is text, so it belongs here rather
+        -- than only in _paint -- which runs on hover and focus, neither of which is typing.
+        -- Wired to _paint alone, the X never appeared at all.
+        if handle._clearBtn then handle:_paint() end
         if handle._silent then return end
         local text = eb:GetText()
         if props.onChange then props.onChange(text) end

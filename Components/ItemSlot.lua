@@ -2,17 +2,28 @@
 --
 -- WHY THIS INHERITS A BLIZZARD TEMPLATE, like StanceButton and unlike everything else.
 --
--- USING an item from addon code is BLOCKED on this client. Measured 2026-08-24: calling
--- `C_Container.UseContainerItem(0, 1)` from tainted Lua returned true from pcall, left the stack
--- count unchanged, did not fire the item, and raised `*** ForceTaint_Strong *** has been blocked
--- from an action only available to the Blizzard UI`. Two installed addons corroborate the shape --
--- MRT builds a SecureActionButtonTemplate just to apply a weapon oil, and ElvUI creates its bag
--- cells from this very template rather than a plain Button.
+-- USING an item from addon code is BLOCKED on this client, and this has now been established TWICE
+-- by different routes. First a probe -- `/run C_Container.UseContainerItem(0, 1)` returned true from
+-- pcall, changed nothing, and raised `*** ForceTaint_Strong *** has been blocked from an action only
+-- available to the Blizzard UI`. Then, after that probe was wrongly dismissed as invalid and the gate
+-- below was removed, a REAL right-click in the bags raised the player-facing popup `SuuUI has been
+-- blocked from an action only available to the Blizzard UI`.
 --
--- MOVING items is a different story and is NOT blocked: `PickupContainerItem` was measured working
--- from the same tainted context, cursor and all. So the template is needed for USE, not for drag --
--- but since it supplies both, and pickup/place/split/use all live in its one OnClick, taking it
--- gives the whole interaction set for free.
+-- SO A HARDWARE EVENT DOES NOT LAUNDER TAINT, which was the reasoning that retracted the first
+-- result: the argument was that a chat-box `/run` is insecure by construction and says nothing about
+-- a real click, and the flaw in it is that OUR OnClick is tainted code whatever triggered it. Calling
+-- a Blizzard function from a tainted stack does not make the call trusted either. The retraction cost
+-- a live error popup, and it is written down here because the reasoning was plausible and wrong.
+--
+-- What the other bag addons do instead, and what this cell does NOT do yet: ElvUI builds its cells
+-- from `ContainerFrameItemButtonTemplate` and lets BLIZZARD'S OWN OnClick receive the click, so the
+-- use happens on an untainted stack; MRT builds a `SecureActionButtonTemplate` purely to apply a
+-- weapon oil. Either would make use and trade reachable. See the note on the right-click branch.
+--
+-- MOVING items is measured and NOT blocked: `PickupContainerItem` worked from the same tainted
+-- context, cursor and all, and `SplitContainerItem` with it. Selling at a MERCHANT and transferring
+-- at an OPEN BANK are also measured working, which is why the right-click branch attempts exactly
+-- those two and skips everything else.
 --
 -- WE OWN THE CLICK, and this reverses what this header used to say. It read "NEVER SetScript OnClick
 -- on this frame -- that handler IS the mechanism", which was reasoned from the secure action bar work
@@ -22,10 +33,8 @@
 -- runs for a cell we created, so they return early in silence.
 --
 -- So movement is ours: PickupContainerItem both picks up and places (and SWAPS on an occupied slot),
--- SplitContainerItem splits, and all of it was measured working from tainted Lua in Phase 0. The one
--- thing still out of reach is USING an item, which is genuinely protected -- right-click therefore
--- sells at a merchant, where the same call is permitted, and does nothing elsewhere rather than
--- spending a taint error on the player.
+-- SplitContainerItem splits, and right-click hands the slot to `UseContainerItem` with NO gate at
+-- all -- the client decides whether that means sell, deposit, trade, attach or use.
 --
 -- The template is still worth inheriting for its ART REGIONS and its own OnEnter tooltip, which needs
 -- no container resolution and does work.
@@ -49,11 +58,31 @@ local CreateFrame, type, select = CreateFrame, type, select
 local S = SuuUI.UISignals
 local T = SuuUI.Theme
 
+--- Resolves a container function across BOTH shapes this client exposes it in.
+--
+-- This client is a hybrid: a modern backend wearing TBC's UI, so the same call is reachable as
+-- `C_Container.<name>` and as a bare global `<name>`, and which one exists is not something to
+-- assume. `_paintCooldown` already read `(C and C.GetContainerItemCooldown) or GetContainerItemCooldown`
+-- -- but the three ACTION calls did not, so pickup, split and use each depended on `C_Container`
+-- alone and would fail in silence on a build that only has the legacy globals.
+--
+-- A BARE global lookup through `_G[name]`, never a hardcoded `_G.name`: a chunk resolves bare names
+-- through its own environment, which under test is the harness table, so reaching past it would make
+-- the fallback branch untestable. The dynamic name is why the index form is used at all.
+-- @param name string
+-- @return function|nil
+local function containerFn(name)
+    local C = C_Container
+    local fn = C and C[name]
+    if type(fn) == "function" then return fn end
+    fn = _G and _G[name]
+    if type(fn) == "function" then return fn end
+    return nil
+end
+
 -- Quality at or above which the edge takes the item's colour. Below it the cell keeps the neutral
 -- icon border, because a WHITE edge on a dark cell reads as a selected state rather than as
 -- information -- the same threshold Plugins/Tooltips/Signal.lua settled on for the same reason.
-local QUALITY_EDGE_FROM = 2
-
 -- The bank's own container id. Read from the client rather than written as -1: Enum.BagIndex.Bank was
 -- MEASURED as -1 on this build, but a literal here would silently point at the wrong container on a
 -- generation that moved it, and this id selects the cell's TEMPLATE -- so a wrong value is a cell whose
@@ -122,9 +151,16 @@ end
 function ItemSlotMeta:_paintEdge()
     local info = self._info
     local q = info and info.quality
-    -- Game facts, not theme tokens: an item's quality colour is what the client says it is, and the
-    -- player already reads those five colours everywhere else in the game.
-    if q and q >= QUALITY_EDGE_FROM then
+    -- EVERY QUALITY THE CLIENT NAMES, grey and white included. This carried a `>= 2` threshold copied
+    -- from Plugins/Tooltips/Signal.lua, and the reasoning does not transfer: on a TOOLTIP a white edge
+    -- reads as a selected state, because a tooltip has one border and no neighbours to compare it with.
+    -- In a grid of eighty cells that all carry an edge, the colour is the only thing separating a grey
+    -- from a common from an uncommon -- so suppressing two of the six made those two look unfinished,
+    -- and the concept colours all of them (Q[0] grey, Q[1] white).
+    --
+    -- Game:ItemQualityColor already answers for all eight qualities and deliberately does NOT fold in a
+    -- threshold, precisely so each surface can make this decision for itself. This is that decision.
+    if q then
         local c = SuuUI.Game:ItemQualityColor(q)
         if c then
             self._iconComp:SetBorderColor(c)
@@ -132,7 +168,7 @@ function ItemSlotMeta:_paintEdge()
         end
     end
     if info then
-        -- An occupied slot below the quality threshold takes the standard neutral edge.
+        -- Occupied but the client does not name this quality: the neutral edge is the honest answer.
         self._iconComp:SetBorderColor(nil)
         return
     end
@@ -308,6 +344,28 @@ end
 -- flag still said "dimmed", and every later call short-circuited before re-applying it. Re-asserting
 -- two SetAlpha calls per cell is cheaper than a state that lies about what is on screen.
 -- @param on bool
+--- Lights or clears the search-match ring.
+-- Separate from SetDimmed on purpose: dimming says "this is not what you asked for" and the ring
+-- says "this is", and a cell in neither state (no active search) must show neither.
+-- @param on boolean
+function ItemSlotMeta:SetMatched(on)
+    self._matched = on and true or false
+    self:_paintMatch()
+end
+
+--- Whether the match ring is lit.
+-- @return boolean
+function ItemSlotMeta:IsMatched()
+    return self._matched == true
+end
+
+function ItemSlotMeta:_paintMatch()
+    if not self._matchRing then return end
+    -- false resolves to a fully transparent edge rather than removing the backdrop, so the ring
+    -- goes dark without any geometry changing.
+    SuuUI.Backdrop.SetBorder(self._matchRing, self._matched and "colorAccent" or false)
+end
+
 function ItemSlotMeta:SetDimmed(on)
     on = on and true or false
     self._dimmed = on
@@ -337,6 +395,9 @@ function ItemSlotMeta:ApplyTheme()
     -- Re-resolve the edge: a quality colour comes from SuuUI.Game, but the NEUTRAL fallback is a
     -- token, so a theme change has to re-run this or an empty cell keeps the old theme's edge.
     self:_paintEdge()
+    -- Apply() restates the whole backdrop table and colorAccent is user-editable, so the ring has
+    -- to be re-lit here or a lit match sits on the previous theme's accent.
+    self:_paintMatch()
 end
 
 function ItemSlotMeta:Destroy()
@@ -401,11 +462,27 @@ function SuuUI.Components.ItemSlot(props, parent)
         and "BankItemButtonGenericTemplate"
         or "ContainerFrameItemButtonTemplate"
 
+    -- SECURE TEMPLATE TRIED TWICE AND ABANDONED, and the reason is worth keeping so nobody reaches for
+    -- it a third time. Adding `SecureActionButtonTemplate` here REPLACES the container template's
+    -- OnClick with the secure handler -- verified in game -- which throws away the only thing that
+    -- performs a container interaction, in exchange for a handler whose `item` and `macro` types this
+    -- client does not dispatch (four attribute payloads were tried and none fired).
+    --
+    -- No secure frame also means no combat lockdown, no deferred geometry and no attributes-once rule
+    -- on this window, which is what the concept said in the first place.
+
     -- FRAME TYPE `ItemButton`, as ElvUI creates its cells -- these templates are declared as that type
     -- and the client's own mixin methods hang off it. Feature-detected rather than assumed: a client
     -- generation without the type would refuse the call outright, and a plain Button still applies the
     -- template's scripts (measured -- our cells had OnClick, OnDragStart and OnReceiveDrag), so the
     -- fallback degrades to what shipped before rather than to nothing.
+    -- NO SECURE TEMPLATE, and this is the load-bearing line. Adding `SecureActionButtonTemplate`
+    -- alongside the container one REPLACES the container template's OnClick with the secure handler --
+    -- verified in game, where `GetScript("OnClick") == SecureActionButton_OnClick` came back true -- so
+    -- the very handler that performs the whole interaction was being thrown away in exchange for one
+    -- that needs attributes this client does not dispatch for the item or macro types.
+    --
+    -- ElvUI creates its slots from exactly this template and nothing else, on this exact client.
     local ok, f = pcall(CreateFrame, "ItemButton", props.name, parent, template)
     if not ok or not f then
         f = CreateFrame("Button", props.name, parent, template)
@@ -479,6 +556,24 @@ function SuuUI.Components.ItemSlot(props, parent)
     -- aura icons needed, where a full-bleed cooldown swallowed the dispel ring.
     box:Add(cooldown, { inset = T:GetToken("borderWidth") or 1 })
 
+    -- THE SEARCH-MATCH RING, lit only while the cell matches a query. The concept's `.cell.hit`
+    -- gives a match an accent edge, and it can do that without losing the item's quality colour
+    -- because a concept cell has TWO edges: a neutral one on the cell and the quality one on the
+    -- art, inset a pixel. This cell has one, carrying quality -- so recolouring it would trade the
+    -- quality colour away for the duration of every search.
+    --
+    -- So the ring is its own edge, one border-width INSIDE the quality edge rather than outside it,
+    -- which is the one place there is room. Both colours stay readable and the resting appearance
+    -- of the grid is untouched: an unlit ring is a transparent edge, not a drawn one. The ordering
+    -- is inverted against the concept, which puts accent outside and quality inside -- see the note
+    -- in the spec.
+    local matchRing = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    -- The edge geometry is built here even though the colour is transparent: Apply always states
+    -- edgeFile and edgeSize, so SetBorder can light it later without rebuilding the table.
+    SuuUI.Backdrop.Apply(matchRing, { bg = false, border = false, inset = 0 })
+    box:Add(matchRing, { align = "stretch", valign = "stretch",
+                         inset = T:GetToken("borderWidth") or 1 })
+
     -- A FontString on the root frame would draw BEHIND the cooldown, because a child frame draws
     -- above its parent's layers. RaiseAbove is the only sanctioned z-order mechanism outside
     -- Core/UIRoot.lua.
@@ -503,6 +598,7 @@ function SuuUI.Components.ItemSlot(props, parent)
         _box        = box,
         _iconComp   = iconComp,
         _cooldown   = cooldown,
+        _matchRing  = matchRing,
         _overlay    = overlay,
         _overlayBox = overlayBox,
         _countText  = countText,
@@ -511,91 +607,47 @@ function SuuUI.Components.ItemSlot(props, parent)
         _readOnly   = false,
     }, ItemSlotMeta)
 
-    -- WE OWN THE INTERACTION. This file used to say "NEVER SetScript OnClick, the template's handler
-    -- IS the mechanism" -- and that premise was MEASURED FALSE in game: with the cell mouse-enabled and
-    -- carrying the template's OnClick, OnDragStart and OnReceiveDrag (all four probed true), neither a
-    -- click nor a drag moved anything. Blizzard's handlers resolve their container through state that
-    -- ContainerFrame_Update installs, and that function never runs for a cell we built, so they return
-    -- early and silently.
+    -- WE DO NOT TOUCH THE CLICK PATH. The template's own OnClick performs the whole interaction --
+    -- pickup, place, split, sell, deposit, mail, trade and USE -- and the one thing that must never
+    -- happen is for our code to be anywhere near it.
     --
-    -- Doing it ourselves is SAFE rather than a gamble, because Phase 0 measured the two calls it needs:
-    -- PickupContainerItem works from tainted Lua (cursor carried item 27860), and UseContainerItem is
-    -- refused away from a merchant but WORKS at one. So movement is ours and only USE is out of reach.
+    -- THIS REVERSES TWO EARLIER INVARIANTS IN THIS FILE, both of which were reasoned from bad
+    -- measurements, and the correction cost a whole session:
     --
-    -- RegisterForClicks and RegisterForDrag are BOTH required and neither is inherited usefully here: a
-    -- Button fires for left-up alone until told otherwise, and a frame with no drag registration never
-    -- receives OnDragStart at all -- which is exactly the half of the report that said drag did nothing.
-    f:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    f:RegisterForDrag("LeftButton")
+    --   1. "The template's handlers are inert for our cells." Tested by handing the click back and
+    --      watching nothing happen -- but that test predated the RegisterForClicks fix, so the click
+    --      was never delivered. It was never inert.
+    --   2. "So SuuUI owns movement, and USE is simply out of reach." Everything built on top of that --
+    --      our own OnClick, a merchant/bank gate, a SecureActionButtonTemplate with `type2 = "item"`
+    --      and then `type2 = "macro"` -- was solving a problem that did not exist, and the secure
+    --      template actively made things worse by REPLACING the container template's OnClick with the
+    --      secure one.
+    --
+    -- WHY WE MAY NOT EVEN ASSIGN BLIZZARD'S OWN FUNCTION: `f:SetScript("OnClick",
+    -- ContainerFrameItemButton_OnClick)` puts OUR taint on the handler, so its protected calls are
+    -- refused. Measured: doing exactly that from a /run raised the blocked-action popup, and the popup
+    -- named `ForceTaint_Strong` -- the chat path's taint identity -- rather than SuuUI, which is what
+    -- distinguished "the approach is wrong" from "the probe method taints it". The template has to
+    -- install its own handler at CreateFrame time, from Blizzard's XML, with nothing of ours on it.
+    --
+    -- ELVUI IS THE PROOF, and it runs on this exact client: `B:ConstructContainerButton` creates the
+    -- slot from the same container template, calls `SetID`, HOOKS OnEnter/OnLeave, and never calls
+    -- SetScript("OnClick"), never calls RegisterForClicks, and never adds a secure template. So this
+    -- file now does the same, and the concept's "nothing here is secure" note turns out to have been
+    -- right the whole way through.
+    --
+    -- NO RegisterForClicks EITHER. Ours overrode the template's own registration, and the explicit
+    -- two-string form silently dropped every right-click -- the third time that call has produced a
+    -- control that looks perfect and does nothing. The template registers what its handler expects;
+    -- there is nothing here for us to improve on.
 
-    -- Pickup and place are ONE call in this API: PickupContainerItem on a loaded cursor PLACES, and
-    -- placing onto an occupied slot SWAPS, handing the previous occupant back. That is why there is no
-    -- separate place path and why a cell written on an overwrite assumption would destroy an item.
-    local function pickupOrPlace()
-        local C = C_Container
-        if not (C and type(C.PickupContainerItem) == "function") then return end
-        local bag = handle:GetBag()
-        if bag == nil then return end
-        C.PickupContainerItem(bag, props.slot)
-    end
-
-    f:SetScript("OnClick", function(_, button)
-        if handle._readOnly then return end
-        local C = C_Container
-        local bag = handle:GetBag()
-        if bag == nil then return end
-
-        if button == "RightButton" then
-            -- UseContainerItem MEANS THREE DIFFERENT THINGS depending on where you are, and only one of
-            -- them is refused. At a merchant it SELLS; at an open bank it TRANSFERS between bank and
-            -- bags, which is the shortcut players already have in their fingers; anywhere else it USES
-            -- the item, and that is the one the client blocks for tainted code (measured: pcall true,
-            -- nothing happened, ForceTaint_Strong). So it is attempted exactly where it is known to
-            -- work, and skipped otherwise rather than spending a taint error on the player.
-            --
-            -- THE BANK TEST IS NOT BankFrame:IsShown(). Suppression deliberately leaves that frame
-            -- SHOWN -- hiding it calls CloseBankFrame() and ends the session -- so its visibility no
-            -- longer says anything about being at a teller. ItemCache tracks the real session from
-            -- BANKFRAME_OPENED / CLOSED, and it is in Core precisely so a component may read it.
-            local atMerchant = MerchantFrame and MerchantFrame.IsShown and MerchantFrame:IsShown()
-            local atBank = SuuUI.ItemCache and SuuUI.ItemCache.IsBankOpen
-                and SuuUI.ItemCache:IsBankOpen()
-            if (atMerchant or atBank) and type(C.UseContainerItem) == "function" then
-                C.UseContainerItem(bag, props.slot)
-            end
-            S:Emit(handle, S.SIGNALS.CLICKED, button)
-            return
-        end
-
-        if IsShiftKeyDown and IsShiftKeyDown() and not CursorHasItem()
-            and type(C.SplitContainerItem) == "function" then
-            local info = handle._info
-            local count = info and info.stackCount or 1
-            if count > 1 then
-                C.SplitContainerItem(bag, props.slot, math.floor(count / 2))
-                S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
-                return
-            end
-        end
-
-        pickupOrPlace()
+    -- CLICKS AND DRAGS ARE OBSERVED, NEVER OWNED. HookScript runs after the template's handler and
+    -- cannot displace it, which is the only safe way to emit a signal from a frame whose behaviour
+    -- belongs to the client. Same reason OnEnter is hooked rather than set: the template's OnEnter is
+    -- where the item tooltip comes from.
+    f:HookScript("OnClick", function(_, button)
         S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
     end)
-
-    -- Drag is the same pickup, and the same place. A player who presses and drags gets OnDragStart;
-    -- one who releases over another cell gets that cell's OnReceiveDrag.
-    f:SetScript("OnDragStart", function()
-        if handle._readOnly then return end
-        pickupOrPlace()
-    end)
-    f:SetScript("OnReceiveDrag", function()
-        if handle._readOnly then return end
-        pickupOrPlace()
-    end)
-
-    -- OnEnter/OnLeave stay HOOKED: the template's own OnEnter is where the item tooltip comes from, and
-    -- that half DOES work -- it needs no container resolution, only the frame. No tooltip code here for
-    -- the same reason StanceButton has none: a second owner anchoring the same frame makes it flick.
     f:HookScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
     f:HookScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
 

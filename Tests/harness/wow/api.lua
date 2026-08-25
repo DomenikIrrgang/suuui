@@ -97,6 +97,14 @@ function M.install(env)
                 self:_fire("PostClick", button, down)
             end)
         end
+        -- How many are in a slot, for the one branch that needs it: a shift-click SPLITS a stack and
+        -- PICKS UP a single item, so the two templates below have to be able to tell them apart.
+        local function stackAt(bag, slot)
+            local perBag = state.containerItems[bag]
+            local rec = perBag and perBag[slot]
+            return (rec and rec.stackCount) or 0
+        end
+
         -- ContainerFrameItemButtonTemplate. Modelled for the same reason StanceButtonTemplate is:
         -- SuuUI has no choice but to inherit it. USING an item from tainted Lua is BLOCKED on this
         -- client -- measured 2026-08-24 as the ForceTaint_Strong popup, with pcall returning true
@@ -145,24 +153,53 @@ function M.install(env)
             -- One phase, and the guess is contained for the same reason as StanceButtonTemplate:
             -- SuuUI never calls RegisterForClicks on these, so the template owns the decision.
             f:RegisterForClicks("AnyUp")
-            f:SetScript("OnClick", function(self, button, down)
-                local C   = env.C_Container
+            -- DRAG IS THE TEMPLATE'S TOO. SuuUI used to register this and hang its own OnDragStart
+            -- here, which is exactly the mistake this file now models away from: the template both
+            -- registers the button and performs the pickup, so a consumer needs neither.
+            f:RegisterForDrag("LeftButton")
+
+            -- The container position, resolved the way the real handler does: the SLOT from the
+            -- button's own id and the BAG from its parent's. Nothing else identifies a cell.
+            local function positionOf(self)
                 local par = self:GetParent()
-                local bag  = par and par.GetID and par:GetID()
-                local slot = self:GetID()
+                return par and par.GetID and par:GetID(), self:GetID()
+            end
+
+            local function pickupOrPlace(self)
+                local C = env.C_Container
+                local bag, slot = positionOf(self)
+                if C and bag and slot then C.PickupContainerItem(bag, slot) end
+            end
+
+            f:SetScript("OnClick", function(self, button, down)
+                local C = env.C_Container
+                local bag, slot = positionOf(self)
                 if C and bag and slot then
-                    if env.CursorHasItem() then
+                    -- THE BUTTON DECIDES, and it used to be ignored here -- every click ran the same
+                    -- branch chain, so a left-click with an empty cursor USED the item instead of
+                    -- picking it up. That is not what the client does, and modelling it that way made
+                    -- a spec about moving items assert a use.
+                    if button == "RightButton" then
+                        -- TRUSTED, so this is not the refused path a tainted caller takes. This one
+                        -- branch is why a bag cell must leave the template's OnClick alone: it is the
+                        -- only route to use, sell, deposit, mail and trade.
+                        state.trustedUseContainerItem(bag, slot)
+                    elseif env.CursorHasItem() then
                         -- Place. Goes through the same pickup, so the swap is one implementation.
                         C.PickupContainerItem(bag, slot)
-                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown() then
+                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown()
+                        and stackAt(bag, slot) > 1 then
+                        -- A SPLIT NEEDS A STACK. Shift-clicking a single item picks it up, which is
+                        -- what the client does and what a cell must not have to special-case.
                         C.SplitContainerItem(bag, slot, 1)
                     else
-                        -- TRUSTED, so this is not the refused path a tainted caller takes.
-                        state.trustedUseContainerItem(bag, slot)
+                        C.PickupContainerItem(bag, slot)
                     end
                 end
                 self:_fire("PostClick", button, down)
             end)
+            f:SetScript("OnDragStart", pickupOrPlace)
+            f:SetScript("OnReceiveDrag", pickupOrPlace)
         end
 
         -- BankItemButtonGenericTemplate -- the BANK's OWN 28-slot container, a different template
@@ -187,12 +224,18 @@ function M.install(env)
                 local bag  = (env.Enum and env.Enum.BagIndex and env.Enum.BagIndex.Bank) or -1
                 local slot = self:GetID()
                 if C and slot then
-                    if env.CursorHasItem() then
+                    -- THE BUTTON DECIDES HERE TOO. Modelled identically to the bag template, because
+                    -- the difference between the two templates is which CONTAINER they resolve, not
+                    -- what a click means.
+                    if button == "RightButton" then
+                        state.trustedUseContainerItem(bag, slot)
+                    elseif env.CursorHasItem() then
                         C.PickupContainerItem(bag, slot)
-                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown() then
+                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown()
+                        and stackAt(bag, slot) > 1 then
                         C.SplitContainerItem(bag, slot, 1)
                     else
-                        state.trustedUseContainerItem(bag, slot)
+                        C.PickupContainerItem(bag, slot)
                     end
                 end
                 self:_fire("PostClick", button, down)
@@ -1275,26 +1318,27 @@ function M.install(env)
     -- through the same gate would make the template look as useless as the direct call.
     state.trustedUseContainerItem = function(bag, slot) return acceptUse(bag, slot, "template") end
 
-    -- UseContainerItem has TWO protection profiles and the harness models both, because the
-    -- difference was measured rather than inferred. At a MERCHANT it SELLS, which ElvUI drives from
-    -- an OnUpdate on this client. Away from one it USES the item -- and that is BLOCKED, measured
-    -- 2026-08-24 as `*** ForceTaint_Strong *** has been blocked from an action only available to
-    -- the Blizzard UI`, with pcall returning true and the stack count unchanged.
-    --
-    -- A refused call is therefore RECORDED in blockedActions rather than raising, exactly as a
-    -- refused geometry call is, because that is what the client does: it returns having changed
-    -- nothing. Recording is the only observable a spec has, and it makes calling this from Lua a
-    -- detectable defect instead of a silent no-op.
-    --
-    -- NOTE the merchant half is evidenced but not yet measured -- see the vendor probe in
-    -- .kiro/specs/inventory.md section 0. If selling turns out to be blocked too, this gate is
-    -- where that changes.
     -- THREE MEANINGS, TWO PERMITTED. At a MERCHANT it SELLS -- measured 2026-08-25, the item left the
     -- bag. At an OPEN BANK it TRANSFERS between bank and bags, which is the client's own right-click
     -- shortcut. Anywhere else it USES the item, and that is the one refused for tainted code.
     --
     -- The merchant half is now MEASURED rather than merely evidenced; the vendor probe in
     -- .kiro/specs/inventory.md section 0 records it.
+    -- UseContainerItem HAS TWO PROTECTION PROFILES and the harness models both. At a MERCHANT it
+    -- SELLS and at an OPEN BANK it TRANSFERS, both measured working in game. Anywhere else it USES
+    -- the item, and that is BLOCKED for tainted code -- established twice: by a probe raising
+    -- ForceTaint_Strong, and then, after that probe was wrongly dismissed, by a real right-click
+    -- raising the player-facing `SuuUI has been blocked from an action only available to the
+    -- Blizzard UI` popup.
+    --
+    -- THIS MODEL WAS BRIEFLY REMOVED on the argument that a hardware event would launder the taint,
+    -- which is false: our OnClick is tainted code whatever triggered it. Removing it let a production
+    -- change that fires a real error popup pass a green suite, so the refusal is modelled again --
+    -- recorded in blockedActions rather than raised, because that is what the client does. Recording
+    -- is the only observable a spec has, and it makes an ungated call a detectable defect.
+    --
+    -- `via` distinguishes the two accepted situations, since a sale and a bank transfer are not the
+    -- same event even though they are one API call.
     local function useContainerItem(bag, slot)
         if type(bag) ~= "number" or type(slot) ~= "number" then return end
         if state.merchantOpen then

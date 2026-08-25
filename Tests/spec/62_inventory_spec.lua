@@ -141,7 +141,7 @@ describe("Plugins/Inventory", function()
             H.setMoney(500)
             local w = IW.New({ container = "bags" })
             w:Show()
-            H.expectNoOverlap(w._moneyText, w._grid:GetFrame())
+            H.expectNoOverlap({ w._moneyText, w._grid:GetFrame() })
             w:Destroy()
         end)
 
@@ -150,7 +150,9 @@ describe("Plugins/Inventory", function()
             local w = IW.New({ container = "bags" })
             w:Show()
             local pad = H.token("spaceSm")
-            local foot = H.box(w._moneyText)
+            -- The FOOTER's box, not the money text's. The row is as tall as its tallest child -- the
+            -- Sell Junk button -- so measuring from the text counts legitimate row height as slack.
+            local foot = H.box(w._footer)
             local content = H.box(w._win:GetContentFrame())
             -- .top measures DOWNWARD from the screen top, so a box's bottom edge is top + height.
             local slack = (content.top + content.height) - (foot.top + foot.height)
@@ -277,6 +279,171 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
+    -- The concept's title bar reads: character dropdown, scope, then sort and sell icons beside the
+    -- close button -- with the footer left as money plus free/total. This block pins that arrangement,
+    -- because the first implementation put sell in the footer as a labelled Button.
+    -- Every assertion in this block names a value read off the concept artifact's own CSS, so a
+    -- drift away from it fails here rather than being noticed in a screenshot.
+    describe("concept fidelity", function()
+        -- ASSERTS THE PAINT, NOT THE HANDLE. This first read `expect(win._glass).truthy()`, which
+        -- passed while the window had NO SURFACE AT ALL: Glass stores `from`/`to`/`sheen` verbatim
+        -- and defaults none of them, so a call that omitted the colours built a complete handle
+        -- whose body drew nothing, and the game world showed straight through the window. A
+        -- primitive returning a handle is not evidence that the handle paints.
+        it("paints the surface as glass, not a flat panel", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local g = w:GetWindow()._glass
+            expect(g).as("the window built a glass surface").truthy()
+            expect(g:IsGradient()).as("a gradient, not a flat fill").truthy()
+
+            local grad = g._body:GetGradient()
+            expect(grad).as("the body actually carries a gradient").truthy()
+            expect(grad.orientation).eq("VERTICAL")
+
+            -- The concept's `.win` runs rgba(10,10,15,.85) at the TOP down to .30 at the bottom,
+            -- which is colorGlass -> colorGlassFade. The client's gradient runs bottom-to-top, so
+            -- the DENSE end is the `to` stop.
+            local dense = H.token("colorGlass")
+            local fade  = H.token("colorGlassFade")
+            -- The stops are keyed r/g/b/a rather than array-indexed; reading them positionally
+            -- yields nil, which is a "near" failure in BOTH directions and so proves nothing.
+            expect(grad.to.a).as("dense end at the top").near(dense[4], 0.001)
+            expect(grad.from.a).as("faded end at the bottom").near(fade[4], 0.001)
+            expect(grad.to.r).as("and the hue is the glass neutral").near(dense[1], 0.001)
+            w:Destroy()
+        end)
+
+        it("gives the search field a stadium surface and a magnifier", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- `.srch{border-radius:10px}` on a 19-unit field is a pill, not a rounded rectangle.
+            expect(w._search._pill).as("pill surface").truthy()
+            expect(w._search._iconComp).as("leading magnifier").truthy()
+            -- Atlas art, not a pictograph character the client's faces may not carry.
+            expect(w._search._iconComp:GetIcon()).eq(H.SuuUI.Icons.PATH)
+            w:Destroy()
+        end)
+
+        it("keeps the typed text clear of the magnifier", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- The whole point of the glyph being INSIDE the field: if the edit box were not inset
+            -- past it, the first characters typed would be drawn over the icon.
+            H.expectNoOverlap({ w._search._eb, w._search._iconComp:GetFrame() })
+            w:Destroy()
+        end)
+
+        it("shows a clear affordance only once there is something to clear", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._search._clearBtn:IsShown()).as("nothing typed yet").falsy()
+            H.typeText(w._search, "poti")
+            expect(w._search._clearBtn:IsShown()).as("a query is present").truthy()
+            H.click(w._search._clearBtn)
+            expect(w._search:GetValue()).as("clearing empties the field").eq("")
+            expect(w._search._clearBtn:IsShown()).as("and hides itself again").falsy()
+            w:Destroy()
+        end)
+
+        it("draws a hairline under the search row as well as above the footer", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._searchDivider).truthy()
+            -- .top measures DOWNWARD: the search hairline is above the footer one.
+            expect(H.box(w._searchDivider:GetFrame()).top)
+                .lt(H.box(w._footDivider:GetFrame()).top)
+            w:Destroy()
+        end)
+
+        it("colours the sort icon with the accent, not the muted text token", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- `.ibtn.acc` for sort against `.ibtn.dgr` for sell: sorting is the affordance the
+            -- window advertises, so it is the coloured one.
+            local acc = H.token("colorAccent")
+            local dgr = H.token("colorDanger")
+            local r, g, b = w._sortBtn._icon:GetVertexColor()
+            expect(r).as("sort takes the accent").near(acc[1], 0.001)
+            expect(g).near(acc[2], 0.001)
+            expect(b).near(acc[3], 0.001)
+            local r2, g2, b2 = w._sellBtn._icon:GetVertexColor()
+            expect(r2).as("sell takes danger").near(dgr[1], 0.001)
+            expect(g2).near(dgr[2], 0.001)
+            expect(b2).near(dgr[3], 0.001)
+            w:Destroy()
+        end)
+
+        -- Asserting the STORED key would pass while the tint on screen was whatever the token said
+        -- at construction. A token is user-editable, so the tint has to be re-resolved.
+        it("re-resolves the icon tint when the accent token is edited", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local theme = H.SuuUI.Theme:GetActive()
+            H.SuuUI.Theme:CreateUserTheme("t_tint", theme)
+            H.SuuUI.Theme:SetUserToken("t_tint", "colorBlue400", { 1, 0, 1, 1 })
+            H.SuuUI.Theme:SetActive("t_tint")
+            local r, g, b = w._sortBtn._icon:GetVertexColor()
+            expect(r).as("followed the edited primitive").near(1, 0.001)
+            expect(g).near(0, 0.001)
+            expect(b).near(1, 0.001)
+            w:Destroy()
+        end)
+
+        it("dims a non-match to the concept's own opacity", function()
+            -- `.dim{opacity:.16}`, and the concept's note says so in words too. This was 0.35.
+            expect(H.token("opacityDimmed")).near(0.16, 0.001)
+        end)
+    end)
+
+    describe("the sell control", function()
+        it("is a title-bar accessory, not a footer button", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._sellBtn).as("the bags window has one").truthy()
+            local held = w:GetWindow():GetTitleAccessories()
+            local found = false
+            for _, a in ipairs(held) do if a == w._sellBtn then found = true end end
+            expect(found).as("held by the title bar").truthy()
+            -- .top measures DOWNWARD, so the title bar is a SMALLER top than the footer.
+            expect(H.box(w._sellBtn:GetFrame()).top)
+                .as("sits above the footer").lt(H.box(w._footer).top)
+            w:Destroy()
+        end)
+
+        it("sits between the sort icon and the close button", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            -- Concept order left to right: sort, sell, close. Accessories stack inward from close, so
+            -- sell is the RIGHTMOST of the two.
+            expect(H.box(w._sellBtn:GetFrame()).left)
+                .as("sell is right of sort").gt(H.box(w._sortBtn:GetFrame()).left)
+            H.expectNoOverlap({ w._sellBtn:GetFrame(), w._sortBtn:GetFrame() })
+            w:Destroy()
+        end)
+
+        -- NOT disabled on the bank -- absent. A greyed control says "not right now" when the truth is
+        -- "never here", and this is the easy bug the design flagged in advance.
+        it("does not exist at all on the bank window", function()
+            local w = IW.New({ container = "bank" })
+            w:Show()
+            expect(w._sellBtn).as("you cannot sell from a bank").eq(nil)
+            w:Destroy()
+        end)
+
+        it("is disabled away from a merchant and enabled at one", function()
+            local w = IW.New({ container = "bags" })
+            H.setMerchantOpen(false)
+            w:Show()
+            expect(w._sellBtn:IsEnabled()).as("not right now").falsy()
+            H.setMerchantOpen(true)
+            w:Refresh()
+            w:_updateFooter()
+            expect(w._sellBtn:IsEnabled()).as("at a vendor it is live").truthy()
+            w:Destroy()
+        end)
+    end)
+
     describe("search filters the grid live", function()
         it("dims non-matches and reports the count", function()
             stageThree()
@@ -285,7 +452,7 @@ describe("Plugins/Inventory", function()
             H.SuuUI.UISignals:Emit(win._search, H.S.SIGNALS.TEXT_CHANGED, "potion")
             expect(win:GetGrid():GetFilter()).eq("potion")
             expect(win._matchText:IsShown()).truthy()
-            expect(win._matchText:GetText()).eq("1 found")
+            expect(win._matchText:GetText()).eq("1 shown")
         end)
 
         it("clears back to everything", function()

@@ -842,6 +842,15 @@ function M.setBagItem(bag, slot, props, opts)
     -- record. The client never reports stackCount 0 for a slot that has something in it.
     if rec.stackCount == nil then rec.stackCount = 1 end
     if rec.quality    == nil then rec.quality    = 1 end
+    -- NO NAME OR HYPERLINK DEFAULT, and that is deliberate rather than thin. An uncached item really
+    -- does report neither: `GetItemInfo` answers nil until GET_ITEM_INFO_RECEIVED fires, which is the
+    -- case Core/ItemCache exists to handle, and 59_itemcache_spec stages exactly that to prove a thin
+    -- read cannot blank a name it already knows. Defaulting them was tried and broke that spec --
+    -- synthesising a name removed the only state in which the assertion means anything.
+    --
+    -- The consequence for a bag cell is real and belongs here rather than in a comment nobody reads:
+    -- the secure `item` attribute is the item's NAME, so right-click cannot use an item whose name has
+    -- not resolved yet. A spec that cares about the attribute stages the name explicitly.
     state.containerItems[bag][slot] = rec
     if not (opts and opts.silent) then M.fireEvent("BAG_UPDATE", bag) end
 end
@@ -1009,6 +1018,28 @@ function M.getUsedAction() return state.usedAction end
 
 --- Forgets the last action click, so one spec can assert a second one cleanly.
 function M.resetUsedAction() state.usedAction = nil end
+
+--- The last SECURE MACRO the client was asked to run: { text, button }, or nil.
+--
+-- A bag cell reaches "use this item" through `type2 = "macro"` plus `/use <bag> <slot>`, because
+-- calling UseContainerItem itself is refused on a tainted stack -- confirmed twice in game, the second
+-- time as a player-facing blocked-action popup. Recorded, never executed: the body is a slash command
+-- and interpreting it is the client's job.
+function M.getUsedMacro() return state.usedMacro end
+
+--- Forgets the last secure macro.
+function M.resetUsedMacro() state.usedMacro = nil end
+
+--- The last SECURE item click: { bag, slot, button }, or nil.
+--
+-- The counterpart to getUsedAction for `type = "item"`. A bag cell uses this rather than calling
+-- UseContainerItem itself, because that call is refused on a tainted stack -- confirmed twice in
+-- game, the second time as a player-facing blocked-action popup. Recorded rather than enacted:
+-- whether the client actually consumes the item is its own decision.
+function M.getUsedSecureItem() return state.usedSecureItem end
+
+--- Forgets the last secure item click.
+function M.resetUsedSecureItem() state.usedSecureItem = nil end
 
 --- Every geometry call the lockdown refused, oldest first.
 --

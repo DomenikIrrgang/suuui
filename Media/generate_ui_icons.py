@@ -45,6 +45,8 @@ THIN = 1.75
 GLYPHS = [
     "sort",     # 0  two arrows, one up one down -- change the ordering
     "account",  # 1  a globe -- this is account-wide rather than this character
+    "coin",     # 2  a stack of coins -- sell grey items
+    "search",   # 3  a magnifier -- the search field's leading glyph
 ]
 assert len(GLYPHS) <= GRID * GRID, (
     f"{len(GLYPHS)} glyphs will not fit a {GRID}x{GRID} sheet"
@@ -104,9 +106,45 @@ def _draw_account(d, u):
     d.ellipse(u.box(12, 6, 8, 20), outline=INK, width=u.w(THIN))
 
 
+def _draw_coin(d, u):
+    """A stack of two coins, seen slightly from above.
+
+    TWO coins rather than one, and drawn as ellipses rather than circles. A single circle with
+    interior detail is the globe glyph next to it on this sheet -- at 32px the two would be one
+    icon as far as a reader is concerned, which is the mistake the autocast/active-state pair
+    already made once. A stack read at an angle is unmistakably money and shares no silhouette
+    with the globe.
+    """
+    # Bottom coin: body plus the visible front rim, which is what makes it read as a solid disc
+    # rather than a ring.
+    d.ellipse(u.box(6, 17, 20, 8), outline=INK, width=u.w(THIN))
+    # Top coin, offset up so the stack has depth.
+    d.ellipse(u.box(6, 8, 20, 8), outline=INK, width=u.w(THIN))
+    # The sides joining them: without these the two ellipses read as two separate rings.
+    d.line([u.p(6.5, 12), u.p(6.5, 21)], fill=INK, width=u.w(THIN))
+    d.line([u.p(25.5, 12), u.p(25.5, 21)], fill=INK, width=u.w(THIN))
+
+
+def _draw_search(d, u):
+    """A magnifier: a ring plus a handle running down-right.
+
+    The concept draws a magnifier inside the search field and this sheet is why it can: the client's
+    own faces do not reliably carry the pictographs, so the emoji would render as a box on the faces
+    that lack it. Atlas art has no such dependency.
+
+    The ring sits UP-LEFT with the handle toward the bottom-right corner, which is the orientation
+    every magnifier icon uses -- mirrored it reads as a stray glyph rather than as "search".
+    """
+    d.ellipse(u.box(5, 5, 16, 16), outline=INK, width=u.w(THIN))
+    # The handle, on the ring's diagonal so the two read as one object.
+    d.line([u.p(18.5, 18.5), u.p(26, 26)], fill=INK, width=u.w(STROKE))
+
+
 DRAW = {
     "sort": _draw_sort,
     "account": _draw_account,
+    "coin": _draw_coin,
+    "search": _draw_search,
 }
 assert set(DRAW) == set(GLYPHS), "every glyph in GLYPHS needs a draw function"
 

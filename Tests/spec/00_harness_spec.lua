@@ -4568,6 +4568,15 @@ describe("harness: containers and the bank", function()
             H.setBagItem(0, 1, { itemID = 22832, quality = 0, stackCount = 1 })
         end)
 
+        -- ESTABLISHED TWICE, by different routes, and briefly retracted in between: a probe raising
+        -- ForceTaint_Strong, and then -- after the probe was wrongly dismissed as invalid because a
+        -- chat-box `/run` is not a hardware event -- a real right-click raising the player-facing
+        -- `SuuUI has been blocked from an action only available to the Blizzard UI` popup. The flaw in
+        -- the dismissal is that a hardware event does not launder taint: an addon's OnClick is tainted
+        -- code whatever triggered it.
+        --
+        -- Modelling the refusal is what makes an ungated production call a detectable defect. With it
+        -- removed, the change that put that popup on screen passed a green suite.
         it("is REFUSED away from a merchant, and recorded as blocked", function()
             H.resetBlockedActions()
             H.env.C_Container.UseContainerItem(0, 1)
@@ -4587,7 +4596,18 @@ describe("harness: containers and the bank", function()
             expect(#used).eq(1)
             expect(used[1].bag).eq(0)
             expect(used[1].slot).eq(1)
+            expect(used[1].via).as("a sale, not a use").eq("merchant")
             expect(H.env.C_Container.GetContainerItemInfo(0, 1)).as("slot emptied").eq(nil)
+        end)
+
+        it("is ACCEPTED at an open bank, and reports the transfer distinctly", function()
+            H.setBankOpen(true)
+            H.resetBlockedActions()
+            H.env.C_Container.UseContainerItem(0, 1)
+            expect(#H.getBlockedActions()).as("not refused at a bank").eq(0)
+            local used = H.getUsedContainerItems()
+            expect(#used).eq(1)
+            expect(used[1].via).as("a transfer, not a sale").eq("bank")
         end)
 
         it("hands back a COPY of the sale record", function()

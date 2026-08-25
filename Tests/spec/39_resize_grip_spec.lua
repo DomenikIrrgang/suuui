@@ -106,7 +106,7 @@ describe("Components.ResizeGrip", function()
             local g = H.mount(H.C.ResizeGrip({}, host))
             for i = 1, 6 do
                 for j = i + 1, 6 do
-                    H.expectNoOverlap(g._dots[i], g._dots[j])
+                    H.expectNoOverlap({ g._dots[i], g._dots[j] })
                 end
             end
         end)

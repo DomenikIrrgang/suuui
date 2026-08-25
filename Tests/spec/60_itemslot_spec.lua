@@ -136,6 +136,63 @@ describe("Components/ItemSlot", function()
         end)
     end)
 
+    -- The concept's `.cell.hit` rings a match in the accent while the item's quality colour stays
+    -- readable. Asserted through the ring's PAINTED border rather than the _matched flag: a flag
+    -- that agreed with nothing on screen is exactly how the search-dim bug survived a green suite.
+    describe("the search match ring", function()
+        it("is unlit until the cell matches", function()
+            stage(0, 1, { itemID = 22832, quality = 3 })
+            local c = cell(0, 1)
+            local _, _, _, a = c._matchRing:GetBackdropBorderColor()
+            expect(a).as("a transparent edge, not a drawn one").near(0, 0.001)
+            expect(c:IsMatched()).falsy()
+        end)
+
+        it("lights in the accent on a match", function()
+            stage(0, 1, { itemID = 22832, quality = 3 })
+            local c = cell(0, 1)
+            c:SetMatched(true)
+            local acc = H.token("colorAccent")
+            local r, g, b, a = c._matchRing:GetBackdropBorderColor()
+            expect(r).as("accent red").near(acc[1], 0.001)
+            expect(g).as("accent green").near(acc[2], 0.001)
+            expect(b).as("accent blue").near(acc[3], 0.001)
+            expect(a).as("and actually opaque").gt(0.5)
+        end)
+
+        -- The whole reason the ring is a separate edge rather than a recolour of the quality one.
+        it("does not cost the item its quality colour", function()
+            stage(0, 1, { itemID = 22832, quality = 4 })
+            local c = cell(0, 1)
+            local want = H.SuuUI.Game:ItemQualityColor(4)
+            c:SetMatched(true)
+            expect(c._iconComp._borderColor)
+                .as("epic edge survives being ringed").eq(want)
+        end)
+
+        it("goes out again when the match is dropped", function()
+            stage(0, 1, { itemID = 22832, quality = 3 })
+            local c = cell(0, 1)
+            c:SetMatched(true)
+            c:SetMatched(false)
+            local _, _, _, a = c._matchRing:GetBackdropBorderColor()
+            expect(a).near(0, 0.001)
+        end)
+
+        it("follows a live edit of the accent token", function()
+            stage(0, 1, { itemID = 22832, quality = 3 })
+            local c = cell(0, 1)
+            c:SetMatched(true)
+            H.SuuUI.Theme:CreateUserTheme("t_ring", H.SuuUI.Theme:GetActive())
+            H.SuuUI.Theme:SetUserToken("t_ring", "colorBlue400", { 0, 1, 0, 1 })
+            H.SuuUI.Theme:SetActive("t_ring")
+            local r, g, b = c._matchRing:GetBackdropBorderColor()
+            expect(r).as("re-resolved").near(0, 0.001)
+            expect(g).near(1, 0.001)
+            expect(b).near(0, 0.001)
+        end)
+    end)
+
     describe("the quality edge", function()
         it("takes the item's colour at uncommon and above", function()
             stage(0, 1, { itemID = 22832, quality = 3 })
@@ -145,12 +202,35 @@ describe("Components/ItemSlot", function()
             expect(c._iconComp._borderColor).as("edge took the quality colour").eq(want)
         end)
 
-        it("stays neutral below uncommon", function()
-            -- A WHITE edge on a dark cell reads as a selected state rather than as information,
-            -- which is why common and poor keep the neutral icon border instead.
+        -- EVERY quality the client names, grey and white included. This asserted the opposite -- a
+        -- `>= 2` threshold copied from the tooltip's border, where a white edge reads as a selected
+        -- state. In a grid where every cell has an edge, the colour is the only thing separating grey
+        -- from common from uncommon, and the concept colours all six.
+        it("colours a COMMON item white rather than leaving it neutral", function()
             stage(0, 1, { itemID = 22832, quality = 1 })
             local c = cell(0, 1)
-            expect(c._iconComp._borderColor).as("no quality colour on a common item").eq(nil)
+            expect(c._iconComp._borderColor)
+                .as("common takes the client's own white").eq(H.SuuUI.Game:ItemQualityColor(1))
+        end)
+
+        it("colours a POOR item grey rather than leaving it neutral", function()
+            stage(0, 1, { itemID = 111, quality = 0 })
+            local c = cell(0, 1)
+            expect(c._iconComp._borderColor).eq(H.SuuUI.Game:ItemQualityColor(0))
+        end)
+
+        it("keeps grey and white distinguishable from each other", function()
+            stage(0, 1, { itemID = 111, quality = 0 })
+            stage(0, 2, { itemID = 222, quality = 1 })
+            local poor, common = cell(0, 1), cell(0, 2)
+            expect(poor._iconComp._borderColor == common._iconComp._borderColor)
+                .as("two colours that are wrong in the same way would pass a has-a-border test").falsy()
+        end)
+
+        it("falls back to neutral for a quality the client does not name", function()
+            stage(0, 1, { itemID = 22832, quality = 99 })
+            local c = cell(0, 1)
+            expect(c._iconComp._borderColor).as("nil is the honest answer").eq(nil)
         end)
 
         it("distinguishes qualities rather than colouring everything the same", function()
@@ -181,7 +261,9 @@ describe("Components/ItemSlot", function()
         -- The distinction is the point: 40 empty slots drawing as hard an edge as the items is what
         -- makes a flat grid read as a spreadsheet rather than as an inventory.
         it("gives an occupied slot MORE edge weight than an empty one", function()
-            stage(0, 1, { itemID = 111, quality = 1 })
+            -- Quality 99 rather than 1: a common item now takes its own white edge, so the
+            -- full-weight-neutral case needs a quality the client does not name.
+            stage(0, 1, { itemID = 111, quality = 99 })
             local occupied = cell(0, 1)
             local empty = cell(0, 2)
             -- nil is Icon's own default, i.e. full-weight colorBorder.
@@ -229,14 +311,20 @@ describe("Components/ItemSlot", function()
     -- Phase 0 had measured it ("BankFrameItem1 is a real table; bank cells have their own template
     -- family") and this component ignored it.
     describe("the template depends on the container", function()
+        -- The container template is still what decides how the client resolves the slot, so it is
+        -- asserted by PREFIX rather than by equality: the secure half is appended to it, and pinning
+        -- the whole string would make every one of these fail for the wrong reason the next time a
+        -- template is added.
         it("builds a BAG cell on the container template", function()
             local c = cell(0, 1)
-            expect(c:GetFrame()._template).eq("ContainerFrameItemButtonTemplate")
+            expect(c:GetFrame()._template:find("ContainerFrameItemButtonTemplate", 1, true))
+                .as("the container template leads").eq(1)
         end)
 
         it("builds the BANK's own container on the bank template", function()
             local c = cell(-1, 1)
-            expect(c:GetFrame()._template).eq("BankItemButtonGenericTemplate")
+            expect(c:GetFrame()._template:find("BankItemButtonGenericTemplate", 1, true))
+                .as("the bank template leads").eq(1)
         end)
 
         -- Bank BAGS are ordinary containers. Getting this wrong the other way would put bank-bag cells
@@ -244,8 +332,16 @@ describe("Components/ItemSlot", function()
         -- bank's own grid instead -- which moves the WRONG item rather than none.
         it("builds a BANK BAG on the container template, not the bank one", function()
             local c = cell(6, 1)
-            expect(c:GetFrame()._template).eq("ContainerFrameItemButtonTemplate")
+            expect(c:GetFrame()._template:find("ContainerFrameItemButtonTemplate", 1, true))
+                .as("the container template leads").eq(1)
         end)
+
+        -- A SECURE TEMPLATE WAS TRIED HERE AND REVERTED. The cell briefly also inherited
+        -- SecureActionButtonTemplate so the client would call UseContainerItem from its own untainted
+        -- handler; it never fired, proved by SELLING breaking while that change was in. These
+        -- assertions are gone rather than skipped, because a template the code does not apply is not
+        -- a pending feature -- see the note in ItemSlot.lua for what a fourth attempt should measure
+        -- first.
 
         it("creates the cell as an ItemButton, the type these templates are declared as", function()
             expect(cell(0, 1):GetFrame():GetObjectType()).eq("ItemButton")
@@ -323,14 +419,22 @@ describe("Components/ItemSlot", function()
             expect(H.env.CursorHasItem()).truthy()
         end)
 
-        it("refuses every path while read-only", function()
+        -- READ-ONLY IS ENFORCED BY MOUSE ROUTING NOW, not by a guard inside a handler of ours -- there
+        -- is no handler of ours left to guard. `EnableMouse(false)` is what the client itself relies
+        -- on, so a snapshot cell of an alt cannot receive a click at all.
+        --
+        -- The direct-fire half of this spec was removed deliberately: invoking the template's handler
+        -- by hand tests a path the client cannot produce, and it would assert that a guard exists
+        -- where the design says the input never arrives. What IS worth pinning is that H.click refuses
+        -- to route -- see "a truthy return means input was delivered, never that a handler ran".
+        it("cannot be clicked at all while read-only", function()
             stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
             c:SetReadOnly(true)
-            H.click(c)
+            expect(H.click(c)).as("the client will not route input to it").falsy()
             expect(H.env.CursorHasItem()).as("a cached alt's grid cannot be moved").falsy()
-            c:GetFrame():_fire("OnDragStart", "LeftButton")
-            expect(H.env.CursorHasItem()).as("drag is refused too").falsy()
+            c:SetReadOnly(false)
+            expect(H.click(c)).as("and it comes back when the cell is live again").truthy()
         end)
 
         it("emits CLICKED and still performs the action", function()
@@ -345,51 +449,119 @@ describe("Components/ItemSlot", function()
 
     -- USE is genuinely protected away from a merchant, so right-click is a SELL where that is
     -- permitted and a no-op elsewhere -- rather than a call that costs the player a taint error.
+    -- RIGHT-CLICK BELONGS ENTIRELY TO THE TEMPLATE, and getting here cost a whole session. Every
+    -- mechanism this block used to assert has been removed: our own gated UseContainerItem call, a
+    -- merchant/bank allow-list, a SecureActionButtonTemplate with `type2 = "item"`, and then the same
+    -- with `type2 = "macro"`.
+    --
+    -- The chain of mistakes is worth recording, because each step was reasoned from a real observation
+    -- that turned out to be an artefact:
+    --   * "the template's handler is inert for our cells" -- tested before the RegisterForClicks fix,
+    --     so the click was never delivered to it.
+    --   * "so we must own the click" -- built on that.
+    --   * "use is protected, so we need a secure button" -- true that our OWN call is refused, but the
+    --     secure template REPLACES the container template's OnClick, throwing away the one handler
+    --     that works.
+    --   * "assign Blizzard's handler ourselves, then" -- a SetScript from our code puts our taint on
+    --     it, and the protected call inside is refused. The popup named `ForceTaint_Strong` rather
+    --     than SuuUI, which is what finally separated "wrong approach" from "the probe taints it".
+    --
+    -- ElvUI settled it: it creates its slots from the same template, calls SetID, hooks OnEnter, and
+    -- touches neither OnClick nor RegisterForClicks. So these specs assert that we keep our hands off.
     describe("right click", function()
-        it("sells at a merchant", function()
+        it("leaves the template's own OnClick in place", function()
+            local f = cell(0, 1):GetFrame()
+            expect(f:GetScript("OnClick")).as("the template installed one").truthy()
+            -- The one thing that must never happen. A SetScript here -- even of Blizzard's own
+            -- function -- carries our taint into the protected call it makes.
+            expect(f._suuuiOwnsClick).as("and nothing of ours replaced it").eq(nil)
+        end)
+
+        it("adds no secure template, so the container handler survives", function()
+            for _, bag in ipairs({ 0, -1, 6 }) do
+                local tpl = cell(bag, 1):GetFrame()._template or ""
+                expect(tpl:find("SecureActionButtonTemplate", 1, true))
+                    .as("bag " .. bag .. " carries no secure half").eq(nil)
+            end
+        end)
+
+        it("is not protected, so the window keeps its no-lockdown simplification", function()
+            local isProtected = cell(0, 1):GetFrame():IsProtected()
+            expect(isProtected).as("a plain cell, exactly as the concept describes").falsy()
+        end)
+
+        it("uses the item through the template, with no gate of ours", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.setMerchantOpen(false)
+            H.setBankOpen(false)
+            H.resetUsedContainerItems()
+            H.resetBlockedActions()
+            H.click(c, "RightButton")
+            local used = H.getUsedContainerItems()
+            expect(#used).as("the client acted, away from any merchant or bank").eq(1)
+            expect(used[1].bag).eq(0)
+            expect(used[1].slot).eq(1)
+            -- TRUSTED, which is the whole point: our own call here was refused with a popup.
+            expect(used[1].via).as("the template's trusted path, not ours").eq("template")
+            expect(#H.getBlockedActions()).as("nothing refused").eq(0)
+        end)
+
+        it("sells at a merchant through that same path", function()
             stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
             H.setMerchantOpen(true)
             H.resetUsedContainerItems()
             H.click(c, "RightButton")
+            -- Nothing merchant-specific exists in the cell any more. The client decides whether a
+            -- right-click is a sale, a deposit, a mail attachment or a use.
             expect(#H.getUsedContainerItems()).as("sold").eq(1)
         end)
 
-        it("transfers at an open bank, which is the client's own shortcut", function()
+        it("transfers at an open bank through that same path", function()
             stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
             H.setMerchantOpen(false)
             H.setBankOpen(true)
             H.resetUsedContainerItems()
-            H.resetBlockedActions()
             H.click(c, "RightButton")
             expect(#H.getUsedContainerItems()).as("transferred").eq(1)
-            expect(#H.getBlockedActions()).as("permitted, not refused").eq(0)
         end)
 
-        -- The bank test must NOT be BankFrame:IsShown(): suppression leaves that frame shown on
-        -- purpose, because hiding it calls CloseBankFrame(). So a cell reading the frame's visibility
-        -- would think it was at a teller permanently.
-        it("does not treat the suppressed bank FRAME as being at a bank", function()
-            stage(0, 1, { itemID = 22832, stackCount = 1 })
-            local c = cell(0, 1)
-            H.setMerchantOpen(false)
-            H.setBankOpen(false)
-            H.env.BankFrame:Show()   -- shown but the session is closed, exactly as suppression leaves it
+        it("acts on a BANK cell through the bank template's own handler", function()
+            H.setBankOpen(true)
+            H.setBagItem(-1, 2, { itemID = 4306, stackCount = 1 })
+            local c = cell(-1, 2)
             H.resetUsedContainerItems()
             H.click(c, "RightButton")
-            expect(#H.getUsedContainerItems()).as("a shown frame is not an open bank").eq(0)
+            local used = H.getUsedContainerItems()
+            expect(#used).as("the bank branch acts too").eq(1)
+            -- The bank template hardcodes container -1 and reads only the slot from GetID(). A cell on
+            -- the wrong template would act on the wrong container, which moves the WRONG item.
+            expect(used[1].bag).eq(-1)
+            expect(used[1].slot).eq(2)
         end)
 
-        it("does nothing away from a merchant, rather than being refused", function()
+        it("never calls UseContainerItem itself, which is what got refused", function()
             stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
             H.setMerchantOpen(false)
-            H.resetUsedContainerItems()
             H.resetBlockedActions()
             H.click(c, "RightButton")
-            expect(#H.getUsedContainerItems()).eq(0)
-            expect(#H.getBlockedActions()).as("no taint error spent on the player").eq(0)
+            -- A tainted call is a POPUP in the player's face, not a silent no-op. Its absence is the
+            -- fix, so it is asserted rather than inferred from the trusted call being present.
+            expect(#H.getBlockedActions())
+                .as("no tainted call, so no blocked-action dialog").eq(0)
+        end)
+
+        it("does not use the item on a LEFT click", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.setMerchantOpen(true)
+            H.resetUsedContainerItems()
+            H.click(c, "LeftButton")
+            expect(#H.getUsedContainerItems())
+                .as("left-click moves items, it never sells or consumes one").eq(0)
         end)
     end)
 

@@ -239,6 +239,42 @@ describe("Components/ItemGrid", function()
             expect(g._entries[1].cell:IsDimmed()).truthy()
         end)
 
+        -- THE OTHER HALF OF THE CUE, and it was untested until a mutation said so: replacing the
+        -- grid's SetMatched(hit) with SetMatched(false) left this whole file green, because the ring
+        -- was only ever asserted at the ItemSlot level. Dimming and ringing are wired in the same
+        -- loop and both need covering here.
+        it("rings the matches while it dims the rest", function()
+            stageThree()
+            local g = grid()
+            g:SetFilter("amber")
+            local acc = H.token("colorAccent")
+            local lit, unlit = 0, 0
+            for _, e in ipairs(g._entries) do
+                local _, _, _, a = e.cell._matchRing:GetBackdropBorderColor()
+                if a > 0.5 then
+                    lit = lit + 1
+                    expect(e.cell:IsDimmed()).as("a ringed cell is never also dimmed").falsy()
+                    local r = e.cell._matchRing:GetBackdropBorderColor()
+                    expect(r).as("and the ring is the accent").near(acc[1], 0.001)
+                else
+                    unlit = unlit + 1
+                end
+            end
+            expect(lit).as("something was ringed").gt(0)
+            expect(unlit).as("and something was not").gt(0)
+        end)
+
+        it("puts every ring out when the filter is cleared", function()
+            stageThree()
+            local g = grid()
+            g:SetFilter("amber")
+            g:SetFilter(nil)
+            for _, e in ipairs(g._entries) do
+                local _, _, _, a = e.cell._matchRing:GetBackdropBorderColor()
+                expect(a).as("a ring left lit would mark a filter that is gone").near(0, 0.001)
+            end
+        end)
+
         -- THE FLAG IS NOT THE EFFECT. Every dim assertion in this file checked IsDimmed(), which is a
         -- boolean the component sets on itself -- so all of them would pass with nothing visibly
         -- dimming, and that is exactly what was reported in game: the match count correct, no cell

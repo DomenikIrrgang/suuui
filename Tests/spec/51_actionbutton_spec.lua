@@ -317,7 +317,7 @@ describe("Components.ActionButton", function()
             local b = build({ slot = 1 })
             -- The collision AuraIcon shipped once, when a count and a duration shared the
             -- bottom-right corner.
-            H.expectNoOverlap(b._countText, b._macroText)
+            H.expectNoOverlap({ b._countText, b._macroText })
         end)
     end)
 

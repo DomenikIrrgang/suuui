@@ -91,7 +91,21 @@ local function layoutAccessories(self)
 end
 
 local function applyTheme(self)
-    SuuUI.Backdrop.Apply(self._frame, { bg = "colorBg", border = "colorBorder" })
+    -- GLASS OR FLAT, decided once at construction. `glass = true` paints the translucent vertical
+    -- gradient plus the lit hairline top edge instead of a flat panel -- the plate an action bar
+    -- already draws itself on, and what the inventory concept specifies for its own surface
+    -- (dense at the TOP, fading downward, with a 10%-white inset highlight along the top edge).
+    --
+    -- Not a runtime switch: Glass builds seven textures per layer and returns a handle, so
+    -- swapping surfaces mid-life would mean tearing one down and standing the other up on a frame
+    -- that already has children anchored over it. A window's surface is a property of what kind of
+    -- window it is, not a state it moves through.
+    if self._glass then
+        self._glass:SetBorder("colorBorder")
+        self._glass:Refresh()
+    else
+        SuuUI.Backdrop.Apply(self._frame, { bg = "colorBg", border = "colorBorder" })
+    end
 
     -- Chrome geometry moves with the size and font tokens. The title text and the drag
     -- region both have to clear the close button, so both insets are expressed from its
@@ -392,7 +406,9 @@ end
 -- a window is never born larger than the space it has to live in.
 -- centered = true pins the window to the middle on every open and keeps no saved
 -- position, for a window that should always appear in the same place.
--- @param props table  { id, title, w, h, minW, minH, maxW, maxH, resizable, centered, layer }
+-- glass = true paints the surface with Backdrop.Glass (translucent gradient + lit top edge)
+-- instead of a flat panel. Fixed at construction; see applyTheme.
+-- @param props table  { id, title, w, h, minW, minH, maxW, maxH, resizable, centered, layer, glass }
 -- @return table  Window handle
 function SuuUI.Layout:CreateWindow(props)
     assert(type(props.id) == "string", "SuuUI Window: id required")
@@ -422,6 +438,26 @@ function SuuUI.Layout:CreateWindow(props)
     end
 
     local f = CreateFrame("Frame", "SuuUI_win_" .. props.id, parent, "BackdropTemplate")
+
+    -- The glass surface, when asked for. Built here rather than in applyTheme because Glass
+    -- creates textures and returns a handle: applyTheme runs on every theme edit, and building
+    -- a second set there would stack seven more textures on the frame each time.
+    --
+    -- It goes on BEFORE any child is added, so the gradient and its top-edge sheen sit under the
+    -- title strip and the content rather than over them. Glass draws in the frame's own
+    -- background layers, so nothing needs raising afterwards.
+    local glass
+    if props.glass then
+        -- ALL THREE COLOURS ARE REQUIRED. Glass stores `from` / `to` / `sheen` verbatim and applies
+        -- no defaults of its own, so a call passing only `border` builds a complete handle whose body
+        -- has no colour and draws NOTHING -- the window came up with no surface at all, the game
+        -- world showing through it. The handle being non-nil is not evidence that anything is
+        -- painted, which is why the spec now asserts the body's colour rather than the handle.
+        glass = SuuUI.Backdrop.Glass(f, {
+            from = "colorGlass", to = "colorGlassFade", sheen = "colorGlassSheen",
+            border = "colorBorder",
+        })
+    end
     f:SetSize(w, h)
     -- Placed by the layer system, not by a hand-written strata: registerWithRoot re-applies
     -- the same layer later, and a window created before the root exists must still land on
@@ -499,6 +535,7 @@ function SuuUI.Layout:CreateWindow(props)
     handle = setmetatable({
         _id        = props.id,
         _frame     = f,
+        _glass     = glass,
         _shell     = shell,
         _titleStrip= titleStrip,
         _titleBox  = titleBox,

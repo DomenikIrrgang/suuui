@@ -66,6 +66,50 @@ function WindowMeta:SortNow()
     self._grid:Sort()
 end
 
+--- Scans for junk and asks before selling any of it.
+--
+-- The confirmation is not politeness. Selling is IRREVERSIBLE once the vendor's twelve buyback slots
+-- overflow, a flat grid has no junk section to inspect first, and a grey can be a quest item or a
+-- vendor-recipe carrier -- so the modal naming the count and the value is the only place the player sees
+-- what is about to go.
+function WindowMeta:SellJunk()
+    local Sell = SuuUI._Inventory and SuuUI._Inventory.Sell
+    if not Sell then return end
+    if not Sell.AtMerchant() then return end
+
+    local list, total, unknown = Sell.Scan(M.containerIds(self._which))
+    if #list == 0 then
+        C.Notice({ title = "Nothing to sell", message = "No grey items a vendor will take.",
+                   tone = "warning" })
+        return
+    end
+
+    -- "at least" when any price is unknown, rather than quietly under-reporting: GetItemInfo may not
+    -- have cached a price this session, and a total that is silently short is worse than a hedged one.
+    local value = SuuUI.Readout.Money(total, { groupThousands = true, spaceUnits = true })
+    local worth = unknown and ("at least " .. (value or "0c")) or (value or "0c")
+    C.Modal({
+        title          = "Sell Junk",
+        message        = ("Sell %d grey item%s for %s?\n\nThe vendor keeps only 12 buyback slots.")
+                            :format(#list, #list == 1 and "" or "s", worth),
+        confirmText    = "Sell",
+        confirmVariant = "danger",
+        onConfirm      = function()
+            Sell.Start(list, function()
+                if self._grid then self:Refresh() end
+                self:_updateFooter()
+            end)
+        end,
+    }):Show()
+end
+
+--- Enables the sell button only where selling is possible.
+function WindowMeta:_syncSell()
+    if not self._sellBtn then return end
+    local Sell = SuuUI._Inventory and SuuUI._Inventory.Sell
+    self._sellBtn:SetEnabled(Sell and Sell.AtMerchant() and not Sell.IsRunning() or false)
+end
+
 function WindowMeta:_updateFooter()
     local used, free, total = self._grid:GetCounts()
     -- Concept spelling: "1,284 g 42 s 18 c" -- the figure in the footer's own text colour and only
@@ -75,6 +119,7 @@ function WindowMeta:_updateFooter()
         colored = true, groupThousands = true, spaceUnits = true,
     }))
     self._slotsText:SetText(free .. " free / " .. total)
+    self:_syncSell()
     self._used = used
 end
 
@@ -85,7 +130,7 @@ function WindowMeta:_updateMatchCount()
         self._matchText:Hide()
         return
     end
-    self._matchText:SetText(self._grid:CountMatches() .. " found")
+    self._matchText:SetText(self._grid:CountMatches() .. " shown")
     self._matchText:Show()
 end
 
@@ -193,6 +238,10 @@ function WindowMeta:Destroy()
     if self._matchText then self._matchText:Destroy() end
     if self._moneyText then self._moneyText:Destroy() end
     if self._slotsText then self._slotsText:Destroy() end
+    if self._sellBtn then
+        if self._win.RemoveTitleAccessory then self._win:RemoveTitleAccessory(self._sellBtn) end
+        self._sellBtn:Destroy()
+    end
     -- Removed from the title bar BEFORE it is destroyed: the window recomputes its title and drag
     -- gutters from the accessory list, and one holding a destroyed handle would keep reserving space
     -- for a button that is gone.
@@ -200,6 +249,7 @@ function WindowMeta:Destroy()
         if self._win.RemoveTitleAccessory then self._win:RemoveTitleAccessory(self._sortBtn) end
         self._sortBtn:Destroy()
     end
+    if self._searchDivider then self._searchDivider:Destroy() end
     if self._footDivider then self._footDivider:Destroy() end
     if self._plateBox then self._plateBox:Destroy() end
     if self._plate then self._plate:Destroy() end
@@ -222,6 +272,12 @@ function M.New(props)
         h         = 300,
         resizable = false,
         centered  = true,
+        -- GLASS, which is what the concept specifies for this surface: its `.win` is a vertical
+        -- gradient from 85% down to 30% opacity with a 10%-white inset highlight along the top
+        -- edge, which is Backdrop.Glass exactly -- `colorGlass` / `colorGlassFade` /
+        -- `colorGlassSheen` already carry those three values. A flat `colorBg` panel was standing
+        -- in for it.
+        glass     = true,
     })
 
     local content = win:GetContentFrame()
@@ -250,10 +306,20 @@ function M.New(props)
     -- box because Input had no placeholder; it does now, and the hint is deliberately not the edit
     -- box's text, so the search filter never sees it as a query.
     --
-    -- No magnifier glyph: this client's faces do not reliably carry the pictographs, and a missing
-    -- one draws a box -- the same reason Dropdown and Accordion spend ASCII on their arrows. The icon
-    -- needs atlas art, which Media/ can generate but does not yet hold.
-    local search = C.Input({ placeholder = "Search items..." }, searchRow:GetFrame())
+    -- A PILL WITH A LEADING MAGNIFIER, which is the concept's `.srch` exactly: `border-radius:10px`
+    -- on a 19-unit field is a stadium, not a rounded rectangle, and the glyph sits inside the field
+    -- rather than beside it. The magnifier is atlas art from Media/ui-icons.tga rather than the
+    -- pictograph character, because this client's faces do not all carry one and a face missing it
+    -- draws a box -- the same reason Dropdown and Accordion spend ASCII on their arrows. That art
+    -- did not exist when this row was first built, which is why the field was square and bare.
+    local searchPath, searchCoords = SuuUI.Icons:Get("search")
+    local search = C.Input({
+        placeholder = "Search items...",
+        pill        = true,
+        icon        = searchPath,
+        iconCoords  = searchCoords,
+        clearable   = true,
+    }, searchRow:GetFrame())
     -- SORT LIVES IN THE TITLE BAR, as an icon, which is what the concept draws -- and it is why the
     -- search field there is full width instead of sharing its row with a 110px dropdown.
     --
@@ -265,11 +331,32 @@ function M.New(props)
     -- Parented to the content frame and then handed to the window: AddTitleAccessory reparents it into
     -- the title strip and raises it above the drag surface, which a button merely anchored there would
     -- sit underneath and never receive a click.
+    -- SELL JUNK IS A TITLE-BAR ICON IN THE DANGER COLOUR, which is what the concept draws: the title
+    -- bar carries the sort and sell icons beside the close button, and the footer stays money plus
+    -- free/total. It was a footer Button first, which put a labelled control where the concept has a
+    -- clean readout row.
+    --
+    -- ON THE BAGS WINDOW ONLY. The bank window has none at all rather than a disabled one: you can
+    -- never sell from a bank, and a greyed control says "not right now" when the truth is "never here".
+    -- Away from a merchant, though, "not right now" IS the truth -- so on the bags window it is present
+    -- and DISABLED, which is the distinction those two cases turn on.
+    local sellBtn
+    if which == "bags" then
+        local coinPath, coinCoords = SuuUI.Icons:Get("coin")
+        sellBtn = C.IconButton({
+            icon = coinPath, coords = coinCoords, iconColor = "colorDanger",
+            scalePop = false,   -- a strip accessory must not scale, or it slides
+        }, content)
+    end
+
     local sortPath, sortCoords = SuuUI.Icons:Get("sort")
     local sortBtn = C.IconButton({
         icon      = sortPath,
         coords    = sortCoords,
-        iconColor = "colorTextMuted",
+        -- ACCENT, which is what the concept gives the sort icon (`.ibtn.acc`) against the sell
+        -- icon's danger and the close button's muted. Sorting is the affordance the window
+        -- advertises, so it is the one control that is coloured rather than quiet.
+        iconColor = "colorAccent",
         -- NO PRESS POP. Reported in game: the button slid out to the right when clicked. A title-bar
         -- accessory is held at a token inset from the strip's right edge, and SetScale reinterprets
         -- that offset in the frame's own scaled space -- so the pop moves it sideways instead of
@@ -307,6 +394,10 @@ function M.New(props)
     -- and the window is sized from it, so the plate hugs the grid rather than the reverse.
     plate:Add(grid)
 
+    -- THREE HAIRLINES, which is what the concept draws: under the title bar (the window's own
+    -- chrome), under the search row, and above the footer. The search one was missing, so the field
+    -- and the grid ran together as one band.
+    local searchDivider = C.Divider({}, content)
     local footDivider = C.Divider({}, content)
 
     local footer = SuuUI.Layout:CreateContainer({
@@ -321,6 +412,7 @@ function M.New(props)
     footer:Add(slotsText, { width = "auto" })
 
     col:Add(searchRow, { width = "fill" })
+    col:Add(searchDivider, { width = "fill" })
     -- The PLATE goes in, not the grid: the grid is inside it. Still no width prop -- the grid's width
     -- is AUTHORITATIVE (columns times cell size) and the window is sized from it, so stretching either
     -- one would make the two define each other. That produced a 16px window once.
@@ -335,12 +427,15 @@ function M.New(props)
         _plate     = plateFrame,
         _plateBox  = plate,
         _footDivider = footDivider,
+        _searchDivider = searchDivider,
         _grid      = grid,
         _search    = search,
         _sortBtn   = sortBtn,
         _matchText = matchText,
         _moneyText = moneyText,
+        _footer    = footer,
         _slotsText = slotsText,
+        _sellBtn   = sellBtn,
         _which     = which,
         _eid       = id,
     }, WindowMeta)
@@ -356,8 +451,13 @@ function M.New(props)
         handle:SortNow()
     end)
 
+    if sellBtn then
+        S:Connect(sellBtn, S.SIGNALS.CLICKED, function() handle:SellJunk() end)
+    end
+
     -- Into the title bar, which reparents it and raises it above the drag surface. Done AFTER the
     -- handle exists, because the click needs a handle to cycle.
+    if sellBtn then win:AddTitleAccessory(sellBtn) end
     win:AddTitleAccessory(sortBtn)
 
     -- The window follows the grid: a settings change moves the grid's size, and the window has to

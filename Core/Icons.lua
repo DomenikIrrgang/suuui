@@ -23,6 +23,8 @@ M.PATH = "Interface\\AddOns\\SuuUI\\Media\\ui-icons"
 local GLYPHS = {
     sort    = { 0.00000, 0.50000, 0.00000, 0.50000 },
     account = { 0.50000, 1.00000, 0.00000, 0.50000 },
+    coin    = { 0.00000, 0.50000, 0.50000, 1.00000 },
+    search  = { 0.50000, 1.00000, 0.50000, 1.00000 },
 }
 
 --- Whether a glyph name is on the sheet.

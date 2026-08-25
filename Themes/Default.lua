@@ -61,7 +61,7 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- nudging the grid's opacity silently changed how search dimming looks, and a user theme that had
     -- done so made search appear not to work at all. Not opacityDisabled either: a non-matching item is
     -- not inert, it is just not the one you asked for.
-    opacityDimmed    = 0.35,
+    opacityDimmed    = 0.16,
     -- Smart guide lines (element-to-element alignment) are brighter than the grid so
     -- they stand out as contextual feedback during a drag.
     opacityGuide     = 0.40,

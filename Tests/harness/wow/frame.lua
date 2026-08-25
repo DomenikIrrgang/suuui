@@ -360,6 +360,35 @@ function M.secureAction(f, button, down)
         -- rather than at every assertion.
         local slot = modifiedAttribute(f, "action", button)
         state.usedAction = { slot = tonumber(slot) or slot, button = button }
+    elseif kind == "macro" then
+        -- `type = "macro"` with `macrotext` is how a Classic-era client reaches an action an addon may
+        -- not call directly: the client runs the macro body from inside its own secure handler, so
+        -- `/use <bag> <slot>` performs a container use that `UseContainerItem` from tainted Lua is
+        -- refused for.
+        --
+        -- Recorded rather than EXECUTED, and deliberately so: running the body would mean the harness
+        -- implementing a slash-command parser and then deciding what `/use` does to the bags, which is
+        -- the client's job. What a spec can prove is that the button asked for the right body.
+        local body = modifiedAttribute(f, "macrotext", button)
+        state.usedMacro = { text = body, button = button }
+    elseif kind == "item" then
+        -- `type = "item"` with a CONTAINER POSITION. The client reads `bag` and `slot` and calls
+        -- UseContainerItem on them from inside its own secure handler -- which is the whole point,
+        -- because that call is refused on a tainted stack. A bag cell reaches "use this item" no
+        -- other way.
+        --
+        -- Recorded rather than enacted, exactly as the action case is: the spec's question is "did
+        -- the button ask the client to use this container position", and actually resolving it would
+        -- mean modelling cooldowns, casts and whether the item is usable at all.
+        --
+        -- The two attributes are read through modifiedAttribute so a per-button `bag2` / `slot2` is
+        -- honoured -- which matters here, since a cell sets `type2` to put this on the RIGHT button
+        -- and leaves left-click to its own pickup handler.
+        local bag = modifiedAttribute(f, "bag", button)
+        local slot = modifiedAttribute(f, "slot", button)
+        state.usedSecureItem = {
+            bag = tonumber(bag) or bag, slot = tonumber(slot) or slot, button = button,
+        }
     end
     f:_fire("PostClick", button, down)
 end

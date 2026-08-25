@@ -216,8 +216,8 @@ describe("Plugins.DataBar – the bar", function()
             for _, name in ipairs({ "left", "center", "right" }) do
                 H.expectInside(section(name), barFrame())
             end
-            H.expectNoOverlap(section("left"), section("center"))
-            H.expectNoOverlap(section("center"), section("right"))
+            H.expectNoOverlap({ section("left"), section("center") })
+            H.expectNoOverlap({ section("center"), section("right") })
         end)
 
         it("stretches every section to the full bar height", function()
@@ -519,8 +519,8 @@ describe("Plugins.DataBar – the bar", function()
             vals.v = "a much longer centre value"
             H.fireEvent("DB_MONEY")
 
-            H.expectNoOverlap(section("left"), section("center"))
-            H.expectNoOverlap(section("center"), section("right"))
+            H.expectNoOverlap({ section("left"), section("center") })
+            H.expectNoOverlap({ section("center"), section("right") })
             H.expectInside(section("center"), barFrame())
         end)
     end)

@@ -89,6 +89,23 @@ return function(H)
     --- Asserts none of the listed widgets overlap each other.
     -- @param targets table  Array of handles or frames
     function H.expectNoOverlap(targets, tol)
+        -- REFUSE A MIS-SHAPED CALL. This takes an ARRAY, and `H.expectNoOverlap(a, b)` reads
+        -- perfectly: it binds `b` to `tol`, leaves `#targets == 0`, and both loops below never
+        -- execute -- so the assertion passes whatever the geometry is. 24 call sites across 12
+        -- spec files were doing exactly that, asserting nothing at all, and the only reason it
+        -- was ever noticed is that a mutation survived. A helper whose misuse is silent will be
+        -- misused again, so the misuse is now an error.
+        if type(targets) ~= "table" then
+            bail("expectNoOverlap needs an ARRAY of targets, got " .. type(targets))
+        end
+        if tol ~= nil and type(tol) ~= "number" then
+            bail("expectNoOverlap takes (targets, tol): pass the widgets as ONE array, " ..
+                 "e.g. H.expectNoOverlap({ a, b }) -- not H.expectNoOverlap(a, b)")
+        end
+        if #targets == 0 then
+            bail("expectNoOverlap got an empty or non-array table -- a single widget cannot " ..
+                 "overlap anything, so this asserted nothing. Pass { a, b }.")
+        end
         for i = 1, #targets do
             for j = i + 1, #targets do
                 local a, b = H.frameOf(targets[i]), H.frameOf(targets[j])

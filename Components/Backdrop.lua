@@ -587,9 +587,20 @@ end
 -- @return table  handle { SetColors, SetBorder, IsGradient, Refresh, Destroy }
 function M.Glass(frame, opts)
     opts = opts or {}
+    -- THE THREE COLOURS DEFAULT TO THE GLASS TOKENS. They used to be stored verbatim, so a caller
+    -- that named only `border` got a fully-formed handle whose body had no colour and drew NOTHING
+    -- -- a window with no surface, the game world showing straight through it, and a handle that
+    -- was non-nil so every "did it build" assertion passed. There is no such thing as a glass
+    -- plate with no glass, so "omitted" can only mean "the usual one": colorGlass ->
+    -- colorGlassFade with colorGlassSheen on the top edge, which is what every caller wanted.
+    --
+    -- Pass `false` to genuinely suppress a layer, exactly as `border = false` already does.
+    local from  = opts.from  == nil and "colorGlass"      or opts.from
+    local to    = opts.to    == nil and "colorGlassFade"  or opts.to
+    local sheen = opts.sheen == nil and "colorGlassSheen" or opts.sheen
     local self = setmetatable({
         _f      = frame,
-        _from   = opts.from,  _to        = opts.to,     _sheen     = opts.sheen,
+        _from   = from,        _to        = to,             _sheen     = sheen,
         _border = opts.border, _bwProp   = opts.borderWidth, _insetProp = opts.inset,
         _bw     = 0,          _inset     = 0,
     }, GlassMeta)

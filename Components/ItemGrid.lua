@@ -301,12 +301,19 @@ function GridMeta:_applyFilter()
     for _, e in ipairs(self._entries) do
         if not q or q == "" then
             e.cell:SetDimmed(false)
+            -- Neither state with no query. A ring left lit from the previous search would go on
+            -- marking cells as matching a filter that is no longer there.
+            e.cell:SetMatched(false)
         else
             local name = e.info and e.info.itemName
             -- An UNRESOLVED item has no name to match, so it is dimmed rather than counted as a
             -- miss: claiming it does not match would be a claim we cannot support.
             local hit = name and strfind(strlower(name), q, 1, true) ~= nil
             e.cell:SetDimmed(not hit)
+            -- TWO cues, not one. The concept dims what does not match AND rings what does; dimming
+            -- alone leaves the eye to pick the bright cells out of eighty, which is the work the
+            -- ring removes.
+            e.cell:SetMatched(hit and true or false)
         end
     end
 end

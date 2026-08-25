@@ -1089,6 +1089,39 @@ describe("Backdrop.Glass", function()
         host = H.parent(300, 200)
     end)
 
+    -- BUILT WITHOUT THE COLOURS, deliberately bypassing `build` above -- which fills the three in
+    -- from DEFAULTS, and is precisely why nothing here caught the footgun. Stored verbatim, an
+    -- omitted colour produced a fully-formed handle whose body drew NOTHING: the inventory window
+    -- shipped with no surface at all and the game world showing through it, while every "did it
+    -- build" assertion passed because the handle was non-nil.
+    describe("colours omitted entirely", function()
+        local function bare(opts)
+            local fr = H.env.CreateFrame("Frame", nil, host)
+            fr:SetSize(200, 40)
+            fr:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
+            return H.SuuUI.Backdrop.Glass(fr, opts or {})
+        end
+
+        it("still paints, defaulting to the glass tokens", function()
+            local g = bare({ border = "colorBorder" })
+            expect(g:IsGradient()).as("a gradient was built").truthy()
+            local grad = g._body:GetGradient()
+            expect(grad).as("the body carries a gradient").truthy()
+            H.expectTokenColor(stop(grad.to), "colorGlass")
+            H.expectTokenColor(stop(grad.from), "colorGlassFade")
+            g:Destroy()
+        end)
+
+        it("treats false as a suppression rather than an omission", function()
+            -- nil means "the usual one"; false means "none". Collapsing the two would make the
+            -- default unavoidable and take `border = false` with it.
+            local g = bare({ sheen = false, border = false })
+            expect(g._sheen).as("suppressed").eq(false)
+            expect(g._from).as("body still defaulted").eq("colorGlass")
+            g:Destroy()
+        end)
+    end)
+
     describe("the gradient body", function()
         it("runs the DENSE colour along the top edge, not the bottom", function()
             build(200, 40, { inset = 0 })

@@ -21,6 +21,13 @@ function IcoMeta:_paint()
     local B = SuuUI.Backdrop
     B.SetBg(self._f, "colorBgAlt")
     B.SetBorder(self._f, "colorBorder")
+    -- The art's tint is a token like everything else here, so it is re-resolved rather than left
+    -- at whatever it was at construction. Without this, editing colorAccent moved every other
+    -- accent in the UI and left the sort icon on the old hue.
+    if self._iconColor and self._icon then
+        local col = SuuUI.Theme:GetToken(self._iconColor)
+        if col then self._icon:SetVertexColor(col[1], col[2], col[3], col[4]) end
+    end
 end
 
 function IcoMeta:ApplyTheme()
@@ -82,11 +89,15 @@ function SuuUI.Components.IconButton(props, parent)
     if props.iconColor then
         local col = SuuUI.Theme:GetToken(props.iconColor)
         if col then icon:SetVertexColor(col[1], col[2], col[3], col[4]) end
+        -- KEPT, not applied and forgotten. A token is user-editable, so a tint resolved once at
+        -- construction is stale the moment the player edits that colour -- and ApplyTheme had no
+        -- way to restate a value it could not read. `_paint` re-asserts it from here.
     end
     box:Add(icon, { inset = pad })
 
     local id = "ico_" .. tostring(f)
     handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true,
+        _iconColor=props.iconColor,
                             _scalePop = props.scalePop ~= false }, IcoMeta)
 
     f:SetScript("OnEnter", function()
