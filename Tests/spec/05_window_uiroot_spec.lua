@@ -1180,3 +1180,64 @@ describe("Settings window", function()
             .as("a right click must not also open the window").falsy()
     end)
 end)
+
+-- Center takes an OFFSET so a PAIR of windows can sit side by side -- the inventory's bank session
+-- opens two and centres the seam between them rather than each window. Spec'd here as well as in the
+-- consumer because this is Layout API: a mutation that ignored the offset was caught only by the
+-- inventory's spec, which means Window's own coverage was asserting less than Window promises.
+describe("Layout.Window Center offset", function()
+    before_each(function() H.setup() end)
+
+    local function makeWin(id, w)
+        return H.SuuUI.Layout:CreateWindow({ id = id, title = id, w = w or 300, h = 200,
+                                             centered = true })
+    end
+
+    it("centres with no offset", function()
+        local win = makeWin("center_plain")
+        win:Show()
+        win:Center()
+        local root = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+        local wb, rb = H.box(win:GetFrame()), H.box(root)
+        local winMid = wb.left + wb.width / 2
+        local rootMid = rb.left + rb.width / 2
+        expect(winMid).as("horizontally centred").near(rootMid, 1)
+    end)
+
+    it("shifts right by a positive offset", function()
+        local win = makeWin("center_right")
+        win:Show()
+        win:Center()
+        local before = H.box(win:GetFrame()).left
+        win:Center(50)
+        expect(H.box(win:GetFrame()).left).as("moved right by the offset").near(before + 50, 1)
+    end)
+
+    it("shifts left by a negative offset", function()
+        local win = makeWin("center_left")
+        win:Show()
+        win:Center()
+        local before = H.box(win:GetFrame()).left
+        win:Center(-50)
+        expect(H.box(win:GetFrame()).left).near(before - 50, 1)
+    end)
+
+    -- .top measures DOWNWARD from the screen top, so a POSITIVE y (up) makes top SMALLER.
+    it("shifts up by a positive y", function()
+        local win = makeWin("center_up")
+        win:Show()
+        win:Center()
+        local before = H.box(win:GetFrame()).top
+        win:Center(0, 40)
+        expect(H.box(win:GetFrame()).top).as("up is a smaller top").near(before - 40, 1)
+    end)
+
+    it("keeps two windows apart when each is offset by half its own width", function()
+        local a, b = makeWin("pair_a", 300), makeWin("pair_b", 200)
+        a:Show()
+        b:Show()
+        a:Center(-((300 + 12) / 2))
+        b:Center((200 + 12) / 2)
+        H.expectNoOverlap(a:GetFrame(), b:GetFrame())
+    end)
+end)

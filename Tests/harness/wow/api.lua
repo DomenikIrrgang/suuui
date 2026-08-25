@@ -109,8 +109,7 @@ function M.install(env)
         -- change -- the discipline ActionButton arrived at the hard way. Modelled this way round on
         -- purpose: a model that read the bag off the button itself would let a consumer get the
         -- parentage wrong and still pass.
-        if template == "ContainerFrameItemButtonTemplate" and f._canScript then
-            -- The regions a consumer addresses by field. They are the reason this is worth
+        if template == "ContainerFrameItemButtonTemplate" and f._canScript then            -- The regions a consumer addresses by field. They are the reason this is worth
             -- modelling: a cell built on the template can paint through them, and a spec that
             -- cannot see them cannot assert anything about the icon or the count.
             f.icon       = f:CreateTexture(nil, "ARTWORK")
@@ -159,6 +158,40 @@ function M.install(env)
                         C.SplitContainerItem(bag, slot, 1)
                     else
                         -- TRUSTED, so this is not the refused path a tainted caller takes.
+                        state.trustedUseContainerItem(bag, slot)
+                    end
+                end
+                self:_fire("PostClick", button, down)
+            end)
+        end
+
+        -- BankItemButtonGenericTemplate -- the BANK's OWN 28-slot container, a different template
+        -- family from a bag. Modelled because the difference IS the bug this found: this handler
+        -- HARDCODES the bank container and reads only the SLOT from GetID(), where the bag template
+        -- reads the container from its parent's id. A cell on the wrong one acts on the wrong
+        -- container, which is why the bank window opened and could not move anything.
+        --
+        -- Bank BAGS (5..11) are ordinary containers and keep the bag template; only -1 comes here,
+        -- exactly as ElvUI branches on this same client.
+        if template == "BankItemButtonGenericTemplate" and f._canScript then
+            f.icon     = f:CreateTexture(nil, "ARTWORK")
+            f.Count    = f:CreateFontString(nil, "OVERLAY")
+            f.Cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+            local bnormal = f:CreateTexture(nil, "BORDER")
+            bnormal:SetTexture("Interface\\Buttons\\UI-Slot-Background")
+            f:SetNormalTexture(bnormal)
+            f:RegisterForClicks("AnyUp")
+            f:SetScript("OnClick", function(self, button, down)
+                local C = env.C_Container
+                -- THE BANK CONTAINER, not the parent's id. That is the modelled difference.
+                local bag  = (env.Enum and env.Enum.BagIndex and env.Enum.BagIndex.Bank) or -1
+                local slot = self:GetID()
+                if C and slot then
+                    if env.CursorHasItem() then
+                        C.PickupContainerItem(bag, slot)
+                    elseif env.IsShiftKeyDown and env.IsShiftKeyDown() then
+                        C.SplitContainerItem(bag, slot, 1)
+                    else
                         state.trustedUseContainerItem(bag, slot)
                     end
                 end
@@ -737,9 +770,31 @@ function M.install(env)
         cell:SetID(1)
     end
 
+    -- MerchantFrame, so "am I at a vendor" is answerable. A consumer gates its SELL path on this --
+    -- UseContainerItem means USE away from a merchant (refused) and SELL at one (permitted) -- so
+    -- without the frame that branch is unreachable and the harness silently tests the no-op path.
+    -- Its shown state follows state.merchantOpen, which H.setMerchantOpen already drives.
+    env.MerchantFrame = CreateFrame("Frame", "MerchantFrame", env.UIParent)
+    env.MerchantFrame.IsShown = function() return state.merchantOpen == true end
+    env.MerchantFrame.IsVisible = env.MerchantFrame.IsShown
+
     env.BankFrame = CreateFrame("Frame", "BankFrame", env.UIParent)
     env.BankFrame:SetSize(400, 300)
     env.BankFrame:Hide()
+    -- HIDING THIS FRAME CLOSES THE BANK, and modelling that is the whole point of it being here.
+    -- Blizzard's BankFrame_OnHide calls CloseBankFrame(), so a consumer that suppresses the frame the
+    -- way it suppresses a bag container ends the session server-side: the bank then reads as 28 slots
+    -- with 0 free and NOTHING can be moved into it. That shipped, and the suite could not see it
+    -- because the harness treated this frame as inert scenery.
+    --
+    -- ElvUI's DisableFrame nils OnHide BEFORE it ever hides this frame, which is the corroboration
+    -- that this is the client's real behaviour rather than a guess.
+    env.BankFrame:SetScript("OnHide", function()
+        state.bankOpen = false
+    end)
+    env.BankFrame:SetScript("OnShow", function()
+        state.bankOpen = true
+    end)
     local bankCell = CreateFrame("Button", "BankFrameItem1", env.BankFrame)
     bankCell:SetSize(37, 37)
     bankCell:SetID(1)
@@ -1234,15 +1289,25 @@ function M.install(env)
     -- NOTE the merchant half is evidenced but not yet measured -- see the vendor probe in
     -- .kiro/specs/inventory.md section 0. If selling turns out to be blocked too, this gate is
     -- where that changes.
+    -- THREE MEANINGS, TWO PERMITTED. At a MERCHANT it SELLS -- measured 2026-08-25, the item left the
+    -- bag. At an OPEN BANK it TRANSFERS between bank and bags, which is the client's own right-click
+    -- shortcut. Anywhere else it USES the item, and that is the one refused for tainted code.
+    --
+    -- The merchant half is now MEASURED rather than merely evidenced; the vendor probe in
+    -- .kiro/specs/inventory.md section 0 records it.
     local function useContainerItem(bag, slot)
         if type(bag) ~= "number" or type(slot) ~= "number" then return end
-        if not state.merchantOpen then
-            state.blockedActions[#state.blockedActions + 1] = {
-                action = "UseContainerItem", bag = bag, slot = slot,
-            }
+        if state.merchantOpen then
+            acceptUse(bag, slot, "merchant")
             return
         end
-        acceptUse(bag, slot, "merchant")
+        if state.bankOpen then
+            acceptUse(bag, slot, "bank")
+            return
+        end
+        state.blockedActions[#state.blockedActions + 1] = {
+            action = "UseContainerItem", bag = bag, slot = slot,
+        }
     end
 
     -- The cursor as the client reports it. GetCursorInfo's item form is `"item", itemID, itemLink`,

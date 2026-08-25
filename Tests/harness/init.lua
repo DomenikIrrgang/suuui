@@ -867,6 +867,19 @@ function M.setBankOpen(open, opts)
     open = not not open
     local was = state.bankOpen
     state.bankOpen = open
+    -- DRIVES BLIZZARD'S OWN FRAME, as the client does: talking to a banker SHOWS BankFrame. That
+    -- matters because the frame's OnHide calls CloseBankFrame(), so a consumer that suppresses the
+    -- frame closes the session -- and with the frame left inert here, that whole failure was
+    -- invisible to the suite while making the bank window unusable in game.
+    --
+    -- Set BEFORE the event fires, so a handler that reads the frame sees the state the event announces.
+    local bank = M.env and M.env.BankFrame
+    if bank then
+        if open then bank:Show() else bank:Hide() end
+        -- The frame's own scripts write state.bankOpen, so re-assert what the caller asked for: a
+        -- consumer may legitimately keep the frame shown while the bank is logically closed.
+        state.bankOpen = open
+    end
     if was ~= open and not (opts and opts.silent) then
         M.fireEvent(open and "BANKFRAME_OPENED" or "BANKFRAME_CLOSED")
     end
@@ -1430,7 +1443,13 @@ end
 local DEFAULT_CLICKS = { "LeftButtonUp" }
 
 local function firesClick(f, button, phase)
-    if f._kind ~= "Button" and f._kind ~= "CheckButton" then return false end
+    -- ASKED THROUGH THE TYPE HIERARCHY, not a hardcoded pair. This was
+    -- `f._kind ~= "Button" and f._kind ~= "CheckButton"`, which silently dropped every OnClick on an
+    -- ItemButton -- the type the bag-cell templates are declared as -- while the frame still reported
+    -- as present, mouse-enabled, and carrying an OnClick script. H.click returned TRUE the whole time,
+    -- because a truthy return means the input was delivered rather than that a handler ran.
+    -- IsObjectType covers Button, CheckButton, ItemButton and anything added later for free.
+    if not (f.IsObjectType and f:IsObjectType("Button")) then return false end
     local list = f._clickButtons or DEFAULT_CLICKS
     -- The client is CASE-INSENSITIVE here: "anyUp", "AnyUp" and "ANYUP" are the same
     -- registration, and third-party code freely uses the lower-cased spelling. Comparing

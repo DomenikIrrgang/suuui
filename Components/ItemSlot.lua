@@ -14,9 +14,21 @@
 -- but since it supplies both, and pickup/place/split/use all live in its one OnClick, taking it
 -- gives the whole interaction set for free.
 --
--- NEVER SetScript("OnClick") ON THIS FRAME. That handler IS the mechanism. Replacing it yields a
--- cell that sizes, highlights, tooltips and reports as shown while doing nothing at all -- the
--- exact failure ActionButton shipped once with press-versus-release. Observe through PostClick.
+-- WE OWN THE CLICK, and this reverses what this header used to say. It read "NEVER SetScript OnClick
+-- on this frame -- that handler IS the mechanism", which was reasoned from the secure action bar work
+-- and is FALSE for this template. Measured in game 2026-08-25: our cells carry the template's OnClick,
+-- OnDragStart and OnReceiveDrag, are mouse-enabled, and moved NOTHING -- not by click, not by drag.
+-- Blizzard's handlers resolve their container from state ContainerFrame_Update installs, and it never
+-- runs for a cell we created, so they return early in silence.
+--
+-- So movement is ours: PickupContainerItem both picks up and places (and SWAPS on an occupied slot),
+-- SplitContainerItem splits, and all of it was measured working from tainted Lua in Phase 0. The one
+-- thing still out of reach is USING an item, which is genuinely protected -- right-click therefore
+-- sells at a merchant, where the same call is permitted, and does nothing elsewhere rather than
+-- spending a taint error on the player.
+--
+-- The template is still worth inheriting for its ART REGIONS and its own OnEnter tooltip, which needs
+-- no container resolution and does work.
 --
 -- BAG AND SLOT ARE POSITIONAL, and that is the property that makes this safe in combat. The slot is
 -- this frame's own id; the BAG is its PARENT's id, which is how Blizzard's own containers are built
@@ -41,6 +53,18 @@ local T = SuuUI.Theme
 -- icon border, because a WHITE edge on a dark cell reads as a selected state rather than as
 -- information -- the same threshold Plugins/Tooltips/Signal.lua settled on for the same reason.
 local QUALITY_EDGE_FROM = 2
+
+-- The bank's own container id. Read from the client rather than written as -1: Enum.BagIndex.Bank was
+-- MEASURED as -1 on this build, but a literal here would silently point at the wrong container on a
+-- generation that moved it, and this id selects the cell's TEMPLATE -- so a wrong value is a cell whose
+-- handler acts on the wrong container, which loses an item rather than misdrawing one.
+--
+-- The second term reads the CLIENT's own BANK_CONTAINER global: a local's initialiser is evaluated
+-- before the local comes into scope, so the bare name there is still the global. Bare rather than
+-- _G.BANK_CONTAINER so the harness can stage it.
+local BANK_CONTAINER = (Enum and Enum.BagIndex and Enum.BagIndex.Bank)
+    or (type(BANK_CONTAINER) == "number" and BANK_CONTAINER)
+    or -1
 
 -- How much of the border an EMPTY slot keeps. Low enough that a half-empty bag reads as mostly
 -- background rather than as a grid, high enough that the slot is still findable when you go to drop
@@ -284,7 +308,10 @@ function ItemSlotMeta:SetDimmed(on)
     on = on and true or false
     if self._dimmed == on then return end
     self._dimmed = on
-    self._f:SetAlpha(on and (T:GetToken("opacityGrid") or 0.16) or 1)
+    -- opacityDimmed, NOT opacityGrid. This read the EDIT-MODE grid overlay's opacity, which is an
+    -- unrelated token that happened to hold a usable number -- so the two were coupled by accident and
+    -- a change to one silently moved the other.
+    self._f:SetAlpha(on and (T:GetToken("opacityDimmed") or 0.35) or 1)
 end
 
 --- @param w number
@@ -344,7 +371,35 @@ function SuuUI.Components.ItemSlot(props, parent)
         "SuuUI: ItemSlot bag " .. tostring(props.bag) ..
         " does not match its parent's id " .. tostring(parentBag))
 
-    local f = CreateFrame("Button", props.name, parent, "ContainerFrameItemButtonTemplate")
+    -- THE TEMPLATE DEPENDS ON THE CONTAINER, and getting this wrong is why the bank window opened but
+    -- could not move anything. ElvUI branches on exactly this line (Bags.lua) on this same client:
+    --
+    --   inherit = (bagID == BANK_CONTAINER) and 'BankItemButtonGenericTemplate'
+    --                                        or 'ContainerFrameItemButtonTemplate'
+    --
+    -- The bank's OWN 28-slot container (-1) is a different template family from a bag -- which Phase 0
+    -- measured and recorded ("BankFrameItem1 is a real table; bank cells have their own template
+    -- family") and which this file then ignored, building every cell on the bag template. The bank
+    -- BAGS (5..11) are ordinary containers and keep the bag template, so the branch is on the single
+    -- container id rather than on "is this the bank window".
+    --
+    -- The two handlers differ in where they get the container: the bag one reads the PARENT's id,
+    -- while the bank generic one hardcodes BANK_CONTAINER and reads only the slot from GetID(). So the
+    -- holder's id is load-bearing for one and ignored by the other, which is why matching the
+    -- reference matters more than reasoning about it.
+    local template = props.bag == BANK_CONTAINER
+        and "BankItemButtonGenericTemplate"
+        or "ContainerFrameItemButtonTemplate"
+
+    -- FRAME TYPE `ItemButton`, as ElvUI creates its cells -- these templates are declared as that type
+    -- and the client's own mixin methods hang off it. Feature-detected rather than assumed: a client
+    -- generation without the type would refuse the call outright, and a plain Button still applies the
+    -- template's scripts (measured -- our cells had OnClick, OnDragStart and OnReceiveDrag), so the
+    -- fallback degrades to what shipped before rather than to nothing.
+    local ok, f = pcall(CreateFrame, "ItemButton", props.name, parent, template)
+    if not ok or not f then
+        f = CreateFrame("Button", props.name, parent, template)
+    end
     f:SetSize(props.size, props.size)
     -- The id IS the wiring, and it is set before anything paints so the first Refresh reads the
     -- right slot rather than slot 0.
@@ -446,12 +501,91 @@ function SuuUI.Components.ItemSlot(props, parent)
         _readOnly   = false,
     }, ItemSlotMeta)
 
-    -- HookScript throughout, never SetScript: the template's own handlers ARE the mechanism, and
-    -- its OnEnter is where the item tooltip comes from. No tooltip code here for the same reason
-    -- StanceButton has none -- a second owner anchoring the same frame makes it flick.
-    f:HookScript("PostClick", function(_, button)
+    -- WE OWN THE INTERACTION. This file used to say "NEVER SetScript OnClick, the template's handler
+    -- IS the mechanism" -- and that premise was MEASURED FALSE in game: with the cell mouse-enabled and
+    -- carrying the template's OnClick, OnDragStart and OnReceiveDrag (all four probed true), neither a
+    -- click nor a drag moved anything. Blizzard's handlers resolve their container through state that
+    -- ContainerFrame_Update installs, and that function never runs for a cell we built, so they return
+    -- early and silently.
+    --
+    -- Doing it ourselves is SAFE rather than a gamble, because Phase 0 measured the two calls it needs:
+    -- PickupContainerItem works from tainted Lua (cursor carried item 27860), and UseContainerItem is
+    -- refused away from a merchant but WORKS at one. So movement is ours and only USE is out of reach.
+    --
+    -- RegisterForClicks and RegisterForDrag are BOTH required and neither is inherited usefully here: a
+    -- Button fires for left-up alone until told otherwise, and a frame with no drag registration never
+    -- receives OnDragStart at all -- which is exactly the half of the report that said drag did nothing.
+    f:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    f:RegisterForDrag("LeftButton")
+
+    -- Pickup and place are ONE call in this API: PickupContainerItem on a loaded cursor PLACES, and
+    -- placing onto an occupied slot SWAPS, handing the previous occupant back. That is why there is no
+    -- separate place path and why a cell written on an overwrite assumption would destroy an item.
+    local function pickupOrPlace()
+        local C = C_Container
+        if not (C and type(C.PickupContainerItem) == "function") then return end
+        local bag = handle:GetBag()
+        if bag == nil then return end
+        C.PickupContainerItem(bag, props.slot)
+    end
+
+    f:SetScript("OnClick", function(_, button)
+        if handle._readOnly then return end
+        local C = C_Container
+        local bag = handle:GetBag()
+        if bag == nil then return end
+
+        if button == "RightButton" then
+            -- UseContainerItem MEANS THREE DIFFERENT THINGS depending on where you are, and only one of
+            -- them is refused. At a merchant it SELLS; at an open bank it TRANSFERS between bank and
+            -- bags, which is the shortcut players already have in their fingers; anywhere else it USES
+            -- the item, and that is the one the client blocks for tainted code (measured: pcall true,
+            -- nothing happened, ForceTaint_Strong). So it is attempted exactly where it is known to
+            -- work, and skipped otherwise rather than spending a taint error on the player.
+            --
+            -- THE BANK TEST IS NOT BankFrame:IsShown(). Suppression deliberately leaves that frame
+            -- SHOWN -- hiding it calls CloseBankFrame() and ends the session -- so its visibility no
+            -- longer says anything about being at a teller. ItemCache tracks the real session from
+            -- BANKFRAME_OPENED / CLOSED, and it is in Core precisely so a component may read it.
+            local atMerchant = MerchantFrame and MerchantFrame.IsShown and MerchantFrame:IsShown()
+            local atBank = SuuUI.ItemCache and SuuUI.ItemCache.IsBankOpen
+                and SuuUI.ItemCache:IsBankOpen()
+            if (atMerchant or atBank) and type(C.UseContainerItem) == "function" then
+                C.UseContainerItem(bag, props.slot)
+            end
+            S:Emit(handle, S.SIGNALS.CLICKED, button)
+            return
+        end
+
+        if IsShiftKeyDown and IsShiftKeyDown() and not CursorHasItem()
+            and type(C.SplitContainerItem) == "function" then
+            local info = handle._info
+            local count = info and info.stackCount or 1
+            if count > 1 then
+                C.SplitContainerItem(bag, props.slot, math.floor(count / 2))
+                S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
+                return
+            end
+        end
+
+        pickupOrPlace()
         S:Emit(handle, S.SIGNALS.CLICKED, button or "LeftButton")
     end)
+
+    -- Drag is the same pickup, and the same place. A player who presses and drags gets OnDragStart;
+    -- one who releases over another cell gets that cell's OnReceiveDrag.
+    f:SetScript("OnDragStart", function()
+        if handle._readOnly then return end
+        pickupOrPlace()
+    end)
+    f:SetScript("OnReceiveDrag", function()
+        if handle._readOnly then return end
+        pickupOrPlace()
+    end)
+
+    -- OnEnter/OnLeave stay HOOKED: the template's own OnEnter is where the item tooltip comes from, and
+    -- that half DOES work -- it needs no container resolution, only the frame. No tooltip code here for
+    -- the same reason StanceButton has none: a second owner anchoring the same frame makes it flick.
     f:HookScript("OnEnter", function() S:Emit(handle, S.SIGNALS.MOUSE_ENTER) end)
     f:HookScript("OnLeave", function() S:Emit(handle, S.SIGNALS.MOUSE_LEAVE) end)
 

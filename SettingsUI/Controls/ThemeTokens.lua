@@ -35,6 +35,7 @@ SuuUI._ThemeEditableTokens = {
     -- Floored well above 0: at 0 a disabled control vanishes instead of reading as inert,
     -- and capped below 1 so the state stays visible at all.
     { key="opacityDisabled", label="Disabled Opacity", type="number", min=0.15, max=0.85, step=0.05 },
+    { key="opacityDimmed",  label="Search Dim",       type="number", min=0.05, max=1.0, step=0.05 },
 
     -- The action bar plate's dense end, its open end, and its lit top edge. Exposed as
     -- three numbers because that is what they are: the colorGlass* tokens they drive are

@@ -37,8 +37,57 @@ local function containerNames()
     local names = {}
     for i = 1, 13 do names[#names + 1] = "ContainerFrame" .. i end
     names[#names + 1] = "ContainerFrameCombinedBags"
-    names[#names + 1] = "BankFrame"
     return names
+end
+
+-- BANKFRAME IS NOT IN THAT LIST, AND MUST NOT BE. Hiding it CLOSES THE BANK: Blizzard's
+-- BankFrame_OnHide calls CloseBankFrame(), so suppressing it the way a bag container is suppressed ends
+-- the session server-side -- after which the bank reads as 28 slots with 0 free and nothing can be
+-- moved into it. That shipped in Phase 6 and made the whole bank window inert, including a direct
+-- C_Container.PickupContainerItem(-1, 1) with a loaded cursor.
+--
+-- ElvUI's DisableFrame nils OnHide BEFORE it ever hides this frame, which is what confirms the
+-- causality rather than merely suggesting it.
+--
+-- So the frame stays SHOWN and is made invisible and unclickable instead: alpha 0, mouse off, and its
+-- anchors cleared so it has no rect to draw in -- the same "ClearAllPoints and keep it unplaced" ElvUI
+-- uses. Every one of those is REVERSIBLE, unlike nilling a script or unregistering events, so
+-- onDisable can still hand the real bank frame back.
+local bankNeutered = false
+local bankRestore = nil
+
+local function neuterBankFrame()
+    local f = _G.BankFrame
+    if not f or bankNeutered then return false end
+    bankNeutered = true
+    bankRestore = {
+        alpha = f.GetAlpha and f:GetAlpha() or 1,
+        mouse = f.IsMouseEnabled and f:IsMouseEnabled() or false,
+        point = nil,
+    }
+    if f.GetNumPoints and f:GetNumPoints() > 0 and f.GetPoint then
+        local p, rel, relP, x, y = f:GetPoint(1)
+        bankRestore.point = { p, rel, relP, x, y }
+    end
+    if f.SetAlpha then f:SetAlpha(0) end
+    if f.EnableMouse then f:EnableMouse(false) end
+    -- No points means no rect, so it draws nothing while remaining SHOWN.
+    if f.ClearAllPoints then f:ClearAllPoints() end
+    return true
+end
+
+local function restoreBankFrame()
+    local f = _G.BankFrame
+    if not (f and bankNeutered) then return end
+    local r = bankRestore
+    bankNeutered, bankRestore = false, nil
+    if not r then return end
+    if f.SetAlpha then f:SetAlpha(r.alpha) end
+    if f.EnableMouse then f:EnableMouse(r.mouse) end
+    if r.point and f.SetPoint then
+        f:ClearAllPoints()
+        f:SetPoint(r.point[1], r.point[2], r.point[3], r.point[4], r.point[5])
+    end
 end
 
 M.containerNames = containerNames
@@ -50,7 +99,11 @@ M.containerNames = containerNames
 -- `ContainerFrame1Item1` is the CLASSIC name and the one measured present on this build.
 -- `ContainerFrameItemButton1` is the retail spelling and is deliberately absent -- probing for it was
 -- already a mistake once in this project.
-local WITNESS_CELLS = { "ContainerFrame1Item1", "BankFrameItem1" }
+-- BankFrameItem1 is deliberately ABSENT. The bank frame is left SHOWN (see neuterBankFrame), so its
+-- cells remain "visible" by IsVisible's reckoning even though the frame has no rect to draw in -- and a
+-- witness that always reports a miss is worse than no witness, because it trains the reader to ignore
+-- the self-check that exists to catch a renamed container.
+local WITNESS_CELLS = { "ContainerFrame1Item1" }
 M.WITNESS_CELLS = WITNESS_CELLS
 
 -- The FrameXML globals that open bags. All plain Lua and replaceable.
@@ -127,6 +180,9 @@ function M.Apply()
         end
     end
 
+    -- Neutered rather than hidden, for the reason above: hiding it closes the bank.
+    neuterBankFrame()
+
     for _, route in ipairs(ROUTES) do
         local current = _G[route.name]
         if type(current) == "function" and originals[route.name] == nil then
@@ -178,6 +234,7 @@ function M.Restore()
         suppressed[frame] = nil
         frame:Show()
     end
+    restoreBankFrame()
     for name, fn in pairs(originals) do
         _G[name] = fn
         originals[name] = nil
@@ -195,6 +252,12 @@ end
 --- Whether the named bag-opening global is currently routed to our window.
 -- @param name string
 -- @return bool
+--- Whether the bank frame is currently neutered (invisible but still SHOWN, so the session lives).
+-- @return bool
+function M.IsBankNeutered()
+    return bankNeutered
+end
+
 function M.IsRouted(name)
     return originals[name] ~= nil
 end

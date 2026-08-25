@@ -226,9 +226,18 @@ end
 
 --- Re-asserts a CENTER placement through UIRoot, which also puts the anchor descriptor
 --- back in step with the frame after a drag moved it behind the layout's back.
-function WinMeta:Center()
+--
+-- The optional offset is what lets a PAIR of windows sit side by side -- the inventory's bank session
+-- opens two and centres the pair rather than each one, so neither lands on top of the other. It is an
+-- offset from centre rather than an absolute position deliberately: a centred window already discards
+-- its drags and re-centres on every open, so a paired offset recomputed per open is consistent with
+-- that instead of fighting a stored position that is never saved.
+-- @param dx number|nil  units right of centre
+-- @param dy number|nil  units up from centre
+function WinMeta:Center(dx, dy)
     if not (SuuUI.UIRoot and SuuUI.UIRoot.UpdateElementAnchor) then return end
-    SuuUI.UIRoot:UpdateElementAnchor(self._frame, { point = "CENTER", x = 0, y = 0 })
+    SuuUI.UIRoot:UpdateElementAnchor(self._frame,
+        { point = "CENTER", x = dx or 0, y = dy or 0 })
 end
 
 --- Shows the window with a fade-in animation. Emits VISIBILITY_CHANGED.

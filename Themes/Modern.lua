@@ -43,6 +43,12 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     opacityDisabled  = 0.40,
     -- Edit mode grid line visibility. Very faint so lines stay out of the way.
     opacityGrid      = 0.15,
+    -- opacityDimmed: how far a cell RECEDES when it does not match a search. Its own token rather than
+    -- a reuse of opacityGrid, which is the EDIT-MODE grid overlay -- sharing that one meant a player
+    -- nudging the grid's opacity silently changed how search dimming looks, and a user theme that had
+    -- done so made search appear not to work at all. Not opacityDisabled either: a non-matching item is
+    -- not inert, it is just not the one you asked for.
+    opacityDimmed    = 0.35,
     -- Smart guide lines (element alignment) are brighter than the base grid.
     opacityGuide     = 0.40,
     -- See Themes/Default.lua: the action bar plate's dense edge, open edge and lit top

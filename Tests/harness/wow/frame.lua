@@ -1093,6 +1093,14 @@ M.metaFor = {
     ScrollFrame = ScrollFrameMeta,
     Button      = ButtonMeta,
     CheckButton = ButtonMeta,
+    -- ItemButton is a real frame TYPE on this client, and the two bag-cell templates
+    -- (ContainerFrameItemButtonTemplate, BankItemButtonGenericTemplate) are declared as it -- which
+    -- is why ElvUI creates its cells with CreateFrame('ItemButton', ...). Modelled as a Button
+    -- because everything a consumer can observe about it here is Button behaviour: it takes the
+    -- mouse by default, it has click phases, and it carries the template's scripts. Without the
+    -- type, a consumer that asks for it correctly gets "does not simulate type ItemButton" and its
+    -- feature-detect falls back to Button -- so the harness would silently test the fallback path.
+    ItemButton  = ButtonMeta,
     StatusBar   = StatusBarMeta,
     Slider      = FrameMeta,
     Cooldown    = CooldownMeta,

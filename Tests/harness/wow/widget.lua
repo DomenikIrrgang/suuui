@@ -68,6 +68,10 @@ local INHERITS = {
     Frame       = { Region = true },
     Button      = { Frame = true, Region = true },
     CheckButton = { Button = true, Frame = true, Region = true },
+    -- ItemButton is a real type on this client and the bag-cell templates are declared as it, so it
+    -- inherits Button exactly as CheckButton does -- which is what makes it mouse-enabled by default
+    -- and what makes IsObjectType('Button') answer true for a bag cell.
+    ItemButton  = { Button = true, Frame = true, Region = true },
     EditBox     = { Frame = true, Region = true },
     ScrollFrame = { Frame = true, Region = true },
     StatusBar   = { Frame = true, Region = true },

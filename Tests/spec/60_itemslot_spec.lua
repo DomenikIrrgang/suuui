@@ -222,52 +222,174 @@ describe("Components/ItemSlot", function()
         end)
     end)
 
-    describe("the Blizzard template's own handler is left intact", function()        it("uses the item on a plain click, through the trusted path", function()
-            stage(0, 1, { itemID = 22832, stackCount = 1 })
+    -- THE BANK IS A DIFFERENT TEMPLATE FAMILY, and missing this shipped a bank window that opened and
+    -- could not move anything. ElvUI branches on exactly this on this client:
+    --   inherit = (bagID == BANK_CONTAINER) and 'BankItemButtonGenericTemplate'
+    --                                        or 'ContainerFrameItemButtonTemplate'
+    -- Phase 0 had measured it ("BankFrameItem1 is a real table; bank cells have their own template
+    -- family") and this component ignored it.
+    describe("the template depends on the container", function()
+        it("builds a BAG cell on the container template", function()
             local c = cell(0, 1)
-            H.resetUsedContainerItems()
-            H.resetBlockedActions()
-            expect(H.click(c)).as("input was delivered").truthy()
-            local used = H.getUsedContainerItems()
-            expect(#used).as("the template used the item").eq(1)
-            expect(used[1].via).as("through the TRUSTED path, not our own call").eq("template")
-            -- And nothing was refused: our own Lua never called the blocked function.
-            expect(#H.getBlockedActions()).as("nothing refused").eq(0)
+            expect(c:GetFrame()._template).eq("ContainerFrameItemButtonTemplate")
         end)
 
-        it("places instead of using when the cursor is loaded", function()
+        it("builds the BANK's own container on the bank template", function()
+            local c = cell(-1, 1)
+            expect(c:GetFrame()._template).eq("BankItemButtonGenericTemplate")
+        end)
+
+        -- Bank BAGS are ordinary containers. Getting this wrong the other way would put bank-bag cells
+        -- on a handler that hardcodes the bank container, so every click would act on slot N of the
+        -- bank's own grid instead -- which moves the WRONG item rather than none.
+        it("builds a BANK BAG on the container template, not the bank one", function()
+            local c = cell(6, 1)
+            expect(c:GetFrame()._template).eq("ContainerFrameItemButtonTemplate")
+        end)
+
+        it("creates the cell as an ItemButton, the type these templates are declared as", function()
+            expect(cell(0, 1):GetFrame():GetObjectType()).eq("ItemButton")
+        end)
+
+        -- The harness dropped every OnClick on an ItemButton because its click gate named Button and
+        -- CheckButton literally. H.click still returned TRUE -- a truthy return means the input was
+        -- delivered, never that a handler ran -- so this asserts the OBSERVABLE, not the return.
+        it("delivers clicks to a bank cell, not just to a bag cell", function()
+            H.setBankOpen(true)
+            H.setBagItem(-1, 1, { itemID = 4306, stackCount = 1 })
+            local c = cell(-1, 1)
+            H.click(c)
+            expect(H.env.CursorHasItem()).as("a bank cell's click reaches our handler").truthy()
+        end)
+    end)
+
+    -- WE OWN THE MOVEMENT. This block used to assert the TEMPLATE did it, on the strength of the
+    -- secure action bar's rule -- and that premise was measured false in game: the cell carried the
+    -- template's OnClick, OnDragStart and OnReceiveDrag, was mouse-enabled, and moved nothing.
+    describe("moving items", function()
+        it("picks the stack up on a plain click", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            expect(H.click(c)).as("input was delivered").truthy()
+            expect(H.env.CursorHasItem()).as("the stack is on the cursor").truthy()
+            expect(select(2, H.env.GetCursorInfo())).eq(22832)
+        end)
+
+        -- Pickup and place are ONE call, and placing onto an occupied slot SWAPS. A cell written on an
+        -- overwrite assumption destroys an item on every rearrange, which is why the swap is asserted.
+        it("places on a loaded cursor, and swaps rather than overwriting", function()
             stage(0, 1, { itemID = 111 })
             stage(0, 2, { itemID = 222 })
             local target = cell(0, 2)
             H.env.C_Container.PickupContainerItem(0, 1)
             expect(H.env.CursorHasItem()).truthy()
-            H.resetUsedContainerItems()
             H.click(target)
-            expect(#H.getUsedContainerItems()).as("placed, not used").eq(0)
             expect(H.env.C_Container.GetContainerItemInfo(0, 2).itemID).eq(111)
-            -- The previous occupant came back to the cursor rather than being destroyed.
-            expect(select(2, H.env.GetCursorInfo())).eq(222)
+            expect(select(2, H.env.GetCursorInfo())).as("previous occupant returned").eq(222)
         end)
 
-        it("emits CLICKED from PostClick, without stealing OnClick", function()
+        -- Drag is the half of the report that could never have worked: with no RegisterForDrag a frame
+        -- never receives OnDragStart at all.
+        it("picks up on a DRAG, not only on a click", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            c:GetFrame():_fire("OnDragStart", "LeftButton")
+            expect(H.env.CursorHasItem()).as("drag picks the stack up").truthy()
+        end)
+
+        it("places on a drag released over it", function()
+            stage(0, 1, { itemID = 111 })
+            stage(0, 2, { itemID = 222 })
+            H.env.C_Container.PickupContainerItem(0, 1)
+            cell(0, 2):GetFrame():_fire("OnReceiveDrag", "LeftButton")
+            expect(H.env.C_Container.GetContainerItemInfo(0, 2).itemID).eq(111)
+        end)
+
+        it("splits a stack on shift-click", function()
+            stage(0, 1, { itemID = 2589, stackCount = 10 })
+            local c = cell(0, 1)
+            H.mods({ shift = true })
+            H.click(c)
+            H.mods({})
+            expect(H.env.CursorHasItem()).as("half the stack is on the cursor").truthy()
+        end)
+
+        it("does not split a single item, it picks it up", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.mods({ shift = true })
+            H.click(c)
+            H.mods({})
+            expect(H.env.CursorHasItem()).truthy()
+        end)
+
+        it("refuses every path while read-only", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            c:SetReadOnly(true)
+            H.click(c)
+            expect(H.env.CursorHasItem()).as("a cached alt's grid cannot be moved").falsy()
+            c:GetFrame():_fire("OnDragStart", "LeftButton")
+            expect(H.env.CursorHasItem()).as("drag is refused too").falsy()
+        end)
+
+        it("emits CLICKED and still performs the action", function()
             stage(0, 1, { itemID = 22832 })
             local c = cell(0, 1)
             local spy = H.signalSpy(c, H.S.SIGNALS.CLICKED)
-            H.resetUsedContainerItems()
             H.click(c)
             expect(spy.count).as("observed").eq(1)
-            -- The action still happened, which is what proves the handler was hooked rather than
-            -- replaced. A spec asserting only the signal would pass with OnClick overwritten.
-            expect(#H.getUsedContainerItems()).as("and the action still ran").eq(1)
+            expect(H.env.CursorHasItem()).as("and the action still ran").truthy()
+        end)
+    end)
+
+    -- USE is genuinely protected away from a merchant, so right-click is a SELL where that is
+    -- permitted and a no-op elsewhere -- rather than a call that costs the player a taint error.
+    describe("right click", function()
+        it("sells at a merchant", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.setMerchantOpen(true)
+            H.resetUsedContainerItems()
+            H.click(c, "RightButton")
+            expect(#H.getUsedContainerItems()).as("sold").eq(1)
         end)
 
-        it("clears the template's own art", function()
+        it("transfers at an open bank, which is the client's own shortcut", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
             local c = cell(0, 1)
-            local f = c:GetFrame()
-            local normal = f.GetNormalTexture and f:GetNormalTexture()
-            expect(normal).as("the template shipped art").truthy()
-            expect(normal:IsShown()).as("and we hid it").falsy()
-            expect(f.icon and f.icon:IsShown()).as("its icon too").falsy()
+            H.setMerchantOpen(false)
+            H.setBankOpen(true)
+            H.resetUsedContainerItems()
+            H.resetBlockedActions()
+            H.click(c, "RightButton")
+            expect(#H.getUsedContainerItems()).as("transferred").eq(1)
+            expect(#H.getBlockedActions()).as("permitted, not refused").eq(0)
+        end)
+
+        -- The bank test must NOT be BankFrame:IsShown(): suppression leaves that frame shown on
+        -- purpose, because hiding it calls CloseBankFrame(). So a cell reading the frame's visibility
+        -- would think it was at a teller permanently.
+        it("does not treat the suppressed bank FRAME as being at a bank", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.setMerchantOpen(false)
+            H.setBankOpen(false)
+            H.env.BankFrame:Show()   -- shown but the session is closed, exactly as suppression leaves it
+            H.resetUsedContainerItems()
+            H.click(c, "RightButton")
+            expect(#H.getUsedContainerItems()).as("a shown frame is not an open bank").eq(0)
+        end)
+
+        it("does nothing away from a merchant, rather than being refused", function()
+            stage(0, 1, { itemID = 22832, stackCount = 1 })
+            local c = cell(0, 1)
+            H.setMerchantOpen(false)
+            H.resetUsedContainerItems()
+            H.resetBlockedActions()
+            H.click(c, "RightButton")
+            expect(#H.getUsedContainerItems()).eq(0)
+            expect(#H.getBlockedActions()).as("no taint error spent on the player").eq(0)
         end)
     end)
 

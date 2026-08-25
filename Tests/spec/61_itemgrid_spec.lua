@@ -239,6 +239,37 @@ describe("Components/ItemGrid", function()
             expect(g._entries[1].cell:IsDimmed()).truthy()
         end)
 
+        -- THE FLAG IS NOT THE EFFECT. Every dim assertion in this file checked IsDimmed(), which is a
+        -- boolean the component sets on itself -- so all of them would pass with nothing visibly
+        -- dimming, and that is exactly what was reported in game: the match count correct, no cell
+        -- changing. Assert the ALPHA, which is what a player actually sees.
+        it("actually changes the cell's alpha, not just its flag", function()
+            stageThree()
+            local g = grid()
+            g:SetFilter("amber")
+            local dimmed, bright
+            for _, e in ipairs(g._entries) do
+                if e.cell:IsDimmed() then dimmed = dimmed or e.cell
+                else bright = bright or e.cell end
+            end
+            expect(dimmed).as("something was dimmed").truthy()
+            expect(bright).as("and something was not").truthy()
+            expect(dimmed:GetFrame():GetAlpha())
+                .as("a dimmed cell is visibly faded").lt(1)
+            expect(bright:GetFrame():GetAlpha())
+                .as("a matching cell is full strength").near(1, 0.001)
+        end)
+
+        it("returns every cell to full alpha when the filter is cleared", function()
+            stageThree()
+            local g = grid()
+            g:SetFilter("amber")
+            g:SetFilter(nil)
+            for _, e in ipairs(g._entries) do
+                expect(e.cell:GetFrame():GetAlpha()).as("all bright again").near(1, 0.001)
+            end
+        end)
+
         it("survives a re-sort", function()
             stageThree()
             local g = grid()

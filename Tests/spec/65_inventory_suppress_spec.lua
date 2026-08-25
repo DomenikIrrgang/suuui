@@ -109,7 +109,38 @@ describe("Plugins/Inventory suppression", function()
             S.Apply()
             expect(H.env.ContainerFrame1:IsShown()).as("backpack container is gone").falsy()
             expect(S.IsSuppressed("ContainerFrame1")).truthy()
-            expect(S.IsSuppressed("BankFrame")).as("the bank goes too").truthy()
+            expect(S.IsSuppressed("BankFrame"))
+                .as("the bank frame is NOT hidden -- hiding it closes the bank").falsy()
+        end)
+
+        -- THE BUG THIS BLOCK EXISTS FOR. Blizzard's BankFrame_OnHide calls CloseBankFrame(), so
+        -- suppressing that frame the way a bag container is suppressed ends the session server-side --
+        -- after which the bank reads 28 slots / 0 free and NOTHING can be moved into it, including a
+        -- direct C_Container.PickupContainerItem(-1, 1) with a loaded cursor. That shipped.
+        it("keeps the bank OPEN after suppression is applied", function()
+            H.setBankOpen(true)
+            expect(H.SuuUI.ItemCache:IsBankOpen()).as("open before").truthy()
+            S.Apply()
+            expect(H.env.BankFrame:IsShown())
+                .as("the frame stays shown, or its OnHide closes the bank").truthy()
+            expect(H.SuuUI.ItemCache:IsBankOpen()).as("still open after").truthy()
+        end)
+
+        it("neuters the bank frame instead of hiding it", function()
+            S.Apply()
+            expect(S.IsBankNeutered()).truthy()
+            expect(H.env.BankFrame:GetAlpha()).as("invisible").eq(0)
+            expect(H.env.BankFrame:IsMouseEnabled()).as("and unclickable").falsy()
+            expect(H.env.BankFrame:GetNumPoints()).as("no rect to draw in").eq(0)
+        end)
+
+        it("hands the bank frame back on restore", function()
+            H.setBankOpen(true)
+            S.Apply()
+            S.Restore()
+            expect(S.IsBankNeutered()).falsy()
+            expect(H.env.BankFrame:GetAlpha()).eq(1)
+            expect(H.env.BankFrame:IsShown()).as("never hidden throughout").truthy()
         end)
 
         -- THE ASSERTION THAT MATTERS. A container renamed out from under the list leaves these
