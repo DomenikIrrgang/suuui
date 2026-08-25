@@ -577,6 +577,37 @@ describe("Components/ItemSlot", function()
             return H.C.ItemSlot(p, holder(bag))
         end
 
+        -- REPORTED IN GAME: no tooltips on another character's items. The cause was read-only doing
+        -- EnableMouse(false) on every cell, which is right for a LIVE cell -- its template handler
+        -- would act on the logged-in character -- and wrong for a snapshot, which has no handler to
+        -- stop and loses its hover with it. Browsing an alt's bags without tooltips is close to
+        -- useless, and this pair is the whole reason the two kinds of cell exist.
+        it("still shows its tooltip while read-only", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, stackCount = 3, quality = 1,
+                        hyperlink = "|Hitem:22832|h[Arcane Powder]|h" })
+            c:SetReadOnly(true)
+            expect(c:GetFrame():IsMouseEnabled())
+                .as("hover survives, because inertness is structural").truthy()
+            H.resetTooltipState()
+            c:GetFrame():_fire("OnEnter")
+            expect(H.GameTooltip:IsShown()).as("the tooltip is up").truthy()
+            c:GetFrame():_fire("OnLeave")
+        end)
+
+        it("still cannot act while read-only, mouse or not", function()
+            local c = snap(0, 1)
+            c:SetItem({ itemID = 22832, stackCount = 3, quality = 1,
+                        hyperlink = "|Hitem:22832|h[Arcane Powder]|h" })
+            c:SetReadOnly(true)
+            H.resetUsedContainerItems()
+            H.click(c, "RightButton")
+            H.click(c, "LeftButton")
+            -- Keeping the mouse must not reintroduce any way to touch the logged-in character's bags.
+            expect(#H.getUsedContainerItems()).as("nothing used or sold").eq(0)
+            expect(H.env.CursorHasItem()).as("and nothing picked up").falsy()
+        end)
+
         it("takes no Blizzard template at all", function()
             expect(snap(0, 1):GetFrame()._template)
                 .as("no container template, so no handler that could act").eq(nil)

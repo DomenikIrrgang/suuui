@@ -91,14 +91,22 @@ function SuuUI.Components.Frame(props, parent)
         _border  = props.border,
     }, FrameMeta)
 
-    if props.rounded then
-        handle._panel = SuuUI.Backdrop.Panel(f, { radius = props.radius })
-    end
-
-    -- Translate the Blizzard resize script into a signal
+    -- THE RESIZE SCRIPT GOES FIRST, before anything adopts this frame. Backdrop.Panel installs its own
+    -- OnSizeChanged (chaining whatever it finds) so its pieces re-derive when the frame changes size --
+    -- and building the panel BEFORE this line meant this SetScript replaced that hook outright. The
+    -- panel then never followed a resize: measured in game as a grid plate that kept its previous,
+    -- larger size after the window shrank, drawing a dark rounded band below the window's own content.
+    --
+    -- Exactly the trap LAYOUT_SYSTEM.md names -- "register a frame's own resize script before adopting
+    -- it" -- and the same one that had Glass not tracking its window. Both orderings are one line
+    -- apart and only one of them works.
     f:SetScript("OnSizeChanged", function(_, w, h)
         S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w, h)
     end)
+
+    if props.rounded then
+        handle._panel = SuuUI.Backdrop.Panel(f, { radius = props.radius })
+    end
 
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

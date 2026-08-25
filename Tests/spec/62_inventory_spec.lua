@@ -290,6 +290,26 @@ describe("Plugins/Inventory", function()
         -- and defaults none of them, so a call that omitted the colours built a complete handle
         -- whose body drew nothing, and the game world showed straight through the window. A
         -- primitive returning a handle is not evidence that the handle paints.
+        -- THE SURFACE MUST FOLLOW THE FRAME, and nothing checked that. Measured in game: a 219-unit
+        -- window wearing a 411x546 glass body, because Glass lays its pieces out with a HOST container
+        -- and the window's own OnSizeChanged -- installed AFTER it -- replaced the container's
+        -- re-layout hook. Every measurement of the frame looked right; the dead band below the footer
+        -- was the surface, still the size the window had when it was created.
+        it("resizes its glass surface with the window", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local win = w:GetWindow()
+            local body = win._glass._body
+            expect(body:GetHeight()).as("matches at rest").near(win:GetHeight(), 2)
+
+            -- Shrink hard, which is what switching to a small snapshot does.
+            win:SetSize(win:GetWidth(), 120)
+            expect(body:GetHeight()).as("the surface followed it down").near(120, 2)
+            expect(body:GetHeight() <= win:GetHeight() + 2)
+                .as("and never extends past the frame").truthy()
+            w:Destroy()
+        end)
+
         it("paints the surface as glass, not a flat panel", function()
             local w = IW.New({ container = "bags" })
             w:Show()
@@ -641,6 +661,84 @@ describe("Plugins/Inventory", function()
             local w = IW.New({ container = "bags" })
             w:Show()
             H.expectInside(w._charDrop:GetFrame(), w:GetWindow()._titleStrip:GetFrame())
+            w:Destroy()
+        end)
+
+        -- IDEMPOTENCE is worth pinning on its own account, but be clear about what it does NOT prove:
+        -- the defect it was written for is INVISIBLE HERE. `_fit` derived the window's chrome as
+        -- window-minus-content on every call, and in the real client those two readings are only
+        -- consistent once it has resized the content frame to match the last SetSize -- a frame later.
+        -- The harness resizes synchronously, so the stale reading never occurs and this spec passes
+        -- with the defect reintroduced (verified). Reported in game after switching character: the
+        -- window came up far too tall and only a close-and-reopen let the readings settle.
+        it("fitting twice does not change the window size", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local h1 = w:GetWindow():GetHeight()
+            w:_fit()
+            local h2 = w:GetWindow():GetHeight()
+            w:_fit()
+            local h3 = w:GetWindow():GetHeight()
+            expect(h2).as("a second fit is a no-op").near(h1, 0.5)
+            expect(h3).as("and so is a third").near(h1, 0.5)
+            w:Destroy()
+        end)
+
+        -- What CAN be asserted structurally: the delta is measured once and kept, so no fit after the
+        -- first depends on the two readings agreeing. That is the actual fix, and unlike the timing it
+        -- is observable.
+        it("measures the window chrome once and USES the cached value", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._chromeH).as("cached after the first real measurement").truthy()
+            -- ASSERTING THE FIELD IS SET PROVES NOTHING -- a first draft of this did exactly that, and
+            -- passed against a version that wrote the cache and then ignored it. Plant a distinctive
+            -- value and check it reaches the window's height: that can only pass if the fit READS it.
+            local _, contentH = w._col:GetContentSize()
+            w._chromeH = 137
+            w:_fit()
+            expect(w:GetWindow():GetHeight())
+                .as("the height came from the cached delta").near(contentH + 137, 1)
+            w:Destroy()
+        end)
+
+        it("re-measures the chrome on a theme change", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._chromeH).truthy()
+            w:ApplyTheme()
+            -- sizeTitleBar and borderWidth are user-editable, so the one moment the delta must be
+            -- taken again is a theme change -- which is why the cache is cleared there rather than
+            -- never.
+            expect(w._chromeH).as("measured again, not left stale").truthy()
+            w:Destroy()
+        end)
+
+        xit("grows the window when the content frame lags a SetSize", function()
+            -- The real defect. Needs the harness to defer a frame's content resize by a tick the way
+            -- the client does; today it resizes synchronously, so `window - content` is always
+            -- consistent and the feedback loop cannot be reproduced. Closing this means teaching
+            -- Tests/harness to settle geometry on a tick, which would change what every geometry
+            -- assertion in the suite measures -- worth doing, not as a drive-by.
+        end)
+
+        it("fits to the snapshot's own grid, not the live one it replaced", function()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Tiny-Thunderstrike"] = { class = "MAGE", money = 10 }
+            store.chars["Tiny-Thunderstrike"].bags =
+                { seen = 1755900000, slots = { [0] = { [1] = { 22832, 1 } } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local live = w:GetWindow():GetHeight()
+            w:SetCharacter("Tiny-Thunderstrike")
+            local snap = w:GetWindow():GetHeight()
+            -- One cached slot against a full set of live bags: the window must shrink, and must not
+            -- keep the live grid's height or grow past it.
+            expect(snap).as("smaller than the live window").lt(live)
+            w:_fit()
+            expect(w:GetWindow():GetHeight()).as("and stable once there").near(snap, 0.5)
             w:Destroy()
         end)
 

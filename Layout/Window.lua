@@ -518,17 +518,6 @@ function SuuUI.Layout:CreateWindow(props)
     -- title strip and the content rather than over them. Glass draws in the frame's own
     -- background layers, so nothing needs raising afterwards.
     local glass
-    if props.glass then
-        -- ALL THREE COLOURS ARE REQUIRED. Glass stores `from` / `to` / `sheen` verbatim and applies
-        -- no defaults of its own, so a call passing only `border` builds a complete handle whose body
-        -- has no colour and draws NOTHING -- the window came up with no surface at all, the game
-        -- world showing through it. The handle being non-nil is not evidence that anything is
-        -- painted, which is why the spec now asserts the body's colour rather than the handle.
-        glass = SuuUI.Backdrop.Glass(f, {
-            from = "colorGlass", to = "colorGlassFade", sheen = "colorGlassSheen",
-            border = "colorBorder",
-        })
-    end
     f:SetSize(w, h)
     -- Placed by the layer system, not by a hand-written strata: registerWithRoot re-applies
     -- the same layer later, and a window created before the root exists must still land on
@@ -546,6 +535,30 @@ function SuuUI.Layout:CreateWindow(props)
     f:SetScript("OnSizeChanged", function(_, width, height)
         if handle then S:Emit(handle, S.SIGNALS.SIZE_CHANGED, width, height) end
     end)
+
+    -- THE GLASS SURFACE, and it is built HERE rather than at CreateFrame time for one reason: Glass
+    -- lays its pieces out with a HOST CONTAINER on this frame, and a host container chains onto
+    -- whatever OnSizeChanged is already installed. Built before the line above, its hook was REPLACED
+    -- by that SetScript -- so the surface never re-laid out and kept whatever size the window had when
+    -- it was created. Measured in game: a 219-unit window wearing a 411x546 glass body, which is the
+    -- dead band that appeared below the footer whenever the window shrank.
+    --
+    -- This is the documented trap in LAYOUT_SYSTEM.md, stated the other way round: register the
+    -- frame's own resize script BEFORE anything adopts it. Both orderings are one line apart and only
+    -- one of them works.
+    --
+    -- It still goes on before any CHILD is added, so the gradient and its top-edge sheen sit under the
+    -- title strip and the content rather than over them.
+    if props.glass then
+        -- ALL THREE COLOURS ARE REQUIRED. Glass stores `from` / `to` / `sheen` verbatim and applies no
+        -- defaults of its own, so a call passing only `border` builds a complete handle whose body has
+        -- no colour and draws NOTHING -- the window came up with no surface at all, the game world
+        -- showing through it.
+        glass = SuuUI.Backdrop.Glass(f, {
+            from = "colorGlass", to = "colorGlassFade", sheen = "colorGlassSheen",
+            border = "colorBorder",
+        })
+    end
 
     -- Chrome is laid out by the engine: title strip on top, content below. The shell
     -- padding is the window's own border, so it tracks the border token.

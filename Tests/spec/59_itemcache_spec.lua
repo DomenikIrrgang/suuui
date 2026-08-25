@@ -43,6 +43,63 @@ describe("Core/ItemCache", function()
         end)
     end)
 
+    -- DATA LOSS, MEASURED IN GAME. A cached alt showed an empty grid and no gold, and the store held
+    -- `money = 0` with zero slots -- while the record itself existed, so the character still appeared
+    -- in the dropdown. The cause was the PLAYER_LOGOUT sweep reading a torn-down container API and
+    -- writing that nothing over a good snapshot. The bank already had this rule; bags did not.
+    describe("an unreadable capture never overwrites a good one", function()
+        it("refuses when the containers report no slots at all", function()
+            H.setBags({ [0] = { free = 2, slots = 4 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 5 })
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            expect(IC:Capture("bags")).as("a readable capture works").truthy()
+            local before = IC:Get(IC:CurrentKey(), "bags")
+            expect(before.slots[0][1]).truthy()
+
+            -- Every container answering zero slots is the state at logout and early in a login. It
+            -- cannot mean "empty bags": every character has a backpack.
+            H.setBags({})
+            expect(IC:Capture("bags")).as("refused").falsy()
+            local after = IC:Get(IC:CurrentKey(), "bags")
+            expect(after.slots[0] and after.slots[0][1])
+                .as("the good snapshot survived").truthy()
+            expect(after.seen).as("and its timestamp was not moved").eq(before.seen)
+        end)
+
+        it("still records a character whose bags are genuinely empty", function()
+            -- The discriminator is the SLOT COUNT, not the item count. Refusing an empty-but-readable
+            -- bag would leave a stale snapshot forever -- a player who sells everything would keep
+            -- showing the items they no longer have.
+            H.setBags({ [0] = { free = 4, slots = 4 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 5 })
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            IC:Capture("bags")
+            H.clearBagItem(0, 1)
+            expect(IC:Capture("bags")).as("readable, just empty").truthy()
+            local rec = IC:Get(IC:CurrentKey(), "bags")
+            expect(rec.slots[0]).as("the item is gone from the snapshot too").eq(nil)
+        end)
+
+        it("does not write money from an unreadable capture", function()
+            H.setBags({ [0] = { free = 2, slots = 4 } })
+            H.setBagItem(0, 1, { itemID = 22832 })
+            H.env.SuuUIItemCache = nil
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            H.setMoney(123456)
+            IC:Capture("bags")
+            expect(IC:MoneyOf(IC:CurrentKey())).eq(123456)
+            -- money = 0 with zero slots is the exact signature that was measured in game.
+            H.setBags({})
+            H.setMoney(0)
+            IC:Capture("bags")
+            expect(IC:MoneyOf(IC:CurrentKey()))
+                .as("the real figure survived the unreadable read").eq(123456)
+        end)
+    end)
+
     describe("capturing bags", function()
         before_each(function()
             H.setBags({ [0] = { free = 14, slots = 16 } }, { silent = true })
@@ -136,6 +193,10 @@ describe("Core/ItemCache", function()
         end)
 
         it("keeps a separate seen stamp per container", function()
+            -- Bags have to be READABLE for this to test anything: a capture with no slots at all is
+            -- now refused, because that state means the container API is not answering rather than
+            -- that the bags are empty.
+            H.setBags({ [0] = { free = 4, slots = 16 } })
             IC:Capture("bags")
             local bagsAt = IC:SeenAt(IC:CurrentKey(), "bags")
             expect(bagsAt).truthy()

@@ -7,6 +7,25 @@ describe("Components.Frame", function()
         host = H.parent(300, 200)
     end)
 
+    -- THE SURFACE MUST FOLLOW THE FRAME, and nothing checked it. Measured in game: the inventory's
+    -- grid plate kept its previous, larger size after the window shrank, drawing a dark rounded band
+    -- below the content. Backdrop.Panel installs its own resize hook, and Frame's SetScript -- one line
+    -- later -- REPLACED it, so no piece ever re-derived. Asserted on the PIECES rather than the frame,
+    -- because the frame's own size was always correct and that is exactly what hid this.
+    it("resizes a rounded surface's pieces with the frame", function()
+        local fr = H.mount(H.C.Frame({ w = 200, h = 120, rounded = true }, host))
+        local panel = fr._panel
+        expect(panel).as("a rounded frame builds a panel").truthy()
+        -- M is the fill layer's centre band: it spans the frame minus its rounded corners, so its
+        -- height moves with the frame's.
+        local band = panel._fill and panel._fill.M
+        expect(band).as("the fill layer exposes a centre band").truthy()
+        local before = band:GetHeight()
+        expect(before).as("and it has a height to begin with").gt(0)
+        fr:GetFrame():SetHeight(60)
+        expect(band:GetHeight()).as("the surface followed the frame down").lt(before)
+    end)
+
     it("applies both dimensions when w and h are given", function()
         local f = H.C.Frame({ w = 120, h = 40 }, host)
         H.expectSize(f, 120, 40)

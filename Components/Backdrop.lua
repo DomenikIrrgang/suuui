@@ -605,6 +605,24 @@ function M.Glass(frame, opts)
         _bw     = 0,          _inset     = 0,
     }, GlassMeta)
 
+    -- OWN ITS RESIZE, which is what Pill and Panel already do and Glass alone did not. Its pieces
+    -- were laid out purely by the host container below, so the surface only followed the frame while
+    -- that container's OnSizeChanged hook survived -- and anything setting the frame's resize script
+    -- afterwards replaced it. Measured in game: a 219-unit window wearing a 411x546 glass body, which
+    -- drew a dead band below the window's own content and only corrected when the window was reopened.
+    --
+    -- Registered BEFORE the container adopts the frame, so the container chains onto this rather than
+    -- the reverse, exactly as Panel documents. Chained rather than replacing, so whatever the caller
+    -- already installed keeps running.
+    --
+    -- The band heights are derived from the frame's size, so a resize has to re-derive them rather
+    -- than only re-placing the pieces -- Refresh is the call that does both.
+    local prev = frame:GetScript("OnSizeChanged")
+    frame:SetScript("OnSizeChanged", function(f_, w, h)
+        if prev then prev(f_, w, h) end
+        self:Refresh()
+    end)
+
     local box = SuuUI.Layout:CreateContainer({ host = frame, layout = "stack" })
     self._box = box
 

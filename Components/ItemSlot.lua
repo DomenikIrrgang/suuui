@@ -311,7 +311,15 @@ function ItemSlotMeta:SetReadOnly(on)
     end
     self._pendingReadOnly = nil
     self._readOnly = on
-    self._f:EnableMouse(not on)
+    -- A SNAPSHOT CELL KEEPS ITS MOUSE. Read-only on a LIVE cell has to drop input, because that cell
+    -- carries a Blizzard container template whose handler would act on the logged-in character. A
+    -- snapshot cell has no template and no handler at all, so it is already inert -- and taking its
+    -- mouse away would remove the hover its own tooltip runs on, which is most of the point of
+    -- browsing an alt's bags. Reported in game: no tooltips on another character's items.
+    --
+    -- This is what the two kinds of cell buy. Inertness by CONSTRUCTION rather than by disabling
+    -- something means read-only costs nothing a reader wants.
+    if not self._snapshot then self._f:EnableMouse(not on) end
 end
 
 --- Applies whatever SetReadOnly could not do during combat. Called by the owner on
@@ -323,7 +331,8 @@ function ItemSlotMeta:ApplyPending()
     self._pendingReadOnly = nil
     if self._readOnly == want then return false end
     self._readOnly = want
-    self._f:EnableMouse(not want)
+    -- Same rule as SetReadOnly: a snapshot cell is inert by construction and keeps its hover.
+    if not self._snapshot then self._f:EnableMouse(not want) end
     return true
 end
 

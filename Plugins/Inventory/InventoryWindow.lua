@@ -299,18 +299,33 @@ function WindowMeta:_fit()
 
     -- ...but SetSize sizes the WINDOW, and a window is its content PLUS its chrome -- the title bar
     -- most of it. Passing a content height straight through left the content area short by exactly
-    -- sizeTitleBar and squeezed the footer off the bottom, which is the other half of this bug. The
-    -- chrome is MEASURED as window-minus-content rather than adding the token, so it stays correct if
-    -- the title bar's height changes or a border is added. GetContentSize can report 0 before the
-    -- window has ever been laid out, which would make the delta the whole window and double the size,
-    -- so that case falls back to the token it would otherwise have measured.
-    local cw, ch = self._win:GetContentSize()
-    local ww, wh = self._win:GetWidth() or 0, self._win:GetHeight() or 0
-    local chromeW, chromeH
-    if type(cw) == "number" and cw > 0 and type(ch) == "number" and ch > 0 then
-        chromeW, chromeH = ww - cw, wh - ch
-    else
-        chromeW, chromeH = 0, T:GetToken("sizeTitleBar") or 26
+    -- sizeTitleBar and squeezed the footer off the bottom.
+    --
+    -- MEASURED ONCE AND CACHED, and that is the fix for a real feedback loop. Deriving the chrome as
+    -- window-minus-content on EVERY fit reads two numbers that are only consistent once the client has
+    -- resized the content frame to match the last SetSize -- and it does that a frame later. Fit again
+    -- before then and `ch` is stale-small while `wh` is current, so the delta comes out inflated and the
+    -- window grows; the next fit inflates it again. Reported in game after switching character: the
+    -- window came up far too tall and stayed that way until it was closed and reopened, which is the
+    -- one thing that let the two readings settle.
+    --
+    -- The delta is a property of the CHROME -- title bar plus borders -- so it does not change with
+    -- content, and re-measuring it per fit bought nothing. It is re-measured on a theme change, where
+    -- sizeTitleBar or borderWidth may have moved, because ApplyTheme re-fits.
+    local chromeW, chromeH = self._chromeW, self._chromeH
+    if not (chromeW and chromeH) then
+        local cw, ch = self._win:GetContentSize()
+        local ww, wh = self._win:GetWidth() or 0, self._win:GetHeight() or 0
+        if type(cw) == "number" and cw > 0 and type(ch) == "number" and ch > 0
+            and wh > ch and ww >= cw then
+            chromeW, chromeH = ww - cw, wh - ch
+            self._chromeW, self._chromeH = chromeW, chromeH
+        else
+            -- Before the window has ever been laid out there is nothing to subtract, so the token it
+            -- would otherwise have measured stands in. NOT cached: the real measurement is better and
+            -- the next fit should still take it.
+            chromeW, chromeH = 0, T:GetToken("sizeTitleBar") or 26
+        end
     end
 
     -- The grid now sits inside the plate, so the window has to carry the plate's inset as well as the
@@ -353,6 +368,10 @@ end
 
 function WindowMeta:ApplyTheme()
     if self._grid then self._grid:ApplyTheme() end
+    -- DROP THE CACHED CHROME. It is measured once and reused because re-deriving it per fit fed back
+    -- into itself, but sizeTitleBar and borderWidth are user-editable -- so a theme change is exactly
+    -- when the delta has to be taken again.
+    self._chromeW, self._chromeH = nil, nil
     self:_fit()
 end
 

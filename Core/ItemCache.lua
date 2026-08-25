@@ -169,8 +169,10 @@ function M:Capture(which)
 
     local ids   = (which == "bank") and bankIds() or bagIds()
     local slots = {}
+    local totalSlots = 0
     for _, bag in ipairs(ids) do
         local n = numSlots(bag) or 0
+        totalSlots = totalSlots + n
         local perBag
         for slot = 1, n do
             local info = readSlot(bag, slot)
@@ -181,6 +183,24 @@ function M:Capture(which)
             end
         end
         if perBag then slots[bag] = perBag end
+    end
+
+    -- AN UNREADABLE READ MUST NOT OVERWRITE A GOOD SNAPSHOT. This is the same rule the bank already
+    -- had ("capturing anyway would overwrite a good snapshot with an empty one, which is worse than
+    -- not capturing at all") -- it just was not applied to bags, and that cost real data: measured in
+    -- game as a cached alt holding `money = 0` and ZERO slots, with the record present so the character
+    -- still appeared in the dropdown. The window then correctly rendered nothing, because there was
+    -- nothing there.
+    --
+    -- THE DISCRIMINATOR IS THE SLOT COUNT, NOT THE ITEM COUNT. A character can genuinely have empty
+    -- bags, and refusing to record that would leave a stale snapshot forever. But every character has
+    -- a backpack, so a TOTAL of zero slots across every container can only mean the container API is
+    -- not answering yet -- which is the state at PLAYER_LOGOUT, and early in a login before the client
+    -- has populated anything.
+    if totalSlots == 0 then
+        SuuUI.Debug("ItemCache: refusing to capture " .. which ..
+                    " -- the containers report no slots at all, so the API is not readable yet")
+        return false
     end
 
     local key   = self:CurrentKey()
@@ -333,13 +353,18 @@ function M:_watch()
     if frame then return end
     frame = CreateFrame("Frame")
     frame:RegisterEvent("BAG_UPDATE")
+    -- ENTERING THE WORLD is the first moment the containers are readable, and without it a character
+    -- who logs in and straight back out again records nothing: BAG_UPDATE may fire before the client
+    -- has populated anything, and the logout sweep reads a torn-down API. Debounced like BAG_UPDATE
+    -- rather than immediate, because the event fires before the bags have settled.
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     frame:RegisterEvent("BANKFRAME_OPENED")
     frame:RegisterEvent("BANKFRAME_CLOSED")
     frame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
     frame:RegisterEvent("PLAYERBANKBAGSLOTS_CHANGED")
     frame:RegisterEvent("PLAYER_LOGOUT")
     frame:SetScript("OnEvent", function(_, event)
-        if event == "BAG_UPDATE" then
+        if event == "BAG_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
             markDirty()
         elseif event == "BANKFRAME_OPENED" then
             bankOpen = true
@@ -351,8 +376,14 @@ function M:_watch()
         elseif event == "PLAYERBANKSLOTS_CHANGED" or event == "PLAYERBANKBAGSLOTS_CHANGED" then
             M:Capture("bank")
         elseif event == "PLAYER_LOGOUT" then
-            -- The final sweep, so an alt is current as of its last play session. Bags only:
-            -- the bank is not readable here.
+            -- The final sweep, so an alt is current as of its last play session. Bags only: the bank
+            -- is not readable here.
+            --
+            -- AND OFTEN THE BAGS ARE NOT EITHER. Measured in game: this sweep wrote `money = 0` and an
+            -- empty slot table over a perfectly good snapshot, which is why a cached alt rendered as an
+            -- empty grid with no gold. Capture now refuses a read that reports no slots at all, so this
+            -- is safe to keep -- and it is worth keeping, because when the API IS still answering it is
+            -- the most current reading that character will ever have.
             frame:SetScript("OnUpdate", nil)
             M:Capture("bags")
         end
