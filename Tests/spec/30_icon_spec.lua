@@ -445,6 +445,76 @@ describe("Components/Icon rounded", function()
         expect(i._borderColor[3]).as("epic purple survived the rounding path").near(0.93, 0.01)
     end)
 
+    -- THE ONE THAT MATTERS. Panel rounds the surface BEHIND the art, which a bag cell's icon covers
+    -- edge to edge -- so without a mask on the art itself the cell renders hard square with the
+    -- rounded surface correctly installed and invisible underneath it. Measured in game.
+    it("masks the ART, not just the surface behind it", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 34,
+                             icon = "Interface\\Icons\\INV_Misc_Bag_08" }, host)
+        expect(i._mask).as("a mask texture was created").truthy()
+        -- ATTACHED, not merely created. The first version of this asserted a fallback expression that
+        -- was truthy either way, and mutation testing caught it: deleting the AddMaskTexture call left
+        -- the test green. The simulated client records attachments on the texture, so ask it.
+        local masks = i._icon._masks or {}
+        local found = false
+        for _, m in ipairs(masks) do if m == i._mask then found = true end end
+        expect(found).as("the mask is attached to the art texture").truthy()
+    end)
+
+    it("keeps the mask on the same inset as the art, so the rounding sits on the corner", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 34 }, host)
+        expect(i._maskProps).truthy()
+        expect(i._maskProps.inset).as("mask follows the art's inset").eq(i._iconProps.inset)
+    end)
+
+    -- The ring and the art must share ONE curve. The mask is stretched, so its corner is a fraction
+    -- of the frame; a ring on the absolute token disagreed with it, and whichever was shallower
+    -- occluded the other -- which in game looked like the border missing at the corners.
+    it("gives the ring the same proportional curve as the art mask", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 40 }, host)
+        expect(i._panel._radiusFrac).as("ring follows the mask's fraction").truthy()
+        expect(i._panel._radius)
+            .as("and resolves it against the frame").eq(H.SuuUI.Pixel.Floor(40 * i._panel._radiusFrac))
+    end)
+
+    it("re-derives the ring's curve when the icon is resized", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 40 }, host)
+        local before = i._panel._radius
+        i:SetSize(80, 80)
+        expect(i._panel._radius).as("a proportional corner grows with the cell").gt(before)
+    end)
+
+    it("lets an explicit radius override the proportional curve", function()
+        local i = H.C.Icon({ border = true, rounded = true, size = 40, radius = 2 }, host)
+        expect(i._panel._radiusFrac).as("explicit wins").eq(nil)
+        expect(i._panel._radius).eq(2)
+    end)
+
+    -- PRECEDENCE, and it is not cosmetic: trim crops the bevel Blizzard bakes into its own icon
+    -- FILES, an atlas of ours has no bevel, and applying both would crop a glyph to a quarter of
+    -- itself -- so the glyph would render as a slice of the wrong picture. Documented in SetIcon and
+    -- untested until mutation testing pointed out that swapping the branches changed nothing.
+    it("lets atlas coords override trim rather than compounding with it", function()
+        local coords = { 0, 0.5, 0, 0.5 }
+        local i = H.C.Icon({ icon = "x", trim = true, coords = coords, size = 32 }, host)
+        local l, r, t2, b = i._icon:GetTexCoord()
+        expect(l).as("left is the atlas coord, not the trim").near(coords[1], 0.0001)
+        expect(r).as("right is the atlas coord").near(coords[2], 0.0001)
+        expect(t2).near(coords[3], 0.0001)
+        expect(b).near(coords[4], 0.0001)
+    end)
+
+    it("still trims when no coords are given", function()
+        local i = H.C.Icon({ icon = "x", trim = true, size = 32 }, host)
+        local l = i._icon:GetTexCoord()
+        expect(l).as("the bevel is cropped").gt(0)
+    end)
+
+    it("does not create a mask for a square icon", function()
+        local i = H.C.Icon({ border = true, size = 34 }, host)
+        expect(i._mask).as("nothing to mask when the corners are square").eq(nil)
+    end)
+
     it("frees the panel on Destroy", function()
         local i = H.C.Icon({ border = true, rounded = true, size = 34 }, host)
         i:Destroy()

@@ -944,3 +944,47 @@ describe("Components.ColorSwatch", function()
         H.expectSize(s, 50, 26)
     end)
 end)
+
+-- The press pop is a transient SetScale, and SetScale reinterprets a frame's own anchor OFFSETS in
+-- its scaled space -- so a button held at a token inset from a strip's edge SLIDES sideways as it
+-- pops instead of growing in place. That shipped as the inventory's title-bar sort button visibly
+-- moving right on every click. Button already had the opt-out; IconButton's call was unconditional
+-- even though Presets.lua documented it as accepting one.
+describe("Components/IconButton press pop", function()
+    local host
+    before_each(function()
+        H.setup()
+        host = H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+    end)
+
+    it("pops by default", function()
+        local b = H.C.IconButton({ icon = "x" }, host)
+        expect(b._scalePop).as("default is on").truthy()
+        H.click(b)
+        -- One tick, because the animator writes on its first update rather than synchronously on
+        -- Play -- reading the scale straight after the click sees 1 in BOTH cases and proves nothing.
+        H.tick(0.016)
+        expect(b:GetFrame():GetScale()).as("scaled while the pop runs").gt(1)
+        H.runAnimations()
+        expect(b:GetFrame():GetScale()).as("and settles back to exactly 1").near(1, 0.0001)
+    end)
+
+    -- Asserting the SETTLED scale cannot tell the two apart: ScalePop returns to 1.0 either way. The
+    -- mid-pop reading is the only discriminating one.
+    it("does not scale at all when scalePop is false", function()
+        local b = H.C.IconButton({ icon = "x", scalePop = false }, host)
+        expect(b._scalePop).falsy()
+        H.click(b)
+        H.tick(0.016)
+        expect(b:GetFrame():GetScale()).as("never leaves 1, so it cannot slide").near(1, 0.0001)
+        H.runAnimations()
+        expect(b:GetFrame():GetScale()).near(1, 0.0001)
+    end)
+
+    it("still emits CLICKED with the pop disabled", function()
+        local b = H.C.IconButton({ icon = "x", scalePop = false }, host)
+        local spy = H.signalSpy(b, H.S.SIGNALS.CLICKED)
+        H.click(b)
+        expect(spy.count).as("the pop is decoration, not the mechanism").eq(1)
+    end)
+end)

@@ -53,6 +53,19 @@ function M.containerIds(which)
     return out
 end
 
+--- Re-sorts the grid using the mode configured in settings.
+--
+-- It does NOT choose or change the mode. `sort_mode` is a settings dropdown with a live applier, so
+-- the settings page already owns which order the grid is in -- a button that cycled it was a second
+-- owner of one value, and the two could disagree about what the player had chosen. This is a plain
+-- "sort now": the useful action after looting, since Refresh deliberately repaints WITHOUT re-sorting
+-- so cells cannot move under the cursor mid-loot.
+--
+-- No Settings:Set, so nothing is written and no watcher cascade runs.
+function WindowMeta:SortNow()
+    self._grid:Sort()
+end
+
 function WindowMeta:_updateFooter()
     local used, free, total = self._grid:GetCounts()
     -- Concept spelling: "1,284 g 42 s 18 c" -- the figure in the footer's own text colour and only
@@ -180,6 +193,13 @@ function WindowMeta:Destroy()
     if self._matchText then self._matchText:Destroy() end
     if self._moneyText then self._moneyText:Destroy() end
     if self._slotsText then self._slotsText:Destroy() end
+    -- Removed from the title bar BEFORE it is destroyed: the window recomputes its title and drag
+    -- gutters from the accessory list, and one holding a destroyed handle would keep reserving space
+    -- for a button that is gone.
+    if self._sortBtn then
+        if self._win.RemoveTitleAccessory then self._win:RemoveTitleAccessory(self._sortBtn) end
+        self._sortBtn:Destroy()
+    end
     if self._footDivider then self._footDivider:Destroy() end
     if self._plateBox then self._plateBox:Destroy() end
     if self._plate then self._plate:Destroy() end
@@ -234,16 +254,33 @@ function M.New(props)
     -- one draws a box -- the same reason Dropdown and Accordion spend ASCII on their arrows. The icon
     -- needs atlas art, which Media/ can generate but does not yet hold.
     local search = C.Input({ placeholder = "Search items..." }, searchRow:GetFrame())
-    local sortDrop = C.Dropdown({
-        options = M.SORT_OPTIONS,
-        value   = get("sort_mode") or "quality",
-        w       = 110,
-    }, searchRow:GetFrame())
+    -- SORT LIVES IN THE TITLE BAR, as an icon, which is what the concept draws -- and it is why the
+    -- search field there is full width instead of sharing its row with a 110px dropdown.
+    --
+    -- It CYCLES rather than opening a menu. A menu is the better control for a long list; this list is
+    -- three entries, and a menu would cost a second click plus a panel to dismiss. The objection to
+    -- cycling is real though -- a mode you cannot see is a mode you cannot trust -- so the active mode
+    -- is NAMED in the footer. That is the trade, not an oversight.
+    --
+    -- Parented to the content frame and then handed to the window: AddTitleAccessory reparents it into
+    -- the title strip and raises it above the drag surface, which a button merely anchored there would
+    -- sit underneath and never receive a click.
+    local sortPath, sortCoords = SuuUI.Icons:Get("sort")
+    local sortBtn = C.IconButton({
+        icon      = sortPath,
+        coords    = sortCoords,
+        iconColor = "colorTextMuted",
+        -- NO PRESS POP. Reported in game: the button slid out to the right when clicked. A title-bar
+        -- accessory is held at a token inset from the strip's right edge, and SetScale reinterprets
+        -- that offset in the frame's own scaled space -- so the pop moves it sideways instead of
+        -- growing it in place. Button's own prop comment names this exact case: "for chrome in a
+        -- strip it would overflow".
+        scalePop  = false,
+    }, content)
     local matchText = C.Text({ text = "", size = "sm", color = "accent", wrap = false },
                              searchRow:GetFrame())
 
     searchRow:Add(search, { width = "fill" })
-    searchRow:Add(sortDrop, { width = 110 })
     searchRow:Add(matchText, { width = "auto" })
 
     local grid = C.ItemGrid({
@@ -300,7 +337,7 @@ function M.New(props)
         _footDivider = footDivider,
         _grid      = grid,
         _search    = search,
-        _sortDrop  = sortDrop,
+        _sortBtn   = sortBtn,
         _matchText = matchText,
         _moneyText = moneyText,
         _slotsText = slotsText,
@@ -315,10 +352,13 @@ function M.New(props)
         handle:_updateMatchCount()
     end)
 
-    S:Connect(sortDrop, S.SIGNALS.VALUE_CHANGED, function(value)
-        grid:SetSortMode(value)
-        SuuUI.Settings:Set(PLUGIN_ID, "sort_mode", value)
+    S:Connect(sortBtn, S.SIGNALS.CLICKED, function()
+        handle:SortNow()
     end)
+
+    -- Into the title bar, which reparents it and raises it above the drag surface. Done AFTER the
+    -- handle exists, because the click needs a handle to cycle.
+    win:AddTitleAccessory(sortBtn)
 
     -- The window follows the grid: a settings change moves the grid's size, and the window has to
     -- re-fit or it clips the last column.

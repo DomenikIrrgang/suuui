@@ -299,17 +299,91 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
-    describe("the sort dropdown", function()
-        it("re-orders the grid and persists the choice", function()
+    describe("the sort control", function()
+        it("re-sorts using the mode configured in settings, without changing it", function()
+            stageThree()
+            H.SuuUI.Settings:Set("inventory", "sort_mode", "slot")
+            local win = IW.New({ container = "bags" })
+            win:Show()
+            expect(win:GetGrid():GetSortMode()).as("settings own the mode").eq("slot")
+            expect(H.click(win._sortBtn)).as("the title-bar button takes the click").truthy()
+            -- The button SORTS; it does not pick the order. A button that cycled would be a second
+            -- owner of one value, and the two could disagree about what the player chose.
+            expect(win:GetGrid():GetSortMode()).as("mode is untouched by the click").eq("slot")
+            expect(H.SuuUI.Settings:Get("inventory", "sort_mode"))
+                .as("and nothing was written").eq("slot")
+            win:Destroy()
+        end)
+
+        -- Reported in game: the button slid out to the right when clicked. The cause was the press
+        -- pop -- SetScale reinterprets the frame's own anchor offset in its scaled space, so a button
+        -- held at an inset from the strip's edge moves instead of growing. TICKING IS ESSENTIAL: the
+        -- animator writes on its first update, so without it this passes with the pop enabled.
+        it("does not move or scale when clicked", function()
             stageThree()
             local win = IW.New({ container = "bags" })
             win:Show()
-            expect(win:GetGrid()._entries[1].info.itemName).eq("Amber Potion")
-            H.SuuUI.UISignals:Emit(win._sortDrop, H.S.SIGNALS.VALUE_CHANGED, "slot")
-            expect(win:GetGrid():GetSortMode()).eq("slot")
-            expect(win:GetGrid()._entries[1].info.itemName).as("bag order now").eq("Zebra Cloth")
-            expect(H.SuuUI.Settings:Get("inventory", "sort_mode"))
-                .as("remembered across sessions").eq("slot")
+            local before = H.box(win._sortBtn:GetFrame())
+            H.click(win._sortBtn)
+            H.tick(0.016)
+            expect(win._sortBtn:GetFrame():GetScale())
+                .as("a strip accessory must not scale, or it slides").near(1, 0.0001)
+            local after = H.box(win._sortBtn:GetFrame())
+            expect(after.left).as("button did not slide sideways").near(before.left, 0.5)
+            expect(after.top).as("button did not slide vertically").near(before.top, 0.5)
+            expect(after.width).as("and did not resize").near(before.width, 0.5)
+            win:Destroy()
+        end)
+
+        it("stays inside the window after being clicked", function()
+            local win = IW.New({ container = "bags" })
+            win:Show()
+            H.click(win._sortBtn)
+            H.expectInside(win._sortBtn:GetFrame(), win:GetWindow():GetFrame())
+            win:Destroy()
+        end)
+
+        it("re-sorts after items moved, which is what the button is for", function()
+            local win = IW.New({ container = "bags" })
+            win:Show()
+            -- An item arrives in a slot the current order would not leave it in. Refresh repaints
+            -- WITHOUT re-sorting on purpose, so only the button puts it back in order.
+            H.setBags({ [0] = { slots = 4, free = 2 }, [1] = { slots = 4, free = 4 } })
+            H.setBagItem(1, 4, { itemID = 4306, stackCount = 1, quality = 4 })
+            win:Refresh()
+            H.click(win._sortBtn)
+            local first = win:GetGrid()._entries[1]
+            expect(first and first.info).as("an occupied slot leads after sorting").truthy()
+            win:Destroy()
+        end)
+
+        -- IN THE TITLE BAR, not merely clickable. H.click reaches the button wherever it is parented,
+        -- so a click test passed with the AddTitleAccessory call DELETED -- mutation testing caught
+        -- exactly that. Ask the window what it is holding.
+        it("puts the sort button in the title bar", function()
+            local win = IW.New({ container = "bags" })
+            win:Show()
+            local held = win:GetWindow():GetTitleAccessories()
+            local found = false
+            for _, a in ipairs(held) do if a == win._sortBtn then found = true end end
+            expect(found).as("the window holds it as a title accessory").truthy()
+            -- And geometrically above the search row, which is what "title bar" means on screen.
+            -- .top measures DOWNWARD from the screen top, so higher up is a SMALLER top.
+            expect(H.box(win._sortBtn:GetFrame()).top)
+                .as("sits above the search field").lt(H.box(win._search:GetFrame()).top)
+            win:Destroy()
+        end)
+
+        it("keeps the search field full width now the dropdown is gone", function()
+            local win = IW.New({ container = "bags" })
+            win:Show()
+            -- The concept's search row is the field and nothing else. A dropdown back on this row
+            -- would show up here as the field losing most of its width.
+            local field = H.box(win._search:GetFrame())
+            local plate = H.box(win._plate:GetFrame())
+            expect(field.width).as("field spans the window, not a third of it")
+                .gte(plate.width * 0.6)
+            win:Destroy()
         end)
 
         it("offers exactly the modes the grid implements", function()

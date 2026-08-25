@@ -37,7 +37,17 @@ SuuUI.Components.InstallEnable(IcoMeta, "_f")
 
 --- Creates an icon button.
 -- Emits CLICKED (button), MOUSE_ENTER, MOUSE_LEAVE, ENABLED_CHANGED.
--- @param props table  { icon, onClick, w, h, padding }
+-- @param props table  { icon, onClick, w, h, padding, coords, iconColor, scalePop }
+--   scalePop: false to drop the press pop. REQUIRED for chrome positioned by a token inset -- a
+--     title-bar accessory is the case. SetScale reinterprets the frame's own anchor OFFSETS in its
+--     scaled space, so a button held at an inset from the strip's edge visibly SLIDES as it pops
+--     rather than growing in place. Presets.lua already documented IconButton as accepting this
+--     while the call was in fact unconditional.
+--   coords: { left, right, top, bottom } as 0..1 fractions, for a glyph on an ATLAS -- one sheet
+--     holds many icons, so the texture alone cannot say which one. See SuuUI.Icons.
+--   iconColor: a colour TOKEN key to tint the art with. The shared sheet is generated white on
+--     transparent precisely so the tint decides the colour, which means a theme change needs no
+--     new art and a coloured sheet would ignore the theme.
 -- @param parent frame
 -- @return table  IconButton handle
 function SuuUI.Components.IconButton(props, parent)
@@ -62,10 +72,22 @@ function SuuUI.Components.IconButton(props, parent)
 
     local icon = f:CreateTexture(nil, "ARTWORK")
     if props.icon then icon:SetTexture(props.icon) end
+    -- An atlas glyph needs its coordinates as well as the sheet: one texture holds many icons.
+    if props.coords then
+        local c = props.coords
+        icon:SetTexCoord(c[1], c[2], c[3], c[4])
+    end
+    -- Tinted rather than drawn in colour, so the sheet stays monochrome and a theme change needs no
+    -- new art. The sheet is generated white on transparent for exactly this.
+    if props.iconColor then
+        local col = SuuUI.Theme:GetToken(props.iconColor)
+        if col then icon:SetVertexColor(col[1], col[2], col[3], col[4]) end
+    end
     box:Add(icon, { inset = pad })
 
     local id = "ico_" .. tostring(f)
-    handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true }, IcoMeta)
+    handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true,
+                            _scalePop = props.scalePop ~= false }, IcoMeta)
 
     f:SetScript("OnEnter", function()
         if handle._enabled == false then return end
@@ -78,7 +100,7 @@ function SuuUI.Components.IconButton(props, parent)
     end)
     f:SetScript("OnMouseUp", function(_, btn)
         if handle._enabled == false then return end
-        SuuUI.Anim.Presets.ScalePop(f)
+        if handle._scalePop then SuuUI.Anim.Presets.ScalePop(f) end
         if props.onClick then props.onClick() end
         S:Emit(handle, S.SIGNALS.CLICKED, btn or "LeftButton")
     end)

@@ -387,7 +387,21 @@ function PanelMeta:Refresh()
     self._inset = self._insetProp or bw
     -- Floored onto the grid: a radius half a pixel off it rounds the corner art and the
     -- strip that meets it to different edges, which shows as a notch at the join.
-    self._radius = SuuUI.Pixel.Floor(self._radiusProp or T:GetToken("borderRadius") or 0)
+    --
+    -- radiusFrac expresses the corner as a FRACTION of the smaller edge instead of an absolute
+    -- length, and it exists for one reason: a surface whose art is rounded by a stretched MASK has a
+    -- proportional corner by construction, and the ring around it must use the SAME curve or the
+    -- shallower of the two occludes the deeper one. Measured in game -- with the ring on the absolute
+    -- token and the art on a 12.5% mask, raising the token past the mask's radius made the art bulge
+    -- over the ring and the coloured border vanish at every corner while looking perfect along the
+    -- straight edges. Absolute stays the default; only a masked consumer asks for the fraction.
+    if self._radiusFrac then
+        local w0, h0 = self._f:GetWidth() or 0, self._f:GetHeight() or 0
+        local edge = w0 < h0 and w0 or h0
+        self._radius = SuuUI.Pixel.Floor(edge * self._radiusFrac)
+    else
+        self._radius = SuuUI.Pixel.Floor(self._radiusProp or T:GetToken("borderRadius") or 0)
+    end
     self:_geom()
     self._box:Layout()
 end
@@ -409,12 +423,16 @@ end
 --           borderless surface that has to cover its whole box.
 --   radius: corner radius, defaulting to the borderRadius token. Clamped to half the
 --           smaller dimension; 0 is square corners.
+--   radiusFrac: corner radius as a FRACTION of the smaller edge, overriding radius and the token.
+--           For a surface whose art is rounded by a stretched mask -- the mask's corner is
+--           proportional, and a ring on an absolute radius would disagree with it. Re-derived on
+--           every pass, so it follows a resize with no call from the owner.
 -- @return table  handle { SetBg, SetBorder, Refresh, Destroy }
 function M.Panel(frame, opts)
     opts = opts or {}
     local self = setmetatable({
         _f = frame, _bwProp = opts.borderWidth, _insetProp = opts.inset,
-        _radiusProp = opts.radius, _inset = 0, _radius = 0,
+        _radiusProp = opts.radius, _radiusFrac = opts.radiusFrac, _inset = 0, _radius = 0,
     }, PanelMeta)
 
     -- Corner size follows the frame, so re-derive on resize. Registered BEFORE the host
@@ -423,7 +441,10 @@ function M.Panel(frame, opts)
     local prev = frame:GetScript("OnSizeChanged")
     frame:SetScript("OnSizeChanged", function(f_, w, h)
         if prev then prev(f_, w, h) end
-        self:_geom()
+        -- A PROPORTIONAL radius depends on the size, so a resize must re-derive the radius rather
+        -- than only re-placing the pieces at the radius it already had. An absolute radius is
+        -- unaffected, which is why _geom alone was correct before radiusFrac existed.
+        if self._radiusFrac then self:Refresh() else self:_geom() end
     end)
 
     local box = SuuUI.Layout:CreateContainer({ host = frame, layout = "stack" })
