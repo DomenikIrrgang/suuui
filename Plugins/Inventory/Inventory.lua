@@ -25,6 +25,7 @@ local SHAPE = {
     cell_size = function(g, v) g:SetCellSize(v) end,
     sort_mode = function(g, v) g:SetSortMode(v) end,
     sort_position = function(g, v) g:SetSortPosition(v) end,
+    auto_sort = function(g, v) g:SetAutoSort(v) end,
 }
 
 local function window()
@@ -197,6 +198,16 @@ plugin = SuuUI:CreatePlugin({
             -- claim that ElvUI's answer is the better one.
             { key = "sort_position", label = "Sort Position", type = "dropdown",
               default = "start", options = W.SORT_POSITIONS },
+            -- OFF means the grid never reorders on its own: it opens in container order and stays
+            -- there until the title-bar sort button is pressed. Which is what a player who arranges
+            -- their bags by hand wants, and it is deliberately NOT the same as `sort_mode = "slot"` --
+            -- that pins the order to container order for ever, while this one keeps whatever the last
+            -- manual sort produced.
+            --
+            -- `sort_mode` and `sort_position` are NOT gated on this. They still decide what the button
+            -- produces, so making them depend on it would grey out the only controls that still matter
+            -- with automatic sorting off.
+            { key = "auto_sort", label = "Sort Automatically", type = "toggle", default = true },
             -- TWO ENTRIES FROM THE PLAN'S TABLE ARE DELIBERATELY ABSENT, and their absence is the
             -- decision rather than an oversight.
             --

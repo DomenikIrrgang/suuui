@@ -448,7 +448,21 @@ function GridMeta:_apply(what)
             self:_destroyCells()
         end
         self:_readEntries()
-        self:Sort()
+        -- Through AutoSort, because a rebuild is the grid acting on its own initiative just as much as
+        -- an open is -- and `_readEntries` has just rebuilt the entry list in CONTAINER order, which is
+        -- exactly what a player with automatic sorting off asked to see. This is also the construction
+        -- path, so it is what decides the very first paint.
+        --
+        -- BUT THE ORDER IS OPTIONAL AND THE PLACEMENT IS NOT. `Sort` places and re-applies the filter
+        -- as a side effect, so a DECLINED AutoSort has to do both itself -- and gating the call without
+        -- this shipped for one turn and collapsed the entire window, because every cell was left
+        -- unplaced and `_resize` never ran, so the grid reported no size and `_fit` sized the window
+        -- around nothing. Nothing in the suite noticed: the new tests asserted entry ORDER and never
+        -- the geometry that ordering happened to carry with it.
+        if not self:AutoSort() then
+            self:_place()
+            self:_applyFilter()
+        end
         S:Emit(self, GRID_SIGNALS.CHILDREN_CHANGED)
     else
         self:_place()
@@ -515,6 +529,40 @@ end
 
 --- @return string
 function GridMeta:GetSortPosition() return self._sortPosition end
+
+--- Sorts, but ONLY if automatic sorting is on.
+--
+-- The seam both automatic triggers go through -- opening the window, and a batch of cached items
+-- resolving -- so the rule lives in one place instead of as a flag test at each call site.
+--
+-- `Sort` itself stays unconditional, and the split is the whole design: `Sort` is what the title-bar
+-- button, the settings dropdowns and a plugin call, and every one of those is the player asking for a
+-- reorder. This is what the grid does on its own initiative, which is the only thing the setting is
+-- entitled to switch off.
+-- @return bool  whether it sorted
+function GridMeta:AutoSort()
+    if not self._autoSort then return false end
+    self:Sort()
+    return true
+end
+
+--- Whether the grid reorders itself without being asked.
+-- @param on bool
+-- @return bool  whether the setting changed
+function GridMeta:SetAutoSort(on)
+    on = on and true or false
+    if self._autoSort == on then return false end
+    self._autoSort = on
+    -- Switching it ON sorts NOW rather than at the next open. A toggle whose effect only appears the
+    -- next time the window is opened reads as broken, which is the same reason SetSortMode applies
+    -- immediately. Switching it off deliberately leaves the current order alone -- the player asked
+    -- the grid to stop rearranging things, not to undo what it already did.
+    if on then self:Sort() end
+    return true
+end
+
+--- @return bool
+function GridMeta:IsAutoSort() return self._autoSort end
 
 function GridMeta:_applyFilter()
     local q = self._filter
@@ -659,6 +707,9 @@ function SuuUI.Components.ItemGrid(props, parent)
         _padding    = padding,
         _sortMode   = SORTS[props.sortMode] and props.sortMode or "quality",
         _sortPosition = POSITIONS[props.sortPosition] and props.sortPosition or "start",
+        -- `~= false` rather than a truthiness test, so an omitted prop means ON while an explicit
+        -- false means off. `props.autoSort or true` would be unable to express "off" at all.
+        _autoSort   = props.autoSort ~= false,
         _readOnly   = props.readOnly and true or false,
         -- The SOURCE. nil character means the live client; a key means that character's cached record,
         -- and `which` names the container inside it. Both are construction-time defaults that
@@ -713,8 +764,12 @@ function SuuUI.Components.ItemGrid(props, parent)
         -- what turns a `?` cell into a real item -- Sort only reorders what the entries already hold,
         -- so sorting alone would rearrange stale info and leave every placeholder in place. Sort then
         -- moves the newly-sortable items out of the parked tail into their proper position.
+        --
+        -- Only the reorder is the grid's own initiative, so only that half goes through AutoSort. With
+        -- automatic sorting off a resolved `?` cell still gains its icon and name -- it simply gains
+        -- them where it already sits, which is what "do not rearrange my bags" has to mean here.
         handle:Refresh()
-        handle:Sort()
+        handle:AutoSort()
     end, id)
     return handle
 end

@@ -24,6 +24,7 @@ describe("Components/ItemGrid", function()
             spacing    = props.spacing or 2,
             sortMode   = props.sortMode,
             sortPosition = props.sortPosition,
+            autoSort   = props.autoSort,
             readOnly   = props.readOnly,
             character  = props.character,
             which      = props.which,
@@ -290,6 +291,108 @@ describe("Components/ItemGrid", function()
             expect(g._entries[1].info).as("free slots lead").eq(nil)
             expect(g._entries[7].info.itemName).eq("Anvil Ore")
             expect(g._entries[8].info.itemName).as("and the run reverses").eq("Zealot Blade")
+        end)
+    end)
+
+    -- The distinction the whole setting turns on: the grid may still be TOLD to sort, it just stops
+    -- deciding to on its own.
+    describe("automatic sorting", function()
+        it("is on unless a prop says otherwise", function()
+            expect(grid():IsAutoSort()).truthy()
+            expect(grid({ autoSort = false }):IsAutoSort()).as("false means off").falsy()
+            -- `~= false` rather than truthiness, so an omitted prop cannot be mistaken for off.
+            expect(grid({ autoSort = nil }):IsAutoSort()).as("omitted means on").truthy()
+        end)
+
+        it("sorts when asked even with automatic sorting off", function()
+            stageThree()
+            local g = grid({ autoSort = false })
+            expect(g:AutoSort()).as("declined, and says so").falsy()
+            -- Sort is what the button and the settings dropdowns call, and those are the player.
+            g:Sort()
+            expect(g._entries[1].info.itemName).as("an explicit sort still works").eq("Amber Potion")
+        end)
+
+        it("declines to sort on its own", function()
+            -- The DISCRIMINATING fixture: slot 1 holds the LOWEST quality, so container order and
+            -- sorted order disagree. Without that the test passes whether or not AutoSort ran.
+            stageThree()
+            local g = grid({ autoSort = false })
+            g:SetSortMode("slot")
+            g:Sort()
+            g:SetAutoSort(false)
+            expect(g:AutoSort()).falsy()
+            expect(g._entries[1].info.itemName).as("container order survived").eq("Zebra Cloth")
+        end)
+
+        it("sorts immediately when switched on", function()
+            stageThree()
+            -- Built with automatic sorting off, so the construction rebuild declined and the entries
+            -- are in CONTAINER order while the mode is still quality. Nothing else here calls Sort --
+            -- an earlier version changed the mode first, which sorted on its own and let the switch-on
+            -- sort be deleted without the test noticing.
+            local g = grid({ autoSort = false })
+            expect(g._entries[1].info.itemName).as("container order to begin with").eq("Zebra Cloth")
+            expect(g:SetAutoSort(true)).as("the setting changed").truthy()
+            -- A toggle whose effect waits for the next window open reads as broken.
+            expect(g._entries[1].info.itemName).as("and it sorted there and then")
+                .eq("Amber Potion")
+        end)
+
+        it("leaves the current order alone when switched off", function()
+            stageThree()
+            local g = grid()
+            expect(g._entries[1].info.itemName).eq("Amber Potion")
+            -- A NEW EPIC whose name sorts first, staged silently and picked up by a Refresh -- which
+            -- repaints without re-ordering. So the entries now differ from what a sort would produce,
+            -- which is what makes the next assertion able to fail: without this the grid is already in
+            -- sorted order and switching off could sort again with no visible difference.
+            stage(0, 5, { itemID = 444, itemName = "Aaa Blade", quality = 4 })
+            g:Refresh()
+            expect(g._entries[1].info.itemName).as("still unsorted after the repaint")
+                .eq("Amber Potion")
+            g:SetAutoSort(false)
+            -- Asked to stop rearranging, not to undo what it already did.
+            expect(g._entries[1].info.itemName).as("nothing was reverted").eq("Amber Potion")
+        end)
+
+        it("drops a write that changes nothing", function()
+            expect(grid():SetAutoSort(true)).as("already on").falsy()
+        end)
+
+        -- THE GEOMETRY, which is the half the first version of this feature lost. `Sort` places the
+        -- cells and re-applies the filter as a side effect, so gating the rebuild's sort silently
+        -- gated its PLACEMENT too: every cell went unplaced, `_resize` never ran, the grid reported no
+        -- size and the window collapsed around it. Every ordering assertion above still passed, which
+        -- is exactly why these two are separate tests -- ordering and placement fail independently.
+        it("still sizes itself when it declines to sort", function()
+            stageThree()
+            local g = grid({ cols = 4, cellSize = 34, spacing = 2, autoSort = false })
+            H.expectSize(g, 4 * 34 + 3 * 2, 2 * 34 + 1 * 2)
+        end)
+
+        it("still places its cells when it declines to sort", function()
+            stageThree()
+            local g = grid({ autoSort = false })
+            -- A cell with no anchor has no resolvable rect at all, so this is nil rather than merely
+            -- wrong when placement is skipped.
+            local first = H.box(g._entries[1].cell)
+            expect(first).as("the first cell resolved a rect").truthy()
+            H.expectInside(g._entries[1].cell, g)
+            H.expectNoOverlap({ g._entries[1].cell, g._entries[2].cell })
+        end)
+
+        -- The other half `Sort` was carrying. A rebuild destroys and recreates every cell, and a fresh
+        -- cell is undimmed -- so an active search has to be re-applied to the new ones or every item
+        -- reads as a match. Reachable exactly as the geometry loss was: type a search, then switch the
+        -- window from Bags to Bank.
+        it("re-applies an active filter when it declines to sort", function()
+            stageThree()
+            local g = grid({ containers = { 0 }, autoSort = false })
+            g:SetFilter("potion")
+            expect(g:CountMatches()).as("one of the three matches").eq(1)
+            g:SetContainers({ 0, 1 })
+            expect(g:CountMatches()).as("and the filter survived the rebuild").eq(1)
         end)
     end)
 
@@ -738,6 +841,31 @@ describe("Components/ItemGrid", function()
             H.SuuUI.Events:Emit("SUUUI_ITEMS_RESOLVED")
             expect(g._entries[1].cell:IsPending()).as("filled in, no reopen needed").falsy()
             expect(g._entries[1].cell:GetItem().itemName).eq("Arcane Powder")
+        end)
+
+        -- The resolve path is the SECOND automatic sort, and it is snapshot-only -- so it is reachable
+        -- from nowhere else and needs its own case. The `?` cell still has to fill in: only the
+        -- REORDER is the grid's own initiative, and "do not rearrange my bags" cannot reasonably mean
+        -- "leave a question mark on screen for ever".
+        it("fills in on the announcement without re-ordering when automatic sorting is off", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = {
+                [1] = { 111, 1 },     -- unresolved, and FIRST in container order
+                [2] = { 222, 1 },     -- a resolved grey
+            } })
+            cacheItem(222, { name = "Broken Fang", q = 0, icon = "i" })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags", autoSort = false })
+            expect(g._entries[1].cell:IsPending()).as("unresolved and in slot order").truthy()
+
+            -- Now it resolves as an EPIC, so a sort would move it nowhere -- it is already first. The
+            -- discriminating item is the grey: with a sort it stays second, without one it stays
+            -- second too. So resolve 111 as a GREY instead and the epic-less pair inverts under a sort.
+            cacheItem(111, { name = "Zzz Trinket", q = 0, icon = "i" })
+            H.SuuUI.Events:Emit("SUUUI_ITEMS_RESOLVED")
+            expect(g._entries[1].cell:IsPending()).as("filled in regardless").falsy()
+            -- Same quality now, so the name key decides: a sort would put "Broken Fang" first.
+            expect(g._entries[1].cell:GetItem().itemName)
+                .as("but nothing was re-ordered").eq("Zzz Trinket")
         end)
 
         it("ignores the announcement while live", function()

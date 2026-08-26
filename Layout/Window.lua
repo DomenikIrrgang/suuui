@@ -271,8 +271,55 @@ end
 -- @param dy number|nil  units up from centre
 function WinMeta:Center(dx, dy)
     if not (SuuUI.UIRoot and SuuUI.UIRoot.UpdateElementAnchor) then return end
+    -- Remembered so a resize can re-centre without losing a paired offset (see SetSize below).
+    self._cdx, self._cdy = dx or 0, dy or 0
+
+    -- NOT a CENTER-to-CENTER anchor any more. The client resolves that as (container - window) / 2,
+    -- so an ODD dimension lands the window on a HALF UNIT -- and with the pixel grid active one unit
+    -- is one physical pixel, so every 1px border anywhere inside the window straddles two pixel rows
+    -- and rasterises at roughly half alpha.
+    --
+    -- Measured in game at 1440p: an inventory window sized from a 41-unit cell put every row of item
+    -- cells on X.5, and the quality borders along the icons' TOP and BOTTOM edges vanished while the
+    -- left and right ones looked perfect. It appeared and disappeared as the window was dragged, which
+    -- is the tell -- the drag path re-anchors through `offsetFromRoot`, which snaps, so a dragged
+    -- window was correct and a freshly centred one was not.
+    --
+    -- The offset cannot carry a half-unit correction either -- but it does not need to: AnchorLayout
+    -- snaps every coordinate on its way to SetPoint, so ANY numeric offset lands on the grid. That is
+    -- the whole fix. A CENTER-to-CENTER pair has no coordinate for the strategy to snap, because the
+    -- client resolves it internally; a stated offset does. Snapping here as well was tried and is
+    -- redundant -- mutation testing showed removing it changed nothing, because the strategy had
+    -- already done it.
+    local rc = SuuUI.UIRoot.GetRootContainer and SuuUI.UIRoot:GetRootContainer()
+    local cw = rc and rc:GetWidth() or 0
+    local ch = rc and rc:GetHeight() or 0
+    local w  = self._frame:GetWidth() or 0
+    local h  = self._frame:GetHeight() or 0
+    if cw > 0 and ch > 0 and w > 0 and h > 0 then
+        SuuUI.UIRoot:UpdateElementAnchor(self._frame, {
+            point = "TOPLEFT", relativePoint = "TOPLEFT",
+            x = (cw - w) / 2 + self._cdx,
+            -- `dy` is documented as units UP from centre, and a TOPLEFT offset grows downward.
+            y = -((ch - h) / 2 - self._cdy),
+        })
+        return
+    end
+    -- Sizes are not resolvable yet -- a window centred before it has ever been laid out. The client's
+    -- own centring is still better than anchoring at the corner, and the next resize re-centres it.
     SuuUI.UIRoot:UpdateElementAnchor(self._frame,
-        { point = "CENTER", x = dx or 0, y = dy or 0 })
+        { point = "CENTER", x = self._cdx, y = self._cdy })
+end
+
+--- Sets the window's size, re-centring a centred window so it stays centred.
+--
+-- A CENTER-to-CENTER anchor re-centred on resize for free; the explicit snapped offset `Center` now
+-- states does not, so the resize has to say so. This is why it is an override rather than an
+-- `OnSizeChanged` hook: a hook would also fire in the middle of a resize-grip drag and fight it.
+-- Declared before `InstallBase`, which only fills gaps, so this survives.
+function WinMeta:SetSize(w, h)
+    self._frame:SetSize(w, h)
+    if self._centered then self:Center(self._cdx, self._cdy) end
 end
 
 --- Shows the window with a fade-in animation. Emits VISIBILITY_CHANGED.

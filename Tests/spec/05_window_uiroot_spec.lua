@@ -865,6 +865,61 @@ describe("Layout.Window", function()
     end)
 
     describe("centered option", function()
+        -- A CENTER-to-CENTER anchor is resolved by the client as (container - window) / 2, so an ODD
+        -- dimension lands the window on a HALF UNIT -- and with the pixel grid active one unit is one
+        -- physical pixel, so every 1px border inside that window straddles two pixel rows and
+        -- rasterises at half alpha. Measured in game at 1440p: an inventory window whose cell size was
+        -- 41 put every row of cells on X.5 and the quality borders along the top and bottom edges of
+        -- the icons blended away entirely, while the left and right edges (offset by an even width)
+        -- looked perfect.
+        --
+        -- Both axes, and both parities, because the fix must not simply trade one for the other.
+        it("lands on whole units when its own size is ODD", function()
+            local w = window({ id = "odd_centre", w = 401, h = 299, centered = true })
+            w:Show()
+            local b = H.box(w:GetFrame())
+            expect(b.left % 1).as("left is a whole unit").eq(0)
+            expect(b.top % 1).as("top is a whole unit").eq(0)
+        end)
+
+        it("still lands on whole units when its size is EVEN", function()
+            local w = window({ id = "even_centre", w = 400, h = 300, centered = true })
+            w:Show()
+            local b = H.box(w:GetFrame())
+            expect(b.left % 1).as("left is a whole unit").eq(0)
+            expect(b.top % 1).as("top is a whole unit").eq(0)
+        end)
+
+        it("keeps a paired offset on whole units too", function()
+            -- The inventory's bank session offsets each window by HALF its own width plus half the
+            -- gap, so a fractional offset is the ordinary case there rather than an edge case.
+            local w = window({ id = "paired_centre", w = 401, h = 299, centered = true })
+            w:Show()
+            w:Center(150.5, -20.5)
+            local b = H.box(w:GetFrame())
+            expect(b.left % 1).as("left is a whole unit").eq(0)
+            expect(b.top % 1).as("top is a whole unit").eq(0)
+        end)
+
+        -- The CENTER-to-CENTER anchor re-centred on resize for free; the explicit offset does not, so
+        -- the resize has to say so. The inventory depends on this directly: its Show() centres the
+        -- window and _fit() then resizes it to fit the grid.
+        it("stays centred when it is resized", function()
+            local w = window({ id = "resize_centre", w = 400, h = 300, centered = true })
+            w:Show()
+            w:SetSize(521, 337)
+            local afterResize = H.box(w:GetFrame())
+            -- Compared against an explicit re-centre rather than to expectCentered*, because an odd
+            -- dimension is half a unit off true centre BY DESIGN once it is snapped -- so the question
+            -- is whether the resize centred it, not whether it is perfectly centred.
+            w:Center()
+            local afterCentre = H.box(w:GetFrame())
+            expect(afterResize.left).as("the resize re-centred on its own").eq(afterCentre.left)
+            expect(afterResize.top).eq(afterCentre.top)
+            expect(afterResize.left % 1).as("and on the grid with odd dimensions").eq(0)
+            expect(afterResize.top % 1).eq(0)
+        end)
+
         it("centres the window even when a saved position exists", function()
             H.env.SuuUIConfig = { windows = { centered_win = { x = 50, y = -50 } } }
             local w = window({ id = "centered_win", w = 400, h = 300, centered = true })

@@ -941,7 +941,7 @@ describe("Plugins/Inventory", function()
             local wired = {
                 enabled = true, suppress_blizzard = true,
                 columns = true, cell_size = true, sort_mode = true,
-                sort_position = true,
+                sort_position = true, auto_sort = true,
                 bank_side = true, sell_confirm = true, sell_interval = true,
             }
             for _, e in ipairs(schema) do
@@ -993,6 +993,89 @@ describe("Plugins/Inventory", function()
             expect(fresh:GetGrid():GetSortPosition())
                 .as("and a window built afterwards reads it too").eq("end")
             fresh:Destroy()
+        end)
+
+        -- The setting has to reach the grid by BOTH routes for the same reason the sort position does,
+        -- and it has one extra thing to prove: that opening the window respects it. Show() is where the
+        -- only automatic sort a player will notice happens, so a setting the applier honours while
+        -- Show() ignores it would look like the toggle does nothing at all.
+        it("stops the window sorting on open when switched off", function()
+            expect(getS("auto_sort")).as("on is what shipped").eq(true)
+            stageThree()
+
+            -- THE LIVE APPLIER half, on a window already on screen. Without it the toggle only works
+            -- for windows built afterwards, which in practice means it does nothing at all: the player
+            -- changes the setting with their bags open.
+            H.SuuUI.Inventory_Open()
+            local open = H.SuuUI.Inventory_GetWindow("bags"):GetGrid()
+            expect(open:IsAutoSort()).as("on to begin with").truthy()
+            setS("auto_sort", false)
+            expect(open:IsAutoSort()).as("the live applier reached the open grid").falsy()
+
+            setS("sort_mode", "quality")
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w:GetGrid():IsAutoSort()).as("the construction prop carried it too").falsy()
+            -- Slot 1 holds the LOWEST quality, so container order and quality order disagree -- without
+            -- that this assertion passes whether or not the open sorted.
+            expect(w:GetGrid()._entries[1].info.itemName)
+                .as("opened in container order").eq("Zebra Cloth")
+
+            -- And the button still works, which is the whole reason switching this off is usable.
+            expect(H.click(w._sortBtn)).truthy()
+            expect(w:GetGrid()._entries[1].info.itemName)
+                .as("an explicit sort still reorders").eq("Amber Potion")
+            w:Destroy()
+        end)
+
+        -- THE SYMPTOM A PLAYER ACTUALLY SAW: with automatic sorting off the window collapsed to a
+        -- strip, because the rebuild's sort was carrying the cell PLACEMENT and gating the sort took
+        -- the geometry with it. "sizes the window to fit the grid" further up cannot catch that -- a
+        -- zero-wide grid satisfies its `gte` -- so this compares the two states directly, which also
+        -- keeps it immune to how the grid's padding happens to be computed.
+        it("still fills the window when automatic sorting is off", function()
+            stageThree()
+            local on = IW.New({ container = "bags" })
+            on:Show()
+            local wOn, hOn = on:GetGrid():GetWidth(), on:GetGrid():GetHeight()
+            expect(wOn).as("sanity: the sorted grid has a size at all").gt(0)
+            on:Destroy()
+
+            setS("auto_sort", false)
+            local off = IW.New({ container = "bags" })
+            off:Show()
+            -- Placement is not the ordering's business, so the same slots over the same columns come
+            -- out the same size whichever order they are in.
+            expect(off:GetGrid():GetWidth()).as("width survived").eq(wOn)
+            expect(off:GetGrid():GetHeight()).as("height survived").eq(hOn)
+            off:Destroy()
+        end)
+
+        -- THE CONFIGURATION THAT PRODUCED THE ARTEFACT, measured in game at 1440p: an ODD cell size
+        -- makes the window an odd size, and `Window:Center`'s CENTER-to-CENTER anchor then put every
+        -- row of cells on a HALF UNIT -- which with the pixel grid active is half a physical pixel, so
+        -- the 1px quality borders along the icons' top and bottom edges rasterised at about half alpha
+        -- and read as absent. Dragging the window fixed it, because the drag path re-anchors through a
+        -- snapped offset.
+        --
+        -- Asserted here as well as in 05_window_uiroot_spec because the window fix and the artefact are
+        -- three layers apart: nothing about a cell mentions centring, so without this the connection
+        -- lives only in a commit message.
+        it("puts every cell on a whole unit with an ODD cell size", function()
+            setS("cell_size", 41)
+            setS("columns", 12)
+            stageThree()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            local b = H.box(w:GetWindow())
+            expect(b.left % 1).as("the window itself is on the grid").eq(0)
+            expect(b.top % 1).as("and so is its top").eq(0)
+            for i, e in ipairs(w:GetGrid()._entries) do
+                local cb = H.box(e.cell)
+                expect(cb.left % 1).as("cell " .. i .. " left is a whole unit").eq(0)
+                expect(cb.top % 1).as("cell " .. i .. " top is a whole unit").eq(0)
+            end
+            w:Destroy()
         end)
     end)
 

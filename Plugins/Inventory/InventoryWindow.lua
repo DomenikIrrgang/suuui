@@ -462,6 +462,12 @@ function WindowMeta:GetGrid() return self._grid end
 --
 -- Opening the window is the one moment a re-sort is unambiguously safe -- there is no cursor mid-drag
 -- and no loot in flight -- which is also why every bag addon sorts on open rather than on update.
+--
+-- Through AutoSort rather than Sort, so `auto_sort` can switch it off. With it off the grid opens in
+-- container order and stays there until the title-bar button is pressed, which is the point -- but it
+-- also means the first open looks a lot like the first-paint defect described above. It is not the
+-- same thing: that bug sorted at the wrong MOMENT, while this is not sorting at all because it was
+-- asked not to.
 function WindowMeta:Show()
     self._win:Show()
     -- REBUILT ON EVERY OPEN, not once at construction. The cache gains a character the first time you
@@ -469,7 +475,7 @@ function WindowMeta:Show()
     -- window is built once per session while the cache keeps growing under it.
     self:_rebuildCharacters()
     self:Refresh()
-    self._grid:Sort()
+    self._grid:AutoSort()
     self:_fit()
     self:_updateFooter()
 end
@@ -769,6 +775,7 @@ function M.New(props)
         spacing    = T:GetToken("spaceXxs") or 2,
         sortMode   = get("sort_mode") or "quality",
         sortPosition = get("sort_position") or "start",
+        autoSort   = get("auto_sort") ~= false,
         namePrefix = "SuuUI_inventory_" .. which .. "_",
     }, content)
 
