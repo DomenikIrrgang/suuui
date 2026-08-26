@@ -77,8 +77,22 @@ M.pickedUpAction = nil
 -- it. A string "0"/"1" rather than a boolean, matching the CVar-backed global.
 M.actionBarLocked = "0"
 
--- Key bindings, keyed by command: state.bindings.ACTIONBUTTON1 = "1". Read by GetBindingKey.
+-- Key bindings, keyed by command: state.bindings.ACTIONBUTTON1 = { "1", "CTRL-F9" }.
+--
+-- A LIST, not a string, because GetBindingKey RETURNS VARARGS -- measured in game 2026-08-26,
+-- where GetBindingKey("ACTIONBUTTON1") answered `1 CTRL-F9` after a second key was bound. A
+-- single-string model cannot express that, and every "clear all keys for this button" spec
+-- written against one would pass whether or not the production loop iterates.
 M.bindings = {}
+
+-- The binding sets on disk, keyed by set number: 1 = account-wide, 2 = character-specific.
+-- SaveBindings copies state.bindings in here; LoadBindings copies it back out. This is what
+-- makes Discard work without a snapshot table -- the saved set IS the snapshot.
+M.savedBindings = {}
+
+-- Which set the client is currently using, as GetCurrentBindingSet reports it. Measured as 1
+-- (account-wide) on the reference character.
+M.currentBindingSet = 1
 
 -- Override bindings installed through SetOverrideBindingClick, in call order.
 M.overrideBindings = {}
@@ -302,7 +316,18 @@ function M.reset()
     M.pickedUpAction  = nil
     M.actionBarLocked = "0"
     M.bindings         = {}
+    M.savedBindings    = {}
+    M.currentBindingSet = 1
     M.overrideBindings = {}
+    -- Modifier state, cleared for a reason this feature made concrete: keybind capture builds its
+    -- key string from IsShiftKeyDown and friends, so a modifier left held by an earlier spec would
+    -- turn a staged plain "F" into "SHIFT-F" -- a wrong assertion that still passes if the spec
+    -- happened to expect the modified form. These were previously only ever WRITTEN (by H.mods)
+    -- and never cleared, which worked only because nothing read them across a file boundary.
+    M.ctrlDown  = false
+    M.altDown   = false
+    M.shiftDown = false
+    M.metaDown  = false
     -- Frame-keyed, so this also drops the only reference the harness holds to a torn-down
     -- secure header.
     M.stateDrivers    = {}

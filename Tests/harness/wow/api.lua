@@ -431,8 +431,14 @@ function M.install(env)
     env.IsControlKeyDown = function() return state.ctrlDown == true end
     env.IsAltKeyDown     = function() return state.altDown == true end
     env.IsShiftKeyDown   = function() return state.shiftDown == true end
+    -- Present on this client, measured 2026-08-26 (`meta function`). It matters because the
+    -- reference machine is macOS: Cmd is a live modifier here, and a keybind capture that does
+    -- not know about it either drops the modifier from the key string or -- worse -- lets a bare
+    -- Cmd become a binding of its own. ElvUI's own ignore list has exactly that hole.
+    env.IsMetaKeyDown    = function() return state.metaDown == true end
     env.IsModifierKeyDown = function()
-        return state.ctrlDown == true or state.altDown == true or state.shiftDown == true
+        return state.ctrlDown == true or state.altDown == true
+            or state.shiftDown == true or state.metaDown == true
     end
 
     env.CreateColor = function(r, g, b, a)
@@ -1640,9 +1646,119 @@ function M.install(env)
     -- Bindings
     --------------------------------------------------------------------------
 
+    -- Returns EVERY key bound to the command, as varargs. Measured in game 2026-08-26:
+    -- GetBindingKey("ACTIONBUTTON1") answered `1 CTRL-F9` once a second key was bound. A
+    -- single-return model would make "clear all keys for this button" untestable, since a
+    -- one-key fixture passes whether or not the production loop iterates.
     env.GetBindingKey = function(command)
         if type(command) ~= "string" then return nil end
-        return state.bindings[command]
+        local list = state.bindings[command]
+        if not list or #list == 0 then return nil end
+        return table.unpack(list, 1, #list)
+    end
+
+    -- Which command owns a key, for the conflict check the mode runs before stealing it.
+    --
+    -- RETURNS "" FOR AN UNBOUND KEY, not nil. This is Blizzard's documented shape and is the
+    -- one thing in this group NOT measured in game -- the Phase 0 probe only established that
+    -- the function exists. Production therefore has to treat nil AND "" as unbound; the spec
+    -- for that guard states so, so the guard is not mistaken for redundancy.
+    env.GetBindingAction = function(key)
+        if type(key) ~= "string" or key == "" then return "" end
+        for command, list in pairs(state.bindings) do
+            for _, k in ipairs(list) do
+                if k == key then return command end
+            end
+        end
+        return ""
+    end
+
+    -- Writes a binding. Two forms, both measured in game 2026-08-26:
+    --   SetBinding(key, command) -> binds, returns true
+    --   SetBinding(key)          -> UNBINDS that key, returns true
+    --
+    -- IT FIRES UPDATE_BINDINGS SYNCHRONOUSLY. Measured: the event handler printed BEFORE the
+    -- caller printed SetBinding's own return value. That is the entire reason the keybind mode
+    -- needs no re-route code -- ActionBars already re-runs applyOwnBindings on that event, and
+    -- ActionButton already repaints its hotkey from it. MODELLED HERE ON PURPOSE: without the
+    -- emission, a spec asserting "one SetBinding re-routes every bar" would be asserting
+    -- something that was already true and could never go red.
+    --
+    -- IN COMBAT IT RETURNS false AND DOES NOT ERROR. Measured: `setbind true false` from a
+    -- pcall, with the client additionally printing "Interface action failed because of an
+    -- AddOn". So a pcall wrapper catches nothing and the attempt itself is user-visible --
+    -- production must gate on InCombatLockdown() instead. Modelled as a falsy return rather
+    -- than a raise so that a spec cannot make a pcall wrapper look correct.
+    env.SetBinding = function(key, command)
+        if type(key) ~= "string" or key == "" then return false end
+        if state.inCombat then
+            state.blockedActions[#state.blockedActions + 1] = {
+                action = "SetBinding", key = key, command = command,
+            }
+            return false
+        end
+
+        -- A key belongs to exactly one command, so binding it anywhere removes it everywhere
+        -- else. This is the "steal" the conflict warning exists to announce.
+        for cmd, list in pairs(state.bindings) do
+            for i = #list, 1, -1 do
+                if list[i] == key then table.remove(list, i) end
+            end
+            if #list == 0 then state.bindings[cmd] = nil end
+        end
+
+        if type(command) == "string" and command ~= "" then
+            local list = state.bindings[command]
+            if not list then
+                list = {}
+                state.bindings[command] = list
+            end
+            list[#list + 1] = key
+        end
+
+        fireEvent("UPDATE_BINDINGS")
+        return true
+    end
+
+    env.GetCurrentBindingSet = function() return state.currentBindingSet end
+
+    -- Copies the live bindings onto the set on disk. Does NOT fire UPDATE_BINDINGS -- measured
+    -- 2026-08-26, where a line calling SetBinding then SaveBindings produced exactly ONE event.
+    env.SaveBindings = function(which)
+        which = tonumber(which) or state.currentBindingSet
+        local snap = {}
+        for command, list in pairs(state.bindings) do
+            local copy = {}
+            for i, k in ipairs(list) do copy[i] = k end
+            snap[command] = copy
+        end
+        state.savedBindings[which] = snap
+        state.currentBindingSet = which
+        return true
+    end
+
+    -- Copies the set on disk back over the live bindings, which is what makes Discard work
+    -- with no snapshot table of our own: the saved set IS the snapshot. Measured 2026-08-26 --
+    -- a live SetBinding was reverted, and the event DID fire (`>> UPDATE_BINDINGS fired` then
+    -- `after discard 1`).
+    --
+    -- Note the consequence, which is real and not a modelling artefact: this also reverts
+    -- anything changed outside the mode and never saved.
+    env.LoadBindings = function(which)
+        which = tonumber(which) or state.currentBindingSet
+        local snap = state.savedBindings[which]
+        local restored = {}
+        if snap then
+            for command, list in pairs(snap) do
+                local copy = {}
+                for i, k in ipairs(list) do copy[i] = k end
+                restored[command] = copy
+            end
+        end
+        state.bindings = restored
+        state.currentBindingSet = which
+        fireEvent("UPDATE_BINDINGS")
+        return true
     end
 
     -- Recorded rather than enacted: a spec's question is "did the button claim this key",

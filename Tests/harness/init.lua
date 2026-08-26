@@ -60,7 +60,8 @@
 -- Client:      H.setGradientSupported  (take the gradient API away, to reach a fallback)
 -- Actions:     H.setAction H.clearAction H.setActionBarPage H.setActionBarLocked
 --              H.getPickedUpAction H.getUsedAction H.resetUsedAction
--- Bindings:    H.setBinding H.getOverrideBindings H.getStateDriver
+-- Bindings:    H.setBinding H.addBinding H.getBindings H.getSavedBindings H.setBindingSet
+--              H.getOverrideBindings H.getStateDriver
 --              H.setTempShapeshiftPage  (the page a temporary shapeshift uses)
 -- Stance:      H.setStanceForm H.popStanceForm H.clearStanceForms H.getCastStance
 --              H.setSpellTexture
@@ -519,11 +520,61 @@ function M.setActionBarPage(page, opts)
 end
 
 --- Binds a key to a command, so GetBindingKey answers it.
+--
+-- REPLACES whatever the command had. Use H.addBinding to stage a SECOND key on the same
+-- command, which is the case GetBindingKey's varargs shape exists for.
 -- @param command string  e.g. "ACTIONBUTTON1"
--- @param key string|nil  nil unbinds
+-- @param key string|nil  nil unbinds every key on the command
 function M.setBinding(command, key)
     assert(type(command) == "string" and command ~= "", "H.setBinding: command required")
-    state.bindings[command] = key
+    if key == nil then
+        state.bindings[command] = nil
+    else
+        state.bindings[command] = { key }
+    end
+end
+
+--- Stages an ADDITIONAL key on a command, so GetBindingKey returns more than one.
+--
+-- The client allows several keys per command -- measured 2026-08-26, GetBindingKey answering
+-- `1 CTRL-F9`. A clear-all path can only be tested against a command holding two or more, so a
+-- spec that stages one key and asserts "all cleared" proves nothing about the loop.
+-- @param command string
+-- @param key string
+function M.addBinding(command, key)
+    assert(type(command) == "string" and command ~= "", "H.addBinding: command required")
+    assert(type(key) == "string" and key ~= "", "H.addBinding: key required")
+    local list = state.bindings[command]
+    if not list then
+        list = {}
+        state.bindings[command] = list
+    end
+    list[#list + 1] = key
+end
+
+--- Every key bound to a command, as a fresh list. Empty when unbound.
+-- @param command string
+-- @return table
+function M.getBindings(command)
+    local out = {}
+    local list = state.bindings[command]
+    if list then
+        for i, k in ipairs(list) do out[i] = k end
+    end
+    return out
+end
+
+--- The binding set on disk, as SaveBindings left it. nil when that set was never saved.
+-- @param which number|nil  1 = account-wide (the measured default), 2 = character-specific
+-- @return table|nil
+function M.getSavedBindings(which)
+    return state.savedBindings[tonumber(which) or state.currentBindingSet]
+end
+
+--- Which binding set the client reports, for the panel's per-character toggle.
+-- @param which number  1 or 2
+function M.setBindingSet(which)
+    state.currentBindingSet = tonumber(which) or 1
 end
 
 --- Whether the client reports the bars locked, which gates drag-and-drop.
@@ -1471,12 +1522,17 @@ function M.setMouseDown(button, down)
 end
 
 --- Sets modifier key state for IsControlKeyDown and friends.
--- @param mods table  { ctrl, alt, shift }
+--
+-- `meta` is Cmd, live on this client (measured 2026-08-26) and load-bearing because the
+-- reference machine is macOS. State is cleared by state.reset(), so a spec never inherits a
+-- held modifier from the file before it -- which would silently turn a staged "F" into "SHIFT-F".
+-- @param mods table  { ctrl, alt, shift, meta }
 function M.mods(mods)
     mods = mods or {}
     state.ctrlDown  = mods.ctrl == true
     state.altDown   = mods.alt == true
     state.shiftDown = mods.shift == true
+    state.metaDown  = mods.meta == true
 end
 
 local function deliverable(f)
@@ -1633,6 +1689,24 @@ function M.key(target, key)
     local f = M.frameOf(target)
     if not (f:IsVisible() and f:IsKeyboardEnabled()) then return false end
     f:_fire("OnKeyDown", key)
+    return true
+end
+
+--- Sends a key RELEASE to a widget with keyboard input enabled.
+--
+-- Its own helper rather than an option on M.key, because the phase is a real distinction and
+-- not a detail: keybind capture reads the key on RELEASE, the way ElvUI's binder does, so that
+-- a modifier still held while the main key comes up is part of the combination. A spec that
+-- staged a press would exercise nothing at all. Keyboard delivery is gated on
+-- IsKeyboardEnabled, which is what makes "the overlay only listens while hovered" assertable:
+-- a released overlay refuses the key and this returns false.
+-- @param target table
+-- @param key string
+-- @return bool  Whether the key was delivered
+function M.keyUp(target, key)
+    local f = M.frameOf(target)
+    if not (f:IsVisible() and f:IsKeyboardEnabled()) then return false end
+    f:_fire("OnKeyUp", key)
     return true
 end
 
