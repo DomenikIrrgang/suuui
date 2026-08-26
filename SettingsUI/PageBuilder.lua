@@ -52,7 +52,18 @@ function M:BuildEntries(schemaArray, pluginId, parentFrame, container, opts)
     local target, targetFrame = container, parentFrame
 
     for _, entry in ipairs(schemaArray) do
-        if entry.type == "section" then
+        -- HIDDEN ENTRIES ARE DECLARED BUT NOT DRAWN, and the distinction matters: an entry is what
+        -- declares a key's default and whether it is `transient`, so deleting one to get it off the
+        -- page also drops those. keybind_mode needs exactly that -- the mode is entered from the
+        -- settings title bar rather than from a checkbox, but the key must still be declared
+        -- transient or the player logs back in with a live binder open.
+        --
+        -- Checked before the section branch so a hidden section header is possible too, and it costs
+        -- nothing: a schema without hidden entries behaves exactly as before.
+        if entry.hidden then
+            -- nothing to build
+
+        elseif entry.type == "section" then
             group = group or C.AccordionGroup()
             local acc = C.Accordion({ label = entry.label }, parentFrame)
             -- The handle, not its frame: the container connects to what it is handed, and

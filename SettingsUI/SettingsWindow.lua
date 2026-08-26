@@ -134,6 +134,70 @@ local function createWindow()
     -- screen, so the constants are only a request and can overshoot on a small display.
     local contentW, contentH = win:GetContentSize()
 
+    -- KEYBIND MODE, in the title strip. Domenik asked for it here rather than as a toggle buried in
+    -- the Layout page: it is a MODE you enter, like edit mode, not a preference you set.
+    --
+    -- A LABELLED BUTTON, not an icon. It went through both: an icon alone did not read as a toggle,
+    -- and once it had an on-state it still did not say what it was FOR -- "I think text is needed,
+    -- not just an icon". A keyboard glyph is a guess the player has to make; the word is not. The
+    -- glyph stays on the shared sheet (Media/generate_ui_icons.py, `keybind`) and is currently unused.
+    --
+    -- Parented to the content frame and then handed to the window, exactly as the inventory window's
+    -- icons are -- AddTitleAccessory reparents it into the title strip and raises it above the drag
+    -- surface, which something merely anchored there would sit underneath and never receive a click.
+    local kbBtn = C.Button({
+        label    = "Keybinds",
+        -- NO PRESS POP. A title-bar accessory is held at a token inset from the strip's edge, and
+        -- SetScale reinterprets that offset in the frame's own scaled space, so the pop slides the
+        -- control sideways instead of growing it in place. Reported in game on the inventory window's
+        -- sort button before that one opted out.
+        scalePop = false,
+        -- NO EXPLICIT SIZE. Passing `h` alone dropped auto-sizing on BOTH axes and left the width at
+        -- zero, so the label rendered clipped to nothing -- caught by the integration spec's
+        -- unclipped-label sweep as `box 0x20, needs 73x20`. Same partial-size trap as Text's
+        -- width-without-height. A title accessory should size to its own text anyway.
+        onClick  = function()
+            if not SuuUI.KeybindMode then return end
+            local wasActive = SuuUI.KeybindMode:IsActive()
+            local nowActive = SuuUI.KeybindMode:Toggle()
+            -- Only when we tried to OPEN and were refused. A normal close also leaves the mode
+            -- inactive, so the state before the click is what tells the two apart.
+            if not wasActive and not nowActive then
+                SuuUI.Components.Notice({
+                    title   = "Keybind Mode",
+                    message = "Keybinds cannot be changed in combat. Try again once you are out of "
+                        .. "the fight.",
+                    tone    = "warning",
+                })
+            end
+        end,
+    }, content)
+    win:AddTitleAccessory(kbBtn, {
+        -- NON-SQUARE, because the strip's default is an icon's square box and this control carries a
+        -- word. A NUMBER rather than a measurement: "auto" was tried and is circular -- the layout
+        -- assigns the width from that value, so reading the control's own width back latched it to
+        -- the whole strip and starved the title text to nothing.
+        --
+        -- 104 rather than the ~54 "Keybinds" measures at the default face. The number has to clear
+        -- the WIDEST shipped face, not the current one: at Morpheus the label needs 73 and the button
+        -- hands its label the accessory width minus its own horizontal padding, so 88 left it three
+        -- units short. The integration spec sweeps every label for clipping after a font change,
+        -- which is what caught both attempts.
+        w = 104,
+    })
+    SuuUI.SettingsWindow._keybindButton = kbBtn
+
+    -- IT IS A TOGGLE, SO IT HAS TO LOOK LIKE ONE. Reported: "it's a button right now not a toggle" --
+    -- it fired and looked identical whether the mode was on or off. The accent variant tints the
+    -- border AND the label, and survives a hover because the hover handler re-derives from the
+    -- variant rather than overwriting it.
+    --
+    -- Driven from the SETTING rather than from the click handler, so `/suuui keybind` and the keybind
+    -- panel's own close box move it too.
+    SuuUI.Settings:Watch("_layout", "keybind_mode", function(isActive)
+        if kbBtn.SetVariant then kbBtn:SetVariant(isActive and "accent" or nil) end
+    end, "_settings_keybind_button", { immediate = true })
+
     -- Nav | divider | page, tracking the window as it resizes
     local main = SuuUI.Layout:CreateContainer({
         parent  = content,

@@ -15,14 +15,27 @@ local C = SuuUI.Components
 local S = SuuUI.UISignals
 local T = SuuUI.Theme
 
-local PANEL_W = 280
+-- 320 rather than 280 because the rows carry BLIZZARD'S binding command names, and
+-- MULTIACTIONBAR5BUTTON1 is 22 characters before the keys are even appended.
+local PANEL_W = 320
 -- Wide enough for the longest reading either counter produces ("999 / 999"), because a Text
 -- measures itself from the string it was CONSTRUCTED with and the client truncates the overflow to
 -- an ellipsis rather than growing the field.
 local VALUE_W = 72
+-- The change rows' width. Explicit for the same reason VALUE_W is: a row built from "" measures ~0
+-- and the client ellipsised every entry to "MULTIACTIONBAR5BUTTON1  unb...". Leaves room for the
+-- scrollbar, which sits inside the scroll frame's own width.
+local ROW_W = PANEL_W - 2 * 12 - 10
 
 local win, built, buildingDone
 local changedText, boundText, perCharToggle, saveBtn
+local changeList, listContent, listBox
+-- Row Texts, reused across repaints. Pooled rather than recreated because Refresh runs on every
+-- binding change and leaking a FontString per keystroke would be a slow leak nobody notices.
+local rows = {}
+-- Tall enough for four rows, which is where a list stops being glanceable anyway; beyond that the
+-- scrollbar does the work instead of the window growing off the screen.
+local LIST_H = 68
 
 -- The honest wording for what Discard can do. An unsaved SetBinding survives a reload on its own
 -- (measured), so Discard reverts to the last SAVED state rather than undoing everything -- and
@@ -57,9 +70,53 @@ function M:Refresh()
     -- live with nothing pending invites a click that does nothing.
     if saveBtn and saveBtn.SetEnabled then saveBtn:SetEnabled(changed > 0) end
 
+    if listBox and mode then
+        local list = mode:Changes()
+        for i, row in ipairs(list) do
+            local t = rows[i]
+            if not t then
+                -- EXPLICIT WIDTH AND WRAP ON. Built from "" a Text measures ~0 wide, so every entry
+                -- came back ellipsised -- "MULTIACTIONBAR5BUTTON1  unb...". Width alone is not
+                -- enough either: these rows carry Blizzard's own command names, and
+                -- MULTIACTIONBAR5BUTTON1 plus two key strings genuinely exceeds one line. Wrapping
+                -- costs a second line on the longest entries and is the only option that never
+                -- hides part of what the player is about to save.
+                t = C.Text({ text = "", size = "sm", color = "text", w = ROW_W,
+                    wrap = true, justify = "LEFT" }, listContent)
+                rows[i] = t
+                listBox:Add(t, { width = ROW_W })
+            end
+            t:SetText(mode:FormatChange(row))
+            -- Cleared reads as a removal, so it takes the danger ink rather than plain text. A
+            -- rebind is not a loss and stays neutral.
+            t:SetColor(row.cleared and "danger" or "text")
+            t:Show()
+        end
+        -- Surplus rows are HIDDEN, not destroyed: the pool is what keeps a long session from
+        -- leaking a FontString per keystroke.
+        for i = #list + 1, #rows do rows[i]:Hide() end
+
+        if #list == 0 then
+            local t = rows[1]
+            if not t then
+                t = C.Text({ text = "", size = "sm", color = "textMuted", w = ROW_W,
+                    wrap = true, justify = "LEFT" }, listContent)
+                rows[1] = t
+                listBox:Add(t, { width = ROW_W })
+            end
+            t:SetText("No changes yet.")
+            t:SetColor("muted")
+            t:Show()
+        end
+    end
+
     if perCharToggle and perCharToggle.SetValue and mode then
         perCharToggle:SetValue(mode:BindingSet() == 2)
     end
+
+    -- Re-fit after the values change: a counter going from "0" to "12 / 96" can re-wrap nothing
+    -- today, but the hint is wrapped text and a locale or font change moves it by a line.
+    if M._fit then M._fit() end
 end
 
 function M:_build()
@@ -101,7 +158,7 @@ function M:_build()
         parent = content, layout = "flow", dir = "horizontal",
         gap = T:GetToken("spaceXs"), align = "center",
     })
-    changedRow:Add(C.Text({ text = "Changed", size = "sm", color = "textMuted" }, content),
+    changedRow:Add(C.Text({ text = "Changes", size = "sm", color = "textMuted" }, content),
         { width = "fill" })
     -- EXPLICIT WIDTH, and both the prop and the Add opt. A Text measures itself from the string it
     -- was CONSTRUCTED with -- "0" is a few units wide -- so a later SetText("63 / 96") overflowed
@@ -111,6 +168,17 @@ function M:_build()
         content)
     changedRow:Add(changedText, { width = VALUE_W })
     box:Add(changedRow, { width = "fill" })
+
+    -- THE CHANGE LIST. A count answers "is there work pending"; the list answers "what did I
+    -- actually do", which is the question a player about to press Save is asking. Capped and
+    -- scrollable so a long editing session cannot grow the window off the screen.
+    changeList = C.ScrollFrame({ w = PANEL_W - 2 * (T:GetToken("spaceMd") or 12), h = LIST_H },
+        content)
+    box:Add(changeList, { width = "fill", height = LIST_H })    listContent = changeList:GetContent()
+    listBox = SuuUI.Layout:CreateContainer({
+        parent = listContent, layout = "flow", dir = "vertical",
+        gap = T:GetToken("spaceXxs"),
+    })
 
     local boundRow = SuuUI.Layout:CreateContainer({
         parent = content, layout = "flow", dir = "horizontal",
@@ -177,6 +245,27 @@ function M:_build()
     btnRow:Add(discardBtn, { width = "fill" })
     box:Add(btnRow, { width = "fill" })
 
+    -- THE WINDOW HUGS ITS CONTENT. A vertical flow packs from the top, so a fixed height left dead
+    -- space under the buttons -- reported twice in game as "the buttons are not aligned to the bottom
+    -- of the window".
+    --
+    -- MEASURED WITH GetContentSize, NOT with the SIZE_CHANGED signal, and that distinction is the
+    -- whole bug in the first attempt. For a `host` container `self._frame` IS the window's content
+    -- frame, so the signal reports the height the WINDOW gave it -- feeding that back into SetSize
+    -- measures the window against itself and tells you nothing about the children. GetContentSize
+    -- returns the bounding box of the children, which is the number actually wanted.
+    local titleH = T:GetToken("sizeTitleBar") or 26
+    local function fit()
+        local _, contentH = box:GetContentSize()
+        if not (contentH and contentH > 0) then return end
+        local want = contentH + titleH
+        local have = win:GetHeight()
+        if have and math.abs(have - want) < 1 then return end
+        win:SetSize(PANEL_W, want)
+    end
+    M._fit = fit
+    fit()
+
     win:Hide()
     buildingDone = true
 end
@@ -213,6 +302,7 @@ function M:_controls()
     return {
         save = saveBtn, perChar = perCharToggle,
         changed = changedText, bound = boundText,
+        rows = rows, list = changeList,
     }
 end
 

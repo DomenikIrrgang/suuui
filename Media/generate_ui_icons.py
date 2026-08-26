@@ -54,6 +54,7 @@ GLYPHS = [
     "coin",     # 2  a stack of coins -- sell grey items
     "search",   # 3  a magnifier -- the search field's leading glyph
     "chevron",  # 4  a downward chevron -- a dropdown's open affordance
+    "keybind",  # 5  a keyboard keycap -- enters keybind mode from the settings title bar
 ]
 assert len(GLYPHS) <= GRID * GRID, (
     f"{len(GLYPHS)} glyphs will not fit a {GRID}x{GRID} sheet"
@@ -173,12 +174,41 @@ def _draw_chevron(d, u):
            fill=INK, width=u.w(STROKE), joint="curve")
 
 
+def _draw_keybind(d, u):
+    """A keyboard: a wide rounded outline with three keys and a spacebar inside.
+
+    THE FIRST ATTEMPT WAS A SINGLE KEYCAP -- a rounded square with a smaller square inset -- and
+    rendering it settled the question the docstring could not: two concentric rounded outlines of
+    similar size read as a FRAME AROUND NOTHING, or worse as a stop button. The inset was supposed
+    to give a top-left light edge, and at 32px a 3-unit offset is simply invisible. Looking at the
+    output is what found that; the code looked correct.
+
+    A KEYBOARD instead, because the plural is what disambiguates it. One rounded box can be a great
+    many things; one rounded box with a row of keys and a spacebar can only be a keyboard, and
+    "keybind mode" is about the keyboard rather than about one key.
+
+    THE INNER KEYS ARE FILLED, not stroked, and that is the opposite of every other glyph on this
+    sheet. A 3-unit stroked square has no interior left at this size -- it downsamples to a grey
+    smudge. Filled squares stay square. The spacebar is a filled bar for the same reason.
+
+    Fill check: x spans 4..28 (75% of the cell) and y spans 9..23 (44%), both clear of verify()'s
+    40% floor without the coaxing the chevron's angle needed.
+    """
+    d.rounded_rectangle(u.box(4, 9, 24, 14), radius=u.w(3), outline=INK, width=u.w(THIN))
+    # Top row: three keys, evenly spaced across the face.
+    for x in (8.5, 14.5, 20.5):
+        d.rectangle(u.box(x, 12.5, 3, 3), fill=INK)
+    # The spacebar, centred and wide, which is the detail that names the object.
+    d.rectangle(u.box(10, 18, 12, 2.5), fill=INK)
+
+
 DRAW = {
     "sort": _draw_sort,
     "account": _draw_account,
     "coin": _draw_coin,
     "search": _draw_search,
     "chevron": _draw_chevron,
+    "keybind": _draw_keybind,
 }
 assert set(DRAW) == set(GLYPHS), "every glyph in GLYPHS needs a draw function"
 

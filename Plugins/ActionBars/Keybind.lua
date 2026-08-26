@@ -161,11 +161,10 @@ end
 
 M._normalizeMouse = normalizeMouse
 
--- The change counter lives on SuuUI.KeybindMode, not here: it is MODE state that the panel reads,
--- and a second provider (bags, the spellbook) must add to the same total rather than keep its own.
-local function noteChange(n)
-    if SuuUI.KeybindMode then SuuUI.KeybindMode:NoteChange(n or 1) end
-end
+-- NO CHANGE COUNTER HERE, and none anywhere: SuuUI.KeybindMode derives its change list by DIFFING
+-- the live bindings against a baseline it snapshots when the mode opens. Nothing has to be told that
+-- a write happened, which is what makes the other side of a steal show up -- the command that LOST a
+-- key differs from its baseline too, and a counter incremented at the write site never sees that.
 
 --- What the chip reads, for a state.
 ---
@@ -475,7 +474,6 @@ function M.Capture(button, key)
 
     if not SetBinding(combo, rec.command) then return false end
 
-    noteChange(1)
     flash(button, "ok")
     return true
 end
@@ -497,7 +495,6 @@ function M.ClearAll(button)
     for _, k in ipairs(keys) do
         -- SetBinding with the command omitted is the unbind form -- measured, returns true.
         SetBinding(k)
-        noteChange(1)
     end
     flash(button, "cleared")
     return true

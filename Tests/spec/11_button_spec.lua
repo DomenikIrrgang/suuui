@@ -214,10 +214,40 @@ describe("Components.Button", function()
             -- Background remains on the resting surface token, not hover/pressed.
             H.expectTokenColor(H.backdropColor(b), "colorBgAlt")
         end)
+
+        -- WHY THE ACCENT VARIANT EXISTS. A title-bar control that toggles a mode looked identical
+        -- whether the mode was on or off -- reported as "it's a button right now not a toggle".
+        -- Expressed as a variant rather than as new paint logic because variants already tint the
+        -- border AND label and are already honoured by the hover and press handlers.
+        it("tints border and label accent while marked on", function()
+            local b = H.C.Button({ label = "Keybinds" }, host)
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorBorder")
+
+            b:SetVariant("accent")
+            expect(b:GetVariant()).eq("accent")
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorAccent")
+        end)
+
+        it("returns to the resting border when the variant is cleared", function()
+            local b = H.C.Button({ label = "Keybinds" }, host)
+            b:SetVariant("accent")
+            b:SetVariant(nil)
+            expect(b:GetVariant()).isNil()
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorBorder")
+        end)
+
+        it("keeps the accent through a hover and a leave", function()
+            local b = H.mount(H.C.Button({ label = "Keybinds" }, host))
+            b:SetVariant("accent")
+            -- The hover handler re-derives its border from the variant, so crossing the control must
+            -- not reset an active button to the resting colour.
+            H.hover(b)
+            H.unhover(b)
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorAccent")
+        end)
     end)
 
-    describe("interaction", function()
-        it("calls onClick and emits CLICKED with the button name", function()
+    describe("interaction", function()        it("calls onClick and emits CLICKED with the button name", function()
             local calls = 0
             local b = H.C.Button({ label = "Go", onClick = function() calls = calls + 1 end }, host)
             local spy = H.signalSpy(b, H.S.SIGNALS.CLICKED)
@@ -319,6 +349,69 @@ describe("Components.IconButton", function()
     it("defaults to a 24px square", function()
         local b = H.C.IconButton({ icon = "Interface\\Icons\\INV_Misc_Gem_01" }, host)
         H.expectSize(b, 24, 24)
+    end)
+
+    describe("active state", function()
+        -- WHY THIS EXISTS. A title-bar control that toggles a mode looked identical whether the mode
+        -- was on or off -- reported as "it's a button right now not a toggle". The component had no
+        -- notion of being ON at all, so every caller would have had to paint it from outside, and
+        -- _paint would then have wiped it on the first hover.
+        local function mk()
+            return H.mount(H.C.IconButton({ w = 24, icon = "Interface\\Icons\\Test",
+                iconColor = "colorTextMuted" }, host))
+        end
+
+        it("starts inactive", function()
+            expect(mk():IsActive()).eq(false)
+        end)
+
+        it("signals ON through TWO channels, not one", function()
+            local b = mk()
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorBorder")
+
+            b:SetActive(true)
+            expect(b:IsActive()).eq(true)
+            expect(b:GetIconColor())
+                .as("the glyph takes the accent").eq("colorAccent")
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorAccent")
+        end)
+
+        it("returns the border to rest when switched off", function()
+            local b = mk()
+            b:SetActive(true)
+            b:SetActive(false)
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorBorder")
+        end)
+
+        it("returns to its RESTING colour when switched off, not to whatever it was", function()
+            local b = mk()
+            b:SetActive(true)
+            b:SetActive(false)
+            expect(b:GetIconColor())
+                .as("the rest colour is remembered separately, because SetActive overwrites the "
+                    .. "live one").eq("colorTextMuted")
+            expect(b:IsActive()).eq(false)
+        end)
+
+        it("keeps the active border across a hover and a leave", function()
+            local b = mk()
+            b:SetActive(true)
+            -- _paint runs on both, and an active border applied from OUTSIDE the component would be
+            -- reset to colorBorder here.
+            b:_paint()
+            expect(b:IsActive()).eq(true)
+            expect(b:GetIconColor()).eq("colorAccent")
+            H.expectTokenColor(H.borderColor(b:GetFrame()), "colorAccent")
+        end)
+
+        it("can signal ON in a colour other than accent", function()
+            local b = H.mount(H.C.IconButton({ w = 24, iconColor = "colorTextMuted",
+                activeColor = "colorDanger" }, host))
+            b:SetActive(true)
+            expect(b:GetIconColor())
+                .as("a danger-toned control that is currently armed wants its own hue")
+                .eq("colorDanger")
+        end)
     end)
 
     it("is square when only w is given", function()

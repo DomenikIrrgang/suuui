@@ -7,6 +7,15 @@ local variantToken = {
     danger  = "colorDanger",
     success = "colorSuccess",
     warning = "colorWarning",
+    -- ACCENT is not an intent like the three above -- it does not say "this went wrong" or "this
+    -- worked". It says THIS IS CURRENTLY ON, which is what a button that toggles a mode needs and
+    -- what SuuUI already means by accent everywhere else: edit mode's drag overlay, the stance bar's
+    -- active form, the keybind overlay's armed wash.
+    --
+    -- Expressed as a variant rather than as new paint logic on purpose: variants already tint the
+    -- border AND the label, and they are already honoured by the hover and press handlers, so an
+    -- active button keeps its accent through a hover instead of being reset by it.
+    accent  = "colorAccent",
 }
 
 local BtnMeta = {}
@@ -80,6 +89,24 @@ end
 -- @return string
 function BtnMeta:GetLabel()
     return self._label:GetText()
+end
+
+--- Changes the button's emphasis after construction, or clears it with nil.
+---
+--- Exists for a button that TOGGLES something: pass "accent" while it is on and nil while it is off,
+--- and the border and label follow. Painting that from outside would not survive, because the hover
+--- and press handlers re-derive their colours from the variant and would reset it on the first
+--- mouseover.
+-- @param variant string|nil  "accent" | "danger" | "success" | "warning"
+function BtnMeta:SetVariant(variant)
+    self._variant = variant
+    self:_paint()
+end
+
+--- The button's current emphasis, or nil.
+-- @return string|nil
+function BtnMeta:GetVariant()
+    return self._variant
 end
 
 -- SetEnabled is installed by InstallEnable below. No bespoke override needed: the

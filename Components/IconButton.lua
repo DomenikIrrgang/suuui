@@ -16,11 +16,63 @@ function IcoMeta:SetIcon(path)
     self._icon:SetTexture(path)
 end
 
+--- Re-tints the art with a colour TOKEN key, or clears the tint with nil.
+---
+--- Stores the key rather than the resolved colour, so _paint and ApplyTheme keep re-resolving it and
+--- a live theme edit reaches a button that is already sitting in its non-default colour. That is the
+--- same reason `iconColor` was a key at construction rather than an RGBA.
+---
+--- Exists because a title-bar control that TOGGLES A MODE has to look different while the mode is
+--- on -- otherwise it is a button that fires and forgets, which is exactly how the keybind control
+--- read before it had this.
+-- @param tokenKey string|nil  e.g. "colorAccent"
+function IcoMeta:SetIconColor(tokenKey)
+    self._iconColor = tokenKey
+    if not self._icon then return end
+    if not tokenKey then
+        self._icon:SetVertexColor(1, 1, 1, 1)
+        return
+    end
+    local col = SuuUI.Theme:GetToken(tokenKey)
+    if col then self._icon:SetVertexColor(col[1], col[2], col[3], col[4]) end
+end
+
+--- The colour token the art is tinted with, or nil.
+-- @return string|nil
+function IcoMeta:GetIconColor()
+    return self._iconColor
+end
+
+--- Marks the button as ON, for a control that toggles something rather than firing once.
+---
+--- TWO CHANNELS, deliberately: an accent BORDER plus an accent glyph. One channel is not enough --
+--- a tint alone was reported as "it's a button right now not a toggle", because a slightly different
+--- glyph colour is not a state a player reads at a glance in a title strip. The border is the same
+--- "this is the live one" signal edit mode's overlay and the stance bar's active form already use.
+---
+--- Stored rather than applied-and-forgotten, because _paint runs on every hover and leave and would
+--- otherwise reset the border to colorBorder the first time the pointer crossed the button.
+-- @param on bool
+function IcoMeta:SetActive(on)
+    self._active = on and true or false
+    self:SetIconColor(self._active and (self._activeColor or "colorAccent") or self._restColor)
+    self:_paint()
+end
+
+--- Whether the button is currently marked on.
+-- @return bool
+function IcoMeta:IsActive()
+    return self._active == true
+end
+
 -- Surface and border only, so leaving hover never rebuilds the backdrop table.
 function IcoMeta:_paint()
     local B = SuuUI.Backdrop
     B.SetBg(self._f, "colorBgAlt")
-    B.SetBorder(self._f, "colorBorder")
+    -- ACTIVE OUTRANKS THE RESTING BORDER. _paint runs on hover and on leave, so an active border
+    -- applied from outside would be wiped the first time the pointer crossed the button -- the state
+    -- has to be consulted here rather than painted once.
+    B.SetBorder(self._f, self._active and (self._activeColor or "colorAccent") or "colorBorder")
     -- The art's tint is a token like everything else here, so it is re-resolved rather than left
     -- at whatever it was at construction. Without this, editing colorAccent moved every other
     -- accent in the UI and left the sort icon on the old hue.
@@ -98,6 +150,13 @@ function SuuUI.Components.IconButton(props, parent)
     local id = "ico_" .. tostring(f)
     handle = setmetatable({ _f=f, _icon=icon, _box=box, _eid=id, _enabled=true,
         _iconColor=props.iconColor,
+        -- The colour to RETURN to when SetActive(false) runs. Remembered separately from
+        -- _iconColor, which SetActive overwrites -- without it, switching a mode off would leave the
+        -- glyph on whatever it happened to be tinted at the time.
+        _restColor=props.iconColor,
+        -- Overridable so a control can signal "on" in something other than accent -- a danger-toned
+        -- button that is currently armed, say.
+        _activeColor=props.activeColor,
                             _scalePop = props.scalePop ~= false }, IcoMeta)
 
     f:SetScript("OnEnter", function()

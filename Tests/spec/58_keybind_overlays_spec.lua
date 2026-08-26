@@ -154,6 +154,58 @@ describe("keybind overlays", function()
                     .. "has to be explicit").falsy()
             expect(KB().GetArmed()).as("and armed must not outlive its overlay").isNil()
         end)
+
+        -- THE PATH THAT ACTUALLY PRODUCES STALE STATE, and the one the first two attempts at this
+        -- spec missed: a REBUILD while a button is hovered. Closing the mode clears `armed`
+        -- wholesale, so it proves nothing about destroy's own bookkeeping. ActionBarGrid destroys and
+        -- recreates its buttons on a slot change, which fires while the pointer is still down on one
+        -- of them -- and a dangling `armed` then makes the next Arm skip its Disarm, leaving the old
+        -- frame listening alongside the new one. That is the "sometimes it binds to a different
+        -- button" shape.
+        it("survives a bar rebuild while a button is hovered", function()
+            H.SuuUI.KeybindMode:Enable()
+            local g = grid(1)
+            local before = g:GetButtons()[1]
+            KB().Arm(before)
+            local staleFrame = KB().OverlayFor(before).f
+            expect(staleFrame:IsKeyboardEnabled()).truthy()
+
+            -- A slot change destroys and recreates every button on the bar.
+            g:SetSlots({ 5, 6, 7, 8 })
+            H.SuuUI.UISignals:Emit(g, H.S.SIGNALS.CHILDREN_CHANGED)
+
+            expect(staleFrame:IsKeyboardEnabled())
+                .as("the destroyed overlay must not still be listening").falsy()
+            expect(KB().GetArmed())
+                .as("armed pointed at a button the grid has thrown away").isNil()
+
+            -- Now arm a fresh button and count. With a dangling `armed`, Arm's Disarm(armed) returns
+            -- early and the count comes back 2.
+            local after = g:GetButtons()[1]
+            KB().Arm(after)
+            local n = 0
+            for _, b in ipairs(H.SuuUI.KeybindMode:GetButtons()) do
+                local r = KB().OverlayFor(b)
+                if r and r.f:IsKeyboardEnabled() then n = n + 1 end
+            end
+            expect(n).as("exactly one listener, however the rebuild landed").eq(1)
+        end)
+
+        it("silences a stray listener even when armed is wrong about it", function()
+            H.SuuUI.KeybindMode:Enable()
+            local bs = grid(1):GetButtons()
+            KB().Arm(bs[1])
+
+            -- Forge the state a missed OnLeave produces: a second overlay listening while `armed`
+            -- still names the first. Arm must silence it by INSPECTION, not by trusting `armed`.
+            KB().OverlayFor(bs[3]).f:EnableKeyboard(true)
+
+            KB().Arm(bs[2])
+            expect(KB().OverlayFor(bs[3]).f:IsKeyboardEnabled())
+                .as("a keypress answered by a button the pointer is nowhere near is exactly the "
+                    .. "reported symptom").falsy()
+            expect(KB().OverlayFor(bs[2]).f:IsKeyboardEnabled()).truthy()
+        end)
     end)
 
     describe("the combo builder", function()

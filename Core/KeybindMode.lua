@@ -112,22 +112,75 @@ function M:GetButtons()
     return out
 end
 
--- How many bindings this session has written or cleared. Lives HERE rather than with the bar
--- overlays because it is mode state: the panel reads it to tell "nothing to save" from "unsaved work
--- pending", and a second provider (bags, the spellbook) would otherwise need a counter of its own.
-local changed = 0
+-- The keys every command held when the mode last opened, saved or discarded:
+-- baseline[command] = { "1", "CTRL-F9" }. The change list is a DIFF against this, not a running
+-- tally, and that choice does the work:
+--
+--   * one entry per command, however many times the player re-binds it -- "unique", as asked
+--   * the entry reads from the ORIGINAL key, not the previous intermediate one, so 1 -> 2 -> 3
+--     shows "1 -> 3" rather than "2 -> 3"
+--   * a change that returns to where it started DISAPPEARS, because there is nothing to save
+--   * the OTHER side of a steal appears for free: the command that lost the key differs from its
+--     baseline too, and a counter incremented at the write site would never have noticed it
+local baseline = nil
 
---- Records that n bindings changed. Called by whichever provider did the writing.
--- @param n number|nil  defaults to 1
-function M:NoteChange(n)
-    changed = changed + (tonumber(n) or 1)
+local function keysOf(command)
+    if not command or type(GetBindingKey) ~= "function" then return {} end
+    return { GetBindingKey(command) }
 end
 
---- How many bindings have been written or cleared since the last save or discard.
-function M:ChangedCount() return changed end
+local function joinKeys(list)
+    if #list == 0 then return nil end
+    return table.concat(list, ", ")
+end
+
+--- Records the current bindings as the baseline the change list is measured against.
+--- Called when the mode opens, and after a save or a discard settles it.
+function M:Snapshot()
+    baseline = {}
+    for _, b in ipairs(self:GetButtons()) do
+        local cmd = b.GetBinding and b:GetBinding() or nil
+        if cmd then baseline[cmd] = keysOf(cmd) end
+    end
+end
+
+--- Every binding that differs from the baseline, as display rows.
+---
+--- Each row is { command, from, to, cleared }, where `from`/`to` are comma-joined key strings and
+--- nil means unbound. Sorted by command so the list does not reshuffle under the player between
+--- repaints -- pairs() order is arbitrary and a jumping list is unreadable.
+-- @return table
+function M:Changes()
+    local out = {}
+    if not baseline then return out end
+    for cmd, was in pairs(baseline) do
+        local now = keysOf(cmd)
+        if joinKeys(was) ~= joinKeys(now) then
+            out[#out + 1] = {
+                command = cmd,
+                from    = joinKeys(was),
+                to      = joinKeys(now),
+                cleared = #now == 0,
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.command < b.command end)
+    return out
+end
+
+--- How many bindings differ from the baseline.
+function M:ChangedCount() return #self:Changes() end
 
 --- Whether there is unsaved work.
-function M:IsDirty() return changed > 0 end
+function M:IsDirty() return self:ChangedCount() > 0 end
+
+--- One change rendered for display, e.g. "ACTIONBUTTON1  1 -> 2" or "ACTIONBUTTON2  cleared".
+-- @param row table  an entry from Changes()
+-- @return string
+function M:FormatChange(row)
+    if row.cleared then return row.command .. "  cleared" end
+    return row.command .. "  " .. (row.from or "unbound") .. " -> " .. (row.to or "unbound")
+end
 
 --- Which binding set the client is on: 1 = account-wide, 2 = character-specific.
 function M:BindingSet()
@@ -145,7 +198,8 @@ end
 function M:Save()
     if type(SaveBindings) ~= "function" then return false end
     SaveBindings(self:BindingSet())
-    changed = 0
+    -- The saved state IS the new baseline, so the list empties rather than being cleared by hand.
+    self:Snapshot()
     return true
 end
 
@@ -158,7 +212,7 @@ end
 function M:Discard()
     if type(LoadBindings) ~= "function" then return false end
     LoadBindings(self:BindingSet())
-    changed = 0
+    self:Snapshot()
     return true
 end
 
@@ -178,6 +232,35 @@ function M:SetPerCharacter(perCharacter)
 end
 
 SuuUI.KeybindMode = M
+
+-- THE BASELINE IS TAKEN HERE, NOT IN Enable(), and the difference is a bug that shipped: the
+-- settings-panel toggle writes this key DIRECTLY through Settings:Set, so it never reaches Enable().
+-- The snapshot was therefore never taken on that path, `baseline` stayed nil, and the change list
+-- could only ever say "No changes yet" -- which is exactly what was reported in game. This file's
+-- own stated principle is that the setting is the single source of truth; hanging a side effect off
+-- one of several writers contradicts it. Anything that must happen when the mode opens belongs on
+-- the watcher, which every entry point goes through.
+--
+-- THE COMBAT GATE MOVES HERE FOR THE SAME REASON. Enable() refuses in combat, but the settings
+-- toggle bypassed that too and could open a mode that cannot write a single binding.
+SuuUI.Settings:Watch("_layout", "keybind_mode", function(isActive)
+    if not isActive then return end
+
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        SuuUI.Settings:Set("_layout", "keybind_mode", false)
+        if SuuUI.Components and SuuUI.Components.Notice then
+            SuuUI.Components.Notice({
+                title   = "Keybind Mode",
+                message = "Keybinds cannot be changed in combat. Try again once you are out of "
+                    .. "the fight.",
+                tone    = "warning",
+            })
+        end
+        return
+    end
+
+    M:Snapshot()
+end, "_keybindmode_baseline")
 
 -- MUTUAL EXCLUSION, both directions, each written where the mode being LEFT is the one reacting.
 -- Two watchers rather than one branch, so neither mode has to know the other's internals -- and

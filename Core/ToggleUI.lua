@@ -75,8 +75,13 @@ SuuUI.Settings:Register("_layout", {
     --
     -- Transient for the same reason edit_mode is: it is a mode the player is currently in, not a
     -- preference. Persisting it would log them back in hovering a live binder.
+    -- HIDDEN, because the mode is entered from the settings window's TITLE BAR rather than from a
+    -- checkbox in a page -- it is a mode you enter like edit mode, not a preference you set. The
+    -- entry STAYS rather than being deleted, because deleting it would drop the `transient`
+    -- declaration with it, and a persisted keybind_mode would log the player back in hovering a live
+    -- binder.
     { key = "keybind_mode", label = "Toggle Keybind Mode", type = "toggle", default = false,
-      transient = true },
+      transient = true, hidden = true },
     { key = "",             label = "Grid & Snap",      type = "section" },
     { key = "snap_mode",    label = "Snap Mode",        type = "dropdown", default = "grid",
       options = {

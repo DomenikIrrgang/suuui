@@ -54,6 +54,24 @@ local function accessoryBox(entry)
     return size < strip and size or strip
 end
 
+--- An accessory's WIDTH, which is its box unless it declared its own.
+---
+--- The strip was built for icons, so an accessory is a SQUARE by default and that is still the right
+--- default -- an icon in a non-square box is a stretched icon. But a LABELLED control cannot be
+--- square: "Keybinds" needs about 73 units and got the icon's 20, which rendered as a clipped label
+--- in a zero-width box (caught by the integration spec's unclipped-label sweep, not by eye).
+---
+--- A NUMBER, never a measurement of the handle. "auto" was tried and is circular: the layout assigns
+--- the child's width from this value, so reading the handle's width back latched it to the whole
+--- strip (measured at 919 units) and starved the title text to zero. If a caller's label outgrows its
+--- number, the integration spec's unclipped-label sweep says so.
+---
+--- Only the width opens up. Height stays pinned to the box so every accessory still sits inside the
+--- chrome it lives in, whatever a caller asks for.
+local function accessoryWidth(entry)
+    return tonumber(entry.w) or accessoryBox(entry)
+end
+
 -- Places the accessories and re-derives the two gutters that have to clear them.
 --
 -- The single place either is computed. An add, a remove and a theme change all route
@@ -71,12 +89,15 @@ local function layoutAccessories(self)
     for i = 1, #self._accessories do
         local entry = self._accessories[i]
         local size  = accessoryBox(entry)
+        local w     = accessoryWidth(entry)
         self._titleBox:SetChildProps(entry.handle, {
             align = "end", valign = "center",
-            width = size, height = size,
+            width = w, height = size,
             inset = { right = CLOSE_EDGE_GAP + cs + agap + band },
         })
-        band = band + size + agap
+        -- The BAND accumulates the width, not the box: a wide accessory has to push the next one --
+        -- and the title text's gutter -- by what it actually occupies, or they overlap it.
+        band = band + w + agap
     end
 
     -- Both gutters were already expressed from the close button's token size; the
@@ -366,7 +387,10 @@ end
 -- hides and shows with the window.
 --
 -- @param handle table  A component handle (an IconButton is the intended shape)
--- @param opts table    Optional { size = number } overriding the token square
+-- @param opts table    Optional { size = number } overriding the token square, and
+--                      { w = number } for a NON-SQUARE accessory -- a labelled button rather
+--                      than an icon. Height stays pinned to the box either way, so the
+--                      control always sits inside the chrome.
 -- @return table  The handle, so a caller can chain off the call
 function WinMeta:AddTitleAccessory(handle, opts)
     assert(type(handle) == "table" and handle.GetFrame,
@@ -382,7 +406,7 @@ function WinMeta:AddTitleAccessory(handle, opts)
     -- would stay clickable after the window closed.
     handle:GetFrame():SetParent(self._titleStrip:GetFrame())
 
-    tinsert(self._accessories, { handle = handle, size = opts.size })
+    tinsert(self._accessories, { handle = handle, size = opts.size, w = opts.w })
     self._titleBox:Add(handle)
 
     -- The drag surface spans the strip and the client gives a click to the topmost

@@ -179,7 +179,22 @@ end
 -- @return table  Text handle
 function SuuUI.Components.Text(props, parent)
     local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    if props.w and props.h then fs:SetSize(props.w, props.h) end
+    -- WIDTH ALONE IS HONOURED, and for a while it was not: this read
+    -- `if props.w and props.h then fs:SetSize(...)`, so a caller passing only `w` got NO width at
+    -- all. That is worse than it looks, because a FontString with no width CANNOT WRAP -- the client
+    -- draws one long line and the parent clips it, which reads as an ellipsis. It cost three
+    -- truncation bugs in one sitting (two counters and the keybind change rows) before the cause was
+    -- read here rather than guessed at the call sites.
+    --
+    -- Height is deliberately still optional: `_fixed` stays false when only `w` is given, so
+    -- _measure keeps owning the height and a wrapped label grows to the lines it needs. There is no
+    -- height-only branch for the same reason -- _measure would overwrite it on the next SetText, so
+    -- it would be a line that reads as intent and does nothing.
+    if props.w and props.h then
+        fs:SetSize(props.w, props.h)
+    elseif props.w then
+        fs:SetWidth(props.w)
+    end
     if props.text then fs:SetText(props.text) end
     fs:SetJustifyH(props.justify or "LEFT")
     fs:SetJustifyV("MIDDLE")

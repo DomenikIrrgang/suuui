@@ -232,6 +232,34 @@ describe("Components.Text", function()
         expect(t:GetText()).eq("Hello")
     end)
 
+    -- THE DEFECT THIS PINS shipped three truncation bugs in one sitting -- two panel counters and a
+    -- change list -- because the width was applied only when BOTH w and h were given. A caller
+    -- passing `w` alone got NO width, and a FontString with no width CANNOT WRAP: the client draws
+    -- one long line and the parent clips it, which reads as an ellipsis. None of the obvious
+    -- assertions at the call sites could see it, because the harness derives a bound width from the
+    -- layout container's anchors while the real client had nothing set at all. Asserted HERE, where
+    -- the value is set rather than inferred.
+    it("honours a width given without a height", function()
+        local t = H.C.Text({ text = "x", w = 140 }, host)
+        expect(t:GetFrame():GetWidth())
+            .as("width alone must bind, or the label cannot wrap and the client truncates").eq(140)
+    end)
+
+    it("still owns its own height when only a width is given", function()
+        local t = H.C.Text({ text = "x", w = 140 }, host)
+        expect(t:GetFrame():GetHeight() > 0)
+            .as("_fixed stays false without an explicit h, so _measure keeps sizing the height and "
+                .. "a wrapped label can grow to the lines it needs").truthy()
+    end)
+
+    it("keeps owning the height when a height is given without a width", function()
+        local t = H.C.Text({ text = "x", h = 40 }, host)
+        expect(t:GetFrame():GetHeight() ~= 40)
+            .as("there is deliberately NO height-only branch: _fixed stays false without a width, "
+                .. "so _measure re-sizes the height on the next SetText and an h alone would be a "
+                .. "line that reads as intent and does nothing").truthy()
+    end)
+
     it("defaults to the medium font size token", function()
         local t = H.C.Text({ text = "x" }, host)
         local _, size = t:GetFrame():GetFont()
