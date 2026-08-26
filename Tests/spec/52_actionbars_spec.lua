@@ -1737,15 +1737,18 @@ describe("Plugins.ActionBars: secure paging", function()
         local g = grid(1)
         local header = P.HeaderFor(g)
         local SIG = H.S.SIGNALS.CHILDREN_CHANGED
-        -- Bar 1 has TWO subscribers to this signal now: paging, and the keybinding routing that
-        -- every bar gained. Drop the binding one first, or HasConnections answers "somebody is
-        -- still subscribed" -- which is true whether or not paging released its own, so the
-        -- assertion below would pass with the release deleted.
+        -- Bar 1 has THREE subscribers to this signal now: paging, the keybinding routing that
+        -- every bar gained, and keybind mode's overlays. Drop the other two first, or
+        -- HasConnections answers "somebody is still subscribed" -- which is true whether or not
+        -- paging released its own, so the assertion below would pass with the release deleted.
         local p = H.SuuUI.Plugins:Get(PLUGIN)
         if p._bindConns and p._bindConns[1] then
             H.SuuUI.UISignals:Disconnect(g, SIG, p._bindConns[1])
             p._bindConns[1] = nil
         end
+        -- Through its own public teardown rather than by reaching for the connection id, since
+        -- that is exactly what Unregister exists to do.
+        if H.SuuUI.ActionBarKeybind then H.SuuUI.ActionBarKeybind.Unregister(g) end
         -- Asserted directly, because the callback's own `if h then` guard makes a LEAKED
         -- subscription behave identically to a released one -- it just holds a closure forever.
         -- HasConnections returns a real boolean, so this cannot fall for a zero-is-truthy count.

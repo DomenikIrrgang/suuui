@@ -27,6 +27,8 @@ Read off the live client, not inferred. Re-run after any client patch.
 | `SetBinding(key)`, command omitted | unbinds, returns `true` | this is the `ESC` clear mechanism |
 | **`LoadBindings(GetCurrentBindingSet())`** | **reverted a live `SetBinding`** — `after discard 1` | **Discard needs no snapshot table.** The saved binding set on disk *is* the snapshot, exactly as ElvUI relies on. Corollary: Discard also reverts anything changed outside the mode and never saved |
 | **`SaveBindings(1)`** | **persists across `/reload`** — `after reload: 1\|CTRL-ALT-SHIFT-P` | Save is one call and it is durable |
+| **an UNSAVED `SetBinding` ALSO survives `/reload`** | measured 2026-08-26: `SetBinding("ALT-Q","ACTIONBUTTON7")` with NO `SaveBindings`, then `/reload`, still answered `7\|ALT-Q` | **This was predicted to revert and it does not.** The client flushes bindings to disk itself on reload/logout, so `SaveBindings` only forces the write EARLIER — it is not what makes an edit durable. Consequence for model C: **Discard is a SESSION undo, not an undo of everything.** It reverts to the last saved state through `LoadBindings`, but a reload or logout with edits pending effectively commits them. ElvUI has the identical property and never tells the player. Phase 6 must not promise more than this |
+| **the write really does reach our own button** | measured 2026-08-26: `ALT-Q` written to `ACTIONBUTTON7`, and pressing ALT-Q fired bar 1 slot 7's ability | **closes the load-bearing in-game check.** `SetBinding` → `UPDATE_BINDINGS` → `applyOwnBindings` → `SetOverrideBindingClick` → our button, with no keybind-mode code anywhere in that chain. The hotkey label did not visibly change only because `ACTIONBUTTON7` then held TWO keys (`7` first) and the label shows the first — not a defect |
 | `GetCurrentBindingSet()` | **`1`** = account-wide | binds are account-wide by default on this character. The panel's per-character checkbox is `LoadBindings(2)` + `SaveBindings(2)`, matching `AB:ChangeBindingProfile` |
 | **`SetBinding` in combat** | returns **`false`**, does **not** error, and the client prints **`Interface action failed because of an AddOn`** | **gate on `InCombatLockdown()` before calling.** A `pcall` wrapper is useless here — there is no error to catch, and the attempt itself throws a scary message at the player. Measured: `setbind true false` |
 | `SaveBindings` in combat | did not error — `savebind true` | **auto-saving on combat start is legal**, so the mode saves instead of silently discarding the way ElvUI does |
@@ -148,6 +150,12 @@ Hint copy, changed/bound counters, the per-character checkbox, `Save`, `Discard`
 `Discard` is `LoadBindings(GetCurrentBindingSet())`. The per-character checkbox must refuse to flip
 with unsaved changes pending, or it silently discards them.
 
+**Discard is a SESSION undo and the copy must not overstate it.** An unsaved `SetBinding` survives a
+reload on its own (measured — see Phase 0), so the honest promise is "revert to the last saved
+state", not "undo everything". Two consequences: the panel says exactly that, and closing the mode
+with edits pending must either auto-save or ask — leaving them to be committed silently by the next
+logout is the one outcome the player cannot predict or recover from.
+
 ### Phase 7 — combat
 `PLAYER_REGEN_DISABLED` → auto-save, flatten every overlay to the dark wash, panel reads
 `Paused — in combat`. `PLAYER_REGEN_ENABLED` → resume in place. The mode does **not** close.
@@ -171,3 +179,22 @@ The harness **records** override bindings and state drivers and never **evaluate
   nothing. Mitigated by the `META`/`COMMAND` substring rule rather than left open.
 
 Do not report a binding or paging change as verified because the suite is green.
+
+### Confirmed in game, so these need no re-testing
+
+- **2026-08-26 — the write reaches our own button.** `ALT-Q` written to `ACTIONBUTTON7` fired bar 1
+  slot 7's ability. The whole propagation chain is measured end to end.
+- **2026-08-26 — the overlay visuals**, after two defects Domenik found by looking rather than by
+  the suite: the chip drew off-centre because it was placed by a container whose computed offset
+  went stale when `paint()` resized it (fixed with an explicit `CENTER` anchor, no container), and
+  the tooltip appended to whatever it last showed because `SetOwner` does not clear lines (fixed
+  with `ClearLines`). Both are the same class: correct-looking code, wrong pixels.
+- **2026-08-26 — the concept's full-length chip does not fit a 32-unit button.** Measured in game
+  as five chips reading `ALT-RLT-ALT-ZLT-ALT-GLT-V` across one bar and `unboundunboundunbound`
+  across another. The chip is now two controls: abbreviated and clamped at rest, full-length when
+  hovered. This is a deliberate, agreed departure from the artifact.
+- **2026-08-26 — `META-` is this client's prefix for Cmd.** Read off one of the player's own
+  bindings rendering as `META-Q`. This is what the failed capture probe could not answer, and it
+  is why the ignore rule matches the `META`/`COMMAND` family rather than an exact token.
+- **2026-08-26 — the conflict warning works.** A contested key arms the pending state and names its
+  current owner instead of taking it.

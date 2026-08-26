@@ -239,6 +239,23 @@ function StanceButtonMeta:SetBinding(command)
     self:_paintHotkey()
 end
 
+--- The binding command this button owns, or nil.
+---
+--- Mirrors ActionButtonMeta:GetBinding deliberately, so keybind mode can walk a stance bar and an
+--- action bar through the same accessor rather than branching on the button kind.
+-- @return string|nil
+function StanceButtonMeta:GetBinding()
+    return self._binding
+end
+
+--- Whether the corner hotkey readout is currently showing.
+--- Mirrors ActionButtonMeta:IsShowingHotkey, so keybind mode can borrow and restore the readout on
+--- either button kind through one call.
+-- @return bool
+function StanceButtonMeta:IsShowingHotkey()
+    return self._showHotkey ~= false
+end
+
 --- @param show bool
 function StanceButtonMeta:SetShowHotkey(show)
     self._showHotkey = show and true or false

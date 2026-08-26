@@ -173,6 +173,8 @@ bootFrame:SetScript("OnEvent", function(_, event, arg1)
         -- Edit mode subsystems: grid overlay and properties panel
         if SuuUI.SnapGrid and SuuUI.SnapGrid.Init then SuuUI.SnapGrid:Init() end
         if SuuUI.EditPanel and SuuUI.EditPanel.Init then SuuUI.EditPanel:Init() end
+        -- Keybind mode's panel, the same shape: builds itself lazily the first time the mode opens.
+        if SuuUI.KeybindPanel and SuuUI.KeybindPanel.Init then SuuUI.KeybindPanel:Init() end
         
         -- Core subsystems (profiles, theme, UI root) are now usable
         SuuUI.Events:Emit("SUUUI_CORE_READY")

@@ -289,6 +289,37 @@ describe("Components.ActionButton", function()
             expect(b._hotkeyText:GetText()).eq("F")
         end)
 
+        it("names its binding command through GetBinding", function()
+            local b = build({ slot = 1, binding = "ACTIONBUTTON3" })
+            expect(b:GetBinding())
+                .as("keybind mode asks a hovered button which command to write a key to")
+                .eq("ACTIONBUTTON3")
+        end)
+
+        it("answers nil when it carries no binding command", function()
+            expect(build({ slot = 1 }):GetBinding()).isNil()
+        end)
+
+        it("follows a later SetBinding, so a re-applied grid does not report a stale command",
+            function()
+                local b = build({ slot = 1, binding = "ACTIONBUTTON3" })
+                b:SetBinding("MULTIACTIONBAR1BUTTON7")
+                expect(b:GetBinding())
+                    .as("ActionBarGrid re-applies bindings onto REUSED buttons, so the reader has "
+                        .. "to track the setter rather than snapshot construction")
+                    .eq("MULTIACTIONBAR1BUTTON7")
+            end)
+
+        it("reports the COMMAND, not the key", function()
+            H.setBinding("ACTIONBUTTON3", "3")
+            H.addBinding("ACTIONBUTTON3", "CTRL-F9")
+            local b = build({ slot = 1, binding = "ACTIONBUTTON3" })
+            expect(b:GetBinding())
+                .as("a command can hold several keys, so only the command is a stable identity -- "
+                    .. "the keys are always re-read with GetBindingKey")
+                .eq("ACTIONBUTTON3")
+        end)
+
         it("abbreviates a modifier binding so it fits the corner of a cell", function()
             local shorten = H.SuuUI._ActionButtonInternals.abbreviateKey
             expect(shorten("SHIFT-1")).eq("S1")

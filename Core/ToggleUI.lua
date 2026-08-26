@@ -68,6 +68,15 @@ SuuUI.Settings:Register("_layout", {
     { key = "",             label = "Edit Mode",        type = "section" },
     { key = "edit_mode",    label = "Toggle Edit Mode", type = "toggle", default = false,
       transient = true },
+    -- Keybind mode's state, registered here rather than in Core/KeybindMode.lua so the two modes
+    -- share ONE namespace and one settings section -- a player looking for "modes" finds both in
+    -- the same place, and the mutual-exclusion watchers read two keys off one store. The
+    -- behaviour lives in Core/KeybindMode.lua; only the key is declared here.
+    --
+    -- Transient for the same reason edit_mode is: it is a mode the player is currently in, not a
+    -- preference. Persisting it would log them back in hovering a live binder.
+    { key = "keybind_mode", label = "Toggle Keybind Mode", type = "toggle", default = false,
+      transient = true },
     { key = "",             label = "Grid & Snap",      type = "section" },
     { key = "snap_mode",    label = "Snap Mode",        type = "dropdown", default = "grid",
       options = {

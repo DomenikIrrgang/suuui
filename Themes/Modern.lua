@@ -48,6 +48,9 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- snapshot" strip. Its own token rather than sharing opacityAccentSubtle: one is a selected
     -- control, the other is a standing warning, and they want tuning separately.
     opacityWarningWash = 0.18,
+    -- The resting keybind wash. See Themes/Default.lua for why it is its own token: it pairs with
+    -- opacityEditOverlay (0.20, the HOVERED wash) and the two must stay clearly apart.
+    opacityKeybindRest = 0.08,
     -- See Themes/Default.lua: how far a disabled control fades.
     opacityDisabled  = 0.40,
     -- Edit mode grid line visibility. Very faint so lines stay out of the way.
@@ -82,6 +85,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     colorAccentSubtle = { ref = "colorAccent", alpha = "opacityAccentSubtle" },
     -- The wash behind a warning STRIP, as opposed to warning-coloured text on nothing.
     colorWarningSubtle = { ref = "colorWarning", alpha = "opacityWarningWash" },
+    -- Keybind mode's washes. See Themes/Default.lua for the reasoning, including why the HOVERED
+    -- state reuses colorEditOverlay instead of declaring a fifth token.
+    colorKeybindRest = { ref = "colorAccent", alpha = "opacityKeybindRest" },
+    colorSuccessSubtle = { ref = "colorSuccess", alpha = "opacityWarningWash" },
+    colorDangerSubtle  = { ref = "colorDanger",  alpha = "opacityWarningWash" },
     -- Edit mode grid lines: the accent colour at grid opacity.
     colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
     -- Smart guides: brighter accent for element-to-element alignment lines.

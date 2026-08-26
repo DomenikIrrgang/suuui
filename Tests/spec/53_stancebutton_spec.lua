@@ -264,6 +264,17 @@ describe("Components.StanceButton", function()
             expect(b._hotkeyText:GetText()).as("shortened, not raw").eq("S1")
         end)
 
+        it("names its binding command through GetBinding, like an action button", function()
+            local b = make(2, { binding = "SHAPESHIFTBUTTON2" })
+            expect(b:GetBinding())
+                .as("keybind mode walks a stance bar and an action bar through ONE accessor "
+                    .. "rather than branching on the button kind")
+                .eq("SHAPESHIFTBUTTON2")
+            b:SetBinding("SHAPESHIFTBUTTON4")
+            expect(b:GetBinding()).eq("SHAPESHIFTBUTTON4")
+            expect(make(1, {}):GetBinding()).as("and nil when it carries none").isNil()
+        end)
+
         it("hides when there is no binding, and when the readout is switched off", function()
             local b = make(1, { binding = "SHAPESHIFTBUTTON1" })
             expect(b._hotkeyText:IsShown()).as("nothing bound").falsy()

@@ -584,6 +584,12 @@ local function buildBar(p, def)
         SuuUI._ActionBars.Paging.Attach(grid, { pageSize = MAX_BUTTONS })
     end
 
+    -- EVERY bar, unlike paging: keybind mode has to reach every bindable button, and every bar
+    -- carries a bindingPrefix. Registration is cheap and draws nothing until the mode opens.
+    if SuuUI.ActionBarKeybind then
+        SuuUI.ActionBarKeybind.Register(grid)
+    end
+
     -- Moveable only while it owns its own position. A docked bar takes it from the dock.
     syncMoveable(p, def)
     if isDocked(def) then
@@ -641,6 +647,12 @@ local function destroyBar(p, def)
 
     if def.paged then
         SuuUI._ActionBars.Paging.Detach(grid)
+    end
+
+    -- Releases the overlays AND the CHILDREN_CHANGED subscription. Skipping this would leave a
+    -- connection pointing at a torn-down grid, and the overlays are children of destroyed buttons.
+    if SuuUI.ActionBarKeybind then
+        SuuUI.ActionBarKeybind.Unregister(grid)
     end
 
     if grid:GetFrame()._suuui_moveable then

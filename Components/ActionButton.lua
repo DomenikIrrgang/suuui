@@ -831,6 +831,29 @@ function ActionButtonMeta:SetBinding(command)
     self:_paintHotkey()
 end
 
+--- The binding command this button owns, or nil.
+---
+--- The counterpart of SetBinding, added for keybind mode: a hovered button has to name the
+--- command a key should be written to, and there was no reader. Deliberately returns the COMMAND
+--- rather than the key -- the keys live in the client's binding set and are always read fresh
+--- with GetBindingKey(command), which answers every key bound to it, not just one.
+-- @return string|nil
+function ActionButtonMeta:GetBinding()
+    return self._binding
+end
+
+--- Whether the corner hotkey readout is currently showing.
+---
+--- The counterpart of SetShowHotkey, and it exists so keybind mode can BORROW the readout rather
+--- than clobber it: while the mode is open the button's full-length key chip replaces the
+--- abbreviated corner reading, and on exit the player's own setting has to come back. Without a
+--- getter the mode would have to guess a value to restore, which silently overwrites whatever the
+--- player chose.
+-- @return bool
+function ActionButtonMeta:IsShowingHotkey()
+    return self._showHotkey ~= false
+end
+
 function ActionButtonMeta:ApplyTheme()
     self:_paintCurrent()
     self._iconComp:ApplyTheme()

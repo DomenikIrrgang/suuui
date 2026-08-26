@@ -58,6 +58,13 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- snapshot" strip. Its own token rather than sharing opacityAccentSubtle: one is a selected
     -- control, the other is a standing warning, and they want tuning separately.
     opacityWarningWash = 0.18,
+    -- HOW FAINT THE RESTING KEYBIND WASH IS -- the tint every bindable button carries while
+    -- keybind mode is open but nothing is hovered. Its own token for the reason above: it has to
+    -- be weak enough to read as "the mode reaches here" rather than "this one is selected", and
+    -- the HOVERED wash is already opacityEditOverlay at 0.20. Two washes this close in strength
+    -- would be one wash as far as a reader is concerned, so this is the pair that wants tuning
+    -- together and separately from everything else.
+    opacityKeybindRest = 0.08,
     -- How far a disabled control fades. It is the ONLY signal that a control is inert, so
     -- it has to read at a glance on every widget, in every value state; low enough to be
     -- unmistakable, high enough that the label is still readable.
@@ -101,6 +108,21 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     colorAccentSubtle = { ref = "colorAccent", alpha = "opacityAccentSubtle" },
     -- The wash behind a warning STRIP, as opposed to warning-coloured text on nothing.
     colorWarningSubtle = { ref = "colorWarning", alpha = "opacityWarningWash" },
+    -- KEYBIND MODE's washes. Four states, four colours, because a keybind is written the instant
+    -- a key is pressed and the player has to be able to tell "armed" from "that landed" from
+    -- "that was cleared" without reading text.
+    --
+    -- Rest is the faintest: every bindable button carries it so the mode's reach is visible.
+    -- HOVERED deliberately reuses colorEditOverlay rather than declaring a fifth token -- it is
+    -- the same accent-at-0.20 "you can act on this" wash edit mode already means by it, and
+    -- giving the same meaning two names is how they drift apart.
+    colorKeybindRest = { ref = "colorAccent", alpha = "opacityKeybindRest" },
+    -- Committed and cleared SHARE opacityWarningWash with the strip above, and that is deliberate:
+    -- these three are one visual family at one strength (a full-bleed state wash), and the keybind
+    -- states are literally warning, success and danger. The token's name is narrower than its use
+    -- has become; renaming it is a separate cleanup, not a reason to duplicate the value.
+    colorSuccessSubtle = { ref = "colorSuccess", alpha = "opacityWarningWash" },
+    colorDangerSubtle  = { ref = "colorDanger",  alpha = "opacityWarningWash" },
     -- Edit mode grid lines: the accent colour at grid opacity.
     colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
     -- Locked frame overlay: a warning tint so "you cannot move this" reads at a glance.

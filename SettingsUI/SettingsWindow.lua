@@ -217,6 +217,29 @@ SlashCmdList["SUUUI"] = function(msg)
         SuuUI.ToggleUI:Disable()
     elseif cmd == "unlock" then
         SuuUI.ToggleUI:Enable()
+    -- A CORE mode, so it belongs here beside the edit-mode verbs. A plugin's command would not:
+    -- Plugins/Inventory/Inventory.lua gave /sbags its own handler precisely to keep plugin
+    -- knowledge out of this one.
+    elseif cmd == "keybind" or cmd == "kb" then
+        if SuuUI.KeybindMode then
+            -- Both the refusal and a normal close leave the mode inactive, so the WARNING has to
+            -- be conditioned on what we were trying to do. Comparing before with after is the
+            -- only way to tell "combat refused me" from "the player just closed it".
+            local wasActive = SuuUI.KeybindMode:IsActive()
+            local nowActive = SuuUI.KeybindMode:Toggle()
+            if not wasActive and not nowActive then
+                -- Components/Notice.lua's own header prescribes this over printing to chat, and
+                -- the addon has no chat output anywhere -- so a print here would have invented a
+                -- convention. "warning" is its tone for a blocked but EXPECTED action, which a
+                -- combat refusal is.
+                SuuUI.Components.Notice({
+                    title   = "Keybind Mode",
+                    message = "Keybinds cannot be changed in combat. Try again once you are out "
+                        .. "of the fight.",
+                    tone    = "warning",
+                })
+            end
+        end
     else
         SuuUI.SettingsWindow.Toggle()
     end
