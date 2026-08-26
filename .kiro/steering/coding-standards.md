@@ -560,7 +560,9 @@ Narrow exceptions: a bare unstyled grouping frame handed straight to a container
 - When hiding Blizzard frames, use `frame:Hide()` plus a guarded `OnShow` hook for a frame
   that re-shows itself — never `frame:UnregisterAllEvents()`, which nothing can undo, so
   `onDisable` could never hand the frame back. Do NOT nil them or `frame:SetParent(nil)` —
-  this can cause taint. See "Hiding Blizzard UI" in `plugin-authoring.md`.
+  this can cause taint. See "Hiding Blizzard UI" in `plugin-authoring.md`. **An action bar is
+  the documented exception** — the hook loses a race the client wins in combat, so suppression
+  there unregisters and reparents instead, and pays for it with a ReloadGuard.
 - Check for frame existence before operating: `if frame and frame.Hide then`.
 - If a needed widget does not exist, build it in `Components/` — do not inline it.
 

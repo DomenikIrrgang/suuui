@@ -28,7 +28,7 @@ describe("Components.ActionBarGrid", function()
         -- The ActionBars plugin builds its own bar at login, so the component's live-count and
         -- shared-watcher assertions would be measuring two grids. Switched off here so these
         -- specs describe the component alone; the plugin has its own block below.
-        H.SuuUI.Settings:Set("action_bars", "enabled", false)
+        H.SuuUI.Plugins:Get("action_bars"):Disable()
         host = H.parent(600, 300)
     end)
 
@@ -266,12 +266,16 @@ describe("Components.ActionBarGrid", function()
 
     describe("teardown", function()
         it("destroys its buttons and stops the shared watcher", function()
+            -- RELATIVE counts, because the ActionBars plugin has its own live grids in this
+            -- sandbox and an absolute 1 pins this test to how many bars ship enabled by default.
+            local gridsBefore = H.SuuUI._ActionBarGridInternals.liveCount()
+            local btnsBefore  = H.SuuUI._ActionButtonInternals.liveCount()
             local g = build()
-            expect(H.SuuUI._ActionBarGridInternals.liveCount()).eq(1)
+            expect(H.SuuUI._ActionBarGridInternals.liveCount()).eq(gridsBefore + 1)
             g:Destroy()
-            expect(H.SuuUI._ActionBarGridInternals.liveCount()).eq(0)
+            expect(H.SuuUI._ActionBarGridInternals.liveCount()).eq(gridsBefore)
             expect(H.SuuUI._ActionButtonInternals.liveCount())
-                .as("its buttons went with it").eq(0)
+                .as("its buttons went with it").eq(btnsBefore)
         end)
 
         it("survives a theme change after being destroyed", function()
@@ -458,8 +462,13 @@ describe("Plugins.ActionBars", function()
                                 "MultiBarLeft", "MultiBarRight", "MainMenuBarArtFrame",
                                 "MainMenuBarLeftEndCap", "MainMenuBarRightEndCap" }) do
             if H.env[name] then
-                expect(H.env[name]:IsShown()).as(name .. " is hidden").falsy()
-                expect(S.IsSuppressed(name)).as(name .. " is claimed").truthy()
+                -- IsVISIBLE, not IsShown, and the difference is the mechanism. Suppression parks a
+                -- frame under a hidden parent instead of hiding it in place, so a child that rides
+                -- on a parked ancestor -- the art and the two gryphons -- keeps its own shown flag
+                -- and still renders nothing. IsShown asks what the frame was told; IsVisible asks
+                -- what the player sees, which is the thing being claimed here.
+                expect(H.env[name]:IsVisible()).as(name .. " is off the screen").falsy()
+                expect(S.IsSuppressed(name)).as(name .. " is suppressed").truthy()
             end
         end
     end)
@@ -597,7 +606,9 @@ describe("Plugins.ActionBars", function()
     end)
 
     it("drops the bar and its watchers when the plugin is disabled", function()
-        H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
+        -- Through Disable() rather than the setting: `enabled` is reload-guarded now, so a Set is
+        -- reverted pending confirmation and would assert the guard instead of the teardown.
+        H.SuuUI.Plugins:Get(PLUGIN):Disable()
         expect(bar()).isNil()
         -- No watcher left to act on a stale handle.
         expect(function() H.SuuUI.Settings:Set(PLUGIN, "bar1_button_size", 50) end).notThrows()
@@ -617,26 +628,124 @@ describe("Plugins.ActionBars: suppression", function()
         return H.env[name]
     end
 
-    describe("the guarded OnShow hook", function()
-        it("re-hides a frame that shows itself again", function()
-            -- MainMenuBar is layout-managed on this client, so it re-shows on a login, a layout
-            -- change, and whenever UIParent_ManageFramePositions runs. A one-shot Hide is
-            -- therefore reverted, which is the whole reason the hook exists.
+    describe("the frames cannot come back", function()
+        it("leaves a frame that shows itself again INVISIBLE", function()
+            -- The mechanism this replaced hooked OnShow and hid the frame again, which is a race
+            -- the client wins in combat. Parking under a hidden parent is not a race: the frame's
+            -- own shown flag can go back to true and nothing renders, because IsVisible walks the
+            -- parent chain and the chain ends somewhere hidden.
+            --
+            -- So the two questions have DIFFERENT answers here, and that is the point.
             local f = bar("MainMenuBar")
-            expect(f:IsShown()).falsy()
             f:Show()
-            expect(f:IsShown()).as("the hook put it back").falsy()
+            expect(f:IsShown()).as("its own flag is back to true").truthy()
+            expect(f:IsVisible()).as("and it still does not render").falsy()
         end)
 
-        it("stops re-hiding once suppression is released", function()
-            -- HookScript cannot be undone, so the hook asks `suppressed` on every call rather
-            -- than assuming. Without that, onDisable could never hand the frame back.
-            local f = bar("MainMenuBar")
+        it("survives the stance change that used to break it -- IN COMBAT", function()
+            -- THE REGRESSION TEST FOR THE REPORTED BUG. ActionBarController registers
+            -- ACTIONBAR_PAGE_CHANGED ("This is used for shapeshifts/stances" is Blizzard's own
+            -- comment) and re-shows MainActionBar, StanceBar and the MultiBars from
+            -- ValidateActionBarTransition. In combat our Hide() answer was refused, so the whole
+            -- cluster stayed on screen -- bags and micro menu with it -- until the fight ended.
+            --
+            -- Fired while IN COMBAT deliberately: out of combat the old mechanism recovered, which
+            -- is exactly why this went unnoticed behind a green suite.
+            H.setCombat(true)
+            H.fireEvent("ACTIONBAR_PAGE_CHANGED")
+            H.fireEvent("UPDATE_BONUS_ACTIONBAR")
+
+            expect(#S.Verify()).as("no Blizzard button came back").eq(0)
+            expect(bar("MainMenuBar"):IsVisible()).falsy()
+            expect(bar("StanceBar"):IsVisible()).falsy()
+            H.setCombat(false)
+        end)
+
+        it("silences Blizzard's bar CONTROLLER rather than racing it", function()
+            -- The half the old mechanism had no equivalent for. With no events the controller's
+            -- UpdateAll never runs, so nothing calls Show() on a bar in the first place.
+            expect(S.ControllersUnloaded()).truthy()
+            expect(H.env.ActionBarController:IsEventRegistered("ACTIONBAR_PAGE_CHANGED"))
+                .as("the stance/page event is gone").falsy()
+            expect(H.env.ActionBarController:IsEventRegistered("UPDATE_BONUS_ACTIONBAR")).falsy()
+        end)
+
+        it("leaves Blizzard's ACTION PLUMBING alive, because our keybinds resolve through it",
+        function()
+            -- THE REGRESSION TEST FOR A BUG THIS FIX CAUSED, found in game by a keypress and not by
+            -- the suite. Copying ElvUI, an earlier version also unregistered these two frames. They
+            -- drive ActionButton_UpdateAction, which keeps the cached slot on Blizzard's own
+            -- ActionButton1..12 current -- and bars 1-8 use BLIZZARD'S BINDING FAMILIES
+            -- (ACTIONBUTTON1..) rather than override-bound clicks on our own buttons, so a keypress
+            -- resolves through those cached slots.
+            --
+            -- Symptom: in cat form the icon was right (our paint reads the `action` attribute the
+            -- paging snippet rewrote) and the keypress fired the out-of-form spell. Clicking worked
+            -- throughout, which is what identified the split.
+            --
+            -- ElvUI can silence this plumbing because it override-binds every bar. We do not, so it
+            -- stays -- and it costs nothing for suppression, since parking is what hides a bar.
+            expect(H.env.ActionBarActionEventsFrame:IsEventRegistered("ACTIONBAR_UPDATE_STATE"))
+                .as("Blizzard's action events still fire").truthy()
+            expect(H.env.ActionBarButtonEventsFrame:IsEventRegistered("ACTIONBAR_SLOT_CHANGED"))
+                .truthy()
+            expect(H.env.ActionBarButtonEventsFrame:IsEventRegistered("ACTIONBAR_UPDATE_COOLDOWN"))
+                .truthy()
+        end)
+
+        it("keeps the two controller registrations that are not ours to take", function()
+            -- SETTINGS_LOADED lets the page controller spawn; UPDATE_EXTRA_ACTIONBAR still lets an
+            -- ExtraActionButton appear. ElvUI keeps both, and taking them costs the player function
+            -- with nothing gained.
+            expect(H.env.ActionBarController:IsEventRegistered("SETTINGS_LOADED")).truthy()
+            expect(H.env.ActionBarController:IsEventRegistered("UPDATE_EXTRA_ACTIONBAR")).truthy()
+            -- And the kept one does not undo the parking.
+            H.fireEvent("SETTINGS_LOADED")
+            expect(bar("MainMenuBar"):IsVisible()).falsy()
+        end)
+
+        it("hides a bar by PARKING it, not by silencing it", function()
+            -- The bar keeps every event it had -- see the plumbing test above -- so it still reacts
+            -- to PLAYER_ENTERING_WORLD by showing itself, exactly as the live client's
+            -- layout-managed frames do. It renders nothing anyway, and that is the whole mechanism:
+            -- suppression does not depend on the frame staying quiet.
+            expect(bar("MainMenuBar"):IsEventRegistered("PLAYER_ENTERING_WORLD"))
+                .as("still registered, deliberately").truthy()
+            H.fireEvent("PLAYER_ENTERING_WORLD")
+            expect(bar("MainMenuBar"):IsShown()).as("it did show itself").truthy()
+            expect(bar("MainMenuBar"):IsVisible()).as("and still renders nothing").falsy()
+        end)
+
+        it("keeps a claimed container's CHILD inside it", function()
+            -- MEASURED, not assumed: MicroMenu's parent is MicroMenuContainer, and both are in the
+            -- same candidate list. A list mixes renames with parent/child pairs, and reparenting a
+            -- child that an ancestor already covers would pull it out of the container it belongs
+            -- to -- damage rather than redundant work. Parking the ancestor is enough.
+            expect(H.env.MicroMenu:GetParent()).as("still in its container")
+                .eq(H.env.MicroMenuContainer)
+            expect(S.IsSuppressed("MicroMenu")).as("and suppressed all the same").truthy()
+            expect(S.IsClaimed("MicroMenu")).as("without being claimed itself").falsy()
+        end)
+
+        it("hands a frame back to the parent it came from", function()
+            -- NOT captured here: by this point before_each has already applied suppression, so
+            -- GetParent() answers the hider. The original is UIParent, which is where the client
+            -- puts these frames and what Apply recorded before it moved them.
+            expect(H.env.MainMenuBar:GetParent()).as("parked to begin with").eq(S.GetHider())
             S.Restore()
-            expect(f:IsShown()).as("restored").truthy()
-            f:Hide()
-            f:Show()
-            expect(f:IsShown()).as("the hook is inert now").truthy()
+            expect(H.env.MainMenuBar:GetParent()).as("back under UIParent").eq(H.env.UIParent)
+            expect(bar("MainMenuBar"):IsVisible()).truthy()
+            -- And nothing re-parks it, because there is no hook left to consult a stale flag.
+            bar("MainMenuBar"):Hide()
+            bar("MainMenuBar"):Show()
+            expect(bar("MainMenuBar"):IsVisible()).as("suppression is released").truthy()
+        end)
+
+        it("clears the frame out of the position manager's table", function()
+            -- A frame parked somewhere else must come out of UIPARENT_MANAGED_FRAME_POSITIONS or
+            -- Blizzard's layout pass keeps anchoring it. Dominos does the same.
+            expect(H.env.UIPARENT_MANAGED_FRAME_POSITIONS.MainMenuBar).isNil()
+            expect(H.env.MainMenuBar.ignoreFramePositionManager).truthy()
         end)
 
         it("undoes any number of Applies with one Restore", function()
@@ -729,23 +838,48 @@ describe("Plugins.ActionBars: suppression", function()
     end)
 
     describe("the toggle", function()
-        it("hands Blizzard's bars back immediately when switched off", function()
+        it("is reload-guarded, on both keys that reach Restore", function()
+            -- THE TRADE, stated as a test. Suppression unregisters Blizzard's own bar events and
+            -- nothing in the API can put them back, so Restore hands the cluster back visible but
+            -- INERT. A player switching either of these off wants working default bars, and only a
+            -- reload produces them.
+            --
+            -- `enabled` needs it as much as `hide_blizzard`, because onDisable calls Restore too --
+            -- guarding only the suppression toggle would leave the plugin switch as a silent way
+            -- into the same half-dead state.
+            expect(H.SuuUI.ReloadGuard:IsGuarded(PLUGIN, "hide_blizzard")).truthy()
+            expect(H.SuuUI.ReloadGuard:IsGuarded(PLUGIN, "enabled")).truthy()
+        end)
+
+        it("does not act on a guarded change until the reload is confirmed", function()
+            -- The guard reverts the write and asks. Until the player says yes, nothing has moved --
+            -- which is the behaviour that replaced "hands them back straight away".
             H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
-            expect(bar("MainMenuBar"):IsShown()).truthy()
+            expect(H.SuuUI.Settings:Get(PLUGIN, "hide_blizzard"))
+                .as("reverted pending confirmation").truthy()
+            expect(bar("MainMenuBar"):IsVisible()).as("so the cluster stays parked").falsy()
+        end)
+
+        it("hands the cluster back when suppression is actually released", function()
+            -- What the toggle does once confirmed, driven directly so the assertion is about
+            -- suppression rather than about the modal.
+            S.Restore()
+            expect(bar("MainMenuBar"):IsVisible()).truthy()
             expect(S.IsSuppressed("MainMenuBar")).falsy()
         end)
 
-        it("takes them away again when switched back on", function()
-            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
-            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", true)
-            expect(bar("MainMenuBar"):IsShown()).falsy()
+        it("takes them away again on a re-apply", function()
+            S.Restore()
+            S.Apply()
+            expect(bar("MainMenuBar"):IsVisible()).falsy()
         end)
 
         it("leaves SuuUI's own bar up when suppression is off", function()
-            -- The point of a separate toggle: both bars on screen at once is a legitimate
-            -- state, and it is what a player debugging their own setup wants.
-            H.SuuUI.Settings:Set(PLUGIN, "hide_blizzard", false)
+            -- The point of a separate toggle: both bars on screen at once is a legitimate state,
+            -- and it is what a player debugging their own setup wants.
+            S.Restore()
             expect(H.SuuUI.Plugins:Get(PLUGIN)._bars[1]).notNil()
+            expect(bar("MainMenuBar"):IsVisible()).as("and theirs is back").truthy()
         end)
 
         it("sits before any section, so it is findable", function()
@@ -761,16 +895,20 @@ describe("Plugins.ActionBars: suppression", function()
     end)
 
     describe("disabling the plugin", function()
+        -- Driven through plugin:Disable() rather than through the setting, because `enabled` is now
+        -- reload-guarded: a Set is reverted pending confirmation, so writing it here would assert
+        -- the guard rather than the teardown. The confirmed path ends in ReloadUI anyway, so
+        -- Disable() is what actually runs.
         it("hands Blizzard's cluster back", function()
-            H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
-            expect(bar("MainMenuBar"):IsShown()).truthy()
-            expect(bar("MultiBarBottomLeft"):IsShown()).truthy()
+            H.SuuUI.Plugins:Get(PLUGIN):Disable()
+            expect(bar("MainMenuBar"):IsVisible()).truthy()
+            expect(bar("MultiBarBottomLeft"):IsVisible()).truthy()
         end)
 
         it("never leaves the player with neither bar", function()
-            H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
+            H.SuuUI.Plugins:Get(PLUGIN):Disable()
             expect(H.SuuUI.Plugins:Get(PLUGIN)._bars[1]).as("ours is gone").isNil()
-            expect(bar("MainMenuBar"):IsShown()).as("so theirs must be back").truthy()
+            expect(bar("MainMenuBar"):IsVisible()).as("so theirs must be back").truthy()
         end)
     end)
 
@@ -885,22 +1023,80 @@ describe("Plugins.ActionBars: every bar", function()
             expect(#routesFor(9)).eq(0)
         end)
 
-        it("does NOT route keys for the bars that use a Blizzard family", function()
-            -- Those act on the SLOT: whatever is bound to ACTIONBUTTON1 fires UseAction(1) whether
-            -- Blizzard's own button is on screen or not, which is exactly why suppressing its bars never
-            -- cost the player their keys. Routing them as well would be a second claim on one key.
+        it("routes keys for the bars that use a Blizzard family TOO", function()
+            -- INVERTED DELIBERATELY. This used to assert that bars on a Blizzard family were left
+            -- unrouted, on the grounds that a family acts on the SLOT so no routing was needed.
+            -- True on its own terms, and it made the addon depend on Blizzard's action plumbing
+            -- staying alive to keep its cached slots current -- so when suppression silenced that
+            -- plumbing, every keybind on bars 1-8 fired the pre-form spell while our own icons
+            -- stayed correct. Clicking worked throughout, which is what identified the split.
             --
-            -- UPDATE_BINDINGS is fired AFTER staging the keys, and that is what makes this test mean
-            -- anything: bar 1 is enabled by default and was already built during setup, so at build time
-            -- there was no key to claim. Mutation testing showed that without this the guard could be
-            -- deleted and the test stayed green.
+            -- An override binding BEATS the base binding, so routing them is interception rather
+            -- than a second claim on one key: Blizzard's path is simply never reached.
+            --
+            -- UPDATE_BINDINGS is fired AFTER staging the keys, and that is what makes this test
+            -- mean anything: bar 1 is enabled by default and was already built during setup, so at
+            -- build time there was no key to claim.
             H.setBinding("ACTIONBUTTON1", "1")
             H.setBinding("MULTIACTIONBAR1BUTTON1", "CTRL-1")
             enable(1)
             enable(2)
             H.fireEvent("UPDATE_BINDINGS")
-            expect(#routesFor(1)).as("bar 1 unrouted").eq(0)
-            expect(#routesFor(2)).as("bar 2 unrouted").eq(0)
+            expect(#routesFor(1)).as("bar 1 routed").eq(1)
+            expect(#routesFor(2)).as("bar 2 routed").eq(1)
+        end)
+
+        it("routes a Blizzard family key onto OUR button, not Blizzard's", function()
+            -- The point of the interception. If the route named Blizzard's button the dependency
+            -- would still be there, just spelled differently.
+            H.setBinding("ACTIONBUTTON3", "3")
+            enable(1)
+            H.fireEvent("UPDATE_BINDINGS")
+            local routes = routesFor(1)
+            local found
+            for _, r in ipairs(routes) do
+                if r.key == "3" then found = r end
+            end
+            expect(found).as("the key was claimed").notNil()
+            expect(found.button).as("onto our own secure button").eq("SuuUIBar1Button3")
+            expect(found.mouseButton).eq("LeftButton")
+        end)
+
+        it("re-routes a Blizzard-family bar when its buttons are rebuilt", function()
+            -- FOUND BY MUTATION: re-gating the CHILDREN_CHANGED subscription to ownBindings-only
+            -- survived, because nothing exercised a rebuild on a family bar. It matters as much
+            -- here as on bars 9-13 -- the grid DESTROYS and recreates its buttons when the count
+            -- changes, and a route left pointing at a destroyed button swallows the player's key.
+            for i = 1, 12 do H.setBinding("ACTIONBUTTON" .. i, tostring(i)) end
+            enable(1)
+            H.fireEvent("UPDATE_BINDINGS")
+            expect(#routesFor(1)).as("all twelve claimed").eq(12)
+
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 6)
+
+            expect(#routesFor(1)).as("re-applied against the new button set").eq(6)
+            for _, r in ipairs(routesFor(1)) do
+                local index = tonumber(tostring(r.button):match("Button(%d+)$"))
+                expect(index).as("route names a real button").notNil()
+                expect(index <= 6).as("no route onto a destroyed button: " .. tostring(r.button))
+                    .truthy()
+            end
+        end)
+
+        it("clears a Blizzard-family bar's routes when the bar is destroyed", function()
+            -- FOUND BY MUTATION: re-gating the teardown clear survived for the same reason. An
+            -- override binding outlives the frame it was set on, so a route left behind points at
+            -- a button that no longer exists -- and because an override BEATS the base binding,
+            -- the player's key would then do nothing at all rather than falling back to Blizzard's
+            -- family. That is strictly worse than the behaviour this routing replaced.
+            H.setBinding("ACTIONBUTTON1", "1")
+            enable(1)
+            H.fireEvent("UPDATE_BINDINGS")
+            expect(#routesFor(1)).as("claimed while the bar exists").gte(1)
+
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_enabled", false)
+
+            expect(#routesFor(1)).as("and released with it").eq(0)
         end)
 
         it("re-claims its keys when the player rebinds, leaving NO stale route", function()
@@ -1389,6 +1585,15 @@ describe("Plugins.ActionBars: secure paging", function()
         local g = grid(1)
         local header = P.HeaderFor(g)
         local SIG = H.S.SIGNALS.CHILDREN_CHANGED
+        -- Bar 1 has TWO subscribers to this signal now: paging, and the keybinding routing that
+        -- every bar gained. Drop the binding one first, or HasConnections answers "somebody is
+        -- still subscribed" -- which is true whether or not paging released its own, so the
+        -- assertion below would pass with the release deleted.
+        local p = H.SuuUI.Plugins:Get(PLUGIN)
+        if p._bindConns and p._bindConns[1] then
+            H.SuuUI.UISignals:Disconnect(g, SIG, p._bindConns[1])
+            p._bindConns[1] = nil
+        end
         -- Asserted directly, because the callback's own `if h then` guard makes a LEAKED
         -- subscription behave identically to a released one -- it just holds a closure forever.
         -- HasConnections returns a real boolean, so this cannot fall for a zero-is-truthy count.
@@ -1762,8 +1967,13 @@ describe("Plugins.ActionBars: the stance bar", function()
     local function withForms(n)
         H.setup()
         for i = 1, n do H.setStanceForm(i, { spellID = i * 100 }, { silent = true }) end
-        H.SuuUI.Settings:Set(PLUGIN, "enabled", false)
-        H.SuuUI.Settings:Set(PLUGIN, "enabled", true)
+        -- Through the handle, not the setting: `enabled` is reload-guarded, so a Set is reverted
+        -- pending confirmation and this rebuild would silently become a no-op -- leaving every
+        -- assertion below measuring the bar setup already built, before the forms were staged. That
+        -- is the exact ordering this helper exists to avoid.
+        local plugin = H.SuuUI.Plugins:Get(PLUGIN)
+        plugin:Disable()
+        plugin:Enable()
         return bars()[stanceDef().id]
     end
 
@@ -1872,6 +2082,43 @@ describe("Plugins.ActionBars: the stance bar", function()
         H.fireEvent("UPDATE_SHAPESHIFT_FORMS")
         expect(grid:IsDeferred()).as("count unchanged, so nothing to lay out").falsy()
         H.setCombat(false)
+    end)
+
+    it("does not touch VISIBILITY when the forms event fires with an unchanged count", function()
+        -- The sibling of the test above, and a separate defect: the visibility call used to sit
+        -- OUTSIDE the count short-circuit, so it ran on every plural event whether the count had
+        -- moved or not. LibActionButton throttles this event family to 1/sec with the comment
+        -- "Blizzard broke the event and its now extremely spammy in some clients", so that was far
+        -- more often than once per shift.
+        --
+        -- ASSERTED AS "THE CALL DID NOT HAPPEN", not as "the client refused it", and the distinction
+        -- is honest rather than pedantic: whether a real StanceButton makes its container protected
+        -- is UNMEASURED -- the harness models StanceButtonTemplate without _secure, and the in-game
+        -- probes covered RegisterStateDriver and SetParent, not this. So a blocked-action assertion
+        -- here would pass no matter what the code did, which is worse than no assertion. Counting
+        -- the calls is the invariant that actually holds either way.
+        local grid = withForms(3)
+        local shows, hides = 0, 0
+        local realShow, realHide = grid.Show, grid.Hide
+        grid.Show = function(self) shows = shows + 1 return realShow(self) end
+        grid.Hide = function(self) hides = hides + 1 return realHide(self) end
+
+        H.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+
+        grid.Show, grid.Hide = realShow, realHide
+        expect(shows + hides).as("count unchanged, so visibility was left alone").eq(0)
+    end)
+
+    it("still settles visibility when the count DOES move", function()
+        -- The other half, so the fix above cannot be "never call it". A mage has no forms and must
+        -- not get an empty plate; a druid gaining its forms must get the bar.
+        local grid = withForms(0)
+        expect(grid:IsShown()).as("no forms, no bar").falsy()
+
+        H.setStanceForm(1, { spellID = 100 }, { silent = true })
+        H.setStanceForm(2, { spellID = 200 }, { silent = true })
+        H.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+        expect(grid:IsShown()).as("the count moved, so visibility followed").truthy()
     end)
 
     it("binds the SHAPESHIFTBUTTON family, which the frame name does not suggest", function()

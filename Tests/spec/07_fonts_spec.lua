@@ -408,14 +408,22 @@ describe("Theme font propagation", function()
         expect((H.fontOf(input._eb))).eq("Fonts/ARIALN.TTF")
     end)
 
-    it("re-measures a Dropdown's arrow column so it never truncates", function()
+    -- This test used to assert that a Dropdown RE-MEASURES its arrow column so a taller face cannot
+    -- truncate it. The arrow is atlas art now, so there is nothing to measure and nothing to
+    -- truncate -- which is itself the property worth pinning: a face swap must move the label and
+    -- leave the arrow alone. The label still has to survive it.
+    it("swaps a Dropdown's face without disturbing its arrow", function()
         local dd = H.mount(H.C.Dropdown({
             options = { { value = 1, label = "One" } }, value = 1, w = 200,
         }, host))
+        local before = H.box(dd._arrow)
         useFace("Morpheus")
-        H.expectTextNotClipped(dd._arrow)
         H.expectTextNotClipped(dd._selText)
         H.expectInside(dd._arrow, dd:GetFrame())
+        local after = H.box(dd._arrow)
+        expect(after.width).as("the face does not size the arrow").eq(before.width)
+        expect(after.height).eq(before.height)
+        H.expectNoOverlap({ dd._selText, dd._arrow })
     end)
 
     it("re-flows a row when the face changes the text height", function()

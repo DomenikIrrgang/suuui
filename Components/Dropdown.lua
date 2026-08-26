@@ -27,19 +27,26 @@ local function faceHeight(text, font, floor)
     return max(floor, th + (T:GetToken("spaceXs") or 4) * 2)
 end
 
-local ARROW_GLYPH = "v"
+-- The arrow is ATLAS ART, from Core/Icons' shared sheet, and it used to be the ASCII "v" that
+-- Accordion still spends on its chevron. The reason for a character in the first place stands and is
+-- worth keeping straight: this client's faces do not reliably carry the geometric-shape triangles,
+-- so a face missing one draws a box, and "v" is the safe fallback every face has. What a character
+-- cannot do is stop looking like a character -- it arrives with the font's own weight, optical
+-- centre and baseline -- and it cannot be TURNED OVER, which is the cue that says the panel below is
+-- already open. A texture does both.
+local ARROW_GLYPH = "chevron"
 
--- The arrow column is measured, never a space token. A column narrower than the glyph
--- does not overflow: the client clips it and draws an ellipsis instead of the arrow.
--- Font sizes are user-editable, so this is re-derived on every theme change.
-local function arrowWidth()
+-- The arrow column is a SQUARE derived from the FONT STEP rather than from sizeIcon. Two reasons.
+-- The affordance grew with the label before this change and should keep doing so -- a control whose
+-- text is at fontSizeXl with a 16px arrow beside it reads as a mismatch. And sizeIcon (16) inside a
+-- 24-unit control leaves the glyph touching the border, the same trap Input's leading glyph
+-- documents for its own search icon.
+--
+-- Snapped here rather than left to the layout strategy: the number is also the label's reserved
+-- gutter, so the two have to agree on the same integer or the gap between them drifts by a rounding.
+local function arrowSize()
     local T = SuuUI.Theme
-    local w = SuuUI.TextMetrics.Measure(ARROW_GLYPH,
-        T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF",
-        T:GetToken("fontSizeMd") or 13)
-    -- A pixel of slack, as Button does: a column pinned to exactly the measured width
-    -- can still trip truncation on rounding.
-    return w + 2
+    return SuuUI.Pixel.Snap(T:GetToken("fontSizeMd") or 13)
 end
 
 local DdMeta = {}
@@ -63,11 +70,11 @@ end
 function DdMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
-    -- The face's own label handles. Easy to miss because the box owns their font strings,
-    -- but each Text handle holds its own theme subscription and outlives the box without
-    -- this — one per dropdown, for the rest of the session.
+    -- The face's own label handle. Easy to miss because the box owns its font string, but the
+    -- Text handle holds its own theme subscription and outlives the box without this -- one per
+    -- dropdown, for the rest of the session. The arrow needs no counterpart: it is a texture the
+    -- frame owns, so it goes when the frame does.
     self._selT:Destroy()
-    self._arrowT:Destroy()
     self._box:Destroy()
     -- Pooled rows are not the row list's to free: it holds raw frames, so their own
     -- boxes and label handles have to be released here or they keep a theme
@@ -157,18 +164,54 @@ function DdMeta:_paint()
     B.SetBg(self._f, self._bg or "colorBgAlt")
     B.SetBorder(self._f, (self._hovered or self._open)
         and "colorBorderFocus" or "colorBorder")
+    self:_paintArrow()
 end
 
--- The arrow column is as wide as the glyph, and the label's right inset reserves that
+-- The arrow's glyph, crop, tint and ORIENTATION. Called from _paint, so it follows hover and open
+-- through the same path the border ring does -- the arrow lighting up with the ring is one cue in two
+-- places rather than a second meaning, which is the distinction a new indicator has to earn.
+function DdMeta:_paintArrow()
+    local tex = self._arrow
+    if not tex then return end
+    local path, c = SuuUI.Icons:Get(ARROW_GLYPH)
+    -- A glyph the sheet does not carry would raise from inside ApplyTheme, which the constructor
+    -- calls -- so a renamed cell would cost the login rather than the arrow. The dropdown's spec
+    -- asserts Icons:Has(ARROW_GLYPH) so the rename is caught there instead.
+    if not (path and c) then return end
+    tex:SetTexture(path)
+
+    -- TURNED OVER WHILE OPEN, by swapping top and bottom: the chevron then points back at the
+    -- button rather than at a panel that is already showing. The client offers no rotation for a
+    -- plain texture and this needs none, since a vertical flip of a symmetrical chevron IS the
+    -- 180-degree rotation. This is the whole reason the glyph is art and not a character.
+    if self._open then
+        tex:SetTexCoord(c[1], c[2], c[4], c[3])
+    else
+        tex:SetTexCoord(c[1], c[2], c[3], c[4])
+    end
+
+    -- White art, tinted here, exactly as the sheet's docstring requires -- any hue baked into the
+    -- texture would ignore the theme.
+    local col = SuuUI.Theme:GetToken((self._hovered or self._open)
+        and "colorAccent" or "colorTextMuted")
+    if col then tex:SetVertexColor(col[1], col[2], col[3], col[4]) end
+end
+
+-- The arrow column is a square as wide as the font step, and the label's right inset reserves that
 -- column plus a gap either side of it. Both move with the font and space tokens.
+--
+-- HEIGHT IS STATED AS WELL AS WIDTH, which the font string it replaced did not need: a stack child
+-- pins neither axis on its own, so an unstated height stretches the texture to the button's full
+-- inner height and the chevron comes out as a tall smear rather than a glyph.
 function DdMeta:_reflow()
     local pad = SuuUI.Theme:GetToken("spaceXs") or 4
-    local aw  = arrowWidth()
-    self._box:SetChildProps(self._arrowT, {
+    local aw  = arrowSize()
+    self._box:SetChildProps(self._arrow, {
         align  = "end",
         valign = "center",
         inset  = { right = pad },
         width  = aw,
+        height = aw,
     })
     self._box:SetChildProps(self._selT, {
         valign = "center",
@@ -288,11 +331,11 @@ function DdMeta:ApplyTheme()
     -- or an open panel keeps the previous theme's border width.
     for _, row in ipairs(self._rows) do B.Apply(row, surface) end
 
-    -- Re-assert the live state: a theme change must not drop the hover or open ring.
+    -- Re-assert the live state: a theme change must not drop the hover or open ring. This also
+    -- re-tints and re-crops the arrow, so a retint or a regenerated sheet reaches it.
     self:_paint()
 
     self._selT:ApplyTheme()
-    self._arrowT:ApplyTheme()
     -- Font and size tokens both move at runtime, so the height is re-derived after the
     -- label has restyled — it depends on the selected face's metrics at the new size.
     self:_autosize()
@@ -333,19 +376,33 @@ function SuuUI.Components.Dropdown(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     -- Text owns the font and colour tokens and re-measures on a token change; the
-    -- handles are added so the box re-flows off their SIZE_CHANGED.
+    -- handle is added so the box re-flows off its SIZE_CHANGED.
     -- Both children's insets are re-derived in _reflow, called from ApplyTheme, so the
     -- arrow column and the label's reserved gutter track the font and space tokens.
     local selT = SuuUI.Components.Text({ justify = "LEFT" }, f)
     box:Add(selT, { valign = "center", inset = { left = TEXT_INSET } })
 
-    local arrowT = SuuUI.Components.Text({ text = ARROW_GLYPH, color = "muted",
-                                           justify = "CENTER" }, f)
-    box:Add(arrowT, { align = "end", valign = "center" })
+    -- A plain TEXTURE rather than a Components.Icon, the same call DataField's leading glyph makes:
+    -- nothing here needs measuring, reflowing or a border, only offsetting, and an Icon would spend a
+    -- frame on it. ARTWORK so it draws above the backdrop. It is painted by _paintArrow, which
+    -- ApplyTheme reaches through _paint at the end of this constructor.
+    local arrow = f:CreateTexture(nil, "ARTWORK")
+    box:Add(arrow, { align = "end", valign = "center" })
 
-    -- Panel floats over everything, placed by the shared floating host
+    -- Panel floats over everything, placed by the shared floating host.
+    --
+    -- PARENTED TO THE HOST, NOT UIParent, and the distinction is the whole bug this line used to
+    -- carry: the host only decides WHERE the panel sits, while the PARENT decides what a unit is.
+    -- The floating host is itself hosted on the UI root, and the root carries the pixel grid's
+    -- scale -- so a panel on UIParent measured its own units against the client's frame while the
+    -- button measured against the root, and its labels rendered at the ratio between the two.
+    -- fontSizeMd is 13 either way; at 1080p the button drew it 9.24 physical pixels tall and the
+    -- panel drew it 13.00, so every option row looked 40% larger than the selection above it.
+    --
+    -- Invisible at the default multiplier, which is why it survived: the two scales coincide at
+    -- 768p and the suite's default client is a 1:1 grid. The spec pins it at physicalHeight 1080.
     local panelHost = SuuUI.Layout:GetFloatingHost()
-    local panel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    local panel = CreateFrame("Frame", nil, panelHost:GetFrame(), "BackdropTemplate")
     panel:Hide()
     panelHost:Add(panel, { anchor = { point = "TOPLEFT", x = 0, y = 0 } })
 
@@ -357,10 +414,10 @@ function SuuUI.Components.Dropdown(props, parent)
     local id = "dd_" .. tostring(f)
     handle = setmetatable({
         _f=f, _panel=panel,
-        -- _selText and _arrow stay the font strings so callers and specs reach the same
-        -- regions; _selT and _arrowT are the Text handles that own them.
-        _selT=selT, _arrowT=arrowT,
-        _selText=selT:GetFrame(), _arrow=arrowT:GetFrame(),
+        -- _selText stays the font string so callers and specs reach the same region; _selT is the
+        -- Text handle that owns it. _arrow IS the texture -- there is no handle wrapping it.
+        _selT=selT,
+        _selText=selT:GetFrame(), _arrow=arrow,
         _box=box, _panelHost=panelHost, _rowList=rowList,
         _options=props.options or {}, _rows={}, _eid=id,
         _value=props.value, _onChange=props.onChange, _enabled=true,

@@ -670,11 +670,11 @@ describe("Components.Dropdown", function()
             H.expectSize(d, 300, 28)
         end)
 
-        -- The arrow column is as wide as the glyph itself: a column pinned to a space
-        -- token is narrower than the arrow at most font sizes, and the client clips a
-        -- font string rather than overflowing it, so the arrow renders as an ellipsis.
-        -- Plus the pixel of slack Button also allows against rounding.
-        local function arrowColumn() return H.textWidth("v", H.token("fontSizeMd")) + 2 end
+        -- The arrow column is a SQUARE as wide as the font step. It used to be measured from the
+        -- ASCII "v" it drew; now it is atlas art, which has no glyph advance to measure and no
+        -- truncation to guard against -- but it still tracks the font token, because an affordance
+        -- that stopped growing with its label would read as a mismatch at fontSizeXl.
+        local function arrowColumn() return H.token("fontSizeMd") end
 
         it("leaves room for the arrow beside the label", function()
             local d = H.mount(H.C.Dropdown({ options = options, value = "solid", w = 160 }, host))
@@ -686,7 +686,19 @@ describe("Components.Dropdown", function()
             expect(ab.width).as("wide enough for the glyph").eq(arrowColumn())
             expect(ab.left - H.box(d._selText).right).as("gap to the label").eq(pad)
             H.expectNoOverlap({ d._selText, d._arrow })
-            H.expectTextNotClipped(d._arrow)
+            H.expectInside(d._arrow, d:GetFrame())
+        end)
+
+        -- A stack child pins NEITHER axis on its own, so an unstated height would stretch the
+        -- texture to the button's full inner height and draw the chevron as a tall smear. It is
+        -- square because its cell on the sheet is.
+        it("keeps the arrow square rather than stretched to the button", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid",
+                                             w = 160, h = 40 }, host))
+            local ab = H.box(d._arrow)
+            expect(ab.height).as("square, not the button's inner height").eq(arrowColumn())
+            expect(ab.width).eq(ab.height)
+            H.expectCenteredV(d._arrow, d:GetFrame())
         end)
 
         it("re-derives the arrow column from the space and font tokens", function()
@@ -700,9 +712,9 @@ describe("Components.Dropdown", function()
             local db, ab = H.box(d), H.box(d._arrow)
             expect(ab.right).eq(db.right - pad)
             expect(ab.width).eq(arrowColumn())
+            expect(ab.height).eq(arrowColumn())
             H.expectNoOverlap({ d._selText, d._arrow })
             H.expectInside(d._arrow, d:GetFrame())
-            H.expectTextNotClipped(d._arrow)
         end)
 
         it("widens the arrow column when the font token grows on a live dropdown", function()
@@ -711,8 +723,146 @@ describe("Components.Dropdown", function()
             H.T:SetUserToken("Big", "fontSizeMd", 30)
             H.T:SetActive("Big")
             expect(H.box(d._arrow).width).eq(arrowColumn())
-            H.expectTextNotClipped(d._arrow)
+            expect(H.box(d._arrow).height).eq(arrowColumn())
             H.expectNoOverlap({ d._selText, d._arrow })
+        end)
+    end)
+
+    describe("the arrow glyph", function()
+        -- The arrow is ATLAS ART from Core/Icons' shared sheet rather than the ASCII "v" it used to
+        -- draw. A character arrives with the font's own weight, optical centre and baseline, and it
+        -- cannot be turned over to say the panel is already open.
+        local GLYPH = "chevron"
+
+        -- This is the assertion standing in for a guard the component cannot otherwise prove: a
+        -- renamed or reordered cell would make Icons:Get answer nil, and _paintArrow returns early
+        -- rather than raising out of the constructor's own ApplyTheme. The sheet's GLYPHS list is
+        -- append-only for the same reason, and Media/generate_ui_icons.py says so.
+        it("names a glyph the shared sheet actually carries", function()
+            expect(H.SuuUI.Icons:Has(GLYPH)).as("the sheet still has this cell").truthy()
+        end)
+
+        it("draws the atlas glyph, not a font string", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
+            local path, c = H.SuuUI.Icons:Get(GLYPH)
+            expect(d._arrow:GetTexture()).eq(path)
+            local l, r, t, b = d._arrow:GetTexCoord()
+            expect(l).eq(c[1])
+            expect(r).eq(c[2])
+            expect(t).as("upright at rest").eq(c[3])
+            expect(b).eq(c[4])
+            -- A crop is what makes one sheet serve five glyphs: uncropped it would draw all of them.
+            expect(r - l < 1 and b - t < 1).as("cropped to its own cell").truthy()
+        end)
+
+        -- Swapping top and bottom turns a symmetrical chevron over, which IS the 180-degree
+        -- rotation -- the client offers no rotation for a plain texture. So the arrow points at the
+        -- panel when it is closed and back at the button when it is open.
+        it("turns over while the panel is open, and back on close", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
+            local _, c = H.SuuUI.Icons:Get(GLYPH)
+            H.click(d)
+            local _, _, t, b = d._arrow:GetTexCoord()
+            expect(t).as("flipped: bottom of the cell on top").eq(c[4])
+            expect(b).eq(c[3])
+            H.click(d)
+            local _, _, t2, b2 = d._arrow:GetTexCoord()
+            expect(t2).as("upright again").eq(c[3])
+            expect(b2).eq(c[4])
+        end)
+
+        -- White art tinted in Lua, as the sheet requires -- a hue baked into the texture would
+        -- ignore the theme. Muted at rest, accent while hovered or open, which is the same cue the
+        -- border ring gives: one signal in two places rather than a second meaning.
+        it("tints muted at rest and accent while hovered", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
+            H.expectTokenColor(H.vertexColor(d._arrow), "colorTextMuted")
+            H.hover(d)
+            H.expectTokenColor(H.vertexColor(d._arrow), "colorAccent")
+            H.unhover(d)
+            H.expectTokenColor(H.vertexColor(d._arrow), "colorTextMuted")
+        end)
+
+        it("tints accent while the panel is open, with the cursor away", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
+            H.click(d)
+            H.unhover(d)
+            H.expectTokenColor(H.vertexColor(d._arrow), "colorAccent")
+        end)
+
+        it("re-tints on a live token edit", function()
+            local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
+            H.T:CreateUserTheme("Tinted", "Modern")
+            H.T:SetUserToken("Tinted", "colorGray400", { 1, 0, 0, 1 })
+            H.T:SetActive("Tinted")
+            expect(H.vertexColor(d._arrow))
+                .as("follows colorTextMuted's primitive").deepEq({ 1, 0, 0, 1 })
+        end)
+    end)
+
+    describe("the panel's unit space", function()
+        -- The panel is PLACED by the shared floating host but PARENTED by whoever constructs it, and
+        -- those are two different decisions: the host decides where it sits, the parent decides what
+        -- a unit is. The panel used to be parented to UIParent while the button sat under the UI
+        -- root, which carries the pixel grid's scale -- so both labels were fontSizeMd and the panel
+        -- still drew its text at the ratio between the two scales. At 1080p that is 1.4062: the
+        -- button drew 13pt as 9.24 physical pixels and every option row drew it as 13.00, which is
+        -- what "the elements have a bigger font size" looked like in game.
+        --
+        -- 1080p SPECIFICALLY. The suite's default client is a 1:1 pixel grid, where the root and
+        -- UIParent coincide and this cannot fail -- which is exactly why it shipped.
+        local function at1080()
+            H.setup({ physicalHeight = 1080 })
+            return H.SuuUI.UIRoot:GetRootContainer():GetFrame()
+        end
+
+        it("gives the root a scale at all, or the rest of this block proves nothing", function()
+            at1080()
+            expect(H.SuuUI.UIRoot:GetRoot():GetEffectiveScale())
+                .as("the 1080p client must actually scale the root").neq(1)
+        end)
+
+        it("renders panel text at the same physical size as the button's", function()
+            local h = at1080()
+            local opts = { { value = "a", label = "Test" }, { value = "b", label = "Default" } }
+            local d = H.mount(H.C.Dropdown({ options = opts, value = "a", w = 160 }, h))
+            H.click(d)
+            local _, bs = d._selText:GetFont()
+            local _, rs = d._rows[1]._lbl:GetFont()
+            expect(rs).as("same token").eq(bs)
+            -- The token being equal is not the claim -- it already was while this was broken. What
+            -- the player sees is the point size times the effective scale.
+            local button = bs * d:GetFrame():GetEffectiveScale()
+            local row    = rs * d._rows[1]._lbl:GetEffectiveScale()
+            expect(row).as("physical glyph height").near(button, 0.01)
+        end)
+
+        it("parents the panel inside the UI root, not UIParent", function()
+            local h = at1080()
+            local d = H.mount(H.C.Dropdown({ options = { { value = "a", label = "A" } } }, h))
+            local root = H.SuuUI.UIRoot:GetRoot()
+            local f, found, steps = d._panel, false, 0
+            while f and steps < 32 do
+                if f == root then
+                    found = true
+                    break
+                end
+                f = f:GetParent()
+                steps = steps + 1
+            end
+            expect(found).as("the panel must sit under the scaled root").truthy()
+            expect(d._panel:GetEffectiveScale())
+                .near(d:GetFrame():GetEffectiveScale(), 0.0001)
+        end)
+
+        it("keeps row geometry in the button's units too", function()
+            local h = at1080()
+            local opts = { { value = "a", label = "Test" }, { value = "b", label = "Default" } }
+            local d = H.mount(H.C.Dropdown({ options = opts, value = "a", w = 160 }, h))
+            H.click(d)
+            -- The panel is anchored to the button's width, so a scale mismatch made the panel wider
+            -- than the control it hangs off -- the same defect as the text, one axis over.
+            expect(H.box(d._panel).width).near(H.box(d).width, 0.01)
         end)
     end)
 
@@ -744,20 +894,22 @@ describe("Components.Dropdown", function()
             end
         end)
 
-        it("keeps the arrow glyph legible when the font token grows", function()
+        it("scales the arrow glyph with the font token", function()
             local d = H.mount(H.C.Dropdown({ options = options }, host))
             H.T:CreateUserTheme("Big", "Modern")
             H.T:SetUserToken("Big", "fontSizeMd", 30)
             H.T:SetActive("Big")
-            local _, size = d._arrow:GetFont()
-            expect(size).eq(H.token("fontSizeMd"))
-            H.expectTextNotClipped(d._arrow)
+            -- Art now, so there is no font to read -- the box IS the glyph, and it tracks the same
+            -- token the label does so the two never look mismatched.
+            expect(H.box(d._arrow).height).eq(H.token("fontSizeMd"))
         end)
 
         it("colours the label with the text token and the arrow with the muted one", function()
             local d = H.mount(H.C.Dropdown({ options = options, value = "solid" }, host))
             H.expectTokenColor(H.textColor(d._selText), "colorText")
-            H.expectTokenColor(H.textColor(d._arrow), "colorTextMuted")
+            -- The arrow's colour is a TINT rather than a text colour: white art, tinted in Lua, so
+            -- one monochrome sheet follows the theme.
+            H.expectTokenColor(H.vertexColor(d._arrow), "colorTextMuted")
         end)
     end)
 

@@ -1180,6 +1180,11 @@ Three details are load-bearing, and each has a regression test:
   alive. The guarded hook is a complete suppression mechanism on its own — a hidden frame
   can only become visible through a show, and every show fires `OnShow` — so leave the
   registrations where Blizzard put them.
+
+  **The one exception is an action bar**, where this pattern does not work at all: Blizzard's
+  `ActionBarController` re-shows the cluster on a stance change, and in combat your `Hide()`
+  answer is refused. See "Suppressing Blizzard's own bars" under Secure Action Bars — it
+  unregisters deliberately and pays for it with a ReloadGuard.
 - **Clear the flag before the `Show()`.** The hook is permanent; restore in the other order
   and it hides the frame straight back on the way out.
 - **Restore only what you suppressed.** With your feature switched off you never hid
@@ -1394,13 +1399,45 @@ buttons. Stopping at the first hid the gryphons and left twelve buttons on scree
 reported success. **Establish which frame holds the buttons by walking the parent chain from a
 button** — the frame that exists is not always the frame that holds them.
 
-**Never `UnregisterAllEvents`** — nothing in the API enumerates a frame's registered events, so it
-is a one-way door and `onDisable` could never hand the frame back. **Never `SetParent(nil)`** —
-reparenting a frame with protected children is protected too.
+**`UnregisterAllEvents` IS the mechanism here, and this is the one place that is true.** Everywhere
+else in this document a Blizzard frame is suppressed with `Hide()` plus a guarded `OnShow` hook, and
+unregistering is forbidden because nothing enumerates a frame's registrations so `onDisable` could
+never hand the frame back. **An action bar cannot be suppressed that way at all.** Blizzard's
+`ActionBarController` registers `ACTIONBAR_PAGE_CHANGED` — its own comment reads "This is used for
+shapeshifts/stances" — and `UPDATE_BONUS_ACTIONBAR`, and re-shows the whole cluster from
+`ValidateActionBarTransition`. In combat your `Hide()` answer is refused, so a warrior changing
+stance or a reload mid-fight leaves the player looking at Blizzard's bars for the rest of the fight.
+That shipped, and it was game-breaking rather than cosmetic.
 
-**Hook `OnShow` and consult your suppressed table on every call.** `HookScript` cannot be undone,
-which is exactly what makes `Restore` possible — so **clear the flag before the restoring `Show()`**,
-or the hook you cannot uninstall hides it again on the way out.
+So do what ElvUI, Bartender4 and Dominos each arrived at independently — make the frames incapable of
+appearing, using only calls a lockdown does not restrict:
+
+1. `ActionBarController:UnregisterAllEvents()`, then re-register `SETTINGS_LOADED` only. Same for
+   `ActionBarActionEventsFrame`, and for `ActionBarButtonEventsFrame` keep `ACTIONBAR_SLOT_CHANGED`
+   and `ACTIONBAR_UPDATE_COOLDOWN` so an ExtraActionButton still works.
+2. `frame:UnregisterAllEvents()` per bar, so it stops re-asserting itself.
+3. `frame:SetParent(hidden)` onto one permanently hidden, **anonymous** frame. A child of a hidden
+   parent renders nothing whatever its own shown flag says, so a later `Show()` is a no-op — and
+   `IsShown()` and `IsVisible()` then disagree, which is what a spec must assert.
+
+**MEASURED IN GAME**, and the split follows from it: `UnregisterAllEvents` and `SetAlpha` are
+permitted under lockdown, while `SetParent` and `RegisterStateDriver` are **refused**. So steps 1 and
+2 run immediately and only step 3 defers to `PLAYER_REGEN_ENABLED`. Deferring only the reparent is
+right rather than a compromise — your own buttons cannot be built in combat either, so alpha-ing the
+cluster out immediately would leave the player with no clickable bars at all.
+
+**Do NOT claim a child whose ancestor you already claimed.** Candidate lists mix renames with
+parent/child pairs (`MicroMenuContainer`/`MicroMenu`, `BagsBar`/`KeyRingButton`, `MainMenuBar` and its
+art frames). Parking the ancestor already takes the child off screen; parking the child as well pulls
+it out of the container it belongs to.
+
+**Never `SetParent(nil)`** — reparenting a frame with protected children is protected too. And never
+call `frame:Hide()` when `frame.HideBase` exists: Edit Mode replaces `Hide`/`Show`/`IsShown` with
+overrides and calling an override taints. This client has Edit Mode.
+
+**The price is a ReloadGuard, and you must pay it.** Unregistering cannot be undone, so `Restore`
+hands the cluster back visible but inert — guard every setting that reaches it, the plugin's own
+`enabled` included, or the plugin switch becomes a silent way into a half-dead default UI.
 
 **Verify with witness buttons.** Hiding a container is the means; a button off the screen is the
 end. Log the failure rather than raising: a stray visible button is cosmetic, not a reason to take

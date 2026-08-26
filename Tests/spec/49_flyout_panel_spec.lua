@@ -413,4 +413,27 @@ describe("Components.FlyoutPanel – the floating icon-and-name roster", functio
                 .as("the host is shared: drop your panel, never the host").eq(host)
         end)
     end)
+
+    -----------------------------------------------------------------------------
+    describe("the panel's unit space", function()
+        -- The host PLACES the panel; its PARENT decides what a unit is. The fallback used to be
+        -- UIParent, which does not carry the pixel grid's scale the UI root does -- so a panel built
+        -- without an explicit parent rendered its own text and rows at the ratio between the two
+        -- scales, 1.4062 at 1080p. Dropdown shipped exactly that and it reached the player as option
+        -- rows visibly larger than the control they hung off.
+        --
+        -- Every caller here passes a parent, so the fallback is the untravelled branch -- which is
+        -- precisely why it needs a spec: nothing else would ever notice it was wrong.
+        it("falls back to the floating host rather than UIParent", function()
+            H.setup({ physicalHeight = 1080 })
+            local root = H.SuuUI.UIRoot:GetRoot()
+            expect(root:GetEffectiveScale())
+                .as("the 1080p client must actually scale the root, or this proves nothing").neq(1)
+
+            local p = H.C.FlyoutPanel({})
+            expect(p:GetFrame():GetEffectiveScale())
+                .as("the panel measures units as the root does").near(root:GetEffectiveScale(), 0.0001)
+            p:Destroy()
+        end)
+    end)
 end)

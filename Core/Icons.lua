@@ -21,10 +21,11 @@ M.PATH = "Interface\\AddOns\\SuuUI\\Media\\ui-icons"
 
 -- left, right, top, bottom as 0..1 fractions, in the order SetTexCoord takes them.
 local GLYPHS = {
-    sort    = { 0.00000, 0.50000, 0.00000, 0.50000 },
-    account = { 0.50000, 1.00000, 0.00000, 0.50000 },
-    coin    = { 0.00000, 0.50000, 0.50000, 1.00000 },
-    search  = { 0.50000, 1.00000, 0.50000, 1.00000 },
+    sort    = { 0.00000, 0.25000, 0.00000, 0.25000 },
+    account = { 0.25000, 0.50000, 0.00000, 0.25000 },
+    coin    = { 0.50000, 0.75000, 0.00000, 0.25000 },
+    search  = { 0.75000, 1.00000, 0.00000, 0.25000 },
+    chevron = { 0.00000, 0.25000, 0.25000, 0.50000 },
 }
 
 --- Whether a glyph name is on the sheet.

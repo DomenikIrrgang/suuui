@@ -34,7 +34,7 @@ describe("Components.ActionButton", function()
         -- The ActionBars plugin builds twelve buttons at login, so every shared-index and
         -- live-count assertion below would be measuring those too. Switched off here so these
         -- specs describe the component alone; the plugin has its own file.
-        H.SuuUI.Settings:Set("action_bars", "enabled", false)
+        H.SuuUI.Plugins:Get("action_bars"):Disable()
         host = H.parent(400, 200)
     end)
 
@@ -112,7 +112,7 @@ describe("Components.ActionButton", function()
             -- disagrees with useOnKeyDown, so precisely one gets through.
             for _, keyDown in ipairs({ false, true }) do
                 H.setup()
-                H.SuuUI.Settings:Set("action_bars", "enabled", false)
+                H.SuuUI.Plugins:Get("action_bars"):Disable()
                 host = H.parent(400, 200)
                 H.setCVarBool("ActionButtonUseKeyDown", keyDown)
                 H.setAction(3, { type = "spell", id = 143 }, { silent = true })
@@ -617,7 +617,7 @@ describe("Components.ActionButton kind=pet", function()
 
     before_each(function()
         H.setup()
-        H.SuuUI.Settings:Set("action_bars", "enabled", false)
+        H.SuuUI.Plugins:Get("action_bars"):Disable()
         host = H.parent(400, 200)
         H.setPetActionBar(true, { silent = true })
         H.setPetAction(1, { name = "Attack", texture = "tex1", isActive = true }, { silent = true })
@@ -889,7 +889,7 @@ describe("Components.ActionButton kind=pet", function()
             for _, keyDown in ipairs({ true, false }) do
                 H.setup()
                 H.setCVarBool("ActionButtonUseKeyDown", keyDown)
-                H.SuuUI.Settings:Set("action_bars", "enabled", false)
+                H.SuuUI.Plugins:Get("action_bars"):Disable()
                 host = H.parent(400, 200)
                 H.setPetActionBar(true, { silent = true })
                 H.setPetAction(1, { name = "Firebolt", texture = "t", autoCastAllowed = true },

@@ -1,60 +1,85 @@
--- Hides Blizzard's bottom action bar cluster, and hands it back exactly.
+-- Takes Blizzard's bottom action bar cluster off the screen, and hands it back on a reload.
 --
--- THE CONSTRAINT THE PLAN DID NOT SPELL OUT: hiding a Blizzard action bar is itself a
--- protected operation. MainMenuBar holds ActionButton1..12, which inherit
--- SecureActionButtonTemplate, so protection propagates down to them and the client's refusal
--- propagates back up -- Hide() on the bar is refused while InCombatLockdown() is true, and the
--- player gets "Interface action failed because of an AddOn". The same is true of Show() on the
--- way back out, which matters more than it sounds: it is the escape hatch.
+-- THE MECHANISM CHANGED, AND THE REASON IS THE WHOLE POINT OF THIS FILE. It used to answer
+-- Blizzard's re-show with Hide(), deferring that call whenever the client refused it in combat.
+-- That cannot be made to work, and the bug it produced was game-breaking rather than cosmetic:
 --
--- So every visibility change here goes through the same deferral the grid uses. Suppressing
--- during a fight sets a flag and completes on PLAYER_REGEN_ENABLED; so does restoring. The
--- cost is that a bar which re-shows itself mid-fight stays visible until the fight ends, which
--- is a cosmetic lapse rather than a broken UI.
+--   * Blizzard's `ActionBarController` registers ACTIONBAR_PAGE_CHANGED -- its own comment reads
+--     "This is used for shapeshifts/stances" -- and UPDATE_BONUS_ACTIONBAR, routing both into
+--     ValidateActionBarTransition, which calls MainActionBar:Show(), StanceBar:Show(),
+--     MultiActionBar_Update() and ManageFramePositions() UNCONDITIONALLY. A warrior changing
+--     stance or a druid shifting form IS that event.
+--   * Hide() on a frame holding secure buttons is refused while InCombatLockdown() is true, so our
+--     answer to that Show() never landed. The cluster stayed on screen -- bags and micro menu with
+--     it, since they travel through this same table -- until the fight ended.
+--   * A /reload or a reconnect mid-fight was the same failure through a different door: Apply()
+--     ran under lockdown, every frame was queued, and the whole cluster was visible.
 --
--- Three rules from plugin-authoring.md, and each of them is load-bearing:
+-- So nothing here hides a bar in response to anything any more. The frames are made STRUCTURALLY
+-- INCAPABLE of appearing, using only calls the client does not restrict -- which is what ElvUI,
+-- Bartender4 and Dominos each arrived at independently:
 --
---   * NEVER UnregisterAllEvents. Nothing in the API enumerates a frame's registered events, so
---     unregistering is a one-way door and onDisable could never hand the frame back.
---   * NEVER SetParent(nil), and never reparent one of these at all -- reparenting a frame that
---     holds protected children is protected too.
---   * The suppression flag is cleared BEFORE the restoring Show(), or the OnShow hook we
---     cannot uninstall hides it again on the way out.
+--   1. UnregisterAllEvents on `ActionBarController`, which deletes the re-show mechanism outright
+--      rather than racing it. ONLY that frame -- see the note on CONTROLLERS for why its two sibling
+--      event frames must stay alive, and what breaks when they do not.
+--   2. SetParent onto a permanently hidden frame. A child of a hidden parent does not render
+--      whatever its own shown flag says, so a later Show() from Blizzard is a no-op.
 --
--- RESOLVED BY CANDIDATE LIST, NEVER BY A LITERAL NAME. The Phase 0 results are a snapshot of
--- one client build, and this one is already mid-migration -- it answers to MainMenuBarArtFrame
--- AND StatusTrackingBarManager in the same breath. A patch that backports one more subsystem
--- renames a frame out from under a literal, and the failure is silent: suppression simply
--- stops hiding something.
+-- Note what is NOT in that list: unregistering each bar's own events. Parking already makes a bar
+-- invisible, so silencing it adds nothing, and doing it broke every keybind on bars 1-8.
+--
+-- There is no race left to lose, and no OnShow hook: the hook this file used to carry existed only
+-- to fight step 3's absence.
+--
+-- MEASURED IN GAME, 2026-08-26, because the whole design turns on which calls survive a lockdown:
+--
+--   | RegisterStateDriver on a protected frame  | REFUSED   |
+--   | SetParent on a frame with a secure child  | REFUSED   |
+--   | UnregisterAllEvents                       | permitted |
+--   | SetAlpha                                  | permitted |
+--
+-- The second row is why the reparent defers to PLAYER_REGEN_ENABLED while the controller unload does
+-- not. Deferring ONLY the reparent is the right split rather than a compromise: our own buttons
+-- cannot be built in combat either (ActionBarGrid:_apply returns early), so alpha-ing the cluster out
+-- immediately -- the one other legal move -- would leave the player with no clickable bars at all
+-- for the rest of the fight. Killing the controller and leaving Blizzard's bars usable until the swap
+-- costs one fight of default bars and loses nothing.
+--
+-- ALSO MEASURED: a plain Frame holding one SecureActionButtonTemplate child reports
+-- `IsProtected() == true, false` -- protected by PROPAGATION, not explicitly. That is the rule both
+-- refusals follow, and it is why the art frames were never the problem: they are SIBLINGS of the
+-- buttons, not ancestors.
+--
+-- UNREGISTERALLEVENTS IS A ONE-WAY DOOR. Nothing in the API enumerates a frame's registered events,
+-- so Restore() reparents and shows but cannot hand a LIVE frame back -- which is why both `enabled`
+-- and `hide_blizzard` carry a ReloadGuard. That trade was ruled on deliberately: a live toggle that
+-- leaves the bug in place is worth less than suppression that works. plugin-authoring.md's "never
+-- UnregisterAllEvents" rule stands everywhere a live restore is still possible; this is the one
+-- documented exception, and the guard is what pays for it.
+--
+-- STILL NEVER: SetParent(nil), which taints. And never `frame:Hide()` on an Edit-Mode-managed frame
+-- when `HideBase` exists -- Edit Mode replaces Hide/Show/IsShown with overrides, and calling an
+-- override taints. THIS CLIENT HAS EDIT MODE, so the guarded form is not defensive padding.
+--
+-- ONE CONSEQUENCE WORTH KNOWING: with the controller's events gone, Blizzard's own vehicle and
+-- override bars no longer appear by themselves. SuuUI's bar 1 covers that through its own paging
+-- driver (`[overridebar]` and `[possessbar]` in Paging.BuildDriver), which is evaluated by
+-- SecureStateDriverManager and is independent of the controller. `PossessActionBar` and
+-- `OverrideActionBar` are deliberately NOT suppressed below for the same reason the possess bar was
+-- deferred: there is no SuuUI replacement frame, so leaving Blizzard's on screen is the safe side.
+--
+-- RESOLVED BY CANDIDATE LIST, NEVER BY A LITERAL NAME. The Phase 0 results are a snapshot of one
+-- client build, and this one is already mid-migration -- it answers to MainMenuBarArtFrame AND
+-- StatusTrackingBarManager in the same breath. A patch that backports one more subsystem renames a
+-- frame out from under a literal, and the failure is silent: suppression simply stops hiding
+-- something.
 local ipairs, pairs, type = ipairs, pairs, type
 
 local M = {}
 
--- Ordered modern-first, classic-second; the first name that exists wins. An entry that
--- resolves to nothing is skipped with a Debug line rather than raising -- an absent frame is a
--- client generation, not a bug.
---
--- Deliberately NOT here, because nothing replaces them yet and hiding them would take away
--- function the player still needs: the bags (Phase 9).
---
--- THE MICRO MENU IS NOW HERE, because Phase 7 replaced it. Note WHICH frame: `MicroMenuContainer`
--- holds the micro buttons and `MicroMenu` is its child.
---
--- `MicroButtonAndBagsBar` stays, and the reason was MEASURED after an earlier draft of this comment
--- got it wrong. It does not hold the bag buttons itself -- walking up from the backpack gives
--- `MainMenuBarBackpackButton > BagsBar`, and BOTH `BagsBar` and `MicroButtonAndBagsBar` exist on this
--- client. So `MicroButtonAndBagsBar` is an ANCESTOR of the bag container, which is why hiding it would
--- still cost the player their bags: the cascade, not the contents.
---
--- Phase 9's target is therefore `BagsBar` plus `KeyRingButton`, NOT `MicroButtonAndBagsBar`. Same
--- shape of mistake as MainActionBar versus MainMenuBar: the frame that exists is not always the frame
--- that holds the buttons.
---
--- BOTH class bars ARE here, and an earlier draft of this comment said the pet bar could not be,
--- on the assumption that its replacement had to adopt Blizzard's PetActionButton1..N the way ElvUI
--- does. It does not: `type="pet"` with the slot in `action` works on a plain
--- SecureActionButtonTemplate (verified from LibActionButton), so SuuUI builds its own pet buttons
--- and Blizzard's stay in their container, which can then go like any other.
+-- Ordered modern-first, classic-second. EVERY name that exists is claimed, not just the first --
+-- see resolveAll. An entry that resolves to nothing is skipped with a Debug line rather than
+-- raising: an absent frame is a client generation, not a bug.
 local TARGETS = {
     -- The BUTTONS. Measured in game by walking up from ActionButton1:
     --   ActionButton1 > MainActionBarButtonContainer1 > MainActionBar > UIParent
@@ -77,7 +102,7 @@ local TARGETS = {
     { id = "multi_5",      names = { "MultiBar5" } },
     { id = "multi_6",      names = { "MultiBar6" } },
     { id = "multi_7",      names = { "MultiBar7" } },
-    -- The shapeshift bar. Safe to hide because SuuUI creates its OWN buttons from
+    -- The shapeshift bar. Safe to claim because SuuUI creates its OWN buttons from
     -- StanceButtonTemplate rather than adopting Blizzard's -- which is also why Blizzard's own
     -- StanceBar_Update, which walks StanceButton1..N by name, never touches ours.
     --
@@ -87,38 +112,31 @@ local TARGETS = {
     -- that, and picking one cost a round of rework.
     { id = "stance_bar",   names = { "StanceBar", "StanceBarFrame", "ShapeshiftBarFrame" } },
     -- The pet bar. `PetActionBar` is the live name on this Edit Mode build; `PetActionBarFrame` is
-    -- the Classic-Era spelling. Both listed for the same reason as the stance pair -- an absent name
-    -- is skipped, and these frames have coexisted under two names before.
+    -- the Classic-Era spelling. Both listed for the same reason as the stance pair.
     { id = "pet_bar",      names = { "PetActionBar", "PetActionBarFrame" } },
     -- The micro menu. Replaced by the data bar's `left` section in Phase 7.
     --
-    -- Safe to hide precisely BECAUSE the replacement calls the panel APIs rather than forwarding
+    -- Safe to claim precisely BECAUSE the replacement calls the panel APIs rather than forwarding
     -- clicks into these buttons: nothing SuuUI draws depends on them existing on screen. Had the
-    -- fields forwarded clicks (the first attempt), hiding their targets would have been the pet bar's
-    -- problem all over again.
+    -- fields forwarded clicks (the first attempt), claiming their targets would have been the pet
+    -- bar's problem all over again.
     --
-    -- `MicroButtonAndBagsBar` is NOT listed: it carries the bag buttons as well, and Phase 9 owns
-    -- those. Hiding it here would cost the player their bags for a whole phase.
+    -- `MicroButtonAndBagsBar` is NOT listed: it is an ANCESTOR of the bag container as well, so
+    -- claiming it would cascade to the bags. Same shape as MainActionBar versus MainMenuBar -- the
+    -- frame that exists is not always the frame that holds the buttons.
     { id = "micro_menu",   names = { "MicroMenuContainer", "MicroMenu" } },
     -- The experience and reputation bars, replaced in Phase 8.
     --
-    -- `StatusTrackingBarManager` is the container; the two inner containers are listed as well because
-    -- this client is a hybrid and has produced coexisting frames three times now. An absent name costs
-    -- nothing, and hiding only the manager on a build that anchors its children elsewhere would leave
-    -- Blizzard's bars on screen under ours.
+    -- `StatusTrackingBarManager` is the container; the two inner containers are listed as well
+    -- because this client is a hybrid and has produced coexisting frames three times now.
     { id = "watch_bars",   names = { "StatusTrackingBarManager",
                                      "MainStatusTrackingBarContainer",
                                      "SecondaryStatusTrackingBarContainer" } },
     -- The bag bar, replaced in Phase 9 by the data bar's BAGS field.
     --
-    -- `BagsBar` is the frame that HOLDS the bag buttons -- established by walking the parent chain from
-    -- `MainMenuBarBackpackButton`, which answered "BagsBar". `MicroButtonAndBagsBar` is its ANCESTOR and
-    -- is deliberately absent: hiding it would cascade to everything beneath, and a Phase 7 note claiming
-    -- it carried the buttons was simply wrong. Same shape as `MainActionBar` versus `MainMenuBar`, which
-    -- cost a round in Phase 4b -- the frame that exists is not always the frame that holds the buttons.
-    --
-    -- `KeyRingButton` is listed separately because it is not inside `BagsBar` on every build, and an
-    -- absent name costs nothing.
+    -- `BagsBar` is the frame that HOLDS the bag buttons -- established by walking the parent chain
+    -- from `MainMenuBarBackpackButton`, which answered "BagsBar". `KeyRingButton` is listed
+    -- separately because it is not inside `BagsBar` on every build.
     { id = "bags",         names = { "BagsBar", "KeyRingButton" } },
     -- The art and the gryphons. Separate entries because a client that keeps the bar but drops
     -- the art is a shape this list has to be able to describe.
@@ -128,10 +146,41 @@ local TARGETS = {
     { id = "max_level",    names = { "MainMenuBarMaxLevelBar" } },
 }
 
+-- Blizzard's bar CONTROLLER, and the events it keeps.
+--
+-- THIS IS THE HALF THE OLD MECHANISM HAD NO EQUIVALENT FOR, and on its own it removes the
+-- stance-change symptom: with no events, ActionBarController_UpdateAll never runs, so nothing calls
+-- Show() on a bar in the first place.
+--
+-- ONLY THE CONTROLLER, and the reason is a dependency that took an in-game retest to find.
+-- ElvUI also unregisters `ActionBarActionEventsFrame` and `ActionBarButtonEventsFrame`, and copying
+-- that broke every KEYBIND on bars 1-8 while leaving the buttons visually correct -- a bug that reads
+-- like the wrong spell being on the bar.
+--
+-- Those two frames are what drive `ActionButton_UpdateAction`, which keeps the cached slot on
+-- Blizzard's own `ActionButton1..12` current. SuuUI deliberately routes bars 1-8 through BLIZZARD'S
+-- BINDING FAMILIES (`ACTIONBUTTON1`..) rather than override-binding its own buttons, precisely so a
+-- player's existing keys keep working -- and that path resolves through those cached slots. Kill the
+-- frames and a keypress in cat form fires the out-of-form spell while our own icon, which reads the
+-- `action` attribute the paging snippet rewrote, shows the right one.
+--
+-- So the two designs are incompatible: ElvUI can silence that plumbing because it override-binds
+-- every bar to clicks on its own buttons. We rely on the families, so the plumbing stays alive. That
+-- costs Blizzard doing invisible bookkeeping on parked frames, which is the cheap side of the trade.
+--
+-- Their events are also not needed for suppression at all: parking is what makes a bar invisible, so
+-- a frame that re-shows itself renders nothing regardless of what it has registered.
+--
+-- SETTINGS_LOADED lets the page controller spawn properly and UPDATE_EXTRA_ACTIONBAR still lets an
+-- ExtraActionButton appear; ElvUI keeps both for the same reasons.
+local CONTROLLERS = {
+    { name = "ActionBarController", keep = { "SETTINGS_LOADED", "UPDATE_EXTRA_ACTIONBAR" } },
+}
+
 -- The buttons this module exists to get off the screen, one per bar family. Used by Verify() as a
--- SELF-CHECK: hiding a container is a means, and these are the end. A container renamed out from
+-- SELF-CHECK: claiming a container is a means, and these are the end. A container renamed out from
 -- under the list above leaves these visible while every other signal says the suppression worked,
--- which is exactly what happened -- so it is checked rather than trusted.
+-- which is exactly what happened once -- so it is checked rather than trusted.
 local WITNESS_BUTTONS = {
     "ActionButton1",
     "MultiBarBottomLeftButton1",
@@ -143,8 +192,7 @@ local WITNESS_BUTTONS = {
     "MultiBar7Button1",
     "StanceButton1",
     "PetActionButton1",
-    -- The micro menu's first button. A container renamed out from under the list above would leave
-    -- this visible while every other signal said the suppression worked.
+    -- The micro menu's first button.
     "CharacterMicroButton",
 }
 
@@ -152,30 +200,77 @@ M.WITNESS_BUTTONS = WITNESS_BUTTONS
 
 M.TARGETS = TARGETS
 
--- Frame -> true for everything this module has hidden. Keyed by frame rather than by name so a
--- client that renames one between builds cannot leave a stale entry behind.
-local suppressed = {}
--- HookScript cannot be undone, exactly like hooksecurefunc, so the hook asks `suppressed` on
--- every call rather than assuming it should always hide. That is what lets Restore work.
-local hooked  = {}
--- Visibility changes the client refused, waiting for the fight to end.
-local pendingHide    = {}
-local pendingRestore = {}
+M.CONTROLLERS = CONTROLLERS
 
+-- frame -> { parent = <original parent>, name = <the name it resolved under> }
+--
+-- Keyed by frame rather than by name so a client that renames one between builds cannot leave a
+-- stale entry behind. The original parent is recorded because it is the only thing Restore has to
+-- go on -- there is no "unparent" that means anything.
+local claimed = {}
+-- Reparents the client refused, waiting for the fight to end. Nothing else defers.
+local pendingPark   = {}
+local pendingUnpark = {}
+
+-- Set once, and deliberately never cleared: the controllers cannot be re-registered, so there is
+-- nothing for a second pass to do and nothing for Restore to undo.
+local controllersUnloaded = false
+
+local hider
 local regen
 
 local function inCombat()
     return type(InCombatLockdown) == "function" and InCombatLockdown() and true or false
 end
 
--- Every name in an entry that EXISTS is hidden, not just the first.
+-- The parking frame. ANONYMOUS on purpose: a named frame can be targeted by a state driver or by
+-- another addon walking globals, and this one must stay hidden for the whole session. Created lazily
+-- so merely loading the file builds nothing.
+local function hiderFrame()
+    if not hider then
+        hider = CreateFrame("Frame", nil, UIParent)
+        hider:Hide()
+    end
+    return hider
+end
+
+M.GetHider = function() return hider end
+
+-- Walks up from a frame looking for something. Bounded as well as terminated, like
+-- Dock.WouldCycle: a parent chain is client state, and a corrupt one must not spin.
+local function findUp(frame, want)
+    local f = frame
+    local steps = 0
+    while f and steps < 32 do
+        if want(f) then return true end
+        f = f.GetParent and f:GetParent() or nil
+        steps = steps + 1
+    end
+    return false
+end
+
+-- Whether an ANCESTOR of this frame is already claimed.
+--
+-- The candidate lists deliberately mix two shapes: genuine renames across client generations, and
+-- parent/child pairs -- MicroMenuContainer with MicroMenu, BagsBar with KeyRingButton, MainMenuBar
+-- with its four art frames. Only a rename wants claiming twice. Parking an ancestor already takes
+-- the child off screen, and parking the child as well would reparent it OUT of the container it
+-- belongs to, which is real damage rather than redundant work: the micro menu's parentage is a fact
+-- this codebase pins deliberately, because it is what keeps the two suppressions independent.
+local function ancestorClaimed(frame)
+    local parent = frame.GetParent and frame:GetParent() or nil
+    if not parent then return false end
+    return findUp(parent, function(f) return claimed[f] ~= nil end)
+end
+
+-- Every name in an entry that EXISTS is claimed, not just the first.
 --
 -- This started as first-match-wins and that was silently, badly wrong. Candidate lists mix two
 -- different things: genuine RENAMES across client generations, where only one name ever exists and
 -- first-match is right, and frames that COEXIST. This client has both `MainMenuBar` and
 -- `MainActionBar` -- the first carries the art, the second holds the buttons -- so stopping at the
 -- first match hid the gryphons and left all twelve buttons on screen, while IsSuppressed() happily
--- reported success. Hiding every match is identical for a rename and correct for a coexistence.
+-- reported success.
 local function resolveAll(entry, fn)
     local found = 0
     for _, name in ipairs(entry.names) do
@@ -188,60 +283,71 @@ local function resolveAll(entry, fn)
     return found
 end
 
--- Deferred UNCONDITIONALLY in combat, rather than only for the frames the client would
--- actually refuse. Only the bars hold secure buttons; the art and the gryphons hold none and
--- could legally be hidden mid-fight. Taking them separately would make half the cluster vanish
--- the moment a fight started and the other half appear when it ended, which reads as a bug. The
--- whole cluster moves together or not at all.
-local function doHide(frame)
+-- Step 1. Legal in combat, so it is never deferred -- which is what makes a mid-combat login safe
+-- even though the reparent below has to wait.
+local function unloadControllers()
+    if controllersUnloaded then return end
+    controllersUnloaded = true
+    for _, def in ipairs(CONTROLLERS) do
+        local frame = _G[def.name]
+        if frame and frame.UnregisterAllEvents then
+            frame:UnregisterAllEvents()
+            if def.keep then
+                for _, event in ipairs(def.keep) do
+                    -- pcall: an event absent on this client generation must cost a missing
+                    -- ExtraActionButton, never the plugin.
+                    pcall(frame.RegisterEvent, frame, event)
+                end
+            end
+        end
+    end
+end
+
+-- Step 3. The only thing here the client can refuse.
+local function park(frame)
     if inCombat() then
-        pendingHide[frame] = true
+        pendingPark[frame] = true
         return false
     end
-    pendingHide[frame] = nil
-    frame:Hide()
+    pendingPark[frame] = nil
+    -- Edit Mode swaps Hide/Show/IsShown for overrides on the frames it manages, and calling an
+    -- override taints. HideBase is the untainted one; a client without Edit Mode has only Hide.
+    local hide = frame.HideBase or frame.Hide
+    if hide then hide(frame) end
+    frame:SetParent(hiderFrame())
     return true
 end
 
-local function doShow(frame)
+local function unpark(frame, rec)
     if inCombat() then
-        pendingRestore[frame] = true
+        pendingUnpark[frame] = rec
         return false
     end
-    pendingRestore[frame] = nil
-    frame:Show()
+    pendingUnpark[frame] = nil
+    frame:SetParent(rec.parent or UIParent)
+    local show = frame.ShowBase or frame.Show
+    if show then show(frame) end
     return true
 end
 
--- WHICH MECHANISM ACTUALLY DECIDES THE FINAL STATE, because three of them overlap here and
--- mutation testing showed only one can be made to fail:
---
---   * THE ONSHOW HOOK is load-bearing. It consults `suppressed` on every call, so whatever the
---     player asked for LAST is what survives -- including on the restore pass below, where a
---     Show() on a still-suppressed frame is immediately undone. Remove it and suppression stops
---     working outright.
---   * The two queue-cancels (Apply clearing pendingRestore, Restore clearing pendingHide) are
---     FLICKER guards, not correctness ones. Without them a frame can be hidden and shown once
---     each on the same PLAYER_REGEN_ENABLED before the hook settles it, which is a visible
---     blink and nothing worse. Neither can be mutated to a failing assertion, and saying so is
---     better than leaving a reader to wonder which test covers them.
---   * Draining hides before restores is belt and braces for a state the cancels make
---     unreachable; if it ever became reachable it leaves the frame VISIBLE, which is the
---     direction a player can recover from.
+-- Drains what combat refused. Parks before unparks: with the queue-cancels below the two can never
+-- hold the same frame, and if that ever became reachable, ending up VISIBLE is the direction a
+-- player can recover from.
 local function onRegen()
-    for frame in pairs(pendingHide) do
-        pendingHide[frame] = nil
-        frame:Hide()
+    for frame in pairs(pendingPark) do
+        pendingPark[frame] = nil
+        park(frame)
     end
-    for frame in pairs(pendingRestore) do
-        pendingRestore[frame] = nil
-        frame:Show()
+    for frame, rec in pairs(pendingUnpark) do
+        pendingUnpark[frame] = nil
+        unpark(frame, rec)
     end
 end
 
+-- Registered only while something is actually waiting. Nothing else can add to either queue --
+-- there is no hook any more -- so an empty pair means there is nothing to wake up for.
 local function syncWatcher()
-    local want = next(suppressed) ~= nil
-        or next(pendingHide) ~= nil or next(pendingRestore) ~= nil
+    local want = next(pendingPark) ~= nil or next(pendingUnpark) ~= nil
     if want then
         if not regen then
             regen = CreateFrame("Frame")
@@ -253,24 +359,36 @@ local function syncWatcher()
     end
 end
 
---- Hides every target that exists on this client.
+--- Claims every target that exists on this client and parks it out of sight.
 --
--- Idempotent: calling it twice installs no second hook and hides nothing twice.
+-- Idempotent: a second call re-parks nothing and unregisters nothing twice.
 -- @return table  the ids that resolved, so a caller can log or assert what was found
 function M.Apply()
+    unloadControllers()
+
     local found = {}
     for _, entry in ipairs(TARGETS) do
-        local n = resolveAll(entry, function(frame)
-            pendingRestore[frame] = nil
-            suppressed[frame] = true
-            if not hooked[frame] then
-                hooked[frame] = true
-                frame:HookScript("OnShow", function(self)
-                    -- Asked on every call, never assumed: this hook outlives Restore.
-                    if suppressed[self] then doHide(self) end
-                end)
+        local n = resolveAll(entry, function(frame, name)
+            pendingUnpark[frame] = nil
+            if ancestorClaimed(frame) then return end
+            if not claimed[frame] then
+                claimed[frame] = { parent = frame:GetParent(), name = name }
+                -- DELIBERATELY NOT UnregisterAllEvents on the bar. Parking is what makes it
+                -- invisible -- a child of a hidden parent renders nothing whatever it has
+                -- registered -- so silencing it buys no visibility and costs the keybind path:
+                -- Blizzard's own action plumbing is what keeps the cached slots the
+                -- ACTIONBUTTON* families resolve through, and bars 1-8 use those families. See
+                -- the note on CONTROLLERS above; this is the same trade, and it was found by a
+                -- keypress in cat form firing the out-of-form spell.
+                --
+                -- Keep Blizzard's layout pass off a frame that now lives somewhere else. Both
+                -- halves, because they are read by different code: the field by
+                -- UIParent_ManageFramePositions, the table entry by the Edit Mode position manager.
+                frame.ignoreFramePositionManager = true
+                local managed = _G.UIPARENT_MANAGED_FRAME_POSITIONS
+                if type(managed) == "table" then managed[name] = nil end
             end
-            doHide(frame)
+            park(frame)
         end)
         if n > 0 then
             found[#found + 1] = entry.id
@@ -280,14 +398,20 @@ function M.Apply()
     end
     syncWatcher()
 
-    -- Self-check, and it is not decoration: hiding a container is the MEANS, a button off the
+    -- Self-check, and it is not decoration: claiming a container is the MEANS, a button off the
     -- screen is the END, and this module already shipped a version where every other signal said
     -- success while twelve buttons sat in plain view. Logged rather than raised -- a stray visible
     -- button is a cosmetic fault, not a reason to take the plugin down mid-session.
-    local visible = M.Verify()
-    if #visible > 0 and SuuUI.Debug then
-        SuuUI.Debug("ActionBars: suppression missed " .. table.concat(visible, ", ") ..
-                    " -- their container is not in TARGETS")
+    --
+    -- Skipped while a park is still queued, because during a fight the answer is "yes, still
+    -- visible" and that is correct rather than a failure. The old version ran it at exactly the
+    -- moment it was guaranteed to fail and reported a misleading reason.
+    if not M.IsDeferred() then
+        local visible = M.Verify()
+        if #visible > 0 and SuuUI.Debug then
+            SuuUI.Debug("ActionBars: suppression missed " .. table.concat(visible, ", ") ..
+                        " -- their container is not in TARGETS")
+        end
     end
     return found
 end
@@ -308,33 +432,59 @@ function M.Verify()
     return visible
 end
 
---- Shows everything this module hid, and stops claiming it.
+--- Puts everything this module claimed back where it found it, and stops claiming it.
 --
--- Never touches a frame it did not hide: with suppression switched off we never hid anything,
+-- Never touches a frame it did not claim: with suppression switched off we never claimed anything,
 -- and showing it here would override whatever else did.
+--
+-- THE FRAMES COME BACK VISIBLE BUT INERT. Their events are gone and cannot be restored, so they
+-- will not update until the UI reloads -- which is why the settings that reach here are
+-- reload-guarded. Restoring position and visibility is still worth doing: it is what makes the
+-- reload cosmetically seamless, and it is the whole behaviour a spec can assert.
 function M.Restore()
-    for frame in pairs(suppressed) do
-        -- Cleared BEFORE the Show, or the hook we cannot uninstall hides it again on the way
-        -- out. Same ordering rule as Plugins/UnitFrames restore and DataBar's restoreTop.
-        suppressed[frame] = nil
-        pendingHide[frame] = nil
-        doShow(frame)
+    for frame, rec in pairs(claimed) do
+        claimed[frame] = nil
+        pendingPark[frame] = nil
+        unpark(frame, rec)
     end
     syncWatcher()
 end
 
---- Whether this module is currently claiming the named frame.
+--- Whether the named frame is currently parked out of sight.
+--
+-- Reports the SCREEN, not the intent. It used to answer from the claim table alone, which meant it
+-- said true throughout a fight in which the frame was still in plain view -- the single most
+-- misleading signal in the old mechanism. Ask IsClaimed for ownership and IsDeferred for the queue.
+--
+-- Answers true for a frame parked via an ANCESTOR as well as one parked directly, because that is
+-- the same fact from the player's side: MainMenuBarArtFrame is off the screen either way, and
+-- ancestorClaimed deliberately leaves it unclaimed.
 -- @param name string
 -- @return bool
 function M.IsSuppressed(name)
     local frame = _G[name]
-    return frame ~= nil and suppressed[frame] == true
+    if not frame or not hider then return false end
+    return findUp(frame, function(f) return f == hider end)
 end
 
---- Whether a visibility change is waiting for the fight to end.
+--- Whether this module owns the named frame, parked yet or not.
+-- @param name string
+-- @return bool
+function M.IsClaimed(name)
+    local frame = _G[name]
+    return frame ~= nil and claimed[frame] ~= nil
+end
+
+--- Whether a reparent is waiting for the fight to end.
 -- @return bool
 function M.IsDeferred()
-    return next(pendingHide) ~= nil or next(pendingRestore) ~= nil
+    return next(pendingPark) ~= nil or next(pendingUnpark) ~= nil
+end
+
+--- Whether Blizzard's bar drivers have been silenced. One-way, by construction.
+-- @return bool
+function M.ControllersUnloaded()
+    return controllersUnloaded
 end
 
 SuuUI._ActionBars = SuuUI._ActionBars or {}

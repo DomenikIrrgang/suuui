@@ -757,7 +757,8 @@ function M.install(env)
     -- Neighbours in the same cluster that LATER phases own: the micro menu (7), the bags (9),
     -- the watch bars (8), the class bars (6). Present so a spec asserting "phase 4b does not
     -- touch these" is testing something rather than skipping an absent frame.
-    for _, name in ipairs({ "MicroMenuContainer", "MicroButtonAndBagsBar",
+    for _, name in ipairs({ "MicroMenuContainer", "MicroMenu", "MicroButtonAndBagsBar",
+                            "BagsBar", "KeyRingButton",
                             "StatusTrackingBarManager",
                             "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer",
                             "StanceBar", "PetActionBar", "PossessActionBar",
@@ -766,6 +767,63 @@ function M.install(env)
         f:SetSize(120, 30)
         f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
     end
+
+    -- BLIZZARD'S OWN BAR DRIVERS, and the reason the suppression rewrite exists.
+    --
+    -- Modelled with the BEHAVIOUR that produced the bug rather than as inert stubs:
+    -- ActionBarController registers the stance and page events and re-shows the whole cluster when
+    -- one fires, which is what ValidateActionBarTransition does in the live client -- it calls
+    -- MainActionBar:Show(), StanceBar:Show() and MultiActionBar_Update() unconditionally.
+    --
+    -- Without that, "suppression survives a stance change" would pass against a controller that
+    -- never did anything: the same passed-for-the-wrong-reason trap the blizzardSystemFrame comment
+    -- above records, and the reason the real bug went ten days undetected behind a green suite.
+    --
+    -- SETTINGS_LOADED is deliberately inert here -- it is the one event suppression KEEPS, so a spec
+    -- can prove the kept registration does not undo the parking.
+    local CONTROLLER_REVIVES = { "MainActionBar", "MainMenuBar", "StanceBar", "PetActionBar",
+                                 "MultiBarBottomLeft", "MultiBarBottomRight",
+                                 "MultiBarLeft", "MultiBarRight" }
+    local ActionBarController = CreateFrame("Frame", "ActionBarController", UIParent)
+    for _, event in ipairs({ "ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR",
+                             "UPDATE_VEHICLE_ACTIONBAR", "UPDATE_OVERRIDE_ACTIONBAR",
+                             "UPDATE_EXTRA_ACTIONBAR",
+                             "SETTINGS_LOADED" }) do
+        ActionBarController:RegisterEvent(event)
+    end
+    ActionBarController:SetScript("OnEvent", function(_, event)
+        if event == "SETTINGS_LOADED" then return end
+        for _, name in ipairs(CONTROLLER_REVIVES) do
+            local f = env[name]
+            if f then f:Show() end
+        end
+    end)
+
+    -- The controller's two sibling event frames. Real registrations, so unregistering them is a
+    -- measurable change rather than a no-op on an empty set.
+    for _, def in ipairs({
+        { name = "ActionBarActionEventsFrame",
+          events = { "ACTIONBAR_UPDATE_STATE", "ACTIONBAR_UPDATE_USABLE" } },
+        { name = "ActionBarButtonEventsFrame",
+          events = { "ACTIONBAR_SLOT_CHANGED", "ACTIONBAR_UPDATE_COOLDOWN", "UPDATE_BINDINGS" } },
+    }) do
+        local f = CreateFrame("Frame", def.name, UIParent)
+        for _, event in ipairs(def.events) do f:RegisterEvent(event) end
+    end
+
+    -- The position manager's table. Present with entries for the frames the client really manages,
+    -- so clearing one is an observable change; an addon that parks a frame elsewhere has to remove
+    -- it or UIParent_ManageFramePositions keeps anchoring it.
+    env.UIPARENT_MANAGED_FRAME_POSITIONS = {
+        MainMenuBar          = {},
+        MainActionBar        = {},
+        MultiBarBottomLeft   = {},
+        MultiBarBottomRight  = {},
+        MultiBarLeft         = {},
+        MultiBarRight        = {},
+        StanceBar            = {},
+        PetActionBar         = {},
+    }
 
     -- THE PANEL TOGGLES the micro menu calls.
     --

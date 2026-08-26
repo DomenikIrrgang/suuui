@@ -521,10 +521,23 @@ existing field keeps the rail, the hover fill, the hug and the tone in one place
 
 ### Suppression
 
-Hidden with the **guarded-`OnShow` hook** from `plugin-authoring.md` ("A frame that re-shows
-itself") and restored in `onDisable`. Never `UnregisterAllEvents` (nothing can enumerate a
-frame's registrations, so `onDisable` could never hand it back). Never `SetParent(nil)`.
-Clear the suppression flag **before** the restoring `Show()`.
+**REWRITTEN 2026-08-26 — the guarded-`OnShow` mechanism this section used to describe was
+game-breaking and is gone.** It answered Blizzard's re-show with `Hide()`, which the client refuses
+in combat, so a warrior changing stance or a reload mid-fight left the whole cluster on screen —
+bags and micro menu with it — until the fight ended. `ActionBarController` re-shows the cluster from
+`ValidateActionBarTransition` on `ACTIONBAR_PAGE_CHANGED` and `UPDATE_BONUS_ACTIONBAR`, which IS a
+form change, so the race was unwinnable.
+
+Suppression now makes the frames incapable of appearing, as ElvUI, Bartender4 and Dominos all do:
+`ActionBarController:UnregisterAllEvents()` (keeping `SETTINGS_LOADED`) plus per-bar
+`UnregisterAllEvents()` plus `SetParent` onto one anonymous, permanently hidden frame. Measured in
+game: `UnregisterAllEvents` and `SetAlpha` are permitted under lockdown while `SetParent` and
+`RegisterStateDriver` are refused, so only the reparent defers to `PLAYER_REGEN_ENABLED`. Never
+`SetParent(nil)`; prefer `HideBase` over `Hide` where it exists, because Edit Mode's overrides taint.
+
+Unregistering is a one-way door, so `Restore` hands the cluster back visible but inert and **both
+`enabled` and `hide_blizzard` carry a ReloadGuard**. Full rationale in `plugin-authoring.md`,
+"Suppressing Blizzard's own bars", and in the header of `Plugins/ActionBars/Suppress.lua`.
 
 `MainMenuBar` is layout-managed on this client, so suppression and any reposition need the
 `hooksecurefunc` re-assert pattern `Plugins/DataBar/DataBar.lua` already uses, consulting a

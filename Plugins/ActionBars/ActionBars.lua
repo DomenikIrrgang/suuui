@@ -124,10 +124,12 @@ local BARS = {
     -- UI, and the ids are profile data as well as dock participant ids -- renumbering would move every
     -- stored position and silently repoint every dock attachment.
     --
-    -- `ownBindings` marks the ones whose binding names SuuUI declares itself, in Bindings.xml. A
-    -- Blizzard family acts on the SLOT, so bars 1-8 need no routing at all: whatever is bound to
-    -- ACTIONBUTTON1 fires UseAction(1) whether Blizzard's button is on screen or not. For these five
-    -- there is no such family, so the key has to be routed to a click on our own secure button.
+    -- `ownBindings` marks the ones whose binding names SuuUI DECLARES itself, in Bindings.xml, and
+    -- that is all it means -- it does not decide which bars get routed. EVERY bar routes its own keys
+    -- through SetOverrideBindingClick, including these eight, because an override beats the base
+    -- binding and intercepting is what removes the dependency on Blizzard's own action plumbing. See
+    -- applyOwnBindings for what depending on it cost. Pages 2 and 7-10 need the declaration because
+    -- Blizzard ships no binding family for those slots at all.
     {
         id = 9, label = "Bar 9", first = 13, page = 2, ownBindings = true,
         bindingPrefix = "SUUUIBAR9BUTTON",
@@ -338,19 +340,28 @@ end
 --- Routes this bar's declared keys to clicks on its own buttons.
 --
 -- ONLY for bars whose binding names SuuUI declares itself. A Blizzard family acts on the SLOT, so bars
--- 1-8 need nothing here: whatever is bound to ACTIONBUTTON1 fires UseAction(1) whether Blizzard's own
--- button is on screen or not, which is why suppressing its bars never cost the player their keys.
+-- EVERY bar routes its own keys, and the gate that used to exempt bars 1-8 is gone.
 --
--- Pages 2 and 7-10 have no such family. `Bindings.xml` gives the player a NAME to bind, and this turns
--- the key they chose into a click on our secure button -- the only route an addon has to a protected
--- UseAction. A Lua binding body calling UseAction directly would be refused.
+-- That exemption was true on its own terms -- whatever is bound to ACTIONBUTTON1 fires UseAction(1)
+-- whether Blizzard's button is on screen or not -- but it made the addon depend on BLIZZARD'S action
+-- plumbing staying alive, because that path resolves through the cached slot on its own
+-- ActionButton1..12. Suppression silenced that plumbing and every keybind on bars 1-8 started firing
+-- the pre-form spell while our own icons stayed correct. Two mechanisms for one job, and the seam is
+-- where the bug lived.
+--
+-- SO WE INTERCEPT INSTEAD. An override binding BEATS the base binding, so reading the player's key
+-- with GetBindingKey("ACTIONBUTTON1") and re-routing it to a click on our own button means Blizzard's
+-- path is never reached. Nothing migrates: their saved keys are untouched, the client's keybinding UI
+-- still shows the families it always did, and `ownBindings` goes back to meaning only what its name
+-- says -- that SuuUI DECLARES those names in Bindings.xml, which pages 2 and 7-10 need because
+-- Blizzard ships no family for them.
 --
 -- Cleared and reapplied wholesale rather than diffed: the set is at most twelve keys, and a diff would
 -- have to track the player's rebinding to know what to remove.
 local function applyOwnBindings(p, def)
-    if not def.ownBindings then return end
     local grid = p._bars[def.id]
     if not grid then return end
+    if not def.bindingPrefix then return end
 
     -- SetOverrideBindingClick is refused in combat, like any other secure mutation. Deferred through the
     -- same pending set the attach transition uses, so leaving combat drains both.
@@ -491,8 +502,22 @@ local function syncStanceForms(p)
                 -- waiting on PLAYER_REGEN_ENABLED for no reason at all.
                 if count ~= #grid:GetSlots() then
                     grid:SetSlots(slotsFor(def, count), bindingsFor(def, count))
+                    -- INSIDE the short-circuit, not beside it. It used to sit outside, so it ran on
+                    -- every plural event whether the count had moved or not -- and the client fires
+                    -- this family repeatedly, which is why LibActionButton throttles it to 1/sec
+                    -- ("Blizzard broke the event and its now extremely spammy in some clients").
+                    --
+                    -- Whether Show/Hide on this grid is actually PROTECTED is UNMEASURED: the grid
+                    -- parents StanceButtonTemplate CheckButtons, and if that template is secure then
+                    -- protection propagates down and the refusal propagates back up, making every
+                    -- stance dance in combat a refused call. The harness models the template without
+                    -- _secure and the in-game probes covered RegisterStateDriver and SetParent, not
+                    -- this -- so treat the protection as unconfirmed and the call as simply wasted.
+                    --
+                    -- Nothing is lost by moving it either way: visibility here is purely a function
+                    -- of the count, so a count that has not changed cannot have changed the answer.
+                    syncStanceVisibility(p, def)
                 end
-                syncStanceVisibility(p, def)
             end
         end
     end
@@ -571,7 +596,7 @@ local function buildBar(p, def)
     -- is nothing to bind a key to, and catching up on PLAYER_REGEN_ENABLED raced the grid's own
     -- catch-up on the same event. The signal exists for exactly this: the buttons announce themselves,
     -- and the keys follow whenever they appear instead of on a guess about ordering.
-    if def.ownBindings then
+    if def.bindingPrefix then
         p._bindConns = p._bindConns or {}
         p._bindConns[def.id] = SuuUI.UISignals:Connect(
             grid, SuuUI.UISignals.SIGNALS.CHILDREN_CHANGED,
@@ -589,8 +614,10 @@ local function destroyBar(p, def)
     -- foreign is still anchored to a frame that is about to go.
     SuuUI.AttachPoints:Revoke(dockPoint(def.id))
     -- The keys go with the bar. Left in place they would point at a button that no longer exists, and
-    -- an override binding outlives the frame it was set on.
-    if def.ownBindings and type(ClearOverrideBindings) == "function" then
+    -- an override binding outlives the frame it was set on. EVERY bar now, not only the self-declared
+    -- ones -- a stale override on bar 1 would swallow the player's key and route it nowhere, which is
+    -- worse than the old behaviour where Blizzard's family would still have answered.
+    if def.bindingPrefix and type(ClearOverrideBindings) == "function" then
         ClearOverrideBindings(grid:GetFrame())
     end
     if p._bindConns and p._bindConns[def.id] then
@@ -715,8 +742,16 @@ local function watchSettings(p)
     for _, def in ipairs(BARS) do
         watchBar(p, def)
     end
-    -- Immediate, so switching it off hands Blizzard's cluster back straight away rather than at
-    -- the next login. That is the whole point of it being separate from the plugin toggle.
+    -- Still immediate, but NOT for the reason this comment used to give. It said switching the
+    -- toggle off "hands Blizzard's cluster back straight away rather than at the next login. That
+    -- is the whole point of it being separate from the plugin toggle." That is no longer true and
+    -- has not been since suppression started unregistering Blizzard's events: those cannot be
+    -- re-registered, so the cluster comes back visible but inert and the key carries a ReloadGuard.
+    --
+    -- The toggle stays separate for the OTHER reason the schema gives -- it is the escape hatch, and
+    -- a player whose bars are misbehaving must be able to reach it without disabling the plugin
+    -- whose settings page they are standing on. `immediate` is what builds the initial state on the
+    -- way in, which is reason enough on its own.
     SuuUI.Settings:Watch(PLUGIN_ID, "hide_blizzard", function(on)
         local Suppress = SuuUI._ActionBars.Suppress
         if on then Suppress.Apply() else Suppress.Restore() end
@@ -905,6 +940,26 @@ SuuUI:CreatePlugin({
         -- invariant simple: a plugin that has initialised has published its participants.
         registerParticipants()
         SuuUI.Settings:Register(PLUGIN_ID, schema())
+
+        -- BOTH keys that reach Suppress.Restore are reload-guarded, and it is the same one reason:
+        -- suppression unregisters Blizzard's own bar events, nothing in the API can put them back,
+        -- so Restore hands the cluster back VISIBLE BUT INERT. A player who switches either of these
+        -- off wants working default bars, and only a reload can produce them.
+        --
+        -- `enabled` needs it as much as `hide_blizzard` does, because onDisable calls Restore too --
+        -- guarding only the suppression toggle would leave the plugin switch as a silent way into
+        -- the same half-dead state. UnitFrames and CastBars already guard their own `enabled` for
+        -- unrelated reasons, so this also stops ActionBars being the odd one out.
+        SuuUI.ReloadGuard:Register(PLUGIN_ID, "enabled", {
+            title   = "Reload Required",
+            message = "Disabling the action bars hands Blizzard's bars back, which needs a UI " ..
+                      "reload to make them work again. Reload now?",
+        })
+        SuuUI.ReloadGuard:Register(PLUGIN_ID, "hide_blizzard", {
+            title   = "Reload Required",
+            message = "Showing Blizzard's action bars again needs a UI reload before they will " ..
+                      "update. Reload now?",
+        })
 
         -- No `immediate` here on purpose. Plugins:autoEnable already applies the stored value
         -- during the login pass, and an immediate callback would run onEnable from inside the

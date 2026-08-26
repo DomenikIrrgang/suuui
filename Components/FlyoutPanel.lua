@@ -500,7 +500,12 @@ function SuuUI.Components.FlyoutPanel(props, parent)
     local T = SuuUI.Theme
 
     local host  = SuuUI.Layout:GetFloatingHost()
-    local panel = CreateFrame("Frame", props.name, parent or UIParent, "BackdropTemplate")
+    -- FALLING BACK TO THE HOST, NOT UIParent. The host places the panel; its PARENT decides what a
+    -- unit is, and the host is hosted on the UI root, which carries the pixel grid's scale. A panel
+    -- on UIParent therefore renders its own text and its row geometry at the ratio between the two
+    -- scales -- 40% oversized at 1080p, and exactly right at 768p, which is what let the same
+    -- mistake sit unnoticed in Dropdown. See the note on its panel.
+    local panel = CreateFrame("Frame", props.name, parent or host:GetFrame(), "BackdropTemplate")
     panel:Hide()
     -- Mouse enabled so the panel itself counts as "inside" for the hover watcher, and so a
     -- click landing in the gutter between rows does not fall through to the world.

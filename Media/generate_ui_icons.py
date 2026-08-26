@@ -4,7 +4,13 @@ Follows generate_micro_icons.py exactly: every dimension is a number in this fil
 rendered with Pillow at 4x and downsampled, and verify() MEASURES THE RESULT rather than trusting a
 comment that claims precision.
 
-    Media/ui-icons.tga   64x64 uncompressed 32-bit, a 2x2 grid of 32x32 glyphs
+    Media/ui-icons.tga   128x128 uncompressed 32-bit, a 4x4 grid of 32x32 glyphs
+
+THE GRID GOES 2 -> 4, NOT 2 -> 3. A texture's dimensions must be a power of two, and three 32px
+cells is 96, which is not one -- so the step past four glyphs is straight to sixteen cells. That is
+the same 128x128 shape the micro sheet already uses, and the eleven spare cells cost nothing: they
+are transparent, and verify() asserts they stay that way so a mis-typed coord shows nothing rather
+than debris.
 
 WHY A SECOND SHEET RATHER THAN THE TWO FREE CELLS IN micro-icons.tga. The micro sheet has exactly
 two cells spare, so it would have fitted -- and it would have been wrong. Its coord table lives in
@@ -28,8 +34,8 @@ from PIL import Image, ImageDraw
 # Geometry. Every number the art depends on lives here.
 # ---------------------------------------------------------------------------
 CELL = 32            # one glyph, in final pixels -- same as the micro sheet, so glyphs are swappable
-GRID = 2             # 2x2 cells
-SHEET = CELL * GRID  # 64 -- a power of two, which the client requires for a texture
+GRID = 4             # 4x4 cells -- see the docstring on why not 3
+SHEET = CELL * GRID  # 128 -- a power of two, which the client requires for a texture
 SCALE = 4            # supersample factor
 PAD = 4              # keep-clear margin inside a cell, in final pixels
 
@@ -47,6 +53,7 @@ GLYPHS = [
     "account",  # 1  a globe -- this is account-wide rather than this character
     "coin",     # 2  a stack of coins -- sell grey items
     "search",   # 3  a magnifier -- the search field's leading glyph
+    "chevron",  # 4  a downward chevron -- a dropdown's open affordance
 ]
 assert len(GLYPHS) <= GRID * GRID, (
     f"{len(GLYPHS)} glyphs will not fit a {GRID}x{GRID} sheet"
@@ -140,11 +147,38 @@ def _draw_search(d, u):
     d.line([u.p(18.5, 18.5), u.p(26, 26)], fill=INK, width=u.w(STROKE))
 
 
+def _draw_chevron(d, u):
+    """A downward chevron: two arms meeting at a point below.
+
+    THE ONE GLYPH ON THIS SHEET THAT REPLACES A CHARACTER RATHER THAN AN EMOJI. Dropdown and
+    Accordion both spend an ASCII "v" on their arrow, because this client's faces do not reliably
+    carry the geometric-shape triangles and a face missing one draws a box. A "v" is a letter
+    though: it has a font's own weight, its own optical centre and its own baseline, so it reads as
+    a character sitting in a control rather than as the control's affordance.
+
+    Two lines rather than a filled triangle, matching _arrow's head on this same sheet: at the size
+    a dropdown draws this -- the font step, so around 13px -- a filled triangle is a blob, while a
+    stroked chevron keeps the hairline weight every other glyph here uses.
+
+    ARMS AT ROUGHLY 51 DEGREES, steeper than the 45 a chevron is usually drawn at. Two reasons, and
+    the first is geometry rather than taste: verify() requires a glyph to fill at least 40% of its
+    cell in BOTH axes, and a 45-degree chevron wide enough to satisfy x is too shallow to satisfy y.
+    The second is that a shallow apex is the first thing to dissolve when the cell is downsampled to
+    a third of its size, which is exactly what happens here.
+
+    Drawn as a single three-point line with a curved joint, so the apex is one mitred corner rather
+    than two butt caps crossing -- overlapping caps leave a notch on the outside of the point.
+    """
+    d.line([u.p(7, 12), u.p(16, 23), u.p(25, 12)],
+           fill=INK, width=u.w(STROKE), joint="curve")
+
+
 DRAW = {
     "sort": _draw_sort,
     "account": _draw_account,
     "coin": _draw_coin,
     "search": _draw_search,
+    "chevron": _draw_chevron,
 }
 assert set(DRAW) == set(GLYPHS), "every glyph in GLYPHS needs a draw function"
 

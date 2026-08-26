@@ -54,13 +54,26 @@ describe("Core/Icons", function()
         expect(names.account).truthy()
     end)
 
-    -- The coords must actually differ, or both buttons draw the same picture. This is the assertion
+    -- The coords must actually differ, or two buttons draw the same picture. This is the assertion
     -- that catches a copy-paste in the table the generator prints.
+    --
+    -- EVERY PAIR, not just one. It used to compare sort against account alone, which is what its own
+    -- comment already claimed to be doing -- and a mutation pointing a third glyph at sort's cell
+    -- survived it, because nothing looked at the third glyph. A pairwise walk cannot be outgrown by
+    -- the sheet: the generator's GLYPHS list is append-only and each new cell is checked against
+    -- every earlier one for free.
     it("gives each glyph a distinct region of the sheet", function()
-        local _, s = I():Get("sort")
-        local _, a = I():Get("account")
-        local same = s[1] == a[1] and s[2] == a[2] and s[3] == a[3] and s[4] == a[4]
-        expect(same).as("two glyphs pointing at one cell").falsy()
+        local names = I():List()
+        for i = 1, #names do
+            for j = i + 1, #names do
+                local _, a = I():Get(names[i])
+                local _, b = I():Get(names[j])
+                local same = a[1] == b[1] and a[2] == b[2] and a[3] == b[3] and a[4] == b[4]
+                expect(same)
+                    .as(names[i] .. " and " .. names[j] .. " point at one cell").falsy()
+            end
+        end
+        expect(#names).as("a one-glyph sheet would pass the walk vacuously").gte(2)
     end)
 
     it("keeps every coord a 0..1 fraction", function()
