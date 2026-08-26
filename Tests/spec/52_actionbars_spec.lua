@@ -670,35 +670,47 @@ describe("Plugins.ActionBars: suppression", function()
             expect(H.env.ActionBarController:IsEventRegistered("UPDATE_BONUS_ACTIONBAR")).falsy()
         end)
 
-        it("leaves Blizzard's ACTION PLUMBING alive, because our keybinds resolve through it",
+        it("silences Blizzard's action plumbing, which is safe ONLY because we route every key",
         function()
-            -- THE REGRESSION TEST FOR A BUG THIS FIX CAUSED, found in game by a keypress and not by
-            -- the suite. Copying ElvUI, an earlier version also unregistered these two frames. They
-            -- drive ActionButton_UpdateAction, which keeps the cached slot on Blizzard's own
-            -- ActionButton1..12 current -- and bars 1-8 use BLIZZARD'S BINDING FAMILIES
-            -- (ACTIONBUTTON1..) rather than override-bound clicks on our own buttons, so a keypress
-            -- resolves through those cached slots.
+            -- THE COUPLING, ASSERTED IN ONE PLACE. These two frames drive ActionButton_UpdateAction,
+            -- which keeps the cached slot on Blizzard's own ActionButton1..12 current. While bars 1-8
+            -- still used BLIZZARD'S BINDING FAMILIES, silencing them broke every keybind on those
+            -- bars: the keypress resolved through the stale cache and fired the pre-form spell while
+            -- our own icon, read from the `action` attribute the paging snippet rewrote, was correct.
+            -- Clicking worked throughout, which is what identified the split. Found in game.
             --
-            -- Symptom: in cat form the icon was right (our paint reads the `action` attribute the
-            -- paging snippet rewrote) and the keypress fired the out-of-form spell. Clicking worked
-            -- throughout, which is what identified the split.
-            --
-            -- ElvUI can silence this plumbing because it override-binds every bar. We do not, so it
-            -- stays -- and it costs nothing for suppression, since parking is what hides a bar.
+            -- It is safe now only because `applyOwnBindings` override-binds EVERY bar onto its own
+            -- secure button, so nothing of ours resolves through Blizzard's at all. The second half
+            -- of this test is that premise: narrow the routing again and this goes red, which is the
+            -- coupling made mechanical instead of left in a comment.
             expect(H.env.ActionBarActionEventsFrame:IsEventRegistered("ACTIONBAR_UPDATE_STATE"))
-                .as("Blizzard's action events still fire").truthy()
+                .as("plumbing silenced").falsy()
+
+            local plugin = H.SuuUI.Plugins:Get(PLUGIN)
+            local routed = 0
+            for _, b in ipairs(H.getOverrideBindings()) do
+                if type(b.button) == "string" and b.button:find("SuuUIBar", 1, true) then
+                    routed = routed + 1
+                end
+            end
+            -- Bar 1 is enabled by default and its keys are staged by the harness, so at least one
+            -- route must exist for a FAMILY bar -- the case that broke.
+            expect(plugin._bars[1]).as("bar 1 is up").notNil()
+            expect(plugin._bindConns and plugin._bindConns[1])
+                .as("and bar 1 routes its own keys, which is what makes the above safe").notNil()
+        end)
+
+        it("keeps the registrations that are not ours to take", function()
+            -- SETTINGS_LOADED lets the page controller spawn; UPDATE_EXTRA_ACTIONBAR plus the two
+            -- ACTIONBAR_* events on the button frame are what still let an ExtraActionButton appear
+            -- and cool down. ElvUI keeps exactly these, and taking them costs the player function
+            -- with nothing gained.
+            expect(H.env.ActionBarController:IsEventRegistered("SETTINGS_LOADED")).truthy()
+            expect(H.env.ActionBarController:IsEventRegistered("UPDATE_EXTRA_ACTIONBAR")).truthy()
             expect(H.env.ActionBarButtonEventsFrame:IsEventRegistered("ACTIONBAR_SLOT_CHANGED"))
                 .truthy()
             expect(H.env.ActionBarButtonEventsFrame:IsEventRegistered("ACTIONBAR_UPDATE_COOLDOWN"))
                 .truthy()
-        end)
-
-        it("keeps the two controller registrations that are not ours to take", function()
-            -- SETTINGS_LOADED lets the page controller spawn; UPDATE_EXTRA_ACTIONBAR still lets an
-            -- ExtraActionButton appear. ElvUI keeps both, and taking them costs the player function
-            -- with nothing gained.
-            expect(H.env.ActionBarController:IsEventRegistered("SETTINGS_LOADED")).truthy()
-            expect(H.env.ActionBarController:IsEventRegistered("UPDATE_EXTRA_ACTIONBAR")).truthy()
             -- And the kept one does not undo the parking.
             H.fireEvent("SETTINGS_LOADED")
             expect(bar("MainMenuBar"):IsVisible()).falsy()

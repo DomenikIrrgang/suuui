@@ -1361,9 +1361,20 @@ keeps evaluating a conditional against a frame that no longer exists.
 ### Keybindings
 
 **A Blizzard binding family acts on the SLOT, not on the button.** Whatever is bound to
-`ACTIONBUTTON1` fires `UseAction(1)` whether Blizzard's own button is on screen or not — which is
-why suppressing Blizzard's bars never costs the player their keys, and why bars using a Blizzard
-family need no binding code at all.
+`ACTIONBUTTON1` fires `UseAction(1)` whether Blizzard's own button is on screen or not — which is why
+suppressing Blizzard's bars never costs the player their keys.
+
+**But do NOT leave those bars unrouted on that basis.** The family resolves through the cached slot on
+Blizzard's own `ActionButton1..12`, which `ActionButton_UpdateAction` keeps current — so relying on it
+makes your addon depend on Blizzard's action plumbing staying registered. SuuUI did, suppression
+silenced that plumbing, and **every keybind on bars 1-8 fired the pre-form spell while the icons stayed
+correct**, because the icon reads your own `action` attribute and the key did not. Clicking worked
+throughout, which is what identified it.
+
+Route **every** bar instead: read the player's key with `GetBindingKey` and re-route it with
+`SetOverrideBindingClick`. An **override binding beats the base binding**, so this is interception
+rather than a second claim on one key — nothing migrates, their saved keys and the client's keybinding
+UI are untouched, and no bar resolves through Blizzard's buttons any more.
 
 **Slots with no Blizzard family need your own names and explicit routing.** Declare them in
 `Bindings.xml` (SuuUI declares `SUUUIBAR9BUTTON1`..`SUUUIBAR13BUTTON12` for the pages Blizzard

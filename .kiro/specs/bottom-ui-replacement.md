@@ -529,15 +529,64 @@ bags and micro menu with it — until the fight ended. `ActionBarController` re-
 form change, so the race was unwinnable.
 
 Suppression now makes the frames incapable of appearing, as ElvUI, Bartender4 and Dominos all do:
-`ActionBarController:UnregisterAllEvents()` (keeping `SETTINGS_LOADED`) plus per-bar
-`UnregisterAllEvents()` plus `SetParent` onto one anonymous, permanently hidden frame. Measured in
-game: `UnregisterAllEvents` and `SetAlpha` are permitted under lockdown while `SetParent` and
-`RegisterStateDriver` are refused, so only the reparent defers to `PLAYER_REGEN_ENABLED`. Never
-`SetParent(nil)`; prefer `HideBase` over `Hide` where it exists, because Edit Mode's overrides taint.
+`UnregisterAllEvents` on `ActionBarController` and its two event frames, plus `SetParent` onto one
+anonymous, permanently hidden frame. Each bar's OWN events are deliberately left alone — parking is
+what makes a bar invisible, so silencing it adds nothing. Never `SetParent(nil)`; prefer `HideBase`
+over `Hide` where it exists, because Edit Mode's overrides taint. Do not claim a child whose ancestor
+is already claimed, or it gets pulled out of the container it belongs to.
 
 Unregistering is a one-way door, so `Restore` hands the cluster back visible but inert and **both
-`enabled` and `hide_blizzard` carry a ReloadGuard**. Full rationale in `plugin-authoring.md`,
-"Suppressing Blizzard's own bars", and in the header of `Plugins/ActionBars/Suppress.lua`.
+`enabled` and `hide_blizzard` carry a ReloadGuard**.
+
+#### Measured under combat lockdown (in game, 2026-08-26)
+
+| Call | In combat |
+|---|---|
+| `RegisterStateDriver` on a protected frame | **refused** |
+| `SetParent` on a frame holding a secure child | **refused** |
+| `UnregisterAllEvents` | permitted |
+| `SetAlpha` | permitted |
+| an already-registered state driver evaluating | works — it is Blizzard's sanctioned channel |
+
+Also measured: a plain `Frame` holding one `SecureActionButtonTemplate` child reports
+`IsProtected() == true, false` — protected by **propagation**, not explicitly. That is the rule both
+refusals follow, and it is why the art frames were never the problem: they are siblings of the
+buttons, not ancestors.
+
+Consequence for the design: only the reparent defers to `PLAYER_REGEN_ENABLED`. Alpha-ing the cluster
+out immediately instead would leave the player with no clickable bars at all, since our own buttons
+cannot be built in combat either.
+
+#### Every bar routes its own keys (2026-08-26)
+
+Bars 1–8 used to rely on Blizzard's binding families with no routing code, on the correct observation
+that a family acts on the SLOT. That made the addon depend on Blizzard's `ActionButton_UpdateAction`
+keeping its cached slots current — so silencing the two event frames broke **every keybind on bars
+1–8**: the keypress fired the pre-form spell while our own icon was correct, because the two resolve
+through different paths. Clicking worked throughout, which is what identified it.
+
+`applyOwnBindings` is therefore no longer gated on `ownBindings`: every bar reads the key with
+`GetBindingKey(<its bindingPrefix>..i)` and re-routes it with `SetOverrideBindingClick` onto its own
+secure button. **An override binding beats the base binding**, so this is interception rather than a
+second claim — nothing migrates, the player's saved keys and the client's keybinding UI are untouched.
+`ownBindings` now means only that SuuUI declares those names in `Bindings.xml`, which pages 2 and
+7–10 need because Blizzard ships no family for them.
+
+**The coupling is mechanical, not documentary**: `52_actionbars_spec.lua` asserts the silencing and
+bar 1's routing in one test, so narrowing the routing back turns it red.
+
+**CONFIRMED IN GAME 2026-08-26**, in three separate reloads: the stance change in combat, a
+reload while shapeshifted in combat, and then keys plus clicks on every bar including pet and stance
+after the routing change and after the plumbing was silenced. Do not re-probe any of it.
+
+**One consequence for the DEFERRED possess bar (Phase 6c).** With `ActionBarController` unregistered,
+Blizzard's own vehicle and override bars no longer appear by themselves — nothing runs
+`ValidateActionBarTransition` any more. SuuUI's bar 1 covers the slots through its own paging driver
+(`[overridebar]` and `[possessbar]` in `Paging.BuildDriver`), which `SecureStateDriverManager`
+evaluates independently of the controller. `PossessActionBar` and `OverrideActionBar` are therefore
+deliberately absent from the suppression targets: there is no SuuUI replacement frame, so leaving
+Blizzard's on screen is the safe side. Worth fifteen seconds in game the next time anything is
+mind-controlled.
 
 `MainMenuBar` is layout-managed on this client, so suppression and any reposition need the
 `hooksecurefunc` re-assert pattern `Plugins/DataBar/DataBar.lua` already uses, consulting a

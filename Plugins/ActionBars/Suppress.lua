@@ -19,14 +19,14 @@
 -- INCAPABLE of appearing, using only calls the client does not restrict -- which is what ElvUI,
 -- Bartender4 and Dominos each arrived at independently:
 --
---   1. UnregisterAllEvents on `ActionBarController`, which deletes the re-show mechanism outright
---      rather than racing it. ONLY that frame -- see the note on CONTROLLERS for why its two sibling
---      event frames must stay alive, and what breaks when they do not.
+--   1. UnregisterAllEvents on `ActionBarController` and its two event frames, which deletes the
+--      re-show mechanism outright rather than racing it. Safe ONLY because every bar override-binds
+--      its own keys -- see the note on CONTROLLERS for what silencing them cost when it did not.
 --   2. SetParent onto a permanently hidden frame. A child of a hidden parent does not render
 --      whatever its own shown flag says, so a later Show() from Blizzard is a no-op.
 --
 -- Note what is NOT in that list: unregistering each bar's own events. Parking already makes a bar
--- invisible, so silencing it adds nothing, and doing it broke every keybind on bars 1-8.
+-- invisible, so silencing it adds nothing.
 --
 -- There is no race left to lose, and no OnShow hook: the hook this file used to carry existed only
 -- to fight step 3's absence.
@@ -146,35 +146,38 @@ local TARGETS = {
     { id = "max_level",    names = { "MainMenuBarMaxLevelBar" } },
 }
 
--- Blizzard's bar CONTROLLER, and the events it keeps.
+-- Blizzard's bar CONTROLLER and its two event frames, and the events each one keeps.
 --
--- THIS IS THE HALF THE OLD MECHANISM HAD NO EQUIVALENT FOR, and on its own it removes the
+-- THIS IS THE HALF THE OLD MECHANISM HAD NO EQUIVALENT FOR, and the controller alone removes the
 -- stance-change symptom: with no events, ActionBarController_UpdateAll never runs, so nothing calls
 -- Show() on a bar in the first place.
 --
--- ONLY THE CONTROLLER, and the reason is a dependency that took an in-game retest to find.
--- ElvUI also unregisters `ActionBarActionEventsFrame` and `ActionBarButtonEventsFrame`, and copying
--- that broke every KEYBIND on bars 1-8 while leaving the buttons visually correct -- a bug that reads
--- like the wrong spell being on the bar.
+-- THE TWO EVENT FRAMES CAME AND WENT AND CAME BACK, and the round trip is the useful part of this
+-- comment. They drive `ActionButton_UpdateAction`, which keeps the cached slot on Blizzard's own
+-- `ActionButton1..12` current. Silencing them while bars 1-8 still used BLIZZARD'S BINDING FAMILIES
+-- (`ACTIONBUTTON1`..) broke every keybind on those bars: a keypress resolved through the stale cache
+-- and fired the pre-form spell, while our own icon -- which reads the `action` attribute the paging
+-- snippet rewrote -- showed the right one. Clicking worked throughout, which is what identified it.
 --
--- Those two frames are what drive `ActionButton_UpdateAction`, which keeps the cached slot on
--- Blizzard's own `ActionButton1..12` current. SuuUI deliberately routes bars 1-8 through BLIZZARD'S
--- BINDING FAMILIES (`ACTIONBUTTON1`..) rather than override-binding its own buttons, precisely so a
--- player's existing keys keep working -- and that path resolves through those cached slots. Kill the
--- frames and a keypress in cat form fires the out-of-form spell while our own icon, which reads the
--- `action` attribute the paging snippet rewrote, shows the right one.
+-- They are silenced again now only because that dependency is GONE: every bar override-binds its own
+-- keys onto its own secure button (see `applyOwnBindings`), so nothing of ours resolves through
+-- Blizzard's buttons at all. **If that routing is ever narrowed back to a subset of bars, these two
+-- entries have to come out in the same change**, or the bug returns exactly as before.
 --
--- So the two designs are incompatible: ElvUI can silence that plumbing because it override-binds
--- every bar to clicks on its own buttons. We rely on the families, so the plumbing stays alive. That
--- costs Blizzard doing invisible bookkeeping on parked frames, which is the cheap side of the trade.
---
--- Their events are also not needed for suppression at all: parking is what makes a bar invisible, so
--- a frame that re-shows itself renders nothing regardless of what it has registered.
+-- Blizzard's buttons are deliberately NOT touched beyond this -- no `statehidden`, no per-button
+-- Hide. Bartender4 and Dominos both do it; here it would buy nothing, because parking is what makes
+-- a bar invisible and its buttons go with it, while `SetAttribute` and `Hide` on a protected button
+-- are both refused in combat -- so it would add a deferred protected-call path with no observable
+-- effect to test.
 --
 -- SETTINGS_LOADED lets the page controller spawn properly and UPDATE_EXTRA_ACTIONBAR still lets an
--- ExtraActionButton appear; ElvUI keeps both for the same reasons.
+-- ExtraActionButton appear; the two ACTIONBAR_* events on the button frame are what let it cool
+-- down. ElvUI keeps exactly these, for exactly these reasons.
 local CONTROLLERS = {
-    { name = "ActionBarController", keep = { "SETTINGS_LOADED", "UPDATE_EXTRA_ACTIONBAR" } },
+    { name = "ActionBarController",        keep = { "SETTINGS_LOADED", "UPDATE_EXTRA_ACTIONBAR" } },
+    { name = "ActionBarActionEventsFrame", keep = nil },
+    { name = "ActionBarButtonEventsFrame", keep = { "ACTIONBAR_SLOT_CHANGED",
+                                                    "ACTIONBAR_UPDATE_COOLDOWN" } },
 }
 
 -- The buttons this module exists to get off the screen, one per bar family. Used by Verify() as a
