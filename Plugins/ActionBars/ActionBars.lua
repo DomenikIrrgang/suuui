@@ -546,10 +546,9 @@ local function buildBar(p, def)
         buttonSize    = get(key(def, "button_size"), 32),
         spacing       = get(key(def, "spacing"), 0),
         showHotkeys   = get(key(def, "show_hotkeys"), true),
-        showMacroText = get(key(def, "show_macro_text"), true),
-        showCount     = get(key(def, "show_count"), true),
-        -- Read from a GLOBAL key, not a per-bar one -- see the schema entry for why this readout
-        -- is the one that is not per bar.
+        -- GLOBAL keys, not per-bar ones -- see GLOBAL_READOUTS and the schema entries.
+        showMacroText = get("show_macro_text", true),
+        showCount     = get("show_count", true),
         showCooldownText = get("show_cooldown_text", true),
         -- Named so /framestack can identify them and a click-casting addon can bind them.
         namePrefix    = "SuuUIBar" .. def.id .. "Button",
@@ -669,10 +668,21 @@ local SHAPE = {
 
 -- Readout toggles. These touch no geometry -- a font string showing or hiding is not protected --
 -- so they apply immediately, in combat included.
+--
+-- ONE entry, because Show Hotkeys is the only readout that is per bar: a key genuinely differs
+-- between a bound bar 1 and a mouse-clicked bar 7. The other three are global; see GLOBAL_READOUTS.
 local READOUTS = {
-    { name = "show_hotkeys",    apply = function(grid, v) grid:SetShowHotkeys(v ~= false) end },
-    { name = "show_macro_text", apply = function(grid, v) grid:SetShowMacroText(v ~= false) end },
-    { name = "show_count",      apply = function(grid, v) grid:SetShowCount(v ~= false) end },
+    { name = "show_hotkeys", apply = function(grid, v) grid:SetShowHotkeys(v ~= false) end },
+}
+
+-- Readouts that are ONE setting for every bar. Fanned out to every grid that exists; a bar built
+-- later is seeded by buildBar reading the same keys, and BOTH halves are needed -- the watcher
+-- cannot reach a bar that does not exist yet, and construction cannot see a later change.
+local GLOBAL_READOUTS = {
+    { name = "show_macro_text",    apply = function(grid, v) grid:SetShowMacroText(v ~= false) end },
+    { name = "show_count",         apply = function(grid, v) grid:SetShowCount(v ~= false) end },
+    { name = "show_cooldown_text",
+      apply = function(grid, v) grid:SetShowCooldownText(v ~= false) end },
 }
 
 -- Applies a bar's dock/free choice: who owns its position, and whether it is in the stack.
@@ -760,14 +770,16 @@ local function watchSettings(p)
         if on then Suppress.Apply() else Suppress.Restore() end
     end, OWNER .. ".hide_blizzard", { immediate = true })
 
-    -- ONE watcher for every bar, unlike the three readouts in READOUTS which are keyed per bar.
-    -- Not `immediate`: buildBar seeds the value through `get`, exactly as the per-bar readouts are
-    -- seeded, so an immediate callback here would only re-apply what construction just set.
-    SuuUI.Settings:Watch(PLUGIN_ID, "show_cooldown_text", function(on)
-        for _, grid in pairs(p._bars) do
-            grid:SetShowCooldownText(on ~= false)
-        end
-    end, OWNER .. ".show_cooldown_text")
+    -- ONE watcher per global readout, each fanning out to every bar that exists. Not `immediate`:
+    -- buildBar seeds the value through `get`, exactly as the per-bar readouts are seeded, so an
+    -- immediate callback here would only re-apply what construction just set.
+    for _, entry in ipairs(GLOBAL_READOUTS) do
+        SuuUI.Settings:Watch(PLUGIN_ID, entry.name, function(v)
+            for _, grid in pairs(p._bars) do
+                entry.apply(grid, v)
+            end
+        end, OWNER .. "." .. entry.name)
+    end
 end
 
 local function unwatchSettings()
@@ -775,7 +787,9 @@ local function unwatchSettings()
         unwatchBar(def)
     end
     SuuUI.Settings:Unwatch(OWNER .. ".hide_blizzard")
-    SuuUI.Settings:Unwatch(OWNER .. ".show_cooldown_text")
+    for _, entry in ipairs(GLOBAL_READOUTS) do
+        SuuUI.Settings:Unwatch(OWNER .. "." .. entry.name)
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -819,14 +833,15 @@ local function barTab(def)
     schema[#schema + 1] = { key = key(def, "show_hotkeys"), label = "Show Hotkeys", type = "toggle",
         default = true, enabledIf = key(def, "enabled") }
 
-    -- Macro names and charge counts exist only for action slots. A form has neither, so the stance
-    -- tab does not offer the toggles rather than showing two switches that do nothing.
-    if not usesIndexSlots(def) then
-        schema[#schema + 1] = { key = key(def, "show_macro_text"), label = "Show Macro Names",
-            type = "toggle", default = true, enabledIf = key(def, "enabled") }
-        schema[#schema + 1] = { key = key(def, "show_count"), label = "Show Counts",
-            type = "toggle", default = true, enabledIf = key(def, "enabled") }
-    end
+    -- NO Show Macro Names and NO Show Counts here. Both are GLOBAL now -- declared once at the top
+    -- level, see `schema()` -- so a bar's tab carries only the readout that is genuinely per bar.
+    --
+    -- Worth noting what that removed as a side effect: this used to be wrapped in
+    -- `if not usesIndexSlots(def)`, because a form and a pet command have neither a macro name nor
+    -- a charge count and two switches that do nothing is worse than none. A global toggle cannot
+    -- have that problem, since it is not offered inside any bar's tab at all. The class bars stay
+    -- correct for the same underlying reason they always were: their providers answer nil and 0, so
+    -- nothing draws whatever the global says.
 
     -- Any bar can attach to any OTHER dockable thing, on any edge. Placed before the sliders, with the
     -- other placement decision, rather than mixed in among the dimensions.
@@ -913,16 +928,24 @@ local function schema()
         -- switch you have to open a group to find is not an escape hatch.
         { key = "hide_blizzard", label = "Hide Blizzard's Action Bars", type = "toggle",
           default = true },
-        -- ONE toggle for every bar, which makes it the odd one out among the four readouts -- the
-        -- other three are declared per bar, inside each bar's own tab. The asymmetry is deliberate.
-        -- Those three describe what a bar says about ITS OWN slots, and a player genuinely may want
-        -- hotkeys on bar 1 and not on bar 7. This one is a single question about the whole UI --
-        -- "do my buttons count down" -- and fifteen switches for it would mostly be fifteen ways to
-        -- end up with bars that disagree, then fifteen places to look when one of them does.
+        -- THE READOUTS THAT ARE ONE SETTING FOR THE WHOLE UI, not one per bar. Only Show Hotkeys
+        -- stays per bar, in each bar's own tab, and the split is a judgement about what a player
+        -- actually varies. A key genuinely differs bar to bar -- bar 1 is bound and a mouse-clicked
+        -- bar 7 is not -- so a per-bar switch there earns its place. These three do not: "do my
+        -- buttons show a macro name / a stack count / a cooldown number" is one question about the
+        -- whole UI, and fifteen switches for it would mostly be fifteen ways to end up with bars
+        -- that disagree, then fifteen places to look when one of them does.
         --
         -- Top level rather than in a group because there is nowhere else: everything below the
-        -- subtabs entry belongs to one bar. It sits after the escape hatch so the two switches a
+        -- subtabs entry belongs to one bar. They sit after the escape hatch so the two switches a
         -- player reaches for in a hurry stay first.
+        --
+        -- NOTE for a profile written before this moved: the old `bar<N>_show_macro_text` and
+        -- `bar<N>_show_count` values are no longer read by anything. They are inert rather than
+        -- migrated -- there is no honest way to fold fifteen booleans into one, and guessing from
+        -- bar 1 would silently discard whatever the player set on the others.
+        { key = "show_macro_text", label = "Show Macro Names", type = "toggle", default = true },
+        { key = "show_count", label = "Show Counts", type = "toggle", default = true },
         { key = "show_cooldown_text", label = "Show Cooldown Numbers", type = "toggle",
           default = true },
     }

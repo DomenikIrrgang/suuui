@@ -2872,6 +2872,27 @@ a number is a hard error in Lua.
   unlike bars 3–8, because it is a class control Blizzard also shows by default. A plain `Hide` is
   enough here rather than a driver: the form *count* only changes at a trainer.
 
+**Its settings split along one line: does a player vary this BAR BY BAR?** The four readouts sort
+themselves by that question and not by symmetry. `show_hotkeys` is declared **per bar**, inside each
+bar's own tab, because a key genuinely differs between a bound bar 1 and a bar 7 the player only
+ever clicks. `show_macro_text`, `show_count` and `show_cooldown_text` are **one global toggle each**,
+at the top level next to `enabled` and `hide_blizzard`: "do my buttons show a stack count" is a
+single question about the whole UI, and fifteen switches for it are mostly fifteen ways to end up
+with bars that disagree, then fifteen places to look when one of them does.
+
+Two consequences worth knowing. A global readout needs **both halves wired** — a `Settings:Watch`
+fanning out over `p._bars`, which cannot reach a bar that does not exist yet, and a `get()` in
+`buildBar`, which cannot see a later change; each has its own spec, because either one alone looks
+correct until a bar is enabled at the wrong moment. And moving a key from per-bar to global leaves
+the old `bar<N>_*` values in existing profiles **inert rather than migrated**: there is no honest way
+to fold fifteen booleans into one, and seeding from bar 1 would silently discard the rest.
+
+The move also deleted a special case. The macro-name and count toggles used to be omitted from the
+two class-bar tabs specifically, since a form and a pet command have neither — a global toggle cannot
+have that problem, because it is not offered inside any bar's tab at all. The class bars stay correct
+for the reason they always were: their providers answer nil and 0, so nothing draws whatever the
+global says, and `StanceButton` stubs both setters for interface parity.
+
 **`Suppress.lua`** hides Blizzard's bottom cluster and hands it back exactly. The constraint the
 plan did not anticipate: **hiding a Blizzard action bar is itself protected**, since `MainMenuBar`
 holds buttons inheriting `SecureActionButtonTemplate` and refusal propagates back up. So does the

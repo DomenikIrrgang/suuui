@@ -577,35 +577,75 @@ describe("Plugins.ActionBars", function()
         end
     end)
 
-    describe("the cooldown-number toggle", function()
-        local function entry()
+    -- The three readouts that are ONE setting for every bar. Show Hotkeys is deliberately not
+    -- among them and is asserted per bar elsewhere -- a key genuinely differs between a bound bar 1
+    -- and a mouse-clicked bar 7, which is the whole basis of the split.
+    describe("the global readout toggles", function()
+        local GLOBAL = {
+            { key = "show_macro_text",    field = "_showMacroText",    setter = "SetShowMacroText" },
+            { key = "show_count",         field = "_showCount",        setter = "SetShowCount" },
+            { key = "show_cooldown_text", field = "_showCooldownText",
+              setter = "SetShowCooldownText" },
+        }
+
+        local function entry(k)
             for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
-                if e.key == "show_cooldown_text" then return e end
+                if e.key == k then return e end
             end
         end
 
-        it("is a single GLOBAL key, not one per bar", function()
-            expect(entry()).as("declared at the top level").notNil()
-            -- The discriminating half: the other three readouts ARE per bar, so finding no
-            -- per-bar variant is a statement about this key rather than about the naming scheme.
-            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
-                expect(e.key ~= "bar1_show_cooldown_text")
-                    .as("no per-bar duplicate to drift from the global one").truthy()
+        it("declares each one once, at the top level", function()
+            for _, g in ipairs(GLOBAL) do
+                local e = entry(g.key)
+                expect(e).as(g.key .. " declared").notNil()
+                expect(e.type).as(g.key .. " is a toggle").eq("toggle")
             end
         end)
 
-        it("defaults ON", function()
-            expect(entry().default).truthy()
-            expect(H.SuuUI.Settings:Get(PLUGIN, "show_cooldown_text")).truthy()
+        it("declares NO per-bar duplicate that could drift from the global one", function()
+            -- The discriminating half. Show Hotkeys IS per bar, so finding bar1_show_hotkeys while
+            -- finding no bar1_show_count is a statement about these keys rather than about the
+            -- naming scheme or the helper.
+            local keys = {}
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do keys[e.key or ""] = true end
+            local function tabKeys(id)
+                for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                    if e.type == "subtabs" then
+                        for _, t in ipairs(e.tabs) do
+                            if t.id == id then
+                                local out = {}
+                                for _, s in ipairs(t.schema) do out[s.key or ""] = true end
+                                return out
+                            end
+                        end
+                    end
+                end
+                return {}
+            end
+            local bar1 = tabKeys("bar1")
+            expect(bar1["bar1_show_hotkeys"])
+                .as("hotkeys stays per bar, so this helper does find per-bar keys").truthy()
+            for _, g in ipairs(GLOBAL) do
+                expect(keys["bar1_" .. g.key]).as("no top-level bar1_" .. g.key).falsy()
+                expect(bar1["bar1_" .. g.key]).as("none in bar 1's tab either").falsy()
+            end
         end)
 
-        it("is a toggle sitting before any group, like the other two global switches", function()
-            local sawSection = false
+        it("defaults every one of them ON", function()
+            for _, g in ipairs(GLOBAL) do
+                expect(entry(g.key).default).as(g.key .. " default").truthy()
+                expect(H.SuuUI.Settings:Get(PLUGIN, g.key)).as(g.key .. " effective").truthy()
+            end
+        end)
+
+        it("keeps them reachable without opening a group", function()
+            local sawGroup = false
             for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
-                if e.type == "section" or e.type == "subtabs" then sawSection = true end
-                if e.key == "show_cooldown_text" then
-                    expect(e.type).eq("toggle")
-                    expect(sawSection).as("reachable without opening a group").falsy()
+                if e.type == "section" or e.type == "subtabs" then sawGroup = true end
+                for _, g in ipairs(GLOBAL) do
+                    if e.key == g.key then
+                        expect(sawGroup).as(g.key .. " sits before any group").falsy()
+                    end
                 end
             end
         end)
@@ -613,25 +653,66 @@ describe("Plugins.ActionBars", function()
         it("reaches the buttons of a bar that already exists", function()
             local buttons = bar():GetButtons()
             expect(#buttons > 0).as("there is something to assert against").truthy()
-            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", false)
-            for i, b in ipairs(buttons) do
-                expect(b._showCooldownText).as("button " .. i .. " off").falsy()
-            end
-            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", true)
-            for i, b in ipairs(buttons) do
-                expect(b._showCooldownText).as("button " .. i .. " back on").truthy()
+            for _, g in ipairs(GLOBAL) do
+                H.SuuUI.Settings:Set(PLUGIN, g.key, false)
+                for i, b in ipairs(buttons) do
+                    expect(b[g.field]).as(g.key .. " off on button " .. i).falsy()
+                end
+                H.SuuUI.Settings:Set(PLUGIN, g.key, true)
+                for i, b in ipairs(buttons) do
+                    expect(b[g.field]).as(g.key .. " back on, button " .. i).truthy()
+                end
             end
         end)
 
         it("seeds a bar built AFTER the value was written", function()
             -- The watcher only reaches bars that exist; construction is what covers the rest, so
-            -- both halves need asserting or a bar enabled later comes up with the wrong readout.
-            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", false)
+            -- both halves need asserting or a bar enabled later comes up with the wrong readouts.
+            for _, g in ipairs(GLOBAL) do
+                H.SuuUI.Settings:Set(PLUGIN, g.key, false)
+            end
             H.SuuUI.Settings:Set(PLUGIN, "bar3_enabled", true)
             local buttons = bar(3):GetButtons()
             expect(#buttons > 0).truthy()
-            for i, b in ipairs(buttons) do
-                expect(b._showCooldownText).as("late bar's button " .. i).falsy()
+            for _, g in ipairs(GLOBAL) do
+                for i, b in ipairs(buttons) do
+                    expect(b[g.field]).as("late bar, " .. g.key .. ", button " .. i).falsy()
+                end
+            end
+        end)
+
+        -- THE CONTRAST THAT MAKES THE SPLIT REAL. Show Hotkeys stays per bar, and nothing asserted
+        -- that until a mutation deleting its watcher outright survived a green run.
+        it("leaves Show Hotkeys per bar, reaching only the bar it names", function()
+            local other = bar(2)
+            expect(other).as("bar 2 is on by default, so there is a neighbour to check").notNil()
+            H.SuuUI.Settings:Set(PLUGIN, "bar1_show_hotkeys", false)
+            for i, b in ipairs(bar(1):GetButtons()) do
+                expect(b._showHotkey).as("bar 1 button " .. i .. " off").falsy()
+            end
+            for i, b in ipairs(other:GetButtons()) do
+                expect(b._showHotkey).as("bar 2 untouched, button " .. i).truthy()
+            end
+        end)
+
+        -- Teardown, asserted PER OWNER rather than by a total. Unwatch answers how many it dropped,
+        -- so 0 means "already gone". A `GetWatcherCount() < before` comparison passed whether or not
+        -- these three were dropped, because disabling the plugin drops the per-bar watchers too --
+        -- two values wrong in the same way prove nothing.
+        it("drops each global watcher when the plugin goes down", function()
+            H.SuuUI.Plugins:Get(PLUGIN):Disable()
+            for _, g in ipairs(GLOBAL) do
+                expect(H.SuuUI.Settings:Unwatch("action_bars." .. g.key))
+                    .as(g.key .. "'s watcher was already gone").eq(0)
+            end
+        end)
+
+        it("really does hold those watchers while it is up", function()
+            -- The discriminating half of the test above: without this, "already gone" would also
+            -- pass for a watcher that was never registered in the first place.
+            for _, g in ipairs(GLOBAL) do
+                expect(H.SuuUI.Settings:Unwatch("action_bars." .. g.key))
+                    .as(g.key .. " is watched while the plugin is up").eq(1)
             end
         end)
     end)
@@ -2286,7 +2367,11 @@ describe("Plugins.ActionBars: the stance bar", function()
             expect(hasKey(stanceTab(), "buttons")).falsy()
         end)
 
-        it("offers no macro-name or count toggles, which a form does not have", function()
+        it("offers no macro-name or count toggles, which are global now", function()
+            -- These used to be omitted from THIS tab specifically, because a form has neither a
+            -- macro name nor a charge count. They are now declared once at the top level, so no
+            -- bar's tab carries them and the special case for the class bars is gone -- the
+            -- assertion survives, its reason changed.
             expect(hasKey(stanceTab(), "show_macro_text")).falsy()
             expect(hasKey(stanceTab(), "show_count")).falsy()
         end)
@@ -2428,7 +2513,9 @@ describe("Plugins.ActionBars: the pet bar", function()
             expect(hasKey(petTab(), "buttons")).truthy()
         end)
 
-        it("drops the macro-name and count toggles, which a pet command has neither of", function()
+        it("carries no macro-name or count toggles, which are global now", function()
+            -- Same as the stance tab: omitted here once because a pet command has neither, now
+            -- absent from every tab because both live at the top level.
             expect(hasKey(petTab(), "show_macro_text")).falsy()
             expect(hasKey(petTab(), "show_count")).falsy()
         end)
