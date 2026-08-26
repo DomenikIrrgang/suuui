@@ -44,6 +44,10 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- opacityEditOverlay, which is the same value today by coincidence -- retinting edit mode
     -- must not retint every segmented control in the addon.
     opacityAccentSubtle = 0.18,
+    -- HOW STRONG AN INTENT WASH IS behind a whole line of text -- the amber "this is a cached
+    -- snapshot" strip. Its own token rather than sharing opacityAccentSubtle: one is a selected
+    -- control, the other is a standing warning, and they want tuning separately.
+    opacityWarningWash = 0.18,
     -- See Themes/Default.lua: how far a disabled control fades.
     opacityDisabled  = 0.40,
     -- Edit mode grid line visibility. Very faint so lines stay out of the way.
@@ -76,6 +80,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- The wash behind a selected segment (Components/SegmentedControl.lua). The concept names this
     -- colour itself, as `--accent-subtle`.
     colorAccentSubtle = { ref = "colorAccent", alpha = "opacityAccentSubtle" },
+    -- The wash behind a warning STRIP, as opposed to warning-coloured text on nothing.
+    colorWarningSubtle = { ref = "colorWarning", alpha = "opacityWarningWash" },
     -- Edit mode grid lines: the accent colour at grid opacity.
     colorGrid        = { ref = "colorAccent",  alpha = "opacityGrid" },
     -- Smart guides: brighter accent for element-to-element alignment lines.

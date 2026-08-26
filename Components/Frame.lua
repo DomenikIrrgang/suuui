@@ -31,7 +31,12 @@ function FrameMeta:Destroy()
 end
 
 function FrameMeta:ApplyTheme()
-    local bgKey = variantMap[self._variant]
+    -- AN EXPLICIT `bg` WINS OVER THE VARIANT, for a surface whose colour is not one of the four
+    -- neutral steps: an intent wash (a warning strip) is a real surface colour but it is not a
+    -- variant, and adding one variant per intent would grow this map every time a plugin needs a
+    -- tinted band. `false` still means transparent, so a caller can suppress the fill outright.
+    local bgKey = self._bg
+    if bgKey == nil then bgKey = variantMap[self._variant] end
     local borderKey = self._border ~= false and "colorBorder" or false
     -- A ROUNDED frame is drawn from masked textures rather than a backdrop, because a backdrop's
     -- corners are its texture's corners. The two are mutually exclusive: applying a backdrop as well
@@ -60,7 +65,8 @@ SuuUI.Components.InstallBase(FrameMeta, "_f")
 SuuUI.Components.InstallEnable(FrameMeta, "_f")
 
 --- Creates a styled frame container.
--- @param props table  { w, h, alpha, variant, border, rounded, radius }
+-- @param props table  { w, h, alpha, variant, bg, border, rounded, radius }
+--   bg: a colour token KEY overriding the variant, or false for no fill
 --   variant: "bg"|"bgAlt"|"bgActive"|"transparent" (default "bg")
 --   border: false to hide the border
 --   rounded: true to draw a rounded surface (Backdrop.Panel) instead of a square backdrop.
@@ -88,6 +94,7 @@ function SuuUI.Components.Frame(props, parent)
         _f       = f,
         _eid     = id,
         _variant = props.variant or "bg",
+        _bg      = props.bg,
         _border  = props.border,
     }, FrameMeta)
 

@@ -1187,6 +1187,70 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
+    -- THE WASH ACROSS THE WHOLE LINE, which is the single most important statement in the window: you
+    -- are looking at cached data and cannot change it. Only the TEXT was warning-coloured at first,
+    -- which read as a caption rather than a banner.
+    describe("the snapshot strip", function()
+        local function snapWindow()
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            H.env.SuuUIItemCache.chars["Thalira-TestRealm"] = { class = "MAGE", bags = {
+                seen = 1755900000, sizes = { [0] = 16 },
+                slots = { [0] = { [1] = { 22832, 3 } } } } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-TestRealm")
+            return w
+        end
+
+        -- THE ASSERTION THAT WOULD HAVE CAUGHT IT. The strip went invisible in game with 91 specs green,
+        -- because the plate had NO WIDTH: CreateContainer's `host` branch sizes nothing, and flow skips
+        -- a hidden child so the column never sized it either. The client then reports 0 for a frame it
+        -- has never laid out and collapses every child, while the harness's solver derives a rect
+        -- regardless -- the gap TESTING.md documents as "a hidden frame has a rect here and none in the
+        -- client". So this asserts the width the CONSTRUCTOR set, before any layout or show.
+        it("gives the strip a real width AND height before it is ever shown", function()
+            local w = IW.New({ container = "bags" })
+            expect(w._snapStrip:IsShown()).as("hidden at construction").falsy()
+            expect(w._snapPlate:GetWidth())
+                .as("sized, or its children cannot resolve in game").gt(0)
+            -- MEASURED IN GAME AS ZERO -- `true 530 0`: shown, 530 wide, no height at all. A hug sets
+            -- the height of a frame the container CREATED, and nothing in the host path does the same,
+            -- so the band existed with no vertical extent while every spec passed.
+            expect(w._snapPlate:GetHeight())
+                .as("and TALL, which is the reading that was 0 in game")
+                .near(H.SuuUI.Theme:GetControlHeight("sizeControlSm", "sm"), 1)
+            w:Destroy()
+        end)
+
+        it("paints the whole line in the warning wash", function()
+            local w = snapWindow()
+            expect(w._snapStrip:IsShown()).truthy()
+            H.expectTokenColor({ w._snapPlate:GetFrame():GetBackdropColor() }, "colorWarningSubtle")
+            w:Destroy()
+        end)
+
+        it("spans the content column's full width", function()
+            -- A wash that stopped at the text would read as a highlight on two words rather than a
+            -- banner. It reaches the column's inner edges, not the WINDOW's: the content column carries
+            -- `spaceSm` of padding that every row sits inside, so the band is inset by that much on each
+            -- side. Going truly edge to edge would mean moving that padding onto each row individually.
+            local w = snapWindow()
+            local inset = H.token("spaceSm") * 2
+            expect(w._snapPlate:GetWidth())
+                .as("as wide as the column allows any row to be")
+                .near(w._col:GetWidth() - inset, 2)
+            w:Destroy()
+        end)
+
+        it("is not painted at all while live", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._snapStrip:IsShown()).as("your own bags carry no warning").falsy()
+            w:Destroy()
+        end)
+    end)
+
     describe("container ids", function()
         it("covers the backpack and every bag slot", function()
             local ids = IW.containerIds("bags")

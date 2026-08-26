@@ -471,6 +471,12 @@ function WindowMeta:ApplyTheme()
     if self._grid then self._grid:ApplyTheme() end
     -- The event bus fires listeners newest-first, so a child handle's own subscription may not have run
     -- yet -- these are applied explicitly or the strip measures the old font.
+    -- The wash derives from colorWarning at a user-editable alpha, so it re-resolves here -- and so
+    -- does the band's HEIGHT, which is a one-line control height and therefore moves with the font.
+    if self._snapPlate then
+        self._snapPlate:ApplyTheme()
+        self._snapPlate:GetFrame():SetHeight(T:GetControlHeight("sizeControlSm", "sm"))
+    end
     if self._scopeSeg then self._scopeSeg:ApplyTheme() end
     if self._scopeTag then self._scopeTag:ApplyTheme() end
     if self._emptyNote then self._emptyNote:ApplyTheme() end
@@ -509,6 +515,7 @@ function WindowMeta:Destroy()
     if self._snapLabel then self._snapLabel:Destroy() end
     if self._snapAge then self._snapAge:Destroy() end
     if self._snapStrip then self._snapStrip:Destroy() end
+    if self._snapPlate then self._snapPlate:Destroy() end
     if self._scopeSeg then self._scopeSeg:Destroy() end
     if self._scopeTag then self._scopeTag:Destroy() end
     if self._emptyNote then self._emptyNote:Destroy() end
@@ -644,8 +651,34 @@ function M.New(props)
     -- THE AMBER STRIP, between the title bar and the search row, shown only on a snapshot. Its colour
     -- is the WARNING intent rather than a colour of its own: "this is not live" is exactly the "blocked
     -- but expected" tone the intent tokens exist for, so a retint moves it with every other warning.
+    --
+    -- THE WHOLE LINE IS WASHED, not just the text. The concept's `.snapbar` carries a warning-tinted
+    -- background and warning-coloured text, and only the text was built -- which made the single most
+    -- important statement in the window (you are looking at cached data and cannot change it) a couple
+    -- of small amber words that read as a caption.
+    --
+    -- A Components.Frame HOSTS the layout rather than the container painting itself, because a
+    -- container's frame is a plain CreateFrame("Frame") with NO BackdropTemplate -- SetBackdrop on one
+    -- would fail in game while passing the suite, since the harness models the method unconditionally.
+    --
+    -- `w` AND `h` ARE BOTH REQUIRED HERE, and each was learned by the strip being invisible in game
+    -- while the suite stayed green. CreateContainer's `host` branch adopts a frame and sizes NOTHING --
+    -- only the self-created branch calls SetWidth and SetPoint, and its comment says why: the client
+    -- does not resolve anchor-derived geometry for a frame it has never laid out, so it reports 0 and
+    -- collapses every child. Measured in game after the width was fixed: `true 530 0`, i.e. shown and
+    -- 530 wide with ZERO HEIGHT, because a hug sets the height of a frame the container CREATED and
+    -- there is nothing in the host path that does the same.
+    --
+    -- The height is a one-line control height rather than a measurement, which is honest about what
+    -- this band is: a single fixed row of small text. Re-asserted in ApplyTheme, because both tokens
+    -- behind it are user-editable.
+    local snapPlate = C.Frame({
+        bg = "colorWarningSubtle", border = false,
+        w = (content.GetWidth and content:GetWidth() or 0) - pad * 2,
+        h = T:GetControlHeight("sizeControlSm", "sm"),
+    }, content)
     local snapStrip = SuuUI.Layout:CreateContainer({
-        parent = content, layout = "flow", dir = "horizontal",
+        host = snapPlate:GetFrame(), layout = "flow", dir = "horizontal",
         gap = gap, align = "center",
         padding = { top = 2, right = pad, bottom = 2, left = pad },
     })
@@ -783,6 +816,7 @@ function M.New(props)
         _footer    = footer,
         _charDrop  = charDrop,
         _snapStrip = snapStrip,
+        _snapPlate = snapPlate,
         _scopeSeg  = scopeSeg,
         _scopeTag  = scopeTag,
         _emptyNote = emptyNote,

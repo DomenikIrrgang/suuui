@@ -255,9 +255,15 @@ SuuUIItemCache = {
     ["Sulisande-Thunderstrike"] = {
       class = "PRIEST", money = 12844218,
       -- `seen` sits BESIDE `slots` rather than inside it: mixing one string key into an
-      -- otherwise integer-keyed table invites an ipairs bug at every read site.
-      bags = { seen = 1755900000, slots = { [0] = { [1] = {22832, 12} }, [1] = { … } } },
-      bank = { seen = 1755730000, slots = { [-1] = { [1] = {22832, 20} }, [5] = { … } } },
+      -- otherwise integer-keyed table invites an ipairs bug at every read site. `sizes` is
+      -- there for the same reason and carries each container's CAPACITY, which cannot be
+      -- recovered later: `slots` is sparse, so a bank holding three items in its first three
+      -- slots is indistinguishable from a three-slot bank, and asking the client answers for
+      -- whoever is logged in. Without it a cached container could only show its USED slots.
+      bags = { seen = 1755900000, sizes = { [0] = 16, [1] = 16 },
+               slots = { [0] = { [1] = {22832, 12} }, [1] = { … } } },
+      bank = { seen = 1755730000, sizes = { [-1] = 28, [5] = 16 },
+               slots = { [-1] = { [1] = {22832, 20} }, [5] = { … } } },
     },
   },
 }
