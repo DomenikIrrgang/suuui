@@ -577,6 +577,65 @@ describe("Plugins.ActionBars", function()
         end
     end)
 
+    describe("the cooldown-number toggle", function()
+        local function entry()
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                if e.key == "show_cooldown_text" then return e end
+            end
+        end
+
+        it("is a single GLOBAL key, not one per bar", function()
+            expect(entry()).as("declared at the top level").notNil()
+            -- The discriminating half: the other three readouts ARE per bar, so finding no
+            -- per-bar variant is a statement about this key rather than about the naming scheme.
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                expect(e.key ~= "bar1_show_cooldown_text")
+                    .as("no per-bar duplicate to drift from the global one").truthy()
+            end
+        end)
+
+        it("defaults ON", function()
+            expect(entry().default).truthy()
+            expect(H.SuuUI.Settings:Get(PLUGIN, "show_cooldown_text")).truthy()
+        end)
+
+        it("is a toggle sitting before any group, like the other two global switches", function()
+            local sawSection = false
+            for _, e in ipairs(H.SuuUI.Settings:GetSchema(PLUGIN)) do
+                if e.type == "section" or e.type == "subtabs" then sawSection = true end
+                if e.key == "show_cooldown_text" then
+                    expect(e.type).eq("toggle")
+                    expect(sawSection).as("reachable without opening a group").falsy()
+                end
+            end
+        end)
+
+        it("reaches the buttons of a bar that already exists", function()
+            local buttons = bar():GetButtons()
+            expect(#buttons > 0).as("there is something to assert against").truthy()
+            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", false)
+            for i, b in ipairs(buttons) do
+                expect(b._showCooldownText).as("button " .. i .. " off").falsy()
+            end
+            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", true)
+            for i, b in ipairs(buttons) do
+                expect(b._showCooldownText).as("button " .. i .. " back on").truthy()
+            end
+        end)
+
+        it("seeds a bar built AFTER the value was written", function()
+            -- The watcher only reaches bars that exist; construction is what covers the rest, so
+            -- both halves need asserting or a bar enabled later comes up with the wrong readout.
+            H.SuuUI.Settings:Set(PLUGIN, "show_cooldown_text", false)
+            H.SuuUI.Settings:Set(PLUGIN, "bar3_enabled", true)
+            local buttons = bar(3):GetButtons()
+            expect(#buttons > 0).truthy()
+            for i, b in ipairs(buttons) do
+                expect(b._showCooldownText).as("late bar's button " .. i).falsy()
+            end
+        end)
+    end)
+
     it("applies the button count setting", function()
         H.SuuUI.Settings:Set(PLUGIN, "bar1_buttons", 6)
         expect(#bar():GetButtons()).eq(6)

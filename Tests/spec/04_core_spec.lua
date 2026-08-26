@@ -1210,6 +1210,43 @@ describe("SuuUI.Readout", function()
         expect(R().SLOTS).deepEq({ "left", "center", "right" })
     end)
 
+    -- Duration moved here from Components/AuraIcon.lua when an action button's cooldown countdown
+    -- became a second surface spelling the same quantity. Same hazard as the k/M drift above, one
+    -- layer down: two remaining-time readouts inches apart must not disagree.
+    describe("Duration", function()
+        it("spells the four bands", function()
+            expect(R().Duration(7200)).eq("2h")
+            expect(R().Duration(1800)).eq("30m")
+            expect(R().Duration(45)).eq("45s")
+            expect(R().Duration(0.4)).eq("0.4s")
+        end)
+
+        it("FLOORS every band rather than rounding", function()
+            -- A readout must never show time that has already gone.
+            expect(R().Duration(7199)).as("just under two hours is still 1h").eq("1h")
+            expect(R().Duration(119)).as("just under two minutes is still 1m").eq("1m")
+            expect(R().Duration(59.9)).as("still 59 seconds, not a minute").eq("59s")
+            expect(R().Duration(1.99)).eq("1s")
+        end)
+
+        it("uses a decimal ONLY below one second", function()
+            -- That band is the only one where the whole-second form carries no information: it
+            -- would read "0s" for the entire final second.
+            expect(R().Duration(1)).eq("1s")
+            expect(R().Duration(0.99))
+                .as("%.1f on 0.99 would print 1.0s, contradicting the branch that chose it")
+                .eq("0.9s")
+            expect(R().Duration(0.04)).eq("0.0s")
+        end)
+
+        it("answers a string for a non-number rather than raising", function()
+            -- It is called from a ticker, so a throw here would take the client's frame with it.
+            expect(R().Duration(nil)).eq("")
+            expect(R().Duration("30")).eq("")
+            expect(R().Duration(0 / 0)).as("NaN is a number and every comparison is false").eq("")
+        end)
+    end)
+
     it("spells current / max exactly, with no abbreviation", function()
         -- No k or M anywhere: abbreviating in one bar and not another is precisely the drift
         -- this module exists to prevent, and the tooltip's first version did exactly that.

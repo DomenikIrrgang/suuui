@@ -37,6 +37,7 @@ describe("Components.ActionBarGrid", function()
             function b:SetShowHotkey(v) self.calls.SetShowHotkey = v end
             function b:SetShowMacroText(v) self.calls.SetShowMacroText = v end
             function b:SetShowCount(v) self.calls.SetShowCount = v end
+            function b:SetShowCooldownText(v) self.calls.SetShowCooldownText = v end
             function b:Refresh() self.calls.Refresh = (self.calls.Refresh or 0) + 1 end
             function b:ApplyTheme() end
             function b:Destroy() self.destroyed = true end
@@ -214,6 +215,49 @@ describe("Components.ActionBarGrid", function()
             H.fireEvent("PLAYER_REGEN_ENABLED")
             expect(g:GetFrame():GetWidth() > before).as("applied on the way out").truthy()
             expect(g:IsDeferred()).as("and no longer behind").falsy()
+            g:Destroy()
+        end)
+    end)
+
+    describe("the cooldown-number readout", function()
+        it("hands the prop to every cell it builds, defaulting on", function()
+            local log = {}
+            grid({ slots = { 1, 2, 3 } }, log)
+            for i, b in ipairs(log) do
+                expect(b.props.showCooldownText)
+                    .as("cell " .. i .. " was told to show it").truthy()
+            end
+        end)
+
+        it("passes the prop through when it is off", function()
+            local log = {}
+            grid({ slots = { 1, 2 }, showCooldownText = false }, log)
+            for i, b in ipairs(log) do
+                expect(b.props.showCooldownText).as("cell " .. i).falsy()
+            end
+        end)
+
+        it("fans a later change out to every cell", function()
+            local log = {}
+            local g = grid({ slots = { 1, 2, 3 } }, log)
+            g:SetShowCooldownText(false)
+            for i, b in ipairs(log) do
+                expect(b.calls.SetShowCooldownText)
+                    .as("cell " .. i .. " was told").eq(false)
+            end
+            g:Destroy()
+        end)
+
+        it("re-states it on a cell that SURVIVES a re-apply", function()
+            -- The trap the button interface exists for: a cell kept across a re-apply is not
+            -- reconstructed, so a setting that only reached the factory would be lost on it.
+            local log = {}
+            local g = grid({ slots = { 1, 2 } }, log)
+            g:SetShowCooldownText(false)
+            log[1].calls.SetShowCooldownText = nil
+            g:SetButtonSize(40)
+            expect(log[1].calls.SetShowCooldownText)
+                .as("re-stated rather than left at its construction value").eq(false)
             g:Destroy()
         end)
     end)

@@ -71,6 +71,38 @@ function M.Options()
 end
 
 ---------------------------------------------------------------------------
+-- Remaining time
+---------------------------------------------------------------------------
+
+--- How long something has left, spelled for a human: "2h", "30m", "45s", "0.4s".
+--
+-- HERE RATHER THAN IN A COMPONENT, for the reason Money below is here. It lived as a file-local
+-- `formatDuration` in Components/AuraIcon.lua, whose own comment named the hazard correctly --
+-- "every consumer of an aura remaining-time would write the same three-tier format otherwise" --
+-- and then drew the boundary one step too small. A second SURFACE is the same hazard as a second
+-- consumer, and an action button's cooldown countdown is that second surface: two readouts of "how
+-- long until this is available again" sitting inches apart on screen must not spell it differently.
+--
+-- EVERY STEP FLOORS RATHER THAN ROUNDS, so a readout never shows time that has already gone.
+-- @param seconds number
+-- @return string  "" for a non-number or NaN, since this runs from a ticker
+function M.Duration(seconds)
+    if type(seconds) ~= "number" or seconds ~= seconds then return "" end
+    if seconds >= 3600 then
+        return format("%dh", floor(seconds / 3600))
+    elseif seconds >= 60 then
+        return format("%dm", floor(seconds / 60))
+    elseif seconds >= 1 then
+        return format("%ds", floor(seconds))
+    end
+    -- Below one second is the only band where a decimal carries information: the whole-second form
+    -- would read "0s" for the entire final second. Floored rather than rounded, because "%.1f" on
+    -- 0.99 prints "1.0s" -- contradicting the branch that chose it, and a glyph wider than anything
+    -- else this formatter can produce.
+    return format("%.1fs", floor(seconds * 10) / 10)
+end
+
+---------------------------------------------------------------------------
 -- Money
 ---------------------------------------------------------------------------
 

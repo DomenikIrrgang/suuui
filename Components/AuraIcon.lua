@@ -1,6 +1,4 @@
 local abs = math.abs
-local floor = math.floor
-local format = string.format
 local S = SuuUI.UISignals
 
 -- The ring an aura icon wears when nothing has tinted it. Its own semantic rather than the
@@ -15,25 +13,10 @@ AuraIconMeta.__index = AuraIconMeta
 -- Duration formatting
 ---------------------------------------------------------------------------
 
--- Duration text lives IN the component because every consumer of an aura remaining-time
--- would write the same three-tier format otherwise. This deliberately differs from
--- StatusBar (which takes plain strings only and leaves formatting to the caller): a bar's
--- remaining-time meaning varies by context; an aura's does not.
-
-local function formatDuration(seconds)
-    if seconds >= 3600 then
-        return format("%dh", floor(seconds / 3600))
-    elseif seconds >= 60 then
-        return format("%dm", floor(seconds / 60))
-    elseif seconds >= 1 then
-        return format("%ds", floor(seconds))
-    end
-    -- Below one second is the only band where a decimal carries information: the whole-second
-    -- form would read "0s" for the entire final second. Floored rather than rounded, because
-    -- "%.1f" on 0.99 prints "1.0s" -- contradicting the branch that chose it, and a glyph
-    -- wider than anything else this formatter can produce.
-    return format("%.1fs", floor(seconds * 10) / 10)
-end
+-- MOVED TO Core/Readout.lua. It was a file-local here on the argument that every consumer of an
+-- aura remaining-time would otherwise write the same three-tier format -- right about the hazard,
+-- one step too small about the scope. An action button's cooldown countdown is a second surface
+-- spelling the same quantity, so the format is shared rather than copied; see Readout.Duration.
 
 ---------------------------------------------------------------------------
 -- Internal helpers
@@ -45,7 +28,7 @@ function AuraIconMeta:_paintDuration()
         self._durationText:Hide()
         return
     end
-    self._durationText:SetText(formatDuration(self._timeLeft))
+    self._durationText:SetText(SuuUI.Readout.Duration(self._timeLeft))
     -- Under 5 seconds the text takes colorWarning so an expiring buff reads at a glance;
     -- above that it takes colorText. Text's built-in colmap does not have a "warning" key,
     -- so the colour is applied directly through SetTextColor on the font string.

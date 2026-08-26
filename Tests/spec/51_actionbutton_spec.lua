@@ -573,6 +573,235 @@ describe("Components.ActionButton", function()
         end)
     end)
 
+    -- The remaining cooldown as a NUMBER on the button.
+    --
+    -- The load-bearing case here is the global cooldown, and it needs TWO assertions rather than
+    -- one. "No number is drawn" alone cannot distinguish the design -- a button filtered out before
+    -- it ever joins the ticker -- from a button sitting on the ticker ten times a second deciding to
+    -- draw nothing. Only the membership count separates them, which is why the internals expose it.
+    describe("the cooldown countdown", function()
+        local function internals() return H.SuuUI._ActionButtonInternals end
+
+        -- The clock starts at 0, so a cooldown staged from 0 has its whole duration left.
+        local function cooling(duration, opts)
+            opts = opts or {}
+            H.setAction(1, {
+                cooldownStart    = opts.start or 0,
+                cooldownDuration = duration,
+            }, { silent = true })
+            return build()
+        end
+
+        -- One throttle period, so the shared ticker actually fires.
+        local function tickOnce()
+            H.tick(internals().rangeThrottle + 0.001)
+        end
+
+        it("draws the remaining time for an ability with a real cooldown", function()
+            local b = cooling(6)
+            expect(b._cooldownText:IsShown()).as("a real cooldown carries a number").truthy()
+            expect(b._cooldownText:GetText()).eq(H.SuuUI.Readout.Duration(6))
+        end)
+
+        it("spells it through the SHARED formatter, not one of its own", function()
+            -- The whole reason Readout.Duration exists: an aura band and a cooling button sit
+            -- inches apart and must not disagree about how to say "45 seconds".
+            local b = cooling(45)
+            expect(b._cooldownText:GetText()).eq("45s")
+            expect(b._cooldownText:GetText()).eq(H.SuuUI.Readout.Duration(45))
+        end)
+
+        it("draws NO number for a cooldown that is only the global cooldown", function()
+            local b = cooling(internals().gcdMaxDuration)
+            expect(b._cooldownText:IsShown())
+                .as("the GCD is what a player asked NOT to see counted").falsy()
+        end)
+
+        it("keeps a GCD off the ticker entirely rather than walking it to draw nothing", function()
+            local b = cooling(internals().gcdMaxDuration)
+            expect(internals().onCooldownCount())
+                .as("filtered before it joins, not after").eq(0)
+            -- And the discriminating half: a real cooldown DOES join, so the count above is a
+            -- statement about the filter rather than about the set never being used.
+            H.setAction(1, { cooldownDuration = 6 }, { silent = true })
+            b:Refresh()
+            expect(internals().onCooldownCount()).eq(1)
+        end)
+
+        it("still sweeps for the GCD -- the swipe and the number disagree on purpose", function()
+            local b = cooling(internals().gcdMaxDuration)
+            expect(b._cooldown._cdDuration)
+                .as("a bar-wide sweep is how 'briefly unavailable' reads").eq(1.5)
+            expect(b._cooldownText:IsShown()).falsy()
+        end)
+
+        it("counts down on the shared ticker", function()
+            local b = cooling(30)
+            expect(b._cooldownText:GetText()).eq("30s")
+            -- One tick, not two: H.tick advances the clock AND runs the OnUpdate, so a second
+            -- call would move the clock again and the expected string with it.
+            H.tick(5)
+            expect(b._cooldownText:GetText()).eq("25s")
+        end)
+
+        it("switches to tenths below one second, FLOORED rather than rounded", function()
+            local b = cooling(6)
+            H.tick(5.75)
+            -- 0.25s left. Rounding would print "0.3s" and claim time that has already gone.
+            expect(b._cooldownText:GetText()).eq("0.2s")
+        end)
+
+        it("clears the number AND retires the button when the cooldown expires", function()
+            local b = cooling(6)
+            expect(internals().onCooldownCount()).eq(1)
+            H.tick(6)
+            tickOnce()
+            expect(b._cooldownText:IsShown()).as("nothing left to count").falsy()
+            -- The client announces a cooldown STARTING and not reliably its finishing, so if the
+            -- expiry did not retire the button nothing else ever would.
+            expect(internals().onCooldownCount())
+                .as("expired buttons leave the walked set").eq(0)
+        end)
+
+        it("draws nothing for an empty slot", function()
+            H.clearAction(1, { silent = true })
+            local b = build()
+            expect(b._cooldownText:IsShown()).falsy()
+            expect(internals().onCooldownCount()).eq(0)
+        end)
+
+        it("draws nothing when the client reports the cooldown as not running", function()
+            H.setAction(1, {
+                cooldownStart = 0, cooldownDuration = 6, cooldownEnable = 0,
+            }, { silent = true })
+            local b = build()
+            expect(b._cooldownText:IsShown()).falsy()
+            expect(internals().onCooldownCount()).eq(0)
+        end)
+
+        describe("the toggle", function()
+            it("is on by default", function()
+                expect(build()._showCooldownText).truthy()
+            end)
+
+            it("draws nothing when the prop is off", function()
+                H.setAction(1, { cooldownDuration = 6 }, { silent = true })
+                local b = build({ showCooldownText = false })
+                expect(b._cooldownText:IsShown()).falsy()
+            end)
+
+            it("shows the number again when switched on MID-cooldown", function()
+                -- Why the window is tracked while the readout is off: switching it back on has to
+                -- show what is running now, not stay blank until some later cooldown starts.
+                H.setAction(1, { cooldownDuration = 30 }, { silent = true })
+                local b = build({ showCooldownText = false })
+                expect(b._cooldownText:IsShown()).falsy()
+                expect(internals().onCooldownCount())
+                    .as("tracked even with nothing drawn").eq(1)
+                b:SetShowCooldownText(true)
+                expect(b._cooldownText:IsShown()).as("the window was still being tracked").truthy()
+                expect(b._cooldownText:GetText()).eq("30s")
+            end)
+
+            it("retires an expired cooldown even while the readout is off", function()
+                -- This is what the toggle check being AFTER the expiry branch buys, and it is the
+                -- only observable difference: nothing is drawn either way, but a button whose
+                -- cooldown has finished must stop being walked. A mutation moving the check to the
+                -- top of _paintCooldownText survived until this assertion existed.
+                H.setAction(1, { cooldownDuration = 6 }, { silent = true })
+                build({ showCooldownText = false })
+                expect(internals().onCooldownCount()).eq(1)
+                H.tick(6)
+                expect(internals().onCooldownCount())
+                    .as("expired, so it leaves the set regardless of the readout").eq(0)
+            end)
+
+            it("hides the number without stopping the countdown underneath", function()
+                H.setAction(1, { cooldownDuration = 30 }, { silent = true })
+                local b = build()
+                b:SetShowCooldownText(false)
+                H.tick(5)
+                b:SetShowCooldownText(true)
+                expect(b._cooldownText:GetText())
+                    .as("it resumes at the real remaining time").eq("25s")
+            end)
+        end)
+
+        describe("where it sits", function()
+            -- Full 2D test. H.box's `top` measures DOWN from the screen top, so a frame lower on
+            -- screen has the LARGER top -- reading it as a bottom-up coordinate inverts this.
+            local function overlaps(a, b)
+                return a.right > b.left and a.left < b.right
+                   and a.bottom > b.top and a.top < b.bottom
+            end
+
+            it("is centred on the button and inside it", function()
+                local b = cooling(30)
+                local f = b:GetFrame()
+                H.expectCenteredV(b._cooldownText:GetFrame(), f)
+                H.expectInside(b._cooldownText:GetFrame(), f)
+            end)
+
+            it("is not clipped by the button", function()
+                local b = cooling(30)
+                H.expectTextNotClipped(b._cooldownText:GetFrame())
+            end)
+
+            -- PINNED, NOT FIXED. At the default 32-unit button a centred number overlaps BOTH
+            -- right-hand corner readouts by about two units. This is the same tension AuraIcon's
+            -- own spec pins: the readouts take fontSizeSm, whose line height does not scale with
+            -- the button, so a centred one and a cornered one cannot be disjoint inside a small
+            -- box. Both cases are reachable in ordinary play -- a stack of potions on a cooldown
+            -- is the count case, and every bound button is the hotkey case -- so this records
+            -- today's geometry rather than leaving someone to rediscover it.
+            it("CAN collide with the corner readouts at the default button size", function()
+                H.setAction(1, { cooldownDuration = 18, count = 5 }, { silent = true })
+                H.setBinding("ACTIONBUTTON1", "Q")
+                local b = build({ size = 32, binding = "ACTIONBUTTON1" })
+                local cd = H.box(b._cooldownText:GetFrame())
+                expect(overlaps(cd, H.box(b._countText:GetFrame())))
+                    .as("count, bottom-right; see the xit below").truthy()
+                expect(overlaps(cd, H.box(b._hotkeyText:GetFrame())))
+                    .as("hotkey, top-right; see the xit below").truthy()
+            end)
+
+            it("is clear of both corners once the button is large enough", function()
+                -- Which is also the player-facing answer today: the Button Size slider resolves
+                -- it, because the corners move apart while the font does not grow with them.
+                H.setAction(1, { cooldownDuration = 18, count = 5 }, { silent = true })
+                H.setBinding("ACTIONBUTTON1", "Q")
+                local b = build({ size = 48, binding = "ACTIONBUTTON1" })
+                H.expectNoOverlap({
+                    b._cooldownText:GetFrame(),
+                    b._countText:GetFrame(),
+                    b._hotkeyText:GetFrame(),
+                })
+            end)
+
+            xit("keeps the number clear of the corner readouts at every button size", function()
+                -- Undecided, and each route costs something real:
+                --   * Inset the number's edges by the corner readouts' widths, the way
+                --     _reserveCountColumn already does for the macro name. Cheapest, but it makes
+                --     a "centred" readout visibly off-centre on exactly the buttons that carry a
+                --     stack or a bound key -- which is most of them.
+                --   * Hide the corner readouts while a number is showing. Loses information a
+                --     player uses, and the hotkey is the one they can least afford to lose.
+                --   * Size the readouts from the BUTTON rather than from fontSizeSm, so all three
+                --     shrink together. Correct-looking, but it takes the readouts off the theme's
+                --     font-size tokens, which every other text in the addon follows.
+                -- Wants Domenik's call on which cost is acceptable.
+            end)
+        end)
+
+        it("leaves the walked set on teardown", function()
+            local b = cooling(6)
+            expect(internals().onCooldownCount()).eq(1)
+            b:Destroy()
+            expect(internals().onCooldownCount())
+                .as("a destroyed handle must not be walked by the ticker").eq(0)
+        end)
+    end)
+
     describe("teardown", function()
         it("drops its theme subscription", function()
             local b = build()
@@ -808,7 +1037,23 @@ describe("Components.ActionButton kind=pet", function()
             expect(b._cooldown._cdStart).eq(500)
             expect(b._cooldown._cdDuration).eq(30)
         end)
+
+        it("counts a pet ability's cooldown down as a number too", function()
+            -- The kind seam earns its keep here: the countdown is written once, on the shared
+            -- provider path, so a pet command gets it without a line of pet-specific code.
+            H.setPetAction(1, { cooldownStart = 0, cooldownDuration = 20 }, { silent = true })
+            local b = pet(1)
+            expect(b._cooldownText:IsShown()).truthy()
+            expect(b._cooldownText:GetText()).eq("20s")
+        end)
+
+        it("draws no number for a pet ability sitting on the global cooldown", function()
+            H.setPetAction(1, { cooldownStart = 0, cooldownDuration = 1.5 }, { silent = true })
+            local b = pet(1)
+            expect(b._cooldownText:IsShown()).falsy()
+        end)
     end)
+
 
     describe("autocast", function()
         it("rings a command that IS autocasting", function()

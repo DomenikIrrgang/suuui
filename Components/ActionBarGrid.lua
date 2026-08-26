@@ -109,6 +109,7 @@ function GridMeta:_syncButtons()
                 showHotkey    = self._showHotkey,
                 showMacroText = self._showMacroText,
                 showCount     = self._showCount,
+                showCooldownText = self._showCooldownText,
                 name          = self._namePrefix and (self._namePrefix .. i) or nil,
             }, self._f)
             buttons[i] = b
@@ -123,6 +124,7 @@ function GridMeta:_syncButtons()
             existing:SetShowHotkey(self._showHotkey)
             existing:SetShowMacroText(self._showMacroText)
             existing:SetShowCount(self._showCount)
+            existing:SetShowCooldownText(self._showCooldownText)
             self._gridBox:SetChildProps(existing, { height = self._buttonSize })
         end
     end
@@ -308,6 +310,13 @@ function GridMeta:SetShowCount(show)
     for _, b in ipairs(self._buttons) do b:SetShowCount(self._showCount) end
 end
 
+--- Shows or hides the remaining-cooldown number on every button.
+-- @param show bool
+function GridMeta:SetShowCooldownText(show)
+    self._showCooldownText = show ~= false
+    for _, b in ipairs(self._buttons) do b:SetShowCooldownText(self._showCooldownText) end
+end
+
 --- The buttons, in slot order. Live handles, not a copy of their state.
 -- @return table
 function GridMeta:GetButtons()
@@ -368,7 +377,8 @@ SuuUI.Components.InstallBase(GridMeta, "_f")
 -- reads them off the handles in GetButtons().
 --
 -- @param props table  { slots, bindings, rows, buttonSize, spacing, padding,
---                       showHotkeys, showMacroText, showCount, namePrefix, buttonFactory }
+--                       showHotkeys, showMacroText, showCount, showCooldownText,
+--                       namePrefix, buttonFactory }
 --   slots:         array of action slot numbers. Required, may be empty.
 --   buttonSize:    side of each square button. Required -- a PLUGIN SETTING, not a token.
 --   bindings:      parallel array of binding commands, e.g. { "ACTIONBUTTON1", ... }
@@ -446,6 +456,7 @@ function SuuUI.Components.ActionBarGrid(props, parent)
         _showHotkey    = props.showHotkeys ~= false,
         _showMacroText = props.showMacroText ~= false,
         _showCount     = props.showCount ~= false,
+        _showCooldownText = props.showCooldownText ~= false,
         _namePrefix    = props.namePrefix,
         -- How a cell's button is built. Defaults to ActionButton, which is what bars 1-8 want.
         -- The seam exists because the STANCE bar cannot use ActionButton at all: its buttons

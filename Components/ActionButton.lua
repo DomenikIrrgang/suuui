@@ -34,6 +34,26 @@ local ipairs, tostring = ipairs, tostring
 local format, gsub, upper = string.format, string.gsub, string.upper
 local S = SuuUI.UISignals
 
+-- The longest cooldown that is STILL ONLY THE GLOBAL COOLDOWN, in seconds.
+--
+-- Why a filter exists at all: GetActionCooldown reports the GCD on EVERY slot at once, so an
+-- unfiltered countdown puts a number on all ninety-six buttons on every single cast. What a player
+-- asked for is the remaining cooldown of an ability that actually has one.
+--
+-- THE TEST IS ON THE COOLDOWN'S DURATION, NEVER ON ITS REMAINING TIME, and that distinction is the
+-- whole reason this works: a six-second cooldown keeps its number all the way down to 0.1s, because
+-- its DURATION is six regardless of how little is left, while a 1.5-second one is the global
+-- cooldown and never draws at all.
+--
+-- 1.5 is not invented here. ElvUI ships `minDuration = 1500` (ms) as its cooldown default on this
+-- exact client and hands it to the client's own SetMinimumCountdownDuration, so this is the same
+-- line every other bar addon on the machine draws. It also covers the 1.0s GCD some energy
+-- abilities use, since that sits below the ceiling rather than beside it.
+--
+-- The price is that a genuine cooldown of 1.5s or shorter shows no number. Nothing in this
+-- expansion has one, and a player who wants the GCD counted is asking for the noise this removes.
+local GCD_MAX_DURATION = 1.5
+
 ---------------------------------------------------------------------------
 -- Shared event frame
 ---------------------------------------------------------------------------
@@ -178,6 +198,14 @@ local live    = {}
 local bySlot  = {}
 local evt
 
+-- Buttons whose cooldown the shared ticker is counting down.
+--
+-- Membership is decided by _setCooldownWindow off the client's own cooldown events, and the GCD is
+-- filtered THERE rather than in the paint -- so a cast that puts the global cooldown on every slot
+-- adds nothing to this set, and an idle bar walks nothing at all. The readout costs exactly as much
+-- as there are real cooldowns running.
+local onCooldown = {}
+
 local function indexSlot(handle, slot)
     if not slot then return end
     local set = bySlot[slot]
@@ -294,6 +322,13 @@ local function onRangeTick(_, elapsed)
     for handle in pairs(live) do
         handle:_paintRange()
     end
+    -- The cooldown countdown rides THIS tick rather than adding a second OnUpdate frame, and the
+    -- throttle already suits it exactly: Readout.Duration's decimal band is tenths, so ten times a
+    -- second is precisely the rate at which the string it produces can change. Only buttons with a
+    -- real cooldown running are walked -- see `onCooldown` -- so an idle bar pays a single `next`.
+    for handle in pairs(onCooldown) do
+        handle:_paintCooldownText()
+    end
 end
 
 local function syncRangeTicker()
@@ -376,14 +411,89 @@ function ActionButtonMeta:_paintCooldown()
     local slot = self:_slotNow()
     if not (slot and self._p.has(slot)) then
         self._cooldown:SetCooldown(0, 0)
+        self:_setCooldownWindow(nil, nil)
         return
     end
     local start, duration, enable = self._p.cooldown(slot)
     if enable and enable ~= 0 and duration and duration > 0 then
         self._cooldown:SetCooldown(start, duration)
+        self:_setCooldownWindow(start, duration)
     else
         self._cooldown:SetCooldown(0, 0)
+        self:_setCooldownWindow(nil, nil)
     end
+end
+
+--- Records the window the countdown reads from, and joins or leaves the shared ticker.
+--
+-- THE SWIPE AND THE NUMBER DELIBERATELY DISAGREE ABOUT THE GCD. The swipe takes every cooldown the
+-- client reports, global one included, because a sweep across the whole bar is how a player reads
+-- "everything is briefly unavailable" and it costs no text. The number is filtered to real
+-- cooldowns, because ninety-six two-digit readouts flashing on every cast is noise rather than
+-- information. Same event, two readings, on purpose -- see GCD_MAX_DURATION.
+--
+-- The filter lives here rather than in the paint so a GCD never joins `onCooldown` in the first
+-- place: gating inside _paintCooldownText would leave every button on the ticker for the GCD's
+-- duration, doing arithmetic to decide to draw nothing.
+function ActionButtonMeta:_setCooldownWindow(start, duration)
+    if start and duration and duration > GCD_MAX_DURATION then
+        self._cdStart, self._cdDuration = start, duration
+        onCooldown[self] = true
+    else
+        self._cdStart, self._cdDuration = nil, nil
+        onCooldown[self] = nil
+    end
+    self:_paintCooldownText()
+end
+
+--- Draws the remaining cooldown as a number, and retires the button when it expires.
+function ActionButtonMeta:_paintCooldownText()
+    local text = self._cooldownText
+    if not text then return end
+
+    if not (self._cdStart and self._cdDuration) then
+        self._cdText = nil
+        text:Hide()
+        return
+    end
+
+    local remaining = self._cdStart + self._cdDuration - GetTime()
+    if remaining <= 0 then
+        -- EXPIRED, and leaving the ticker here is the point rather than tidiness: the client
+        -- announces a cooldown STARTING and does not reliably announce one finishing, so nothing
+        -- else would ever drop this button from the walked set.
+        self._cdStart, self._cdDuration = nil, nil
+        onCooldown[self] = nil
+        self._cdText = nil
+        text:Hide()
+        return
+    end
+
+    -- The toggle is checked AFTER the expiry branch, and that order is load-bearing for ticker
+    -- hygiene rather than for anything on screen. Checked first, a cooldown that runs out while the
+    -- readout is switched off would never reach the branch above that retires its button, so the
+    -- ticker would keep walking it until some later cooldown event happened to clear the window.
+    --
+    -- Note what the order does NOT buy: both orders keep `_cdStart` intact, so switching the
+    -- readout back on mid-cooldown shows the number either way. A mutation moving this check to the
+    -- top of the function survived a spec asserting exactly that, which is why the spec now asserts
+    -- the walked SET as well as the string.
+    if not self._showCooldownText then
+        self._cdText = nil
+        text:Hide()
+        return
+    end
+
+    local str = SuuUI.Readout.Duration(remaining)
+    -- An unchanged write is dropped: this runs ten times a second per cooling button while the
+    -- string only moves once a second above the decimal band. Same guard StatusBar's overlay
+    -- readouts and DataField both carry, and for the same reason -- a re-measure per tick per
+    -- button is the entire cost of the feature.
+    if str ~= self._cdText then
+        self._cdText = str
+        text:SetText(str)
+    end
+    text:Show()
 end
 
 function ActionButtonMeta:_paintCount()
@@ -692,6 +802,16 @@ function ActionButtonMeta:SetShowCount(show)
     self:_paintCount()
 end
 
+--- Shows or hides the remaining-cooldown number.
+---
+--- Only abilities with a cooldown of their own ever carry one; the global cooldown is filtered out
+--- before a button joins the ticker. See GCD_MAX_DURATION.
+-- @param show bool
+function ActionButtonMeta:SetShowCooldownText(show)
+    self._showCooldownText = show ~= false
+    self:_paintCooldownText()
+end
+
 --- Sets the button's side. Called by its grid when the size setting changes.
 ---
 --- A protected frame, so this is refused in combat like any other geometry -- the CALLER owns
@@ -738,6 +858,8 @@ function ActionButtonMeta:Destroy()
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     deindexSlot(self, self._indexed)
     live[self] = nil
+    -- Left in `onCooldown` this handle would be walked by the ticker after its frame is gone.
+    onCooldown[self] = nil
     -- Both drop to nothing once the last button goes, rather than leaving a registered
     -- OnUpdate and nine events running for no one.
     syncRangeTicker()
@@ -745,6 +867,7 @@ function ActionButtonMeta:Destroy()
     if self._countText then self._countText:Destroy() end
     if self._macroText then self._macroText:Destroy() end
     if self._hotkeyText then self._hotkeyText:Destroy() end
+    if self._cooldownText then self._cooldownText:Destroy() end
     self._iconComp:Destroy()
     self._box:Destroy()
     self._f:Hide()
@@ -776,6 +899,8 @@ SuuUI.Components.InstallBase(ActionButtonMeta, "_f")
 --   showHotkey:    default true
 --   showMacroText: default true
 --   showCount:     default true
+--   showCooldownText: default true. The remaining cooldown as a number, centred. Abilities with a
+--                  cooldown of their own only -- the global cooldown never draws one.
 --   tooltip:       show the client's action tooltip on hover (default true)
 --   tooltipAnchor: GameTooltip anchor point (default "ANCHOR_RIGHT")
 --   name:          optional global frame name, so /framestack and click-casting addons
@@ -953,6 +1078,22 @@ function SuuUI.Components.ActionButton(props, parent)
     })
     macroText:Hide()
 
+    -- Remaining cooldown: CENTRED on the icon. The other three positions are taken -- hotkey
+    -- top-right, count bottom-right, macro name along the bottom -- and the middle is also where it
+    -- belongs on its own merits, for the reason AuraIcon centres its timer: it is the reading a
+    -- player scans a cooling button for.
+    --
+    -- PLAIN colorText, and NOT AuraIcon's colorWarning under five seconds. On an aura that band
+    -- means "about to fall off", which is worth shouting about; every cooldown in the game passes
+    -- through it on its way to zero, so the same rule would turn the number yellow at the tail of
+    -- every cast and mean nothing at all.
+    local cooldownText = SuuUI.Components.Text({
+        text = "", size = "sm", color = "text", justify = "CENTER", wrap = false,
+    }, overlay)
+    cooldownText._fade = false
+    overlayBox:Add(cooldownText, { align = "center", valign = "center" })
+    cooldownText:Hide()
+
     local id = "actionbutton_" .. tostring(f)
     handle = setmetatable({
         _f             = f,
@@ -966,6 +1107,7 @@ function SuuUI.Components.ActionButton(props, parent)
         _hotkeyText    = hotkeyText,
         _countText     = countText,
         _macroText     = macroText,
+        _cooldownText  = cooldownText,
         _eid           = id,
         _kind          = props.kind or "action",
         _p             = provider,
@@ -973,6 +1115,7 @@ function SuuUI.Components.ActionButton(props, parent)
         _showHotkey    = props.showHotkey ~= false,
         _showMacroText = props.showMacroText ~= false,
         _showCount     = props.showCount ~= false,
+        _showCooldownText = props.showCooldownText ~= false,
         _tooltip       = props.tooltip ~= false,
         _tooltipAnchor = props.tooltipAnchor or "ANCHOR_RIGHT",
         _usable        = true,
@@ -980,6 +1123,11 @@ function SuuUI.Components.ActionButton(props, parent)
         _outOfRange    = false,
         _current       = false,
         _autoRepeat    = false,
+        -- The cooldown window the countdown reads from, and the string currently on screen. All
+        -- three nil until a real cooldown starts; _cdText is what makes an unchanged write free.
+        _cdStart       = nil,
+        _cdDuration    = nil,
+        _cdText        = nil,
     }, ActionButtonMeta)
 
     -- PostClick, not OnClick: the template owns OnClick and it is what performs the action.
@@ -1053,6 +1201,15 @@ SuuUI._ActionButtonInternals = {
     hasTicker = function()
         return rangeTicker ~= nil and rangeTicker:GetScript("OnUpdate") ~= nil
     end,
+    -- How many buttons the ticker is counting a cooldown down for. The set is module-local, so
+    -- without this a spec cannot tell "the GCD drew no number" from "the GCD is on the ticker
+    -- drawing nothing", and cannot assert that an expired cooldown retires its button.
+    onCooldownCount = function()
+        local n = 0
+        for _ in pairs(onCooldown) do n = n + 1 end
+        return n
+    end,
+    gcdMaxDuration = GCD_MAX_DURATION,
     eventFrame = function() return evt end,
     abbreviateKey = abbreviateKey,
     rangeThrottle = RANGE_THROTTLE,

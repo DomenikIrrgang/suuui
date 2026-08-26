@@ -250,7 +250,8 @@ end
 -- first -- which is why they are here as a group with the contract named, not added one crash at a
 -- time.
 --
---   GetSlot / SetSize / SetBinding / SetShowHotkey / SetShowMacroText / SetShowCount / Destroy
+--   GetSlot / SetSize / SetBinding / SetShowHotkey / SetShowMacroText / SetShowCount /
+--   SetShowCooldownText / Destroy
 
 --- The grid's identity accessor. For a stance button the grid's "slot" IS the form index -- the
 --- grid compares it to decide whether a cell must be rebuilt, and form 2 in cell 2 is exactly that
@@ -265,6 +266,12 @@ end
 -- invent a readout the client has no data for.
 function StanceButtonMeta:SetShowMacroText() end
 function StanceButtonMeta:SetShowCount() end
+
+-- Accepted and ignored for a different reason from the two above: a form DOES have a cooldown, so
+-- there is data to draw -- the countdown was simply scoped to the action and pet bars. Answering the
+-- call is what keeps the grid's fan-out generic; drawing nothing here is a decision, not a gap, and
+-- adding it later is confined to this file.
+function StanceButtonMeta:SetShowCooldownText() end
 
 --- @param w number
 --- @param h number|nil  defaults to w

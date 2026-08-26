@@ -45,7 +45,9 @@ SuuUI/
 │   │                     --   window and the tooltip's account section), and the answer has to exist
 │   │                     --   whether or not the window that writes it is loaded
 │   ├── Readout.lua       -- how a bar's value is SPELLED: the shared current/max, current and
-│   │                     --   percent formats, the slot list, the dropdown options. Neither a
+│   │                     --   percent formats, the slot list, the dropdown options -- plus
+│   │                     --   Duration, the `2h / 30m / 45s / 0.4s` remaining-time format shared
+│   │                     --   by an aura's timer and an action button's cooldown number. Neither a
 │   │                     --   game fact nor a token — a presentation choice the whole UI has to
 │   │                     --   make the same way, so a unit frame and a tooltip cannot disagree
 │   ├── Profile.lua       -- profile storage, CRUD, character linking
@@ -2222,15 +2224,49 @@ document it here.
   for a clickable icon use `IconButton`.
 - `ActionButton` — one action bar cell: the client's own action system wearing SuuUI's art.
   A `Button` on `SecureActionButtonTemplate`, composing `Icon` for the art, a Blizzard
-  `Cooldown` for the sweep (the same sanctioned exception `AuraIcon` takes), and three `Text`
+  `Cooldown` for the sweep (the same sanctioned exception `AuraIcon` takes), and four `Text`
   readouts in an overlay frame raised above the sweep. Props: `slot` and `size` — **both
   required**, because a button's size is a *plugin setting* and the component must not invent
-  a theme token for it — plus `binding`, `showHotkey`, `showMacroText`, `showCount`, `name`.
+  a theme token for it — plus `binding`, `showHotkey`, `showMacroText`, `showCount`,
+  `showCooldownText`, `name`.
   API: `Refresh` / `GetSlot` / `HasAction` / `IsCurrent` / `IsAutoRepeat` / `IsOutOfRange` /
-  `SetShowHotkey` / `SetShowMacroText` / `SetShowCount` / `SetBinding`. Emits `CLICKED`,
+  `SetShowHotkey` / `SetShowMacroText` / `SetShowCount` / `SetShowCooldownText` / `SetBinding`.
+  Emits `CLICKED`,
   `MOUSE_ENTER`, `MOUSE_LEAVE`, `SIZE_CHANGED`. Draws **no border** — the A2 look is one glass
   plate under a whole grid with hairline dividers between cells, so a per-button border would
   draw a second edge inside the first.
+
+  **The remaining cooldown is drawn as a number, centred, and the swipe and the number
+  deliberately disagree about the global cooldown.** `GetActionCooldown` reports the GCD on
+  *every* slot at once, so an unfiltered countdown puts a number on all ninety-six buttons on
+  every cast — which is noise rather than information, and is exactly what a player asking for
+  "the cooldown of an ability that actually has one" is asking to be spared. The swipe still
+  takes every cooldown the client reports, GCD included, because a sweep across the whole bar is
+  how "briefly unavailable" reads and it costs no text. The filter is `GCD_MAX_DURATION`, 1.5s,
+  and it is **tested against the cooldown's DURATION rather than its remaining time** — a
+  six-second cooldown keeps its number down to 0.1s, while a 1.5-second one never draws at all.
+  The number is not invented here: ElvUI ships `minDuration = 1500` (ms) as its cooldown default
+  on this client and hands it to the client's own `SetMinimumCountdownDuration`, so it is the
+  same line every other bar addon on the machine draws, and it covers the 1.0s GCD some energy
+  abilities use. The cost is that a genuine cooldown of 1.5s or shorter shows no number; nothing
+  in this expansion has one.
+
+  Two more things about it are load-bearing. The countdown **rides the existing shared range
+  ticker** rather than adding a second `OnUpdate` frame, and that throttle already suits it
+  exactly — `Readout.Duration`'s decimal band is tenths, so ten times a second is precisely the
+  rate at which the string can change; only buttons with a real cooldown running are walked, so
+  an idle bar pays one `next`. And the **toggle is checked after the expiry branch**, so a
+  cooldown that runs out while the readout is switched off still retires its button from the
+  walked set — a mutation moving that check to the top of the paint survived until the spec
+  asserted the set rather than only the string.
+
+  It takes **plain `colorText`, not `AuraIcon`'s `colorWarning` under five seconds**: on an aura
+  that band means "about to fall off", but every cooldown in the game passes through it on the
+  way to zero, so the same rule would turn the number yellow at the tail of every cast and mean
+  nothing. Centred because the other three positions are taken and because it is the reading a
+  player scans a cooling button for — and at the default 32-unit size it **can overlap both
+  right-hand corner readouts**, which `Tests/spec/51_actionbutton_spec.lua` pins along with an
+  `xit` naming the three routes past it. The Button Size slider is today's answer.
 
   Everything below fails **silently in game** — the button still sizes, still takes the mouse,
   still reports as shown — which is why each is pinned by a mutation-verified spec:
@@ -2366,6 +2402,12 @@ document it here.
   entire final second. Every step floors rather than rounds, so a readout never shows time
   that is already gone, and `"%.1f"` on 0.99 would print `"1.0s"` from the branch that had
   just decided the value was under a second.
+
+  **That format is `Readout.Duration`, not this component's own.** It was a file-local here on
+  the argument that every consumer of an aura remaining-time would otherwise re-write it — right
+  about the hazard, one step too small about the scope. An action button's cooldown countdown is a
+  second *surface* spelling the same quantity, and two remaining-time readouts inches apart on
+  screen must not disagree, so it moved to Core for the reason `Readout.Money` did.
 - `NavItem` — selectable labelled row with hover/selected states, for nav lists.
 - `DataField` — one field on the data bar: a muted **prefix**, a **value**, and an accent
   underline along the bottom edge while hovered. Props: `prefix`, `text`, `tone`, `w`, `h`,

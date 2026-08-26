@@ -548,6 +548,9 @@ local function buildBar(p, def)
         showHotkeys   = get(key(def, "show_hotkeys"), true),
         showMacroText = get(key(def, "show_macro_text"), true),
         showCount     = get(key(def, "show_count"), true),
+        -- Read from a GLOBAL key, not a per-bar one -- see the schema entry for why this readout
+        -- is the one that is not per bar.
+        showCooldownText = get("show_cooldown_text", true),
         -- Named so /framestack can identify them and a click-casting addon can bind them.
         namePrefix    = "SuuUIBar" .. def.id .. "Button",
     }, root:GetFrame())
@@ -756,6 +759,15 @@ local function watchSettings(p)
         local Suppress = SuuUI._ActionBars.Suppress
         if on then Suppress.Apply() else Suppress.Restore() end
     end, OWNER .. ".hide_blizzard", { immediate = true })
+
+    -- ONE watcher for every bar, unlike the three readouts in READOUTS which are keyed per bar.
+    -- Not `immediate`: buildBar seeds the value through `get`, exactly as the per-bar readouts are
+    -- seeded, so an immediate callback here would only re-apply what construction just set.
+    SuuUI.Settings:Watch(PLUGIN_ID, "show_cooldown_text", function(on)
+        for _, grid in pairs(p._bars) do
+            grid:SetShowCooldownText(on ~= false)
+        end
+    end, OWNER .. ".show_cooldown_text")
 end
 
 local function unwatchSettings()
@@ -763,6 +775,7 @@ local function unwatchSettings()
         unwatchBar(def)
     end
     SuuUI.Settings:Unwatch(OWNER .. ".hide_blizzard")
+    SuuUI.Settings:Unwatch(OWNER .. ".show_cooldown_text")
 end
 
 ---------------------------------------------------------------------------
@@ -899,6 +912,18 @@ local function schema()
         -- without having to disable the plugin whose settings page they are standing on, and a
         -- switch you have to open a group to find is not an escape hatch.
         { key = "hide_blizzard", label = "Hide Blizzard's Action Bars", type = "toggle",
+          default = true },
+        -- ONE toggle for every bar, which makes it the odd one out among the four readouts -- the
+        -- other three are declared per bar, inside each bar's own tab. The asymmetry is deliberate.
+        -- Those three describe what a bar says about ITS OWN slots, and a player genuinely may want
+        -- hotkeys on bar 1 and not on bar 7. This one is a single question about the whole UI --
+        -- "do my buttons count down" -- and fifteen switches for it would mostly be fifteen ways to
+        -- end up with bars that disagree, then fifteen places to look when one of them does.
+        --
+        -- Top level rather than in a group because there is nowhere else: everything below the
+        -- subtabs entry belongs to one bar. It sits after the escape hatch so the two switches a
+        -- player reaches for in a hurry stay first.
+        { key = "show_cooldown_text", label = "Show Cooldown Numbers", type = "toggle",
           default = true },
     }
 
