@@ -90,7 +90,52 @@ local SORTS = {
     -- muscle memory rather than by looking. Empty slots stay in place here rather than being pushed
     -- to the end, because "the client's order" is the whole point of this mode.
     slot = byPosition,
+    -- QUALITY + TYPE: quality first, then what kind of thing an item is, then how good it is. Seven
+    -- keys deep with two data tables behind it, so the rule lives in `Components/ItemSortKeys.lua`
+    -- and this is only the registration. `pendingLast` still wraps it, and the difference it covers
+    -- is worth being precise about, because the two states look alike and are not:
+    --
+    --   * A LIVE slot whose GetItemInfo has not cached still reports a QUALITY -- the container API
+    --     gives it -- so the rule places the item at the end of its own quality band through
+    --     CLASS_UNKNOWN, which is the shortest jump available when the client finally answers.
+    --   * A SNAPSHOT slot the account cache holds nothing for reports no quality either, so there is
+    --     no band to place it in at all. `pending` is that state, and sending it to the tail is
+    --     honest rather than asserting a quality we do not have.
+    quality_type = occupiedFirst(pendingLast(function(a, b)
+        return SuuUI.ItemSortKeys.Compare(a, b)
+    end)),
 }
+
+-- SORT POSITION: which END of the grid the sorted run packs against.
+--
+-- `start` puts the first item in the first cell and leaves the free slots as a tail. `end` is
+-- ElvUI's `sortInverted`, which is `true` in its shipped defaults -- so a player arriving from it
+-- expects free slots at the top-left and items packed against the last cell, and reads ours as the
+-- odd one. It also has a rationale of its own worth stating: loot fills the FIRST free slot, so with
+-- items packed at the end every new item appears in the same corner instead of somewhere down a
+-- wall of eighty icons.
+--
+-- It is a FULL REVERSAL of whichever comparator the mode resolved to, not a rule that relocates the
+-- empty slots and leaves the rest alone. That is what ElvUI does -- `ReverseSort(a, b) =
+-- DefaultSort(b, a)` -- and it is a real behavioural claim rather than a shortcut: in this mode
+-- quality runs ASCENDING and names run Z->A. The gentler reading (empties first, items still
+-- best-first) looks better in isolation and is NOT what ElvUI produces, so it would leave the two
+-- disagreeing for anyone comparing them side by side, which is the whole reason this setting exists.
+--
+-- One wrapper serves every mode, `slot` included. A rule that applied to two of three would need a
+-- reason why the third is exempt, and there is none: the client's own order reversed is still the
+-- client's own order.
+local function inverted(cmp)
+    return function(a, b) return cmp(b, a) end
+end
+
+-- Built once at load rather than per Sort(), so choosing a position costs a table lookup instead of
+-- a closure. Derived from SORTS rather than listed, so a fourth mode is inverted for free -- a hand
+-- written second table is how one mode ends up silently ignoring the setting.
+local INVERTED = {}
+for name, cmp in pairs(SORTS) do INVERTED[name] = inverted(cmp) end
+
+local POSITIONS = { start = true, ["end"] = true }
 
 local function inCombat()
     return type(InCombatLockdown) == "function" and InCombatLockdown()
@@ -436,9 +481,10 @@ function GridMeta:SetContainers(ids)
     self:_apply("rebuild")
 end
 
---- Re-orders the grid by the current sort mode.
+--- Re-orders the grid by the current sort mode and position.
 function GridMeta:Sort()
-    local cmp = SORTS[self._sortMode] or SORTS.quality
+    local set = (self._sortPosition == "end") and INVERTED or SORTS
+    local cmp = set[self._sortMode] or set.quality
     tsort(self._entries, cmp)
     self:_place()
     self:_applyFilter()
@@ -455,6 +501,20 @@ end
 
 --- @return string
 function GridMeta:GetSortMode() return self._sortMode end
+
+--- Which end of the grid the sorted run packs against.
+-- @param pos string  "start" | "end"
+-- @return bool  whether the order changed
+function GridMeta:SetSortPosition(pos)
+    if not POSITIONS[pos] then return false end
+    if self._sortPosition == pos then return false end
+    self._sortPosition = pos
+    self:Sort()
+    return true
+end
+
+--- @return string
+function GridMeta:GetSortPosition() return self._sortPosition end
 
 function GridMeta:_applyFilter()
     local q = self._filter
@@ -598,6 +658,7 @@ function SuuUI.Components.ItemGrid(props, parent)
         _spacing    = spacing,
         _padding    = padding,
         _sortMode   = SORTS[props.sortMode] and props.sortMode or "quality",
+        _sortPosition = POSITIONS[props.sortPosition] and props.sortPosition or "start",
         _readOnly   = props.readOnly and true or false,
         -- The SOURCE. nil character means the live client; a key means that character's cached record,
         -- and `which` names the container inside it. Both are construction-time defaults that

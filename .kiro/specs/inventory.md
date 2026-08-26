@@ -249,7 +249,20 @@ SuuUIItemCache = {
   _version = 1,
   items = {                          -- account-wide, shared by every reader
     [22832] = { link = "|cff...|Hitem:22832...|h[Arcane Powder]|h|r",
-                icon = 134129, q = 1, name = "Arcane Powder" },
+                icon = 134129, q = 1, name = "Arcane Powder",
+                -- THE FIVE ORDERING FIELDS, added for the `quality_type` sort: class, subclass,
+                -- equip slot, item level, sell price. The container API reports NONE of them, so
+                -- they come from `GetItemInfo` at upsert time, once per item id ever (guarded on
+                -- `cls == nil`, since a class of 0 and a price of 0 are both real answers). They
+                -- live here rather than being read live at sort time because a SNAPSHOT of an alt
+                -- needs them and the client has no reason to have cached an item only an alt owns.
+                --
+                -- They top up on their OWN path, not through the record upsert: widening
+                -- `Resolve`'s completeness test to include them was tried and it sent otherwise
+                -- complete entries back through the full upsert, where a thin resolve overwrote a
+                -- good icon. An entry from a SavedVariable written before these existed is
+                -- backfilled on the next resolve or capture.
+                cls = 7, sub = 12, eq = "", ilvl = 20, price = 55 },
   },
   chars = {
     ["Sulisande-Thunderstrike"] = {
@@ -394,7 +407,8 @@ preceding section (`plugin-authoring.md`).
 | `columns` | slider | 10 | 6–20 |
 | `cell_size` | slider | 34 | 24–48 |
 | `grouping` | dropdown | `flat` | `flat` ｜ `category` — the deferred grouping option, shipped as a stub returning `flat` in v1 |
-| `sort_mode` | dropdown | `quality` | |
+| `sort_mode` | dropdown | `quality` | `quality` ｜ `quality_type` ｜ `name` ｜ `slot`. `quality_type` is the deep ordering — quality, then item class, then equip slot for gear or subclass for everything else, then item level, sell price and name, with conjured items demoted below poor. Modelled branch-for-branch on ElvUI's bag sorter but **named for what it produces**, not for the addon: the rule lives in `Components/ItemSortKeys.lua` with the provenance as a comment. Labelled "Quality + Type" rather than "Type" because quality is still the PRIMARY key — a rare trade good outranks an uncommon weapon and category only groups within a band |
+| `sort_position` | dropdown | `start` | `start` ｜ `end` — which end of the grid the sorted run packs against. `end` is a **full reversal** of whichever comparator the mode resolved to, matching ElvUI's `sortInverted` (which is `true` in ElvUI's shipped defaults, though its install wizard sets it back to `false`). So in `end` quality runs ascending and names run Z→A; the gentler reading — empties relocated, items still best-first — was rejected because it would leave the two addons disagreeing side by side, which is the only reason to offer the setting. The wrapper is derived from the `SORTS` table rather than listed per mode, so `slot` inverts too and a fourth mode is covered for free |
 | — | section | | **Bank** |
 | `bank_side` | dropdown | `right` | which side the second window defaults to |
 | — | section | | **Account** |

@@ -23,6 +23,7 @@ describe("Components/ItemGrid", function()
             cellSize   = props.cellSize or CELL,
             spacing    = props.spacing or 2,
             sortMode   = props.sortMode,
+            sortPosition = props.sortPosition,
             readOnly   = props.readOnly,
             character  = props.character,
             which      = props.which,
@@ -161,6 +162,134 @@ describe("Components/ItemGrid", function()
             g:SetSortMode("slot")
             g:Sort()
             expect(#g._cellBox:GetChildren()).as("Add is membership, not upsert").eq(n)
+        end)
+    end)
+
+    -- The setting is not only about WHERE the run lands. It is a full reversal of whichever
+    -- comparator the mode resolved to, which is what makes it agree with ElvUI's `sortInverted`
+    -- rather than merely resemble it.
+    describe("sort position", function()
+        it("defaults to the start of the bags", function()
+            expect(grid():GetSortPosition()).eq("start")
+        end)
+
+        it("packs the items against the last cell and the free slots against the first", function()
+            stageThree()
+            local g = grid()
+            expect(g:SetSortPosition("end")).truthy()
+            for i = 1, 5 do
+                expect(g._entries[i].info).as("free slot " .. i .. " leads").eq(nil)
+            end
+            expect(g._entries[6].info).as("the items are the tail").truthy()
+            expect(g._entries[8].info).truthy()
+        end)
+
+        -- THE DISCRIMINATING ASSERTION. An implementation that only relocated the empty slots and
+        -- left quality descending satisfies the packing test above just as well, and would put the
+        -- epic at entry 6. A full comparator reversal puts it last. This is the test that pins which
+        -- of the two rules we shipped.
+        it("reverses the order inside the run, not just the packing", function()
+            stageThree()
+            local g = grid()
+            g:SetSortPosition("end")
+            expect(g._entries[6].info.itemName).as("worst quality leads").eq("Zebra Cloth")
+            expect(g._entries[7].info.itemName).eq("Middling Ore")
+            expect(g._entries[8].info.itemName).as("the epic is last").eq("Amber Potion")
+        end)
+
+        -- `slot` is the mode most likely to be exempted by accident, since its comparator is the one
+        -- that does not separate empty slots out.
+        it("inverts bag order too, so no mode ignores the setting", function()
+            stageThree()
+            local g = grid()
+            g:SetSortMode("slot")
+            g:SetSortPosition("end")
+            expect(g._entries[1].slot).as("the last slot leads").eq(8)
+            expect(g._entries[8].slot).eq(1)
+        end)
+
+        it("refuses an unknown position and keeps the current one", function()
+            local g = grid()
+            expect(g:SetSortPosition("middle")).falsy()
+            expect(g:GetSortPosition()).eq("start")
+        end)
+
+        it("drops a write that changes nothing", function()
+            expect(grid():SetSortPosition("start")).as("already there").falsy()
+        end)
+
+        it("takes the position from a construction prop", function()
+            stageThree()
+            local g = grid({ sortPosition = "end" })
+            expect(g:GetSortPosition()).eq("end")
+            expect(g._entries[1].info).as("free slots lead on first paint").eq(nil)
+            expect(g._entries[8].info.itemName).eq("Amber Potion")
+        end)
+
+        it("still moves no items", function()
+            stageThree()
+            local g = grid()
+            g:SetSortPosition("end")
+            local info = H.env.C_Container.GetContainerItemInfo(0, 1)
+            expect(info.itemName).as("slot 1 still holds what it held").eq("Zebra Cloth")
+        end)
+
+        it("does not accumulate children when the position changes", function()
+            stageThree()
+            local g = grid()
+            local n = #g._cellBox:GetChildren()
+            expect(n).gt(0)
+            g:SetSortPosition("end")
+            g:SetSortPosition("start")
+            expect(#g._cellBox:GetChildren()).eq(n)
+        end)
+    end)
+
+    -- The rule itself is specced in 60_itemsortkeys_spec. What matters here is that the grid REACHES
+    -- it and that the wrappers around every other mode still apply to it.
+    describe("the quality + type mode", function()
+        -- Two items of the SAME quality whose names order one way and whose classes order the other,
+        -- so quality-then-name and quality-then-type CANNOT produce the same sequence. Without that
+        -- disagreement the test passes whichever mode is actually running.
+        local function stagePair()
+            stage(0, 1, { itemID = 901, itemName = "Anvil Ore",    quality = 2 })
+            stage(0, 2, { itemID = 902, itemName = "Zealot Blade", quality = 2 })
+            H.setItemInfo(901, { name = "Anvil Ore", quality = 2, classID = 7 })
+            H.setItemInfo(902, { name = "Zealot Blade", quality = 2, classID = 2,
+                                 equipSlot = "INVTYPE_WEAPON" })
+        end
+
+        it("is a selectable mode", function()
+            local g = grid()
+            expect(g:SetSortMode("quality_type")).truthy()
+            expect(g:GetSortMode()).eq("quality_type")
+        end)
+
+        it("orders by category where name order would disagree", function()
+            stagePair()
+            local g = grid()
+            expect(g._entries[1].info.itemName).as("name order leads with the ore").eq("Anvil Ore")
+            g:SetSortMode("quality_type")
+            expect(g._entries[1].info.itemName)
+                .as("weapon is class 2, trade good is class 7").eq("Zealot Blade")
+        end)
+
+        it("still puts empty slots last", function()
+            stagePair()
+            local g = grid()
+            g:SetSortMode("quality_type")
+            expect(g._entries[3].info).as("the tail is empty").eq(nil)
+            expect(g._entries[8].info).eq(nil)
+        end)
+
+        it("composes with the sort position", function()
+            stagePair()
+            local g = grid()
+            g:SetSortMode("quality_type")
+            g:SetSortPosition("end")
+            expect(g._entries[1].info).as("free slots lead").eq(nil)
+            expect(g._entries[7].info.itemName).eq("Anvil Ore")
+            expect(g._entries[8].info.itemName).as("and the run reverses").eq("Zealot Blade")
         end)
     end)
 
@@ -570,6 +699,30 @@ describe("Components/ItemGrid", function()
             -- A pending cell is still an ITEM. Past the free-slot tail it would read as one stranded
             -- beyond the end of the bag.
             expect(g._entries[1].cell:IsPending()).as("before the empties, not after").truthy()
+        end)
+
+        -- THE DISCRIMINATING PAIRING for the `quality_type` mode's pendingLast wrapper, and it took a
+        -- second attempt to find one: an unresolved cached item has no quality, which the rule reads as
+        -- -1, so against a GREY (0) the wrapper changes nothing and the test passes without it. A
+        -- CONJURED item is deliberately demoted to -99, which is BELOW that -- so on the quality key
+        -- alone the unresolved item would win and lead the run. Only the wrapper puts it behind.
+        --
+        -- Which is also the argument for the wrapper existing on this mode at all: for a live slot the
+        -- container API always reports a quality, so an item whose class has not resolved still lands
+        -- in its own band and needs no help. A cached slot the account table holds nothing for has no
+        -- quality either, so there is no band to put it in and guessing one asserts what we do not know.
+        it("keeps an unresolved item behind a demoted one under quality + type", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = {
+                [1] = { 111, 1 },    -- unresolved: no name, no quality
+                [2] = { 5350, 1 },   -- Conjured Water: resolved, and ranked below poor
+            } })
+            cacheItem(5350, { name = "Conjured Water", q = 1, icon = "i" })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            g:SetSortMode("quality_type")
+            g:Sort()
+            expect(g._entries[1].cell:IsPending()).as("the demoted but known item leads").falsy()
+            expect(g._entries[2].cell:IsPending()).as("the unresolved one is parked").truthy()
         end)
 
         -- THE FILL-IN. Without this a cached alt keeps its `?` cells until the window is closed and

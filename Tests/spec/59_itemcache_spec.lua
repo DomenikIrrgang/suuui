@@ -58,6 +58,24 @@ describe("Core/ItemCache", function()
             expect(IC:ItemInfo(22832).icon).as("icon survived").eq("good")
         end)
 
+        -- THE MIGRATION CASE. Every entry in a SavedVariable written before the ordering fields
+        -- existed looks exactly like this: complete by every other measure, and with no class. Resolve
+        -- has to top it up anyway, or an existing player's whole item table orders at CLASS_UNKNOWN
+        -- for ever. The last assertion is the one that matters: the first attempt at this widened the
+        -- completeness test instead, which backfilled correctly AND destroyed the icon above.
+        it("backfills the ordering fields on an entry stored before they existed", function()
+            H.env.SuuUIItemCache.items[22832] = { name = "Arcane Powder", icon = "good", q = 1 }
+            H.setItemInfo(22832, { name = "Arcane Powder", classID = 7, subclassID = 12,
+                                   itemLevel = 20, sellPrice = 55 })
+            expect(IC:Resolve(22832)).as("something was learned").truthy()
+            local e = IC:ItemInfo(22832)
+            expect(e.cls).as("the class reached the record").eq(7)
+            expect(e.sub).eq(12)
+            expect(e.ilvl).eq(20)
+            expect(e.price).eq(55)
+            expect(e.icon).as("and the good icon still survived").eq("good")
+        end)
+
         -- COALESCED ON PURPOSE. This event fires once PER ITEM, so a fresh login browsing an alt with
         -- 58 unresolved stacks fires 58 times in a few frames. One announcement after the burst
         -- settles is one re-sort instead of 58.

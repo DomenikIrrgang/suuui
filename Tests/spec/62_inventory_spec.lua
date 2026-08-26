@@ -941,6 +941,7 @@ describe("Plugins/Inventory", function()
             local wired = {
                 enabled = true, suppress_blizzard = true,
                 columns = true, cell_size = true, sort_mode = true,
+                sort_position = true,
                 bank_side = true, sell_confirm = true, sell_interval = true,
             }
             for _, e in ipairs(schema) do
@@ -971,6 +972,27 @@ describe("Plugins/Inventory", function()
 
         it("confirms before selling by default", function()
             expect(getS("sell_confirm")).as("irreversible, so it defaults on").eq(true)
+        end)
+
+        -- BOTH PATHS, because they fail independently: a window built after the setting was written
+        -- reads it as a construction prop, while one already on screen only follows through the SHAPE
+        -- watcher. Wiring either alone leaves a control that works exactly half the time -- and the
+        -- half that breaks is the one the player sees, since they change the setting with the bags open.
+        it("packs the sort run at whichever end the setting names", function()
+            expect(getS("sort_position")).as("start is what shipped").eq("start")
+
+            H.SuuUI.Inventory_Open()
+            local grid = H.SuuUI.Inventory_GetWindow("bags"):GetGrid()
+            expect(grid:GetSortPosition()).eq("start")
+
+            setS("sort_position", "end")
+            expect(grid:GetSortPosition()).as("the live applier reached the open grid").eq("end")
+
+            local fresh = IW.New({ container = "bags" })
+            fresh:Show()
+            expect(fresh:GetGrid():GetSortPosition())
+                .as("and a window built afterwards reads it too").eq("end")
+            fresh:Destroy()
         end)
     end)
 

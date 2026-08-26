@@ -1787,9 +1787,11 @@ function M.install(env)
     -- not be tested at all and its mutation would have survived.
     --
     -- Return ORDER matters and is the client's, recovered from on-disk consumers rather than
-    -- memory: field 3 is quality, field 4 is the item level, field 11 is the sell price. Those
-    -- three are the ones SuuUI reads; the rest are present so a positional `select` written
-    -- against the real client lands on the same slot here.
+    -- memory: field 3 is quality, field 4 is the item level, field 11 is the sell price, and
+    -- fields 12 and 13 are the NUMERIC class and subclass ids. Those last two are not the
+    -- localized `class`/`subclass` STRINGS at 6 and 7 -- the pair at 12/13 is what an ordering
+    -- rule can actually compare, and they were absent here entirely, so a sort keyed on item
+    -- category could not be staged and every mutation against it would have survived.
     --
     -- An UNSTAGED link returns nothing at all, which is what the client does for an item it has
     -- not cached yet -- a real state a consumer has to survive, not an error.
@@ -1799,7 +1801,7 @@ function M.install(env)
         if not rec then return nil end
         return rec.name, rec.link, rec.quality, rec.itemLevel, rec.reqLevel,
                rec.class, rec.subclass, rec.maxStack, rec.equipSlot, rec.texture,
-               rec.sellPrice
+               rec.sellPrice, rec.classID, rec.subclassID
     end
 
     -- client's own `.hex` field -- which is a |cff… COLOUR ESCAPE and not a colour.

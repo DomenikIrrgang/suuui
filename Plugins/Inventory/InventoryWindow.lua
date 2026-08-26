@@ -26,8 +26,21 @@ WindowMeta.__index = WindowMeta
 -- Sort options, shared with the settings page so the two cannot disagree about what exists.
 M.SORT_OPTIONS = {
     { value = "quality", label = "Quality" },
+    -- Labelled "Quality + Type", not "Type", because quality is still the PRIMARY key -- a rare trade
+    -- good outranks an uncommon weapon and category only groups within a band. A label reading "Type"
+    -- would promise all weapons together regardless of quality, which is a different ordering.
+    { value = "quality_type", label = "Quality + Type" },
     { value = "name",    label = "Name" },
     { value = "slot",    label = "Bag order" },
+}
+
+-- Which end of the grid the sorted run packs against. `end` is what ElvUI does in its shipped
+-- defaults, which is the reason this is offered rather than fixed: it also reverses the order inside
+-- each mode, so the two produce the same grid rather than merely a similar one. Labelled by where the
+-- ITEMS end up, not where the free slots do -- that is the half a player is looking at.
+M.SORT_POSITIONS = {
+    { value = "start", label = "Start of Bags" },
+    { value = "end",   label = "End of Bags" },
 }
 
 local function get(key)
@@ -755,6 +768,7 @@ function M.New(props)
         cellSize   = get("cell_size") or 34,
         spacing    = T:GetToken("spaceXxs") or 2,
         sortMode   = get("sort_mode") or "quality",
+        sortPosition = get("sort_position") or "start",
         namePrefix = "SuuUI_inventory_" .. which .. "_",
     }, content)
 

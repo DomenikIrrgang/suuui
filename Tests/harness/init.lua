@@ -1372,7 +1372,7 @@ end
 -- of it.
 -- @param link string|number  The item link or id a consumer will look up
 -- @param props table  { name, quality, itemLevel, reqLevel, class, subclass, maxStack,
---                       equipSlot, texture, sellPrice }
+--                       equipSlot, texture, sellPrice, classID, subclassID }
 function M.setItemInfo(link, props)
     assert(state.env, "H.setup() must run before H.setItemInfo")
     assert(type(link) == "string" or type(link) == "number", "link must be a string or number")
@@ -1380,6 +1380,11 @@ function M.setItemInfo(link, props)
     local allowed = {
         name = true, quality = true, itemLevel = true, reqLevel = true, class = true,
         subclass = true, maxStack = true, equipSlot = true, texture = true, sellPrice = true,
+        -- The NUMERIC ids at fields 12 and 13, which are what an ordering rule compares. Distinct
+        -- from `class`/`subclass` above, which are the localized display strings at 6 and 7 -- a
+        -- spec staging one and asserting the other would be reading a different field than the one
+        -- it set, so both are offered and the defaults below are chosen to AGREE.
+        classID = true, subclassID = true,
         -- What GetItemCount answers. Two numbers rather than one, because the client's
         -- includeBank argument returns the TOTAL and a consumer wanting the bank's own figure
         -- has to subtract -- so a spec has to be able to stage a case where those differ.
@@ -1397,6 +1402,11 @@ function M.setItemInfo(link, props)
         reqLevel  = props.reqLevel  or 1,
         class     = props.class     or "Miscellaneous",
         subclass  = props.subclass  or "Junk",
+        -- 15 is Miscellaneous, which is what `class` defaults to above. Kept in step deliberately:
+        -- a default pair that contradicted itself would let a spec assert a category the same item
+        -- reports differently through the other field.
+        classID    = props.classID    or 15,
+        subclassID = props.subclassID or 0,
         maxStack  = props.maxStack  or 1,
         equipSlot = props.equipSlot or "",
         texture   = props.texture   or "Interface\\Icons\\INV_Misc_QuestionMark",
@@ -1410,6 +1420,13 @@ end
 --- Forgets every staged item, so GetItemInfo answers nothing -- the client's uncached state.
 function M.clearItems()
     state.items = {}
+    -- The `quality_type` ordering memoises an item's class, slot, level and price by id, on the
+    -- grounds that those are fixed properties of the id. That holds in game and NOT here, where this
+    -- helper's whole job is to declare an item uncached again -- so a surviving memo would keep
+    -- answering for an item the client has just been told it has never seen, and a spec asserting the
+    -- uncached ordering would pass against the wrong state.
+    local SK = M.SuuUI and M.SuuUI.ItemSortKeys
+    if SK and type(SK.ResetMemo) == "function" then SK.ResetMemo() end
 end
 
 --- Clears the tooltip state record.

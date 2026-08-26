@@ -24,6 +24,7 @@ local SHAPE = {
     columns   = function(g, v) g:SetColumns(v) end,
     cell_size = function(g, v) g:SetCellSize(v) end,
     sort_mode = function(g, v) g:SetSortMode(v) end,
+    sort_position = function(g, v) g:SetSortPosition(v) end,
 }
 
 local function window()
@@ -190,6 +191,12 @@ plugin = SuuUI:CreatePlugin({
               default = 34, min = 24, max = 48, step = 1 },
             { key = "sort_mode", label = "Sort By", type = "dropdown",
               default = "quality", options = W.SORT_OPTIONS },
+            -- Defaults to `start` rather than to ElvUI's `end`, because `start` is what ships today
+            -- and switching the default would reverse the grid for everyone already using it. The
+            -- option exists so a player who reads bags the ElvUI way can have that; it is not a
+            -- claim that ElvUI's answer is the better one.
+            { key = "sort_position", label = "Sort Position", type = "dropdown",
+              default = "start", options = W.SORT_POSITIONS },
             -- TWO ENTRIES FROM THE PLAN'S TABLE ARE DELIBERATELY ABSENT, and their absence is the
             -- decision rather than an oversight.
             --

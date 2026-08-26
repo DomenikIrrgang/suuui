@@ -135,6 +135,32 @@ function M.NameFromLink(link)
     return name
 end
 
+-- THE FIVE ORDERING FIELDS, on their own top-up path rather than inside the record upsert below.
+--
+-- The container API reports none of them -- it gives icon, count, quality, link and id and stops --
+-- so they are fetched here. They are what the `quality_type` ordering compares, and storing them is
+-- what lets a SNAPSHOT of another character order the same way: the client has no reason to have
+-- cached an item only an alt owns.
+--
+-- SEPARATE from `upsertItem` because they arrived later than the rest of the record, so an entry
+-- written by an earlier version is complete by every other measure. Widening `Resolve`'s completeness
+-- test to include them was tried and it broke the rule this file exists to keep -- it sent otherwise
+-- complete entries back through the full upsert, where a thin resolve overwrote a good icon with
+-- whatever that call happened to report. `59_itemcache_spec`'s "never blanks a field it already had"
+-- is the assertion that caught it.
+--
+-- Guarded on `e.cls == nil` rather than on falsiness, because a class id of 0 (Consumable) and a sell
+-- price of 0 (a quest item) are both real answers. So this runs ONCE PER ITEM ID EVER: a capture
+-- reads ~250 slots, and a per-slot lookup would be 250 calls where this is one per new item.
+-- @return bool  whether anything was learned
+local function fillOrderKeys(e, id)
+    if e.cls ~= nil or type(GetItemInfo) ~= "function" then return false end
+    local ok, _, _, _, ilvl, _, _, _, _, equip, _, price, cls, sub = pcall(GetItemInfo, id)
+    if not ok or type(cls) ~= "number" then return false end
+    e.cls, e.sub, e.eq, e.ilvl, e.price = cls, sub, equip, ilvl, price
+    return true
+end
+
 local function upsertItem(info)
     local id = info and info.itemID
     if not id then return end
@@ -145,6 +171,7 @@ local function upsertItem(info)
     if info.iconFileID then e.icon = info.iconFileID end
     if info.quality    then e.q    = info.quality end
     if info.itemName   then e.name = info.itemName end
+    fillOrderKeys(e, id)
     -- Derived from the link when nothing supplied one, which for a container read is ALWAYS --
     -- see NameFromLink. Filling in here rather than at the call site means every writer gets it,
     -- including the resolve path and any future one.
@@ -310,7 +337,11 @@ function M:Resolve(id)
     local s = store()
     local e = s and s.items and s.items[id]
     if not e then return false end
-    if e.name and e.icon and e.q then return false end
+    -- The ordering fields top up FIRST and on their own path, so an entry that is complete by every
+    -- other measure still gains them -- while a complete entry still returns before the record upsert
+    -- below, which is what stops a thin resolve overwriting a good icon.
+    local learned = fillOrderKeys(e, id)
+    if e.name and e.icon and e.q then return learned end
     if type(GetItemInfo) ~= "function" then return false end
     -- Positional, and only the four fields a cell paints from. A pcall because this runs from an
     -- event handler and an unresolvable id must not unwind into the client's dispatch.
