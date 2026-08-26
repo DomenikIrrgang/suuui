@@ -1143,6 +1143,50 @@ describe("Plugins/Inventory", function()
         end)
     end)
 
+    -- THE FOOTER'S SNAPSHOT READOUT. It used to say "N items cached" on the honest grounds that the
+    -- cache stored only OCCUPIED slots, so a free count would have been invented. Capture now records
+    -- each container's capacity, so the real figure is available -- but only for records captured since,
+    -- and the difference has to stay visible rather than being papered over with a plausible number.
+    describe("the footer on a snapshot", function()
+        local function cachedWindow(sizes)
+            local IC = H.SuuUI.ItemCache
+            IC:Init()
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-TestRealm"] = { class = "MAGE", bags = {
+                seen = 1755900000,
+                slots = { [0] = { [1] = { 22832, 3 } } },
+                sizes = sizes,
+            } }
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            w:SetCharacter("Thalira-TestRealm")
+            return w
+        end
+
+        it("reports free slots when the capacity was recorded", function()
+            local w = cachedWindow({ [0] = 16 })
+            expect(w._slotsText:GetText()).eq("15 free / 16")
+            w:Destroy()
+        end)
+
+        it("falls back to the item count for a record with no capacity", function()
+            -- A record captured before sizes existed renders up to its highest occupied index, so its
+            -- empty slots are unknown rather than free. Saying "0 free / 1" would be a lie told
+            -- confidently; the old wording is the honest answer for that record.
+            local w = cachedWindow(nil)
+            expect(w._slotsText:GetText()).eq("1 items cached")
+            w:Destroy()
+        end)
+
+        it("still reports free slots on the live window", function()
+            local w = IW.New({ container = "bags" })
+            w:Show()
+            expect(w._slotsText:GetText():find("free", 1, true) ~= nil)
+                .as("your own bags always know").truthy()
+            w:Destroy()
+        end)
+    end)
+
     describe("container ids", function()
         it("covers the backpack and every bag slot", function()
             local ids = IW.containerIds("bags")

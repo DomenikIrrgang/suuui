@@ -474,6 +474,55 @@ describe("Components/ItemGrid", function()
             -- genuinely produces a pending cell in production, or the absence of IsPending entirely.
         end)
 
+        -- FREE SLOTS IN A SNAPSHOT, which the grid could not show while the cache stored only occupied
+        -- slots. Reported in game: an alt's bank rendered as a tight block of items with nowhere visibly
+        -- left to put anything.
+        it("renders a cached container at its stored capacity", function()
+            cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 1 } } })
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-Thunderstrike"].bags.sizes = { [0] = 16 }
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local used, free, total = g:GetCounts()
+            expect(total).as("the whole bag, not just what is in it").eq(16)
+            expect(used).eq(1)
+            expect(free).eq(15)
+            expect(g:HasCapacity()).truthy()
+        end)
+
+        it("shows an EMPTY cached bag at full size", function()
+            -- The case the sparse slot table cannot express: a bag holding nothing has no slot entries at
+            -- all, so without the stored size it renders as absent.
+            cacheChar("Thalira-Thunderstrike", "bags", {})
+            local store = H.env.SuuUIItemCache
+            store.chars["Thalira-Thunderstrike"].bags.sizes = { [0] = 16 }
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local _, free, total = g:GetCounts()
+            expect(total).eq(16)
+            expect(free).eq(16)
+        end)
+
+        -- A RECORD WITHOUT SIZES MUST NOT PRETEND. It renders up to its highest occupied index, so its
+        -- empty middle slots are UNKNOWN rather than free -- and reporting them as free would invent a
+        -- number, which is precisely what the old footer wording existed to avoid.
+        it("falls back to the highest occupied slot for a record with no sizes", function()
+            cacheChar("Thalira-Thunderstrike", "bags",
+                      { [0] = { [1] = { 22832, 1 }, [5] = { 21877, 1 } } })
+            local g = grid({ containers = { 0 }, character = "Thalira-Thunderstrike",
+                             which = "bags" })
+            local used, _, total = g:GetCounts()
+            expect(total).as("up to the last thing it knows about").eq(5)
+            expect(used).eq(2)
+            expect(g:HasCapacity()).as("and it says it cannot answer for capacity").falsy()
+        end)
+
+        it("reports capacity as known while live", function()
+            H.setBags({ [0] = { free = 4, slots = 8 } })
+            local g = grid({ containers = { 0 } })
+            expect(g:HasCapacity()).as("the client answers for your own bags").truthy()
+        end)
+
         it("marks a cached item pending when the client cannot name it", function()
             cacheChar("Thalira-Thunderstrike", "bags", { [0] = { [1] = { 22832, 12 } } })
             -- Deliberately NOT cacheItem'd: no entry in the shared item table at all.

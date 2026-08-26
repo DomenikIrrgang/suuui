@@ -211,6 +211,25 @@ end
 -- @return number used
 -- @return number free
 -- @return number total
+--- Whether this grid knows its container's real CAPACITY, as opposed to only its contents.
+--
+-- Always true when live: the client answers. For a snapshot it depends on whether that record was
+-- captured with per-bag sizes, which older records were not.
+--
+-- IT IS NOT ENOUGH TO COMPARE used AGAINST total. A record captured before sizes existed renders up to
+-- its highest OCCUPIED index, so a container holding items in slots 1 and 5 renders five cells with
+-- three empty ones in the middle -- and those three are unknown, not free. Reporting them as free would
+-- invent a number, which is the exact failure the footer's snapshot branch was written to avoid.
+-- @return bool
+function GridMeta:HasCapacity()
+    if not self._snapshot then return true end
+    local rec = cachedRecord(self._characterKey, self._which)
+    local sizes = rec and rec.sizes
+    if type(sizes) ~= "table" then return false end
+    for _ in pairs(sizes) do return true end
+    return false
+end
+
 function GridMeta:GetCounts()
     local used, total = 0, 0
     for _, e in ipairs(self._entries) do
@@ -269,14 +288,25 @@ function GridMeta:_readEntries()
     -- render against your own 16 -- four items silently missing, with nothing on screen to say so.
     local snap = self._snapshot and cachedRecord(self._characterKey, self._which) or nil
     local snapSlots = snap and snap.slots or nil
+    local snapSizes = snap and snap.sizes or nil
     for _, bag in ipairs(self._containers) do
         local n
         if self._snapshot then
-            n = 0
-            local perBag = snapSlots and snapSlots[bag]
-            if perBag then
-                -- The cache stores only occupied slots, so the count is the highest index present.
-                for slot in pairs(perBag) do if slot > n then n = slot end end
+            -- THE STORED CAPACITY FIRST, so a cached container shows its FREE slots and not merely the
+            -- occupied ones. Reported in game: an alt's bank rendered as a tight block of items with
+            -- nowhere visibly left to put anything, which is a worse answer than the truth and makes the
+            -- footer's total a fiction.
+            n = snapSizes and snapSizes[bag] or nil
+            if not n then
+                -- FALLBACK for a record captured before sizes were stored: the highest occupied index.
+                -- Understates the container -- that is exactly the old behaviour -- but it is the most
+                -- that record can support, and the real figure arrives the next time that character is
+                -- captured. Better than rendering nothing for a snapshot a player can still read.
+                n = 0
+                local perBag = snapSlots and snapSlots[bag]
+                if perBag then
+                    for slot in pairs(perBag) do if slot > n then n = slot end end
+                end
             end
         else
             n = numSlots(bag) or 0

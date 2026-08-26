@@ -330,10 +330,15 @@ function WindowMeta:_updateFooter()
         self._moneyText:SetText("")
         self._moneyText:Hide()
     end
-    -- FREE SLOTS ARE A LIVE FACT. A cached grid cannot say how many slots are free -- the cache stores
-    -- only occupied ones -- so the concept swaps the readout for what a snapshot DOES know: how many
-    -- items are in it. Printing "22 free / 80" from a snapshot would be an invented number.
-    if self:IsSnapshot() then
+    -- FREE SLOTS, FROM THE SNAPSHOT TOO, now that capture records each container's capacity. It used to
+    -- read "N items cached" here on the honest grounds that the cache stored only OCCUPIED slots, so a
+    -- free count would have been invented -- that reasoning was right and is simply no longer true.
+    --
+    -- Still gated on the grid knowing its capacity, because a record captured before sizes were stored
+    -- genuinely cannot say: it renders up to its highest occupied index, so its empty middle slots are
+    -- unknown rather than free. Those records keep the old readout until that character is captured
+    -- again, which is the difference between a stale number and a wrong one.
+    if self:IsSnapshot() and not self._grid:HasCapacity() then
         self._slotsText:SetText(used .. " items cached")
     else
         self._slotsText:SetText(free .. " free / " .. total)

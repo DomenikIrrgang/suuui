@@ -199,10 +199,20 @@ function M:Capture(which)
 
     local ids   = (which == "bank") and bankIds() or bagIds()
     local slots = {}
+    -- THE CAPACITY, PER BAG, and it has to be recorded because it cannot be recovered later. The slot
+    -- table is sparse -- only occupied slots are stored -- so "how big is this container" is
+    -- unanswerable from it: a bank holding three items in its first three slots is indistinguishable
+    -- from a three-slot bank. Asking the client is worse than useless, since GetContainerNumSlots
+    -- answers for whoever is logged in.
+    --
+    -- Without it a cached container could only ever show its USED slots, so an alt's bank rendered as a
+    -- tight block of items with no free space visible and no honest total to report in the footer.
+    local sizes = {}
     local totalSlots = 0
     for _, bag in ipairs(ids) do
         local n = numSlots(bag) or 0
         totalSlots = totalSlots + n
+        if n > 0 then sizes[bag] = n end
         local perBag
         for slot = 1, n do
             local info = readSlot(bag, slot)
@@ -242,7 +252,7 @@ function M:Capture(which)
     -- `seen` is per character AND per container, not one stamp per character. Bags refresh every
     -- time that character plays; the bank only when they visit one, so hour-old bags beside
     -- three-week-old bank data is the normal case and a single stamp would be a lie.
-    rec[which] = { seen = time(), slots = slots }
+    rec[which] = { seen = time(), slots = slots, sizes = sizes }
     -- Holdings moved, so every memoised answer about who holds what is now suspect.
     findMemo = {}
     return true

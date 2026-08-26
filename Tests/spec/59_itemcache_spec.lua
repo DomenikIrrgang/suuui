@@ -191,6 +191,40 @@ describe("Core/ItemCache", function()
         end)
     end)
 
+    -- CAPACITY IS RECORDED, because it cannot be recovered later. The slot table is sparse -- only
+    -- occupied slots are stored -- so "how big is this container" is unanswerable from it: a bank
+    -- holding three items in its first three slots is indistinguishable from a three-slot bank. And
+    -- asking the client is worse than useless, since GetContainerNumSlots answers for whoever is
+    -- logged in.
+    describe("container capacity", function()
+        it("stores each bag's size", function()
+            H.setBags({ [0] = { free = 14, slots = 16 }, [1] = { free = 20, slots = 20 } })
+            H.setBagItem(0, 1, { itemID = 22832, stackCount = 2, quality = 1, iconFileID = "i",
+                                 hyperlink = "|Hitem:22832|h[Thing]|h" })
+            IC:Capture("bags")
+            local rec = IC:Get(IC:CurrentKey(), "bags")
+            expect(rec.sizes).truthy()
+            expect(rec.sizes[0]).as("the backpack's real size").eq(16)
+            expect(rec.sizes[1]).as("and the second bag's").eq(20)
+        end)
+
+        it("records a size for an EMPTY bag too", function()
+            -- The case the sparse slot table cannot express at all: a 16-slot bag holding nothing has no
+            -- entry in `slots`, so without `sizes` it is indistinguishable from a bag that is not there.
+            H.setBags({ [0] = { free = 16, slots = 16 } })
+            IC:Capture("bags")
+            local rec = IC:Get(IC:CurrentKey(), "bags")
+            expect(rec.sizes[0]).eq(16)
+        end)
+
+        it("omits a bag the character does not have", function()
+            H.setBags({ [0] = { free = 16, slots = 16 } })
+            IC:Capture("bags")
+            local rec = IC:Get(IC:CurrentKey(), "bags")
+            expect(rec.sizes[3]).as("no bag in that slot, so no size").eq(nil)
+        end)
+    end)
+
     describe("the store", function()
         it("exists after boot, stamped and shaped", function()
             local s = H.env.SuuUIItemCache
