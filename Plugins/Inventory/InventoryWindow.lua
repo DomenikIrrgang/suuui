@@ -615,6 +615,8 @@ function M.New(props)
         sellBtn = C.IconButton({
             icon = coinPath, coords = coinCoords, iconColor = "colorDanger",
             scalePop = false,   -- a strip accessory must not scale, or it slides
+            -- A TIGHTER INSET, not a bigger button -- see the sort button below for why.
+            padding = T:GetToken("spaceXxs"),
         }, content)
     end
 
@@ -734,6 +736,12 @@ function M.New(props)
         -- growing it in place. Button's own prop comment names this exact case: "for chrome in a
         -- strip it would overflow".
         scalePop  = false,
+        -- A TIGHTER INSET, NOT A BIGGER BUTTON. IconButton insets its glyph by `padding` on every
+        -- side, so the art is the box minus twice that -- and the box is the title-bar accessory
+        -- size, shared with the close button and capped by the strip height. Growing the box would
+        -- reflow the whole band and leave these two odd against the X; shrinking the inset grows
+        -- only the art. `spaceXxs` rather than a literal, so the glyph tracks the spacing scale.
+        padding   = T:GetToken("spaceXxs"),
     }, content)
     local matchText = C.Text({ text = "", size = "sm", color = "accent", wrap = false },
                              searchRow:GetFrame())
