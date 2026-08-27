@@ -42,7 +42,16 @@ M.DEFAULTS = {
         -- what is left is what a person said to you.
         groups = { "SAY", "YELL", "EMOTE", "TEXT_EMOTE", "PARTY", "PARTY_LEADER",
                    "RAID", "RAID_LEADER", "RAID_WARNING", "MONSTER_SAY", "MONSTER_YELL",
-                   "MONSTER_EMOTE", "MONSTER_WHISPER", "MONSTER_PARTY" },
+                   "MONSTER_EMOTE", "MONSTER_WHISPER", "MONSTER_PARTY",
+                   -- CHANNEL is here because leaving it out LOST EVERY NUMBERED-CHANNEL LINE.
+                   -- The event list is built from the panels' groups, so a group no panel claims is
+                   -- never registered at all -- and with Blizzard's chat suppressed the player simply
+                   -- never sees `/1` or `/2 Trade` again. A channel is people TALKING, so General is
+                   -- where it belongs under the same rule that keeps loot and XP in the Log.
+                   --
+                   -- A joined channel may still be given its OWN panel, which is what the ruling
+                   -- asked for; this is the floor, not a replacement for that.
+                   "CHANNEL" },
         -- Channel traffic fades out of a frameless log; a conversation does not (see the plan).
         fade = true,
         -- Frameless. The concept gives CHROME to conversations only -- a channel is a firehose you

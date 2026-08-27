@@ -876,6 +876,29 @@ the component's own state rather than a frame located by guessing a global name.
 precisely this defect and would have caught it on the first round, `IsMouseEnabled` covers the
 hyperlink `EnableMouse`, and `H.box`/`H.expectInside` cover the badge sitting on its disc.
 
+### Numbered channel traffic was being LOST
+
+**A group no panel claims is a group the player never receives.** `ChatPanels.Events` builds the
+event list from the panels' own `groups`, and no default panel claimed `CHANNEL` — so
+`CHAT_MSG_CHANNEL` was never registered, and with Blizzard's chat suppressed every `/1`, `/2 Trade`
+and custom-channel line was silently dropped. Found by writing the spec that fires it, after noticing
+that `CHAT_MSG_CHANNEL` appeared in no spec at all; the probe read `registered: false, of 38 events`.
+
+Fixed by adding `CHANNEL` to **General's** groups. A channel is people TALKING, so it belongs with
+conversation under the same rule that keeps loot and XP in the Log — and this is the floor rather
+than the design: it stops messages being lost, and nothing about it prevents a joined channel from
+also getting its own panel.
+
+**OPEN QUESTION, pinned as an `xit` rather than guessed:** the ruling was that joined channels "can
+have their own panels", which reads as CONFIGURED — but whispers auto-create theirs on first receipt,
+so the two mechanisms are inconsistent as they stand. Whether a busy Trade channel should earn its
+own rail row, and whether that is opt-in or automatic, is Domenik's call.
+
+**The generalisable hazard:** a panel's `groups` list is not just a routing filter, it is the
+SUBSCRIPTION. Removing a group from every panel silently unsubscribes the event, so the failure is
+total and invisible rather than a misrouted line. The spec now asserts the registered event list, not
+only where a line lands — an unregistered event cannot even be staged into a failure.
+
 **Phase 8 — Polish. PARTLY DONE (2026-08-27), untested.** Jump-to-bottom has landed, and building it
 exposed that **the log could not be scrolled at all**: `MessageLog` shipped `ScrollUp` / `ScrollDown`
 / `PageUp` / `ScrollToTop` / `ScrollToBottom` and **nothing ever delivered a gesture** — no
@@ -906,8 +929,12 @@ closure kept it alive.
 
 **`/r` and the reply bindings need NO code.** Nothing in the plugin handles them because Blizzard's
 own binding drives the edit box we adopted, and suppression only reparents `ChatFrame1` rather than
-unregistering its events, so the reply path stays intact. It is an in-game check, not a build task —
-press the reply key after a whisper and confirm the chip reads `> Name`.
+unregistering its events, so the reply path stays intact.
+
+**The reply KEY is deprioritised: Domenik does not use it (2026-08-27).** So the `REPLY`/`REPLY2`
+binding is off the verification list and off the build list — do not spend a round on it. `/r` typed
+as TEXT is a different question and still matters, because that goes through the box's own parser
+and then through our routing.
 
 **Harness gap:** `EnableMouseWheel` and `OnMouseWheel` delivery are not modelled, so the wheel is
 verifiable in game only until a recorder is added. Remaining in Phase 8: copy-a-line and copy-buffer

@@ -54,6 +54,14 @@ function M.load(opts)
     setmetatable(env, { __index = _G })
 
     local wow = api.install(env)
+
+    -- SavedVariables exist BEFORE the addon's files run: the client restores them from disk and only
+    -- then loads the addon, which is why a restore path finds a populated global at file scope and at
+    -- PLAYER_LOGIN. Injected here rather than after boot because assigning one afterwards is a state
+    -- the client never produces -- and until this existed, every SavedVariable-restore path in the
+    -- addon was untestable, since PLAYER_LOGIN has already run by the time H.setup() returns.
+    for k, v in pairs(opts.savedVars or {}) do env[k] = v end
+
     local files = M.readToc(root)
 
     for _, relPath in ipairs(files) do

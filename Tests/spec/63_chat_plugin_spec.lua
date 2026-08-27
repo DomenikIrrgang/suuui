@@ -12,6 +12,382 @@ describe("chat plugin", function()
         return p
     end
 
+    describe("history persistence", function()
+        -- The store's own Serialise/Restore round-trip is covered in 65_chatstore_panels_spec.
+        -- What is tested HERE is the wiring that was missing entirely: the store had both methods
+        -- and nothing called either, so history did not survive a logout.
+
+        it("writes the store into the per-character SavedVariable at logout", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "kara?", sender = "Thalvyn" })
+            expect(H.env.SuuUIChatHistory).as("nothing written before logout").eq(nil)
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            expect(blob).as("PLAYER_LOGOUT is the only moment it is written").notNil()
+            expect(type(blob.streams)).eq("table")
+            local found = false
+            for _, recs in pairs(blob.streams) do
+                for _, r in ipairs(recs) do
+                    if r.message == "kara?" then found = true end
+                end
+            end
+            expect(found).as("the message itself, not just the shape").eq(true)
+        end)
+
+        it("comes back from the SavedVariable on the next session", function()
+            -- Driven through the REAL writer rather than a hand-built blob: a staged table would
+            -- assert the staging, and this project has already shipped a bug where every spec staged
+            -- a state the production writer cannot produce.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "remember me", sender = "Thalvyn" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+
+            -- A fresh session: new client, new plugin, with that blob already on disk.
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local p2 = enabled()
+            expect(p2._chat._store:StreamCount())
+                .as("the store is built FROM the SavedVariable, not empty").gt(0)
+            local recs = p2._chat._store:Records()
+            local found = false
+            for _, r in ipairs(recs) do if r.message == "remember me" then found = true end end
+            expect(found).as("the line survived the relog").eq(true)
+
+            -- And that it was RENDERED. Asserting the store alone proved only that `Restore` ran:
+            -- deleting the `_replayHistory()` call left this test green, because a restored store with
+            -- nothing on screen satisfies every assertion above. A mutation found that.
+            --
+            -- Searched across EVERY panel's log rather than the active one: a guild line correctly
+            -- lands on the Guild panel while General stays active, so asserting on `ActiveLog()` here
+            -- reads 0 for a completely correct render.
+            local shown = false
+            for _, log in pairs(p2._chat._logs) do
+                for i = 1, log:GetNumMessages() do
+                    if tostring(log:GetMessageInfo(i)):find("remember me", 1, true) then
+                        shown = true
+                    end
+                end
+            end
+            expect(shown).as("replayed into a log, not just into the store").eq(true)
+        end)
+
+        it("takes the depth from the SETTING, not from the stored blob", function()
+            -- A player who lowered the slider between sessions expects the next login to trim, not to
+            -- honour whatever depth was in force when the history was written.
+            local p = enabled()
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            blob.depth = 500
+
+            -- Asserted at BUILD time against the setting's own default, with NO Set() call: writing
+            -- the setting afterwards made this pass through the `history_depth` watcher instead of
+            -- through the build, so deleting the build-time SetDepth left it green. A mutation found
+            -- that, and it is the difference between testing the line and testing its neighbour.
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local p2 = enabled()
+            local want = H.SuuUI.Settings:Get("chat", "history_depth")
+            expect(want).as("the default, so the blob's 500 cannot coincide with it").lt(500)
+            expect(p2._chat._store:GetDepth())
+                .as("the setting wins over the blob's stored depth").eq(want)
+        end)
+
+        it("survives an absent SavedVariable, which is every fresh install", function()
+            H.env.SuuUIChatHistory = nil
+            local p = enabled()
+            expect(p._chat._store).as("Restore(nil) yields an empty store, so there is ONE path").notNil()
+            expect(p._chat._store:StreamCount()).eq(0)
+        end)
+
+        it("replays without re-adding, so the store does not double", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "one", sender = "Thalvyn" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local p2 = enabled()
+            -- Replay ran during the build. Re-adding through Add would renumber every sequence and
+            -- destroy the interleaving that restoring by sequence exists to preserve.
+            expect(#p2._chat._store:Records())
+                .as("one stored line stays one line after replay").eq(1)
+        end)
+
+        it("does not count replayed history as unread", function()
+            -- Otherwise every badge reads the full depth on login, which is exactly the noise the
+            -- badge exists to make meaningful.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local p2 = enabled()
+            for id, row in pairs(p2._chat._rows) do
+                expect(row:GetCount())
+                    .as("restored history is what you already read: " .. tostring(id)).eq(nil)
+            end
+        end)
+
+        it("leaves replayed history FULLY FADED when fading is on", function()
+            -- A line's fade clock starts when it is ADDED, so replayed history would otherwise be as
+            -- prominent as a message that just arrived and then fade out all together.
+            --
+            -- `_replayHistory` is driven DIRECTLY rather than through a login, because the setting is
+            -- read while the window builds and the window builds inside `H.setup()` -- reaching the
+            -- login ordering would mean staging a whole fake `SuuUIProfiles`, and a hand-built
+            -- profile is exactly the shape production may not produce. The branch is the same one
+            -- either way; what is untested is only that a stored preference arrives before the build.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "old news", sender = "Thalvyn" })
+            H.SuuUI.Settings:Set("chat", "fade_channels", true)
+            p._chat:_replayHistory()
+            expect(p._chat:ActiveLog():IsFaded())
+                .as("present but not shouting; hover reveals it").eq(true)
+        end)
+
+        it("shows replayed history immediately when fading is OFF, which is the default", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "old news", sender = "Thalvyn" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local p2 = enabled()
+            expect(p2._chat:ActiveLog():IsFaded())
+                .as("a player who turned fading off wants to see it").eq(false)
+        end)
+    end)
+
+    describe("unread counts", function()
+        -- `Avatar` drew this badge from the start and NOTHING ever set it -- the same unwired
+        -- component as the hyperlink click and the ActionButton tooltip before it.
+
+        it("counts a line that lands on a panel you are not reading", function()
+            local p = enabled()
+            expect(p._chat:GetActivePanel()).as("General is active at rest").eq("general")
+            H.chat("CHAT_MSG_GUILD", { text = "kara?", sender = "Thalvyn" })
+            expect(p._chat._rows["guild"]:GetCount()).eq(1)
+        end)
+
+        it("never counts the panel you ARE reading", function()
+            -- A badge over the tab you are looking at can only say "you have read this".
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            expect(p._chat._rows["general"]:GetCount())
+                .as("the active panel's messages are already on screen").eq(nil)
+        end)
+
+        it("clears only the panel being opened, so the badge means WAITING", function()
+            -- Zeroing every count on a switch would make the badge mean "since you last changed
+            -- tabs", which is a different and much less useful statement.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "one", sender = "Thalvyn" })
+            H.chat("CHAT_MSG_LOOT",  { text = "loot" })
+            expect(p._chat._rows["guild"]:GetCount()).eq(1)
+            expect(p._chat._rows["log"]:GetCount()).eq(1)
+            p._chat:SetActivePanel("guild")
+            expect(p._chat._rows["guild"]:GetCount()).as("read, so cleared").eq(nil)
+            expect(p._chat._rows["log"]:GetCount()).as("still waiting for you").eq(1)
+            -- The CONSEQUENCE, and the assertion that actually discriminates: the Log's count must
+            -- CONTINUE rather than restart. Reading the badge alone could not see the table being
+            -- cleared behind it -- a mutation that zeroed every entry left the stale badge in place
+            -- and this test green, because only the opened panel's row is ever re-set.
+            H.chat("CHAT_MSG_LOOT", { text = "more loot" })
+            expect(p._chat._rows["log"]:GetCount())
+                .as("continues from 1 rather than restarting").eq(2)
+        end)
+
+        it("keeps the count when the rail is REBUILT", function()
+            -- The rail is rebuilt whenever a conversation appears, so a rebuild that reset every
+            -- badge would silently discard exactly what the badge exists to advertise.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "one", sender = "Thalvyn" })
+            expect(p._chat._rows["guild"]:GetCount()).eq(1)
+            -- A whisper creates a conversation panel, which rebuilds the rail.
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            expect(p._chat._rows["guild"]:GetCount())
+                .as("survived the rebuild the whisper triggered").eq(1)
+        end)
+
+        it("counts a whisper against its own new conversation panel", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            local row = p._chat._rows["whisper:sylvaine-testrealm"]
+            expect(row).as("the conversation got a rail row").notNil()
+            expect(row:GetCount()).as("and its first whisper is unread").eq(1)
+        end)
+    end)
+
+    describe("the rail's size is a setting", function()
+        it("sizes the disc from rail_size, not from a control token", function()
+            -- It shipped pinned to `sizeControlSm` (18) with an 11px glyph, which made the channel
+            -- unidentifiable at a glance. A widget's own dimension is a plugin setting here, never a
+            -- theme token.
+            local p = enabled()
+            local want = H.SuuUI.Settings:Get("chat", "rail_size")
+            expect(want).notNil()
+            expect(p._chat._rows["general"]._size).eq(want)
+        end)
+
+        it("rebuilds the rail when the size changes, and restates the rail's WIDTH", function()
+            -- The size is baked into each Avatar at construction, so it cannot be repainted -- and
+            -- rebuilding alone is not enough, because the window sized the rail's cell from the old
+            -- diameter and would clip every new disc.
+            local p = enabled()
+            local before = p._chat:_railWidth(false)
+            H.SuuUI.Settings:Set("chat", "rail_size", 40)
+            expect(p._chat._rows["general"]._size).as("the row was rebuilt at the new size").eq(40)
+            expect(p._chat:_railWidth(false)).as("and the rail grew with it").gt(before)
+        end)
+    end)
+
+    describe("clicking a link, and the fade reveal", function()
+        it("hands a link click to the client's own SetItemRef", function()
+            -- The component emitted HYPERLINK_CLICK from the start and NOTHING consumed it, so links
+            -- rendered perfectly and did nothing. `SetItemRef` is what makes an item link open its
+            -- tooltip frame and a player link open the whisper menu.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "look", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            H.resetItemRef()
+            expect(H.clickHyperlink(log._log, "item:19019", "[Thunderfury]", "LeftButton")).eq(true)
+            local ref = H.getItemRef()
+            expect(ref).as("the click reached the client, not just our signal").notNil()
+            expect(ref.link).eq("item:19019")
+            expect(ref.text).eq("[Thunderfury]")
+            expect(ref.button).eq("LeftButton")
+        end)
+
+        it("passes the button through, so a right click can open a player menu", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "look", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            H.resetItemRef()
+            H.clickHyperlink(log._log, "player:Thalvyn", "[Thalvyn]", "RightButton")
+            expect(H.getItemRef().button)
+                .as("a swallowed button turns a context menu into a whisper").eq("RightButton")
+        end)
+
+        it("reveals a faded buffer on hover AND restarts the fade clocks", function()
+            -- Alpha alone is not enough: every restored line's own fade time expired long ago, so a
+            -- reveal that forgets ResetAllFadeTimes shows the text for one frame and loses it again.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "old", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            log:SetFaded(true)
+            expect(log._log:GetAlpha()).as("fully faded means invisible, not dim").eq(0)
+            local before = log._log:GetFadeResetCount()
+            H.hover(log._log)
+            expect(log:IsFaded()).as("hovering reveals it").eq(false)
+            expect(log._log:GetAlpha()).eq(1)
+            expect(log._log:GetFadeResetCount())
+                .as("and restarts the clocks, or it vanishes again next frame").gt(before)
+        end)
+
+        it("does NOT re-fade when the cursor leaves", function()
+            -- Per-line fading expires the lines again on its own clock. Re-hiding them the instant
+            -- the cursor left would lose the text before you finished reading it.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "old", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            log:SetFaded(true)
+            H.hover(log._log)
+            H.hover(p._chat._wrapper)
+            expect(log:IsFaded()).as("a deliberate hover must survive the cursor moving on").eq(false)
+        end)
+    end)
+
+    describe("numbered channel traffic", function()
+        it("registers CHAT_MSG_CHANNEL at all", function()
+            -- THE bug this block exists for, and it was a message-LOSS bug rather than a misrouting
+            -- one: the event list is built from the panels' groups, so a group no panel claims is
+            -- never subscribed -- and with Blizzard's chat suppressed the player never sees `/1` or
+            -- `/2 Trade` again. Asserted on the event list rather than only on where a line lands,
+            -- because an unregistered event cannot even be staged into the failure.
+            local p = enabled()
+            local events = H.SuuUI.ChatPanels.Events(p._chat._panels, H.env.ChatTypeGroup)
+            local has = false
+            for _, e in ipairs(events) do if e == "CHAT_MSG_CHANNEL" then has = true end end
+            expect(has).as("a group no panel claims is a group the player loses").eq(true)
+        end)
+
+        it("shows a channel line in General", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            local log = p._chat:LogFor("general")
+            expect(log).as("General took it").notNil()
+            local shown = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("wts stuff", 1, true) then shown = true end
+            end
+            expect(shown).as("a channel is people talking, so it is not Log traffic").eq(true)
+        end)
+
+        it("tags the line with the channel NUMBER, which is what /2 means", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            local log = p._chat:LogFor("general")
+            local tagged = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("2", 1, true) then tagged = true end
+            end
+            expect(tagged).as("the tag column carries the channel index").eq(true)
+        end)
+
+        xit("gives a joined channel its OWN panel", function()
+            -- RESOLVED by Domenik 2026-08-27: whispers are DELIBERATELY the exception -- they may
+            -- open their own window, and `whisper_mode` is the config for whether they do. Channels
+            -- are not: they stay in General unless the player configures a panel for one. So the two
+            -- mechanisms are not inconsistent after all, and this stays skipped rather than becoming
+            -- a feature. Kept as the record of the decision.
+        end)
+    end)
+
+    describe("whisper_mode governs whether a whisper opens its own panel", function()
+        -- Domenik's ruling: "whispers are extra, there can be a config that new whispers open or
+        -- dont open a new whisper window". That config already existed as the three-way
+        -- `whisper_mode`; it simply was not consulted when the panel was created.
+
+        it("opens a panel on Both, which is the default", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            expect(p._chat._rows["whisper:sylvaine-testrealm"]).notNil()
+        end)
+
+        it("opens a panel on Their Own Panel Only", function()
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "whisper_mode", "panel")
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            expect(p._chat._rows["whisper:sylvaine-testrealm"]).notNil()
+        end)
+
+        it("opens NO panel on General Only", function()
+            -- The bug this pins: a panel was built regardless of the mode, so General Only produced
+            -- a rail row for a conversation whose every message went to General -- an empty panel
+            -- advertising itself.
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "whisper_mode", "general")
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            expect(p._chat._rows["whisper:sylvaine-testrealm"])
+                .as("no rail row for a panel the player asked not to have").eq(nil)
+        end)
+
+        it("still shows the whisper in General when no panel is opened", function()
+            -- The message must never be lost as a side effect of not wanting a panel for it.
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "whisper_mode", "general")
+            H.chat("CHAT_MSG_WHISPER", { text = "secret", sender = "Sylvaine-TestRealm" })
+            local log = p._chat:LogFor("general")
+            local shown = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("secret", 1, true) then shown = true end
+            end
+            expect(shown).as("General Only means General, not nowhere").eq(true)
+        end)
+    end)
+
     describe("registration", function()
         it("registers as a plugin", function()
             expect(P()).notNil()

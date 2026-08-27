@@ -5138,6 +5138,20 @@ describe("harness: chat", function()
     end)
 
     describe("hyperlinks", function()
+        it("refuses a wheel notch until EnableMouseWheel(true)", function()
+            -- Same shape as the mouse gate below, and it caught two real defects the moment it was
+            -- added: `MessageLog` and `ScrollFrame` both set an OnMouseWheel script and never enabled
+            -- the wheel, so neither could be scrolled in game while the suite stayed green.
+            local f = makeLog()
+            local notches = 0
+            f:SetScript("OnMouseWheel", function() notches = notches + 1 end)
+            expect(H.scroll(f, -1)).as("a script nothing can reach is not wired").eq(false)
+            expect(notches).eq(0)
+            f:EnableMouseWheel(true)
+            expect(H.scroll(f, -1)).eq(true)
+            expect(notches).eq(1)
+        end)
+
         it("refuses dispatch until SetHyperlinksEnabled(true)", function()
             local f = makeLog()
             local got
@@ -5148,9 +5162,27 @@ describe("harness: chat", function()
             expect(got).eq(nil)
         end)
 
+        it("refuses dispatch until the frame takes the MOUSE, not just SetHyperlinksEnabled", function()
+            -- THE assertion whose absence let a dead link click ship green. Enabling hyperlinks only
+            -- tells the client to hit-test them; the click never reaches the frame to be hit-tested
+            -- unless the frame takes mouse input, and a ScrollingMessageFrame is a Frame subtype so
+            -- it takes none until told to. `Components/MessageLog` shipped exactly this way.
+            local f = makeLog()
+            f:SetHyperlinksEnabled(true)
+            local got
+            f:SetScript("OnHyperlinkClick", function(_, link) got = link end)
+            expect(H.clickHyperlink(f, "item:19019"))
+                .as("hyperlinks enabled but no mouse: the client cannot deliver this").eq(false)
+            expect(got).eq(nil)
+            f:EnableMouse(true)
+            expect(H.clickHyperlink(f, "item:19019")).as("and now it can").eq(true)
+            expect(got).eq("item:19019")
+        end)
+
         it("delivers link, text and button once enabled", function()
             local f = makeLog()
             f:SetHyperlinksEnabled(true)
+            f:EnableMouse(true)
             local link, text, button
             f:SetScript("OnHyperlinkClick", function(_, l, t, b) link, text, button = l, t, b end)
             expect(H.clickHyperlink(f, "item:19019", "[Thunderfury]", "RightButton")).eq(true)
@@ -5162,6 +5194,7 @@ describe("harness: chat", function()
         it("reports false when nothing is listening", function()
             local f = makeLog()
             f:SetHyperlinksEnabled(true)
+            f:EnableMouse(true)
             expect(H.clickHyperlink(f, "item:1")).eq(false)
         end)
     end)

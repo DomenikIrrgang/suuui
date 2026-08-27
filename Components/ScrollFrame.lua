@@ -159,6 +159,12 @@ function SuuUI.Components.ScrollFrame(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local sf = CreateFrame("ScrollFrame", nil, f)
+    -- Not optional, and it was missing: nothing in the client enables the wheel for you -- Blizzard's
+    -- own scroll templates state `enableMouseWheel="true"` in XML -- so the OnMouseWheel script set
+    -- below was unreachable and every scrollable surface in the addon, the settings window included,
+    -- could only be scrolled by dragging the thumb. The suite could not see it because `H.scroll`
+    -- fired the script directly instead of gating on the flag.
+    sf:EnableMouseWheel(true)
     box:Add(sf)
 
     local content = CreateFrame("Frame", nil, sf)

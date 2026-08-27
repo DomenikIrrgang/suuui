@@ -681,13 +681,26 @@ function Chat:LogFor(id) return self._logs and self._logs[id] or nil end
 --- separator falls in the right place without ordering logic.
 function Chat:_ensureConversation(rec)
     if not rec.conversation then return nil end
+    -- `whisper_mode` decides this, and it was NOT consulted: a panel was built on every first
+    -- whisper regardless, so "General Only" produced a rail row for a conversation whose messages
+    -- all went to General -- an empty panel advertising itself.
+    --
+    -- Gated here rather than through a SECOND setting, which is what "a config for whether new
+    -- whispers open a window" would naively become: two settings both answering "do I get a whisper
+    -- panel" can contradict each other, and `whisper_mode = panel` with panels switched off would
+    -- route every whisper to a panel that does not exist. One setting, three honest states.
+    if get("whisper_mode") == "general" then return nil end
     local id = "whisper:" .. rec.conversation
     local existing = SuuUI.ChatPanels.Find(self._panels, id)
     if existing then return existing end
 
     local panel = SuuUI.ChatPanels.Conversation(rec.conversation, rec.sender)
     tinsert(self._panels, panel)
-    self:_buildRail()
+    -- _rebuildRail rather than _buildRail: a new conversation can carry the LONGEST name in the
+    -- list, and the expanded width is measured from the widest one. Rebuilding the rows alone left
+    -- that width stale -- harmless while expansion overlays the log rather than reflowing it, which
+    -- is exactly the kind of "harmless" that stops being harmless when the overlay changes.
+    self:_rebuildRail()
     return panel
 end
 

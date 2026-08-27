@@ -120,7 +120,8 @@ function M.setup(opts)
     -- every setup so a spec that narrows it cannot leak into the next one.
     state.castBarGlobals = opts.castBarGlobals
 
-    local loaded = addon.load({ root = M.root, boot = opts.boot, debug = opts.debug })
+    local loaded = addon.load({ root = M.root, boot = opts.boot, debug = opts.debug,
+                                savedVars = opts.savedVars })
     M.env      = loaded.env
     M.SuuUI    = loaded.SuuUI
     M.wow      = loaded.wow
@@ -1398,6 +1399,17 @@ function M.clearAuras(unit, opts)
 end
 
 --- Returns the last CancelUnitBuff call record { unit, index }, or nil.
+--- What the last hyperlink click handed the client's own SetItemRef.
+--- @return table|nil  { link, text, button, frame }
+function M.getItemRef()
+    return state.itemRef
+end
+
+--- Forgets it, so one spec can assert a second click without the first still standing.
+function M.resetItemRef()
+    state.itemRef = nil
+end
+
 function M.getCancelBuff()
     return state.cancelBuff
 end
@@ -1674,11 +1686,20 @@ function M.clearUnitActions()
 end
 
 --- Sends a mouse wheel notch.
+---
+--- GATED on the wheel being enabled and the frame being visible, exactly as `M.key` is gated on
+--- keyboard input. It used to fire unconditionally, which made it unable to tell a wired scroll from
+--- an unreachable one: `Components/MessageLog` and `Components/ScrollFrame` both set an
+--- OnMouseWheel script without ever calling `EnableMouseWheel`, and the suite had nothing to say
+--- about either. Returns whether the notch was delivered.
 -- @param target table
 -- @param delta number  1 up, -1 down
+-- @return bool
 function M.scroll(target, delta)
     local f = M.frameOf(target)
+    if not (f:IsVisible() and f:IsMouseWheelEnabled()) then return false end
     f:_fire("OnMouseWheel", delta or -1)
+    return true
 end
 
 --- Sends a key press to a widget with keyboard input enabled.
@@ -2113,6 +2134,11 @@ function M.clickHyperlink(target, link, text, button)
     local f = M.frameOf(target)
     assert(f and f.GetHyperlinksEnabled, "harness: clickHyperlink target is not a message log")
     if not f:GetHyperlinksEnabled() then return false end
+    -- The MOUSE gate, and its absence is why a dead link click shipped with a green suite:
+    -- `SetHyperlinksEnabled(true)` only tells the client to hit-test links, and the click never
+    -- reaches the frame to BE hit-tested unless the frame takes mouse input. A ScrollingMessageFrame
+    -- is a Frame subtype, so it takes none until told to.
+    if not f:IsMouseEnabled() then return false end
     local script = f:GetScript("OnHyperlinkClick")
     if not script then return false end
     script(f, link, text or link, button or "LeftButton")

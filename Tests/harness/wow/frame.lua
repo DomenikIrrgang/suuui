@@ -182,6 +182,13 @@ function FrameMeta:IsMouseEnabled()
 end
 function FrameMeta:EnableMouseWheel(on) self._mouseWheelEnabled = on and true or false end
 
+-- Defaults to FALSE, like a plain Frame's mouse. Nothing in the client enables the wheel for you --
+-- Blizzard's own scroll templates say `enableMouseWheel="true"` in XML -- so a frame that sets an
+-- OnMouseWheel script and never enables the wheel has a script the player cannot reach. There was
+-- no getter at all before this, which is why `H.scroll` fired unconditionally and two shipped
+-- components had exactly that defect with a green suite.
+function FrameMeta:IsMouseWheelEnabled() return self._mouseWheelEnabled == true end
+
 function FrameMeta:EnableKeyboard(on)  self._keyboardEnabled = on and true or false end
 function FrameMeta:IsKeyboardEnabled() return self._keyboardEnabled == true end
 function FrameMeta:SetPropagateKeyboardInput(on) self._propagateKeyboard = on end
@@ -1243,6 +1250,17 @@ function ScrollingMessageFrameMeta:GetFading()            return self._fading ==
 function ScrollingMessageFrameMeta:SetTimeVisible(secs)   self._timeVisible = secs end
 function ScrollingMessageFrameMeta:GetTimeVisible()       return self._timeVisible end
 function ScrollingMessageFrameMeta:SetFadeDuration(secs)  self._fadeDuration = secs end
+
+-- ResetAllFadeTimes: COUNTED rather than enacted. In the client this restarts every line's fade
+-- clock, which is what brings faded text back -- ElvUI calls it immediately before its own frame
+-- fade-in. Per-line clocks are not modelled here, so the observable is that it was CALLED: a reveal
+-- that sets alpha and forgets this leaves the text visible for one frame and gone the next, and a
+-- count is the only thing a spec can hold onto. Model what a caller can observe, nothing beyond.
+function ScrollingMessageFrameMeta:ResetAllFadeTimes()
+    self._fadeResets = (self._fadeResets or 0) + 1
+end
+
+function ScrollingMessageFrameMeta:GetFadeResetCount() return self._fadeResets or 0 end
 function ScrollingMessageFrameMeta:GetFadeDuration()      return self._fadeDuration end
 
 function ScrollingMessageFrameMeta:SetInsertMode(mode)

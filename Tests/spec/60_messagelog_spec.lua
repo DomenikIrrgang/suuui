@@ -211,6 +211,46 @@ describe("MessageLog", function()
         end)
     end)
 
+    describe("input the client must be able to deliver", function()
+        it("takes the MOUSE, or no link can ever be hit-tested", function()
+            -- Shipped missing. `SetHyperlinksEnabled(true)` alone only asks the client to hit-test
+            -- links; the click never reaches a Frame subtype that takes no mouse input, so every
+            -- link rendered perfectly and was dead. Asserted on the frame rather than through a
+            -- click, because a click helper that does not gate on this cannot tell the difference.
+            local log = make()
+            expect(log._log:IsMouseEnabled()).eq(true)
+        end)
+
+        it("takes the WHEEL, or its own scroll methods are unreachable", function()
+            -- Also shipped missing: ScrollUp/ScrollDown/PageUp/ScrollToTop/ScrollToBottom all
+            -- existed and nothing could deliver a gesture, so the buffer was write-only.
+            local log = make()
+            expect(log._log:IsMouseWheelEnabled()).eq(true)
+        end)
+
+        it("scrolls on a wheel notch and reports leaving the bottom", function()
+            local log = make()
+            for i = 1, 40 do log:AddMessage("line " .. i) end
+            local spy = H.signalSpy(log, H.C.MESSAGELOG_SIGNALS.AT_BOTTOM_CHANGED)
+            expect(log:AtBottom()).as("a fresh log sits at the newest line").eq(true)
+            expect(H.scroll(log._log, 1)).as("delivered").eq(true)
+            expect(log:AtBottom()).as("a notch up leaves the bottom").eq(false)
+            expect(spy.count).as("and says so exactly once").eq(1)
+            expect(spy:arg(1)).eq(false)
+        end)
+
+        it("shift plus wheel jumps to an end rather than paging, as Blizzard's chat does", function()
+            local log = make()
+            for i = 1, 40 do log:AddMessage("line " .. i) end
+            H.scroll(log._log, 1)
+            H.scroll(log._log, 1)
+            expect(log:AtBottom()).eq(false)
+            H.env.IsShiftKeyDown = function() return true end
+            H.scroll(log._log, -1)
+            expect(log:AtBottom()).as("one shift-notch down returns to the newest line").eq(true)
+        end)
+    end)
+
     describe("hyperlinks", function()
         it("translates a client hyperlink click into a signal", function()
             local log = make()

@@ -2256,6 +2256,15 @@ function M.install(env)
         return 0, nil, 0
     end
 
+    -- SetItemRef: RECORDED, never enacted. It is the client's own dispatcher for a link click -- an
+    -- item link opens its tooltip frame, a player link opens the whisper menu, a quest link opens the
+    -- quest panel -- and enacting any of that would mean the harness deciding what each link type
+    -- does, after which a spec asserts against that guess instead of against the client. What a spec
+    -- can prove is that the right link, text and button reached it, which is the whole of our side.
+    env.SetItemRef = function(link, text, button, chatFrame)
+        state.itemRef = { link = link, text = text, button = button, frame = chatFrame }
+    end
+
     -- ChatTypeGroup: a routing-bucket label expanded to the events it carries. THE GROUP IS THE
     -- UNIT, never the raw event -- it is what the client persists and what a tab subscribes to.
     --

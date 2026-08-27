@@ -260,6 +260,10 @@ M.chatLineID = 0
 -- answer 0 -- the client's "you are not in that channel" -- rather than inventing a name.
 M.channels = {}
 
+-- The last SetItemRef call, as { link, text, button, frame }. A link click's whole observable
+-- effect on our side: what we handed the client's own dispatcher.
+M.itemRef = nil
+
 local pending, pendingSet
 local dependents
 
@@ -351,6 +355,7 @@ function M.reset()
     -- Cleared for the reason every other store here is: a leaked channel would let "the chip named
     -- the channel" pass before the spec staged one.
     M.channels           = {}
+    M.itemRef            = nil
     -- Action slots and everything keyed off them. Cleared for the reason every other store
     -- here is: a leaked slot would let a "the button drew an icon" assertion pass before the
     -- spec staged anything, and a leaked page would put bar 1 on someone else's slots. The
