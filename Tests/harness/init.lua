@@ -1983,6 +1983,120 @@ function M.fontOf(target)
     return f:GetFont()
 end
 
+--------------------------------------------------------------------------------
+-- Chat
+--------------------------------------------------------------------------------
+
+-- The CHAT_MSG_* payload, by NAME. The client delivers these positionally and the list is long
+-- and mostly unused, so a spec writing them positionally would be encoding a guess about slots
+-- nobody reads -- and getting slot 11 wrong is invisible until a player-name right-click
+-- silently degrades, because lineID lives there.
+--
+-- Field names are validated, for the reason H.setBagItem validates its own: a typo would
+-- otherwise stage nothing and the assertion would pass against an empty payload.
+local CHAT_FIELDS = {
+    text = true, sender = true, language = true, channel = true, target = true,
+    flags = true, zoneID = true, channelIndex = true, channelBaseName = true,
+    lineID = true, guid = true, bnSenderID = true,
+}
+
+--- Fires a CHAT_MSG_* event with a realistic positional payload built from named fields.
+--
+-- Only `text` is required. `lineID` defaults to an incrementing number rather than nil,
+-- because it is what SetItemRef needs to resolve a player link's context menu -- a consumer
+-- that drops it looks correct until someone right-clicks a name.
+-- @param event string  e.g. "CHAT_MSG_GUILD"
+-- @param props table   { text, sender, lineID, channel, ... }
+function M.chat(event, props)
+    assert(type(event) == "string" and event:find("^CHAT_MSG_"),
+        "H.chat: event must be a CHAT_MSG_* name, got " .. tostring(event))
+    props = props or {}
+    for k in pairs(props) do
+        assert(CHAT_FIELDS[k], "H.chat: unknown field '" .. tostring(k) .. "'")
+    end
+    state.chatLineID = (state.chatLineID or 0) + 1
+    -- The client's argument order. Slots nothing reads are passed as nil deliberately rather
+    -- than filled with plausible values, so a consumer that starts reading one has to stage it.
+    return M.fireEvent(event,
+        props.text or "",
+        props.sender,
+        props.language,
+        props.channel,
+        props.target,
+        props.flags,
+        props.zoneID,
+        props.channelIndex,
+        props.channelBaseName,
+        nil,
+        props.lineID or state.chatLineID,
+        props.guid,
+        props.bnSenderID)
+end
+
+--- Every SendChatMessage call, in order, as { msg, chatType, language, target }.
+--- A COPY: the live table is what the next call appends to, so handing it out would let a
+--- caller mutate the record the following assertion reads.
+function M.getSentMessages()
+    local out = {}
+    for i, rec in ipairs(state.sentMessages) do
+        out[i] = { msg = rec.msg, chatType = rec.chatType,
+                   language = rec.language, target = rec.target }
+    end
+    return out
+end
+
+function M.resetSentMessages() state.sentMessages = {} end
+
+--- Overrides what GetChatWindowMessages(id) answers for one window. Pass nil to drop the
+--- override and return that window to the MEASURED client defaults.
+-- @param id number
+-- @param groups table|nil  array of group names
+function M.setChatWindowMessages(id, groups)
+    assert(type(id) == "number", "H.setChatWindowMessages: id must be a number")
+    state.chatWindowMessages = state.chatWindowMessages or {}
+    state.chatWindowMessages[id] = groups
+end
+
+--- The lines a message log would actually DRAW.
+--
+-- Empty when no font is set, which is the refusal worth having: a message frame with no font
+-- renders nothing in game while remaining present, correctly sized, and reporting its messages
+-- through GetNumMessages -- a silent failure the plain getters cannot express.
+--
+-- Lives on H rather than as a method on the frame ON PURPOSE. A harness-only name added to a
+-- frame's metatable is reachable from shipped code, and this project has already shipped a call
+-- to GameTooltip:GetLine() that existed only here and raised on the first mouseover with the
+-- whole suite green. H cannot be reached from the addon at all.
+-- @param target table  message log frame or component handle
+-- @return table  array of { text, r, g, b, id }, oldest first
+function M.getChatLines(target)
+    local f = M.frameOf(target)
+    assert(f and f.GetNumMessages, "harness: getChatLines target is not a message log")
+    if not f:_hasFont() then return {} end
+    local out = {}
+    for i = 1, f:GetNumMessages() do
+        local text, r, g, b, id = f:GetMessageInfo(i)
+        out[i] = { text = text, r = r, g = g, b = b, id = id }
+    end
+    return out
+end
+
+--- Delivers a hyperlink click to a message log, as the client does when a player clicks a link.
+--
+-- REFUSED, returning false, when SetHyperlinksEnabled(true) was never called -- which is the
+-- state a log that forgot the call is in, and in game it presents as item links that look
+-- perfect and are dead to the click.
+-- @return boolean  whether the click was delivered
+function M.clickHyperlink(target, link, text, button)
+    local f = M.frameOf(target)
+    assert(f and f.GetHyperlinksEnabled, "harness: clickHyperlink target is not a message log")
+    if not f:GetHyperlinksEnabled() then return false end
+    local script = f:GetScript("OnHyperlinkClick")
+    if not script then return false end
+    script(f, link, text or link, button or "LeftButton")
+    return true
+end
+
 require("harness.expect_layout")(M)
 
 return M

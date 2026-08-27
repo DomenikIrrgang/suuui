@@ -135,6 +135,34 @@ function TextMeta:GetFontSize()
     return self._size
 end
 
+--- A one-unit shadow under the glyphs, for text that sits over the GAME WORLD.
+---
+--- Opt-in rather than always on: text inside a panel already has a surface behind it, where a
+--- shadow is muddy rather than helpful. It is the frameless surfaces -- a chat log, a rail label, a
+--- resting chip -- that have nothing behind them, and the concept specifies a text-shadow on every
+--- one of those for that reason.
+function TextMeta:SetShadow(on)
+    self._shadow = on and true or false
+    self:_applyShadow()
+end
+
+function TextMeta:HasShadow() return self._shadow == true end
+
+function TextMeta:_applyShadow()
+    local fs = self._fs
+    if not (fs and fs.SetShadowColor) then return end
+    if not self._shadow then
+        fs:SetShadowColor(0, 0, 0, 0)
+        return
+    end
+    local T = SuuUI.Theme
+    local ink = T:GetToken("colorGray950") or { 0, 0, 0, 1 }
+    local a = T:GetToken("opacityTextShadow")
+    if type(a) ~= "number" then a = 0.9 end
+    fs:SetShadowColor(ink[1], ink[2], ink[3], a)
+    fs:SetShadowOffset(SuuUI.Pixel.Line(1), -SuuUI.Pixel.Line(1))
+end
+
 function TextMeta:ApplyTheme()
     local T     = SuuUI.Theme
     -- An override comes from a caller, so it is resolved rather than trusted: SetFont
@@ -144,10 +172,20 @@ function TextMeta:ApplyTheme()
                   or T:GetToken("fontFamilyMain") or "Fonts/FRIZQT__.TTF"
     local size  = T:GetFontSize(self._size) or 13
     local ckey  = colmap[self._color] or "colorText"
-    local col   = T:GetToken(ckey) or {0.92, 0.92, 0.92, 1}
+    -- A LITERAL {r,g,b,a} bypasses the map. Needed because some colours are game FACTS rather
+    -- than theme decisions -- a chat channel's colour comes from ChatTypeInfo, and painting it
+    -- from a token would make SuuUI disagree with the rest of the player's UI. The key path is
+    -- still the default, so nothing that passes a key changes.
+    local col
+    if type(self._color) == "table" then
+        col = self._color
+    else
+        col = T:GetToken(ckey) or {0.92, 0.92, 0.92, 1}
+    end
     self._fs:SetFont(font, size, self._flags or "")
     self._fs:SetTextColor(col[1], col[2], col[3], col[4])
     self:_measure()
+    self:_applyShadow()
 end
 
 -- Text cannot use the generic InstallEnable because its root element is a FontString,
@@ -210,6 +248,7 @@ function SuuUI.Components.Text(props, parent)
         _flags     = props.flags or "",
         _font      = props.font,
         _fixed     = (props.w and props.h) and true or false,
+        _shadow    = props.shadow and true or false,
     }, TextMeta)
     handle:ApplyTheme()
     SuuUI.Events:On("SUUUI_THEME_CHANGED", function() handle:ApplyTheme() end, id)

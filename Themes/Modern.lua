@@ -48,6 +48,14 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- snapshot" strip. Its own token rather than sharing opacityAccentSubtle: one is a selected
     -- control, the other is a standing warning, and they want tuning separately.
     opacityWarningWash = 0.18,
+
+    -- See Themes/Default.lua: a Chip's wash and ring. Slightly stronger here to match this
+    -- theme's higher contrast.
+    opacityRailIdle   = 0.50,
+    -- How dark the shadow under text that sits over the GAME WORLD is. A frameless log
+    -- has no panel behind it, so this is what separates a glyph from terrain.
+    opacityTextShadow = 0.90,
+    opacityChipBorder = 0.45,
     -- The resting keybind wash. See Themes/Default.lua for why it is its own token: it pairs with
     -- opacityEditOverlay (0.20, the HOVERED wash) and the two must stay clearly apart.
     opacityKeybindRest = 0.08,

@@ -226,6 +226,34 @@ M.bonusBarOffset = 0
 -- is what the client does for one it does not know. Set through H.setCVarBool.
 M.cvars = {}
 
+----------------------------------------------------------------------------------
+-- Chat
+----------------------------------------------------------------------------------
+
+-- Every C_ChatInfo.SendChatMessage call, in order, as { msg, chatType, language, target }.
+--
+-- RECORDED rather than enacted, for the reason the state drivers are: enacting a send would mean
+-- the harness deciding what the server echoes back, after which a spec asserts against that guess
+-- instead of against the client. What a spec can prove is that the right text went to the right
+-- channel. Read through H.getSentMessages(), which hands out a copy.
+M.sentMessages = {}
+
+-- What GetChatWindowMessages(id) answers, keyed by window index.
+--
+-- The DEFAULTS BELOW ARE MEASURED on this client (Anniversary TBC, 2026-08-23) rather than
+-- invented, because they are not in Lua at all: ChatFrame_OnLoad starts with an empty
+-- messageTypeList and the groups arrive from the C client. Windows 4-10 are genuinely empty.
+--
+-- Window 2 matters more than it looks: it carries six real CHAT_MSG groups (XP, honour,
+-- tradeskills), so a consumer that treats it as "just the combat log" and drops it loses the
+-- player's XP messages. Staged so a spec can prove the fold-into-General routing happens.
+M.chatWindowMessages = nil
+
+-- Monotonic lineID handed to each staged chat message. The client's lineID is what SetItemRef
+-- resolves a player link's context menu against, so a consumer that drops it loses right-click
+-- on names -- giving every staged message a distinct one means a spec can catch that.
+M.chatLineID = 0
+
 local pending, pendingSet
 local dependents
 
@@ -305,6 +333,15 @@ function M.reset()
     -- already shipped once.
     M.inCombat       = false
     M.blockedActions = {}
+    -- Chat. Cleared for the reason every other store here is, and this one has a concrete
+    -- failure: a leaked sentMessages would let "the reply went to Sylvaine" pass before the
+    -- spec typed anything, and a leaked window-routing override would put another file's
+    -- groups on window 1. chatWindowMessages goes back to nil rather than to the measured
+    -- defaults, because api.lua answers the measured table when the override is absent --
+    -- one source for the defaults instead of two that can drift.
+    M.sentMessages       = {}
+    M.chatWindowMessages = nil
+    M.chatLineID         = 0
     -- Action slots and everything keyed off them. Cleared for the reason every other store
     -- here is: a leaked slot would let a "the button drew an icon" assertion pass before the
     -- spec staged anything, and a leaked page would put bar 1 on someone else's slots. The

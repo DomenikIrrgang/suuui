@@ -58,6 +58,18 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- snapshot" strip. Its own token rather than sharing opacityAccentSubtle: one is a selected
     -- control, the other is a standing warning, and they want tuning separately.
     opacityWarningWash = 0.18,
+
+    -- A Chip's two alphas: the wash behind its text and its hairline ring. Its own pair rather
+    -- than sharing the wash family above, because a chip is tinted by a GAME FACT (a chat
+    -- channel's ChatTypeInfo colour) rather than by an intent token -- so retinting a warning
+    -- must not change how a channel chip reads, and vice versa. The ring is deliberately much
+    -- stronger than the fill: the chip has to stay legible as a small object over the game
+    -- world, where the fill alone disappears against bright terrain.
+    opacityRailIdle   = 0.50,
+    -- How dark the shadow under text that sits over the GAME WORLD is. A frameless log
+    -- has no panel behind it, so this is what separates a glyph from terrain.
+    opacityTextShadow = 0.90,
+    opacityChipBorder = 0.40,
     -- HOW FAINT THE RESTING KEYBIND WASH IS -- the tint every bindable button carries while
     -- keybind mode is open but nothing is hovered. Its own token for the reason above: it has to
     -- be weak enough to read as "the mode reaches here" rather than "this one is selected", and

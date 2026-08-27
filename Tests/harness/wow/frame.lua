@@ -544,6 +544,12 @@ function EditBoxMeta:SetMultiLine(on)     self._multiLine = on and true or false
 function EditBoxMeta:SetNumeric(on)       self._numeric = on and true or false end
 function EditBoxMeta:HighlightText()      end
 function EditBoxMeta:SetTextInsets(...)   self._textInsets = { ... } end
+-- Readable, so a spec can assert the insets an adopted box was given. Write-only, the
+-- adoption's inset tightening could not be asserted at all.
+function EditBoxMeta:GetTextInsets()
+    local t = self._textInsets or {}
+    return t[1] or 0, t[2] or 0, t[3] or 0, t[4] or 0
+end
 
 --- Raises for an asset the client cannot load, as the real client does.
 --- See FontStringMeta:SetFont.
@@ -1116,6 +1122,214 @@ end
 
 function GameTooltipMeta:IsShown() return self._tooltipShown == true end
 
+----------------------------------------------------------------------------------
+-- ScrollingMessageFrame
+----------------------------------------------------------------------------------
+
+-- The client's own scrolling text log: word wrap, a line cap, timed fading, scrolling and
+-- per-line hyperlink hit-testing, none of which an addon has to write. Two installed addons
+-- create one on this client (DBM-GUI's panel prototype and ElvUI's AFK screen), so it is real
+-- rather than assumed.
+--
+-- MODELLED WITH ITS REFUSALS, not just its capabilities, because this harness's documented
+-- failure mode is permissiveness -- it hands every frame every method, which is how the combat
+-- lockdown and hidden-frame gaps let broken code stay green. Two refusals are modelled here:
+--   * AddMessage exists ONLY on this meta, so calling it on a plain Frame raises. A consumer
+--     that creates the wrong frame type cannot silently appear to work.
+--   * A log with no font set DRAWS NOTHING. The client cannot lay out a line without a font,
+--     and the failure in game is silent -- the frame is present, sized and reports its
+--     messages, and renders empty. H.getChatLines() is the observable; see its comment for why
+--     that lives on H rather than on the frame.
+local ScrollingMessageFrameMeta = derive(FrameMeta)
+M.ScrollingMessageFrameMeta = ScrollingMessageFrameMeta
+
+-- Blizzard's own default, set in ChatFrame_OnLoad. Modelled as the default so a consumer that
+-- never raises it inherits the real ceiling rather than an unlimited buffer -- 128 is the number
+-- to beat, and a spec asserting a deeper scrollback has to say so.
+local DEFAULT_MAX_LINES = 128
+
+function ScrollingMessageFrameMeta:_initMessages()
+    if not self._messages then
+        self._messages   = {}
+        self._maxLines   = DEFAULT_MAX_LINES
+        self._scroll     = 0
+        self._insertMode = "BOTTOM"
+    end
+end
+
+--- Appends one message. Index 1 is the OLDEST, which is the order ElvUI's copy-chat loop reads
+--- them in (`for i = 1, GetNumMessages()`), so a consumer that walks them builds the transcript
+--- top to bottom.
+function ScrollingMessageFrameMeta:AddMessage(text, r, g, b, id)
+    self:_initMessages()
+    assert(type(text) == "string" or type(text) == "number",
+        "harness: AddMessage needs a string, got " .. type(text))
+    table.insert(self._messages, {
+        text = tostring(text), r = r, g = g, b = b, id = id,
+    })
+    -- The cap trims the OLDEST, which is what makes a log a rolling window.
+    while #self._messages > self._maxLines do table.remove(self._messages, 1) end
+    -- A new message at the bottom does not move a reader who has scrolled up: the client holds
+    -- their position and the unread simply accumulates below them. That is the behaviour a
+    -- jump-to-bottom affordance exists for, so modelling it wrongly would make that untestable.
+    if self._scroll > 0 then
+        self._scroll = math.min(self._scroll + 1, math.max(0, #self._messages - 1))
+    end
+end
+
+function ScrollingMessageFrameMeta:GetNumMessages()
+    self:_initMessages()
+    return #self._messages
+end
+
+--- Returns message, r, g, b, id for one line, oldest first. Five values, as the client's does.
+function ScrollingMessageFrameMeta:GetMessageInfo(i)
+    self:_initMessages()
+    local rec = self._messages[i]
+    if not rec then return nil end
+    return rec.text, rec.r, rec.g, rec.b, rec.id
+end
+
+function ScrollingMessageFrameMeta:Clear()
+    self:_initMessages()
+    self._messages = {}
+    self._scroll   = 0
+end
+
+-- Horizontal justification. Modelled with the CLIENT's default of "CENTER" rather than "LEFT",
+-- which is the whole reason it is here: a bare CreateFrame("ScrollingMessageFrame") centres every
+-- line, Blizzard's own chat frames are LEFT only because their XML template says so, and with
+-- this absent from the harness nothing could tell the two apart. A centre-justified chat log
+-- shipped and was found by looking at the game -- one line sat 135 units right of the chip below
+-- it, which is exactly half the slack in a 460-wide frame.
+--
+-- The harness lays out no text, so this is a recorder: it proves the CALL was made, not that the
+-- glyphs moved. See "GameTooltip ... renders nothing" in TESTING.md for the same contract.
+-- A message frame carries FontInstance's shadow methods, and a frameless log over the game world
+-- needs them: the concept gives every chat line a text-shadow because there is no panel behind it.
+function ScrollingMessageFrameMeta:SetShadowColor(r, g, b, a)
+    self._shadowColor = { r, g, b, a == nil and 1 or a }
+end
+function ScrollingMessageFrameMeta:GetShadowColor()
+    local c = self._shadowColor
+    if not c then return 0, 0, 0, 0 end
+    return c[1], c[2], c[3], c[4]
+end
+function ScrollingMessageFrameMeta:SetShadowOffset(x, y) self._shadowX, self._shadowY = x, y end
+function ScrollingMessageFrameMeta:GetShadowOffset() return self._shadowX or 0, self._shadowY or 0 end
+
+function ScrollingMessageFrameMeta:SetJustifyH(j) self._justifyH = j end
+function ScrollingMessageFrameMeta:GetJustifyH()  return self._justifyH or "CENTER" end
+function ScrollingMessageFrameMeta:SetJustifyV(j) self._justifyV = j end
+function ScrollingMessageFrameMeta:GetJustifyV()  return self._justifyV or "MIDDLE" end
+
+function ScrollingMessageFrameMeta:SetMaxLines(n)    self:_initMessages()
+    self._maxLines = n
+    while #self._messages > self._maxLines do table.remove(self._messages, 1) end
+end
+
+function ScrollingMessageFrameMeta:GetMaxLines()
+    self:_initMessages()
+    return self._maxLines
+end
+
+-- Fading is the whole reason a frameless chat is affordable: the client times it, so the addon
+-- sets three values and writes no ticker. Stored rather than simulated -- the harness has no
+-- render loop, and a spec asserting "it faded" would be asserting against our own timer instead
+-- of the client's. What a spec CAN prove is that a channel log enables it and a conversation log
+-- does not, which is the design rule these back.
+function ScrollingMessageFrameMeta:SetFading(on)          self._fading = on and true or false end
+function ScrollingMessageFrameMeta:GetFading()            return self._fading == true end
+function ScrollingMessageFrameMeta:SetTimeVisible(secs)   self._timeVisible = secs end
+function ScrollingMessageFrameMeta:GetTimeVisible()       return self._timeVisible end
+function ScrollingMessageFrameMeta:SetFadeDuration(secs)  self._fadeDuration = secs end
+function ScrollingMessageFrameMeta:GetFadeDuration()      return self._fadeDuration end
+
+function ScrollingMessageFrameMeta:SetInsertMode(mode)
+    self:_initMessages()
+    self._insertMode = mode
+end
+function ScrollingMessageFrameMeta:GetInsertMode()
+    self:_initMessages()
+    return self._insertMode
+end
+
+-- Hyperlink hit-testing, and the refusal that matters: dispatch does NOTHING until a consumer
+-- calls SetHyperlinksEnabled(true). In game that presents as item links that look perfect and
+-- are dead to the click, so leaving it permissive would hide the single most likely wiring bug
+-- in a chat log. Enforced in H.clickHyperlink.
+function ScrollingMessageFrameMeta:SetHyperlinksEnabled(on)
+    self._hyperlinksEnabled = on and true or false
+end
+function ScrollingMessageFrameMeta:GetHyperlinksEnabled()
+    return self._hyperlinksEnabled == true
+end
+
+-- The scroll window. Offset 0 is the BOTTOM (newest), counting upward, which is the direction
+-- the client's ScrollUp moves. The ceiling is the message count rather than a computed
+-- lines-per-page: the harness has no line layout, and inventing one would let a spec assert a
+-- page size the client never agreed to.
+function ScrollingMessageFrameMeta:ScrollUp()
+    self:_initMessages()
+    self._scroll = math.min(self._scroll + 1, math.max(0, #self._messages - 1))
+end
+function ScrollingMessageFrameMeta:ScrollDown()
+    self:_initMessages()
+    self._scroll = math.max(self._scroll - 1, 0)
+end
+function ScrollingMessageFrameMeta:PageUp()
+    self:_initMessages()
+    self._scroll = math.min(self._scroll + 10, math.max(0, #self._messages - 1))
+end
+function ScrollingMessageFrameMeta:PageDown()
+    self:_initMessages()
+    self._scroll = math.max(self._scroll - 10, 0)
+end
+function ScrollingMessageFrameMeta:ScrollToTop()
+    self:_initMessages()
+    self._scroll = math.max(0, #self._messages - 1)
+end
+function ScrollingMessageFrameMeta:ScrollToBottom()
+    self:_initMessages()
+    self._scroll = 0
+end
+-- MEASURED on this client (interface 20504): the getter is `GetScrollOffset`, and
+-- `GetCurrentScroll` DOES NOT EXIST -- probed directly, it answers nil while every other method this
+-- addon calls on a ScrollingMessageFrame answers `function`. It was modelled here under the wrong
+-- name, so the whole scroll block of 00_harness_spec passed against an API the client does not have
+-- and the first wheel turn in game raised "attempt to call a nil value" 29 times. Deliberately NOT
+-- aliased to both names: modelling a method the client lacks is what let this ship.
+function ScrollingMessageFrameMeta:GetScrollOffset()
+    self:_initMessages()
+    return self._scroll
+end
+function ScrollingMessageFrameMeta:AtBottom()
+    self:_initMessages()
+    return self._scroll == 0
+end
+
+-- The font. A message frame is a FontInstance, so it carries these directly rather than through
+-- a child region -- and SetFont RAISES on an unloadable asset exactly as FontString:SetFont
+-- does here and in the client, because that throw has already cost this addon a broken login.
+function ScrollingMessageFrameMeta:SetFont(path, size, flags)
+    if not font.hasFace(path) then
+        error("ScrollingMessageFrame:SetFont(): Invalid font asset (" .. tostring(path)
+              .. "): file not found", 2)
+    end
+    self._fontPath, self._fontSize, self._fontFlags = path, size, flags
+end
+function ScrollingMessageFrameMeta:GetFont()
+    return self._fontPath, self._fontSize, self._fontFlags
+end
+function ScrollingMessageFrameMeta:SetFontObject(obj) self._fontObject = obj end
+function ScrollingMessageFrameMeta:GetFontObject()    return self._fontObject end
+
+--- Whether this log could draw a line at all: false until a font or font object is set. Not a
+--- client API -- see H.getChatLines.
+function ScrollingMessageFrameMeta:_hasFont()
+    return self._fontPath ~= nil or self._fontObject ~= nil
+end
+
 M.metaFor = {
     Frame       = FrameMeta,
     EditBox     = EditBoxMeta,
@@ -1134,6 +1348,7 @@ M.metaFor = {
     Slider      = FrameMeta,
     Cooldown    = CooldownMeta,
     GameTooltip = GameTooltipMeta,
+    ScrollingMessageFrame = ScrollingMessageFrameMeta,
 }
 
 return M

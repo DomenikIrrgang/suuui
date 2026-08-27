@@ -519,6 +519,10 @@ function M.install(env)
         return unitField(unit, "name", unit == "player" and "Testchar" or nil)
     end
     env.GetRealmName  = function() return "TestRealm" end
+    -- The language the player speaks. The client hands a language on EVERY chat event, so a
+    -- consumer that prints it unconditionally puts "[Common]" on every line -- which is exactly
+    -- what shipped, and could not be caught while this was absent.
+    env.GetDefaultLanguage = function() return state.defaultLanguage or "Common" end
     -- Copper, as GetMoney() reports it. Staged rather than fixed because the inventory footer
     -- prints it and the cache stores it per character.
     env.GetMoney      = function() return state.money or 0 end
@@ -2114,7 +2118,15 @@ function M.install(env)
     env.print = function(...)
         local parts = {}
         for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
-        state.debugLog[#state.debugLog + 1] = table.concat(parts, " ")
+        local line = table.concat(parts, " ")
+        state.debugLog[#state.debugLog + 1] = line
+        -- ROUTED THROUGH THE DEFAULT CHAT FRAME, as the client's print does. Without this the
+        -- addon-output mirror could only be tested by calling AddMessage by hand, which passes
+        -- while nothing in production takes that path -- the exact shape of mistake that shipped
+        -- a dead micro-menu button. debugLog is still written, so every Fault/Debug spec is
+        -- unaffected.
+        local dcf = env.DEFAULT_CHAT_FRAME
+        if dcf and dcf.AddMessage then dcf:AddMessage(line) end
     end
 
     -- Vanilla-era string helpers some addons expect
@@ -2175,6 +2187,285 @@ function M.install(env)
     env.WOW_PROJECT_WRATH_CLASSIC           = 11
     env.WOW_PROJECT_CATACLYSM_CLASSIC       = 14
     env.WOW_PROJECT_ID                      = 5
+
+    --------------------------------------------------------------------------
+    -- Chat
+    --------------------------------------------------------------------------
+    -- ChatTypeInfo: the per-type colours and the sticky flag, as the PLAYER's own colour
+    -- settings. A game fact rather than a theme decision, which is why a chat field's colour
+    -- must come from here and not from a token -- a retint of the theme must not make SuuUI
+    -- disagree with the rest of the player's UI about what guild chat looks like.
+    --
+    -- `sticky` is what makes the edit box reopen in the channel you last spoke in, and it is
+    -- the top cause of mistells, so it is modelled rather than dropped: Say, party, raid,
+    -- guild, officer and whisper are sticky in the client's own defaults; channels are not.
+    env.ChatTypeInfo = {
+        SAY             = { r = 1.00, g = 1.00, b = 1.00, sticky = 1 },
+        EMOTE           = { r = 1.00, g = 0.50, b = 0.25, sticky = 0 },
+        YELL            = { r = 1.00, g = 0.25, b = 0.25, sticky = 0 },
+        WHISPER         = { r = 1.00, g = 0.50, b = 1.00, sticky = 1 },
+        WHISPER_INFORM  = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
+        PARTY           = { r = 0.67, g = 0.67, b = 1.00, sticky = 1 },
+        PARTY_LEADER    = { r = 0.46, g = 0.78, b = 1.00, sticky = 0 },
+        RAID            = { r = 1.00, g = 0.50, b = 0.00, sticky = 1 },
+        RAID_LEADER     = { r = 1.00, g = 0.28, b = 0.04, sticky = 0 },
+        RAID_WARNING    = { r = 1.00, g = 0.28, b = 0.00, sticky = 0 },
+        GUILD           = { r = 0.25, g = 1.00, b = 0.25, sticky = 1 },
+        OFFICER         = { r = 0.25, g = 0.75, b = 0.25, sticky = 1 },
+        MONSTER_SAY     = { r = 1.00, g = 1.00, b = 1.00, sticky = 0 },
+        MONSTER_YELL    = { r = 1.00, g = 0.25, b = 0.25, sticky = 0 },
+        MONSTER_EMOTE   = { r = 1.00, g = 0.50, b = 0.25, sticky = 0 },
+        MONSTER_WHISPER = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
+        CHANNEL         = { r = 1.00, g = 0.75, b = 0.75, sticky = 0 },
+        SYSTEM          = { r = 1.00, g = 1.00, b = 0.00, sticky = 0 },
+        LOOT            = { r = 0.00, g = 0.67, b = 0.00, sticky = 0 },
+        MONEY           = { r = 1.00, g = 1.00, b = 0.00, sticky = 0 },
+        SKILL           = { r = 0.10, g = 0.75, b = 0.10, sticky = 0 },
+        AFK             = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
+        DND             = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
+    }
+
+    -- ChatTypeGroup: a routing-bucket label expanded to the events it carries. THE GROUP IS THE
+    -- UNIT, never the raw event -- it is what the client persists and what a tab subscribes to.
+    --
+    -- Not every group is purely CHAT_MSG_*: SYSTEM also pulls TIME_PLAYED_MSG and
+    -- PLAYER_LEVEL_UP, and GUILD pulls GUILD_MOTD. A consumer that assumed "group means one
+    -- CHAT_MSG event" would drop those, so the model keeps them.
+    --
+    -- CHAT_MSG_AFK deliberately appears in BOTH WHISPER and AFK, exactly as the client has it.
+    -- That is what makes ChatTypeGroupInverted non-deterministic in game (it is built with
+    -- pairs()), so a consumer must build its event->tab map from an ordered list of its own --
+    -- and this duplication is what lets a spec prove it does.
+    env.ChatTypeGroup = {
+        SAY             = { "CHAT_MSG_SAY" },
+        EMOTE           = { "CHAT_MSG_EMOTE", "CHAT_MSG_TEXT_EMOTE" },
+        YELL            = { "CHAT_MSG_YELL" },
+        WHISPER         = { "CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM",
+                            "CHAT_MSG_AFK", "CHAT_MSG_DND" },
+        PARTY           = { "CHAT_MSG_PARTY" },
+        PARTY_LEADER    = { "CHAT_MSG_PARTY_LEADER" },
+        RAID            = { "CHAT_MSG_RAID" },
+        RAID_LEADER     = { "CHAT_MSG_RAID_LEADER" },
+        RAID_WARNING    = { "CHAT_MSG_RAID_WARNING" },
+        GUILD           = { "CHAT_MSG_GUILD", "GUILD_MOTD" },
+        OFFICER         = { "CHAT_MSG_OFFICER" },
+        MONSTER_SAY     = { "CHAT_MSG_MONSTER_SAY" },
+        MONSTER_YELL    = { "CHAT_MSG_MONSTER_YELL" },
+        MONSTER_EMOTE   = { "CHAT_MSG_MONSTER_EMOTE" },
+        MONSTER_WHISPER = { "CHAT_MSG_MONSTER_WHISPER" },
+        CHANNEL         = { "CHAT_MSG_CHANNEL", "CHAT_MSG_CHANNEL_JOIN",
+                            "CHAT_MSG_CHANNEL_LEAVE", "CHAT_MSG_CHANNEL_NOTICE",
+                            "CHAT_MSG_CHANNEL_NOTICE_USER", "CHAT_MSG_CHANNEL_LIST" },
+        SYSTEM          = { "CHAT_MSG_SYSTEM", "TIME_PLAYED_MSG", "PLAYER_LEVEL_UP" },
+        ERRORS          = { "CHAT_MSG_SYSTEM" },
+        AFK             = { "CHAT_MSG_AFK" },
+        DND             = { "CHAT_MSG_DND" },
+        LOOT            = { "CHAT_MSG_LOOT" },
+        MONEY           = { "CHAT_MSG_MONEY" },
+        SKILL           = { "CHAT_MSG_SKILL" },
+        OPENING         = { "CHAT_MSG_OPENING" },
+        TRADESKILLS     = { "CHAT_MSG_TRADESKILLS" },
+        PET_INFO        = { "CHAT_MSG_PET_INFO" },
+        COMBAT_XP_GAIN     = { "CHAT_MSG_COMBAT_XP_GAIN" },
+        COMBAT_HONOR_GAIN  = { "CHAT_MSG_COMBAT_HONOR_GAIN" },
+        COMBAT_MISC_INFO   = { "CHAT_MSG_COMBAT_MISC_INFO" },
+        COMBAT_FACTION_CHANGE = { "CHAT_MSG_COMBAT_FACTION_CHANGE" },
+        BG_SYSTEM_NEUTRAL  = { "CHAT_MSG_BG_SYSTEM_NEUTRAL" },
+        BG_SYSTEM_ALLIANCE = { "CHAT_MSG_BG_SYSTEM_ALLIANCE" },
+        BG_SYSTEM_HORDE    = { "CHAT_MSG_BG_SYSTEM_HORDE" },
+        BN_WHISPER         = { "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM" },
+        VOICE_TEXT         = { "CHAT_MSG_VOICE_TEXT" },
+    }
+
+    -- The per-window default routing, MEASURED on this client rather than read out of Lua --
+    -- ChatFrame_OnLoad starts with an empty messageTypeList and the groups come from the C
+    -- client, so this is the only place they exist in the suite. Windows 4-10 are genuinely
+    -- empty. Retail-only groups (ACHIEVEMENT, PET_BATTLE_INFO, INSTANCE_CHAT, PING, CURRENCY,
+    -- GUILD_ITEM_LOOTED and friends) are in the real dump and kept here, because a consumer
+    -- must tolerate a declared group whose events never fire on this client.
+    local MEASURED_WINDOW_MESSAGES = {
+        [1] = { "SYSTEM", "SYSTEM_NOMENU", "SAY", "EMOTE", "YELL", "WHISPER", "PARTY",
+                "PARTY_LEADER", "RAID", "RAID_LEADER", "RAID_WARNING", "GUILD", "OFFICER",
+                "MONSTER_SAY", "MONSTER_YELL", "MONSTER_EMOTE", "MONSTER_WHISPER",
+                "MONSTER_BOSS_EMOTE", "MONSTER_BOSS_WHISPER", "ERRORS", "AFK", "DND",
+                "IGNORED", "BG_HORDE", "BG_ALLIANCE", "BG_NEUTRAL", "COMBAT_FACTION_CHANGE",
+                "SKILL", "LOOT", "MONEY", "CHANNEL", "ACHIEVEMENT", "GUILD_ACHIEVEMENT",
+                "BN_WHISPER", "BN_WHISPER_INFORM", "BN_CONVERSATION", "BN_INLINE_TOAST_ALERT",
+                "CURRENCY", "BN_WHISPER_PLAYER_OFFLINE", "PET_BATTLE_INFO", "INSTANCE_CHAT",
+                "INSTANCE_CHAT_LEADER", "GUILD_ITEM_LOOTED", "COMBAT_HONOR_GAIN", "PING" },
+        [2] = { "OPENING", "TRADESKILLS", "PET_INFO", "COMBAT_XP_GAIN", "COMBAT_HONOR_GAIN",
+                "COMBAT_MISC_INFO" },
+        [3] = { "VOICE_TEXT" },
+    }
+    M.MEASURED_WINDOW_MESSAGES = MEASURED_WINDOW_MESSAGES
+
+    env.NUM_CHAT_WINDOWS = 10
+    env.MAX_WOW_CHAT_CHANNELS = 20
+
+    -- Answers a staged override first, then the measured defaults. The override is nil after a
+    -- reset rather than a copy of the defaults, so there is ONE source for them.
+    env.GetChatWindowMessages = function(id)
+        local staged = state.chatWindowMessages and state.chatWindowMessages[id]
+        local list = staged or MEASURED_WINDOW_MESSAGES[id]
+        if not list then return end
+        return table.unpack(list, 1, #list)
+    end
+
+    -- C_ChatInfo.SendChatMessage is the real function on this client; the bare global is a
+    -- deprecation shim that forwards to it, which is exactly how Blizzard ships it here. Both
+    -- are modelled so a consumer calling either is recorded -- and so a spec can prove the
+    -- addon reaches for the modern name.
+    --
+    -- RECORDED, never enacted. Note what is deliberately NOT modelled: the hardware-event gate
+    -- on SAY/YELL/CHANNEL. A keypress satisfies it and a timer does not, and the harness has no
+    -- notion of either, so a spec CANNOT prove a send was legitimate -- that stays an in-game
+    -- check. Do not read a recorded send as evidence the client would have allowed it.
+    env.C_ChatInfo = {
+        SendChatMessage = function(msg, chatType, language, target)
+            table.insert(state.sentMessages, {
+                msg = msg, chatType = chatType or "SAY",
+                language = language, target = target,
+            })
+        end,
+    }
+    env.SendChatMessage = function(msg, chatType, language, target)
+        return env.C_ChatInfo.SendChatMessage(msg, chatType, language, target)
+    end
+
+    -- Chat GlobalStrings. The addon composes a line as
+    -- `format(_G['CHAT_'..chatType..'_GET'] .. '%s', senderLink, message)`, which is the shape
+    -- recovered from ElvUI's own path rather than from memory.
+    --
+    -- SHAPE-ACCURATE, NOT VERBATIM. What the addon's logic depends on is the number and order of
+    -- format specifiers and whether the string carries a `|Hchannel:…|h[…]|h` prefix; the real
+    -- client supplies localized English. So a spec catches a composition bug but is NOT evidence
+    -- the wording reads right in game -- that is an in-game eyeball.
+    --
+    -- The bracketed channel names here are the load-bearing part: a consumer that renders a tag
+    -- chip AND the raw globalstring prints the channel twice, so these must carry the bracket the
+    -- real ones do or the strip path is untestable.
+    env.CHAT_SAY_GET             = "%s says: "
+    env.CHAT_YELL_GET            = "%s yells: "
+    env.CHAT_EMOTE_GET           = "%s "
+    env.CHAT_WHISPER_GET         = "%s whispers: "
+    env.CHAT_WHISPER_INFORM_GET  = "To %s: "
+    env.CHAT_PARTY_GET           = "|Hchannel:Party|h[Party]|h %s: "
+    env.CHAT_PARTY_LEADER_GET    = "|Hchannel:Party|h[Party Leader]|h %s: "
+    env.CHAT_RAID_GET            = "|Hchannel:raid|h[Raid]|h %s: "
+    env.CHAT_RAID_LEADER_GET     = "|Hchannel:raid|h[Raid Leader]|h %s: "
+    env.CHAT_RAID_WARNING_GET    = "[Raid Warning] %s: "
+    env.CHAT_GUILD_GET           = "|Hchannel:Guild|h[Guild]|h %s: "
+    env.CHAT_OFFICER_GET         = "|Hchannel:o|h[Officer]|h %s: "
+    env.CHAT_CHANNEL_GET         = "%s: "
+    env.CHAT_MONSTER_SAY_GET     = "%s says: "
+    env.CHAT_MONSTER_YELL_GET    = "%s yells: "
+    env.CHAT_MONSTER_EMOTE_GET   = "%s "
+    env.CHAT_MONSTER_WHISPER_GET = "%s whispers: "
+    -- The two "special" globalstrings: the message goes INSIDE the format string because these
+    -- carry their own formatting, which is a different composition branch.
+    env.CHAT_MONSTER_BOSS_EMOTE_GET   = "%s "
+    env.CHAT_MONSTER_BOSS_WHISPER_GET = "%s whispers: "
+
+    -- Blizzard's own chat frames. Modelled because suppression is a real feature with a real
+    -- failure mode: hiding them without mirroring their AddMessage loses every other addon's
+    -- print() output, which is invisible until a player wonders why DBM has gone quiet.
+    --
+    -- They are ScrollingMessageFrames, like ours, so GetNumMessages/GetMessageInfo answer on them
+    -- and a spec can assert what Blizzard's frame received as well as what ours did.
+    local chatFrames = {}
+    for i = 1, 10 do
+        local cf = CreateFrame("ScrollingMessageFrame", "ChatFrame" .. i, UIParent)
+        cf:SetSize(430, 120)
+        cf:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 32, 96)
+        -- A font, so AddMessage produces something H.getChatLines can see. The real frames carry
+        -- ChatFontNormal.
+        cf:SetFontObject(env.ChatFontNormal)
+        env["ChatFrame" .. i] = cf
+        chatFrames[i] = cf
+
+        -- The tab is a separate frame in the client and has to be suppressed separately -- hiding
+        -- the log while leaving its tab on screen is a real bug shape.
+        local tab = CreateFrame("Button", "ChatFrame" .. i .. "Tab", UIParent)
+        tab:SetSize(80, 20)
+        env["ChatFrame" .. i .. "Tab"] = tab
+
+        -- The EDIT BOX, and it is a CHILD OF THE CHAT FRAME, which is the load-bearing part: parking
+        -- the chat frame on a hidden holder takes its edit box with it, so a suppressed chat leaves
+        -- the player typing into something they cannot see. That is only visible if the parentage is
+        -- modelled, and it was not.
+        --
+        -- It is Blizzard's own box on purpose and must stay so -- `hash_SecureCmdList` is file-local
+        -- with no global handle, so a custom box permanently loses /cast, /target, /click and the
+        -- rest, and shift-click-to-insert-a-link only works in ACTIVE_CHAT_EDIT_BOX.
+        local eb = CreateFrame("EditBox", "ChatFrame" .. i .. "EditBox", cf)
+        eb:SetSize(430, 22)
+        -- Anchored under its chat frame, as the client's is. Without a point there is nothing for an
+        -- adopter to RESTORE, so a spec could not tell a correct hand-back from a lost anchor.
+        eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", 0, -6)
+        eb:SetAutoFocus(false)
+        eb:Hide()
+        -- The channel lives in an ATTRIBUTE in the client -- ElvUI reads
+        -- `editbox:GetAttribute('chatType')` in two places -- and modelling it as a plain FIELD let
+        -- a consumer reading the field pass every spec while always reading "SAY" in game. The field
+        -- is kept alongside so the fallback path is exercised too.
+        eb:SetAttribute("chatType", "SAY")
+        eb.chatType = "SAY"
+        cf.editBox = eb
+        env["ChatFrame" .. i .. "EditBox"] = eb
+    end
+
+    -- The dock and the menu button, both separate frames that survive hiding the logs.
+    env.GeneralDockManager = CreateFrame("Frame", "GeneralDockManager", UIParent)
+    env.GeneralDockManager:SetSize(430, 20)
+    env.ChatFrameMenuButton = CreateFrame("Button", "ChatFrameMenuButton", UIParent)
+    env.ChatFrameMenuButton:SetSize(32, 32)
+
+    env.DEFAULT_CHAT_FRAME = chatFrames[1]
+    env.CHAT_FRAMES = { "ChatFrame1", "ChatFrame2", "ChatFrame3" }
+
+    -- The edit-box activation surface. Modelled as a RECORDER plus the two state changes a consumer
+    -- can observe -- which box is active, and what channel it is aimed at -- because the real
+    -- functions do a great deal more (history, sticky channel, autocomplete) and inventing that
+    -- would let a spec assert against the harness's guess rather than the client's behaviour.
+    --
+    -- `ChatFrameUtil` is the MODERN name and it DOES exist on this client: Anniversary runs the
+    -- refactored Blizzard_ChatFrameBase, and the bare ChatEdit_* globals are deprecation shims. Both
+    -- are published so a consumer reaching for either is exercised.
+    local activeEditBox = nil
+
+    local function activate(eb, keepText)
+        eb = eb or chatFrames[1].editBox
+        activeEditBox = eb
+        env.ACTIVE_CHAT_EDIT_BOX = eb
+        if not keepText then eb:SetText("") end
+        eb:Show()
+        return eb
+    end
+
+    local function deactivate(eb)
+        eb = eb or activeEditBox
+        if not eb then return end
+        eb:Hide()
+        if activeEditBox == eb then
+            activeEditBox = nil
+            env.ACTIVE_CHAT_EDIT_BOX = nil
+        end
+    end
+
+    env.ChatEdit_ActivateChat   = activate
+    env.ChatEdit_DeactivateChat = deactivate
+    env.ChatEdit_GetActiveWindow = function() return activeEditBox end
+    -- The box a /command or a click would target when none is open yet.
+    env.ChatEdit_ChooseBoxForSend = function() return chatFrames[1].editBox end
+    env.ChatEdit_GetLastActiveWindow = function() return activeEditBox or chatFrames[1].editBox end
+
+    env.ChatFrameUtil = {
+        ActivateChat        = activate,
+        DeactivateChat      = deactivate,
+        GetActiveWindow     = function() return activeEditBox end,
+        ChooseBoxForSend    = function() return chatFrames[1].editBox end,
+        GetLastActiveWindow = function() return activeEditBox or chatFrames[1].editBox end,
+    }
 
     --- Adds a client font object reporting a face, the way a locale client ships extra
     --- fonts. It becomes visible to GetFonts, so the addon's harvest can see it.

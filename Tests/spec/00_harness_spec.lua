@@ -4300,6 +4300,10 @@ describe("harness: WoW API simulation", function()
         -- harness-only convenience is introduced.
         local HARNESS_ONLY = {
             "GetLine", "GetLineColor", "_lineFontString", "_fire",
+            -- The message log's font probe. It sits on the frame meta so H.getChatLines can
+            -- ask it, which makes it reachable from shipped code exactly as GetLine was --
+            -- and that one raised on the first mouseover with the whole suite green.
+            "_hasFont",
         }
 
         -- The files the client really loads, read from the .toc rather than globbed: a file that
@@ -4912,6 +4916,418 @@ describe("harness: key bindings", function()
                 .as("this gate is what makes \"the overlay only listens while hovered\" assertable")
                 .eq(false)
             expect(got).eq(nil)
+        end)
+    end)
+end)
+
+describe("harness: chat", function()
+    before_each(function() H.setup() end)
+
+    -- A message log a spec can actually use: font set, so it draws.
+    local function makeLog(parent)
+        local f = H.env.CreateFrame("ScrollingMessageFrame", nil, parent or H.UIParent)
+        f:SetSize(400, 120)
+        f:SetFont("Fonts/FRIZQT__.TTF", 13, "")
+        return f
+    end
+
+    describe("ScrollingMessageFrame", function()
+        it("records a text shadow, which a frameless log needs over the world", function()
+            -- The concept gives every chat line a text-shadow because there is no panel behind it.
+            -- Absent from the harness, nothing could tell a shadowed log from an unshadowed one.
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.parent(200, 80))
+            local _, _, _, a0 = f:GetShadowColor()
+            expect(a0).as("no shadow until asked").eq(0)
+            f:SetShadowColor(0, 0, 0, 0.9)
+            f:SetShadowOffset(1, -1)
+            local r, g, b, a = f:GetShadowColor()
+            expect(r + g + b).eq(0)
+            expect(a).near(0.9, 0.001)
+            local x, y = f:GetShadowOffset()
+            expect(x).eq(1)
+            expect(y).eq(-1)
+        end)
+
+        it("centres text by default, as a bare one does in the client", function()
+            -- Blizzard's own chat frames read LEFT only because their XML template says so. With
+            -- this absent from the harness nothing could tell the two apart, and a centred chat
+            -- log shipped: one line sat 135 units right of the chip below it, which is exactly
+            -- half the slack in a 460-wide frame.
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.parent(200, 80))
+            expect(f:GetJustifyH()).eq("CENTER")
+            f:SetJustifyH("LEFT")
+            expect(f:GetJustifyH()).eq("LEFT")
+        end)
+
+        it("is a real frame type and reports itself as a Frame", function()
+            local f = makeLog()
+            expect(f:GetObjectType()).eq("ScrollingMessageFrame")
+            expect(f:IsObjectType("ScrollingMessageFrame")).eq(true)
+            expect(f:IsObjectType("Frame"))
+                .as("code filtering foreign children with IsObjectType('Frame') must see one")
+                .eq(true)
+            expect(f:IsObjectType("Region")).eq(true)
+        end)
+
+        it("does NOT put AddMessage on a plain Frame", function()
+            -- The refusal that stops a consumer creating the wrong type and appearing to work.
+            local plain = H.parent(40, 40)
+            expect(plain.AddMessage)
+                .as("AddMessage belongs to the message-log meta alone").eq(nil)
+        end)
+
+        it("stores messages oldest-first, as a copy loop reads them", function()
+            local f = makeLog()
+            f:AddMessage("first")
+            f:AddMessage("second")
+            expect(f:GetNumMessages()).eq(2)
+            expect((f:GetMessageInfo(1)))
+                .as("index 1 is the OLDEST, which is the order a transcript is built in")
+                .eq("first")
+            expect((f:GetMessageInfo(2))).eq("second")
+        end)
+
+        it("returns the colour and lineID it was given", function()
+            local f = makeLog()
+            f:AddMessage("hi", 0.25, 0.5, 0.75, 4242)
+            local text, r, g, b, id = f:GetMessageInfo(1)
+            expect(text).eq("hi")
+            expect(r).near(0.25, 0.0001)
+            expect(g).near(0.5, 0.0001)
+            expect(b).near(0.75, 0.0001)
+            expect(id).as("lineID is what SetItemRef resolves a player link against").eq(4242)
+        end)
+
+        it("answers nil for a line that does not exist", function()
+            local f = makeLog()
+            expect(f:GetMessageInfo(1)).eq(nil)
+        end)
+
+        it("defaults to Blizzard's own 128-line cap and trims the oldest past it", function()
+            local f = makeLog()
+            expect(f:GetMaxLines())
+                .as("ChatFrame_OnLoad sets 128; a consumer that never raises it inherits the "
+                    .. "real ceiling").eq(128)
+            f:SetMaxLines(3)
+            for i = 1, 5 do f:AddMessage("m" .. i) end
+            expect(f:GetNumMessages()).eq(3)
+            expect((f:GetMessageInfo(1)))
+                .as("the cap trims the OLDEST, which is what makes it a rolling window").eq("m3")
+        end)
+
+        it("trims immediately when the cap is lowered below the current count", function()
+            local f = makeLog()
+            for i = 1, 6 do f:AddMessage("m" .. i) end
+            f:SetMaxLines(2)
+            expect(f:GetNumMessages()).eq(2)
+            expect((f:GetMessageInfo(1))).eq("m5")
+        end)
+
+        it("Clear empties the buffer and returns to the bottom", function()
+            local f = makeLog()
+            for i = 1, 4 do f:AddMessage("m" .. i) end
+            f:ScrollUp()
+            f:Clear()
+            expect(f:GetNumMessages()).eq(0)
+            expect(f:AtBottom()).eq(true)
+        end)
+    end)
+
+    describe("fading", function()
+        it("stores the three values a channel log sets", function()
+            local f = makeLog()
+            expect(f:GetFading()).as("off until asked for").eq(false)
+            f:SetFading(true)
+            f:SetTimeVisible(8)
+            f:SetFadeDuration(3)
+            expect(f:GetFading()).eq(true)
+            expect(f:GetTimeVisible()).eq(8)
+            expect(f:GetFadeDuration()).eq(3)
+        end)
+
+        it("keeps fading independent per log, which is the design rule", function()
+            -- channels fade, conversations persist: one native call differs per tab.
+            local channel, conversation = makeLog(), makeLog()
+            channel:SetFading(true)
+            conversation:SetFading(false)
+            expect(channel:GetFading()).eq(true)
+            expect(conversation:GetFading())
+                .as("a conversation is history, not a firehose").eq(false)
+        end)
+    end)
+
+    describe("scrolling", function()
+        it("starts at the bottom and moves upward", function()
+            local f = makeLog()
+            for i = 1, 5 do f:AddMessage("m" .. i) end
+            expect(f:AtBottom()).eq(true)
+            expect(f:GetScrollOffset()).eq(0)
+            f:ScrollUp()
+            expect(f:GetScrollOffset()).eq(1)
+            expect(f:AtBottom()).eq(false)
+            f:ScrollDown()
+            expect(f:AtBottom()).eq(true)
+        end)
+
+        it("clamps at both ends", function()
+            local f = makeLog()
+            for i = 1, 3 do f:AddMessage("m" .. i) end
+            f:ScrollDown()
+            expect(f:GetScrollOffset()).as("cannot scroll past the newest").eq(0)
+            f:ScrollToTop()
+            local top = f:GetScrollOffset()
+            f:ScrollUp()
+            expect(f:GetScrollOffset()).as("cannot scroll past the oldest").eq(top)
+        end)
+
+        it("holds a scrolled reader's position when a message arrives", function()
+            local f = makeLog()
+            for i = 1, 5 do f:AddMessage("m" .. i) end
+            f:ScrollUp()
+            f:ScrollUp()
+            local before = f:GetScrollOffset()
+            f:AddMessage("new")
+            expect(f:AtBottom())
+                .as("a new message must not yank a reader back down -- that is what a "
+                    .. "jump-to-bottom affordance exists for").eq(false)
+            expect(f:GetScrollOffset()).gt(before - 1)
+        end)
+
+        it("ScrollToBottom returns to live", function()
+            local f = makeLog()
+            for i = 1, 5 do f:AddMessage("m" .. i) end
+            f:ScrollToTop()
+            f:ScrollToBottom()
+            expect(f:AtBottom()).eq(true)
+        end)
+    end)
+
+    describe("the font refusal", function()
+        it("draws nothing until a font is set, while still reporting its messages", function()
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.UIParent)
+            f:SetSize(400, 120)
+            f:AddMessage("invisible")
+            expect(f:GetNumMessages())
+                .as("the buffer holds it -- the frame is present and correctly sized").eq(1)
+            expect(#H.getChatLines(f))
+                .as("and renders NOTHING, which in game is silent: this is the whole reason "
+                    .. "getChatLines exists").eq(0)
+        end)
+
+        it("draws once a font is set", function()
+            local f = makeLog()
+            f:AddMessage("visible")
+            expect(#H.getChatLines(f)).eq(1)
+            expect(H.getChatLines(f)[1].text).eq("visible")
+        end)
+
+        it("accepts a font OBJECT as well as a path", function()
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.UIParent)
+            f:SetFontObject(H.env.ChatFontNormal)
+            f:AddMessage("via object")
+            expect(f:GetFontObject()).notNil()
+            expect(#H.getChatLines(f)).eq(1)
+        end)
+
+        it("raises on an unloadable font asset, as the client does", function()
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.UIParent)
+            local ok, err = pcall(function() f:SetFont("Fonts/NOPE.TTF", 13, "") end)
+            expect(ok).as("an unguarded probe here has already cost this addon a login").eq(false)
+            expect(tostring(err):find("Invalid font asset", 1, true)).notNil()
+        end)
+    end)
+
+    describe("hyperlinks", function()
+        it("refuses dispatch until SetHyperlinksEnabled(true)", function()
+            local f = makeLog()
+            local got
+            f:SetScript("OnHyperlinkClick", function(_, link) got = link end)
+            expect(H.clickHyperlink(f, "item:19019"))
+                .as("links that look perfect and are dead to the click is the likeliest "
+                    .. "wiring bug in a chat log").eq(false)
+            expect(got).eq(nil)
+        end)
+
+        it("delivers link, text and button once enabled", function()
+            local f = makeLog()
+            f:SetHyperlinksEnabled(true)
+            local link, text, button
+            f:SetScript("OnHyperlinkClick", function(_, l, t, b) link, text, button = l, t, b end)
+            expect(H.clickHyperlink(f, "item:19019", "[Thunderfury]", "RightButton")).eq(true)
+            expect(link).eq("item:19019")
+            expect(text).eq("[Thunderfury]")
+            expect(button).eq("RightButton")
+        end)
+
+        it("reports false when nothing is listening", function()
+            local f = makeLog()
+            f:SetHyperlinksEnabled(true)
+            expect(H.clickHyperlink(f, "item:1")).eq(false)
+        end)
+    end)
+
+    describe("ChatTypeInfo and ChatTypeGroup", function()
+        it("carries the player's own per-type colours", function()
+            local info = H.env.ChatTypeInfo
+            expect(info.GUILD).notNil()
+            expect(info.GUILD.g).as("guild chat is green in the client's own defaults").gt(0.9)
+            expect(info.WHISPER).notNil()
+            expect(info.SAY.r).eq(1)
+        end)
+
+        it("marks the sticky types, which is what prevents mistells", function()
+            local info = H.env.ChatTypeInfo
+            expect(info.GUILD.sticky).eq(1)
+            expect(info.CHANNEL.sticky)
+                .as("a channel is NOT sticky in the client's defaults").eq(0)
+        end)
+
+        it("expands a group to its events", function()
+            local g = H.env.ChatTypeGroup
+            expect(g.SAY[1]).eq("CHAT_MSG_SAY")
+            expect(#g.CHANNEL).as("a channel group carries join/leave/notice too").gte(4)
+        end)
+
+        it("keeps a group that is not purely CHAT_MSG_*", function()
+            local g = H.env.ChatTypeGroup
+            local found = false
+            for _, e in ipairs(g.SYSTEM) do if e == "TIME_PLAYED_MSG" then found = true end end
+            expect(found)
+                .as("SYSTEM pulls non-CHAT_MSG events; a consumer assuming one event per group "
+                    .. "drops them").eq(true)
+        end)
+
+        it("puts CHAT_MSG_AFK in TWO groups, as the client does", function()
+            local g = H.env.ChatTypeGroup
+            local inWhisper = false
+            for _, e in ipairs(g.WHISPER) do if e == "CHAT_MSG_AFK" then inWhisper = true end end
+            expect(inWhisper).eq(true)
+            expect(g.AFK[1]).eq("CHAT_MSG_AFK")
+            -- This duplication is why the client's own inverted map is non-deterministic across
+            -- logins: it is built with pairs(). A consumer must order its own map.
+        end)
+    end)
+
+    describe("GetChatWindowMessages", function()
+        it("answers the MEASURED defaults for the three populated windows", function()
+            local w1 = { H.env.GetChatWindowMessages(1) }
+            expect(#w1).gte(40)
+            expect(w1[1]).eq("SYSTEM")
+
+            local w2 = { H.env.GetChatWindowMessages(2) }
+            expect(#w2).eq(6)
+            local hasXP = false
+            for _, g in ipairs(w2) do if g == "COMBAT_XP_GAIN" then hasXP = true end end
+            expect(hasXP)
+                .as("window 2 carries REAL CHAT_MSG traffic -- dropping it as 'just the combat "
+                    .. "log' loses the player's XP messages").eq(true)
+
+            expect((H.env.GetChatWindowMessages(3))).eq("VOICE_TEXT")
+        end)
+
+        it("answers nothing for the empty windows", function()
+            expect((H.env.GetChatWindowMessages(5))).eq(nil)
+            expect((H.env.GetChatWindowMessages(10))).eq(nil)
+        end)
+
+        it("includes groups whose events never fire on this client", function()
+            local w1 = { H.env.GetChatWindowMessages(1) }
+            local hasRetailOnly = false
+            for _, g in ipairs(w1) do if g == "PET_BATTLE_INFO" then hasRetailOnly = true end end
+            expect(hasRetailOnly)
+                .as("the declared list exceeds this client's event surface, so a consumer must "
+                    .. "tolerate a group that never delivers").eq(true)
+        end)
+
+        it("takes a staged override and drops back to the defaults", function()
+            H.setChatWindowMessages(1, { "GUILD" })
+            expect((H.env.GetChatWindowMessages(1))).eq("GUILD")
+            H.setChatWindowMessages(1, nil)
+            expect((H.env.GetChatWindowMessages(1)))
+                .as("nil restores the measured defaults rather than an empty window").eq("SYSTEM")
+        end)
+    end)
+
+    describe("sending", function()
+        it("records a send through the modern C_ChatInfo name", function()
+            H.env.C_ChatInfo.SendChatMessage("hello", "GUILD")
+            local sent = H.getSentMessages()
+            expect(#sent).eq(1)
+            expect(sent[1].msg).eq("hello")
+            expect(sent[1].chatType).eq("GUILD")
+        end)
+
+        it("routes the deprecated global through the same recorder", function()
+            H.env.SendChatMessage("hi", "WHISPER", nil, "Sylvaine")
+            local sent = H.getSentMessages()
+            expect(#sent).eq(1)
+            expect(sent[1].target)
+                .as("the bare global is a shim on this client, not a second implementation")
+                .eq("Sylvaine")
+        end)
+
+        it("defaults an unstated chat type to SAY", function()
+            H.env.SendChatMessage("oops")
+            expect(H.getSentMessages()[1].chatType).eq("SAY")
+        end)
+
+        it("hands out a COPY, so a caller cannot edit the next assertion's record", function()
+            H.env.SendChatMessage("one", "SAY")
+            local first = H.getSentMessages()
+            first[1].msg = "tampered"
+            expect(H.getSentMessages()[1].msg).eq("one")
+        end)
+
+        it("resets between tests", function()
+            expect(#H.getSentMessages())
+                .as("a leaked send would let a reply assertion pass before anything was typed")
+                .eq(0)
+        end)
+    end)
+
+    describe("H.chat", function()
+        it("fires the event with the text in the first slot", function()
+            local f = H.parent(10, 10)
+            local got
+            f:RegisterEvent("CHAT_MSG_GUILD")
+            f:SetScript("OnEvent", function(_, _, text) got = text end)
+            H.chat("CHAT_MSG_GUILD", { text = "anyone need Kara?" })
+            expect(got).eq("anyone need Kara?")
+        end)
+
+        it("delivers sender and lineID in the client's own slots", function()
+            local f = H.parent(10, 10)
+            local sender, lineID
+            f:RegisterEvent("CHAT_MSG_WHISPER")
+            f:SetScript("OnEvent", function(_, _, _, s, _, _, _, _, _, _, _, _, id)
+                sender, lineID = s, id
+            end)
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine", lineID = 77 })
+            expect(sender).eq("Sylvaine")
+            expect(lineID).eq(77)
+        end)
+
+        it("supplies a distinct lineID when the spec does not", function()
+            local ids = {}
+            local f = H.parent(10, 10)
+            f:RegisterEvent("CHAT_MSG_SAY")
+            f:SetScript("OnEvent", function(_, _, _, _, _, _, _, _, _, _, _, _, id)
+                table.insert(ids, id)
+            end)
+            H.chat("CHAT_MSG_SAY", { text = "a" })
+            H.chat("CHAT_MSG_SAY", { text = "b" })
+            expect(ids[1]).notNil()
+            expect(ids[2]).as("a shared lineID would hide a consumer that drops it").neq(ids[1])
+        end)
+
+        it("rejects a typo'd field rather than staging nothing", function()
+            local ok = pcall(function() H.chat("CHAT_MSG_SAY", { txt = "typo" }) end)
+            expect(ok).eq(false)
+        end)
+
+        it("rejects an event that is not a CHAT_MSG_*", function()
+            local ok = pcall(function() H.chat("UNIT_AURA", { text = "x" }) end)
+            expect(ok).eq(false)
         end)
     end)
 end)

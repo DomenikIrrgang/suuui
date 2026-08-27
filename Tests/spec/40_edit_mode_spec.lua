@@ -247,6 +247,16 @@ describe("Guide Snap", function()
     -- places the frame. Passing it only to Apply leaves both frames co-located, which
     -- makes every snap delta zero and every assertion pass for the wrong reason.
     local function stage(offX, offY)
+        -- Every moveable frame in the addon is a snap CANDIDATE, so a production frame
+        -- registered by a plugin (the chat window is one) offers its own edges as magnets and
+        -- pulls an axis this spec expects to be left alone. Unregister them first so the snap
+        -- logic is measured against exactly the two frames staged below -- otherwise this block
+        -- fails whenever any future plugin gains a moveable, which is what happened when the
+        -- chat plugin landed.
+        for _, f in ipairs(H.SuuUI.ToggleUI:GetAll()) do
+            H.SuuUI.MoveableFrame:Remove(f)
+        end
+
         H.SuuUI.Settings:Register("guide_plugin", {
             { key = "other_pos", type = "position", default = {
                 point = "TOPLEFT", relPoint = "TOPLEFT", x = 200, y = -200 } },

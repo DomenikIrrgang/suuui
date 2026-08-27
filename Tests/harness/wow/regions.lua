@@ -188,6 +188,20 @@ function FontStringMeta:GetTextColor()
     return c[1], c[2], c[3], c[4]
 end
 
+-- Text SHADOW. Modelled because a frameless log draws over the game world, where a shadow is what
+-- keeps text readable -- the concept specifies one on every chat line for that reason. The harness
+-- lays out no glyphs, so this is a recorder: it proves the call was made, not that pixels darkened.
+function FontStringMeta:SetShadowColor(r, g, b, a)
+    self._shadowColor = { r, g, b, a == nil and 1 or a }
+end
+function FontStringMeta:GetShadowColor()
+    local c = self._shadowColor
+    if not c then return 0, 0, 0, 0 end
+    return c[1], c[2], c[3], c[4]
+end
+function FontStringMeta:SetShadowOffset(x, y) self._shadowX, self._shadowY = x, y end
+function FontStringMeta:GetShadowOffset() return self._shadowX or 0, self._shadowY or 0 end
+
 function FontStringMeta:SetJustifyH(j) self._justifyH = j end
 function FontStringMeta:GetJustifyH()  return self._justifyH or "CENTER" end
 function FontStringMeta:SetJustifyV(j) self._justifyV = j end

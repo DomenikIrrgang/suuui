@@ -78,6 +78,10 @@ local INHERITS = {
     Slider      = { Frame = true, Region = true },
     Cooldown    = { Frame = true, Region = true },
     GameTooltip = { Frame = true, Region = true },
+    -- A scrolling text log. In the hierarchy for the same reason every other subtype is: code
+    -- that filters foreign children with IsObjectType("Frame") must see one, or it tests the
+    -- fallback path here and the real path in game.
+    ScrollingMessageFrame = { Frame = true, Region = true },
     Texture     = { Region = true },
     FontString  = { Region = true },
 }
@@ -433,6 +437,9 @@ local SCRIPTABLE = {
     OnTextChanged=true, OnEnterPressed=true, OnEscapePressed=true, OnTabPressed=true,
     OnEditFocusGained=true, OnEditFocusLost=true, OnValueChanged=true, OnCursorChanged=true,
     OnAttributeChanged=true, OnReceiveDrag=true, OnHyperlinkClick=true, OnChar=true,
+    -- A message log's link HOVER, which is how a tooltip gets shown for an item in chat.
+    -- OnHyperlinkClick was already here; these two were the missing half.
+    OnHyperlinkEnter=true, OnHyperlinkLeave=true,
     OnSpacePressed=true, OnLoad=true, OnVerticalScroll=true, OnScrollRangeChanged=true,
     -- The two hooks a secure action template offers around its own OnClick. They exist so
     -- code can observe a click without replacing the handler that performs the action —
