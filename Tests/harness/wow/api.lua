@@ -2217,6 +2217,15 @@ function M.install(env)
         MONSTER_EMOTE   = { r = 1.00, g = 0.50, b = 0.25, sticky = 0 },
         MONSTER_WHISPER = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
         CHANNEL         = { r = 1.00, g = 0.75, b = 0.75, sticky = 0 },
+        -- The PER-CHANNEL rows. A numbered channel's colour lives at `CHANNEL<index>`, not at
+        -- `CHANNEL` -- ElvUI reads `ChatTypeInfo[chatType..chanIndex]` -- so a consumer reading the
+        -- generic row paints every channel identically. Deliberately DISTINCT from each other and
+        -- from `CHANNEL`, or a spec could not tell a correct per-channel lookup from a fallback.
+        CHANNEL1        = { r = 1.00, g = 0.78, b = 0.00, sticky = 0 },
+        CHANNEL2        = { r = 0.00, g = 1.00, b = 0.78, sticky = 0 },
+        CHANNEL3        = { r = 0.78, g = 0.00, b = 1.00, sticky = 0 },
+        CHANNEL4        = { r = 0.00, g = 0.55, b = 1.00, sticky = 0 },
+        CHANNEL5        = { r = 1.00, g = 0.35, b = 0.55, sticky = 0 },
         SYSTEM          = { r = 1.00, g = 1.00, b = 0.00, sticky = 0 },
         LOOT            = { r = 0.00, g = 0.67, b = 0.00, sticky = 0 },
         MONEY           = { r = 1.00, g = 1.00, b = 0.00, sticky = 0 },
@@ -2224,6 +2233,28 @@ function M.install(env)
         AFK             = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
         DND             = { r = 1.00, g = 0.50, b = 1.00, sticky = 0 },
     }
+
+    -- GetChannelName: the INDEX FIRST, then the name. That order is the trap, and it is measured
+    -- rather than assumed -- ElvUI destructures it as `local chanIndex = GetChannelName(chanTarget)`
+    -- and tests `chanIndex == 0`. Reading the first return as a name yields the number back, which
+    -- is exactly the bug that shipped a chat chip reading a bare `1`.
+    --
+    -- A channel the player has NOT joined answers 0 with no name, which is the client's own signal
+    -- and the reason a consumer must guard on it instead of concatenating `CHANNEL` .. 0.
+    env.GetChannelName = function(arg)
+        local chans = state.channels or {}
+        if type(arg) == "number" then
+            local name = chans[arg]
+            if name then return arg, name, 0 end
+            return 0, nil, 0
+        end
+        if type(arg) == "string" then
+            for i, name in pairs(chans) do
+                if name == arg then return i, name, 0 end
+            end
+        end
+        return 0, nil, 0
+    end
 
     -- ChatTypeGroup: a routing-bucket label expanded to the events it carries. THE GROUP IS THE
     -- UNIT, never the raw event -- it is what the client persists and what a tab subscribes to.

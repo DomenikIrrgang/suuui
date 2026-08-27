@@ -254,6 +254,12 @@ M.chatWindowMessages = nil
 -- on names -- giving every staged message a distinct one means a spec can catch that.
 M.chatLineID = 0
 
+-- The numbered channels the player has JOINED, as index -> name. Empty by default, because a
+-- character who has joined nothing is the state a spec should have to opt out of: the chat plugin
+-- resolves a numbered channel's NAME through GetChannelName, and an index that is not in here must
+-- answer 0 -- the client's "you are not in that channel" -- rather than inventing a name.
+M.channels = {}
+
 local pending, pendingSet
 local dependents
 
@@ -342,6 +348,9 @@ function M.reset()
     M.sentMessages       = {}
     M.chatWindowMessages = nil
     M.chatLineID         = 0
+    -- Cleared for the reason every other store here is: a leaked channel would let "the chip named
+    -- the channel" pass before the spec staged one.
+    M.channels           = {}
     -- Action slots and everything keyed off them. Cleared for the reason every other store
     -- here is: a leaked slot would let a "the button drew an icon" assertion pass before the
     -- spec staged anything, and a leaked page would put bar 1 on someone else's slots. The

@@ -5182,6 +5182,50 @@ describe("harness: chat", function()
                 .as("a channel is NOT sticky in the client's defaults").eq(0)
         end)
 
+        it("colours each numbered channel SEPARATELY from the generic CHANNEL row", function()
+            -- A consumer reading `ChatTypeInfo.CHANNEL` paints every channel identically. The rows
+            -- must therefore differ, or a spec cannot tell a correct `CHANNEL<index>` lookup from a
+            -- fallback to the generic one.
+            local info = H.env.ChatTypeInfo
+            expect(info.CHANNEL1).notNil()
+            expect(info.CHANNEL2).notNil()
+            expect(info.CHANNEL1.r ~= info.CHANNEL2.r or info.CHANNEL1.g ~= info.CHANNEL2.g)
+                .as("two channels must not share a colour").eq(true)
+            expect(info.CHANNEL1.g ~= info.CHANNEL.g or info.CHANNEL1.r ~= info.CHANNEL.r)
+                .as("a channel must not match the generic row").eq(true)
+        end)
+
+        it("answers GetChannelName with the INDEX first and the name second", function()
+            -- The trap this models. ElvUI destructures it as `local chanIndex = GetChannelName(t)`
+            -- and tests `chanIndex == 0`, so reading the first return as a name hands the NUMBER
+            -- back -- which is exactly how a chat chip shipped reading a bare `1`.
+            H.setChannel(1, "General")
+            local idx, name = H.env.GetChannelName(1)
+            expect(idx).as("index first").eq(1)
+            expect(name).as("name second").eq("General")
+        end)
+
+        it("answers 0 for a channel the player has NOT joined", function()
+            -- The client's own "you are not in that channel". A consumer that skips this guard
+            -- builds `CHANNEL0` and looks up a colour row that does not exist.
+            local idx, name = H.env.GetChannelName(4)
+            expect(idx).eq(0)
+            expect(name).as("no name to be had").eq(nil)
+        end)
+
+        it("resolves a channel by NAME as well as by index", function()
+            H.setChannel(2, "Trade")
+            expect((H.env.GetChannelName("Trade"))).eq(2)
+            expect((H.env.GetChannelName("Nowhere"))).as("unknown name is 0, not nil").eq(0)
+        end)
+
+        it("forgets staged channels between tests", function()
+            -- Asserted directly rather than trusted: a leaked channel would let "the chip named the
+            -- channel" pass before a spec staged one, which is the failure this reset prevents.
+            expect((H.env.GetChannelName(1)))
+                .as("H.setup cleared the channels staged by earlier tests").eq(0)
+        end)
+
         it("expands a group to its events", function()
             local g = H.env.ChatTypeGroup
             expect(g.SAY[1]).eq("CHAT_MSG_SAY")

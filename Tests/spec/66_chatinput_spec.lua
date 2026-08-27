@@ -170,31 +170,54 @@ describe("ChatInput", function()
             -- `sticky = 1` means "this type MAY be remembered", not "you last spoke here", and six
             -- types carry it -- so scanning for it returned whichever came first in an arbitrary
             -- iteration order. Phase 4a shipped exactly that and always read "Say".
-            eb().chatType = "GUILD"
+            -- Staged as an ATTRIBUTE, which is where the client keeps it -- ElvUI reads
+            -- `editbox:GetAttribute('chatType')` in two places. Setting the plain FIELD instead is
+            -- what this spec did originally, and it passed against a production version that read
+            -- the field: the harness now defaults the attribute to "SAY", so a field-only staging
+            -- correctly fails. That failure is the point, not a regression.
+            eb():SetAttribute("chatType", "GUILD")
             expect((I().ChatType())).eq("GUILD")
         end)
 
         it("defaults to SAY when the box says nothing", function()
+            -- BOTH cleared. With only the field cleared this passed for the wrong reason: the
+            -- harness defaults the attribute to "SAY", so the assertion was reading that default
+            -- rather than the guard under test.
+            eb():SetAttribute("chatType", nil)
             eb().chatType = nil
             expect((I().ChatType())).eq("SAY")
+            eb():SetAttribute("chatType", "")
             eb().chatType = ""
             expect((I().ChatType())).eq("SAY")
         end)
 
         it("carries the whisper TARGET, which is what the chip needs", function()
-            eb().chatType = "WHISPER"
-            eb().tellTarget = "Sylvaine"
+            eb():SetAttribute("chatType", "WHISPER")
+            eb():SetAttribute("tellTarget", "Sylvaine")
             local t, target = I().ChatType()
             expect(t).eq("WHISPER")
             expect(target).eq("Sylvaine")
         end)
 
         it("carries a numbered channel's target", function()
-            eb().chatType = "CHANNEL"
-            eb().channelTarget = 2
+            eb():SetAttribute("chatType", "CHANNEL")
+            eb():SetAttribute("channelTarget", 2)
             local t, target = I().ChatType()
             expect(t).eq("CHANNEL")
             expect(target).eq(2)
+        end)
+
+        it("falls back to the plain FIELD when the attribute is absent", function()
+            -- The fallback is deliberate rather than leftover: it costs one `or` and a client
+            -- generation that exposes the field instead then needs no change here. Pinned so the
+            -- attribute-first fix above cannot quietly delete it.
+            eb():SetAttribute("chatType", nil)
+            eb():SetAttribute("tellTarget", nil)
+            eb().chatType = "WHISPER"
+            eb().tellTarget = "Aldara"
+            local t, target = I().ChatType()
+            expect(t).as("field read when no attribute is set").eq("WHISPER")
+            expect(target).as("target read from the field too").eq("Aldara")
         end)
 
         it("answers SAY with no box at all", function()

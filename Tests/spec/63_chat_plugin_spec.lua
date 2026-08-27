@@ -81,12 +81,19 @@ describe("chat plugin", function()
 
         it("fades, because General is a channel tab", function()
             local p = enabled()
+            -- Staged ON explicitly: `fade_channels` now DEFAULTS TO FALSE, so relying on the default
+            -- here would assert the opposite of what this test is named for.
+            H.SuuUI.Settings:Set("chat", "fade_channels", true)
             expect(p._chat:ActiveLog():IsFading())
                 .as("channels fade, conversations persist").eq(true)
         end)
 
         it("stops fading when the setting is off", function()
             local p = enabled()
+            -- Turned ON and then OFF, so the TRANSITION is what is asserted. With the default now
+            -- false, setting it false alone would pass without the code doing anything at all.
+            H.SuuUI.Settings:Set("chat", "fade_channels", true)
+            expect(p._chat:ActiveLog():IsFading()).as("on first, or the next line proves nothing").eq(true)
             H.SuuUI.Settings:Set("chat", "fade_channels", false)
             expect(p._chat:ActiveLog():IsFading()).eq(false)
         end)
@@ -347,9 +354,14 @@ describe("chat plugin", function()
             -- An absolute assertion, because comparing collapsed against expanded cannot see a
             -- column missing from both.
             local p = enabled()
+            -- Derived from the SETTING, not from `sizeControlSm`. The disc size became a plugin
+            -- setting (`rail_size`) because it is one widget's own dimension rather than design
+            -- language, so a token-derived expectation here now asserts the wrong number and would
+            -- go on asserting it if the setting moved again.
             expect(p._chat:_railWidth(false))
                 .as("2px marker + gap + disc")
-                .near(H.SuuUI.Pixel.Line(2) + H.token("spaceXs") + H.token("sizeControlSm"), 0.5)
+                .near(H.SuuUI.Pixel.Line(2) + H.token("spaceXs")
+                      + H.SuuUI.Settings:Get("chat", "rail_size"), 0.5)
         end)
 
         it("collapses again when the cursor leaves the rail as a region", function()
@@ -434,6 +446,9 @@ describe("chat plugin", function()
     describe("per-panel log shape", function()
         it("fades a CHANNEL panel and not the Log", function()
             local p = enabled()
+            -- `fade_channels` defaults to FALSE now, so the per-panel RULE under test -- channels
+            -- fade, the Log does not -- only exists once fading is switched on.
+            H.SuuUI.Settings:Set("chat", "fade_channels", true)
             H.chat("CHAT_MSG_LOOT", { text = "loot" })
             expect(p._chat:LogFor("general"):IsFading())
                 .as("channel traffic fades out of a frameless log").truthy()
@@ -487,6 +502,9 @@ describe("chat plugin", function()
             -- _logFor sets fading at creation, so a mutation to _apply's per-panel branch was
             -- invisible until a setting change drove it over logs that already existed.
             local p = enabled()
+            -- Fading staged on, or `_apply`'s per-panel branch resolves to "no fading" for every
+            -- panel and the assertion below cannot tell a channel from the Log.
+            H.SuuUI.Settings:Set("chat", "fade_channels", true)
             H.chat("CHAT_MSG_SAY",  { text = "hi", sender = "A" })
             H.chat("CHAT_MSG_LOOT", { text = "loot" })
             H.SuuUI.Settings:Set("chat", "fade_after", 12)
@@ -628,7 +646,7 @@ describe("chat plugin", function()
             -- Driven through OPENING the box rather than calling the refresh by hand, so the wiring
             -- is under test and not just the read.
             local p = enabled()
-            H.env.ChatFrame1.editBox.chatType = "GUILD"
+            H.env.ChatFrame1.editBox:SetAttribute("chatType", "GUILD")
             H.SuuUI._ChatInput.Open()
             expect(p._chat._chip:GetText())
                 .as("the chip follows the box without anyone refreshing it").eq("Guild")
@@ -638,7 +656,7 @@ describe("chat plugin", function()
             local p = enabled()
             H.SuuUI._ChatInput.Open()
             local box = H.env.ChatFrame1.editBox
-            box.chatType = "PARTY"
+            box:SetAttribute("chatType", "PARTY")
             -- Tab cycles the channel in place; a text change is the only script that fires then.
             box:SetText("x")
             expect(p._chat._chip:GetText()).eq("Party")
@@ -647,7 +665,8 @@ describe("chat plugin", function()
         it("names the PERSON for a whisper, not the word Whisper", function()
             local p = enabled()
             local box = H.env.ChatFrame1.editBox
-            box.chatType, box.tellTarget = "WHISPER", "Sylvaine-TestRealm"
+            box:SetAttribute("chatType", "WHISPER")
+            box:SetAttribute("tellTarget", "Sylvaine-TestRealm")
             p._chat:_refreshChip()
             expect(p._chat._chip:GetText())
                 .as("the chip answers WHERE this is going, and a name is that answer")
@@ -656,12 +675,68 @@ describe("chat plugin", function()
                 .as("own realm stripped, as everywhere else").eq(nil)
         end)
 
+        it("names a numbered channel, not its NUMBER", function()
+            -- The bug this pins shipped and took three rounds to find: the edit box carries the
+            -- channel NUMBER in `channelTarget`, and the chip rendered `tostring(target)` -- so it
+            -- read a bare `1`, which answers nothing. `GetChannelName` returns the index FIRST and
+            -- the name second, and reading the wrong slot hands the number straight back.
+            local p = enabled()
+            H.setChannel(1, "General")
+            local box = H.env.ChatFrame1.editBox
+            box:SetAttribute("chatType", "CHANNEL")
+            box:SetAttribute("channelTarget", 1)
+            p._chat:_refreshChip()
+            expect(p._chat._chip:GetText())
+                .as("the chip answers WHICH channel, and a number does not").eq("General")
+        end)
+
+        it("drops a zone channel's qualifier", function()
+            local p = enabled()
+            H.setChannel(2, "General - Elwynn Forest")
+            local box = H.env.ChatFrame1.editBox
+            box:SetAttribute("chatType", "CHANNEL")
+            box:SetAttribute("channelTarget", 2)
+            p._chat:_refreshChip()
+            expect(p._chat._chip:GetText())
+                .as("you are standing in the zone; naming it back is noise").eq("General")
+        end)
+
+        it("colours a numbered channel from CHANNEL<index>, not the generic CHANNEL row", function()
+            -- `ChatTypeInfo.CHANNEL` is a DIFFERENT colour from `ChatTypeInfo.CHANNEL1`, so reading
+            -- the plain type paints every channel identically and the chip stops carrying identity.
+            local p = enabled()
+            H.setChannel(1, "General")
+            local box = H.env.ChatFrame1.editBox
+            box:SetAttribute("chatType", "CHANNEL")
+            box:SetAttribute("channelTarget", 1)
+            p._chat:_refreshChip()
+            local r, g = p._chat._chip._label:GetTextColor()
+            expect(g).near(H.env.ChatTypeInfo.CHANNEL1.g, 0.02)
+            expect(r).as("and not the generic row").near(H.env.ChatTypeInfo.CHANNEL1.r, 0.02)
+        end)
+
+        it("leaves the NUMBER standing for a channel the player has not joined", function()
+            -- GetChannelName answers 0 with no name. A blank chip would be worse than the number,
+            -- so the number is the fallback rather than an empty label.
+            local p = enabled()
+            H.clearChannels()
+            local box = H.env.ChatFrame1.editBox
+            box:SetAttribute("chatType", "CHANNEL")
+            box:SetAttribute("channelTarget", 7)
+            p._chat:_refreshChip()
+            expect(p._chat._chip:GetText()).eq("7")
+        end)
+
         it("colours the chip and the field's border from the channel", function()
             local p = enabled()
-            H.env.ChatFrame1.editBox.chatType = "GUILD"
+            H.env.ChatFrame1.editBox:SetAttribute("chatType", "GUILD")
             p._chat:_refreshChip()
-            local _, g = p._chat._chip._label:GetTextColor()
+            -- RED as well as green, because SAY and GUILD both carry g = 1: asserting green alone
+            -- could not tell the staged channel from the SAY default, so this passed while the chip
+            -- was reading the wrong source entirely. Red is 0.25 for GUILD against 1 for SAY.
+            local r, g = p._chat._chip._label:GetTextColor()
             expect(g).near(H.env.ChatTypeInfo.GUILD.g, 0.02)
+            expect(r).as("red separates GUILD from the SAY default").near(H.env.ChatTypeInfo.GUILD.r, 0.02)
         end)
 
         it("hands the box back on disable, before our window hides", function()

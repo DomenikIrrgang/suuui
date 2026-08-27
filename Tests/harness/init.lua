@@ -2007,6 +2007,28 @@ local CHAT_FIELDS = {
 -- that drops it looks correct until someone right-clicks a name.
 -- @param event string  e.g. "CHAT_MSG_GUILD"
 -- @param props table   { text, sender, lineID, channel, ... }
+--- Stages a numbered channel the player has joined, so GetChannelName can name it.
+---
+--- Pure state: joining a channel fires CHANNEL_UI_UPDATE and a JOINED system message in game, and
+--- neither is modelled -- nothing in this addon reads either, and inventing them would invite a
+--- spec to assert against a guess. Stage the channel and drive the reader directly.
+-- @param index number  the channel number, as `/1` names it
+-- @param name string   the channel's name, e.g. "General" or "General - Elwynn Forest"
+function M.setChannel(index, name)
+    assert(M.env, "H.setChannel: call H.setup() first")
+    assert(type(index) == "number" and index > 0,
+        "H.setChannel: index must be a positive number, got " .. tostring(index))
+    assert(type(name) == "string" and name ~= "",
+        "H.setChannel: name must be a non-empty string, got " .. tostring(name))
+    state.channels = state.channels or {}
+    state.channels[index] = name
+end
+
+--- Leaves every staged channel, so GetChannelName answers 0 for all of them.
+function M.clearChannels()
+    state.channels = {}
+end
+
 function M.chat(event, props)
     assert(type(event) == "string" and event:find("^CHAT_MSG_"),
         "H.chat: event must be a CHAT_MSG_* name, got " .. tostring(event))
