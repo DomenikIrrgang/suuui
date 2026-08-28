@@ -1405,6 +1405,17 @@ function M.getItemRef()
     return state.itemRef
 end
 
+--- Every line delivered to the client's error frame, in order.
+---
+--- This is the channel a SuuUI.Fault has to reach: `print` lands in Blizzard's chat, which the chat
+--- plugin parks under a hidden holder, so a fault that only prints is invisible to the player.
+-- @return table
+function M.getErrorMessages()
+    local out = {}
+    for i, v in ipairs(state.errorMessages) do out[i] = v end
+    return out
+end
+
 --- Forgets it, so one spec can assert a second click without the first still standing.
 function M.resetItemRef()
     state.itemRef = nil
@@ -2035,6 +2046,26 @@ local CHAT_FIELDS = {
 --- spec to assert against a guess. Stage the channel and drive the reader directly.
 -- @param index number  the channel number, as `/1` names it
 -- @param name string   the channel's name, e.g. "General" or "General - Elwynn Forest"
+--- Stages what GetPlayerInfoByGUID answers for one GUID.
+---
+--- `props.class` is the class FILE key ("MAGE"), which is what the SECOND return carries and what
+--- Game:ClassColor resolves. A localized string like "Mage" resolves to no colour at all, silently,
+--- which is why the two are separate fields here. Pass nil props to forget the GUID.
+-- @param guid string
+-- @param props table|nil  { class, localizedClass, race, localizedRace, sex, name, realm }
+function M.setPlayerGUID(guid, props)
+    assert(M.env, "harness: setPlayerGUID before setup()")
+    if props == nil then state.playersByGUID[guid] = nil return end
+    local allowed = { class = true, localizedClass = true, race = true, localizedRace = true,
+                      sex = true, name = true, realm = true }
+    for k in pairs(props) do
+        assert(allowed[k], "harness: unknown player field '" .. tostring(k) .. "'")
+    end
+    local rec = state.playersByGUID[guid] or {}
+    for k, v in pairs(props) do rec[k] = v end
+    state.playersByGUID[guid] = rec
+end
+
 function M.setChannel(index, name)
     assert(M.env, "H.setChannel: call H.setup() first")
     assert(type(index) == "number" and index > 0,

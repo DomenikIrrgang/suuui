@@ -69,8 +69,11 @@ describe("Chip", function()
         it("tints its surface with its own colour at the chip wash", function()
             local chip = make({ text = "Guild", color = GUILD })
             -- The surface is a NEUTRAL panel colour; only the ring and the label carry the channel.
+            -- Read off the frame's own BACKDROP: the chip is square now, so there is no pill whose
+            -- internals to reach into -- and a backdrop is what the concept's zero border radius asks
+            -- for anyway.
             local bg = H.token("colorBg")
-            local br, bg2, bb = chip._pill._fillM:GetVertexColor()
+            local br, bg2, bb = chip._f:GetBackdropColor()
             expect(br).as("the chip surface is colorBg, not the channel colour").near(bg[1], 0.02)
             expect(bg2).near(bg[2], 0.02)
             expect(bb).near(bg[3], 0.02)
@@ -82,9 +85,9 @@ describe("Chip", function()
             -- BUTTON rather than a label -- over the game world, with no panel behind it.
             local white = { 1, 1, 1, 1 }
             local chip = make({ text = "Say", color = white })
-            local r, g, b = chip._pill._fillM:GetVertexColor()
+            local r, g, b = chip._f:GetBackdropColor()
             expect(r + g + b)
-                .as("a white channel must not produce a pale pill")
+                .as("a white channel must not produce a pale surface")
                 .lt(1.5)
             -- The channel is still legible, through the ring and the label rather than the fill.
             local lr, lg, lb = chip._label:GetTextColor()
@@ -93,7 +96,7 @@ describe("Chip", function()
 
         it("rings itself in the channel colour, which is the signal that survives", function()
             local chip = make({ text = "Guild", color = GUILD })
-            local _, g = chip._pill._edgeM:GetVertexColor()
+            local _, g = chip._f:GetBackdropBorderColor()
             expect(g).as("the ring is the channel's own colour").near(GUILD[2], 0.02)
             expect(H.token("opacityChipBorder"))
                 .as("the ring carries the chip over bright terrain").gt(0)
@@ -123,14 +126,15 @@ describe("Chip", function()
             expect(chip.SetVariant).eq(nil)
         end)
 
-        it("paints an opaque-enough surface for the ring to read as a ring", function()
-            -- The property that makes the single variant correct: the fill must actually COVER
-            -- the border pill's middle, or the ring illusion collapses into a solid shape.
+        it("draws a REAL border, so no fill opacity is load-bearing", function()
+            -- This replaces an assertion about the Pill's fake ring: it drew a solid
+            -- border-coloured pill and covered the middle, so the fill HAD to be opaque enough to
+            -- hide it or the ring collapsed into a solid shape. A square backdrop has an actual
+            -- edge, so that whole coupling is gone -- which is the simplification squaring bought.
             local chip = make({ text = "x", color = GUILD })
-            local _, _, _, fillA = chip._pill._fillM:GetVertexColor()
-            local _, _, _, ringA = chip._pill._edgeM:GetVertexColor()
-            expect(fillA).as("a translucent fill lets the whole border pill show through")
-                .gt(ringA)
+            local _, _, _, ringA = chip._f:GetBackdropBorderColor()
+            expect(ringA).as("the ring carries the chip's alpha directly")
+                .near(H.token("opacityChipBorder"), 0.02)
         end)
     end)
 

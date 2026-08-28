@@ -219,6 +219,178 @@ describe("ChatFormat", function()
         end)
     end)
 
+    describe("a non-string message must not raise", function()
+        local function F() return H.SuuUI.ChatFormat end
+
+        it("renders a NUMBER message instead of raising", function()
+            -- A number reaches Body during history replay, off a SavedVariable written by an older
+            -- version. `message:find(...)` raised on it -- a Lua number has no metatable reaching
+            -- `string` -- and the throw unwound out of buildWindow and cost the ENTIRE chat window.
+            local ok, out = pcall(F().Body, "SAY", 42, "Thalvyn", { plain = true })
+            expect(ok).as("a number is rendered, not raised on").eq(true)
+            expect(tostring(out):find("42", 1, true)).notNil()
+        end)
+
+        it("renders a NUMBER sender", function()
+            local ok = pcall(F().Body, "SAY", "hi", 7, { plain = true })
+            expect(ok).eq(true)
+        end)
+
+        it("survives a number on the MONSTER path, where the crash actually was", function()
+            local ok = pcall(F().Body, "MONSTER_EMOTE", 42, "Onyxia", { plain = true })
+            expect(ok).eq(true)
+        end)
+    end)
+
+    describe("monster and boss placeholders", function()
+        local function F() return H.SuuUI.ChatFormat end
+
+        it("substitutes the source's name into a MONSTER_EMOTE's own %s", function()
+            -- Shipped as a literal "%s" on screen. The message carries the placeholder, not the
+            -- globalstring, and the client is what fills it in.
+            local out = F().Body("MONSTER_EMOTE", "%s prepares to cast Shadow Bolt.", "Felguard")
+            expect(out:find("%%s")).as("no placeholder survives").eq(nil)
+            expect(out:find("Felguard", 1, true)).as("the source is named").notNil()
+        end)
+
+        it("substitutes in the PLAIN branch too, which is where it actually broke", function()
+            -- MONSTER_EMOTE lands in a panel that draws a tag column, so it takes the plain early
+            -- return and never reaches the globalstring path. Fixing only the latter would have
+            -- looked correct in a unit test and stayed broken in game.
+            local out = F().Body("MONSTER_EMOTE", "%s roars!", "Onyxia", { plain = true })
+            expect(out:find("%%s")).eq(nil)
+            expect(out:find("Onyxia", 1, true)).notNil()
+        end)
+
+        it("leaves a line with no placeholder untouched", function()
+            local out = F().Body("MONSTER_SAY", "You are not prepared.", "Illidan", { plain = true })
+            expect(out:find("You are not prepared.", 1, true)).notNil()
+        end)
+
+        it("does not touch a PLAYER line that happens to contain %s", function()
+            -- A player typing "%s" is not a placeholder, and the prefix test is what keeps them apart.
+            local out = F().Body("SAY", "printf(\"%s\")", "Thalvyn", { plain = true })
+            expect(out:find("%%s")).as("a player's own text is left alone").notNil()
+        end)
+
+        it("survives a source name containing a percent sign", function()
+            -- gsub treats `%` in the REPLACEMENT as a capture reference, so an unescaped name would
+            -- raise from inside an event handler.
+            local out = F().Body("MONSTER_EMOTE", "%s attacks!", "50%Health", { plain = true })
+            -- ONE percent in the expected text: `%%` in a Lua string literal is already two percent
+            -- characters, so asserting "50%%Health" looks for a doubling that must not survive.
+            expect(out:find("50%Health", 1, true)).notNil()
+        end)
+    end)
+
+    describe("Plain", function()
+        local function F() return H.SuuUI.ChatFormat end
+
+        it("keeps a link's LABEL and drops its target", function()
+            expect(F().Plain("got |Hitem:19019|h[Thunderfury]|h today"))
+                .as("the bracketed name is the readable part; the item id is not")
+                .eq("got [Thunderfury] today")
+        end)
+
+        it("removes colour codes", function()
+            expect(F().Plain("|cff00ff00green|r text")).eq("green text")
+        end)
+
+        it("removes an inline texture, which has no textual form", function()
+            expect(F().Plain("a |TInterface\\Icons\\foo:12|t b")).eq("a  b")
+        end)
+
+        it("unwraps a COLOURED link, which is the ordering trap", function()
+            -- A link's display text usually carries its own colour, so stripping colour first would
+            -- leave the |h fragments with nothing to anchor on.
+            expect(F().Plain("|cffa335ee|Hitem:19019|h[Thunderfury]|h|r"))
+                .eq("[Thunderfury]")
+        end)
+
+        it("leaves an escaped pipe as a single pipe", function()
+            expect(F().Plain("a || b")).eq("a | b")
+        end)
+
+        it("strips a real composed line end to end", function()
+            -- Driven through the REAL composer rather than a hand-written string, so the test cannot
+            -- pass against markup production never emits.
+            local line = F().Line({
+                chatType = "GUILD",
+                message  = "got |Hitem:19019|h[Thunderfury]|h",
+                sender   = F().PlayerLink("Thalvyn", 7, "Thalvyn"),
+            }, { timestamps = false, tag = true })
+            local plain = F().Plain(line)
+            expect(plain:find("|c", 1, true)).as("no colour escapes survive").eq(nil)
+            expect(plain:find("|H", 1, true)).as("no link wrappers survive").eq(nil)
+            expect(plain:find("Thalvyn", 1, true)).as("the sender is still readable").notNil()
+            expect(plain:find("[Thunderfury]", 1, true)).as("and so is the item").notNil()
+        end)
+
+        it("returns nil and empty unchanged", function()
+            expect(F().Plain(nil)).eq(nil)
+            expect(F().Plain("")).eq("")
+        end)
+    end)
+
+    describe("LinkifyURLs", function()
+        local function F() return H.SuuUI.ChatFormat end
+
+        it("wraps an http URL in a url: hyperlink", function()
+            local out = F().LinkifyURLs("see https://wowhead.com/item=19019 for it")
+            expect(out:find("|Hurl:https://wowhead.com/item=19019|h", 1, true)).notNil()
+            expect(out:find("see ", 1, true)).as("surrounding text is preserved").eq(1)
+            expect(out:find(" for it", 1, true)).notNil()
+        end)
+
+        it("wraps a bare www. address, which has no scheme to match on", function()
+            expect(F().LinkifyURLs("go to www.wowhead.com now")
+                :find("|Hurl:www.wowhead.com|h", 1, true)).notNil()
+        end)
+
+        it("leaves trailing punctuation OUTSIDE the link", function()
+            -- "see https://wow.gg." otherwise carries the full stop into the address and the player
+            -- copies a broken URL.
+            local out = F().LinkifyURLs("see https://wow.gg.")
+            expect(out:find("|Hurl:https://wow.gg|h", 1, true)).as("no trailing dot in the link").notNil()
+            expect(out:sub(-1)).as("the sentence keeps its full stop").eq(".")
+        end)
+
+        it("handles a scheme URL and a www address in the SAME message", function()
+            -- The case a gsub-per-pattern version gets wrong: the www pass also matches the `www.`
+            -- inside the already-wrapped https link and nests the two.
+            local out = F().LinkifyURLs("try https://www.a.com or www.b.com")
+            local _, n = out:gsub("|Hurl:", "")
+            expect(n).as("exactly two links, not a nested one").eq(2)
+            expect(out:find("|Hurl:https://www.a.com|h", 1, true)).notNil()
+            expect(out:find("|Hurl:www.b.com|h", 1, true)).notNil()
+        end)
+
+        it("does not linkify ordinary prose that merely looks domain-shaped", function()
+            -- A false positive is worse than a miss: it makes plain text look clickable. So a bare
+            -- `foo.bar` is deliberately NOT matched -- only a scheme or a www. prefix.
+            for _, s in ipairs({ "e.g. that thing", "meet at 5p.m. sharp", "hp.mp ratio" }) do
+                expect(F().LinkifyURLs(s)).as(s).eq(s)
+            end
+        end)
+
+        it("is idempotent, so a second pass cannot nest links", function()
+            local once = F().LinkifyURLs("see https://wow.gg here")
+            expect(F().LinkifyURLs(once)).eq(once)
+        end)
+
+        it("returns nil and empty unchanged", function()
+            expect(F().LinkifyURLs(nil)).eq(nil)
+            expect(F().LinkifyURLs("")).eq("")
+        end)
+
+        it("colours the link from the accent TOKEN, not a hardcoded hex", function()
+            local code = H.SuuUI.Theme:GetColorCode("colorAccent")
+            expect(code).notNil()
+            expect(F().LinkifyURLs("https://wow.gg"):find(code, 1, true))
+                .as("a retint must move chat's links with everything else").notNil()
+        end)
+    end)
+
     describe("Line", function()
         it("assembles timestamp, tag and body in that order", function()
             H.setClock({ year = 2026, month = 8, day = 27, hour = 19, min = 41, sec = 0 })

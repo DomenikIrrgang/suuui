@@ -264,6 +264,14 @@ M.channels = {}
 -- effect on our side: what we handed the client's own dispatcher.
 M.itemRef = nil
 
+-- Every line handed to UIErrorsFrame. A fault's only VISIBLE channel while the chat plugin suppresses
+-- Blizzard's chat, so a spec has to be able to read it.
+M.errorMessages = {}
+
+-- Player info keyed by GUID, as GetPlayerInfoByGUID answers it. Chat carries a sender's GUID and
+-- nothing else about them, so this is the only route to a class colour for a name in a line.
+M.playersByGUID = {}
+
 local pending, pendingSet
 local dependents
 
@@ -356,6 +364,8 @@ function M.reset()
     -- the channel" pass before the spec staged one.
     M.channels           = {}
     M.itemRef            = nil
+    M.errorMessages      = {}
+    M.playersByGUID      = {}
     -- Action slots and everything keyed off them. Cleared for the reason every other store
     -- here is: a leaked slot would let a "the button drew an icon" assertion pass before the
     -- spec staged anything, and a leaked page would put bar 1 on someone else's slots. The

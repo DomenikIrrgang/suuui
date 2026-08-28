@@ -55,6 +55,7 @@ GLYPHS = [
     "search",   # 3  a magnifier -- the search field's leading glyph
     "chevron",  # 4  a downward chevron -- a dropdown's open affordance
     "keybind",  # 5  a keyboard keycap -- enters keybind mode from the settings title bar
+    "copy",     # 6  two offset sheets -- copies one chat line's text
 ]
 assert len(GLYPHS) <= GRID * GRID, (
     f"{len(GLYPHS)} glyphs will not fit a {GRID}x{GRID} sheet"
@@ -202,6 +203,38 @@ def _draw_keybind(d, u):
     d.rectangle(u.box(10, 18, 12, 2.5), fill=INK)
 
 
+def _draw_copy(d, u):
+    """Two offset sheets: the back one peeking out top-right of the front one.
+
+    The pair is the whole glyph. ONE rounded rectangle is a page, a card, a panel or a stop button
+    depending on what sits next to it -- it is the OFFSET DUPLICATE that says "copy", because the
+    thing being depicted is that there are now two of something. Same reasoning as the keyboard's
+    plural keys: the count is what disambiguates the object.
+
+    Both are STROKED rather than filled, unlike the keybind keys, because here the two outlines are
+    separated by a gap and stay legible at 32px -- and a filled front sheet would hide the back one
+    entirely, which is the one detail that carries the meaning.
+
+    THE FIRST ATTEMPT STROKED BOTH AND NOTHING ELSE, and rendering it settled what the code could
+    not: with all four lines visible through the overlap the two shapes read as CROSSING -- a Venn
+    diagram, or two windows -- rather than as one sheet lying in front of another. Depth is the entire
+    point, because two intersecting frames depict nothing.
+
+    So the front sheet's area is FILLED WITH TRANSPARENCY before it is stroked, which knocks the back
+    sheet's lines out of the overlap. On this RGBA sheet a (0,0,0,0) fill replaces rather than
+    composites, so it erases. Order is load-bearing: back sheet, knock-out, front stroke.
+
+    Fill check: x spans 6..26 (62% of the cell) and y spans 5..27 (69%), both clear of verify()'s
+    40% floor.
+    """
+    # Back sheet, offset up and to the right.
+    d.rounded_rectangle(u.box(12, 5, 14, 17), radius=u.w(2), outline=INK, width=u.w(THIN))
+    # Erase where the front sheet will sit, so the back one stops at its edge.
+    d.rounded_rectangle(u.box(6, 10, 14, 17), radius=u.w(2), fill=(0, 0, 0, 0))
+    # Front sheet, stroked over the cleared area.
+    d.rounded_rectangle(u.box(6, 10, 14, 17), radius=u.w(2), outline=INK, width=u.w(THIN))
+
+
 DRAW = {
     "sort": _draw_sort,
     "account": _draw_account,
@@ -209,6 +242,7 @@ DRAW = {
     "search": _draw_search,
     "chevron": _draw_chevron,
     "keybind": _draw_keybind,
+    "copy": _draw_copy,
 }
 assert set(DRAW) == set(GLYPHS), "every glyph in GLYPHS needs a draw function"
 

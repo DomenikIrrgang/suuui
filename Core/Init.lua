@@ -36,6 +36,17 @@ function SuuUI.Fault(msg)
     if seenFaults[msg] then return end
     seenFaults[msg] = true
     print("|cffff5555[SuuUI]|r " .. msg)
+    -- ALSO to the error frame, and this is not belt-and-braces -- it is the only channel that works
+    -- when it matters most. `print` goes to Blizzard's ChatFrame1, and this addon's own chat plugin
+    -- SUPPRESSES that frame by parking it under a hidden holder, so a fault raised while the chat
+    -- feature is active prints into something the player cannot see. Every fault in the addon was
+    -- structurally invisible on exactly the configuration players run, which is how a chat window with
+    -- three broken settings produced no message at all and cost several rounds of blind diagnosis.
+    --
+    -- UIErrorsFrame is the client's own always-visible surface and is not ours to suppress. pcall'd
+    -- because a fault reporter that raises is worse than the fault.
+    local ef = _G.UIErrorsFrame
+    if ef and ef.AddMessage then pcall(ef.AddMessage, ef, "[SuuUI] " .. msg, 1, 0.33, 0.33, 1) end
 end
 
 --- Clears the fault dedup set. For tests, and for a reload-like reset.

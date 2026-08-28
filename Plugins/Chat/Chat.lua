@@ -50,7 +50,11 @@ local SCHEMA = {
         { value = "lg", label = "Large" },
       } },
     { key = "width",  label = "Width",  type = "slider", default = 460, min = 240, max = 900, step = 10 },
-    { key = "height", label = "Height", type = "slider", default = 180, min = 80,  max = 600, step = 10 },
+    -- 1400 is deliberately ABOVE the screen's own height in units (~768 at the default scale, ~1080
+    -- once the pixel grid's multiplier kicks in). That is not an oversight: a debugging window that
+    -- runs off the top edge is a legitimate thing to want, the frame is moveable, and capping at the
+    -- root's height would deny it for a tidiness nobody asked for.
+    { key = "height", label = "Height", type = "slider", default = 180, min = 80,  max = 1400, step = 10 },
 
     { key = "", label = "Fading", type = "section" },
     { key = "fade_channels", label = "Fade Channel Messages", type = "toggle", default = false },
@@ -137,6 +141,78 @@ local CHIP_LABEL = {
     OFFICER = "Officer", WHISPER = "Whisper",
 }
 
+--- Offers ONE line's text as selectable plain text, found by the sequence its copy icon carries.
+---
+--- Per line rather than per buffer, which is what was asked for: dumping the whole log made the
+--- player hunt for the line they wanted inside a wall of text they did not.
+---
+--- The line is read back out of the LOG rather than recomposed from the store, so what is offered is
+--- exactly what is on screen -- and the icon's own link is stripped with the rest of the markup,
+--- since `|Hsuucopy:12|h|T…|t|h` is not part of what anybody wants to paste.
+function Chat:CopyLine(seq)
+    local log = self:ActiveLog()
+    if not log or seq == nil then return false end
+    local needle = "|Hsuucopy:" .. tostring(seq) .. "|h"
+    for i = 1, (log:GetNumMessages() or 0) do
+        local text = log:GetMessageInfo(i)
+        if type(text) == "string" and text:find(needle, 1, true) then
+            local plain = SuuUI.ChatFormat.Plain(text)
+            -- Only the leading SPACE needs trimming. The icon itself is already gone: `Plain` unwraps
+            -- the link to its label -- which for the copy link IS the texture escape -- and then
+            -- strips textures, so nothing of the affordance survives except the space that followed
+            -- it. A `^|T.-|t` strip was here first and mutation testing proved it never matched.
+            plain = plain:gsub("^%s+", "")
+            local modal = SuuUI.Components.Modal({
+                title = "Copy Line",
+                message = "Select and press Ctrl-C.",
+                input = true,
+                inputValue = plain,
+                inputMaxChars = #plain + 1,
+                dismissOnly = true,
+                autoDestroy = true,
+            })
+            modal:Show()
+            return modal
+        end
+    end
+    return false
+end
+
+--- States the rail's cell: an explicit width, and the stretch that gives it the row's full height.
+---
+--- Takes a NUMBER rather than the expanded flag, because the expansion is animated and every frame of
+--- that tween needs an intermediate width the flag cannot express.
+---
+--- ONE place, because `SetChildProps` REPLACES a child's props rather than patching them -- a call
+--- passing only `width` silently dropped `align = "stretch"`, and the rail's scroll frame came out at
+--- its own content height instead of the row's. Three call sites had to agree and did not.
+function Chat:_setRailCell(width)
+    if not (self._top and self._railScroll) then return end
+    self._top:SetChildProps(self._railScroll, {
+        width = width,
+        align = "stretch",
+    })
+end
+
+--- The height the rail+log row gets: everything the input row and its gap do not use.
+---
+--- STATED rather than left to `height = "fill"`. The fill produced 88 units inside a 180-unit window
+--- -- the row came out at its own content height and the input row floated 66 units above the bottom
+--- edge, which is what made the moveable frame look far larger than the chat. Whether that is a
+--- limitation of vertical fill for a container child is NOT established: the obvious instrumentation
+--- was invisible, because `print` inside the addon sandbox is captured by the harness's chat mirror
+--- rather than reaching stdout. So this states the number it can compute instead of relying on a
+--- distribution whose behaviour here is unexplained, and the open question is recorded as an xit.
+function Chat:_topHeight()
+    local T = SuuUI.Theme
+    local gap = T:GetToken("spaceXs") or 4
+    local total = (self._wrapper and self._wrapper:GetHeight()) or 0
+    local input = (self._inputRow and self._inputRow:GetHeight()) or 0
+    local h = total - input - gap
+    if h < 1 then h = 1 end
+    return h
+end
+
 --- Shows or hides the input row as Blizzard's box opens and closes.
 ---
 --- The chip is REUSED rather than duplicated: at rest it sits under the log naming the channel Enter
@@ -208,6 +284,36 @@ end
 ---
 --- Fading is resolved per panel rather than globally: channels fade, conversations persist, and
 --- that is one native call differing per tab rather than a setting the player sets twice.
+--- The sender's class colour as a `|cffRRGGBB` escape, or nil when the class is unknown.
+---
+--- Resolved from the GUID the chat event carried, which is the ONLY thing a chat message says about
+--- who sent it -- there is no class field. `GetPlayerInfoByGUID` answers englishClass SECOND; the
+--- first return is localized ("Mage"), which resolves to no colour at all and fails silently, so the
+--- destructure here is deliberate and is the order ElvUI reads on this client.
+---
+--- CACHED ON THE RECORD, and the cache is what makes this safe to call from the render path: history
+--- replay re-renders every stored line at login, and a record restored from a SavedVariable carries
+--- a GUID whose player the client may no longer know anything about -- so the answer is memoised
+--- including its absence, via a separate flag, or every replayed line would re-query for nothing.
+---
+--- Only a PLAYER gets one. A creature has no class and the client answers nothing for its GUID, which
+--- is the right outcome: a monster's name takes the line's own colour.
+function Chat:_classColour(rec)
+    if not rec then return nil end
+    if rec._classResolved then return rec._classCode end
+    rec._classResolved = true
+    local guid = rec.guid
+    if type(guid) ~= "string" or guid == "" then return nil end
+    if type(GetPlayerInfoByGUID) ~= "function" then return nil end
+    -- pcall'd because this runs inside the renderer, off data a SavedVariable may have supplied, and
+    -- the client raises on a malformed GUID rather than answering nil.
+    local ok, _, englishClass = pcall(GetPlayerInfoByGUID, guid)
+    if not ok or type(englishClass) ~= "string" then return nil end
+    rec._classCode = SuuUI.Game and SuuUI.Game.ClassColorCode
+                 and SuuUI.Game:ClassColorCode(englishClass) or nil
+    return rec._classCode
+end
+
 function Chat:_apply()
     local size = get("font_size") or "md"
     local fadeOn = get("fade_channels")
@@ -222,6 +328,25 @@ function Chat:_apply()
     end
     local w, h = get("width") or 460, get("height") or 180
     self._wrapper:SetSize(w, h)
+    -- The ONLY place the row's height is stated -- initial layout included, since `_apply` runs on
+    -- enable as well as on every size change. A second statement at build time was here and mutation
+    -- testing proved it redundant: this one had already run by the time anything could observe it.
+    if self._win and self._top then
+        self._win:SetChildProps(self._top:GetFrame(), { width = "fill", height = self:_topHeight() })
+    end
+    -- RE-STATE the rail's content height once the row above has its final size. The scroll frame
+    -- decides on a bar by comparing content against viewport, and at construction the viewport is not
+    -- yet sized -- so a bar computed then reflects a viewport of almost nothing and appears when
+    -- nothing overflows. In game that showed as a scrollbar after every reload that vanished on the
+    -- first hover, because hovering rebuilt the rail and recomputed it correctly.
+    --
+    -- Deliberately belt-and-braces alongside the ordering fix in ScrollFrame's own resize handler:
+    -- the harness lays out synchronously and does NOT reproduce the symptom either way, so neither
+    -- change is verified against it. This one does not depend on when the client lays out.
+    if self._railScroll and self._rail then
+        SuuUI.UISignals:Emit(self._railScroll, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED,
+                             select(2, self._rail:GetContentSize()))
+    end
 end
 
 --- The log a message with no panel of its own belongs in: the Log panel, else the active one.
@@ -363,11 +488,27 @@ function Chat:_replayHistory()
     if not self._store then return 0 end
     local recs = self._store:Records()
     self._replaying = true
+    local failed = 0
     for i = 1, #recs do
         local rec = recs[i]
-        self:_ensureConversation(rec)
-        rec.panels = self:_route(rec)
-        self:_render(rec)
+        -- PER RECORD, and this is the structural lesson from the failure it fixes: replay reads
+        -- persisted data written by an older version of this addon, so a record it cannot render is a
+        -- question of WHEN, not IF. Unguarded, one such record raised through `_render`, through this
+        -- loop, and out of `buildWindow` -- leaving the plugin with no window, Blizzard's chat back on
+        -- screen, and every setting apparently inert. A player lost the whole feature over one line.
+        --
+        -- The cost of skipping is one missing history line. The cost of not skipping is the window.
+        local ok = pcall(function()
+            self:_ensureConversation(rec)
+            rec.panels = self:_route(rec)
+            self:_render(rec)
+        end)
+        if not ok then failed = failed + 1 end
+    end
+    if failed > 0 then
+        -- Reported rather than swallowed: silently dropping history is how a corrupt store stays
+        -- undiagnosed for months.
+        SuuUI.Fault("chat: skipped " .. failed .. " unreadable history record(s)")
     end
     self._replaying = false
     -- With fading ON, restored history is left FULLY FADED rather than fading out over the next few
@@ -432,7 +573,8 @@ function Chat:_render(rec)
             message      = rec.message,
             -- The LINK keeps the full name, because that is what a whisper and a context menu
             -- need; only the displayed text is shortened.
-            sender       = SuuUI.ChatFormat.PlayerLink(rec.senderFull, rec.lineID, rec.sender),
+            sender       = SuuUI.ChatFormat.PlayerLink(rec.senderFull, rec.lineID, rec.sender,
+                                                       self:_classColour(rec)),
             language     = rec.language,
             channelIndex = rec.channelIndex,
         }, {
@@ -442,6 +584,9 @@ function Chat:_render(rec)
             -- line of a Guild panel is the same information twice. This is the property the
             -- per-panel render buys -- one record, two panels, two correct strings.
             tag        = (get("show_tags") and self:_wantsTag(panel)) and true or false,
+            -- Every line gets its own copy affordance. The sequence is the handle: it is stamped by
+            -- the store before this runs, and it is what the click resolves the line back from.
+            copySeq    = rec.seq,
         })
         -- The lineID is passed as the chat-type id, which is what BlizzardChat's mirror
         -- discriminates on: an id-less AddMessage is addon output from print(), and only those
@@ -532,7 +677,12 @@ function Chat:_railWidth(expanded)
     local gap = T:GetToken("spaceXs") or 4
     -- The SAME number the rows are built with. Read from the setting rather than the token, or a
     -- disc larger than 18 is clipped by a rail still sized for the old constant.
-    local w = SuuUI.Pixel.Line(2) + gap + (get("rail_size") or T:GetToken("sizeControlSm") or 18)
+    -- The scrollbar is reserved ALWAYS, not only while the rows overflow: a bar that appeared with
+    -- the first whisper would shift the log sideways at the moment a whisper arrived, which is the
+    -- worst possible moment to move the text someone is reading.
+    local bar = T:GetToken("sizeScrollbar") or 8
+    local w = SuuUI.Pixel.Line(2) + gap + bar
+        + (get("rail_size") or T:GetToken("sizeControlSm") or 18)
     if not expanded then return w end
 
     -- The WIDEST name, so expanding does not resize the rail again per row and the log's left edge
@@ -556,11 +706,45 @@ end
 --- read a name would re-wrap every line of chat and slide the resting chip sideways. Measured in
 --- game at ~70 units of travel. The names OVERLAY the log's left edge instead, and stay legible
 --- because the concept gives `.lbl` a text-shadow for exactly this reason.
+--- Expands or collapses the rail, MOVING the log rather than covering it.
+---
+--- This used to overlay: the rail kept its collapsed width and each row's name overflowed across the
+--- log, which was a deliberate choice to keep the log's left edge from jumping. Seeing it settled it
+--- the other way -- the names landed ON TOP of the message text and both became unreadable, which is
+--- worse than a moving edge. So the rail's width is restated and the log reflows beside it.
 function Chat:SetRailExpanded(on)
     on = on and true or false
     if on == self._railExpanded then return end
     self._railExpanded = on
     for _, row in pairs(self._rows) do row:SetShowLabel(on) end
+
+    -- ANIMATED, because snapping the log sideways reads as a glitch rather than as a reveal. `animFast`
+    -- is the token every other panel reveal in the addon uses -- Dropdown's panel, Modal, Tooltip,
+    -- Accordion -- so this is the same gesture at the same speed rather than a timing of its own.
+    --
+    -- Driven through the animator's `value` property rather than by animating the frame's width: the
+    -- width is a LAYOUT PROP, so tweening the frame directly would fight the container, which restates
+    -- it on its next pass. `apply` hands every step back through the layout engine, which is the same
+    -- division StatusBar's fill transitions draw.
+    --
+    -- One animation per (target, property), so a hover-out mid-expand PRE-EMPTS the expand and
+    -- continues from wherever the width actually got to -- no queue, and no snap back to the start.
+    local from = (self._railScroll and self._railScroll:GetWidth()) or self:_railWidth(not on)
+    local to   = self:_railWidth(on)
+    local dur  = SuuUI.Theme:GetToken("animFast") or 0.12
+    -- 0 disables it, exactly as animPopScale = 1 disables the button pop. Also the equal-width case,
+    -- where a tween would be a frame of work to arrive where it started.
+    if dur <= 0 or from == to then
+        self:_setRailCell(to)
+        return
+    end
+    SuuUI.Anim:New({
+        target   = self,
+        property = "value",
+        apply    = function(v) self:_setRailCell(v) end,
+        from     = from, to = to,
+        duration = dur, easing = "easeOut",
+    }):Play()
 end
 
 function Chat:IsRailExpanded() return self._railExpanded == true end
@@ -571,13 +755,13 @@ function Chat:IsRailExpanded() return self._railExpanded == true end
 ---
 --- The disc size is baked into each Avatar at construction, so a size change cannot be repainted --
 --- and rebuilding alone is not enough either, because the window sized the rail's cell from the old
---- diameter and would clip every new disc. Always the COLLAPSED width: expansion deliberately
---- overlays the log rather than reflowing it, which is why SetRailExpanded restates no width.
+--- diameter and would clip every new disc.
+---
+--- The width follows the CURRENT expansion state. Hardcoding the collapsed one shrank the rail out
+--- from under its own labels whenever a conversation appeared while the cursor was on the rail.
 function Chat:_rebuildRail()
     self:_buildRail()
-    if self._win and self._rail then
-        self._win:SetChildProps(self._rail, { width = self:_railWidth(false) })
-    end
+    self:_setRailCell(self:_railWidth(self._railExpanded == true))
 end
 
 --- Builds or rebuilds the rail from the panel list.
@@ -716,46 +900,84 @@ local function buildWindow(p)
     wrapper:SetSize(get("width") or 460, get("height") or 180)
     self._wrapper = wrapper
 
-    -- The concept's window is [rail][column]: a permanently visible avatar rail on the left, and
-    -- the log plus the resting chip on the right.
+    -- The concept's window is [rail][column] -- but the INPUT ROW is a full-width sibling BELOW that
+    -- row rather than a child of the column, which is what stops it moving when the rail expands.
+    --
+    -- The rail widens on hover and pushes whatever shares its row. With the input inside the column
+    -- that meant the resting chip slid sideways every time the cursor crossed the rail; as a sibling
+    -- it is outside that row entirely and cannot be pushed. It also gets the WHOLE window width to
+    -- type in rather than being inset by the rail, which is the better field either way.
     local win = SuuUI.Layout:CreateContainer({
-        host = wrapper, layout = "flow", dir = "horizontal",
-        gap = SuuUI.Theme:GetToken("spaceSm"),
+        host = wrapper, layout = "flow", dir = "vertical",
+        gap = SuuUI.Theme:GetToken("spaceXs"),
     })
     self._win = win
+
+    -- The row the rail actually lives in, and therefore the only thing its expansion resizes.
+    --
+    -- HOSTED ON A FRAME rather than being a bare container, and that is load-bearing: a container
+    -- with no explicit `h` re-states its height from its CONTENT inside its own Layout(), which
+    -- overwrites whatever the parent assigned -- so `height = "fill"` was silently losing to the hug
+    -- and this row came out 88 units tall inside a 180-unit window. The input row then floated 66
+    -- units above the bottom edge and the moveable frame looked far bigger than the chat.
+    --
+    -- A host container adopts the frame's size instead of computing one, so the fill sticks. Same
+    -- shape as logHost below, for the same reason.
+    local topHost = CreateFrame("Frame", nil, wrapper)
+    local top = SuuUI.Layout:CreateContainer({
+        host = topHost, layout = "flow", dir = "horizontal",
+        gap = SuuUI.Theme:GetToken("spaceSm"),
+    })
+    win:Add(topHost, { width = "fill", height = "fill" })
+    self._top = top
+
+    -- The rail SCROLLS. It is a vertical flow of one row per channel plus one per conversation, so
+    -- its content height grows without bound -- with a handful of whispers open it ran past the
+    -- window's bottom edge, over the input row and off the frame, taking the rows out of reach.
+    --
+    -- Stretched on the cross axis rather than given `height = "fill"`: in a horizontal flow the
+    -- height IS the cross axis, so stretch is the documented mechanism and it sidesteps the fill
+    -- behaviour that under-sized the row above.
+    local railScroll = SuuUI.Components.ScrollFrame({
+        w = self:_railWidth(false), h = 1,
+    }, wrapper)
+    top:Add(railScroll, { width = self:_railWidth(false), align = "stretch" })
+    self._railScroll = railScroll
 
     -- The rail. Channel rows, a hairline separator, then one row per conversation -- which is one
     -- list rather than two, so switching from Guild to a whisper is the same gesture.
     local rail = SuuUI.Layout:CreateContainer({
-        parent = wrapper, layout = "flow", dir = "vertical",
+        parent = railScroll:GetContent(), layout = "flow", dir = "vertical",
         gap = SuuUI.Theme:GetToken("spaceXxs"),
     })
     self._rail = rail
     self._rows = {}
     self._railExpanded = false
-    win:Add(rail, { width = 0 })
+
+    -- The scroll frame cannot know its content grew: the rail reports its own height and this hands
+    -- that number on, which is what makes the bar appear exactly when the rows overflow.
+    SuuUI.UISignals:Connect(rail, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function(_, h)
+        SuuUI.UISignals:Emit(railScroll, SuuUI.UISignals.SIGNALS.CONTENT_RESIZED, h)
+    end)
 
     -- Collapses when the cursor leaves the rail as a REGION. OnLeave cannot express this: the
     -- client moves focus to a child as soon as the cursor enters one, so a row's own OnLeave fires
     -- while the cursor is still inside the rail.
     self._railHover = SuuUI.Components.HoverAway({
-        frame = rail:GetFrame(),
+        frame = railScroll:GetFrame(),
         onOutside = function() self:SetRailExpanded(false) end,
     })
-
-    local col = SuuUI.Layout:CreateContainer({
-        parent = wrapper, layout = "flow", dir = "vertical",
-        gap = SuuUI.Theme:GetToken("spaceXs"),
-    })
-    win:Add(col, { width = "fill", height = "fill" })
-    self._col = col
 
     -- Every panel's log OVERLAYS in one stack rather than sitting in the flow, because only one is
     -- shown at a time and flow would collapse the hidden ones -- resizing the column on every tab
     -- switch. A stack also keeps each log at the full column size whether or not it is visible.
+    --
+    -- Added to `top`, beside the rail. The intermediate vertical column this used to sit in is gone:
+    -- it existed only to stack the log above the input row, and the input row is a sibling of this
+    -- whole row now.
     local logHost = CreateFrame("Frame", nil, wrapper)
     local logBox = SuuUI.Layout:CreateContainer({ host = logHost, layout = "stack" })
-    col:Add(logHost, { width = "fill", height = "fill" })
+    top:Add(logHost, { width = "fill", height = "fill" })
     self._logHost, self._logBox = logHost, logBox
 
     -- Jump-to-bottom. A stack child of the log box, so it OVERLAYS the log's bottom-right corner
@@ -809,7 +1031,9 @@ local function buildWindow(p)
         padding = { left = SuuUI.Theme:GetToken("spaceXs"),
                     right = SuuUI.Theme:GetToken("spaceXs") },
     })
-    col:Add(inputRow, { width = "fill" })
+    -- FULL WIDTH of the window, and a sibling of the rail's row rather than a child of it: the
+    -- rail cannot push what is not beside it.
+    win:Add(inputRow, { width = "fill" })
     self._inputRow, self._inputBox, self._inputBorder = inputRow, inputRowBox, inputRow
 
     local chip = SuuUI.Components.Chip({ text = "Say" }, inputRow)
@@ -823,11 +1047,18 @@ local function buildWindow(p)
 
     local eb = SuuUI._ChatInput.Adopt(inputRow)
     if eb then
-        -- The row grows to fit the BOX, not the reverse. The template owns its height (measured at
-        -- 32) and squeezing it was both wrong and ineffective.
-        local boxH = eb:GetHeight() or 0
-        if boxH > (inputRow:GetHeight() or 0) then inputRow:SetHeight(boxH) end
-
+        -- The ROW owns the height and the box fills it -- note the placer below pins the box to all
+        -- FOUR edges, so its own template height is not a constraint on anything.
+        --
+        -- There used to be a ratchet here: `if boxH > rowH then inputRow:SetHeight(boxH) end`, from
+        -- before that BOTTOM anchor existed. It was a one-way grow driven by a frame BLIZZARD owns,
+        -- and it broke two things at once in game while the suite stayed green -- the harness's edit
+        -- box stub is small, so the branch never fired. With a tall box the row ate the window,
+        -- `_topHeight` clamped the log to its 1-unit floor, and the Height slider then appeared to do
+        -- NOTHING, because every value it set was consumed by the row.
+        --
+        -- The rule this cost: never let a foreign frame's reported size become a floor for our own
+        -- layout. Size ours from tokens and fit theirs into it.
         -- Placed EXPLICITLY rather than added to the flow container, and re-placed on every open.
         -- SetPoint on a Blizzard frame is the documented carve-out for exactly this.
         --
@@ -913,14 +1144,57 @@ local function buildWindow(p)
             -- link open its tooltip frame, a player link open the whisper menu, and a quest or spell
             -- link open its own panel. None of it is protected, so no combat guard belongs here.
             S:Connect(log, SIG.HYPERLINK_CLICK, function(link, text, button)
+                -- `url:` is OUR link type and the client knows nothing about it, so it is answered
+                -- here rather than handed on: SetItemRef would silently do nothing. There is no way
+                -- to open a browser from the client, so the honest answer is to hand the player the
+                -- address in something they can select and copy.
+                local url = type(link) == "string" and link:match("^url:(.+)$")
+                if url then
+                    SuuUI.Components.Modal({
+                        title = "Link",
+                        message = "Press Ctrl-C to copy.",
+                        input = true,
+                        inputValue = url,
+                        dismissOnly = true,
+                        autoDestroy = true,
+                    }):Show()
+                    return
+                end
+                -- Our own link type too, and answered the same way: the client has no `suucopy`
+                -- handler, so forwarding it would be a silent no-op.
+                local seq = type(link) == "string" and link:match("^suucopy:(%d+)$")
+                if seq then
+                    local w = SuuUI.Chat_GetWindow()
+                    if w then w:CopyLine(tonumber(seq)) end
+                    return
+                end
                 if type(SetItemRef) ~= "function" then return end
-                pcall(SetItemRef, link, text, button, log:GetFrame())
+                -- The CLIENT's own dispatcher, not Blizzard's chat-frame script. Forwarding through
+                -- `ChatFrame1:GetScript("OnHyperlinkClick")` was tried and REVERTED together with the
+                -- hover forwarding: that frame is parked under a hidden holder by suppression, so
+                -- handing it the gesture put the result somewhere with no rect. It is also the wrong
+                -- shape of dependency -- this addon must stand alone.
+                --
+                -- The cost is honest and worth stating: a link type a THIRD-PARTY addon adds (Questie's
+                -- `questie:`) is dead in our log, because those addons hook `ChatFrame1..10` BY NAME and
+                -- our frame is not one of them. Every link type the CLIENT knows works.
+                --
+                -- pcall stays -- an error raised inside a click handler unwinds into the client -- but
+                -- it must not be SILENT, or a dead link is indistinguishable from nothing being wired.
+                local ok, err = pcall(SetItemRef, link, text, button, log:GetFrame())
+                if not ok then
+                    SuuUI.Debug("chat: SetItemRef failed for " .. tostring(link) .. ": " .. tostring(err))
+                end
             end)
             -- Hovering a link shows the client's tooltip, which is what makes a linked item worth
             -- linking. `SetHyperlink` raises for a link that has no tooltip -- a player link is the
             -- common one -- so a failure hides the tooltip rather than leaving the previous item's
             -- on screen.
             S:Connect(log, SIG.HYPERLINK_ENTER, function(link)
+                -- OUR OWN tooltip, deliberately. Forwarding to Blizzard's OnHyperlinkEnter was tried
+                -- and REVERTED: its handler anchors the tooltip to ChatFrame1, which suppression has
+                -- parked under a hidden holder -- and a hidden frame has no rect, so the tooltip drew
+                -- nothing at all. It failed silently and cost every item mouseover in the log.
                 local tt = GameTooltip
                 if not tt then return end
                 tt:SetOwner(log:GetFrame(), "ANCHOR_CURSOR")
@@ -941,8 +1215,10 @@ local function buildWindow(p)
     end
 
     self:_buildRail()
-    -- After _buildRail, because the width is measured from the panel list's widest name.
-    win:SetChildProps(rail, { width = self:_railWidth(false) })
+    -- After _buildRail, because the width is measured from the panel list's widest name. On `top`,
+    -- which is the row the rail is a child of -- setting it on the vertical window would size a child
+    -- that container does not have, and silently do nothing.
+    self:_setRailCell(self:_railWidth(false))
     -- The first panel's log exists from the start, so the window is not an empty box before the
     -- first message arrives.
     if self._panels[1] then self:_logFor(self._panels[1]) end
@@ -988,8 +1264,37 @@ plugin = SuuUI:CreatePlugin({
     end,
 
     onEnable = function(p)
-        if not p._chat then p._chat = buildWindow(p) end
-        p._chat._wrapper:Show()
+        -- GUARDED, and the guard is the point. `onEnable` is pcall'd into a debug-gated log, so a
+        -- throw in buildWindow used to abort this function SILENTLY -- and everything below it,
+        -- including the `hide_blizzard` watcher, never ran. The visible result was Blizzard's chat
+        -- back on screen with no error and no clue, which is exactly how it presented.
+        --
+        -- SuuUI.Fault prints with debug off, which is the difference between a bug report saying
+        -- "the chat is broken" and one naming the line.
+        if not p._chat then
+            -- xpcall with a traceback handler, not pcall: the message alone says WHAT failed and the
+            -- stack says WHERE, and without the line number this cost several rounds of guessing.
+            --
+            -- The result is also parked in a global. UIErrorsFrame text FADES after a few seconds, so
+            -- a fault the player blinked past is a fault nobody can read -- `SuuUI._ChatBuildError`
+            -- survives until the next reload and can be printed on demand.
+            local ok, res = xpcall(function() return buildWindow(p) end, function(e)
+                local where = ""
+                if type(debugstack) == "function" then
+                    local okStack, s = pcall(debugstack, 2, 8, 0)
+                    if okStack then where = tostring(s) end
+                end
+                return tostring(e) .. "\n" .. where
+            end)
+            if ok then
+                p._chat = res
+                SuuUI._ChatBuildError = nil
+            else
+                SuuUI._ChatBuildError = tostring(res)
+                SuuUI.Fault("chat: the window failed to build: " .. tostring(res))
+            end
+        end
+        if p._chat then p._chat._wrapper:Show() end
 
         -- Addon output has no chat event, so it can only be caught by hooking Blizzard's frame.
         -- Wired whether or not suppression is on: with their chat visible the line would otherwise
@@ -1013,7 +1318,16 @@ plugin = SuuUI:CreatePlugin({
         for _, key in ipairs({ "show_timestamps", "timestamp_format", "show_tags",
                               "font_size", "width", "height", "fade_channels", "fade_after" }) do
             SuuUI.Settings:Watch(PLUGIN_ID, key, function()
-                if p._chat then p._chat:_apply() end
+                if not p._chat then return end
+                -- REPORTED, not swallowed. `Settings:Watch` pcalls its callback into SuuUI.Debug,
+                -- which prints nothing with debug off -- so a throw in `_apply` presents as "the
+                -- height slider does nothing", with no error and nothing to search for. It also
+                -- explains a stale layout at the same time, because `_apply` is the only place the
+                -- top row's height is stated.
+                local ok, err = pcall(p._chat._apply, p._chat)
+                if not ok then
+                    SuuUI.Fault("chat: applying '" .. key .. "' failed: " .. tostring(err))
+                end
             end, PLUGIN_ID .. ".shape")
         end
 

@@ -27,7 +27,12 @@ local GLYPHS = {
     search  = { 0.75000, 1.00000, 0.00000, 0.25000 },
     chevron = { 0.00000, 0.25000, 0.25000, 0.50000 },
     keybind = { 0.25000, 0.50000, 0.25000, 0.50000 },
+    copy    = { 0.50000, 0.75000, 0.25000, 0.50000 },
 }
+
+--- The sheet's pixel size. Needed because an INLINE texture escape takes sheet PIXELS where
+--- SetTexCoord takes 0..1 fractions, so a consumer embedding a glyph in text has to convert.
+M.SHEET = 128
 
 --- Whether a glyph name is on the sheet.
 -- @param name string
@@ -50,6 +55,29 @@ function M:Get(name)
     local c = type(name) == "string" and GLYPHS[name] or nil
     if not c then return nil, nil end
     return M.PATH, { c[1], c[2], c[3], c[4] }
+end
+
+--- A glyph as an INLINE TEXTURE escape, for embedding in a string the client renders.
+---
+--- The one way to put an icon inside a chat line: a ScrollingMessageFrame renders text and gives no
+--- per-line frame to parent anything to, so an icon there has to BE part of the string. Wrap the
+--- result in a hyperlink and it becomes clickable, which is how a per-line affordance is possible at
+--- all.
+---
+--- Coordinates are converted to sheet PIXELS, because `|T…|t` takes pixels where `SetTexCoord` takes
+--- fractions -- handing it fractions draws the sheet's top-left pixel stretched over the whole glyph,
+--- which looks like a solid block rather than an icon.
+-- @param name string
+-- @param size number|nil  edge in text units; defaults to 14
+-- @return string|nil  nil for an unknown glyph, so a typo shows as absent rather than as a block
+function M:Escape(name, size)
+    local path, c = M:Get(name)
+    if not path then return nil end
+    local s = tonumber(size) or 14
+    local sheet = M.SHEET
+    return "|T" .. path .. ":" .. s .. ":" .. s .. ":0:0:" .. sheet .. ":" .. sheet
+        .. ":" .. (c[1] * sheet) .. ":" .. (c[2] * sheet)
+        .. ":" .. (c[3] * sheet) .. ":" .. (c[4] * sheet) .. "|t"
 end
 
 --- Every glyph name on the sheet, unordered.

@@ -88,10 +88,19 @@ end
 -- @param lineID number|nil
 -- @param display string|nil  what the link shows, defaults to name
 -- @return string
-function M.PlayerLink(name, lineID, display)
+function M.PlayerLink(name, lineID, display, colour)
     if type(name) ~= "string" or name == "" then return display or "" end
-    if not lineID then return display or name end
-    return format("|Hplayer:%s:%d|h%s|h", name, lineID, display or name)
+    local text = display or name
+    -- The colour wraps the DISPLAY text, inside the link rather than around it. Around it the escape
+    -- would sit between the timestamp and the link and colour the separator too; inside, exactly the
+    -- name is tinted and the `|r` restores whatever the line's own colour is.
+    --
+    -- Taken as a ready-made escape rather than a class name on purpose: this file is pure formatting
+    -- and must not reach into SuuUI.Game for a game fact. The caller resolves the class, this places
+    -- the string.
+    if type(colour) == "string" and colour ~= "" then text = colour .. text .. "|r" end
+    if not lineID then return text end
+    return format("|Hplayer:%s:%d|h%s|h", name, lineID, text)
 end
 
 --- Strips a realm suffix from a display name when it matches the player's own.
@@ -113,6 +122,86 @@ function M.ShortName(name, ownRealm)
     local b = ownRealm:gsub("%s+", ""):lower()
     if a == b then return bare end
     return name
+end
+
+--- Strips the client's display markup, leaving text a player can paste somewhere.
+---
+--- A rendered chat line is full of escapes -- `|cffRRGGBB…|r` colour, `|Hitem:…|h[Name]|h` links,
+--- `|T…|t` inline textures -- and pasting those raw is useless: `|cff00ff00|Hplayer:Thal…` is not
+--- what anyone wanted to copy. A link's DISPLAY TEXT is kept and its target dropped, because
+--- `[Thunderfury]` is the readable part and the item id is not.
+---
+--- Order matters. Links are unwrapped BEFORE colour codes are removed: the display text inside a
+--- link usually carries its own `|cff…|r`, and stripping colour first would leave the `|h` fragments
+--- with nothing to anchor the match on.
+-- @param text string|nil
+-- @return string|nil
+function M.Plain(text)
+    if type(text) ~= "string" or text == "" then return text end
+    local out = text
+    -- Hyperlink: keep the bracketed label, drop the target and the wrapper.
+    out = out:gsub("|H.-|h(.-)|h", "%1")
+    -- Inline texture: no textual equivalent at all, so it goes entirely.
+    out = out:gsub("|T.-|t", "")
+    -- Colour open and close.
+    out = out:gsub("|c%x%x%x%x%x%x%x%x", "")
+    out = out:gsub("|r", "")
+    -- An escaped pipe survives as a single pipe, which is what the player typed.
+    out = out:gsub("||", "|")
+    return out
+end
+
+--- Wraps any URL in the text in a clickable `url:` hyperlink.
+---
+--- A URL cannot be a real hyperlink in this client -- there is no link type for it and nothing opens
+--- a browser -- so the convention every chat addon uses is a CUSTOM link type that the addon's own
+--- click handler recognises and answers with a copy dialog. Ours is `url:`, and because SuuUI owns
+--- its `OnHyperlinkClick` it needs no `SetItemRef` hook and carries no taint risk.
+---
+--- Deliberately conservative: an explicit scheme, or a `www.` prefix. Matching a bare `foo.bar`
+--- would linkify "e.g." and every sentence ending in a domain-shaped abbreviation, and a false
+--- positive here is worse than a miss because it makes ordinary text look clickable.
+---
+--- Trailing punctuation is peeled back OUT of the link, or "see https://wow.gg." carries the full
+--- stop into the URL and the player copies a broken address.
+-- @param text string|nil
+-- @return string|nil
+function M.LinkifyURLs(text)
+    if type(text) ~= "string" or text == "" then return text end
+    -- Already linkified: this is not idempotent, and a second pass would nest `url:` links.
+    if text:find("|Hurl:", 1, true) then return text end
+
+    local code = (SuuUI.Theme and SuuUI.Theme.GetColorCode
+        and SuuUI.Theme:GetColorCode("colorAccent")) or "|cff33aaff"
+
+    -- ONE scan taking whichever pattern matches earliest, rather than a gsub per pattern. Two
+    -- passes cannot cope with a message carrying both forms: the `www.` pass would also match the
+    -- `www.` inside an `https://www.…` the first pass had already wrapped, nesting the links.
+    local out, pos = {}, 1
+    while pos <= #text do
+        local s1, e1 = text:find("https?://%S+", pos)
+        local s2, e2 = text:find("www%.%S+", pos)
+        local s, e
+        if s1 and (not s2 or s1 <= s2) then
+            s, e = s1, e1
+        elseif s2 then
+            s, e = s2, e2
+        end
+        if not s then break end
+
+        out[#out + 1] = text:sub(pos, s - 1)
+        local url, tail = text:sub(s, e), ""
+        -- Trailing sentence punctuation is peeled back OUT of the link, or "see https://wow.gg."
+        -- carries the full stop into the address and the player copies a broken URL.
+        while #url > 1 and url:sub(-1):find("[%.,;:!%?%)%]]") do
+            tail = url:sub(-1) .. tail
+            url = url:sub(1, -2)
+        end
+        out[#out + 1] = "|Hurl:" .. url .. "|h" .. code .. "[" .. url .. "]|r|h" .. tail
+        pos = e + 1
+    end
+    out[#out + 1] = text:sub(pos)
+    return table.concat(out)
 end
 
 --- A numbered channel's name as the chip spells it: the zone qualifier dropped.
@@ -139,8 +228,41 @@ function M.Body(chatType, message, sender, opts)
     opts = opts or {}
     -- Injectable for specs; falls through to the client's real globals in game.
     local globals = opts.globals or _G
-    message = message or ""
-    sender  = sender or ""
+    -- COERCED, not merely defaulted, and this is load-bearing rather than defensive habit. `Body` is
+    -- called during history REPLAY off a SavedVariable, where a legacy or hand-edited record can carry
+    -- a number in either field -- and `message:find(...)` on a number raises, because a Lua number has
+    -- no metatable to reach `string`. That took the whole chat window down: the throw unwound out of
+    -- `_replayHistory`, out of `buildWindow`, and the plugin ended up with no window at all, which
+    -- presented as Blizzard's chat returning and every setting silently doing nothing.
+    --
+    -- One coercion here rather than a type test per branch: `Body` has four early returns, so guarding
+    -- each is four chances to miss one, and the mixed style is what let it through the first time.
+    if type(message) ~= "string" then message = tostring(message or "") end
+    if type(sender)  ~= "string" then sender  = tostring(sender  or "") end
+
+    -- Applied HERE, at the one point every path below passes through: `Body` has several early
+    -- returns (TEXT_EMOTE, the plain branch, the language branch), so linkifying in each would be
+    -- four chances to forget one. Safe against item and player links, which contain no scheme and no
+    -- `www.` and so cannot be matched.
+    message = M.LinkifyURLs(message)
+
+    -- A MONSTER or BOSS line carries its OWN `%s` placeholder for the source's name -- "%s prepares
+    -- to cast..." -- and the client substitutes it. Without that the player reads a literal `%s`,
+    -- which is what shipped.
+    --
+    -- Applied here, BEFORE the `plain` branch returns: MONSTER_EMOTE lands in a panel that draws a tag
+    -- column, so it takes that early return and never reaches the globalstring path where `SPECIAL`
+    -- would have handled it. `SPECIAL` covers MONSTER_BOSS_* and is correct -- ElvUI lists those as
+    -- real client groups -- it simply never covered plain MONSTER_EMOTE.
+    --
+    -- Gated on the placeholder being PRESENT rather than on an enumeration of types, so it cannot
+    -- touch a line that has none, and the prefix test is the one ElvUI uses. The sender's own `%` is
+    -- escaped because gsub treats it as a capture reference in the replacement.
+    if sender ~= "" and message:find("%%s")
+        and (strsub(chatType or "", 1, 7) == "MONSTER" or strsub(chatType or "", 1, 9) == "RAID_BOSS")
+    then
+        message = gsub(message, "%%s", (gsub(sender, "%%", "%%%%")))
+    end
 
     -- BEFORE the globalstring lookup, deliberately: TEXT_EMOTE's message ALREADY contains the
     -- sender's name ("Thalvyn waves."), so prefixing would print it twice -- and it needs no
@@ -238,6 +360,19 @@ function M.Line(def, opts)
     if showTag then out = tag .. " " .. out end
     if opts.timestamps then
         out = M.Timestamp(opts.timeFormat, opts.now) .. " " .. out
+    end
+    -- The per-line COPY affordance, outermost so it sits before the timestamp -- "at the beginning of
+    -- every message". It is an inline texture wrapped in a hyperlink, which is the only way to make
+    -- something in a ScrollingMessageFrame clickable: the frame renders text and offers no per-line
+    -- frame to parent a button to.
+    --
+    -- The link carries the SEQUENCE rather than the text: a link target cannot hold a message with
+    -- escapes and pipes in it, and the sequence is enough to find the line again.
+    if opts.copySeq then
+        local icon = SuuUI.Icons and SuuUI.Icons:Escape("copy", opts.copySize)
+        if icon then
+            out = "|Hsuucopy:" .. tostring(opts.copySeq) .. "|h" .. icon .. "|h " .. out
+        end
     end
     return out, tag
 end

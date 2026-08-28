@@ -2,6 +2,23 @@
 local H = require("harness")
 
 describe("harness: WoW API simulation", function()
+
+    describe("a fault reaches a VISIBLE surface", function()
+        it("delivers to the error frame, not only to chat", function()
+            -- `print` goes to Blizzard's ChatFrame1, which the chat plugin SUPPRESSES by parking it
+            -- under a hidden holder -- so a fault that only prints is invisible on exactly the
+            -- configuration players run. That cost several rounds of blind diagnosis on a chat
+            -- window whose settings had silently stopped applying.
+            H.setup()
+            H.SuuUI.ClearFaults()
+            H.SuuUI.Fault("boom")
+            local found = false
+            for _, line in ipairs(H.getErrorMessages()) do
+                if line:find("boom", 1, true) then found = true end
+            end
+            expect(found).as("the player can actually see it").eq(true)
+        end)
+    end)
     before_each(function() H.setup() end)
 
     describe("addon bootstrap", function()

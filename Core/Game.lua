@@ -510,7 +510,37 @@ function M:CoinColorCode(kind)
     return code
 end
 
-local DIFFICULTY = {    trivial = {0.50, 0.50, 0.50, 1},   -- grey:   no experience left in it
+local classCodeCache = {}
+
+--- A class's colour as a `|cffRRGGBB` escape, or nil for a class this client does not name.
+---
+--- The ESCAPE rather than the table, for the reason CoinColorCode gives above: a chat line is ONE
+--- font string, so a sender's name cannot be a separately-coloured Text handle without putting two
+--- baselines on one line. Callers that paint a frame still want ClassColor's table.
+---
+--- Cached per class and validated against the live source exactly as ClassColor is, so a class-colour
+--- addon retinting RAID_CLASS_COLORS at runtime is picked up without allocating per line -- this is
+--- called once per chat message.
+-- @param classFile string  e.g. "MAGE"
+-- @return string|nil
+function M:ClassColorCode(classFile)
+    if type(classFile) ~= "string" or classFile == "" then return nil end
+    local c = self:ClassColor(classFile)
+    if not c then return nil end
+    local cached = classCodeCache[classFile]
+    -- Keyed on the resolved colour too, so a runtime retint invalidates rather than serving a stale
+    -- escape for the rest of the session.
+    if cached and cached.r == c[1] and cached.g == c[2] and cached.b == c[3] then return cached.code end
+    -- Rounded to integers explicitly, per the note in CoinColorCode: "%02x" on a float raises under
+    -- the test runner's Lua 5.3 while the client's 5.1 truncates silently.
+    local code = format("|cff%02x%02x%02x",
+        floor(c[1] * 255 + 0.5), floor(c[2] * 255 + 0.5), floor(c[3] * 255 + 0.5))
+    classCodeCache[classFile] = { code = code, r = c[1], g = c[2], b = c[3] }
+    return code
+end
+
+local DIFFICULTY = {
+    trivial = {0.50, 0.50, 0.50, 1},   -- grey:   no experience left in it
     easy    = {0.25, 0.75, 0.25, 1},   -- green
     fair    = {1.00, 1.00, 0.00, 1},   -- yellow: within two levels either way
     hard    = {1.00, 0.50, 0.25, 1},   -- orange

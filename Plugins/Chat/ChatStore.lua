@@ -306,6 +306,24 @@ function M.Restore(blob)
         if type(recs) == "table" then
             for _, rec in ipairs(recs) do
                 if type(rec) == "table" then
+                    -- NORMALISED, because this file's own promise -- a malformed blob yields an empty
+                    -- store rather than raising -- was only ever kept for the blob's SHAPE. The
+                    -- records themselves were trusted verbatim, so a legacy or hand-edited entry whose
+                    -- `message` was a number sailed through here and raised much later, inside the
+                    -- renderer, where it unwound out of `buildWindow` and cost the player the entire
+                    -- chat window rather than one line.
+                    --
+                    -- Coerced rather than dropped: a record with an odd field still carries what was
+                    -- said, and silently discarding history is the worse failure of the two.
+                    if rec.message ~= nil and type(rec.message) ~= "string" then
+                        rec.message = tostring(rec.message)
+                    end
+                    if rec.sender ~= nil and type(rec.sender) ~= "string" then
+                        rec.sender = tostring(rec.sender)
+                    end
+                    if rec.senderFull ~= nil and type(rec.senderFull) ~= "string" then
+                        rec.senderFull = tostring(rec.senderFull)
+                    end
                     -- Marked so a renderer can dim rehydrated lines and draw a session divider:
                     -- history from a previous login must not read as live conversation.
                     rec.restored = true

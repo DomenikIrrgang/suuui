@@ -18,7 +18,17 @@ function ModalMeta:Show()
     self._window:Show()
     SuuUI.Anim.Presets.FadeIn(self._overlay, SuuUI.Theme:GetToken("animFast"))
     SuuUI.Anim.Presets.FadeIn(self._window, SuuUI.Theme:GetToken("animFast"))
-    if self._input then self._input:SetFocus() end
+    if self._input then
+        -- SELECTED, not merely focused, when the field arrives with a value: the whole point of a
+        -- prefilled dialog is that the text is ready to copy or to type over, and a focused box with
+        -- nothing selected gives Ctrl-C nothing to take. An empty field just takes focus, where a
+        -- select-all would be a no-op anyway.
+        if self._input:GetValue() ~= "" then
+            self._input:SelectAll()
+        else
+            self._input:SetFocus()
+        end
+    end
     S:Emit(self, S.SIGNALS.VISIBILITY_CHANGED, true)
 end
 
@@ -146,7 +156,18 @@ function SuuUI.Components.Modal(props, parent)
 
     local input
     if props.input then
-        input = C.Input({ value = "", w = w - pad * 2 }, root:GetFrame())
+        -- `inputValue` prefills it. Added for the copy-a-link dialog, where the whole point is that
+        -- the text is ALREADY there to be selected -- but general: a rename dialog wants the current
+        -- name in the box, and every caller would otherwise reach past the handle into `_input`.
+        -- `inputMaxChars` matters more than it looks: Input caps at 255 by default, so a dialog
+        -- holding anything long -- a copied chat buffer -- would be silently truncated to a quarter
+        -- of a screen of text with no error and no clue.
+        input = C.Input({
+            value = props.inputValue or "",
+            w = w - pad * 2,
+            multiLine = props.inputMultiLine or nil,
+            maxChars = props.inputMaxChars or nil,
+        }, root:GetFrame())
         root:Add(input, { width = "fill" })
         handle._input = input
     end

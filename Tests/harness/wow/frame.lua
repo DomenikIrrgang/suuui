@@ -549,7 +549,16 @@ function EditBoxMeta:SetCursorPosition(p) self._cursor = p end
 function EditBoxMeta:GetCursorPosition()  return self._cursor or 0 end
 function EditBoxMeta:SetMultiLine(on)     self._multiLine = on and true or false end
 function EditBoxMeta:SetNumeric(on)       self._numeric = on and true or false end
-function EditBoxMeta:HighlightText()      end
+-- Recorded, not a no-op. It was an empty stub, which made "the value is selected" unassertable --
+-- and a focused box with an unselected value is precisely how a copy dialog ships uncopyable. No
+-- arguments means the whole value, which is the client's own contract.
+function EditBoxMeta:HighlightText(from, to)
+    self._highlight = { from = from or 0, to = to or -1 }
+end
+
+-- nil when nothing is selected. `to == -1` is the client's "to the end".
+function EditBoxMeta:GetHighlight() return self._highlight end
+
 function EditBoxMeta:SetTextInsets(...)   self._textInsets = { ... } end
 -- Readable, so a spec can assert the insets an adopted box was given. Write-only, the
 -- adoption's inset tightening could not be asserted at all.

@@ -2457,6 +2457,24 @@ function M.install(env)
     -- The dock and the menu button, both separate frames that survive hiding the logs.
     env.GeneralDockManager = CreateFrame("Frame", "GeneralDockManager", UIParent)
     env.GeneralDockManager:SetSize(430, 20)
+    -- The client's always-visible error surface, and the ONE channel a fault can use while this addon
+    -- is suppressing Blizzard's chat -- `print` goes to a frame the chat plugin parks under a hidden
+    -- holder, so every fault was structurally invisible on the configuration players actually run.
+    -- Modelled as a recorder so a spec can prove a fault reached somewhere the player can see it.
+    -- RETURN ORDER MEASURED, not assumed: ElvUI's chat module destructures it as
+    -- `local _, englishClass = GetPlayerInfoByGUID(arg12)`, so englishClass is SECOND and the
+    -- localized name is first. Getting that backwards yields a localized string like "Mage" where a
+    -- class FILE key is wanted, which resolves to no colour at all -- silently.
+    env.GetPlayerInfoByGUID = function(guid)
+        local rec = guid and state.playersByGUID[guid]
+        if not rec then return nil end
+        return rec.localizedClass or rec.class, rec.class, rec.localizedRace or "Human",
+               rec.race or "Human", rec.sex or 2, rec.name or "Unknown", rec.realm or ""
+    end
+
+    env.UIErrorsFrame = CreateFrame("Frame", "UIErrorsFrame", UIParent)
+    env.UIErrorsFrame.AddMessage = function(_, text) state.errorMessages[#state.errorMessages + 1] = tostring(text) end
+
     env.ChatFrameMenuButton = CreateFrame("Button", "ChatFrameMenuButton", UIParent)
     env.ChatFrameMenuButton:SetSize(32, 32)
 

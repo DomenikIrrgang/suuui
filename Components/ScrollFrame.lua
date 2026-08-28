@@ -151,6 +151,13 @@ function SuuUI.Components.ScrollFrame(props, parent)
     local handle
     f:SetScript("OnSizeChanged", function(_, newW, newH)
         if not (handle and handle._box) then return end
+        -- LAY OUT FIRST. `_needsBar` measures the inner scroll frame, which is a stack child of
+        -- `box` -- and this script is registered BEFORE `box` adopts the frame (as it must be, or the
+        -- container's own re-layout hook would be replaced), so the container's pass runs AFTER this
+        -- one. Measuring here without laying out first reads the PREVIOUS viewport height, which is
+        -- how a scroll frame ends up showing a bar it does not need until something else resizes it:
+        -- seen in game as a stale bar after a reload that vanished on the first hover.
+        handle._box:Layout()
         handle:_updateBar()
         S:Emit(handle, S.SIGNALS.SIZE_CHANGED, newW, newH)
     end)

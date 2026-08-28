@@ -481,6 +481,31 @@ describe("Components.Modal", function()
             expect(m._input._eb:HasFocus()).truthy()
         end)
 
+        it("prefills the input from inputValue", function()
+            -- It hardcoded `value = ""`, so a caller wanting the current name or a URL in the box had
+            -- to reach past the handle into `_input`.
+            local m = H.C.Modal({ title = "T", input = true, inputValue = "https://wow.gg" })
+            expect(m._input:GetValue()).eq("https://wow.gg")
+        end)
+
+        it("SELECTS a prefilled value on show, or Ctrl-C copies nothing", function()
+            -- Focus alone is not enough, and the difference is invisible until someone tries to copy:
+            -- a copy-a-link dialog shipped focused-but-unselected and could not be copied from.
+            local m = H.C.Modal({ title = "T", input = true, inputValue = "https://wow.gg" })
+            m:Show()
+            local hl = m._input._eb:GetHighlight()
+            expect(hl).as("the whole value is selected, ready to copy").notNil()
+            expect(hl.from).eq(0)
+            expect(hl.to).as("-1 is the client's 'to the end'").eq(-1)
+        end)
+
+        it("does not select an EMPTY input, where there is nothing to select", function()
+            local m = H.C.Modal({ title = "T", input = true })
+            m:Show()
+            expect(m._input._eb:GetHighlight()).eq(nil)
+            expect(m._input._eb:HasFocus()).as("but it still takes focus").truthy()
+        end)
+
         it("hides the window once the fade finishes", function()
             local m = H.C.Modal({ title = "T" })
             m:Show()

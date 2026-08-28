@@ -219,6 +219,69 @@ describe("chat plugin", function()
     end)
 
     describe("the rail's size is a setting", function()
+        it("WIDENS when expanded, so the log moves instead of being covered", function()
+            -- It used to overlay: the rail kept its collapsed width and each row's name overflowed
+            -- across the log. In game the names landed on top of the message text and both became
+            -- unreadable, which is worse than the moving left edge the overlay was protecting.
+            --
+            -- Asserted on the LOG's resolved left edge, not on the rail's layout props: "the log
+            -- moves" is the requirement, and a props assertion would pass on a width nothing applied.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local before = H.box(p._chat:ActiveLog()).left
+            p._chat:SetRailExpanded(true)
+            -- The width is TWEENED over animFast now, so the settled state is what to assert; reading
+            -- it immediately measures the first frame of the animation.
+            H.runAnimations()
+            local after = H.box(p._chat:ActiveLog()).left
+            expect(after).as("the log is pushed right by the widened rail").gt(before)
+        end)
+
+        it("ANIMATES the width rather than snapping it", function()
+            -- Snapping the log sideways read as a glitch in game. Asserted as "in between", which is
+            -- the only thing that distinguishes a tween from an instant jump -- a settled-state
+            -- assertion passes for both.
+            local p = enabled()
+            local collapsed = p._chat:_railWidth(false)
+            local expanded  = p._chat:_railWidth(true)
+            expect(expanded).as("there is room to animate across").gt(collapsed)
+            p._chat:SetRailExpanded(true)
+            H.tick(0.03)
+            local mid = p._chat._railScroll:GetWidth()
+            expect(mid).as("part way there, not arrived").lt(expanded)
+            expect(mid).as("and moving").gt(collapsed - 0.5)
+            H.runAnimations()
+            expect(p._chat._railScroll:GetWidth()).as("settles exactly on the target").near(expanded, 0.5)
+        end)
+
+        it("pre-empts a reversal instead of queueing it", function()
+            -- One animation per (target, property), so hovering out mid-expand continues from wherever
+            -- the width actually got to. A queued second tween would first finish opening.
+            local p = enabled()
+            local collapsed = p._chat:_railWidth(false)
+            p._chat:SetRailExpanded(true)
+            H.tick(0.03)
+            p._chat:SetRailExpanded(false)
+            H.runAnimations()
+            expect(p._chat._railScroll:GetWidth())
+                .as("ends collapsed, not wherever the interrupted expand was going").near(collapsed, 0.5)
+        end)
+
+
+        it("returns to the collapsed width when the cursor leaves", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local collapsed = H.box(p._chat:ActiveLog()).left
+            p._chat:SetRailExpanded(true)
+            H.runAnimations()
+            p._chat:SetRailExpanded(false)
+            -- Settled BOTH ways. Without this the test passed vacuously: neither tween had run, so
+            -- the log had never moved and "came back" was true of a log that never left.
+            H.runAnimations()
+            expect(H.box(p._chat:ActiveLog()).left)
+                .as("and comes back to where it started").near(collapsed, 0.5)
+            expect(p._chat:IsRailExpanded()).eq(false)
+        end)
         it("sizes the disc from rail_size, not from a control token", function()
             -- It shipped pinned to `sizeControlSm` (18) with an 11px glyph, which made the channel
             -- unidentifiable at a glance. A widget's own dimension is a plugin setting here, never a
@@ -241,7 +304,157 @@ describe("chat plugin", function()
         end)
     end)
 
+    describe("class-coloured sender names", function()
+        local GUID = "Player-1-ABCDEF"
+
+        local function say(class)
+            H.setup()
+            if class then H.setPlayerGUID(GUID, { class = class, localizedClass = "Localized" }) end
+            H.SuuUI.Settings:Set("chat", "enabled", true)
+            local p = H.SuuUI.Plugins:Get("chat")
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn", guid = GUID })
+            local log = p._chat:ActiveLog()
+            return log:GetMessageInfo(log:GetNumMessages()), p
+        end
+
+        it("tints the sender with the class colour", function()
+            local line = say("MAGE")
+            local want = H.SuuUI.Game:ClassColorCode("MAGE")
+            expect(want).as("the class resolves to an escape").notNil()
+            expect(line:find(want, 1, true)).as("the name carries the class colour").notNil()
+        end)
+
+        it("puts the colour INSIDE the player link, around the name only", function()
+            -- Outside the link the escape would also tint the separator between timestamp and name.
+            local line = say("MAGE")
+            local code = H.SuuUI.Game:ClassColorCode("MAGE")
+            expect(line:find("|Hplayer:.-|h" .. code:gsub("|", "%%|"))).notNil()
+        end)
+
+        it("reads englishClass, NOT the localized first return", function()
+            -- GetPlayerInfoByGUID answers localizedClass first. Reading that gives "Localized", which
+            -- resolves to no colour -- and fails silently, which is the whole reason this is pinned.
+            local line = say("MAGE")
+            expect(line:find("Localized", 1, true)).as("the localized name is not used as a key").eq(nil)
+        end)
+
+        it("leaves a name uncoloured when the client knows nothing about the GUID", function()
+            -- A creature has no class and the client answers nothing, which is correct: the name takes
+            -- the line's own colour rather than an invented one.
+            local line = say(nil)
+            expect(line:find("Thalvyn", 1, true)).notNil()
+            expect(line:find("|cff")).as("no colour escape is invented").eq(nil)
+        end)
+
+        it("caches the lookup on the record, including its absence", function()
+            local _, p = say(nil)
+            local recs = p._chat._store:Records()
+            expect(recs[#recs]._classResolved).as("absence is memoised too").eq(true)
+        end)
+    end)
+
+    describe("a bad history record must not cost the window", function()
+        -- The real failure, reproduced. A record whose `message` was a NUMBER -- from a SavedVariable
+        -- written by an older version -- raised inside the renderer, unwound out of `_replayHistory`
+        -- and out of `buildWindow`, and left the plugin with NO window: Blizzard's chat came back and
+        -- every setting silently did nothing. One line of stored history cost the whole feature.
+        local function withHistory(message)
+            H.setup({ savedVars = { SuuUIChatHistory = {
+                depth = 50, seq = 2, order = { "general" },
+                streams = { general = { {
+                    kind = "SAY", message = message, sender = "Thalvyn",
+                    senderFull = "Thalvyn", seq = 1, stream = "general",
+                } } },
+            } } })
+            H.SuuUI.Settings:Set("chat", "enabled", true)
+            return H.SuuUI.Plugins:Get("chat")
+        end
+
+        it("still builds the window with a NUMBER in a stored message", function()
+            local p = withHistory(42)
+            expect(p._chat).as("the window survives the bad record").notNil()
+            expect(H.SuuUI._ChatBuildError).as("the build did not fail").eq(nil)
+        end)
+
+        it("still builds the window with a TABLE in a stored message", function()
+            -- A number is what shipped; a table is the same class of fault and must not raise either.
+            local p = withHistory({ nonsense = true })
+            expect(p._chat).notNil()
+        end)
+
+        it("normalises a numeric message on restore rather than trusting it", function()
+            -- ChatStore.Restore's own comment promises a malformed blob yields an empty store rather
+            -- than raising, but it only ever validated the blob's SHAPE, never a record's fields.
+            local p = withHistory(42)
+            local recs = p._chat._store:Records()
+            expect(#recs).gt(0)
+            expect(type(recs[1].message)).as("coerced, not dropped").eq("string")
+            expect(recs[1].message).eq("42")
+        end)
+    end)
+
+    describe("a tall adopted edit box must not drive our layout", function()
+        -- Blizzard owns that box's height. A ratchet here once let it become a FLOOR for our input
+        -- row, which ate the window, clamped the log to its 1-unit floor, and made the Height slider
+        -- look inert. The suite stayed green through all of it because the harness's stub box is
+        -- small -- so these specs stage the tall box the client actually has.
+        local function tallBox(h)
+            H.setup()
+            local eb = H.env.ChatFrame1EditBox
+            if eb then eb:SetHeight(h) end
+            H.SuuUI.Settings:Set("chat", "enabled", true)
+            return H.SuuUI.Plugins:Get("chat")._chat
+        end
+
+        it("keeps the input row at its token height", function()
+            local c = tallBox(160)
+            local want = H.SuuUI.Theme:GetControlHeight("sizeControlMd")
+            expect(H.box(c._inputRow).height)
+                .as("the row states its own height, not the box's").eq(want)
+        end)
+
+        it("leaves the log filling the window, not clamped to its floor", function()
+            local c = tallBox(160)
+            local win = H.box(c._win)
+            local top = H.box(c._top)
+            expect(top.height).as("the log row is not collapsed").gt(1)
+            -- The whole window is accounted for: log row + input row + one gap.
+            expect(top.height + H.box(c._inputRow).height + H.token("spaceXs")).eq(win.height)
+        end)
+
+        it("still honours the height setting with a tall box present", function()
+            -- The symptom was "the height slider does nothing", so assert the slider's EFFECT rather
+            -- than the stored value.
+            local c = tallBox(160)
+            local before = H.box(c._top).height
+            H.SuuUI.Settings:Set("chat", "height", 400)
+            expect(H.box(c._top).height).as("raising the window raises the log").gt(before)
+            expect(H.box(c._win).height).eq(400)
+        end)
+    end)
+
     describe("clicking a link, and the fade reveal", function()
+        it("does NOT forward the click to Blizzard's chat frame, which suppression has parked", function()
+            -- Forwarding was tried, shipped, and reverted the same session. It looks like good interop
+            -- -- addons that add link types hook `OnHyperlinkClick` on `ChatFrame1..10` by name -- but
+            -- that frame is PARKED under a hidden holder by suppression, and a hidden frame has no
+            -- rect, so the hover half put the tooltip nowhere and cost every item mouseover in the log.
+            -- It is also the wrong dependency shape: this addon stands alone.
+            --
+            -- Asserted rather than merely commented so the next reader cannot re-add it without a
+            -- failing test explaining why.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "look", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            local forwarded = false
+            H.env.ChatFrame1:SetScript("OnHyperlinkClick", function() forwarded = true end)
+            H.resetItemRef()
+            expect(H.clickHyperlink(log._log, "item:19019", "[T]", "LeftButton")).eq(true)
+            expect(forwarded).as("Blizzard's parked frame is not handed the gesture").eq(false)
+            expect(H.getItemRef()).as("the client's own dispatcher is used").notNil()
+            expect(H.getItemRef().link).eq("item:19019")
+        end)
+
         it("hands a link click to the client's own SetItemRef", function()
             -- The component emitted HYPERLINK_CLICK from the start and NOTHING consumed it, so links
             -- rendered perfectly and did nothing. `SetItemRef` is what makes an item link open its
@@ -266,6 +479,32 @@ describe("chat plugin", function()
             H.clickHyperlink(log._log, "player:Thalvyn", "[Thalvyn]", "RightButton")
             expect(H.getItemRef().button)
                 .as("a swallowed button turns a context menu into a whisper").eq("RightButton")
+        end)
+
+        it("answers a url: link ITSELF rather than handing it to the client", function()
+            -- `url:` is our own link type and the client knows nothing about it, so passing it to
+            -- SetItemRef would silently do nothing -- the exact failure shape of a dead link click.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "see https://wow.gg", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            H.resetItemRef()
+            expect(H.clickHyperlink(log._log, "url:https://wow.gg", "[https://wow.gg]", "LeftButton"))
+                .eq(true)
+            expect(H.getItemRef())
+                .as("never forwarded: the client has no url: handler").eq(nil)
+        end)
+
+        it("linkifies a URL in a message that reaches the log", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "see https://wow.gg for it", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            local linked = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("|Hurl:https://wow.gg|h", 1, true) then
+                    linked = true
+                end
+            end
+            expect(linked).as("a URL in chat is clickable, end to end").eq(true)
         end)
 
         it("reveals a faded buffer on hover AND restarts the fade clocks", function()
@@ -385,6 +624,158 @@ describe("chat plugin", function()
                 if tostring(log:GetMessageInfo(i)):find("secret", 1, true) then shown = true end
             end
             expect(shown).as("General Only means General, not nowhere").eq(true)
+        end)
+    end)
+
+    describe("copying ONE line", function()
+        it("puts a clickable copy icon at the start of every line", function()
+            -- A ScrollingMessageFrame renders text and offers no per-line frame, so the affordance
+            -- has to BE part of the string: an inline texture wrapped in a hyperlink.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            local line = log:GetMessageInfo(1)
+            expect(line:find("|Hsuucopy:", 1, true))
+                .as("the icon leads the line, before the timestamp").eq(1)
+            expect(line:find("|T", 1, true)).as("and it is a texture, not a letter").notNil()
+        end)
+
+        it("copies THAT line, stripped of markup and of the icon itself", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "first",  sender = "Thalvyn" })
+            H.chat("CHAT_MSG_SAY", { text = "second", sender = "Aldara" })
+            local log = p._chat:ActiveLog()
+            -- Take the seq off the SECOND line's own link, the way a click does.
+            local seq = log:GetMessageInfo(2):match("|Hsuucopy:(%d+)|h")
+            expect(seq).notNil()
+            local m = p._chat:CopyLine(tonumber(seq))
+            expect(m).as("a dialog opened").notNil()
+            local text = m._input:GetValue()
+            expect(text:find("second", 1, true)).as("the line that was clicked").notNil()
+            expect(text:find("first", 1, true)).as("and only that line").eq(nil)
+            expect(text:find("|T", 1, true)).as("the copy icon is not part of the text").eq(nil)
+            expect(text:find("|H", 1, true)).as("nor any link wrapper").eq(nil)
+            expect(text:find("|c", 1, true)).as("nor any colour escape").eq(nil)
+            expect(text:sub(1, 1) == " ")
+                .as("no leading space where the icon used to be").eq(false)
+        end)
+
+        it("refuses a sequence that is not on screen", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            expect(p._chat:CopyLine(9999)).eq(false)
+            expect(p._chat:CopyLine(nil)).eq(false)
+        end)
+
+        it("answers the copy link ITSELF rather than handing it to the client", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local log = p._chat:ActiveLog()
+            local seq = log:GetMessageInfo(1):match("|Hsuucopy:(%d+)|h")
+            H.resetItemRef()
+            expect(H.clickHyperlink(log._log, "suucopy:" .. seq, "icon", "LeftButton")).eq(true)
+            expect(H.getItemRef())
+                .as("the client has no suucopy handler; forwarding would be a no-op").eq(nil)
+        end)
+    end)
+
+    describe("the window fills its own height", function()
+        it("puts the input row flush against the bottom edge", function()
+            -- The defect: the rail+log row came out at its CONTENT height (88 units inside a 180-unit
+            -- window), so the input row floated 66 units above the bottom and the edit-mode overlay
+            -- looked far larger than the chat. Asserted as edges meeting, because that is the thing
+            -- the player sees -- a height assertion alone would pass with the row in the wrong place.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local w = H.box(p._chat._wrapper)
+            local i = H.box(p._chat._inputRow)
+            expect(i.top + i.height)
+                .as("the input row's bottom IS the window's bottom").near(w.top + w.height, 1)
+        end)
+
+        it("gives the rail and log row everything the input row does not use", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hi", sender = "Thalvyn" })
+            local w = H.box(p._chat._wrapper)
+            local t = H.box(p._chat._top)
+            local i = H.box(p._chat._inputRow)
+            local gap = H.token("spaceXs")
+            expect(t.height).as("no dead space between them").near(w.height - i.height - gap, 1)
+            expect(t.top).as("and the row starts at the top").near(w.top, 1)
+        end)
+
+        it("restates the row's height when the window is resized", function()
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "height", 320)
+            local w = H.box(p._chat._wrapper)
+            local i = H.box(p._chat._inputRow)
+            expect(w.height).eq(320)
+            expect(i.top + i.height)
+                .as("a taller window still ends where the input row ends").near(w.top + w.height, 1)
+        end)
+
+        xit("uses height = fill for the rail+log row instead of stating the number", function()
+            -- OPEN: `height = "fill"` on that row produced its content height (88 of 180) and a
+            -- forced re-layout did not change it, so it is not staleness. The cause is unproven --
+            -- instrumenting FlowLayout was invisible because `print` inside the addon sandbox is
+            -- captured by the harness's chat mirror rather than reaching stdout -- so rather than
+            -- guess at the strategy, the plugin states the height it can compute. Worth returning to
+            -- with `io.write`, because if vertical fill is wrong for a container child it is wrong
+            -- everywhere, not only here.
+        end)
+    end)
+
+    describe("the rail scrolls when there are many conversations", function()
+        it("stays inside the window however many rows there are", function()
+            -- The defect: the rail is a vertical flow that hugs its content, so a handful of open
+            -- whispers ran it past the window's bottom edge, over the input row and off the frame --
+            -- taking the rows out of reach entirely.
+            local p = enabled()
+            for _, n in ipairs({ "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot" }) do
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = n .. "-TestRealm" })
+            end
+            local w  = H.box(p._chat._wrapper)
+            local sc = H.box(p._chat._railScroll)
+            expect(sc.top + sc.height)
+                .as("the rail's viewport ends inside the window").lte(w.top + w.height + 0.5)
+        end)
+
+        it("overflows INSIDE the viewport, which is what makes it scrollable", function()
+            -- The rows must still exist at full height -- clipping them away would lose them rather
+            -- than let the player reach them. The content being taller than the viewport IS the
+            -- scrollable state.
+            local p = enabled()
+            for _, n in ipairs({ "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot" }) do
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = n .. "-TestRealm" })
+            end
+            expect(H.box(p._chat._rail).height)
+                .as("the rows are all there, taller than the viewport")
+                .gt(H.box(p._chat._railScroll).height)
+            -- And the scroll frame KNOWS: comparing the two heights alone passed with the rail's
+            -- SIZE_CHANGED connection deleted, because the content is taller either way. What the
+            -- connection causes is the viewport learning its range, and a bar is the observable.
+            expect(p._chat._railScroll:_needsBar())
+                .as("the scroll frame was told its content grew").truthy()
+        end)
+
+        it("takes the row's full height, not its own content height", function()
+            -- `SetChildProps` REPLACES props, so a call passing only `width` dropped the stretch and
+            -- the viewport came out at content height. Every site goes through _setRailCell now.
+            local p = enabled()
+            expect(p._chat._railScroll:GetHeight())
+                .near(p._chat._top:GetFrame():GetHeight(), 1)
+        end)
+
+        it("keeps the same width whether or not the bar is showing", function()
+            -- The scrollbar is reserved always: a bar appearing with the first whisper would shift the
+            -- log sideways at the exact moment a whisper arrived.
+            local p = enabled()
+            local before = H.box(p._chat:LogFor("general")).left
+            for _, n in ipairs({ "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot" }) do
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = n .. "-TestRealm" })
+            end
+            expect(H.box(p._chat:LogFor("general")).left)
+                .as("the log did not move when the rail overflowed").near(before, 0.5)
         end)
     end)
 
@@ -691,21 +1082,32 @@ describe("chat plugin", function()
                 .as("the row grows to hold the name").gt(rowBefore)
         end)
 
-        it("does NOT move the log or the chip when it expands", function()
-            -- The defect this pins was measured in game at ~70 units of travel: the rail and the
-            -- column are flow siblings, so growing the rail's cell pushed the column -- which means
-            -- hovering to read a name re-wraps every line of chat and slides the resting chip
-            -- sideways. The names overlay the log instead.
+        it("MOVES the log right when it expands, and leaves the input row alone", function()
+            -- REVERSED TWICE, and the second shape is Domenik's: the overlay put channel names on top
+            -- of the message text, and reflowing the whole column then slid the resting chip sideways
+            -- on every hover. The fix is STRUCTURAL rather than a choice between those two -- the input
+            -- row is a full-width sibling of the [rail][log] row instead of a child of it, so the rail
+            -- can push the log without the chip being beside it to push.
             local p = enabled()
             H.chat("CHAT_MSG_SAY", { text = "hello there", sender = "Grimtusk" })
             local chipBefore = H.box(p._chat._chip).left
             local logBefore  = H.box(p._chat:LogFor("general")).left
+
+            -- The HOVER wiring, asserted without advancing the clock: HoverAway polls the cursor's
+            -- position rather than tracking enter/leave, so any tick long enough to settle the tween
+            -- also decides the cursor has left and collapses the rail again.
             H.hover(p._chat._rows["guild"])
-            expect(p._chat:IsRailExpanded()).as("it did expand").truthy()
-            expect(H.box(p._chat._chip).left)
-                .as("the resting chip must not slide sideways on a hover").eq(chipBefore)
+            expect(p._chat:IsRailExpanded()).as("hovering a row expands the rail").truthy()
+
+            -- The GEOMETRY, driven directly so the tween can finish without the poll undoing it.
+            p._chat:SetRailExpanded(false)
+            H.runAnimations()
+            p._chat:SetRailExpanded(true)
+            H.runAnimations()
             expect(H.box(p._chat:LogFor("general")).left)
-                .as("and the log must not re-wrap").eq(logBefore)
+                .as("the log is pushed clear of the names").gt(logBefore)
+            expect(H.box(p._chat._chip).left)
+                .as("and the chip does NOT move, being outside the rail's row").near(chipBefore, 0.5)
         end)
 
         it("sizes the expanded rail to the WIDEST name, not the first", function()
@@ -734,9 +1136,12 @@ describe("chat plugin", function()
             -- setting (`rail_size`) because it is one widget's own dimension rather than design
             -- language, so a token-derived expectation here now asserts the wrong number and would
             -- go on asserting it if the setting moved again.
+            --
+            -- The SCROLLBAR is part of the width too, and reserved whether or not the rows currently
+            -- overflow -- otherwise the log would shift sideways the moment a whisper arrived.
             expect(p._chat:_railWidth(false))
-                .as("2px marker + gap + disc")
-                .near(H.SuuUI.Pixel.Line(2) + H.token("spaceXs")
+                .as("2px marker + gap + scrollbar + disc")
+                .near(H.SuuUI.Pixel.Line(2) + H.token("spaceXs") + H.token("sizeScrollbar")
                       + H.SuuUI.Settings:Get("chat", "rail_size"), 0.5)
         end)
 

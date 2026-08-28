@@ -115,6 +115,16 @@ function InpMeta:SetFocus()
     self._eb:SetFocus()
 end
 
+--- Focuses the field and SELECTS its whole value, so Ctrl-C copies it.
+---
+--- Focus alone is not enough and that is the trap: a focused box with an unselected value gives
+--- Ctrl-C nothing to take, which is exactly how a copy-a-link dialog shipped that could not be
+--- copied from. `HighlightText` with no arguments selects everything.
+function InpMeta:SelectAll()
+    self._eb:SetFocus()
+    if self._eb.HighlightText then self._eb:HighlightText() end
+end
+
 -- Surface and border colour only. Focus and hover changes take this path so a state
 -- flip never rebuilds the backdrop table.
 function InpMeta:_paint()
@@ -215,6 +225,11 @@ function SuuUI.Components.Input(props, parent)
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local eb = CreateFrame("EditBox", nil, f)
+    -- MULTI-LINE, for a field holding text with newlines in it -- a copy-the-buffer window is the
+    -- case. Stated at construction rather than offered as a setter, because it changes what Enter
+    -- DOES (newline versus submit, see the OnEnterPressed guard below) and flipping that under a
+    -- focused field would change the meaning of the player's next keypress.
+    if props.multiLine then eb:SetMultiLine(true) end
     -- The vertical inset has no matching space token (2px), so it stays a literal.
     local insetX = SuuUI.Theme:GetToken("spaceXs") or 4
     local gapX = SuuUI.Theme:GetToken("spaceXs") or 4
@@ -313,6 +328,9 @@ function SuuUI.Components.Input(props, parent)
         S:Emit(handle, S.SIGNALS.TEXT_CHANGED, text)
     end)
     eb:SetScript("OnEnterPressed", function()
+        -- In a MULTI-LINE field Enter belongs to the text: submitting there would make a newline
+        -- impossible to type, which defeats the only reason such a field exists.
+        if props.multiLine then return end
         eb:ClearFocus()
         local text = eb:GetText()
         if props.onEnter then props.onEnter(text) end

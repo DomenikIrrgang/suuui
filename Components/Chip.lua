@@ -51,12 +51,18 @@ end
 -- transparent bg does not hollow the ring out -- it reveals the whole border pill as a solid
 -- shape. `outline` therefore rendered as its own opposite: the densest chip available. Its spec
 -- passed throughout, because it asserted the fill layer's ALPHA rather than what the player sees.
+-- SQUARE, not rounded. The chip was built on `Backdrop.Pill` and the concept shows no border radius
+-- at all -- confirmed against the mockup after seeing it in game. A square surface is also the
+-- simpler primitive here: `Apply` paints a real border, where `Pill` fakes its ring by drawing a
+-- solid border-coloured pill and covering the middle, which is why a transparent fill could not
+-- hollow it out.
 function ChipMeta:_paint()
     local T = SuuUI.Theme
     local c = resolve(self._color) or { 1, 1, 1, 1 }
     local ring = T:GetToken("opacityChipBorder") or 0.40
-    self._pill:SetBg("colorBg")
-    self._pill:SetBorder({ c[1], c[2], c[3], ring })
+    local B = SuuUI.Backdrop
+    B.SetBg(self._f, "colorBg")
+    B.SetBorder(self._f, { c[1], c[2], c[3], ring })
     -- A LITERAL colour, not a token key: a channel's colour is a game fact from ChatTypeInfo.
     self._labelText:SetColor({ c[1], c[2], c[3], 1 })
 end
@@ -77,7 +83,6 @@ end
 
 function ChipMeta:ApplyTheme()
     self._labelText:ApplyTheme()
-    self._pill:Refresh()
     self:_paint()
     self:_autosize()
 end
@@ -86,7 +91,6 @@ function ChipMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
     self._labelText:Destroy()
-    self._pill:Destroy()
     self._box:Destroy()
     self._f:Hide()
 end
@@ -107,8 +111,10 @@ function SuuUI.Components.Chip(props, parent)
     props = props or {}
     local T = SuuUI.Theme
 
-    -- A plain Frame: a backdrop underneath would show its own square corners through the pill.
-    local f = CreateFrame("Frame", nil, parent)
+    -- A BackdropTemplate frame, because the surface IS a backdrop now: the chip is square, so the
+    -- Pill primitive it used to need is gone along with the plain-Frame requirement that came with it.
+    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    SuuUI.Backdrop.Apply(f, { bg = "colorBg", border = "colorBorder" })
 
     local handle
     f:SetScript("OnSizeChanged", function(_, w, h)
@@ -117,7 +123,6 @@ function SuuUI.Components.Chip(props, parent)
     end)
 
     local box  = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
-    local pill = SuuUI.Backdrop.Pill(f, { bg = false, border = false })
 
     local sizeKey = props.size or "sm"
     local labelText = SuuUI.Components.Text({
@@ -129,7 +134,7 @@ function SuuUI.Components.Chip(props, parent)
 
     local id = "chip_" .. tostring(f)
     handle = setmetatable({
-        _f = f, _box = box, _pill = pill, _eid = id,
+        _f = f, _box = box, _eid = id,
         _label = labelText:GetFrame(), _labelText = labelText,
         _text = props.text or "",
         _color = props.color,
