@@ -396,12 +396,28 @@ describe("ChatPanels", function()
     end
 
     describe("Panels", function()
-        it("ships General, Guild and Log as DEFAULTS", function()
+        it("ships General, Global, Guild and Log as DEFAULTS", function()
             local panels = P().Panels(nil)
-            expect(#panels).eq(3)
+            expect(#panels).eq(4)
+            -- ORDER matters twice over: the rail renders in it, and `_render`'s
+            -- never-land-nowhere fallback is `panels[1]`, so General has to stay first.
             expect(panels[1].id).eq("general")
-            expect(panels[2].id).eq("guild")
-            expect(panels[3].id).eq("log")
+            expect(panels[2].id).eq("global")
+            expect(panels[3].id).eq("guild")
+            expect(panels[4].id).eq("log")
+        end)
+
+        it("gives every shipped panel a DISTINCT rail initial", function()
+            -- The disc's letter is the only thing identifying a panel at rest -- the name appears on
+            -- hover -- so two panels sharing one is two panels the player cannot tell apart. `#`
+            -- moved to Global (a player types `/1`, `/2`) and General took `@`.
+            local seen = {}
+            for _, p in ipairs(P().Panels(nil)) do
+                expect(seen[p.initial]).as("duplicate initial " .. tostring(p.initial)).falsy()
+                seen[p.initial] = true
+            end
+            expect(P().Find(P().Panels(nil), "global").initial).eq("#")
+            expect(P().Find(P().Panels(nil), "general").initial).eq("@")
         end)
 
         it("prefers a stored list, so the set is the player's", function()
@@ -421,8 +437,8 @@ describe("ChatPanels", function()
 
         it("falls back rather than leaving the player with no panels", function()
             -- An empty chat window is indistinguishable from a broken addon.
-            expect(#P().Panels({})).eq(3)
-            expect(#P().Panels({ { name = "no id" } })).eq(3)
+            expect(#P().Panels({})).eq(4)
+            expect(#P().Panels({ { name = "no id" } })).eq(4)
         end)
 
         it("General is CONVERSATION only", function()
@@ -434,6 +450,29 @@ describe("ChatPanels", function()
             expect(set["LOOT"]).as("loot belongs in the Log, not among people talking").falsy()
             expect(set["COMBAT_XP_GAIN"]).falsy()
             expect(set["GUILD"]).as("Guild is its own panel").falsy()
+            expect(set["CHANNEL"]).as("channels moved to Global, and are not copied").falsy()
+        end)
+
+        it("Global is CHANNELS only", function()
+            -- The client makes no distinction between a city channel and a joined one -- General,
+            -- Trade, LocalDefense, LookingForGroup and every custom channel are all
+            -- `CHAT_MSG_CHANNEL` told apart by their index -- so "all the global channels plus the
+            -- custom ones" is exactly this one group.
+            local global = P().Find(P().Panels(nil), "global")
+            local set = {}
+            for _, g in ipairs(global.groups) do set[g] = true end
+            expect(set["CHANNEL"]).truthy()
+            expect(set["SAY"]).as("not conversation").falsy()
+            expect(set["GUILD"]).falsy()
+            expect(set["LOOT"]).falsy()
+            expect(set["CHANNEL_NOTICE"])
+                .as("a join notice is bookkeeping, so it stays in the Log").falsy()
+        end)
+
+        it("makes Global a firehose that fades, like the channel traffic it took over", function()
+            local global = P().Find(P().Panels(nil), "global")
+            expect(global.fade).as("a channel is glanced at, not read").truthy()
+            expect(global.chrome).as("chrome is for conversations").falsy()
         end)
     end)
 
@@ -442,6 +481,32 @@ describe("ChatPanels", function()
             local guild = P().Find(P().Panels(nil), "guild")
             expect(P().Accept(guild, rec("GUILD"))).truthy()
             expect(P().Accept(guild, rec("SAY"))).falsy()
+        end)
+
+        it("treats an ABSENT group list as no filter at all", function()
+            -- A panel that never declared a group clause is a deliberate catch-all.
+            expect(P().Accept({ id = "all" }, rec("LOOT"))).truthy()
+            expect(P().Accept({ id = "all" }, rec("SAY"))).truthy()
+        end)
+
+        it("treats an EMPTY group list as a filter nothing satisfies", function()
+            -- ABSENT and EMPTY are opposites here, and the difference became user-reachable the
+            -- moment the player could switch every one of a panel's categories off. Collapsing them
+            -- made that panel accept EVERY message in the game -- the loudest possible reading of
+            -- "show me none of this", and how a Global panel with nothing ticked filled with loot.
+            expect(P().Accept({ id = "none", groups = {} }, rec("LOOT"))).falsy()
+            expect(P().Accept({ id = "none", groups = {} }, rec("CHANNEL"))).falsy()
+        end)
+
+        it("keeps that distinction through the COPY Panels hands out", function()
+            -- copyPanel flattened nil to {}, so the distinction existed in Accept and was destroyed
+            -- one call earlier by the thing every caller actually goes through.
+            local copied = P().Panels({ { id = "all", name = "All" } })
+            expect(copied[1].groups).as("nil survives the copy").eq(nil)
+            expect(P().Accept(copied[1], rec("LOOT"))).truthy()
+            local emptied = P().Panels({ { id = "none", name = "None", groups = {} } })
+            expect(emptied[1].groups).notNil()
+            expect(P().Accept(emptied[1], rec("LOOT"))).falsy()
         end)
 
         it("an explicit stream list wins over groups", function()
@@ -583,6 +648,277 @@ describe("ChatPanels", function()
             local ok = pcall(P().Events, { { id = "x", groups = { "PET_BATTLE_INFO" } } },
                              H.env.ChatTypeGroup)
             expect(ok).truthy()
+        end)
+    end)
+end)
+
+describe("ChatCategories", function()
+    before_each(function() H.setup() end)
+
+    local function C() return H.SuuUI.ChatCategories end
+    local function P() return H.SuuUI.ChatPanels end
+
+    local function has(list, want)
+        for _, v in ipairs(list or {}) do if v == want then return true end end
+        return false
+    end
+
+    describe("the vocabulary itself", function()
+        it("gives every category a unique id", function()
+            local seen = {}
+            for _, c in ipairs(C().CATEGORIES) do
+                expect(seen[c.id]).as("duplicate category id " .. tostring(c.id)).falsy()
+                seen[c.id] = true
+            end
+        end)
+
+        it("gives every category a unique label", function()
+            -- Two rows reading the same thing on a settings page is a page the player cannot use:
+            -- the label IS the only thing distinguishing one toggle from the next.
+            local seen = {}
+            for _, c in ipairs(C().CATEGORIES) do
+                expect(seen[c.label]).as("duplicate label " .. tostring(c.label)).falsy()
+                seen[c.label] = true
+            end
+        end)
+
+        it("never puts one group in two categories", function()
+            -- The load-bearing invariant. GroupsFor de-duplicates, so a group named by two
+            -- categories would survive switching EITHER of them off -- a toggle that visibly does
+            -- nothing, for the half of its groups the other one also claims.
+            local owner = {}
+            for _, c in ipairs(C().CATEGORIES) do
+                for _, g in ipairs(c.groups) do
+                    expect(owner[g])
+                        .as(g .. " is claimed by both " .. tostring(owner[g]) .. " and " .. c.id)
+                        .falsy()
+                    owner[g] = c.id
+                end
+            end
+        end)
+
+        it("gives every category at least one group", function()
+            -- A category with no groups is a control that cannot change anything -- the settings
+            -- equivalent of a theme token nothing reads.
+            for _, c in ipairs(C().CATEGORIES) do
+                expect(#c.groups).as(c.id .. " has no groups").gt(0)
+            end
+        end)
+    end)
+
+    describe("Key", function()
+        it("builds one key per panel and category", function()
+            expect(C().Key("general", "system")).eq("general_show_system")
+            expect(C().Key("log", "loot")).eq("log_show_loot")
+        end)
+
+        it("returns nil rather than a malformed key for a bad argument", function()
+            expect(C().Key(nil, "system")).eq(nil)
+            expect(C().Key("general", nil)).eq(nil)
+        end)
+    end)
+
+    describe("Default", function()
+        it("puts SYSTEM messages in General as well as the Log", function()
+            -- The ruling this feature was asked for: General is the main window, and a system line
+            -- is what a player expects to read there because that is where Blizzard puts it.
+            expect(C().Default("general", "system")).as("General shows system").truthy()
+            expect(C().Default("log", "system")).as("the Log keeps them too").truthy()
+        end)
+
+        it("keeps conversation categories out of the Log and Log categories out of General", function()
+            expect(C().Default("general", "say")).truthy()
+            -- eq(false), not falsy(): the whole reason this coerces is that a nil default renders an
+            -- unchecked box while Get answers nil, which is a second spelling of off that no watcher
+            -- fires for. `.falsy()` cannot tell the two apart, so it proved nothing here.
+            expect(C().Default("log", "say")).as("a real false, never nil").eq(false)
+            expect(C().Default("log", "loot")).truthy()
+            expect(C().Default("general", "loot")).as("a real false, never nil").eq(false)
+        end)
+
+        it("keeps Guild out of both, because Guild has a panel of its own", function()
+            -- Not an oversight: General showing it too would put every guild line on screen twice.
+            expect(C().Default("general", "guild")).eq(false)
+            expect(C().Default("log", "guild")).eq(false)
+        end)
+
+        it("answers FALSE, not nil, for an unknown category", function()
+            -- It is read as a schema `default`, and a nil default renders unchecked while Get
+            -- answers nil -- two spellings of off, only one of which a watcher fires for.
+            expect(C().Default("general", "nope")).eq(false)
+        end)
+
+        it("answers FALSE for a category row that OMITS a panel's field", function()
+            -- Every shipped row writes both fields, so the coercion is unreachable through the
+            -- table as it stands -- which is exactly why it is pinned here rather than deleted. A
+            -- row added later as `{ id, label, general = true, groups }` with no `log` is the
+            -- shape it defends against, and the failure it prevents is silent: `Schema` would put
+            -- a nil default on that toggle, `PageBuilder` would draw it unchecked, and no watcher
+            -- would fire for the value the player never changed.
+            local cats = C().CATEGORIES
+            cats[#cats + 1] = { id = "_probe", label = "_probe", general = true,
+                                groups = { "PROBE" } }
+            expect(C().Default("log", "_probe")).as("an absent field is a real false").eq(false)
+            expect(C().Default("general", "_probe")).eq(true)
+            -- And the derived schema carries that false rather than a nil.
+            local seen
+            for _, e in ipairs(C().Schema("log")) do
+                if e.key == "log_show__probe" then seen = e end
+            end
+            expect(seen.default).eq(false)
+            cats[#cats] = nil
+        end)
+
+        it("answers a boolean for every declared category on every panel", function()
+            for _, panelId in ipairs(C().PANELS) do
+                for _, c in ipairs(C().CATEGORIES) do
+                    expect(type(C().Default(panelId, c.id)))
+                        .as(panelId .. "/" .. c.id .. " must be a boolean").eq("boolean")
+                end
+            end
+        end)
+    end)
+
+    describe("Schema", function()
+        it("emits one toggle per category, in vocabulary order", function()
+            local schema = C().Schema("general")
+            expect(#schema).eq(#C().CATEGORIES)
+            for i, entry in ipairs(schema) do
+                expect(entry.type).eq("toggle")
+                expect(entry.key).eq(C().Key("general", C().CATEGORIES[i].id))
+                expect(entry.label).eq(C().CATEGORIES[i].label)
+            end
+        end)
+
+        it("takes each entry's default from Default, so the page and the filter agree", function()
+            -- The whole reason the schema is generated: a hand-written default that disagreed with
+            -- GroupsFor would render a ticked box for a group the panel does not carry.
+            for _, entry in ipairs(C().Schema("log")) do
+                local catId = entry.key:match("^log_show_(.+)$")
+                expect(entry.default).eq(C().Default("log", catId))
+            end
+        end)
+
+        it("differs between the two panels", function()
+            local g, l = C().Schema("general"), C().Schema("log")
+            local gLoot, lLoot
+            for _, e in ipairs(g) do if e.key == "general_show_loot" then gLoot = e.default end end
+            for _, e in ipairs(l) do if e.key == "log_show_loot" then lLoot = e.default end end
+            expect(gLoot).falsy()
+            expect(lLoot).truthy()
+        end)
+    end)
+
+    describe("GroupsFor", function()
+        it("expands the shipped defaults when given no predicate", function()
+            local groups = C().GroupsFor("general")
+            expect(has(groups, "SAY")).truthy()
+            expect(has(groups, "SYSTEM")).as("General now carries SYSTEM").truthy()
+            expect(has(groups, "CHANNEL")).as("channels MOVED to Global, not copied").falsy()
+            expect(has(groups, "LOOT")).as("loot is the Log's").falsy()
+        end)
+
+        it("gives Global the channel group and nothing else", function()
+            local groups = C().GroupsFor("global")
+            expect(#groups).as("one group covers every channel, city and custom alike").eq(1)
+            expect(groups[1]).eq("CHANNEL")
+        end)
+
+        it("honours a predicate over the defaults", function()
+            local only = C().GroupsFor("general", function(id) return id == "loot" end)
+            expect(has(only, "LOOT")).truthy()
+            expect(has(only, "MONEY")).as("the whole category, not just its first group").truthy()
+            expect(has(only, "SAY")).as("a default-on category the predicate refused").falsy()
+        end)
+
+        it("returns an empty list when every category is off", function()
+            expect(#C().GroupsFor("general", function() return false end)).eq(0)
+        end)
+
+        it("de-duplicates and keeps vocabulary order", function()
+            local groups = C().GroupsFor("general", function() return true end)
+            local seen = {}
+            for _, g in ipairs(groups) do
+                expect(seen[g]).as("duplicate group " .. g).falsy()
+                seen[g] = true
+            end
+            -- Order is total, so the event registration set built from it is the same on every
+            -- login -- the determinism ChatPanels' ordered arrays exist for.
+            local iSay, iLoot
+            for i, g in ipairs(groups) do
+                if g == "SAY" then iSay = i end
+                if g == "LOOT" then iLoot = i end
+            end
+            expect(iSay).lt(iLoot)
+        end)
+
+        it("claims CHANNEL_JOIN and CHANNEL_LEAVE, which no panel used to", function()
+            -- The CHANNEL group registers both events, and until this table existed no panel named
+            -- either KIND -- so every join and leave notice fell through routing into _render's
+            -- never-land-nowhere fallback, which is General. They belong with the bookkeeping.
+            local log = C().GroupsFor("log")
+            expect(has(log, "CHANNEL_JOIN")).truthy()
+            expect(has(log, "CHANNEL_LEAVE")).truthy()
+            expect(has(C().GroupsFor("general"), "CHANNEL_JOIN")).falsy()
+        end)
+    end)
+
+    describe("Keys", function()
+        it("names every configurable panel", function()
+            -- Declared explicitly rather than counted, because `Keys` is what the plugin wires its
+            -- watchers from AND what tells `_applyCategories` which panels to re-derive: a panel
+            -- missing from here renders its toggles (the schema is generated per panel) and then
+            -- ignores every one of them, which reads as the checkboxes being broken.
+            local set = {}
+            for _, id in ipairs(C().PANELS) do set[id] = true end
+            expect(set["general"]).truthy()
+            expect(set["global"]).as("Global's toggles need watchers like anyone else's").truthy()
+            expect(set["log"]).truthy()
+            expect(set["guild"]).as("one group, so there is nothing to configure").falsy()
+        end)
+
+        it("covers every configurable panel crossed with every category", function()
+            expect(#C().Keys()).eq(#C().PANELS * #C().CATEGORIES)
+        end)
+
+        it("is what a caller wires watchers from, so it contains no nils", function()
+            for _, key in ipairs(C().Keys()) do expect(type(key)).eq("string") end
+        end)
+    end)
+
+    describe("the panel defaults are DERIVED from it", function()
+        it("gives General exactly GroupsFor('general')", function()
+            -- No second copy: two lists of the same fact would let the shipped defaults and the
+            -- switchable categories disagree, and the page would offer a control for a group the
+            -- panel does not carry.
+            local panel = P().Find(P().Panels(nil), "general")
+            local want = C().GroupsFor("general")
+            expect(#panel.groups).eq(#want)
+            for i, g in ipairs(want) do expect(panel.groups[i]).eq(g) end
+        end)
+
+        it("gives the Log exactly GroupsFor('log')", function()
+            local panel = P().Find(P().Panels(nil), "log")
+            local want = C().GroupsFor("log")
+            expect(#panel.groups).eq(#want)
+            for i, g in ipairs(want) do expect(panel.groups[i]).eq(g) end
+        end)
+
+        it("gives Global exactly GroupsFor('global')", function()
+            local panel = P().Find(P().Panels(nil), "global")
+            local want = C().GroupsFor("global")
+            expect(#panel.groups).eq(#want)
+            for i, g in ipairs(want) do expect(panel.groups[i]).eq(g) end
+        end)
+
+        it("leaves Guild alone, and claims GUILD_MOTD there", function()
+            -- Guild is not in PANELS: one group means a category page for it would be a single
+            -- checkbox that empties the panel. GUILD_MOTD is named because the GUILD group
+            -- registers that event and its record's kind is GUILD_MOTD, not GUILD -- unclaimed, the
+            -- message of the day fell through into General.
+            local panel = P().Find(P().Panels(nil), "guild")
+            expect(has(panel.groups, "GUILD")).truthy()
+            expect(has(panel.groups, "GUILD_MOTD")).truthy()
         end)
     end)
 end)

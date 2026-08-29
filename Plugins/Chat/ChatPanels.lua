@@ -37,21 +37,15 @@ local M = {}
 --- Every group list is an ordered ARRAY, never a hash, for the reason above.
 M.DEFAULTS = {
     {
-        id = "general", name = "General", initial = "#",
-        -- CONVERSATION only. Not an everything-tab: loot, XP and system lines go to the Log, so
-        -- what is left is what a person said to you.
-        groups = { "SAY", "YELL", "EMOTE", "TEXT_EMOTE", "PARTY", "PARTY_LEADER",
-                   "RAID", "RAID_LEADER", "RAID_WARNING", "MONSTER_SAY", "MONSTER_YELL",
-                   "MONSTER_EMOTE", "MONSTER_WHISPER", "MONSTER_PARTY",
-                   -- CHANNEL is here because leaving it out LOST EVERY NUMBERED-CHANNEL LINE.
-                   -- The event list is built from the panels' groups, so a group no panel claims is
-                   -- never registered at all -- and with Blizzard's chat suppressed the player simply
-                   -- never sees `/1` or `/2 Trade` again. A channel is people TALKING, so General is
-                   -- where it belongs under the same rule that keeps loot and XP in the Log.
-                   --
-                   -- A joined channel may still be given its OWN panel, which is what the ruling
-                   -- asked for; this is the floor, not a replacement for that.
-                   "CHANNEL" },
+        id = "general", name = "General", initial = "@",
+        -- DERIVED from ChatCategories rather than listed here, because the player now configures
+        -- exactly this list from the settings page: two copies of it would mean the shipped
+        -- defaults and the switchable categories could disagree, and the page would offer a
+        -- control for a group the panel does not actually carry. `Chat` re-derives it from the
+        -- stored settings at build time; this is what a profile that has never touched them gets.
+        --
+        -- Conversation-first, and with SYSTEM now included: see the `system` category's note.
+        groups = SuuUI.ChatCategories.GroupsFor("general"),
         -- Channel traffic fades out of a frameless log; a conversation does not (see the plan).
         fade = true,
         -- Frameless. The concept gives CHROME to conversations only -- a channel is a firehose you
@@ -61,8 +55,34 @@ M.DEFAULTS = {
         color = "colorGray600",
     },
     {
+        -- The global channels: General, Trade, LocalDefense, LookingForGroup and every custom
+        -- channel the player joined. One panel for all of them because the CLIENT makes no
+        -- distinction -- they are all `CHAT_MSG_CHANNEL` told apart by their index -- so there is
+        -- nothing finer to split on without a per-channel filter dimension that does not exist yet.
+        --
+        -- Its own panel rather than a slice of General because channel volume is what makes a chat
+        -- window unreadable: Trade alone outpaces everything a player is actually talking in. The
+        -- `channels` category MOVED here rather than being copied, or every line would print twice.
+        id = "global", name = "Global",
+        -- `#` is the channel sigil -- a player types `/1`, `/2` -- so it belongs on the panel that IS
+        -- the channels. General carried it from when General carried CHANNEL, and now takes `@`
+        -- instead: what is left there is talk aimed at or around you. All four initials stay ASCII
+        -- and distinct (@ # G L), because the client's faces do not reliably carry anything else.
+        initial = "#",
+        groups = SuuUI.ChatCategories.GroupsFor("global"),
+        -- A firehose, exactly like General's channel traffic was -- so it fades and stays frameless.
+        fade = true, chrome = false,
+        -- The client's own generic channel colour, which is honest here in a way it is not for
+        -- General: this panel is nothing BUT channels. `_panelColor` falls back to a muted token on a
+        -- client with no such row, so a missing entry costs a duller disc rather than an error.
+        color = "CHANNEL",
+    },
+    {
         id = "guild", name = "Guild", initial = "G",
-        groups = { "GUILD", "OFFICER" },
+        -- GUILD_MOTD is an EVENT the `GUILD` group registers, and its record's kind is
+        -- `GUILD_MOTD` rather than `GUILD` -- so without it named here the message of the day
+        -- matched no panel and fell through `_render`'s fallback into General.
+        groups = { "GUILD", "OFFICER", "GUILD_MOTD" },
         fade = true, chrome = false,
         color = "GUILD",
     },
@@ -70,11 +90,8 @@ M.DEFAULTS = {
         id = "log", name = "Log", initial = "L",
         -- Everything that is not someone talking. One panel rather than a scattering of them,
         -- because the player never wants to READ this -- only to find one line in it afterwards.
-        groups = { "SYSTEM", "CHANNEL_NOTICE", "CHANNEL_NOTICE_USER", "CHANNEL_LIST",
-                   "LOOT", "MONEY", "COMBAT_XP_GAIN", "COMBAT_HONOR_GAIN", "COMBAT_FACTION_CHANGE",
-                   "COMBAT_MISC_INFO", "SKILL", "TRADESKILLS", "OPENING", "PET_INFO",
-                   "BG_SYSTEM_NEUTRAL", "BG_SYSTEM_ALLIANCE", "BG_SYSTEM_HORDE",
-                   "IGNORED", "TARGETICONS" },
+        -- Derived, for the reason General's is.
+        groups = SuuUI.ChatCategories.GroupsFor("log"),
         -- Does NOT fade: the Log exists to be searched after the fact, and a faded line cannot be.
         fade = false, chrome = false,
         color = "colorGray600",
@@ -126,7 +143,12 @@ local function copyPanel(p)
         name   = p.name,
         initial = p.initial,
         color  = p.color,
-        groups = copyArray(p.groups),
+        -- NIL is preserved rather than flattened to an empty array, exactly as `senders` and
+        -- `streams` are, because for `groups` the two mean OPPOSITE things in Accept: absent is "no
+        -- group clause, match anything", empty is "a group clause nothing satisfies, match nothing".
+        -- Flattening turned a configurable panel with every category switched off into a panel that
+        -- accepted EVERY message -- the loudest possible reading of "show me none of this".
+        groups = p.groups and copyArray(p.groups) or nil,
         senders = p.senders and copyArray(p.senders) or nil,
         streams = p.streams and copyArray(p.streams) or nil,
         fade   = p.fade and true or false,
@@ -211,6 +233,12 @@ end
 --- `groups` is filtered by group alone. That is what keeps adding a dimension cheap: a new
 --- optional field plus one clause here, with every existing stored panel unaffected because it
 --- does not carry the field.
+---
+--- ABSENT AND EMPTY ARE DIFFERENT for `groups`, and the difference is user-reachable now that the
+--- player configures a panel's categories. `groups = nil` is "no group clause" and matches anything;
+--- `groups = {}` is "a group clause nothing satisfies" and matches nothing. Collapsing the two made
+--- a panel with every category switched off accept EVERY message in the game -- the exact opposite
+--- of what the player asked for, and the loudest failure this filter can produce.
 -- @param panel table
 -- @param rec table
 -- @return boolean
@@ -225,7 +253,7 @@ function M.Accept(panel, rec)
             if key == rec.stream then ok = true break end
         end
         if not ok then return false end
-    elseif panel.groups and #panel.groups > 0 then
+    elseif panel.groups then
         local ok = false
         for _, g in ipairs(panel.groups) do
             if g == rec.kind then ok = true break end

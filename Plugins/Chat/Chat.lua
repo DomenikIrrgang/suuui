@@ -98,10 +98,30 @@ local SCHEMA = {
     -- forever, which is why the minimum is 0 rather than 1.
     { key = "history_days", label = "Forget Conversations After (Days)", type = "slider", default = 14,
       min = 0, max = 90, step = 1 },
-
-    { key = "", label = "Internal", type = "internal" },
-    { key = "position", type = "position" },
 }
+
+-- The per-panel message categories, APPENDED rather than written inline: every entry is generated
+-- from `ChatCategories`, so adding a category is one row in that table and no edit here. Writing
+-- twenty-eight toggles by hand is also how a key gets misspelled in exactly one of the two places
+-- that have to agree about it.
+--
+-- Two SECTIONS rather than a `subtabs` entry. `PageBuilder` walks the schema linearly and a section
+-- opens an accordion that swallows everything after it until the next one, so two sections give two
+-- long toggle lists that are one click each to open and cannot both be open -- which is the right
+-- shape for two lists the player compares against each other. A `subtabs` entry placed after the
+-- existing sections would render as a control inside the last accordion's body instead.
+local function appendCategories(label, panelId)
+    tinsert(SCHEMA, { key = "", label = label, type = "section" })
+    for _, entry in ipairs(SuuUI.ChatCategories.Schema(panelId)) do
+        tinsert(SCHEMA, entry)
+    end
+end
+appendCategories("General Panel: Messages", "general")
+appendCategories("Global Panel: Messages", "global")
+appendCategories("Log Panel: Messages", "log")
+
+tinsert(SCHEMA, { key = "", label = "Internal", type = "internal" })
+tinsert(SCHEMA, { key = "position", type = "position" })
 
 --------------------------------------------------------------------------------
 -- The window
@@ -379,6 +399,105 @@ function Chat:_systemLog()
     return panel and self:_logFor(panel) or nil
 end
 
+--- Every log that addon output belongs in.
+---
+--- Resolved through the SAME question a real system line is routed by -- which panels accept a
+--- `SYSTEM` record -- rather than being pinned to the Log. There is now a setting saying where
+--- system messages go, and a `print()` from another addon is system output; answering it two
+--- different ways would mean a player who put system lines in General still had to look in the Log
+--- for half of them.
+---
+--- Falls back to `_systemLog` when routing resolves nothing, so addon output cannot be lost by a
+--- player switching the `system` category off on both panels: they asked for the client's system
+--- chatter to be quieter, not for another addon's error to vanish.
+-- @return table  array of log handles, possibly empty
+function Chat:_systemLogs()
+    local out = {}
+    for _, id in ipairs(SuuUI.ChatPanels.Route(self._panels, { kind = "SYSTEM" })) do
+        local panel = SuuUI.ChatPanels.Find(self._panels, id)
+        if panel then tinsert(out, self:_logFor(panel)) end
+    end
+    if #out == 0 then
+        local log = self:_systemLog()
+        if log then out[1] = log end
+    end
+    return out
+end
+
+--- Rewrites the configurable panels' group filters from the player's category settings.
+---
+--- The SETTINGS are the source of truth; the panel's `groups` array is a derived cache of them, so
+--- this runs at build time and again on every category change. `ChatPanels.DEFAULTS` derives the
+--- same list from the same table, which is what keeps a fresh profile and a configured one on one
+--- code path.
+---
+--- Only `ChatCategories.PANELS` are touched. Guild is a single-group panel and a conversation is
+--- filtered by stream, so neither has a category list to apply -- and rewriting their groups from an
+--- empty answer would empty them.
+function Chat:_applyCategories()
+    local Cats = SuuUI.ChatCategories
+    for _, panelId in ipairs(Cats.PANELS) do
+        local panel = SuuUI.ChatPanels.Find(self._panels or {}, panelId)
+        if panel then
+            panel.groups = Cats.GroupsFor(panelId, function(catId)
+                return get(Cats.Key(panelId, catId)) and true or false
+            end)
+        end
+    end
+end
+
+--- Brings the event frame's registrations in line with what the panels now want.
+---
+--- A DIFF rather than a re-register, and both halves matter. Registering the new ones is what makes
+--- switching a category on take effect at all -- the event set is a union over the panels' groups, so
+--- a group nothing claimed was never subscribed and its messages never reached the plugin. And
+--- unregistering the dropped ones is what makes switching one off actually stop the traffic rather
+--- than merely filter it, which is the difference between a quiet panel and a store that keeps
+--- growing with records nothing will ever show.
+---
+--- `PLAYER_LOGOUT` is registered separately and deliberately absent from `_registered`, so this can
+--- never unregister the one event the history depends on.
+function Chat:_syncEvents()
+    local ev = self._events
+    if not ev then return end
+    local _, want = SuuUI.ChatPanels.Events(self._panels, ChatTypeGroup)
+    local have = self._registered or {}
+    for event in pairs(have) do
+        if not want[event] then
+            pcall(ev.UnregisterEvent, ev, event)
+            have[event] = nil
+        end
+    end
+    for event in pairs(want) do
+        if not have[event] then
+            -- pcall: an event absent on this client generation must not take the plugin down.
+            pcall(ev.RegisterEvent, ev, event)
+            have[event] = true
+        end
+    end
+    self._registered = have
+end
+
+--- Repaints every panel from the store under the filters that are live now.
+---
+--- This is what makes a category toggle visible IMMEDIATELY instead of only affecting the next
+--- message. It is affordable for exactly the reason the store holds records rather than strings: a
+--- re-render is a re-route plus a re-format of what was already kept, so the player sees the loot
+--- lines they already received move into the panel they just ticked.
+---
+--- The logs are CLEARED first. `_replayHistory` appends, so replaying onto a populated log would
+--- print the entire history a second time -- and the bounded buffer would then evict the oldest half
+--- of it, which looks like the toggle deleting messages.
+---
+--- Unread counts are deliberately NOT reset: `_bumpUnread` and `_bumpMissed` both stand down while
+--- `_replaying`, so the badges survive untouched rather than being recounted from history.
+function Chat:_rerender()
+    if not (self._logs and self._store) then return end
+    for _, log in pairs(self._logs) do log:Clear() end
+    self:_replayHistory()
+    self:_refreshJump()
+end
+
 --- Routes one chat event into the log.
 ---
 --- 4a puts EVERY tab's traffic in the ONE log, deliberately. A General-only log would show no
@@ -634,7 +753,7 @@ function Chat:_render(rec, onlyPanelId)
             -- A panel carrying ONE group needs no tag: the panel IS the label, so "GLD" on every
             -- line of a Guild panel is the same information twice. This is the property the
             -- per-panel render buys -- one record, two panels, two correct strings.
-            tag        = (get("show_tags") and self:_wantsTag(panel)) and true or false,
+            tag        = self:_wantsTag(panel, rec),
             -- ALWAYS, because "time, name, colon, message -- in General and in a whisper alike" is the
             -- concept's stated rule and it is not conditional on anything. It used to ride on the tag
             -- being drawn, which coupled two unrelated things: turning the tag column off brought
@@ -668,15 +787,30 @@ function Chat:_render(rec, onlyPanelId)
     end
 end
 
---- Whether a panel's rows should carry a channel tag.
+--- Whether a panel's rows should carry a channel tag, for one record.
 ---
---- One rule, not two: a tag is drawn only when the panel can hold MORE THAN ONE group, because
---- otherwise it is the same word on every line and the panel itself already says it.
+--- Two rules, and the second is an exception to the first rather than a feature of its own.
 ---
---- A conversation is covered by that same rule rather than by a guard of its own -- it filters by
---- STREAM and carries no groups at all, so the count is 0. A separate `panel.conversation` check
---- was here and mutation testing proved it unreachable: both branches agreed on every input.
-function Chat:_wantsTag(panel)
+--- The general rule: a tag is drawn only when the panel can hold MORE THAN ONE group, because
+--- otherwise it is the same word on every line and the panel itself already says it. A conversation
+--- is covered by that same rule rather than by a guard of its own -- it filters by STREAM and
+--- carries no groups at all, so the count is 0. A separate `panel.conversation` check was here and
+--- mutation testing proved it unreachable: both branches agreed on every input.
+---
+--- THE EXCEPTION: a numbered channel's tag is its NUMBER, which differs line to line. So it is not a
+--- label repeating what the panel already says -- it is the only channel identity the row has, since
+--- `_render` passes `labelled = true` and that strips the globalstring's own `[2. Trade]` bracket.
+--- Without this the Global panel would render General, Trade, LookingForGroup and every custom
+--- channel as one indistinguishable run of `Name: message`, told apart only by six similar
+--- ChatTypeInfo colours -- and the number is the actionable half, because `/2` is what a player
+--- types to reply. Neither gate applies to it: not the group count, and not `show_tags`, whose whole
+--- argument for defaulting off is that a TYPE tag repeats what the line colour already says.
+-- @param panel table
+-- @param rec table|nil  the record being rendered; omitted asks about the panel alone
+-- @return boolean
+function Chat:_wantsTag(panel, rec)
+    if rec and rec.kind == "CHANNEL" then return true end
+    if not get("show_tags") then return false end
     return #(panel.groups or {}) > 1
 end
 
@@ -1537,6 +1671,10 @@ local function buildWindow(p)
     -- Panels and the store are built BEFORE the event frame, because registration is derived from
     -- the panel list: a group no panel wants is not subscribed at all.
     self._panels = SuuUI.ChatPanels.Panels(p:GetProfile().panels)
+    -- Applied BEFORE the store and the replay. The panels' filters decide what the replay routes, so
+    -- deriving them afterwards would repaint the whole history under the shipped defaults and only
+    -- honour the player's categories from the next live message onward.
+    self:_applyCategories()
     -- Built from the SavedVariable rather than empty, which is what makes history survive a logout
     -- and is the whole reason records carry a sequence. `Restore` tolerates nil and a hand-edited
     -- blob by yielding an empty store, so a fresh install and a returning player are ONE path.
@@ -1673,11 +1811,12 @@ local function buildWindow(p)
         self:_onChatEvent(event, ...)
     end)
     pcall(ev.RegisterEvent, ev, "PLAYER_LOGOUT")
-    for _, event in ipairs(SuuUI.ChatPanels.Events(self._panels, ChatTypeGroup)) do
-        -- pcall: an event absent on this client generation must not take the plugin down.
-        pcall(ev.RegisterEvent, ev, event)
-    end
     self._events = ev
+    -- Through `_syncEvents` rather than a loop of its own, so the first registration and every later
+    -- category change walk ONE code path. A second loop here would be the copy that stops agreeing
+    -- with the diff the moment either is touched.
+    self._registered = {}
+    self:_syncEvents()
 
     self:_apply()
     self:_refreshChip()
@@ -1741,10 +1880,12 @@ plugin = SuuUI:CreatePlugin({
             local info = ChatTypeInfo and ChatTypeInfo.SYSTEM
             local r, g, b
             if type(info) == "table" then r, g, b = info.r, info.g, info.b end
-            -- Addon output is not conversation, so it belongs in the Log panel under the same
-            -- ruling that sends loot and XP there -- not in whichever tab happens to be open.
-            local log = p._chat:_systemLog()
-            if log then log:AddMessage(text, r, g, b) end
+            -- Addon output is system output, so it goes wherever the player put system messages --
+            -- resolved through the same routing a real SYSTEM line takes rather than pinned to the
+            -- Log, so the two cannot give different answers to one question.
+            for _, log in ipairs(p._chat:_systemLogs()) do
+                log:AddMessage(text, r, g, b)
+            end
         end)
 
         SuuUI.Settings:Watch(PLUGIN_ID, "hide_blizzard", function(on)
@@ -1791,6 +1932,34 @@ plugin = SuuUI:CreatePlugin({
         SuuUI.Settings:Watch(PLUGIN_ID, "rail_size", function()
             if p._chat then p._chat:_rebuildRail() end
         end, PLUGIN_ID .. ".shape")
+
+        -- One watcher per category key, DERIVED from ChatCategories rather than listed: a category
+        -- added to that table is watched without anyone remembering to come back here, and the
+        -- failure that avoids is a toggle that stores a value nothing reacts to -- which reads as
+        -- the setting being broken rather than as a missing subscription.
+        --
+        -- Three things happen, in this order, and none is optional. The filter is re-derived, or the
+        -- panel keeps showing what it showed. The event registrations are diffed, or a newly-ticked
+        -- category's messages never reach the plugin at all -- the event set is a union over the
+        -- panels' groups, so nothing was subscribed to it. And the panels are repainted, or the
+        -- change appears to do nothing until the next message happens to arrive.
+        for _, key in ipairs(SuuUI.ChatCategories.Keys()) do
+            SuuUI.Settings:Watch(PLUGIN_ID, key, function()
+                local c = p._chat
+                if not c then return end
+                -- REPORTED, not swallowed: `Settings:Watch` pcalls into SuuUI.Debug, which prints
+                -- nothing with debug off, so a throw here would present as one checkbox silently
+                -- doing nothing while the rest worked.
+                local ok, err = pcall(function()
+                    c:_applyCategories()
+                    c:_syncEvents()
+                    c:_rerender()
+                end)
+                if not ok then
+                    SuuUI.Fault("chat: applying '" .. key .. "' failed: " .. tostring(err))
+                end
+            end, PLUGIN_ID .. ".shape")
+        end
     end,
 
     onDisable = function(p)

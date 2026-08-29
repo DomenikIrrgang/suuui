@@ -1056,29 +1056,81 @@ describe("chat plugin", function()
             expect(has).as("a group no panel claims is a group the player loses").eq(true)
         end)
 
-        it("shows a channel line in General", function()
+        it("shows a channel line in Global, not in General", function()
+            -- Channels MOVED to their own panel: Trade alone outpaces everything a player is
+            -- actually talking in, which is what made one shared window unreadable.
             local p = enabled()
             H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
                                          channelIndex = 2, channel = "Trade" })
-            local log = p._chat:LogFor("general")
-            expect(log).as("General took it").notNil()
+            local log = p._chat:LogFor("global")
+            expect(log).as("Global took it").notNil()
             local shown = false
             for i = 1, log:GetNumMessages() do
                 if tostring(log:GetMessageInfo(i)):find("wts stuff", 1, true) then shown = true end
             end
             expect(shown).as("a channel is people talking, so it is not Log traffic").eq(true)
+
+            local general = p._chat:LogFor("general")
+            local leaked = false
+            for i = 1, (general and general:GetNumMessages() or 0) do
+                if tostring(general:GetMessageInfo(i)):find("wts stuff", 1, true) then leaked = true end
+            end
+            expect(leaked).as("moved, not copied -- or every Trade line prints twice").eq(false)
         end)
 
         it("tags the line with the channel NUMBER, which is what /2 means", function()
+            -- Asserted as the tag ADJACENT TO THE SENDER rather than as a bare `find("2")`, which the
+            -- timestamp column satisfies on its own -- so the old assertion passed whether or not a
+            -- tag was drawn at all.
+            --
+            -- The needle carries `|Hplayer:` because the sender is rendered as a LINK, so the link
+            -- opener sits between the tag and the name -- a `"2 Thalvyn"` substring never matches.
             local p = enabled()
             H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
                                          channelIndex = 2, channel = "Trade" })
-            local log = p._chat:LogFor("general")
+            local log = p._chat:LogFor("global")
             local tagged = false
             for i = 1, log:GetNumMessages() do
-                if tostring(log:GetMessageInfo(i)):find("2", 1, true) then tagged = true end
+                if tostring(log:GetMessageInfo(i)):find("2 |Hplayer:Thalvyn", 1, true) then tagged = true end
             end
             expect(tagged).as("the tag column carries the channel index").eq(true)
+        end)
+
+        it("tags it EVEN WITH show_tags off, because the number is per-line information", function()
+            -- The exception `_wantsTag` carries. `show_tags` defaults off on the argument that a TYPE
+            -- tag repeats what the line colour already says -- true of `GLD`, false of a channel
+            -- number: `_render` strips the globalstring's `[2. Trade]` bracket, so without the tag the
+            -- Global panel is General, Trade and every custom channel rendered as one
+            -- indistinguishable run of `Name: message`.
+            local p = enabled()
+            expect(H.SuuUI.Settings:Get("chat", "show_tags")).as("off by default").falsy()
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            local log = p._chat:LogFor("global")
+            local text = log:GetMessageInfo(log:GetNumMessages())
+            expect(text:find("2 |Hplayer:Thalvyn", 1, true)).notNil()
+            expect(text:find("[2. Trade]", 1, true))
+                .as("and the globalstring's own bracket is still stripped").eq(nil)
+        end)
+
+        it("distinguishes two channels in the same panel", function()
+            -- The whole reason the number is drawn: one panel now holds General, Trade,
+            -- LookingForGroup and every custom channel, and they are one chat GROUP told apart only
+            -- by their index.
+            local p = enabled()
+            H.chat("CHAT_MSG_CHANNEL", { text = "anyone?", sender = "Ayla",
+                                         channelIndex = 1, channel = "General" })
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            local log = p._chat:LogFor("global")
+            local one, two = false, false
+            for i = 1, log:GetNumMessages() do
+                local t = tostring(log:GetMessageInfo(i))
+                if t:find("1 |Hplayer:Ayla", 1, true) then one = true end
+                if t:find("2 |Hplayer:Thalvyn", 1, true) then two = true end
+            end
+            expect(one).truthy()
+            expect(two).truthy()
         end)
 
         xit("gives a joined channel its OWN panel", function()
@@ -1799,13 +1851,32 @@ describe("chat plugin", function()
             -- and a mutation forcing the tag on survived. A per-channel panel is the real case and
             -- exactly what an editable panel list is for; the rule is asserted directly because
             -- staging one through the plugin's lifecycle tests the lifecycle, not the rule.
+            --
+            -- `show_tags` is now read INSIDE `_wantsTag` rather than ANDed at the call site, so it
+            -- has to be staged on for the group-count rule to be reachable at all.
             local p = enabled()
-            expect(p._chat:_wantsTag({ id = "trade", groups = { "CHANNEL" } }))
+            H.SuuUI.Settings:Set("chat", "show_tags", true)
+            expect(p._chat:_wantsTag({ id = "loot", groups = { "LOOT" } }))
                 .as("one group means the tag is the same word on every line").falsy()
             expect(p._chat:_wantsTag({ id = "guild", groups = { "GUILD", "OFFICER" } }))
                 .as("two groups means the tag distinguishes guild from officer").truthy()
             expect(p._chat:_wantsTag({ id = "whisper:x", streams = { "whisper:x" } }))
                 .as("a conversation carries no groups at all, so the same rule covers it").falsy()
+        end)
+
+        it("honours show_tags for a type tag, and overrides it for a channel NUMBER", function()
+            -- The two halves of the rule, side by side. A single-group CHANNEL panel is the case that
+            -- breaks the group-count premise: its tag differs line to line, so "one group means one
+            -- constant label" is simply false for it.
+            local p = enabled()
+            local channels = { id = "global", groups = { "CHANNEL" } }
+            H.SuuUI.Settings:Set("chat", "show_tags", false)
+            expect(p._chat:_wantsTag({ id = "guild", groups = { "GUILD", "OFFICER" } }))
+                .as("a type tag obeys the setting").falsy()
+            expect(p._chat:_wantsTag(channels, { kind = "CHANNEL" }))
+                .as("a channel number is per-line information, so it ignores the setting").truthy()
+            expect(p._chat:_wantsTag(channels, { kind = "SAY" }))
+                .as("and the exception is per RECORD, not per panel").falsy()
         end)
 
         it("re-resolves fading per panel when a setting changes AFTER the logs exist", function()
@@ -1874,7 +1945,7 @@ describe("chat plugin", function()
             expect(p._chat:LogFor("whisper:sylvaine-testrealm"):GetNumMessages()).eq(3)
             -- The PANEL LIST is what a duplicate grows: _rows and _logs are keyed by panel id, so
             -- a second panel with the same id is invisible in both.
-            expect(#p._chat._panels).as("three channels plus ONE conversation").eq(4)
+            expect(#p._chat._panels).as("four fixed panels plus ONE conversation").eq(5)
         end)
 
         it("never drops a message with nowhere to go", function()
@@ -2164,6 +2235,306 @@ describe("chat plugin", function()
             expect(H.SuuUI.Settings:GetWatcherCount())
                 .as("a subscription leak is invisible until it fires into freed state")
                 .lte(baseline)
+        end)
+    end)
+
+    describe("message categories", function()
+        -- The pure vocabulary is covered in 65_chatstore_panels_spec. What is tested HERE is the
+        -- wiring, which is where every one of these can fail silently: a filter that is never
+        -- re-derived, an event that is never registered so the message does not arrive at all, and
+        -- a change that only takes effect for the NEXT message.
+
+        local Cats
+        local function cats() Cats = Cats or H.SuuUI.ChatCategories return Cats end
+        local function setCat(panelId, catId, on)
+            H.SuuUI.Settings:Set("chat", cats().Key(panelId, catId), on)
+        end
+        local function shows(p, panelId, needle)
+            local log = p._chat:LogFor(panelId)
+            if not log then return false end
+            for i = 1, (log:GetNumMessages() or 0) do
+                if tostring(log:GetMessageInfo(i)):find(needle, 1, true) then return true end
+            end
+            return false
+        end
+        local function count(p, panelId, needle)
+            local log, n = p._chat:LogFor(panelId), 0
+            if not log then return 0 end
+            for i = 1, (log:GetNumMessages() or 0) do
+                if tostring(log:GetMessageInfo(i)):find(needle, 1, true) then n = n + 1 end
+            end
+            return n
+        end
+
+        it("shows a system message in General by default", function()
+            -- The request this feature exists for. General is the main window; a system line is what
+            -- a player expects to read there, because that is where Blizzard puts it.
+            local p = enabled()
+            H.chat("CHAT_MSG_SYSTEM", { text = "You have earned Rank 4" })
+            expect(shows(p, "general", "Rank 4")).truthy()
+        end)
+
+        it("shows that same system message in the Log too", function()
+            -- Fan-out is the ordinary case in this model: one record reaching two panels is what
+            -- lets General be readable AS IT HAPPENS while the Log stays searchable AFTERWARDS.
+            local p = enabled()
+            H.chat("CHAT_MSG_SYSTEM", { text = "You have earned Rank 4" })
+            expect(shows(p, "log", "Rank 4")).truthy()
+        end)
+
+        it("stops showing it in General when the category is switched off, and keeps it in the Log", function()
+            local p = enabled()
+            setCat("general", "system", false)
+            H.chat("CHAT_MSG_SYSTEM", { text = "bags are full" })
+            expect(shows(p, "general", "bags are full")).as("General refused it").falsy()
+            expect(shows(p, "log", "bags are full")).as("the Log still has it").truthy()
+        end)
+
+        it("does NOT fall back into General when General refuses the category", function()
+            -- _render's never-land-nowhere fallback is General, so a filter the routing ignores
+            -- looks exactly like a filter that works until the OTHER panel is off too. This is the
+            -- assertion that tells the two apart.
+            local p = enabled()
+            setCat("general", "loot", false)
+            H.chat("CHAT_MSG_LOOT", { text = "You receive loot: Copper Bar" })
+            expect(shows(p, "general", "Copper Bar")).falsy()
+            expect(shows(p, "log", "Copper Bar")).truthy()
+        end)
+
+        it("registers the events a newly-ticked category needs", function()
+            -- The subtle half. The event set is a UNION over the panels' groups, so a group nothing
+            -- claimed was never subscribed -- ticking the box would filter for messages that never
+            -- reach the plugin at all.
+            local p = enabled()
+            expect(p._chat._registered["CHAT_MSG_LOOT"]).as("the Log wants loot by default").truthy()
+            setCat("log", "loot", false)
+            expect(p._chat._registered["CHAT_MSG_LOOT"])
+                .as("nothing wants it any more, so it is unregistered").falsy()
+            setCat("general", "loot", true)
+            expect(p._chat._registered["CHAT_MSG_LOOT"])
+                .as("General wants it now, so it comes back").truthy()
+        end)
+
+        it("actually receives a message for a category re-enabled after being dropped", function()
+            -- The consequence of the registration diff, asserted through the log rather than through
+            -- the bookkeeping: H.chat dispatches only to frames registered for the event, so a line
+            -- arriving at all is proof the subscription is live.
+            local p = enabled()
+            setCat("log", "loot", false)
+            setCat("general", "loot", false)
+            H.chat("CHAT_MSG_LOOT", { text = "Copper Bar" })
+            expect(shows(p, "log", "Copper Bar")).as("unsubscribed, so it never arrived").falsy()
+            setCat("log", "loot", true)
+            H.chat("CHAT_MSG_LOOT", { text = "Tin Bar" })
+            expect(shows(p, "log", "Tin Bar")).truthy()
+        end)
+
+        it("never unregisters PLAYER_LOGOUT, whatever the categories say", function()
+            -- The history's only write moment. It is registered outside the tracked set precisely so
+            -- the diff cannot reach it; without that, switching every category off would silently
+            -- cost the player their chat history at the next logout.
+            local p = enabled()
+            for _, c in ipairs(cats().CATEGORIES) do
+                setCat("general", c.id, false)
+                setCat("log", c.id, false)
+            end
+            H.chat("CHAT_MSG_GUILD", { text = "still here", sender = "Thalvyn" })
+            p._chat:_saveHistory()
+            expect(type(H.env.SuuUIChatHistory)).as("logout still writes the store").eq("table")
+        end)
+
+        it("repaints existing history when a category is switched on", function()
+            -- The difference between a setting that works and one that appears to do nothing: the
+            -- store holds RECORDS, so a re-route plus a re-format shows the player the lines they
+            -- already received moving into the panel they just ticked.
+            local p = enabled()
+            H.chat("CHAT_MSG_LOOT", { text = "You receive loot: Silver Bar" })
+            expect(shows(p, "general", "Silver Bar")).as("General does not want loot yet").falsy()
+            setCat("general", "loot", true)
+            expect(shows(p, "general", "Silver Bar"))
+                .as("the line the player already received").truthy()
+        end)
+
+        it("repaints existing history when a category is switched off", function()
+            local p = enabled()
+            H.chat("CHAT_MSG_SYSTEM", { text = "rested bonus" })
+            expect(shows(p, "general", "rested bonus")).truthy()
+            setCat("general", "system", false)
+            expect(shows(p, "general", "rested bonus"))
+                .as("the repaint removes it, rather than leaving it stranded").falsy()
+        end)
+
+        it("does not duplicate a line across the repaint", function()
+            -- _replayHistory APPENDS, so a repaint that forgot to clear would print the whole
+            -- history a second time -- and the bounded buffer would then evict the oldest half of
+            -- it, which reads as the toggle deleting messages.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "hello there", sender = "Thalvyn" })
+            expect(count(p, "general", "hello there")).eq(1)
+            setCat("general", "loot", true)
+            expect(count(p, "general", "hello there")).eq(1)
+            setCat("general", "loot", false)
+            expect(count(p, "general", "hello there")).eq(1)
+        end)
+
+        it("does not inflate an unread badge across the repaint", function()
+            -- The repaint runs through _replayHistory, so `_replaying` is set and both bump guards
+            -- stand down. Without that every rail badge would jump by the whole history on any
+            -- category change.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "one", sender = "Thalvyn" })
+            H.chat("CHAT_MSG_GUILD", { text = "two", sender = "Thalvyn" })
+            local before = (p._chat._unread or {})["guild"] or 0
+            setCat("general", "loot", true)
+            expect((p._chat._unread or {})["guild"] or 0).eq(before)
+        end)
+
+        it("puts the toggles on the settings page, one per category per panel", function()
+            -- Registered, not merely declared: a generated schema that never reached Settings would
+            -- leave every category at its default with no way to change it.
+            enabled()
+            local schema = H.SuuUI.Settings:GetSchema("chat")
+            local seen = {}
+            for _, entry in ipairs(schema) do seen[entry.key] = entry end
+            for _, key in ipairs(cats().Keys()) do
+                expect(seen[key]).as("missing schema entry for " .. key).notNil()
+                expect(seen[key].type).eq("toggle")
+            end
+        end)
+
+        it("groups them under a section per panel, so the page stays scannable", function()
+            enabled()
+            local labels = {}
+            for _, entry in ipairs(H.SuuUI.Settings:GetSchema("chat")) do
+                if entry.type == "section" then labels[entry.label] = true end
+            end
+            expect(labels["General Panel: Messages"]).truthy()
+            expect(labels["Global Panel: Messages"]).truthy()
+            expect(labels["Log Panel: Messages"]).truthy()
+        end)
+
+        it("shows NOTHING in a panel with every category switched off", function()
+            -- The bug this caught. `_applyCategories` leaves an all-off panel with an EMPTY groups
+            -- array, and Accept's "an absent clause matches everything" made that panel accept EVERY
+            -- message in the game -- so a Global panel with nothing ticked filled up with loot, XP
+            -- and system lines. Absent and empty are opposites; see ChatPanels.Accept.
+            local p = enabled()
+            for _, c in ipairs(cats().CATEGORIES) do setCat("global", c.id, false) end
+            H.chat("CHAT_MSG_LOOT", { text = "You receive loot: Copper Bar" })
+            H.chat("CHAT_MSG_SYSTEM", { text = "a system line" })
+            H.chat("CHAT_MSG_GUILD", { text = "guild talk", sender = "Thalvyn" })
+            local log = p._chat:LogFor("global")
+            expect(log and log:GetNumMessages() or 0)
+                .as("an emptied filter accepts nothing, not everything").eq(0)
+        end)
+
+        it("lets the player put channels back into General as well", function()
+            -- Global is a configurable panel like the other two, so moving channels out of General is
+            -- a DEFAULT rather than a hardcoding -- which is the whole point of the category layer.
+            local p = enabled()
+            setCat("general", "channels", true)
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            expect(shows(p, "general", "wts stuff")).truthy()
+            expect(shows(p, "global", "wts stuff")).as("and Global still has it").truthy()
+        end)
+
+        it("lets the player take channels away from Global entirely", function()
+            local p = enabled()
+            setCat("global", "channels", false)
+            setCat("general", "channels", true)
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            expect(shows(p, "general", "wts stuff")).truthy()
+            expect(shows(p, "global", "wts stuff")).falsy()
+        end)
+
+        it("applies a STORED category at build time, not just on a live change", function()
+            -- The mutation this exists for: every other test in this block changes a setting while
+            -- the window is already up, so it drives the WATCHER. Remove the derivation from
+            -- buildWindow and all of them still pass, while a returning player's stored categories
+            -- silently revert to the shipped defaults until they touch a checkbox.
+            --
+            -- A cold login through a seeded profile is the only way to reach that path.
+            H.setup({ boot = false })
+            H.env.SuuUIProfiles = {
+                profiles = { Default = { plugins = {
+                    chat = {
+                        enabled = true,
+                        general_show_loot = true,
+                        log_show_loot     = false,
+                    },
+                    _layout = { edit_mode = false },
+                } } },
+                charMap = {},
+            }
+            H.fireEvent("ADDON_LOADED", "SuuUI")
+            H.fireEvent("PLAYER_LOGIN")
+
+            local p = H.SuuUI.Plugins:Get("chat")
+            expect(p._chat).as("the window came up").notNil()
+            H.chat("CHAT_MSG_LOOT", { text = "You receive loot: Gold Bar" })
+            expect(shows(p, "general", "Gold Bar")).as("the stored category was honoured").truthy()
+            expect(shows(p, "log", "Gold Bar")).as("and the stored refusal too").falsy()
+        end)
+    end)
+
+    describe("addon output", function()
+        -- Driven through DEFAULT_CHAT_FRAME:AddMessage with NO chat-type id, which is what the
+        -- mirror discriminates addon output on. Going through the real caller is the point: an
+        -- earlier version of this block asserted `_systemLogs()` directly and a mutation pinning the
+        -- mirror back to a single log SURVIVED it -- the mechanism was proven and the only thing
+        -- using it was not.
+        local function say(text)
+            H.env.DEFAULT_CHAT_FRAME:AddMessage(text)
+        end
+        local function shows(p, panelId, needle)
+            local log = p._chat:LogFor(panelId)
+            if not log then return false end
+            for i = 1, (log:GetNumMessages() or 0) do
+                if tostring(log:GetMessageInfo(i)):find(needle, 1, true) then return true end
+            end
+            return false
+        end
+
+        it("reaches General as well as the Log by default", function()
+            -- A print() from another addon IS system output, and there is now a setting saying where
+            -- system output goes. Answering it two different ways would leave a player who put
+            -- system lines in General still hunting the Log for half of them.
+            local p = enabled()
+            say("Questie: quest complete")
+            expect(shows(p, "general", "Questie")).as("General shows system output").truthy()
+            expect(shows(p, "log", "Questie")).as("and the Log keeps it").truthy()
+        end)
+
+        it("stops reaching General when the system category is switched off there", function()
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "general_show_system", false)
+            say("Questie: quest complete")
+            expect(shows(p, "general", "Questie")).falsy()
+            expect(shows(p, "log", "Questie")).truthy()
+        end)
+
+        it("still lands somewhere when BOTH panels refuse system messages", function()
+            -- The player asked for the client's system chatter to be quieter, not for another
+            -- addon's error message to vanish with no trace.
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "general_show_system", false)
+            H.SuuUI.Settings:Set("chat", "log_show_system", false)
+            expect(#p._chat:_systemLogs()).gte(1)
+            say("Questie: something broke")
+            local anywhere = false
+            for id in pairs(p._chat._logs or {}) do
+                if shows(p, id, "something broke") then anywhere = true end
+            end
+            expect(anywhere).truthy()
+        end)
+
+        it("resolves to exactly the panels that accept a SYSTEM record", function()
+            local p = enabled()
+            expect(#p._chat:_systemLogs()).as("General and the Log, by default").eq(2)
+            H.SuuUI.Settings:Set("chat", "general_show_system", false)
+            expect(#p._chat:_systemLogs()).eq(1)
         end)
     end)
 end)
