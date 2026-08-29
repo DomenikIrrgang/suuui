@@ -74,6 +74,80 @@ describe("ChatStore", function()
                 .eq(1)
         end)
 
+        it("EVICTS records older than the age cap", function()
+            -- The second, orthogonal cap. Depth alone cannot bound the store, because it caps records
+            -- per stream while nothing caps the number of streams.
+            local now = 1000000
+            local store = S().NewStore({ maxAge = 86400 })
+            store:Add(rec("WHISPER", "old", { conversation = "a", at = now - 90000 }))
+            store:Add(rec("WHISPER", "new", { conversation = "a", at = now - 100 }))
+            store:Evict(now)
+            local left = store:Stream("whisper:a")
+            expect(#left).as("only the record inside the window survives").eq(1)
+            expect(left[1].message).eq("new")
+        end)
+
+        it("DROPS a stream the eviction emptied, not just its records", function()
+            -- The half that actually solves the problem. Evicting only records shrinks the bytes while
+            -- `_order` keeps every conversation key for ever, so the login replay still walks all of
+            -- them and the file still grows without bound.
+            local now = 1000000
+            local store = S().NewStore({ maxAge = 86400 })
+            store:Add(rec("WHISPER", "old", { conversation = "gone", at = now - 90000 }))
+            store:Add(rec("WHISPER", "recent", { conversation = "kept", at = now - 100 }))
+            expect(store:StreamCount()).eq(2)
+            expect(store:Evict(now)).as("reports what it dropped").eq(1)
+            expect(store:StreamCount()).as("the emptied stream is gone").eq(1)
+            local keys = store:Keys()
+            for i = 1, #keys do
+                expect(keys[i] == "whisper:gone").as("and gone from the ORDERED key list too").eq(false)
+            end
+        end)
+
+        it("KEEPS a record with no timestamp", function()
+            -- `at` is stamped as `type(time) == "function" and time() or nil`, so it can legitimately
+            -- be absent. Deleting on missing data is the destructive direction.
+            local now = 1000000
+            local store = S().NewStore({ maxAge = 86400 })
+            store:Add(rec("WHISPER", "unstamped", { conversation = "a" }))
+            store:Evict(now)
+            expect(store:Count("whisper:a")).as("kept rather than silently deleted").eq(1)
+        end)
+
+        it("evicts NOTHING when the cap is 0", function()
+            local now = 1000000
+            local store = S().NewStore({ maxAge = 0 })
+            store:Add(rec("WHISPER", "ancient", { conversation = "a", at = now - 99999999 }))
+            expect(store:Evict(now)).eq(0)
+            expect(store:Count("whisper:a")).as("0 means keep forever").eq(1)
+        end)
+
+        it("SetMaxAge evicts immediately rather than at the next message", function()
+            -- Same reasoning as SetDepth: the streams holding the oldest records are the quiet ones
+            -- nobody is going to talk in, so waiting for a message would never free them.
+            local store = S().NewStore()
+            local now = (H.env.time and H.env.time()) or 1000000
+            store:Add(rec("WHISPER", "old", { conversation = "a", at = now - 90000 }))
+            store:SetMaxAge(86400)
+            expect(store:GetMaxAge()).eq(86400)
+            expect(store:StreamCount()).as("evicted on the spot").eq(0)
+        end)
+
+        it("survives a SAVE and RESTORE carrying the age cap, evicting on the way in", function()
+            -- Restore must evict before the plugin replays: the whole point is that a conversation the
+            -- player stopped using costs neither a rebuilt panel nor a walk over its records.
+            local now = (H.env.time and H.env.time()) or 1000000
+            local store = S().NewStore({ maxAge = 86400 })
+            store:Add(rec("WHISPER", "old", { conversation = "a", at = now - 90000 }))
+            store:Add(rec("WHISPER", "new", { conversation = "b", at = now - 60 }))
+            local blob = store:Serialise()
+            expect(blob.maxAge).as("the cap is persisted").eq(86400)
+            local back = S().Restore(blob)
+            expect(back:GetMaxAge()).eq(86400)
+            expect(back:StreamCount()).as("the stale conversation never reaches the replay").eq(1)
+            expect(back:Count("whisper:b")).eq(1)
+        end)
+
         it("keeps the NEWEST records when it trims", function()
             local store = S().NewStore({ depth = 2 })
             for i = 1, 5 do store:Add(rec("SAY", "m" .. i)) end

@@ -17,6 +17,23 @@ function M:Register(typeId, createFn)
     if not active[typeId]   then active[typeId]   = {} end
 end
 
+--- The FRAME behind a pooled entry, which may be a component handle rather than a raw frame.
+---
+--- A factory is free to return a component handle -- `chat.log` does, and pooling was the whole
+--- reason that factory exists -- but a handle deliberately exposes no `ClearAllPoints`, `HasScript`
+--- or `SetScale`, so every reset call below would raise on one. That never surfaced because the only
+--- handle-returning pool in the addon was acquired and NEVER released, so the recycle path had never
+--- run; the first release raised `attempt to call a nil value (method 'ClearAllPoints')`.
+---
+--- Additive on purpose: a raw frame has no GetFrame, so every existing caller is untouched.
+local function frameOf(f)
+    if type(f) == "table" and type(f.GetFrame) == "function" then
+        local inner = f:GetFrame()
+        if inner then return inner end
+    end
+    return f
+end
+
 --- Acquires a frame from the pool, creating one if needed.
 -- @param typeId string
 -- @param parent frame  WoW frame to parent to
@@ -27,7 +44,9 @@ function M:Acquire(typeId, parent)
     local f
     if #pool > 0 then
         f = tremove(pool)
-        f:SetParent(parent)
+        -- Through the frame: a handle has no SetParent, and re-parenting is what makes a recycled
+        -- entry belong to its new owner.
+        frameOf(f):SetParent(parent)
     else
         f = factories[typeId](parent)
     end
@@ -47,7 +66,8 @@ local SCRIPTS = {
 
 --- Strips everything the previous owner put on a frame, so the next Acquire hands back a
 --- frame in its factory-fresh state rather than one carrying someone else's wiring.
-local function reset(frame)
+local function reset(entry)
+    local frame = frameOf(entry)
     frame:Hide()
     frame:ClearAllPoints()
 
@@ -60,6 +80,13 @@ local function reset(frame)
 
     -- Signals are keyed by object, so a recycled frame would otherwise still deliver to
     -- listeners registered by whoever held it last.
+    --
+    -- Deliberately the FRAME, not a handle entry. A component factory wires its own signals ONCE per
+    -- physical instance -- `chat.log` connects HYPERLINK_CLICK in the factory precisely so a recycled
+    -- log cannot accumulate a second connection -- and purging the handle here would strip that
+    -- wiring on release, so a reissued log would silently stop responding to link clicks. The
+    -- consequence for callers: connect to a POOLED handle in its factory, not after Acquire, because
+    -- a per-acquire connection is not cleaned up here and would accumulate.
     if SuuUI.UISignals then SuuUI.UISignals:DisconnectAll(frame) end
     -- An in-flight tween writes to the frame after release and holds a reference to it.
     if SuuUI.Anim and SuuUI.Anim.CancelAll then SuuUI.Anim:CancelAll(frame) end

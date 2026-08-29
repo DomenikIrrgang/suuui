@@ -231,4 +231,33 @@ function M.Age(when, now)
     return weeks == 1 and "1 week ago" or (weeks .. " weeks ago")
 end
 
+--- The same freshness, in the narrowest form that still says it: "now", "14m", "3h", "2d", "1w".
+---
+--- A SECOND format rather than a parameter on Age, because the two answer in different places: Age
+--- reads inside a sentence ("captured 3 minutes ago") while this one sits in a fixed right-hand
+--- column beside a name, where "14 minutes ago" is wider than the name it belongs to and pushes the
+--- list past the panel.
+---
+--- It lives HERE, next to Age, for the reason Age itself does: it is a presentation choice, and a
+--- second compact form invented at a call site is how two surfaces end up disagreeing about how to
+--- say the same thing. Same coarseness rule -- anything under a minute is "now", because a chat
+--- roster is scanned rather than read.
+-- @param when number|nil
+-- @param now number|nil   override for the current time; tests pass it, callers do not
+-- @return string
+function M.AgeShort(when, now)
+    if type(when) ~= "number" then return "" end
+    now = now or (time and time()) or when
+    local secs = now - when
+    if secs < 0 then secs = 0 end
+    if secs < 60 then return "now" end
+    local mins = floor(secs / 60)
+    if mins < 60 then return mins .. "m" end
+    local hours = floor(mins / 60)
+    if hours < 24 then return hours .. "h" end
+    local days = floor(hours / 24)
+    if days < 7 then return days .. "d" end
+    return floor(days / 7) .. "w"
+end
+
 SuuUI.Readout = M

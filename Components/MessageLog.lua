@@ -178,6 +178,15 @@ function LogMeta:_applyFont()
     if not ok then
         self._log:SetFont(SuuUI.Fonts.FALLBACK, size, "")
     end
+    -- THE ROW GAP. A bare ScrollingMessageFrame stacks its lines flush, which is what made the log a
+    -- wall of text against the concept's separated rows -- it puts 3px between them. `spaceXxs` for its
+    -- MEANING: a hairline gap between things stacked inside one widget, which is exactly this.
+    --
+    -- Here rather than at construction because it is token-derived, so it has to be re-stated whenever
+    -- the spacing scale is edited -- the same reason the font is re-read here rather than cached.
+    if self._log.SetSpacing then
+        self._log:SetSpacing(SuuUI.Pixel.Snap(T:GetToken("spaceXxs") or 2))
+    end
 end
 
 function LogMeta:ApplyTheme()
@@ -234,8 +243,15 @@ function SuuUI.Components.MessageLog(props, parent)
     -- Inset by the border width so a chromed log's text never sits on its own hairline. A
     -- frameless log insets by the same amount, which keeps the text position stable across a
     -- chrome flip -- otherwise every line would shift by a pixel on hover.
+    --
+    -- PLUS the concept's own inner padding (`.log { padding: 5px 7px }`), which is why the text does
+    -- not run against the glass edge there. Added ON TOP of the border inset rather than replacing it,
+    -- so the chrome-flip stability above still holds: both states inset by the same total.
     local inset = T:GetToken("borderWidth") or 1
-    box:Add(log, { inset = inset })
+    local padX = T:GetToken("spaceSm") or 8
+    local padY = T:GetToken("spaceXs") or 4
+    box:Add(log, { inset = { left = inset + padX, right = inset + padX,
+                             top = inset + padY, bottom = inset + padY } })
 
     -- Hyperlinks: without this the client never hit-tests a link, and item links look perfect
     -- and are dead to the click.

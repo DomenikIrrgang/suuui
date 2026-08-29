@@ -5,7 +5,44 @@ floating over the world, per-conversation whisper tabs on a persistent avatar ra
 shape everywhere, optional timestamp column, and a resting chip naming the channel Enter will
 open.
 
-Status: **not started.** Nothing in this document is implemented.
+Status: **shipped and in use.** Everything in §7's phase list is implemented, plus a good deal that
+postdates the plan. The sections below are kept as the historical plan and the record of what
+measurement settled — they are accurate about *why* decisions were made, and they are NOT a
+description of the current surface. Read this section for that.
+
+### What the plan did not anticipate
+
+Built after the phase list closed, in roughly the order it happened:
+
+| Surface | Where |
+|---|---|
+| Per-line **copy** affordance — an inline texture wrapped in a hyperlink, the only way to make something in a `ScrollingMessageFrame` clickable | `ChatFormat.Line`'s `copySeq`, `Core/Icons.lua` |
+| **URL detection**, linkified at `Body`'s single entry; `url:` is ours, so the click hands the player a selectable address rather than opening a browser | `ChatFormat.LinkifyURLs` |
+| **Class-coloured sender names**, off the GUID the event already carries | `Chat:_classColour`, `Game:ClassColorCode` |
+| **Rail scrolling** plus an `animFast` width tween, and a square chip | `Chat:_railWidth`, `_setRailCell` |
+| **Closeable** conversations (right-click a rail avatar), refused for General/Guild/Log | `Chat:CloseConversation`, `ChatPanels.Remove` |
+| **Reopen without whispering**: a self-hiding `+` rail row opening a searchable roster | `Chat:ClosedConversations`, `_openReopenFlyout`, `FlyoutPanel`'s `filter` props |
+| The closed set **persisted** in the same SavedVariable as the streams, gated on `_replaying` | `Chat:_saveHistory`, `_ensureConversation` |
+| **Age eviction** — a second retention rule that drops whole streams, which is what actually bounds the store | `ChatStore:Evict`, `SetMaxAge`, the `history_days` setting |
+| `Chat:_render(rec, onlyPanelId)` gained a **narrowing** second argument for reopen replay | `Chat:_render` |
+
+### Three concept details that are NOT reachable, and why
+
+All three fail for one reason: a `ScrollingMessageFrame` renders text, has **one font for the whole
+frame**, and offers no per-line frame to hang anything on.
+
+- **The 2px channel-coloured left border per row.** The substitute was a text tag column (§5b),
+  which now defaults **off** — keeping Blizzard's line colours means the channel is already on the
+  line, so the tag was the same information twice.
+- **A bold sender name.** There is no bold escape and no per-substring font.
+- **A timestamp smaller than the body** (the concept's 9px against 11px). It is *dimmed* instead,
+  with `colorTextMuted`, because undimmed it inherited the line's channel colour and rendered a
+  whisper's clock in whisper pink.
+
+What the concept's row shape DID reach: `time, name, colon, message` everywhere, unconditionally.
+That rule used to ride on the tag being drawn, which coupled two unrelated things — switching the
+tag off brought `says:` and `whispers:` back. A line with no sender at all still takes the
+globalstring path, where the phrasing *is* the content.
 
 ---
 
@@ -353,11 +390,24 @@ none of which the suite could have caught as written. Fixed 2026-08-27, 10/10 mu
 
 - **The tag duplicated the globalstring's VERB.** §5b established that the tag REPLACES the
   `[Guild]` bracket; the same is true of the verb. `CHAT_SAY_GET` is `"%s says: "`, which reads
-  `SAY Thalvyn says: test` beside a tag column. So `Body` gained a `plain` mode, passed by `Line`
-  whenever it is drawing a tag, that composes `Name: message` instead. The globalstring path
-  survives for every type with NO tag — a boss emote, a system line, a channel notice — where its
-  phrasing IS the content rather than a label. A real narrowing of "build it from GlobalStrings":
-  they are right for Blizzard's tagless layout and wrong for a tagged one.
+  `SAY Thalvyn says: test` beside a tag column. So `Body` gained a `plain` mode that composes
+  `Name: message` instead. The globalstring path survives for every line with NO SENDER — a boss
+  emote, a system line, a channel notice — where its phrasing IS the content rather than a label. A
+  real narrowing of "build it from GlobalStrings": they are right for Blizzard's tagless layout and
+  wrong for a tagged one.
+
+  **Superseded in one respect, and the correction matters.** `plain` was originally passed by `Line`
+  *whenever it was drawing a tag*, which coupled two unrelated things: once `show_tags` defaulted off
+  (§7b), switching the tag column off brought `says:` and `whispers:` back everywhere — the opposite
+  of the concept's stated rule that a row is `time, name, colon, message` in General and in a whisper
+  alike. `plain` is now unconditional for any line WITH a sender, and the caller passes `labelled`
+  rather than the formatter inferring it from the tag.
+
+  **That change exposed a live bug.** `WHISPER` and `WHISPER_INFORM` both tag as `WSP`, so with the
+  verb gone a whisper you SENT and one you RECEIVED rendered as the identical string — the tag could
+  not tell them apart and the verb was the only thing that had been doing it. An outgoing whisper
+  now reads `You:`, taken from the client's `YOU` global where it has one, which is also the
+  concept's own form for the player's own line.
 - **The player's own language printed on every line.** The client sends a language on every chat
   event, and Blizzard gates the display on it being DIFFERENT. Now gated on
   `GetDefaultLanguage()` — which the harness lacked entirely, so the bug was unreachable by any
@@ -379,23 +429,29 @@ small phase rather than a drive-by.
 
 On plugin id `chat`, one page, grouped into accordion sections by the existing `section` type.
 
+**As shipped** — this is read off `Plugins/Chat/Chat.lua`'s `SCHEMA`, not the original plan, which
+differed in five places (it had a `show_channel_rail` and a `rail_expand_hover` that were never
+built, no `hide_blizzard`, no `rail_size`, no `history_days`, and a `height` capped at 600):
+
 ```lua
 { key="enabled",            label="Enable Chat",            type="toggle",  default=true },
+{ key="hide_blizzard",      label="Hide Blizzard's Chat",   type="toggle",  default=true },
 
 { key="",                   label="Appearance",             type="section" },
 { key="show_timestamps",    label="Show Timestamps",        type="toggle",  default=true },
 { key="timestamp_format",   label="Timestamp Format",       type="dropdown", default="24h",
   enabledIf="show_timestamps", options={ {value="24h",label="14:32"},
   {value="12h",label="2:32 PM"}, {value="24hs",label="14:32:07"} } },
-{ key="show_channel_rail",  label="Channel Colour Rail",    type="toggle",  default=true },
+{ key="show_tags",          label="Show Channel Tags",      type="toggle",  default=false },
 { key="font_size",          label="Text Size",              type="dropdown", default="md",
   options={ {value="sm",label="Small"}, {value="md",label="Medium"},
   {value="lg",label="Large"} } },
 { key="width",              label="Width",                  type="slider",  default=460, min=240, max=900, step=10 },
-{ key="height",             label="Height",                 type="slider",  default=180, min=80,  max=600, step=10 },
+{ key="height",             label="Height",                 type="slider",  default=180, min=80,  max=1400, step=10 },
 
 { key="",                   label="Fading",                 type="section" },
 { key="fade_channels",      label="Fade Channel Messages",  type="toggle",  default=false },
+{ key="rail_size",          label="Channel Icon Size",      type="slider",  default=30, min=16, max=44, step=2 },
 { key="fade_after",         label="Fade After",             type="slider",  default=8, min=2, max=60, step=1,
   enabledIf="fade_channels" },
 
@@ -404,16 +460,33 @@ On plugin id `chat`, one page, grouped into accordion sections by the existing `
   options={ {value="general", label="General Only"},
             {value="panel",   label="Their Own Panel Only"},
             {value="both",    label="Both"} } },
-{ key="rail_expand_hover",  label="Expand Rail On Hover",   type="toggle",  default=true },
 { key="history_depth",      label="Remembered Messages",    type="slider",  default=50, min=0, max=500, step=10 },
+{ key="history_days",       label="Forget Conversations After (Days)",
+                                                            type="slider",  default=14, min=0, max=90, step=1 },
 
-{ key="",                   label="Internal",               type="section" },
+{ key="",                   label="Internal",               type="internal" },
 { key="position",           type="position" },
 ```
 
+**`history_depth` and `history_days` are two orthogonal retention rules and both are needed.**
+`history_depth` caps records **per stream**, deliberately, so a busy Trade channel cannot evict a
+whisper — Blizzard keeps one buffer per frame and a quiet conversation ages out behind traffic it has
+nothing to do with. But nothing caps the NUMBER of streams, so the stored total is
+`depth × conversations` and grows for as long as the player keeps meeting people: at the shipped 50,
+two hundred people whispered is ten thousand records, every one parsed at login and walked by the
+replay. `history_days` is what bounds it, and **evicting a stream's last record drops the stream** —
+evicting only records would shrink the bytes while the ordered key list kept every conversation for
+ever. Age was chosen over a cap on the stream count because a count cap evicts by the wrong key:
+whisper eight people today and it drops the conversation you were having yesterday. `0` on either
+means "no limit"; a record with no `at` is kept, since deleting on missing data is the destructive
+direction.
+
+**`show_tags` defaults OFF**, which reverses the plan. See §5b — the tag was a substitute for a
+concept detail the frame cannot draw, and with Blizzard's line colours kept it is redundant.
+
 Notes: `show_timestamps` defaults **on**, unlike Blizzard's — the column was asked for, so it
 should be there without hunting. `fade_channels` never applies to conversation tabs; that is not
-a setting, it is the design rule. `history_depth = 0` disables persistence entirely.
+a setting, it is the design rule.
 
 `whisper_mode` defaults to **both**, which puts a whisper in its conversation tab *as well as*
 General — Blizzard's `popout_and_inline` behaviour. It is the default because this client sits at
@@ -968,16 +1041,28 @@ harness, because the harness is where the optimistic assumption lives.
 
 ---
 
-## 7b. Concept fidelity — three open questions for the first render
+## 7b. Concept fidelity — resolved
 
-The mockup was HTML at small scale, so three of its values have no direct WoW equivalent. Each
-is resolved conservatively below and each wants an eye at the Phase 4 checkpoint.
+The mockup was HTML at small scale, so three of its values had no direct WoW equivalent. All three
+are now settled; they are kept here because each answer is a fact about the client rather than a
+preference.
 
-| Mockup | Shipped | Why, and the fix if it looks wrong |
+| Mockup | Shipped | Resolution |
 |---|---|---|
-| chip text ~8–10px, uppercase, 0.5px letterspacing | `fontSizeSm` (11), caller's own case, no letterspacing | The concept's own design system states 11/13/15/18, so the mockup's 8px was a preview artefact. **WoW has no `text-transform` or letter-spacing at all** — the caller passes the literal string. If chips read heavy, the fix is an `fontSizeXs` token |
-| inactive rail avatars dimmed to 50% | class disc always full strength; active state rides the LABEL colour (muted → text) | The concept's own label rule says exactly this, and it uses existing tokens. A dimmed class colour also reads as a *different class*. If the rail needs more separation, an `opacityRailIdle` token is the fix |
-| chip fill 12% / ring 40% | `opacityChipFill` 0.12 / `opacityChipBorder` 0.40 (Modern: 0.14 / 0.45) | Taken from the concept directly and made themeable |
+| chip text ~8–10px, uppercase, 0.5px letterspacing | `fontSizeSm` (11), caller's own case, no letterspacing | **Closed as unreachable.** The concept's own design system states 11/13/15/18, so the mockup's 8px was a preview artefact — and **WoW has no `text-transform` or letter-spacing at all**. No `fontSizeXs` token was added; nothing asked for one |
+| inactive rail avatars dimmed to 50% | class disc always full strength; active state rides the LABEL colour (muted → text) | **Closed as shipped.** The concept's own label rule says exactly this and uses existing tokens. A dimmed class colour also reads as a *different class* |
+| chip fill 12% / ring 40% | ring: `opacityChipBorder` 0.40 (Modern 0.45). Fill: **plain `colorBg`**, no opacity token | **This table used to claim an `opacityChipFill` token. It was never created** — `Components/Chip.lua` reads `opacityChipBorder` for the ring and fills with `colorBg`, whose own translucency comes from `opacityPanel`. A second fill token would have been a theme-editor control that did nothing, which `architecture.md` names as worse than an absent one |
+
+### Two mockup items DECLINED, and they are still open for a decision
+
+Both are shared with the addon-button tray, which is why they were refused rather than deferred —
+matching one consumer's mockup would restyle a surface nobody asked to change:
+
+- **4px-rounded rows.** A `FlyoutPanel` row is square; rounding needs per-row masking inside a
+  shared component (`Backdrop.Pill`/`Circle` exist, but a row is neither).
+- **The concept's translucent glass surface** `rgba(10,10,15,.42)` plus a 9% white hairline. The
+  panel is opaque `colorBg`. This needs a new opacity token in both built-in themes and in
+  `ThemeTokens.lua`.
 
 
 ---
@@ -997,10 +1082,37 @@ is resolved conservatively below and each wants an eye at the Phase 4 checkpoint
 
 ## 9. Open questions
 
-1. ~~The real per-window routing defaults.~~ **Answered** — measured in §5. Phase 0 recon is
-   complete and nothing is blocking.
-2. **Combat log.** Revised by the dump: window 2 is not purely the combat-log addon, it carries
-   six real `CHAT_MSG_*` groups. v1 folds those into General and neuters window 2 with the rest;
-   the `COMBAT_LOG_EVENT` combat log itself is still out of scope.
-3. **`LibChatAnims`.** Recommendation: no, pending Phase 5 evidence.
-4. **Rail side.** Left in the current design; right is one anchor change if preferred.
+Closed:
+
+1. ~~The real per-window routing defaults.~~ **Answered** — measured in §5.
+2. ~~**Combat log.**~~ **Answered.** Window 2 is not purely the combat-log addon; it carries six
+   real `CHAT_MSG_*` groups, which are folded into the Log panel. The `COMBAT_LOG_EVENT` combat log
+   itself remains out of scope.
+3. ~~**`LibChatAnims`.**~~ **No.** Never needed; no fifth library was embedded. Tab-flash taint was
+   not observed.
+4. ~~**Rail side.**~~ **Left**, as designed, and nothing has asked for the other side.
+5. ~~**A cap on the NUMBER of stored conversations.**~~ **Answered by age instead** — see
+   `history_days` in §6. A count cap was explicitly rejected: it evicts by the wrong key.
+
+Still open:
+
+6. **The two declined mockup items** — 4px-rounded rows and the translucent glass surface. Both are
+   shared with the addon-button tray; see §7b for the cost of each.
+7. **Per-panel scroll position.** `SetActivePanel`'s own comment claims a panel has its own scroll
+   position; it does not. Switching tabs drops you to the bottom and loses your place mid-read.
+   Pinned by an `xit` in `Tests/spec/63_chat_plugin_spec.lua`.
+8. **`xit("gives a joined channel its OWN panel")`** in the same file is probably obsolete — the
+   taxonomy ruling is that joined channels stay in General — and should be deleted rather than left
+   implying an open decision.
+9. **`xit("uses height = fill for the rail+log row instead of stating the number")`.** If that
+   container behaviour is wrong it is wrong addon-wide, so it wants its own investigation rather
+   than a fix from here.
+
+### Two things a future session should NOT re-litigate
+
+- **Hyperlink forwarding to `ChatFrame1`'s scripts was tried and REVERTED.** The hover half anchored
+  the tooltip to a frame the plugin itself parks hidden, so an item mouseover drew nothing; the click
+  half carries the same trap for `player:` and channel links. A spec pins that we do not forward.
+- **Bracketed quest text is not our bug.** `SetItemRef("quest:…")` works, and the raw stored message
+  contained no `|H` markup at all — a third-party addon rewrites shift-clicked quests into plain
+  bracketed text.

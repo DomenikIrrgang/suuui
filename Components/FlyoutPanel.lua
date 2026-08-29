@@ -20,16 +20,50 @@ PanelMeta.__index = PanelMeta
 -- The icon column's own size. A row holds text as well, so its height is floored against the
 -- font metrics the same way every other text-bearing control is -- an icon larger than the
 -- text step grows the row, a smaller one does not shrink it below a readable line.
+--- The panel's own edge padding, read in ONE place.
+---
+--- It was read twice -- once in `_layout` to size the panel and once in `ApplyTheme` to place the grid
+--- -- and changing only the first left the rows at the old inset while the panel grew around them. The
+--- two must agree by construction, not by both being edited.
+function PanelMeta:_pad()
+    return SuuUI.Theme:GetToken("spaceSm") or 8
+end
+
 function PanelMeta:_rowHeight()
     local T = SuuUI.Theme
-    return max(T:GetControlHeight("sizeControlMd"),
-               self._iconSize + (T:GetToken("spaceXxs") or 2) * 2)
+    -- FLOORED AT sizeRow (28), which is the mockup's row height exactly: it draws an 18-unit disc with
+    -- roughly five units above and below. spaceXs around the disc alone gives 26, and those two missing
+    -- units are what still read as cramped after the panel padding was already matched.
+    return max(T:GetToken("sizeRow") or 28,
+               self._iconSize + (T:GetToken("spaceXs") or 4) * 2)
 end
 
 -- Widest label in the set, measured through Box rather than Measure: the number becomes the
 -- font string's OWN box, and the client truncates with zero tolerance, so a box at the bare
 -- metric is a clip. Re-measured on every rebuild and every theme change, since the font face
 -- and step are both user-editable.
+--- The width to reserve for the meta column: the widest entry's meta at the size it renders at.
+---
+--- Measured at fontSizeSm because that is the step the meta Text uses -- measuring at Md would reserve
+--- more than it draws and push every label leftward for nothing.
+function PanelMeta:_metaWidth()
+    local T = SuuUI.Theme
+    local font = SuuUI.Fonts:Path(T:GetToken("fontFamilyMain"))
+    local size = T:GetToken("fontSizeSm") or 11
+    local w = 0
+    for _, entry in ipairs(self._entries) do
+        local m = entry.meta
+        if type(m) == "string" and m ~= "" then
+            local bw = SuuUI.TextMetrics.Box(m, font, size)
+            if bw > w then w = bw end
+        end
+    end
+    -- One gap of separation from the label, and nothing at all when no entry carries meta -- an empty
+    -- column would silently narrow every label.
+    if w > 0 then w = w + (T:GetToken("spaceSm") or 8) end
+    return w
+end
+
 function PanelMeta:_labelWidth()
     local T = SuuUI.Theme
     local font = SuuUI.Fonts:Path(T:GetToken("fontFamilyMain"))
@@ -79,6 +113,15 @@ function PanelMeta:_row(index)
     row._label  = row._labelT:GetFrame()
     row._labelProps = { valign = "center", inset = { left = 0, right = 0 } }
     row._box:Add(row._labelT, row._labelProps)
+
+    -- META: an entry's secondary text, in its OWN dim right-aligned column rather than appended to
+    -- the label. The concept draws meta exactly this way -- a separate small column in a muted grey,
+    -- never the same string at the same weight as the name -- and joining the two also makes the
+    -- label's own width include text the reader is not scanning for.
+    row._metaT = SuuUI.Components.Text({ justify = "RIGHT", size = "sm", color = "muted" }, row)
+    row._meta  = row._metaT:GetFrame()
+    row._metaProps = { align = "end", valign = "center", inset = { right = 0 } }
+    row._box:Add(row._metaT, row._metaProps)
 
     row._iconProps = { align = "start", valign = "center", inset = { left = 0 } }
     -- The panel this row belongs to, so the permanent hover hooks above can reach it without
@@ -139,7 +182,9 @@ function PanelMeta:SetMaxHeight(h)
     local v = (type(h) == "number" and h > 0) and h or 0
     if self._maxHeight == v then return end
     self._maxHeight = v
-    self:SetRows(self._entries)
+    -- _render, NOT SetRows: `_entries` is the FILTERED and CAPPED view, so re-seeding from it would
+    -- make a theme change or an icon resize permanently discard every entry not currently drawn.
+    self:_render()
     if self:IsOpen() then self:_place() end
 end
 
@@ -240,22 +285,97 @@ function PanelMeta:_raiseAll()
     end
 end
 
+--- Re-points the panel at a different anchor frame.
+---
+--- Exists because an anchor can be DESTROYED AND RECREATED between opens: the chat rail's reopen row
+--- is rebuilt whenever the closed-conversation list changes, so a panel constructed against the first
+--- row was left anchored to a dead frame after a reopen. That produced two symptoms from one cause --
+--- the panel resolved its position against a frame with no rect (it appeared somewhere else entirely),
+--- and the dead frame could never read as "inside", so the hover watcher closed it immediately.
+---
+--- Updates the guard set too, or the second half of that stays broken.
+-- @param frame frame|nil
+function PanelMeta:SetAnchorTo(frame)
+    if self._anchorTo == frame then return end
+    self._anchorTo = frame
+    if self._hoverAway and self._hoverAway.SetGuards then
+        self._hoverAway:SetGuards(frame and { frame } or nil)
+    end
+    if self:IsOpen() then self:_place() end
+end
+
+--- Replaces the roster. With a filter on, this stores the FULL list and draws a narrowed view of it.
 function PanelMeta:SetRows(entries)
+    self._all = entries or {}
+    return self:_render()
+end
+
+--- The current filter text, lower-cased. Empty when there is no filter field.
+function PanelMeta:GetFilter()
+    if not self._search then return "" end
+    local t = self._search:GetValue() or ""
+    return t:lower()
+end
+
+--- Every entry matching the current filter, in the order given. The FULL match set, uncapped, so a
+--- caller (and the footer) can say how many were found rather than how many are drawn.
+function PanelMeta:_matches()
+    local q = self:GetFilter()
+    if q == "" then return self._all end
+    local out = {}
+    for _, e in ipairs(self._all) do
+        -- Matched on the LABEL, which is what the player can see and therefore what they type. Plain
+        -- find, never a pattern: a name containing `-` or `(` is a live pattern and would either match
+        -- nothing or raise.
+        if tostring(e.label or ""):lower():find(q, 1, true) then out[#out + 1] = e end
+    end
+    return out
+end
+
+--- Draws the roster: the filtered set, capped, plus the footer line.
+function PanelMeta:_render()
     local T = SuuUI.Theme
-    self._entries = entries or {}
+    local hits = self:_matches()
+    -- CAPPED, and the cap is why the panel scales: without it a 300-entry roster is laid out as 300
+    -- rows across a dozen columns spanning the screen, because this panel's overflow strategy is
+    -- columns rather than scrolling.
+    local entries = hits
+    if self._maxRows > 0 and #hits > self._maxRows then
+        entries = {}
+        for i = 1, self._maxRows do entries[i] = hits[i] end
+    end
+    self._entries = entries
+
+    if self._count then
+        local total = #self._all
+        if #hits > #entries then
+            self._count:SetText("showing " .. #entries .. " of " .. #hits .. " — keep typing to narrow")
+        elseif self:GetFilter() ~= "" then
+            self._count:SetText(#hits .. " of " .. total)
+        else
+            self._count:SetText(total .. (total == 1 and " conversation" or " conversations"))
+        end
+    end
+    return self:_layout()
+end
+
+--- Lays out the currently-drawn entries.
+function PanelMeta:_layout()
+    local T = SuuUI.Theme
 
     for _, row in ipairs(self._rows) do row:Hide() end
     for _, col in ipairs(self._cols) do col:Hide() end
 
     local rowH   = self:_rowHeight()
     local labelW = self:_labelWidth()
-    local pad    = T:GetToken("spaceXs") or 4
+    local pad    = self:_pad()
     local gutter = T:GetToken("spaceSm") or 8
     local gap    = T:GetToken("spaceSm") or 8
     local rowGap = T:GetToken("spaceXxs") or 2
 
     local n      = #self._entries
-    local colW   = gutter * 2 + self._iconSize + gap + labelW
+    local metaW  = self:_metaWidth()
+    local colW   = gutter * 2 + self._iconSize + gap + labelW + metaW
     local perCol = self:_rowsPerColumn(rowH, rowGap, pad, n)
     local nCols  = (n > 0) and ceil(n / perCol) or 0
 
@@ -285,9 +405,15 @@ function PanelMeta:SetRows(entries)
         -- The label is inset past the icon column rather than flowed after it, so nothing in
         -- the row derives its height from the row's own height. See _row.
         row._labelProps.inset.left  = gutter + self._iconSize + gap
-        row._labelProps.inset.right = gutter
+        -- The label's RIGHT inset reserves the meta column, so a long name is truncated by the layout
+        -- rather than drawing underneath the age.
+        row._labelProps.inset.right = gutter + metaW
         row._box:SetChildProps(row._labelT, row._labelProps)
         row._labelT:SetText(entry.label or "")
+
+        row._metaProps.inset.right = gutter
+        row._box:SetChildProps(row._metaT, row._metaProps)
+        row._metaT:SetText(entry.meta or "")
 
         -- Swapped only when the frame actually differs, for the same reason as the column move.
         if row._held and row._held ~= entry.frame then
@@ -341,7 +467,21 @@ function PanelMeta:SetRows(entries)
     self._colCount = nCols
 
     self._contentW = pad * 2 + nCols * colW + max(0, nCols - 1) * gap
-    self._contentH = pad * 2 + tallest * rowH + max(0, tallest - 1) * rowGap
+    -- FLOORED by the search field's own placeholder. The panel hugs its ROWS, and a roster of short
+    -- names produced a panel narrower than its own field -- which showed as "Search conversatio..."
+    -- truncated inside a box the layout considered correct, because nothing in the width calculation
+    -- knew the field existed.
+    --
+    -- Box rather than Measure, since the number becomes the field's own box, plus the field's inner
+    -- text inset on both sides and one gutter of slack for the caret.
+    if self._filter and self._placeholder then
+        local font = SuuUI.Fonts:Path(T:GetToken("fontFamilyMain"))
+        local need = pad * 2 + SuuUI.TextMetrics.Box(self._placeholder, font, T:GetFontSize("md"))
+                   + gutter * 2 + (T:GetToken("spaceSm") or 8)
+        if need > self._contentW then self._contentW = need end
+    end
+    self._contentH = pad * 2 + (self._headerH or 0) + (self._footerH or 0)
+                   + tallest * rowH + max(0, tallest - 1) * rowGap
 end
 
 --- Number of rows currently in the roster.
@@ -360,7 +500,9 @@ function PanelMeta:SetIconSize(size)
     if type(size) ~= "number" or size <= 0 then return end
     if self._iconSize == size then return end
     self._iconSize = size
-    self:SetRows(self._entries)
+    -- _render, NOT SetRows: `_entries` is the FILTERED and CAPPED view, so re-seeding from it would
+    -- make a theme change or an icon resize permanently discard every entry not currently drawn.
+    self:_render()
     if self:IsOpen() then self:_place() end
 end
 
@@ -372,12 +514,47 @@ end
 
 -- Places and sizes the panel against its anchor. `align` decides which vertical edge lines
 -- up, so a field in the bar's right section drops a panel that stays on screen.
+--- Which side of the anchor the panel should open on, as a point pair.
+---
+--- `align = "auto"` picks the QUADRANT: the panel always grows toward the middle of the screen, so an
+--- anchor in the bottom-left opens up and to the right, one in the top-right opens down and to the
+--- left. Without it a panel anchored to a chat window parked in the bottom-left corner opens downward,
+--- off the bottom edge, where most of it cannot be read.
+---
+--- MEASURED AGAINST THE UI ROOT, never GetScreenHeight(): the root carries the pixel grid's scale, so
+--- the two are different coordinate spaces and mixing them is wrong on the vertical axis only -- which
+--- looks correct at the default multiplier and wrong at every other one.
+---
+--- Falls back to the stated align when either rect is missing. A frame that has never been laid out
+--- reports nil here, and guessing a quadrant from nil would place the panel somewhere arbitrary.
+function PanelMeta:_quadrant()
+    local anchor = self._anchorTo
+    local root = SuuUI.UIRoot and SuuUI.UIRoot.GetRoot and SuuUI.UIRoot:GetRoot()
+    if not (anchor and root and anchor.GetCenter and root.GetCenter) then return nil end
+    local ax, ay = anchor:GetCenter()
+    local rx, ry = root:GetCenter()
+    if not (ax and ay and rx and ry) then return nil end
+    -- Below the middle means open UPWARD; left of the middle means keep the left edges together so
+    -- the width extends rightward into the screen.
+    local up   = ay < ry
+    local left = ax < rx
+    if up then
+        return left and "BOTTOMLEFT" or "BOTTOMRIGHT", left and "TOPLEFT" or "TOPRIGHT"
+    end
+    return left and "TOPLEFT" or "TOPRIGHT", left and "BOTTOMLEFT" or "BOTTOMRIGHT"
+end
+
 function PanelMeta:_place()
     local point, relPoint
-    if self._align == "right" then
-        point, relPoint = "TOPRIGHT", "BOTTOMRIGHT"
-    else
-        point, relPoint = "TOPLEFT", "BOTTOMLEFT"
+    if self._align == "auto" then
+        point, relPoint = self:_quadrant()
+    end
+    if not point then
+        if self._align == "right" then
+            point, relPoint = "TOPRIGHT", "BOTTOMRIGHT"
+        else
+            point, relPoint = "TOPLEFT", "BOTTOMLEFT"
+        end
     end
     self._host:SetChildAnchor(self._panel, {
         point         = point,
@@ -433,8 +610,45 @@ function PanelMeta:ApplyTheme()
     local B = SuuUI.Backdrop
 
     B.Apply(self._panel, { bg = "colorBg", border = "colorBorder" })
-    local pad = T:GetToken("spaceXs") or 4
-    self._grid:SetPadding({ top = pad, right = pad, bottom = pad, left = pad })
+    local pad = self:_pad()
+    -- The header and footer reservation is re-derived HERE, not stated once at construction, because
+    -- this line owns the grid's padding and re-states it from tokens on every theme pass -- including
+    -- the pass the constructor runs, which is AFTER the header is built. Reserving it there alone was
+    -- immediately wiped, so the rows were laid out at the top padding and drew over the search field.
+    --
+    -- It also has to be re-derived rather than remembered: both heights come from font and size
+    -- tokens, so a token edit changes them and a frozen number would clip the field it reserves for.
+    if self._filter then
+        local gap = T:GetToken("spaceXs") or 4
+        local inputH = T:GetControlHeight("sizeRow")
+        self._headerH = inputH + pad + gap
+        -- MEASURED, not read off the Text: `GetHeight()` on a font string nothing has laid out yet
+        -- answers 0, so the footer reserved only a gap and the last row was drawn through the count
+        -- line. And a LINE height, not the point size -- fontSizeSm is 11 while its line is ~13, so a
+        -- reservation at the point size is a clip by construction.
+        local font = SuuUI.Fonts:Path(T:GetToken("fontFamilyMain"))
+        local _, lineH = SuuUI.TextMetrics.Measure("Ag", font, T:GetFontSize("sm"))
+        self._footerH = (lineH or T:GetFontSize("sm")) + pad + gap
+
+        -- Re-stated from the ONE pad owner, so a padding change reaches the field and the count.
+        if self._searchProps then
+            self._searchProps.height = inputH
+            self._searchProps.inset.top = pad
+            self._searchProps.inset.left = pad
+            self._searchProps.inset.right = pad
+            self._headerBox:SetChildProps(self._search, self._searchProps)
+        end
+        if self._countProps then
+            self._countProps.inset.bottom = pad
+            self._countProps.inset.left = pad
+            self._countProps.inset.right = pad
+            self._footerBox:SetChildProps(self._count, self._countProps)
+        end
+    end
+    self._grid:SetPadding({
+        top    = pad + (self._headerH or 0), right = pad,
+        bottom = pad + (self._footerH or 0), left  = pad,
+    })
     self._grid:SetGap(T:GetToken("spaceSm") or 8)
     for _, col in ipairs(self._cols) do
         col:SetGap(T:GetToken("spaceXxs") or 2)
@@ -452,7 +666,9 @@ function PanelMeta:ApplyTheme()
 
     -- Row heights and the label column both come from tokens, so a restyle re-derives the
     -- whole roster rather than keeping the geometry measured under the old theme.
-    self:SetRows(self._entries)
+    -- _render, NOT SetRows: `_entries` is the FILTERED and CAPPED view, so re-seeding from it would
+    -- make a theme change or an icon resize permanently discard every entry not currently drawn.
+    self:_render()
     if self:IsOpen() then self:_place() end
 end
 
@@ -540,9 +756,60 @@ function SuuUI.Components.FlyoutPanel(props, parent)
         _entries  = {},
         _eid      = id,
         _anchorTo = props.anchorTo,
-        _align    = props.align == "right" and "right" or "left",
+        -- "auto" is opt-in rather than the default so the addon-button tray, which is anchored to a
+        -- data bar at the top of the screen, keeps the placement it was built and specced against.
+        _align    = (props.align == "right" and "right")
+                 or (props.align == "auto" and "auto") or "left",
         _iconSize = props.iconSize or T:GetToken("sizeIcon") or 16,
+        -- A roster that can be hundreds long needs a way to NARROW it rather than a way to scroll it.
+        -- Opt-in, so the addon-button tray -- which is a fixed handful of icons -- renders exactly as
+        -- it did before and pays for none of this.
+        _filter   = props.filter and true or false,
+        _maxRows  = (type(props.maxRows) == "number" and props.maxRows > 0) and props.maxRows or 0,
+        _headerH  = 0,
+        _footerH  = 0,
+        _all      = {},
     }, PanelMeta)
+
+    if handle._filter then
+        local pad   = T:GetToken("spaceXs") or 4
+        local gap   = T:GetToken("spaceXs") or 4
+        -- sizeRow, not sizeControlLg: the mockup's field is ~27 units tall against a control's 24, and
+        -- the short field was part of what still read as cramped.
+        local inputH = T:GetControlHeight("sizeRow")
+
+        -- STACK containers hosted on the panel, one pinned to the top and one to the bottom. A stack
+        -- child stretches horizontally by default, so both track the panel's width with no width
+        -- arithmetic here -- and the panel's width is decided by the row grid, which is what should
+        -- decide it.
+        --
+        -- Hosting a second and third container on the same frame is sanctioned: adopting CHAINS the
+        -- existing OnSizeChanged rather than replacing it, so the grid's own re-layout survives.
+        handle._headerBox = SuuUI.Layout:CreateContainer({ host = panel, layout = "stack" })
+        handle._placeholder = props.filterPlaceholder or "Search…"
+        handle._search = SuuUI.Components.Input({ placeholder = handle._placeholder }, panel)
+        -- The props are KEPT so ApplyTheme can re-state them: stated only here they are frozen at
+        -- construction, so the panel's padding could grow while the field stayed flush against the
+        -- border -- which is exactly what shipped.
+        handle._searchProps = { valign = "start", height = inputH,
+                                inset = { top = pad, left = pad, right = pad } }
+        handle._headerBox:Add(handle._search, handle._searchProps)
+
+        handle._footerBox = SuuUI.Layout:CreateContainer({ host = panel, layout = "stack" })
+        handle._count = SuuUI.Components.Text({ text = "", size = "sm", color = "muted" }, panel)
+        handle._countProps = { valign = "end",
+                               inset = { bottom = pad, left = pad, right = pad } }
+        handle._footerBox:Add(handle._count, handle._countProps)
+
+        -- The reservation itself is NOT stated here: ApplyTheme owns the grid's padding and re-states
+        -- it from tokens on every pass, so a value set here is wiped by the constructor's own
+        -- ApplyTheme call below. It derives both heights instead.
+
+        -- Filtering is re-applied on every keystroke, off the FULL list kept in `_all`.
+        SuuUI.UISignals:Connect(handle._search, SuuUI.UISignals.SIGNALS.TEXT_CHANGED, function()
+            handle:_render()
+        end)
+    end
 
     handle._hoverAway = SuuUI.Components.HoverAway({
         frame     = panel,

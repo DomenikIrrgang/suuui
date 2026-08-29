@@ -397,7 +397,54 @@ describe("ChatFormat", function()
             local text = F().Line(
                 { chatType = "GUILD", message = "kara?", sender = "Thalvyn", globals = H.env },
                 { timestamps = true, tag = true })
-            expect(text).eq("19:41 GLD Thalvyn: kara?")
+            -- The timestamp carries a colour escape now: the whole line is painted the channel's
+            -- colour by AddMessage, and the clock is the one part of it that is not the channel's
+            -- information -- so undimmed it renders a whisper's time in whisper pink.
+            local code = H.SuuUI.Theme:GetColorCode("colorTextMuted")
+            expect(text).eq(code .. "19:41|r GLD Thalvyn: kara?")
+        end)
+
+        it("DIMS the timestamp rather than letting it take the line's colour", function()
+            H.setClock({ year = 2026, month = 8, day = 27, hour = 19, min = 41, sec = 0 })
+            local text = F().Line(
+                { chatType = "WHISPER", message = "hi", sender = "Sylvaine", globals = H.env },
+                { timestamps = true })
+            local code = H.SuuUI.Theme:GetColorCode("colorTextMuted")
+            expect(text:find(code, 1, true)).as("the muted token reaches the line").notNil()
+            expect(text:find("|r", 1, true)).as("and restores the line's own colour after").notNil()
+        end)
+
+        it("drops the VERB for a self-labelled row, like the concept's one row shape", function()
+            -- A conversation panel refuses a tag because the panel IS the label; the globalstring's
+            -- verb is redundant for the same reason, so `Sylvaine whispers: hi` became `Sylvaine: hi`.
+            local text = F().Line(
+                { chatType = "WHISPER", message = "hi", sender = "Sylvaine", globals = H.env },
+                { labelled = true })
+            expect(text).eq("Sylvaine: hi")
+        end)
+
+        it("says YOU for an outgoing whisper, so direction survives without the verb", function()
+            -- The bug this closes: WHISPER and WHISPER_INFORM both tag as WSP, so with the verb gone a
+            -- message you SENT and one you RECEIVED were the identical string.
+            local sent = F().Line(
+                { chatType = "WHISPER_INFORM", message = "otw", sender = "Sylvaine", globals = H.env },
+                { labelled = true })
+            local got = F().Line(
+                { chatType = "WHISPER", message = "otw", sender = "Sylvaine", globals = H.env },
+                { labelled = true })
+            expect(sent).eq("You: otw")
+            expect(sent == got).as("sent and received must not render identically").eq(false)
+        end)
+
+        it("prefers the client's own word for YOU when it has one", function()
+            -- The one string here a player reads as a WORD rather than as a name, so it follows the
+            -- locale where the client offers it.
+            H.env.YOU = "Du"
+            local text = F().Line(
+                { chatType = "WHISPER_INFORM", message = "otw", sender = "Sylvaine", globals = H.env },
+                { labelled = true })
+            H.env.YOU = nil
+            expect(text).eq("Du: otw")
         end)
 
         it("omits the timestamp when the setting is off", function()

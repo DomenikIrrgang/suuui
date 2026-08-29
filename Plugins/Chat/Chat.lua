@@ -13,6 +13,17 @@ local ipairs, type = ipairs, type
 local ipairs, pairs, type, tostring = ipairs, pairs, type, tostring
 local tinsert = table.insert
 
+-- The reopen row's label, in ONE place because the rail's expanded width is measured from it and a
+-- second copy would drift from what is drawn. Deliberately short: the expanded rail is as wide as its
+-- widest label, and "Closed conversations" would make every hover push the log much further than any
+-- player name does. The tooltip carries the full explanation.
+local REOPEN_LABEL = "Closed"
+
+-- How many closed conversations the roster shows at once. Named rather than inline because it is the
+-- whole reason the roster stays usable at three hundred conversations, and because the search field
+-- that lands next has to cap its RESULTS to the same number.
+local REOPEN_MAX_ROWS = 8
+
 local poolRegistered = false
 
 local WHISPER_KINDS = {
@@ -43,7 +54,12 @@ local SCHEMA = {
         { value = "12h",  label = "2:32 PM" },
         { value = "24hs", label = "14:32:07" },
       } },
-    { key = "show_tags", label = "Show Channel Tags", type = "toggle", default = true },
+    -- OFF by default, because the concept's row has no text tag at all: it carries channel identity on
+    -- a 2px coloured left border, which a ScrollingMessageFrame cannot draw. Keeping Blizzard's line
+    -- colours means that identity is ALREADY on the line -- a Guild line is green, a whisper pink -- so
+    -- `GLD` in front of it is the same information twice, and it is the widest thing between the
+    -- timestamp and the name. The setting stays for anyone who wants the column back.
+    { key = "show_tags", label = "Show Channel Tags", type = "toggle", default = false },
     { key = "font_size", label = "Text Size", type = "dropdown", default = "md", options = {
         { value = "sm", label = "Small" },
         { value = "md", label = "Medium" },
@@ -76,6 +92,12 @@ local SCHEMA = {
       } },
     { key = "history_depth", label = "Remembered Messages", type = "slider", default = 50,
       min = 0, max = 500, step = 10 },
+    -- The SECOND retention rule, and the one that actually bounds the SavedVariable. `history_depth`
+    -- caps records per conversation while nothing caps how many conversations there are, so the total
+    -- is depth x conversations and grows for as long as the player keeps meeting people. 0 means keep
+    -- forever, which is why the minimum is 0 rather than 1.
+    { key = "history_days", label = "Forget Conversations After (Days)", type = "slider", default = 14,
+      min = 0, max = 90, step = 1 },
 
     { key = "", label = "Internal", type = "internal" },
     { key = "position", type = "position" },
@@ -527,7 +549,26 @@ end
 --- Writes the store to the per-character SavedVariable. Called at PLAYER_LOGOUT only.
 function Chat:_saveHistory()
     if not self._store then return end
-    SuuUIChatHistory = self._store:Serialise()
+    -- Evicted before serialising, because login is not the only moment history goes stale: a client
+    -- left running for three weeks holds records older than the window with nothing having re-read the
+    -- store since. One walk per logout, against a store already capped by depth.
+    self._store:Evict()
+    local blob = self._store:Serialise()
+    -- The CLOSED SET rides along in the same SavedVariable, and it has to be persisted at all because
+    -- closing removes the PANEL while deliberately keeping the STREAM -- so the login replay, which
+    -- walks every stored record, recreated a panel for every conversation and every close was undone
+    -- by a reload.
+    --
+    -- Here rather than in the profile because it shares the history's SCOPE and LIFETIME exactly: the
+    -- streams are per-character and so are the conversations, and one write path cannot drift from
+    -- itself. Only ids that still HAVE a stream are kept, or the set grows forever as old
+    -- conversations are trimmed out from under it.
+    local closed = {}
+    for id in pairs(self._closed or {}) do
+        if #self._store:Stream(id) > 0 then closed[id] = true end
+    end
+    blob.closed = closed
+    SuuUIChatHistory = blob
 end
 
 --- Which panels this record belongs in. A LIST, never one panel.
@@ -546,9 +587,17 @@ end
 --- Formatting happens HERE, per panel, per render, reading the settings that are live now -- never
 --- at receipt, which would freeze the player's timestamp format and tag choice into the buffer, and
 --- would give both panels the same string when a single-group panel wants no tag at all.
-function Chat:_render(rec)
+function Chat:_render(rec, onlyPanelId)
     local targets = {}
-    for _, id in ipairs(rec.panels or {}) do
+    -- `onlyPanelId` narrows a render to a single panel, which is what REOPENING needs: the record has
+    -- already been shown in General (that happened when it arrived), so replaying it through normal
+    -- routing would print every line a second time there.
+    if onlyPanelId then
+        local only = SuuUI.ChatPanels.Find(self._panels, onlyPanelId)
+        if not only then return end
+        targets = { only }
+    end
+    for _, id in ipairs((not onlyPanelId) and (rec.panels or {}) or {}) do
         local panel = SuuUI.ChatPanels.Find(self._panels, id)
         if panel then tinsert(targets, panel) end
     end
@@ -557,7 +606,9 @@ function Chat:_render(rec)
     -- "panel" and the conversation has not been created yet, or the player deleted the only panel
     -- that wanted this group -- and a silently dropped line is the worst outcome this module can
     -- produce, worse than one shown in the wrong place, which is at least visible and correctable.
-    if #targets == 0 then
+    -- The fallback is for ROUTED records only. A narrowed replay has already resolved its one panel
+    -- above, so falling back here would dump a reopened conversation's history into General.
+    if #targets == 0 and not onlyPanelId then
         local fallback = self._panels[1]
         if not fallback then return end
         tinsert(targets, fallback)
@@ -584,6 +635,17 @@ function Chat:_render(rec)
             -- line of a Guild panel is the same information twice. This is the property the
             -- per-panel render buys -- one record, two panels, two correct strings.
             tag        = (get("show_tags") and self:_wantsTag(panel)) and true or false,
+            -- ALWAYS, because "time, name, colon, message -- in General and in a whisper alike" is the
+            -- concept's stated rule and it is not conditional on anything. It used to ride on the tag
+            -- being drawn, which coupled two unrelated things: turning the tag column off brought
+            -- `says:` and `whispers:` back everywhere, which is the opposite of one row shape.
+            --
+            -- What tells a whisper from a say once the verb is gone is the LINE COLOUR, which is
+            -- exactly how the concept does it -- colour and a coloured border, never words. Keeping
+            -- Blizzard's colours is what makes that available. A line with no sender at all (a system
+            -- message, a channel notice) still takes the globalstring path, where the phrasing IS the
+            -- content; `Body` decides that on the sender being empty.
+            labelled   = true,
             -- Every line gets its own copy affordance. The sequence is the handle: it is stamped by
             -- the store before this runs, and it is what the click resolves the line back from.
             copySeq    = rec.seq,
@@ -694,6 +756,13 @@ function Chat:_railWidth(expanded)
         local lw = SuuUI.TextMetrics.Box(panel.name or panel.id or "", font, size)
         if lw > widest then widest = lw end
     end
+    -- The reopen row's label counts toward the widest, or the rail expands to fit the names and
+    -- clips this one. Measured whenever the row COULD exist rather than only when it does: the width
+    -- is stated before the rows are rebuilt, so asking `_reopenRow` here would read the old state.
+    if self._store and #self:ClosedConversations() > 0 then
+        local lw = SuuUI.TextMetrics.Box(REOPEN_LABEL, font, size)
+        if lw > widest then widest = lw end
+    end
     return w + gap + widest
 end
 
@@ -717,6 +786,9 @@ function Chat:SetRailExpanded(on)
     if on == self._railExpanded then return end
     self._railExpanded = on
     for _, row in pairs(self._rows) do row:SetShowLabel(on) end
+    -- The reopen row lives OUTSIDE `_rows`, so every per-row pass has to name it explicitly. Missed
+    -- here, its label stayed on screen with the rail collapsed to discs.
+    if self._reopenRow then self._reopenRow:SetShowLabel(on) end
 
     -- ANIMATED, because snapping the log sideways reads as a glitch rather than as a reveal. `animFast`
     -- is the token every other panel reveal in the addon uses -- Dropdown's panel, Modal, Tooltip,
@@ -771,6 +843,13 @@ function Chat:_buildRail()
         row:Destroy()
     end
     self._rows = {}
+    -- Not in `_rows`, so it needs its own teardown -- the rail is rebuilt on every conversation
+    -- change, and without this each rebuild would leave another avatar parented to the wrapper.
+    if self._reopenRow then
+        self._rail:Remove(self._reopenRow)
+        self._reopenRow:Destroy()
+        self._reopenRow = nil
+    end
     if self._sep then
         self._rail:Remove(self._sep)
         self._sep:Destroy()
@@ -798,7 +877,22 @@ function Chat:_buildRail()
             showLabel = self._railExpanded == true,
         }, self._wrapper)
         local id = panel.id
-        SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.CLICKED, function()
+        local isConversation = panel.conversation and true or false
+        local panelName = panel.name or panel.id
+        SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.CLICKED, function(button)
+            -- RIGHT-CLICK CLOSES a conversation, left-click selects. No × badge, and that is a
+            -- deliberate trade rather than laziness: the rail is collapsed to a disc at rest, so a
+            -- close button would either sit inside a 30-unit circle already carrying an initial and an
+            -- unread badge, or appear only while expanded -- which is a control that exists only when
+            -- hovered, on a row whose hover ALSO drives the expansion.
+            --
+            -- Right-click needs no pixels and matches what the client's own chat tabs do. It is
+            -- advertised in the avatar's tooltip, because a gesture nobody documents is a gesture
+            -- nobody finds.
+            if button == "RightButton" then
+                if isConversation then self:CloseConversation(id) end
+                return
+            end
             self:SetActivePanel(id)
         end)
         -- Armed from a ROW's enter rather than the rail frame's, because a container's frame is not
@@ -806,8 +900,30 @@ function Chat:_buildRail()
         -- fires on the way INTO a child and would collapse the rail from under the cursor the moment
         -- it reached the name it was aiming for.
         SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.MOUSE_ENTER, function()
+            -- The tooltip earns its place at REST, where the row is a bare disc carrying one initial:
+            -- it is the only thing that says who `T` is. It also carries the close hint, since
+            -- right-click is otherwise undiscoverable.
+            --
+            -- GameTooltip rather than Components.Tooltip, matching this file's hyperlink path: rail
+            -- rows are destroyed and rebuilt on every conversation change, and a per-row component
+            -- handle would be one more thing to free on each rebuild for a transient hint.
+            local tt = GameTooltip
+            if tt then
+                tt:SetOwner(av:GetFrame(), "ANCHOR_RIGHT")
+                tt:ClearLines()
+                tt:AddLine(panelName)
+                if isConversation then tt:AddLine("Right-click to close", 0.6, 0.6, 0.6) end
+                tt:Show()
+            end
             self:SetRailExpanded(true)
             if self._railHover then self._railHover:Arm() end
+        end)
+        -- The TOOLTIP hides on leave, and only the tooltip. The rail's own collapse stays with
+        -- HoverAway for the reason given above -- OnLeave fires on the way INTO a child, so
+        -- collapsing here would take the rail away as the cursor reached the name. A tooltip has the
+        -- opposite requirement: it must go the moment the cursor leaves, and re-entering re-shows it.
+        SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.MOUSE_LEAVE, function()
+            if GameTooltip then GameTooltip:Hide() end
         end)
         -- NATURAL width, not "fill". A filled child is clamped to the rail's cell, so an expanded
         -- row's name would be shown and then clipped at 24 units. Taking its own width is what lets
@@ -819,6 +935,10 @@ function Chat:_buildRail()
         -- unread messages the badge exists to advertise.
         av:SetCount(self._unread and self._unread[panel.id] or 0)
     end
+    -- LAST in the rail, below the conversations it reopens. Built here rather than in _rebuildRail so
+    -- every path that rebuilds rows gets it -- closing a conversation is exactly the moment it has to
+    -- appear, and that path goes through here.
+    self:_buildReopenRow(size)
 end
 
 --- Switches the visible panel.
@@ -863,6 +983,269 @@ function Chat:LogFor(id) return self._logs and self._logs[id] or nil end
 --- Done at RECEIPT rather than from stored settings because a conversation cannot be configured
 --- before it exists. The panel is appended, so it lands after every channel panel and the rail's
 --- separator falls in the right place without ordering logic.
+--- The rail's "reopen a closed conversation" row, and the flyout it opens.
+---
+--- SELF-HIDING: it exists only while there is something closed to reopen, so the rail carries no
+--- permanent control that does nothing on a fresh login. That also makes it its own affordance -- a
+--- row appearing when you close a conversation is what tells the player the history is still there.
+function Chat:_buildReopenRow(size)
+    if not self._store then return end
+    if #self:ClosedConversations() == 0 then return end
+
+    local av = SuuUI.Components.Avatar({
+        initial   = "+",
+        color     = SuuUI.Theme:GetToken("colorTextMuted"),
+        label     = REOPEN_LABEL,
+        size      = size,
+        active    = false,
+        showLabel = self._railExpanded == true,
+    }, self._wrapper)
+
+    SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.CLICKED, function()
+        self:_openReopenFlyout(av)
+    end)
+    SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.MOUSE_ENTER, function()
+        local tt = GameTooltip
+        if tt then
+            tt:SetOwner(av:GetFrame(), "ANCHOR_RIGHT")
+            tt:ClearLines()
+            tt:AddLine("Closed conversations")
+            tt:AddLine("Click to reopen one and read its history", 0.6, 0.6, 0.6)
+            tt:Show()
+        end
+        self:SetRailExpanded(true)
+        if self._railHover then self._railHover:Arm() end
+    end)
+    SuuUI.UISignals:Connect(av, SuuUI.UISignals.SIGNALS.MOUSE_LEAVE, function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
+
+    self._rail:Add(av)
+    self._reopenRow = av
+end
+
+--- Opens the closed-conversation roster next to the rail.
+---
+--- Rows are LABEL-ONLY: FlyoutPanel's icon slot adopts a foreign frame and does not own it, so
+--- handing it an Avatar per row would make this function responsible for destroying those avatars on
+--- every rebuild. A name is the whole information a player needs to pick a conversation.
+function Chat:_openReopenFlyout(anchor)
+    local closed = self:ClosedConversations()
+    if #closed == 0 then return end
+
+    if not self._reopenFlyout then
+        self._reopenFlyout = SuuUI.Components.FlyoutPanel({
+            anchorTo = anchor:GetFrame(),
+            -- QUADRANT placement. The chat window is moveable and STARTS in the bottom-left corner,
+            -- where a panel that always opened downward ran off the bottom of the screen. `auto` grows
+            -- it toward the middle instead, so a bottom-left rail opens up and to the right.
+            align    = "auto",
+            -- The panel does the narrowing now, so EVERY closed conversation is handed over and the
+            -- cap applies to what is DRAWN. Capping here instead would put the older ones out of
+            -- reach of the search field entirely, which is the whole reason it exists.
+            filter   = true,
+            filterPlaceholder = "Search conversations…",
+            maxRows  = REOPEN_MAX_ROWS,
+            -- The disc size the concept draws, which is the RAIL's resting size rather than the
+            -- rail_size setting: this roster is a list of names, not the rail itself, and a 30-unit
+            -- disc per row would make eight rows taller than the log they sit over.
+            iconSize = SuuUI.Theme:GetToken("sizeControlSm") or 18,
+        }, self._wrapper)
+    end
+    -- RE-POINTED on every open, because `_buildRail` destroys and recreates the reopen row whenever the
+    -- closed list changes -- which a reopen always does. The panel was constructed against the FIRST
+    -- row, so after one reopen it hung off a DESTROYED frame: it opened somewhere else entirely, and
+    -- closed the instant it appeared, since a frame with no rect can never read as "inside" for the
+    -- hover watcher. One cause, both symptoms.
+    self._reopenFlyout:SetAnchorTo(anchor:GetFrame())
+    local rows = {}
+    -- The flyout ADOPTS an icon frame and does not own it, so this owns them: the previous set is
+    -- destroyed only AFTER SetRows has swapped the new frames in, or the destroy would tear out frames
+    -- the panel is still holding.
+    local fresh = {}
+    for i = 1, #closed do
+        -- NOT capped here: the panel caps what it DRAWS while keeping the full set searchable. The
+        -- list is newest-first, so an unfiltered roster shows the conversations most likely to be
+        -- wanted and typing reaches the rest.
+        local c = closed[i]
+        local id = c.id
+        -- The age is META, in its own dim right-aligned column. It used to be glued into the label
+        -- with a separator, which drew it at the NAME's size and colour -- the concept renders meta as
+        -- a separate small muted column, and joining the two also made the label's measured width
+        -- include text nobody is scanning for.
+        -- A CLASS-COLOURED DISC per row, as the concept draws it -- the roster read as a bare list of
+        -- names without one, and the disc is what makes a row recognisable at a glance the same way
+        -- the rail's is.
+        --
+        -- Coloured through the same `_panelColor` the rail uses, given a panel definition built from
+        -- the stored key, so a closed conversation cannot disagree with its own rail row about colour.
+        local av = SuuUI.Components.Avatar({
+            initial   = (c.name or "?"):sub(1, 1):upper(),
+            color     = self:_panelColor(SuuUI.ChatPanels.Conversation(id:sub(9), c.name)),
+            size      = SuuUI.Theme:GetToken("sizeControlSm") or 18,
+            active    = false,
+            showLabel = false,
+        }, self._wrapper)
+        tinsert(fresh, av)
+        tinsert(rows, {
+            key   = id,
+            label = c.name,
+            meta  = SuuUI.Readout.AgeShort(c.at),
+            frame = av:GetFrame(),
+            onClick = function()
+                if self._reopenFlyout then self._reopenFlyout:Close() end
+                self:ReopenConversation(id)
+            end,
+        })
+    end
+    self._reopenFlyout:SetRows(rows)
+    for _, old in ipairs(self._reopenAvatars or {}) do old:Destroy() end
+    self._reopenAvatars = fresh
+    self._reopenFlyout:Open()
+end
+
+--- Every conversation the STORE remembers that has no panel open. Newest first.
+---
+--- Exists because closing a conversation must not be the same thing as losing it: the player closes a
+--- window to clear the rail, then wants to read what someone said last night WITHOUT whispering them
+--- to summon the panel back -- messaging a person to check your own logs is not an acceptable price.
+---
+--- Read from the STREAM KEYS rather than from a separate "recently closed" list, which is the reason
+--- there is nothing extra to persist: a stream key IS the panel id (both are `whisper:<key>`), the
+--- streams already survive logout in SavedVariables, and so a conversation from a previous session is
+--- listed exactly like one closed a minute ago.
+-- @return table  { { id, name, count } }
+function Chat:ClosedConversations()
+    local out = {}
+    if not self._store then return out end
+    for _, key in ipairs(self._store:Keys()) do
+        if key:sub(1, 8) == "whisper:" and not SuuUI.ChatPanels.Find(self._panels, key) then
+            local recs = self._store:Stream(key)
+            local n = #recs
+            if n > 0 then
+                -- The name off the LAST record: it is the display name the client most recently gave
+                -- for that person, and the key itself is lower-cased and realm-suffixed, so showing
+                -- the key would read "thalvyn-" in the list.
+                local last = recs[n]
+                tinsert(out, { id = key, name = last.sender or key:sub(9), count = n,
+                               seq = last.seq or 0, at = last.at })
+            end
+        end
+    end
+    -- Newest conversation first, which is the order a player scans for "who was I just talking to".
+    -- `id` breaks the tie so the list cannot reorder between openings on equal sequences.
+    table.sort(out, function(x, y)
+        if x.seq ~= y.seq then return x.seq > y.seq end
+        return x.id < y.id
+    end)
+    return out
+end
+
+--- Reopens a closed conversation and replays its stored history into it.
+---
+--- Distinct from the automatic path in `_ensureConversation`, which needs an incoming record to work
+--- from. This one is driven by the PLAYER choosing a name, so it has to rebuild the panel from the
+--- stream alone and then fill the log itself -- a reopened panel that came back empty would tell the
+--- player their history was gone.
+-- @param id string  the `whisper:<key>` id from ClosedConversations
+-- @return boolean
+function Chat:ReopenConversation(id)
+    if type(id) ~= "string" or not self._store then return false end
+    if SuuUI.ChatPanels.Find(self._panels, id) then return true end
+    local recs = self._store:Stream(id)
+    if #recs == 0 then return false end
+
+    local key = id:sub(9)
+    local panel = SuuUI.ChatPanels.Conversation(key, recs[#recs].sender or key)
+    tinsert(self._panels, panel)
+    -- No longer closed, or the next reload would close it again behind the player's back.
+    if self._closed then self._closed[id] = nil end
+    self:_rebuildRail()
+
+    -- ACTIVATED BEFORE THE REPLAY, which is load-bearing rather than cosmetic ordering. `_logFor`
+    -- hides a log it builds for any panel that is not the active one, so replaying first meant every
+    -- restored line was added to a HIDDEN ScrollingMessageFrame -- and a hidden frame has no rect in
+    -- the client, so the frame had no height to lay its lines out against and they did not settle at
+    -- the bottom the way a live conversation's do. Activating first costs one frame of an empty panel
+    -- and gives the replay a laid-out frame to write into. `_refreshJump` tolerates the log not
+    -- existing yet, which is what makes this order safe.
+    self:SetActivePanel(id)
+
+    -- `_replaying` suppresses the same things a login replay suppresses -- no unread bump, no store
+    -- write, no jump-to-bottom nudge -- because none of this is new traffic.
+    self._replaying = true
+    for i = 1, #recs do
+        -- NARROWED to this panel: these records were already shown wherever routing sent them when
+        -- they arrived, so a routed replay would print each line into General a second time.
+        local ok = pcall(self._render, self, recs[i], id)
+        if not ok then SuuUI.Fault("chat: a stored record in " .. id .. " could not be replayed") end
+    end
+    self._replaying = false
+
+    -- The newest line is what the player must be looking at, so the replay ends AT THE BOTTOM. Needed
+    -- on top of the ordering above because the log comes from the pool: `Clear` empties the buffer, and
+    -- a scroll offset that outlived its messages would place the restored lines against a history that
+    -- no longer exists. A login replay never showed this -- the pool is empty at login, so it gets a
+    -- fresh frame at offset 0 -- which is exactly why this only went wrong on a mid-session reopen.
+    local log = self:LogFor(id)
+    if log and log.ScrollToBottom then log:ScrollToBottom() end
+    return true
+end
+
+--- Closes one conversation panel. Returns whether anything closed.
+---
+--- Reopening is not a separate feature and deliberately has no button: the next whisper from that
+--- person runs `_ensureConversation` again, which recreates the panel -- and because the STORE is
+--- untouched, the recreated panel replays that conversation's history instead of opening blank. So
+--- "close" means "put this away", not "forget this person".
+---
+--- Only a conversation can close; ChatPanels.Remove refuses General, Guild and Log, which are the
+--- window's fixed spine. A gesture that could remove one of those would leave the player with no way
+--- back short of a reload.
+function Chat:CloseConversation(id)
+    if not SuuUI.ChatPanels.Remove(self._panels, id) then return false end
+    -- Recorded so the login replay does not recreate the panel. The STREAM is untouched, which is what
+    -- keeps the history readable through the reopen roster.
+    self._closed = self._closed or {}
+    self._closed[id] = true
+
+    -- The LOG goes with the panel, or its frame leaks: `_logFor` builds one per panel id and nothing
+    -- else would ever free it, so closing and reopening a conversation ten times would leave ten
+    -- message frames parented to the log box.
+    --
+    -- RELEASED to the pool, not destroyed: `_logFor` acquires it from `chat.log`, so destroying it
+    -- would hand the pool a dead handle to reissue on the next conversation.
+    local log = self._logs and self._logs[id]
+    if log then
+        self._logBox:Remove(log)
+        -- CLEARED BEFORE RELEASE, and this is a privacy fix rather than tidiness. The pool's reset is
+        -- generic -- hide, unanchor, drop scripts -- and knows nothing about a message buffer, so a
+        -- released log kept every line it held. Measured: close Alpha's conversation, then have Beta
+        -- whisper, and Beta's panel opened showing Alpha's message. One person's private conversation
+        -- rendered in another's window.
+        if log.Clear then log:Clear() end
+        SuuUI.Pool:Release("chat.log", log)
+        self._logs[id] = nil
+    end
+    -- Unread state goes too. Left behind, a reopened panel would inherit a count from before it was
+    -- closed and show a badge for messages the player has already dealt with.
+    --
+    -- `_missed` is deliberately NOT touched: it is one counter for the jump-to-bottom badge on the
+    -- ACTIVE log, not a per-panel table, so clearing it here would reset a badge about a different
+    -- panel entirely.
+    if self._unread then self._unread[id] = nil end
+
+    -- Falling back to General rather than to whatever is adjacent: the active panel just ceased to
+    -- exist, and "the tab next to the one you closed" is a different answer every time depending on
+    -- how many conversations happen to be open.
+    if self._active == id then
+        local first = SuuUI.ChatPanels.Find(self._panels, "general") or self._panels[1]
+        if first then self:SetActivePanel(first.id) end
+    end
+    self:_rebuildRail()
+    return true
+end
+
 function Chat:_ensureConversation(rec)
     if not rec.conversation then return nil end
     -- `whisper_mode` decides this, and it was NOT consulted: a panel was built on every first
@@ -878,8 +1261,48 @@ function Chat:_ensureConversation(rec)
     local existing = SuuUI.ChatPanels.Find(self._panels, id)
     if existing then return existing end
 
+    -- A conversation the player CLOSED stays closed across a reload, and the gate is `_replaying`
+    -- rather than unconditional: the login replay must not undo a close, while a LIVE whisper from
+    -- that person is exactly the event that should bring the panel back. So the flag is cleared here
+    -- on the live path -- otherwise the panel would reopen and the store would still call it closed,
+    -- and the next reload would close it again.
+    if self._closed and self._closed[id] then
+        if self._replaying then return nil end
+        self._closed[id] = nil
+    end
+
     local panel = SuuUI.ChatPanels.Conversation(rec.conversation, rec.sender)
     tinsert(self._panels, panel)
+    -- REPLAY what the store already holds for this conversation, so a panel the player closed and
+    -- that a new whisper reopens comes back with its context rather than one orphaned line. Skipped
+    -- during the login replay, where `_replayHistory` is already walking every record and this would
+    -- render each one twice.
+    --
+    -- Before the incoming record is rendered, so history sits ABOVE the message that reopened it.
+    if not self._replaying and self._store then
+        local prior = self._store:Stream(id)
+        if #prior > 0 then
+            self._replaying = true
+            for i = 1, #prior do
+                -- STRICTLY OLDER than the record being ingested. By the time this runs the incoming
+                -- record is ALREADY in the stream, so replaying the whole stream rendered it here and
+                -- the caller rendered it again -- one whisper, printed twice.
+                local old = prior[i]
+                if not (rec.seq and old.seq and old.seq >= rec.seq) then
+                    pcall(self._render, self, old, id)
+                end
+            end
+            self._replaying = false
+            -- SETTLED AT THE BOTTOM, exactly as `ReopenConversation` does. This panel is deliberately
+            -- NOT activated -- a new whisper must not yank the player away from what they are reading
+            -- -- so unlike that path the log stays hidden and cannot be laid out here. The offset is
+            -- the part that survives to the moment it IS shown, and 0 is what makes the newest line
+            -- the one they land on. Not done from `SetActivePanel`, which must preserve a scroll
+            -- position the player chose by hand.
+            local log = self:LogFor(id)
+            if log and log.ScrollToBottom then log:ScrollToBottom() end
+        end
+    end
     -- _rebuildRail rather than _buildRail: a new conversation can carry the LONGEST name in the
     -- list, and the expanded width is measured from the widest one. Rebuilding the rows alone left
     -- that width stale -- harmless while expansion overlays the log rather than reflowing it, which
@@ -1123,6 +1546,19 @@ local function buildWindow(p)
     -- in force when the history was written.
     self._store  = SuuUI.ChatStore.Restore(SuuUIChatHistory)
     self._store:SetDepth(get("history_depth"))
+    -- Applied for the same reason as the depth above: the SETTING wins over whatever window the blob
+    -- was written under, so lowering the slider between sessions evicts on the next login. Restore has
+    -- already evicted using the blob's own value, so this only ever tightens or relaxes that result.
+    self._store:SetMaxAge((tonumber(get("history_days")) or 0) * 86400)
+    -- Read BEFORE the replay, since the replay is what would otherwise recreate every closed panel.
+    -- Copied rather than aliased: the blob is replaced wholesale on the next save, and aliasing it
+    -- would leave this table pointing at a discarded one.
+    self._closed = {}
+    if type(SuuUIChatHistory) == "table" and type(SuuUIChatHistory.closed) == "table" then
+        for id in pairs(SuuUIChatHistory.closed) do
+            if type(id) == "string" then self._closed[id] = true end
+        end
+    end
     self._active = self._panels[1] and self._panels[1].id or nil
 
     -- Pooled so a conversation the player closes returns its frame rather than leaking one per
@@ -1337,6 +1773,16 @@ plugin = SuuUI:CreatePlugin({
         -- SetDepth call at build time.
         SuuUI.Settings:Watch(PLUGIN_ID, "history_depth", function(depth)
             if p._chat and p._chat._store then p._chat._store:SetDepth(depth) end
+        end, PLUGIN_ID .. ".shape")
+
+        -- Same reasoning as the depth watcher: nothing to repaint, and without this the slider would
+        -- silently do nothing until the next login. The rail is rebuilt afterwards because eviction can
+        -- drop a whole conversation, and a closed one that is gone must stop being offered for reopen.
+        SuuUI.Settings:Watch(PLUGIN_ID, "history_days", function(days)
+            local c = p._chat
+            if not (c and c._store) then return end
+            c._store:SetMaxAge((tonumber(days) or 0) * 86400)
+            c:_rebuildRail()
         end, PLUGIN_ID .. ".shape")
 
         -- The disc size is baked into each Avatar at construction, so this REBUILDS the rail rather

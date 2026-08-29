@@ -154,6 +154,21 @@ function HoverMeta:AddGuard(frame)
     self._guards[#self._guards + 1] = frame
 end
 
+--- REPLACES the extra guards, keeping the panel itself.
+---
+--- Needed because AddGuard only appends: when the frame a panel hangs off is DESTROYED AND RECREATED
+--- (a rail row rebuilt after its list changed), appending the new one leaves the dead one in the list
+--- and grows it on every rebuild. A destroyed frame has no rect, so it can never read as inside --
+--- which presents as a panel that closes the instant it opens.
+-- @param frames table|nil  array of frames that count as inside, besides the panel
+function HoverMeta:SetGuards(frames)
+    local guards = { self._frame }
+    if frames then
+        for i = 1, #frames do guards[#guards + 1] = frames[i] end
+    end
+    self._guards = guards
+end
+
 --- Releases the watcher.
 function HoverMeta:Destroy()
     self._watcher:SetScript("OnUpdate", nil)

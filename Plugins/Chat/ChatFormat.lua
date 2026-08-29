@@ -281,13 +281,27 @@ function M.Body(chatType, message, sender, opts)
     -- content -- a boss emote, a system line, a channel notice.
     if opts.plain then
         if sender == "" then return message end
+        -- AN OUTGOING WHISPER MUST STILL SAY SO. `sender` is the TARGET for WHISPER_INFORM, so the
+        -- bare `Name: message` this branch produces reads exactly like a whisper you RECEIVED -- and
+        -- the tag column cannot save it, because WHISPER and WHISPER_INFORM both tag as `WSP`. That
+        -- shipped: in General with tags on, a message you sent and a message you got were identical.
+        --
+        -- `You:` is also the concept's own form for the player's own line, so the fix and the mockup
+        -- agree. Taken from the client's global when it has one so the word follows the locale, since
+        -- this is the one string here a player reads as a word rather than as a name.
+        local outgoing = chatType == "WHISPER_INFORM" or chatType == "BN_WHISPER_INFORM"
+        local who = sender
+        if outgoing then
+            local you = globals.YOU
+            who = (type(you) == "string" and you ~= "" and you) or "You"
+        end
         -- A DIFFERENT language still has to appear, in the same place Blizzard puts it: right
         -- before the message. Dropping it here was a real bug -- the plain branch returned early
         -- and never reached the language path below.
         if opts.language and opts.language ~= "" then
-            return sender .. ": [" .. opts.language .. "] " .. message
+            return who .. ": [" .. opts.language .. "] " .. message
         end
-        return sender .. ": " .. message
+        return who .. ": " .. message
     end
 
     local header = globals["CHAT_" .. tostring(chatType) .. "_GET"]
@@ -348,18 +362,35 @@ function M.Line(def, opts)
     def, opts = def or {}, opts or {}
     local tag = M.Tag(def.chatType, def.channelIndex)
     local showTag = (opts.tag and tag ~= nil) or false
+    -- `plain` means the ROW'S CONTEXT already says which conversation this is -- which is true of a
+    -- drawn tag AND of a panel dedicated to one person. `_wantsTag` already refuses a tag there on the
+    -- grounds that "the panel IS the label"; the globalstring's VERB is redundant for the same reason,
+    -- so a conversation was reading `Tangodin whispers: hi` where the concept reads `Tangodin: hi`.
+    -- One row shape everywhere is the concept's stated rule, and this is the half that was missing.
+    local labelled = showTag or (opts.labelled and true or false)
     local body = M.Body(def.chatType, def.message, def.sender, {
         language = def.language, globals = def.globals,
-        -- When the tag column carries the channel, the globalstring's own label AND verb are both
+        -- When the row's context carries the channel, the globalstring's own label AND verb are both
         -- redundant. See Body.
-        plain = showTag,
+        plain = labelled,
     })
     body = M.StripChannelPrefix(body)
 
     local out = body
     if showTag then out = tag .. " " .. out end
     if opts.timestamps then
-        out = M.Timestamp(opts.timeFormat, opts.now) .. " " .. out
+        -- DIMMED, because the whole line is painted the channel's colour by `AddMessage` and the
+        -- timestamp is the one part of it that is not the channel's information -- so left alone it
+        -- renders a whisper's clock in whisper pink, as loud as the message. The concept gives it its
+        -- own dim column for exactly that reason.
+        --
+        -- `colorTextMuted` for its MEANING rather than its value: the concept's grey is a shade darker
+        -- again, but "dimmer supporting text" is what this is, and reading a token whose number
+        -- happens to match is how a surface ends up coupled to a setting nobody connects to it. `|r`
+        -- restores whatever colour AddMessage set, which is what the class-coloured name relies on too.
+        local code = (SuuUI.Theme and SuuUI.Theme.GetColorCode
+            and SuuUI.Theme:GetColorCode("colorTextMuted")) or "|cff808594"
+        out = code .. M.Timestamp(opts.timeFormat, opts.now) .. "|r " .. out
     end
     -- The per-line COPY affordance, outermost so it sits before the timestamp -- "at the beginning of
     -- every message". It is an inline texture wrapped in a hyperlink, which is the only way to make

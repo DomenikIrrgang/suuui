@@ -1,5 +1,5 @@
 local ipairs, pairs, type, tostring = ipairs, pairs, type, tostring
-local tinsert = table.insert
+local tinsert, tremove = table.insert, table.remove
 
 local M = {}
 
@@ -143,6 +143,32 @@ end
 --- mutates what it is given.
 -- @param stored table|nil
 -- @return table
+--- Removes a CONVERSATION panel from the list, in place. Returns whether one was removed.
+---
+--- Conversations only, and the refusal is the point: General, Guild and Log are the fixed spine of
+--- the window, so a gesture that could remove one would leave the player with a chat they cannot get
+--- back without a reload. A conversation is different -- it was created by someone whispering, and a
+--- new whisper recreates it.
+---
+--- The STORE is deliberately untouched. The stream keyed by this conversation keeps its records, so
+--- reopening shows the history rather than an empty panel, and closing a window is not a request to
+--- delete what was said.
+-- @param panels table
+-- @param id string
+-- @return boolean
+function M.Remove(panels, id)
+    if type(panels) ~= "table" or type(id) ~= "string" then return false end
+    for i = 1, #panels do
+        local panel = panels[i]
+        if panel.id == id then
+            if not panel.conversation then return false end
+            tremove(panels, i)
+            return true
+        end
+    end
+    return false
+end
+
 function M.Panels(stored)
     local out = {}
     local src = (type(stored) == "table" and #stored > 0) and stored or M.DEFAULTS

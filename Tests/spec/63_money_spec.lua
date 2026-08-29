@@ -183,6 +183,24 @@ describe("Core/Game coin colours", function()
     -- exactly as well as a timestamp -- while a precise one invites the reader to believe the CONTENTS
     -- are precise too, which for a cached bag they are not.
     describe("Readout.Age", function()
+
+    describe("AgeShort", function()
+        it("says the same freshness in a narrow column", function()
+            local R = H.SuuUI.Readout
+            local now = 1000000
+            expect(R.AgeShort(now - 10, now)).as("under a minute is not counted in seconds").eq("now")
+            expect(R.AgeShort(now - 14 * 60, now)).eq("14m")
+            expect(R.AgeShort(now - 3 * 3600, now)).eq("3h")
+            expect(R.AgeShort(now - 2 * 86400, now)).eq("2d")
+            expect(R.AgeShort(now - 21 * 86400, now)).eq("3w")
+        end)
+
+        it("returns an empty string when there is no timestamp", function()
+            -- Age says "never" because it reads inside a sentence; this sits in a column, where a word
+            -- for absence is noise.
+            expect(H.SuuUI.Readout.AgeShort(nil)).eq("")
+        end)
+    end)
         local NOW = 1755900000
 
         it("says never when nothing was ever read", function()

@@ -304,6 +304,507 @@ describe("chat plugin", function()
         end)
     end)
 
+    describe("reopening WITHOUT whispering the person again", function()
+        local function closedOne(name)
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "night", sender = name })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name)
+            p._chat:CloseConversation(id)
+            return p, id
+        end
+
+        it("lists a closed conversation so it can be found again", function()
+            -- Messaging someone to summon their panel back is not an acceptable way to read your own
+            -- logs, so the closed set has to be discoverable from the store alone.
+            local p, id = closedOne("Thalvyn")
+            local closed = p._chat:ClosedConversations()
+            expect(#closed).eq(1)
+            expect(closed[1].id).eq(id)
+            expect(closed[1].name).as("the display name, not the lower-cased key").eq("Thalvyn")
+        end)
+
+        it("reopens on demand and replays the stored history", function()
+            local p, id = closedOne("Thalvyn")
+            expect(p._chat:ReopenConversation(id)).eq(true)
+            local log = p._chat:LogFor(id)
+            expect(log).notNil()
+            local found = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("night", 1, true) then found = true end
+            end
+            expect(found).as("history is replayed, not lost").eq(true)
+        end)
+
+        it("does NOT duplicate the replayed lines into General", function()
+            -- Those records were already shown in General when they arrived, so a routed replay would
+            -- print every line there a second time.
+            local p, id = closedOne("Thalvyn")
+            local general = p._chat:LogFor("general")
+            local before = general and general:GetNumMessages() or 0
+            p._chat:ReopenConversation(id)
+            expect((general and general:GetNumMessages() or 0))
+                .as("General is untouched by the replay").eq(before)
+        end)
+
+        it("drops out of the closed list once reopened", function()
+            local p, id = closedOne("Thalvyn")
+            p._chat:ReopenConversation(id)
+            expect(#p._chat:ClosedConversations()).eq(0)
+        end)
+
+        it("offers a rail row only while something is closed", function()
+            local p = enabled()
+            expect(p._chat._reopenRow).as("nothing closed, no control").eq(nil)
+            H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = "Thalvyn" })
+            p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Thalvyn"))
+            expect(p._chat._reopenRow).as("appears when there is").notNil()
+        end)
+
+        it("HIDES its label when the rail is collapsed, like every other row", function()
+            -- It lives outside `_rows`, so each per-row pass has to name it. Missed in the label
+            -- toggle, its text stayed on screen with the rail collapsed to discs.
+            local p, _ = closedOne("Thalvyn")
+            p._chat:SetRailExpanded(false)
+            expect(p._chat._reopenRow:IsShowingLabel()).eq(false)
+            p._chat:SetRailExpanded(true)
+            expect(p._chat._reopenRow:IsShowingLabel()).eq(true)
+        end)
+
+        it("leaves room for its own label at the expanded width", function()
+            -- Asserted as an INVARIANT rather than as a before/after comparison, deliberately: the
+            -- label is "Closed" and "General" is always present at seven characters, so this row can
+            -- never BE the widest and a comparison would pass whether or not the width measured it.
+            -- What must hold is that the expanded rail is wide enough to draw this label -- which is
+            -- exactly what broke when the label read "Closed conversations" and was not measured.
+            local p, _ = closedOne("Thalvyn")
+            local font = H.SuuUI.Fonts:Path(H.SuuUI.Theme:GetToken("fontFamilyMain"))
+            local size = H.SuuUI.Theme:GetFontSize("md")
+            local need = H.SuuUI.TextMetrics.Box(p._chat._reopenRow:GetLabel(), font, size)
+            expect(p._chat:_railWidth(true) - p._chat:_railWidth(false))
+                .as("the expanded rail can draw this row's label").gte(need)
+        end)
+
+        it("CAPS the roster, because a player whispers hundreds of people", function()
+            -- FlyoutPanel wraps a long roster into COLUMNS, so an uncapped list does not scroll badly
+            -- -- it renders every row across a dozen columns spanning the screen.
+            local p = enabled()
+            for i = 1, 30 do
+                local name = "Person" .. i
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            expect(#p._chat:ClosedConversations()).as("all are remembered").eq(30)
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            expect(p._chat._reopenFlyout:GetRowCount()).as("but only eight are shown").eq(8)
+        end)
+
+        it("shows the NEWEST conversations, since those are the ones being looked for", function()
+            local p = enabled()
+            for i = 1, 12 do
+                local name = "P" .. i
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            local closed = p._chat:ClosedConversations()
+            expect(closed[1].name).as("most recent first").eq("P12")
+        end)
+
+        it("labels each row with a COMPACT age", function()
+            -- "14 minutes ago" is wider than the name it belongs to and would push the roster past the
+            -- panel, which is why Readout.AgeShort exists alongside Age.
+            local p, _ = closedOne("Thalvyn")
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local label = p._chat._reopenFlyout._entries[1].label
+            expect(label:find("Thalvyn", 1, true)).notNil()
+            -- Asserted against the EXACT string AgeShort would produce, because looser forms do not
+            -- discriminate: `find("now")` also matches Age's "just now", and asserting only that "ago"
+            -- is absent passes even when no age is shown at all. Both weaker versions let a mutation
+            -- swapping AgeShort for Age survive.
+            local at = p._chat:ClosedConversations()[1].at
+            expect(at).as("the record carries an arrival time").notNil()
+            local want = H.SuuUI.Readout.AgeShort(at)
+            expect(#want > 0).as("and it renders to something").eq(true)
+            -- The age is its OWN entry field now, not part of the label: the concept draws meta as a
+            -- separate dim column, and a joined string also drew it at the name's size and colour.
+            expect(label).as("the label is the name alone").eq("Thalvyn")
+            expect(p._chat._reopenFlyout._entries[1].meta).eq(want)
+        end)
+
+        it("finds a conversation buried past the cap by TYPING its name", function()
+            -- The point of the search field: with 30 closed conversations the roster draws 8, and the
+            -- 20th is unreachable without it. Capping in the plugin instead of the panel would have put
+            -- that entry outside what the field can even see.
+            local p = enabled()
+            for i = 1, 30 do
+                local name = "Person" .. i
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local fly = p._chat._reopenFlyout
+            expect(fly:GetRowCount()).as("drawn without a query").eq(8)
+            H.typeText(fly._search, "Person20")
+            expect(fly:GetRowCount()).as("the buried one is found").eq(1)
+            expect(fly._entries[1].label:find("Person20", 1, true)).notNil()
+        end)
+
+        it("reopens the conversation the search found", function()
+            local p = enabled()
+            for i = 1, 12 do
+                local name = "Q" .. i
+                H.chat("CHAT_MSG_WHISPER", { text = "hi " .. i, sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local fly = p._chat._reopenFlyout
+            H.typeText(fly._search, "Q3")
+            expect(fly:GetRowCount()).eq(1)
+            fly._entries[1].onClick(fly._entries[1], "LeftButton")
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Q3")
+            expect(H.SuuUI.ChatPanels.Find(p._chat._panels, id)).as("it reopened").notNil()
+            expect(p._chat._active).eq(id)
+        end)
+
+        it("draws a class-coloured disc on every row, as the concept does", function()
+            -- Without it the roster read as a bare list of names: the concept gives each row the same
+            -- disc the rail carries, which is what makes a row recognisable at a glance.
+            local p, _ = closedOne("Thalvyn")
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            expect(#p._chat._reopenAvatars).as("one disc per row").eq(1)
+            expect(p._chat._reopenFlyout._entries[1].frame)
+                .as("and it is handed to the row").eq(p._chat._reopenAvatars[1]:GetFrame())
+        end)
+
+        it("destroys the PREVIOUS discs when the roster is rebuilt", function()
+            -- The panel adopts an icon frame and does not own it, so reopening the flyout ten times
+            -- would otherwise leave ten sets of avatars parented to the wrapper.
+            local p, _ = closedOne("Thalvyn")
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local first = p._chat._reopenAvatars[1]
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            expect(#p._chat._reopenAvatars).eq(1)
+            expect(p._chat._reopenAvatars[1] == first).as("a fresh set replaced it").eq(false)
+            -- Asserted through a CONSEQUENCE of the destroy, not through the replacement: a fresh set
+            -- is created whether or not the old one was freed, so the first version of this spec let a
+            -- mutation deleting the teardown survive. Destroy hides the frame.
+            expect(first:GetFrame():IsShown()).as("the previous disc was destroyed").eq(false)
+        end)
+
+        it("renders a CONVERSATION panel's own lines without the whisper verb", function()
+            -- The wiring, not the mechanism: ChatFormat can drop the verb for a labelled row, but only
+            -- if the plugin tells it the panel is one. Without this spec, passing `labelled = false`
+            -- from _render survived mutation while the format specs all stayed green.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = "Tangodin" })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Tangodin")
+            local log = p._chat:LogFor(id)
+            expect(log).as("the conversation panel has a log").notNil()
+            local line = log:GetMessageInfo(log:GetNumMessages())
+            expect(line:find("whispers", 1, true))
+                .as("the panel IS the label, so the verb is redundant").eq(nil)
+            -- Asserted at the END rather than as a contiguous "Tangodin: hi": the sender is a
+            -- hyperlink, so the link's `|h` closer sits between the name and the colon.
+            expect(line:sub(-4)).as("one row shape: name, colon, message").eq(": hi")
+            expect(line:find("Tangodin", 1, true)).as("and the name is still there").notNil()
+        end)
+
+        it("still says WHO in General, where the panel labels nothing", function()
+            -- The other half: General carries many groups, so its rows keep the tag that tells them
+            -- apart. Dropping the verb everywhere would make a whisper unreadable among say and party.
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "whisper_mode", "general")
+            H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = "Tangodin" })
+            local log = p._chat:LogFor("general")
+            expect(log).as("General has a log").notNil()
+            local line = log:GetMessageInfo(log:GetNumMessages())
+            expect(line:find("Tangodin", 1, true)).as("the sender is named").notNil()
+        end)
+
+        it("applies the history_days SETTING to the store", function()
+            -- Without a watcher the slider silently does nothing until the next login, which is the
+            -- gap history_depth already had its own watcher for.
+            local p = enabled()
+            H.SuuUI.Settings:Set("chat", "history_days", 3)
+            expect(p._chat._store:GetMaxAge()).as("days become seconds").eq(3 * 86400)
+            H.SuuUI.Settings:Set("chat", "history_days", 0)
+            expect(p._chat._store:GetMaxAge()).as("0 means keep forever").eq(0)
+        end)
+
+        it("drops an EVICTED conversation from the reopen roster", function()
+            -- An evicted stream must stop being offered: `ClosedConversations` reads the store, so a
+            -- conversation whose history is gone would otherwise still be listed with nothing behind it.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = "Tangodin" })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Tangodin")
+            p._chat:CloseConversation(id)
+            expect(#p._chat:ClosedConversations()).as("listed while its history exists").eq(1)
+
+            -- Age the one record past the window rather than waiting.
+            local recs = p._chat._store:Stream(id)
+            local now = (H.env.time and H.env.time()) or 1000000
+            p._chat._store:Clear(id)
+            recs[1].at = now - 40 * 86400
+            p._chat._store:_insert(recs[1])
+            -- 7 rather than 14: `Set` DROPS a write that does not change the effective value, and 14
+            -- is the shipped default -- so setting it to 14 fires no watcher and evicts nothing.
+            H.SuuUI.Settings:Set("chat", "history_days", 7)
+
+            expect(p._chat._store:Count(id)).as("evicted").eq(0)
+            expect(#p._chat:ClosedConversations()).as("and no longer offered for reopen").eq(0)
+        end)
+
+        it("ACTIVATES the panel before replaying, so lines land in a shown log", function()
+            -- The root of "reopened lines do not start at the bottom". `_logFor` hides a log it builds
+            -- for a panel that is not active, so replaying first added every restored line to a HIDDEN
+            -- ScrollingMessageFrame -- which has no rect in the client, so there was no height to lay
+            -- the lines out against. Asserting the ORDER is what discriminates: the outcome alone
+            -- passes either way here, because the harness gives a hidden frame a rect.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "one", sender = "Tangodin" })
+            H.chat("CHAT_MSG_WHISPER", { text = "two", sender = "Tangodin" })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Tangodin")
+            p._chat:CloseConversation(id)
+
+            local activeAtFirstRender
+            local real = p._chat._render
+            p._chat._render = function(self, rec, only)
+                if activeAtFirstRender == nil then activeAtFirstRender = self._active or false end
+                return real(self, rec, only)
+            end
+            p._chat:ReopenConversation(id)
+            p._chat._render = real
+
+            expect(activeAtFirstRender).as("the panel is active before the first line is replayed").eq(id)
+            expect(p._chat:LogFor(id):IsShown()).as("so the log is shown while it fills").eq(true)
+        end)
+
+        it("leaves a REOPENED conversation scrolled to the bottom", function()
+            -- Pins the outcome the player sees. NOT discriminable in the harness on its own: its
+            -- ScrollingMessageFrame:Clear() zeroes the scroll offset, so a pooled log cannot come back
+            -- carrying a stale one here the way it does in game. Kept because it is the invariant, and
+            -- it fails if a future change replays without settling.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "one", sender = "Tangodin" })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Tangodin")
+            p._chat:CloseConversation(id)
+            p._chat:ReopenConversation(id)
+            expect(p._chat:LogFor(id):AtBottom()).as("newest line is what you land on").eq(true)
+        end)
+
+        it("settles the log at the bottom when a LIVE whisper reopens it", function()
+            -- The automatic path is deliberately NOT activated -- a whisper must not yank the player
+            -- away from what they are reading -- so its log stays hidden and only the offset can be
+            -- settled. That offset is what survives to the moment the player clicks the row.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "one", sender = "Tangodin" })
+            local id = "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Tangodin")
+            p._chat:CloseConversation(id)
+            H.chat("CHAT_MSG_WHISPER", { text = "back", sender = "Tangodin" })
+            local log = p._chat:LogFor(id)
+            expect(log).as("the live whisper reopened it").notNil()
+            expect(log:AtBottom()).as("and it is settled at the bottom").eq(true)
+            expect(p._chat:GetActivePanel() == id).as("without stealing the active panel").eq(false)
+        end)
+
+        it("can be opened AGAIN after a reopen", function()
+            -- Shipped broken: `_buildRail` destroys and recreates the reopen row whenever the closed
+            -- list changes, and a reopen always changes it -- so the panel was left anchored to the
+            -- destroyed first row. It opened in the wrong place and closed instantly, because a frame
+            -- with no rect can never read as "inside" for the hover watcher.
+            local p = enabled()
+            for _, name in ipairs({ "Alpha", "Beta" }) do
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local fly = p._chat._reopenFlyout
+            fly._entries[1].onClick(fly._entries[1], "LeftButton")
+
+            -- The row that exists NOW, after the rebuild.
+            local row = p._chat._reopenRow
+            expect(row).as("still something closed, so the row is back").notNil()
+            p._chat:_openReopenFlyout(row)
+            expect(fly._anchorTo).as("anchored to the CURRENT row").eq(row:GetFrame())
+            expect(fly:IsOpen()).as("and it stays open").eq(true)
+            H.expectInside(fly, H.UIParent)
+        end)
+
+        it("drops the DESTROYED row from the hover guards", function()
+            -- AddGuard only appends, so without a replace the dead frame stays in the list and the set
+            -- grows on every rebuild -- and a dead guard is exactly what closed the panel instantly.
+            local p = enabled()
+            for _, name in ipairs({ "Alpha", "Beta" }) do
+                H.chat("CHAT_MSG_WHISPER", { text = "hi", sender = name })
+                p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey(name))
+            end
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local fly = p._chat._reopenFlyout
+            local dead = p._chat._reopenRow:GetFrame()
+            fly._entries[1].onClick(fly._entries[1], "LeftButton")
+            p._chat:_openReopenFlyout(p._chat._reopenRow)
+            local guards = fly._hoverAway._guards
+            for i = 1, #guards do
+                expect(guards[i] == dead).as("the destroyed row is not a guard").eq(false)
+            end
+        end)
+
+        it("stays CLOSED across a reload", function()
+            -- Shipped reopening itself on every reload: closing removes the PANEL while deliberately
+            -- keeping the STREAM, and the login replay walks every stored record, so it recreated a
+            -- panel for every conversation and undid the close.
+            local p, id = closedOne("Thalvyn")
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            expect(blob.closed and blob.closed[id]).as("the close is persisted").truthy()
+
+            -- Relog with that blob staged, exactly as the client restores it.
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            H.SuuUI.Settings:Set("chat", "enabled", true)
+            local p2 = H.SuuUI.Plugins:Get("chat")
+            expect(H.SuuUI.ChatPanels.Find(p2._chat._panels, id))
+                .as("no panel after the reload").eq(nil)
+            expect(#p2._chat:ClosedConversations())
+                .as("but it is still reachable from the roster").eq(1)
+        end)
+
+        it("REOPENS on a live whisper after a reload, not on the replay", function()
+            -- The gate is the replay specifically: a new whisper from that person is exactly the event
+            -- that should bring the panel back.
+            local p, id = closedOne("Thalvyn")
+            H.fireEvent("PLAYER_LOGOUT")
+            H.setup({ savedVars = { SuuUIChatHistory = H.env.SuuUIChatHistory } })
+            H.SuuUI.Settings:Set("chat", "enabled", true)
+            local p2 = H.SuuUI.Plugins:Get("chat")
+            expect(H.SuuUI.ChatPanels.Find(p2._chat._panels, id)).eq(nil)
+            H.chat("CHAT_MSG_WHISPER", { text = "still there?", sender = "Thalvyn" })
+            expect(H.SuuUI.ChatPanels.Find(p2._chat._panels, id))
+                .as("a live whisper reopens it").notNil()
+        end)
+
+        it("does not re-close a conversation the whisper just reopened", function()
+            -- If the flag were not cleared on the live path the panel would reopen and the store would
+            -- still call it closed, so the NEXT reload would close it again behind the player.
+            local p, id = closedOne("Thalvyn")
+            H.chat("CHAT_MSG_WHISPER", { text = "back", sender = "Thalvyn" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            expect(blob.closed and blob.closed[id]).as("no longer recorded as closed").falsy()
+        end)
+
+        it("forgets a closed id that has no stream left", function()
+            -- Otherwise the set grows forever as old conversations are trimmed out from under it.
+            -- Asserted directly rather than by trimming: SetDepth(0) does not empty a stream, so a
+            -- depth-driven version of this test passed for the wrong reason.
+            local p, id = closedOne("Thalvyn")
+            p._chat._closed["whisper:nobody-"] = true
+            H.fireEvent("PLAYER_LOGOUT")
+            local closed = H.env.SuuUIChatHistory.closed or {}
+            expect(closed[id]).as("a live stream keeps its flag").truthy()
+            expect(closed["whisper:nobody-"]).as("a streamless id is dropped").falsy()
+        end)
+
+        it("survives a logout, because the streams do", function()
+            -- A conversation closed in a previous session is listed exactly like one closed a minute
+            -- ago: the stream keys ARE the panel ids and they persist in SavedVariables.
+            local p, id = closedOne("Thalvyn")
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            expect(blob).notNil()
+            expect(blob.streams[id]).as("the closed conversation is still stored").notNil()
+        end)
+
+        it("never shows one person's whisper in ANOTHER person's panel", function()
+            -- Measured before the fix: closing Alpha's conversation released its log to the pool with
+            -- every line still in the buffer, and Beta's new panel acquired it and rendered Alpha's
+            -- private message. The pool's reset is generic and knows nothing about a message buffer.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "SECRET-A", sender = "Alpha" })
+            p._chat:CloseConversation("whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Alpha"))
+            H.chat("CHAT_MSG_WHISPER", { text = "hello-b", sender = "Beta" })
+            local log = p._chat:LogFor("whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Beta"))
+            expect(log).notNil()
+            local leaked = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("SECRET-A", 1, true) then leaked = true end
+            end
+            expect(leaked).as("no cross-conversation leak").eq(false)
+        end)
+    end)
+
+    describe("closing and reopening a conversation", function()
+        local function whispered()
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Thalvyn" })
+            -- DERIVED, never hardcoded: the key is lower-cased and realm-suffixed
+            -- ("thalvyn-"), so a literal "whisper:Thalvyn" addresses a panel that does not exist.
+            return p, "whisper:" .. H.SuuUI.ChatRouting.ConversationKey("Thalvyn")
+        end
+
+        it("closes a conversation panel on right-click", function()
+            local p, id = whispered()
+            expect(H.SuuUI.ChatPanels.Find(p._chat._panels, id)).as("panel opened").notNil()
+            expect(H.click(p._chat._rows[id], "RightButton")).eq(true)
+            expect(H.SuuUI.ChatPanels.Find(p._chat._panels, id)).as("and closed").eq(nil)
+        end)
+
+        it("LEFT-click still selects rather than closing", function()
+            local p, id = whispered()
+            expect(H.click(p._chat._rows[id], "LeftButton")).eq(true)
+            expect(H.SuuUI.ChatPanels.Find(p._chat._panels, id)).as("still open").notNil()
+            expect(p._chat._active).eq(id)
+        end)
+
+        it("REFUSES to close General, which is the window's fixed spine", function()
+            -- A gesture that could remove General would leave the player with no way back short of a
+            -- reload, so the refusal lives in the model rather than in the row's handler.
+            local p = enabled()
+            expect(H.SuuUI.ChatPanels.Remove(p._chat._panels, "general")).eq(false)
+            expect(H.SuuUI.ChatPanels.Find(p._chat._panels, "general")).notNil()
+        end)
+
+        it("falls back to General when the CLOSED panel was the active one", function()
+            local p, id = whispered()
+            p._chat:SetActivePanel(id)
+            p._chat:CloseConversation(id)
+            expect(p._chat._active).as("not left pointing at a panel that no longer exists").eq("general")
+        end)
+
+        it("RELEASES the log to the pool instead of destroying it", function()
+            -- _logFor acquires from the `chat.log` pool, so destroying the handle would hand the pool a
+            -- dead one to reissue on the next conversation.
+            local p, id = whispered()
+            p._chat:CloseConversation(id)
+            expect(p._chat._logs[id]).as("the log is dropped").eq(nil)
+            H.chat("CHAT_MSG_WHISPER", { text = "back", sender = "Thalvyn" })
+            local log = p._chat:LogFor(id)
+            expect(log).as("a reissued log is usable").notNil()
+            expect(log:GetNumMessages()).gt(0)
+        end)
+
+        it("reopens with the conversation's HISTORY, because the store is untouched", function()
+            -- Closing a window is not a request to delete what was said.
+            local p, id = whispered()
+            p._chat:CloseConversation(id)
+            H.chat("CHAT_MSG_WHISPER", { text = "still there?", sender = "Thalvyn" })
+            local log = p._chat:LogFor(id)
+            expect(log).notNil()
+            local found = false
+            for i = 1, log:GetNumMessages() do
+                if tostring(log:GetMessageInfo(i)):find("hey", 1, true) then found = true end
+            end
+            expect(found).as("the earlier whisper is replayed, not lost").eq(true)
+        end)
+
+        it("clears unread state so a reopened panel shows no stale badge", function()
+            local p, id = whispered()
+            p._chat:SetActivePanel("general")
+            H.chat("CHAT_MSG_WHISPER", { text = "two", sender = "Thalvyn" })
+            expect((p._chat._unread or {})[id]).as("unread accrued").gt(0)
+            p._chat:CloseConversation(id)
+            expect((p._chat._unread or {})[id]).eq(nil)
+        end)
+    end)
+
     describe("class-coloured sender names", function()
         local GUID = "Player-1-ABCDEF"
 
@@ -342,8 +843,13 @@ describe("chat plugin", function()
             -- A creature has no class and the client answers nothing, which is correct: the name takes
             -- the line's own colour rather than an invented one.
             local line = say(nil)
-            expect(line:find("Thalvyn", 1, true)).notNil()
-            expect(line:find("|cff")).as("no colour escape is invented").eq(nil)
+            local at = line:find("Thalvyn", 1, true)
+            expect(at).notNil()
+            -- Narrowed to the NAME. A line-wide `|cff` search used to work and now finds the
+            -- TIMESTAMP's own muted escape, which is a legitimate one -- so the assertion asks the
+            -- question it always meant: is there an escape immediately before the name.
+            expect(line:sub(1, at - 1):find("|cff[0-9a-fA-F]+$"))
+                .as("no colour escape is invented for the name").eq(nil)
         end)
 
         it("caches the lookup on the record, including its absence", function()
@@ -1028,8 +1534,31 @@ describe("chat plugin", function()
                 .contains("|Hplayer:Sulisande-TestRealm:5|h")
         end)
 
+        it("draws NO channel tag out of the box", function()
+            -- The default, asserted with nothing written: the concept's row has no text tag at all, and
+            -- with Blizzard's line colours kept the channel is already on the line.
+            local p = enabled()
+            H.chat("CHAT_MSG_GUILD", { text = "hi", sender = "Thalvyn" })
+            local text = p._chat:LogFor("guild"):GetMessageInfo(1)
+            expect(text:find("GLD", 1, true)).as("no tag column by default").eq(nil)
+        end)
+
+        it("keeps ONE row shape with the tag OFF, which is the default", function()
+            -- The concept's rule is "time, name, colon, message -- in General and in a whisper alike",
+            -- and it is not conditional. This used to ride on the tag being drawn, so switching the tag
+            -- column off brought `says:` and `whispers:` back everywhere.
+            local p = enabled()
+            H.chat("CHAT_MSG_SAY", { text = "test", sender = "Thalvyn" })
+            local text = p._chat:ActiveLog():GetMessageInfo(1)
+            expect(text:find("says", 1, true)).as("no verb, tag or no tag").eq(nil)
+            expect(text:sub(-6)).as("name, colon, message").eq(": test")
+        end)
+
         it("does not print the channel verb beside the tag", function()
             local p = enabled()
+            -- Asked for explicitly: the tag now defaults OFF, because the concept draws none and the
+            -- line's own colour already carries the channel.
+            H.SuuUI.Settings:Set("chat", "show_tags", true)
             H.chat("CHAT_MSG_SAY", { text = "test", sender = "Thalvyn" })
             local text = p._chat:ActiveLog():GetMessageInfo(1)
             expect(text).contains("SAY")
@@ -1558,6 +2087,7 @@ describe("chat plugin", function()
 
         it("prefixes the channel tag when on", function()
             local p = enabled()
+            H.SuuUI.Settings:Set("chat", "show_tags", true)
             H.chat("CHAT_MSG_GUILD", { text = "hi", sender = "Thalvyn" })
             expect((p._chat:LogFor("guild"):GetMessageInfo(1))).contains("GLD")
         end)

@@ -74,13 +74,32 @@ describe("MessageLog", function()
             expect(make({ maxLines = 40 }):GetMaxLines()).eq(40)
         end)
 
+        it("separates rows by the spacing token, not flush like a bare frame", function()
+            -- A bare ScrollingMessageFrame stacks lines flush, which is what made the log read as a
+            -- wall of text against the concept's separated rows.
+            local log = make()
+            expect(log._log:GetSpacing()).eq(H.token("spaceXxs"))
+        end)
+
+        it("re-derives the row gap when the spacing token changes", function()
+            -- Token-derived, so it belongs on the theme path rather than being cached at construction.
+            local log = make()
+            H.T:CreateUserTheme("Roomy", "Default")
+            H.T:SetUserToken("Roomy", "spaceXxs", 6)
+            H.T:SetActive("Roomy")
+            expect(log._log:GetSpacing()).as("re-read on the theme path").eq(6)
+        end)
+
         it("insets the log by the border width on both chrome states", function()
             -- The inset is constant so text does not shift by a pixel when chrome fades in.
             local bare    = make({ chrome = false })
             local chromed = make({ chrome = true })
-            local bw = H.token("borderWidth")
-            expect(H.box(bare._log).left - H.box(bare).left).near(bw, 0.51)
-            expect(H.box(chromed._log).left - H.box(chromed).left).near(bw, 0.51)
+            -- Border width PLUS the concept's inner padding, which is why its text does not run
+            -- against the glass edge. The load-bearing part is unchanged and is what this asserts:
+            -- both chrome states inset by the SAME amount, so nothing shifts when chrome fades in.
+            local want = H.token("borderWidth") + H.token("spaceSm")
+            expect(H.box(bare._log).left - H.box(bare).left).near(want, 0.51)
+            expect(H.box(chromed._log).left - H.box(chromed).left).near(want, 0.51)
         end)
     end)
 

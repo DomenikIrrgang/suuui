@@ -1236,6 +1236,13 @@ function ScrollingMessageFrameMeta:GetShadowOffset() return self._shadowX or 0, 
 
 function ScrollingMessageFrameMeta:SetJustifyH(j) self._justifyH = j end
 function ScrollingMessageFrameMeta:GetJustifyH()  return self._justifyH or "CENTER" end
+
+-- The gap between lines. A ScrollingMessageFrame is a FontInstance, so it carries this directly --
+-- and it was ABSENT here, which is the shape of gap this file's header warns about: the addon's
+-- `if self._log.SetSpacing` guard meant the call silently did nothing under test, so a spec about row
+-- separation could not fail. Defaults to 0, which is the client's own flush stacking.
+function ScrollingMessageFrameMeta:SetSpacing(s) self._spacing = tonumber(s) or 0 end
+function ScrollingMessageFrameMeta:GetSpacing()  return self._spacing or 0 end
 function ScrollingMessageFrameMeta:SetJustifyV(j) self._justifyV = j end
 function ScrollingMessageFrameMeta:GetJustifyV()  return self._justifyV or "MIDDLE" end
 

@@ -108,12 +108,39 @@ local function trim(s, depth)
     while #s > cap do tremove(s, 1) end
 end
 
+--- Drops records older than `cutoff` from one stream, answering how many are left.
+---
+--- A record with NO `at` is KEPT. The field is stamped as `type(time) == "function" and time() or
+--- nil`, so it can legitimately be absent, and deleting on missing data is the destructive
+--- direction: an unstamped record still carries what was said.
+---
+--- Walked in full rather than from the front like `trim`. Within a stream `at` is non-decreasing in
+--- practice, so a front-only walk would normally do -- but this blob is a SavedVariable a player may
+--- have hand-edited, and one out-of-order entry would then shield every stale record behind it. A
+--- stream is capped at `depth`, so the whole walk costs nothing.
+local function evictStale(s, cutoff)
+    for i = #s, 1, -1 do
+        local rec = s[i]
+        local at = type(rec) == "table" and rec.at or nil
+        if type(at) == "number" and at < cutoff then tremove(s, i) end
+    end
+    return #s
+end
+
 --- Creates a message store.
 ---
 --- `depth` is the per-stream cap, NOT a global one, and that distinction is the point: a busy
 --- Trade channel must not be able to evict a whisper. Blizzard keeps one buffer per frame and a
 --- quiet conversation ages out behind traffic it has nothing to do with.
--- @param opts table|nil  { depth }
+---
+--- `maxAge` is the SECOND, orthogonal cap, in seconds, and it is what actually bounds the store.
+--- `depth` caps records PER STREAM while nothing caps the NUMBER of streams, so the stored total is
+--- depth x conversations -- at the shipped 50, two hundred people whispered is ten thousand records,
+--- every one of them parsed at login and walked by the replay. Age was chosen over a hard cap on the
+--- stream count because a count cap evicts by the wrong key: whisper eight people today and it drops
+--- the conversation you were having yesterday. Age only ever drops what the player has stopped using.
+--- 0 disables it.
+-- @param opts table|nil  { depth, maxAge }
 -- @return table  store handle
 function M.NewStore(opts)
     opts = opts or {}
@@ -123,6 +150,10 @@ function M.NewStore(opts)
     -- unreachable, because it is one comparison and the alternative cost 67 minutes once.
     local depth = opts.depth
     if type(depth) ~= "number" or depth < 1 then depth = 50 end
+    -- 0 is a MEANINGFUL value here, unlike depth's: it means "never evict by age". So the guard
+    -- rejects only a non-number or a negative, rather than flooring at 1.
+    local maxAge = opts.maxAge
+    if type(maxAge) ~= "number" or maxAge < 0 then maxAge = 0 end
     return setmetatable({
         _streams = {},
         _order   = {},
@@ -130,6 +161,7 @@ function M.NewStore(opts)
         -- are many streams, so the total is the interesting number, and a player who wants deep
         -- scrollback raises it rather than paying for it in every conversation by default.
         _depth   = math.floor(depth),
+        _maxAge  = maxAge,
         _seq     = 0,
     }, StoreMeta)
 end
@@ -148,6 +180,57 @@ function StoreMeta:SetDepth(depth)
     if type(depth) ~= "number" or depth < 1 then return end
     self._depth = math.floor(depth)
     for _, s in pairs(self._streams) do trim(s, self._depth) end
+end
+
+--- The age cap in seconds, or 0 when nothing is evicted by age.
+function StoreMeta:GetMaxAge() return self._maxAge or 0 end
+
+--- Sets the age cap in seconds and evicts immediately. 0 disables it.
+---
+--- Evicts now rather than at the next message, for the reason SetDepth does: the streams holding the
+--- oldest records are exactly the quiet ones nobody is going to talk in.
+-- @param secs number
+function StoreMeta:SetMaxAge(secs)
+    if type(secs) ~= "number" or secs < 0 then return end
+    self._maxAge = secs
+    self:Evict()
+end
+
+--- Drops every record older than the age cap, and every stream that leaves empty.
+---
+--- DROPPING THE EMPTIED STREAM is the half that actually solves the problem. Evicting only records
+--- shrinks the bytes while `_order` keeps every conversation key the player has ever had -- so the
+--- login replay still walks all of them and the file still grows without bound. An empty stream is
+--- also indistinguishable from a conversation with history as far as `ClosedConversations` is
+--- concerned, so leaving one behind would keep offering the player a conversation with nothing in it.
+---
+--- `now` is injectable so a spec can age the store without waiting; it defaults to the wall clock.
+--- Note that is `time()`, the EPOCH -- not `GetTime()`, which is uptime and resets every login, so it
+--- could not express "older than 14 days" across the sessions this cap exists to span.
+-- @param now number|nil  epoch seconds
+-- @return number  how many streams were dropped
+function StoreMeta:Evict(now)
+    local maxAge = self._maxAge or 0
+    if maxAge <= 0 then return 0 end
+    if type(now) ~= "number" then now = (type(time) == "function" and time()) or nil end
+    if type(now) ~= "number" then return 0 end
+
+    local cutoff = now - maxAge
+    -- Keys collected first: Clear mutates `_order`, and walking it while it is being spliced skips
+    -- entries. Same reason the event bus dispatches over a snapshot.
+    local keys = {}
+    for i = 1, #self._order do keys[i] = self._order[i] end
+
+    local dropped = 0
+    for i = 1, #keys do
+        local key = keys[i]
+        local s = self._streams[key]
+        if s and evictStale(s, cutoff) == 0 then
+            self:Clear(key)
+            dropped = dropped + 1
+        end
+    end
+    return dropped
 end
 
 --- Appends a record, returning it plus its stream key.
@@ -275,7 +358,8 @@ end
 --- at 1 and interleaving this session's messages underneath the last one's.
 -- @return table
 function StoreMeta:Serialise()
-    local out = { depth = self._depth, seq = self._seq, order = self:Keys(), streams = {} }
+    local out = { depth = self._depth, maxAge = self._maxAge or 0, seq = self._seq,
+                  order = self:Keys(), streams = {} }
     for _, key in ipairs(self._order) do
         out.streams[key] = self:Stream(key)
     end
@@ -287,7 +371,12 @@ end
 -- @param blob table|nil
 -- @return table  store handle
 function M.Restore(blob)
-    local store = M.NewStore({ depth = type(blob) == "table" and blob.depth or nil })
+    local store = M.NewStore({
+        depth  = type(blob) == "table" and blob.depth or nil,
+        -- Taken from the BLOB rather than left to the plugin's watcher, because eviction has to run
+        -- before the replay walks the records and the watcher fires later in the login sequence.
+        maxAge = type(blob) == "table" and blob.maxAge or nil,
+    })
     if type(blob) ~= "table" or type(blob.streams) ~= "table" then return store end
 
     local highest = 0
@@ -350,6 +439,11 @@ function M.Restore(blob)
     -- is whenever trimming discarded records that had already consumed numbers.
     store._seq = highest
     if type(blob.seq) == "number" and blob.seq > store._seq then store._seq = blob.seq end
+    -- EVICTED HERE, which is the pass that pays for itself: this runs before the plugin replays the
+    -- store, so a conversation the player stopped using weeks ago costs neither a rebuilt panel nor a
+    -- walk over its records, and the next save writes the file without it. Records added later in the
+    -- session are new by definition, so nothing else on the login path needs a second pass.
+    store:Evict()
     return store
 end
 

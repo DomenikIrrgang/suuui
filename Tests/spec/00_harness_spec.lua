@@ -4949,6 +4949,15 @@ describe("harness: chat", function()
     end
 
     describe("ScrollingMessageFrame", function()
+        it("stacks lines FLUSH until a spacing is set, like the client", function()
+            -- Modelled because it was absent: an addon guarding with `if log.SetSpacing` had its call
+            -- silently dropped, so a spec about row separation could not fail either way.
+            local f = H.env.CreateFrame("ScrollingMessageFrame", nil, H.parent(200, 80))
+            expect(f:GetSpacing()).as("the client's own flush default").eq(0)
+            f:SetSpacing(3)
+            expect(f:GetSpacing()).eq(3)
+        end)
+
         it("records a text shadow, which a frameless log needs over the world", function()
             -- The concept gives every chat line a text-shadow because there is no panel behind it.
             -- Absent from the harness, nothing could tell a shadowed log from an unshadowed one.
