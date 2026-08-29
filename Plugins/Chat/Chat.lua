@@ -750,6 +750,23 @@ function Chat:_render(rec, onlyPanelId)
         }, {
             timestamps = get("show_timestamps") and true or false,
             timeFormat = get("timestamp_format"),
+            -- The RECORD'S OWN clock, never the render's. Formatting is deliberately deferred to
+            -- render time so a settings change re-reads -- but that also means a replayed history
+            -- line is formatted at LOGIN, and with `now` absent `date()` answers the current time:
+            -- every restored line came back stamped with the moment the player logged in, the whole
+            -- history reading as one instant. The plumbing existed on both sides and nothing joined
+            -- it -- `Line` and `Timestamp` both document the parameter, and `at` was already stamped,
+            -- persisted, and read by the age eviction.
+            --
+            -- `at` is epoch seconds from `time()`, never `GetTime()`, which is uptime and resets
+            -- every login, so it survives the SavedVariable. It is nil only for a record written
+            -- before it was stamped, and falling through to now is the honest answer there: the
+            -- alternative is a blank column, and no stored clock is not the same as midnight.
+            --
+            -- Every other timestamp spec fires a LIVE message with the clock already staged, where
+            -- this value and "now" are equal -- which is exactly why the omission rendered correctly
+            -- in every test while being wrong for the only case that reads a stored line.
+            now        = rec.at,
             -- A panel carrying ONE group needs no tag: the panel IS the label, so "GLD" on every
             -- line of a Guild panel is the same information twice. This is the property the
             -- per-panel render buys -- one record, two panels, two correct strings.

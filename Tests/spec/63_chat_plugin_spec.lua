@@ -2156,6 +2156,70 @@ describe("chat plugin", function()
             expect((p._chat:LogFor("guild"):GetMessageInfo(1)):find("19:41", 1, true)).eq(nil)
         end)
 
+        it("stamps a REPLAYED line with the time it arrived, not the login time", function()
+            -- Every other spec in this block fires a LIVE message with the clock already staged,
+            -- where the record's own `at` and "now" are the same value -- so none of them could
+            -- discriminate, and `_render` shipped without passing `now` at all. A reload therefore
+            -- restamped the entire history with the moment the player logged in.
+            local p = enabled()
+            H.setClock({ year = 2026, month = 8, day = 27, hour = 19, min = 41, sec = 0 })
+            H.chat("CHAT_MSG_GUILD", { text = "kara?", sender = "Thalvyn" })
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+
+            -- A later session. The replay runs inside the LOGIN, so the clock it would fall back to
+            -- is whatever `H.setup` reset to -- read from the client rather than hardcoded, since a
+            -- hardcoded default silently stops discriminating if the harness moves it.
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local loginClock = H.env.date("%H:%M")
+            expect(loginClock).as("the two clocks must differ or nothing is proven").neq("19:41")
+            local p2 = enabled()
+
+            local text
+            for _, log in pairs(p2._chat._logs) do
+                for i = 1, log:GetNumMessages() do
+                    local t = tostring(log:GetMessageInfo(i))
+                    if t:find("kara?", 1, true) then text = t end
+                end
+            end
+            expect(text).as("the replayed line was found at all").notNil()
+            expect(text).as("carries the time the message arrived").contains("19:41")
+            -- Searched in the STAMP's own position rather than the whole line: the copy icon's
+            -- texture escape carries `14:14:0:0:...`, so a bare search for a HH:MM reading matches
+            -- the icon and passes whatever the timestamp says.
+            local stamp = text:match("|cff%x%x%x%x%x%x(%d%d:%d%d)|r")
+            expect(stamp).as("the timestamp column was located").notNil()
+            expect(stamp).as("and is NOT the moment of the relog").neq(loginClock)
+        end)
+
+        it("falls back to the current time for a record with no stored one", function()
+            -- A record written before `at` was stamped. A blank column would be worse: no stored
+            -- clock is not the same fact as midnight, so the render's own time is the honest answer.
+            local p = enabled()
+            H.fireEvent("PLAYER_LOGOUT")
+            local blob = H.env.SuuUIChatHistory
+            blob.streams = { ["guild"] = { {
+                kind = "GUILD", message = "ancient", sender = "Thalvyn",
+                senderFull = "Thalvyn", stream = "guild", seq = 1,
+            } } }
+            blob.order = { "guild" }
+
+            H.setup({ savedVars = { SuuUIChatHistory = blob } })
+            local loginClock = H.env.date("%H:%M")
+            local p2 = enabled()
+
+            local text
+            for _, log in pairs(p2._chat._logs) do
+                for i = 1, log:GetNumMessages() do
+                    local t = tostring(log:GetMessageInfo(i))
+                    if t:find("ancient", 1, true) then text = t end
+                end
+            end
+            expect(text).as("an unstamped record still renders").notNil()
+            expect(text:match("|cff%x%x%x%x%x%x(%d%d:%d%d)|r"))
+                .as("stamped with the current time rather than left blank").eq(loginClock)
+        end)
+
         it("prefixes the channel tag when on", function()
             local p = enabled()
             H.SuuUI.Settings:Set("chat", "show_tags", true)
