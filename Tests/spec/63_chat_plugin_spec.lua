@@ -912,11 +912,25 @@ describe("chat plugin", function()
             return H.SuuUI.Plugins:Get("chat")._chat
         end
 
-        it("keeps the input row at its token height", function()
+        it("keeps the input row at the height WE derive, not the box's", function()
             local c = tallBox(160)
-            local want = H.SuuUI.Theme:GetControlHeight("sizeControlMd")
+            -- The row's height is the chip plus the padding the chip gets on its left -- see
+            -- `Chat:_inputHeight`. Derived here from the tokens rather than by calling that method,
+            -- which would assert nothing.
+            local want = H.box(c._chip).height + H.token("spaceXs") * 2
             expect(H.box(c._inputRow).height)
                 .as("the row states its own height, not the box's").eq(want)
+            expect(H.box(c._inputRow).height)
+                .as("and nowhere near the 160-unit box").lt(160)
+        end)
+
+        it("never drops below what the edit box's own text needs", function()
+            -- `sizeControlMd` is the floor because the row holds Blizzard's box, whose text is
+            -- `fontSizeMd`. A chip small enough to undercut that must not shorten the row.
+            local c = tallBox(160)
+            expect(H.box(c._inputRow).height)
+                .as("floored by the control height for fontSizeMd text")
+                .gte(H.SuuUI.Theme:GetControlHeight("sizeControlMd"))
         end)
 
         it("leaves the log filling the window, not clamped to its floor", function()
@@ -1407,6 +1421,64 @@ describe("chat plugin", function()
 
         it("is enabled by default", function()
             expect(H.SuuUI.Settings:Get("chat", "enabled")).eq(true)
+        end)
+    end)
+
+    describe("the input row gives the chip the same room on every side", function()
+        -- Reported from a screenshot: the chip sat flush against the row's top and bottom border while
+        -- clearing its left border by 4. Measured before the fix -- row 22, chip 21, gaps 4/1/0 -- and
+        -- the cause was that BOTH numbers come from `GetControlHeight`, so the row's floor and the
+        -- chip's height track each other and no bigger size token can separate them.
+        local function rowAndChip()
+            local p = enabled()
+            return H.box(p._chat._inputRow), H.box(p._chat._chip), p._chat
+        end
+
+        it("clears the chip vertically by the same padding as horizontally", function()
+            local row, chip = rowAndChip()
+            local pad = H.token("spaceXs")
+            expect(chip.left - row.left).as("left clearance").eq(pad)
+            expect(chip.top - row.top).as("clearance above the chip").eq(pad)
+            expect((row.top + row.height) - (chip.top + chip.height))
+                .as("clearance below the chip").eq(pad)
+        end)
+
+        it("re-derives the row when a theme edit grows the chip", function()
+            -- Nothing else in this plugin listens for a theme change, so without the chip's own
+            -- SIZE_CHANGED a token edit would grow the chip inside a row that stayed put -- which is
+            -- the reported bug, reintroduced by the user editing a token.
+            --
+            -- Driven through `sizeControlSm`, which is a real input to the chip's height. NOT through
+            -- `fontSizeSm`, which looks like the obvious lever and is inert: `Chip:_autosize` passes
+            -- the short key "sm" to `GetControlHeight`, whose second parameter is a full TOKEN NAME,
+            -- so it silently falls back to `fontSizeMd`. Every call site in the addon makes that same
+            -- mistake -- a separate Core defect, deliberately not fixed here because it also moves the
+            -- inventory window and the segmented control.
+            local _, chip0, c = rowAndChip()
+            local before = H.box(c._inputRow).height
+            H.SuuUI.Theme:CreateUserTheme("big", H.SuuUI.Theme:GetActive())
+            H.SuuUI.Theme:SetUserToken("big", "sizeControlSm", H.token("sizeControlSm") + 12)
+            H.SuuUI.Theme:SetActive("big")
+            local chip1 = H.box(c._chip)
+            expect(chip1.height).as("the chip grew with the token").gt(chip0.height)
+            expect(H.box(c._inputRow).height).as("and the row grew with it").gt(before)
+            expect(H.box(c._inputRow).height - chip1.height)
+                .as("still symmetric after the edit").eq(H.token("spaceXs") * 2)
+            -- The LOG row has to give back what the input row took, or a window whose height is a
+            -- setting overflows. Asserted here rather than only at default tokens, because this is the
+            -- one path that re-derives the input row WITHOUT `_apply` running -- so without this the
+            -- restatement inside `_syncInputHeight` is untested and a mutation deleting it survives.
+            expect(H.box(c._top).height + H.box(c._inputRow).height + H.token("spaceXs"))
+                .as("the window is still fully accounted for").eq(H.box(c._win).height)
+        end)
+
+        it("gives the log row back exactly what the input row took", function()
+            -- `_topHeight` subtracts the input row from the window, so a taller input row must shrink
+            -- the log rather than overflowing a window whose height is a setting.
+            local _, _, c = rowAndChip()
+            local win = H.box(c._win)
+            expect(H.box(c._top).height + H.box(c._inputRow).height + H.token("spaceXs"))
+                .as("the window is still fully accounted for").eq(win.height)
         end)
     end)
 

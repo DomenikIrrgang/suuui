@@ -356,6 +356,50 @@ function Chat:_classColour(rec)
     return rec._classCode
 end
 
+--- The height the input row needs: the chip's own height plus the SAME padding the chip already gets
+--- on its left, floored by what the adopted edit box's text needs.
+---
+--- DERIVED FROM THE CHIP rather than stated as a token, because the defect it fixes is a
+--- RELATIONSHIP. Measured before this existed: row 22, chip 21, clearances left 4, top 1, bottom 0 --
+--- so the chip was flush against the row's border above and below while sitting 4 units clear of it
+--- on the left, and the row read as squeezing it. Naming a bigger token cannot fix that class of bug:
+--- the row's floor and the chip's height BOTH come from `GetControlHeight`, so they track each other
+--- and the gap stays ~1 whatever the font tokens do. The rule has to be "the vertical padding equals
+--- the horizontal padding", which only the chip's measured height can state.
+---
+--- `sizeControlMd` survives as the FLOOR because the row also holds Blizzard's edit box, whose text
+--- is `fontSizeMd`: a chip small enough to make the row shorter than that would clip the typing.
+function Chat:_inputHeight()
+    local T = SuuUI.Theme
+    local pad = T:GetToken("spaceXs") or 4
+    local want = ((self._chip and self._chip:GetHeight()) or 0) + pad * 2
+    local floor = T:GetControlHeight("sizeControlMd")
+    if want < floor then want = floor end
+    return SuuUI.Pixel.Ceil(want)
+end
+
+--- States the log row's height. ONE place, because `_syncInputHeight` has to restate it too: the row
+--- above takes whatever the input row leaves, so the two can never be stated independently.
+function Chat:_syncTopHeight()
+    if not (self._win and self._top) then return end
+    self._win:SetChildProps(self._top:GetFrame(), { width = "fill", height = self:_topHeight() })
+end
+
+--- Applies `_inputHeight`, and gives the log row back whatever changed.
+---
+--- Called from the chip's own `SIZE_CHANGED` as well as from `_apply`, so a theme edit that grows the
+--- chip grows the row with it -- nothing else in this plugin listens for a theme change, so without
+--- that signal a `fontSizeSm` edit would reintroduce the exact flush-against-the-border bug.
+--- Guarded on the height actually moving, because that signal also fires on every channel change
+--- (the chip re-measures its WIDTH when Tab renames it).
+function Chat:_syncInputHeight()
+    if not self._inputRow then return end
+    local want = self:_inputHeight()
+    if math.abs((self._inputRow:GetHeight() or 0) - want) <= 0.5 then return end
+    self._inputRow:SetHeight(want)
+    self:_syncTopHeight()
+end
+
 function Chat:_apply()
     local size = get("font_size") or "md"
     local fadeOn = get("fade_channels")
@@ -370,12 +414,15 @@ function Chat:_apply()
     end
     local w, h = get("width") or 460, get("height") or 180
     self._wrapper:SetSize(w, h)
-    -- The ONLY place the row's height is stated -- initial layout included, since `_apply` runs on
+    -- The ONLY place the LOG row's height is stated -- initial layout included, since `_apply` runs on
     -- enable as well as on every size change. A second statement at build time was here and mutation
     -- testing proved it redundant: this one had already run by the time anything could observe it.
-    if self._win and self._top then
-        self._win:SetChildProps(self._top:GetFrame(), { width = "fill", height = self:_topHeight() })
-    end
+    --
+    -- And there is deliberately no `_syncInputHeight()` call here either, for the same reason and by
+    -- the same evidence: the input row's height is stated at build the moment the chip exists, and
+    -- re-stated from the chip's own `SIZE_CHANGED`, so nothing can reach this line with a stale one.
+    -- Adding the call back made the mutation that deletes it SURVIVE, which is what dead code is.
+    self:_syncTopHeight()
     -- RE-STATE the rail's content height once the row above has its final size. The scroll frame
     -- decides on a bar by comparing content against viewport, and at construction the viewport is not
     -- yet sized -- so a bar computed then reflects a viewport of almost nothing and appears when
@@ -1611,7 +1658,8 @@ local function buildWindow(p)
     --     own. LAYOUT_SYSTEM.md calls this out, and an attach point is the only other place it bites.
     -- So the row is never hidden. Only its border and background are painted or cleared.
     local inputRow = CreateFrame("Frame", nil, wrapper, "BackdropTemplate")
-    inputRow:SetHeight(SuuUI.Theme:GetControlHeight("sizeControlMd"))
+    -- No height stated here: it is derived from the chip, which does not exist yet. `_syncInputHeight`
+    -- below states it as soon as the chip can be measured, and again from `_apply`.
     local inputRowBox = SuuUI.Layout:CreateContainer({
         host = inputRow, layout = "flow", dir = "horizontal",
         gap = SuuUI.Theme:GetToken("spaceXs"), align = "center",
@@ -1626,6 +1674,12 @@ local function buildWindow(p)
     local chip = SuuUI.Components.Chip({ text = "Say" }, inputRow)
     inputRowBox:Add(chip, { width = "auto" })
     self._chip = chip
+    -- The row's height comes from the chip, so it can only be stated now. Re-derived whenever the chip
+    -- resizes, which is what keeps a theme edit of `fontSizeSm` from squeezing it flush again.
+    self:_syncInputHeight()
+    SuuUI.UISignals:Connect(chip, SuuUI.UISignals.SIGNALS.SIZE_CHANGED, function()
+        self:_syncInputHeight()
+    end)
 
     -- Blizzard's box, adopted rather than replaced -- see ChatInput.lua for the two walls that make
     -- a custom one permanently worse. Added to a container on a SHOWN frame, per the note above.
