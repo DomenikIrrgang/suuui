@@ -126,9 +126,15 @@ end
 
 function LogMeta:GetFontSize() return self._sizeKey end
 
---- The chrome: a hairline and a faint surface, or nothing at all. The concept's log is frameless
---- at rest and gains both inside a conversation, so this is a runtime state rather than a
---- construction-time one.
+--- The chrome: a hairline border, or none at all. The concept's log is frameless at rest, so this
+--- is a runtime state rather than a construction-time one.
+---
+--- It no longer controls the SURFACE. Every log now carries the bottom-weighted wash
+--- unconditionally, because that surface is a legibility mechanism rather than decoration -- white
+--- text on snow or water is genuinely hard to read with the text shadow alone, which is what the
+--- frameless concept shipped and what Domenik reported. So `chrome` is the border and nothing else;
+--- a solid `colorBg` on top of the wash would be two surfaces, and at opacityPanel the wash would
+--- be invisible underneath it.
 -- @param on boolean
 function LogMeta:SetChrome(on)
     self._chrome = on and true or false
@@ -156,15 +162,15 @@ function LogMeta:_applyShadow()
 end
 
 function LogMeta:_paint()
-    local B = SuuUI.Backdrop
-    if self._chrome then
-        B.SetBg(self._f, "colorBg")
-        B.SetBorder(self._f, "colorBorder")
-    else
-        -- Frameless: the log floats over the game world with no surface of its own.
-        B.SetBg(self._f, false)
-        B.SetBorder(self._f, false)
-    end
+    -- BORDER ONLY. The surface is the wash, which is always on -- see SetChrome.
+    SuuUI.Backdrop.SetBorder(self._f, self._chrome and "colorBorder" or false)
+end
+
+--- Whether the wash is drawing a real gradient, or the flat fallback on a client with no gradient
+--- API. Reported rather than assumed, exactly as Backdrop.Glass reports it: a flat wash at the
+--- dense end would be far heavier than intended, so a caller that cares can say so.
+function LogMeta:IsWashGradient()
+    return self._wash ~= nil and self._wash:IsGradient() == true
 end
 
 -- Resolved through Fonts:Path because SetFont RAISES on an asset the client cannot load, and an
@@ -190,10 +196,13 @@ function LogMeta:_applyFont()
 end
 
 function LogMeta:ApplyTheme()
-    -- Apply builds the full backdrop table (both channels) whatever colours it is handed, so
-    -- _paint can flip either to transparent later. The default inset is the border width, which
-    -- is what a chromed log wants -- its background must not paint under its own hairline.
-    SuuUI.Backdrop.Apply(self._f, { bg = "colorBg", border = "colorBorder" })
+    -- The BACKDROP carries the border only. Apply builds the full table whatever it is handed, so
+    -- `_paint` can flip the border to transparent later; `bg = false` keeps the background channel
+    -- transparent for good, because the surface is the wash below rather than a backdrop fill.
+    SuuUI.Backdrop.Apply(self._f, { bg = false, border = "colorBorder" })
+    -- Re-derived rather than left alone: the wash's colours are token derivations, and its band
+    -- geometry depends on borderWidth, which a theme edit can move.
+    if self._wash then self._wash:Refresh() end
     self:_paint()
     self:_applyFont()
 end
@@ -201,6 +210,7 @@ end
 function LogMeta:Destroy()
     S:DisconnectAll(self)
     SuuUI.Events:Off("SUUUI_THEME_CHANGED", self._eid)
+    if self._wash then self._wash:Destroy() self._wash = nil end
     self._box:Destroy()
     self._f:Hide()
 end
@@ -237,8 +247,30 @@ function SuuUI.Components.MessageLog(props, parent)
         S:Emit(handle, S.SIGNALS.SIZE_CHANGED, w2, h2)
     end)
 
-    local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
+    -- THE LEGIBILITY WASH, built before the host container adopts the frame so the container chains
+    -- onto Glass's own resize hook rather than replacing it -- the same ordering Backdrop.Glass
+    -- documents for its callers, and the reason a glass surface elsewhere once drew a 411x546 body
+    -- inside a 219-unit window.
+    --
+    -- `from` and `to` look INVERTED here and are correct. Glass's convention is that `from` is the
+    -- DENSE end and it is the TOP (it hands `to` to SetGradient's min slot, which is the bottom). A
+    -- chat log fills UPWARD, so the ink has to be at the bottom where the newest lines are: the
+    -- light token goes in `from` and the dense one in `to`.
+    --
+    -- `sheen = false` because the sheen is a lit hairline along the TOP edge -- a highlight on the
+    -- dense end of a plate. On a bottom-weighted wash the dense end is the bottom, so the sheen
+    -- would draw a bright line across the thinnest part of the gradient, which is a line on the
+    -- game world rather than an edge on a surface. `border = false` for the same reason `_paint`
+    -- owns it: the border is `chrome`, and it belongs to the backdrop so a chrome flip costs no
+    -- rebuild here.
+    local wash = SuuUI.Backdrop.Glass(f, {
+        from   = "colorChatWashFade",
+        to     = "colorChatWash",
+        sheen  = false,
+        border = false,
+    })
 
+    local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
     local log = CreateFrame("ScrollingMessageFrame", props.name, f)
     -- Inset by the border width so a chromed log's text never sits on its own hairline. A
     -- frameless log insets by the same amount, which keeps the text position stable across a
@@ -275,7 +307,7 @@ function SuuUI.Components.MessageLog(props, parent)
 
     local id = "msglog_" .. tostring(f)
     handle = setmetatable({
-        _f = f, _log = log, _box = box, _eid = id,
+        _f = f, _log = log, _box = box, _eid = id, _wash = wash,
         _sizeKey = props.size or "md",
         _chrome  = props.chrome and true or false,
     }, LogMeta)

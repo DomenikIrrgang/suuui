@@ -53,7 +53,11 @@ SuuUI._ThemeEditableTokens = {
     -- Capped low: this is a catch of light along an edge, and above roughly 0.25 it stops
     -- reading as an edge and becomes a white line drawn across the plate.
     { key="opacityGlassSheen", label="Glass Sheen Opacity", type="number", min=0.0, max=0.25, step=0.01 },
-
+    -- The chat log's legibility wash, bottom-weighted. Exposed because how much ink chat needs
+    -- depends on where the player spends their time -- snow and water need far more than a
+    -- dungeon -- so this is the one surface opacity a player has a real reason to tune.
+    { key="opacityChatWash",     label="Chat Wash Opacity",      type="number", min=0.0, max=1.0, step=0.05 },
+    { key="opacityChatWashFade", label="Chat Wash Fade Opacity", type="number", min=0.0, max=1.0, step=0.05 },
     -- Stored as a font name, not a path; SuuUI.Fonts resolves it. Options come from the
     -- client's own faces plus anything LibSharedMedia-3.0 exposes, if the player has it.
     { key="fontFamilyMain", label="Font",           type="font" },

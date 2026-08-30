@@ -75,6 +75,11 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- hairline. Denser here than in Default, matching this theme's higher contrast.
     opacityGlass      = 0.85,
     opacityGlassFade  = 0.30,
+    -- The chat log's legibility wash. Bottom-weighted, and its own pair rather than a reuse of the
+    -- glass tokens -- see Themes/Default.lua for the full reasoning. Modern runs the dense end a
+    -- shade heavier, matching how it treats every other surface.
+    opacityChatWash     = 0.58,
+    opacityChatWashFade = 0.10,
     opacityGlassSheen = 0.10,
 
     -- Tier 2: surfaces
@@ -115,6 +120,8 @@ SuuUI.Theme:RegisterBuiltin("Modern", {
     -- colorBarTrack, and the sheen refs the lightest neutral because it is a highlight.
     colorGlass       = { ref = "colorGray950", alpha = "opacityGlass" },
     colorGlassFade   = { ref = "colorGray950", alpha = "opacityGlassFade" },
+    colorChatWash     = { ref = "colorGray950", alpha = "opacityChatWash" },
+    colorChatWashFade = { ref = "colorGray950", alpha = "opacityChatWashFade" },
     colorGlassSheen  = { ref = "colorGray100", alpha = "opacityGlassSheen" },
     -- See Themes/Default.lua: the uninterruptible-cast outline.
     colorShield      = "colorGray400",

@@ -99,6 +99,17 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- single opacity makes it a flat panel, which is the look it exists to avoid.
     opacityGlass      = 0.80,
     opacityGlassFade  = 0.30,
+    -- The chat log's legibility wash: a vertical gradient, DENSE AT THE BOTTOM and almost gone at
+    -- the top. Its own pair rather than a reuse of the glass tokens above, for the reason
+    -- colorBarTrack is not shared either -- those describe the plate an action bar draws itself on,
+    -- so retinting a bar's plate must not silently change how readable chat is.
+    --
+    -- Bottom-weighted because a chat log fills UPWARD: the newest lines sit at the bottom, so that
+    -- is where the ink is needed, and a sparse log's empty top stays nearly transparent instead of
+    -- showing a dark rectangle over the world. 0.55 is what it takes to read white text on snow;
+    -- 0.10 is enough to keep the top edge from ending abruptly.
+    opacityChatWash     = 0.55,
+    opacityChatWashFade = 0.10,
     -- The lit top edge. Deliberately very low: it reads as a catch of light, and much
     -- above 0.15 it stops being an edge and becomes a white line drawn on the plate.
     opacityGlassSheen = 0.10,
@@ -155,6 +166,10 @@ SuuUI.Theme:RegisterBuiltin("Default", {
     -- retinting a health bar's background silently retinted every action bar plate.
     colorGlass       = { ref = "colorGray950", alpha = "opacityGlass" },
     colorGlassFade   = { ref = "colorGray950", alpha = "opacityGlassFade" },
+    -- The chat wash's two ends. `colorChatWash` is the DENSE one and it is drawn at the BOTTOM,
+    -- which is the opposite end from colorGlass -- see the opacity notes above.
+    colorChatWash     = { ref = "colorGray950", alpha = "opacityChatWash" },
+    colorChatWashFade = { ref = "colorGray950", alpha = "opacityChatWashFade" },
     -- The only place in this palette where a light neutral and a dark one meet inside one
     -- treatment: the sheen is a highlight ON the plate, so it refs the lightest neutral
     -- rather than the darkest. Pairing it with colorGlass above is the whole effect.

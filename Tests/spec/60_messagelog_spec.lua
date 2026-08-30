@@ -293,21 +293,94 @@ describe("MessageLog", function()
         end)
     end)
 
+    describe("the legibility wash", function()
+        -- Domenik's report: white text over snow or water is genuinely hard to read with the text
+        -- shadow alone, which is what the frameless concept shipped. Every log now carries a
+        -- bottom-weighted wash, and it is NOT the chrome -- see the `chrome` block below.
+        local function stop(c)
+            local r, g, b, a = c:GetRGBA()
+            return { r, g, b, a }
+        end
+
+        it("draws on every log, chromed or not", function()
+            -- Unconditional, because legibility is not a per-panel look decision: General, Global,
+            -- Guild, Log and a conversation all sit over the same game world.
+            for _, chromed in ipairs({ true, false }) do
+                local log = make({ chrome = chromed })
+                expect(log:IsWashGradient())
+                    .as("chrome=" .. tostring(chromed) .. " still gets the wash").truthy()
+            end
+        end)
+
+        it("puts the DENSE end at the BOTTOM, where the newest lines are", function()
+            -- THE load-bearing assertion, and the reason the from/to arguments look inverted in the
+            -- constructor. A ScrollingMessageFrame fills upward, so the ink has to be at the bottom;
+            -- Glass's own convention is that `from` is the dense end AND the top, so the tokens are
+            -- passed the other way round. Get this backwards and the wash is heaviest across the
+            -- empty top of a sparse log while the text sits on the transparent end.
+            --
+            -- SetGradient's FIRST colour is the minimum, i.e. the bottom -- which the harness records
+            -- as `grad.from`.
+            local log = make({})
+            local grad = log._wash._body:GetGradient()
+            expect(grad).as("a real gradient, not the flat fallback").truthy()
+            H.expectTokenColor(stop(grad.from), "colorChatWash")
+            H.expectTokenColor(stop(grad.to), "colorChatWashFade")
+        end)
+
+        it("carries no sheen, because a lit edge would land on the thin end", function()
+            -- Glass's sheen is a highlight along the TOP. On a bottom-weighted wash the top is the
+            -- nearly-transparent end, so a sheen there draws a bright line on the game world rather
+            -- than an edge on a surface.
+            expect(make({})._wash._sheen).eq(false)
+        end)
+
+        it("re-resolves its colours when the wash token is edited", function()
+            -- Was `fireEvent("SUUUI_THEME_CHANGED")` plus `expect(IsWashGradient()).truthy()`, which
+            -- a mutation deleting `_wash:Refresh()` from ApplyTheme SURVIVED -- re-emitting on the
+            -- same theme cannot distinguish a surface that re-resolves from one that never does.
+            --
+            -- `Refresh` is what calls Glass's `SetColors`, so without it a player dragging the Chat
+            -- Wash Opacity slider in the theme editor would see nothing until the next reload. The
+            -- assertion is the PAINTED bottom stop moving, which is the only thing that proves it.
+            local log = make({})
+            local before = stop(log._wash._body:GetGradient().from)[4]
+            H.T:CreateUserTheme("Washy", "Modern")
+            H.T:SetUserToken("Washy", "opacityChatWash", 0.20)
+            H.T:SetActive("Washy")
+            local after = stop(log._wash._body:GetGradient().from)[4]
+            expect(before).as("the shipped dense end").gt(0.4)
+            expect(after).as("follows the edited token").near(0.20, 0.001)
+        end)
+
+        it("is released on Destroy", function()
+            local log = make({})
+            log:Destroy()
+            expect(log._wash).as("the Glass handle owns textures and a resize hook").eq(nil)
+        end)
+    end)
+
     describe("chrome", function()
-        it("is frameless at rest -- fully transparent surface and edge", function()
+        it("is frameless at rest -- no border and no backdrop fill", function()
             local log = make({ chrome = false })
             expect(log:HasChrome()).eq(false)
-            local _, _, _, a = log._f:GetBackdropColor()
-            expect(a).as("no surface: the log floats over the game world").near(0, 0.001)
             local _, _, _, ba = log._f:GetBackdropBorderColor()
             expect(ba).near(0, 0.001)
         end)
 
-        it("paints a surface and hairline when chrome is on", function()
+        it("keeps the backdrop's FILL transparent either way", function()
+            -- The surface is the wash. A solid colorBg on top of it would be two surfaces, and at
+            -- opacityPanel (0.97) the wash underneath would be invisible -- so `chrome` was narrowed
+            -- to the hairline alone rather than owning the fill as well.
+            for _, chromed in ipairs({ true, false }) do
+                local _, _, _, a = make({ chrome = chromed })._f:GetBackdropColor()
+                expect(a).as("chrome=" .. tostring(chromed)).near(0, 0.001)
+            end
+        end)
+
+        it("paints a hairline when chrome is on", function()
             local log = make({ chrome = true })
             expect(log:HasChrome()).eq(true)
-            local _, _, _, a = log._f:GetBackdropColor()
-            expect(a).gt(0)
             local _, _, _, ba = log._f:GetBackdropBorderColor()
             expect(ba).gt(0)
         end)
@@ -315,11 +388,11 @@ describe("MessageLog", function()
         it("flips at runtime, because the concept fades chrome in on hover", function()
             local log = make({ chrome = false })
             log:SetChrome(true)
-            local _, _, _, a = log._f:GetBackdropColor()
-            expect(a).gt(0)
+            local _, _, _, ba = log._f:GetBackdropBorderColor()
+            expect(ba).gt(0)
             log:SetChrome(false)
-            local _, _, _, a2 = log._f:GetBackdropColor()
-            expect(a2).near(0, 0.001)
+            local _, _, _, ba2 = log._f:GetBackdropBorderColor()
+            expect(ba2).near(0, 0.001)
         end)
     end)
 
@@ -357,8 +430,8 @@ describe("MessageLog", function()
         it("keeps the chrome state across a theme change", function()
             local log = make({ chrome = true })
             H.fireEvent("SUUUI_THEME_CHANGED")
-            local _, _, _, a = log._f:GetBackdropColor()
-            expect(a).as("a theme change must not drop the chrome").gt(0)
+            local _, _, _, ba = log._f:GetBackdropBorderColor()
+            expect(ba).as("a theme change must not drop the chrome").gt(0)
         end)
     end)
 
