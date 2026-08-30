@@ -2293,9 +2293,20 @@ function M.install(env)
         MONSTER_YELL    = { "CHAT_MSG_MONSTER_YELL" },
         MONSTER_EMOTE   = { "CHAT_MSG_MONSTER_EMOTE" },
         MONSTER_WHISPER = { "CHAT_MSG_MONSTER_WHISPER" },
-        CHANNEL         = { "CHAT_MSG_CHANNEL", "CHAT_MSG_CHANNEL_JOIN",
-                            "CHAT_MSG_CHANNEL_LEAVE", "CHAT_MSG_CHANNEL_NOTICE",
-                            "CHAT_MSG_CHANNEL_NOTICE_USER", "CHAT_MSG_CHANNEL_LIST" },
+        -- MEASURED IN GAME 2026-08-30, and it is NOT what this model used to claim. The live client's
+        -- CHANNEL group holds exactly FIVE entries -- the join/leave/notice/list bookkeeping -- and
+        -- `CHAT_MSG_CHANNEL`, the event that carries what somebody actually SAID in a channel, is
+        -- NOT among them. Probes: `#ChatTypeGroup.CHANNEL` = 5, and a scan for CHAT_MSG_CHANNEL
+        -- returned 0.
+        --
+        -- This entry used to include CHAT_MSG_CHANNEL, and that inaccuracy is the whole reason no
+        -- spec could catch a real total-loss bug: the panels' subscription set is a union over their
+        -- groups, so on the live client nothing ever subscribed to CHAT_MSG_CHANNEL and not one
+        -- numbered- or custom-channel line reached the addon -- while every channel spec here passed,
+        -- because the harness supplied the key the client withholds.
+        CHANNEL         = { "CHAT_MSG_CHANNEL_JOIN", "CHAT_MSG_CHANNEL_LEAVE",
+                            "CHAT_MSG_CHANNEL_NOTICE", "CHAT_MSG_CHANNEL_NOTICE_USER",
+                            "CHAT_MSG_CHANNEL_LIST" },
         SYSTEM          = { "CHAT_MSG_SYSTEM", "TIME_PLAYED_MSG", "PLAYER_LEVEL_UP" },
         ERRORS          = { "CHAT_MSG_SYSTEM" },
         AFK             = { "CHAT_MSG_AFK" },

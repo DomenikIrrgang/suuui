@@ -115,7 +115,17 @@ function M.Conversation(key, name)
         initial = (name or key):sub(1, 1):upper(),
         streams = { "whisper:" .. key },
         fade    = false,
-        chrome  = true,
+        -- FRAMELESS, like every other panel. The concept gave chrome to conversations only -- "a
+        -- channel is a firehose you glance at, a conversation is history you read, so only the
+        -- latter earns a panel" -- and Domenik overruled that after seeing it in game: a whisper
+        -- panel with its own surface and hairline reads as a different WIDGET rather than the same
+        -- log showing different messages, which is the opposite of the one-row-shape rule the rest
+        -- of the design follows.
+        --
+        -- `fade = false` stays, and that is the half of the distinction that survives: a
+        -- conversation persists while channels fade out. The difference is in what the log KEEPS,
+        -- not in what it looks like.
+        chrome  = false,
         -- The rail colour is the partner's CLASS colour where the client will say, which it only
         -- can once a GUID has been seen; nil leaves the caller's own fallback in charge.
         color   = nil,
@@ -310,13 +320,31 @@ function M.Events(panels, groupTable)
     local out, seen = {}, {}
 
     local function addGroup(group)
+        -- ALWAYS derive `CHAT_MSG_<group>`, in ADDITION to whatever the client's group expands to.
+        --
+        -- MEASURED IN GAME 2026-08-30: the live client's `CHANNEL` group holds five entries -- the
+        -- join/leave/notice/list bookkeeping -- and does NOT contain `CHAT_MSG_CHANNEL`, the event
+        -- carrying what somebody actually said in a channel. So the group EXISTS and expanding it
+        -- alone loses the only event anyone wants from it: not one numbered- or custom-channel line
+        -- ever reached this addon, in any panel, with the category switched on.
+        --
+        -- Deriving the name is correct rather than a patch, because this list is DUAL-PURPOSE: it
+        -- registers client events AND matches record kinds, and a record's kind is exactly an event's
+        -- `CHAT_MSG_` suffix (`Chat:_onChatEvent` strips that prefix). So every name here already
+        -- asserts "a record of this kind may arrive", which is only true if the matching event is
+        -- subscribed. The client's own grouping is a convenience on top -- it pulls in siblings like
+        -- GUILD_MOTD under GUILD -- not the definition.
+        --
+        -- A FALLBACK-ONLY version of this shipped first and was inert here, because it only fired
+        -- when the group was missing entirely. The group is present; its contents are the problem.
+        --
+        -- Names that are neither a group nor an event (`CHAT_MSG_ERRORS`, `CHAT_MSG_GUILD_MOTD`) cost
+        -- one refused `pcall(RegisterEvent)` in the caller and are not recorded as registered.
+        local derived = "CHAT_MSG_" .. group
+        if not seen[derived] then seen[derived] = true tinsert(out, derived) end
+
         local events = groupTable[group]
-        if type(events) ~= "table" then
-            -- A declared group with no events on this client -- PET_BATTLE_INFO, INSTANCE_CHAT,
-            -- CURRENCY. Tolerated silently: the group list is shared across client generations,
-            -- and a dead group is not a bug in the panel that names it.
-            return
-        end
+        if type(events) ~= "table" then return end
         for _, e in ipairs(events) do
             if not seen[e] then seen[e] = true tinsert(out, e) end
         end

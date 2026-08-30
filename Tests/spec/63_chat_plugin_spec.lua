@@ -1056,6 +1056,46 @@ describe("chat plugin", function()
             expect(has).as("a group no panel claims is a group the player loses").eq(true)
         end)
 
+        it("delivers a channel line on a client with NO ChatTypeGroup.CHANNEL", function()
+            -- A DEFENSIVE case, not the shipped bug -- the live client does have a CHANNEL group, it
+            -- simply omits `CHAT_MSG_CHANNEL` (see the derivation spec in 65_chatstore_panels_spec).
+            -- Kept because the group's presence must not be load-bearing either way: a client
+            -- generation that drops the group entirely has to keep working.
+            H.setup({ boot = false })
+            H.env.ChatTypeGroup.CHANNEL = nil
+            H.fireEvent("ADDON_LOADED", "SuuUI")
+            H.fireEvent("PLAYER_LOGIN")
+
+            local p = H.SuuUI.Plugins:Get("chat")
+            expect(p._chat).as("the window came up").notNil()
+            expect(p._chat._registered["CHAT_MSG_CHANNEL"])
+                .as("derived from the group NAME when the group is absent").truthy()
+
+            H.chat("CHAT_MSG_CHANNEL", { text = "wts stuff", sender = "Thalvyn",
+                                         channelIndex = 2, channel = "Trade" })
+            local log = p._chat:LogFor("global")
+            local shown = false
+            for i = 1, (log and log:GetNumMessages() or 0) do
+                if tostring(log:GetMessageInfo(i)):find("wts stuff", 1, true) then shown = true end
+            end
+            expect(shown).as("and the line actually arrives").truthy()
+        end)
+
+        xit("only claims an event in _registered when the client accepted it", function()
+            -- The code does this (`if pcall(...) then have[event] = true end`) and it matters in
+            -- game, because `_registered` is what an in-game probe reads and a set claiming a
+            -- refused event sends a diagnosis down the wrong path. THE HARNESS CANNOT EXPRESS IT:
+            -- its RegisterEvent accepts any string, so `CHAT_MSG_GUILD_MOTD` -- which the fallback
+            -- derives from the Guild panel's GUILD_MOTD kind, and which is not a real event --
+            -- registers happily here and fails only on the live client.
+            --
+            -- Closing this means validating event names in Tests/harness/wow/frame.lua against a
+            -- known set, which is worth doing and is not a drive-by: several specs fire synthetic
+            -- events the real client has never heard of.
+            local p = enabled()
+            expect(p._chat._registered["CHAT_MSG_GUILD_MOTD"]).falsy()
+        end)
+
         it("shows a channel line in Global, not in General", function()
             -- Channels MOVED to their own panel: Trade alone outpaces everything a player is
             -- actually talking in, which is what made one shared window unreadable.
@@ -1803,6 +1843,31 @@ describe("chat plugin", function()
             p._chat:SetActivePanel("general")
             expect(log:AtBottom()).eq(at)
         end)
+
+        it("gives a panel nothing has routed to yet a log when it is opened", function()
+            -- Found in game, not by this suite: switching to the Global panel before any channel
+            -- line had arrived produced a BLANK window. `_logFor` is only called from `_render` and
+            -- once at build for the first panel, so the switch hid General's log and showed nothing
+            -- -- and `ActiveLog()` answering nil silently disables jump-to-bottom and per-line copy.
+            local p = enabled()
+            expect(p._chat:LogFor("global")).as("no traffic yet, so no log").eq(nil)
+            p._chat:SetActivePanel("global")
+            local log = p._chat:LogFor("global")
+            expect(log).as("opening it builds one").notNil()
+            expect(log:IsShown()).as("and shows it -- an EMPTY log, not an absent one").truthy()
+            expect(p._chat:ActiveLog()).as("so the active log is never nil").eq(log)
+        end)
+
+        it("hides the outgoing panel's log when the incoming one is built fresh", function()
+            -- The order matters: `_logFor` hides a log whose panel is not active, so building the
+            -- new log before `_active` moved would leave it hidden and the switch would still show
+            -- nothing at all.
+            local p = enabled()
+            local general = p._chat:LogFor("general")
+            p._chat:SetActivePanel("global")
+            expect(general:IsShown()).as("the outgoing log is hidden").falsy()
+            expect(p._chat:LogFor("global"):IsShown()).as("the incoming one is not").truthy()
+        end)
     end)
 
     describe("per-panel log shape", function()
@@ -1818,14 +1883,30 @@ describe("chat plugin", function()
                 .as("the Log exists to be searched afterwards; a faded line cannot be").falsy()
         end)
 
-        it("gives a CONVERSATION chrome and no fading, per the concept", function()
+        it("gives a CONVERSATION no chrome and no fading", function()
+            -- The concept gave chrome to conversations only; Domenik overruled it after seeing it in
+            -- game, because a whisper panel with its own surface reads as a different widget rather
+            -- than the same log showing different messages. FADING is still the distinction that
+            -- survives -- a conversation persists, a channel fades -- so both halves are asserted
+            -- here: a mutation restoring the surface must fail, and one that starts fading a
+            -- conversation must fail too.
             local p = enabled()
             H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
             local log = p._chat:LogFor("whisper:sylvaine-testrealm")
             expect(log).as("a conversation panel is created on the first whisper").notNil()
             expect(log:HasChrome())
-                .as("a conversation is history you read, so it earns a panel").truthy()
-            expect(log:IsFading()).falsy()
+                .as("same surface as every other panel").eq(false)
+            expect(log:IsFading()).as("but it does not fade away").falsy()
+        end)
+
+        it("draws a conversation on the SAME surface as General", function()
+            -- The property Domenik asked for, stated as the comparison rather than as an absolute:
+            -- what matters is that the two agree, not what either one happens to be.
+            local p = enabled()
+            H.chat("CHAT_MSG_WHISPER", { text = "hey", sender = "Sylvaine-TestRealm" })
+            local convo = p._chat:LogFor("whisper:sylvaine-testrealm")
+            local general = p._chat:LogFor("general")
+            expect(convo:HasChrome()).eq(general:HasChrome())
         end)
 
         it("omits the tag in a conversation, where the chip already names the person", function()

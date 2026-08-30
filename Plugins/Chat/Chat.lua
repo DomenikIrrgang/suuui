@@ -470,9 +470,12 @@ function Chat:_syncEvents()
     end
     for event in pairs(want) do
         if not have[event] then
-            -- pcall: an event absent on this client generation must not take the plugin down.
-            pcall(ev.RegisterEvent, ev, event)
-            have[event] = true
+            -- pcall: an event absent on this client generation must not take the plugin down. The
+            -- RESULT is kept rather than discarded, so `_registered` states what is actually
+            -- subscribed -- a set that claimed a refused event would make the one reading an
+            -- in-game probe can take about this untrustworthy, which is how a whole diagnosis round
+            -- gets spent on a lie.
+            if pcall(ev.RegisterEvent, ev, event) then have[event] = true end
         end
     end
     self._registered = have
@@ -1100,8 +1103,18 @@ end
 --- switch (Phase 8), and `63_chat_plugin_spec.lua` carries an xit naming that.
 function Chat:SetActivePanel(id)
     if id == self._active then return end
-    if not SuuUI.ChatPanels.Find(self._panels, id) then return end
+    local panel = SuuUI.ChatPanels.Find(self._panels, id)
+    if not panel then return end
     self._active = id
+    -- The panel must HAVE a log before it is shown. `_logFor` is called from `_render` and once at
+    -- build for the first panel, so a panel nothing has routed to yet has NO log -- and switching to
+    -- it hid the outgoing panel's log and showed nothing. That is a blank window rather than an
+    -- empty one, and `ActiveLog()` answering nil silently disables jump-to-bottom and per-line copy
+    -- until the first message happens to arrive.
+    --
+    -- Created AFTER `_active` moves, deliberately: `_logFor` hides a log whose panel is not active,
+    -- so the other order would build it hidden and the switch would still show nothing.
+    self:_logFor(panel)
     for pid, log in pairs(self._logs) do
         if pid == id then log:Show() else log:Hide() end
     end

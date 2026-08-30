@@ -472,7 +472,7 @@ describe("ChatPanels", function()
         it("makes Global a firehose that fades, like the channel traffic it took over", function()
             local global = P().Find(P().Panels(nil), "global")
             expect(global.fade).as("a channel is glanced at, not read").truthy()
-            expect(global.chrome).as("chrome is for conversations").falsy()
+            expect(global.chrome).as("no panel is chromed any more").falsy()
         end)
     end)
 
@@ -648,6 +648,57 @@ describe("ChatPanels", function()
             local ok = pcall(P().Events, { { id = "x", groups = { "PET_BATTLE_INFO" } } },
                              H.env.ChatTypeGroup)
             expect(ok).truthy()
+        end)
+
+        it("falls back to CHAT_MSG_<group> when the client has no such GROUP", function()
+            local events = P().Events({ { id = "g", groups = { "CHANNEL" } } }, { SAY = { "CHAT_MSG_SAY" } })
+            local has = false
+            for _, e in ipairs(events) do if e == "CHAT_MSG_CHANNEL" then has = true end end
+            expect(has).as("a name that is not a group still names an event").truthy()
+        end)
+
+        it("derives CHAT_MSG_<group> EVEN WHEN the group exists and omits it", function()
+            -- THE bug, measured in game 2026-08-30. The live client's CHANNEL group holds five
+            -- entries -- join, leave, notice, notice_user, list -- and NOT `CHAT_MSG_CHANNEL`, the
+            -- event carrying what somebody said. So the group is present and expanding it alone
+            -- subscribes to all the bookkeeping and none of the conversation: no numbered- or
+            -- custom-channel line reached the addon at all, in any panel, with the category on.
+            --
+            -- A fallback that only fired when the group was ABSENT shipped first and was inert for
+            -- exactly this reason. Staged with the client's real five-entry list.
+            local events = P().Events({ { id = "g", groups = { "CHANNEL" } } }, {
+                CHANNEL = { "CHAT_MSG_CHANNEL_JOIN", "CHAT_MSG_CHANNEL_LEAVE",
+                            "CHAT_MSG_CHANNEL_NOTICE", "CHAT_MSG_CHANNEL_NOTICE_USER",
+                            "CHAT_MSG_CHANNEL_LIST" },
+            })
+            local has, notices = false, 0
+            for _, e in ipairs(events) do
+                if e == "CHAT_MSG_CHANNEL" then has = true end
+                if e:find("^CHAT_MSG_CHANNEL_") then notices = notices + 1 end
+            end
+            expect(has).as("the message event, which the group withholds").truthy()
+            expect(notices).as("and the group's own five, not instead of them").eq(5)
+        end)
+
+        it("prefers the GROUP's real event list over the fallback", function()
+            -- The derivation must not shadow a group that genuinely exists: CHANNEL carries five
+            -- events, and collapsing it to the one derived name would lose every notice.
+            local events = P().Events({ { id = "g", groups = { "CHANNEL" } } }, H.env.ChatTypeGroup)
+            local n = 0
+            for _, e in ipairs(events) do
+                if e:find("^CHAT_MSG_CHANNEL") then n = n + 1 end
+            end
+            expect(n).as("the group's whole list plus the derived name").gt(1)
+        end)
+
+        it("still de-duplicates a fallback name against a real one", function()
+            local events = P().Events({
+                { id = "a", groups = { "TEXT_EMOTE" } },
+                { id = "b", groups = { "EMOTE" } },
+            }, H.env.ChatTypeGroup)
+            local n = 0
+            for _, e in ipairs(events) do if e == "CHAT_MSG_TEXT_EMOTE" then n = n + 1 end end
+            expect(n).as("EMOTE's list already carries it").eq(1)
         end)
     end)
 end)
