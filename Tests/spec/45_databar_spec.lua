@@ -185,6 +185,116 @@ describe("Plugins.DataBar – the bar", function()
         end)
     end)
 
+    ------------------------------------------------------------------------------
+    -- The glass plate. The strip is a Backdrop.Glass surface rather than a flat backdrop, and
+    -- the ORIENTATION is why most of these exist: `from` is the DENSE end and it is the TOP,
+    -- identical to the action bar plate, so the bar's ink sits against the screen edge and
+    -- dissolves downward into the world. Swapping the pair still produces a gradient and still
+    -- looks deliberate -- the chat wash IS that swap, deliberately -- so nothing about a
+    -- finished plate says which way round it went, and only an assertion can.
+    ------------------------------------------------------------------------------
+    describe("the glass surface", function()
+        -- The client hands gradient endpoints back as CreateColor objects rather than arrays,
+        -- so a stop has to be unpacked before expectTokenColor can read it. Reading
+        -- grad.to[4] yields nil and makes a `near` assertion fail in both directions.
+        local function stop(c)
+            local r, g, b, a = c:GetRGBA()
+            return { r, g, b, a }
+        end
+
+        local function gradient()
+            local body = bar()._glass._body
+            expect(body).as("the plate has a body texture").notNil()
+            return body:GetGradient()
+        end
+
+        it("paints a real gradient rather than a flat fill", function()
+            expect(bar()._glass).as("the bar owns a glass handle").notNil()
+            expect(bar()._glass:IsGradient())
+                .as("the gradient path, not the no-API fallback").truthy()
+            expect(gradient()).notNil()
+        end)
+
+        it("runs the DENSE colour along the TOP edge, like the action bar plate", function()
+            local grad = gradient()
+            expect(grad.orientation).eq("VERTICAL")
+            -- SetGradient's FIRST colour runs along the BOTTOM for a VERTICAL gradient, so the
+            -- FADED end is the one passed first. This is the assertion that fails the moment
+            -- the pair is swapped into the chat wash's bottom-weighted orientation.
+            H.expectTokenColor(stop(grad.from), "colorGlassFade")
+            H.expectTokenColor(stop(grad.to), "colorGlass")
+        end)
+
+        it("carries more ink at the top than at the bottom", function()
+            -- The same fact stated without naming either token, so it still holds if both are
+            -- ever repointed: whichever colours the plate ends up with, the top is the dense
+            -- one. Two equal ends would satisfy the token assertion above and read as flat.
+            local grad = gradient()
+            expect(stop(grad.to)[4])
+                .as("the top edge is more opaque than the bottom").gt(stop(grad.from)[4])
+        end)
+
+        it("covers the strip's whole box, leaving no transparent gutter", function()
+            -- inset = 0 at the call site. With `border = false` the inset would otherwise
+            -- default to the border width and leave a one-pixel unpainted ring around a strip
+            -- nothing else draws into -- the same reason a frameless StatusBar insets by 0.
+            H.expectBox(bar()._glass._body, H.box(barFrame()))
+        end)
+
+        it("cannot be given a backdrop, so the flat fill cannot come back", function()
+            -- The frame is created WITHOUT BackdropTemplate on purpose: one opaque flat colour
+            -- under the gradient defeats the entire plate, and the client puts SetBackdrop on a
+            -- frame only when it was built from that template. So the regression is
+            -- structurally unreachable rather than merely not currently written.
+            local ok = pcall(function()
+                H.SuuUI.Backdrop.Apply(barFrame(), { bg = "colorBg", border = false, inset = 0 })
+            end)
+            expect(ok).as("Apply cannot reach a frame with no BackdropTemplate").falsy()
+        end)
+
+        it("keeps the bottom hairline drawn above the plate", function()
+            -- Draw order between two textures on ONE frame is the draw LAYER, so
+            -- H.expectDrawsAbove cannot answer it -- it compares frame strata and a texture
+            -- has none. The plate's body is BACKGROUND and the hairline ARTWORK; move either
+            -- and the bar's own bottom edge disappears under its surface.
+            local RANK = { BACKGROUND = 1, BORDER = 2, ARTWORK = 3, OVERLAY = 4, HIGHLIGHT = 5 }
+            local edge = RANK[(bar()._edge:GetDrawLayer())]
+            local body = RANK[(bar()._glass._body:GetDrawLayer())]
+            expect(edge).as("the hairline sits on a known layer").notNil()
+            expect(body).as("the plate body sits on a known layer").notNil()
+            expect(edge).as("the hairline draws over the plate").gt(body)
+        end)
+
+        it("keeps the lit hairline on the top edge, like the action bar plate", function()
+            -- The sheen is what makes the plate read as a SURFACE rather than a fade, and it
+            -- belongs on the dense end. Kept rather than suppressed because the ask was
+            -- explicitly "the same as the action bars" -- the chat wash passes sheen = false,
+            -- because on a bottom-weighted plate the top edge is the thinnest part and a bright
+            -- line there draws on the game world instead of on a surface.
+            local sheen = bar()._glass._sheenTex
+            H.expectTokenColor(H.vertexColor(sheen), "colorGlassSheen")
+            expect(H.box(sheen).top)
+                .as("on the strip's top edge, where the ink is").eq(H.box(barFrame()).top)
+        end)
+
+        it("re-resolves the gradient after a glass token edit", function()
+            -- Proves ApplyTheme actually calls glass:Refresh(). There is no backdrop here for
+            -- Theme:ApplyToFrame to repaint, so without that call a token edit reaches the
+            -- plate by no route at all and the surface silently keeps its login colours.
+            local was    = H.token("opacityGlass")
+            local target = was / 2
+            expect(stop(gradient().to)[4])
+                .as("the plate starts at the theme's own glass opacity").near(was, 0.001)
+
+            H.T:CreateUserTheme("Glassy", "Modern")
+            H.T:SetActive("Glassy")
+            H.T:SetUserToken("Glassy", "opacityGlass", target)
+
+            expect(stop(gradient().to)[4])
+                .as("the dense end followed the token").near(target, 0.001)
+        end)
+    end)
+
     describe("section placement", function()
         before_each(function()
             stage("db.left", "left", "LEFT")
@@ -1031,6 +1141,20 @@ describe("Plugins.DataBar – the bar", function()
     end)
 
     describe("teardown", function()
+        it("drops the glass plate's own layout box", function()
+            -- Glass lays its six pieces out with a container of its OWN, which the bar's box
+            -- knows nothing about -- so the bar has to destroy the handle explicitly or the
+            -- plate's container outlives the strip it was drawing.
+            local g = bar()._glass
+            expect(#g._box:GetChildren())
+                .as("the plate has pieces while the bar is alive").gt(0)
+
+            bar():Destroy()
+
+            expect(#g._box:GetChildren())
+                .as("Glass's own container was torn down too").eq(0)
+        end)
+
         it("unsubscribes from the registry", function()
             stage("db.a", "left", "A")
             local b = bar()

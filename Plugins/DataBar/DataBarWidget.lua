@@ -274,10 +274,10 @@ end
 
 function Bar:ApplyTheme()
     local T = SuuUI.Theme
-    -- No border: a full-width strip framed on all four sides reads as a floating panel
-    -- rather than as part of the screen edge. The single bottom hairline is a texture,
-    -- since a backdrop edge cannot be drawn on one side.
-    SuuUI.Backdrop.Apply(self._f, { bg = "colorBg", border = false, inset = 0 })
+    -- Re-derives the plate's thickness from borderWidth and re-resolves all three glass
+    -- colours, which is the only way a token edit reaches a surface built from textures —
+    -- there is no backdrop here for Theme:ApplyToFrame to repaint.
+    self._glass:Refresh()
 
     local c = T:GetToken("colorBorder")
     if c then self._edge:SetColorTexture(c[1], c[2], c[3], c[4]) end
@@ -321,6 +321,9 @@ function Bar:Destroy()
     for _, name in ipairs(SuuUI.DataBar.SECTIONS) do
         self._groups[name]:Destroy()
     end
+    -- Before the bar's own box: the plate's pieces are textures on this frame laid out by a
+    -- container of Glass's own, so it owns that container's teardown and we own ours.
+    self._glass:Destroy()
     self._box:Destroy()
     SuuUI.UIRoot:RemoveElement(self._f)
     self._f:Hide()
@@ -345,16 +348,47 @@ function Bar:Create(parent)
     local S = SuuUI.UISignals
     local root = SuuUI.UIRoot:GetRootContainer()
 
-    local f = CreateFrame("Frame", "SuuUI_data_bar_bar", parent, "BackdropTemplate")
+    -- NO BackdropTemplate. The surface is a Glass plate, which is drawn from textures, and a
+    -- backdrop under it would paint one flat opaque colour across the gradient and defeat the
+    -- whole thing. Leaving the template on the frame would leave `Backdrop.Apply` available to
+    -- whoever reads this next, which is exactly how the gradient would silently die.
+    local f = CreateFrame("Frame", "SuuUI_data_bar_bar", parent)
     -- Deliberately no EnableMouse: the strip spans the screen, and a bar that swallowed
     -- clicks would make the top of the world unclickable. Each field enables its own.
     f:SetSize(root:GetWidth() or 100, T:GetControlHeight("sizeRow"))
+
+    -- THE GLASS PLATE, and it is built HERE — before the box below adopts the frame. Glass lays
+    -- its pieces out with a HOST CONTAINER of its own and installs its own OnSizeChanged, and a
+    -- host container CHAINS onto whatever resize script is already installed. Built after the
+    -- box, its hook would be the one chained FROM rather than TO and the plate would keep
+    -- whatever size the bar had at construction — the documented trap in LAYOUT_SYSTEM.md, and
+    -- the reason a 219-unit window once wore a 411x546 glass body. It also has to go on before
+    -- any CHILD is added, so the gradient sits under the fields rather than over them.
+    --
+    -- ORIENTATION IS THE DEFAULT, and deliberately identical to Components/ActionBarGrid.lua:
+    -- `from` is the DENSE end and it is the TOP, fading to `colorGlassFade` at the bottom. The
+    -- chat wash is the inverted one (it swaps the pair, because a log fills upward); a bar
+    -- pinned to the top of the screen wants its ink against that edge, dissolving downward into
+    -- the world. Sharing the action bars' tokens is the POINT rather than a coupling to regret:
+    -- the two plates are one treatment, so a retint must move both.
+    --
+    -- inset = 0 for the same reason the flat backdrop passed it: with `border = false` the inset
+    -- would still default to the border width, leaving a one-pixel transparent gap around the
+    -- whole strip that nothing draws into.
+    local glass = SuuUI.Backdrop.Glass(f, {
+        from = "colorGlass", to = "colorGlassFade", sheen = "colorGlassSheen",
+        -- No border: a full-width strip framed on all four sides reads as a floating panel
+        -- rather than as part of the screen edge. The bar keeps its own bottom hairline below,
+        -- which a backdrop edge could not draw on one side either.
+        border = false, inset = 0,
+    })
 
     local box = SuuUI.Layout:CreateContainer({ host = f, layout = "stack" })
 
     local self = setmetatable({
         _f          = f,
         _box        = box,
+        _glass      = glass,
         _root       = root,
         _records    = {},
         _dividers   = {},

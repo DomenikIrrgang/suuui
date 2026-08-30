@@ -2447,13 +2447,18 @@ document it here.
 
   Three more details are load-bearing:
 
-  - **At rest it paints nothing.** The bar already draws one continuous `colorBg` surface
+  - **At rest it paints nothing.** The bar already draws one continuous `Backdrop.Glass` plate
     underneath, so a field with a background of its own would either match that surface
     exactly (a wasted draw) or blend a second translucent panel colour against it and leave a
     visible seam at every field edge — the trap `Accordion`'s header and body avoid by being
-    siblings. Only the hover fill (`colorBgHover`) is painted, and the surface is borderless
+    siblings. The argument only got stronger when the bar's flat `colorBg` backdrop became a
+    gradient: a field surface would now have to match a colour that *changes down the strip*.
+    Only the hover fill (`colorBgHover`) is painted, and the surface is borderless
     with `inset = 0` so it covers the whole box and meets its own dividers, exactly as a
-    frameless `StatusBar` does.
+    frameless `StatusBar` does. Note that fill carries `opacityPanel`, so a hovered field is a
+    near-opaque patch on a plate that fades to `opacityGlassFade` — deliberate, since hover is
+    the one state that should read as solid, but it is why hover looks heavier here than the
+    rest of the strip.
   - **The rail is a texture on `sizeRail`, and it is tied to the hovered state rather than to
     a flag of its own** — a backdrop border draws on all four sides, and a rail driven by its
     own flag can survive a `MOUSE_LEAVE` that some other paint path forgot about. It shares
