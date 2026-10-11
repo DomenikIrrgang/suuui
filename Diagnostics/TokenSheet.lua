@@ -226,7 +226,14 @@ local function build()
     return f
 end
 
-ns.RegisterCommand("tokens", "Show every design token colour and text style.", function()
+-- Opened by the diagnostics module's /suu tokens.
+ns.TokenSheet = {}
+
+function ns.TokenSheet.Toggle()
     window = window or build()
     window:SetShown(not window:IsShown())
-end)
+end
+
+function ns.TokenSheet.Hide()
+    if window then window:Hide() end
+end

@@ -707,7 +707,14 @@ local function show(text)
     window.edit:HighlightText()
 end
 
-ns.RegisterCommand("probe", "Check which client APIs SuuUI depends on exist here; \"/suu probe show\" reopens the last report.", function(arg)
+-- Run by the diagnostics module's /suu probe.
+ns.Probe = {}
+
+function ns.Probe.Hide()
+    if window then window:Hide() end
+end
+
+function ns.Probe.Command(arg)
     if arg == "show" then
         if SuuUIProbe and SuuUIProbe.lastReport then
             show(SuuUIProbe.lastReport)
@@ -719,4 +726,4 @@ ns.RegisterCommand("probe", "Check which client APIs SuuUI depends on exist here
     local text, found, total = run()
     show(text)
     ns.Print(("Probe found %d of %d. /reload to save it for Claude to read."):format(found, total))
-end)
+end

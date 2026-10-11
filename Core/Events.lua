@@ -87,9 +87,9 @@ end
 -- SuuUI messages
 --------------------------------------------------------------------------------
 
--- SuuUI's own messages are named SUUUI_*, so they never collide with game events.
+-- Message names carry a prefix so they never collide with a game event:
+-- SUUUI_* for SuuUI's own, the plugin's own prefix for a plugin's.
 function Events.On(name, fn, owner)
-    assert(name:find("^SUUUI_"), "SuuUI Events: message names start with SUUUI_")
     add("msg:" .. name, fn, owner)
 end
 

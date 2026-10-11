@@ -113,7 +113,7 @@ Every step below gives what's built, the boards it implements, how to confirm it
 ### 0.4 Module system and plugin API
 - **Build:**
   - The module registry: `SuuUI.RegisterModule{ id, name, description, defaults, OnInitialize, OnEnable, OnDisable, reloadToToggle }`. Enabled state is saved per profile. A disabled module is never initialised.
-  - The first version of the public API on the `SuuUI` global: `API_VERSION`, `RegisterModule`, `GetModule`, the module's settings (`db`, `Watch`), messages (`On`, `Off`, `Emit`), the combat queue and `SuppressBlizzard`. Later steps add tokens, components, anchors and extension points to it.
+  - The first version of the public API on the `SuuUI` global, documented in `Docs/API.md`: `API_VERSION`, `RegisterModule`, `GetModule`, `ListModules`; per module `Get`/`Set`/`Reset`/`Watch`/`Veto` for its settings, `On`/`Off`/`Emit`, `OnGameEvent`/`OnUnitEvent`, `RunOutOfCombat`, `RegisterCommand`; plus `Tokens`, `Fonts`, `Pixel` and `SuppressBlizzard`/`RestoreBlizzard`. Later steps add components, anchors and extension points to it.
   - Isolation: each plugin's callbacks run under `pcall`, and a failure goes to `Fault` and marks that module as errored.
   - `/suu modules` lists every module with its state and source; `/suu enable <id>` and `/suu disable <id>` toggle one until the settings window exists.
   - `Examples/SuuUI_HelloPlugin`, a small plugin addon kept in the repository. Copy it into AddOns to test with; it is not shipped.
