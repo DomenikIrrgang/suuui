@@ -387,31 +387,42 @@ function UF:LayoutRow(marker)
     if metaText ~= "" then tailW = tailW + size.gap + UI.MeasureText("caption", metaText) end
     for _, b in ipairs(badges) do tailW = tailW + size.gap + (b.knownWidth or 0) end
 
-    -- The name sizes itself to its text, so the meta and badges follow it
-    -- directly, secret or not. A readable name that would crowd them out is
-    -- given a width, which adds the ellipsis; a secret one can't be measured
-    -- and is simply clipped where the row ends.
+    -- A readable name sizes itself to its text and the meta and badges follow
+    -- it, as the design draws it; a name that would crowd them out gets a
+    -- width, which adds the ellipsis. A secret name (an enemy in combat)
+    -- can't be measured: it gets the room the meta and badges leave, the
+    -- engine adds the ellipsis, and they sit at the row's right end instead.
     local natural = self.name:GetUnboundedStringWidth()
     local room = self.row:GetWidth() - x - tailW
+    local secretName = isSecret(natural)
     self.name:ClearAllPoints()
     self.name:SetPoint("LEFT", self.row, "LEFT", x, 0)
-    if not isSecret(natural) and natural > room and room > 20 then
+    if secretName then
+        self.name:SetWidth(math.max(1, room))
+    elseif natural > room and room > 20 then
         self.name:SetWidth(room)
     else
         self.name:SetWidth(0)
     end
 
-    if self.opts.size == "sm" then
+    if self.opts.size == "sm" or secretName then
+        -- right to left from the row's end: the badges, then the meta
         local after = nil
-        for i = #badges, 1, -1 do
-            local b = badges[i]
-            b:ClearAllPoints()
-            if after then b:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
-            else b:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
-            after = b
+        local function place(region)
+            region:ClearAllPoints()
+            if after then region:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
+            else region:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
+            after = region
         end
-        badges = {}
+        for i = #badges, 1, -1 do place(badges[i]) end
+        if metaText ~= "" and self.opts.size ~= "sm" then place(self.meta) end
+        if self.opts.size == "sm" then
+            self.meta:ClearAllPoints()
+            if metaText ~= "" then self.meta:SetPoint("LEFT", self.name, "RIGHT", size.gap, 0) end
+        end
+        return
     end
+
     local prev = self.name
     if metaText ~= "" then
         self.meta:ClearAllPoints()
