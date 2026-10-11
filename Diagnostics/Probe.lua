@@ -371,75 +371,168 @@ end
 local isSecret = issecretvalue or function() return false end
 local isSecretTable = issecrettable or function() return false end
 
--- "secret", "readable", "none" (no value) or "error"; never keeps the value.
-local function sample(fn, ...)
-    if type(fn) ~= "function" then return "missing" end
-    local ok, v = pcall(fn, ...)
-    if not ok then return "error" end
+local function errText(msg)
+    return (tostring(msg):gsub("^Interface\\[^:]*:%d+: ", "")):sub(1, 160)
+end
+
+-- "secret", "readable" or "none" for one value; never keeps the value.
+local function state(v)
     if isSecret(v) then return "secret" end
     if v == nil then return "none" end
     return "readable"
 end
 
-local function sampleAura(unit)
-    local get = C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
-    if not get then return "missing" end
-    local ok, data = pcall(get, unit, 1, "HELPFUL")
-    if not ok then return "error" end
-    if isSecret(data) then return "secret" end
-    if data == nil then return "none" end
-    if isSecretTable(data) then return "secret table" end
-    if isSecret(data.spellId) then return "secret spellId" end
-    return "readable"
+-- The state of every string-keyed field of a table the client returned, or
+-- the state of a non-table value.
+local function describe(t)
+    if isSecret(t) or type(t) ~= "table" then return state(t) end
+    if isSecretTable(t) then return "secret table" end
+    local out = {}
+    local ok, err = pcall(function()
+        for k, v in pairs(t) do
+            if type(k) == "string" then
+                out[k] = isSecret(v) and "secret" or (v == nil and "none" or "readable")
+            end
+        end
+    end)
+    if not ok then return "error: " .. errText(err) end
+    return out
+end
+
+-- Calls fn and describes its first result; errors become "error: <message>".
+local function call(fn, ...)
+    if type(fn) ~= "function" then return "missing" end
+    local ok, v = pcall(fn, ...)
+    if not ok then return "error: " .. errText(v) end
+    return describe(v)
+end
+
+local UNIT_FIELDS = {
+    { "name", function(u) return UnitName(u) end },
+    { "class", function(u) return (select(2, UnitClass(u))) end },
+    { "level", UnitLevel },
+    { "classification", UnitClassification },
+    { "reaction", function(u) return UnitReaction(u, "player") end },
+    { "dead", UnitIsDeadOrGhost },
+    { "role", UnitGroupRolesAssigned },
+    { "health", UnitHealth },
+    { "healthMax", UnitHealthMax },
+    { "healthPercent", UnitHealthPercent },
+    { "power", UnitPower },
+    { "powerType", UnitPowerType },
+    { "absorbs", UnitGetTotalAbsorbs },
+    { "incomingHeals", UnitGetIncomingHeals },
+    { "threat", function(u) return UnitThreatSituation("player", u) end },
+    { "castName", UnitCastingInfo },
+    { "castNotInterruptible", function(u) return (select(8, UnitCastingInfo(u))) end },
+    { "castDuration", UnitCastingDuration },
+}
+
+-- The first aura of each filter, read three ways: by index, through the slot
+-- API that Blizzard's AuraUtil uses, and as a list.
+local function sampleAuras(unit)
+    local A = C_UnitAuras or {}
+    local out = {}
+    for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
+        out["byIndex " .. filter] = call(A.GetAuraDataByIndex, unit, 1, filter)
+        if A.GetAuraSlots then
+            local ok, tokenOrError, slot = pcall(A.GetAuraSlots, unit, filter)
+            if not ok then
+                out["slots " .. filter] = "error: " .. errText(tokenOrError)
+            else
+                out["slots " .. filter] = state(slot)
+                if slot ~= nil and not isSecret(slot) then
+                    out["bySlot " .. filter] = call(A.GetAuraDataBySlot, unit, slot)
+                end
+            end
+        end
+        if A.GetUnitAuras then
+            local ok, list = pcall(A.GetUnitAuras, unit, filter, 1)
+            if not ok then
+                out["list " .. filter] = "error: " .. errText(list)
+            elseif type(list) == "table" and not isSecret(list) and not isSecretTable(list) then
+                out["list " .. filter] = describe(list[1])
+            else
+                out["list " .. filter] = describe(list)
+            end
+        end
+    end
+    return out
 end
 
 local function sampleUnits()
     local out = {}
     for _, unit in ipairs(SAMPLE_UNITS) do
         if UnitExists(unit) then
-            out[unit] = {
-                name = sample(UnitName, unit),
-                health = sample(UnitHealth, unit),
-                healthMax = sample(UnitHealthMax, unit),
-                healthPercent = sample(UnitHealthPercent, unit),
-                power = sample(UnitPower, unit),
-                cast = sample(UnitCastingInfo, unit),
-                aura = sampleAura(unit),
-                threat = unit ~= "player" and sample(UnitThreatSituation, "player", unit) or nil,
-            }
+            local fields = {}
+            for _, f in ipairs(UNIT_FIELDS) do
+                if not (f[1] == "threat" and unit == "player") then
+                    fields[f[1]] = call(f[2], unit)
+                end
+            end
+            out[unit] = { fields = fields, auras = sampleAuras(unit) }
         end
     end
     return out
 end
 
+-- The GCD reference spells, then up to three actions on the current bar 1.
 local function sampleCooldowns()
     local out = {}
-    local get = C_Spell and C_Spell.GetSpellCooldown
     for _, id in ipairs(SAMPLE_SPELLS) do
-        local state = "missing"
-        if get then
-            local ok, cd = pcall(get, id)
-            if not ok then state = "error"
-            elseif isSecret(cd) then state = "secret"
-            elseif cd == nil then state = "none"
-            elseif isSecret(cd.startTime) or isSecret(cd.duration) then state = "secret fields"
-            else state = "readable" end
+        out["spell " .. id] = call(C_Spell and C_Spell.GetSpellCooldown, id)
+    end
+    local AB = C_ActionBar or {}
+    local hasAction = HasAction or AB.HasAction
+    local n = 0
+    for slot = 1, 12 do
+        if n < 3 and hasAction and hasAction(slot) then
+            n = n + 1
+            out["action " .. slot] = call(AB.GetActionCooldown, slot)
+            out["action " .. slot .. " duration object"] = call(AB.GetActionCooldownDuration, slot)
         end
-        out[tostring(id)] = state
     end
     return out
 end
 
--- Calls the no-argument Is*/In* queries the messaging scan found.
+-- Calls the no-argument queries the messaging scan found and keeps their
+-- answer when it is readable.
 local function sampleMessaging(saved)
     local out = {}
     for _, path in ipairs(saved.scans["Messaging lockdown APIs"] or {}) do
         local short = path:match("%.(%w+)$")
-        if short and (short:find("^Is") or short:find("^In")) then
-            out[short] = sample(resolve(path))
+        if short and (short:find("^Is") or short:find("^In") or short:find("^Are")) then
+            local ok, v = pcall(resolve(path))
+            if not ok then out[short] = "error: " .. errText(v)
+            elseif isSecret(v) then out[short] = "secret"
+            else out[short] = tostring(v) end
         end
     end
     return out
+end
+
+-- One report line from a describe() result: fields grouped by state, then
+-- each error with its message.
+local function summarize(label, d)
+    if type(d) ~= "table" then return { ("  %s: %s"):format(label, d) } end
+    local groups, errors = {}, {}
+    for _, k in ipairs(sortedKeys(d)) do
+        local v = d[k]
+        if type(v) == "table" then v = "table" end
+        if v:find("^error") then
+            errors[#errors + 1] = ("    %s %s"):format(k, v)
+        else
+            groups[v] = groups[v] or {}
+            table.insert(groups[v], k)
+        end
+    end
+    local parts = {}
+    for _, s in ipairs({ "readable", "secret", "secret table", "none", "missing", "table" }) do
+        if groups[s] then parts[#parts + 1] = s .. " " .. table.concat(groups[s], ", ") end
+    end
+    local lines = { ("  %s: %s"):format(label, #parts > 0 and table.concat(parts, " · ") or "nothing") }
+    for _, e in ipairs(errors) do lines[#lines + 1] = e end
+    return lines
 end
 
 local function context()
@@ -510,19 +603,23 @@ local function run()
 
     report[#report + 1] = ""
     report[#report + 1] = "Secret values right now (" .. ctx.key .. ")"
+    local function add(lines)
+        for _, line in ipairs(lines) do report[#report + 1] = line end
+    end
     for _, unit in ipairs(SAMPLE_UNITS) do
         local u = samples.units[unit]
         if u then
-            report[#report + 1] = ("  %s: name %s, health %s, health%% %s, power %s, cast %s, aura %s%s")
-                :format(unit, u.name, u.health, u.healthPercent, u.power, u.cast, u.aura,
-                    u.threat and (", threat " .. u.threat) or "")
+            add(summarize(unit, u.fields))
+            for _, k in ipairs(sortedKeys(u.auras)) do
+                add(summarize("  " .. unit .. " aura " .. k, u.auras[k]))
+            end
         end
     end
-    for id, state in pairs(samples.cooldowns) do
-        report[#report + 1] = ("  spell %s cooldown: %s"):format(id, state)
+    for _, k in ipairs(sortedKeys(samples.cooldowns)) do
+        add(summarize(k, samples.cooldowns[k]))
     end
-    for name, state in pairs(samples.messaging) do
-        report[#report + 1] = ("  %s: %s"):format(name, state)
+    for _, k in ipairs(sortedKeys(samples.messaging)) do
+        report[#report + 1] = ("  %s: %s"):format(k, samples.messaging[k])
     end
 
     report[#report + 1] = ""
