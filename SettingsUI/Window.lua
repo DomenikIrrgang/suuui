@@ -20,7 +20,10 @@ local NAV_W = T.size["settings-nav"]
 local PREVIEW_W = 320
 local HEAD_H = S["space-5"] + 30 + S["space-5"]
 local FOOT_H = S["space-4"] * 2 + 30
+-- The content column: narrower beside a live preview, otherwise wider, but
+-- capped so a row's label and its control stay within one glance.
 local CONTENT_W = WIDTH - NAV_W - PREVIEW_W - S["space-6"] * 2
+local WIDE_W = math.min(WIDTH - NAV_W - S["space-6"] * 2, 720)
 
 local frame
 local pages = {}      -- section id -> page
@@ -65,7 +68,7 @@ local function buildControl(parent, def, onChange)
     end
     if c == "slider" then
         return UI.Slider(parent, { min = def.min, max = def.max, step = def.step, unit = def.unit,
-            format = def.format, width = def.width, onChange = onChange })
+            format = def.format, width = def.width, live = def.live, onChange = onChange })
     end
     if c == "stepper" then
         return UI.Stepper(parent, { min = def.min, max = def.max, step = def.step, unit = def.unit, onChange = onChange })
@@ -99,7 +102,7 @@ local function bindRow(page, def)
     end)
     row = UI.SettingRow(page.frame, {
         label = def.label, description = describe(def.description), control = ctl,
-        stacked = def.stacked, width = CONTENT_W, onReset = reset,
+        stacked = def.stacked, width = page.width, onReset = reset,
     })
     row.def = def
     row.isModified = function() return isDefault ~= nil and not isDefault() end
@@ -123,7 +126,7 @@ end
 local Page = {}
 
 function Page:AddGroup(def)
-    local g = UI.SettingsGroup(self.frame, { title = def.title, description = def.description, width = CONTENT_W })
+    local g = UI.SettingsGroup(self.frame, { title = def.title, description = def.description, width = self.width })
     g.def = def
     g.rows = {}
     for _, rdef in ipairs(def.rows or {}) do
@@ -181,11 +184,12 @@ function Page:Filter(q)
 end
 
 local function buildPage(section)
+    local width = section.preview and CONTENT_W or WIDE_W
     local f = CreateFrame("Frame", nil, frame.content.child)
-    f:SetWidth(CONTENT_W)
-    local page = setmetatable({ section = section, frame = f, groups = {}, rows = {} }, { __index = Page })
+    f:SetWidth(width)
+    local page = setmetatable({ section = section, frame = f, groups = {}, rows = {}, width = width }, { __index = Page })
     page.stack = Layout.Stack(f, { gap = S["space-7"], autoSize = "height" })
-    page.title = UI.SectionHeader(f, section.label, nil, CONTENT_W)
+    page.title = UI.SectionHeader(f, section.label, nil, width)
     page.title:Hide()
     page.stack:Add(page.title)
     for _, g in ipairs(section.groups or {}) do page:AddGroup(g) end
@@ -282,11 +286,16 @@ end
 -- Showing sections, searching, the preview
 --------------------------------------------------------------------------------
 
+-- The preview column shows only for a section that has a preview; otherwise
+-- the content takes its space.
 local function showPreview(section)
     local p = frame.preview
     if p.view then p.view:Hide(); p.view = nil end
+    local has = section and section.preview ~= nil and query == ""
+    p:SetShown(has)
+    frame.content:SetPoint("BOTTOMRIGHT", -((has and PREVIEW_W or 0) + S["space-6"]), FOOT_H)
     p.title:SetValue(section and section.previewTitle or "Live preview")
-    if section and section.preview then
+    if has then
         local view = section.preview(p)
         local avail = PREVIEW_W - S["space-5"] * 2
         local w = view:GetWidth()
@@ -297,8 +306,6 @@ local function showPreview(section)
         view:Show()
         p.view = view
         p.note:SetValue(scale < 1 and ("Shown at %d%% to fit"):format(scale * 100 + 0.5) or "")
-    else
-        p.note:SetValue("Nothing to preview in this section.")
     end
 end
 
@@ -339,6 +346,7 @@ function W.Search(text)
     if query ~= "" then
         for _, section in ipairs(Registry.List()) do getPage(section) end
     end
+    showPreview(Registry.Get(current or ""))
     applyView()
 end
 
@@ -517,7 +525,7 @@ local function build()
     f.content = scrollArea(f)
     f.content:SetPoint("TOPLEFT", NAV_W + S["space-6"], -(top + S["space-5"]))
     f.content:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + S["space-6"]), bottom)
-    f.content.child:SetWidth(CONTENT_W)
+    f.content.child:SetWidth(WIDE_W)
     f.pagesStack = Layout.Stack(f.content.child, { gap = S["space-7"], autoSize = "height", padding = { 0, 0, 0, S["space-6"] } })
     f.empty = UI.Text(f.content.child, "body", "ink-muted")
     f.empty:SetValue("No setting matches that search.")

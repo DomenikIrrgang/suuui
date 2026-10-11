@@ -22,6 +22,12 @@ local Button = {}
 
 function Button:SetLabel(text)
     self.label:SetValue(text)
+    self:Remeasure()
+end
+
+-- Sizes the button to its label (again on show, in case the text wasn't
+-- measurable while it was hidden).
+function Button:Remeasure()
     if not self.fixedWidth then
         self:SetWidth(self.label:GetUnboundedStringWidth() + S["space-5"] * 2)
     end
@@ -73,6 +79,7 @@ function UI.Button(parent, opts)
 
     b:SetScript("OnEnter", onEnter)
     b:SetScript("OnLeave", onLeave)
+    b:HookScript("OnShow", b.Remeasure)
     b:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self.label:SetPoint("CENTER", 0, -1) end end)
     b:SetScript("OnMouseUp", function(self) self.label:SetPoint("CENTER", 0, 0) end)
     b:SetScript("OnClick", function(self) if opts.onClick then opts.onClick(self) end end)

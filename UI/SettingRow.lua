@@ -25,7 +25,20 @@ local RESET_COL = 24
 
 local Row = {}
 
+-- Lays the row out now, and once more on the next frame: WoW wraps text at
+-- the next render, so a description's wrapped height is only right then.
 function Row:Relayout()
+    self:Arrange()
+    if not self.relayoutQueued then
+        self.relayoutQueued = true
+        C_Timer.After(0, function()
+            self.relayoutQueued = false
+            self:Arrange()
+        end)
+    end
+end
+
+function Row:Arrange()
     local width = self:GetWidth()
     local ctl = self.control
     local ctlW, ctlH = 0, 0
@@ -187,6 +200,17 @@ function Group:SetMeta(text)
 end
 
 function Group:Relayout()
+    self:Arrange()
+    if not self.relayoutQueued then
+        self.relayoutQueued = true
+        C_Timer.After(0, function()
+            self.relayoutQueued = false
+            self:Arrange()
+        end)
+    end
+end
+
+function Group:Arrange()
     local headH = self.title:GetStringHeight()
     if self.desc:IsShown() then
         self.desc:SetFixedWidth(self:GetWidth())

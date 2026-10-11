@@ -94,14 +94,19 @@ function Toggle:SetValue(on, animate)
     self.border:SetColor(on and "arcane" or (self:IsMouseOver() and "gilt" or "gilt-line"))
     self.knob:SetVertexColor(UI.RGBA(on and "arcane" or "ink-muted"))
     local to = on and KNOB_ON or KNOB_OFF
+    self:SetScript("OnUpdate", nil)
+    self.knob:ClearAllPoints()
     if animate and was ~= nil and was ~= on and not reduced() then
-        local from = on and KNOB_OFF or KNOB_ON
-        self.knob:ClearAllPoints()
+        -- Slide over dur-fast with an ease-out (a cubic).
+        local from, start, dur = on and KNOB_OFF or KNOB_ON, GetTime(), T.duration["dur-fast"]
         self.knob:SetPoint("CENTER", self, "TOPLEFT", from, -9)
-        self.slide.move:SetOffset(to - from, 0)
-        self.slide:Play()
+        self:SetScript("OnUpdate", function(b)
+            local t = math.min(1, (GetTime() - start) / dur)
+            local e = 1 - (1 - t) ^ 3
+            b.knob:SetPoint("CENTER", b, "TOPLEFT", from + (to - from) * e, -9)
+            if t >= 1 then b:SetScript("OnUpdate", nil) end
+        end)
     else
-        self.knob:ClearAllPoints()
         self.knob:SetPoint("CENTER", self, "TOPLEFT", to, -9)
     end
 end
@@ -117,14 +122,6 @@ function UI.Toggle(parent, opts)
     b.bg:SetAllPoints()
     b.border = UI.Border(b, "gilt-line")
     b.knob = UI.Diamond(b, 8, "ink-muted")
-    b.slide = b.knob:CreateAnimationGroup()
-    b.slide.move = b.slide:CreateAnimation("Translation")
-    b.slide.move:SetDuration(T.duration["dur-fast"])
-    b.slide.move:SetSmoothing(T.easing["ease-out"].smoothing)
-    b.slide:SetScript("OnFinished", function()
-        b.knob:ClearAllPoints()
-        b.knob:SetPoint("CENTER", b, "TOPLEFT", b.value and KNOB_ON or KNOB_OFF, -9)
-    end)
     b.onChange = opts.onChange
     b:SetScript("OnClick", function(self)
         if self.disabled then return end
@@ -249,7 +246,9 @@ end
 --------------------------------------------------------------------------------
 -- Slider: the value in numeric on top, a 4px track filled arcane up to the
 -- value, and an 11px ink diamond thumb with an arcane edge. Live while dragging.
---   { min, max, step, value, width = 200, unit = "px", format = fn(v) -> text }
+--   { min, max, step, value, width = 200, unit = "px", format = fn(v) -> text,
+--     live = true }   -- false: onChange only when the drag ends (for settings that
+--                     -- move the very window being dragged in, like the scale)
 --------------------------------------------------------------------------------
 
 local Slider = {}
@@ -265,7 +264,7 @@ function Slider:ShowValue(v)
 end
 
 function Slider:SetValue(v)
-    self.value = v
+    self.value, self.committed = v, v
     self.updating = true
     self.slider:SetValue(v)
     self.updating = false
@@ -274,6 +273,7 @@ end
 
 Slider.SetDisabled = function(self, disabled)
     setDisabled(self, disabled)
+    self.slider:SetEnabled(not self.disabled)
     self.slider:EnableMouse(not self.disabled)
     self.slider:EnableMouseWheel(not self.disabled)
 end
@@ -285,6 +285,7 @@ function UI.Slider(parent, opts)
     f:SetSize(width, T.type.numeric.lineHeight + S["space-2"] + 18)
     f.min, f.max, f.step = opts.min or 0, opts.max or 1, opts.step
     f.unit, f.format, f.onChange = opts.unit, opts.format, opts.onChange
+    f.live = opts.live ~= false
 
     f.valueText = UI.Text(f, "numeric", "ink")
     f.valueText:SetPoint("TOPRIGHT")
@@ -322,17 +323,28 @@ function UI.Slider(parent, opts)
         dia:SetPoint("CENTER", thumb, "CENTER")
     end
     s:EnableMouseWheel(true)
+    local function commit()
+        if f.pending ~= nil and f.pending ~= f.committed then
+            f.committed = f.pending
+            if f.onChange then f.onChange(f.pending) end
+        end
+        f.pending = nil
+    end
     s:SetScript("OnMouseWheel", function(self, delta)
+        if f.disabled then return end
         local step = f.step or (f.max - f.min) / 20
         self:SetValue(math.max(f.min, math.min(f.max, self:GetValue() + delta * step)))
+        commit()
     end)
+    s:SetScript("OnMouseUp", commit)
     s:SetScript("OnValueChanged", function(_, v)
-        if f.updating then return end
+        if f.updating or f.disabled then return end
         v = snap(v, f.min, f.step)
         if v == f.value then return end
         f.value = v
         f:ShowValue(v)
-        if f.onChange then f.onChange(v) end
+        f.pending = v
+        if f.live then commit() end
     end)
     f.slider = s
     f:SetValue(opts.value or f.min)
