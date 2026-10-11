@@ -107,7 +107,8 @@ function Base:Add(child, opts)
     child.layout = self
     child.layoutOpts = opts
     self.children[#self.children + 1] = child
-    if child.HookScript and not child.suuLayoutHooked then
+    -- Texts and textures have HookScript too, but no size scripts: only frames are hooked.
+    if child:IsObjectType("Frame") and not child.suuLayoutHooked then
         child.suuLayoutHooked = true
         child:HookScript("OnSizeChanged", onChildChanged)
         child:HookScript("OnShow", function(c) onChildChanged(c) end)

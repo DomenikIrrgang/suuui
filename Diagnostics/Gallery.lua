@@ -223,6 +223,8 @@ local function build()
         meta = ("design tokens v%d · API %s"):format(T.version, SuuUI.API_VERSION),
         width = COL_W * 2 + S["space-6"] + S["space-5"] * 2 + 4, height = 700,
     })
+    -- Hidden until fully built, so a failed build leaves nothing on screen.
+    w:Hide()
     w:SetPoint("CENTER")
     local columns = Layout.Stack(w.content, { direction = "horizontal", gap = S["space-6"], autoSize = "height" })
     for _, fill in ipairs({ columnA, columnB }) do
