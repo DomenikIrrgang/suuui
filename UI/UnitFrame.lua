@@ -380,9 +380,12 @@ function UF:LayoutRow(marker)
     local badges = {}
     if self.badge:IsShown() then badges[#badges + 1] = self.badge end
     if self.you:IsShown() then badges[#badges + 1] = self.you end
+    -- Never read sizes back from the meta or the badges: they are anchored
+    -- after the name, and a secret name makes their geometry secret too.
+    local metaText = self.meta.value or ""
     local tailW = 0
-    if self.meta:GetText() ~= "" then tailW = tailW + size.gap + self.meta:GetUnboundedStringWidth() end
-    for _, b in ipairs(badges) do tailW = tailW + size.gap + b:GetWidth() end
+    if metaText ~= "" then tailW = tailW + size.gap + UI.MeasureText("caption", metaText) end
+    for _, b in ipairs(badges) do tailW = tailW + size.gap + (b.knownWidth or 0) end
 
     -- The name sizes itself to its text, so the meta and badges follow it
     -- directly, secret or not. A readable name that would crowd them out is
@@ -410,7 +413,7 @@ function UF:LayoutRow(marker)
         badges = {}
     end
     local prev = self.name
-    if self.meta:GetText() ~= "" then
+    if metaText ~= "" then
         self.meta:ClearAllPoints()
         self.meta:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
         prev = self.meta

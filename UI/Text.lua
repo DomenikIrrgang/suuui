@@ -68,6 +68,21 @@ function Text:Changed()
     if self.layout then self.layout:Invalidate() end
 end
 
+-- The width of `text` in a text style, measured on a hidden FontString that
+-- is anchored to nothing. A region anchored after one with secret text (an
+-- enemy's name in combat) reports its own size as secret too, so anything in
+-- such a chain must be measured here instead.
+local measurer
+function UI.MeasureText(style, text)
+    if not measurer then
+        measurer = UIParent:CreateFontString(nil, "OVERLAY")
+        measurer:Hide()
+    end
+    ns.Fonts.Apply(measurer, style)
+    measurer:SetText(text or "")
+    return measurer:GetUnboundedStringWidth()
+end
+
 function UI.Text(parent, style, color, layer)
     local fs = parent:CreateFontString(nil, layer or "OVERLAY")
     Mixin(fs, Text)

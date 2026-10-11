@@ -110,7 +110,9 @@ function Badge:SetState(tone, text)
     local wasShown = self:IsShown() and self.text ~= nil
     self.label:SetValue(text)
     self.text, self.tone = text, tone
-    self:SetWidth(self.label:GetUnboundedStringWidth() + 10)
+    -- Kept: a badge anchored after secret text can't read its own width back.
+    self.knownWidth = UI.MeasureText("badge", text) + 10
+    self:SetWidth(self.knownWidth)
     if not wasShown then Motion.FadeIn(self, T.duration["dur-fast"]) end
 end
 
