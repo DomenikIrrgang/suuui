@@ -19,19 +19,37 @@ SuuUI is written from scratch for this client. The design system is the only inp
 | Core services | Event bus, settings with per-character profiles, combat queue, Blizzard-frame suppression, pixel scale, error reporting |
 | Primitives | Text, Panel, Icon, StatusBar, Button, glows and animation presets, laid out by an engine that invalidates and then flushes once per frame |
 | Components | One Lua component per design-system component (`UnitFrame`, `AuraIcon`, `ActionButton`, …), with the same names and props |
-| Modules | One per HUD area or window. Each has its own Enabled toggle, settings section and edit-mode handle |
+| Module system | A registry that loads, enables and disables modules, and the versioned **public API** they are written against |
+| Modules | One per HUD area or window, built-in or from a plugin addon. Each has its own Enabled toggle, settings section and edit-mode handle |
 | Tests | An offline harness with 12.1 API stubs and secret-value simulation, run under Lua 5.1 |
+
+### Pluggable by design
+
+Every feature can be switched off entirely, and other addons can extend SuuUI.
+
+- **Every feature is a module.** Unit frames, action bars, chat, bags and every other feature are each one module. The core itself only holds the services, primitives, components and the settings window.
+- **A disabled module costs nothing.** It is never initialised: no frames, no events, no settings section. Blizzard's own frame for that feature stays exactly as it was. Turning a module on or off takes effect at once. The exception is a module that replaced a protected Blizzard frame, such as the action bars: it switches on the next reload, and the settings window offers Reload now.
+- **Built-in modules use the public API.** They are written as if they were plugins, so a plugin addon can do anything a built-in module can.
+- **Plugin addons** declare `## Dependencies: SuuUI` and register through `SuuUI.RegisterModule`. A plugin can:
+  - add a module with its own settings section, edit-mode handle and profile data
+  - use the tokens, fonts and every component (`UnitFrame`, `AuraIcon`, `Panel`, …), so it looks native
+  - listen to SuuUI's messages, such as a module enabled, a profile changed or the group profile switched
+  - extend another module through its published extension points, for example adding an element to every unit frame, a row type to the damage meter or a notification kind
+  - anchor to another module's frames by a published anchor name (`"player"`, `"dock"`, `"chat"`), never by reaching into its internals
+- **The API is versioned.** `SuuUI.API_VERSION` follows semantic versioning, and a plugin can require a minimum version. A plugin that fails to load or errors shows one line in the settings window's module list; it never breaks SuuUI or another plugin.
+- **One list of modules.** A Modules page in the settings window lists every module, built-in and plugin, with its toggle, its state and where it came from.
 
 ### Rules for every increment (definition of done)
 
 1. **The game stays playable.** Each feature is a module with an Enabled toggle. Until a module exists, or while it's off, Blizzard's own frame is left untouched. Suppress Blizzard frames by reparenting them to a hidden frame, never with an `OnShow → Hide` hook.
-2. **It loads cleanly.** No Lua errors with `/console scriptErrors 1`. `luac5.1 -p` passes on every shipped file. The test suite runs green under real Lua 5.1.
-3. **It's combat-safe.** Nothing protected moves in lockdown: route those changes through the core combat queue. Run a `/console taintLog 1` session on anything secure.
-4. **It respects secret values.** Never compare or do maths on a value that might be secret. Use curve objects, `SetAlphaFromBoolean` and duration objects. Where the client hides data, hide the slot.
-5. **It's performant by construction.** Show and Hide are idempotent. Events use `RegisterUnitEvent`. Each widget caches the last value it painted. Views that are hidden are marked stale and refresh on Show. Lists are reconciled by key, never rebuilt.
-6. **It's configurable.** Each module adds its own section to the settings window. Changes apply live and the module has an edit-mode handle.
-7. **It matches the design.** Compare the result with its canvas board(s) side by side at 2560×1440 with UI scale 1, and note any deviations.
-8. **It ends in a commit.** Commit with the increment number, then do the in-game confirmation below.
+2. **It goes through the public API.** A module uses only the public API, and it reaches other modules only through their published anchors, messages and extension points. Anything new a module needs from the core is added to the public API and documented there, so plugins can use it too.
+3. **It loads cleanly.** No Lua errors with `/console scriptErrors 1`. `luac5.1 -p` passes on every shipped file. The test suite runs green under real Lua 5.1.
+4. **It's combat-safe.** Nothing protected moves in lockdown: route those changes through the core combat queue. Run a `/console taintLog 1` session on anything secure.
+5. **It respects secret values.** Never compare or do maths on a value that might be secret. Use curve objects, `SetAlphaFromBoolean` and duration objects. Where the client hides data, hide the slot.
+6. **It's performant by construction.** Show and Hide are idempotent. Events use `RegisterUnitEvent`. Each widget caches the last value it painted. Views that are hidden are marked stale and refresh on Show. Lists are reconciled by key, never rebuilt.
+7. **It's configurable.** Each module adds its own section to the settings window. Changes apply live and the module has an edit-mode handle.
+8. **It matches the design.** Compare the result with its canvas board(s) side by side at 2560×1440 with UI scale 1, and note any deviations.
+9. **It ends in a commit.** Commit with the increment number, then do the in-game confirmation below.
 
 Every step below gives what's built, the boards it implements, how to confirm it in game, and the Forever unknowns to verify first.
 
@@ -62,7 +80,21 @@ Every step below gives what's built, the boards it implements, how to confirm it
   - An offline test harness: a TOC loader, frame and anchor simulation, and 12.1 API stubs including `issecretvalue` and secret-value behaviour. It runs under Lua 5.1.5, with a pre-commit `luac5.1 -p` check.
 - **Confirm:** a setting changed through `/suu set` survives `/reload` and appears under the right profile. Switching profiles works. An error deliberately thrown in a test plugin shows as one player-visible line instead of breaking the load.
 
-### 0.4 Primitives and layout engine
+### 0.4 Module system and plugin API
+- **Build:**
+  - The module registry: `SuuUI.RegisterModule{ id, name, description, defaults, OnInitialize, OnEnable, OnDisable, reloadToToggle }`. Enabled state is saved per profile. A disabled module is never initialised.
+  - The first version of the public API on the `SuuUI` global: `API_VERSION`, `RegisterModule`, `GetModule`, the module's settings (`db`, `Watch`), messages (`On`, `Off`, `Emit`), the combat queue and `SuppressBlizzard`. Later steps add tokens, components, anchors and extension points to it.
+  - Isolation: each plugin's callbacks run under `pcall`, and a failure goes to `Fault` and marks that module as errored.
+  - `/suu modules` lists every module with its state and source; `/suu enable <id>` and `/suu disable <id>` toggle one until the settings window exists.
+  - `Examples/SuuUI_HelloPlugin`, a small plugin addon kept in the repository. Copy it into AddOns to test with; it is not shipped.
+  - The probe from 0.1 becomes the first built-in module (`diagnostics`).
+- **Confirm:**
+  - With the example plugin copied in, `/suu modules` lists it next to `diagnostics`.
+  - `/suu disable hello` removes it at once, and it stays off after `/reload`.
+  - Breaking the example on purpose (an error in `OnEnable`) marks it as errored, and SuuUI and the other modules keep working.
+  - Deleting `SuuUI` while the example plugin is installed shows the client's normal "missing dependency" message, with nothing else broken.
+
+### 0.5 Primitives and layout engine
 - **Build:**
   - Primitives:
     - Text, with idempotent Show/Hide and cached metrics.
@@ -74,13 +106,16 @@ Every step below gives what's built, the boards it implements, how to confirm it
   - A layout engine that uses `Invalidate()` plus a per-frame flush, with stack, grid and anchor strategies.
   - Anchoring by cluster: positions are expressed from an edge or the centre, using the 2560×1440 reference.
   - Animation presets from the Motion table, including the reduced-motion switch.
+  - Tokens, fonts, primitives and the layout engine are added to the public API.
   - **`/suu gallery`** shows all of them.
 - **Boards:** Alerts and badges (StateBadge), Window frame (shell only), and the Panel, Button, ProgressBar and SectionHeader component pages.
 - **Confirm:** the gallery matches the component previews. Dragging a resizable gallery panel stays smooth, and the debug counter shows SetPoint calls per frame staying flat.
 
-### 0.5 Settings window and edit mode
+### 0.6 Settings window and edit mode
 - **Build:**
   - `SettingsWindow` with nav sections and search.
+  - The **Modules** page: every built-in and plugin module with its toggle, its state (on, off, errored, needs reload) and its source. Each enabled module's settings section appears in the nav, so a plugin's section sits beside the built-in ones.
+  - The public API gains `RegisterSettings` (a section built from a schema with the controls below) and `RegisterMover` (an edit-mode handle).
   - Every control: Toggle, Checkbox, Segmented, Select (single and multiple), Slider, Stepper, ColorPicker, KeybindField, AnchorPicker, ListEditor and FilterMenu.
   - `SettingRow` and `SettingsGroup`, with the changed-row diamond, a reset arrow and a disabled-with-reason state.
   - Profiles with Import/Export.
@@ -92,8 +127,9 @@ Every step below gives what's built, the boards it implements, how to confirm it
   - Reset works per row, per section and for everything.
   - An exported profile string, imported on a second character, reproduces the settings.
   - Entering combat closes edit mode cleanly.
+  - The example plugin's section and edit-mode handle work exactly like a built-in one, and turning it off on the Modules page removes both.
 
-> At the end of Phase 0 nothing on the HUD has changed yet, but every later module plugs into tokens, settings, edit mode and the combat queue.
+> At the end of Phase 0 nothing on the HUD has changed yet, but every later module plugs into tokens, settings, edit mode and the combat queue through the same public API a plugin addon uses.
 
 ---
 
@@ -112,6 +148,7 @@ Every step below gives what's built, the boards it implements, how to confirm it
   - Combat-reactive: frames rest at `opacity-ooc` and come up over `dur-slow`.
   - Suppress Blizzard's PlayerFrame and TargetFrame by reparenting.
   - Place both frames by the tank/DPS and healer cockpit rules.
+  - Publish the first extension points: unit frame elements (a plugin can add its own text, icon or bar to every unit frame) and the `"player"` and `"target"` anchors.
 - **Boards:** Player frame, Target frame; scenes Dungeon boss · DPS.
 - **Confirm:**
   - Targeting and click-casting work, and with no target, world clicks are not swallowed.
@@ -423,7 +460,14 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
   - A check that SavedVariables stay bounded.
 - **Confirm:** a 40-player raid fight shows no blocked actions and stays within budget.
 
-### 4.3 Release
+### 4.3 Plugin developer kit
+- **Build:**
+  - A reference for the public API: every function, message, anchor name and extension point, with the version that introduced it.
+  - A plugin guide built around `Examples/SuuUI_HelloPlugin`, plus a second, fuller example that adds an element to every unit frame.
+  - A test in the suite that fails when a public function changes signature without an `API_VERSION` bump.
+- **Confirm:** someone who hasn't seen the code can follow the guide and get a plugin with a settings section and a movable frame running.
+
+### 4.4 Release
 - **Build:** a first-run splash using the emblem, a default layout per role, the addon-list icon, the README, a CurseForge or Wago package, and a changelog.
 
 ---
@@ -432,13 +476,13 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 
 | # | Increment | Depends on |
 |---|---|---|
-| 0.1–0.5 | Scaffold, tokens, core, primitives, settings and edit mode | — |
+| 0.1–0.6 | Scaffold, tokens, core, module system and plugin API, primitives, settings and edit mode | — |
 | 1.1–1.4 | Player and target frames, other unit frames, cast bars and swing timer, auras | 0.x |
 | 1.5–1.7 | Action bars and the Cooldown Manager | 0.x |
 | 1.8–1.10 | Party, raid and nameplates | 1.1, 1.4 |
 | 1.11–1.13 | Alerts, meters, timeline and readiness | 1.1 |
 | 2.1–2.8 | Minimap, chat, tracker, notifications, bags, loot, tooltips and campsite | 0.x (2.6 uses 2.4) |
-| 3.1–3.6 | The Blizzard windows | 0.4 (shell) |
+| 3.1–3.6 | The Blizzard windows | 0.5 (shell) |
 | 4.x | Presets, performance and release | everything |
 
 Phases 2 and 3 don't depend on Phase 1. If a different part of the UI should come first, they can be reordered.
