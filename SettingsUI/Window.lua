@@ -128,11 +128,11 @@ local Page = {}
 function Page:AddGroup(def)
     local g = UI.SettingsGroup(self.frame, { title = def.title, description = def.description, width = self.width })
     g.def = def
-    g.rows = {}
+    g.boundRows = {} -- not g.rows: that is the group's own row frame
     for _, rdef in ipairs(def.rows or {}) do
         local row = bindRow(self, rdef)
         g:AddRow(row)
-        g.rows[#g.rows + 1] = row
+        g.boundRows[#g.boundRows + 1] = row
         self.rows[#self.rows + 1] = row
     end
     self.groups[#self.groups + 1] = g
@@ -154,7 +154,7 @@ function Page:Refresh()
     local changed = 0
     for _, g in ipairs(self.groups) do
         local n = 0
-        for _, row in ipairs(g.rows) do
+        for _, row in ipairs(g.boundRows) do
             row.refresh()
             if row.isModified() then n = n + 1 end
         end
@@ -170,7 +170,7 @@ function Page:Filter(q)
     for _, g in ipairs(self.groups) do
         local groupHit = q == "" or (g.def.title or ""):lower():find(q, 1, true)
         local shown = 0
-        for _, row in ipairs(g.rows) do
+        for _, row in ipairs(g.boundRows) do
             local d = row.def
             local hit = groupHit or (d.label or ""):lower():find(q, 1, true)
                 or (tostring(describe(d.description) or "")):lower():find(q, 1, true)
@@ -217,11 +217,11 @@ local function navButton(i)
         b.bg = UI.Fill(b, "surface-raised")
         b.bg:SetAllPoints()
         b.mark = UI.Diamond(b, 5, "gilt")
-        b.mark:SetPoint("CENTER", b, "LEFT", 7.5, 0)
+        b.mark:SetPoint("CENTER", b, "LEFT", 7, 0)
         b.dot = UI.Diamond(b, 5, "ink")
         b.dot:SetPoint("CENTER", b, "RIGHT", -S["space-4"] - 2.5, 0)
         b.label = UI.Text(b, "label", "ink-muted")
-        b.label:SetPoint("LEFT", S["space-5"], 0)
+        b.label:SetPoint("LEFT", S["space-5"] + 4, 0)
         b.heading = UI.Text(b, "caption", "ink-muted")
         b.heading:SetPoint("BOTTOMLEFT", S["space-4"], S["space-2"])
         b:SetScript("OnEnter", function(self)

@@ -50,7 +50,7 @@ end
 
 -- A downward chevron, a minus and a plus.
 function UI.Chevron(parent, color)
-    return glyph(parent, 12, color, { { 6, 45, -2, 0 }, { 6, -45, 2, 0 } })
+    return glyph(parent, 12, color, { { 6, -45, -2, 0 }, { 6, 45, 2, 0 } })
 end
 
 function UI.Minus(parent, color)
