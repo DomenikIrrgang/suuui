@@ -188,6 +188,11 @@ local function makeInitializer(group, size)
         stacks:SetShadowColor(0, 0, 0, 1)
         stacks:SetShadowOffset(0, -1)
         stacks:SetPoint("TOPRIGHT", -2, -1)
+        -- A thin outline as well, so the digits read on any icon art.
+        for _, fs in ipairs({ duration, stacks }) do
+            local path, height = fs:GetFont()
+            if path then fs:SetFont(path, height, "OUTLINE") end
+        end
 
         -- Clicks only where they do something (cancelling your own buff):
         -- a click-alive icon would swallow clicks meant for what is under it.
