@@ -21,7 +21,7 @@ SuuUI is written from scratch for this client. The design system is the only inp
 | Components | One Lua component per design-system component (`UnitFrame`, `AuraIcon`, `ActionButton`, …), with the same names and props |
 | Module system | A registry that loads, enables and disables modules, and the versioned **public API** they are written against |
 | Modules | One per HUD area or window, built-in or from a plugin addon. Each has its own Enabled toggle, settings section and edit-mode handle |
-| Tests | An offline harness with 12.1 API stubs and secret-value simulation, run under Lua 5.1 |
+| Tests | Not yet. A test harness is being built separately and will be brought into the project later; until then every step is confirmed in game |
 
 ### Pluggable by design
 
@@ -43,7 +43,7 @@ Every feature can be switched off entirely, and other addons can extend SuuUI.
 
 1. **The game stays playable.** Each feature is a module with an Enabled toggle. Until a module exists, or while it's off, Blizzard's own frame is left untouched. Suppress Blizzard frames by reparenting them to a hidden frame, never with an `OnShow → Hide` hook.
 2. **It goes through the public API.** A module uses only the public API, and it reaches other modules only through their published anchors, messages and extension points. Anything new a module needs from the core is added to the public API and documented there, so plugins can use it too.
-3. **It loads cleanly.** No Lua errors with `/console scriptErrors 1`. `luac5.1 -p` passes on every shipped file. The test suite runs green under real Lua 5.1.
+3. **It loads cleanly.** No Lua errors with `/console scriptErrors 1`. Every changed file passes a quick `luac -p` syntax check (no automated tests until the separate harness is brought in).
 4. **It's combat-safe.** Nothing protected moves in lockdown: route those changes through the core combat queue. Run a `/console taintLog 1` session on anything secure.
 5. **It respects secret values.** Never compare or do maths on a value that might be secret. Use curve objects, `SetAlphaFromBoolean` and duration objects. Where the client hides data, hide the slot.
 6. **It's performant by construction.** Show and Hide are idempotent. Events use `RegisterUnitEvent`. Each widget caches the last value it painted. Views that are hidden are marked stale and refresh on Show. Lists are reconciled by key, never rebuilt.
@@ -71,13 +71,12 @@ Every step below gives what's built, the boards it implements, how to confirm it
 - **Boards:** the design system's foundations (Color, Typography).
 - **Confirm:** the swatches match the design-system page and both faces render. `micro` (9.5px) is still legible at your UI scale.
 
-### 0.3 Core services and test harness
+### 0.3 Core services
 - **Build:**
   - An EventBus that dispatches over a snapshot, so listeners can be added or removed safely during an emit.
   - Settings and Profile (SavedVariables with per-character profiles). Watchers can veto a write before it's stored, a nested write supersedes the outer one, and table defaults are copied, never handed out.
   - Add a core **combat queue** (deduplicated, flushed on `PLAYER_REGEN_ENABLED`) and a **SuppressBlizzard(frame)** helper that reparents.
   - Add `Pixel` (perfect scale, rescaled only on uiScale changes and deferred while in combat) and `Fault` for errors players should see.
-  - An offline test harness: a TOC loader, frame and anchor simulation, and 12.1 API stubs including `issecretvalue` and secret-value behaviour. It runs under Lua 5.1.5, with a pre-commit `luac5.1 -p` check.
 - **Confirm:** a setting changed through `/suu set` survives `/reload` and appears under the right profile. Switching profiles works. An error deliberately thrown in a test plugin shows as one player-visible line instead of breaking the load.
 
 ### 0.4 Module system and plugin API
@@ -454,7 +453,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 
 ### 4.2 Performance and taint pass
 - **Build:**
-  - Frame-count and SetPoint budgets added to the test suite.
+  - Frame-count and SetPoint budgets, checked with `/suu perf`.
   - An in-game `/suu perf` command showing CPU and memory per module.
   - A full `taintLog` raid session.
   - A check that SavedVariables stay bounded.
@@ -464,7 +463,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Build:**
   - A reference for the public API: every function, message, anchor name and extension point, with the version that introduced it.
   - A plugin guide built around `Examples/SuuUI_HelloPlugin`, plus a second, fuller example that adds an element to every unit frame.
-  - A test in the suite that fails when a public function changes signature without an `API_VERSION` bump.
+  - Once the test harness is in the project: a test that fails when a public function changes signature without an `API_VERSION` bump.
 - **Confirm:** someone who hasn't seen the code can follow the guide and get a plugin with a settings section and a movable frame running.
 
 ### 4.4 Release
