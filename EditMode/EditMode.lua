@@ -277,7 +277,9 @@ local function buildLayer()
     overlay = CreateFrame("Frame", "SuuUIEditMode", root())
     overlay:SetAllPoints(root())
     overlay:SetFrameStrata("FULLSCREEN")
-    overlay:EnableMouse(true)
+    -- The layer itself never takes the mouse, so the camera and the world
+    -- stay usable; only the movers, the toolbar and the panel do.
+    overlay:EnableMouse(false)
     overlay:EnableKeyboard(true)
     overlay:Hide()
     overlay.wash = overlay:CreateTexture(nil, "BACKGROUND")
@@ -297,8 +299,6 @@ local function buildLayer()
             self:SetPropagateKeyboardInput(true)
         end
     end)
-    -- A click on empty space deselects.
-    overlay:SetScript("OnMouseDown", function() select(nil) end)
     overlay.panel = buildPanel()
     toolbar = buildToolbar()
     toolbar:Hide()
@@ -350,6 +350,16 @@ end
 function EditMode.Toggle()
     if active then EditMode.Exit() else EditMode.Enter() end
 end
+
+-- A click anywhere but on a mover, the toolbar or the panel deselects.
+Events.OnGame("GLOBAL_MOUSE_DOWN", function()
+    if not (active and selected) then return end
+    if toolbar:IsMouseOver() or overlay.panel:IsMouseOver() then return end
+    for _, m in ipairs(movers) do
+        if m.overlay and m.overlay:IsShown() and m.overlay:IsMouseOver() then return end
+    end
+    select(nil)
+end, "EditMode")
 
 Events.OnGame("PLAYER_REGEN_DISABLED", function()
     if active then
