@@ -119,6 +119,10 @@ local DISPEL_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle
 
 local function makeInitializer(group, size)
     return function(button)
+        -- The engine's layout only anchors its buttons; their size is ours to
+        -- set, and an unsized button renders nothing.
+        pcall(button.SetSize, button, size, size)
+
         -- Regions first, styled, and only then registered with the button:
         -- each registration makes the engine draw at once, and an unstyled
         -- FontString has no font yet.
