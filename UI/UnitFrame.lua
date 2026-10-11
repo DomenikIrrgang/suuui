@@ -191,17 +191,23 @@ function UI.UnitFrame(parent, unit, opts)
     f.glow = UI.Shadow(f, "glow-ember")
     f.glow:SetShown(false)
 
+    -- The row (marker, name, meta, badges) is clipped where the health % slot
+    -- begins, so a long name never runs into it, even when it is secret.
+    f.row = CreateFrame("Frame", nil, o)
+    f.row:SetPoint("TOPLEFT", size.pad, 0)
+    f.row:SetPoint("BOTTOMRIGHT", -(size.pad + (opts.size == "sm" and 0 or 34 + size.gap)), 0)
+    f.row:SetClipsChildren(true)
     f.role = o:CreateTexture(nil, "OVERLAY")
     f.role:SetSize(size.role, size.role)
     f.classDot = UI.Diamond(o, opts.size == "sm" and 4 or 5, "ink")
-    f.name = UI.Text(o, size.name, "ink")
+    f.name = UI.Text(f.row, size.name, "ink")
     f.name:SetShadowed(true)
     f.name:SetWordWrap(false)
-    f.meta = UI.Text(o, "caption", "ink")
+    f.meta = UI.Text(f.row, "caption", "ink")
     f.meta:SetShadowed(true)
-    f.badge = UI.StateBadge(o, "danger", "")
+    f.badge = UI.StateBadge(f.row, "danger", "")
     f.badge:Hide()
-    f.you = UI.StateBadge(o, "neutral", "you")
+    f.you = UI.StateBadge(f.row, "neutral", "you")
     f.you:SetShown(opts.you == true)
     f.right = UI.Text(o, "numeric", "ink")
     f.right:SetShadowed(true)
@@ -353,38 +359,45 @@ end
 
 -- marker, name, meta, badges ... health %, in one row; the name gives way.
 function UF:LayoutRow(marker)
-    local size, w = self.size, self:GetWidth()
-    local x = size.pad
+    local size = self.size
+    local x = 0
+    for _, m in ipairs({ self.role, self.classDot }) do m:ClearAllPoints() end
     if marker then
-        marker:ClearAllPoints()
-        marker:SetPoint("LEFT", self, "LEFT", x + (marker == self.classDot and 2 or 0), 0)
-        x = x + (marker == self.role and size.role or 5) + size.gap
+        marker:SetPoint("LEFT", self.row, "LEFT", marker == self.classDot and 2 or 0, 0)
+        x = (marker == self.role and size.role or 5) + size.gap
     end
-    -- The health % (or "Dead") gets a fixed slot: the text may be secret, and
-    -- tabular digits keep "100%" the widest it gets.
-    local right = w - size.pad - (self.opts.size == "sm" and 0 or 34) - size.gap
 
-    local metaW = self.meta:GetText() ~= "" and self.meta:GetUnboundedStringWidth() or 0
     local badges = {}
     if self.badge:IsShown() then badges[#badges + 1] = self.badge end
     if self.you:IsShown() then badges[#badges + 1] = self.you end
-    local badgesW = 0
-    for _, b in ipairs(badges) do badgesW = badgesW + b:GetWidth() + size.gap end
-    local nameMax = right - x - badgesW - (metaW > 0 and (metaW + size.gap) or 0)
+    local tailW = 0
+    if self.meta:GetText() ~= "" then tailW = tailW + size.gap + self.meta:GetUnboundedStringWidth() end
+    for _, b in ipairs(badges) do tailW = tailW + size.gap + b:GetWidth() end
 
+    -- The name sizes itself to its text, so the meta and badges follow it
+    -- directly, secret or not. A readable name that would crowd them out is
+    -- given a width, which adds the ellipsis; a secret one can't be measured
+    -- and is simply clipped where the row ends.
     local natural = self.name:GetUnboundedStringWidth()
-    local nameW = (not isSecret(natural) and natural) and math.min(natural, nameMax) or nameMax
+    local room = self.row:GetWidth() - x - tailW
     self.name:ClearAllPoints()
-    self.name:SetPoint("LEFT", self, "LEFT", x, 0)
-    self.name:SetWidth(math.max(1, nameW))
-    x = x + nameW + size.gap
-    self.meta:ClearAllPoints()
-    self.meta:SetPoint("LEFT", self, "LEFT", x, 0)
-    if metaW > 0 then x = x + metaW + size.gap end
+    self.name:SetPoint("LEFT", self.row, "LEFT", x, 0)
+    if not isSecret(natural) and natural > room and room > 20 then
+        self.name:SetWidth(room)
+    else
+        self.name:SetWidth(0)
+    end
+
+    local prev = self.name
+    if self.meta:GetText() ~= "" then
+        self.meta:ClearAllPoints()
+        self.meta:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
+        prev = self.meta
+    end
     for _, b in ipairs(badges) do
         b:ClearAllPoints()
-        b:SetPoint("LEFT", self, "LEFT", x, 0)
-        x = x + b:GetWidth() + size.gap
+        b:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
+        prev = b
     end
 end
 
