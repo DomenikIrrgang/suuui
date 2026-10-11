@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.3.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.4.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.3.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls |
+| `SuuUI.API_VERSION` | `"0.3.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -66,6 +66,7 @@ local M = SuuUI.RegisterModule({
 | `M:RunOutOfCombat(key, fn)` | Runs `fn` now, or after combat. A later call with the same key replaces a waiting one |
 | `M:RegisterCommand(name, help, fn)` | Adds `/suu <name>`; `fn(rest of the line)` |
 | `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
+| `M:RegisterMover(frame, { key = "position", label })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
 | `M.id`, `M.name`, `M.source`, `M.builtIn`, `M.state` | |
@@ -79,6 +80,7 @@ local M = SuuUI.RegisterModule({
 | `SUUUI_PROFILE_CHANGED` | `profileName` |
 | `SUUUI_MODULE_REGISTERED` / `_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
 | `SUUUI_SETTINGS_SECTIONS_CHANGED` | — |
+| `SUUUI_EDITMODE_CHANGED` | `active` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
 
@@ -175,3 +177,25 @@ Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDi
 | `Stepper(parent, { min, max, step, value, unit, onChange })` | An exact number |
 | `TextField(parent, { width, placeholder, value, onChange, onTextChanged })` | Text; `onChange` on Enter or when it loses focus |
 | `SettingRow(parent, { label, description, control, stacked, onReset, width })`, `SettingsGroup(parent, { title, meta, description, width })` | The pieces sections are made of |
+
+## Edit mode (0.4)
+
+`/suu edit` (or Appearance › Edit layout) shows every registered frame on a snap grid: drag to move, click to select, arrow keys to nudge (Shift: 10px), Hide/Show and Reset on the selected frame, Snap to grid, Grid size and Reset all in the panel. It closes when combat starts and runs beside the game's own Edit Mode.
+
+A frame's position is a setting in its module's namespace, declared in the defaults, so it is saved per profile:
+
+```lua
+defaults = { position = { point = "TOP", x = 0, y = -160 } },
+OnEnable = function(self)
+    self:RegisterMover(self.frame, { key = "position", label = "Hello" })
+end,
+```
+
+`point` is one of the nine screen anchors (`TOPLEFT` … `BOTTOMRIGHT`, `CENTER`) and `x`, `y` the offset of the frame's same point from it, in design pixels; `hidden = true` hides the frame. A dropped frame takes the anchor of the screen third its centre is in, so layouts keep their shape on every resolution. Protected frames are placed after combat.
+
+| | |
+|---|---|
+| `SuuUI.RegisterMover(frame, { namespace, key, label })` | The same for a frame outside a module |
+| `SuuUI.EditMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | |
+
+Settings: `layout.snap`, `layout.gridSize`.

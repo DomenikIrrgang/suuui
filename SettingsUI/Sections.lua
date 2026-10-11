@@ -33,6 +33,13 @@ Registry.Register({
               reset = function() Settings.Reset("ui", "scale") end,
               disabled = function() return scaleIsAuto(), "Turn automatic scale off first." end },
         } },
+        { title = "Layout", rows = {
+            { label = "Move frames", control = "button", text = "Edit layout",
+              description = "Drag SuuUI's frames on a snap grid. Closes by itself when combat starts.",
+              onClick = function()
+                  if ns.EditMode.Enter() then ns.SettingsWindow.Toggle() end
+              end },
+        } },
     },
 })
 

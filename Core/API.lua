@@ -121,3 +121,18 @@ end
 function API.OpenSettings(sectionId)
     ns.SettingsWindow.Open(sectionId)
 end
+
+-- 0.4: edit mode
+
+-- An edit-mode handle for a frame whose position lives in a settings table
+-- (opts.namespace, opts.key); modules use module:RegisterMover instead.
+function API.RegisterMover(frame, opts)
+    return ns.EditMode.Register(frame, opts)
+end
+
+API.EditMode = {
+    Enter = ns.EditMode.Enter,
+    Exit = ns.EditMode.Exit,
+    Toggle = ns.EditMode.Toggle,
+    IsActive = ns.EditMode.IsActive,
+}

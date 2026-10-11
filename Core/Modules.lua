@@ -30,9 +30,9 @@ ns.Modules = Modules
 
 local Events, Settings, Fault, Combat, Util = ns.Events, ns.Settings, ns.Fault, ns.Combat, ns.Util
 
-ns.API_VERSION = "0.3.0"
+ns.API_VERSION = "0.4.0"
 
-local RESERVED = { core = true, ui = true }
+local RESERVED = { core = true, ui = true, layout = true }
 
 local list, byId = {}, {}
 local started = false
@@ -92,6 +92,15 @@ function Module:RegisterSettings(def)
     return ns.SettingsRegistry.Register(def, self)
 end
 
+-- An edit-mode handle for one of the module's frames. opts.key names a
+-- position setting in the module's defaults (default "position").
+function Module:RegisterMover(frame, opts)
+    opts = opts or {}
+    opts.namespace = self.id
+    opts.label = opts.label or self.name
+    return ns.EditMode.Register(frame, opts, self)
+end
+
 function Module:Print(...)
     ns.Print("|cffa39b8b" .. self.name .. ":|r", ...)
 end
@@ -109,6 +118,7 @@ local function cleanup(m)
     Settings.Unwatch(m)
     ns.UnregisterCommands(m)
     if ns.SettingsRegistry then ns.SettingsRegistry.Unregister(m) end
+    if ns.EditMode then ns.EditMode.Unregister(m) end
 end
 
 local function fail(m, phase)

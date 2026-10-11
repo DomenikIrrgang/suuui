@@ -7,6 +7,7 @@
 --   /suu hello               says the greeting
 --   /suu set hello.greeting Well met
 --   /suu disable hello       removes it at once, command and all
+--   /suu edit                drag the Hello frame; it stays where you leave it
 --   /suu set hello.failOnEnable on, then /suu disable hello and /suu enable hello
 --                            shows how a failing plugin is contained
 
@@ -14,10 +15,11 @@ SuuUI.RegisterModule({
     id = "hello",
     name = "Hello",
     description = "An example plugin that says hello.",
-    api = "0.3",
+    api = "0.4",
     defaults = {
         greeting = "Hello from a SuuUI plugin",
         failOnEnable = false,
+        position = { point = "TOP", x = 0, y = -160 },   -- moved in /suu edit
     },
 
     OnInitialize = function(self)
@@ -33,8 +35,22 @@ SuuUI.RegisterModule({
             self:Print(self:Get("greeting"), ("(you changed target %d times)"):format(self.targets))
         end)
 
+        -- A small frame on the screen, built from SuuUI's own components and
+        -- movable in SuuUI's edit mode.
+        if not self.frame then
+            local UI = SuuUI.UI
+            self.frame = UI.Panel(SuuUI.Root, { title = "Hello", meta = "example plugin", width = 220 })
+            self.frame.text = UI.Text(self.frame.body, "body", "ink")
+            self.frame.text:SetPoint("TOPLEFT")
+            self.frame.body:SetHeight(SuuUI.Tokens.type.body.lineHeight)
+        end
+        self.frame.text:SetValue(self:Get("greeting"))
+        self.frame:Show()
+        self:RegisterMover(self.frame, { key = "position", label = "Hello" })
+
         self:Watch("greeting", function(greeting)
             self:Print("New greeting:", greeting)
+            self.frame.text:SetValue(greeting)
         end)
 
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
@@ -62,6 +78,7 @@ SuuUI.RegisterModule({
     end,
 
     OnDisable = function(self)
+        if self.frame then self.frame:Hide() end
         self:Print("Goodbye.")
     end,
 })
