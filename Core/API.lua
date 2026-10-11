@@ -143,3 +143,13 @@ API.UI.UnitFrame = UI.UnitFrame
 API.UI.Flag = UI.Flag               -- a possibly secret boolean as a plain one (secret reads as false)
 API.UI.MeasureText = UI.MeasureText -- text width, safe where anchors make geometry secret
 API.Motion.AlphaTo = ns.Motion.AlphaTo
+
+-- 0.6: anchors and cast bars
+
+-- Modules publish their frames under a name (player, target, targettarget,
+-- focus, pet, boss1 ... boss5); others attach to them. Message:
+-- SUUUI_ANCHOR_CHANGED (name, frame).
+API.PublishAnchor = ns.Anchors.Publish
+API.GetAnchor = ns.Anchors.Get
+
+API.UI.CastBar = UI.CastBar

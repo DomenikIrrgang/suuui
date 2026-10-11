@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.4.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.6.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.3.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode |
+| `SuuUI.API_VERSION` | `"0.3.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors and cast bars |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -81,6 +81,7 @@ local M = SuuUI.RegisterModule({
 | `SUUUI_MODULE_REGISTERED` / `_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
 | `SUUUI_SETTINGS_SECTIONS_CHANGED` | — |
 | `SUUUI_EDITMODE_CHANGED` | `active` |
+| `SUUUI_ANCHOR_CHANGED` | `name, frame` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
 
@@ -199,3 +200,24 @@ end,
 | `SuuUI.EditMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | |
 
 Settings: `layout.snap`, `layout.gridSize`.
+
+## Anchors (0.6)
+
+Modules find each other's frames through published anchors, never through each other's internals.
+
+| | |
+|---|---|
+| `SuuUI.PublishAnchor(name, frame)` | Publishes a frame under a name (`nil` unpublishes) |
+| `SuuUI.GetAnchor(name)` | The frame, or `nil`; listen to `SUUUI_ANCHOR_CHANGED` for changes |
+
+Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames).
+
+## Unit frames and cast bars (0.5, 0.6)
+
+| | |
+|---|---|
+| `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`. See `UI/UnitFrame.lua` for `opts` |
+| `SuuUI.UI.CastBar(parent, unit, { size, width, icon, kick })` | A cast bar; `:Activate()`, `:Deactivate()`, `:SetIconShown(on)`, `:SetKickShown(on)` |
+| `SuuUI.UI.Flag(v)` | A possibly secret boolean as a plain one (secret reads as false). Show from a secret boolean with `region:SetAlphaFromBoolean` instead |
+| `SuuUI.UI.MeasureText(style, text)` | A text's width, measured where no anchor chain can make it secret |
+| `SuuUI.Motion.AlphaTo(frame, alpha, duration)` | Fades to an alpha; works on secure frames in combat |

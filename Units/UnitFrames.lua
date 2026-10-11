@@ -295,12 +295,14 @@ local function build(self)
     -- The boss stack: one holder, moved as one in edit mode.
     local holder = CreateFrame("Frame", "SuuUIBossFrames", SuuUI.Root)
     local w, h = UI.Size("bar-md"), UI.Size("unit-md")
-    holder:SetSize(w, BOSSES * h + (BOSSES - 1) * S["space-5"])
+    -- each boss leaves room under its bar for its cast (space-1, cast-sm)
+    local pitch = h + S["space-1"] + UI.Size("cast-sm") + S["space-5"]
+    holder:SetSize(w, BOSSES * pitch - S["space-5"])
     self.bossHolder, self.bosses = holder, {}
     for i = 1, BOSSES do
         local f = UI.UnitFrame(holder, "boss" .. i, { size = "md", meta = true, name = "SuuUIBoss" .. i .. "Frame" })
         f.metaKind = "level"
-        f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * (h + S["space-5"]))
+        f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * pitch)
         self.bosses[i] = f
         self.allFrames["boss" .. i] = f
     end
@@ -317,6 +319,9 @@ function M:OnEnable()
         self:RegisterMover(self.frames[d.key], { key = d.position, label = d.label })
     end
     self:RegisterMover(self.bossHolder, { key = "bossPosition", label = "Boss frames" })
+    -- Published, so other modules (cast bars, auras) and plugins can attach to them.
+    for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, self.frames[d.key]) end
+    for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, self.bosses[i]) end
     self.bossHolder.suuManagedShow = true
     self:RegisterSettings(SECTION)
     self:UpdateVisibility()

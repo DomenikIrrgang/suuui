@@ -206,7 +206,10 @@ Every step below gives what's built, the boards it implements, how to confirm it
   - A hunter or warlock pet shows with its power.
   - Boss frames appear on a dungeon boss and fade out cleanly after the kill.
 
-### 1.3 Cast bars and swing timer
+### 1.3 Cast bars (1.3a) and swing timer (1.3b)
+
+Split in two increments: 1.3a cast bars (its own module, attached to the unit frames through published anchors), 1.3b the swing timer.
+
 - **Build:**
   - Cast bars for the player (centre stack), target, focus and boss.
   - Interruptibility drawn through `SetAlphaFromBoolean`, with the lock glyph for casts that can't be interrupted.
