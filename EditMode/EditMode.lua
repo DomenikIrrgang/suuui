@@ -43,7 +43,9 @@ local function place(m)
     Combat.Run("mover:" .. m.namespace .. "." .. m.key, function()
         m.frame:ClearAllPoints()
         m.frame:SetPoint(pos.point or "CENTER", root(), pos.point or "CENTER", pos.x or 0, pos.y or 0)
-        m.frame:SetShown(not pos.hidden)
+        -- A frame whose visibility its module manages (a unit frame that shows
+        -- only while its unit exists) reads position.hidden itself.
+        if not m.frame.suuManagedShow then m.frame:SetShown(not pos.hidden) end
     end, m.label)
 end
 

@@ -83,6 +83,37 @@ function Motion.Enter(frame, duration)
     g:Play()
 end
 
+-- Fades `frame` from its current alpha to `to` over `duration` (ease-out).
+-- One shared driver runs every fade, so it also works on secure frames,
+-- whose scripts can't be set in combat (alpha itself is never protected).
+local fades = {}
+local driver = CreateFrame("Frame")
+driver:Hide()
+driver:SetScript("OnUpdate", function(self)
+    local now, any = GetTime(), false
+    for frame, f in pairs(fades) do
+        local t = math.min(1, (now - f.start) / f.duration)
+        local e = 1 - (1 - t) ^ 3
+        frame:SetAlpha(f.from + (f.to - f.from) * e)
+        if t >= 1 then fades[frame] = nil else any = true end
+    end
+    if not any then self:Hide() end
+end)
+
+function Motion.AlphaTo(frame, to, duration)
+    duration = duration or T.duration["dur-slow"]
+    local from = frame:GetAlpha()
+    if reduced() or duration <= 0 or math.abs(from - to) < 0.01 then
+        fades[frame] = nil
+        frame:SetAlpha(to)
+        return
+    end
+    local f = fades[frame]
+    if f and f.to == to then return end
+    fades[frame] = { from = from, to = to, start = GetTime(), duration = duration }
+    driver:Show()
+end
+
 function Motion.Pop(frame)
     Motion.Stop(frame)
     if reduced() then return end

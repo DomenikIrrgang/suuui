@@ -418,6 +418,8 @@ local UNIT_FIELDS = {
     { "health", UnitHealth },
     { "healthMax", UnitHealthMax },
     { "healthPercent", UnitHealthPercent },
+    { "healthPercentScaled", function(u) return UnitHealthPercent(u, true, CurveConstants.ScaleTo100) end },
+    { "powerPercentScaled", function(u) return UnitPowerPercent(u, UnitPowerType(u), true, CurveConstants.ScaleTo100) end },
     { "power", UnitPower },
     { "powerType", UnitPowerType },
     { "absorbs", UnitGetTotalAbsorbs },

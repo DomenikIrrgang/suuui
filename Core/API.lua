@@ -136,3 +136,8 @@ API.EditMode = {
     Toggle = ns.EditMode.Toggle,
     IsActive = ns.EditMode.IsActive,
 }
+
+-- 0.5: unit frames
+
+API.UI.UnitFrame = UI.UnitFrame
+API.Motion.AlphaTo = ns.Motion.AlphaTo
