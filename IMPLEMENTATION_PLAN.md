@@ -141,23 +141,30 @@ Every step below gives what's built, the boards it implements, how to confirm it
 - **Boards:** Alerts and badges (StateBadge), Window frame (shell only), and the Panel, Button, ProgressBar and SectionHeader component pages.
 - **Confirm:** the gallery matches the component previews. Dragging a resizable gallery panel stays smooth, and the debug counter shows SetPoint calls per frame staying flat.
 
-### 0.6 Settings window and edit mode
+### 0.6 Settings window
 - **Build:**
-  - `SettingsWindow` with nav sections and search.
+  - `SettingsWindow` with nav sections and search, opened with `/suu` (no arguments) and from the game menu. The minimap Jewel comes in 2.1.
+  - `SettingRow` and `SettingsGroup`: each row says what it does; a changed row shows an `ink` diamond and a reset arrow; sections count their changes; a disabled row dims and says why.
+  - The controls the existing settings need: Toggle, Checkbox, Segmented, Select (single and multiple), Slider and Stepper. The rest arrive with the first step that uses them: KeybindField (1.6), AnchorPicker (1.4), ListEditor (1.7), ColorPicker and FilterMenu (where a setting first needs them).
   - The **Modules** page: every built-in and plugin module with its toggle, its state (on, off, errored, needs reload) and its source. Each enabled module's settings section appears in the nav, so a plugin's section sits beside the built-in ones.
-  - The public API gains `RegisterSettings` (a section built from a schema with the controls below) and `RegisterMover` (an edit-mode handle).
-  - Every control: Toggle, Checkbox, Segmented, Select (single and multiple), Slider, Stepper, ColorPicker, KeybindField, AnchorPicker, ListEditor and FilterMenu.
-  - `SettingRow` and `SettingsGroup`, with the changed-row diamond, a reset arrow and a disabled-with-reason state.
-  - Profiles with Import/Export.
-  - Edit mode: EditModeFrame handles on a snap grid, mutually exclusive with keybind mode and closed on `PLAYER_REGEN_DISABLED`.
-  - Opened from `/suu` and the game menu. The minimap Jewel comes in 2.1.
-- **Boards:** Settings window, Settings controls, Select and filter menus, Setting rows and groups, Edit mode.
+  - The **General** sections: Appearance (`ui.scale`), Motion (`ui.reducedMotion`) and Profiles (switch, copy, delete, reset, and Import/Export as a text string).
+  - The public API gains `RegisterSettings`: a section built from a schema with the controls above.
+- **Boards:** Settings window, Settings controls, Select and filter menus, Setting rows and groups.
 - **Confirm:**
-  - Every control works and changes apply instantly.
+  - Every control works and changes apply instantly; there is no Apply button.
   - Reset works per row, per section and for everything.
   - An exported profile string, imported on a second character, reproduces the settings.
+  - The example plugin's section works exactly like a built-in one, and turning the plugin off on the Modules page removes it.
+
+### 0.7 Edit mode
+- **Build:**
+  - Edit mode: `EditModeFrame` handles on a snap grid for every SuuUI frame that registers one; positions saved per profile, as offsets from the frame's screen anchor.
+  - Mutually exclusive with keybind mode (1.6), and closed on `PLAYER_REGEN_DISABLED`.
+  - The public API gains `RegisterMover` (an edit-mode handle).
+- **Boards:** Edit mode.
+- **Confirm:**
+  - The gallery's test frame and the example plugin's frame move, snap and stay where they were left after `/reload`.
   - Entering combat closes edit mode cleanly.
-  - The example plugin's section and edit-mode handle work exactly like a built-in one, and turning it off on the Modules page removes both.
 
 > At the end of Phase 0 nothing on the HUD has changed yet, but every later module plugs into tokens, settings, edit mode and the combat queue through the same public API a plugin addon uses.
 
@@ -507,7 +514,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 
 | # | Increment | Depends on |
 |---|---|---|
-| 0.1–0.6 | Scaffold, tokens, core, module system and plugin API, primitives, settings and edit mode | — |
+| 0.1–0.7 | Scaffold, tokens, core, module system and plugin API, primitives, settings window, edit mode | — |
 | 1.1–1.4 | Player and target frames, other unit frames, cast bars and swing timer, auras | 0.x |
 | 1.5–1.7 | Action bars and the Cooldown Manager | 0.x |
 | 1.8–1.10 | Party, raid and nameplates | 1.1, 1.4 |
