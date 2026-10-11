@@ -5,7 +5,8 @@
 --
 -- Placement (2560x1440 reference):
 --   your buffs     top right, left of the minimap (224px from the right
---                  edge, 50px down), growing left; right click cancels
+--                  edge, space-7 down like the minimap's top), growing left;
+--                  right click cancels
 --   your debuffs   above the player frame, right-aligned, growing left
 --   on the target  your debuffs (and, on a friend, your buffs: HoTs,
 --                  shields) above the target frame, growing right
@@ -26,7 +27,7 @@ local M = SuuUI.RegisterModule({
     api = "0.6",
     reloadToToggle = true,
     defaults = {
-        buffPosition = { point = "TOPRIGHT", x = -224, y = -50 },
+        buffPosition = { point = "TOPRIGHT", x = -224, y = -28 },
         showBuffs = true,
         showDebuffs = true,
         showTarget = true,
