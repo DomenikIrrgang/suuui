@@ -140,4 +140,6 @@ API.EditMode = {
 -- 0.5: unit frames
 
 API.UI.UnitFrame = UI.UnitFrame
+API.UI.Flag = UI.Flag               -- a possibly secret boolean as a plain one (secret reads as false)
+API.UI.MeasureText = UI.MeasureText -- text width, safe where anchors make geometry secret
 API.Motion.AlphaTo = ns.Motion.AlphaTo

@@ -68,6 +68,15 @@ function Text:Changed()
     if self.layout then self.layout:Invalidate() end
 end
 
+-- A yes/no from the game as a plain boolean. In combat many unit queries
+-- return a secret boolean, and testing one (if, and, or, not) errors; a
+-- secret answer counts as unknown and reads as false. To show something from
+-- a secret boolean, use region:SetAlphaFromBoolean instead.
+function UI.Flag(v)
+    if issecretvalue and issecretvalue(v) then return false end
+    return v and true or false
+end
+
 -- The width of `text` in a text style, measured on a hidden FontString that
 -- is anchored to nothing. A region anchored after one with secret text (an
 -- enemy's name in combat) reports its own size as secret too, so anything in

@@ -135,7 +135,7 @@ local function buildCombo(target)
         f.pips[i] = { outer = outer, inner = inner, lit = lit }
     end
     function f:Update()
-        local shown = M:Get("comboPoints") and comboClass() and UnitExists("target") and UnitCanAttack("player", "target")
+        local shown = M:Get("comboPoints") and comboClass() and UnitExists("target") and UI.Flag(UnitCanAttack("player", "target"))
         self:SetShown(shown and true or false)
         if not shown then return end
         local n = GetComboPoints and GetComboPoints("player", "target")
@@ -181,7 +181,7 @@ function M:UpdateFade()
         local f = self.frames[d.key]
         if f:IsVisible() and f:IsMouseOver() then hovered = true end
     end
-    local resting = self:Get("fadeOutOfCombat") and not UnitAffectingCombat("player") and playerFull() and not hovered
+    local resting = self:Get("fadeOutOfCombat") and not UI.Flag(UnitAffectingCombat("player")) and playerFull() and not hovered
     local alpha = resting and T.opacity["opacity-ooc"] or 1
     for _, d in ipairs(FRAMES) do
         Motion.AlphaTo(self.frames[d.key], alpha, T.duration["dur-slow"])

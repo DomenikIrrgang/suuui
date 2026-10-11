@@ -209,7 +209,7 @@ function UI.UnitFrame(parent, unit, opts)
     f.badge = UI.StateBadge(f.row, "danger", "")
     f.badge:Hide()
     f.you = UI.StateBadge(f.row, "neutral", "you")
-    f.you:SetShown(opts.you == true)
+    f.you:SetShown(opts.you == true or opts.youWhenPlayer == true)
     f.right = UI.Text(o, "numeric", "ink")
     f.right:SetShadowed(true)
     f.right:SetPoint("RIGHT", -size.pad, 0)
@@ -223,7 +223,7 @@ end
 
 function UF:UpdateHealth(instant)
     local u = self.unit
-    local dead = UnitIsDeadOrGhost(u)
+    local dead = UI.Flag(UnitIsDeadOrGhost(u))
     local max, cur = UnitHealthMax(u), UnitHealth(u)
     for _, b in ipairs({ self.health, self.healthLow, self.ghost, self.incoming, self.absorb }) do
         b:SetMinMaxValues(0, amount(max))
@@ -253,7 +253,7 @@ function UF:UpdateHealth(instant)
     if dead then
         self.right:SetStyle("caption")
         self.right:SetColor("ink-muted")
-        self.right:SetValue(UnitIsGhost(u) and "Ghost" or "Dead")
+        self.right:SetValue(UI.Flag(UnitIsGhost(u)) and "Ghost" or "Dead")
     elseif self.opts.healthText ~= "none" and self.opts.size ~= "sm" then
         self.right:SetStyle("numeric")
         self.right:SetColor("ink")
@@ -316,7 +316,7 @@ function UF:UpdateIdentity()
 
     -- The marker before the name: a role icon, else the class diamond.
     local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(u)
-    local isPlayer = UnitIsPlayer(u)
+    local isPlayer = UI.Flag(UnitIsPlayer(u))
     local _, class = UnitClass(u)
     local classColor = isPlayer and not isSecret(class) and class and T.color["class-" .. class:lower()]
     self.role:Hide()
@@ -362,7 +362,14 @@ function UF:UpdateIdentity()
         self.meta:SetValue(meta and metaText(u) or "")
     end
     if self.opts.youWhenPlayer then
-        self.you:SetShown(UnitIsUnit(u, "player") and true or false)
+        -- "Is it you?" is a secret boolean in combat: the engine sets the
+        -- badge's alpha from it. The badge keeps its place either way.
+        local isYou = UnitIsUnit(u, "player")
+        if issecretvalue and issecretvalue(isYou) then
+            self.you:SetAlphaFromBoolean(isYou, 1, 0)
+        else
+            self.you:SetAlpha(isYou and 1 or 0)
+        end
     end
     self:LayoutRow(marker)
 end
@@ -459,7 +466,7 @@ end
 
 function UF:Refresh()
     if not UnitExists(self.unit) then return end
-    self.dead = UnitIsDeadOrGhost(self.unit)
+    self.dead = UI.Flag(UnitIsDeadOrGhost(self.unit))
     self:UpdateIdentity()
     self:UpdateHealth(true)
     self:UpdatePower()
