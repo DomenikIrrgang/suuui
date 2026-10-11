@@ -221,11 +221,24 @@ local function call(container, names, ...)
     return false
 end
 
+-- The unit goes last, after the groups (it decides which events the
+-- container listens to), followed by a full re-scan.
 function AC:SetUnit(unit)
-    if unit == self.unit then return end
     self.unit = unit
     pcall(self.container.SetUnit, self.container, unit)
+    self:Refresh()
 end
+
+-- A full re-scan. A container doesn't notice when its unit token points at a
+-- new unit (another target, focus or boss): re-scan on those changes.
+function AC:Refresh()
+    pcall(self.container.UpdateAllAuras, self.container)
+end
+
+local RESCAN = {
+    target = "PLAYER_TARGET_CHANGED",
+    focus = "PLAYER_FOCUS_CHANGED",
+}
 
 function AC:SetGroupMax(key, n)
     pcall(self.container.SetAuraGroupMaxFrameCount, self.container, key, n)
@@ -260,5 +273,7 @@ function UI.AuraContainer(parent, unit, opts)
         if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. group.key) end
     end
     self:SetUnit(unit)
+    local event = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT")
+    if event then ns.Events.OnGame(event, function() self:Refresh() end, self) end
     return self
 end
