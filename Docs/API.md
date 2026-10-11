@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.1.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.2.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.1.0"` |
+| `SuuUI.API_VERSION` | `"0.2.0"`. 0.2 added the screen root, components, layouts and motion |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -78,6 +78,7 @@ local M = SuuUI.RegisterModule({
 | `SUUUI_PROFILE_CHANGED` | `profileName` |
 | `SUUUI_MODULE_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
+| `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
 
 ## Design tokens and text
 
@@ -96,3 +97,38 @@ local M = SuuUI.RegisterModule({
 | `SuuUI.Pixel.PerfectScale()` | The effective scale at which one UI unit is one pixel |
 | `SuuUI.SuppressBlizzard(frame, [opts])` | Hides a Blizzard frame by reparenting it, after combat if needed. `opts.unregisterEvents` also stops its events; it then only comes back after a reload |
 | `SuuUI.RestoreBlizzard(frame)` | Gives it back; `false` if only a reload can |
+
+## The screen root (0.2)
+
+| | |
+|---|---|
+| `SuuUI.Root` | The frame every SuuUI frame on the screen lives under. It runs at pixel-perfect scale times `ui.scale`, so one unit is one design pixel: design sizes and offsets from the screen's edges or centre are used as they are. Rescales wait for the end of combat |
+
+Settings in the `ui` namespace: `ui.scale` (0 = automatic: 1 up to 1440p, larger on taller screens; otherwise 0.5–2) and `ui.reducedMotion` (drops decorative motion, keeps every value change).
+
+## Components (0.2)
+
+All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or plain numbers.
+
+| | |
+|---|---|
+| `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only |
+| `SectionHeader(parent, label, meta, width)` | A label on the world with a fading gilt rule; `:SetLabel(label, meta)` |
+| `WindowFrame(parent, { name, title, meta, keybind, width, height, footer, onClose })` | The shell of every full window: draggable, Escape closes it (with a `name`), content in `window.content` (scrolls), optional `window.footer` |
+| `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip })` | `:SetLabel(text)`, `:SetEnabledState(enabled)` |
+| `CloseButton(parent, onClick)`, `KeyChip(parent, key)` | Header pieces |
+| `StateBadge(parent, tone, text)` | Tones: `danger`, `warning`, `magic`, `curse`, `poison`, `disease`, `ward`, `info`, `neutral`; `:SetState(tone, text)` |
+| `Icon(parent, size)` | `:SetArt(texture)`, `:SetState("rest"/"ready"/"dim"/"active")`, `:SetBorder(token)`, `:SetGlow(shadowToken)`, `:SetCount(n)`, `:Pop()` |
+| `StatusBar(parent, { width, height, fill, deep, track, border, ghost })` | `:SetMinMax(min, max)`, `:SetValue(v)` (secret values are fine; the ghost drains after 150ms), `:SetValueNow(v)`, `:SetFill(fill, deep)` |
+| `Text(parent, style, color)` | A FontString in a text style: `:SetValue(v)` (secret-safe, skips unchanged readable values), `:SetStyle`, `:SetColor`, `:SetShadowed`, `:SetFixedWidth`, `:SetVisible` |
+| `ShowTooltip(owner, data)`, `HideTooltip()`, `AttachTooltip(frame, data)`, `TooltipFrame(parent)` | SuuUI's tooltip. `data`: `{ title, titleColor, subtitle, lines = { { left, right } }, description, meta }` |
+
+Drawing helpers: `Fill(parent, color, layer)`, `Border(frame, color, { width, inset, layer })` (stays one physical pixel), `Hairline(parent, color, fade = "out"/"both"/nil)`, `Diamond(parent, size, color)`, `Shadow(frame, shadowToken)`, `SoftEdge(frame)`, `Cross(parent, size, color)`, `RGBA(token[, alpha])`, `Size(token)`.
+
+## Layout and motion (0.2)
+
+| | |
+|---|---|
+| `SuuUI.Layout.Stack(container, { direction, gap, padding, align, autoSize })` | Lays out `:Add(child[, { gapBefore }])`ed children in a row or column, once per frame. Texts whose value may be secret need a fixed width |
+| `SuuUI.Layout.Grid(container, { columns, cellWidth, cellHeight, gap, padding })` | Fixed cells, row by row |
+| `SuuUI.Motion.FadeIn(frame[, duration])`, `.Enter(frame[, duration])`, `.Pop(frame)`, `.Stop(frame)` | The design's presets; nothing animates with `ui.reducedMotion` on |

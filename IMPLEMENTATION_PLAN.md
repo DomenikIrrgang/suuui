@@ -36,7 +36,7 @@ These come from probe runs on 2026-10-11, build 1.60.1.70338: solo in the open w
 | Quests and map | `C_QuestLog.GetQuestsOnMap`, `C_QuestLine`, `C_TaskQuest`, `C_SuperTrack`, retail's `ObjectiveTrackerFrame` | Quest pins can use the game's own data |
 | Professions, Group Finder, social, bags, tooltips | `C_TradeSkillUI`, `C_ProfSpecs`, `C_LFGList`, `C_FriendList`, `C_Club`, `C_Container`, `C_Bank`, `TooltipDataProcessor`, `C_TooltipInfo` | Retail APIs throughout |
 | Game type | `C_GameRules` and `Enum.GameMode` exist | Detect Forever through these if the TOC gate ever isn't enough |
-| Your screen | 1920×1080, UI scale 0.71, `useUiScale` off | The design is drawn for 2560×1440. Step 0.5 decides how its pixel sizes map to other screens |
+| Your screen | 1920×1080, UI scale 0.71, `useUiScale` off | The design is drawn for 2560×1440. Decided in 0.5: one design pixel is one physical pixel, so sizes stay as designed and only the gaps between clusters shrink |
 
 ---
 
@@ -134,7 +134,7 @@ Every step below gives what's built, the boards it implements, how to confirm it
     - StatusBar that accepts secret values, colours through a curve, and draws a ghost segment.
     - Button, Tooltip shell, and the glow effects (`glow-arcane`, `glow-ember`, `glow-ward`).
   - A layout engine that uses `Invalidate()` plus a per-frame flush, with stack, grid and anchor strategies.
-  - Anchoring by cluster: positions are expressed from an edge or the centre, using the 2560×1440 reference.
+  - Anchoring by cluster: positions are expressed from an edge or the centre, using the 2560×1440 reference. **Decided:** `SuuUI.Root` runs at pixel-perfect scale, so one design pixel is one physical pixel; on other resolutions the frames keep their size and only the gaps between clusters change. `ui.scale` multiplies it (automatic: 1 up to 1440p, larger above).
   - Animation presets from the Motion table, including the reduced-motion switch.
   - Tokens, fonts, primitives and the layout engine are added to the public API.
   - **`/suu gallery`** shows all of them.

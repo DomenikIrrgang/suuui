@@ -49,3 +49,52 @@ API.Pixel = {
 -- Blizzard frames
 API.SuppressBlizzard = ns.SuppressBlizzard
 API.RestoreBlizzard = ns.RestoreBlizzard
+
+-- 0.2: the screen root, components, layouts and motion
+
+-- Every SuuUI frame on the screen lives under SuuUI.Root. One unit there is
+-- one design pixel (a physical pixel times ui.scale), so design sizes and
+-- offsets from the screen's edges or centre are used as they are.
+API.Root = ns.Root
+
+local UI = ns.UI
+API.UI = {
+    -- components
+    Panel = UI.Panel,
+    SectionHeader = UI.SectionHeader,
+    WindowFrame = UI.WindowFrame,
+    Button = UI.Button,
+    CloseButton = UI.CloseButton,
+    KeyChip = UI.KeyChip,
+    StateBadge = UI.StateBadge,
+    Icon = UI.Icon,
+    StatusBar = UI.StatusBar,
+    Text = UI.Text,
+    -- the tooltip
+    ShowTooltip = UI.ShowTooltip,
+    HideTooltip = UI.HideTooltip,
+    AttachTooltip = UI.AttachTooltip,
+    TooltipFrame = UI.TooltipFrame,
+    -- drawing
+    Fill = UI.Fill,
+    Border = UI.Border,
+    Hairline = UI.Hairline,
+    Diamond = UI.Diamond,
+    Shadow = UI.Shadow,
+    SoftEdge = UI.SoftEdge,
+    Cross = UI.Cross,
+    RGBA = UI.RGBA,
+    Size = UI.Size,
+}
+
+API.Layout = {
+    Stack = ns.Layout.Stack,
+    Grid = ns.Layout.Grid,
+}
+
+API.Motion = {
+    FadeIn = ns.Motion.FadeIn,
+    Enter = ns.Motion.Enter,
+    Pop = ns.Motion.Pop,
+    Stop = ns.Motion.Stop,
+}
