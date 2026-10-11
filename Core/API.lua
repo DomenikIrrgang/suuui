@@ -154,3 +154,6 @@ API.GetAnchor = ns.Anchors.Get
 
 API.UI.CastBar = UI.CastBar
 API.UI.SwingTimer = UI.SwingTimer
+
+-- 0.7: auras (engine aura containers, styled as the design's AuraIcon)
+API.UI.AuraContainer = UI.AuraContainer
