@@ -9,6 +9,36 @@ Sources of truth:
 
 ---
 
+## Client facts (from `/suu probe`)
+
+These come from the first probe run on 2026-10-11: build 1.60.1.70338, solo and out of combat in Tirisfal Glades at level 1. They replace the design's "unconfirmed on Forever" notes. Run the probe again in a dungeon fight and a raid to fill in the combat column.
+
+| Topic | Finding | What it means for the build |
+|---|---|---|
+| **Health and power** | **Secret even out of combat**, solo in the open world, for the player and nameplates alike. `UnitHealthPercent` is secret too | The design's table says "full" out of combat; on Forever it isn't. Treat health and power as secret **everywhere**: fills through `StatusBar`, the low-health fill and tint through colour curves, % text through secret-safe formatting. Fading to `opacity-ooc` "with everyone full" can't compare health, so it has to come from combat state, or from a curve if alpha can take one (to verify in 1.1) |
+| Unit names | Readable | Names, class colours and role icons need no special handling |
+| Secret-value tools | All present: `issecretvalue`, `canaccessvalue`, `issecrettable`, colour curves, `EvaluateColorValueFromBoolean`, duration objects, `SetAlphaFromBoolean`, `SetVertexColorFromBoolean`, `StatusBar:SetTimerDuration`, `Cooldown:SetCooldownFromDurationObject` | The design's restricted-API patterns are all available |
+| Heal prediction, absorbs, auras | Calculator, absorbs, `C_UnitAuras` (including `GetAuraDuration`) and `GetAuraDispelTypeColor` all present | Incoming heals, shields and dispel badges are buildable. Whether dispel types read in combat is still to check |
+| Casts, threat | `UnitCastingDuration`/`UnitChannelDuration`, `UnitThreatSituation`, `UnitDetailedThreatSituation` present | Cast bars, interrupt state and threat as designed |
+| Your own cooldowns | Spell 29515 (Forever's global cooldown reference) is readable; 61304 doesn't exist here | Use 29515 for the GCD |
+| Swing timer | `C_SwingTimer` (2 functions), `Enum.PlayerSwingType`, `Blizzard_SwingTimer` loaded | As designed |
+| Cooldown Manager | `C_CooldownViewer`, all four viewer frames, `Blizzard_CooldownViewer` loaded | As designed |
+| Damage meter | `C_DamageMeter` (8 functions), 11 meter types, 3 session types | As designed |
+| **Encounter timeline** | **Exists**: `C_EncounterTimeline` (34 functions); `Blizzard_EncounterTimeline` loads on demand | Step 1.13's timeline is buildable, no longer a maybe |
+| **Action bars** | **8 bars**: `MainActionBar` plus `MultiBarBottomLeft`, `BottomRight`, `Right`, `Left`, `MultiBar5`–`7`. No `MultiBar8`, no `MainMenuBar`. `StanceBar`, `PetActionBar`, Edit Mode bar enum with 11 values | Bars 1–8 as designed; bar 1 is `MainActionBar` |
+| Edit Mode | `C_EditMode`, `EditModeManagerFrame` | Native, as designed |
+| Group sync | Addon messages present, plus `InChatMessagingLockdown` and `AreOutgoingAddonChatMessagesRestricted` | Readiness checks the second before sending, instead of guessing from encounter state |
+| Specializations | `GetSpecialization` is **absent**; `C_SpecializationInfo`, `C_ClassTalents`, `C_Traits` present | Read the spec through `C_SpecializationInfo` |
+| Spellbook and talents | `Blizzard_PlayerSpells` loads on demand; no `SpellBookFrame`, no `Blizzard_TalentUI` | Spellbook and talents are retail's combined `PlayerSpellsFrame` (step 3.2) |
+| Legacy | Blizzard UI exists: `LegacyMicroButton`, `LegacyChallengeViewedUtil`, and more (full list in the saved probe data) | Step 3.2 restyles Blizzard's Legacy window |
+| Campfires | No camping API or frame | As the design expected: auras and item cooldowns only |
+| Quests and map | `C_QuestLog.GetQuestsOnMap`, `C_QuestLine`, `C_TaskQuest`, `C_SuperTrack`, retail's `ObjectiveTrackerFrame` | Quest pins can use the game's own data |
+| Professions, Group Finder, social, bags, tooltips | `C_TradeSkillUI`, `C_ProfSpecs`, `C_LFGList`, `C_FriendList`, `C_Club`, `C_Container`, `C_Bank`, `TooltipDataProcessor`, `C_TooltipInfo` | Retail APIs throughout |
+| Game type | `C_GameRules` and `Enum.GameMode` exist | Detect Forever through these if the TOC gate ever isn't enough |
+| Your screen | 1920×1080, UI scale 0.71, `useUiScale` off | The design is drawn for 2560×1440. Step 0.5 decides how its pixel sizes map to other screens |
+
+---
+
 ## Architecture
 
 SuuUI is written from scratch for this client. The design system is the only input besides the client's own API.
