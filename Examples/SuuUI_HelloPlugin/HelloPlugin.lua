@@ -2,6 +2,7 @@
 -- A minimal SuuUI plugin: one module with a setting, a chat command, a game
 -- event and a message. Copy this folder to Interface/AddOns to try it.
 --
+--   /suu                     its section is under Plugins in the settings window
 --   /suu modules             lists it next to SuuUI's own modules
 --   /suu hello               says the greeting
 --   /suu set hello.greeting Well met
@@ -13,7 +14,7 @@ SuuUI.RegisterModule({
     id = "hello",
     name = "Hello",
     description = "An example plugin that says hello.",
-    api = "0.1",
+    api = "0.3",
     defaults = {
         greeting = "Hello from a SuuUI plugin",
         failOnEnable = false,
@@ -43,6 +44,19 @@ SuuUI.RegisterModule({
         self:On("SUUUI_MODULE_ENABLED", function(_, id)
             if id ~= self.id then self:Print("Another module turned on:", id) end
         end)
+
+        -- A section in SuuUI's settings window, beside the built-in ones.
+        self:RegisterSettings({
+            id = "hello", label = "Hello",
+            groups = {
+                { title = "Greeting", description = "An example plugin's own settings.", rows = {
+                    { key = "greeting", label = "Greeting", control = "text", width = 240,
+                      description = "What /suu hello says." },
+                    { key = "failOnEnable", label = "Fail on enable", control = "toggle",
+                      description = "Makes the plugin fail the next time it turns on, to show how SuuUI contains a broken plugin." },
+                } },
+            },
+        })
 
         self:Print(self:Get("greeting"))
     end,

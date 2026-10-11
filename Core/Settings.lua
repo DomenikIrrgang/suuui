@@ -280,6 +280,64 @@ function Profiles.Delete(text)
     return true
 end
 
+-- Replaces the current profile's values with a copy of another profile's,
+-- and tells the watchers of every registered setting that changed.
+function Profiles.CopyFrom(text)
+    local name, err = Profiles.Find(text)
+    if not name then return false, err end
+    if name == Profiles.Current() then return true end
+    local data, changed = Copy(db.profiles[name]), {}
+    for namespace, defs in pairs(defaults) do
+        for key in pairs(defs) do
+            if not Equal(stored(profile, namespace, key), stored(data, namespace, key)) then
+                changed[#changed + 1] = { namespace, key }
+            end
+        end
+    end
+    wipe(profile)
+    for k, v in pairs(data) do profile[k] = v end
+    for _, c in ipairs(changed) do notify(c[1], c[2]) end
+    Events.Emit("SUUUI_PROFILE_CHANGED", Profiles.Current())
+    return true
+end
+
+-- A copy of a profile's stored values, for export.
+function Profiles.Export(text)
+    local name, err = Profiles.Find(text or Profiles.Current())
+    if not name then return nil, err end
+    return { name = name, data = Copy(db.profiles[name]) }
+end
+
+-- Keeps plain data only, and for registered settings only values of the
+-- default's type. Namespaces SuuUI doesn't know (a plugin that isn't
+-- installed here) are kept as they are.
+local function sanitize(data)
+    local out = {}
+    if type(data) ~= "table" then return out end
+    for namespace, values in pairs(data) do
+        if type(namespace) == "string" and type(values) == "table" then
+            local defs = defaults[namespace]
+            for key, v in pairs(values) do
+                local ok = type(key) == "string"
+                if ok and defs and defs[key] ~= nil then ok = type(v) == type(defs[key]) end
+                if ok then
+                    out[namespace] = out[namespace] or {}
+                    out[namespace][key] = Copy(v)
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- A new profile from exported data; switches to it.
+function Profiles.Import(name, data)
+    local ok, err = Profiles.Create(name)
+    if not ok then return false, err end
+    db.profiles[strtrim(name)] = sanitize(data)
+    return Profiles.Use(strtrim(name))
+end
+
 local function bind()
     SuuUIDB = SuuUIDB or {}
     db = SuuUIDB

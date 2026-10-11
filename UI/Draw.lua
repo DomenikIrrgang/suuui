@@ -136,8 +136,8 @@ end
 -- active tabs, class diamonds).
 --------------------------------------------------------------------------------
 
-function UI.Diamond(parent, size, color, layer)
-    local t = parent:CreateTexture(nil, layer or "OVERLAY", nil, 7)
+function UI.Diamond(parent, size, color, layer, sublevel)
+    local t = parent:CreateTexture(nil, layer or "OVERLAY", nil, sublevel or 7)
     t:SetTexture(WHITE)
     t:SetVertexColor(UI.RGBA(color or "gilt"))
     t:SetSize(size, size)

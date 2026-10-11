@@ -98,3 +98,26 @@ API.Motion = {
     Pop = ns.Motion.Pop,
     Stop = ns.Motion.Stop,
 }
+
+-- 0.3: settings controls and the settings window
+
+API.UI.Toggle = UI.Toggle
+API.UI.Checkbox = UI.Checkbox
+API.UI.Segmented = UI.Segmented
+API.UI.Select = UI.Select
+API.UI.Slider = UI.Slider
+API.UI.Stepper = UI.Stepper
+API.UI.TextField = UI.TextField
+API.UI.SettingRow = UI.SettingRow
+API.UI.SettingsGroup = UI.SettingsGroup
+
+-- A settings section that is always there (a module uses module:RegisterSettings,
+-- whose section goes away with the module). See SettingsUI/Registry.lua.
+function API.RegisterSettings(def)
+    return ns.SettingsRegistry.Register(def)
+end
+
+-- Opens the settings window, at a section if given.
+function API.OpenSettings(sectionId)
+    ns.SettingsWindow.Open(sectionId)
+end

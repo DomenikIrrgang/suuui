@@ -22,9 +22,10 @@ end
 --------------------------------------------------------------------------------
 -- Slash commands
 --
--- Core files and modules add subcommands with ns.RegisterCommand; "/suu" alone
--- lists them in registration order. A command registered with an owner (a
--- module) is removed again with ns.UnregisterCommands(owner).
+-- Core files and modules add subcommands with ns.RegisterCommand. "/suu"
+-- alone opens the settings window; "/suu help" lists the commands in
+-- registration order. A command registered with an owner (a module) is
+-- removed again with ns.UnregisterCommands(owner).
 --------------------------------------------------------------------------------
 
 local commands, order = {}, {}
@@ -65,14 +66,16 @@ SlashCmdList.SUUUI = function(msg)
     local name, rest = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
     name = name:lower()
     local cmd = commands[name]
-    if cmd then
+    if name == "" and ns.SettingsWindow then
+        ns.SettingsWindow.Toggle()
+    elseif cmd then
         if ns.Fault then
             ns.Fault.Call("/suu " .. name, cmd.fn, rest)
         else
             cmd.fn(rest)
         end
     else
-        if name ~= "" and name ~= "help" then
+        if name ~= "help" then
             ns.Print(("Unknown command \"%s\"."):format(name))
         end
         showHelp()

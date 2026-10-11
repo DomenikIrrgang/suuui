@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.2.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.3.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.2.0"`. 0.2 added the screen root, components, layouts and motion |
+| `SuuUI.API_VERSION` | `"0.3.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -65,6 +65,7 @@ local M = SuuUI.RegisterModule({
 |---|---|
 | `M:RunOutOfCombat(key, fn)` | Runs `fn` now, or after combat. A later call with the same key replaces a waiting one |
 | `M:RegisterCommand(name, help, fn)` | Adds `/suu <name>`; `fn(rest of the line)` |
+| `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
 | `M.id`, `M.name`, `M.source`, `M.builtIn`, `M.state` | |
@@ -76,7 +77,8 @@ local M = SuuUI.RegisterModule({
 | `SUUUI_SETTINGS_READY` | — |
 | `SUUUI_SETTING_CHANGED` | `namespace, key` |
 | `SUUUI_PROFILE_CHANGED` | `profileName` |
-| `SUUUI_MODULE_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
+| `SUUUI_MODULE_REGISTERED` / `_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
+| `SUUUI_SETTINGS_SECTIONS_CHANGED` | — |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
 
@@ -132,3 +134,44 @@ Drawing helpers: `Fill(parent, color, layer)`, `Border(frame, color, { width, in
 | `SuuUI.Layout.Stack(container, { direction, gap, padding, align, autoSize })` | Lays out `:Add(child[, { gapBefore }])`ed children in a row or column, once per frame. Texts whose value may be secret need a fixed width |
 | `SuuUI.Layout.Grid(container, { columns, cellWidth, cellHeight, gap, padding })` | Fixed cells, row by row |
 | `SuuUI.Motion.FadeIn(frame[, duration])`, `.Enter(frame[, duration])`, `.Pop(frame)`, `.Stop(frame)` | The design's presets; nothing animates with `ui.reducedMotion` on |
+
+## The settings window (0.3)
+
+`/suu` opens it; so do the "SuuUI settings" button under the game menu and `SuuUI.OpenSettings([sectionId])`.
+
+A section is plain data. `module:RegisterSettings(section)` ties it to the module (namespace = the module's id); `SuuUI.RegisterSettings(section)` registers one that is always there.
+
+```lua
+M:RegisterSettings({
+    id = "hello", label = "Hello",
+    category = "Plugins",          -- Frames, Insights, World, General or Plugins (the default)
+    order = 100,
+    groups = {
+        { title = "Greeting", description = "…", rows = {
+            { key = "greeting", label = "Greeting", control = "text", description = "What /suu hello says." },
+            { key = "size", label = "Size", control = "slider", min = 16, max = 32, step = 2, unit = "px" },
+            { key = "mode", label = "Mode", control = "segmented",
+              options = { { value = "a", label = "A" }, { value = "b", label = "B" } } },
+            { key = "on", label = "Something", control = "toggle",
+              disabled = function() return not SuuUI.GetModule("hello"):Get("size"), "Why it's off." end },
+        } },
+    },
+    build = function(page) end,    -- optional: page:AddGroup(groupDef), page:Clear(), page:Refresh()
+    preview = function(parent) return frame end,  -- optional live preview (scaled to fit 320px)
+})
+```
+
+A row: `key` (or `get`, `set`, `isDefault`, `reset` functions), `label`, `description` (a string or a function), `control` (`toggle`, `checkbox`, `segmented`, `select`, `slider`, `stepper`, `text`, `button`, `custom`), the control's options (`options` (a list or a function), `multiple`, `min`, `max`, `step`, `unit`, `format`, `width`, `placeholder`, `text`, `onClick`, `build`), `stacked`, and `disabled = function() return disabled, reason end`. Rows update live, show a diamond and a reset arrow when changed, and are found by the window's search.
+
+Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDisabled(disabled)`:
+
+| | |
+|---|---|
+| `Toggle(parent, { value, onChange })` | On or off |
+| `Checkbox(parent, { label, value, onChange })` | Several things that can all be on |
+| `Segmented(parent, { options, value, onChange })` | One of two to five named options |
+| `Select(parent, { options, value, onChange, multiple, width, placeholder, maxShown })` | One (or several) of a longer list; `:SetOptions(options)` |
+| `Slider(parent, { min, max, step, value, unit, format, width, onChange })` | A size or amount you judge by eye |
+| `Stepper(parent, { min, max, step, value, unit, onChange })` | An exact number |
+| `TextField(parent, { width, placeholder, value, onChange, onTextChanged })` | Text; `onChange` on Enter or when it loses focus |
+| `SettingRow(parent, { label, description, control, stacked, onReset, width })`, `SettingsGroup(parent, { title, meta, description, width })` | The pieces sections are made of |

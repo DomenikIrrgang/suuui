@@ -30,7 +30,7 @@ ns.Modules = Modules
 
 local Events, Settings, Fault, Combat, Util = ns.Events, ns.Settings, ns.Fault, ns.Combat, ns.Util
 
-ns.API_VERSION = "0.2.0"
+ns.API_VERSION = "0.3.0"
 
 local RESERVED = { core = true, ui = true }
 
@@ -85,6 +85,13 @@ function Module:RegisterCommand(name, help, fn)
     ns.RegisterCommand(name, help, fn, self)
 end
 
+-- A settings section for this module: its rows read and write the module's
+-- own namespace, and the section goes away when the module turns off.
+function Module:RegisterSettings(def)
+    def.namespace = def.namespace or self.id
+    return ns.SettingsRegistry.Register(def, self)
+end
+
 function Module:Print(...)
     ns.Print("|cffa39b8b" .. self.name .. ":|r", ...)
 end
@@ -101,6 +108,7 @@ local function cleanup(m)
     Events.OffAll(m)
     Settings.Unwatch(m)
     ns.UnregisterCommands(m)
+    if ns.SettingsRegistry then ns.SettingsRegistry.Unregister(m) end
 end
 
 local function fail(m, phase)
@@ -207,6 +215,7 @@ function Modules.Register(def)
 
     list[#list + 1] = m
     byId[id] = m
+    Events.Emit("SUUUI_MODULE_REGISTERED", id)
     if started then start(m) end
     return m
 end
