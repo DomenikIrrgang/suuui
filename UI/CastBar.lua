@@ -34,15 +34,16 @@ local isSecret = issecretvalue or function() return false end
 -- Your interrupt: the first of your class's interrupts you know.
 --------------------------------------------------------------------------------
 
+-- Per class, interrupt families in order of preference, each with its ranks.
 local INTERRUPTS = {
-    ROGUE = { 1766, 1767, 1768, 1769 },                                  -- Kick
-    WARRIOR = { 6552, 6554, 72, 1671, 1672 },                            -- Pummel, Shield Bash
-    SHAMAN = { 8042, 8044, 8045, 8046, 10412, 10413, 10414 },            -- Earth Shock
-    MAGE = { 2139 },                                                     -- Counterspell
-    PRIEST = { 15487 },                                                  -- Silence
-    PALADIN = { 853, 5588, 5589, 10308 },                                -- Hammer of Justice
-    DRUID = { 5211, 6798, 8983 },                                        -- Bash
-    HUNTER = { 19503 },                                                  -- Scatter Shot
+    ROGUE = { { 1766, 1767, 1768, 1769 } },                              -- Kick
+    WARRIOR = { { 6552, 6554 }, { 72, 1671, 1672 } },                    -- Pummel, then Shield Bash
+    SHAMAN = { { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } },        -- Earth Shock
+    MAGE = { { 2139 } },                                                 -- Counterspell
+    PRIEST = { { 15487 } },                                              -- Silence
+    PALADIN = { { 853, 5588, 5589, 10308 } },                            -- Hammer of Justice
+    DRUID = { { 5211, 6798, 8983 } },                                    -- Bash
+    HUNTER = { { 19503 } },                                              -- Scatter Shot
 }
 
 -- Each interrupt's own cooldown in seconds, if the client can't tell us
@@ -60,22 +61,28 @@ ns.Interrupt = Interrupt
 
 local function isInterrupt(id)
     local _, class = UnitClass("player")
-    for _, x in ipairs(INTERRUPTS[class] or {}) do
-        if x == id then return true end
+    for _, family in ipairs(INTERRUPTS[class] or {}) do
+        for _, x in ipairs(family) do
+            if x == id then return true end
+        end
     end
     return false
 end
 
+local function known(id)
+    return (IsPlayerSpell and IsPlayerSpell(id)) or (IsSpellKnown and IsSpellKnown(id))
+end
+
+-- The highest known rank of the first family you know (Pummel before Shield Bash).
 function Interrupt.Find()
     local _, class = UnitClass("player")
     Interrupt.spell = nil
-    local list = INTERRUPTS[class] or {}
-    -- the highest rank you know
-    for i = #list, 1, -1 do
-        local id = list[i]
-        if (IsPlayerSpell and IsPlayerSpell(id)) or (IsSpellKnown and IsSpellKnown(id)) then
-            Interrupt.spell = id
-            break
+    for _, family in ipairs(INTERRUPTS[class] or {}) do
+        for i = #family, 1, -1 do
+            if known(family[i]) then
+                Interrupt.spell = family[i]
+                return
+            end
         end
     end
 end
@@ -198,9 +205,9 @@ function UI.CastBar(parent, unit, opts)
         f.arcaneEdge:SetAllPoints(bar)
         UI.Border(f.arcaneEdge, "arcane")
         if f.icon then
-            local iconEdge = CreateFrame("Frame", nil, host)
-            iconEdge:SetAllPoints(f.icon)
-            UI.Border(iconEdge, "arcane")
+            f.iconEdge = CreateFrame("Frame", nil, host)
+            f.iconEdge:SetAllPoints(f.icon)
+            UI.Border(f.iconEdge, "arcane")
         end
         f.glow = UI.Shadow(f.arcaneEdge, "glow-arcane")
         -- the lock, on its own host, shown when the cast can't be interrupted
@@ -259,6 +266,7 @@ end
 function CB:Arrange()
     local x = (self.icon and self.iconShown) and self.h or 0
     if self.icon then self.icon:SetShown(self.iconShown) end
+    if self.iconEdge then self.iconEdge:SetShown(self.iconShown) end
     self.bar:ClearAllPoints()
     self.bar:SetPoint("TOPLEFT", x, 0)
     self.bar:SetPoint("BOTTOMRIGHT")
@@ -294,6 +302,15 @@ end
 function CB:Tick()
     local d = self.duration
     if not d then return end
+    -- A missed stop event (a unit that despawns mid-cast) never leaves a bar
+    -- standing: a few times a second, check the cast still runs.
+    local now = GetTime()
+    if now - (self.lastCheck or 0) > 0.25 then
+        self.lastCheck = now
+        if not (UnitExists(self.unit) and (UnitCastingDuration(self.unit) or UnitChannelDuration(self.unit))) then
+            return self:Stop()
+        end
+    end
     local remaining = d:GetRemainingDuration()
     self.time:SetFormattedText("%.1fs", remaining)
     self.time.value = nil

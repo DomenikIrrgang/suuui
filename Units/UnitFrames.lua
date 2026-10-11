@@ -357,6 +357,9 @@ end
 function M:OnDisable()
     -- Only reached when the module errors: the module toggles on reload.
     if self.frames then
+        -- Withdraw the anchors, so nothing stays attached to frames that are gone.
+        for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, nil) end
+        for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, nil) end
         for _, f in pairs(self.allFrames) do
             f:Deactivate()
             UnregisterUnitWatch(f)

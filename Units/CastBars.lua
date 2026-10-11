@@ -35,6 +35,9 @@ local ATTACH = {
     target = "showTarget", focus = "showFocus",
     boss1 = "showBoss", boss2 = "showBoss", boss3 = "showBoss", boss4 = "showBoss", boss5 = "showBoss",
 }
+-- Each attached bar is as wide as its unit's bar (the size tokens, never a
+-- size read back from the frame).
+local WIDTH = { target = "bar-lg" }
 
 function M:Attach(name, frame)
     local key = ATTACH[name]
@@ -45,7 +48,7 @@ function M:Attach(name, frame)
         return
     end
     if not bar then
-        bar = UI.CastBar(frame, name, { size = "sm", width = frame:GetWidth(), name = "SuuUI" .. name .. "CastBar" })
+        bar = UI.CastBar(frame, name, { size = "sm", width = WIDTH[name] or "bar-md", name = "SuuUI" .. name .. "CastBar" })
         self.attached[name] = bar
     end
     bar:SetParent(frame)
@@ -59,7 +62,15 @@ end
 function M:ApplyOptions()
     for name in pairs(ATTACH) do self:Attach(name, SuuUI.GetAnchor(name)) end
     self.player:SetIconShown(self:Get("showIcon"))
-    if self:Get("showPlayer") then self.player:Activate() else self.player:Deactivate() end
+    -- Your cast bar runs unless it is turned off or hidden in edit mode.
+    if self:Get("showPlayer") and not self:Get("playerPosition").hidden then
+        -- (also when turned on mid-session: Blizzard's must not show beside it)
+        SuuUI.SuppressBlizzard("PlayerCastingBarFrame")
+        SuuUI.SuppressBlizzard("PetCastingBarFrame")
+        self.player:Activate()
+    else
+        self.player:Deactivate()
+    end
 end
 
 local SECTION = {
@@ -95,7 +106,7 @@ function M:OnEnable()
     self:ApplyOptions()
 
     self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
-    for _, key in ipairs({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick" }) do
+    for _, key in ipairs({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "playerPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
 end
