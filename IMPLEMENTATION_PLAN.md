@@ -11,16 +11,16 @@ Sources of truth:
 
 ## Client facts (from `/suu probe`)
 
-These come from the first probe run on 2026-10-11: build 1.60.1.70338, solo and out of combat in Tirisfal Glades at level 1. They replace the design's "unconfirmed on Forever" notes. Run the probe again in a dungeon fight and a raid to fill in the combat column.
+These come from probe runs on 2026-10-11, build 1.60.1.70338: solo in the open world (Tirisfal Glades), and solo in a dungeon (Wailing Caverns) both between pulls and fighting trash. They replace the design's "unconfirmed on Forever" notes. Still to probe: a boss encounter, a group, and a raid.
 
 | Topic | Finding | What it means for the build |
 |---|---|---|
 | **Health and power** | **Secret even out of combat**, solo in the open world, for the player and nameplates alike. `UnitHealthPercent` is secret too | The design's table says "full" out of combat; on Forever it isn't. Treat health and power as secret **everywhere**: fills through `StatusBar`, the low-health fill and tint through colour curves, % text through secret-safe formatting. Fading to `opacity-ooc` "with everyone full" can't compare health, so it has to come from combat state, or from a curve if alpha can take one (to verify in 1.1) |
-| Unit names | Readable | Names, class colours and role icons need no special handling |
+| Unit names | Your own name is always readable. **Enemy names (target, nameplates) are secret in dungeon combat** and readable out of it | Names go straight to `FontString:SetText`, which takes secret values. Never truncate, measure or compare a name in code: let the FontString clip it |
 | Secret-value tools | All present: `issecretvalue`, `canaccessvalue`, `issecrettable`, colour curves, `EvaluateColorValueFromBoolean`, duration objects, `SetAlphaFromBoolean`, `SetVertexColorFromBoolean`, `StatusBar:SetTimerDuration`, `Cooldown:SetCooldownFromDurationObject` | The design's restricted-API patterns are all available |
-| Heal prediction, absorbs, auras | Calculator, absorbs, `C_UnitAuras` (including `GetAuraDuration`) and `GetAuraDispelTypeColor` all present | Incoming heals, shields and dispel badges are buildable. Whether dispel types read in combat is still to check |
-| Casts, threat | `UnitCastingDuration`/`UnitChannelDuration`, `UnitThreatSituation`, `UnitDetailedThreatSituation` present | Cast bars, interrupt state and threat as designed |
-| Your own cooldowns | Spell 29515 (Forever's global cooldown reference) is readable; 61304 doesn't exist here | Use 29515 for the GCD |
+| Heal prediction, absorbs, auras | Calculator, absorbs, `C_UnitAuras` (including `GetAuraDuration`) and `GetAuraDispelTypeColor` all present. Auras read fine out of combat; **`GetAuraDataByIndex` raises an error in dungeon combat** for the player, the target and nameplates | Auras can't be read by index in combat. The probe from 0.0.3 tries the slot and list APIs and records the error; pick the aura path from that before step 1.4 |
+| Casts, threat | `UnitCastingDuration`/`UnitChannelDuration`, `UnitThreatSituation`, `UnitDetailedThreatSituation` present. Threat is **readable in dungeon combat** on the target and nameplates | Threat borders, badges and the threat meter as designed. Cast bars as designed; interrupt state still depends on the cooldown question above |
+| Your own cooldowns | Spell 29515 (Forever's global cooldown reference) is readable out of combat; 61304 doesn't exist here. **In dungeon combat, 29515's start and duration are secret** | The design says your own cooldowns are never hidden; on Forever they are, at least the GCD. Drive swipes and timers from duration objects (`SetCooldownFromDurationObject`), and find a readable "is it ready" signal before building the interrupt glyph and the Cooldown Manager's ready flash. The 0.0.3 probe samples real action-bar cooldowns field by field |
 | Swing timer | `C_SwingTimer` (2 functions), `Enum.PlayerSwingType`, `Blizzard_SwingTimer` loaded | As designed |
 | Cooldown Manager | `C_CooldownViewer`, all four viewer frames, `Blizzard_CooldownViewer` loaded | As designed |
 | Damage meter | `C_DamageMeter` (8 functions), 11 meter types, 3 session types | As designed |
