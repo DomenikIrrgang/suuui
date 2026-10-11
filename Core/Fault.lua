@@ -35,6 +35,16 @@ function Fault.Report(source, message, stack)
         byKey[old.source .. "\0" .. old.message] = nil
     end
     ns.Print(("|cffff9a80%s hit an error and was skipped:|r %s  (/suu errors)"):format(source, message))
+
+    -- Kept in the saved variables too (written on /reload or logout), so the
+    -- errors of a session can be read outside the game.
+    if type(SuuUIDB) == "table" then
+        SuuUIDB.errors = SuuUIDB.errors or {}
+        local saved = SuuUIDB.errors
+        saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), source = source, message = message,
+            stack = stack, version = ns.version }
+        while #saved > 30 do table.remove(saved, 1) end
+    end
 end
 
 -- Calls fn(...) under xpcall; an error is reported against `source`.
@@ -64,6 +74,12 @@ function Fault.List()
 end
 
 ns.RegisterCommand("errors", "List the errors SuuUI caught this session; \"/suu errors test\" raises one on purpose.", function(arg)
+    if arg == "clear" then
+        wipe(list)
+        wipe(byKey)
+        if type(SuuUIDB) == "table" then SuuUIDB.errors = nil end
+        return ns.Print("Errors cleared.")
+    end
     if arg == "test" then
         ns.Events.On("SUUUI_FAULT_TEST", function() error("a deliberate test error") end, "Fault test")
         ns.Events.On("SUUUI_FAULT_TEST", function() ns.Print("The next listener still ran.") end, "Fault test (second listener)")

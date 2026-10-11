@@ -107,6 +107,19 @@ local function comboClass()
     return false
 end
 
+-- Step curves: pip i is lit from i points up (UnitPowerPercent's 0-1 input).
+local pipCurves = {}
+local function pipCurve(i)
+    if not pipCurves[i] then
+        local c = C_CurveUtil.CreateCurve()
+        c:SetType(Enum.LuaCurveType.Step)
+        c:AddPoint(0, 0)
+        c:AddPoint((i - 0.5) / 5, 1)
+        pipCurves[i] = c
+    end
+    return pipCurves[i]
+end
+
 local function buildCombo(target)
     local f = CreateFrame("Frame", nil, target)
     f:SetSize(5 * 12, 12)
@@ -117,18 +130,34 @@ local function buildCombo(target)
         outer:SetPoint("CENTER", f, "LEFT", 6 + (i - 1) * 12, 0)
         local inner = UI.Diamond(f, 6, "surface-sunk", "ARTWORK", 2)
         inner:SetPoint("CENTER", outer, "CENTER")
-        f.pips[i] = { outer = outer, inner = inner }
+        local lit = UI.Diamond(f, 6, "ink", "ARTWORK", 3)
+        lit:SetPoint("CENTER", outer, "CENTER")
+        f.pips[i] = { outer = outer, inner = inner, lit = lit }
     end
     function f:Update()
         local shown = M:Get("comboPoints") and comboClass() and UnitExists("target") and UnitCanAttack("player", "target")
         self:SetShown(shown and true or false)
         if not shown then return end
-        local n = GetComboPoints and GetComboPoints("player", "target") or 0
+        local n = GetComboPoints and GetComboPoints("player", "target")
+        if issecretvalue(n) then
+            -- Hidden in combat: each pip's alpha comes from an engine step curve.
+            local cp = Enum.PowerType.ComboPoints
+            for i, p in ipairs(self.pips) do
+                p.outer:SetVertexColor(UI.RGBA("gilt-line"))
+                p.inner:SetVertexColor(UI.RGBA("surface-sunk"))
+                p.lit:SetVertexColor(UI.RGBA("ink"))
+                p.lit:SetAlpha(UnitPowerPercent("player", cp, false, pipCurve(i)))
+            end
+            return
+        end
+        n = n or 0
         local full = n >= 5
         for i, p in ipairs(self.pips) do
             local on = i <= n
             p.outer:SetVertexColor(UI.RGBA(full and "arcane" or "gilt-line"))
-            p.inner:SetVertexColor(UI.RGBA(full and "arcane" or (on and "ink" or "surface-sunk")))
+            p.inner:SetVertexColor(UI.RGBA("surface-sunk"))
+            p.lit:SetVertexColor(UI.RGBA(full and "arcane" or "ink"))
+            p.lit:SetAlpha(on and 1 or 0)
         end
     end
     return f

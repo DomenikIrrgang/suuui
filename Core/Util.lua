@@ -35,8 +35,14 @@ function Util.SortedKeys(t)
     return out
 end
 
--- A readable name for an owner passed to the event bus or settings.
+-- A readable name for an owner passed to the event bus or settings: a
+-- module's name, a frame's global name, or the owner itself.
 function Util.OwnerName(owner)
-    if type(owner) == "table" then return owner.name or owner.id or tostring(owner) end
+    if type(owner) == "table" then
+        if type(owner.name) == "string" then return owner.name end
+        if type(owner.id) == "string" then return owner.id end
+        if owner.GetName and owner:GetName() then return owner:GetName() end
+        return tostring(owner)
+    end
     return tostring(owner)
 end
