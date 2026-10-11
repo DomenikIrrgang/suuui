@@ -45,8 +45,26 @@ local INTERRUPTS = {
     HUNTER = { 19503 },                                                  -- Scatter Shot
 }
 
-local Interrupt = { spell = nil, bars = {} }
+-- Each interrupt's own cooldown in seconds, if the client can't tell us
+-- (GetSpellBaseCooldown): vanilla values.
+local BASE_COOLDOWN = {
+    [1766] = 10, [1767] = 10, [1768] = 10, [1769] = 10,
+    [6552] = 10, [6554] = 10, [72] = 12, [1671] = 12, [1672] = 12,
+    [8042] = 6, [8044] = 6, [8045] = 6, [8046] = 6, [10412] = 6, [10413] = 6, [10414] = 6,
+    [2139] = 24, [15487] = 45, [853] = 60, [5588] = 60, [5589] = 60, [10308] = 60,
+    [5211] = 60, [6798] = 60, [8983] = 60, [19503] = 30,
+}
+
+local Interrupt = { spell = nil, bars = {}, usedAt = nil, cooldown = 0 }
 ns.Interrupt = Interrupt
+
+local function isInterrupt(id)
+    local _, class = UnitClass("player")
+    for _, x in ipairs(INTERRUPTS[class] or {}) do
+        if x == id then return true end
+    end
+    return false
+end
 
 function Interrupt.Find()
     local _, class = UnitClass("player")
@@ -62,18 +80,31 @@ function Interrupt.Find()
     end
 end
 
--- true (ready), false (cooling down) or nil (no interrupt known)
+-- Seconds left on the interrupt's own cooldown, from when you last used it:
+-- your own cast, always readable. 0 when it is up.
+function Interrupt.Remaining()
+    if not Interrupt.usedAt then return 0 end
+    return math.max(0, Interrupt.usedAt + Interrupt.cooldown - GetTime())
+end
+
+-- true (ready), false (cooling down) or nil (no interrupt known). The game's
+-- "on cooldown" also covers the global cooldown after any cast; when the
+-- interrupt's own cooldown is over, that is all it is, and it counts as ready.
 function Interrupt.Ready()
     if not Interrupt.spell then return nil end
     local cd = C_Spell.GetSpellCooldown(Interrupt.spell)
     if not cd or isSecret(cd.isActive) then return nil end
-    return not cd.isActive
+    if not cd.isActive then return true end
+    return Interrupt.Remaining() <= 0
 end
 
-function Interrupt.Remaining()
-    local d = Interrupt.spell and C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(Interrupt.spell)
-    return d and d:GetRemainingDuration()
-end
+Events.OnUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
+    if isSecret(spellID) or not spellID or not isInterrupt(spellID) then return end
+    local ms = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
+    Interrupt.cooldown = (not isSecret(ms) and ms and ms > 0) and ms / 1000 or BASE_COOLDOWN[spellID] or 0
+    Interrupt.usedAt = GetTime()
+    for bar in pairs(Interrupt.bars) do bar:UpdateKick() end
+end, "Interrupt")
 
 local function refreshKicks()
     for bar in pairs(Interrupt.bars) do bar:UpdateKick() end
@@ -268,7 +299,12 @@ function CB:Tick()
     self.time.value = nil
     if self.kick and self.kick.secs:IsShown() then
         local r = Interrupt.Remaining()
-        if isSecret(r) or r ~= nil then self.kick.secs:SetFormattedText("%.0f", r) end
+        if r > 0 then
+            self.kick.secs:SetValue(tostring(math.ceil(r)))
+        else
+            -- the cooldown just ran out
+            self:UpdateKick()
+        end
     end
 end
 
