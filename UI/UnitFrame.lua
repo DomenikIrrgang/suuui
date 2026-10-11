@@ -7,7 +7,8 @@
 --       width = nil,        -- default: the size's bar token
 --       anchor = false,     -- the player frame's double gilt frame and two diamonds
 --       you = false,        -- the "you" badge
---       meta = false,       -- level and classification after the name
+--       meta = false,       -- after the name: true for level and classification, "family" for a pet's family
+--       poll = nil,         -- seconds: redraw on a timer, for units with no events (targettarget)
 --       power = true,       -- the power line
 --       healthText = "percent", -- or "none"
 --       nameColor = "game", -- class colour (players) or reaction colour (NPCs); "ink" for plain names
@@ -353,7 +354,16 @@ function UF:UpdateIdentity()
             self.name:SetColor("ink")
         end
     end
-    self.meta:SetValue(self.opts.meta and metaText(u) or "")
+    local meta = self.opts.meta
+    if meta == "family" then
+        local family = UnitCreatureFamily(u)
+        self.meta:SetValue((not isSecret(family) and family) or "")
+    else
+        self.meta:SetValue(meta and metaText(u) or "")
+    end
+    if self.opts.youWhenPlayer then
+        self.you:SetShown(UnitIsUnit(u, "player") and true or false)
+    end
     self:LayoutRow(marker)
 end
 
@@ -388,6 +398,17 @@ function UF:LayoutRow(marker)
         self.name:SetWidth(0)
     end
 
+    if self.opts.size == "sm" then
+        local after = nil
+        for i = #badges, 1, -1 do
+            local b = badges[i]
+            b:ClearAllPoints()
+            if after then b:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
+            else b:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
+            after = b
+        end
+        badges = {}
+    end
     local prev = self.name
     if self.meta:GetText() ~= "" then
         self.meta:ClearAllPoints()
@@ -457,6 +478,22 @@ function UF:Activate()
         Events.OnGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
     elseif self.unit == "focus" then
         Events.OnGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
+    elseif self.unit == "targettarget" then
+        Events.OnGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+        onUnit(self, "UNIT_TARGET", function() self:Refresh() end)
+    elseif self.unit == "pet" then
+        Events.OnUnit("UNIT_PET", "player", function() self:Refresh() end, self)
+    elseif self.unit:find("^boss") then
+        Events.OnGame("INSTANCE_ENCOUNTER_ENGAGE_UNIT", function() self:Refresh() end, self)
+    end
+    if self.opts.poll then
+        -- A unit with no events of its own: redraw while shown.
+        self.ticker = C_Timer.NewTicker(self.opts.poll, function()
+            if self:IsVisible() and UnitExists(self.unit) then
+                self:UpdateHealth(true)
+                self:UpdatePower()
+            end
+        end)
     end
     self:Refresh()
 end
@@ -465,4 +502,5 @@ function UF:Deactivate()
     if not self.active then return end
     self.active = false
     Events.OffAll(self)
+    if self.ticker then self.ticker:Cancel() self.ticker = nil end
 end

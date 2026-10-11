@@ -1,37 +1,48 @@
 -- Units/UnitFrames.lua
--- The player and target frames (step 1.1). A built-in module written against
--- the public API only.
+-- The unit frames: player and target (step 1.1), target of target, focus,
+-- pet and boss frames (step 1.2). A built-in module written against the
+-- public API only.
 --
--- Placement (tanks and DPS; the healer profile moves them in step 1.8): the
--- player frame's right edge 200px left of the centre line and its top 340px
--- above the bottom edge; the target mirrors it on the right.
+-- Placement follows the cockpit on the 2560x1440 reference (tanks and DPS;
+-- the healer profile moves the player and target in step 1.8):
+--   player   right edge 200px left of the centre line, top 340px above the bottom
+--   target   mirrors it on the right
+--   target of target  space-5 right of the target, centred on it
+--   focus    in that column, its top 520px above the bottom
+--   pet      under the player frame (space-5), right-aligned to it
+--   bosses   top right, left of the objective tracker (300px from the right
+--            edge, 260px down, level with the tracker), stacked space-5 apart
 --
--- Blizzard's PlayerFrame and TargetFrame are stood down; only a reload brings
--- them back, so turning this module off or on takes effect after a reload.
--- TargetFrame also carries the target's cast bar, its auras and the target of
--- target; SuuUI's own arrive in steps 1.2 to 1.4.
+-- Blizzard's frames are stood down; only a reload brings them back, so this
+-- module turns off or on after a reload.
 
 local UI, Motion, T = SuuUI.UI, SuuUI.Motion, SuuUI.Tokens
 local S = T.space
 
-local PLAYER_CHILDREN = {
-    "healthbar", "healthBar", "HealthBar", "HealthBarsContainer.healthBar", "manabar", "ManaBar",
-    "powerBarAlt", "PowerBarAlt", "PlayerFrameContent.PlayerFrameContentMain.HealthBarsContainer.HealthBar",
-}
-local TARGET_CHILDREN = {
-    "healthbar", "healthBar", "HealthBar", "HealthBarsContainer.healthBar", "manabar", "ManaBar",
-    "spellbar", "castBar", "auraPools", "BuffFrame", "AurasFrame", "DebuffFrame", "totFrame", "CcRemoverFrame",
-}
+local BAR_CHILDREN = { "healthbar", "healthBar", "HealthBar", "HealthBarsContainer.healthBar", "manabar", "ManaBar" }
+local function children(extra)
+    local list = { unpack(BAR_CHILDREN) }
+    for _, c in ipairs(extra or {}) do list[#list + 1] = c end
+    return list
+end
 
 local M = SuuUI.RegisterModule({
     id = "unitframes",
     name = "Unit frames",
-    description = "The player and target frames: the bar is the frame.",
+    description = "Player, target, target of target, focus, pet and boss frames: the bar is the frame.",
     api = "0.5",
     reloadToToggle = true,
     defaults = {
         playerPosition = { point = "BOTTOM", x = -350, y = 308 },
         targetPosition = { point = "BOTTOM", x = 350, y = 308 },
+        totPosition = { point = "BOTTOM", x = 582, y = 312 },
+        focusPosition = { point = "BOTTOM", x = 612, y = 492 },
+        petPosition = { point = "BOTTOM", x = -300, y = 268 },
+        bossPosition = { point = "TOPRIGHT", x = -300, y = -260 },
+        showToT = true,
+        showFocus = true,
+        showPet = true,
+        showBoss = true,
         fadeOutOfCombat = true,
         showPower = true,
         healthText = "percent",
@@ -40,6 +51,45 @@ local M = SuuUI.RegisterModule({
         comboPoints = true,
     },
 })
+
+-- Every frame this module draws. `show` names the setting that turns it off.
+local FRAMES = {
+    { key = "player", unit = "player", label = "Player", position = "playerPosition",
+      opts = { size = "lg", anchor = true, you = true, name = "SuuUIPlayerFrame" } },
+    { key = "target", unit = "target", label = "Target", position = "targetPosition", watch = true,
+      opts = { size = "lg", meta = true, name = "SuuUITargetFrame" } },
+    { key = "tot", unit = "targettarget", label = "Target of target", position = "totPosition", watch = true, show = "showToT",
+      opts = { size = "sm", width = "bar-tot", power = false, youWhenPlayer = true, poll = 0.2, name = "SuuUITargetTargetFrame" } },
+    { key = "focus", unit = "focus", label = "Focus", position = "focusPosition", watch = true, show = "showFocus",
+      opts = { size = "md", meta = true, name = "SuuUIFocusFrame" } },
+    { key = "pet", unit = "pet", label = "Pet", position = "petPosition", watch = true, show = "showPet",
+      opts = { size = "md", meta = "family", name = "SuuUIPetFrame" } },
+}
+
+local BOSSES = 5
+
+--------------------------------------------------------------------------------
+-- Blizzard's frames
+--------------------------------------------------------------------------------
+
+local function standDownBlizzard()
+    SuuUI.SuppressBlizzard("PlayerFrame", { children = children({ "powerBarAlt", "PowerBarAlt" }) })
+    SuuUI.SuppressBlizzard("TargetFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "DebuffFrame", "totFrame", "CcRemoverFrame" }) })
+    SuuUI.SuppressBlizzard("TargetFrameToT", { keepParent = true })
+    SuuUI.SuppressBlizzard("ComboFrame", { keepParent = true })
+    if M:Get("showFocus") then
+        SuuUI.SuppressBlizzard("FocusFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "totFrame" }) })
+    end
+    if M:Get("showPet") then
+        SuuUI.SuppressBlizzard("PetFrame", { children = children() })
+    end
+    if M:Get("showBoss") then
+        SuuUI.SuppressBlizzard("BossTargetFrameContainer")
+        for i = 1, BOSSES do
+            SuuUI.SuppressBlizzard("Boss" .. i .. "TargetFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame" }) })
+        end
+    end
+end
 
 --------------------------------------------------------------------------------
 -- Combo points: five diamonds over the target frame's right end. Forever's
@@ -94,12 +144,19 @@ local function playerFull()
     return (pct or 100) >= 100
 end
 
+-- Out of combat at full health, the frames rest at opacity-ooc. Boss frames
+-- exist only in encounters and never fade.
 function M:UpdateFade()
-    local resting = self:Get("fadeOutOfCombat") and not UnitAffectingCombat("player") and playerFull()
-        and not (self.player:IsMouseOver() or (self.target:IsShown() and self.target:IsMouseOver()))
+    local hovered = false
+    for _, d in ipairs(FRAMES) do
+        local f = self.frames[d.key]
+        if f:IsVisible() and f:IsMouseOver() then hovered = true end
+    end
+    local resting = self:Get("fadeOutOfCombat") and not UnitAffectingCombat("player") and playerFull() and not hovered
     local alpha = resting and T.opacity["opacity-ooc"] or 1
-    Motion.AlphaTo(self.player, alpha, T.duration["dur-slow"])
-    Motion.AlphaTo(self.target, alpha, T.duration["dur-slow"])
+    for _, d in ipairs(FRAMES) do
+        Motion.AlphaTo(self.frames[d.key], alpha, T.duration["dur-slow"])
+    end
 end
 
 -- Danger: a non-tank holding aggro in a group. Solo, everyone tanks their own.
@@ -109,30 +166,63 @@ function M:UpdateThreat()
     -- issecretvalue first: a truth test on a secret value would error.
     local danger = IsInGroup() and not issecretvalue(status) and status ~= nil and status >= 2
         and role ~= "TANK"
-    self.player:SetState(danger and "danger" or nil, danger and "Aggro" or nil)
+    self.frames.player:SetState(danger and "danger" or nil, danger and "Aggro" or nil)
+end
+
+--------------------------------------------------------------------------------
+-- Showing, hiding and options
+--------------------------------------------------------------------------------
+
+-- A unit frame follows its unit (RegisterUnitWatch) unless it is turned off
+-- in the settings or hidden in edit mode.
+local function follow(self, frame, on)
+    self:RunOutOfCombat("watch:" .. frame:GetName(), function()
+        if on then
+            RegisterUnitWatch(frame)
+        else
+            UnregisterUnitWatch(frame)
+            frame:Hide()
+        end
+    end)
+end
+
+function M:UpdateVisibility()
+    for _, d in ipairs(FRAMES) do
+        if d.watch then
+            local pos = self:Get(d.position)
+            follow(self, self.frames[d.key], not pos.hidden and (not d.show or self:Get(d.show)))
+        end
+    end
+    local bossOn = self:Get("showBoss") and not self:Get("bossPosition").hidden
+    for i = 1, BOSSES do follow(self, self.bosses[i], bossOn) end
+end
+
+function M:ApplyOptions()
+    for _, f in pairs(self.allFrames) do
+        f.opts.power = (f.opts.size ~= "sm") and self:Get("showPower")
+        f.opts.healthText = self:Get("healthText")
+        f.opts.nameColor = self:Get("nameColor")
+        if f.metaKind == "level" then f.opts.meta = self:Get("showMeta") end
+        if f.active then f:Refresh() end
+    end
+    self.combo:Update()
+    self:UpdateFade()
 end
 
 --------------------------------------------------------------------------------
 -- Settings
 --------------------------------------------------------------------------------
 
-local function applyOptions(self)
-    for _, f in ipairs({ self.player, self.target }) do
-        f.opts.power = self:Get("showPower")
-        f.opts.healthText = self:Get("healthText")
-        f.opts.nameColor = self:Get("nameColor")
-        f:Refresh()
-    end
-    self.target.opts.meta = self:Get("showMeta")
-    self.target:Refresh()
-    self.combo:Update()
-    self:UpdateFade()
-end
-
 local SECTION = {
-    id = "unitframes", label = "Player & target", category = "Frames", order = 10,
+    id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
     groups = {
-        { title = "Player and target", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
+        { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
+            { key = "showToT", label = "Target of target", control = "toggle", description = "Right of the target, centred on it." },
+            { key = "showFocus", label = "Focus", control = "toggle", description = "Right of centre, above the target of target." },
+            { key = "showPet", label = "Pet", control = "toggle", description = "Under the player frame, with its focus or mana." },
+            { key = "showBoss", label = "Boss frames", control = "toggle", description = "Top right, left of the tracker, one per boss." },
+        } },
+        { title = "Every frame", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
             { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
               description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover." },
             { key = "showPower", label = "Power line", control = "toggle",
@@ -143,10 +233,10 @@ local SECTION = {
             { key = "nameColor", label = "Name colour", control = "segmented",
               options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
               description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
-        } },
-        { title = "Target", rows = {
             { key = "showMeta", label = "Level and classification", control = "toggle",
-              description = "After the name: \"60 Elite\", \"?? Boss\"." },
+              description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
+        } },
+        { title = "Combo points", rows = {
             { key = "comboPoints", label = "Combo points", control = "toggle",
               description = "Five diamonds over the target frame; all arcane at five.",
               disabled = function()
@@ -162,35 +252,55 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
-function M:OnEnable()
-    SuuUI.SuppressBlizzard("PlayerFrame", { children = PLAYER_CHILDREN })
-    SuuUI.SuppressBlizzard("TargetFrame", { children = TARGET_CHILDREN })
-    SuuUI.SuppressBlizzard("ComboFrame", { keepParent = true })
-
-    if not self.player then
-        self.player = UI.UnitFrame(SuuUI.Root, "player", { size = "lg", anchor = true, you = true, name = "SuuUIPlayerFrame" })
-        self.target = UI.UnitFrame(SuuUI.Root, "target", { size = "lg", meta = true, name = "SuuUITargetFrame" })
-        self.target.suuManagedShow = true
-        self.combo = buildCombo(self.target)
+local function build(self)
+    self.frames, self.allFrames = {}, {}
+    for _, d in ipairs(FRAMES) do
+        local f = UI.UnitFrame(SuuUI.Root, d.unit, d.opts)
+        f.metaKind = d.opts.meta == true and "level" or nil
+        if d.watch then f.suuManagedShow = true end
+        self.frames[d.key] = f
+        self.allFrames[d.key] = f
     end
-    RegisterUnitWatch(self.target)
-    self.player:Show()
+    -- The boss stack: one holder, moved as one in edit mode.
+    local holder = CreateFrame("Frame", "SuuUIBossFrames", SuuUI.Root)
+    local w, h = UI.Size("bar-md"), UI.Size("unit-md")
+    holder:SetSize(w, BOSSES * h + (BOSSES - 1) * S["space-5"])
+    self.bossHolder, self.bosses = holder, {}
+    for i = 1, BOSSES do
+        local f = UI.UnitFrame(holder, "boss" .. i, { size = "md", meta = true, name = "SuuUIBoss" .. i .. "Frame" })
+        f.metaKind = "level"
+        f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * (h + S["space-5"]))
+        self.bosses[i] = f
+        self.allFrames["boss" .. i] = f
+    end
+    self.combo = buildCombo(self.frames.target)
+end
 
-    self.player:Activate()
-    self.target:Activate()
-    self:RegisterMover(self.player, { key = "playerPosition", label = "Player" })
-    self:RegisterMover(self.target, { key = "targetPosition", label = "Target" })
+function M:OnEnable()
+    standDownBlizzard()
+    if not self.frames then build(self) end
+
+    self.frames.player:Show()
+    for _, f in pairs(self.allFrames) do f:Activate() end
+    for _, d in ipairs(FRAMES) do
+        self:RegisterMover(self.frames[d.key], { key = d.position, label = d.label })
+    end
+    self:RegisterMover(self.bossHolder, { key = "bossPosition", label = "Boss frames" })
+    self.bossHolder.suuManagedShow = true
     self:RegisterSettings(SECTION)
-    applyOptions(self)
+    self:UpdateVisibility()
+    self:ApplyOptions()
 
-    self.player.onHealth = function() self:UpdateFade() end
+    local player = self.frames.player
+    player.onHealth = function() self:UpdateFade() end
     for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
         self:OnGameEvent(e, function() self:UpdateFade() end)
     end
-    self.player:HookScript("OnEnter", function() self:UpdateFade() end)
-    self.player:HookScript("OnLeave", function() self:UpdateFade() end)
-    self.target:HookScript("OnEnter", function() self:UpdateFade() end)
-    self.target:HookScript("OnLeave", function() self:UpdateFade() end)
+    for _, d in ipairs(FRAMES) do
+        local f = self.frames[d.key]
+        f:HookScript("OnEnter", function() self:UpdateFade() end)
+        f:HookScript("OnLeave", function() self:UpdateFade() end)
+    end
 
     self:OnUnitEvent("UNIT_THREAT_SITUATION_UPDATE", "player", function() self:UpdateThreat() end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function() self:UpdateThreat() end)
@@ -199,25 +309,22 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self.combo:Update() end)
 
     for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "comboPoints" }) do
-        self:Watch(key, function() applyOptions(self) end)
+        self:Watch(key, function() self:ApplyOptions() end)
     end
-    -- Hiding the target frame in edit mode stops it following the target.
-    self:Watch("targetPosition", function(pos)
-        self:RunOutOfCombat("targetWatch", function()
-            if pos.hidden then UnregisterUnitWatch(self.target); self.target:Hide()
-            else RegisterUnitWatch(self.target) end
-        end)
-    end)
+    for _, key in ipairs({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",
+                           "focusPosition", "petPosition", "bossPosition" }) do
+        self:Watch(key, function() self:UpdateVisibility() end)
+    end
     self:UpdateThreat()
 end
 
 function M:OnDisable()
     -- Only reached when the module errors: the module toggles on reload.
-    if self.player then
-        self.player:Deactivate()
-        self.target:Deactivate()
-        UnregisterUnitWatch(self.target)
-        self.player:Hide()
-        self.target:Hide()
+    if self.frames then
+        for _, f in pairs(self.allFrames) do
+            f:Deactivate()
+            UnregisterUnitWatch(f)
+            f:Hide()
+        end
     end
 end
