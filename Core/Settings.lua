@@ -207,10 +207,31 @@ function Profiles.List()
     return db and Util.SortedKeys(db.profiles) or {}
 end
 
+-- The profile `text` names: its exact name, the same name in any letter case,
+-- or the start of exactly one name. Returns the name, or nil and why not.
+function Profiles.Find(text)
+    text = strtrim(text or "")
+    if db.profiles[text] then return text end
+    local lower, exact, starts = text:lower(), nil, {}
+    for name in pairs(db.profiles) do
+        local l = name:lower()
+        if l == lower then exact = name end
+        if text ~= "" and l:sub(1, #lower) == lower then starts[#starts + 1] = name end
+    end
+    if exact then return exact end
+    if #starts == 1 then return starts[1] end
+    table.sort(starts)
+    if #starts > 1 then
+        return nil, ("\"%s\" could mean %s."):format(text, table.concat(starts, " or "))
+    end
+    return nil, ("There is no profile called \"%s\". Profiles: %s."):format(text, table.concat(Profiles.List(), ", "))
+end
+
 -- Switches this character to another profile and tells the watchers of every
 -- registered setting whose value differs.
-function Profiles.Use(name)
-    if not db.profiles[name] then return false, "There is no profile called " .. name .. "." end
+function Profiles.Use(text)
+    local name, err = Profiles.Find(text)
+    if not name then return false, err end
     if name == Profiles.Current() then return true end
     local target, changed = db.profiles[name], {}
     for namespace, defs in pairs(defaults) do
@@ -229,17 +250,28 @@ end
 
 -- A new profile, copied from `from` (default: the current one).
 function Profiles.Create(name, from)
-    if db.profiles[name] then return false, "A profile called " .. name .. " already exists." end
-    local source = db.profiles[from or Profiles.Current()]
-    if not source then return false, "There is no profile called " .. tostring(from) .. "." end
-    db.profiles[name] = Copy(source)
+    name = strtrim(name or "")
+    if name == "" then return false, "A profile needs a name." end
+    for existing in pairs(db.profiles) do
+        if existing:lower() == name:lower() then
+            return false, "A profile called " .. existing .. " already exists."
+        end
+    end
+    local source = Profiles.Current()
+    if from then
+        local err
+        source, err = Profiles.Find(from)
+        if not source then return false, err end
+    end
+    db.profiles[name] = Copy(db.profiles[source])
     return true
 end
 
 -- Deletes a profile no character on this account is using right now; characters
 -- mapped to it go back to their own profile at their next login.
-function Profiles.Delete(name)
-    if not db.profiles[name] then return false, "There is no profile called " .. name .. "." end
+function Profiles.Delete(text)
+    local name, err = Profiles.Find(text)
+    if not name then return false, err end
     if name == Profiles.Current() then return false, "You are using " .. name .. "; switch to another profile first." end
     db.profiles[name] = nil
     for char, mapped in pairs(db.chars) do
@@ -366,7 +398,7 @@ ns.RegisterCommand("reset", "Reset a setting, a namespace, or everything: /suu r
     ns.Print(arg .. " is back to its default.")
 end)
 
-ns.RegisterCommand("profile", "Show profiles; /suu profile use|new|delete <name>", function(arg)
+ns.RegisterCommand("profile", "Show profiles; /suu profile use|new|delete <name> (any letter case, or the start of a name)", function(arg)
     if not profile then return ns.Print("Settings haven't loaded yet.") end
     local verb, name = arg:match("^(%S+)%s+(.+)$")
     local ok, err
@@ -376,8 +408,9 @@ ns.RegisterCommand("profile", "Show profiles; /suu profile use|new|delete <name>
         ok, err = Profiles.Create(name)
         if ok then ok, err = Profiles.Use(name) end
     elseif verb == "delete" then
+        local full = Profiles.Find(name)
         ok, err = Profiles.Delete(name)
-        if ok then ns.Print("Deleted " .. name .. ".") end
+        if ok then ns.Print("Deleted " .. full .. ".") end
     elseif arg ~= "" then
         return ns.Print("Usage: /suu profile [use|new|delete <name>]")
     end
