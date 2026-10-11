@@ -153,3 +153,4 @@ API.PublishAnchor = ns.Anchors.Publish
 API.GetAnchor = ns.Anchors.Get
 
 API.UI.CastBar = UI.CastBar
+API.UI.SwingTimer = UI.SwingTimer
