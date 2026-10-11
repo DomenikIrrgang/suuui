@@ -55,7 +55,9 @@ local M = SuuUI.RegisterModule({
 -- Every frame this module draws. `show` names the setting that turns it off.
 local FRAMES = {
     { key = "player", unit = "player", label = "Player", position = "playerPosition",
-      opts = { size = "lg", anchor = true, you = true, name = "SuuUIPlayerFrame" } },
+      -- No "you" badge here (the design has one): the player frame is always you.
+      -- Target of target keeps it, where it tells you a mob is on you.
+      opts = { size = "lg", anchor = true, name = "SuuUIPlayerFrame" } },
     { key = "target", unit = "target", label = "Target", position = "targetPosition", watch = true,
       opts = { size = "lg", meta = true, name = "SuuUITargetFrame" } },
     { key = "tot", unit = "targettarget", label = "Target of target", position = "totPosition", watch = true, show = "showToT",
