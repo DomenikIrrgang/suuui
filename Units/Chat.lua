@@ -182,10 +182,10 @@ function M:SkinFrame(cf)
     end
     alphaOff(_G[name .. "ResizeButton"])
     self:ApplyFont(cf)
-    -- the edit box (1-10 only: temporary ones are left alone)
+    -- the edit box (temporary windows' too: restyled only, never hooked)
     local id = cf:GetID()
     local eb = _G[name .. "EditBox"]
-    if eb and id and id >= 1 and id <= 10 then
+    if eb then
         for _, part in ipairs({ "Left", "Mid", "Right", "FocusLeft", "FocusMid", "FocusRight" }) do
             alphaOff(_G[name .. "EditBox" .. part])
         end
@@ -197,7 +197,8 @@ function M:SkinFrame(cf)
         eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", 0, -GAP)
         eb:SetHeight(INPUT_H)
         if eb.SetTextInsets then eb:SetTextInsets(S["space-4"], S["space-4"], 0, 0) end
-        local size = select(2, FCF_GetChatWindowInfo(id)) or 13
+        local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
+        if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
         eb:SetFont(BODY_FONT, size, "")
         if eb.header then eb.header:SetFont(BODY_FONT, size, "") end
         if eb.headerSuffix then eb.headerSuffix:SetFont(BODY_FONT, size, "") end
@@ -300,10 +301,18 @@ function M:Wake()
     self.lastActive = GetTime()
 end
 
+local function editBoxes()
+    local out = {}
+    for _, cf in ipairs(chatFrames()) do
+        local eb = cf:GetName() and _G[cf:GetName() .. "EditBox"]
+        if eb then out[#out + 1] = eb end
+    end
+    return out
+end
+
 local function editBoxFocused()
-    for i = 1, 10 do
-        local eb = _G["ChatFrame" .. i .. "EditBox"]
-        if eb and eb.HasFocus then
+    for _, eb in ipairs(editBoxes()) do
+        if eb.HasFocus then
             local ok, f = pcall(eb.HasFocus, eb)
             if ok and not isSecret(f) and f then return true end
         end
@@ -314,8 +323,14 @@ end
 function M:Tick()
     local p = self.panel
     if not p then return end
+    -- a new window (a whisper tab): skinned
+    local frames = chatFrames()
+    if #frames ~= self.frameCount then
+        self.frameCount = #frames
+        self:SkinAll()
+    end
     -- the window's own font size may have changed in its menu
-    for _, cf in ipairs(chatFrames()) do self:ApplyFont(cf) end
+    for _, cf in ipairs(frames) do self:ApplyFont(cf) end
     self:UpdateTabs()
     local awake = true
     if self:Get("fadeIdle") then
@@ -329,13 +344,10 @@ function M:Tick()
         local a = awake and 1 or 0
         SuuUI.Motion.AlphaTo(p.deco, a, awake and 0.2 or 1.2)
         SuuUI.Motion.AlphaTo(p.tabs, a, awake and 0.2 or 1.2)
-        -- Blizzard's edit box: hidden while idle and unfocused
-        for i = 1, 10 do
-            local eb = _G["ChatFrame" .. i .. "EditBox"]
-            if eb then
-                local ok, f = pcall(eb.HasFocus, eb)
-                if not (ok and not isSecret(f) and f) then eb:SetAlpha(a) end
-            end
+        -- Blizzard's edit boxes: hidden while idle and unfocused
+        for _, eb in ipairs(editBoxes()) do
+            local ok, f = pcall(eb.HasFocus, eb)
+            if not (ok and not isSecret(f) and f) then eb:SetAlpha(a) end
         end
     end
 end
@@ -406,6 +418,14 @@ function M:OnEnable()
     end
     for _, e in ipairs(WAKE) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:Wake() end) end
+    end
+    -- a whisper opens a temporary window: skinned a frame later
+    for _, e in ipairs({ "CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function()
+                C_Timer.After(0, function() if self:IsEnabled() then self:SkinAll() end end)
+            end)
+        end
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingPlace then self:PlaceChat() end end)
     self:Watch("position", function() C_Timer.After(0, function() self:PlaceChat() end) end)
