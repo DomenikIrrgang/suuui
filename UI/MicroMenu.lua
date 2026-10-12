@@ -7,6 +7,7 @@
 --   local m = UI.MicroMenu(parent, { name = "SuuUIMicroMenu" })
 --   m:SetItems({ { key, glyph, label, click = "CharacterMicroButton" | onClick = fn }, ... })
 --   m:SetAlert(key, text or nil)
+--   m:SetActive(key, on)      -- its window is open: the hover look stays
 --
 -- An item with `click` is a secure button clicking that Blizzard micro
 -- button (so it works in combat wherever the game allows the window); one
@@ -74,8 +75,8 @@ local function buildButton(m, item)
             description = self.alertText })
     end)
     b:HookScript("OnLeave", function(self)
-        self.hover:Hide()
-        self.edge:SetShown(false)
+        self.hover:SetShown(self.active and true or false)
+        self.edge:SetShown(self.active and true or false)
         UI.HideTooltip()
     end)
     b:HookScript("OnMouseDown", function(self) self.glyph:SetPoint("CENTER", 0, -1) end)
@@ -102,6 +103,17 @@ function Menu:SetItems(items)
     end
     self:SetSize(math.max(1, x - gap + pad), px + pad * 2)
     return true
+end
+
+function Menu:SetActive(key, on)
+    local b = self.buttons[key]
+    on = on and true or false
+    if not b or b.active == on then return end
+    b.active = on
+    if not b:IsMouseOver() then
+        b.hover:SetShown(on)
+        b.edge:SetShown(on)
+    end
 end
 
 function Menu:SetAlert(key, text)

@@ -37,11 +37,21 @@ local ITEMS = {
     { key = "groupfinder", glyph = "search", label = "Group Finder", click = "LFDMicroButton" },
     { key = "collections", glyph = "gem", label = "Collections", click = "CollectionsMicroButton" },
     { key = "shop", glyph = "coin", label = "Shop", click = "StoreMicroButton" },
-    { key = "worldmap", glyph = "map", label = "World map", onClick = function() ToggleWorldMap() end, bind = "TOGGLEWORLDMAP" },
-    { key = "bags", glyph = "bag", label = "Bags", onClick = function() ToggleAllBags() end, bind = "OPENALLBAGS" },
+    { key = "worldmap", glyph = "map", label = "World map", onClick = function() ToggleWorldMap() end, bind = "TOGGLEWORLDMAP",
+      open = function() return WorldMapFrame and WorldMapFrame:IsShown() end },
+    { key = "bags", glyph = "bag", label = "Bags", onClick = function() ToggleAllBags() end, bind = "OPENALLBAGS",
+      open = function()
+          if ContainerFrameCombinedBags and ContainerFrameCombinedBags:IsShown() then return true end
+          for i = 1, 6 do
+              local f = _G["ContainerFrame" .. i]
+              if f and f:IsShown() then return true end
+          end
+          return false
+      end },
     -- the game menu's Blizzard button doesn't answer a secure click on
     -- Forever (EllesmereUI toggles the frame the same way)
-    { key = "menu", glyph = "menu", label = "Game menu", onClick = function() ToggleFrame(GameMenuFrame) end },
+    { key = "menu", glyph = "menu", label = "Game menu", onClick = function() ToggleFrame(GameMenuFrame) end,
+      open = function() return GameMenuFrame and GameMenuFrame:IsShown() end },
 }
 
 -- The chosen items this client has (a Blizzard button that's missing: left out).
@@ -63,6 +73,20 @@ function M:Layout()
     end
     self.pendingLayout = nil
     self:UpdateAlerts()
+end
+
+-- Which windows are open: a Blizzard micro button is pushed while its window
+-- shows; the others check their window. Looked at a few times a second
+-- while the menu shows.
+local function isOpen(item)
+    if item.open then return item.open() and true or false end
+    local b = item.click and _G[item.click]
+    return b and b.GetButtonState and b:GetButtonState() == "PUSHED" or false
+end
+
+function M:UpdateActive()
+    if not self.menu then return end
+    for _, item in ipairs(ITEMS) do self.menu:SetActive(item.key, isOpen(item)) end
 end
 
 -- Something to act on: unspent talent points.
@@ -136,6 +160,13 @@ function M:OnEnable()
     if not self.menu then
         self.menu = UI.MicroMenu(SuuUI.Root, { name = "SuuUIMicroMenu" })
         self.menu:SetFrameStrata("MEDIUM")
+        local wait = 0
+        self.menu:HookScript("OnUpdate", function(_, elapsed)
+            wait = wait - elapsed
+            if wait > 0 then return end
+            wait = 0.15
+            self:UpdateActive()
+        end)
     end
     self.menu.suuManagedShow = true
     self:HideBlizzard()
