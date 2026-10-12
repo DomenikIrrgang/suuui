@@ -331,11 +331,8 @@ function UI.UnitFrame(parent, unit, opts)
     f.markerLayer:SetAllPoints()
     f.markerLayer:SetFrameLevel(o:GetFrameLevel() + 10)
     f.markerLayer:EnableMouse(false)
-    f.marker = f.markerLayer:CreateTexture(nil, "OVERLAY")
-    f.marker:SetTexture(MARKERS)
-    f.marker:SetSize(size.marker, size.marker)
+    f.marker = UI.RaidMarker(f.markerLayer, size.marker)
     f.marker:SetPoint("TOP", f, "TOP", 0, size.rise)
-    f.marker:Hide()
     f:FitRow() -- the row ends where the health text (and reserved room) begins
     f.rightW = 0
     return f
@@ -532,23 +529,36 @@ end
 -- game's SetRaidTargetIconTexture works out the cell with Lua arithmetic,
 -- which a secret refuses, so a secret index goes to the texture's sprite
 -- sheet cell, which the engine works out itself.
-function UF:UpdateRaidMarker()
-    local A, u = self.api, self.unit
-    if self.opts.raidMarker == false or not u or not A.GetRaidTargetIndex or not A.UnitExists(u) then
-        self.marker:Hide()
-        return
-    end
+-- 0.9, public: UI.RaidMarker(parent, size) makes the texture (hidden), and
+-- UI.ShowRaidMarker(texture, unit[, api]) shows that unit's marker on it, or
+-- hides it (no marker, no unit, or `api` without GetRaidTargetIndex).
+function UI.RaidMarker(parent, size, layer)
+    local t = parent:CreateTexture(nil, layer or "OVERLAY")
+    t:SetTexture(MARKERS)
+    t:SetSize(size, size)
+    t:Hide()
+    return t
+end
+
+function UI.ShowRaidMarker(t, u, api)
+    local A = api or _G
+    if not u or not A.GetRaidTargetIndex or not A.UnitExists(u) then return t:Hide() end
     local index = A.GetRaidTargetIndex(u)
     if isSecret(index) then
-        local ok = self.marker.SetSpriteSheetCell and pcall(self.marker.SetSpriteSheetCell, self.marker, index, 4, 4, 64, 64)
-        self.marker:SetShown(ok and true or false)
+        local ok = t.SetSpriteSheetCell and pcall(t.SetSpriteSheetCell, t, index, 4, 4, 64, 64)
+        t:SetShown(ok and true or false)
     elseif index and index >= 1 and index <= 8 then
         local col, row = (index - 1) % 4, math.floor((index - 1) / 4)
-        self.marker:SetTexCoord(col * 0.25, (col + 1) * 0.25, row * 0.25, (row + 1) * 0.25)
-        self.marker:Show()
+        t:SetTexCoord(col * 0.25, (col + 1) * 0.25, row * 0.25, (row + 1) * 0.25)
+        t:Show()
     else
-        self.marker:Hide()
+        t:Hide()
     end
+end
+
+function UF:UpdateRaidMarker()
+    if self.opts.raidMarker == false then return self.marker:Hide() end
+    UI.ShowRaidMarker(self.marker, self.unit, self.api)
 end
 
 -- marker, name, meta, badges ... health %, in one row; the name gives way.

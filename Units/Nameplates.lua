@@ -57,6 +57,7 @@ local M = SuuUI.RegisterModule({
         friendlyOpenWorld = true,
         friendlyStyle = true,
         questMarks = true,
+        raidMarker = true,
     },
 })
 
@@ -187,6 +188,9 @@ local function buildPlate(parent, api)
     f.pct = UI.Text(f, "micro", "ink")
     f.pct:SetShadowed(true)
     f.pct:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, -NAME_H)
+    -- the raid target marker, just left of the plate, centred on it
+    f.raidMarker = UI.RaidMarker(f, 18)
+    f.raidMarker:SetPoint("RIGHT", f, "LEFT", -S["space-2"], 0)
     -- a quest objective: the gilt diamond and what you have of it
     f.quest = CreateFrame("Frame", nil, f)
     f.quest:SetHeight(NAME_H)
@@ -447,7 +451,13 @@ function Plate:UpdateTarget()
     self:UpdateBorder()
 end
 
+function Plate:UpdateRaidMarker()
+    if not M:Get("raidMarker") then return self.raidMarker:Hide() end
+    UI.ShowRaidMarker(self.raidMarker, self.unit, self.api)
+end
+
 function Plate:Refresh()
+    self:UpdateRaidMarker()
     self:UpdateQuest()
     self:UpdateName()
     self:UpdateHealth()
@@ -692,8 +702,8 @@ end
 --------------------------------------------------------------------------------
 
 local PEOPLE = {
-    { name = "Cinder Acolyte", health = 0.62, max = 13800, reaction = 2, target = true, threat = 3, debuffs = { 1978, 1130 }, cast = { name = "Flame Lash", icon = 133, progress = 0.55, time = "0.9s", target = "Kaelith", targetClass = "PRIEST" } },
-    { name = "Ember Hound", health = 0.81, max = 8400, reaction = 2, threat = 2, quest = "3/8" },
+    { name = "Cinder Acolyte", marker = 8, health = 0.62, max = 13800, reaction = 2, target = true, threat = 3, debuffs = { 1978, 1130 }, cast = { name = "Flame Lash", icon = 133, progress = 0.55, time = "0.9s", target = "Kaelith", targetClass = "PRIEST" } },
+    { name = "Ember Hound", marker = 7, health = 0.81, max = 8400, reaction = 2, threat = 2, quest = "3/8" },
     { name = "Ashbound Ritualist", health = 0.28, max = 11200, reaction = 2, threat = 0, cast = { name = "Rain of Ash", icon = 5740, progress = 0.3, time = "1.9s", locked = true } },
     { name = "Dusk Prowler", health = 1, max = 6900, reaction = 4 },
     { name = "Ysolde", health = 0.9, max = 3900, reaction = 5, friendly = true, class = "PALADIN", debuffs = { 702 }, debuffType = "Curse",
@@ -763,6 +773,8 @@ end
 function M:DrawPreview()
     if not self.previewPlates then return end
     local w, auraPx, castPx = self:Get("width"), self:Get("auraSize"), self:Get("castHeight")
+    -- room for the raid markers left of the plates, so the view centres whole
+    local markerW = self:Get("raidMarker") and (18 + S["space-2"]) or 0
     local y = 0
     for i, f in ipairs(self.previewPlates) do
         local d = PEOPLE[i]
@@ -772,7 +784,7 @@ function M:DrawPreview()
         f:Refresh()
         f:ClearAllPoints()
         local top = (d.debuffs and self:Get("auras") > 0) and (auraPx + S["space-1"] * 2) or 0
-        f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", 0, -(y + top + NAME_H))
+        f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", markerW, -(y + top + NAME_H))
         f:Show()
         for k, icon in ipairs(f.fakeIcons) do
             local id = d.debuffs and d.debuffs[k]
@@ -813,7 +825,7 @@ function M:DrawPreview()
         end
         y = y + top + plateH() + castH + S["space-6"]
     end
-    self.previewView:SetSize(w, y)
+    self.previewView:SetSize(markerW + w, y)
 end
 
 --------------------------------------------------------------------------------
@@ -858,6 +870,8 @@ local SECTION = {
               description = "At the right end of the name row: the health percentage, the current health, or both." },
             { key = "threat", label = "Threat badges", control = "toggle",
               description = "Aggro when a mob attacks you. As a tank in a group: Losing when it's about to leave you, Aggro when it has." },
+            { key = "raidMarker", label = "Raid markers", control = "toggle",
+              description = "Skull, cross and the rest, just left of the plate." },
             { key = "questMarks", label = "Quest objectives", control = "toggle",
               description = "A gilt mark left of the name on mobs your quests still need, with what you have (3/8)." },
             { key = "dimOthers", label = "Dim all but your target", control = "toggle",
@@ -923,6 +937,7 @@ function M:OnEnable()
     self:OnGameEvent("NAME_PLATE_UNIT_ADDED", function(_, unit) self:OnPlateAdded(unit) end)
     self:OnGameEvent("NAME_PLATE_UNIT_REMOVED", function(_, unit) self:OnPlateRemoved(unit) end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:ForEach(function(f) f:UpdateTarget() end) end)
+    self:OnGameEvent("RAID_TARGET_UPDATE", function() self:ForEach(function(f) f:UpdateRaidMarker() end) end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function() self:ForEach(function(f) f:UpdateThreat() end) end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
@@ -931,7 +946,7 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_FACTION", function(_, unit)
         if unit and unit:find("^nameplate") and UnitExists(unit) then self:Recheck(unit) end
     end)
-    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks" }) do
+    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks", "raidMarker" }) do
         self:Watch(key, function()
             for unit, f in pairs(byUnit) do
                 self:ApplyAuraCount(f)
