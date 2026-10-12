@@ -94,8 +94,8 @@ return {
           { "Piercing Howl", hidden = true, missing = "hide" }, STUNS },
       procs = { "Flurry", "Enrage" } },
     { id = "protection", name = "Protection", tree = 3,
-      essential = { "Shield Slam", { "Revenge", when = inStance("defensive") },
-          you("Shield Block", { when = inStance("defensive") }), "Thunder Clap", you("Bloodrage") },
+      essential = { "Shield Slam", { "Revenge", when = inStance("defensive") }, "Thunder Clap",
+          you("Shield Block", { when = inStance("defensive") }), you("Bloodrage") },
       utility = { "Taunt", "Mocking Blow", "Challenging Shout",
           you("Shield Wall", { sound = "chime" }), you("Last Stand"), "Shield Bash", "Concussion Blow", DISARM,
           -- Vanguard: Defensive Stance charges too

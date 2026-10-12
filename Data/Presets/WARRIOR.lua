@@ -197,8 +197,8 @@ ns.CooldownPresets = {
         essential = {
             { name = "Shield Slam", icon = 8242, ids = { 8242, 15655, 23922, 23923, 23924, 23925, 446354, 1213462, 1236179 } },
             { name = "Revenge", icon = 6572, when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 6572, 6574, 7379, 11600, 11601, 12170, 19130, 25288, 28844 } },
-            { name = "Shield Block", icon = 2565, effect = "you", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 2565, 2570, 12169, 467891 } },
             { name = "Thunder Clap", icon = 6343, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
+            { name = "Shield Block", icon = 2565, effect = "you", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 2565, 2570, 12169, 467891 } },
             { name = "Bloodrage", icon = 2687, effect = "you", ids = { 2687, 29131 } },
         },
         utility = {
