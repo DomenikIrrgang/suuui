@@ -654,10 +654,10 @@ if not arg[1] then
     local CLASS_LABEL = { DRUID = "Druid", HUNTER = "Hunter", MAGE = "Mage", PALADIN = "Paladin", PRIEST = "Priest",
         ROGUE = "Rogue", SHAMAN = "Shaman", WARLOCK = "Warlock", WARRIOR = "Warrior" }
     local auras, auraNames = {}, {}
-    local function note(class, name, ids)
+    local function note(class, name, ids, icon)
         local a = auras[name]
         if not a then
-            a = { ids = {}, seen = {}, classes = {}, classSet = {} }
+            a = { ids = {}, seen = {}, classes = {}, classSet = {}, icon = icon }
             auras[name] = a
             auraNames[#auraNames + 1] = name
         end
@@ -670,9 +670,9 @@ if not arg[1] then
         if e.collection then
             for _, x in ipairs(e.entries or {}) do walkAura(class, x) end
         elseif e.group then
-            for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids) end
+            for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids, m.icon) end
         else
-            note(class, e.name, e.ids)
+            note(class, e.name, e.ids, e.icon)
         end
     end
     for _, class in ipairs(classes) do
@@ -687,9 +687,9 @@ if not arg[1] then
                     local b = e.behaviour
                     if b and b.effect then
                         if e.group and not b.effectName then
-                            for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids) end
+                            for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids, m.icon) end
                         else
-                            note(class, b.effectName or e.name, b.effectIDs or e.ids)
+                            note(class, b.effectName or e.name, b.effectIDs or e.ids, not b.effectName and e.icon or nil)
                         end
                     end
                 end
@@ -706,7 +706,11 @@ if not arg[1] then
         table.sort(a.classes)
         local ids = {}
         for _, id in ipairs(a.ids) do ids[#ids + 1] = tostring(id) end
-        alines[#alines + 1] = ("    [%q] = { classes = %q, ids = { %s } },"):format(name, table.concat(a.classes, ", "), table.concat(ids, ", "))
+        -- the art most of its IDs share (a name's lowest ID is often an NPC
+        -- version with other art)
+        local icon = a.icon or iconID(nil, a.ids)
+        alines[#alines + 1] = ("    [%q] = { classes = %q,%s ids = { %s } },"):format(name, table.concat(a.classes, ", "),
+            icon and (" icon = %d,"):format(icon) or "", table.concat(ids, ", "))
     end
     alines[#alines + 1] = "}"
     local af = assert(io.open("Data/AuraCatalog.lua", "w"))

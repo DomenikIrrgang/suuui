@@ -819,8 +819,11 @@ end
 -- included), and the presets' shared slots by name with the list each came
 -- from.
 -- Auras other classes' presets track ("+ Add" notes their class): name ->
--- "Priest", filled by candidates("aura").
+-- "Priest", filled by candidates("aura"). And every candidate's chosen art
+-- (the presets' and the catalog's icon: what most of its IDs show), which a
+-- new entry takes along.
 local auraClassNote = {}
+local candidateIcon = {}
 
 local function candidates(kind)
     local byName, groups = {}, {}
@@ -840,6 +843,7 @@ local function candidates(kind)
                     groups[e.name] = groups[e.name] or { entry = e, key = key }
                 else
                     add(e.name, e.ids)
+                    if e.icon then candidateIcon[e.name] = candidateIcon[e.name] or e.icon end
                 end
             end)
         end
@@ -851,6 +855,7 @@ local function candidates(kind)
                 add(name, a.ids)
                 auraClassNote[name] = a.classes
             end
+            if a.icon then candidateIcon[name] = candidateIcon[name] or a.icon end
         end
     end
     if kind == "cooldown" then
@@ -973,7 +978,7 @@ local function entryFor(value, byName, groups)
         g.uid = newUid()
         return g
     end
-    if byName and byName[value] then return { name = value, ids = byName[value] } end
+    if byName and byName[value] then return { name = value, ids = byName[value], icon = candidateIcon[value] } end
 end
 
 -- A small square button with a drawn glyph: "up", "down" or "remove".
@@ -1531,7 +1536,8 @@ local function buildEditor(parent)
         local options = {}
         for name in pairs(byName) do
             if not present[name] and not taken[name] then
-                options[#options + 1] = { value = name, label = name, icon = idsArt(byName[name]),
+                options[#options + 1] = { value = name, label = name,
+                    icon = candidateIcon[name] and C_Spell.GetSpellTexture(candidateIcon[name]) or idsArt(byName[name]),
                     note = kind ~= "cooldown" and auraClassNote[name] or nil }
             end
         end
