@@ -28,7 +28,7 @@ local M = SuuUI.RegisterModule({
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
         pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
-        pullVoice = "Female", -- "Female" | "Male" | "off": the last ten seconds spoken
+        pullVoice = "Heart", -- a voice in Media/Sounds/Countdown, or "off": the last ten seconds spoken
         source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
         hideTheirs = true,   -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
         dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
@@ -36,9 +36,10 @@ local M = SuuUI.RegisterModule({
 })
 
 -- The first voices (borrowed for a day) gave way to SuuUI's own.
-M:Migrate("pullVoice-own", function(values)
-    if values.pullVoice == "David" then values.pullVoice = "Male"
-    elseif values.pullVoice == "Jim" then values.pullVoice = "Female" end
+M:Migrate("pullVoice-kokoro", function(values)
+    local v = values.pullVoice
+    if v == "David" or v == "Male" then values.pullVoice = "Michael"
+    elseif v == "Jim" or v == "Female" then values.pullVoice = "Heart" end
 end)
 
 -- "Last 5 seconds" became "Last 10 seconds".
@@ -300,13 +301,13 @@ end
 
 --------------------------------------------------------------------------------
 -- The countdown voice: the last ten seconds and "Pull!" spoken
--- (Media/Sounds/Countdown: SuuUI's own, generated from public-domain Piper
--- voices, see its license.txt and tools/gen_countdown_voice.py). Addon
+-- (Media/Sounds/Countdown: SuuUI's own, generated with Kokoro-82M, Apache-2.0
+-- weights, see its license.txt and tools/gen_countdown_voice.py). Addon
 -- sound files play on Forever (game-data paths don't). Quiet while a boss
 -- mod feeds the timeline: it counts out loud itself then.
 --------------------------------------------------------------------------------
 
-local VOICES = { Female = true, Male = true }
+local VOICES = { Heart = true, Bella = true, Michael = true, Fenrir = true, Puck = true }
 local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.ogg"
 
 -- n: 1-10, or "pull"
@@ -566,7 +567,8 @@ local SECTION = {
               options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
               description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
             { key = "pullVoice", label = "Voice", control = "segmented",
-              options = { { value = "Female", label = "Female" }, { value = "Male", label = "Male" }, { value = "off", label = "Off" } },
+              options = { { value = "Heart", label = "Heart" }, { value = "Bella", label = "Bella" }, { value = "Michael", label = "Michael" },
+                          { value = "Fenrir", label = "Fenrir" }, { value = "Puck", label = "Puck" }, { value = "off", label = "Off" } }, stacked = true,
               description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then." },
             { label = "Listen", control = "button", text = "Hear the voice",
               disabled = function() return M:Get("pullVoice") == "off", "Choose a voice first." end,

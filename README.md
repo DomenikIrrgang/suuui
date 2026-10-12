@@ -175,7 +175,7 @@ SuuUI is released under the [MIT License](LICENSE). The bundled typefaces keep t
 ## ✦ Credits
 
 - Typefaces: **[Figtree](https://github.com/erikdkennedy/figtree)** and **[Marcellus SC](https://fonts.google.com/specimen/Marcellus+SC)**, both under the SIL Open Font License (see [`Media/Fonts`](Media/Fonts)).
-- Countdown voices: generated for SuuUI with [Piper](https://github.com/rhasspy/piper) from the voices *en_US-ljspeech-high* and *en_US-norman-medium* by Bryce Beattie, trained on public-domain recordings ([LJ Speech](https://keithito.com/LJ-Speech-Dataset/), [LibriVox](https://librivox.org)); see [`Media/Sounds/Countdown`](Media/Sounds/Countdown).
+- Countdown voices: generated for SuuUI with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0) by hexgrad; see [`Media/Sounds/Countdown`](Media/Sounds/Countdown).
 - Made for the **WoW Forever** community.
 
 <p align="center">
