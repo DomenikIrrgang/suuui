@@ -20,7 +20,7 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
-            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", effectName = "Divine Shield", effectIDs = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 }, members = {
                 { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
                 { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
             }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
@@ -99,7 +99,7 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Voice of Truth", effect = "you", ids = { 1310897 } },
-            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", effectName = "Divine Shield", effectIDs = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 }, members = {
                 { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
                 { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
             }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
@@ -183,7 +183,7 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Templar's Bulwark", effect = "you", ids = { 1311015 } },
-            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", effectName = "Divine Shield", effectIDs = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 }, members = {
                 { name = "Divine Protection", when = { conditions = { { type = "group", value = "solo" } } }, ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
                 { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
             }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
@@ -295,7 +295,7 @@ ns.CooldownPresets = {
         utility = {
             { name = "Repentance", effect = "target", ids = { 20066, 1324538 } },
             { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
-            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", effectName = "Divine Shield", effectIDs = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 }, members = {
                 { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
                 { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
             }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },

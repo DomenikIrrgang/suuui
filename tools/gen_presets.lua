@@ -233,6 +233,11 @@ local function resolveGroup(entry, key, where, class)
     table.sort(union)
     g.ids = union
     g.icon = g.icon or (g.members[1] and iconID(class, g.members[1].ids))
+    -- a cooldown group's effect: any member's aura (Fire Ward's absorb shows
+    -- on the slot although it shows Frost Ward), unless effectName says
+    if cooldowns and g.behaviour.effect and not g.behaviour.effectIDs then
+        g.behaviour.effectIDs, g.behaviour.effectName = union, entry.group
+    end
     return g
 end
 

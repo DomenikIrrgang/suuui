@@ -19,7 +19,7 @@ ns.CooldownPresets = {
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         utility = {
-            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
             { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
             { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
@@ -65,7 +65,7 @@ ns.CooldownPresets = {
         essential = {
             { name = "Hurricane", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
             { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
-            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         utility = {
@@ -116,11 +116,11 @@ ns.CooldownPresets = {
     { id = "feralcat", name = "Feral (cat)", tree = 2, lists = {
         essential = {
             { name = "Shifting Power", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1322605 } },
-            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
+            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
             { name = "Berserk", effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
             { name = "Cower", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1742, 1747, 1748, 1749, 1750, 1751, 1753, 1754, 1755, 1756, 8998, 9000, 9892, 16697, 16698, 456333 } },
             { name = "Bash", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
                 { name = "Feral Charge", ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
@@ -128,7 +128,7 @@ ns.CooldownPresets = {
         utility = {
             { name = "Prowl", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 5215, 6783, 8152, 9913, 24450, 24451, 24452, 24453, 24454, 24455, 1264489 } },
             { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
-            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
             { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
         },
@@ -176,9 +176,9 @@ ns.CooldownPresets = {
     } },
     { id = "feralbear", name = "Feral (bear)", tree = 2, lists = {
         essential = {
-            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
+            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
             { name = "Growl", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
-            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
                 { name = "Feral Charge", ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
@@ -189,7 +189,7 @@ ns.CooldownPresets = {
         utility = {
             { name = "Frenzied Regeneration", effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 22842, 22845, 428708 } },
             { name = "Challenging Roar", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5209 } },
-            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
             { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
             { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
@@ -259,7 +259,7 @@ ns.CooldownPresets = {
         utility = {
             { name = "Tranquility", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
             { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
-            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         buffs = {

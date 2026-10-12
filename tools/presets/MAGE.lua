@@ -14,9 +14,8 @@
 --     Ice Barrier, Evocation, the wards, Mana Shield on you; Frost Nova and
 --     Cone of Cold on the target), so those auras have no entry of their own
 --   * Frost Nova's cell is gone while a boss is targeted (bosses don't root)
---   * Fire Ward and Frost Ward stay two cells: the class data carries no
---     cooldowns for trainer spells, so a shared cooldown isn't confirmed
---     (and one cell would show only the last ward learned, Frost Ward)
+--   * Fire Ward and Frost Ward share a cooldown (confirmed in game): one
+--     cell, Frost Ward's icon once learned, either ward's absorb on it
 --   * buffs you keep up (armor, Arcane Intellect, from anyone; 30 min and
 --     more) remind while missing, out of combat
 --   * debuffs: Polymorph, Fireball's, Pyroblast's and Frostfire Bolt's DoTs
@@ -51,13 +50,16 @@ local FIRE_DEBUFFS = { collection = "Fire Debuffs", entries = {
     { "Pyroblast", missing = "hide" },
     { "Frostfire Bolt", missing = "hide" } } }
 
+-- the wards share a cooldown: one cell, either ward's absorb shown on it
+local WARDS = { group = "Wards", members = { "Fire Ward", "Frost Ward" }, effect = "you" }
+
 return {
     -- No talents: Clearcasting needs Arcane Concentration, so it only shows
     -- once a point goes there (harmless till then).
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { "Fire Blast", FROST_NOVA, { "Cone of Cold", effect = "target" }, "Counterspell" },
       utility = { "Blink", { "Evocation", effect = "you" }, { "Mana Shield", effect = "you" },
-                  { "Fire Ward", effect = "you" }, { "Frost Ward", effect = "you" } },
+                  WARDS },
       buffs = { armor("Frost Armor"), INTELLECT },
       debuffs = { "Frostbolt", { "Fireball", missing = "hide" }, POLYMORPH },
       procs = { "Clearcasting" } },
@@ -71,7 +73,7 @@ return {
                     { "Counterspell", effect = "target", effectName = "Counterspell - Silenced" } },
       utility = { "Blink", { "Evocation", effect = "you" }, { "Mana Shield", effect = "you" },
                   { "Ice Block", effect = "you" }, "Cone of Cold",
-                  { "Fire Ward", effect = "you" }, { "Frost Ward", effect = "you" } },
+                  WARDS },
       buffs = { armor("Mage Armor"), INTELLECT },
       debuffs = { POLYMORPH },
       -- Arcane Blast: the stacking buff on you (up to 4, 8 sec)
@@ -85,7 +87,7 @@ return {
                     { "Cone of Cold", effect = "target" }, "Counterspell" },
       utility = { { "Combustion", effect = "you" }, "Blink", { "Evocation", effect = "you" },
                   { "Ice Block", effect = "you" }, { "Mana Shield", effect = "you" },
-                  { "Fire Ward", effect = "you" }, { "Frost Ward", effect = "you" } },
+                  WARDS },
       buffs = { armor("Mage Armor"), INTELLECT },
       debuffs = { FIRE_DEBUFFS, POLYMORPH, STUNS },
       -- Hot Streak: the cue to press Pyroblast
@@ -97,7 +99,7 @@ return {
       essential = { FROST_NOVA, { "Cone of Cold", effect = "target" },
                     { "Ice Barrier", effect = "you" }, "Fire Blast", "Counterspell" },
       utility = { "Blink", { "Ice Block", effect = "you" }, "Cold Snap", { "Evocation", effect = "you" },
-                  { "Frost Ward", effect = "you" }, { "Fire Ward", effect = "you" } },
+                  WARDS },
       buffs = { armor("Ice Armor"), INTELLECT },
       -- Frostbite: the freeze (Ice Lance's window); Chilled: Improved
       -- Blizzard's and Frost/Ice Armor's slow

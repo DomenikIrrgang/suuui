@@ -10,11 +10,11 @@
 --
 -- Choices:
 --   forms (live conditions, in combat too): bear abilities and auras show in
---   bear form, cat ones in cat form, Primal Bite and Berserk in either
---   (Berserk requires one; Primal Bite's tooltip names no form), heals
+--   bear form, cat ones in cat form (Primal Bite is bear only, confirmed in
+--   game), Berserk in either (it requires one), Barkskin in every form
+--   (confirmed in game), heals
 --   (Tranquility, Swiftmend, Wild Growth, Nature's Swiftness) in caster form
---   only (Moonkin Form blocks healing), the other spells (Barkskin,
---   Innervate, Rebirth, Hurricane, the DoTs) in caster or moonkin form.
+--   only (Moonkin Form blocks healing), the other spells (Innervate, Rebirth, Hurricane, the DoTs) in caster or moonkin form.
 --   Nature's Grasp (castable while shapeshifted), Faerie Fire (one name for
 --   the caster and the feral spell), the reminders and the shared groups
 --   show in every form. So each preset is right whatever you shift into: the
@@ -67,13 +67,13 @@ end
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { bear("Bash"), bear("Growl"), bear(onYou("Enrage")), onYou("Nature's Grasp") },
-      utility = { casting(onYou("Barkskin")), casting(onYou("Innervate")), cat(onYou("Dash")), casting("Rebirth"), healing("Tranquility") },
+      utility = { onYou("Barkskin"), casting(onYou("Innervate")), cat(onYou("Dash")), casting("Rebirth"), healing("Tranquility") },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       debuffs = { casting("Moonfire"), "Faerie Fire", bear("Demoralizing Roar"), HOLDS, S.STUNS },
       procs = { "Clearcasting" } },
     -- Balance has no short cooldowns: its essentials are the minute-long ones.
     { id = "balance", name = "Balance", tree = 1,
-      essential = { casting("Hurricane"), casting(onYou("Innervate")), casting(onYou("Barkskin")), onYou("Nature's Grasp") },
+      essential = { casting("Hurricane"), casting(onYou("Innervate")), onYou("Barkskin"), onYou("Nature's Grasp") },
       -- Nature's Swiftness for hybrids that reach it in Restoration
       utility = { casting("Rebirth"), healing("Tranquility"), cat(onYou("Dash")), casting(onYou("Nature's Swiftness")) },
       buffs = { remind("Mark of the Wild"), remind("Thorns"), forms({ "Moonkin Form", mine = true, missing = "remind" }, "caster") },
@@ -81,18 +81,18 @@ return {
       procs = { "Clearcasting", "Nature's Grace", "Eclipse" } },
     { id = "feralcat", name = "Feral (cat)", tree = 2,
       -- Bash and Feral Charge for the times you shift to bear
-      essential = { cat("Shifting Power"), feral("Primal Bite"), feral(onYou("Berserk")), cat("Cower"), bear("Bash"), feralCharge() },
+      essential = { cat("Shifting Power"), bear("Primal Bite"), feral(onYou("Berserk")), cat("Cower"), bear("Bash"), feralCharge() },
       -- Prowl's cooldown restarts when stealth breaks; its icon shows while you prowl
-      utility = { cat(onYou("Prowl")), cat(onYou("Dash")), casting(onYou("Barkskin")), casting(onYou("Innervate")), casting("Rebirth") },
+      utility = { cat(onYou("Prowl")), cat(onYou("Dash")), onYou("Barkskin"), casting(onYou("Innervate")), casting("Rebirth") },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       -- Pounce Bleed only after an opener
       debuffs = { cat({ collection = "Bleeds", entries = { "Rip", "Rake", hide("Pounce Bleed") } }),
           "Faerie Fire", S.physical({ druid = true }), S.STUNS },
       procs = { "Clearcasting" } },
     { id = "feralbear", name = "Feral (bear)", tree = 2,
-      essential = { feral("Primal Bite"), bear("Growl"), feralCharge(), bear("Bash"), bear(onYou("Enrage")), feral(onYou("Berserk")) },
+      essential = { bear("Primal Bite"), bear("Growl"), feralCharge(), bear("Bash"), bear(onYou("Enrage")), feral(onYou("Berserk")) },
       -- Dash for the times you shift to cat
-      utility = { bear(onYou("Frenzied Regeneration")), bear("Challenging Roar"), casting(onYou("Barkskin")), casting(onYou("Innervate")),
+      utility = { bear(onYou("Frenzied Regeneration")), bear("Challenging Roar"), onYou("Barkskin"), casting(onYou("Innervate")),
           casting("Rebirth"), cat(onYou("Dash")) },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       -- Lacerate stacks to 5 and is kept up, like Faerie Fire and the roar
@@ -100,7 +100,7 @@ return {
       procs = { "Clearcasting" } },
     { id = "restoration", name = "Restoration", tree = 3,
       essential = { healing("Swiftmend"), healing("Wild Growth"), healing(onYou("Nature's Swiftness")), casting(onYou("Innervate")) },
-      utility = { healing("Tranquility"), casting("Rebirth"), casting(onYou("Barkskin")), onYou("Nature's Grasp") },
+      utility = { healing("Tranquility"), casting("Rebirth"), onYou("Barkskin"), onYou("Nature's Grasp") },
       -- your own HoTs on yourself, for self-healing, while up
       buffs = { remind("Mark of the Wild"), remind("Thorns"), { "Rejuvenation", mine = true, missing = "hide" },
           { "Regrowth", mine = true, missing = "hide" } },
