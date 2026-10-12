@@ -2,6 +2,7 @@
 -- Notifications (step 2.4): a stack at the top left under the micro menu.
 -- Requests are Blizzard's own popups (party invite, resurrection, summon,
 -- duel, trade, release spirit, delete item, logout, battleground entry …)
+-- and its battleground-ready and ready-check windows
 -- shown as SuuUI cards; notes come from SuuUI.Notify (timed, sticky, or
 -- until something happens). At most five show (the rest behind "+N more"),
 -- requests first; in combat only requests and conditions.
@@ -233,18 +234,15 @@ end
 
 -- The card's data for a hosted popup.
 function M:CardData(h)
-    local dialog, kind = h.dialog, h.kind
-    local text = dialog.Text and dialog.Text:GetText()
+    local kind = h.kind
+    local text = h.text()
     local d = {
         id = h.id, kind = "action", tone = kind.tone, category = kind.category,
-        title = plain(text) and text or "", icon = { glyph = kind.glyph },
-        host = { buttons = #buttonsOf(dialog) },
+        title = plain(text) and text or (kind.title or ""), icon = { glyph = kind.glyph },
+        host = { buttons = #h.buttons() },
     }
-    local info = StaticPopupDialogs and StaticPopupDialogs[h.which]
-    local timeout = info and info.timeout
-    if plain(timeout) and type(timeout) == "number" and timeout > 0 and plain(dialog.timeleft) and dialog.timeleft then
-        d.duration, d.remaining = timeout, dialog.timeleft
-    end
+    local duration, remaining = h.time()
+    if duration then d.duration, d.remaining = duration, remaining end
     if kind.item then
         local what, _, link = GetCursorInfo()
         if what == "item" and plain(link) and link then
@@ -253,7 +251,7 @@ function M:CardData(h)
             d.item = { icon = icon, label = name or link, quality = qualities[quality or 1] or "common" }
         end
     end
-    if kind.confirm and dialog.EditBox and dialog.EditBox:IsShown() then
+    if kind.confirm and h.editBox and h.editBox:IsShown() then
         d.confirmText = (DELETE_ITEM_CONFIRM_STRING or "DELETE")
     end
     return d
@@ -271,7 +269,7 @@ function M:Attach(h)
     h.card = card
     local kind = h.kind
     local x = 0
-    local list = buttonsOf(h.dialog)
+    local list = h.buttons()
     for k = #list, 1, -1 do
         local b, index = list[k].button, list[k].index
         local variant = (index == kind.primary and "primary") or (index == kind.danger and "danger") or "quiet"
@@ -280,14 +278,32 @@ function M:Attach(h)
         b:SetPoint("RIGHT", card.actionsRow, "RIGHT", -x, 0)
         x = x + w + S["space-3"]
     end
-    local eb = h.dialog.EditBox
+    local eb = h.editBox
     if card.data and card.data.confirmText and eb then self:StyleEditBox(h, eb, card.confirmBox) end
 end
 
+-- A Blizzard popup: its buttons, text, time left and edit box.
 function M:Host(dialog, which)
-    if not self:Get("requests") then return end
     local kind = KINDS[which]
     if not kind then return end
+    local info = StaticPopupDialogs and StaticPopupDialogs[which]
+    self:HostFrame(dialog, which, kind, {
+        buttons = function() return buttonsOf(dialog) end,
+        text = function() return dialog.Text and dialog.Text:GetText() end,
+        time = function()
+            local timeout = info and info.timeout
+            if plain(timeout) and type(timeout) == "number" and timeout > 0 and plain(dialog.timeleft) and dialog.timeleft then
+                return timeout, dialog.timeleft
+            end
+        end,
+        editBox = dialog.EditBox,
+    })
+end
+
+-- Any Blizzard request window: `parts` says where its buttons ({ button,
+-- index } in order), text, time (duration, remaining) and edit box are.
+function M:HostFrame(dialog, which, kind, parts)
+    if not self:Get("requests") then return end
     local h = self.hosts[dialog]
     if h and h.which ~= which then self:Undo(h) end
     if not h then
@@ -299,6 +315,7 @@ function M:Host(dialog, which)
         end
     end
     h.which, h.kind = which, kind
+    h.buttons, h.text, h.time, h.editBox = parts.buttons, parts.text, parts.time or function() end, parts.editBox
     h.id = "popup:" .. (dialog:GetName() or tostring(dialog))
     -- the popup itself out of sight (its parts come onto the card); kept on
     -- screen by its clamp otherwise
@@ -317,6 +334,79 @@ function M:Release(dialog)
     if h.clamped ~= nil then dialog:SetClampedToScreen(h.clamped) end
     self.hosts[dialog] = nil
     self:Rebuild()
+end
+
+-- Blizzard's request windows that aren't popups: the battleground's "enter"
+-- (its answer is forbidden to addons: hosted like the popups) and the ready
+-- check (hosted the same way, so it sits with the rest).
+local function shownButtons(...)
+    local out = {}
+    for i = 1, select("#", ...) do
+        local b = select(i, ...)
+        if b and b:IsShown() then out[#out + 1] = { button = b, index = i } end
+    end
+    return out
+end
+
+-- The battleground waiting for you to enter.
+local function battlefieldReady()
+    if not (GetMaxBattlefieldID and GetBattlefieldStatus) then return nil end
+    for i = 1, GetMaxBattlefieldID() do
+        local status = GetBattlefieldStatus(i)
+        if status == "confirm" then return i end
+    end
+end
+
+local WINDOWS = {
+    {
+        name = "PVPReadyDialog",
+        kind = { category = "Battleground", glyph = "flag", primary = 1, title = "Your battleground is ready" },
+        parts = function(f)
+            local total -- the first reading: the whole time to enter
+            return {
+                buttons = function() return shownButtons(f.enterButton, f.leaveButton) end,
+                text = function() return f.label and f.label:GetText() end,
+                time = function()
+                    local i = battlefieldReady()
+                    local t = i and GetBattlefieldPortExpiration and GetBattlefieldPortExpiration(i)
+                    if plain(t) and t and t > 0 then
+                        -- seconds on some clients, milliseconds on others
+                        local left = t > 1000 and t / 1000 or t
+                        total = total or left
+                        return total, left
+                    end
+                end,
+            }
+        end,
+    },
+    {
+        name = "ReadyCheckFrame",
+        kind = { category = "Ready check", glyph = "flag", primary = 1, title = "Are you ready?" },
+        parts = function(f)
+            local l = _G.ReadyCheckListenerFrame or f
+            return {
+                buttons = function() return shownButtons(l.YesButton, l.NoButton) end,
+                text = function() return l.Text and l.Text:GetText() end,
+                time = function()
+                    if M.readyEndsAt then return M.readyDuration, math.max(0, M.readyEndsAt - GetTime()) end
+                end,
+            }
+        end,
+    },
+}
+
+function M:HookWindows()
+    for _, w in ipairs(WINDOWS) do
+        local f = _G[w.name]
+        if f and not self.hookedHide[f] then
+            self.hookedHide[f] = true
+            f:HookScript("OnShow", function(frame)
+                if self:IsEnabled() then self:HostFrame(frame, w.name, w.kind, w.parts(frame)) end
+            end)
+            f:HookScript("OnHide", function(frame) self:Release(frame) end)
+            if f:IsShown() then self:HostFrame(f, w.name, w.kind, w.parts(f)) end
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -363,18 +453,21 @@ function M:Tick()
     for dialog, h in pairs(self.hosts) do
         local card = h.card
         if card then
-            local text = dialog.Text and dialog.Text:GetText()
-            if plain(text) and text ~= h.data.title then
+            local text = h.text()
+            if plain(text) and text and text ~= h.data.title then
                 h.data.title = text
                 card:SetTitle(text)
             end
-            if h.data.duration and plain(dialog.timeleft) and dialog.timeleft then card:SetRemaining(dialog.timeleft) end
+            if h.data.duration then
+                local _, remaining = h.time()
+                if remaining then card:SetRemaining(remaining) end
+            end
             local point, rel = dialog:GetPoint(1)
             if point ~= "BOTTOMRIGHT" or rel ~= UIParent then
                 dialog:ClearAllPoints()
                 dialog:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -OFF_SCREEN, OFF_SCREEN)
             end
-            local list = buttonsOf(dialog)
+            local list = h.buttons()
             local first = list[#list] and list[#list].button
             if first then
                 local _, brel = first:GetPoint(1)
@@ -477,6 +570,14 @@ function M:OnEnable()
             if dialog then self:Host(dialog, which) end
         end)
     end
+    self:HookWindows()
+    -- the ready check's time
+    self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)
+        if plain(timeLeft) and type(timeLeft) == "number" and timeLeft > 0 then
+            self.readyDuration, self.readyEndsAt = timeLeft, GetTime() + timeLeft
+        end
+    end)
+    self:OnGameEvent("READY_CHECK_FINISHED", function() self.readyEndsAt = nil end)
     -- in combat notes wait; out of it they come back
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Rebuild() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Rebuild() end)
