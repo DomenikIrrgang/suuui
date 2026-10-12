@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.10.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.11.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.10.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter |
+| `SuuUI.API_VERSION` | `"0.11.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -52,6 +52,7 @@ local M = SuuUI.RegisterModule({
 | `M:Reset([key])` | One key, or the module's whole namespace |
 | `M:Watch(key, fn)` | `fn(value, namespace, key)` after each change, including profile switches |
 | `M:Veto(key, fn)` | `fn(new, old)` returning `false, reason` refuses a change. A refused value a profile brings in (switching, copying, importing) is dropped, so the default applies |
+| `M:CharData()` (0.11) | The module's own table for this character, saved with SuuUI: what it keeps that isn't a setting (a history, a cache). Never in a profile, an export or a reset. From `OnEnable` on |
 | `M:Migrate(id, fn)` (0.9) | `fn(values)` brings one profile's stored values of the module into a new shape (a renamed key, a changed type) by changing `values` in place. See *Migrations* |
 
 #### Migrations

@@ -28,7 +28,7 @@ local M = SuuUI.RegisterModule({
     id = "chat",
     name = "Chat",
     description = "Blizzard's chat in SuuUI's look: a glass panel, SuuUI tabs and input, fading while idle.",
-    api = "0.10",
+    api = "0.11",
     reloadToToggle = true,
     defaults = {
         position = { point = "BOTTOMLEFT", x = 28, y = 28 },
@@ -458,15 +458,23 @@ function M:ApplyMirrorFont(cf)
 end
 
 --------------------------------------------------------------------------------
--- History: what you sent (every channel, whispers), recalled with Up and
--- Down. Taken from the chat events your own lines come back as and handed
--- to the edit boxes' own history: the game recalls them, SuuUI never types
--- into the input (its text would then be SuuUI's, and what's sent with it
--- could be blocked). If Blizzard adds lines itself, SuuUI leaves it to it.
+-- History: what you sent and the commands you ran, recalled with Up and
+-- Down, kept for the character across reloads. This client's input has no
+-- recall of its own. Taken on Enter, before Blizzard runs the line (a
+-- message as the command that sends it again: "/p hi", "/w Name hi"); your
+-- own lines coming back as chat events fill in if that key never reaches
+-- SuuUI. A recalled line is typed in by SuuUI, so what's sent with it runs
+-- as SuuUI's: in combat Up and Down do nothing (a protected command or a
+-- message in an encounter would be blocked).
 --------------------------------------------------------------------------------
 
-local HISTORY_KEEP = 32
--- chat event → the command that sends there
+local HISTORY_KEEP = 50
+-- the input's chat type → the command that sends there
+local TYPE_CMD = {
+    SAY = "/s", YELL = "/y", EMOTE = "/e", PARTY = "/p", RAID = "/raid", RAID_WARNING = "/rw",
+    INSTANCE_CHAT = "/i", GUILD = "/g", OFFICER = "/o",
+}
+-- your own line's chat event → the command that sends there
 local SENT = {
     CHAT_MSG_SAY = "/s", CHAT_MSG_YELL = "/y", CHAT_MSG_EMOTE = "/e",
     CHAT_MSG_PARTY = "/p", CHAT_MSG_PARTY_LEADER = "/p",
@@ -478,7 +486,31 @@ local SENT = {
 
 local function plain(v) return v ~= nil and not isSecret(v) end
 
--- Your own line, as the command that sends it again; nil for anyone else's.
+-- What the input holds as a line to keep: a command as typed, a message
+-- with the command for where it goes.
+local function typedLine(eb)
+    local text = eb:GetText()
+    if not plain(text) or type(text) ~= "string" then return nil end
+    text = strtrim(text)
+    if text == "" then return nil end
+    if text:sub(1, 1) == "/" then return text end
+    local chatType = eb:GetAttribute("chatType")
+    if not plain(chatType) then return nil end
+    if chatType == "WHISPER" or chatType == "BN_WHISPER" then
+        local target = eb:GetAttribute("tellTarget")
+        if plain(target) and type(target) == "string" and target ~= "" then return "/w " .. target .. " " .. text end
+        return nil
+    end
+    if chatType == "CHANNEL" then
+        local channel = eb:GetAttribute("channelTarget")
+        if plain(channel) and channel then return "/" .. tostring(channel) .. " " .. text end
+        return nil
+    end
+    local cmd = TYPE_CMD[chatType]
+    return cmd and (cmd .. " " .. text) or nil
+end
+
+-- Your own line from a chat event, as the command that sends it again.
 local function sentLine(event, text, sender, channelNumber, guid)
     local cmd = SENT[event]
     if not cmd or not plain(text) or type(text) ~= "string" or text == "" then return nil end
@@ -495,30 +527,57 @@ local function sentLine(event, text, sender, channelNumber, guid)
     return cmd .. " " .. text
 end
 
--- An edit box gets its history: lines kept, what was sent so far, and a
--- watch for Blizzard adding lines itself.
-function M:HistoryFor(eb)
-    if not (eb.AddHistoryLine and eb.GetHistoryLines) then return end
-    self.historyBoxes = self.historyBoxes or {}
-    if self.historyBoxes[eb] then return end
-    self.historyBoxes[eb] = true
-    if (eb:GetHistoryLines() or 0) < HISTORY_KEEP and eb.SetHistoryLines then eb:SetHistoryLines(HISTORY_KEEP) end
-    for _, line in ipairs(self.history or {}) do eb:AddHistoryLine(line) end
-    hooksecurefunc(eb, "AddHistoryLine", function()
-        if not self.addingHistory then self.blizzardHistory = true end
-    end)
+function M:History()
+    local data = self:CharData()
+    data.history = data.history or {}
+    return data.history
 end
 
 function M:AddHistory(line)
-    if self.blizzardHistory then return end
-    self.history = self.history or {}
-    local list = self.history
+    local list = self:History()
     if list[#list] == line then return end
     list[#list + 1] = line
-    if #list > HISTORY_KEEP then table.remove(list, 1) end
-    self.addingHistory = true
-    for eb in pairs(self.historyBoxes or {}) do pcall(eb.AddHistoryLine, eb, line) end
-    self.addingHistory = nil
+    while #list > HISTORY_KEEP do table.remove(list, 1) end
+    self.recall = nil
+end
+
+-- Up: one line further back; Down: one forward, past the newest an empty
+-- input. A recall starts over once the text isn't the recalled line.
+function M:Recall(eb, step)
+    if InCombatLockdown() then return end
+    local list = self:History()
+    if #list == 0 then return end
+    local r = self.recall
+    local text = eb:GetText()
+    if not (r and r.eb == eb and plain(text) and text == r.shown) then
+        r = { eb = eb, index = #list + 1 }
+        self.recall = r
+    end
+    local index = math.max(1, math.min(#list + 1, r.index + step))
+    if index == r.index then return end
+    r.index = index
+    eb:SetText(list[index] or "")
+    eb:SetCursorPosition(#eb:GetText())
+    -- as the input shows it (Blizzard may turn "/p " into its header)
+    r.shown = eb:GetText()
+end
+
+-- An edit box gets the history: Enter keeps the line, Up and Down recall.
+function M:HistoryFor(eb)
+    self.historyBoxes = self.historyBoxes or {}
+    if self.historyBoxes[eb] then return end
+    self.historyBoxes[eb] = true
+    eb:HookScript("OnKeyDown", function(box, key)
+        if key ~= "ENTER" and key ~= "NUMPADENTER" then return end
+        local line = typedLine(box)
+        if line then
+            self.keyCapture = true
+            self:AddHistory(line)
+        end
+    end)
+    eb:HookScript("OnArrowPressed", function(box, key)
+        if key == "UP" then self:Recall(box, -1) elseif key == "DOWN" then self:Recall(box, 1) end
+    end)
 end
 
 function M:WatchSent()
@@ -526,6 +585,7 @@ function M:WatchSent()
     for event in pairs(SENT) do
         if not valid or valid(event) then
             self:OnGameEvent(event, function(_, text, sender, _, _, _, _, _, channelNumber, _, _, _, guid)
+                if self.keyCapture then return end
                 local line = sentLine(event, text, sender, channelNumber, guid)
                 if line then self:AddHistory(line) end
             end)

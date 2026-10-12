@@ -480,12 +480,26 @@ function Profiles.Import(name, data)
     return Profiles.Use(strtrim(name))
 end
 
+-- A module's own data for this character (not a setting: kept out of
+-- profiles, exports and resets), made on first use. Saved with SuuUIDB.
+function Settings.CharData(namespace)
+    assert(db, "SuuUI Settings: saved settings have not loaded yet")
+    local mine = db.charData[charKey]
+    if not mine then
+        mine = {}
+        db.charData[charKey] = mine
+    end
+    mine[namespace] = mine[namespace] or {}
+    return mine[namespace]
+end
+
 local function bind()
     SuuUIDB = SuuUIDB or {}
     db = SuuUIDB
     db.version = db.version or 1
     db.profiles = db.profiles or {}
     db.chars = db.chars or {}
+    db.charData = db.charData or {}
     charKey = UnitName("player") .. " - " .. GetRealmName()
     local name = db.chars[charKey]
     if not (name and db.profiles[name]) then name = charKey end
