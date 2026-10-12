@@ -15,6 +15,12 @@ Glyphs/<name>.tga (64x64, white): the design system's line glyphs (its Glyph
 component: 24-unit SVG paths, stroke 1.9, round caps), stroked here by a
 small path rasterizer (M L H V C S Q A Z, relative and absolute). Tinted in
 game. Mark.tga (64x64, colour): the SuuUI mark (Docs/assets/suuui-mark.svg).
+
+Circle textures (white, tinted in game): CircleFill.tga (64, a disc),
+CircleEdge.tga (256, a ring 1/176 of the width at the edge: the minimap's 1px
+gilt line at 176px; also the round buttons' edge), CircleBand.tga (256, the
+inset-anchor's 3px dark band just inside the edge at 176px), CircleSoft.tga
+(128, a disc fading out: round shadows and glows).
 """
 
 import math
@@ -285,6 +291,11 @@ GLYPHS = {
     "plus": "M12 5v14M5 12h14",
     "minus": "M5 12h14",
     "flag": "M5 21V4M5 4h12l-2 4 2 4H5",
+    "hammer": "M14 4l6 6-3 3-6-6 3-3zM11 7L4 14a2 2 0 0 0 3 3l7-7",
+    "trophy": "M8 4h8v5a4 4 0 0 1-8 0V4zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8",
+    "search": "M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L20 20",
+    "gem": "M12 3l6 6-6 12-6-12 6-6zM6 9h12",
+    "coin": "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM9 9.5h6M9 14.5h6",
 }
 
 
@@ -343,6 +354,43 @@ def mark_pixel(size=64, ss=4):
     return lambda x, y: cache[(x, y)]
 
 
+# --- Circles: radial coverage with 4x4 supersampling
+
+def circle(size, inner, outer, ss=4):
+    """Alpha of the band inner..outer (fractions of the radius)."""
+    r = size / 2
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss - r
+                    y = py + (sy + 0.5) / ss - r
+                    d = math.hypot(x, y) / r
+                    if inner <= d <= outer:
+                        hits += 1
+            cache[(px, py)] = round(255 * hits / (ss * ss))
+    return lambda x, y: (255, 255, 255, cache[(x, y)])
+
+
+def soft_circle(size, core=0.6):
+    """A disc solid to `core` of the radius, then a smooth fall to the edge."""
+    r = size / 2
+
+    def pixel(px, py):
+        d = math.hypot(px + 0.5 - r, py + 0.5 - r) / r
+        if d <= core:
+            a = 1.0
+        elif d >= 1:
+            a = 0.0
+        else:
+            t = (d - core) / (1 - core)
+            a = (1 - t) ** 2 * (1 + 2 * t)  # smoothstep down
+        return (255, 255, 255, round(255 * a))
+    return pixel
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "Glyphs"), exist_ok=True)
@@ -357,6 +405,10 @@ def main():
     for name, d in GLYPHS.items():
         jobs.append((os.path.join("Glyphs", name + ".tga"), 64, stroke_alpha(path_polylines(d), 1.9)))
     jobs.append(("Mark.tga", 64, mark_pixel()))
+    jobs.append(("CircleFill.tga", 64, circle(64, 0, 1)))
+    jobs.append(("CircleEdge.tga", 256, circle(256, 1 - 2 / 176, 1)))
+    jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))
+    jobs.append(("CircleSoft.tga", 128, soft_circle(128)))
     only = set(os.sys.argv[1:])
     for name, size, pixel in jobs:
         if only and name not in only and os.path.splitext(os.path.basename(name))[0] not in only:

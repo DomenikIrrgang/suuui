@@ -1,7 +1,7 @@
 -- Units/MicroBags.lua
--- Blizzard's micro menu and bag bar, moved out of the dock's way until SuuUI
--- draws its own (step 2.1). A built-in module written against the public API
--- only.
+-- Blizzard's bag bar (and its micro menu while SuuUI's own, the Micro menu
+-- module, is off), moved out of the dock's way. A built-in module written
+-- against the public API only.
 --
 -- Each one moves into a holder of its own that edit mode can place: the micro
 -- menu top left, where the design's micro menu sits (space-7 from the edges),
@@ -82,19 +82,26 @@ end
 local SECTION = {
     id = "microbags", label = "Micro menu & bags", category = "Frames", order = 28,
     groups = {
-        { title = "Micro menu and bag bar", description = "Blizzard's own, until SuuUI draws its own. Move them in edit mode (General › Appearance › Edit layout).", rows = {
+        { title = "Bag bar", description = "Blizzard's bag bar, until SuuUI draws its own bags; Blizzard's micro menu too while SuuUI's micro menu is off. Move them in edit mode.", rows = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "scale", label = "Scale", control = "slider", min = 0.6, max = 1.4, step = 0.05,
               format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
-              description = "Both at once, from Blizzard's size." },
+              description = "From Blizzard's size." },
         } },
     },
 }
 
+-- SuuUI's micro menu replaces Blizzard's: then only the bag bar is ours.
+local function ownMicroMenu()
+    local m = SuuUI.GetModule("micromenu")
+    return m and m:Get("enabled") and true or false
+end
+
 function M:OnEnable()
     for _, item in ipairs(ITEMS) do
         local f = _G[item.frame]
+        if item.frame == "MicroMenu" and ownMicroMenu() then f = nil end
         if f then
             if not item.holderFrame then
                 item.holderFrame = CreateFrame("Frame", item.holder, SuuUI.Root)
