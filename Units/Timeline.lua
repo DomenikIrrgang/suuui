@@ -29,6 +29,8 @@ local M = SuuUI.RegisterModule({
         pullSeconds = 10,
         pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
         source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
+        hideTheirs = true,   -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
+        dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
     },
 })
 
@@ -114,6 +116,78 @@ function M:AddonTimerPause(source, id, paused)
         t.endsAt, t.paused = GetTime() + t.paused, nil
     end
     self:Refresh()
+end
+
+--------------------------------------------------------------------------------
+-- Their own display, hidden while they feed the timeline (setting).
+-- DBM: its HideDBMWarnings option (warnings and announces; kept and handed
+-- back), and each bar DBT makes kept at alpha 0 (its HideDBMBars would stop
+-- the timers themselves, callbacks included). BigWigs: each LibCandyBar bar
+-- it starts kept at alpha 0. BigWigs' messages have no way in from outside.
+--------------------------------------------------------------------------------
+
+function M:Suppressing(source)
+    return self:IsEnabled() and self:Get("hideTheirs") and self:Get("source") == source
+end
+
+-- keep a frame invisible while `test()` says so (one hook per frame)
+local function keepHidden(frame, test)
+    if not frame then return end
+    frame.suuHideTest = test
+    if not frame.suuHideHooked then
+        frame.suuHideHooked = true
+        hooksecurefunc(frame, "SetAlpha", function(f, a)
+            if a > 0 and f.suuHideTest and f.suuHideTest() then f:SetAlpha(0) end
+        end)
+    end
+    if test() then frame:SetAlpha(0) end
+end
+
+function M:ApplySuppression()
+    -- DBM's warnings: on while DBM feeds the timeline, your own setting back otherwise
+    if DBM and DBM.Options then
+        local want = self:Suppressing("dbm")
+        local was = self:Get("dbmWarningsWas")
+        if want and was == "" then
+            self:Set("dbmWarningsWas", DBM.Options.HideDBMWarnings and "true" or "false")
+            DBM.Options.HideDBMWarnings = true
+        elseif not want and was ~= "" then
+            DBM.Options.HideDBMWarnings = was == "true"
+            self:Set("dbmWarningsWas", "")
+        end
+    end
+end
+
+-- Each part once, as soon as its library is there (BigWigs loads its
+-- plugins, LibCandyBar with them, on demand: tried again on ADDON_LOADED).
+function M:HookDisplays()
+    self.hookedParts = self.hookedParts or {}
+    local hooked = self.hookedParts
+    -- DBM's bars
+    if not hooked.dbt and DBT and type(DBT.CreateBar) == "function" then
+        hooked.dbt = true
+        local create = DBT.CreateBar
+        DBT.CreateBar = function(dbt, ...)
+            local bar = create(dbt, ...)
+            if type(bar) == "table" and bar.frame then
+                keepHidden(bar.frame, function() return M:Suppressing("dbm") end)
+            end
+            return bar
+        end
+    end
+    -- BigWigs' bars (LibCandyBar, shared: only bars BigWigs tags as its own)
+    local candy = not hooked.candy and LibStub and LibStub("LibCandyBar-3.0", true)
+    if candy and candy.barPrototype and candy.barPrototype.Start then
+        hooked.candy = true
+        hooksecurefunc(candy.barPrototype, "Start", function(bar)
+            if bar.Get and bar:Get("bigwigs:module") ~= nil then
+                keepHidden(bar, function() return M:Suppressing("bigwigs") end)
+            else
+                -- the pool is shared: another addon's bar shows as it likes
+                bar.suuHideTest = nil
+            end
+        end)
+    end
 end
 
 -- DBM's timer types (colorId): 4 interrupt, 5 role (tank).
@@ -438,6 +512,9 @@ local SECTION = {
                   if #missing > 0 then text = text .. " Install " .. table.concat(missing, " or ") .. " to use " .. (#missing > 1 and "theirs" or "its") .. "." end
                   return text
               end },
+            { key = "hideTheirs", label = "Hide their bars", control = "toggle",
+              disabled = function() return M:Get("source") == "suui", "Choose DBM or BigWigs first." end,
+              description = "While a boss mod feeds the timeline, its own timer bars stay hidden; DBM's warnings too (its \"Hide DBM warnings\" option, given back when you switch). BigWigs' messages can't be hidden from outside: turn them off in BigWigs if you like." },
         } },
         { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). It is the game's own countdown, the one DBM and BigWigs use: in a group, the leader's or an assistant's reaches everyone (their boss mods show it, players without addons see the game's numbers), and theirs shows here. Combat ends it.", rows = {
             { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
@@ -462,6 +539,9 @@ function M:OnEnable()
         end
     end
     self:HookSources()
+    self:HookDisplays()
+    self:ApplySuppression()
+    self:OnGameEvent("ADDON_LOADED", function() self:HookDisplays() end)
     if not self.timeline then
         self.timeline = UI.EncounterTimeline(SuuUI.Root, { variant = self:Get("variant") == "list" and "list" or "track" })
         self.timeline:SetFrameStrata("MEDIUM")
@@ -487,7 +567,8 @@ function M:OnEnable()
     end
     self:BlizzardNumbers(self:Get("pullAlert") == "off")
     self:Watch("pullAlert", function() self:BlizzardNumbers(self:Get("pullAlert") == "off") end)
-    self:Watch("source", function() self.addonTimers = {}; self:Refresh() end)
+    self:Watch("source", function() self.addonTimers = {}; self:ApplySuppression(); self:Refresh() end)
+    self:Watch("hideTheirs", function() self:ApplySuppression() end)
     for _, key in ipairs({ "variant", "position" }) do
         self:Watch(key, function()
             self:Refresh()
@@ -500,6 +581,11 @@ end
 
 function M:OnDisable()
     self:BlizzardNumbers(true)
+    -- DBM's own setting back (Suppressing is false once disabled)
+    if DBM and DBM.Options and self:Get("dbmWarningsWas") ~= "" then
+        DBM.Options.HideDBMWarnings = self:Get("dbmWarningsWas") == "true"
+        self:Set("dbmWarningsWas", "")
+    end
     self:CancelPull(true)
     if self.timeline then self.timeline:Hide() end
 end
