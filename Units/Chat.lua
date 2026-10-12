@@ -438,10 +438,52 @@ local function stripColour(s)
     return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
 end
 
+-- Blizzard's own timestamp (its option in Social) as a pattern for the
+-- start of a line: its date format with the numbers as wildcards.
+local stampFormat, stampPattern
+local function blizzardStamp()
+    local fmt = GetCVar and GetCVar("showTimestamps")
+    if not plain(fmt) or type(fmt) ~= "string" or fmt == "" or fmt == "none" then return nil end
+    if fmt ~= stampFormat then
+        stampFormat = fmt
+        local out = {}
+        local i = 1
+        while i <= #fmt do
+            local c = fmt:sub(i, i)
+            if c == "%" and i < #fmt then
+                local k = fmt:sub(i + 1, i + 1)
+                out[#out + 1] = (k == "p") and "[AaPp]%.?[Mm]%.?" or "%d+"
+                i = i + 2
+            else
+                out[#out + 1] = c:gsub("%p", "%%%0")
+                i = i + 1
+            end
+        end
+        stampPattern = table.concat(out)
+    end
+    return stampPattern
+end
+
+local function stripBlizzardStamp(text)
+    local pattern = blizzardStamp()
+    if not pattern then return text end
+    local rest = text:match("^" .. pattern .. "(.*)$")
+    if rest then return rest end
+    -- coloured
+    local colour = text:match("^|c%x%x%x%x%x%x%x%x")
+    if colour then
+        rest = text:sub(11):match("^" .. pattern .. "|r(.*)$")
+        if rest then return rest end
+    end
+    return text
+end
+
 -- Blizzard's finished line → the design's (without the time).
 function M:FormatLine(text)
     if not plain(text) or type(text) ~= "string" then return text end
     local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
+    -- SuuUI shows the time: Blizzard's own goes
+    if self:Get("timestamps") then text = stripBlizzardStamp(text) end
     -- channel tags: no brackets, numbered ones without the zone
     if short then
         text = text:gsub("(|Hchannel:[^|]*|h)%[(.-)%](|h)", function(open, label, close)
@@ -1117,7 +1159,7 @@ local SECTION = {
         } },
         { title = "Lines", rows = {
             { key = "timestamps", label = "Timestamps", control = "toggle",
-              description = "The time before each line while you're using the chat; gone when it fades. Turn Blizzard's own off (Options › Social) so there's one." },
+              description = "The time before each line while you're using the chat; gone when it fades. Blizzard's own (Options › Social) is left out then." },
             { key = "classDiamonds", label = "Class diamonds", control = "toggle",
               description = "A diamond in the class colour before each name. Names take the line's colour." },
             { key = "shortChannels", label = "Short channel names", control = "toggle",
