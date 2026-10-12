@@ -221,6 +221,9 @@ function M:SkinFrame(cf)
         eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", 0, -GAP)
         eb:SetHeight(INPUT_H)
         if eb.SetTextInsets then eb:SetTextInsets(S["space-4"], S["space-4"], 0, 0) end
+        -- Up and Down recall what you sent (the edit box's own history),
+        -- without Alt
+        if eb.SetAltArrowKeyMode then eb:SetAltArrowKeyMode(false) end
         local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
         if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
         eb:SetFont(BODY_FONT, size, "")
@@ -391,6 +394,32 @@ local function tabButton(m, i)
     return b
 end
 
+-- The combat log's filter bar (Blizzard's: My actions, What happened to me?
+-- …), shown at the top of the lines while the Combat Log tab is: Blizzard
+-- shows it only while its own dock has the combat log selected, which it no
+-- longer is. The lines move down to make room.
+local FILTER_H = 24
+function M:CombatFilterBar(show)
+    local bar = _G.CombatLogQuickButtonFrame_Custom
+    local mirror = self.mirrors and self.mirrors[ChatFrame2]
+    if mirror then
+        mirror:ClearAllPoints()
+        mirror:SetPoint("TOPLEFT", 0, (show and bar) and -(FILTER_H + S["space-1"]) or 0)
+        mirror:SetPoint("BOTTOMRIGHT")
+    end
+    if not bar then return end
+    if show then
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", self.panel.log, "TOPLEFT", 0, 0)
+        bar:SetPoint("TOPRIGHT", self.panel.log, "TOPRIGHT", 0, 0)
+        bar:SetHeight(FILTER_H)
+        bar:SetFrameStrata("MEDIUM")
+        bar:Show()
+    else
+        bar:Hide()
+    end
+end
+
 function M:Select(cf)
     self.selected = cf
     if self.unread then self.unread[cf] = nil end
@@ -398,6 +427,7 @@ function M:Select(cf)
         mirror:SetShown(frame == cf)
         if frame == cf then self.activeMirror = mirror end
     end
+    self:CombatFilterBar(cf == ChatFrame2)
     self:UpdateTabs()
 end
 
