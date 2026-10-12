@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/version-0.1.5-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.1.5">
   <img src="https://img.shields.io/badge/status-in%20development-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: in development">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
 </p>
 
 <p align="center">
@@ -166,6 +167,10 @@ The presets are written as spell names in [`tools/presets/<CLASS>.lua`](tools/pr
 </details>
 
 ---
+
+## ✦ License
+
+SuuUI is released under the [MIT License](LICENSE). The bundled typefaces keep their own license, the SIL Open Font License 1.1.
 
 ## ✦ Credits
 
