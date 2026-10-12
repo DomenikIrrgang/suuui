@@ -73,10 +73,35 @@ for name, list in pairs(byName) do
     byName[name] = out
 end
 
+local missing, resolved = {}, {}
 local source = dofile(SOURCE)
 
+-- Behaviour an entry may carry (the Cooldown Manager's Behaviour panel keys,
+-- copied as they are), and how each is written out.
+local BEHAVIOUR = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "missing", "size",
+                    "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "hidden", "source" }
+
+-- The behaviour fields of a source entry; effectName (an aura's name) becomes
+-- effectIDs, every ID with that name, like any entry's.
+local function behaviour(entry, where)
+    local b = {}
+    if type(entry) ~= "table" then return b end
+    for _, k in ipairs(BEHAVIOUR) do
+        if entry[k] ~= nil and not (k == "source" and entry.group) then b[k] = entry[k] end
+    end
+    if entry.effectName then
+        local ids = byName[entry.effectName]
+        if not ids then
+            missing[#missing + 1] = ("%s: effectName %q"):format(where, entry.effectName)
+        else
+            b.effectIDs, b.effectName = ids, entry.effectName
+        end
+    end
+    return b
+end
+
 -- Resolve every entry first; report every unknown name at once.
-local missing, resolved = {}, {}
+resolved = {}
 local classes = {}
 for class in pairs(source) do classes[#classes + 1] = class end
 table.sort(classes)
@@ -89,7 +114,8 @@ for _, class in ipairs(classes) do
             for _, entry in ipairs(preset[key] or {}) do
                 if type(entry) == "table" and entry.group then
                     -- a group: every member resolved, the union as its IDs
-                    local g = { group = true, name = entry.group, source = entry.source or "mine", max = entry.max or 1, members = {} }
+                    local g = { group = true, name = entry.group, source = entry.source or "mine", max = entry.max or 1, members = {},
+                        behaviour = behaviour(entry, ("%s / %s / %s / group %s"):format(class, preset.name, key, entry.group)) }
                     local union, seen = {}, {}
                     for _, mname in ipairs(entry.members) do
                         local ids = byName[mname]
@@ -111,7 +137,8 @@ for _, class in ipairs(classes) do
                     if not ids then
                         missing[#missing + 1] = ("%s / %s / %s: %q"):format(class, preset.name, key, name)
                     else
-                        out[#out + 1] = { name = name, ids = ids, mine = type(entry) == "table" and entry.mine or nil }
+                        out[#out + 1] = { name = name, ids = ids, mine = type(entry) == "table" and entry.mine or nil,
+                            behaviour = behaviour(entry, ("%s / %s / %s: %q"):format(class, preset.name, key, name)) }
                     end
                 end
             end
@@ -144,6 +171,22 @@ if #missing > 0 then
     os.exit(1)
 end
 
+-- Behaviour fields as Lua: " key = value," each, in a fixed order.
+local function behaviourText(b)
+    local parts = {}
+    for _, k in ipairs(BEHAVIOUR) do
+        local v = b and b[k]
+        if type(v) == "string" then parts[#parts + 1] = (" %s = %q,"):format(k, v)
+        elseif v ~= nil then parts[#parts + 1] = (" %s = %s,"):format(k, tostring(v)) end
+    end
+    if b and b.effectIDs then
+        local ids = {}
+        for _, id in ipairs(b.effectIDs) do ids[#ids + 1] = tostring(id) end
+        parts[#parts + 1] = (" effectName = %q, effectIDs = { %s },"):format(b.effectName, table.concat(ids, ", "))
+    end
+    return table.concat(parts)
+end
+
 local function idList(ids)
     local parts = {}
     for _, id in ipairs(ids) do parts[#parts + 1] = tostring(id) end
@@ -172,13 +215,13 @@ for _, class in ipairs(classes) do
             lines[#lines + 1] = ("        %s = {"):format(key)
             for _, e in ipairs(p.lists[key]) do
                 if e.group then
-                    lines[#lines + 1] = ("            { group = true, name = %q, source = %q, max = %d, icon = %d, members = {"):format(e.name, e.source, e.max, e.icon or 0)
+                    lines[#lines + 1] = ("            { group = true, name = %q, source = %q, max = %d, icon = %d,%s members = {"):format(e.name, e.source, e.max, e.icon or 0, behaviourText(e.behaviour))
                     for _, m in ipairs(e.members) do
                         lines[#lines + 1] = ("                { name = %q, ids = { %s } },"):format(m.name, idList(m.ids))
                     end
                     lines[#lines + 1] = ("            }, ids = { %s } },"):format(idList(e.ids))
                 else
-                    lines[#lines + 1] = ("            { name = %q,%s ids = { %s } },"):format(e.name, e.mine and " mine = true," or "", idList(e.ids))
+                    lines[#lines + 1] = ("            { name = %q,%s%s ids = { %s } },"):format(e.name, e.mine and " mine = true," or "", behaviourText(e.behaviour), idList(e.ids))
                 end
             end
             lines[#lines + 1] = "        },"
