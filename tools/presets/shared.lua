@@ -40,6 +40,14 @@ local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1, ic
 local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike", hidden = true,
     members = { "Mortal Strike", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV" } }
 
+-- Every stun on the target, from anyone: whoever stuns sees what's already
+-- on it, so stuns don't overlap (proc stuns included; Seal of Justice's is
+-- named "Stun").
+local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice",
+    members = { "Hammer of Justice", "Cheap Shot", "Kidney Shot", "Bash", "Pounce", "Concussion Blow",
+        "Charge Stun", "Intercept Stun", "Intimidation", "War Stomp", "Holy Wrath", "Stun", "Impact",
+        "Starfire Stun", "Improved Concussive Shot", "Pyroclasm", "Blackout" } }
+
 -- A copy of a group (or entry) with other fields: with(AP_REDUCTION, { missing = "grey" }).
 local function with(t, fields)
     local out = {}
@@ -53,5 +61,5 @@ return {
     SEALS = SEALS, BLESSINGS = BLESSINGS, JUDGEMENTS = JUDGEMENTS,
     MY_JUDGEMENT = MY_JUDGEMENT, OTHERS_JUDGEMENTS = OTHERS_JUDGEMENTS, TAUNTS = TAUNTS,
     ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
-    HEALING_REDUCTION = HEALING_REDUCTION, with = with,
+    HEALING_REDUCTION = HEALING_REDUCTION, STUNS = STUNS, with = with,
 }

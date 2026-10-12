@@ -17,6 +17,8 @@
 -- Focused Fire) aren't procs and aren't tracked; Rapid Killing's buff isn't
 -- in the client scan (only the talent's ID), so it's left out for now.
 
+local S = dofile("tools/presets/shared.lua")
+
 local ASPECTS = { "Aspect of the Hawk", "Aspect of the Monkey", "Aspect of the Cheetah", "Aspect of the Beast",
     "Aspect of the Pack", "Aspect of the Wild" }
 local function aspects(icon) return { group = "Aspects", source = "mine", max = 1, icon = icon, members = ASPECTS,
@@ -43,7 +45,7 @@ return {
       essential = { "Arcane Shot", "Raptor Strike", "Mongoose Bite", "Aimed Shot", "Multi-Shot" },
       utility = { CONCUSSIVE, RAPID_FIRE, "Freezing Trap", "Immolation Trap", "Disengage", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
-      debuffs = { { "Hunter's Mark", source = "any" }, STINGS, "Wing Clip" },
+      debuffs = { { "Hunter's Mark", source = "any" }, STINGS, "Wing Clip", S.STUNS },
       procs = {} },
     -- ranged with pet and hawks; Summon Hawk and Arcane Shot share one
     -- cooldown, both kept so the icon is there before Summon Hawk is learnt
@@ -51,14 +53,14 @@ return {
       essential = { "Summon Hawk", "Arcane Shot", "Aimed Shot", "Multi-Shot", "Raptor Strike" },
       utility = { "Bestial Wrath", "Intimidation", RAPID_FIRE, CONCUSSIVE, "Freezing Trap", "Explosive Trap", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
-      debuffs = { MARK, STINGS, "Wing Clip" },
+      debuffs = { MARK, STINGS, "Wing Clip", S.STUNS },
       procs = { DEADLY_ASPECTS } },
     { id = "marksmanship", name = "Marksmanship", tree = 2,
       essential = { "Aimed Shot", "Multi-Shot", "Arcane Shot", "Sniper Shot" },
       utility = { RAPID_FIRE, { "Scatter Shot", effect = "target" }, CONCUSSIVE, "Freezing Trap", "Feign Death",
           "Disengage", { "Flare", hidden = true } },
       buffs = { { "Trueshot Aura", missing = "remind" }, aspects("Aspect of the Hawk") },
-      debuffs = { MARK, STINGS, "Wing Clip" },
+      debuffs = { MARK, STINGS, "Wing Clip", S.STUNS },
       procs = { "Quick Shots" } },
     -- melee: Expose Prey (on Hunter's Mark targets) and dodges open
     -- Mongoose Bite, parries Counterattack
@@ -68,6 +70,6 @@ return {
       utility = { { "Deterrence", effect = "you" }, RAPID_FIRE, "Disengage", "Feign Death", "Freezing Trap",
           "Immolation Trap", "Explosive Trap" },
       buffs = { aspects("Aspect of the Monkey") },
-      debuffs = { MARK, "Wing Clip", STINGS, "Lacerating Strikes", FIRE_TRAPS },
+      debuffs = { MARK, "Wing Clip", STINGS, "Lacerating Strikes", FIRE_TRAPS, S.STUNS },
       procs = { "Expose Prey" } },
 }

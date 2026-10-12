@@ -43,35 +43,39 @@ local function onTarget(name) return { name, effect = "target" } end
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { "Judgement", "Holy Strike", "Consecration", "Hammer of Wrath" },
-      utility = { onTarget("Hammer of Justice"), onYou("Divine Protection"), onYou("Divine Shield"), "Lay on Hands",
+      utility = { "Hammer of Justice", onYou("Divine Protection"), onYou("Divine Shield"), "Lay on Hands",
           onYou("Blessing of Protection"), onYou("Blessing of Freedom"), "Exorcism" },
       buffs = { seals("Seal of Righteousness", "warn"), blessings("Blessing of Might"), auras("Devotion Aura") },
-      debuffs = { MY_JUDGEMENT },
+      debuffs = { MY_JUDGEMENT, S.STUNS },
       procs = {} },
     { id = "holy", name = "Holy", tree = 1,
       -- Light's Vigil on an enemy shows on its icon; on an ally (a buff on
       -- another unit) the tracker can't show it
       essential = { "Holy Shock", onTarget("Light's Vigil"), onYou("Divine Favor"), "Judgement" },
       utility = { onYou("Voice of Truth"), onYou("Divine Shield"), onYou("Divine Protection"), "Lay on Hands",
-          onYou("Blessing of Protection"), onYou("Blessing of Freedom"), onTarget("Hammer of Justice"), "Exorcism" },
+          onYou("Blessing of Protection"), onYou("Blessing of Freedom"), "Hammer of Justice", "Exorcism" },
       buffs = { seal("Seal of Wisdom"), blessings("Blessing of Wisdom"), auras("Concentration Aura") },
       debuffs = { MY_JUDGEMENT },
       procs = { "Infusion of Light" } },
     { id = "protection", name = "Protection", tree = 2,
-      essential = { onYou("Holy Shield"), "Holy Strike", "Judgement", "Consecration", onYou("Swift Judgement"), "Hammer of Wrath" },
-      utility = { onYou("Templar's Bulwark"), onYou("Divine Protection"), onYou("Divine Shield"), "Lay on Hands",
-          onYou("Blessing of Protection"), onYou("Blessing of Freedom"), onTarget("Hammer of Justice"), "Holy Wrath" },
+      -- Holy Shield's block charges show with the procs, its icon is the cooldown;
+      -- Exorcism is for undead and demons (dimmed on anything else); no
+      -- Divine Protection (a tank can't attack under it, and its Forbearance
+      -- blocks Divine Shield)
+      essential = { "Holy Shield", "Holy Strike", "Judgement", "Consecration", "Exorcism", onYou("Swift Judgement"), "Hammer of Wrath" },
+      utility = { onYou("Templar's Bulwark"), onYou("Divine Shield"), "Lay on Hands",
+          onYou("Blessing of Protection"), onYou("Blessing of Freedom"), "Hammer of Justice", "Holy Wrath" },
       -- Seal of Fury is the taunt and the shield: never without it
       buffs = { seals("Seal of Fury", "warn"), { "Righteous Fury", mine = true, missing = "remind" },
           blessings("Blessing of Kings"), auras("Devotion Aura"), mine("Iron Creed") },
-      debuffs = { MY_JUDGEMENT, S.AP_REDUCTION, S.ATTACK_SLOWS, TAUNTS },
-      procs = { "Redoubt", "Reckoning" } },
+      debuffs = { MY_JUDGEMENT, S.AP_REDUCTION, S.ATTACK_SLOWS, S.STUNS, TAUNTS },
+      procs = { "Holy Shield", "Redoubt", "Reckoning" } },
     { id = "retribution", name = "Retribution", tree = 3,
       essential = { "Judgement", "Holy Strike", "Consecration", "Exorcism", "Hammer of Wrath" },
-      utility = { onTarget("Repentance"), onTarget("Hammer of Justice"), onYou("Divine Shield"), onYou("Divine Protection"),
+      utility = { onTarget("Repentance"), "Hammer of Justice", onYou("Divine Shield"), onYou("Divine Protection"),
           "Lay on Hands", onYou("Blessing of Freedom"), onYou("Blessing of Protection"), "Holy Wrath" },
       buffs = { seals("Seal of Command", "warn"), blessings("Blessing of Might"), auras("Retribution Aura") },
       -- Sacred Arbiter keeps every paladin's judgement up: others' count too
-      debuffs = { MY_JUDGEMENT, OTHERS_JUDGEMENTS },
+      debuffs = { MY_JUDGEMENT, OTHERS_JUDGEMENTS, S.STUNS },
       procs = { "Vengeance", "Vindication", ECHOES } },
 }

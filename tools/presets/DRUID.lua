@@ -33,7 +33,7 @@ local HOLDS = { group = "Crowd Controls", source = "mine", max = 1, icon = "Enta
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { onTarget("Bash"), "Growl", onYou("Enrage"), onYou("Nature's Grasp") },
+      essential = { "Bash", "Growl", onYou("Enrage"), onYou("Nature's Grasp") },
       utility = { onYou("Barkskin"), onYou("Innervate"), onYou("Dash"), "Rebirth", "Tranquility" },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       debuffs = { "Moonfire", "Faerie Fire", "Demoralizing Roar", HOLDS },
@@ -51,14 +51,14 @@ return {
       -- Prowl's cooldown restarts when stealth breaks; its icon shows while you prowl
       utility = { onYou("Prowl"), onYou("Dash"), onYou("Barkskin"), onYou("Innervate"), "Rebirth" },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
-      debuffs = { grey("Rip"), grey("Rake"), grey("Faerie Fire"), "Pounce Bleed" },
+      debuffs = { grey("Rip"), grey("Rake"), grey("Faerie Fire"), "Pounce Bleed", S.STUNS },
       procs = { "Clearcasting" } },
     { id = "feralbear", name = "Feral (bear)", tree = 2,
-      essential = { "Primal Bite", "Growl", onTarget("Feral Charge"), onTarget("Bash"), onYou("Enrage"), onYou("Berserk") },
+      essential = { "Primal Bite", "Growl", onTarget("Feral Charge"), "Bash", onYou("Enrage"), onYou("Berserk") },
       utility = { onYou("Frenzied Regeneration"), "Challenging Roar", onYou("Barkskin"), onYou("Innervate"), "Rebirth" },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       -- Lacerate stacks to 5 and is kept up, like Faerie Fire and the roar
-      debuffs = { grey("Lacerate"), grey("Faerie Fire"), S.with(S.AP_REDUCTION, { missing = "grey" }), S.ATTACK_SLOWS, TAUNTS },
+      debuffs = { grey("Lacerate"), grey("Faerie Fire"), S.with(S.AP_REDUCTION, { missing = "grey" }), S.ATTACK_SLOWS, S.STUNS, TAUNTS },
       procs = { "Clearcasting" } },
     { id = "restoration", name = "Restoration", tree = 3,
       essential = { "Swiftmend", "Wild Growth", onYou("Nature's Swiftness"), onYou("Innervate") },
