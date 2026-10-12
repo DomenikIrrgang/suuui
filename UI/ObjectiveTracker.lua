@@ -178,7 +178,7 @@ local function entriesOf(quests)
 end
 
 -- While the quests scroll they make room for the thumb at the right edge.
-local GUTTER = S["space-4"] + 1
+local GUTTER = S["space-5"] + 1
 
 function Tracker:SetQuests(quests, freeze)
     if freeze and self.contentWidth then
