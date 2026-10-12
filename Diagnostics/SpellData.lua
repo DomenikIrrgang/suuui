@@ -5,7 +5,9 @@
 -- Collects, per character, into SuuUIProbe.spells["Name-Realm"]:
 --   spellbook   every spell in your (and your pet's) spellbook: name, rank,
 --               spell ID, tab (Balance, Feral Combat, ...), passive, not yet
---               learned, base cooldown
+--               learned, base cooldown; a pet's spells with the pet's family
+--               (Imp, Voidwalker, Wolf, ...). While recording, every pet you
+--               summon or tame is read too, so they add up
 --   casts       every spell you cast, with the exact rank ID
 --   auras       every aura seen on you, your target and your pet: name, ID,
 --               buff or debuff, whether it was yours, its duration
@@ -92,6 +94,7 @@ local function dumpBank(d, bank, owner)
             kind = ITEM_TYPE[it.itemType] or it.itemType,
             known = IsPlayerSpell and IsPlayerSpell(id) or nil,
             cooldownMS = baseCooldown(id),
+            family = owner == "pet" and UnitCreatureFamily and UnitCreatureFamily("pet") or nil,
         }
         count = count + 1
     end
@@ -183,6 +186,15 @@ local function start()
     Events.OnGame("PLAYER_TARGET_CHANGED", sweepAll, SD)
     Events.OnGame("PLAYER_REGEN_ENABLED", afterCombat, SD)
     Events.OnUnit("UNIT_SPELLCAST_SUCCEEDED", "player", noteCast, SD)
+    -- each new pet: its spellbook (once it has loaded), out of combat
+    Events.OnUnit("UNIT_PET", "player", function()
+        C_Timer.After(1, function()
+            if recording and UnitExists("pet") and not InCombatLockdown() then
+                local _, pet = SD.DumpSpellbook()
+                ns.Print(("Spell data: %s's %d spells read."):format(UnitCreatureFamily("pet") or UnitName("pet") or "pet", pet))
+            end
+        end)
+    end, SD)
     sweepAll()
 end
 
