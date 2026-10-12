@@ -188,9 +188,11 @@ local function buildPlate(parent, api)
     f.pct = UI.Text(f, "micro", "ink")
     f.pct:SetShadowed(true)
     f.pct:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, -NAME_H)
-    -- the raid target marker, just left of the plate, centred on it
+    -- the raid target marker, just left of the plate, centred on what shows
+    -- of it: the name's capitals sit in the lower ~9px of their row, so the
+    -- plate's own middle would put the marker high
     f.raidMarker = UI.RaidMarker(f, 18)
-    f.raidMarker:SetPoint("RIGHT", f, "LEFT", -S["space-2"], 0)
+    f.raidMarker:SetPoint("RIGHT", f, "LEFT", -S["space-2"], -math.floor((NAME_H - 9) / 2 + 0.5))
     -- a quest objective: the gilt diamond and what you have of it
     f.quest = CreateFrame("Frame", nil, f)
     f.quest:SetHeight(NAME_H)
