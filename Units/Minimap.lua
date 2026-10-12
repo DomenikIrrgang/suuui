@@ -39,7 +39,10 @@ local GLYPHS = TEX .. "Glyphs\\"
 local ROUND_MASK = 186178
 local isSecret = issecretvalue or function() return false end
 local function readable(v) return not isSecret(v) and type(v) == "number" end
-local ZONE_H = T.type.header.lineHeight + T.type.caption.lineHeight
+-- the zone lines: zone, subzone, the instance line; above the disc with room
+-- for the north marker (8px over the ring) plus space-3
+local ZONE_H = T.type.header.lineHeight + T.type.caption.lineHeight * 2
+local ZONE_GAP = 8 + S["space-3"]
 local TIME_H = T.type.caption.lineHeight
 
 --------------------------------------------------------------------------------
@@ -129,14 +132,6 @@ local function decorate(disc, handlers)
     d.mail:SetPoint("TOPLEFT", over, "TOPLEFT", -4, -26)
     d.mail.tip = handlers.mailTip
     d.mail:Hide()
-    -- the instance difficulty: upper right (UpdateDifficulty)
-    d.difficulty = roundButton(over, 24, nil, 14)
-    d.difficulty:SetPoint("TOPRIGHT", over, "TOPRIGHT", 4, -26)
-    d.difficulty.text = UI.Text(d.difficulty, "numeric", "gilt-text")
-    d.difficulty.text:SetFont(SuuUI.Fonts.Get("numeric"):GetFont(), 10.5, "")
-    d.difficulty.text:SetPoint("CENTER", 0.5, 0)
-    d.difficulty:EnableMouse(true)
-    d.difficulty:Hide()
     -- zoom: lower right
     d.zoomIn = roundButton(over, 22, "plus", 12)
     d.zoomOut = roundButton(over, 22, "minus", 12)
@@ -152,14 +147,17 @@ local function buildBlock(parent, name, handlers)
     local f = CreateFrame("Frame", name, parent)
     f.zone = UI.Text(f, "header", "gilt-text")
     f.zone:SetShadowed(true)
-    f.zone:SetPoint("TOP", 0, 0)
     f.zone:SetJustifyH("CENTER")
     f.zone:SetWordWrap(false)
     f.sub = UI.Text(f, "caption", "ink")
     f.sub:SetShadowed(true)
-    f.sub:SetPoint("TOP", f.zone, "BOTTOM", 0, 0)
     f.sub:SetJustifyH("CENTER")
     f.sub:SetWordWrap(false)
+    -- inside an instance: "Dungeon · 5 players" (the kind in ink, the rest muted)
+    f.instance = UI.Text(f, "caption", "ink-muted")
+    f.instance:SetShadowed(true)
+    f.instance:SetJustifyH("CENTER")
+    f.instance:SetWordWrap(false)
     f.disc = CreateFrame("Frame", nil, f)
     f.time = UI.Text(f, "caption", "ink")
     f.time:SetShadowed(true)
@@ -173,18 +171,35 @@ local function buildBlock(parent, name, handlers)
     return f
 end
 
+-- The zone lines stack upward from the disc (the map never moves when a
+-- line comes or goes): the instance line lowest, the subzone, the zone.
+local function stackZone(f)
+    local below = nil
+    for _, line in ipairs({ f.instance, f.sub, f.zone }) do
+        line:ClearAllPoints()
+        if line:IsShown() and line.value and line.value ~= "" then
+            if below then line:SetPoint("BOTTOM", below, "TOP", 0, 0)
+            else line:SetPoint("BOTTOM", f.disc, "TOP", 0, ZONE_GAP) end
+            below = line
+        else
+            line:SetPoint("BOTTOM", f.disc, "TOP", 0, ZONE_GAP)
+        end
+    end
+end
+
 local function layoutBlock(f, size, zone, clock)
     f.disc:SetSize(size, size)
-    f.zone:SetWidth(size + 40)
-    f.sub:SetWidth(size + 40)
-    f.zone:SetVisible(zone)
-    f.sub:SetVisible(zone)
+    for _, line in ipairs({ f.zone, f.sub, f.instance }) do
+        line:SetWidth(size + 40)
+        line:SetVisible(zone)
+    end
     f.time:SetVisible(clock)
     f.timeButton:SetShown(clock)
     f.disc:ClearAllPoints()
-    local top = zone and (ZONE_H + S["space-3"]) or 0
+    local top = zone and (ZONE_H + ZONE_GAP) or 8
     f.disc:SetPoint("TOP", 0, -top)
     f:SetSize(size, top + size + (clock and (S["space-3"] + TIME_H) or 0))
+    stackZone(f)
 end
 
 --------------------------------------------------------------------------------
@@ -197,6 +212,7 @@ function M:UpdateZone()
     if isSecret(zone) or isSecret(sub) then return end
     self.block.zone:SetValue(zone or "")
     self.block.sub:SetValue((sub and sub ~= "" and sub ~= zone) and sub or "")
+    stackZone(self.block)
 end
 
 function M:UpdateClock()
@@ -307,31 +323,27 @@ function M:PlaceMinimap()
     Minimap:SetZoom(zoom)
 end
 
--- The instance's difficulty: inside a dungeon or raid, a round badge on the
--- ring's upper right with the group size (amber when heroic), the
--- difficulty's name in its tooltip. Blizzard's own stays in the invisible
--- cluster.
+-- Inside a dungeon or raid, a line under the zone: "Dungeon · 5 players",
+-- "Raid · 20 players" (Forever has no heroic modes: the kind and the size
+-- are what there is to say). Blizzard's difficulty badge stays in the
+-- invisible cluster.
+local function instanceLine(kind, size)
+    local inkHex = T.color["ink"].hex
+    return ("|cff%s%s|r · %s players"):format(inkHex, kind, size)
+end
+
 function M:UpdateDifficulty()
-    local badge = self.block and self.block.deco.difficulty
-    if not badge then return end
-    local name, kind, difficultyID, difficultyName, maxPlayers = GetInstanceInfo()
+    local f = self.block
+    if not f then return end
+    local _, kind, _, _, maxPlayers = GetInstanceInfo()
     local inside = not isSecret(kind) and (kind == "party" or kind == "raid")
-    if not inside or isSecret(difficultyID) then
-        badge:Hide()
-        return
+    if inside then
+        local size = readable(maxPlayers) and maxPlayers > 0 and tostring(maxPlayers) or "?"
+        f.instance:SetValue(instanceLine(kind == "raid" and "Raid" or "Dungeon", size))
+    else
+        f.instance:SetValue("")
     end
-    local heroic = false
-    if GetDifficultyInfo and readable(difficultyID) then
-        local _, _, isHeroic, _, displayHeroic = GetDifficultyInfo(difficultyID)
-        heroic = (not isSecret(isHeroic) and isHeroic) or (not isSecret(displayHeroic) and displayHeroic) or false
-    end
-    local size = readable(maxPlayers) and maxPlayers > 0 and tostring(maxPlayers) or "?"
-    badge.text:SetValue(size)
-    badge.text:SetColor(heroic and "amber" or "gilt-text")
-    local zone = (not isSecret(name) and name) or ""
-    local diff = (not isSecret(difficultyName) and difficultyName ~= "" and difficultyName) or (heroic and "Heroic" or "Normal")
-    badge.tip = function() return { title = diff, subtitle = zone, lines = { { "Group size", size } } } end
-    badge:Show()
+    stackZone(f)
 end
 
 function M:Guard()
@@ -386,12 +398,11 @@ function M:PreviewView(parent)
         you:SetTexture("Interface\\Minimap\\MinimapArrow")
         you:SetSize(24, 24)
         you:SetPoint("CENTER")
-        f.zone:SetValue("Durotar")
-        f.sub:SetValue("Razor Hill")
+        f.zone:SetValue("Wailing Caverns")
+        f.sub:SetValue("")
         f.time:SetValue("21:40")
         f.deco.mail:Show()
-        f.deco.difficulty.text:SetValue("5")
-        f.deco.difficulty:Show()
+        f.instance:SetValue(instanceLine("Dungeon", "5"))
         self.preview = f
     end
     self.preview:SetParent(parent)
