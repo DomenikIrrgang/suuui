@@ -6,6 +6,7 @@
 --   local m = UI.ThreatMeter(parent, { rows = 8 })
 --   m:SetTarget(name)               -- may be secret (an enemy in a dungeon)
 --   m:SetRows(list, opts)
+--   m:SetMaxRows(n)                 -- 0.10: the height in rows, live
 --
 -- list: { { name, class, role, status, percent, raw, you }, ... } in group
 -- order. role "TANK", "HEALER", "DAMAGER", "PET" or nil; status 0-3
@@ -198,6 +199,14 @@ function Meter:SetTarget(name)
     end
     self.target:SetFormattedText("on %s", name)
     self.target.value = nil
+end
+
+-- The rows the meter keeps its height for (the damage meter's), live.
+function Meter:SetMaxRows(n)
+    self.maxRows = math.max(2, n or 8)
+    local h, gap = UI.Size("meter-row"), S["space-1"]
+    self:SetHeight(32 + 1 + S["space-3"] * 2 + self.maxRows * h + (self.maxRows - 1) * gap)
+    for i = self.maxRows + 1, #self.rows do self.rows[i]:Hide() end
 end
 
 local STATUS_RANK = function(r) return readable(r.status) and r.status or -1 end

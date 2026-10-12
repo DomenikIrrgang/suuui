@@ -14,6 +14,10 @@
 --                           -- than maxRows (false: never); Enter picks the first match
 --       lookup = fn(query), -- extra options for what was typed, shown first
 --                           -- (e.g. a spell found by its ID); implies a search field
+--       bare = true,        -- 0.10: no field until hovered (a panel header's
+--                           -- select): text in textStyle/textColor, 24px tall,
+--                           -- as wide as the chosen label (up to `width`)
+--       textStyle = "header", textColor = "gilt-text",
 --   })
 --   select:SetOptions(options), select:SetValue(v), select:SetDisabled(disabled)
 --
@@ -74,7 +78,13 @@ end
 
 function Select:SetValue(v)
     self.value = self.multiple and { unpack(v or {}) } or v
-    self.text:SetValue(self:Summary())
+    local summary = self:Summary()
+    self.text:SetValue(summary)
+    -- bare: as wide as its label, chevron included
+    if self.bare then
+        local w = UI.MeasureText(self.textStyle, summary) + S["space-2"] * 2 + S["space-1"] + 12
+        self:SetWidth(math.min(self.maxWidth, math.ceil(w)))
+    end
     if self.list and self.list:IsShown() then self:Refresh() end
 end
 
@@ -404,8 +414,31 @@ function UI.Select(parent, opts)
     f:SetScript("OnClick", function(self)
         if self.list and self.list:IsShown() then self:Close() else self:Open() end
     end)
-    f:SetScript("OnEnter", function(self) if not self.disabled then self.border:SetColor("gilt") end end)
-    f:SetScript("OnLeave", function(self) self.border:SetColor("gilt-line") end)
+    f:SetScript("OnEnter", function(self)
+        if self.disabled then return end
+        self.border:SetColor("gilt")
+        if self.bare then self.border:SetShown(true) end
+    end)
+    f:SetScript("OnLeave", function(self)
+        self.border:SetColor("gilt-line")
+        if self.bare then self.border:SetShown(false) end
+    end)
+    if opts.bare then
+        f.bare, f.maxWidth = true, opts.width or 190
+        f.textStyle = opts.textStyle or "body"
+        f:SetHeight(24)
+        f.bg:Hide()
+        f.border:SetShown(false)
+        f.text:SetStyle(f.textStyle)
+        f.text:SetColor(opts.textColor or "ink")
+        f.text:SetWordWrap(false)
+        f.text:ClearAllPoints()
+        f.text:SetPoint("LEFT", S["space-2"], 0)
+        f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-1"], 0)
+        f.chevron:ClearAllPoints()
+        f.chevron:SetPoint("RIGHT", -S["space-2"], 0)
+        f.minListWidth = opts.minListWidth or 200
+    end
     f:SetScript("OnHide", function(self) self:Close() end)
     f:SetValue(opts.value)
     return f

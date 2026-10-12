@@ -4,8 +4,9 @@
 --
 -- The meter: your target's threat table, in combat with a hostile target
 -- (Show "In combat"; "Always" keeps it on screen, empty without one),
--- left of the damage meter's slot in the bottom right corner (its right edge
--- 292px from the screen's, 28px up), always 8 rows tall. Rows by % (ranked)
+-- left of the damage meter in the bottom right corner (its right edge 292px
+-- from the screen's, 28px up), as tall as the damage meter (its Rows; 8
+-- while that module is off). Rows by % (ranked)
 -- while the client lets SuuUI compare it; when the % is secret (bosses), by
 -- threat state, then group order. The state (UnitThreatSituation) stays
 -- readable in combat, so the badges and the warning work everywhere.
@@ -258,12 +259,19 @@ local SAMPLE = {
     { name = "Veyra", class = "SHAMAN", role = "HEALER", status = 0, percent = 21, raw = 502000 },
 }
 
+-- The damage meter's Rows, so both meters are the same height.
+local function meterRows()
+    local dm = SuuUI.GetModule("damagemeter")
+    return dm and dm:Get("rows") or 8
+end
+
 function M:PreviewView(parent)
     if not self.preview then
-        self.preview = UI.ThreatMeter(parent, { rows = 8 })
+        self.preview = UI.ThreatMeter(parent, { rows = meterRows() })
         self.preview:SetTarget("Lava Surger")
     end
     self.preview:SetParent(parent)
+    self.preview:SetMaxRows(meterRows())
     self:RefreshPreview()
     return self.preview
 end
@@ -286,7 +294,7 @@ local function meterOff()
 end
 
 local SECTION = {
-    id = "threat", label = "Damage & threat", category = "Insights", order = 50,
+    id = "threat", label = "Damage & threat", category = "Insights", order = 50, merge = "damagemeter",
     preview = function(parent) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Threat",
     previewNote = "Bottom right, left of the damage meter's place.",
@@ -312,7 +320,7 @@ local SECTION = {
 
 function M:OnEnable()
     if not self.meter then
-        self.meter = UI.ThreatMeter(SuuUI.Root, { rows = 8 })
+        self.meter = UI.ThreatMeter(SuuUI.Root, { rows = meterRows() })
         self.meter:SetFrameStrata("MEDIUM")
         self.meter:Hide()
         self.driver = CreateFrame("Frame")
@@ -336,6 +344,15 @@ function M:OnEnable()
     for _, key in ipairs({ "warnPull", "aggroAlert", "position" }) do
         self:Watch(key, function() if self.driver:IsShown() then self:Update() end end)
     end
+    -- as tall as the damage meter
+    self.meter:SetMaxRows(meterRows())
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        if namespace == "damagemeter" and key == "rows" then
+            self.meter:SetMaxRows(meterRows())
+            if self.preview then self.preview:SetMaxRows(meterRows()); self:RefreshPreview() end
+            if self.driver:IsShown() then self:Update() end
+        end
+    end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Refresh() end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() if self.driver:IsShown() then self:Update() end end)

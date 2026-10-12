@@ -217,7 +217,9 @@ API.UI.PetBar = UI.PetBar
 -- 0.10: alerts, the threat meter
 
 API.UI.Alert = UI.Alert             -- Alert(parent) -> a:SetAlert(tone, title, detail[, ...])
-API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts)
+API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts), m:SetMaxRows(n)
+API.UI.DamageMeter = UI.DamageMeter -- DamageMeter(parent, opts): one window on C_DamageMeter (see UI/DamageMeter.lua)
+API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
 -- takes it away. detail: text, or a format whose arguments may be secret.
