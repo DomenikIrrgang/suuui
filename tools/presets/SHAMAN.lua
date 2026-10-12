@@ -19,6 +19,7 @@
 --   Totem's.
 
 -- one elemental shield at a time (Water Shield is a Restoration talent)
+local S = dofile("tools/presets/shared.lua")
 local function shields(icon) return { group = "Shields", source = "mine", max = 1, icon = icon, missing = "remind",
     members = { "Lightning Shield", "Water Shield" } } end
 -- the buffs totems put on you, per element (any shaman's totem counts)
@@ -52,7 +53,7 @@ return {
       buffs = { shields("Lightning Shield"), air("Windfury Totem"), EARTH, WATER },
       -- Stormstrike's debuff: your next Lightning Bolt, Chain Lightning or
       -- Earth Shock on the target hits 20% harder
-      debuffs = { "Stormstrike", "Frost Shock", "Earthbind" },
+      debuffs = { "Stormstrike", "Frost Shock", "Earthbind", S.physical() },
       procs = { "Maelstrom Weapon", "Flurry", "Elemental Devastation" } },
     { id = "restoration", name = "Restoration", tree = 3,
       -- a healer's rotation has only Riptide, so the healing cooldowns sit

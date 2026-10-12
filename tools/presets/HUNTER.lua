@@ -32,6 +32,13 @@ local DEADLY_ASPECTS = { group = "Aspect Procs", source = "mine", max = 1, icon 
     members = { "Quick Shots", "Quick Strikes" } }
 -- your fire trap's burn on the target (one fire trap at a time); Explosive
 -- Trap's burn is named "Explosive Trap Effect" in the client
+-- Cooldowns sharing one icon: the last one you know shows (Aimed Shot and
+-- Multi-Shot share a cooldown, so do Summon Hawk and Arcane Shot; Explosive
+-- Trap replaces Immolation Trap, one fire trap at a time)
+local SHOTS = { group = "Aimed Shot", members = { "Multi-Shot", "Aimed Shot" } }
+local HAWK = { group = "Summon Hawk", members = { "Arcane Shot", "Summon Hawk" } }
+local FIRE_TRAP_CD = { group = "Fire Trap", members = { "Immolation Trap", "Explosive Trap" } }
+
 local FIRE_TRAPS = { group = "Fire Traps", source = "mine", max = 1, icon = "Immolation Trap",
     members = { "Immolation Trap", "Explosive Trap", "Explosive Trap Effect" } }
 
@@ -42,7 +49,7 @@ local MARK = { "Hunter's Mark", source = "any", missing = "warn" }
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { "Arcane Shot", "Raptor Strike", "Mongoose Bite", "Aimed Shot", "Multi-Shot" },
+      essential = { "Arcane Shot", "Raptor Strike", "Mongoose Bite", SHOTS },
       utility = { CONCUSSIVE, RAPID_FIRE, "Freezing Trap", "Immolation Trap", "Disengage", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
       debuffs = { { "Hunter's Mark", source = "any" }, STINGS, "Wing Clip", S.STUNS },
@@ -50,17 +57,17 @@ return {
     -- ranged with pet and hawks; Summon Hawk and Arcane Shot share one
     -- cooldown, both kept so the icon is there before Summon Hawk is learnt
     { id = "beastmastery", name = "Beast Mastery", tree = 1,
-      essential = { "Summon Hawk", "Arcane Shot", "Aimed Shot", "Multi-Shot", "Raptor Strike" },
+      essential = { HAWK, SHOTS, "Raptor Strike" },
       utility = { "Bestial Wrath", "Intimidation", RAPID_FIRE, CONCUSSIVE, "Freezing Trap", "Explosive Trap", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
-      debuffs = { MARK, STINGS, "Wing Clip", S.STUNS },
+      debuffs = { MARK, STINGS, "Wing Clip", S.physical(), S.STUNS },
       procs = { DEADLY_ASPECTS } },
     { id = "marksmanship", name = "Marksmanship", tree = 2,
-      essential = { "Aimed Shot", "Multi-Shot", "Arcane Shot", "Sniper Shot" },
+      essential = { SHOTS, "Arcane Shot", "Sniper Shot" },
       utility = { RAPID_FIRE, { "Scatter Shot", effect = "target" }, CONCUSSIVE, "Freezing Trap", "Feign Death",
           "Disengage", { "Flare", hidden = true } },
       buffs = { { "Trueshot Aura", missing = "remind" }, aspects("Aspect of the Hawk") },
-      debuffs = { MARK, STINGS, "Wing Clip", S.STUNS },
+      debuffs = { MARK, STINGS, "Wing Clip", S.physical(), S.STUNS },
       procs = { "Quick Shots" } },
     -- melee: Expose Prey (on Hunter's Mark targets) and dodges open
     -- Mongoose Bite, parries Counterattack
@@ -68,8 +75,8 @@ return {
       essential = { "Raptor Strike", "Mongoose Bite", { "Counterattack", effect = "target" }, "Strider Kick",
           "Arcane Shot", "Multi-Shot" },
       utility = { { "Deterrence", effect = "you" }, RAPID_FIRE, "Disengage", "Feign Death", "Freezing Trap",
-          "Immolation Trap", "Explosive Trap" },
+          FIRE_TRAP_CD },
       buffs = { aspects("Aspect of the Monkey") },
-      debuffs = { MARK, "Wing Clip", STINGS, "Lacerating Strikes", FIRE_TRAPS, S.STUNS },
+      debuffs = { MARK, "Wing Clip", STINGS, "Lacerating Strikes", FIRE_TRAPS, S.physical(), S.STUNS },
       procs = { "Expose Prey" } },
 }

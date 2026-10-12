@@ -31,10 +31,14 @@ ns.CooldownPresets = {
         debuffs = {
             { name = "Rupture", ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
             { name = "Garrote", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
-            { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
-            }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
             { group = true, name = "Poisons", source = "mine", max = 2, icon = 2818, members = {
                 { name = "Deadly Poison", ids = { 2818, 2823, 2835, 3583, 10022, 13582, 21787, 21788, 25974, 434312 } },
                 { name = "Deadly Poison II", ids = { 2819, 2824, 2837, 434313 } },
@@ -111,10 +115,14 @@ ns.CooldownPresets = {
                 { name = "Mind-numbing Poison III", ids = { 11398, 11399, 11400 } },
             }, ids = { 2818, 2819, 2823, 2824, 2835, 2837, 3408, 3409, 3420, 3583, 5760, 5761, 5763, 8692, 8693, 8694, 10022, 11201, 11202, 11353, 11354, 11355, 11356, 11357, 11358, 11398, 11399, 11400, 13218, 13219, 13220, 13221, 13222, 13223, 13224, 13225, 13226, 13227, 13582, 21787, 21788, 25347, 25349, 25351, 25809, 25810, 25974, 434312, 434313, 434314, 434315, 434316 } },
             { name = "Garrote", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
-            { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
-            }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
             { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
                 { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Cheap Shot", ids = { 1833, 6409, 14902 } },
@@ -168,10 +176,14 @@ ns.CooldownPresets = {
         },
         debuffs = {
             { name = "Rupture", ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
-            { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
-            }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
             { group = true, name = "Poisons", source = "mine", max = 2, icon = 2818, members = {
                 { name = "Deadly Poison", ids = { 2818, 2823, 2835, 3583, 10022, 13582, 21787, 21788, 25974, 434312 } },
                 { name = "Deadly Poison II", ids = { 2819, 2824, 2837, 434313 } },
@@ -238,10 +250,14 @@ ns.CooldownPresets = {
             { name = "Hemorrhage", missing = "grey", ids = { 16511 } },
             { name = "Rupture", ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
             { name = "Garrote", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
-            { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
-            }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
             { group = true, name = "Poisons", source = "mine", max = 2, icon = 2818, members = {
                 { name = "Deadly Poison", ids = { 2818, 2823, 2835, 3583, 10022, 13582, 21787, 21788, 25974, 434312 } },
                 { name = "Deadly Poison II", ids = { 2819, 2824, 2837, 434313 } },

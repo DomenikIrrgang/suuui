@@ -20,8 +20,10 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
-            { name = "Divine Protection", effect = "you", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
-            { name = "Divine Shield", effect = "you", ids = { 642, 659, 1020, 13874 } },
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+                { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+                { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
+            }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
             { name = "Lay on Hands", ids = { 633, 2800, 9257, 10310, 17233 } },
             { name = "Blessing of Protection", effect = "you", ids = { 1022, 5599, 10278, 442948 } },
             { name = "Blessing of Freedom", effect = "you", ids = { 1044 } },
@@ -97,8 +99,10 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Voice of Truth", effect = "you", ids = { 1310897 } },
-            { name = "Divine Shield", effect = "you", ids = { 642, 659, 1020, 13874 } },
-            { name = "Divine Protection", effect = "you", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+                { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+                { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
+            }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
             { name = "Lay on Hands", ids = { 633, 2800, 9257, 10310, 17233 } },
             { name = "Blessing of Protection", effect = "you", ids = { 1022, 5599, 10278, 442948 } },
             { name = "Blessing of Freedom", effect = "you", ids = { 1044 } },
@@ -179,7 +183,10 @@ ns.CooldownPresets = {
         },
         utility = {
             { name = "Templar's Bulwark", effect = "you", ids = { 1311015 } },
-            { name = "Divine Shield", effect = "you", ids = { 642, 659, 1020, 13874 } },
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+                { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+                { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
+            }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
             { name = "Lay on Hands", ids = { 633, 2800, 9257, 10310, 17233 } },
             { name = "Blessing of Protection", effect = "you", ids = { 1022, 5599, 10278, 442948 } },
             { name = "Blessing of Freedom", effect = "you", ids = { 1044 } },
@@ -226,15 +233,23 @@ ns.CooldownPresets = {
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
                 { name = "Judgement of Justice", ids = { 20184, 25944, 25945 } },
             }, ids = { 20184, 20185, 20186, 20188, 20267, 20268, 20300, 20301, 20302, 20303, 20341, 20342, 20343, 20344, 20345, 20346, 20352, 20353, 20354, 20355, 21183, 25752, 25753, 25757, 25758, 25942, 25943, 25944, 25945, 28775, 456496 } },
-            { group = true, name = "Attack Power Reduction", source = "any", max = 1, icon = 1160, members = {
-                { name = "Demoralizing Shout", ids = { 1160, 6190, 11554, 11555, 11556, 13730, 16244, 19778, 23511, 27579 } },
-                { name = "Demoralizing Roar", ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
-                { name = "Vindication", ids = { 67, 440667, 440668 } },
-            }, ids = { 67, 99, 1160, 1735, 6190, 9490, 9747, 9898, 10968, 11554, 11555, 11556, 13730, 15727, 15971, 16244, 19778, 20753, 23511, 27551, 27579, 440667, 440668 } },
-            { group = true, name = "Attack Speed Slows", source = "any", max = 1, icon = 6343, members = {
-                { name = "Thunder Clap", ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
-                { name = "Hurricane", ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
-            }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { group = true, name = "Attack Power Reduction", source = "any", max = 1, icon = 1160, members = {
+                    { name = "Demoralizing Shout", ids = { 1160, 6190, 11554, 11555, 11556, 13730, 16244, 19778, 23511, 27579 } },
+                    { name = "Demoralizing Roar", ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
+                    { name = "Vindication", ids = { 67, 440667, 440668 } },
+                }, ids = { 67, 99, 1160, 1735, 6190, 9490, 9747, 9898, 10968, 11554, 11555, 11556, 13730, 15727, 15971, 16244, 19778, 20753, 23511, 27551, 27579, 440667, 440668 } },
+                { group = true, name = "Attack Speed Slows", source = "any", max = 1, icon = 6343, members = {
+                    { name = "Thunder Clap", ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
+                    { name = "Hurricane", ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
+                }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
+            } },
             { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
                 { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Cheap Shot", ids = { 1833, 6409, 14902 } },
@@ -280,8 +295,10 @@ ns.CooldownPresets = {
         utility = {
             { name = "Repentance", effect = "target", ids = { 20066, 1324538 } },
             { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
-            { name = "Divine Shield", effect = "you", ids = { 642, 659, 1020, 13874 } },
-            { name = "Divine Protection", effect = "you", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+            { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
+                { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+                { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
+            }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
             { name = "Lay on Hands", ids = { 633, 2800, 9257, 10310, 17233 } },
             { name = "Blessing of Freedom", effect = "you", ids = { 1044 } },
             { name = "Blessing of Protection", effect = "you", ids = { 1022, 5599, 10278, 442948 } },
@@ -331,6 +348,14 @@ ns.CooldownPresets = {
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
                 { name = "Judgement of Justice", ids = { 20184, 25944, 25945 } },
             }, ids = { 20184, 20185, 20186, 20188, 20267, 20268, 20300, 20301, 20302, 20303, 20341, 20342, 20343, 20344, 20345, 20346, 20352, 20353, 20354, 20355, 21183, 25752, 25753, 25757, 25758, 25942, 25943, 25944, 25945, 28775, 456496 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
             { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
                 { name = "Hammer of Justice", ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Cheap Shot", ids = { 1833, 6409, 14902 } },

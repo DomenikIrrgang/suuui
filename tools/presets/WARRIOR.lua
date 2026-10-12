@@ -37,7 +37,7 @@ return {
       essential = { "Overpower", "Thunder Clap", "Victory Rush", "Execute", you("Bloodrage") },
       utility = { "Charge", "Intercept", "Pummel", "Shield Bash", onTarget("Disarm"), you("Berserker Rage"), you("Retaliation") },
       buffs = { BATTLE_SHOUT },
-      debuffs = { "Rend", "Hamstring", ARMOR, DEMORALIZING, S.STUNS },
+      debuffs = { "Rend", "Hamstring", S.physical(), DEMORALIZING, S.STUNS },
       procs = {} },
     { id = "arms", name = "Arms", tree = 1,
       -- Bloodthrill's window shows on Overpower (aura name differs)
@@ -47,7 +47,7 @@ return {
           onTarget("Intimidating Shout"), "Spearing Strike", "Victory Rush", you("Retaliation", { hidden = true }) },
       buffs = { BATTLE_SHOUT },
       -- Rend feeds Bloodthrill; Mortal Strike's healing cut is for PvP
-      debuffs = { "Rend", "Deep Wounds", ARMOR, "Hamstring", S.STUNS, HEALING },
+      debuffs = { "Rend", "Deep Wounds", S.physical(), "Hamstring", S.STUNS, HEALING },
       procs = {} },
     { id = "fury", name = "Fury", tree = 2,
       essential = { "Bloodthirst", "Whirlwind", "Execute", you("Death Wish"), you("Bloodrage") },
@@ -55,7 +55,7 @@ return {
           onTarget("Intimidating Shout"), "Victory Rush" },
       buffs = { BATTLE_SHOUT },
       -- Deep Wounds is an Arms talent most Fury builds still reach
-      debuffs = { ARMOR, "Deep Wounds", { "Hamstring", hidden = true }, { "Piercing Howl", hidden = true }, S.STUNS },
+      debuffs = { S.physical(), "Deep Wounds", { "Hamstring", hidden = true }, { "Piercing Howl", hidden = true }, S.STUNS },
       procs = { "Flurry", "Enrage" } },
     { id = "protection", name = "Protection", tree = 3,
       essential = { "Shield Slam", "Revenge", you("Shield Block"), "Thunder Clap", you("Bloodrage") },
@@ -63,6 +63,6 @@ return {
           "Shield Bash", "Concussion Blow", onTarget("Disarm"), "Charge",
           { "Intercept", hidden = true }, you("Berserker Rage", { hidden = true }) },
       buffs = { BATTLE_SHOUT },
-      debuffs = { ARMOR, DEMORALIZING, SLOWS, S.STUNS, TAUNTS },
+      debuffs = { S.physical({ tank = true }), S.STUNS, TAUNTS },
       procs = {} },
 }

@@ -40,7 +40,7 @@ return {
       essential = { "Kick", target("Gouge"), "Kidney Shot", "Feint" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "grey" } },
-      debuffs = { "Rupture", "Garrote", S.ARMOR_REDUCTION, poisons(), S.STUNS, S.HEALING_REDUCTION },
+      debuffs = { "Rupture", "Garrote", S.physical(), poisons(), S.STUNS, S.HEALING_REDUCTION },
       procs = {} },
     { id = "assassination", name = "Assassination", tree = 1,
       -- Improved Kidney Shot: the stun is a damage window, so it leads
@@ -48,14 +48,14 @@ return {
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" }, { "Venom", missing = "warn" } },
       -- Mutilate and Venom want a poison up: grey while none is
-      debuffs = { "Rupture", poisons("grey"), "Garrote", S.ARMOR_REDUCTION, S.STUNS, S.HEALING_REDUCTION },
+      debuffs = { "Rupture", poisons("grey"), "Garrote", S.physical(), S.STUNS, S.HEALING_REDUCTION },
       procs = { "Remorseless" } },
     { id = "combat", name = "Combat", tree = 2,
       -- Riposte lights up after a parry by itself; its disarm shows on it
       essential = { you("Adrenaline Rush"), you("Blade Flurry"), target("Riposte"), "Kick", "Kidney Shot", "Feint" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Gouge"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" } },
-      debuffs = { "Rupture", S.ARMOR_REDUCTION, poisons(), S.STUNS, S.HEALING_REDUCTION },
+      debuffs = { "Rupture", S.physical(), poisons(), S.STUNS, S.HEALING_REDUCTION },
       procs = {} },
     { id = "subtlety", name = "Subtlety", tree = 3,
       -- Premeditation's 20 sec to spend its combo points
@@ -64,6 +64,6 @@ return {
       utility = { "Preparation", you("Vanish"), target("Blind"), target("Gouge"), you("Evasion"), you("Sprint"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" } },
       -- Hemorrhage feeds Rupture: grey while it's off
-      debuffs = { { "Hemorrhage", missing = "grey" }, "Rupture", "Garrote", S.ARMOR_REDUCTION, poisons(), S.STUNS, "Sap", S.HEALING_REDUCTION },
+      debuffs = { { "Hemorrhage", missing = "grey" }, "Rupture", "Garrote", S.physical(), poisons(), S.STUNS, "Sap", S.HEALING_REDUCTION },
       procs = { "Thousand Cuts", "Cutthroat" } },
 }

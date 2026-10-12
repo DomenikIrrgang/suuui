@@ -134,6 +134,14 @@ ns.CooldownPresets = {
             { name = "Stormstrike", ids = { 17364, 410156 } },
             { name = "Frost Shock", ids = { 8056, 8058, 10472, 10473, 12548, 15089, 15499, 19133, 21030, 21401, 22582, 23115, 1248001 } },
             { name = "Earthbind", ids = { 3600 } },
+            { collection = true, name = "Physical Debuffs", entries = {
+                { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
+                    { name = "Sunder Armor", ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+                { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+            } },
         },
         procs = {
             { name = "Maelstrom Weapon", ids = { 408498 } },

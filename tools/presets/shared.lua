@@ -51,6 +51,30 @@ local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Just
         "Charge Stun", "Intercept Stun", "Intimidation", "War Stomp", "Holy Wrath", "Stun", "Impact",
         "Starfire Stun", "Improved Concussive Shot", "Pyroclasm", "Blackout" } }
 
+-- "while one of these classes is in your group (you included)"
+local function withClass(...)
+    return { conditions = { { type = "classes", classes = { ... } } } }
+end
+
+-- The Physical Debuffs collection: armor reduction from anyone, Faerie Fire
+-- while a druid is in the group (any druid keeps it up: grey while missing),
+-- Curse of Recklessness while a warlock is (often another curse: hidden while
+-- missing); tanks add attack power reduction and the attack-speed slow.
+-- opts: tank = true; druid = true (druids track their own Faerie Fire).
+local function physical(opts)
+    opts = opts or {}
+    local entries = { ARMOR_REDUCTION }
+    if not opts.druid then
+        entries[#entries + 1] = { "Faerie Fire", source = "any", missing = "grey", when = withClass("DRUID") }
+    end
+    entries[#entries + 1] = { "Curse of Recklessness", source = "any", missing = "hide", when = withClass("WARLOCK") }
+    if opts.tank then
+        entries[#entries + 1] = AP_REDUCTION
+        entries[#entries + 1] = ATTACK_SLOWS
+    end
+    return { collection = "Physical Debuffs", entries = entries }
+end
+
 -- A copy of a group (or entry) with other fields: with(AP_REDUCTION, { missing = "grey" }).
 local function with(t, fields)
     local out = {}
@@ -65,4 +89,5 @@ return {
     MY_JUDGEMENT = MY_JUDGEMENT, OTHERS_JUDGEMENTS = OTHERS_JUDGEMENTS, TAUNTS = TAUNTS,
     ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
     HEALING_REDUCTION = HEALING_REDUCTION, STUNS = STUNS, with = with,
+    withClass = withClass, physical = physical,
 }
