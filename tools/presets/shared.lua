@@ -28,8 +28,30 @@ local function armors(icon) return { group = "Armors", source = "mine", max = 1,
     members = { "Frost Armor", "Ice Armor", "Mage Armor" } } end
 local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max = 3, icon = "Judgement of Wisdom", members = JUDGEMENTS }
 
+-- Debuffs that don't stack across classes, from anyone (whoever put it up,
+-- you needn't): armor and attack power reduction, the attack-speed slow
+-- tanks want on their target, and healing reduction (PvP; hidden until shown).
+local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1, icon = "Sunder Armor",
+    members = { "Sunder Armor", "Expose Armor" } }
+local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1, icon = "Demoralizing Shout",
+    members = { "Demoralizing Shout", "Demoralizing Roar", "Vindication" } }
+local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1, icon = "Thunder Clap",
+    members = { "Thunder Clap", "Hurricane" } }
+local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike", hidden = true,
+    members = { "Mortal Strike", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV" } }
+
+-- A copy of a group (or entry) with other fields: with(AP_REDUCTION, { missing = "grey" }).
+local function with(t, fields)
+    local out = {}
+    for k, v in pairs(t) do out[k] = v end
+    for k, v in pairs(fields) do out[k] = v end
+    return out
+end
+
 return {
     mine = mine, seal = seal, blessing = blessing, armors = armors,
     SEALS = SEALS, BLESSINGS = BLESSINGS, JUDGEMENTS = JUDGEMENTS,
     MY_JUDGEMENT = MY_JUDGEMENT, OTHERS_JUDGEMENTS = OTHERS_JUDGEMENTS, TAUNTS = TAUNTS,
+    ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
+    HEALING_REDUCTION = HEALING_REDUCTION, with = with,
 }

@@ -35,14 +35,15 @@ local FIRE_TRAPS = { group = "Fire Traps", source = "mine", max = 1, icon = "Imm
 
 local RAPID_FIRE = { "Rapid Fire", effect = "you" }
 local CONCUSSIVE = { "Concussive Shot", effect = "target" }
-local MARK = { "Hunter's Mark", missing = "warn" }
+-- one Hunter's Mark per target: another hunter's counts too
+local MARK = { "Hunter's Mark", source = "any", missing = "warn" }
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { "Arcane Shot", "Raptor Strike", "Mongoose Bite", "Aimed Shot", "Multi-Shot" },
       utility = { CONCUSSIVE, RAPID_FIRE, "Freezing Trap", "Immolation Trap", "Disengage", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
-      debuffs = { "Hunter's Mark", STINGS, "Wing Clip" },
+      debuffs = { { "Hunter's Mark", source = "any" }, STINGS, "Wing Clip" },
       procs = {} },
     -- ranged with pet and hawks; Summon Hawk and Arcane Shot share one
     -- cooldown, both kept so the icon is there before Summon Hawk is learnt

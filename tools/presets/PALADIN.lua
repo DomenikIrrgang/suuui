@@ -64,7 +64,7 @@ return {
       -- Seal of Fury is the taunt and the shield: never without it
       buffs = { seals("Seal of Fury", "warn"), { "Righteous Fury", mine = true, missing = "remind" },
           blessings("Blessing of Kings"), auras("Devotion Aura"), mine("Iron Creed") },
-      debuffs = { MY_JUDGEMENT, TAUNTS },
+      debuffs = { MY_JUDGEMENT, S.AP_REDUCTION, S.ATTACK_SLOWS, TAUNTS },
       procs = { "Redoubt", "Reckoning" } },
     { id = "retribution", name = "Retribution", tree = 3,
       essential = { "Judgement", "Holy Strike", "Consecration", "Exorcism", "Hammer of Wrath" },

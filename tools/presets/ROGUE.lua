@@ -24,6 +24,8 @@
 -- Your poisons on the target, one slot: main and off hand can carry two.
 -- The debuffs keep their rank's name (Deadly Poison II...) except Wound and
 -- Crippling Poison's; Instant Poison leaves no debuff.
+local S = dofile("tools/presets/shared.lua")
+
 local POISON_DEBUFFS = { "Deadly Poison", "Deadly Poison II", "Deadly Poison III", "Deadly Poison IV", "Deadly Poison V",
     "Wound Poison", "Crippling Poison", "Mind-numbing Poison", "Mind-numbing Poison II", "Mind-numbing Poison III" }
 local function poisons(missing)
@@ -38,7 +40,7 @@ return {
       essential = { "Kick", target("Gouge"), target("Kidney Shot"), "Feint" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "grey" } },
-      debuffs = { "Rupture", "Garrote", "Expose Armor", poisons(), "Cheap Shot" },
+      debuffs = { "Rupture", "Garrote", S.ARMOR_REDUCTION, poisons(), "Cheap Shot", S.HEALING_REDUCTION },
       procs = {} },
     { id = "assassination", name = "Assassination", tree = 1,
       -- Improved Kidney Shot: the stun is a damage window, so it leads
@@ -46,14 +48,14 @@ return {
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" }, { "Venom", missing = "warn" } },
       -- Mutilate and Venom want a poison up: grey while none is
-      debuffs = { "Rupture", poisons("grey"), "Garrote", "Expose Armor", "Cheap Shot" },
+      debuffs = { "Rupture", poisons("grey"), "Garrote", S.ARMOR_REDUCTION, "Cheap Shot", S.HEALING_REDUCTION },
       procs = { "Remorseless" } },
     { id = "combat", name = "Combat", tree = 2,
       -- Riposte lights up after a parry by itself; its disarm shows on it
       essential = { you("Adrenaline Rush"), you("Blade Flurry"), target("Riposte"), "Kick", target("Kidney Shot"), "Feint" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Gouge"), target("Blind"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" } },
-      debuffs = { "Rupture", "Expose Armor", poisons(), "Cheap Shot" },
+      debuffs = { "Rupture", S.ARMOR_REDUCTION, poisons(), "Cheap Shot", S.HEALING_REDUCTION },
       procs = {} },
     { id = "subtlety", name = "Subtlety", tree = 3,
       -- Premeditation's 20 sec to spend its combo points
@@ -62,6 +64,6 @@ return {
       utility = { "Preparation", you("Vanish"), target("Blind"), target("Gouge"), you("Evasion"), you("Sprint"), "Distract" },
       buffs = { { "Slice and Dice", missing = "warn" } },
       -- Hemorrhage feeds Rupture: grey while it's off
-      debuffs = { { "Hemorrhage", missing = "grey" }, "Rupture", "Garrote", "Expose Armor", poisons(), "Cheap Shot", "Sap" },
+      debuffs = { { "Hemorrhage", missing = "grey" }, "Rupture", "Garrote", S.ARMOR_REDUCTION, poisons(), "Cheap Shot", "Sap", S.HEALING_REDUCTION },
       procs = { "Thousand Cuts", "Cutthroat" } },
 }
