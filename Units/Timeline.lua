@@ -36,9 +36,9 @@ local M = SuuUI.RegisterModule({
 })
 
 -- The first voices (borrowed for a day) gave way to SuuUI's own.
-M:Migrate("pullVoice-kokoro", function(values)
+M:Migrate("pullVoice-kokoro-3", function(values)
     local v = values.pullVoice
-    if v == "David" or v == "Male" then values.pullVoice = "Michael"
+    if v == "David" or v == "Male" or v == "Fenrir" or v == "Puck" then values.pullVoice = "Michael"
     elseif v == "Jim" or v == "Female" then values.pullVoice = "Heart" end
 end)
 
@@ -307,7 +307,7 @@ end
 -- mod feeds the timeline: it counts out loud itself then.
 --------------------------------------------------------------------------------
 
-local VOICES = { Heart = true, Bella = true, Michael = true, Fenrir = true, Puck = true }
+local VOICES = { Heart = true, Bella = true, Michael = true }
 local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.ogg"
 
 -- n: 1-10, or "pull"
@@ -568,7 +568,7 @@ local SECTION = {
               description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
             { key = "pullVoice", label = "Voice", control = "segmented",
               options = { { value = "Heart", label = "Heart" }, { value = "Bella", label = "Bella" }, { value = "Michael", label = "Michael" },
-                          { value = "Fenrir", label = "Fenrir" }, { value = "Puck", label = "Puck" }, { value = "off", label = "Off" } }, stacked = true,
+                          { value = "off", label = "Off" } }, stacked = true,
               description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then." },
             { label = "Listen", control = "button", text = "Hear the voice",
               disabled = function() return M:Get("pullVoice") == "off", "Choose a voice first." end,
