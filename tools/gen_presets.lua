@@ -4,6 +4,7 @@
 -- the spell IDs that carry exactly that name in the client. A name the client
 -- doesn't have stops the run, so nothing unverified reaches the presets.
 --   lua tools/gen_presets.lua            (from the addon folder)
+--   lua tools/gen_presets.lua MAGE       (one class only)
 
 -- The main scan, plus Forever's own spells (1.2-1.33 million) in full.
 local SCANS = { "tools/data/forever_spells.tsv", "tools/data/forever_own.tsv", "tools/data/found.tsv" }
@@ -103,7 +104,10 @@ end
 -- Resolve every entry first; report every unknown name at once.
 resolved = {}
 local classes = {}
-for class in pairs(source) do classes[#classes + 1] = class end
+-- one class only with an argument (lua tools/gen_presets.lua MAGE)
+for class in pairs(source) do
+    if not arg[1] or arg[1]:upper() == class then classes[#classes + 1] = class end
+end
 table.sort(classes)
 for _, class in ipairs(classes) do
     resolved[class] = {}
