@@ -8,8 +8,13 @@
 -- The pull countdown: "/suu pull [seconds]" (default 10; 0 cancels). It
 -- rides the timeline as "Pull", counts down as an alert (out of combat too;
 -- setting: the whole countdown, the last ten seconds or none) and says
--- "Pull!" at zero. In a group the leader
--- (or an assistant) sends it to everyone with SuuUI. Combat cancels it.
+-- "Pull!" at zero. Combat cancels it.
+-- It is Blizzard's own countdown (C_PartyInfo.DoCountdown, the /countdown
+-- one), which DBM and BigWigs use too: a countdown anyone starts (SuuUI, DBM,
+-- BigWigs, /countdown) shows here, and SuuUI's shows in theirs and, without
+-- any addon, as Blizzard's numbers. While SuuUI's alert shows the countdown,
+-- Blizzard's own numbers (TimerTracker) stay away, as BigWigs does it. On a
+-- client without it, SuuUI sends its own message to everyone with SuuUI.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -168,17 +173,67 @@ local function canLead()
     return not UI.Flag(IsInRaid())
 end
 
+local function blizzardCountdown()
+    return C_PartyInfo and C_PartyInfo.DoCountdown
+end
+
 function M:Pull(arg)
-    local seconds = tonumber(arg) or self:Get("pullSeconds")
+    local seconds = math.floor(tonumber(arg) or self:Get("pullSeconds"))
+    if UI.Flag(IsInGroup()) and not canLead() then
+        self:Print("Only the leader or an assistant can start a pull countdown in a raid.")
+        return
+    end
+    -- Blizzard's countdown: everyone's START_PLAYER_COUNTDOWN (ours too) starts it
+    local doCountdown = blizzardCountdown()
+    if doCountdown and pcall(doCountdown, math.max(0, seconds)) then
+        if seconds <= 0 then self:CancelPull() return end
+        -- no START_PLAYER_COUNTDOWN for us (solo, perhaps): ours anyway
+        local token = {}
+        self.awaiting = token
+        C_Timer.After(0.5, function()
+            if self.awaiting == token then
+                self.awaiting = nil
+                self:StartPull(seconds)
+            end
+        end)
+        return
+    end
     if UI.Flag(IsInGroup()) then
-        if not canLead() then
-            self:Print("Only the leader or an assistant can start a pull countdown in a raid.")
-            return
-        end
         local channel = UI.Flag(IsInRaid()) and "RAID" or "PARTY"
         pcall(C_ChatInfo.SendAddonMessage, PREFIX, ("PULL\t%d"):format(seconds), channel)
     end
     self:StartPull(seconds)
+end
+
+-- Blizzard's countdown started or cancelled (by anyone: SuuUI, DBM,
+-- BigWigs, /countdown).
+function M:OnCountdown(guid, seconds)
+    if isSecret(guid) or isSecret(seconds) or not readable(seconds) then return end
+    if InCombatLockdown() then return end
+    self.awaiting = nil
+    local from
+    if type(guid) == "string" and guid ~= UnitGUID("player") and GetPlayerInfoByGUID then
+        local ok, _, _, _, _, _, name = pcall(GetPlayerInfoByGUID, guid)
+        if ok and not isSecret(name) and type(name) == "string" then from = name end
+    end
+    self:StartPull(seconds, from)
+end
+
+-- Blizzard's big countdown numbers, kept away while SuuUI's alert counts.
+function M:BlizzardNumbers(show)
+    local tracker = TimerTracker
+    if not tracker then return end
+    if show then
+        if self.trackerOff then
+            pcall(tracker.RegisterEvent, tracker, "START_PLAYER_COUNTDOWN")
+            pcall(tracker.RegisterEvent, tracker, "CANCEL_PLAYER_COUNTDOWN")
+            self.trackerOff = nil
+        end
+    elseif not self.trackerOff then
+        pcall(tracker.UnregisterEvent, tracker, "START_PLAYER_COUNTDOWN")
+        pcall(tracker.UnregisterEvent, tracker, "CANCEL_PLAYER_COUNTDOWN")
+        self.trackerOff = true
+    end
 end
 
 function M:OnMessage(prefix, text, _, sender)
@@ -282,6 +337,12 @@ function M:OnEnable()
         if not valid or valid(e) then self:OnGameEvent(e, function() self:Refresh() end) end
     end
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.pullTicker then self:CancelPull() end end)
+    if not valid or valid("START_PLAYER_COUNTDOWN") then
+        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, guid, seconds) self:OnCountdown(guid, seconds) end)
+        self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function() self:CancelPull() end)
+    end
+    self:BlizzardNumbers(self:Get("pullAlert") == "off")
+    self:Watch("pullAlert", function() self:BlizzardNumbers(self:Get("pullAlert") == "off") end)
     for _, key in ipairs({ "variant", "position" }) do
         self:Watch(key, function()
             self:Refresh()
@@ -293,6 +354,7 @@ function M:OnEnable()
 end
 
 function M:OnDisable()
+    self:BlizzardNumbers(true)
     self:CancelPull(true)
     if self.timeline then self.timeline:Hide() end
 end
