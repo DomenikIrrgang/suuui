@@ -121,6 +121,7 @@ end
 function M:CancelPull(quiet)
     if self.pullID and ET then pcall(ET.CancelScriptEvent, self.pullID) end
     self.pullID = nil
+    self.pullEnds = nil
     if self.pullTicker then self.pullTicker:Cancel(); self.pullTicker = nil end
     SuuUI.HideAlert("pull")
     if not quiet then self:Refresh() end
@@ -143,6 +144,7 @@ function M:StartPull(seconds, from)
         end
     end
     local endsAt = GetTime() + seconds
+    self.pullEnds = endsAt
     local detail = from and ("from " .. from) or nil
     -- the countdown as an alert (all of it, or the last ten seconds), then "Pull!"
     local mode = self:Get("pullAlert")
@@ -156,6 +158,7 @@ function M:StartPull(seconds, from)
             if self.pullTicker then self.pullTicker:Cancel() end
             self.pullTicker = nil
             self.pullID = nil
+            self.pullEnds = nil
         elseif mode == "all" or (mode == "last10" and left <= 10) then
             SuuUI.ShowAlert("pull", "info", ("Pull in %d"):format(math.ceil(left)), detail)
         end
@@ -207,10 +210,24 @@ end
 
 -- Blizzard's countdown started or cancelled (by anyone: SuuUI, DBM,
 -- BigWigs, /countdown).
-function M:OnCountdown(guid, seconds)
+function M:OnCountdown(guid, seconds, ...)
+    -- what the client sends (kept for /reload: SuuUIProbe.countdown)
+    SuuUIProbe = SuuUIProbe or {}
+    SuuUIProbe.countdown = SuuUIProbe.countdown or {}
+    local args = { guid, seconds, ... }
+    local shown = {}
+    for i = 1, select("#", ...) + 2 do
+        local v = args[i]
+        shown[i] = isSecret(v) and "secret" or tostring(v)
+    end
+    table.insert(SuuUIProbe.countdown, { at = GetTime(), args = shown })
+    while #SuuUIProbe.countdown > 12 do table.remove(SuuUIProbe.countdown, 1) end
+    -- ours arrived (or anyone's): no fallback start
+    self.awaiting = nil
     if isSecret(guid) or isSecret(seconds) or not readable(seconds) then return end
     if InCombatLockdown() then return end
-    self.awaiting = nil
+    -- the same countdown again (the event can come more than once): keep it
+    if self.pullEnds and math.abs(GetTime() + seconds - self.pullEnds) < 1.5 then return end
     local from
     if type(guid) == "string" and guid ~= UnitGUID("player") and GetPlayerInfoByGUID then
         local ok, _, _, _, _, _, name = pcall(GetPlayerInfoByGUID, guid)
@@ -338,7 +355,7 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.pullTicker then self:CancelPull() end end)
     if not valid or valid("START_PLAYER_COUNTDOWN") then
-        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, guid, seconds) self:OnCountdown(guid, seconds) end)
+        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, ...) self:OnCountdown(...) end)
         self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function() self:CancelPull() end)
     end
     self:BlizzardNumbers(self:Get("pullAlert") == "off")
