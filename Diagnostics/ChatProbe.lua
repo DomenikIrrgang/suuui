@@ -4,6 +4,9 @@
 -- windows). Globals, ChatFrameUtil, ChatFrame1's own methods and C_ChatInfo
 -- whose names mention channels, message groups or chat windows, plus what
 -- each chat window holds. Saved in SuuUIProbe.chat on /reload.
+-- Also the input field's history: how many lines it keeps, its arrow key
+-- mode, which key scripts it has, and every global, mixin method or field
+-- whose name mentions history (send a couple of lines before probing).
 
 local _, ns = ...
 
@@ -66,6 +69,51 @@ function CP.Command()
     local chans = {}
     for i = 1, #list, 3 do chans[#chans + 1] = tostring(list[i]) .. ":" .. tostring(list[i + 1]) end
     out.channelList = table.concat(chans, ", ")
+    -- the input field and its history
+    local eb = ChatFrame1EditBox
+    local edit = {}
+    if eb then
+        local function try(m) if eb[m] then local ok, v = pcall(eb[m], eb); return ok and (isSecret(v) and "secret" or tostring(v)) or "error" end return "missing" end
+        edit.historyLines = try("GetHistoryLines")
+        edit.altArrowKeyMode = try("GetAltArrowKeyMode")
+        edit.multiLine = try("IsMultiLine")
+        edit.focused = try("HasFocus")
+        edit.scripts = {}
+        for _, sc in ipairs({ "OnArrowPressed", "OnKeyDown", "OnKeyUp", "OnChar", "OnEnterPressed", "OnTabPressed", "OnEditFocusGained" }) do
+            local ok, has = pcall(eb.HasScript, eb, sc)
+            local fn = ok and has and eb:GetScript(sc)
+            edit.scripts[sc] = fn and "set" or (ok and has and "none" or "unsupported")
+        end
+        edit.fields = {}
+        for k, v in pairs(eb) do
+            if type(k) == "string" and (k:lower():find("history") or k:lower():find("arrow")) then
+                edit.fields[#edit.fields + 1] = k .. " = " .. type(v) .. (type(v) == "table" and (" #" .. #v) or (type(v) ~= "function" and (" " .. tostring(v)) or ""))
+            end
+        end
+        table.sort(edit.fields)
+        local emt = getmetatable(eb)
+        local methods = {}
+        if emt and type(emt.__index) == "table" then
+            for k in pairs(emt.__index) do
+                if type(k) == "string" and (k:find("History") or k:find("Arrow")) then methods[#methods + 1] = k end
+            end
+        end
+        table.sort(methods)
+        edit.methods = methods
+    end
+    local hist = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and (k:find("History") and (k:find("Chat") or k:find("Edit")) or k:find("^ChatEdit_")) then
+            hist[#hist + 1] = k .. " (" .. type(v) .. ")"
+        end
+    end
+    table.sort(hist)
+    edit.globals = hist
+    local lastActive = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+    edit.activeWindow = lastActive and lastActive:GetName() or "none"
+    local lastUsed = ChatEdit_GetLastActiveWindow and ChatEdit_GetLastActiveWindow()
+    edit.lastActiveWindow = lastUsed and lastUsed:GetName() or "none"
+    out.editBox = edit
     SuuUIProbe.chat = out
     ns.Print(("Chat probe: %d global functions found. /reload to save."):format(#globals))
 end
