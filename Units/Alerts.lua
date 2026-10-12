@@ -32,7 +32,7 @@ local TEST_TIME = 4
 function M:Show(key, tone, title, detail, ...)
     if not self.frame then return end
     local inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
-    if not inCombat and not self.testing then return end
+    if not inCombat and not self.testing and not (self.anytime and self.anytime[key]) then return end
     local current = self.current
     if current and current ~= key and (URGENCY[self.tone] or 0) > (URGENCY[tone] or 0) then return end
     local fresh = current ~= key or self.tone ~= tone
@@ -44,6 +44,12 @@ function M:Show(key, tone, title, detail, ...)
         SuuUI.Motion.Enter(self.alert)
         if tone == "danger" and self:Get("sound") then UI.TrackerSound("warning") end
     end
+end
+
+-- A key whose alerts may show out of combat too (a pull countdown).
+function M:AllowOutOfCombat(key)
+    self.anytime = self.anytime or {}
+    self.anytime[key] = true
 end
 
 function M:Hide(key)

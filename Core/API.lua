@@ -219,6 +219,7 @@ API.UI.PetBar = UI.PetBar
 API.UI.Alert = UI.Alert             -- Alert(parent) -> a:SetAlert(tone, title, detail[, ...])
 API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts), m:SetMaxRows(n)
 API.UI.DamageMeter = UI.DamageMeter -- DamageMeter(parent, opts): one window on C_DamageMeter (see UI/DamageMeter.lua)
+API.UI.EncounterTimeline = UI.EncounterTimeline -- EncounterTimeline(parent, { variant, window, soonAt }) -> t:SetEvents(list), t:SetVariant(v), t:SetMeta(text)
 API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
@@ -226,6 +227,11 @@ API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, 
 function API.ShowAlert(key, tone, title, detail, ...)
     local m = Modules.Get("alerts")
     if m and m:IsEnabled() then m:Show(key, tone, title, detail, ...) end
+end
+-- A key whose alerts may also show out of combat (a pull countdown).
+function API.AllowAlertOutOfCombat(key)
+    local m = Modules.Get("alerts")
+    if m then m:AllowOutOfCombat(key) end
 end
 function API.HideAlert(key)
     local m = Modules.Get("alerts")
