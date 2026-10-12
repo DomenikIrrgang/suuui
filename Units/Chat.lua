@@ -420,6 +420,12 @@ function M:ApplyGlobalTab()
         end
     end
     if not global then return end
+    -- second in the dock, after General (a one-time move: the game saves the
+    -- dock order, so later sessions load it cleanly)
+    local docked = select(9, GetChatWindowInfo(global:GetID()))
+    if FCF_DockFrame and not isSecret(docked) and docked ~= 2 then
+        FCF_DockFrame(global, 2)
+    end
     -- everything General was set to show, and every channel you're in
     local channels, seen = {}, {}
     for _, list in ipairs({ windowChannels(general:GetID()), joinedChannels() }) do
