@@ -213,3 +213,19 @@ API.KeybindMode = {
     IsActive = ns.KeybindMode.IsActive,
 }
 API.UI.PetBar = UI.PetBar
+
+-- 0.10: alerts, the threat meter
+
+API.UI.Alert = UI.Alert             -- Alert(parent) -> a:SetAlert(tone, title, detail[, ...])
+API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts)
+-- One alert at a time, centred, in combat only (the Alerts module; nothing
+-- while it's off). The same key updates its alert in place; HideAlert(key)
+-- takes it away. detail: text, or a format whose arguments may be secret.
+function API.ShowAlert(key, tone, title, detail, ...)
+    local m = Modules.Get("alerts")
+    if m and m:IsEnabled() then m:Show(key, tone, title, detail, ...) end
+end
+function API.HideAlert(key)
+    local m = Modules.Get("alerts")
+    if m and m:IsEnabled() then m:Hide(key) end
+end

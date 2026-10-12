@@ -355,6 +355,10 @@ Decided (2026-10-12): like the party frames, **one layout per profile**; roles p
 - **Confirm:**
   - Overtaking the tank on a trash mob raises the alert.
   - On a boss, the rows are ordered by state with no errors from secret values.
+- **Built (2026-10-12, not yet confirmed in game):**
+  - `UI.Alert` and the Alerts module (Insights › Alerts): one alert at a time, top centre 270px down, in combat only, cleared when combat ends; the same key updates in place, a more urgent one isn't replaced; a sound on danger (setting); "Show test alerts" shows the three tones out of combat; the preview shows them at real size. Public API `SuuUI.ShowAlert(key, tone, title, detail, ...)` / `SuuUI.HideAlert(key)` (0.10); a detail is a format whose arguments may be secret.
+  - `UI.ThreatMeter` and the Threat meter module (Insights › Damage & threat): bottom right (right edge 292px in, 28px up, the damage meter's place to its right), always 8 rows, in combat with a hostile target. Rows from `UnitDetailedThreatSituation` for you, your pet and the group (pets as "PET"); states only from `UnitThreatSituation`; by % and ranked while every % is readable, otherwise by state then group order with the boss note; your row pinned in the last slot when it's below; settings Show, Who (Group / Tanks and me / Just me), Before the name (Role icon / Class icon / None), Raw threat (readable values only), Warn me before I pull.
+  - The warning: "You're about to pull" (warning) at status 1 while someone else holds the mob (in a group or with a pet), "You have drawn aggro" (danger) at 2-3 in a group unless you're the tank; the detail names the target, the holder and your threat drop if it's ready (Feign Death, Feint/Vanish, Fade, Ice Block, Cower, Divine Shield; "ready" from the cooldown's readable `isActive`).
 
 ### 1.12 Damage meter
 - **Build:**

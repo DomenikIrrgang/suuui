@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.9.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.10.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.9.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames |
+| `SuuUI.API_VERSION` | `"0.10.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -303,3 +303,12 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.KeybindMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | Keybind mode (`/suu keybind`): hover a button, press a key. It binds the game's own command for the button, so the game's Key Bindings window shows it too. Message: `SUUUI_KEYBINDMODE_CHANGED (active)` |
 | Keybinds settings (0.9) | General › Keybinds, in the `actionbars` namespace: `showKeys` (show key bindings on buttons at all) and `keyBars` (the bars that show them: a list of `"1"` … `"8"`, `"stance"`, `"pet"`) |
 | Bindable buttons | A button made with `SuuUI.UI.ActionButton` takes part in keybind mode when it has `b.bindCommand` (a game binding command) and `b.bindLabel`; `ActionBar`, `StanceBar` and `PetBar` set both |
+
+## Alerts and the threat meter (0.10)
+
+| | |
+|---|---|
+| `SuuUI.ShowAlert(key, tone, title, detail, ...)` | One alert at a time, centred 270px down from the top of the screen, in combat only (the Alerts module; nothing while it's off). `tone`: `"danger"`, `"warning"` or `"info"`. `detail` is text, or a format whose arguments may be secret (a target's name in a dungeon). The same `key` updates its alert in place; a new key replaces the alert showing unless that one is more urgent (danger > warning > info). Combat ending clears it. Danger alerts can play a sound |
+| `SuuUI.HideAlert(key)` | Takes that key's alert away (raise an alert while its reason holds, hide it when it doesn't) |
+| `SuuUI.UI.Alert(parent)` | The alert band itself: `a:SetAlert(tone, title, detail[, ...])` sizes it to its text (a detail with a secret argument can't be measured: the band is then at least `notice-w` wide and cuts it) |
+| `SuuUI.UI.ThreatMeter(parent, { rows })` | The threat meter panel, `meter-w` wide and always `rows` rows tall (default 8). `m:SetTarget(name)` (may be secret); `m:SetRows(list, opts)`, `list` in group order: `{ name, class, role ("TANK", "HEALER", "DAMAGER", "PET"), status (0-3, nil unknown), percent (scaled, possibly secret), raw (possibly secret), you }`; `opts`: `show` (`"group"`, `"tanks"`, `"self"`), `byState` (order by threat state then group, with the boss note; otherwise by %, ranked), `marker` (`"role"`, `"class"`, `"none"`), `raw` (show the threat value; readable ones only), `nameColor` (`"class"` or `"ink"`). States come from the status alone: Aggro, Pulling, Losing, Tanking |
