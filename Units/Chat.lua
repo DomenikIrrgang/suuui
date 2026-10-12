@@ -938,11 +938,25 @@ function M:CombatFilterBar(show)
     end
 end
 
--- Right click on a tab: what Blizzard's tab menu did (its tabs are out of
--- reach now). Sizes and names go through the client's own chat window
--- settings; Blizzard's chat settings open on the window.
-local FONT_SIZES = { 10, 11, 12, 13, 14, 15, 16, 18, 20 }
+-- Right click on a whisper tab: close it. The windows' own settings (font
+-- size, name, Blizzard's chat settings, new and closing) are in SuuUI's
+-- settings, Chat › Windows.
+function M:TabMenu(b)
+    local cf = b.cf
+    if not (cf and cf.isTemporary and FCF_Close and MenuUtil and MenuUtil.CreateContextMenu) then return end
+    MenuUtil.CreateContextMenu(b, function(_, root)
+        root:CreateButton("Close", function() self:CloseWindow(cf) end)
+    end)
+end
 
+function M:CloseWindow(cf)
+    pcall(FCF_Close, cf)
+    if self.selected == cf then self:Select(ChatFrame1) else self:UpdateTabs() end
+    if self.windowsEditor and self.windowsEditor:IsVisible() then self.windowsEditor:Refresh() end
+end
+
+-- Sizes and names go through the client's own chat window settings;
+-- Blizzard's chat settings open on the window.
 function M:SetFontSize(cf, size)
     if cf.isTemporary then
         tempSizes[cf] = size
@@ -950,6 +964,12 @@ function M:SetFontSize(cf, size)
         pcall(SetChatWindowSize, cf:GetID(), size)
     end
     if self:ApplyFont(cf) then self:ApplyMirrorFont(cf) end
+end
+
+function M:RenameWindow(cf, name)
+    if name == "" or cf.isTemporary or not SetChatWindowName then return end
+    pcall(SetChatWindowName, cf:GetID(), name)
+    self:UpdateTabs()
 end
 
 function M:OpenChatSettings(cf)
@@ -960,49 +980,14 @@ function M:OpenChatSettings(cf)
     ShowUIPanel(ChatConfigFrame)
 end
 
-function M:NewWindow()
-    askText("New window", "", "A name · Enter makes it · Esc cancels", function(name)
-        if name == "" or not FCF_OpenNewWindow then return end
-        local ok, cf = pcall(FCF_OpenNewWindow, name)
-        C_Timer.After(0, function()
-            if not self:IsEnabled() then return end
-            self:SkinAll()
-            if ok and cf and self.mirrors and self.mirrors[cf] then self:Select(cf) end
-        end)
-    end)
-end
-
-function M:TabMenu(b)
-    local cf = b.cf
-    if not (cf and MenuUtil and MenuUtil.CreateContextMenu) then return end
-    MenuUtil.CreateContextMenu(b, function(_, root)
-        local sizes = root:CreateButton("Font size")
-        for _, size in ipairs(FONT_SIZES) do
-            sizes:CreateRadio(tostring(size), function() return fontSize(cf) == size end,
-                function() self:SetFontSize(cf, size) end)
-        end
-        if not cf.isTemporary then
-            root:CreateButton("Rename…", function()
-                local name = GetChatWindowInfo(cf:GetID())
-                askText("Rename window", plain(name) and name or "", "Enter saves · Esc cancels", function(text)
-                    if text ~= "" and SetChatWindowName then pcall(SetChatWindowName, cf:GetID(), text) end
-                    self:UpdateTabs()
-                end)
-            end)
-            if ChatConfigFrame then
-                root:CreateButton("Chat settings…", function() self:OpenChatSettings(cf) end)
-            end
-        end
-        if FCF_OpenNewWindow and (not FCF_CanOpenNewWindow or FCF_CanOpenNewWindow()) then
-            root:CreateButton("New window…", function() self:NewWindow() end)
-        end
-        if cf ~= ChatFrame1 and cf ~= ChatFrame2 and FCF_Close then
-            root:CreateDivider()
-            root:CreateButton("Close", function()
-                pcall(FCF_Close, cf)
-                if self.selected == cf then self:Select(ChatFrame1) else self:UpdateTabs() end
-            end)
-        end
+function M:NewWindow(name)
+    if name == "" or not FCF_OpenNewWindow then return end
+    local ok, cf = pcall(FCF_OpenNewWindow, name)
+    C_Timer.After(0, function()
+        if not self:IsEnabled() then return end
+        self:SkinAll()
+        if ok and cf and self.mirrors and self.mirrors[cf] then self:Select(cf) end
+        if self.windowsEditor and self.windowsEditor:IsVisible() then self.windowsEditor:Refresh() end
     end)
 end
 
@@ -1223,10 +1208,79 @@ end
 
 local function idleOff() return not M:Get("fadeIdle"), "Turn the idle fade on first." end
 
+-- Settings › Chat › Windows: each window (whisper windows aside) with its
+-- name, font size, Blizzard's chat settings for it and closing; a new one.
+local EDIT_W, ROW_H = 520, 38
+
+local function windowRow(parent)
+    local r = CreateFrame("Frame", nil, parent)
+    r:SetSize(EDIT_W - 12, ROW_H)
+    r.name = UI.TextField(r, { width = 200, onChange = function(text)
+        if r.cf then M:RenameWindow(r.cf, strtrim(text)) end
+    end })
+    r.name:SetPoint("LEFT")
+    r.size = UI.Stepper(r, { min = 8, max = 24, step = 1, unit = "px", onChange = function(v)
+        if r.cf then M:SetFontSize(r.cf, v) end
+    end })
+    r.size:SetPoint("LEFT", r.name, "RIGHT", S["space-4"], 0)
+    r.config = UI.Button(r, { text = "Chat settings…", onClick = function() if r.cf then M:OpenChatSettings(r.cf) end end,
+        tooltip = { title = "Chat settings", description = "Blizzard's settings for this window: which channels and messages it shows." } })
+    r.config:SetPoint("LEFT", r.size, "RIGHT", S["space-4"], 0)
+    r.close = UI.CloseButton(r, function() if r.cf then M:CloseWindow(r.cf) end end)
+    r.close:SetPoint("RIGHT", -S["space-2"], 0)
+    return r
+end
+
+local function buildWindows(parent)
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(EDIT_W, 100)
+    f.rows = {}
+    f.well = CreateFrame("Frame", nil, f)
+    UI.Fill(f.well, "surface-sunk"):SetAllPoints()
+    UI.Border(f.well, "gilt-faint")
+    f.well:SetPoint("TOPLEFT")
+    f.add = UI.Button(f, { text = "New window", onClick = function()
+        askText("New window", "", "A name · Enter makes it · Esc cancels", function(name) M:NewWindow(name) end)
+    end })
+    function f:Refresh()
+        for _, r in ipairs(self.rows) do r:Hide() end
+        local y = 6
+        local i = 0
+        for _, cf in ipairs(M:Windows()) do
+            if not cf.isTemporary then
+                i = i + 1
+                local r = self.rows[i] or windowRow(self.well)
+                self.rows[i] = r
+                r.cf = cf
+                local name = GetChatWindowInfo(cf:GetID())
+                r.name:SetValue(plain(name) and name or "")
+                r.size:SetValue(fontSize(cf))
+                r.config:SetShown(ChatConfigFrame ~= nil)
+                r.close:SetShown(cf ~= ChatFrame1 and cf ~= ChatFrame2 and FCF_Close ~= nil)
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", 6, -y)
+                r:Show()
+                y = y + ROW_H
+            end
+        end
+        local wellH = y + 6
+        self.well:SetSize(EDIT_W, wellH)
+        local canNew = FCF_OpenNewWindow and (not FCF_CanOpenNewWindow or FCF_CanOpenNewWindow())
+        self.add:SetShown(canNew and true or false)
+        self.add:ClearAllPoints()
+        self.add:SetPoint("TOPLEFT", 0, -(wellH + 10))
+        self:SetHeight(wellH + (canNew and (10 + 30) or 0))
+    end
+    M.windowsEditor = f
+    f:Refresh()
+    f:HookScript("OnShow", function() f:Refresh() end)
+    return f
+end
+
 local SECTION = {
     id = "chat", label = "Chat", category = "World", order = 20,
     groups = {
-        { title = "Chat", description = "SuuUI shows Blizzard's chat windows as its own tabs: what goes in which window, other addons' filters and the input stay Blizzard's. Right click a tab for its font size, name, chat settings, a new window or closing it.", rows = {
+        { title = "Chat", description = "SuuUI shows Blizzard's chat windows as its own tabs: what goes in which window, other addons' filters and the input stay Blizzard's.", rows = {
             { key = "logHeight", label = "Height", control = "slider", min = 100, max = 400, step = 10, unit = "px", combat = true,
               description = "The lines' area; the panel adds the tabs and the input." },
             { key = "fadeIdle", label = "Fade when idle", control = "toggle",
@@ -1234,6 +1288,9 @@ local SECTION = {
             { key = "idleDelay", label = "Idle after", control = "slider", min = 5, max = 60, step = 1, unit = "s", disabled = idleOff },
             { key = "globalTab", label = "Global channels in their own tab", control = "toggle",
               description = "General, Trade, LocalDefense and the rest in a Global tab (your Guild tab renamed, or a new one); the General tab keeps everything else. Channels you join later go there too. Off: SuuUI leaves your tabs as they are." },
+        } },
+        { title = "Windows", description = "Each tab's window: its name, font size and Blizzard's settings for what it shows. Whisper windows close with a right click on their tab.", rows = {
+            { label = "Windows", control = "custom", build = buildWindows, stacked = true },
         } },
         { title = "Lines", rows = {
             { key = "timestamps", label = "Timestamps", control = "toggle",
