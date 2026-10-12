@@ -6,8 +6,9 @@
 -- add to it, SuuUI's pull countdown first. Hidden while nothing is on it.
 --
 -- The pull countdown: "/suu pull [seconds]" (default 10; 0 cancels). It
--- rides the timeline as "Pull", counts down the last five seconds as an
--- alert (out of combat too) and says "Pull!" at zero. In a group the leader
+-- rides the timeline as "Pull", counts down as an alert (out of combat too;
+-- setting: the whole countdown, the last ten seconds or none) and says
+-- "Pull!" at zero. In a group the leader
 -- (or an assistant) sends it to everyone with SuuUI. Combat cancels it.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -21,9 +22,14 @@ local M = SuuUI.RegisterModule({
         position = { point = "TOP", x = 0, y = -28 },
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
-        pullAlert = "all",   -- "all" | "last5" | "off": the countdown as an alert
+        pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
     },
 })
+
+-- "Last 5 seconds" became "Last 10 seconds".
+M:Migrate("pullAlert-last10", function(values)
+    if values.pullAlert == "last5" then values.pullAlert = "last10" end
+end)
 
 local isSecret = issecretvalue or function() return false end
 local function readable(v) return not isSecret(v) and type(v) == "number" end
@@ -133,7 +139,7 @@ function M:StartPull(seconds, from)
     end
     local endsAt = GetTime() + seconds
     local detail = from and ("from " .. from) or nil
-    -- the countdown as an alert (all of it, or the last five seconds), then "Pull!"
+    -- the countdown as an alert (all of it, or the last ten seconds), then "Pull!"
     local mode = self:Get("pullAlert")
     local function tick()
         local left = endsAt - GetTime()
@@ -145,7 +151,7 @@ function M:StartPull(seconds, from)
             if self.pullTicker then self.pullTicker:Cancel() end
             self.pullTicker = nil
             self.pullID = nil
-        elseif mode == "all" or (mode == "last5" and left <= 5) then
+        elseif mode == "all" or (mode == "last10" and left <= 10) then
             SuuUI.ShowAlert("pull", "info", ("Pull in %d"):format(math.ceil(left)), detail)
         end
     end
@@ -248,7 +254,7 @@ local SECTION = {
         { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). In a group the leader's or an assistant's reaches everyone with SuuUI; combat ends it.", rows = {
             { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
             { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
-              options = { { value = "all", label = "Whole countdown" }, { value = "last5", label = "Last 5 seconds" }, { value = "off", label = "Off" } },
+              options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
               description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
             { label = "Start one", control = "button", text = "Start a pull countdown",
               onClick = function() M:Pull() end },
