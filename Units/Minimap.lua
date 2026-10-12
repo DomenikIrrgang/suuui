@@ -26,7 +26,8 @@ local M = SuuUI.RegisterModule({
     api = "0.10",
     reloadToToggle = true,
     defaults = {
-        position = { point = "TOPRIGHT", x = -28, y = -28 },
+        -- the frame's top: the zone lines above it end 28px from the screen's top
+        position = { point = "TOPRIGHT", x = -28, y = -65 },
         size = 176,
         zone = true,
         clock = true,
@@ -39,9 +40,8 @@ local GLYPHS = TEX .. "Glyphs\\"
 local ROUND_MASK = 186178
 local isSecret = issecretvalue or function() return false end
 local function readable(v) return not isSecret(v) and type(v) == "number" end
--- the zone lines: zone, subzone, the instance line; above the disc with room
--- for the north marker (8px over the ring) plus space-3
-local ZONE_H = T.type.header.lineHeight + T.type.caption.lineHeight * 2
+-- the zone lines (zone, subzone, the instance line) end this far above the
+-- disc: the north marker's 8px over the ring, plus space-3
 local ZONE_GAP = 8 + S["space-3"]
 local TIME_H = T.type.caption.lineHeight
 
@@ -196,7 +196,10 @@ local function layoutBlock(f, size, zone, clock)
     f.time:SetVisible(clock)
     f.timeButton:SetShown(clock)
     f.disc:ClearAllPoints()
-    local top = zone and (ZONE_H + ZONE_GAP) or 8
+    -- the placed frame is the map and the clock (8px on top for the north
+    -- marker); the zone lines hang above it, so neither an empty line nor a
+    -- new one moves the map
+    local top = 8
     f.disc:SetPoint("TOP", 0, -top)
     f:SetSize(size, top + size + (clock and (S["space-3"] + TIME_H) or 0))
     stackZone(f)
