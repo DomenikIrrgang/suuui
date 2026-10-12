@@ -439,7 +439,7 @@ local SECTION = {
                   return text
               end },
         } },
-        { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). In a group the leader's or an assistant's reaches everyone with SuuUI; combat ends it.", rows = {
+        { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). It is the game's own countdown, the one DBM and BigWigs use: in a group, the leader's or an assistant's reaches everyone (their boss mods show it, players without addons see the game's numbers), and theirs shows here. Combat ends it.", rows = {
             { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
             { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
               options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
