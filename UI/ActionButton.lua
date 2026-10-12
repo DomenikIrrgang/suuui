@@ -125,6 +125,23 @@ end
 -- Draws a cooldown from any source: whether it runs, whether it is only the
 -- global cooldown, and the engine's duration object (secret-safe).
 function AB:ShowCooldown(active, gcd, duration)
+    -- Right as the global cooldown ends the game can report it for a moment
+    -- as a real cooldown (active, no longer "on the GCD"): every button would
+    -- flash grey. Coming from the global cooldown, such a reading is believed
+    -- only when it still holds a moment later; meanwhile it draws as the GCD.
+    if active and not gcd and self.onGCD and not self.confirming then
+        gcd = true
+        if not self.recheck then
+            self.recheck = true
+            C_Timer.After(0.15, function()
+                self.recheck = nil
+                self.confirming = true
+                self:UpdateCooldown()
+                self.confirming = nil
+            end)
+        end
+    end
+    self.onGCD = active and gcd or false
     if active then
         if duration then self.cooldown:SetCooldownFromDurationObject(duration) end
         -- The global cooldown sweeps but shows no digits and keeps the colour.
