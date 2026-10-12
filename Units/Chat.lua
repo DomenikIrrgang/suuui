@@ -107,7 +107,8 @@ end
 
 function M:PanelSize()
     local w = UI.Size("chat-w")
-    local h = PAD_TOP + TABS_H + GAP + self:Get("logHeight") + GAP + INPUT_H + PAD_BOTTOM
+    -- the panel (tabs and lines), then the input below it at the same width
+    local h = PAD_TOP + TABS_H + GAP + self:Get("logHeight") + PAD_BOTTOM + GAP + INPUT_H
     return w, h
 end
 
@@ -117,13 +118,18 @@ function M:BuildPanel()
     p:EnableMouse(false)
     p.deco = CreateFrame("Frame", nil, p)
     p.deco:SetAllPoints()
-    p.ground = UI.Fill(p.deco, "surface-glass", "BACKGROUND")
+    -- the panel: glass ground and gilt-line edge around the tabs and lines
+    p.box = CreateFrame("Frame", nil, p.deco)
+    p.box:SetPoint("TOPLEFT")
+    p.box:SetPoint("BOTTOMRIGHT", 0, INPUT_H + GAP)
+    p.ground = UI.Fill(p.box, "surface-glass", "BACKGROUND")
     p.ground:SetAllPoints()
-    p.border = UI.Border(p.deco, "gilt-line")
-    -- the input field: surface-sunk, a gilt-line edge (Blizzard's edit box sits on it)
+    p.border = UI.Border(p.box, "gilt-line")
+    -- the input field below the panel, as wide: surface-sunk, a gilt-line
+    -- edge (Blizzard's edit box sits on it)
     p.field = CreateFrame("Frame", nil, p.deco)
-    p.field:SetPoint("BOTTOMLEFT", PAD_X, PAD_BOTTOM)
-    p.field:SetPoint("BOTTOMRIGHT", -PAD_X, PAD_BOTTOM)
+    p.field:SetPoint("BOTTOMLEFT")
+    p.field:SetPoint("BOTTOMRIGHT")
     p.field:SetHeight(INPUT_H)
     UI.Fill(p.field, "surface-sunk", "BACKGROUND"):SetAllPoints()
     UI.Border(p.field, "gilt-line")
@@ -138,7 +144,7 @@ function M:BuildPanel()
     p.log = CreateFrame("Frame", nil, p)
     p.log:SetFrameStrata("LOW")
     p.log:SetPoint("TOPLEFT", PAD_X, -(PAD_TOP + TABS_H + GAP))
-    p.log:SetPoint("BOTTOMRIGHT", -PAD_X, PAD_BOTTOM + INPUT_H + GAP)
+    p.log:SetPoint("BOTTOMRIGHT", -PAD_X, INPUT_H + GAP + PAD_BOTTOM)
     self.panel = p
 end
 
@@ -154,7 +160,7 @@ function M:LogRect()
     local k = p:GetEffectiveScale() / UIParent:GetEffectiveScale()
     local left = (l + PAD_X) * k
     local right = (l + w - PAD_X) * k
-    local bottom = (b + PAD_BOTTOM + INPUT_H + GAP) * k
+    local bottom = (b + INPUT_H + GAP + PAD_BOTTOM) * k
     local top = bottom + self:Get("logHeight") * k
     return left, bottom, right, top
 end
@@ -233,8 +239,10 @@ function M:SkinFrame(cf)
             if eb[key] then eb[key]:SetAlpha(0) end
         end
         eb:ClearAllPoints()
-        eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", 0, -GAP)
-        eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", 0, -GAP)
+        -- on the field below the panel: out by the panel's padding, down by
+        -- its bottom padding and the gap
+        eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", -PAD_X, -(PAD_BOTTOM + GAP))
+        eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", PAD_X, -(PAD_BOTTOM + GAP))
         eb:SetHeight(INPUT_H)
         if eb.SetTextInsets then eb:SetTextInsets(S["space-4"], S["space-4"], 0, 0) end
         -- Up and Down recall what you sent (the edit box's own history),
