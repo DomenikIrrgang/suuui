@@ -162,9 +162,9 @@ ns.CooldownPresets = {
     } },
     { id = "combat", name = "Combat", tree = 2, lists = {
         essential = {
-            { name = "Riposte", icon = 5237, effect = "target", ids = { 5237, 6187, 6569, 14251 } },
+            { name = "Riposte", icon = 14251, effect = "target", ids = { 5237, 6187, 6569, 14251 } },
             { name = "Adrenaline Rush", icon = 13750, effect = "you", ids = { 13750, 28752, 28753 } },
-            { name = "Blade Flurry", icon = 1226883, effect = "you", ids = { 13877, 1226883, 1230700 } },
+            { name = "Blade Flurry", icon = 13877, effect = "you", ids = { 13877, 1226883, 1230700 } },
             { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
             { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
             { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },

@@ -146,17 +146,23 @@ end
 local haveIcons = next(ICON) ~= nil
 
 -- The ID whose art an entry (or a group with none of its members up) shows:
--- the art most of the name's IDs share (the lowest ID is often an NPC
--- version with other art: Seal of Wisdom), as an ID the class really has
--- when one carries it. Without the art data: an ID the class has, else the
--- lowest.
+-- the art most of the IDs the class really has share (its talents and
+-- spellbook ranks: NPC versions can outnumber them with other art, Shield
+-- Slam's five against its four ranks), else most of all the name's IDs (the
+-- lowest is often an NPC version with other art: Seal of Wisdom), as an ID
+-- the class has when one carries it. Without the art data: an ID the class
+-- has, else the lowest.
 local function iconID(class, ids)
     local known = knownIDs[class] or {}
     if haveIcons then
+        local own = false
+        for _, id in ipairs(ids) do
+            if known[id] and ICON[id] then own = true; break end
+        end
         local count, best, bestN = {}, nil, 0
         for _, id in ipairs(ids) do
             local file = ICON[id]
-            if file then
+            if file and (known[id] or not own) then
                 count[file] = (count[file] or 0) + 1
                 local n = count[file]
                 -- ties go to the art of an ID the class has, then the earlier

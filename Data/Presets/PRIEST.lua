@@ -111,7 +111,7 @@ ns.CooldownPresets = {
             { name = "Vampiric Embrace", icon = 15286, effect = "target", ids = { 15286, 15290, 461966, 1237618 } },
         },
         utility = {
-            { name = "Silence", icon = 6726, effect = "target", ids = { 6726, 8988, 12528, 15487, 18278, 18327, 22666, 23207, 26069, 27559, 29943, 30225, 1214273, 1224125, 1293654, 1304401, 1324427 } },
+            { name = "Silence", icon = 15487, effect = "target", ids = { 6726, 8988, 12528, 15487, 18278, 18327, 22666, 23207, 26069, 27559, 29943, 30225, 1214273, 1224125, 1293654, 1304401, 1324427 } },
             { name = "Inner Focus", icon = 14751, effect = "you", ids = { 14751 } },
             { name = "Psychic Scream", icon = 8122, ids = { 8122, 8124, 10888, 10890, 13704, 15398, 22884, 26042, 27610, 437928 } },
             { name = "Fade", icon = 586, effect = "you", ids = { 586, 9578, 9579, 9592, 10941, 10942, 12685, 20672, 1292765 } },
@@ -119,7 +119,7 @@ ns.CooldownPresets = {
             { name = "Fear Ward", icon = 6346, effect = "you", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 6346, 459699 } },
         },
         buffs = {
-            { name = "Shadowform", icon = 16592, missing = "warn", when = { conditions = { { type = "stance", stances = { "shadowform" }, ["not"] = true } } }, ids = { 15473, 16592, 22917, 401980, 412527, 412569, 426223, 1213334 } },
+            { name = "Shadowform", icon = 15473, missing = "warn", when = { conditions = { { type = "stance", stances = { "shadowform" }, ["not"] = true } } }, ids = { 15473, 16592, 22917, 401980, 412527, 412569, 426223, 1213334 } },
             { name = "Inner Fire", icon = 588, missing = "remind", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
             { name = "Power Word: Fortitude", icon = 1243, missing = "remind", ids = { 1243, 1244, 1245, 2791, 10937, 10938, 10939, 10940, 13864, 23947, 23948 } },
             { name = "Shadow Protection", icon = 7235, missing = "remind", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 976, 977, 1279, 7235, 7241, 7242, 7243, 7244, 10957, 10958, 16874, 17548 } },

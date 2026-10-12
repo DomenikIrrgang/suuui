@@ -13,7 +13,7 @@ if class ~= "DRUID" then return end
 ns.CooldownPresets = {
     { id = "unspecced", name = "Unspecced", tree = 0, lists = {
         essential = {
-            { name = "Enrage", icon = 3019, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Enrage", icon = 5229, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
             { name = "Growl", icon = 6795, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
             { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
             { name = "Nature's Grasp", icon = 16689, effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
@@ -117,11 +117,11 @@ ns.CooldownPresets = {
         essential = {
             { name = "Shifting Power", icon = 1322605, when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1322605 } },
             { name = "Primal Bite", icon = 407995, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
-            { name = "Berserk", icon = 26662, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
+            { name = "Berserk", icon = 417141, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
             { name = "Cower", icon = 1742, when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1742, 1747, 1748, 1749, 1750, 1751, 1753, 1754, 1755, 1756, 8998, 9000, 9892, 16697, 16698, 456333 } },
             { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { group = true, name = "Feral Charge", icon = 414920, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
-                { name = "Feral Charge", icon = 414920, ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
+                { name = "Feral Charge", icon = 1238122, ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", icon = 16979, ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
         },
@@ -177,11 +177,11 @@ ns.CooldownPresets = {
     { id = "feralbear", name = "Feral (bear)", tree = 2, lists = {
         essential = {
             { name = "Primal Bite", icon = 407995, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
-            { name = "Enrage", icon = 3019, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
-            { name = "Berserk", icon = 26662, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
+            { name = "Enrage", icon = 5229, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Berserk", icon = 417141, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
             { name = "Growl", icon = 6795, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
-            { group = true, name = "Feral Charge", icon = 414920, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
-                { name = "Feral Charge", icon = 414920, ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
+                { name = "Feral Charge", icon = 1238122, ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", icon = 16979, ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
             { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },

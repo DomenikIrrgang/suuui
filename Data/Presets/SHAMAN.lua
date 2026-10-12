@@ -168,7 +168,7 @@ ns.CooldownPresets = {
     } },
     { id = "restoration", name = "Restoration", tree = 3, lists = {
         essential = {
-            { name = "Riptide", icon = 405168, ids = { 22419, 405168, 405194, 405321, 405324, 408521, 409954, 1239242, 1239243 } },
+            { name = "Riptide", icon = 408521, ids = { 22419, 405168, 405194, 405321, 405324, 408521, 409954, 1239242, 1239243 } },
             { name = "Nature's Swiftness", icon = 16188, effect = "you", ids = { 16188, 17116, 29274 } },
             { name = "Mana Tide Totem", icon = 16190, ids = { 16190, 17354, 17359 } },
             { group = true, name = "Shocks", icon = 8042, fixedIcon = true, members = {
