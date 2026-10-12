@@ -409,6 +409,9 @@ function M:CombatFilterBar(show)
     end
     if not bar then return end
     if show then
+        -- out of ChatFrame2 (always hidden now: Blizzard's dock stays on
+        -- General) into the lines' area
+        if bar:GetParent() ~= self.panel.log then bar:SetParent(self.panel.log) end
         bar:ClearAllPoints()
         bar:SetPoint("TOPLEFT", self.panel.log, "TOPLEFT", 0, 0)
         bar:SetPoint("TOPRIGHT", self.panel.log, "TOPRIGHT", 0, 0)
@@ -647,6 +650,9 @@ end
 
 function M:OnEnable()
     if not ChatFrame1 then return end
+    -- Blizzard's combat log loads when its tab is first shown, which never
+    -- happens now: loaded here (its lines and its filter bar)
+    if C_AddOns and not C_AddOns.IsAddOnLoaded("Blizzard_CombatLog") then pcall(C_AddOns.LoadAddOn, "Blizzard_CombatLog") end
     if not self.panel then self:BuildPanel() end
     self.panel.suuManagedShow = true
     self:Layout()
