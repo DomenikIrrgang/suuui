@@ -188,18 +188,22 @@ function M:Pull(arg)
     end
     -- Blizzard's countdown: everyone's START_PLAYER_COUNTDOWN (ours too) starts it
     local doCountdown = blizzardCountdown()
-    if doCountdown and pcall(doCountdown, math.max(0, seconds)) then
-        if seconds <= 0 then self:CancelPull() return end
-        -- no START_PLAYER_COUNTDOWN for us (solo, perhaps): ours anyway
+    if doCountdown then
+        -- armed before the call: the client fires START_PLAYER_COUNTDOWN inside
+        -- it, before it returns (2026-10-12); without that event, ours anyway
         local token = {}
         self.awaiting = token
-        C_Timer.After(0.5, function()
-            if self.awaiting == token then
-                self.awaiting = nil
-                self:StartPull(seconds)
-            end
-        end)
-        return
+        if pcall(doCountdown, math.max(0, seconds)) then
+            if seconds <= 0 then self.awaiting = nil; self:CancelPull() return end
+            C_Timer.After(0.5, function()
+                if self.awaiting == token then
+                    self.awaiting = nil
+                    if not self.pullEnds then self:StartPull(seconds) end
+                end
+            end)
+            return
+        end
+        self.awaiting = nil
     end
     if UI.Flag(IsInGroup()) then
         local channel = UI.Flag(IsInRaid()) and "RAID" or "PARTY"
