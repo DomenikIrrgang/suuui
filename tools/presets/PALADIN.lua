@@ -55,7 +55,7 @@ return {
       utility = { onYou("Voice of Truth"), onYou("Divine Shield"), onYou("Divine Protection"), "Lay on Hands",
           onYou("Blessing of Protection"), onYou("Blessing of Freedom"), "Hammer of Justice", "Exorcism" },
       buffs = { seal("Seal of Wisdom"), blessings("Blessing of Wisdom"), auras("Concentration Aura") },
-      debuffs = { MY_JUDGEMENT },
+      debuffs = { MY_JUDGEMENT, S.STUNS },
       procs = { "Infusion of Light" } },
     { id = "protection", name = "Protection", tree = 2,
       -- Holy Shield's block charges show with the procs, its icon is the cooldown;

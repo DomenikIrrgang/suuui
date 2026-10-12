@@ -23,6 +23,8 @@
 -- it), Bane of Doom as a cooldown (its debuff is in the Banes slot).
 
 -- Only one Bane per warlock on a target (Havoc is also limited to 1 target).
+local S = dofile("tools/presets/shared.lua")
+
 local function banes(icon) return { group = "Banes", source = "mine", max = 1, icon = icon,
     members = { "Bane of Agony", "Bane of Doom", "Bane of Havoc" } } end
 -- Only one Curse per warlock on a target (Curse of Shadow isn't in Forever).
@@ -79,6 +81,6 @@ return {
       buffs = { armors("Demon Armor") },
       -- Immolate feeds Conflagrate and Incinerate's bonus
       debuffs = with({ { "Immolate", missing = "warn" }, banes("Bane of Agony"), curses("Curse of the Elements"), "Corruption",
-          { "Shadow Vulnerability", missing = "hide" } }, CC),
+          { "Shadow Vulnerability", missing = "hide" }, S.STUNS }, CC),
       procs = {} },
 }

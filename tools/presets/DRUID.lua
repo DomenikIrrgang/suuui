@@ -36,7 +36,7 @@ return {
       essential = { "Bash", "Growl", onYou("Enrage"), onYou("Nature's Grasp") },
       utility = { onYou("Barkskin"), onYou("Innervate"), onYou("Dash"), "Rebirth", "Tranquility" },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
-      debuffs = { "Moonfire", "Faerie Fire", "Demoralizing Roar", HOLDS },
+      debuffs = { "Moonfire", "Faerie Fire", "Demoralizing Roar", HOLDS, S.STUNS },
       procs = { "Clearcasting" } },
     -- Balance has no short cooldowns: its essentials are the minute-long ones.
     { id = "balance", name = "Balance", tree = 1,
@@ -44,7 +44,7 @@ return {
       -- Nature's Swiftness for hybrids that reach it in Restoration
       utility = { "Rebirth", "Tranquility", onYou("Dash"), onYou("Nature's Swiftness") },
       buffs = { remind("Mark of the Wild"), remind("Thorns"), { "Moonkin Form", mine = true, missing = "remind" } },
-      debuffs = { grey("Moonfire"), grey("Insect Swarm"), "Faerie Fire", HOLDS },
+      debuffs = { grey("Moonfire"), grey("Insect Swarm"), "Faerie Fire", HOLDS, S.STUNS },
       procs = { "Clearcasting", "Nature's Grace", "Eclipse" } },
     { id = "feralcat", name = "Feral (cat)", tree = 2,
       essential = { "Shifting Power", "Primal Bite", onYou("Berserk"), "Cower" },
@@ -65,6 +65,6 @@ return {
       utility = { "Tranquility", "Rebirth", onYou("Barkskin"), onYou("Nature's Grasp") },
       -- your own HoTs on yourself, for self-healing
       buffs = { remind("Mark of the Wild"), remind("Thorns"), mine("Rejuvenation"), mine("Regrowth") },
-      debuffs = { "Moonfire", "Faerie Fire", HOLDS },
+      debuffs = { "Moonfire", "Faerie Fire", HOLDS, S.STUNS },
       procs = { "Clearcasting" } },
 }

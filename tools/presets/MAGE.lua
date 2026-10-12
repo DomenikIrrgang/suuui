@@ -65,7 +65,7 @@ return {
                   { "Fire Ward", effect = "you" }, { "Frost Ward", effect = "you" } },
       buffs = { armor("Mage Armor"), INTELLECT },
       -- amber in time to refresh the stacks with Scorch
-      debuffs = { { "Fire Vulnerability", expiring = 5 }, "Ignite", "Pyroblast", "Frostfire Bolt", "Polymorph" },
+      debuffs = { { "Fire Vulnerability", expiring = 5 }, "Ignite", "Pyroblast", "Frostfire Bolt", "Polymorph", S.STUNS },
       procs = { "Heating Up", "Clearcasting" } },
 
     -- Frostbolt and Ice Lance on frozen targets (Frost Nova, Frostbite,

@@ -72,6 +72,6 @@ return {
                   onYou("Power Word: Shield"), onYou("Fear Ward") },
       buffs = { remind("Shadowform"), remind("Inner Fire"), remind("Power Word: Fortitude"), remind("Shadow Protection"), SPIRITS },
       -- the dot you keep up warns while it's off the target
-      debuffs = { { "Shadow Word: Pain", missing = "warn" }, "Mind Flay", "Blackout" },
+      debuffs = { { "Shadow Word: Pain", missing = "warn" }, "Mind Flay", S.STUNS },
       procs = { "Shadow Weaving", "Spirit Tap" } },
 }

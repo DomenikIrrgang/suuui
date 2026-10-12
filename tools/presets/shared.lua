@@ -43,6 +43,9 @@ local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1
 -- Every stun on the target, from anyone: whoever stuns sees what's already
 -- on it, so stuns don't overlap (proc stuns included; Seal of Justice's is
 -- named "Stun").
+-- Every preset of a class or spec that can stun has it: all paladins,
+-- warriors, rogues, druids (Bash) and hunters; Fire mages (Impact),
+-- Destruction warlocks (Pyroclasm), Shadow priests (Blackout).
 local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice",
     members = { "Hammer of Justice", "Cheap Shot", "Kidney Shot", "Bash", "Pounce", "Concussion Blow",
         "Charge Stun", "Intercept Stun", "Intimidation", "War Stomp", "Holy Wrath", "Stun", "Impact",
