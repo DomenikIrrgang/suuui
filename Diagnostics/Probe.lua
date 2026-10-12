@@ -738,6 +738,10 @@ function ns.Probe.Command(arg)
         ns.ClassData.Command(rest)
         return
     end
+    if sub == "icons" then
+        ns.IconProbe.Command(rest)
+        return
+    end
     if sub == "api" then
         ns.ApiDocs.Command(rest)
         return

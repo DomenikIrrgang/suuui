@@ -714,7 +714,9 @@ local function rankText(entry)
             return (sub and sub ~= "") and sub or "Known", id
         end
     end
-    return "Not learned", entry.ids[1] -- Rank 1: the highest IDs are often NPC versions
+    -- not learned: the preset's chosen art (what most of its ranks show),
+    -- else Rank 1 (the highest IDs are often NPC versions)
+    return "Not learned", entry.icon or entry.ids[1]
 end
 
 -- What "+ Add" offers: cooldowns from your spellbook (and every preset of
