@@ -706,7 +706,9 @@ function Meter:RefreshRecap()
         local r = self.rows[n] or buildRow(self, n)
         local kind = plainString(ev.event) and ev.event or ""
         local heal = kind == "SPELL_HEAL" or kind == "SPELL_PERIODIC_HEAL"
-        local d = { rankWide = true, mark = "spell", spellID = ev.spellId, textName = true, heal = heal }
+        -- a heal: its name and amount in the healing colour
+        local d = { rankWide = true, mark = "spell", spellID = ev.spellId, textName = true, heal = heal,
+                    nameColor = heal and "fel" or nil }
         if readable(deathAt) and readable(ev.timestamp) then
             local ago = deathAt - ev.timestamp
             d.rank = ago < 0.05 and "0s" or ("-%.1fs"):format(ago)
