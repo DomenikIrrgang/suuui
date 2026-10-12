@@ -234,6 +234,11 @@ API.UI.TRACKER_HEAD_H = UI.TRACKER_HEAD_H -- the tracker head's height (its togg
 -- 0.11: notifications
 API.UI.Notification = UI.Notification -- Notification(parent) -> n:SetData(d), n:SetRemaining(s), n:SetTitle(text)
 API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { max }) -> s:SetItems(list, inCombat), s:CardFor(id)
+-- 0.11: bags
+API.UI.SkinItemSlot = UI.SkinItemSlot -- SkinItemSlot(button) -> skin:SetItem({ icon, count, quality, dim, locked } or nil)
+API.UI.ItemSlot = UI.ItemSlot   -- ItemSlot(parent[, size]) -> a plain slot (b.skin)
+API.UI.Money = UI.Money         -- Money(parent) -> m:SetCopper(n)
+API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
