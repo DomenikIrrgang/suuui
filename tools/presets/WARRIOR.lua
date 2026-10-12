@@ -65,6 +65,6 @@ return {
           "Shield Bash", onTarget("Concussion Blow"), onTarget("Disarm"), "Charge",
           { "Intercept", hidden = true }, you("Berserker Rage", { hidden = true }) },
       buffs = { BATTLE_SHOUT },
-      debuffs = { TAUNTS, ARMOR, DEMORALIZING },
+      debuffs = { ARMOR, DEMORALIZING, TAUNTS },
       procs = {} },
 }

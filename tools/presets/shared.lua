@@ -17,7 +17,7 @@ local JUDGEMENTS = { "Judgement of the Crusader", "Judgement of Wisdom", "Judgem
 local function seal(icon) return { group = "Seals", source = "mine", max = 1, icon = icon, members = SEALS } end
 local function blessing(icon) return { group = "Blessings", source = "mine", max = 1, icon = icon, members = BLESSINGS } end
 local MY_JUDGEMENT = { group = "My Judgements", source = "mine", max = 1, icon = "Judgement of the Crusader", members = JUDGEMENTS }
--- Tanks: the taunt on your target, whoever cast it (another tank's too; a
+-- Tanks (always the last debuff entry of a tank preset): the taunt on your target, whoever cast it (another tank's too; a
 -- hunter pet's Growl counts as well). A Forever paladin taunts with
 -- Judgement of Fury (Seal of Fury's judgement); Hand of Reckoning exists in
 -- the client but no Forever paladin learns it.

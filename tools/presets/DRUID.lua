@@ -58,7 +58,7 @@ return {
       utility = { onYou("Frenzied Regeneration"), "Challenging Roar", onYou("Barkskin"), onYou("Innervate"), "Rebirth" },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       -- Lacerate stacks to 5 and is kept up, like Faerie Fire and the roar
-      debuffs = { TAUNTS, grey("Lacerate"), grey("Faerie Fire"), grey("Demoralizing Roar") },
+      debuffs = { grey("Lacerate"), grey("Faerie Fire"), grey("Demoralizing Roar"), TAUNTS },
       procs = { "Clearcasting" } },
     { id = "restoration", name = "Restoration", tree = 3,
       essential = { "Swiftmend", "Wild Growth", onYou("Nature's Swiftness"), onYou("Innervate") },
