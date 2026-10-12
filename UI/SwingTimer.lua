@@ -22,6 +22,7 @@
 -- learned: if shots keep firing on time while you run through the window,
 -- the window goes away (t:SetAutoShotWindow(on), opts.onNoAutoShotCast).
 --   t:SetAutoShotWindow(on)
+--   t:SetBarWidth(px)    -- 0.9: live (it follows your cast bar's width)
 
 local _, ns = ...
 
@@ -190,6 +191,18 @@ function ST:SetDelayed(r, delayed)
     r.digits:SetColor(UI.RGBA(delayed and "amber" or "ink"))
 end
 
+function ST:SetBarWidth(w)
+    self.barW = UI.Size(w)
+    self:SetWidth(self.barW)
+    for kind, r in pairs(self.rows) do
+        r:SetWidth(self.barW)
+        -- a shot in flight keeps its window's share of the new width
+        if kind == SWING.Ranged and r.window:IsShown() and r.endsAt and r.length then
+            r.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / r.length)))
+        end
+    end
+end
+
 function ST:SetAutoShotWindow(on)
     self.autoShotWindow = on and true or false
     local r = self.rows[SWING.Ranged]
@@ -234,7 +247,7 @@ function ST:Swing(length, kind)
         r.flash:SetAlpha(1)
         r.flashAt = now
     end
-    r.live, r.endsAt = true, now + length
+    r.live, r.endsAt, r.length = true, now + length, length
     r:SetAlpha(1)
     r.duration:SetTimeFromStart(now, length)
     r.bar:SetTimerDuration(r.duration, IMMEDIATE, DIR.ElapsedTime)

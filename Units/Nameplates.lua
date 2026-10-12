@@ -820,23 +820,38 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
+-- The cast rows wait for cast bars.
+local function castBarsOff()
+    if not M:Get("castBars") then return true, "Turn Cast bars on first." end
+    return false
+end
+
 local SECTION = {
-    id = "nameplates", label = "Nameplates", category = "Frames", order = 16,
+    id = "nameplates", label = "Nameplates", category = "Frames", order = 20,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
-        { title = "Enemy nameplates", description = "SuuUI's plates on enemies. Turning the module off brings Blizzard's back after a reload.", rows = {
+        { title = "Size", description = "SuuUI's plates on enemies. Turning the module off brings Blizzard's back after a reload.", rows = {
             { key = "width", label = "Width", control = "slider", min = 100, max = 200, step = 2, unit = "px", live = false },
             { key = "barHeight", label = "Health bar height", control = "slider", min = 4, max = 24, step = 1, unit = "px", live = false },
-            { key = "auras", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1,
-              description = "Above the name, with their time. Only yours." },
-            { key = "auraSize", label = "Debuff size", control = "slider", min = 12, max = 28, step = 1, unit = "px", live = false, combat = true },
+            { key = "auraSize", label = "Debuff size", control = "slider", min = 12, max = 28, step = 1, unit = "px", live = false, combat = true,
+              disabled = function()
+                  if M:Get("auras") == 0 then return true, "Set Debuff icons above 0 first." end
+                  return false
+              end },
+            { key = "castHeight", label = "Cast bar height", control = "slider", min = 4, max = 20, step = 1, unit = "px", live = false,
+              disabled = castBarsOff },
+        } },
+        { title = "Casts", rows = {
             { key = "castBars", label = "Cast bars", control = "toggle",
               description = "Under the bar: arcane when you can interrupt it, a lock when you can't." },
             { key = "castTarget", label = "Cast target", control = "toggle",
-              description = "Who the spell is aimed at, under the spell name, in their class colour." },
+              description = "Who the spell is aimed at, under the spell name, in their class colour.", disabled = castBarsOff },
             { key = "castKick", label = "Your interrupt", control = "toggle",
-              description = "On interruptible casts: a diamond in arcane when your interrupt is ready, its seconds when it isn't." },
-            { key = "castHeight", label = "Cast bar height", control = "slider", min = 4, max = 20, step = 1, unit = "px", live = false },
+              description = "On interruptible casts: a diamond in arcane when your interrupt is ready, its seconds when it isn't.", disabled = castBarsOff },
+        } },
+        { title = "On the plate", rows = {
+            { key = "auras", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1,
+              description = "Above the name, with their time. Only yours." },
             { key = "healthText", label = "Health text", control = "segmented",
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },

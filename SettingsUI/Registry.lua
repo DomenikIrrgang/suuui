@@ -14,13 +14,24 @@
 --           } },
 --       },
 --       build = function(page) end,  -- instead of (or after) groups: page:AddGroup(groupDef)
+--       merge = "castbars",          -- optional: see below
 --   })
+--
+-- A section with `merge` (the id of another section) isn't listed on its own:
+-- its groups show on that section's page, after the page's own groups. Each
+-- keeps its own namespace, so its rows read and write its own settings; they
+-- are found by the search, count towards the page's changes, are reset by its
+-- Reset section, and go away with their section (a module turned off). Only
+-- the groups merge (not build, preview). While the other section isn't
+-- registered, the merged one is listed on its own, by its category and order.
 --
 -- A row: key (or get/set/isDefault/reset functions), label, description (a
 -- string or a function), control ("toggle", "checkbox", "segmented", "select",
 -- "slider", "stepper", "text", "button", "custom" or nil), the control's own
 -- options (options, multiple, min, max, step, unit, format, width, text,
 -- onClick, build), stacked, disabled = function() return disabled, reason end,
+-- (custom: build(parent, onChange, def) returns the control; with a key or get
+-- it is bound like the others: onChange writes, :SetValue(v) shows the value)
 -- and combat = true for a change that waits for the end of combat (the window
 -- adds "Waits for the end of combat." to the description).
 
@@ -52,6 +63,7 @@ function Registry.Register(def, owner)
         preview = def.preview,
         previewTitle = def.previewTitle,
         previewNote = def.previewNote,
+        merge = def.merge,
         owner = owner,
     }
     sections[#sections + 1] = s
@@ -76,14 +88,37 @@ function Registry.Get(id)
     return byId[id]
 end
 
--- Sections in display order: by category, then order, then label.
+local function before(a, b)
+    local ca, cb = CATEGORY_INDEX[a.category], CATEGORY_INDEX[b.category]
+    if ca ~= cb then return ca < cb end
+    if a.order ~= b.order then return a.order < b.order end
+    return a.label < b.label
+end
+
+-- The section a merged one shows on, while that one is registered (and isn't
+-- merged itself).
+function Registry.MergedInto(s)
+    local target = s.merge and byId[s.merge]
+    if target and target ~= s and not target.merge then return target end
+end
+
+-- The sections listed on their own (not merged into another), in display
+-- order: by category, then order, then label.
 function Registry.List()
-    local list = { unpack(sections) }
-    table.sort(list, function(a, b)
-        local ca, cb = CATEGORY_INDEX[a.category], CATEGORY_INDEX[b.category]
-        if ca ~= cb then return ca < cb end
-        if a.order ~= b.order then return a.order < b.order end
-        return a.label < b.label
-    end)
+    local list = {}
+    for _, s in ipairs(sections) do
+        if not Registry.MergedInto(s) then list[#list + 1] = s end
+    end
+    table.sort(list, before)
+    return list
+end
+
+-- The sections merged into section `id`, by order, then label.
+function Registry.Merged(id)
+    local list = {}
+    for _, s in ipairs(sections) do
+        if s.merge == id and Registry.MergedInto(s) then list[#list + 1] = s end
+    end
+    table.sort(list, before)
     return list
 end

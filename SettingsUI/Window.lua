@@ -31,10 +31,27 @@ local current         -- the open section's id
 local query = ""      -- the search text, lower case
 
 --------------------------------------------------------------------------------
--- A scrolling area: mouse wheel only, content in area.child.
+-- A scrolling area: mouse wheel only, content in area.child. With `bar`, a
+-- thin scrollbar (Select's: a gilt-faint track, an ink-muted thumb for the
+-- visible part) sits `bar` px right of the area, only while the content
+-- overflows.
 --------------------------------------------------------------------------------
 
-local function scrollArea(parent)
+local function updateBar(scroll)
+    local track, thumb = scroll.track, scroll.thumb
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local on = max >= 1 and viewH > 0
+    track:SetShown(on)
+    thumb:SetShown(on)
+    if not on then return end
+    local thumbH = math.max(24, viewH * viewH / (viewH + max))
+    thumb:SetHeight(thumbH)
+    thumb:ClearAllPoints()
+    thumb:SetPoint("TOP", track, "TOP", 0, -(viewH - thumbH) * math.min(1, scroll:GetVerticalScroll() / max))
+end
+
+local function scrollArea(parent, bar)
     local scroll = CreateFrame("ScrollFrame", nil, parent)
     local child = CreateFrame("Frame", nil, scroll)
     child:SetSize(1, 1)
@@ -45,6 +62,21 @@ local function scrollArea(parent)
         self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 48)))
     end)
     scroll.child = child
+    if bar then
+        -- on the parent: the scroll frame clips what it holds
+        scroll.track = UI.Fill(parent, "gilt-faint", "ARTWORK")
+        scroll.track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", bar, 0)
+        scroll.track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", bar, 0)
+        scroll.track:SetWidth(3)
+        scroll.thumb = UI.Fill(parent, "ink-muted", "OVERLAY")
+        scroll.thumb:SetWidth(3)
+        local function update() updateBar(scroll) end
+        scroll:SetScript("OnScrollRangeChanged", update)
+        scroll:SetScript("OnVerticalScroll", update)
+        scroll:SetScript("OnSizeChanged", update)
+        child:SetScript("OnSizeChanged", update)
+        update()
+    end
     return scroll
 end
 
@@ -90,13 +122,17 @@ local function buildControl(parent, def, onChange)
     if c == "button" then
         return UI.Button(parent, { text = def.text, variant = def.variant, onClick = def.onClick })
     end
-    if c == "custom" then return def.build(parent) end
+    -- a custom control: build(parent, onChange, def); with a key (or get) it is
+    -- bound like the others (onChange writes, SetValue shows the setting)
+    if c == "custom" then return def.build(parent, onChange, def) end
 end
 
--- A SettingRow whose control reads and writes one setting (or def.get/def.set).
-local function bindRow(page, def)
-    local namespace = def.namespace or page.section.namespace
-    local valued = def.control and def.control ~= "button" and def.control ~= "custom"
+-- A SettingRow whose control reads and writes one setting (or def.get/def.set),
+-- in the namespace of the section the row comes from (a merged section's own).
+local function bindRow(page, def, section)
+    local namespace = def.namespace or section.namespace
+    local valued = def.control and def.control ~= "button"
+        and (def.control ~= "custom" or def.key ~= nil or def.get ~= nil)
     local get = def.get or (def.key and function() return Settings.Get(namespace, def.key) end)
     local set = def.set or (def.key and function(v) return Settings.Set(namespace, def.key, v) end)
     local isDefault = def.isDefault or (def.key and function() return Settings.IsDefault(namespace, def.key) end)
@@ -121,7 +157,7 @@ local function bindRow(page, def)
         label = def.label, description = rowDescription(def), control = ctl,
         stacked = def.stacked, width = page.width, onReset = doReset,
     })
-    row.def, row.doReset = def, doReset
+    row.def, row.doReset, row.namespace = def, doReset, namespace
     row.isModified = function() return isDefault ~= nil and not isDefault() end
     row.refresh = function()
         if valued and get and ctl.SetValue then ctl:SetValue(get()) end
@@ -142,12 +178,14 @@ end
 
 local Page = {}
 
-function Page:AddGroup(def)
+-- `section`: the section the group comes from, when it was merged in from
+-- another (its rows use that section's namespace).
+function Page:AddGroup(def, section)
     local g = UI.SettingsGroup(self.frame, { title = def.title, description = def.description, width = self.width })
-    g.def = def
+    g.def, g.section = def, section or self.section
     g.boundRows = {} -- not g.rows: that is the group's own row frame
     for _, rdef in ipairs(def.rows or {}) do
-        local row = bindRow(self, rdef)
+        local row = bindRow(self, rdef, g.section)
         g:AddRow(row)
         g.boundRows[#g.boundRows + 1] = row
         self.rows[#self.rows + 1] = row
@@ -182,13 +220,14 @@ function Page:Refresh()
 end
 
 -- Shows the rows matching `q` (everything when q is empty); returns the count.
--- A match on the section's label or a group's title or description shows all
--- the rows under it.
+-- A match on the section's label (or a merged group's own section's label) or
+-- a group's title or description shows all the rows under it.
 function Page:Filter(q)
     local total = 0
     local sectionHit = q == "" or (self.section.label or ""):lower():find(q, 1, true)
     for _, g in ipairs(self.groups) do
-        local groupHit = sectionHit or (g.def.title or ""):lower():find(q, 1, true)
+        local groupHit = sectionHit or (g.section.label or ""):lower():find(q, 1, true)
+            or (g.def.title or ""):lower():find(q, 1, true)
             or (tostring(describe(g.def.description) or "")):lower():find(q, 1, true)
         local shown = 0
         for _, row in ipairs(g.boundRows) do
@@ -215,6 +254,13 @@ local function buildPage(section)
     page.stack:Add(page.title)
     for _, g in ipairs(section.groups or {}) do page:AddGroup(g) end
     if section.build then section.build(page) end
+    -- then the groups of the sections merged into this one
+    local merged = {}
+    for _, m in ipairs(Registry.Merged(section.id)) do
+        merged[#merged + 1] = m.id
+        for _, g in ipairs(m.groups or {}) do page:AddGroup(g, m) end
+    end
+    page.merged = table.concat(merged, ",")
     page:Refresh()
     f:Hide()
     frame.pagesStack:Add(f)
@@ -395,7 +441,9 @@ local function applyView()
 end
 
 function W.Show(id)
-    local section = Registry.Get(id) or Registry.List()[1]
+    local section = Registry.Get(id or "")
+    -- a merged section opens the page it shows on
+    section = section and (Registry.MergedInto(section) or section) or Registry.List()[1]
     if not section then return end
     current = section.id
     getPage(section)
@@ -616,7 +664,7 @@ local function build()
     preview.area:SetClipsChildren(true)
     f.preview = preview
 
-    f.content = scrollArea(f)
+    f.content = scrollArea(f, S["space-3"])
     f.content:SetPoint("TOPLEFT", NAV_W + S["space-6"], -(top + S["space-5"]))
     f.content:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + S["space-6"]), bottom)
     f.content.child:SetWidth(WIDE_W)
@@ -649,8 +697,7 @@ local function build()
         disarmReset()
         for _, row in ipairs(page.rows) do
             -- turning modules on and off is not a setting to reset
-            local namespace = row.def.namespace or page.section.namespace
-            local moduleToggle = row.def.key == "enabled" and ns.Modules.Get(namespace or "")
+            local moduleToggle = row.def.key == "enabled" and ns.Modules.Get(row.namespace or "")
             if row.doReset and row.isModified() and not moduleToggle then row.doReset() end
         end
     end })
@@ -675,16 +722,37 @@ local function build()
                          "SUUUI_ROLE_CHANGED" }) do
         Events.On(e, profilesChanged, "SettingsWindow")
     end
+    -- A page goes when its section does, when its section is merged into
+    -- another now, and when the sections merged into it changed (it's built
+    -- again, with them).
+    local function listed(id)
+        local s = Registry.Get(id)
+        return s ~= nil and Registry.MergedInto(s) == nil
+    end
+    local function mergedIds(id)
+        local ids = {}
+        for _, m in ipairs(Registry.Merged(id)) do ids[#ids + 1] = m.id end
+        return table.concat(ids, ",")
+    end
     Events.On("SUUUI_SETTINGS_SECTIONS_CHANGED", function()
         for id, page in pairs(pages) do
-            if not Registry.Get(id) then
+            if not listed(id) or page.section ~= Registry.Get(id) or page.merged ~= mergedIds(id) then
                 frame.pagesStack:Remove(page.frame)
                 page.frame:Hide()
                 pages[id] = nil
             end
         end
         buildNav()
-        if not Registry.Get(current or "") then W.Show() else applyView() end
+        if not listed(current or "") then
+            -- (a merged section opens the page it now shows on)
+            W.Show(current)
+        else
+            getPage(Registry.Get(current))
+            if query ~= "" then
+                for _, section in ipairs(Registry.List()) do getPage(section) end
+            end
+            applyView()
+        end
     end, "SettingsWindow")
     for _, e in ipairs({ "SUUUI_MODULE_ENABLED", "SUUUI_MODULE_DISABLED", "SUUUI_MODULE_ERRORED" }) do
         Events.On(e, function() W.RefreshAll() end, "SettingsWindow")

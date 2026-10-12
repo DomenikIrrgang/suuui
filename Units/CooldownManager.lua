@@ -1372,15 +1372,13 @@ local function buildEditor(parent)
 end
 
 local SECTION = {
-    id = "cooldowns", label = "Cooldown Manager", category = "Frames", order = 19,
+    id = "cooldowns", label = "Cooldown Manager", category = "Frames", order = 26,
     groups = {
-        { title = "Preset", description = "Every preset of your class. Loading one fills the lists with its spells, every rank included.", rows = {
+        { title = "What it shows", description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. Per spell: shown or hidden (cooldowns), and what happens while it isn't up (auras): the list's choice, hidden (the others close up), grey in its place, or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
             { label = "Your lists", control = "custom", build = buildPresetBar, stacked = true },
-        } },
-        { title = "Tracked spells", description = "Per spell: shown or hidden (cooldowns), and what happens while it isn't up (auras): the list's choice, hidden (the others close up), grey in its place, or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
             { label = "Lists", control = "custom", build = buildEditor, stacked = true },
         } },
-        { title = "Display", rows = {
+        { title = "How it shows", rows = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "essentialSize", label = "Essential size", control = "slider", min = 30, max = 52, step = 2, unit = "px", live = false, combat = true,

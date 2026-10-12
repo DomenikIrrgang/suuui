@@ -5,8 +5,8 @@
 --
 -- Placement (2560x1440 reference):
 --   your buffs     top right, left of the minimap (224px from the right
---                  edge, space-7 down like the minimap's top), growing left;
---                  right click cancels
+--                  edge, space-7 down like the minimap's top), growing left
+--                  (or right), 16 to a row by default; right click cancels
 --   your debuffs   above the player frame, right-aligned, growing left
 --   on the target  your debuffs (and, on a friend, your buffs: HoTs,
 --                  shields) above the target frame, growing right
@@ -33,6 +33,10 @@ local M = SuuUI.RegisterModule({
         showTarget = true,
         showFocus = true,
         showBoss = true,
+        buffSize = UI.Size("icon-lg"),
+        buffsPerRow = 16,
+        buffGrowth = "left",    -- "left" or "right" from the holder's edge
+        debuffSize = UI.Size("icon-lg"),
     },
 })
 
@@ -70,6 +74,8 @@ function M:Attach(name, frame)
     if not def then return end
     local c = self.attached[name]
     if frame and not c then
+        -- your debuffs are made at the setting's size (ApplyLayout resizes them after)
+        if name == "player" then def.opts.size = self:Get("debuffSize") end
         c = UI.AuraContainer(frame, name, def.opts)
         self.attached[name] = c
     end
@@ -92,14 +98,55 @@ function M:ApplyOptions()
     end
 end
 
+-- Sizes, row length and growth, out of combat: the engine's buttons refuse a
+-- resize in combat. The holder (the edit-mode outline) is a row of the
+-- setting's icons, two rows tall, and the icons start at the edge they grow from.
+function M:ApplyLayout()
+    self:RunOutOfCombat("layout", function()
+        local sp = S["space-2"]
+        if self.buffs then
+            local size, n = self:Get("buffSize"), self:Get("buffsPerRow")
+            local w = n * (size + sp)
+            self.buffHolder:SetSize(w, 2 * (size + sp))
+            self.buffs:SetGroupSize("buffs", size)
+            if self.buffs.SetLineWidth then self.buffs:SetLineWidth(w) end
+            local c = self.buffs.container
+            c:ClearAllPoints()
+            if self:Get("buffGrowth") == "right" then
+                c:SetPoint("TOPLEFT", self.buffHolder, "TOPLEFT")
+                self.buffs:SetFlow("TOPLEFT", { "RIGHT", "DOWN" })
+            else
+                c:SetPoint("TOPRIGHT", self.buffHolder, "TOPRIGHT")
+                self.buffs:SetFlow("TOPRIGHT", { "LEFT", "DOWN" })
+            end
+        end
+        if self.attached.player then self.attached.player:SetGroupSize("debuffs", self:Get("debuffSize")) end
+        SuuUI.EditMode.Refresh()
+    end)
+end
+
+local function buffsOff()
+    if not M:Get("showBuffs") then return true, "Your buffs are off." end
+end
+
 local SECTION = {
-    id = "auras", label = "Auras", category = "Frames", order = 15,
+    id = "auras", label = "Auras", category = "Frames", order = 12,
     groups = {
         { title = "On you", description = "In combat the game hides which spell an aura is from addons, so the game itself fills these in: SuuUI only styles them.", rows = {
             { key = "showBuffs", label = "Your buffs", control = "toggle",
               description = "Top right, left of the minimap. Right click cancels one." },
+            { key = "buffSize", label = "Buff size", control = "slider", min = 20, max = 48, step = 1, unit = "px",
+              live = false, combat = true, disabled = buffsOff },
+            { key = "buffsPerRow", label = "Buffs per row", control = "slider", min = 4, max = 32, step = 1,
+              live = false, combat = true, disabled = buffsOff, description = "Then the next row starts below." },
+            { key = "buffGrowth", label = "Buffs grow", control = "segmented", combat = true, disabled = buffsOff,
+              options = { { value = "left", label = "Left" }, { value = "right", label = "Right" } },
+              description = "From the right edge of their place, or from its left edge." },
             { key = "showDebuffs", label = "Your debuffs", control = "toggle",
               description = "Above the player frame; a debuff with a type wears its dispel colour." },
+            { key = "debuffSize", label = "Debuff size", control = "slider", min = 20, max = 48, step = 1, unit = "px",
+              live = false, combat = true,
+              disabled = function() if not M:Get("showDebuffs") then return true, "Your debuffs are off." end end },
         } },
         { title = "On other frames", description = "Only the auras you cast.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
@@ -132,8 +179,12 @@ function M:OnEnable()
     self:Watch("showBuffs", SuuUI.EditMode.Refresh)
     self:RegisterSettings(SECTION)
     self:ApplyOptions()
+    self:ApplyLayout()
 
     self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
+    for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
+        self:Watch(key, function() self:ApplyLayout() end)
+    end
     for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "showFocus", "showBoss", "buffPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end

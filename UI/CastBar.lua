@@ -9,13 +9,15 @@
 --       width = 300,
 --       icon = true,          -- the spell's icon as a square at the left end
 --       kick = true,          -- your interrupt's state at the right end of interruptible casts
---       target = true,        -- 0.9, plates: who the spell is aimed at, a line under the spell name
+--       target = true,        -- 0.9: who the spell is aimed at; plates: a line under the spell name,
+--                             -- other sizes: after it, "Spell › Target", in the spell name's width
 --   })
 --   bar:Activate(); bar:Deactivate()
 --   bar:SetIconShown(on); bar:SetKickShown(on)   -- live, from the settings
 --   bar:SetUnit(unit)                             -- another unit (nameplate tokens are reused)
 --   bar:SetBarHeight(px)                          -- 0.9: the bar's height (a plate's spell line stays under it)
---   bar:SetTargetShown(on)                        -- 0.9: the plate's target line, live
+--   bar:SetTargetShown(on)                        -- 0.9: the cast's target, live
+--   bar:SetBarWidth(px)                           -- 0.9: the whole bar's width, live
 --   bar:SetNeutral(on)                            -- 0.9: a friendly unit's cast: never "you can stop it"
 --                                                 -- (no arcane layer, lock or interrupt); a plate's
 --                                                 -- owner sets it, other bars at each cast start
@@ -331,6 +333,8 @@ function UI.CastBar(parent, unit, opts)
 
     f:SetScript("OnUpdate", function(self) self:Tick() end)
     f.pad, f.h, f.totalW = pad, h, UI.Size(opts.width or 300)
+    -- off a plate the target goes after the spell name, only when asked for
+    if not plate then f.targetShown = opts.target and true or false end
     f.iconShown = f.icon ~= nil
     f.kickShown = f.kick ~= nil
     return f
@@ -350,6 +354,14 @@ function CB:Arrange()
     local reserve = 40 + ((self.kick and self.kickShown) and 30 or 0)
     self.spell:SetWidth(self.totalW - x - self.pad * 2 - (self.lockW or 0) - reserve)
     if self.target then self.target.name:SetWidth(self.totalW - (self.lockW or 0) - 12) end
+end
+
+-- The whole bar's width, live: the spell name keeps the room the time and
+-- the interrupt leave.
+function CB:SetBarWidth(w)
+    self.totalW = UI.Size(w)
+    self:SetWidth(self.totalW)
+    self:Arrange()
 end
 
 -- The bar's height, live. On a plate only the bar changes (the spell line
@@ -378,8 +390,8 @@ end
 function CB:SetTargetShown(on)
     self.targetShown = on and true or false
     if self.target and not on then self.target:Hide() end
-    -- turned on mid-cast: the line shows now, not at the next cast
-    if on and self.duration then self:UpdateTarget() end
+    -- changed mid-cast: the target shows (or goes) now, not at the next cast
+    if self.duration then self:UpdateTarget() end
 end
 
 -- Who the spell is aimed at. The name (and class) may be secret: never
@@ -393,6 +405,17 @@ local function spellTarget(unit)
 end
 
 function CB:UpdateTarget()
+    if not self.plate then
+        -- "Spell › Target" in the spell name's fixed width, so the engine
+        -- shortens it; both may be secret, so they only go to the text
+        local spell = self.spellName
+        if type(spell) == "nil" then return end
+        if self.targetShown then
+            local ok, name = pcall(spellTarget, self.unit)
+            if ok and type(name) ~= "nil" then return self.spell:SetFormattedText("%s › %s", spell, name) end
+        end
+        return self.spell:SetText(spell)
+    end
     local t = self.target
     if not t then return end
     if self.targetShown == false then return t:Hide() end
@@ -472,6 +495,7 @@ function CB:Start(channel)
     if self.arcaneFill then
         self.arcaneFill:SetTimerDuration(d, nil, channel and DIR.RemainingTime or DIR.ElapsedTime)
     end
+    self.spellName = name
     self.spell:SetText(name)
     if self.iconArt then self.iconArt:SetTexture(texture) end
     self:UpdateTarget()
@@ -501,7 +525,7 @@ function CB:SetInterruptible(notInterruptible)
 end
 
 function CB:Stop()
-    self.duration = nil
+    self.duration, self.spellName = nil, nil
     if self.target then self.target:Hide() end
     self:Hide()
 end

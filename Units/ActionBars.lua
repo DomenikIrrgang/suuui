@@ -50,11 +50,14 @@ local M = SuuUI.RegisterModule({
     reloadToToggle = true,
     defaults = {
         position = { point = "BOTTOM", x = 0, y = 28 },
-        keys1 = true, keys2 = true, keys3 = true, keys4 = true,
+        -- Key bindings on the buttons: one switch, and the bars it covers
+        -- ("1" to "8", "stance", "pet"), in KEY_BARS order.
+        showKeys = true,
+        keyBars = { "1", "2", "3", "4", "5", "6", "7", "8", "stance", "pet" },
         showEmpty = false,
         showXP = true,
-        showStance = true, keysStance = true,
-        showPet = true, keysPet = true,
+        showStance = true,
+        showPet = true,
         dockSize = 20, dockVisibility = "always",
         textSize = 9.5,
         count5 = 12, count6 = 12, count7 = 12, count8 = 12,
@@ -76,7 +79,6 @@ local M = SuuUI.RegisterModule({
         -- bars 5-8: seeded from what they hold on the first load
         seeded = false,
         show5 = false, show6 = false, show7 = false, show8 = false,
-        keys5 = true, keys6 = true, keys7 = true, keys8 = true,
         cols5 = 1, cols6 = 1, cols7 = 1, cols8 = 1,
         pos5 = { point = "RIGHT", x = -28, y = 0 },
         pos6 = { point = "RIGHT", x = -52, y = 0 },
@@ -98,6 +100,27 @@ local BARS = {
 }
 
 local COLUMNS = { 1, 2, 3, 4, 6, 12 }
+
+-- The bars "Show key bindings" can cover, as the chips list them.
+local KEY_BARS = {
+    { value = "1", label = "Bar 1" }, { value = "2", label = "Bar 2" }, { value = "3", label = "Bar 3" },
+    { value = "4", label = "Bar 4" }, { value = "5", label = "Bar 5" }, { value = "6", label = "Bar 6" },
+    { value = "7", label = "Bar 7" }, { value = "8", label = "Bar 8" },
+    { value = "stance", label = "Stance" }, { value = "pet", label = "Pet" },
+}
+
+-- One toggle per bar (keys1 to keys8, keysStance, keysPet) became the list
+-- keyBars under one switch, showKeys: the bars whose toggle was on (or never
+-- changed) stay on, and the switch is on.
+M:Migrate("keyBars", function(values)
+    local old = { "keys1", "keys2", "keys3", "keys4", "keys5", "keys6", "keys7", "keys8", "keysStance", "keysPet" }
+    local bars = {}
+    for i, key in ipairs(old) do
+        if values[key] ~= false then bars[#bars + 1] = KEY_BARS[i].value end
+        values[key] = nil
+    end
+    values.keyBars = bars
+end)
 
 
 --------------------------------------------------------------------------------
@@ -247,7 +270,11 @@ function M:ApplyOptions()
         if self:Get("attach" .. a.key) then attached[#attached + 1] = a.header end
     end
     UI.SetVisibility(self.dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"), attached)
-    for i, bar in ipairs(self.bars) do bar:SetHotkeysShown(self:Get("keys" .. i)) end
+    local keysOn = {}
+    if self:Get("showKeys") then
+        for _, id in ipairs(self:Get("keyBars")) do keysOn[id] = true end
+    end
+    for i, bar in ipairs(self.bars) do bar:SetHotkeysShown(keysOn[tostring(i)]) end
     for _, bar in ipairs(self.bars) do bar:SetShowEmpty(self:Get("showEmpty")) end
     UI.SetActionTextSize(self:Get("textSize"))
     self.pet:SetShowEmpty(self:Get("showEmpty"))
@@ -261,9 +288,9 @@ function M:ApplyOptions()
         end
     end
     self.stance:SetEnabled(self:Get("showStance") and not self:Get("stancePosition").hidden)
-    self.stance:SetHotkeysShown(self:Get("keysStance"))
+    self.stance:SetHotkeysShown(keysOn.stance)
     self.pet:SetEnabled(self:Get("showPet") and not self:Get("petPosition").hidden)
-    self.pet:SetHotkeysShown(self:Get("keysPet"))
+    self.pet:SetHotkeysShown(keysOn.pet)
     for _, a in ipairs(self.attachable) do
         self:RunOutOfCombat("place:" .. a.key, function() self:Place(a) end)
     end
@@ -491,17 +518,8 @@ function M:XPTooltip(owner)
 end
 
 local SECTION = {
-    id = "actionbars", label = "Action bars", category = "Frames", order = 18,
+    id = "actionbars", label = "Action bars", category = "Frames", order = 22,
     groups = {
-        { title = "Key bindings", description = "Every bar shows its key bindings; the binding is always in the tooltip too.", rows = {
-            { label = "Bind keys", control = "button", text = "Keybind mode",
-              description = "Hover a button and press a key, a mouse button or the wheel to bind it. Delete clears. Also /suu keybind.",
-              onClick = function() SuuUI.KeybindMode.Enter() end },
-            { key = "keys1", label = "Bar 1", control = "toggle", description = "The bottom row of the dock. It follows your stance, form or stealth; its tooltips name the page it is on." },
-            { key = "keys2", label = "Bar 2", control = "toggle", description = "The row above bar 1." },
-            { key = "keys3", label = "Bar 3", control = "toggle", description = "The block left of the middle." },
-            { key = "keys4", label = "Bar 4", control = "toggle", description = "The block right of the middle." },
-        } },
         { title = "Dock", rows = {
             { key = "showEmpty", label = "Empty slots", control = "toggle",
               description = "Show slots with nothing in them. They always show while you drag a spell or item." },
@@ -515,17 +533,14 @@ local SECTION = {
               format = function(v) return ("%gpx"):format(v) end,
               description = "Key bindings, counts and cooldown digits on every bar, not only the dock's. 9.5px is the smallest the design allows." },
         } },
+        { title = "Stance and pet bars", rows = {
+            { key = "showStance", label = "Stance and form bar", control = "toggle", combat = true,
+              description = "Above the dock's left block, for classes with stances, forms or stealth. Blizzard's own comes back after a reload." },
+            { key = "showPet", label = "Pet bar", control = "toggle", combat = true,
+              description = "Above the dock's right block, while you have a pet. Right click an ability to switch its autocast." },
+        } },
     },
 }
-
-table.insert(SECTION.groups, 2, { title = "Stance and pet bars", rows = {
-    { key = "showStance", label = "Stance and form bar", control = "toggle", combat = true,
-      description = "Above the dock's left block, for classes with stances, forms or stealth. Blizzard's own comes back after a reload." },
-    { key = "keysStance", label = "Its key bindings", control = "toggle", description = "Show the stance bar's key bindings on its buttons." },
-    { key = "showPet", label = "Pet bar", control = "toggle", combat = true,
-      description = "Above the dock's right block, while you have a pet. Right click an ability to switch its autocast." },
-    { key = "keysPet", label = "Its key bindings", control = "toggle", description = "Show the pet bar's key bindings on its buttons." },
-} })
 
 -- One group for each of bars 5-8.
 for id = 5, 8 do
@@ -544,9 +559,42 @@ for id = 5, 8 do
           description = "Each of its buttons, edge to edge." },
         { key = "gap" .. id, label = "Gap", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false, combat = true,
           description = "Between its buttons." },
-        { key = "keys" .. id, label = "Key bindings", control = "toggle", description = "Show its key bindings on the buttons." },
     } }
+    -- its other rows wait for the bar to be on
+    local function barOff()
+        if not M:Get("show" .. id) then return true, "Turn the bar on first." end
+        return false
+    end
+    for i, row in ipairs(SECTION.groups[#SECTION.groups].rows) do
+        if i > 1 then row.disabled = barOff end
+    end
 end
+
+-- General > Keybinds: keybind mode, and which bars show their bindings.
+-- (the settings window binds it to keyBars: it writes through onChange and
+-- shows resets and profile switches through SetValue)
+local function keyBarChips(parent, onChange)
+    return UI.ToggleChips(parent, { options = KEY_BARS, value = M:Get("keyBars"), onChange = onChange })
+end
+
+local KEYBINDS = {
+    id = "keybinds", label = "Keybinds", category = "General", order = 30,
+    groups = {
+        { title = "Key bindings", description = "Every binding is in its button's tooltip too, shown on the button or not.", rows = {
+            { label = "Bind keys", control = "button", text = "Keybind mode",
+              description = "Hover a button and press a key, a mouse button or the wheel to bind it. Delete clears. Also /suu keybind.",
+              onClick = function() SuuUI.KeybindMode.Enter() end },
+            { key = "showKeys", label = "Show key bindings", control = "toggle",
+              description = "The key on each button, top left. Text size is under Frames › Action bars › Dock." },
+            { key = "keyBars", label = "On these bars", control = "custom", build = keyBarChips, stacked = true,
+              description = "Bars 1 to 4 are the dock; bars 5 to 8 show once you turn them on.",
+              disabled = function()
+                  if not M:Get("showKeys") then return true, "Turn Show key bindings on first." end
+                  return false
+              end },
+        } },
+    },
+}
 
 function M:OnEnable()
     local function start()
@@ -557,8 +605,8 @@ function M:OnEnable()
     -- Secure buttons can only be made out of combat (a reload mid-fight waits).
     if InCombatLockdown() then self:RunOutOfCombat("build", start) else start() end
     self:RegisterSettings(SECTION)
-    local keys = { "textSize", "showEmpty", "showXP", "showStance", "keysStance", "showPet", "keysPet", "dockSize", "dockVisibility", "position" }
-    for id = 1, 8 do keys[#keys + 1] = "keys" .. id end
+    self:RegisterSettings(KEYBINDS)
+    local keys = { "textSize", "showEmpty", "showXP", "showStance", "showPet", "showKeys", "keyBars", "dockSize", "dockVisibility", "position" }
     for id = 5, 8 do
         keys[#keys + 1] = "show" .. id
         keys[#keys + 1] = "cols" .. id

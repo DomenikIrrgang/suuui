@@ -6,8 +6,8 @@
 --             its description and base cooldown (read a moment later: the
 --             client loads spell text on demand)
 --   trainer   when a class trainer's window opens: every spell it lists,
---             unavailable ones included, with rank, required level and
---             description
+--             unavailable ones included, with rank, required level,
+--             description and training cost (copper)
 -- Saved per class in SuuUIProbe.classData[CLASS] on /reload.
 --
 --   /suu probe class    read the talents now; then talk to the class trainer
@@ -140,9 +140,11 @@ function CD.ReadTrainer()
             if type(level) == "number" and level > maxLevel then maxLevel = level end
             local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i) or nil
             local desc = GetTrainerServiceDescription and call(GetTrainerServiceDescription, i) or nil
+            local cost = GetTrainerServiceCost and call(GetTrainerServiceCost, i) or nil
             spells[#spells + 1] = { name = name, rank = rank ~= "" and rank or nil, kind = kind, level = level, link = link,
                 skill = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i) or nil,
-                description = type(desc) == "string" and not isSecret(desc) and desc ~= "" and desc or nil }
+                description = type(desc) == "string" and not isSecret(desc) and desc ~= "" and desc or nil,
+                cost = type(cost) == "number" and not isSecret(cost) and cost or nil }
         end
     end
     -- C_Trainer, if this client has it (names only, for later)

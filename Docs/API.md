@@ -191,10 +191,15 @@ M:RegisterSettings({
     },
     build = function(page) end,    -- optional: page:AddGroup(groupDef), page:Clear(), page:Refresh()
     preview = function(parent) return frame end,  -- optional live preview (real size, 320px column)
+    merge = "castbars",            -- optional (0.9): show the groups on another section's page
 })
 ```
 
+`merge` (0.9): the id of another section. The merged section isn't listed in the section list; its groups show on that section's page, after the page's own groups. Each group keeps its own section's namespace, so its rows read and write the merged module's settings. They are found by the search, count towards the page's change diamond, are reset by its Reset section, and go away with their section (when its module turns off). Only `groups` merge (not `build` or `preview`), and merges don't chain. While the other section isn't registered (its module is off), the merged one is listed on its own, by its own category and order. `SuuUI.OpenSettings(id)` with a merged section's id opens the page it shows on. The swing timer merges into the cast bars' section this way.
+
 A row: `key` (or `get`, `set`, `isDefault`, `reset` functions), `label`, `description` (a string or a function), `control` (`toggle`, `checkbox`, `segmented`, `select`, `slider`, `stepper`, `text`, `button`, `custom`), the control's options (`options` (a list or a function), `multiple`, `min`, `max`, `step`, `unit`, `format`, `width`, `placeholder`, `text`, `onClick`, `build`), `stacked`, `disabled = function() return disabled, reason end`, and `combat = true` (0.9) for a change that waits for the end of combat: the window adds "Waits for the end of combat." to the description (or shows it alone), so don't write it yourself. Rows update live, show a diamond and a reset arrow when changed, and are found by the window's search.
+
+A `custom` row (0.9): `build(parent, onChange, def)` returns the control. With a `key` (or `get`), the row binds it like a built-in control: the control calls `onChange(value)` to write the setting (a refused value goes back, the row shows its change diamond and reset arrow), and the window calls `control:SetValue(value)` on every refresh (a reset, a profile switch), when the control has `SetValue`. Without a key or get it is left alone.
 
 Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDisabled(disabled)`:
 
@@ -254,22 +259,22 @@ Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` 
 
 | | |
 |---|---|
-| `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`; 0.9: `:SetUnit(unit)`, `:Resize(w, h)`, `:SetDispelBadges("all"|"removable"|"off")` (debuff-type border and badge, in combat too) (out of combat) and the opts `height`, `lowHealth`, `incoming`, `powerFor(unit)`. See `UI/UnitFrame.lua` for `opts` |
+| `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`; 0.9: `:SetUnit(unit)`, `:Resize(w, h)`, `:SetDispelBadges("all"|"removable"|"off")` (debuff-type border and badge, in combat too) (out of combat) and the opts `height`, `lowHealth`, `incoming`, `powerFor(unit)`. See `UI/UnitFrame.lua` for `opts`; 0.9 too: the opt `raidMarker = true` (the raid target icon over the top edge; `:UpdateRaidMarker()`), and a built-in offline state ("Offline" in the right-hand text, an empty bar, a faint name, no power line) |
 | Buff indicators (0.9) | `f:SetIndicators(list)` (live, out of combat) and `f:SetPreviewIndicators(list)` on a unit frame; `SuuUI.UI.GroupIndicators()` (list, version) and `SuuUI.UI.SetGroupIndicators(list)` (emits `SUUUI_INDICATORS_CHANGED`); an indicator is `{ name, ids, kind = "icon"|"square"|"border"|"fill", point, size, color, source = "mine"|"any" }`, `SuuUI.UI.INDICATOR_POINTS` lists the points |
-| `SuuUI.UI.UnitStandIn(person)` (0.9) | Stand-in Unit* functions for a preview: `person(unit)` returns `{ name, class, role, health (0-1), max, power, incoming, absorb, dead, you }`; pass the result as a unit frame's `opts.api` |
+| `SuuUI.UI.UnitStandIn(person)` (0.9) | Stand-in Unit* functions for a preview: `person(unit)` returns `{ name, class, role, health (0-1), max, power, incoming, absorb, dead, you, offline, marker (1-8) }`; pass the result as a unit frame's `opts.api`; the stand-in also answers `UnitIsConnected` and `GetRaidTargetIndex` |
 | `SuuUI.Role()` (0.9) | Your role ("TANK", "HEALER", "DAMAGER") and where it came from ("chosen", "assigned", "talents"). Profiles can switch with it (General > Profiles > By role) |
 | `SuuUI.Spec()` (0.9) | The talent tree with the most points (1-3; 0 with none spent) and the points per tree |
-| `SuuUI.UI.CastBar(parent, unit, { size, width, icon, kick })` | A cast bar; `:Activate()`, `:Deactivate()`, `:SetIconShown(on)`, `:SetKickShown(on)`; 0.9: `size = "plate"`, `:SetUnit(unit)`, `:SetBarHeight(px)`, opt `target` (plates: the spell's target under the spell name) and `:SetTargetShown(on)`, `:SetNeutral(on)` (a friendly unit's cast: no arcane layer, lock or interrupt) |
+| `SuuUI.UI.CastBar(parent, unit, { size, width, icon, kick })` | A cast bar; `:Activate()`, `:Deactivate()`, `:SetIconShown(on)`, `:SetKickShown(on)`; 0.9: `size = "plate"`, `:SetUnit(unit)`, `:SetBarHeight(px)`, `:SetBarWidth(px)`, opt `target` (who the spell is aimed at: on plates a line under the spell name, on other sizes after it, "Spell › Target", in the spell name's width) and `:SetTargetShown(on)`, `:SetNeutral(on)` (a friendly unit's cast: no arcane layer, lock or interrupt) |
 | `SuuUI.UI.Flag(v)` | A possibly secret boolean as a plain one (secret reads as false). Show from a secret boolean with `region:SetAlphaFromBoolean` instead |
 | `SuuUI.UI.MeasureText(style, text)` | A text's width, measured where no anchor chain can make it secret |
 | `SuuUI.Motion.AlphaTo(frame, alpha, duration)` | Fades to an alpha; works on secure frames in combat |
-| `SuuUI.UI.SwingTimer(parent, { width, name })` | The swing timer from the game's own `PLAYER_SWING`; `:Activate()`, `:Deactivate()` |
+| `SuuUI.UI.SwingTimer(parent, { width, name })` | The swing timer from the game's own `PLAYER_SWING`; `:Activate()`, `:Deactivate()`; 0.9: `:SetBarWidth(px)` |
 
 ## Auras (0.7)
 
 | | |
 |---|---|
-| `SuuUI.UI.AuraContainer(parent, unit, opts)` | An engine aura container styled as the design's AuraIcon. `opts`: `size` (token), `anchor`, `growth` (`{ "LEFT", "UP" }`), `lineWidth`, `groups` (`{ key, filter = { "HARMFUL", "PLAYER" }, max, dispel, cancel, drain }`). Returns `{ container, ... }` with `:SetUnit(unit)`, `:Refresh()`, `:SetGroupMax(key, n)`; 0.9: `:SetFlow(anchor, growth)`, `:SetGroupSize(key, size)` (live; out of combat, as the engine's buttons refuse it in combat), `:Release()` (containers can never be freed: a released one has no unit, is hidden and stops listening until the next `:SetUnit(unit)`, so whoever rebuilds can reuse it). Addon code can't read auras in combat, so the engine fills it |
+| `SuuUI.UI.AuraContainer(parent, unit, opts)` | An engine aura container styled as the design's AuraIcon. `opts`: `size` (token), `anchor`, `growth` (`{ "LEFT", "UP" }`), `lineWidth`, `groups` (`{ key, filter = { "HARMFUL", "PLAYER" }, max, dispel, cancel, drain }`). Returns `{ container, ... }` with `:SetUnit(unit)`, `:Refresh()`, `:SetGroupMax(key, n)`; 0.9: `:SetFlow(anchor, growth)`, `:SetLineWidth(px)`, `:SetGroupSize(key, size)` (live; out of combat, as the engine's buttons refuse it in combat), `:Release()` (containers can never be freed: a released one has no unit, is hidden and stops listening until the next `:SetUnit(unit)`, so whoever rebuilds can reuse it). Addon code can't read auras in combat, so the engine fills it |
 | Group options (0.9) | `include = { spellIDs }` (only those spells), `dispelTypes = { "Curse" }` (only debuffs of those types, matched by the engine in combat too), `initialize = fn(button)` (build the button yourself, once, when the engine creates it: decorations hung on it show and hide with it, which is how party frames draw a debuff type's border and badge in combat) |
 
 ## Action bars (0.8)
@@ -291,4 +296,5 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.CooldownTracker(parent, { name })` | SuuUI's own Cooldown Manager: `:SetLists({ essential, utility, buffs, debuffs, procs })` (entries `{ name, ids, mine }`), `:SetOptions({ essentialSize, utilityInline, missingBuffs, missingDebuffs, readyPop, procHighlight })`; 0.9: `:Stop()` (no events, aura sounds or containers in use) and `:Start()` (again; a new tracker runs). Cooldowns are its own icons; buffs, debuffs and procs are engine aura containers with spell lists |
 | `SuuUI.CooldownPresets()` | Your class's presets: `{ { id, name, lists } }`, every entry carrying all the IDs with its name in Forever's client |
 | `SuuUI.KeybindMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | Keybind mode (`/suu keybind`): hover a button, press a key. It binds the game's own command for the button, so the game's Key Bindings window shows it too. Message: `SUUUI_KEYBINDMODE_CHANGED (active)` |
+| Keybinds settings (0.9) | General › Keybinds, in the `actionbars` namespace: `showKeys` (show key bindings on buttons at all) and `keyBars` (the bars that show them: a list of `"1"` … `"8"`, `"stance"`, `"pet"`) |
 | Bindable buttons | A button made with `SuuUI.UI.ActionButton` takes part in keybind mode when it has `b.bindCommand` (a game binding command) and `b.bindLabel`; `ActionBar`, `StanceBar` and `PetBar` set both |

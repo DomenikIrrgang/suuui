@@ -41,6 +41,8 @@ local M = SuuUI.RegisterModule({
         gap = 6,
         power = "roles",        -- "roles" (tanks and healers), "all", "none"
         healthText = "percent",
+        nameColor = "game",     -- "game" (class colour) or "ink", as on the unit frames
+        raidMarkers = true,
         lowHealth = false,
         incoming = true,
         auras = 4,
@@ -122,7 +124,7 @@ end
 local PEOPLE = {
     { you = true, health = 0.92, power = 0.7, auras = {} },
     { name = "Brannoc", class = "WARRIOR", role = "TANK", health = 0.64, max = 8800, power = 0.4, incoming = 0.18, absorb = 0.1,
-      auras = { { 871 } } },
+      marker = 8, auras = { { 871 } } },
     { name = "Ysolde", class = "PRIEST", role = "HEALER", health = 0.83, max = 3900, power = 0.14, selected = true,
       debuff = "Magic", removable = true, auras = { { 122, "dispel-magic" } } },
     { name = "Kaelith", class = "MAGE", role = "DAMAGER", health = 0.28, max = 3600, power = 0.55, incoming = 0.12, aggro = true,
@@ -206,6 +208,8 @@ function M:DrawPreview(force)
     for i, f in ipairs(self.previewFrames) do
         local d = person("preview" .. i)
         f.opts.healthText = self:Get("healthText")
+        f.opts.nameColor = self:Get("nameColor")
+        f.opts.raidMarker = self:Get("raidMarkers")
         f.opts.lowHealth = false
         f.opts.lowTint = self:Get("lowHealth")
         f.opts.incoming = self:Get("incoming")
@@ -327,6 +331,8 @@ end
 function M:ApplyOptions()
     for _, f in ipairs(self.frames) do
         f.opts.healthText = self:Get("healthText")
+        f.opts.nameColor = self:Get("nameColor")
+        f.opts.raidMarker = self:Get("raidMarkers")
         f.opts.lowHealth = false
         f.opts.lowTint = self:Get("lowHealth")
         f.opts.incoming = self:Get("incoming")
@@ -434,7 +440,7 @@ end
 --------------------------------------------------------------------------------
 
 local SECTION = {
-    id = "party", label = "Party frames", category = "Frames", order = 12,
+    id = "party", label = "Party frames", category = "Frames", order = 14,
     -- the preview column: a made-up party with every setting applied
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
@@ -459,6 +465,11 @@ local SECTION = {
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
               description = "At the right end of each bar: the health percentage, the current health, or both." },
+            { key = "nameColor", label = "Name colour", control = "segmented",
+              options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
+              description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
+            { key = "raidMarkers", label = "Raid markers", control = "toggle",
+              description = "A skull, cross or other raid marker over the top edge of the frame, in combat too." },
             { key = "lowHealth", label = "Low-health tint", control = "toggle",
               description = "The empty part of the bar warms to ember from 70% down, strongest at 10%, so the lowest stand out in a full grid. Healers want it." },
             { key = "incoming", label = "Incoming heals and absorbs", control = "toggle",
@@ -468,7 +479,8 @@ local SECTION = {
             { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 6, step = 1, combat = true,
               description = "Beside each bar, in order: debuffs you can remove, defensives on them, other important debuffs. Your heals over time and shields go in Buff indicators." },
             { key = "auraSide", label = "Aura side", control = "segmented", combat = true,
-              options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } } },
+              options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } },
+              disabled = function() if M:Get("auras") == 0 then return true, "No aura icons." end end },
             { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
               description = "Magic, Curse, Poison, Disease as a badge and border on the frame, in combat too. Several at once: Magic shows over Curse, Poison, Disease." },
@@ -512,7 +524,7 @@ function M:OnEnable()
         end)
     end
     self:Watch("showSolo", function() self:UpdateVisibility() end)
-    for _, key in ipairs({ "power", "healthText", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }) do
+    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }) do
         self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
     end
     self:Watch("debuffBadges", function() self:RunOutOfCombat("badges", function() self:ApplyBadges() end) end)

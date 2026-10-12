@@ -29,7 +29,7 @@
 --       },
 --   })
 --   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids),
---   c:SetFlow(anchor, growth)
+--   c:SetFlow(anchor, growth), c:SetLineWidth(px)   -- 0.9: both after creation too
 --   c:Release()                  -- 0.9: parked for reuse (no unit, hidden,
 --                                -- deaf) until the next SetUnit
 --   c:SetGroupSize(key, size)    -- 0.9: a group's icon size, live (out of combat:
@@ -350,6 +350,12 @@ function AC:SetGroupSize(key, size)
             pcall(b.scrim.SetHeight, b.scrim, math.floor(px * 0.6))
         end
     end
+    self:Refresh()
+end
+
+-- 0.9: px before the icons wrap to the next line (nil: never), after creation.
+function AC:SetLineWidth(px)
+    call(self.container, { "SetFlowLayoutMaximumLineSize", "SetAuraLayoutRowWidth" }, px)
     self:Refresh()
 end
 

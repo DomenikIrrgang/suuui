@@ -188,15 +188,15 @@ Registry.Register({
               build = function(p) return pickAndAct(p, "Delete", Profiles.Delete, true) end,
               description = "Characters using it go back to their own profile." },
         } },
-        { title = "By role", description = "SuuUI can switch profiles with your role: set up a profile for each role, and the party frames, bars and everything else follow when you change spec or get a role in a group. It switches out of combat, and a profile you pick by hand stays until your role changes.", rows = {
+        { title = "By role", description = "SuuUI can switch profiles with your role: set up a profile for each, and everything follows when you change spec or get a role in a group, out of combat.", rows = {
             { label = "Your role", control = "select", width = 220,
               options = function()
                   local now = ns.Roles.LABEL[(select(1, ns.Roles.Current()))]
                   local auto = Profiles.ChosenRole() == "auto" and (" (now " .. now .. ")") or ""
-                  return { { value = "auto", label = "Automatic" .. auto, note = "The role a group gives you, else your talents" },
+                  return { { value = "auto", label = "Automatic" .. auto },
                            { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "DPS" } }
               end,
-              description = "Automatic: the role a group gives you (role check, group finder), else the talent tree with the most points.",
+              description = "Automatic: the role a group gives you (role check, group finder), else the talent tree with the most points. A profile you pick by hand stays until your role changes.",
               get = function() return Profiles.ChosenRole() end,
               set = function(v) return Profiles.SetChosenRole(v) end },
             roleRow("TANK", "Tank profile"),

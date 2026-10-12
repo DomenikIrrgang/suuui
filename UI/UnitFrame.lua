@@ -24,6 +24,7 @@
 --                           -- header's child; the header sets its unit)
 --       reserveRight = 0,   -- px kept free at the bar's right end (inline auras)
 --       textOnSmall = false, -- health text on an sm frame too (raid frames)
+--       raidMarker = true,  -- the raid target marker (skull, cross…) over the top edge
 --       api = nil,          -- a stand-in for the game's Unit* functions (previews);
 --                           -- such a frame isn't activated, call :Refresh()
 --   })
@@ -34,7 +35,11 @@
 --   f:Activate()   -- starts listening to the unit's events and draws it
 --   f:Deactivate()
 --   f:SetState(tone, word)   -- a state border and badge ("danger", "Aggro"); nil clears it
+--   f:UpdateRaidMarker()     -- redraws the marker (after opts.raidMarker changes)
 --   f:Refresh()
+--
+-- A disconnected player shows "Offline" where the health text goes, the bar
+-- empty and the name faint, as a dead unit does.
 --
 -- Secret values: health, max health, power, incoming heals and absorbs go
 -- straight to StatusBars, which take them as they are. The health % text is
@@ -56,11 +61,16 @@ local ROLE_ICON = {
     DAMAGER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleDamage.tga",
 }
 
+-- marker: the raid target marker's size; rise: how far it stands over the
+-- top edge (less on sm, whose frames sit a few px apart in a raid grid)
 local SIZES = {
-    lg = { height = "unit-lg", width = "bar-lg", name = "unit-name-lg", role = 14, pad = S["space-4"], gap = S["space-3"] },
-    md = { height = "unit-md", width = "bar-md", name = "unit-name", role = 12, pad = S["space-4"], gap = S["space-3"] },
-    sm = { height = "unit-sm", width = "bar-sm", name = "unit-name-sm", role = 10, pad = S["space-3"], gap = S["space-2"] },
+    lg = { height = "unit-lg", width = "bar-lg", name = "unit-name-lg", role = 14, pad = S["space-4"], gap = S["space-3"], marker = 18, rise = 8 },
+    md = { height = "unit-md", width = "bar-md", name = "unit-name", role = 12, pad = S["space-4"], gap = S["space-3"], marker = 16, rise = 7 },
+    sm = { height = "unit-sm", width = "bar-sm", name = "unit-name-sm", role = 10, pad = S["space-3"], gap = S["space-2"], marker = 14, rise = 4 },
 }
+
+-- The game's raid target markers: eight 64px cells, four to a row.
+local MARKERS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 
 local LOW_HEALTH = 0.35 -- the design's lowAt
 local LOW_MANA = 0.25
@@ -132,6 +142,14 @@ local function shortNumber(v)
     if v >= 1e4 then return ("%.0fk"):format(v / 1e3) end
     if v >= 1e3 then return ("%.1fk"):format(v / 1e3) end
     return ("%d"):format(v + 0.5)
+end
+
+-- A player who has left the game. The answer is never secret for group
+-- members; a secret one counts as connected.
+local function isOffline(A, unit)
+    if not A.UnitIsConnected or not UI.Flag(A.UnitIsPlayer(unit)) then return false end
+    local connected = A.UnitIsConnected(unit)
+    return not isSecret(connected) and connected == false
 end
 
 local function healthPercent(A, unit)
@@ -306,6 +324,18 @@ function UI.UnitFrame(parent, unit, opts)
     f.right = UI.Text(o, "numeric", "ink")
     f.right:SetShadowed(true)
     f.right:SetPoint("RIGHT", -size.pad, 0)
+
+    -- The raid target marker: centred on the top edge, standing over it, on
+    -- its own layer above the borders, badges and the selection.
+    f.markerLayer = CreateFrame("Frame", nil, f)
+    f.markerLayer:SetAllPoints()
+    f.markerLayer:SetFrameLevel(o:GetFrameLevel() + 10)
+    f.markerLayer:EnableMouse(false)
+    f.marker = f.markerLayer:CreateTexture(nil, "OVERLAY")
+    f.marker:SetTexture(MARKERS)
+    f.marker:SetSize(size.marker, size.marker)
+    f.marker:SetPoint("TOP", f, "TOP", 0, size.rise)
+    f.marker:Hide()
     f:FitRow() -- the row ends where the health text (and reserved room) begins
     f.rightW = 0
     return f
@@ -319,19 +349,22 @@ function UF:UpdateHealth(instant)
     local A = self.api
     local u = self.unit
     local dead = UI.Flag(A.UnitIsDeadOrGhost(u))
+    local offline = isOffline(A, u)
+    -- dead or offline: an empty bar
+    local gone = dead or offline
     local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
     for _, b in ipairs({ self.health, self.healthLow, self.ghost, self.incoming, self.absorb }) do
         b:SetMinMaxValues(0, amount(max))
     end
-    cur = dead and 0 or amount(cur)
+    cur = gone and 0 or amount(cur)
     self.health:SetValue(cur)
     self.healthLow:SetValue(cur)
     if self.opts.lowHealth == false then
         self.healthLow:SetAlpha(0)
     else
-        self.healthLow:SetAlpha(dead and 0 or amount(A.UnitHealthPercent(u, true, belowCurve(LOW_HEALTH))))
+        self.healthLow:SetAlpha(gone and 0 or amount(A.UnitHealthPercent(u, true, belowCurve(LOW_HEALTH))))
     end
-    local tint = self.opts.lowTint and not dead and lowTintCurve()
+    local tint = self.opts.lowTint and not gone and lowTintCurve()
     self.tint:SetAlpha(tint and amount(A.UnitHealthPercent(u, true, tint)) or 0)
 
     -- The ghost trails the fill: after a hold, the engine eases it down.
@@ -348,14 +381,14 @@ function UF:UpdateHealth(instant)
         end
     end
 
-    local noIncoming = dead or self.opts.incoming == false
+    local noIncoming = gone or self.opts.incoming == false
     self.incoming:SetValue(noIncoming and 0 or amount(UnitGetIncomingHeals and A.UnitGetIncomingHeals(u)))
     self.absorb:SetValue(noIncoming and 0 or amount(UnitGetTotalAbsorbs and A.UnitGetTotalAbsorbs(u)))
 
-    if dead then
+    if gone then
         self.right:SetStyle("caption")
         self.right:SetColor("ink-muted")
-        self.right:SetValue(UI.Flag(A.UnitIsGhost(u)) and "Ghost" or "Dead")
+        self.right:SetValue(offline and "Offline" or (UI.Flag(A.UnitIsGhost(u)) and "Ghost" or "Dead"))
     elseif self.opts.healthText ~= "none" and (self.opts.size ~= "sm" or self.opts.textOnSmall) then
         self.right:SetStyle("numeric")
         self.right:SetColor("ink")
@@ -384,9 +417,11 @@ function UF:UpdateHealth(instant)
     else
         self.right:SetValue("")
     end
-    if self.dead ~= dead then
-        self.dead = dead
+    if self.dead ~= dead or self.offline ~= offline then
+        local power = self.offline ~= offline
+        self.dead, self.offline = dead, offline
         self:UpdateIdentity()
+        if power then self:UpdatePower() end -- an offline unit has none
     end
     if self.onHealth then self.onHealth(self) end
 end
@@ -394,7 +429,7 @@ end
 function UF:UpdatePower()
     local A = self.api
     local u = self.unit
-    if self.opts.power == false or (self.opts.powerFor and not self.opts.powerFor(u, self.api)) then
+    if self.offline or self.opts.power == false or (self.opts.powerFor and not self.opts.powerFor(u, self.api)) then
         self.power:Hide()
         self.powerLow:Hide()
         return
@@ -453,9 +488,9 @@ function UF:UpdateIdentity()
     end
 
     -- The name: class colour for players, reaction colour for hostile and
-    -- neutral NPCs, ink for friendly ones; ink-faint when dead.
+    -- neutral NPCs, ink for friendly ones; ink-faint when dead or offline.
     self.name:SetValue(A.UnitName(u))
-    if self.dead then
+    if self.dead or self.offline then
         self.name:SetColor("ink-faint")
     elseif self.opts.nameColor == "ink" then
         self.name:SetColor("ink")
@@ -491,6 +526,29 @@ function UF:UpdateIdentity()
         end
     end
     self:LayoutRow(marker)
+end
+
+-- The raid target marker. GetRaidTargetIndex may be secret in combat: the
+-- game's SetRaidTargetIconTexture works out the cell with Lua arithmetic,
+-- which a secret refuses, so a secret index goes to the texture's sprite
+-- sheet cell, which the engine works out itself.
+function UF:UpdateRaidMarker()
+    local A, u = self.api, self.unit
+    if self.opts.raidMarker == false or not u or not A.GetRaidTargetIndex or not A.UnitExists(u) then
+        self.marker:Hide()
+        return
+    end
+    local index = A.GetRaidTargetIndex(u)
+    if isSecret(index) then
+        local ok = self.marker.SetSpriteSheetCell and pcall(self.marker.SetSpriteSheetCell, self.marker, index, 4, 4, 64, 64)
+        self.marker:SetShown(ok and true or false)
+    elseif index and index >= 1 and index <= 8 then
+        local col, row = (index - 1) % 4, math.floor((index - 1) / 4)
+        self.marker:SetTexCoord(col * 0.25, (col + 1) * 0.25, row * 0.25, (row + 1) * 0.25)
+        self.marker:Show()
+    else
+        self.marker:Hide()
+    end
 end
 
 -- marker, name, meta, badges ... health %, in one row; the name gives way.
@@ -899,7 +957,8 @@ end
 --------------------------------------------------------------------------------
 -- Stand-ins for previews: made-up people with the Unit* functions a frame
 -- reads. person(unit) returns { name, class, role, health (0-1), max, power
--- (0-1), incoming, absorb, dead, you } for a preview unit token.
+-- (0-1), incoming, absorb, dead, offline, marker (1-8), you } for a preview
+-- unit token.
 --------------------------------------------------------------------------------
 
 local STAND_IN_POWER = { WARRIOR = { 1, "RAGE" }, ROGUE = { 3, "ENERGY" } }
@@ -931,6 +990,8 @@ function UI.UnitStandIn(person)
         UnitReaction = function() return 5 end,
         UnitCreatureFamily = function() return nil end,
         UnitIsUnit = function(u, other) return other == "player" and person(u).you or false end,
+        UnitIsConnected = function(u) return not person(u).offline end,
+        GetRaidTargetIndex = function(u) return person(u).marker end,
     }
 end
 
@@ -1004,9 +1065,11 @@ function UF:Refresh()
     self:FitRow()
     if not A.UnitExists(self.unit) then return end
     self.dead = UI.Flag(A.UnitIsDeadOrGhost(self.unit))
+    self.offline = isOffline(A, self.unit)
     self:UpdateIdentity()
     self:UpdateHealth(true)
     self:UpdatePower()
+    self:UpdateRaidMarker()
 end
 
 --------------------------------------------------------------------------------
@@ -1015,7 +1078,7 @@ end
 
 local HEALTH_EVENTS = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED" }
 local POWER_EVENTS = { "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER" }
-local IDENTITY_EVENTS = { "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_FACTION", "UNIT_CLASSIFICATION_CHANGED", "UNIT_CONNECTION" }
+local IDENTITY_EVENTS = { "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_FACTION", "UNIT_CLASSIFICATION_CHANGED" }
 
 -- Registers a unit event if this client has it (a few retail events may not).
 local function onUnit(f, event, fn)
@@ -1029,6 +1092,9 @@ function UF:Activate()
     for _, e in ipairs(HEALTH_EVENTS) do onUnit(self, e, function() self:UpdateHealth() end) end
     for _, e in ipairs(POWER_EVENTS) do onUnit(self, e, function() self:UpdatePower() end) end
     for _, e in ipairs(IDENTITY_EVENTS) do onUnit(self, e, function() self:UpdateIdentity() end) end
+    -- going offline or coming back: the bar, the text, the name and the power line
+    onUnit(self, "UNIT_CONNECTION", function() self:Refresh() end)
+    Events.OnGame("RAID_TARGET_UPDATE", function() self:UpdateRaidMarker() end, self)
     Events.OnGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
     -- a group unit can become another person: redraw everything
     local grouped = self.unit:find("^party") or self.unit:find("^raid")

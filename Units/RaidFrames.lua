@@ -31,6 +31,7 @@ local M = SuuUI.RegisterModule({
     defaults = {
         position = { point = "BOTTOMLEFT", x = 28, y = 300 },
         arrangement = "columns",   -- "columns" (side layout) or "rows" (healer layout)
+        sort = "group",            -- within each group: "group" (raid order) or "role"
         perBand = 4,               -- columns: groups side by side before the next band
         width = 108,
         height = 20,
@@ -40,6 +41,8 @@ local M = SuuUI.RegisterModule({
         showSolo = false,          -- your own frame while not in a group (to try them)
         power = "roles",
         healthText = "none",
+        nameColor = "game",        -- "game" (class colour) or "ink", as on the unit frames
+        raidMarkers = true,
         lowHealth = false,
         incoming = true,
         auras = 2,
@@ -136,6 +139,7 @@ function M:StyleButton(button)
     local f = UI.UnitFrame(nil, nil, {
         frame = button, size = "sm", width = self:Get("width"), height = h,
         powerFor = powerFor, textOnSmall = true, healthText = self:Get("healthText"),
+        nameColor = self:Get("nameColor"), raidMarker = self:Get("raidMarkers"),
         lowHealth = false, lowTint = self:Get("lowHealth"), incoming = self:Get("incoming"),
         reserveRight = auraReserve(h),
     })
@@ -186,6 +190,26 @@ end
 --------------------------------------------------------------------------------
 -- Headers
 --------------------------------------------------------------------------------
+
+-- Sorting within each group. groupBy only orders the units the header's
+-- groupFilter (its group number) lets in: the header filters first, then
+-- sorts what passed by groupingOrder, and anyone whose role isn't listed
+-- goes last. groupingOrder goes first: a header with groupBy and no
+-- groupingOrder errors on its next update.
+local ROLE_ORDER = "TANK,HEALER,DAMAGER,NONE"
+
+function M:ApplySort()
+    local byRole = self:Get("sort") == "role"
+    for _, hd in ipairs(self.headers) do
+        if byRole then
+            hd:SetAttribute("groupingOrder", ROLE_ORDER)
+            hd:SetAttribute("groupBy", "ASSIGNEDROLE")
+        else
+            hd:SetAttribute("groupBy", nil)
+            hd:SetAttribute("groupingOrder", nil)
+        end
+    end
+end
 
 -- Run by each header for each button it makes (restricted code): size and
 -- click actions, then SuuUI's styling.
@@ -273,6 +297,8 @@ end
 function M:ApplyOptions()
     for _, f in ipairs(self.buttons) do
         f.opts.healthText = self:Get("healthText")
+        f.opts.nameColor = self:Get("nameColor")
+        f.opts.raidMarker = self:Get("raidMarkers")
         f.opts.lowTint = self:Get("lowHealth")
         f.opts.incoming = self:Get("incoming")
         f.opts.reserveRight = auraReserve(f:GetHeight())
@@ -372,7 +398,7 @@ local HEALTH = { 64, 92, 31, 83, 88, 18, 100, 0, 76, 64, 97, 100, 58, 100, 91, 1
 -- what makes the preview show every state: auras are spell textures with the
 -- edge the engine would give them
 local SPECIAL = {
-    Brannoc = { incoming = 0.18, absorb = 0.1, auras = { { 871 } } },
+    Brannoc = { incoming = 0.18, absorb = 0.1, marker = 8, auras = { { 871 } } },
     Kaelith = { aggro = true, incoming = 0.12, auras = { { 10060 } } },
     Morrow = { debuff = "Poison", auras = { { 2818, "dispel-poison" } } },
     Oren = { debuff = "Disease", removable = true, auras = { { 18278, "dispel-disease" } } },
@@ -381,7 +407,10 @@ local SPECIAL = {
     Dagny = { absorb = 0.14 }, Nimra = { debuff = "Magic", removable = true, auras = { { 122, "dispel-magic" } } },
     Liora = { debuff = "Curse", auras = { { 980, "dispel-curse" } } },
     Ysolde = { selected = true, power = 0.14 },
+    Hadrin = { marker = 7 }, Veyra = { offline = true },
 }
+
+local ROLE_RANK = { TANK = 1, HEALER = 2, DAMAGER = 3 }
 
 local people = {}
 local function person(unit)
@@ -442,12 +471,27 @@ function M:DrawPreview(force)
     local groups = math.ceil(count / 5)
     local size, far = iconSize(h), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
+    -- each person's place in their group: raid order, or by role as the
+    -- headers sort (tanks, healers, then damage; raid order within a role)
+    local slotOf = {}
+    for g = 1, groups do
+        local members = {}
+        for i = (g - 1) * 5 + 1, math.min(g * 5, count) do members[#members + 1] = i end
+        if self:Get("sort") == "role" then
+            table.sort(members, function(a, b)
+                local ra, rb = ROLE_RANK[person("raidpreview" .. a).role] or 4, ROLE_RANK[person("raidpreview" .. b).role] or 4
+                if ra ~= rb then return ra < rb end
+                return a < b
+            end)
+        end
+        for slot, i in ipairs(members) do slotOf[i] = slot - 1 end
+    end
     local maxX, maxY = 0, 0
     for i, f in ipairs(self.previewFrames) do
         if i > count then
             f:Hide()
         else
-            local g, slot = math.floor((i - 1) / 5) + 1, (i - 1) % 5
+            local g, slot = math.floor((i - 1) / 5) + 1, slotOf[i]
             local x, y
             if rows then
                 x, y = slot * (w + gap), (g - 1) * (h + groupGap)
@@ -459,6 +503,8 @@ function M:DrawPreview(force)
             f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", x, -y)
             maxX, maxY = math.max(maxX, x + w), math.max(maxY, y + h)
             f.opts.healthText = self:Get("healthText")
+            f.opts.nameColor = self:Get("nameColor")
+            f.opts.raidMarker = self:Get("raidMarkers")
             f.opts.lowTint = self:Get("lowHealth")
             f.opts.lowHealth = false
             f.opts.incoming = self:Get("incoming")
@@ -505,7 +551,7 @@ end
 --------------------------------------------------------------------------------
 
 local SECTION = {
-    id = "raid", label = "Raid frames", category = "Frames", order = 13,
+    id = "raid", label = "Raid frames", category = "Frames", order = 16,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
         { title = "Layout", description = "One layout per profile. Healers usually want groups as rows in the middle of the screen, tanks and DPS columns above the chat: make a profile for each and let SuuUI switch them with your role (General > Profiles > By role). Move the frames in edit mode (General > Appearance > Edit layout).", rows = {
@@ -520,6 +566,9 @@ local SECTION = {
             { key = "arrangement", label = "Groups", control = "segmented", combat = true,
               options = { { value = "columns", label = "Columns" }, { value = "rows", label = "Rows" } },
               description = "Columns: each group a column of five (the side layout). Rows: each group a row of five, group 1 on top (the healer layout)." },
+            { key = "sort", label = "Sort", control = "segmented", combat = true,
+              options = { { value = "group", label = "Group order" }, { value = "role", label = "Role" } },
+              description = "Within each group: the raid's order, or tanks, healers, then damage. Everyone stays in their own group." },
             { key = "perBand", label = "Columns side by side", control = "stepper", min = 1, max = 8, step = 1, combat = true,
               description = "Then the next groups start a new band below. 4 keeps 40 players in two bands.",
               disabled = function() if M:Get("arrangement") ~= "columns" then return true, "Only for groups as columns." end end },
@@ -540,6 +589,11 @@ local SECTION = {
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
               description = "At the right end of each bar: the health percentage, the current health, or both." },
+            { key = "nameColor", label = "Name colour", control = "segmented",
+              options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
+              description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
+            { key = "raidMarkers", label = "Raid markers", control = "toggle",
+              description = "A skull, cross or other raid marker over the top edge of the frame, in combat too." },
             { key = "lowHealth", label = "Low-health tint", control = "toggle",
               description = "The empty part of the bar warms to ember from 70% down, strongest at 10%, so the lowest stand out in a full grid. Healers want it." },
             { key = "incoming", label = "Incoming heals and absorbs", control = "toggle",
@@ -584,6 +638,7 @@ function M:OnEnable()
         self:Layout()
         precreate(self)
         self:Layout()
+        self:ApplySort()
         self:UpdateVisibility()
         self:ApplyOptions()
     end)
@@ -594,7 +649,7 @@ function M:OnEnable()
             self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
         end)
     end
-    for _, key in ipairs({ "power", "healthText", "lowHealth", "incoming", "rangeAlpha" }) do
+    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "rangeAlpha" }) do
         self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
     end
     self:Watch("debuffBadges", function()
@@ -602,6 +657,10 @@ function M:OnEnable()
         self:RunOutOfCombat("badges", function() self:ApplyBadges() end)
     end)
     self:Watch("showSolo", function() self:UpdateVisibility() end)
+    self:Watch("sort", function()
+        self:DrawPreview()
+        self:RunOutOfCombat("sort", function() self:ApplySort() end)
+    end)
     self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)

@@ -5,10 +5,13 @@
 -- written against the public API only; it finds the unit frames through
 -- their published anchors.
 --
--- Placement (2560x1440 reference): your cast bar is 340px wide, centred on
--- the screen, its top 316px above the bottom edge, under the Cooldown Manager
--- and over the swing timer. The others hang space-1 under their unit's bar,
--- at its width.
+-- Placement (2560x1440 reference): your cast bar is 340px wide (240–420 in
+-- the settings; the swing timer follows it), centred on the screen, its top
+-- 316px above the bottom edge, under the Cooldown Manager and over the swing
+-- timer. The others hang space-1 under their unit's bar, at its width.
+--
+-- Its settings section is "Cast & swing bars": the swing timer merges its
+-- own groups into it.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -17,7 +20,7 @@ local M = SuuUI.RegisterModule({
     id = "castbars",
     name = "Cast bars",
     description = "Your cast bar, and the casts of your target, focus and bosses with your interrupt's state.",
-    api = "0.6",
+    api = "0.9",
     reloadToToggle = true,
     defaults = {
         playerPosition = { point = "BOTTOM", x = 0, y = 292 },
@@ -27,6 +30,8 @@ local M = SuuUI.RegisterModule({
         showBoss = true,
         showIcon = true,
         showKick = true,
+        playerWidth = 340,
+        castTarget = true, -- "Spell › Target" on every cast bar
     },
 })
 
@@ -35,9 +40,16 @@ local ATTACH = {
     target = "showTarget", focus = "showFocus",
     boss1 = "showBoss", boss2 = "showBoss", boss3 = "showBoss", boss4 = "showBoss", boss5 = "showBoss",
 }
--- Each attached bar is as wide as its unit's bar (the size tokens, never a
--- size read back from the frame).
-local WIDTH = { target = "bar-lg" }
+-- Each attached bar is as wide as its unit's bar: the target's follows the
+-- unit frames' width setting, the others their size token (never a size read
+-- back from the frame).
+local function width(name)
+    if name == "target" then
+        local frames = SuuUI.GetModule("unitframes")
+        return frames and frames:Get("width") or "bar-lg"
+    end
+    return "bar-md"
+end
 
 function M:Attach(name, frame)
     local key = ATTACH[name]
@@ -48,20 +60,25 @@ function M:Attach(name, frame)
         return
     end
     if not bar then
-        bar = UI.CastBar(frame, name, { size = "sm", width = WIDTH[name] or "bar-md", name = "SuuUI" .. name .. "CastBar" })
+        bar = UI.CastBar(frame, name, { size = "sm", width = width(name), name = "SuuUI" .. name .. "CastBar",
+            target = self:Get("castTarget") })
         self.attached[name] = bar
     end
     bar:SetParent(frame)
+    bar:SetBarWidth(UI.Size(width(name)))
     bar:ClearAllPoints()
     bar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -S["space-1"])
     bar:SetIconShown(self:Get("showIcon"))
     bar:SetKickShown(self:Get("showKick"))
+    bar:SetTargetShown(self:Get("castTarget"))
     if self:Get(key) then bar:Activate() else bar:Deactivate() end
 end
 
 function M:ApplyOptions()
     for name in pairs(ATTACH) do self:Attach(name, SuuUI.GetAnchor(name)) end
     self.player:SetIconShown(self:Get("showIcon"))
+    self.player:SetTargetShown(self:Get("castTarget"))
+    self.player:SetBarWidth(self:Get("playerWidth"))
     -- Your cast bar runs unless it is turned off or hidden in edit mode.
     if self:Get("showPlayer") and not self:Get("playerPosition").hidden then
         -- (also when turned on mid-session: Blizzard's must not show beside it)
@@ -74,17 +91,23 @@ function M:ApplyOptions()
 end
 
 local SECTION = {
-    id = "castbars", label = "Cast bars", category = "Frames", order = 20,
+    id = "castbars", label = "Cast & swing bars", category = "Frames", order = 24,
     groups = {
-        { title = "Whose casts", rows = {
-            { key = "showPlayer", label = "Your cast bar", control = "toggle",
+        { title = "Your cast bar", rows = {
+            { key = "showPlayer", label = "Show", control = "toggle",
               description = "Centred between the player and target frames. Blizzard's own comes back after a reload." },
+            { key = "playerWidth", label = "Width", control = "slider", min = 240, max = 420, step = 10, unit = "px",
+              description = "The swing timer under it is as wide." },
+        } },
+        { title = "Other cast bars", rows = {
             { key = "showTarget", label = "Target", control = "toggle", description = "Under the target frame." },
             { key = "showFocus", label = "Focus", control = "toggle", description = "Under the focus frame, so you can stop a second caster." },
             { key = "showBoss", label = "Bosses", control = "toggle", description = "Under each boss frame." },
         } },
         { title = "On every cast bar", rows = {
             { key = "showIcon", label = "Spell icon", control = "toggle", description = "The spell's icon at the left end of the bar." },
+            { key = "castTarget", label = "Show the target", control = "toggle",
+              description = "Who the spell is aimed at, after the spell name: Chain Heal › Kaelith." },
             { key = "showKick", label = "Your interrupt", control = "toggle",
               description = "On interruptible casts: a diamond in arcane when your interrupt is ready, its seconds when it isn't. Shown between pulls and in encounters alike." },
         } },
@@ -97,7 +120,8 @@ function M:OnEnable()
         SuuUI.SuppressBlizzard("PetCastingBarFrame")
     end
     if not self.player then
-        self.player = UI.CastBar(SuuUI.Root, "player", { size = "md", width = 340, name = "SuuUIPlayerCastBar" })
+        self.player = UI.CastBar(SuuUI.Root, "player", { size = "md", width = self:Get("playerWidth"),
+            name = "SuuUIPlayerCastBar", target = self:Get("castTarget") })
         self.player.suuManagedShow = true -- shown only while you cast
         self.attached = {}
     end
@@ -108,7 +132,15 @@ function M:OnEnable()
     self:ApplyOptions()
 
     self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
-    for _, key in ipairs({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "playerPosition" }) do
+    -- the target's bar follows the target frame's width, live
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        -- (with the frame: its resize waits for the end of combat too)
+        if namespace == "unitframes" and key == "width" then
+            self:RunOutOfCombat("targetWidth", function() self:Attach("target", SuuUI.GetAnchor("target")) end)
+        end
+    end)
+    for _, key in ipairs({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "castTarget",
+                           "playerWidth", "playerPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
 end

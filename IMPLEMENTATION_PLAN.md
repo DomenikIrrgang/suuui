@@ -340,6 +340,11 @@ Decided (2026-10-12): like the party frames, **one layout per profile**; roles p
   - Tanking, a mob you are about to lose shows "Losing".
   - Plates still update inside a dungeon.
 
+### 1.10c Review round (2026-10-12)
+- **Batch 1, bugs (confirmed in game):** sliders off the mouse wheel, steppers snap to their step, profile lists and role profiles kept in step, Cooldown Manager containers reused (AuraContainer:Release), buff-indicator edits published when the edit panel closes, target of target follows, own plate stays Blizzard's, friendly casts neutral, every possibly secret value checked before it is compared.
+- **Batch 2, consistent settings (confirmed in game):** settings migrations (`module:Migrate`), the `combat = true` row flag, one Health text control (Percent / Value / Both / None) and one Debuff badges control everywhere, shared labels.
+- **Batch 3, new settings and layout (not yet confirmed):** merged sections (`merge`), Cast & swing bars in one section (cast width the swing timer follows, "Show the target", swing Off / In combat / Always), General > Keybinds (one switch, bars as chips), Micro menu & bags section (Shows, Scale), nameplate groups Size / Casts / On the plate, unit frame width and height, offline state and raid markers on unit and group frames, class-coloured names and role sort on raid, your buffs' size / per row / growth, a scrollbar for the settings content, custom setting rows bound like the others.
+
 ### 1.11 Alerts, threat meter and the pull warning
 - **Build:**
   - The `Alert` system: centred, about 270px down, short-lived, and present only in combat.

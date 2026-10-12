@@ -646,7 +646,7 @@ function M:DrawPreview()
 end
 
 local SECTION = {
-    id = "indicators", label = "Buff indicators", category = "Frames", order = 14,
+    id = "indicators", label = "Buff indicators", category = "Frames", order = 18,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
         { title = "Indicators", description = "Your heals over time and shields on party and raid frames, in combat too: an icon, a coloured square, a border or a tint over the health. Saved per class and spec in this profile, so one profile serves all your characters. Edit one for its look, when it shows and where.", rows = {

@@ -1,7 +1,8 @@
 -- tools/extract_classdata.lua
 -- Copies each class's data (/suu probe class) out of the saved variables into
 -- tools/data/class_<class>.tsv, one line per talent or trainer spell:
---   source  tree  spellID  name  rank  level  active  cooldown  description
+--   source  tree  spellID  name  rank  level  active  cooldown  description  cost
+-- (cost: a trainer spell's training cost in copper)
 -- source is "talent" or "trainer"; tree is the talent tree by position (1, 2,
 -- 3 from left to right); trainer lines carry the required level. The
 -- generator takes talent IDs from here (some aren't in the scans).
@@ -32,10 +33,11 @@ for class, d in pairs(all) do
         tostring(d.trainerNPC), tostring(d.trainerMaxLevel)))
     for _, t in ipairs(d.talents or {}) do
         out:write(table.concat({ "talent", tree(t.x), t.spellID, t.name or "", "", "", t.passive and "passive" or "active",
-            t.cooldown and tostring(t.cooldown) or "", flat(t.description) }, "\t"), "\n")
+            t.cooldown and tostring(t.cooldown) or "", flat(t.description), "" }, "\t"), "\n")
     end
     for _, s in ipairs(d.trainer or {}) do
-        out:write(table.concat({ "trainer", "", "", s.name or "", s.rank or "", tostring(s.level or ""), "", "", flat(s.description) }, "\t"), "\n")
+        out:write(table.concat({ "trainer", "", "", s.name or "", s.rank or "", tostring(s.level or ""), "", "", flat(s.description),
+            s.cost and tostring(s.cost) or "" }, "\t"), "\n")
     end
     out:close()
     print(("%s: %d talents, %d trainer spells -> %s"):format(class, #(d.talents or {}), #(d.trainer or {}), path))

@@ -48,7 +48,12 @@ local M = SuuUI.RegisterModule({
         healthText = "percent",
         nameColor = "game",
         showMeta = true,
+        raidMarkers = true,
         comboPoints = true,
+        -- the player and target frames' size (the others keep their tokens);
+        -- the defaults are the design's bar-lg and unit-lg
+        width = UI.Size("bar-lg"),
+        height = UI.Size("unit-lg"),
         debuffBadges = "all",   -- your frame: "all" debuff types, "removable", "off"
     },
 })
@@ -241,11 +246,22 @@ function M:ApplyOptions()
         f.opts.power = (f.opts.size ~= "sm") and self:Get("showPower")
         f.opts.healthText = self:Get("healthText")
         f.opts.nameColor = self:Get("nameColor")
+        f.opts.raidMarker = self:Get("raidMarkers")
         if f.metaKind == "level" then f.opts.meta = self:Get("showMeta") end
         if f.active then f:Refresh() end
     end
     self.combo:Update()
     self:UpdateFade()
+end
+
+-- The player and target frames' size, out of combat (secure buttons). The
+-- combo points, auras and edit-mode outlines hang off the frames and follow.
+function M:ApplySize()
+    self:RunOutOfCombat("size", function()
+        local w, h = self:Get("width"), self:Get("height")
+        for _, key in ipairs({ "player", "target" }) do self.frames[key]:Resize(w, h) end
+        SuuUI.EditMode.Refresh()
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -262,9 +278,11 @@ local SECTION = {
             { key = "showPet", label = "Pet", control = "toggle", combat = true, description = "Under the player frame, with its focus or mana." },
             { key = "showBoss", label = "Boss frames", control = "toggle", combat = true, description = "Top right, left of the tracker, one per boss." },
         } },
-        { title = "Every frame", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
-            { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
-              description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover." },
+        { title = "Size", description = "The player and target frames; the others keep theirs.", rows = {
+            { key = "width", label = "Width", control = "slider", min = 200, max = 400, step = 2, unit = "px", live = false, combat = true },
+            { key = "height", label = "Height", control = "slider", min = 24, max = 48, step = 1, unit = "px", live = false, combat = true },
+        } },
+        { title = "Bars and text", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
             { key = "showPower", label = "Power line", control = "toggle",
               description = "Mana, rage, energy or focus along the bottom of each bar. Low mana turns it amber." },
             { key = "healthText", label = "Health text", control = "segmented",
@@ -276,13 +294,13 @@ local SECTION = {
               description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
             { key = "showMeta", label = "Level and classification", control = "toggle",
               description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
+            { key = "raidMarkers", label = "Raid markers", control = "toggle",
+              description = "A skull, cross or other raid marker over the top edge of the frame, in combat too." },
         } },
-        { title = "Debuffs on you", rows = {
+        { title = "Your frame", rows = {
             { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
               description = "Magic, Curse, Poison, Disease on your frame as a badge and border, in combat too." },
-        } },
-        { title = "Combo points", rows = {
             { key = "comboPoints", label = "Combo points", control = "toggle",
               description = "Five diamonds over the target frame; all arcane at five.",
               disabled = function()
@@ -290,6 +308,10 @@ local SECTION = {
                   if class ~= "ROGUE" and class ~= "DRUID" then return true, "Only rogues and druids use combo points." end
                   return false
               end },
+        } },
+        { title = "Behaviour", rows = {
+            { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
+              description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover." },
         } },
     },
 }
@@ -345,6 +367,7 @@ function M:OnEnable()
     self.bossHolder.suuManagedShow = true
     self:RegisterSettings(SECTION)
     self:UpdateVisibility()
+    self:ApplySize()
     self:ApplyOptions()
 
     local player = self.frames.player
@@ -364,13 +387,14 @@ function M:OnEnable()
     self:OnUnitEvent("UNIT_DISPLAYPOWER", "player", function() self.combo:Update() end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self.combo:Update() end)
 
-    for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "comboPoints" }) do
+    for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "raidMarkers", "comboPoints" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
     for _, key in ipairs({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",
                            "focusPosition", "petPosition", "bossPosition" }) do
         self:Watch(key, function() self:UpdateVisibility() end)
     end
+    for _, key in ipairs({ "width", "height" }) do self:Watch(key, function() self:ApplySize() end) end
     self:UpdateThreat()
     self:RunOutOfCombat("debuffBadges", function() self.frames.player:SetDispelBadges(self:Get("debuffBadges")) end)
     self:Watch("debuffBadges", function()
