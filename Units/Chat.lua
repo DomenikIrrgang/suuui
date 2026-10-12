@@ -1,13 +1,19 @@
 -- Units/Chat.lua
--- Chat, the skin (step 2.2a; the line layer, 2.2b, comes next). Blizzard's
--- chat keeps doing all the work: its message frames (filters, links, secret
--- payloads), the edit box and the dock. SuuUI strips their art and draws the
--- design around them: a glass panel `chat-w` wide at the bottom left, the
--- tabs (SuuUI's labels over Blizzard's invisible tabs, which keep clicks,
--- drags and menus: the labels take no mouse), the input field behind
--- Blizzard's restyled edit box, and an idle fade (ground, border, tabs and
--- input go; the lines stay). A built-in module written against the public
--- API only.
+-- Chat (step 2.2): SuuUI's own chat display over Blizzard's chat.
+--
+-- Blizzard's chat keeps receiving and formatting every message (filters of
+-- other addons, links, secret payloads during encounters), but invisibly:
+-- its frames' text at alpha 0, their mouse, wheel and links off. Each finished
+-- line is copied (a post-hook on the window's AddMessage) into SuuUI's own
+-- ScrollingMessageFrame for that window, in SuuUI's panel: a glass panel
+-- `chat-w` wide at the bottom left, SuuUI's tabs (real buttons, in SuuUI's
+-- order: General, Global, then the rest, whispers last; each tab is one of
+-- Blizzard's windows, so its own chat settings decide what goes where), the
+-- input field behind Blizzard's restyled edit box (the input stays Blizzard's:
+-- the game blocks addon-sent chat in lockdown and secure slash commands), and
+-- an idle fade (ground, border, tabs and input go; the lines stay). Links in
+-- SuuUI's windows open with SetItemRef; shift-click inserts them. A built-in
+-- module written against the public API only.
 --
 -- Rules from EllesmereUIChat on this client (see IMPLEMENTATION_PLAN 2.2):
 -- no FCF_* hooks, no writes to the tab alpha globals, no hooks on edit box
@@ -105,12 +111,18 @@ function M:BuildPanel()
     p.field:SetHeight(INPUT_H)
     UI.Fill(p.field, "surface-sunk", "BACKGROUND"):SetAllPoints()
     UI.Border(p.field, "gilt-line")
-    -- the tab labels' holder: above the chat frames, no mouse
-    p.tabs = CreateFrame("Frame", nil, UIParent)
+    -- the tab bar: SuuUI's own tab buttons, above Blizzard's (invisible) dock
+    p.tabs = CreateFrame("Frame", nil, p)
     p.tabs:SetFrameStrata("MEDIUM")
-    p.tabs:SetAllPoints(p)
-    p.tabs:EnableMouse(false)
-    p.ghosts = {}
+    p.tabs:SetPoint("TOPLEFT", PAD_X, -PAD_TOP)
+    p.tabs:SetPoint("TOPRIGHT", -PAD_X, -PAD_TOP)
+    p.tabs:SetHeight(TABS_H)
+    p.tabButtons = {}
+    -- the lines' area: SuuUI's message frames, one per Blizzard window
+    p.log = CreateFrame("Frame", nil, p)
+    p.log:SetFrameStrata("LOW")
+    p.log:SetPoint("TOPLEFT", PAD_X, -(PAD_TOP + TABS_H + GAP))
+    p.log:SetPoint("BOTTOMRIGHT", -PAD_X, PAD_BOTTOM + INPUT_H + GAP)
     self.panel = p
 end
 
@@ -183,6 +195,17 @@ function M:SkinFrame(cf)
     end
     alphaOff(_G[name .. "ResizeButton"])
     self:ApplyFont(cf)
+    -- inert: its text invisible, no mouse, wheel or links (SuuUI's copy is the
+    -- one shown and clicked); chat frames can be protected in combat while a
+    -- whisper window exists: then again after combat
+    if cf.FontStringContainer then cf.FontStringContainer:SetAlpha(0) end
+    local ok = pcall(function()
+        cf:EnableMouse(false)
+        if cf.EnableMouseWheel then cf:EnableMouseWheel(false) end
+        if cf.SetHyperlinksEnabled then cf:SetHyperlinksEnabled(false) end
+    end)
+    if not ok then self.pendingSkin = true end
+    self:Mirror(cf)
     -- the edit box (temporary windows' too: restyled only, never hooked)
     local id = cf:GetID()
     local eb = _G[name .. "EditBox"]
@@ -214,18 +237,25 @@ function M:ApplyFont(cf)
     local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
     if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
     self.fontSizes = self.fontSizes or {}
-    if self.fontSizes[cf] == size then return end
+    if self.fontSizes[cf] == size then return false end
     self.fontSizes[cf] = size
     cf:SetFont(BODY_FONT, size, "")
     cf:SetShadowOffset(1, -1)
     cf:SetShadowColor(0, 0, 0, 0.8)
+    return true
 end
 
 function M:SkinAll()
     for _, cf in ipairs(chatFrames()) do self:SkinFrame(cf) end
-    -- the dock's tab strip invisible, its mouse left alone: Blizzard's tab
-    -- dragging (reordering, undocking) runs through it
-    if GeneralDockManager then GeneralDockManager:SetAlpha(0) end
+    -- Blizzard's tab strip: invisible and out of the mouse's way (SuuUI's own
+    -- tabs are the ones used)
+    if GeneralDockManager then
+        GeneralDockManager:SetAlpha(0)
+        for _, cf in ipairs(GENERAL_CHAT_DOCK and GENERAL_CHAT_DOCK.DOCKED_CHAT_FRAMES or {}) do
+            local tab = cf:GetName() and _G[cf:GetName() .. "Tab"]
+            if tab then pcall(tab.EnableMouse, tab, false) end
+        end
+    end
     for _, name in ipairs({ "QuickJoinToastButton", "ChatFrameMenuButton", "ChatFrameChannelButton",
                             "ChatFrameToggleVoiceDeafenButton", "ChatFrameToggleVoiceMuteButton" }) do
         alphaOff(_G[name])
@@ -233,67 +263,181 @@ function M:SkinAll()
 end
 
 --------------------------------------------------------------------------------
--- Tabs: SuuUI's labels over Blizzard's invisible docked tabs
+-- Mirrors: SuuUI's message frame for each Blizzard window
 --------------------------------------------------------------------------------
 
-local function ghost(p, i)
-    local g = p.ghosts[i]
-    if g then return g end
-    g = CreateFrame("Frame", nil, p.tabs)
-    g:EnableMouse(false)
-    -- inside its tab (Blizzard sizes tabs to its own, narrower font): the
-    -- header face at 12px, centred, cut with "…" when a name is longer
-    g.label = UI.Text(g, "header", "ink-muted")
-    g.label:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 12, "")
-    g.label:SetShadowed(true)
-    g.label:SetPoint("LEFT", 2, 0)
-    g.label:SetPoint("RIGHT", -2, 0)
-    g.label:SetJustifyH("CENTER")
-    g.label:SetWordWrap(false)
-    -- the active tab: a hairline fading at both ends, and a gilt diamond
-    -- (Blizzard's tabs reach into the lines' area: 4px up)
-    g.line = UI.Hairline(g, "gilt-line", "both")
-    g.line:SetPoint("BOTTOMLEFT", 0, 4)
-    g.line:SetPoint("BOTTOMRIGHT", 0, 4)
-    g.jewel = UI.Diamond(g, 5, "gilt")
-    g.jewel:SetPoint("CENTER", g, "BOTTOM", 0, 4)
-    -- unread: a small ink diamond before the label
-    g.unread = UI.Diamond(g, 4, "ink")
-    g.unread:SetPoint("CENTER", g, "LEFT", 2, 0)
-    p.ghosts[i] = g
-    return g
+local MAX_LINES = 500
+
+local function linkClick(frame, link, text, button)
+    if isSecret(link) then return end
+    pcall(SetItemRef, link, text, button, frame)
+end
+
+local function linkEnter(frame, link)
+    if isSecret(link) or type(link) ~= "string" then return end
+    local kind = link:match("^(%a+):")
+    if kind == "item" or kind == "spell" or kind == "achievement" or kind == "quest" or kind == "currency" then
+        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
+        pcall(GameTooltip.SetHyperlink, GameTooltip, link)
+        GameTooltip:Show()
+    end
+end
+
+function M:MirrorFrame(cf)
+    local m = CreateFrame("ScrollingMessageFrame", nil, self.panel.log)
+    m:SetAllPoints()
+    m:SetJustifyH("LEFT")
+    m:SetFading(false)
+    m:SetMaxLines(MAX_LINES)
+    m:SetIndentedWordWrap(true)
+    m:SetHyperlinksEnabled(true)
+    m:EnableMouseWheel(true)
+    m:SetScript("OnMouseWheel", function(self, delta)
+        if IsShiftKeyDown() then
+            if delta > 0 then self:ScrollToTop() else self:ScrollToBottom() end
+        elseif delta > 0 then self:ScrollUp() else self:ScrollDown() end
+    end)
+    m:SetScript("OnHyperlinkClick", linkClick)
+    m:SetScript("OnHyperlinkEnter", linkEnter)
+    m:SetScript("OnHyperlinkLeave", function() GameTooltip:Hide() end)
+    m:Hide()
+    return m
+end
+
+-- Every line Blizzard adds to the window, copied (a secret one whole), and
+-- what it already holds.
+function M:Mirror(cf)
+    self.mirrors = self.mirrors or {}
+    if self.mirrors[cf] then return end
+    local m = self:MirrorFrame(cf)
+    self.mirrors[cf] = m
+    self:ApplyMirrorFont(cf)
+    local n = cf.GetNumMessages and cf:GetNumMessages() or 0
+    for i = 1, n do
+        local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
+        if ok and text ~= nil then m:AddMessage(text, r, g, b) end
+    end
+    -- the combat log clears and refills its window on a filter change
+    hooksecurefunc(cf, "Clear", function() m:Clear() end)
+    hooksecurefunc(cf, "AddMessage", function(_, text, r, g, b)
+        if text == nil then return end
+        m:AddMessage(text, r, g, b)
+        if m ~= self.activeMirror and cf ~= ChatFrame2 then
+            self.unread = self.unread or {}
+            self.unread[cf] = true
+        end
+    end)
+end
+
+function M:ApplyMirrorFont(cf)
+    local m = self.mirrors and self.mirrors[cf]
+    if not m then return end
+    local id = cf:GetID()
+    local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
+    if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
+    m:SetFont(BODY_FONT, size, "")
+    m:SetShadowOffset(1, -1)
+    m:SetShadowColor(0, 0, 0, 0.8)
+end
+
+--------------------------------------------------------------------------------
+-- Tabs: SuuUI's own buttons, one per Blizzard window, in SuuUI's order
+--------------------------------------------------------------------------------
+
+-- The windows as tabs: docked ones (General first, Global second, the rest in
+-- the dock's order), then whisper windows.
+function M:Windows()
+    local out, seen = {}, {}
+    local function add(cf)
+        if cf and not seen[cf] then seen[cf] = true; out[#out + 1] = cf end
+    end
+    local docked = GENERAL_CHAT_DOCK and GENERAL_CHAT_DOCK.DOCKED_CHAT_FRAMES or { ChatFrame1 }
+    local function named(wanted)
+        for _, cf in ipairs(docked) do
+            local name = GetChatWindowInfo(cf:GetID())
+            if type(name) == "string" and not isSecret(name) and name:lower() == wanted then return cf end
+        end
+    end
+    add(ChatFrame1)
+    add(named("global"))
+    for _, cf in ipairs(docked) do if not cf.isTemporary then add(cf) end end
+    for _, cf in ipairs(docked) do add(cf) end
+    return out
+end
+
+local function tabButton(m, i)
+    local p = m.panel
+    local b = p.tabButtons[i]
+    if b then return b end
+    b = CreateFrame("Button", nil, p.tabs)
+    b:SetHeight(TABS_H)
+    b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    b.label = UI.Text(b, "header", "ink-muted")
+    b.label:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 12, "")
+    b.label:SetShadowed(true)
+    b.label:SetPoint("LEFT", 0, 1)
+    b.label:SetWordWrap(false)
+    b.line = UI.Hairline(b, "gilt-line", "both")
+    b.line:SetPoint("BOTTOMLEFT", 0, 2)
+    b.line:SetPoint("BOTTOMRIGHT", 0, 2)
+    b.jewel = UI.Diamond(b, 5, "gilt")
+    b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 2)
+    b.unread = UI.Diamond(b, 4, "ink")
+    b.unread:SetPoint("LEFT", b.label, "RIGHT", S["space-2"], 1)
+    b:SetScript("OnEnter", function(self) if not self.active then self.label:SetColor("ink") end end)
+    b:SetScript("OnLeave", function(self) if not self.active then self.label:SetColor("ink-muted") end end)
+    b:SetScript("OnClick", function(self) m:Select(self.cf) end)
+    p.tabButtons[i] = b
+    return b
+end
+
+function M:Select(cf)
+    self.selected = cf
+    if self.unread then self.unread[cf] = nil end
+    for frame, mirror in pairs(self.mirrors or {}) do
+        mirror:SetShown(frame == cf)
+        if frame == cf then self.activeMirror = mirror end
+    end
+    self:UpdateTabs()
 end
 
 function M:UpdateTabs()
     local p = self.panel
-    local dock = GENERAL_CHAT_DOCK
-    local frames = dock and dock.DOCKED_CHAT_FRAMES or { ChatFrame1 }
-    local selected = dock and FCFDock_GetSelectedWindow and FCFDock_GetSelectedWindow(dock)
-    local n = 0
-    for _, cf in ipairs(frames) do
-        local tab = cf and cf:GetName() and _G[cf:GetName() .. "Tab"]
-        if tab and tab:IsShown() then
-            n = n + 1
-            local g = ghost(p, n)
-            g:ClearAllPoints()
-            g:SetAllPoints(tab)
-            local text = tab.GetText and tab:GetText()
-            g.label:SetText(text or "")
-            local active = cf == selected
-            g.label:SetColor(active and "gilt-text" or "ink-muted")
-            g.line:SetShown(active)
-            g.jewel:SetShown(active)
-            local alerting = false
-            local reader = ChatFrameUtil and ChatFrameUtil.IsTabAlerting
-            if reader then
-                local ok, a = pcall(reader, tab)
-                alerting = ok and not isSecret(a) and a and true or false
-            end
-            g.unread:SetShown(alerting and not active)
-            g:Show()
-        end
+    local windows = self:Windows()
+    if not self.selected or not tContains(windows, self.selected) then
+        self.selected = nil
+        self:Select(ChatFrame1)
+        return
     end
-    for i = n + 1, #p.ghosts do p.ghosts[i]:Hide() end
+    -- its mirror may have come after the choice
+    local mirror = self.mirrors and self.mirrors[self.selected]
+    if mirror and not mirror:IsShown() then self:Select(self.selected) return end
+    local x = 0
+    for i, cf in ipairs(windows) do
+        local b = tabButton(self, i)
+        b.cf = cf
+        local name = GetChatWindowInfo(cf:GetID())
+        if cf.isTemporary and cf.chatTarget then name = cf.chatTarget end
+        b.label:SetText(name or "")
+        b.label.value = nil
+        local w = 60
+        if not isSecret(name) and type(name) == "string" then
+            w = math.min(140, math.ceil(UI.MeasureText("header", name)) + 2)
+        end
+        b.label:SetWidth(w)
+        local active = cf == self.selected
+        b.active = active
+        b.label:SetColor(active and "gilt-text" or "ink-muted")
+        b.line:SetShown(active)
+        b.jewel:SetShown(active)
+        b.unread:SetShown(not active and self.unread and self.unread[cf] or false)
+        b:SetWidth(w + 8)
+        b:ClearAllPoints()
+        b:SetPoint("BOTTOMLEFT", p.tabs, "BOTTOMLEFT", x, 0)
+        b:Show()
+        x = x + w + 8 + S["space-5"]
+    end
+    for i = #windows + 1, #p.tabButtons do p.tabButtons[i]:Hide() end
 end
 
 --------------------------------------------------------------------------------
@@ -333,7 +477,9 @@ function M:Tick()
         self:SkinAll()
     end
     -- the window's own font size may have changed in its menu
-    for _, cf in ipairs(frames) do self:ApplyFont(cf) end
+    for _, cf in ipairs(frames) do
+        if self:ApplyFont(cf) then self:ApplyMirrorFont(cf) end
+    end
     self:UpdateTabs()
     local awake = true
     if self:Get("fadeIdle") then
@@ -517,6 +663,7 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.pendingPlace then self:PlaceChat() end
+        if self.pendingSkin then self.pendingSkin = nil; self:SkinAll() end
         self:ApplyGlobalTab()
     end)
     -- the channels settle a moment after login; joins and leaves later
