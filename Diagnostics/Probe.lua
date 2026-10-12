@@ -730,6 +730,10 @@ function ns.Probe.Command(arg)
         ns.PlateProbe.Command(rest)
         return
     end
+    if sub == "meter" then
+        ns.MeterProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
