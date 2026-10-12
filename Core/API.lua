@@ -198,6 +198,9 @@ function API.CooldownPresets() return ns.CooldownPresets or {} end
 -- 0.9: every talent of a class (all nine classes', generated from the class
 -- data): { { id = spellID, name, tree = 1-3 }, ... }, nil for an unknown class
 function API.ClassTalents(class) return ns.ClassTalents and ns.ClassTalents[class] end
+-- 0.9: every aura any class's presets track: { [name] = { classes = "Priest",
+-- ids = { ... } } } (Data/AuraCatalog.lua, generated)
+function API.AuraCatalog() return ns.AuraCatalog or {} end
 API.UI.SetActionTextSize = UI.SetActionTextSize -- px, never below micro (9.5)
 API.UI.SetVisibility = UI.SetVisibility -- "always" | "combat" | "mouseover" | "hidden"
 API.UI.VISIBILITY_OPTIONS = UI.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"

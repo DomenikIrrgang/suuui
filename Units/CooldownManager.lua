@@ -818,6 +818,10 @@ end
 -- Returns spells by name (shared slots' members and what collections hold
 -- included), and the presets' shared slots by name with the list each came
 -- from.
+-- Auras other classes' presets track ("+ Add" notes their class): name ->
+-- "Priest", filled by candidates("aura").
+local auraClassNote = {}
+
 local function candidates(kind)
     local byName, groups = {}, {}
     local function add(name, ids)
@@ -838,6 +842,15 @@ local function candidates(kind)
                     add(e.name, e.ids)
                 end
             end)
+        end
+    end
+    -- every class's preset auras too (a paladin tracking Power Word: Shield)
+    if kind ~= "cooldown" and SuuUI.AuraCatalog then
+        for name, a in pairs(SuuUI.AuraCatalog()) do
+            if not byName[name] then
+                add(name, a.ids)
+                auraClassNote[name] = a.classes
+            end
         end
     end
     if kind == "cooldown" then
@@ -1518,7 +1531,8 @@ local function buildEditor(parent)
         local options = {}
         for name in pairs(byName) do
             if not present[name] and not taken[name] then
-                options[#options + 1] = { value = name, label = name, icon = idsArt(byName[name]) }
+                options[#options + 1] = { value = name, label = name, icon = idsArt(byName[name]),
+                    note = kind ~= "cooldown" and auraClassNote[name] or nil }
             end
         end
         for name, g in pairs(slots and groups or {}) do
