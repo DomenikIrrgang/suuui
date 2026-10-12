@@ -173,7 +173,10 @@ function M:ItemButton(i)
     b:RegisterForClicks("AnyDown", "AnyUp")
     b:SetAttribute("type", "item")
     b:SetHotkey("")
+    -- an item, not an action slot: the button would draw itself empty
+    -- (an empty slot hides its face)
     b.hasAction = true
+    b:UpdateEmpty()
     b.UpdateCooldown = itemCooldown
     b.ShowTooltip = function(self)
         if self.logIndex and GameTooltip.SetQuestLogSpecialItem then

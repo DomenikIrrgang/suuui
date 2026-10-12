@@ -247,8 +247,9 @@ function Tracker:QuestTop(questID)
     local top = self.tops and self.tops[questID]
     if not top then return nil end
     top = top - (self.scroll or 0)
-    -- the item beside the title (2px over it, its own height) out of the window
-    if top - 2 < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
+    -- the title scrolled out of the window (its item, 24px from 2px over the
+    -- title, would hang past the window's bottom)
+    if top < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
     return HEAD_H + S["space-4"] + top
 end
 
