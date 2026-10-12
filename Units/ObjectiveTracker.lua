@@ -1,7 +1,9 @@
 -- Units/ObjectiveTracker.lua
 -- The objective tracker (step 2.3): your tracked quests on the world under
 -- the minimap, top right (28px in, 300px down, under its clock), 260px wide. Titles in their
--- difficulty colour (the game's own: GetQuestDifficultyColor), objectives
+-- difficulty colour (the game's own: GetQuestDifficultyColor), grouped by
+-- their quest log zone (the zone you're in first, then the nearest, sorted
+-- again every 10 seconds out of combat and on zone changes), objectives
 -- with their counts, "Ready to turn in" once a quest is done; the mouse
 -- wheel scrolls what doesn't fit the height (not in combat while quest
 -- items show: their secure buttons can't move then). Blizzard's tracker is hidden
@@ -116,18 +118,84 @@ local function questOf(questID)
     return q
 end
 
+-- The quest log's heading over a quest (its zone, or a group such as a
+-- class or "Dungeon").
+local function zoneOf(questID, logIndex)
+    local header = C_QuestLog.GetHeaderIndexForQuest and C_QuestLog.GetHeaderIndexForQuest(questID)
+    if not (plain(header) and header) then
+        -- walk up the log to the heading above
+        for i = logIndex - 1, 1, -1 do
+            local info = C_QuestLog.GetInfo(i)
+            if type(info) == "table" and info.isHeader then header = i break end
+        end
+    end
+    local info = header and C_QuestLog.GetInfo(header)
+    return type(info) == "table" and plain(info.title) and info.title or nil
+end
+
+-- How far a quest is (squared), when it's on your continent; nil otherwise.
+local function distanceOf(questID)
+    if not C_QuestLog.GetDistanceSqToQuest then return nil end
+    local ok, d, onContinent = pcall(C_QuestLog.GetDistanceSqToQuest, questID)
+    if ok and plain(d) and d and plain(onContinent) and onContinent then return d end
+    return nil
+end
+
+-- The zone you're in, by both names the game uses.
+local function hereNames()
+    local here = {}
+    for _, name in ipairs({ GetRealZoneText and GetRealZoneText(), GetZoneText and GetZoneText() }) do
+        if plain(name) and name ~= "" then here[name] = true end
+    end
+    local map = C_Map.GetBestMapForUnit("player")
+    local info = plain(map) and map and C_Map.GetMapInfo(map)
+    if info and plain(info.name) then here[info.name] = true end
+    return here
+end
+
+-- Your tracked quests by zone: the zone you're in first, then the zones by
+-- their nearest quest, then the rest (another continent, nothing to point
+-- at) in quest log order; inside a zone the nearest first.
 function M:TrackedQuests()
-    local out = {}
+    local list = {}
     local n = C_QuestLog.GetNumQuestWatches()
-    if not plain(n) then return out end
+    if not plain(n) then return list end
     for i = 1, n do
         local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
         if plain(id) and id then
             local q = questOf(id)
-            if q then out[#out + 1] = q end
+            if q then
+                q.zone = zoneOf(id, q.logIndex)
+                q.distance = distanceOf(id)
+                list[#list + 1] = q
+            end
         end
     end
-    return out
+    local here = hereNames()
+    local zones = {}
+    for _, q in ipairs(list) do
+        local key = q.zone or ""
+        local z = zones[key]
+        if not z then
+            z = { here = here[key] and true or false, first = q.logIndex }
+            zones[key] = z
+        end
+        if q.distance and (not z.nearest or q.distance < z.nearest) then z.nearest = q.distance end
+        if q.logIndex < z.first then z.first = q.logIndex end
+    end
+    table.sort(list, function(a, b)
+        local za, zb = zones[a.zone or ""], zones[b.zone or ""]
+        if za ~= zb then
+            if za.here ~= zb.here then return za.here end
+            local da, db = za.nearest or math.huge, zb.nearest or math.huge
+            if da ~= db then return da < db end
+            return za.first < zb.first
+        end
+        local da, db = a.distance or math.huge, b.distance or math.huge
+        if da ~= db then return da < db end
+        return a.logIndex < b.logIndex
+    end)
+    return list
 end
 
 --------------------------------------------------------------------------------
@@ -380,12 +448,12 @@ end
 --------------------------------------------------------------------------------
 
 local PREVIEW_QUESTS = {
-    { questID = 1, title = "The Ashmaw Den", difficulty = "difficult", objectives = {
+    { questID = 1, zone = "Duskwater Hollow", title = "The Ashmaw Den", difficulty = "difficult", objectives = {
         { text = "Ashmaw Ravager slain", progress = "3/8" },
         { text = "Ember Pelt", progress = "5/5", done = true },
     }, item = { preview = true, icon = 134075 } },
-    { questID = 2, title = "Letters for the Crossroads", difficulty = "standard", complete = true },
-    { questID = 3, title = "Speargrass Cuttings", difficulty = "trivial", objectives = {
+    { questID = 2, zone = "Duskwater Hollow", title = "Letters for the Crossroads", difficulty = "standard", complete = true },
+    { questID = 3, zone = "Durotar", title = "Speargrass Cuttings", difficulty = "trivial", objectives = {
         { text = "Handful of Cattails", progress = "0/2" },
         { text = "Speargrass Cuttings", progress = "1/4" },
     } },
@@ -439,8 +507,16 @@ function M:OnEnable()
             if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
         end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
-        local wait = 0
+        local wait, resort = 0, 10
         self.frame:SetScript("OnUpdate", function(_, elapsed)
+            -- as you move, the nearest quests come up (not in combat: the
+            -- list holds still then)
+            resort = resort - elapsed
+            if resort <= 0 then
+                resort = 10
+                -- (nor while you're reading it with the mouse on it)
+                if not InCombatLockdown() and not self.tracker:IsMouseOver() then self:QueueRefresh() end
+            end
             wait = wait - elapsed
             if wait > 0 then return end
             wait = 0.25
@@ -469,13 +545,9 @@ function M:OnEnable()
                          "PLAYER_ENTERING_WORLD", "BAG_UPDATE_COOLDOWN" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
     end
-    -- nearest first, as Blizzard's tracker sorts them (its own is off now)
-    for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function()
-                if C_QuestLog.SortQuestWatches then pcall(C_QuestLog.SortQuestWatches) end
-            end)
-        end
+    -- a new zone: sorted again (the zone you're in goes first)
+    for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_POI_UPDATE" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
     end
     -- a boss fight without a boss unit: the tracker (not its items) collapses
     for _, e in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END" }) do

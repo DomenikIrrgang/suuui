@@ -8,7 +8,7 @@
 -- arcane check and "Ready to turn in" once every objective is done.
 --
 --   local t = UI.ObjectiveTracker(parent, { width = 260, maxHeight = 440 })
---   t:SetQuests(quests, freeze)   -- { questID, title, difficulty, complete,
+--   t:SetQuests(quests, freeze)   -- { questID, zone, title, difficulty, complete,
 --                                 --   failed, turnIn, objectives = { { text,
 --                                 --   progress, done } }, item }
 --   t:SetCollapsed(on)            -- only the head
@@ -21,6 +21,8 @@
 --   opts.toggle: the owner's own (secure) toggle button, drawn here, placed
 --   by the owner over the head's left end (HEAD_H square at the top left)
 --
+-- Quests with a `zone` get its heading (caption, gilt-text, a fading rule)
+-- wherever the zone changes; give them grouped.
 -- `freeze` (in combat, when quest items are beside the titles): the quests
 -- keep their places and a quest's height only grows, so a secure item
 -- button set beside a title before combat stays beside it. New quests go
@@ -147,40 +149,92 @@ function Tracker:DrawQuest(r, q)
     return y
 end
 
+-- A zone's heading over its quests: caption in gilt-text, a gilt-line
+-- hairline fading out after it.
+local function zoneRow(t)
+    local z = CreateFrame("Frame", nil, t.list)
+    z:SetHeight(LINE_H)
+    z.text = UI.Text(z, "caption", "gilt-text")
+    z.text:SetShadowed(true)
+    z.text:SetPoint("LEFT")
+    z.rule = UI.Hairline(z, "gilt-line", "out")
+    z.rule:SetPoint("LEFT", z.text, "RIGHT", S["space-3"], 0)
+    z.rule:SetPoint("RIGHT")
+    return z
+end
+
+-- The list's entries: a zone heading wherever the zone changes (quests
+-- carry `zone`; none: no headings), then its quests.
+local function entriesOf(quests)
+    local entries, last = {}, nil
+    for _, q in ipairs(quests) do
+        if q.zone and q.zone ~= last then
+            entries[#entries + 1] = { zone = q.zone }
+            last = q.zone
+        end
+        entries[#entries + 1] = { id = q.questID, zone = q.zone }
+    end
+    return entries
+end
+
 function Tracker:SetQuests(quests, freeze)
     quests = quests or {}
     local byID = {}
     for _, q in ipairs(quests) do byID[q.questID] = q end
-    -- the order: as given, or (frozen) the last one's with new quests after
-    local order = {}
-    if freeze and self.order then
-        local seen = {}
-        for _, id in ipairs(self.order) do order[#order + 1] = id; seen[id] = true end
-        for _, q in ipairs(quests) do if not seen[q.questID] then order[#order + 1] = q.questID end end
+    -- the entries: as given, or (frozen) the last ones with new quests after
+    local entries
+    if freeze and self.entries then
+        entries = {}
+        local seen, last = {}, nil
+        for _, e in ipairs(self.entries) do
+            entries[#entries + 1] = e
+            if e.id then seen[e.id] = true end
+            last = e.zone
+        end
+        for _, q in ipairs(quests) do
+            if not seen[q.questID] then
+                if q.zone and q.zone ~= last then entries[#entries + 1] = { zone = q.zone }; last = q.zone end
+                entries[#entries + 1] = { id = q.questID, zone = q.zone }
+            end
+        end
     else
-        for _, q in ipairs(quests) do order[#order + 1] = q.questID end
+        entries = entriesOf(quests)
         self.heights = {}
     end
-    self.order = order
+    self.entries = entries
     for _, r in ipairs(self.rows) do r.inUse = false end
-    self.tops, self.rowOf = {}, {}
-    local y, shown = 0, 0
-    for i, id in ipairs(order) do
-        local q = byID[id]
-        local r = self.rows[i] or questRow(self)
-        self.rows[i] = r
-        local h = q and self:DrawQuest(r, q) or 0
-        if freeze then h = math.max(h, self.heights[id] or 0) end
-        y = y + ((shown > 0) and S["space-4"] or 0)
-        self.heights[id] = h
-        self.tops[id] = y
-        if q then
-            r.top, r.height, r.inUse = y, h, true
-            r:SetSize(self.width, h)
-            self.rowOf[id] = r
+    for _, z in ipairs(self.zoneRows) do z.inUse = false end
+    self.tops = {}
+    local y, prev = 0, nil
+    local nQuest, nZone = 0, 0
+    for _, e in ipairs(entries) do
+        if e.id then
+            nQuest = nQuest + 1
+            local r = self.rows[nQuest] or questRow(self)
+            self.rows[nQuest] = r
+            local q = byID[e.id]
+            local h = q and self:DrawQuest(r, q) or 0
+            if freeze then h = math.max(h, self.heights[e.id] or 0) end
+            -- space-4 between quests, space-2 under a zone's heading
+            if prev == "quest" then y = y + S["space-4"] elseif prev == "zone" then y = y + S["space-2"] end
+            self.heights[e.id] = h
+            self.tops[e.id] = y
+            r.top, r.height, r.inUse = y, h, q ~= nil
+            r:SetSize(self.width, math.max(1, h))
+            y = y + h
+            prev = "quest"
+        else
+            nZone = nZone + 1
+            local z = self.zoneRows[nZone] or zoneRow(self)
+            self.zoneRows[nZone] = z
+            -- space-5 over a zone's heading after the one before
+            if prev then y = y + S["space-5"] end
+            z.text:SetValue(e.zone)
+            z:SetWidth(self.width)
+            z.top, z.height, z.inUse = y, LINE_H, true
+            y = y + LINE_H
+            prev = "zone"
         end
-        y = y + h
-        shown = shown + 1
     end
     self.listHeight = y
     self.list:SetHeight(math.max(1, y))
@@ -220,14 +274,16 @@ function Tracker:ApplyScroll()
     local max = math.max(0, (self.listHeight or 0) - view)
     self.scroll = math.max(0, math.min(max, self.scroll or 0))
     local scroll = self.scroll
-    for _, r in ipairs(self.rows) do
-        local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
-        if visible then
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
-            r:Show()
-        else
-            r:Hide()
+    for _, pool in ipairs({ self.rows, self.zoneRows }) do
+        for _, r in ipairs(pool) do
+            local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
+            if visible then
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
+                r:Show()
+            else
+                r:Hide()
+            end
         end
     end
     if max > 0 then
@@ -307,6 +363,7 @@ function UI.ObjectiveTracker(parent, opts)
     t.maxHeight = opts.maxHeight
     t:SetSize(t.width, HEAD_H)
     t.rows = {}
+    t.zoneRows = {}
     t.heights = {}
 
     t.head = CreateFrame("Frame", nil, t)
