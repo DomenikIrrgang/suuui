@@ -134,14 +134,22 @@ function CD.ReadTrainer()
     local spells, maxLevel = {}, 0
     local n = call(GetNumTrainerServices) or 0
     for i = 1, n do
-        local name, rank, kind = call(GetTrainerServiceInfo, i)
+        -- this client answers name, availability, icon (no rank); older ones
+        -- name, rank, availability
+        local name, a, b = call(GetTrainerServiceInfo, i)
+        local rank, kind, icon
+        if a == "available" or a == "unavailable" or a == "used" or a == "header" then
+            kind, icon = a, b
+        else
+            rank, kind = a, b
+        end
         if name and kind ~= "header" then
             local level = GetTrainerServiceLevelReq and call(GetTrainerServiceLevelReq, i) or nil
             if type(level) == "number" and level > maxLevel then maxLevel = level end
             local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i) or nil
             local desc = GetTrainerServiceDescription and call(GetTrainerServiceDescription, i) or nil
             local cost = GetTrainerServiceCost and call(GetTrainerServiceCost, i) or nil
-            spells[#spells + 1] = { name = name, rank = rank ~= "" and rank or nil, kind = kind, level = level, link = link,
+            spells[#spells + 1] = { name = name, rank = rank ~= "" and rank or nil, kind = kind, icon = icon, level = level, link = link,
                 skill = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i) or nil,
                 description = type(desc) == "string" and not isSecret(desc) and desc ~= "" and desc or nil,
                 cost = type(cost) == "number" and not isSecret(cost) and cost or nil }
