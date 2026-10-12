@@ -38,11 +38,14 @@ local PAD_X, PAD_TOP, PAD_BOTTOM = S["space-5"], S["space-2"], S["space-5"]
 local TABS_H, INPUT_H, GAP = 24, 30, S["space-3"]
 local TICK = 0.2
 
--- chat messages that wake the panel
-local WAKE = { "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID",
-    "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_WHISPER",
-    "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM", "CHAT_MSG_CHANNEL",
-    "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }
+-- chat messages that wake the panel: to you and your group (public chat,
+-- Trade, say and yell, would keep it awake for good)
+local WAKE = { "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER",
+    "CHAT_MSG_RAID_WARNING", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM",
+    "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM", "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }
+
+local hidden = CreateFrame("Frame")
+hidden:Hide()
 
 local function chatFrames()
     local out = {}
@@ -156,8 +159,27 @@ function M:SkinFrame(cf)
     local buttons = _G[name .. "ButtonFrame"]
     alphaOff(buttons)
     emptyTextures(buttons)
-    alphaOff(cf.ScrollToBottomButton)
-    alphaOff(cf.ScrollBar)
+    -- Blizzard shows these again with its own fades: the scroll-to-bottom
+    -- button hides itself whenever shown; the scrollbar's steppers go to a
+    -- hidden frame, its track and thumb invisible (EllesmereUI's way)
+    local sb = cf.ScrollToBottomButton
+    if sb then
+        alphaOff(sb)
+        sb:Hide()
+        self.sbHooked = self.sbHooked or {}
+        if not self.sbHooked[sb] then
+            self.sbHooked[sb] = true
+            sb:HookScript("OnShow", sb.Hide)
+        end
+    end
+    local bar = cf.ScrollBar
+    if bar then
+        for _, key in ipairs({ "Back", "Forward" }) do
+            if bar[key] then bar[key]:SetParent(hidden) end
+        end
+        if bar.Track then alphaOff(bar.Track) end
+        alphaOff(bar)
+    end
     alphaOff(_G[name .. "ResizeButton"])
     self:ApplyFont(cf)
     -- the edit box (1-10 only: temporary ones are left alone)
@@ -220,11 +242,12 @@ local function ghost(p, i)
     g.label:SetPoint("CENTER", 0, 0)
     g.label:SetWordWrap(false)
     -- the active tab: a hairline fading at both ends, and a gilt diamond
+    -- (Blizzard's tabs reach into the lines' area: 4px up)
     g.line = UI.Hairline(g, "gilt-line", "both")
-    g.line:SetPoint("BOTTOMLEFT", 0, 0)
-    g.line:SetPoint("BOTTOMRIGHT", 0, 0)
+    g.line:SetPoint("BOTTOMLEFT", 0, 4)
+    g.line:SetPoint("BOTTOMRIGHT", 0, 4)
     g.jewel = UI.Diamond(g, 5, "gilt")
-    g.jewel:SetPoint("CENTER", g, "BOTTOM", 0, 0)
+    g.jewel:SetPoint("CENTER", g, "BOTTOM", 0, 4)
     -- unread: a small ink diamond before the label
     g.unread = UI.Diamond(g, 4, "ink")
     g.unread:SetPoint("RIGHT", g.label, "LEFT", -S["space-2"], 0)
