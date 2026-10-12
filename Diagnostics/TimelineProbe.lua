@@ -10,8 +10,10 @@
 --   /suu probe timeline        arm: samples now, 3 and 10 seconds into each
 --                              boss (ENCOUNTER_START) and fight, and when
 --                              timeline events arrive; /reload to save
---   /suu probe timeline demo   Blizzard's Edit Mode sample events, solo: adds
---                              them, samples a second later, removes them
+--   /suu probe timeline demo   solo: Blizzard's Edit Mode sample events and
+--                              one scripted event of SuuUI's own (adds them,
+--                              samples 1 and 4 seconds later, removes them),
+--                              plus every console variable about the timeline
 --   /suu probe timeline off    stop sampling
 
 local _, ns = ...
@@ -174,6 +176,25 @@ function TP.Sample(label)
     return s
 end
 
+-- Console variables whose name mentions the timeline or encounters.
+local function cvars()
+    local out = {}
+    if not (C_Console and C_Console.GetAllCommands) then return "no C_Console.GetAllCommands" end
+    local ok, all = pcall(C_Console.GetAllCommands)
+    if not ok or type(all) ~= "table" then return "error" end
+    for _, c in ipairs(all) do
+        local name = c.command
+        if type(name) == "string" then
+            local low = name:lower()
+            if low:find("timeline") or low:find("encounter") or low:find("bossmod") or low:find("raidwarn") then
+                local okV, v = pcall(C_CVar.GetCVar, name)
+                out[name] = okV and tostring(v) or "(command)"
+            end
+        end
+    end
+    return out
+end
+
 local function prepare()
     SuuUIProbe = SuuUIProbe or {}
     local store = SuuUIProbe.timeline or { samples = {} }
@@ -183,6 +204,7 @@ local function prepare()
     store.registeredEvents = watchEvents() or store.registeredEvents
     store.eventPayloads = eventPayloads
     store.blizzardAddon = C_AddOns.IsAddOnLoaded("Blizzard_EncounterTimeline") and "loaded" or "not loaded"
+    store.cvars = cvars()
     return store
 end
 
@@ -198,11 +220,16 @@ function TP.Command(arg)
         if not ET then ns.Print("Timeline probe: no C_EncounterTimeline.") return end
         TP.Sample("before the demo")
         SuuUIProbe.timeline.demoAdd = call(ET.AddEditModeEvents)
+        -- one event of our own: Shield Wall's spell and art, 10 seconds
+        local okS, id = pcall(ET.AddScriptEvent, { spellID = 871, iconFileID = 132362, duration = 10, overrideName = "SuuUI test" })
+        SuuUIProbe.timeline.scriptAdd = okS and shape(id) or ("error: " .. tostring(id))
+        local scriptID = okS and not isSecret(id) and id or nil
         C_Timer.After(1, function()
             TP.Sample("demo, 1s")
             C_Timer.After(3, function()
                 TP.Sample("demo, 4s")
                 SuuUIProbe.timeline.demoCancel = call(ET.CancelEditModeEvents)
+                if scriptID then SuuUIProbe.timeline.scriptCancel = call(ET.CancelScriptEvent, scriptID) end
                 ns.Print("Timeline probe: demo sampled. /reload to save.")
             end)
         end)
