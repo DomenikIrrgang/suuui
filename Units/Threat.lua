@@ -12,8 +12,10 @@
 --
 -- The warning: an amber alert "You're about to pull" while you're over the
 -- tank's threat but not yet holding the mob (status 1), with your threat drop
--- if it's ready; in a group, an ember "You have drawn aggro" once you hold it
--- (status 2-3) and aren't the tank. Both go when the reason does.
+-- if it's ready; an ember "You have drawn aggro" once you hold it (status
+-- 2-3) and aren't the tank: in a group, or (setting) while your pet is on the
+-- mob's threat table, so a hunter or warlock pulling off the pet hears it.
+-- Both go when the reason does.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -29,6 +31,7 @@ local M = SuuUI.RegisterModule({
         marker = "role",   -- "role" | "class" | "none"
         raw = false,
         warnPull = true,
+        aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
     },
 })
 
@@ -155,12 +158,19 @@ function M:MeterOpts(byState)
     return { show = self:Get("who"), marker = self:Get("marker"), raw = self:Get("raw"), byState = byState }
 end
 
-function M:Warn(rows)
-    if not self:Get("warnPull") then
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.HideAlert("threat-aggro")
-        return
+-- Whether the aggro alert applies: in a group, or with your pet on the mob.
+function M:AggroApplies(rows)
+    local mode = self:Get("aggroAlert")
+    if mode == "off" then return false end
+    if UI.Flag(IsInGroup()) then return true end
+    if mode ~= "pet" then return false end
+    for _, r in ipairs(rows) do
+        if r.unit == "pet" then return true end
     end
+    return false
+end
+
+function M:Warn(rows)
     local me
     for _, r in ipairs(rows) do if r.you then me = r end end
     local status = me and me.status
@@ -172,7 +182,7 @@ function M:Warn(rows)
     end
     local drop = readyDrop()
     local dropText = drop and (" · " .. drop .. " ready") or ""
-    if status == 1 then
+    if status == 1 and self:Get("warnPull") then
         SuuUI.HideAlert("threat-aggro")
         -- whoever holds the mob: the first other row at 2-3
         local holder
@@ -185,7 +195,7 @@ function M:Warn(rows)
         else
             SuuUI.ShowAlert("threat-pull", "warning", "You're about to pull", "%s%s", UnitName("target"), dropText)
         end
-    elseif status >= 2 and UI.Flag(IsInGroup()) then
+    elseif status >= 2 and self:AggroApplies(rows) then
         SuuUI.HideAlert("threat-pull")
         SuuUI.ShowAlert("threat-aggro", "danger", "You have drawn aggro", "%s%s", UnitName("target"), dropText)
     else
@@ -281,7 +291,10 @@ local SECTION = {
             { key = "raw", label = "Raw threat", control = "toggle", disabled = meterOff,
               description = "The threat number before the percent (not on bosses: the client hides it there)." },
             { key = "warnPull", label = "Warn me before I pull", control = "toggle",
-              description = "An alert as soon as you pass the tank's threat, and when you've drawn aggro in a group. Works on bosses: it needs only the threat state. Needs the Alerts module." },
+              description = "An alert as soon as you pass the tank's (or your pet's) threat. Works on bosses: it needs only the threat state. Needs the Alerts module." },
+            { key = "aggroAlert", label = "When I draw aggro", control = "segmented", stacked = true,
+              options = { { value = "off", label = "Off" }, { value = "group", label = "In a group" }, { value = "pet", label = "In a group or with my pet" } },
+              description = "An ember alert once a mob turns to you and you aren't the tank. With my pet: also solo, while your pet is on the mob (not when you open on it before your pet arrives)." },
         } },
     },
 }
@@ -309,7 +322,7 @@ function M:OnEnable()
     for _, key in ipairs({ "who", "marker", "raw" }) do
         self:Watch(key, function() self:RefreshPreview(); if self.driver:IsShown() then self:Update() end end)
     end
-    for _, key in ipairs({ "warnPull", "position" }) do
+    for _, key in ipairs({ "warnPull", "aggroAlert", "position" }) do
         self:Watch(key, function() if self.driver:IsShown() then self:Update() end end)
     end
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
