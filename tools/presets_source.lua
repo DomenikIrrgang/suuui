@@ -61,5 +61,10 @@
 
 local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 local out = {}
-for _, class in ipairs(CLASSES) do out[class] = dofile(("tools/presets/%s.lua"):format(class)) end
+-- a class file that doesn't load is reported and left out (the others still
+-- generate)
+for _, class in ipairs(CLASSES) do
+    local ok, presets = pcall(dofile, ("tools/presets/%s.lua"):format(class))
+    if ok then out[class] = presets else io.stderr:write(("presets of %s don't load: %s\n"):format(class, tostring(presets))) end
+end
 return out
