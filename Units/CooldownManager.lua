@@ -1979,12 +1979,25 @@ local function buildEditor(parent)
         function r:TalentOptions()
             local have, options = {}, {}
             for _, id in ipairs(self.cond and self.cond.talents or {}) do have[id] = true end
+            -- by tree, left to right, each under its spec's name (Data/Talents.lua;
+            -- else the tree's number), then by name
+            local list = {}
             for _, t in ipairs(classTalents(self.talentClass)) do
-                if not have[t.id] then
-                    -- the spec's name (Data/Talents.lua), else the tree's number
-                    local tree = t.spec or (t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree)))
-                    options[#options + 1] = { value = t.id, label = t.name, note = tree, icon = C_Spell.GetSpellTexture(t.id) }
+                if not have[t.id] then list[#list + 1] = t end
+            end
+            table.sort(list, function(x, y)
+                local a, b = tonumber(x.tree) or 9, tonumber(y.tree) or 9
+                if a ~= b then return a < b end
+                return x.name < y.name
+            end)
+            local heading
+            for _, t in ipairs(list) do
+                local tree = t.spec or (t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree))) or "Other"
+                if tree ~= heading then
+                    heading = tree
+                    options[#options + 1] = { heading = tree }
                 end
+                options[#options + 1] = { value = t.id, label = t.name, icon = C_Spell.GetSpellTexture(t.id) }
             end
             self.addTalent:SetOptions(options)
             self.addTalent:SetValue(nil)
