@@ -28,6 +28,7 @@ local M = SuuUI.RegisterModule({
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
         pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
+        source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
     },
 })
 
@@ -63,20 +64,118 @@ end
 
 local ACTIVE, PAUSED = 0, 1
 
--- Every event the game's timeline holds, as the component's list. One whose
--- time is secret can't be placed, so it's left out.
+--------------------------------------------------------------------------------
+-- Boss mods as a source: DBM's timer callbacks, BigWigs' bar messages. Only
+-- the ones loaded are offered; a source that's gone falls back to SuuUI.
+--------------------------------------------------------------------------------
+
+local function plain(v) return not isSecret(v) and type(v) == "string" and v ~= "" end
+local function iconOf(v)
+    if isSecret(v) then return nil end
+    return tonumber(v) or (type(v) == "string" and v ~= "" and v) or nil
+end
+-- a boss mod's own pull bar: SuuUI's countdown shows the pull already
+local function isPull(text) return plain(text) and text:lower():find("^pull") ~= nil end
+
+local SOURCES = {
+    dbm = { label = "DBM", loaded = function() return DBM and DBM.RegisterCallback and true or false end },
+    bigwigs = { label = "BigWigs", loaded = function() return BigWigsLoader and BigWigsLoader.RegisterMessage and true or false end },
+}
+
+function M:SourceOptions()
+    local opts = { { value = "suui", label = "SuuUI" } }
+    for _, key in ipairs({ "dbm", "bigwigs" }) do
+        if SOURCES[key].loaded() then opts[#opts + 1] = { value = key, label = SOURCES[key].label } end
+    end
+    return opts
+end
+
+-- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }
+function M:AddonTimer(source, id, text, seconds, icon, badge)
+    if self:Get("source") ~= source or not readable(seconds) or seconds <= 0 or isPull(text) then return end
+    self.addonTimers = self.addonTimers or {}
+    self.addonTimers[id] = { id = "addon:" .. tostring(id), label = plain(text) and text or "", icon = iconOf(icon),
+                             badge = badge, endsAt = GetTime() + seconds }
+    self:Refresh()
+end
+
+function M:AddonTimerStop(source, id)
+    if self:Get("source") ~= source or not self.addonTimers then return end
+    if id == nil then self.addonTimers = {} else self.addonTimers[id] = nil end
+    self:Refresh()
+end
+
+function M:AddonTimerPause(source, id, paused)
+    local t = self:Get("source") == source and self.addonTimers and self.addonTimers[id]
+    if not t then return end
+    if paused and t.endsAt then
+        t.paused, t.endsAt = math.max(0, t.endsAt - GetTime()), nil
+    elseif not paused and t.paused then
+        t.endsAt, t.paused = GetTime() + t.paused, nil
+    end
+    self:Refresh()
+end
+
+-- DBM's timer types (colorId): 4 interrupt, 5 role (tank).
+local DBM_BADGE = { [4] = { tone = "info", text = "Kick" }, [5] = { tone = "warning", text = "Tank" } }
+
+function M:HookSources()
+    if self.hooked then return end
+    self.hooked = true
+    if SOURCES.dbm.loaded() then
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerBegin", function(_, id, msg, timer, icon, _, _, colorId)
+            self:AddonTimer("dbm", id, msg, timer, icon, readable(colorId) and DBM_BADGE[colorId] or nil)
+        end)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerStop", function(_, id) self:AddonTimerStop("dbm", id) end)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerPause", function(_, id) self:AddonTimerPause("dbm", id, true) end)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerResume", function(_, id) self:AddonTimerPause("dbm", id, false) end)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerUpdate", function(_, id, elapsed, total)
+            local t = self:Get("source") == "dbm" and self.addonTimers and self.addonTimers[id]
+            if t and readable(elapsed) and readable(total) then
+                t.endsAt, t.paused = GetTime() + math.max(0, total - elapsed), nil
+                self:Refresh()
+            end
+        end)
+    end
+    if SOURCES.bigwigs.loaded() then
+        -- BigWigs keys its bars by module and text
+        local owner = {}
+        local function key(module, text) return tostring(module) .. "\31" .. (plain(text) and text or "?") end
+        local reg = BigWigsLoader.RegisterMessage
+        pcall(reg, owner, "BigWigs_StartBar", function(_, module, _, text, time, icon)
+            self:AddonTimer("bigwigs", key(module, text), text, time, icon)
+        end)
+        pcall(reg, owner, "BigWigs_StopBar", function(_, module, text) self:AddonTimerStop("bigwigs", key(module, text)) end)
+        pcall(reg, owner, "BigWigs_StopBars", function() self:AddonTimerStop("bigwigs", nil) end)
+        pcall(reg, owner, "BigWigs_PauseBar", function(_, module, text) self:AddonTimerPause("bigwigs", key(module, text), true) end)
+        pcall(reg, owner, "BigWigs_ResumeBar", function(_, module, text) self:AddonTimerPause("bigwigs", key(module, text), false) end)
+    end
+end
+
+-- Everything on the timeline, as the component's list: the game's timeline
+-- (with a boss mod as the source, only SuuUI's own timers from it: the pull)
+-- and the chosen boss mod's timers. One whose time is secret can't be
+-- placed, so it's left out.
 function M:Read()
     local list = {}
+    local now = GetTime()
+    local source = self:Get("source")
+    if source ~= "suui" then
+        for id, t in pairs(self.addonTimers or {}) do
+            if t.paused or (t.endsAt and t.endsAt > now) then list[#list + 1] = t else self.addonTimers[id] = nil end
+        end
+    end
     if not ET then return list end
     local ok, ids = pcall(ET.GetEventList)
     if not ok or type(ids) ~= "table" then return list end
-    local now = GetTime()
+    local SCRIPT = Enum.EncounterTimelineEventSource and Enum.EncounterTimelineEventSource.Script
     for _, id in ipairs(ids) do
         local okS, state = pcall(ET.GetEventState, id)
         local okR, left = pcall(ET.GetEventTimeRemaining, id)
         local okI, info = pcall(ET.GetEventInfo, id)
         if okS and okR and okI and readable(state) and (state == ACTIVE or state == PAUSED) and readable(left)
-           and (left > 0 or state == PAUSED) and type(info) == "table" then
+           and (left > 0 or state == PAUSED) and type(info) == "table"
+           and (source == "suui" or not readable(info.source) or info.source == SCRIPT) then
             local label = info.spellName
             if isSecret(label) or type(label) ~= "string" then label = nil end
             local e = { id = id, label = (self.labels and self.labels[id]) or label or "", icon = readable(info.iconFileID) and info.iconFileID or nil,
@@ -327,6 +426,19 @@ local SECTION = {
               description = "Five abilities on the real timeline, the last one past its 30 seconds.",
               onClick = function() M:Test() end },
         } },
+        { title = "Boss timers", rows = {
+            { key = "source", label = "From", control = "segmented", stacked = true,
+              options = { { value = "suui", label = "SuuUI" } },
+              description = function()
+                  local missing = {}
+                  for _, key in ipairs({ "dbm", "bigwigs" }) do
+                      if not SOURCES[key].loaded() then missing[#missing + 1] = SOURCES[key].label end
+                  end
+                  local text = "SuuUI: the game's own timeline (Forever sends no boss data yet) and SuuUI's timers. A boss mod: its boss timers ride the timeline, SuuUI's pull countdown too; you can turn its own bars off in its settings."
+                  if #missing > 0 then text = text .. " Install " .. table.concat(missing, " or ") .. " to use " .. (#missing > 1 and "theirs" or "its") .. "." end
+                  return text
+              end },
+        } },
         { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). In a group the leader's or an assistant's reaches everyone with SuuUI; combat ends it.", rows = {
             { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
             { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
@@ -339,6 +451,17 @@ local SECTION = {
 }
 
 function M:OnEnable()
+    -- the boss mods loaded now; a chosen one that's gone: back to SuuUI
+    local options = self:SourceOptions()
+    local available = {}
+    for _, o in ipairs(options) do available[o.value] = true end
+    if not available[self:Get("source")] then self:Set("source", "suui") end
+    for _, g in ipairs(SECTION.groups) do
+        for _, row in ipairs(g.rows) do
+            if row.key == "source" then row.options = options end
+        end
+    end
+    self:HookSources()
     if not self.timeline then
         self.timeline = UI.EncounterTimeline(SuuUI.Root, { variant = self:Get("variant") == "list" and "list" or "track" })
         self.timeline:SetFrameStrata("MEDIUM")
@@ -364,6 +487,7 @@ function M:OnEnable()
     end
     self:BlizzardNumbers(self:Get("pullAlert") == "off")
     self:Watch("pullAlert", function() self:BlizzardNumbers(self:Get("pullAlert") == "off") end)
+    self:Watch("source", function() self.addonTimers = {}; self:Refresh() end)
     for _, key in ipairs({ "variant", "position" }) do
         self:Watch(key, function()
             self:Refresh()
