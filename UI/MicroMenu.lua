@@ -36,7 +36,8 @@ local function buildButton(m, item)
     local b = CreateFrame("Button", m.name and (m.name .. item.key) or nil, m, secure and "SecureActionButtonTemplate" or nil)
     local px = UI.Size("menu-button")
     b:SetSize(px, px)
-    b:RegisterForClicks("LeftButtonUp")
+    -- both: a secure button acts on the one the game's ActionButtonUseKeyDown names
+    b:RegisterForClicks(secure and "AnyDown" or "LeftButtonUp", secure and "AnyUp" or nil)
     if secure then
         b:SetAttribute("type", "click")
         b:SetAttribute("clickbutton", _G[item.click])

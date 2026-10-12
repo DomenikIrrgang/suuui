@@ -122,7 +122,7 @@ local function decorate(disc, handlers)
     d.jewel:SetPoint("BOTTOMLEFT", over, "BOTTOMLEFT", -4, 26)
     d.jewel:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     d.jewel:SetScript("OnClick", handlers.jewel)
-    d.jewel.tip = function() return { title = "SuuUI", lines = { { "Click", "Settings" }, { "Right-click", "Edit layout" } } } end
+    d.jewel.tip = function() return { title = "SuuUI", lines = { { "Click", "Settings (open or close)" }, { "Right-click", "Edit layout" } } } end
     -- mail: upper left while it waits
     d.mail = roundButton(over, 24, "mail", 14)
     d.mail:SetPoint("TOPLEFT", over, "TOPLEFT", -4, -26)
@@ -135,8 +135,6 @@ local function decorate(disc, handlers)
     d.zoomIn:SetPoint("BOTTOM", d.zoomOut, "TOP", 0, S["space-2"])
     d.zoomIn:SetScript("OnClick", function() handlers.zoom(1) end)
     d.zoomOut:SetScript("OnClick", function() handlers.zoom(-1) end)
-    d.zoomIn.tip = function() return { title = "Zoom in" } end
-    d.zoomOut.tip = function() return { title = "Zoom out" } end
     return d
 end
 
@@ -389,7 +387,7 @@ function M:OnEnable()
     if not self.block then
         local handlers = {
             jewel = function(_, button)
-                if button == "RightButton" then SuuUI.EditMode.Enter() else SuuUI.OpenSettings() end
+                if button == "RightButton" then SuuUI.EditMode.Enter() else SuuUI.ToggleSettings() end
             end,
             zoom = function(delta) self:Zoom(delta) end,
             clock = function(_, button)

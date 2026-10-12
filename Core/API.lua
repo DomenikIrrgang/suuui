@@ -126,6 +126,10 @@ end
 function API.OpenSettings(sectionId)
     ns.SettingsWindow.Open(sectionId)
 end
+-- 0.10: opens the settings window, or closes it while it's open
+function API.ToggleSettings()
+    ns.SettingsWindow.Toggle()
+end
 
 -- 0.4: edit mode
 
