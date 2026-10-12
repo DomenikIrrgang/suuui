@@ -397,6 +397,13 @@ Decided (2026-10-12): like the party frames, **one layout per profile**; roles p
 
 ## Phase 2: World, chat and everyday play
 
+### Open checks (need a group, a dungeon, a battleground or a particular place)
+Everything below is built; it only waits for the right situation in game.
+- **Group:** threat meter rows and the "you're about to pull" warning with others; readiness (`/suu ready`, other SuuUI users); the pull countdown reaching others; nameplate threat as a tank; raid frames in a real raid; a ready check started by someone else (its card); duel, summon, resurrection and trade requests (their cards; a party invite is confirmed).
+- **Dungeon:** DBM/BigWigs boss timers on the timeline (Forever dungeon); the minimap probe inside; the objective tracker collapsing on a boss (its quest items hide); chat in an encounter's lockdown after an Up-arrow recall (messages vanish? then recall text only); death and release spirit (its card).
+- **Places:** using a quest item from the tracker in combat at its quest; the battleground enter card (if Forever has battlegrounds); the damaged-gear note (worn gear, then repair).
+- **Addons:** a Questie-style chat link filter still applying through SuuUI's chat.
+
 ### 2.1 Minimap, micro menu and the Jewel
 - **Build:**
   - `Minimap`: round, with the gilt ring, the north marker, your arrow, group members as diamonds, the zone name above and the clock below. The ring carries the mail marker, the zoom control, and the SuuUI Jewel button that opens settings.
