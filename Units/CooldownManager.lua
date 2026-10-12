@@ -1709,7 +1709,7 @@ local function buildEditor(parent)
         end
         local t, i, slot = locate(l, b.path)
         local e = t and t[i]
-        if e and (b.uid or e.name == b.name) then return e, slot end
+        if e and (b.uid or e.name == b.entryName) then return e, slot end
     end
 
     local function mutateEntry(fn)
@@ -2257,7 +2257,8 @@ local function buildEditor(parent)
         if not e then return end
         self.behaviour = self.behaviour or buildBehaviour()
         local b = self.behaviour
-        b.key, b.path, b.uid, b.name, b.slotUid = path.key, path, e.uid, e.name, slot and slot.uid
+        -- (b.name is the panel's Name field: the entry's name goes in entryName)
+        b.key, b.path, b.uid, b.entryName, b.slotUid = path.key, path, e.uid, e.name, slot and slot.uid
         self:RefreshBehaviour()
         b:Show()
     end
