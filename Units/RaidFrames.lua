@@ -43,10 +43,16 @@ local M = SuuUI.RegisterModule({
         lowHealth = false,
         incoming = true,
         auras = 2,
-        badges = "all",
+        debuffBadges = "all",      -- "all" debuff types, "removable" or "off"
         rangeAlpha = T.opacity["opacity-oor"],
     },
 })
+
+-- "badges" is "debuffBadges" now, as on the unit frames
+M:Migrate("debuffBadges", function(values)
+    if values.badges ~= nil and values.debuffBadges == nil then values.debuffBadges = values.badges end
+    values.badges = nil
+end)
 
 local GROUPS = 8
 local isSecret = issecretvalue or function() return false end
@@ -136,7 +142,7 @@ function M:StyleButton(button)
     if not InCombatLockdown() then f:RegisterForClicks("AnyUp") end
     buildAuras(f, h)
     buildSelected(f)
-    f:SetDispelBadges(self:Get("badges"))
+    f:SetDispelBadges(self:Get("debuffBadges"))
     f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
     self.buttons[#self.buttons + 1] = f
     -- the header sets the unit; the frame and its auras follow
@@ -292,7 +298,7 @@ function M:QueueIndicators()
 end
 
 function M:ApplyBadges()
-    for _, f in ipairs(self.buttons) do f:SetDispelBadges(self:Get("badges")) end
+    for _, f in ipairs(self.buttons) do f:SetDispelBadges(self:Get("debuffBadges")) end
 end
 
 function M:UpdateVisibility()
@@ -435,7 +441,7 @@ function M:DrawPreview(force)
     local perBand = math.max(1, self:Get("perBand"))
     local groups = math.ceil(count / 5)
     local size, far = iconSize(h), self:Get("rangeAlpha")
-    local removableOnly = self:Get("badges") == "removable"
+    local badges = self:Get("debuffBadges")
     local maxX, maxY = 0, 0
     for i, f in ipairs(self.previewFrames) do
         if i > count then
@@ -462,7 +468,7 @@ function M:DrawPreview(force)
             local d = person("raidpreview" .. i)
             f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
             for kind, deco in pairs(f.dispelDecos) do
-                deco:SetShown(d.debuff == kind and (d.removable or not removableOnly))
+                deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
             end
             f:SetAlpha(d.far and far or 1)
             f.selected:SetAlpha(d.selected and 1 or 0)
@@ -502,47 +508,53 @@ local SECTION = {
     id = "raid", label = "Raid frames", category = "Frames", order = 13,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
-        { title = "Layout", description = "One layout per profile. Healers usually want groups as rows in the middle of the screen, tanks and DPS columns above the chat: make a profile for each and let SuuUI switch them with your role (General > Profiles > By role).", rows = {
+        { title = "Layout", description = "One layout per profile. Healers usually want groups as rows in the middle of the screen, tanks and DPS columns above the chat: make a profile for each and let SuuUI switch them with your role (General > Profiles > By role). Move the frames in edit mode (General > Appearance > Edit layout).", rows = {
+            { key = "showSolo", label = "Show when solo", control = "toggle", combat = true,
+              description = "Your own frame while you aren't in a group: to try the frames (a debuff on you shows its badge)." },
             { label = "Preview", control = "segmented",
               options = { { value = 10, label = "10" }, { value = 20, label = "20" }, { value = 40, label = "40" } },
               description = "How many made-up people the preview shows.",
               get = function() return M.previewSize or 20 end,
               -- not a setting: no reset, never counts as a change
               set = function(v) M.previewSize = v; M:DrawPreview(); return true end },
-            { key = "arrangement", label = "Groups", control = "segmented",
+            { key = "arrangement", label = "Groups", control = "segmented", combat = true,
               options = { { value = "columns", label = "Columns" }, { value = "rows", label = "Rows" } },
               description = "Columns: each group a column of five (the side layout). Rows: each group a row of five, group 1 on top (the healer layout)." },
-            { key = "perBand", label = "Columns side by side", control = "stepper", min = 1, max = 8, step = 1,
+            { key = "perBand", label = "Columns side by side", control = "stepper", min = 1, max = 8, step = 1, combat = true,
               description = "Then the next groups start a new band below. 4 keeps 40 players in two bands.",
               disabled = function() if M:Get("arrangement") ~= "columns" then return true, "Only for groups as columns." end end },
-            { key = "width", label = "Width", control = "slider", min = 60, max = 200, step = 2, unit = "px", live = false },
-            { key = "height", label = "Height", control = "slider", min = 14, max = 40, step = 1, unit = "px", live = false },
-            { key = "heightLarge", label = "Height from 21 players", control = "slider", min = 14, max = 40, step = 1, unit = "px", live = false,
+            { key = "width", label = "Width", control = "slider", min = 60, max = 200, step = 2, unit = "px", live = false, combat = true,
+              description = "Each frame's width; groups as rows are five frames wide." },
+            { key = "height", label = "Height", control = "slider", min = 14, max = 40, step = 1, unit = "px", live = false, combat = true,
+              description = "Up to 20 players; the aura icons inside the bar follow it." },
+            { key = "heightLarge", label = "Height from 21 players", control = "slider", min = 14, max = 40, step = 1, unit = "px", live = false, combat = true,
               description = "A shorter bar keeps a 40-player grid clear of the dock." },
-            { key = "gap", label = "Gap", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false },
-            { key = "groupGap", label = "Gap between groups", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false },
-            { key = "showSolo", label = "Show when solo", control = "toggle",
-              description = "Your own frame while you aren't in a group: to try the real frames. Move them in edit mode." },
+            { key = "gap", label = "Gap", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false, combat = true },
+            { key = "groupGap", label = "Gap between groups", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false, combat = true },
         } },
         { title = "Inside the bar", rows = {
             { key = "power", label = "Power line", control = "segmented",
               options = { { value = "roles", label = "Tanks and healers" }, { value = "all", label = "Everyone" }, { value = "none", label = "None" } },
               description = "Without roles in the group, healing classes count as healers." },
             { key = "healthText", label = "Health text", control = "segmented",
-              options = { { value = "none", label = "None" }, { value = "percent", label = "64%" }, { value = "value", label = "8.5k" } } },
+              options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
+                          { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
+              description = "At the right end of each bar: the health percentage, the current health, or both." },
             { key = "lowHealth", label = "Low-health tint", control = "toggle",
-              description = "The empty part of the bar warms to ember from 70% down, strongest at 10%. Healers want it." },
-            { key = "incoming", label = "Incoming heals and absorbs", control = "toggle" },
-            { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 3, step = 1,
+              description = "The empty part of the bar warms to ember from 70% down, strongest at 10%, so the lowest stand out in a full grid. Healers want it." },
+            { key = "incoming", label = "Incoming heals and absorbs", control = "toggle",
+              description = "Heals on their way, past the health, then shields, hatched." },
+            { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 3, step = 1, combat = true,
               description = "Inside the bar's right end, in order: debuffs you can remove, defensives on them, other important debuffs. Your heals over time and shields go in Buff indicators." },
         } },
         { title = "States", rows = {
-            { key = "badges", label = "Debuff badges", control = "segmented",
-              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" } },
+            { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
+              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
               description = "Magic, Curse, Poison, Disease as a badge and border, in combat too. A debuff covers Aggro." },
             -- step 0.01: the default is the design's opacity-oor (0.42)
             { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
-              format = function(v) return ("%d%%"):format(v * 100 + 0.5) end },
+              format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+              description = "How faint a raid member out of your range is." },
         } },
     },
 }
@@ -585,7 +597,7 @@ function M:OnEnable()
     for _, key in ipairs({ "power", "healthText", "lowHealth", "incoming", "rangeAlpha" }) do
         self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
     end
-    self:Watch("badges", function()
+    self:Watch("debuffBadges", function()
         self:DrawPreview()
         self:RunOutOfCombat("badges", function() self:ApplyBadges() end)
     end)

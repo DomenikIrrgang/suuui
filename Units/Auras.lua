@@ -95,11 +95,13 @@ end
 local SECTION = {
     id = "auras", label = "Auras", category = "Frames", order = 15,
     groups = {
-        { title = "Auras", description = "In combat the game hides which spell an aura is from addons, so the game itself fills these in: SuuUI only styles them.", rows = {
+        { title = "On you", description = "In combat the game hides which spell an aura is from addons, so the game itself fills these in: SuuUI only styles them.", rows = {
             { key = "showBuffs", label = "Your buffs", control = "toggle",
               description = "Top right, left of the minimap. Right click cancels one." },
             { key = "showDebuffs", label = "Your debuffs", control = "toggle",
               description = "Above the player frame; a debuff with a type wears its dispel colour." },
+        } },
+        { title = "On other frames", description = "Only the auras you cast.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
               description = "Your debuffs on it, and your buffs on a friend (HoTs, shields), above the target frame." },
             { key = "showFocus", label = "On your focus", control = "toggle", description = "Your debuffs, after the focus bar." },

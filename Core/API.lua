@@ -194,6 +194,7 @@ API.UI.Confirm = UI.Confirm     -- { title, text, confirm, cancel, onConfirm, on
 function API.CooldownPresets() return ns.CooldownPresets or {} end
 API.UI.SetActionTextSize = UI.SetActionTextSize -- px, never below micro (9.5)
 API.UI.SetVisibility = UI.SetVisibility -- "always" | "combat" | "mouseover" | "hidden"
+API.UI.VISIBILITY_OPTIONS = UI.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"
 
 -- Keybind mode: hover a button, press a key. Message: SUUUI_KEYBINDMODE_CHANGED (active).
 API.KeybindMode = {

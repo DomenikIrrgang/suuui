@@ -20,7 +20,9 @@
 -- string or a function), control ("toggle", "checkbox", "segmented", "select",
 -- "slider", "stepper", "text", "button", "custom" or nil), the control's own
 -- options (options, multiple, min, max, step, unit, format, width, text,
--- onClick, build), stacked, and disabled = function() return disabled, reason end.
+-- onClick, build), stacked, disabled = function() return disabled, reason end,
+-- and combat = true for a change that waits for the end of combat (the window
+-- adds "Waits for the end of combat." to the description).
 
 local _, ns = ...
 

@@ -45,10 +45,16 @@ local M = SuuUI.RegisterModule({
         incoming = true,
         auras = 4,
         auraSide = "right",
-        badges = "all",         -- "all" debuff types, or "removable" only
+        debuffBadges = "all",   -- "all" debuff types, "removable" or "off"
         rangeAlpha = T.opacity["opacity-oor"],
     },
 })
+
+-- "badges" is "debuffBadges" now, as on the unit frames
+M:Migrate("debuffBadges", function(values)
+    if values.badges ~= nil and values.debuffBadges == nil then values.debuffBadges = values.badges end
+    values.badges = nil
+end)
 
 local SLOTS = { "player", "party1", "party2", "party3", "party4" }
 local isSecret = issecretvalue or function() return false end
@@ -196,7 +202,7 @@ function M:DrawPreview(force)
     self.previewHolder:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", self:Get("auraSide") == "left" and auraW or 0, 0)
     self.previewView:SetSize(hw + auraW, hh)
     local h, far = self:Get("height"), self:Get("rangeAlpha")
-    local removableOnly = self:Get("badges") == "removable"
+    local badges = self:Get("debuffBadges")
     for i, f in ipairs(self.previewFrames) do
         local d = person("preview" .. i)
         f.opts.healthText = self:Get("healthText")
@@ -206,7 +212,7 @@ function M:DrawPreview(force)
         f:Refresh()
         f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
         for kind, deco in pairs(f.dispelDecos) do
-            deco:SetShown(d.debuff == kind and (d.removable or not removableOnly))
+            deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
         end
         f:SetAlpha(d.far and far or 1)
         f.selected:SetAlpha(d.selected and 1 or 0)
@@ -366,10 +372,10 @@ function M:UpdateState(f)
     f:SetState(aggro and "danger" or nil, aggro and "Aggro" or nil)
 end
 
--- Debuff-type badges (the unit frame's slots): every type, or only what you
--- can remove. Out of combat (it may create the slots).
+-- Debuff-type badges (the unit frame's slots): every type, only what you
+-- can remove, or none. Out of combat (it may create the slots).
 function M:ApplyBadges()
-    for _, f in ipairs(self.frames) do f:SetDispelBadges(self:Get("badges")) end
+    for _, f in ipairs(self.frames) do f:SetDispelBadges(self:Get("debuffBadges")) end
 end
 
 -- Buff indicators (the Buff indicators module's list), out of combat; a
@@ -432,19 +438,18 @@ local SECTION = {
     -- the preview column: a made-up party with every setting applied
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
-        { title = "Layout", description = "One layout per profile. For a healer and a tank or DPS layout, make a profile for each and let SuuUI switch them with your role (General > Profiles > By role).", rows = {
-            { key = "showSelf", label = "Show yourself", control = "toggle", description = "You first, then your party." },
-            { key = "showSolo", label = "Show when solo", control = "toggle",
-              description = "Your own frame while you aren't in a group: to try the frames (a debuff on you shows its badge)." ,
+        { title = "Layout", description = "One layout per profile. For a healer and a tank or DPS layout, make a profile for each and let SuuUI switch them with your role (General > Profiles > By role). Move the frames in edit mode (General > Appearance > Edit layout).", rows = {
+            { key = "showSelf", label = "Show yourself", control = "toggle", combat = true, description = "You first, then your party." },
+            { key = "showSolo", label = "Show when solo", control = "toggle", combat = true,
+              description = "Your own frame while you aren't in a group: to try the frames (a debuff on you shows its badge).",
               disabled = function() if not M:Get("showSelf") then return true, "Turn on Show yourself first." end end },
-            { key = "direction", label = "Direction", control = "segmented",
+            { key = "direction", label = "Direction", control = "segmented", combat = true,
               options = { { value = "up", label = "Up" }, { value = "down", label = "Down" }, { value = "right", label = "Across" } },
               description = "Up suits frames above the chat; across, a row in the middle of the screen." },
-            { key = "width", label = "Width", control = "slider", min = 80, max = 300, step = 4, unit = "px", live = false },
-            { key = "height", label = "Height", control = "slider", min = 18, max = 48, step = 2, unit = "px", live = false,
+            { key = "width", label = "Width", control = "slider", min = 80, max = 300, step = 2, unit = "px", live = false, combat = true },
+            { key = "height", label = "Height", control = "slider", min = 18, max = 48, step = 1, unit = "px", live = false, combat = true,
               description = "The aura icons are as tall as the bars." },
-            { key = "gap", label = "Gap", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false,
-              description = "Move the frames in edit mode (General > Appearance > Edit layout)." },
+            { key = "gap", label = "Gap", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false, combat = true },
         } },
         { title = "Inside the bar", rows = {
             { key = "power", label = "Power line", control = "segmented",
@@ -453,18 +458,19 @@ local SECTION = {
             { key = "healthText", label = "Health text", control = "segmented",
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
-              description = "The health percentage, the current health, or both." },
+              description = "At the right end of each bar: the health percentage, the current health, or both." },
             { key = "lowHealth", label = "Low-health tint", control = "toggle",
               description = "The empty part of the bar warms to ember from 70% down, strongest at 10%, so the lowest stand out in a full grid. Healers want it." },
-            { key = "incoming", label = "Incoming heals and absorbs", control = "toggle" },
+            { key = "incoming", label = "Incoming heals and absorbs", control = "toggle",
+              description = "Heals on their way, past the health, then shields, hatched." },
         } },
         { title = "Auras and states", rows = {
-            { key = "auras", label = "Auras", control = "stepper", min = 0, max = 6, step = 1,
+            { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 6, step = 1, combat = true,
               description = "Beside each bar, in order: debuffs you can remove, defensives on them, other important debuffs. Your heals over time and shields go in Buff indicators." },
-            { key = "auraSide", label = "Aura side", control = "segmented",
+            { key = "auraSide", label = "Aura side", control = "segmented", combat = true,
               options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } } },
-            { key = "badges", label = "Debuff badges", control = "segmented",
-              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" } },
+            { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
+              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
               description = "Magic, Curse, Poison, Disease as a badge and border on the frame, in combat too. Several at once: Magic shows over Curse, Poison, Disease." },
             -- step 0.01: the default is the design's opacity-oor (0.42)
             { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
@@ -506,10 +512,10 @@ function M:OnEnable()
         end)
     end
     self:Watch("showSolo", function() self:UpdateVisibility() end)
-    for _, key in ipairs({ "power", "healthText", "lowHealth", "incoming", "badges", "rangeAlpha" }) do
+    for _, key in ipairs({ "power", "healthText", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }) do
         self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
     end
-    self:Watch("badges", function() self:RunOutOfCombat("badges", function() self:ApplyBadges() end) end)
+    self:Watch("debuffBadges", function() self:RunOutOfCombat("badges", function() self:ApplyBadges() end) end)
     -- the preview follows layout changes at once (the real frames wait for
     -- the end of combat)
     for _, key in ipairs({ "width", "height", "gap", "direction", "showSelf", "auras", "auraSide" }) do

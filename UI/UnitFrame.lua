@@ -120,8 +120,9 @@ end
 -- still show (or the value itself, shown with %d).
 local function shortNumber(v)
     if isSecret(v) then
+        -- the answer is secret too: never tested, only returned
         local ok, text = pcall(AbbreviateNumbers, v)
-        if ok and text ~= nil then return text end
+        if ok then return text end
         local ok2, plain = pcall(string.format, "%d", v)
         return ok2 and plain or v
     end
@@ -359,8 +360,10 @@ function UF:UpdateHealth(instant)
         self.right:SetStyle("numeric")
         self.right:SetColor("ink")
         local mode = self.opts.healthText or "percent"
-        local pct = mode ~= "value" and healthPercent(A, u) or nil
-        local value = mode ~= "percent" and shortNumber(cur) or nil
+        -- plain ifs: `x and secret or nil` would test the secret
+        local pct, value
+        if mode ~= "value" then pct = healthPercent(A, u) end
+        if mode ~= "percent" then value = shortNumber(cur) end
         -- secret parts go to the engine's own formatting, never through Lua
         if isSecret(pct) or isSecret(value) then
             if mode == "value" then

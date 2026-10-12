@@ -28,7 +28,7 @@ local M = SuuUI.RegisterModule({
         setups = {},
         preset = "", lists = {}, -- before setups (migrated once)
         shows = "always",
-        essentialSize = 36,
+        essentialSize = 40,
         utilityInline = false,
         missingBuffs = "grey",
         missingDebuffs = "target",
@@ -42,6 +42,13 @@ local M = SuuUI.RegisterModule({
         viewerOff = false,
     },
 })
+
+-- Essential size became 30-52px (the design's 40 by default): a size you set
+-- stays, moved into the range if it was outside.
+M:Migrate("essentialSize-30-52", function(values)
+    local v = values.essentialSize
+    if type(v) == "number" then values.essentialSize = math.max(30, math.min(52, v)) end
+end)
 
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 local isSecret = issecretvalue or function() return false end
@@ -173,7 +180,7 @@ end
 
 -- The lists from before setups: kept for this class's active spec, dropped
 -- when they were another class's (a profile shared across classes).
-function M:Migrate()
+function M:MigrateLists()
     local old, oldPreset = self:Get("lists"), self:Get("preset")
     if next(old) ~= nil then
         local all = self:Get("setups")
@@ -220,12 +227,6 @@ end
 --------------------------------------------------------------------------------
 -- Settings
 --------------------------------------------------------------------------------
-
-local VISIBILITY = {
-    { value = "always", label = "Always" },
-    { value = "combat", label = "In combat" },
-    { value = "mouseover", label = "Mouseover" },
-}
 
 -- The setup and preset bar: which spec's setup you edit (the active one by
 -- default), your class's presets, Load, and what the lists are based on.
@@ -1380,21 +1381,21 @@ local SECTION = {
             { label = "Lists", control = "custom", build = buildEditor, stacked = true },
         } },
         { title = "Display", rows = {
-            { key = "shows", label = "Shows", control = "segmented", options = VISIBILITY,
+            { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
-            { key = "essentialSize", label = "Essential size", control = "slider", min = 24, max = 48, step = 2, unit = "px", live = false,
+            { key = "essentialSize", label = "Essential size", control = "slider", min = 30, max = 52, step = 2, unit = "px", live = false, combat = true,
               description = "The Essential row's icons. Utility stays at 30px unless it sits after Essential." },
-            { key = "utilityInline", label = "Utility", control = "segmented",
+            { key = "utilityInline", label = "Utility", control = "segmented", combat = true,
               options = { { value = false, label = "Own row" }, { value = true, label = "After Essential" } },
               description = "After Essential keeps the block two rows tall (the healer layout)." },
-            { key = "missingBuffs", label = "Missing buffs", control = "segmented",
+            { key = "missingBuffs", label = "Missing buffs", control = "segmented", combat = true,
               options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Show grey" }, { value = "remind", label = "Remind" } },
               description = "A tracked buff that isn't up: hidden (the others close up), grey in its place, or Remind: grey only while it's missing, out of combat." },
-            { key = "missingDebuffs", label = "Missing debuffs", control = "segmented",
+            { key = "missingDebuffs", label = "Missing debuffs", control = "segmented", combat = true,
               options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Show grey" }, { value = "target", label = "With a target" }, { value = "remind", label = "Remind" } },
               description = "Your debuffs that aren't on the target: hidden (the others close up), grey, grey only while you have a hostile target, or Remind: grey only while it's missing from a hostile target, out of combat." },
-            { key = "readyPop", label = "Ready pop", control = "toggle", description = "A cooldown coming off cooldown pops with the arcane flash." },
-            { key = "procHighlight", label = "Proc highlight", control = "toggle", description = "Procs wear the arcane edge and glow." },
+            { key = "readyPop", label = "Pop when ready", control = "toggle", description = "A cooldown coming off cooldown pops with the arcane flash." },
+            { key = "procHighlight", label = "Proc highlight", control = "toggle", combat = true, description = "Procs wear the arcane edge and glow." },
         } },
     },
 }
@@ -1418,7 +1419,7 @@ function M:OnEnable()
     -- This character's spec, then the lists from before setups (once). A
     -- spec seen the first time starts from its preset (M:Setup).
     self.spec, self.points = self:DetectSpec()
-    self:Migrate() -- before anything reads a setup (that would create it from the preset)
+    self:MigrateLists() -- before anything reads a setup (that would create it from the preset)
     self:RegisterMover(self.tracker, { key = "position", label = "Cooldown Manager" })
     self:RegisterSettings(SECTION)
     self:Apply()

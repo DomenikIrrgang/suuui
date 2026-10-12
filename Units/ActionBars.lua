@@ -98,11 +98,6 @@ local BARS = {
 }
 
 local COLUMNS = { 1, 2, 3, 4, 6, 12 }
-local VISIBILITY = {
-    { value = "always", label = "Always" },
-    { value = "combat", label = "In combat" },
-    { value = "mouseover", label = "Mouseover" },
-}
 
 
 --------------------------------------------------------------------------------
@@ -502,9 +497,6 @@ local SECTION = {
             { label = "Bind keys", control = "button", text = "Keybind mode",
               description = "Hover a button and press a key, a mouse button or the wheel to bind it. Delete clears. Also /suu keybind.",
               onClick = function() SuuUI.KeybindMode.Enter() end },
-            { key = "textSize", label = "Text size", control = "slider", min = 9.5, max = 16, step = 0.5, live = false,
-              format = function(v) return ("%gpx"):format(v) end,
-              description = "Key bindings, counts and cooldown digits on every bar. 9.5px is the smallest the design allows." },
             { key = "keys1", label = "Bar 1", control = "toggle", description = "The bottom row of the dock. It follows your stance, form or stealth; its tooltips name the page it is on." },
             { key = "keys2", label = "Bar 2", control = "toggle", description = "The row above bar 1." },
             { key = "keys3", label = "Bar 3", control = "toggle", description = "The block left of the middle." },
@@ -513,21 +505,24 @@ local SECTION = {
         { title = "Dock", rows = {
             { key = "showEmpty", label = "Empty slots", control = "toggle",
               description = "Show slots with nothing in them. They always show while you drag a spell or item." },
-            { key = "dockSize", label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false,
-              description = "All four bars in the dock at once; the stance and pet bars follow at 9/10 of it. Waits for the end of combat." },
-            { key = "dockVisibility", label = "Shows", control = "segmented", options = VISIBILITY,
+            { key = "dockSize", label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false, combat = true,
+              description = "All four bars in the dock at once; the stance and pet bars follow at 9/10 of it." },
+            { key = "dockVisibility", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it (or you drag a spell)." },
-            { key = "showXP", label = "XP bar", control = "toggle",
+            { key = "showXP", label = "XP bar", control = "toggle", combat = true,
               description = "Along the dock's foot: your XP with rested XP after it, or your watched reputation at the level cap. Blizzard's own comes back after a reload." },
+            { key = "textSize", label = "Text size", control = "slider", min = 9.5, max = 16, step = 0.5, live = false,
+              format = function(v) return ("%gpx"):format(v) end,
+              description = "Key bindings, counts and cooldown digits on every bar, not only the dock's. 9.5px is the smallest the design allows." },
         } },
     },
 }
 
 table.insert(SECTION.groups, 2, { title = "Stance and pet bars", rows = {
-    { key = "showStance", label = "Stance and form bar", control = "toggle",
+    { key = "showStance", label = "Stance and form bar", control = "toggle", combat = true,
       description = "Above the dock's left block, for classes with stances, forms or stealth. Blizzard's own comes back after a reload." },
     { key = "keysStance", label = "Its key bindings", control = "toggle", description = "Show the stance bar's key bindings on its buttons." },
-    { key = "showPet", label = "Pet bar", control = "toggle",
+    { key = "showPet", label = "Pet bar", control = "toggle", combat = true,
       description = "Above the dock's right block, while you have a pet. Right click an ability to switch its autocast." },
     { key = "keysPet", label = "Its key bindings", control = "toggle", description = "Show the pet bar's key bindings on its buttons." },
 } })
@@ -537,17 +532,17 @@ for id = 5, 8 do
     local options = {}
     for _, n in ipairs(COLUMNS) do options[#options + 1] = { value = n, label = tostring(n) } end
     SECTION.groups[#SECTION.groups + 1] = { title = "Bar " .. id, rows = {
-        { key = "show" .. id, label = "Show", control = "toggle",
+        { key = "show" .. id, label = "Show", control = "toggle", combat = true,
           description = id == 5 and "At the right edge by default; move it in edit mode." or "Next to the bar before it by default; move it in edit mode." },
-        { key = "vis" .. id, label = "Shows", control = "segmented", options = VISIBILITY,
+        { key = "vis" .. id, label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
           description = "Always, only in combat, or when the mouse is over it (or you drag a spell)." },
-        { key = "count" .. id, label = "Buttons", control = "stepper", min = 1, max = 12, step = 1,
+        { key = "count" .. id, label = "Buttons", control = "stepper", min = 1, max = 12, step = 1, combat = true,
           description = "How many of its 12 buttons show." },
-        { key = "cols" .. id, label = "Columns", control = "segmented", options = options,
+        { key = "cols" .. id, label = "Columns", control = "segmented", options = options, combat = true,
           description = "1 stands it upright, 12 lays it flat." },
-        { key = "size" .. id, label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false,
-          description = "Waits for the end of combat." },
-        { key = "gap" .. id, label = "Spacing", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false,
+        { key = "size" .. id, label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false, combat = true,
+          description = "Each of its buttons, edge to edge." },
+        { key = "gap" .. id, label = "Gap", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false, combat = true,
           description = "Between its buttons." },
         { key = "keys" .. id, label = "Key bindings", control = "toggle", description = "Show its key bindings on the buttons." },
     } }

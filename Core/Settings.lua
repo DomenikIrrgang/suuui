@@ -13,6 +13,7 @@
 --   Settings.Watch(namespace, key, fn, owner)   fn(value, namespace, key) after a change
 --   Settings.Veto(namespace, key, fn, owner)    fn(new, old) -> false, reason refuses it
 --   Settings.Unwatch(owner)
+--   Settings.Migrate(namespace, id, fn, owner)  fn(values) reshapes a profile's stored values once
 --
 -- A watcher may change the setting it is told about (clamping, reverting).
 -- That newer write notifies every watcher itself, and the outer notification
@@ -30,6 +31,12 @@ local defaults = {}    -- namespace -> { key -> default }
 local watchers = {}    -- "namespace.key" -> { { fn, owner }, ... }
 local vetoes = {}      -- "namespace.key" -> { { fn, owner }, ... }
 local generation = {}  -- "namespace.key" -> write count
+local migrations = {}  -- { namespace, id, fn, owner }, in the order they were registered
+
+-- In each profile, the migrations it has had: "namespace/id" -> true. Not a
+-- namespace any module can have (ids start with a letter), so it is never a
+-- setting, and it travels with the profile's data (copies, exports).
+local MIGRATED = "__migrated"
 
 local db, profile, charKey -- bound when SuuUIDB has loaded
 
@@ -222,6 +229,61 @@ local function screen(p)
     end
 end
 
+--------------------------------------------------------------------------------
+-- Migrations: a module renames a key or changes a value's type, and its
+-- migration brings each profile's stored values into the new shape, once.
+-- They run before screening and the type check, which would drop an old
+-- value as the wrong type.
+--------------------------------------------------------------------------------
+
+-- Runs one migration on profile data `p` unless it has had it. `fn` sees the
+-- namespace's stored values only when there are some; a profile without any
+-- has nothing to migrate and counts as done. A migration that errors isn't
+-- marked done, so a fixed one runs at the next load.
+local function runMigration(p, m)
+    local tag = m.namespace .. "/" .. m.id
+    local done = p[MIGRATED]
+    if type(done) == "table" and done[tag] then return end
+    local values = p[m.namespace]
+    if type(values) == "table" then
+        if not Fault.Call(m.owner, m.fn, values) then return end
+        -- what the migration left at its default isn't stored
+        local defs = defaults[m.namespace]
+        for k, v in pairs(values) do
+            if defs[k] ~= nil and Equal(v, defs[k]) then values[k] = nil end
+        end
+        if next(values) == nil then p[m.namespace] = nil end
+    end
+    if type(p[MIGRATED]) ~= "table" then p[MIGRATED] = {} end
+    p[MIGRATED][tag] = true
+end
+
+-- Every migration profile data `p` hasn't had yet, in the order they came.
+local function migrate(p)
+    for _, m in ipairs(migrations) do runMigration(p, m) end
+end
+
+function Settings.Migrate(namespace, id, fn, owner)
+    if not defaults[namespace] then error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 2) end
+    assert(type(id) == "string" and id ~= "" and type(fn) == "function", "SuuUI Settings: a migration needs an id and a function")
+    for _, m in ipairs(migrations) do
+        assert(not (m.namespace == namespace and m.id == id), "SuuUI Settings: migration " .. namespace .. "/" .. id .. " is already registered")
+    end
+    local m = { namespace = namespace, id = id, fn = fn, owner = OwnerName(owner or namespace) }
+    migrations[#migrations + 1] = m
+    if not db then return end -- bind runs it on every profile
+    -- Registered after the profiles loaded (a plugin's file): every profile
+    -- now, and the watchers hear what changed in the current one.
+    local before = Copy(profile[namespace])
+    for _, p in pairs(db.profiles) do
+        if type(p) == "table" then runMigration(p, m) end
+    end
+    screen(profile)
+    for key in pairs(defaults[namespace]) do
+        if not Equal(before and before[key], stored(profile, namespace, key)) then notify(namespace, key) end
+    end
+end
+
 function Profiles.Current()
     return db and db.chars[charKey]
 end
@@ -257,6 +319,7 @@ function Profiles.Use(text)
     if not name then return false, err end
     if name == Profiles.Current() then return true end
     local target, changed = db.profiles[name], {}
+    migrate(target)
     screen(target)
     for namespace, defs in pairs(defaults) do
         for key in pairs(defs) do
@@ -318,6 +381,7 @@ function Profiles.CopyFrom(text)
     if not name then return false, err end
     if name == Profiles.Current() then return true end
     local data, changed = Copy(db.profiles[name]), {}
+    migrate(data)
     screen(data)
     for namespace, defs in pairs(defaults) do
         for key in pairs(defs) do
@@ -378,7 +442,8 @@ function Profiles.Export(text)
     return { name = name, data = Copy(db.profiles[name]) }
 end
 
--- Keeps plain data only, and for registered settings only values of the
+-- Keeps plain data only, brings an older SuuUI's values into today's shape
+-- (migrations), then keeps for registered settings only values of the
 -- default's type. Namespaces SuuUI doesn't know (a plugin that isn't
 -- installed here) are kept as they are.
 local function sanitize(data)
@@ -386,15 +451,22 @@ local function sanitize(data)
     if type(data) ~= "table" then return out end
     for namespace, values in pairs(data) do
         if type(namespace) == "string" and type(values) == "table" then
-            local defs = defaults[namespace]
             for key, v in pairs(values) do
-                local ok = type(key) == "string"
-                if ok and defs and defs[key] ~= nil then ok = type(v) == type(defs[key]) end
-                if ok then
+                if type(key) == "string" then
                     out[namespace] = out[namespace] or {}
                     out[namespace][key] = Copy(v)
                 end
             end
+        end
+    end
+    migrate(out)
+    for namespace, values in pairs(out) do
+        local defs = defaults[namespace]
+        if defs then
+            for key, v in pairs(values) do
+                if defs[key] ~= nil and type(v) ~= type(defs[key]) then values[key] = nil end
+            end
+            if next(values) == nil then out[namespace] = nil end
         end
     end
     return out
@@ -420,7 +492,11 @@ local function bind()
     db.chars[charKey] = name
     db.profiles[name] = db.profiles[name] or {}
     profile = db.profiles[name]
-    screen(profile) -- the vetoes of every file of SuuUI are in by now
+    -- the migrations and vetoes of every file of SuuUI are in by now
+    for _, p in pairs(db.profiles) do
+        if type(p) == "table" then migrate(p) end
+    end
+    screen(profile)
 end
 
 Events.OnGame("ADDON_LOADED", function(_, addon)

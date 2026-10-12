@@ -52,6 +52,27 @@ local M = SuuUI.RegisterModule({
 | `M:Reset([key])` | One key, or the module's whole namespace |
 | `M:Watch(key, fn)` | `fn(value, namespace, key)` after each change, including profile switches |
 | `M:Veto(key, fn)` | `fn(new, old)` returning `false, reason` refuses a change. A refused value a profile brings in (switching, copying, importing) is dropped, so the default applies |
+| `M:Migrate(id, fn)` (0.9) | `fn(values)` brings one profile's stored values of the module into a new shape (a renamed key, a changed type) by changing `values` in place. See *Migrations* |
+
+#### Migrations
+
+A stored value of another type than the default's is ignored, so when you rename a key or change its type, register a migration right after `RegisterModule`, at file load:
+
+```lua
+local M = SuuUI.RegisterModule({ id = "hello", api = "0.9", defaults = { healthText = "percent" } })
+
+-- 1.1 turned the toggle `showHealth` into the choice `healthText`
+M:Migrate("healthText", function(values)
+    if type(values.showHealth) == "boolean" then
+        values.healthText = values.showHealth and "percent" or "none"
+    end
+    values.showHealth = nil
+end)
+```
+
+- `values` is the module's stored values in one profile: only what differs from the defaults. `fn` is called only for profiles that have stored values for the module; values the migration leaves at their default are dropped.
+- Each migration (`id`, unique per module) runs once per profile, and the profile remembers it. It runs on every profile when SuuUI loads (a plugin's, when it registers), and on profiles that come in later: switched to, copied from or imported (an older export too). It runs before values are checked by type and by vetoes, so converted values survive.
+- Migrations run in the order they were registered. One that errors is reported and runs again at the next load.
 
 | Events | |
 |---|---|
@@ -173,7 +194,7 @@ M:RegisterSettings({
 })
 ```
 
-A row: `key` (or `get`, `set`, `isDefault`, `reset` functions), `label`, `description` (a string or a function), `control` (`toggle`, `checkbox`, `segmented`, `select`, `slider`, `stepper`, `text`, `button`, `custom`), the control's options (`options` (a list or a function), `multiple`, `min`, `max`, `step`, `unit`, `format`, `width`, `placeholder`, `text`, `onClick`, `build`), `stacked`, and `disabled = function() return disabled, reason end`. Rows update live, show a diamond and a reset arrow when changed, and are found by the window's search.
+A row: `key` (or `get`, `set`, `isDefault`, `reset` functions), `label`, `description` (a string or a function), `control` (`toggle`, `checkbox`, `segmented`, `select`, `slider`, `stepper`, `text`, `button`, `custom`), the control's options (`options` (a list or a function), `multiple`, `min`, `max`, `step`, `unit`, `format`, `width`, `placeholder`, `text`, `onClick`, `build`), `stacked`, `disabled = function() return disabled, reason end`, and `combat = true` (0.9) for a change that waits for the end of combat: the window adds "Waits for the end of combat." to the description (or shows it alone), so don't write it yourself. Rows update live, show a diamond and a reset arrow when changed, and are found by the window's search.
 
 Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDisabled(disabled)`:
 
@@ -259,6 +280,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 |---|---|
 | `SuuUI.UI.ActionBar(parent, opts)` | Up to 12 buttons on a secure header. `opts`: `name` (global name; buttons are `name .. "Button" .. i`), `slot` (first action slot), `count`, `columns`, `gap`, `size`, `binding` (the game's binding command prefix, e.g. `"MULTIACTIONBAR1BUTTON"`: every key bound to it clicks the button), `paging` (macro conditions, e.g. `SuuUI.UI.ActionBarPaging()`), `onPage(bar, page)`. Returns a bar with `.header`, `.buttons`, `:Page()`, `:SetHotkeysShown(on)`, `:SetShowEmpty(on)`, `:Layout(columns, gap)`, `:UpdateBindings()` |
 | `SuuUI.UI.SetVisibility(frame, mode, also)` | When a frame shows: `"always"`, `"combat"` (a secure driver, so it works for frames holding secure buttons), `"mouseover"` (fades in while the mouse is over it or you drag something) or `"hidden"`. 0.9: `also`, a list of frames outside `frame` whose hover counts as its own for mouseover; setting the mode a frame already has changes nothing. Edit mode and keybind mode show every managed frame that isn't hidden (keybind mode the pet bar too). Bars: `bar:SetVisibility(mode)`, `bar:Layout(columns, gap, count, size)` |
+| `SuuUI.UI.VISIBILITY_OPTIONS` (0.9) | The `{ value, label }` choices `"always"`, `"combat"`, `"mouseover"`, for a settings row's `options` |
 | `SuuUI.UI.ActionBarPaging()` | Bar 1's paging on Forever: override and vehicle bars, manual pages 2–6, then stance/form pages 7–10 |
 | `SuuUI.UI.ActionButton(parent, name, size)` | One button's art on a `SecureActionButtonTemplate` button (the bar sets the secure attributes). `:SetSlot(slot)`, `:SetHotkey(text)`, `:SetHotkeyShown(on)`, `:Update()` |
 | `SuuUI.UI.ShortKey(key)` | A binding in button size: `"SHIFT-1"` → `"S1"`, `"BUTTON4"` → `"M4"` |

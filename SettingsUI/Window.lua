@@ -57,6 +57,17 @@ local function describe(d)
     return d
 end
 
+-- A row's description; a row with `combat = true` (a change that waits for
+-- the end of combat) says so in the same words everywhere.
+local COMBAT_NOTE = "Waits for the end of combat."
+
+local function rowDescription(def)
+    local d = describe(def.description)
+    if not def.combat then return d end
+    if d == nil or d == "" then return COMBAT_NOTE end
+    return d .. " " .. COMBAT_NOTE
+end
+
 local function buildControl(parent, def, onChange)
     local c = def.control
     if c == "toggle" then return UI.Toggle(parent, { onChange = onChange }) end
@@ -107,7 +118,7 @@ local function bindRow(page, def)
         row.refresh()
     end
     row = UI.SettingRow(page.frame, {
-        label = def.label, description = describe(def.description), control = ctl,
+        label = def.label, description = rowDescription(def), control = ctl,
         stacked = def.stacked, width = page.width, onReset = doReset,
     })
     row.def, row.doReset = def, doReset
@@ -115,7 +126,7 @@ local function bindRow(page, def)
     row.refresh = function()
         if valued and get and ctl.SetValue then ctl:SetValue(get()) end
         if type(def.options) == "function" and ctl.SetOptions then ctl:SetOptions(def.options()) end
-        if type(def.description) == "function" then row:SetDescription(def.description()) end
+        if type(def.description) == "function" then row:SetDescription(rowDescription(def)) end
         local disabled, reason = false, nil
         if def.disabled then disabled, reason = def.disabled() end
         row:SetDisabled(disabled, reason)
@@ -183,7 +194,7 @@ function Page:Filter(q)
         for _, row in ipairs(g.boundRows) do
             local d = row.def
             local hit = groupHit or (d.label or ""):lower():find(q, 1, true)
-                or (tostring(describe(d.description) or "")):lower():find(q, 1, true)
+                or (tostring(rowDescription(d) or "")):lower():find(q, 1, true)
             row:SetShown(hit and true or false)
             if hit then shown = shown + 1 end
         end

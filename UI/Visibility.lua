@@ -15,6 +15,9 @@
 -- mode waits for the end of combat. While edit mode or keybind mode is open,
 -- every managed frame that isn't "hidden" shows fully, so it can be placed
 -- and bound.
+--
+-- UI.VISIBILITY_OPTIONS (0.9): the choices a "Shows" setting offers, as a
+-- segmented control's options. "hidden" isn't one of them.
 
 local _, ns = ...
 
@@ -24,6 +27,12 @@ local modes = {}   -- frame -> mode
 local hover = {}   -- frames fading on mouseover
 local also = {}    -- frame -> frames whose hover counts as its own
 local forced = false
+
+UI.VISIBILITY_OPTIONS = {
+    { value = "always", label = "Always" },
+    { value = "combat", label = "In combat" },
+    { value = "mouseover", label = "Mouseover" },
+}
 
 local function apply(frame)
     local mode = modes[frame]

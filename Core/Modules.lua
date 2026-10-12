@@ -14,6 +14,7 @@
 --       OnEnable = function(self) end,
 --       OnDisable = function(self) end,
 --   })
+--   M:Migrate("renameFoo", function(values) ... end) -- once per profile, at file load
 --
 -- A module that is off is never initialised: no frames, no events. Its
 -- "enabled" setting lives in its own namespace, so it is saved per profile.
@@ -70,6 +71,11 @@ function Module:Set(key, value) return Settings.Set(self.id, key, value) end
 function Module:Reset(key) return Settings.Reset(self.id, key) end
 function Module:Watch(key, fn) Settings.Watch(self.id, key, fn, self) end
 function Module:Veto(key, fn) Settings.Veto(self.id, key, fn, self) end
+
+-- fn(values) reshapes one profile's stored values of this module (a renamed
+-- key, a changed type), once per profile. Call it right after RegisterModule,
+-- at file load, so it runs before the old values are judged by type.
+function Module:Migrate(id, fn) Settings.Migrate(self.id, id, fn, self) end
 
 function Module:On(message, fn) Events.On(message, fn, self) end
 function Module:Off(message) Events.Off(message, self) end

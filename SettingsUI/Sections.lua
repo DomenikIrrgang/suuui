@@ -18,14 +18,14 @@ Registry.Register({
     groups = {
         { title = "Scale", description = "SuuUI draws one design pixel as one pixel of your screen, so frames keep their size on every resolution and only the space between them changes.",
           rows = {
-            { label = "Automatic scale", control = "toggle",
+            { label = "Automatic scale", control = "toggle", combat = true,
               description = "100% up to 1440p, larger on taller screens.",
               get = scaleIsAuto,
               set = function(on) return Settings.Set("ui", "scale", on and 0 or ns.UserScale()) end,
               isDefault = scaleIsAuto,
               reset = function() Settings.Reset("ui", "scale") end },
-            { label = "Scale", control = "slider", min = 0.5, max = 2, step = 0.05, live = false,
-              description = "Every SuuUI frame at once, when you let go of the slider. Waits for the end of combat.",
+            { label = "Scale", control = "slider", min = 0.5, max = 2, step = 0.05, live = false, combat = true,
+              description = "Every SuuUI frame at once, when you let go of the slider.",
               format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
               get = function() return ns.UserScale() end,
               set = function(v) return Settings.Set("ui", "scale", v) end,
@@ -50,7 +50,7 @@ Registry.Register({
 Registry.Register({
     id = "motion", label = "Motion", category = "General", order = 20, namespace = "ui",
     groups = {
-        { title = "Motion", rows = {
+        { title = "Animations", rows = {
             { key = "reducedMotion", label = "Reduce motion", control = "toggle",
               description = "Drops decorative motion: fades, pops and slides. Every value still updates at once." },
         } },

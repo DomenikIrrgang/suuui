@@ -256,11 +256,11 @@ local SECTION = {
     id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
     groups = {
         { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
-            { key = "showToT", label = "Target of target", control = "toggle",
+            { key = "showToT", label = "Target of target", control = "toggle", combat = true,
               description = "Right of the target, centred on it. Blizzard's belongs to its target frame, so off there is none." },
-            { key = "showFocus", label = "Focus", control = "toggle", description = "Right of centre, above the target of target." },
-            { key = "showPet", label = "Pet", control = "toggle", description = "Under the player frame, with its focus or mana." },
-            { key = "showBoss", label = "Boss frames", control = "toggle", description = "Top right, left of the tracker, one per boss." },
+            { key = "showFocus", label = "Focus", control = "toggle", combat = true, description = "Right of centre, above the target of target." },
+            { key = "showPet", label = "Pet", control = "toggle", combat = true, description = "Under the player frame, with its focus or mana." },
+            { key = "showBoss", label = "Boss frames", control = "toggle", combat = true, description = "Top right, left of the tracker, one per boss." },
         } },
         { title = "Every frame", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
             { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
@@ -278,7 +278,7 @@ local SECTION = {
               description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
         } },
         { title = "Debuffs on you", rows = {
-            { key = "debuffBadges", label = "Debuff badges", control = "segmented",
+            { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
               description = "Magic, Curse, Poison, Disease on your frame as a badge and border, in combat too." },
         } },

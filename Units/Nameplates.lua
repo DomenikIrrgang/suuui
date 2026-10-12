@@ -17,12 +17,12 @@
 --
 -- The plate, top to bottom: up to four of your debuffs (icon-sm by default,
 -- engine aura container), the name in its reaction colour with the state
--- badge and health % (micro) at the right, the bar (nameplate, 10px by
+-- badge and the health text (micro) at the right, the bar (nameplate, 10px by
 -- default), the cast (cast-plate, 8px by default, the spell line under it).
 -- The three sizes are settings. Everything the game may hide goes to the engine
 -- unread: health to the StatusBar, the name to the text (a fixed width, so a
 -- secret name is cut with "…"; in dungeons enemy names are secret), the
--- percentage through a curve.
+-- percentage through a curve, the value through AbbreviateNumbers.
 -- Quest objectives: a gilt diamond left of the name (with the count, 3/8 or
 -- 45%) on mobs one of your quests still needs, read from the unit's tooltip
 -- data (structured lines, every value checked for secrecy), cached per
@@ -53,17 +53,25 @@ local M = SuuUI.RegisterModule({
         castKick = true,
         dimOthers = true,
         threat = true,
-        healthText = true,
+        healthText = "percent", -- "percent", "value", "both" or "none", as on the unit frames
         friendlyOpenWorld = true,
         friendlyStyle = true,
         questMarks = true,
     },
 })
 
+-- "Health %" was a toggle; it is the unit frames' health text choice now
+M:Migrate("healthText", function(values)
+    if type(values.healthText) == "boolean" then values.healthText = values.healthText and "percent" or "none" end
+end)
+
 local isSecret = issecretvalue or function() return false end
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local LOW = 0.35
-local NAME_H, PCT_W = 14, 32
+local NAME_H = 14
+-- The health text's room at the name row's right end, per mode: a secret
+-- text can't be measured, so each mode keeps a fixed width.
+local PCT_W = { percent = 32, value = 36, both = 68, none = 0 }
 
 -- SuuUI's own records, never keys on Blizzard's frames
 local hidden = setmetatable({}, { __mode = "k" })   -- Blizzard UnitFrame -> true while hidden
@@ -171,7 +179,7 @@ local function buildPlate(parent, api)
     local w = M:Get("width")
     f:SetSize(w, plateH())
 
-    -- the name row: name (reaction colour), badge, health %
+    -- the name row: name (reaction colour), badge, health text
     f.name = UI.Text(f, "unit-name-sm", "ink")
     f.name:SetShadowed(true)
     f.name:SetWordWrap(false)
@@ -247,7 +255,20 @@ end
 function Plate:SetPlateWidth(w)
     self:SetSize(w, plateH())
     self.bar:SetHeight(barH())
-    self.name:SetWidth(math.max(20, w - (self.questW or 0) - PCT_W - S["space-2"] - (self.badge:IsShown() and (self.badge.knownWidth or 0) + S["space-2"] or 0)))
+    local mode = M:Get("healthText")
+    local textW = PCT_W[mode] or PCT_W.percent
+    -- the badge left of the health text, or at the row's end without one
+    if self.textMode ~= mode then
+        self.textMode = mode
+        self.badge:ClearAllPoints()
+        if textW > 0 then
+            self.badge:SetPoint("RIGHT", self.pct, "LEFT", -S["space-2"], 0)
+        else
+            self.badge:SetPoint("RIGHT", self, "TOPRIGHT", 0, -NAME_H / 2)
+        end
+    end
+    self.name:SetWidth(math.max(20, w - (self.questW or 0) - (textW > 0 and textW + S["space-2"] or 0)
+        - (self.badge:IsShown() and (self.badge.knownWidth or 0) + S["space-2"] or 0)))
 end
 
 -- Is this mob one of your quest objectives, still open? Its tooltip data says:
@@ -330,13 +351,32 @@ function Plate:UpdateHealth()
     else
         self.healthLow:SetAlpha(0)
     end
-    if M:Get("healthText") and A.UnitHealthPercent and CurveConstants then
-        local pct = A.UnitHealthPercent(u, true, CurveConstants.ScaleTo100)
-        if isSecret(pct) then self.pct:SetFormattedText("%d%%", pct) else self.pct:SetFormattedText("%d%%", (pct or 0) + 0.5) end
-        self.pct:Show()
+    -- The health text: the percentage through a curve, the value through
+    -- AbbreviateNumbers (a secret health gives a secret string). Neither is
+    -- ever tested: they go to the engine's formatting as they are.
+    local mode = M:Get("healthText")
+    local pct, value
+    local hasPct = (mode == "percent" or mode == "both") and A.UnitHealthPercent ~= nil and CurveConstants ~= nil
+    local hasValue = false -- a plain flag: the value itself may be secret
+    if hasPct then
+        pct = A.UnitHealthPercent(u, true, CurveConstants.ScaleTo100)
+        if not isSecret(pct) then pct = (pct or 0) + 0.5 end
+    end
+    if mode == "value" or mode == "both" then
+        local ok, text = pcall(AbbreviateNumbers, amount(cur))
+        if ok then value, hasValue = text, true end
+    end
+    if mode == "both" and hasPct and hasValue then
+        self.pct:SetFormattedText("%s · %d%%", value, pct)
+    elseif mode ~= "percent" and hasValue then
+        self.pct:SetText(value)
+    elseif hasPct then
+        self.pct:SetFormattedText("%d%%", pct)
     else
         self.pct:Hide()
+        return
     end
+    self.pct:Show()
 end
 
 local REACTION = { [1] = "reaction-hostile", [2] = "reaction-hostile", [3] = "reaction-hostile", [4] = "reaction-neutral" }
@@ -519,7 +559,7 @@ local function anchor(f, plate)
 end
 
 -- Lays a SuuUI plate on Blizzard's: an enemy's, or a friendly one (name,
--- bar and health % only).
+-- bar and health text only).
 function M:Attach(unit, plate, friendly)
     local uf = plate.UnitFrame
     if uf and uf:IsForbidden() then return end
@@ -652,11 +692,11 @@ end
 --------------------------------------------------------------------------------
 
 local PEOPLE = {
-    { name = "Cinder Acolyte", health = 0.62, reaction = 2, target = true, threat = 3, debuffs = { 1978, 1130 }, cast = { name = "Flame Lash", icon = 133, progress = 0.55, time = "0.9s", target = "Kaelith", targetClass = "PRIEST" } },
-    { name = "Ember Hound", health = 0.81, reaction = 2, threat = 2, quest = "3/8" },
-    { name = "Ashbound Ritualist", health = 0.28, reaction = 2, threat = 0, cast = { name = "Rain of Ash", icon = 5740, progress = 0.3, time = "1.9s", locked = true } },
-    { name = "Dusk Prowler", health = 1, reaction = 4 },
-    { name = "Ysolde", health = 0.9, reaction = 5, friendly = true, class = "PALADIN", debuffs = { 702 }, debuffType = "Curse",
+    { name = "Cinder Acolyte", health = 0.62, max = 13800, reaction = 2, target = true, threat = 3, debuffs = { 1978, 1130 }, cast = { name = "Flame Lash", icon = 133, progress = 0.55, time = "0.9s", target = "Kaelith", targetClass = "PRIEST" } },
+    { name = "Ember Hound", health = 0.81, max = 8400, reaction = 2, threat = 2, quest = "3/8" },
+    { name = "Ashbound Ritualist", health = 0.28, max = 11200, reaction = 2, threat = 0, cast = { name = "Rain of Ash", icon = 5740, progress = 0.3, time = "1.9s", locked = true } },
+    { name = "Dusk Prowler", health = 1, max = 6900, reaction = 4 },
+    { name = "Ysolde", health = 0.9, max = 3900, reaction = 5, friendly = true, class = "PALADIN", debuffs = { 702 }, debuffType = "Curse",
       cast = { name = "Flash of Light", icon = 19750, progress = 0.7, time = "0.4s" } },
 }
 
@@ -787,10 +827,9 @@ local SECTION = {
         { title = "Enemy nameplates", description = "SuuUI's plates on enemies. Turning the module off brings Blizzard's back after a reload.", rows = {
             { key = "width", label = "Width", control = "slider", min = 100, max = 200, step = 2, unit = "px", live = false },
             { key = "barHeight", label = "Health bar height", control = "slider", min = 4, max = 24, step = 1, unit = "px", live = false },
-            { key = "auras", label = "Your debuffs", control = "stepper", min = 0, max = 4, step = 1,
+            { key = "auras", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1,
               description = "Above the name, with their time. Only yours." },
-            { key = "auraSize", label = "Debuff size", control = "slider", min = 12, max = 28, step = 1, unit = "px", live = false,
-              description = "Changes wait for the end of a fight." },
+            { key = "auraSize", label = "Debuff size", control = "slider", min = 12, max = 28, step = 1, unit = "px", live = false, combat = true },
             { key = "castBars", label = "Cast bars", control = "toggle",
               description = "Under the bar: arcane when you can interrupt it, a lock when you can't." },
             { key = "castTarget", label = "Cast target", control = "toggle",
@@ -798,7 +837,10 @@ local SECTION = {
             { key = "castKick", label = "Your interrupt", control = "toggle",
               description = "On interruptible casts: a diamond in arcane when your interrupt is ready, its seconds when it isn't." },
             { key = "castHeight", label = "Cast bar height", control = "slider", min = 4, max = 20, step = 1, unit = "px", live = false },
-            { key = "healthText", label = "Health %", control = "toggle" },
+            { key = "healthText", label = "Health text", control = "segmented",
+              options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
+                          { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
+              description = "At the right end of the name row: the health percentage, the current health, or both." },
             { key = "threat", label = "Threat badges", control = "toggle",
               description = "Aggro when a mob attacks you. As a tank in a group: Losing when it's about to leave you, Aggro when it has." },
             { key = "questMarks", label = "Quest objectives", control = "toggle",
@@ -807,10 +849,10 @@ local SECTION = {
               description = "With a target, other plates rest at 72% so yours reads first." },
         } },
         { title = "Friendly nameplates", rows = {
-            { key = "friendlyOpenWorld", label = "Only in the open world", control = "toggle",
+            { key = "friendlyOpenWorld", label = "Only in the open world", control = "toggle", combat = true,
               description = "Friendly players' plates show in the open world and hide in dungeons and raids. Turning it off brings them back everywhere; from then on the game's own nameplate setting decides." },
             { key = "friendlyStyle", label = "SuuUI's look", control = "toggle",
-              description = "In the open world: the name in its class colour, the bar, health %, the debuffs you can remove and casts. Inside dungeons, raids, battlegrounds and arenas the game keeps its own." },
+              description = "In the open world: the name in its class colour, the bar, the health text, the debuffs you can remove and casts. Inside dungeons, raids, battlegrounds and arenas the game keeps its own." },
         } },
     },
 }

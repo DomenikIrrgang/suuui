@@ -2,9 +2,12 @@
 -- "/suu probe class": what this class really gets on Forever, for the
 -- Cooldown Manager presets (plan step 1.7c). Works at level 1:
 --   talents   every node of the class's talent trees, learned or not, with
---             its spell ID (through C_Traits, as Forever's talents are built)
+--             its spell ID (through C_Traits, as Forever's talents are built),
+--             its description and base cooldown (read a moment later: the
+--             client loads spell text on demand)
 --   trainer   when a class trainer's window opens: every spell it lists,
---             unavailable ones included, with rank and required level
+--             unavailable ones included, with rank, required level and
+--             description
 -- Saved per class in SuuUIProbe.classData[CLASS] on /reload.
 --
 --   /suu probe class    read the talents now; then talk to the class trainer
@@ -87,7 +90,30 @@ function CD.ReadTalents()
         end
     end
     d.talents, d.talentsAt, d.talentsError = talents, date("%Y-%m-%d %H:%M"), nil
+    CD.Describe(talents)
     return #talents
+end
+
+-- What each talent does and its base cooldown: Forever's own talents have no
+-- other source. The client loads spell text on demand, so ask for all of it
+-- first and read it a moment later.
+function CD.Describe(talents)
+    for _, t in ipairs(talents) do
+        if C_Spell.RequestLoadSpellData then pcall(C_Spell.RequestLoadSpellData, t.spellID) end
+    end
+    C_Timer.After(2, function()
+        local n = 0
+        for _, t in ipairs(talents) do
+            local desc = call(C_Spell.GetSpellDescription, t.spellID)
+            if type(desc) == "string" and not isSecret(desc) and desc ~= "" then
+                t.description = desc
+                n = n + 1
+            end
+            local cd = GetSpellBaseCooldown and call(GetSpellBaseCooldown, t.spellID)
+            if type(cd) == "number" and not isSecret(cd) and cd > 0 then t.cooldown = cd end
+        end
+        ns.Print(("Class data: %d of %d talent descriptions read. /reload to save."):format(n, #talents))
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -113,8 +139,10 @@ function CD.ReadTrainer()
             local level = GetTrainerServiceLevelReq and call(GetTrainerServiceLevelReq, i) or nil
             if type(level) == "number" and level > maxLevel then maxLevel = level end
             local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i) or nil
+            local desc = GetTrainerServiceDescription and call(GetTrainerServiceDescription, i) or nil
             spells[#spells + 1] = { name = name, rank = rank ~= "" and rank or nil, kind = kind, level = level, link = link,
-                skill = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i) or nil }
+                skill = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i) or nil,
+                description = type(desc) == "string" and not isSecret(desc) and desc ~= "" and desc or nil }
         end
     end
     -- C_Trainer, if this client has it (names only, for later)

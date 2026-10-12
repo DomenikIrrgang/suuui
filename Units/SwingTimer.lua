@@ -40,7 +40,7 @@ end
 local SECTION = {
     id = "swingtimer", label = "Swing timer", category = "Frames", order = 21,
     groups = {
-        { title = "Swing timer", description = "Without the combat log SuuUI can't see parry haste or clipped swings, so it shows neither.", rows = {
+        { title = "When it shows", description = "Without the combat log SuuUI can't see parry haste or clipped swings, so it shows neither.", rows = {
             { key = "inCombatOnly", label = "In combat only", control = "toggle",
               description = "Out of combat the timer is gone." },
             { key = "hideForHealers", label = "Hide when you heal", control = "toggle",
