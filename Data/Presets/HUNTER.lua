@@ -60,7 +60,6 @@ ns.CooldownPresets = {
             { name = "Explosive Trap", ids = { 13813, 14316, 14317 } },
             { name = "Scare Beast", ids = { 1513, 14326, 14327, 1324506, 1324507, 1324510 } },
             { name = "Disengage", ids = { 781, 14272, 14273, 14344 } },
-            { name = "Tranquilizing Shot", ids = { 19801, 1218134 } },
         },
         buffs = {
             { name = "Aspect of the Hawk", ids = { 13165, 14318, 14319, 14320, 14321, 14322, 25296, 25406 } },
@@ -98,7 +97,6 @@ ns.CooldownPresets = {
         utility = {
             { name = "Scatter Shot", ids = { 1988, 19503, 23601, 462666, 1324499 } },
             { name = "Concussive Shot", ids = { 5116, 17174, 22914, 27634, 1236191 } },
-            { name = "Tranquilizing Shot", ids = { 19801, 1218134 } },
             { name = "Feign Death", ids = { 5384 } },
             { name = "Freezing Trap", ids = { 1499, 3355, 14308, 14309, 14310, 14311, 27753, 1285994, 1288849, 1288851, 1288852, 1294351, 1294353, 1294444, 1324500, 1324501, 1324502 } },
             { name = "Distracting Shot", ids = { 14274, 15629, 15630, 15631, 15632, 20736 } },

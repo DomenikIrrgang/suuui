@@ -62,6 +62,7 @@ ns.CooldownPresets = {
             { name = "Shadow Word: Pain", ids = { 589, 594, 616, 970, 992, 1260, 2767, 10892, 10893, 10894, 11639, 14032, 15654, 17146, 19776, 23268, 23952, 24212, 27605, 450646, 1226589 } },
         },
         procs = {
+            { name = "Focused Casting", ids = { 27828 } },
         },
     } },
     { id = "holy", name = "Holy", tree = 2, lists = {
@@ -121,6 +122,7 @@ ns.CooldownPresets = {
             { name = "Blackout", ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
         },
         procs = {
+            { name = "Shadow Weaving", ids = { 15257, 15258 } },
             { name = "Spirit Tap", ids = { 15270, 15271 } },
         },
     } },

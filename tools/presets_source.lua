@@ -24,7 +24,7 @@
 -- "Touch of Fire". Blessing of Sanctuary, Elemental Mastery and Curse of
 -- Shadow aren't in Forever's client at all. Trainers don't teach Gift of the
 -- Wild, Prayer of Fortitude, Arcane Brilliance, Inferno, Fire Nova Totem (Fire
--- Nova is a spell), Lightwell or Desperate Prayer, and Sanctity Aura isn't a
+-- Nova is a spell), Lightwell, Desperate Prayer or Tranquilizing Shot, and Sanctity Aura isn't a
 -- talent (checked against /suu probe class data in tools/data).
 -- Forever's own class spells (IDs above a million) aren't in vanilla's lists:
 -- Seal of Fury (Protection) so far; more turn up in characters' spellbooks.
@@ -117,7 +117,7 @@ return {
           utility = { "Hammer of Justice", "Divine Shield", "Divine Protection", "Lay on Hands", "Blessing of Freedom", "Blessing of Protection", "Holy Wrath" },
           buffs = { seal("Seal of Command"), blessing("Blessing of Might"), "Retribution Aura", "Divine Shield", "Divine Protection", "Blessing of Freedom", "Blessing of Protection", "Blessing of Sacrifice" },
           debuffs = { MY_JUDGEMENT, OTHERS_JUDGEMENTS, "Repentance", "Hammer of Justice" },
-          procs = { "Vengeance" } },
+          procs = { "Vengeance", "Vindication" } },
     },
 
     -- From Forever's own class data (trainer + talents, 2026-10-11): Aimed
@@ -133,13 +133,13 @@ return {
           procs = {} },
         { id = "beastmastery", name = "Beast Mastery", tree = 1,
           essential = { "Bestial Wrath", "Intimidation", "Rapid Fire", "Aimed Shot", "Multi-Shot", "Arcane Shot" },
-          utility = { "Summon Hawk", "Concussive Shot", "Feign Death", "Freezing Trap", "Frost Trap", "Immolation Trap", "Explosive Trap", "Scare Beast", "Disengage", "Tranquilizing Shot" },
+          utility = { "Summon Hawk", "Concussive Shot", "Feign Death", "Freezing Trap", "Frost Trap", "Immolation Trap", "Explosive Trap", "Scare Beast", "Disengage" },
           buffs = { "Aspect of the Hawk", "Aspect of the Monkey", "Aspect of the Cheetah", "Aspect of the Pack", "Aspect of the Wild", "Aspect of the Beast", "Trueshot Aura", "Rapid Fire" },
           debuffs = { "Hunter's Mark", "Serpent Sting", "Scorpid Sting", "Viper Sting", "Concussive Shot", "Wing Clip", "Freezing Trap", "Intimidation" },
           procs = { "Quick Shots", "Focused Fire" } },
         { id = "marksmanship", name = "Marksmanship", tree = 2,
           essential = { "Aimed Shot", "Sniper Shot", "Multi-Shot", "Arcane Shot", "Rapid Fire" },
-          utility = { "Scatter Shot", "Concussive Shot", "Tranquilizing Shot", "Feign Death", "Freezing Trap", "Distracting Shot", "Flare", "Disengage" },
+          utility = { "Scatter Shot", "Concussive Shot", "Feign Death", "Freezing Trap", "Distracting Shot", "Flare", "Disengage" },
           buffs = { "Trueshot Aura", "Aspect of the Hawk", "Aspect of the Monkey", "Aspect of the Cheetah", "Rapid Fire" },
           debuffs = { "Hunter's Mark", "Serpent Sting", "Scorpid Sting", "Viper Sting", "Scatter Shot", "Concussive Shot" },
           procs = { "Quick Shots", "Rapid Killing", "Careful Aim" } },
@@ -190,7 +190,7 @@ return {
           utility = { "Psychic Scream", "Fade", "Fear Ward" },
           buffs = { "Power Word: Fortitude", "Divine Spirit", "Inner Fire", "Power Word: Shield", "Power Infusion", "Inner Focus", "Fear Ward", "Shadow Protection", "Fade" },
           debuffs = { "Shadow Word: Pain" },
-          procs = {} },
+          procs = { "Focused Casting" } },
         { id = "holy", name = "Holy", tree = 2,
           essential = { "Prayer of Mending", "Power Word: Shield", "Fear Ward" },
           utility = { "Psychic Scream", "Fade" },
@@ -202,7 +202,7 @@ return {
           utility = { "Inner Focus", "Power Word: Shield", "Devouring Plague", "Fear Ward" },
           buffs = { "Shadowform", "Inner Fire", "Power Word: Fortitude", "Shadow Protection", "Power Word: Shield", "Fade" },
           debuffs = { "Shadow Word: Pain", "Vampiric Embrace", "Mind Flay", "Devouring Plague", "Shadow Vulnerability", "Silence", "Psychic Scream", "Blackout" },
-          procs = { "Spirit Tap" } },
+          procs = { "Shadow Weaving", "Spirit Tap" } },
     },
 
     SHAMAN = {
