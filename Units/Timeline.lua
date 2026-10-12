@@ -28,11 +28,18 @@ local M = SuuUI.RegisterModule({
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
         pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
+        pullVoice = "Female", -- "Female" | "Male" | "off": the last ten seconds spoken
         source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
         hideTheirs = true,   -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
         dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
     },
 })
+
+-- The first voices (borrowed for a day) gave way to SuuUI's own.
+M:Migrate("pullVoice-own", function(values)
+    if values.pullVoice == "David" then values.pullVoice = "Male"
+    elseif values.pullVoice == "Jim" then values.pullVoice = "Female" end
+end)
 
 -- "Last 5 seconds" became "Last 10 seconds".
 M:Migrate("pullAlert-last10", function(values)
@@ -291,7 +298,41 @@ end
 -- The pull countdown
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- The countdown voice: the last ten seconds and "Pull!" spoken
+-- (Media/Sounds/Countdown: SuuUI's own, generated from public-domain Piper
+-- voices, see its license.txt and tools/gen_countdown_voice.py). Addon
+-- sound files play on Forever (game-data paths don't). Quiet while a boss
+-- mod feeds the timeline: it counts out loud itself then.
+--------------------------------------------------------------------------------
+
+local VOICES = { Female = true, Male = true }
+local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.ogg"
+
+-- n: 1-10, or "pull"
+function M:Speak(n, voice)
+    voice = voice or self:Get("pullVoice")
+    if not VOICES[voice] then return end
+    if n ~= "pull" and (n < 1 or n > 10) then return end
+    pcall(PlaySoundFile, VOICE_PATH:format(voice, tostring(n)), "Master")
+end
+
+-- Each of the last ten seconds on the second, then "Pull!".
+function M:ScheduleVoice(seconds, token)
+    local voice = self:Get("pullVoice")
+    if not VOICES[voice] or self:Get("source") ~= "suui" then return end
+    for n = math.min(10, math.floor(seconds)), 1, -1 do
+        C_Timer.After(seconds - n, function()
+            if self.voiceToken == token then self:Speak(n, voice) end
+        end)
+    end
+    C_Timer.After(seconds, function()
+        if self.voiceToken == token then self:Speak("pull", voice) end
+    end)
+end
+
 function M:CancelPull(quiet)
+    self.voiceToken = nil
     if self.pullID and ET then pcall(ET.CancelScriptEvent, self.pullID) end
     self.pullID = nil
     self.pullEnds = nil
@@ -318,6 +359,9 @@ function M:StartPull(seconds, from)
     end
     local endsAt = GetTime() + seconds
     self.pullEnds = endsAt
+    local token = {}
+    self.voiceToken = token
+    self:ScheduleVoice(seconds, token)
     local detail = from and ("from " .. from) or nil
     -- the countdown as an alert (all of it, or the last ten seconds), then "Pull!"
     local mode = self:Get("pullAlert")
@@ -521,6 +565,15 @@ local SECTION = {
             { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
               options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
               description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
+            { key = "pullVoice", label = "Voice", control = "segmented",
+              options = { { value = "Female", label = "Female" }, { value = "Male", label = "Male" }, { value = "off", label = "Off" } },
+              description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then." },
+            { label = "Listen", control = "button", text = "Hear the voice",
+              disabled = function() return M:Get("pullVoice") == "off", "Choose a voice first." end,
+              onClick = function()
+                  local voice = M:Get("pullVoice")
+                  for i, n in ipairs({ 3, 2, 1, "pull" }) do C_Timer.After(i - 1, function() M:Speak(n, voice) end) end
+              end },
             { label = "Start one", control = "button", text = "Start a pull countdown",
               onClick = function() M:Pull() end },
         } },
