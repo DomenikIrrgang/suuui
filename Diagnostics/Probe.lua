@@ -734,6 +734,10 @@ function ns.Probe.Command(arg)
         ns.MeterProbe.Command(rest)
         return
     end
+    if sub == "timeline" then
+        ns.TimelineProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
