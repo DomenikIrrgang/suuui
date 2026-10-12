@@ -1859,7 +1859,7 @@ local function buildEditor(parent)
     end
 
     local function buildConditions(b)
-        local cs = CreateFrame("Frame", nil, b.body)
+        local cs = CreateFrame("Frame", nil, b.inner)
         cs:SetWidth(CW)
         b.sections[#b.sections + 1] = cs
         local rule = UI.Hairline(cs, "gilt-faint")
@@ -1944,7 +1944,7 @@ local function buildEditor(parent)
     end
 
     local function section(b)
-        local s = CreateFrame("Frame", nil, b.body)
+        local s = CreateFrame("Frame", nil, b.inner)
         s:SetWidth(CW)
         b.sections[#b.sections + 1] = s
         return s, stack(s)
@@ -1954,6 +1954,12 @@ local function buildEditor(parent)
         local b = UI.Panel(SuuUI.Root, { title = "Behaviour", width = BP_W, height = 600, solid = true })
         UI.MakeModal(b)
         b.sections = {}
+        -- everything scrolls once the panel would outgrow the screen (many
+        -- conditions): the panel stops at most of the screen's height
+        b.scroll = UI.ScrollArea(b.body, 6)
+        b.scroll:SetAllPoints(b.body)
+        b.inner = b.scroll.child
+        b.inner:SetWidth(CW)
 
         -- a note on top: a member's slot, a cooldown slot's order
         -- (the box itself, then space-5 before the next section)
@@ -2127,7 +2133,7 @@ local function buildEditor(parent)
 
         buildConditions(b)
 
-        b.reset = UI.Button(b.body, { text = "Reset", width = 90, onClick = function()
+        b.reset = UI.Button(b.inner, { text = "Reset", width = 90, onClick = function()
             local ctx = f.behaviour.ctx
             mutateEntry(function(e)
                 if ctx == "member" then
@@ -2140,7 +2146,7 @@ local function buildEditor(parent)
                 end
             end)
         end })
-        b.done = UI.Button(b.body, { text = "Done", variant = "primary", width = 90, onClick = function() b:Hide() end })
+        b.done = UI.Button(b.inner, { text = "Done", variant = "primary", width = 90, onClick = function() b:Hide() end })
         return b
     end
 
@@ -2243,17 +2249,19 @@ local function buildEditor(parent)
         local h = 0
         for _, s in ipairs(shown) do
             s:ClearAllPoints()
-            s:SetPoint("TOPLEFT", b.body, "TOPLEFT", 0, -h)
+            s:SetPoint("TOPLEFT", b.inner, "TOPLEFT", 0, -h)
             s:SetHeight(s.height)
             s:Show()
             h = h + s.height
         end
         h = h + 10
         b.reset:ClearAllPoints()
-        b.reset:SetPoint("TOPLEFT", b.body, "TOPLEFT", 0, -h)
+        b.reset:SetPoint("TOPLEFT", b.inner, "TOPLEFT", 0, -h)
         b.done:ClearAllPoints()
-        b.done:SetPoint("TOPRIGHT", b.body, "TOPLEFT", CW, -h)
-        b:SetHeight(b:BodyTop() + h + 30 + 20)
+        b.done:SetPoint("TOPRIGHT", b.inner, "TOPLEFT", CW, -h)
+        local content = h + 30
+        b.inner:SetHeight(content)
+        b:SetHeight(math.min(b:BodyTop() + content + 20, math.floor(SuuUI.Root:GetHeight() * 0.85)))
     end
 
     function f:OpenBehaviour(path)
@@ -2264,6 +2272,7 @@ local function buildEditor(parent)
         local b = self.behaviour
         -- (b.name is the panel's Name field: the entry's name goes in entryName)
         b.key, b.path, b.uid, b.entryName, b.slotUid = path.key, path, e.uid, e.name, slot and slot.uid
+        b.scroll:SetVerticalScroll(0)
         self:RefreshBehaviour()
         b:Show()
     end

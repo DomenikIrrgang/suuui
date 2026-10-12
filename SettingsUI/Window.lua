@@ -30,55 +30,9 @@ local pages = {}      -- section id -> page
 local current         -- the open section's id
 local query = ""      -- the search text, lower case
 
---------------------------------------------------------------------------------
--- A scrolling area: mouse wheel only, content in area.child. With `bar`, a
--- thin scrollbar (Select's: a gilt-faint track, an ink-muted thumb for the
--- visible part) sits `bar` px right of the area, only while the content
--- overflows.
---------------------------------------------------------------------------------
-
-local function updateBar(scroll)
-    local track, thumb = scroll.track, scroll.thumb
-    local viewH = scroll:GetHeight()
-    local max = math.max(0, scroll.child:GetHeight() - viewH)
-    local on = max >= 1 and viewH > 0
-    track:SetShown(on)
-    thumb:SetShown(on)
-    if not on then return end
-    local thumbH = math.max(24, viewH * viewH / (viewH + max))
-    thumb:SetHeight(thumbH)
-    thumb:ClearAllPoints()
-    thumb:SetPoint("TOP", track, "TOP", 0, -(viewH - thumbH) * math.min(1, scroll:GetVerticalScroll() / max))
-end
-
-local function scrollArea(parent, bar)
-    local scroll = CreateFrame("ScrollFrame", nil, parent)
-    local child = CreateFrame("Frame", nil, scroll)
-    child:SetSize(1, 1)
-    scroll:SetScrollChild(child)
-    scroll:EnableMouseWheel(true)
-    scroll:SetScript("OnMouseWheel", function(self, delta)
-        local max = math.max(0, child:GetHeight() - self:GetHeight())
-        self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 48)))
-    end)
-    scroll.child = child
-    if bar then
-        -- on the parent: the scroll frame clips what it holds
-        scroll.track = UI.Fill(parent, "gilt-faint", "ARTWORK")
-        scroll.track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", bar, 0)
-        scroll.track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", bar, 0)
-        scroll.track:SetWidth(3)
-        scroll.thumb = UI.Fill(parent, "ink-muted", "OVERLAY")
-        scroll.thumb:SetWidth(3)
-        local function update() updateBar(scroll) end
-        scroll:SetScript("OnScrollRangeChanged", update)
-        scroll:SetScript("OnVerticalScroll", update)
-        scroll:SetScript("OnSizeChanged", update)
-        child:SetScript("OnSizeChanged", update)
-        update()
-    end
-    return scroll
-end
+-- A scrolling area (UI.ScrollArea): mouse wheel, content in area.child, an
+-- optional thin scrollbar.
+local scrollArea = UI.ScrollArea
 
 --------------------------------------------------------------------------------
 -- Rows bound to settings
