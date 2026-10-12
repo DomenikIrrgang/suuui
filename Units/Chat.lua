@@ -237,9 +237,14 @@ local function ghost(p, i)
     if g then return g end
     g = CreateFrame("Frame", nil, p.tabs)
     g:EnableMouse(false)
+    -- inside its tab (Blizzard sizes tabs to its own, narrower font): the
+    -- header face at 12px, centred, cut with "…" when a name is longer
     g.label = UI.Text(g, "header", "ink-muted")
+    g.label:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 12, "")
     g.label:SetShadowed(true)
-    g.label:SetPoint("CENTER", 0, 0)
+    g.label:SetPoint("LEFT", 2, 0)
+    g.label:SetPoint("RIGHT", -2, 0)
+    g.label:SetJustifyH("CENTER")
     g.label:SetWordWrap(false)
     -- the active tab: a hairline fading at both ends, and a gilt diamond
     -- (Blizzard's tabs reach into the lines' area: 4px up)
@@ -250,7 +255,7 @@ local function ghost(p, i)
     g.jewel:SetPoint("CENTER", g, "BOTTOM", 0, 4)
     -- unread: a small ink diamond before the label
     g.unread = UI.Diamond(g, 4, "ink")
-    g.unread:SetPoint("RIGHT", g.label, "LEFT", -S["space-2"], 0)
+    g.unread:SetPoint("CENTER", g, "LEFT", 2, 0)
     p.ghosts[i] = g
     return g
 end
