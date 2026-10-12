@@ -426,7 +426,7 @@ local function rosterClasses()
     local set = {}
     local function add(unit)
         local _, class = UnitClass(unit)
-        if class and not isSecret(class) then set[class] = true end
+        if not isSecret(class) and class then set[class] = true end
     end
     add("player")
     if known(IsInRaid and IsInRaid(), false) then
