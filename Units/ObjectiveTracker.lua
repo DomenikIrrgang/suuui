@@ -1,9 +1,10 @@
 -- Units/ObjectiveTracker.lua
 -- The objective tracker (step 2.3): your tracked quests on the world under
--- the minimap, top right (28px in, 260px down), 260px wide. Titles in their
+-- the minimap, top right (28px in, 300px down, under its clock), 260px wide. Titles in their
 -- difficulty colour (the game's own: GetQuestDifficultyColor), objectives
--- with their counts, "Ready to turn in" once a quest is done; what doesn't
--- fit the height is counted ("4 more tracked"). Blizzard's tracker is hidden
+-- with their counts, "Ready to turn in" once a quest is done; the mouse
+-- wheel scrolls what doesn't fit the height (not in combat while quest
+-- items show: their secure buttons can't move then). Blizzard's tracker is hidden
 -- while this runs. A built-in module written against the public API only.
 --
 -- Quest items: SuuUI's secure action buttons (type "item") left of their
@@ -27,7 +28,8 @@ local M = SuuUI.RegisterModule({
     api = "0.11",
     reloadToToggle = true,
     defaults = {
-        position = { point = "TOPRIGHT", x = -28, y = -260 },
+        -- under the minimap's clock (it ends 271px down), space-6 clear
+        position = { point = "TOPRIGHT", x = -28, y = -300 },
         shows = "always",
         maxHeight = 440,
         collapsed = false,            -- the head's toggle
@@ -362,7 +364,7 @@ function M:ApplySize()
     self.pendingSize = nil
     local h = self:Get("maxHeight")
     self.frame:SetSize(WIDTH, h)
-    self.tracker.maxHeight = h
+    self.tracker:SetMaxHeight(h)
     self:Refresh()
 end
 
@@ -404,7 +406,7 @@ local SECTION = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "maxHeight", label = "Height", control = "slider", min = 160, max = 800, step = 10, unit = "px", combat = true,
-              description = "The most it takes down the screen; tracked quests that don't fit are counted below." },
+              description = "The most it takes down the screen; scroll with the mouse wheel for the quests below." },
             { key = "items", label = "Quest items", control = "toggle", combat = true,
               description = "A quest's usable item left of its title: click it to use, in combat too." },
             { key = "collapseInBossFights", label = "Collapse in boss fights", control = "toggle", combat = true,
@@ -428,6 +430,11 @@ function M:OnEnable()
         self.tracker = UI.ObjectiveTracker(self.frame, { width = WIDTH, toggle = self.toggle })
         self.tracker:SetPoint("TOPLEFT")
         self.tracker.onQuestClick = function(id, button, row) self:QuestClick(id, button, row) end
+        -- the items follow the list (out of combat: in combat it's locked
+        -- while items show)
+        self.tracker.onScroll = function()
+            if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
+        end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
         local wait = 0
         self.frame:SetScript("OnUpdate", function(_, elapsed)
@@ -476,7 +483,12 @@ function M:OnEnable()
             end)
         end
     end
+    -- secure item buttons can't move in combat: neither does the list then
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        self.tracker:SetScrollLocked((self.itemsShown or 0) > 0)
+    end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        self.tracker:SetScrollLocked(false)
         if self.pendingSecure then self:ApplySecure() end
         if self.pendingSize then self:ApplySize() end
         self:Refresh()

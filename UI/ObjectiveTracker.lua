@@ -13,7 +13,10 @@
 --                                 --   progress, done } }, item }
 --   t:SetCollapsed(on)            -- only the head
 --   t:QuestTop(questID)           -- where a quest's title starts (px down
---                                 -- from the tracker's top), for its item
+--                                 -- from the tracker's top), for its item;
+--                                 -- nil while scrolled out of sight
+--   t:ScrollBy(px), t:SetScrollLocked(on), t.onScroll() -- the wheel scrolls
+--                                 -- the quests within maxHeight
 --   t.onToggle, t.onQuestClick(questID, button) -- set by the owner
 --   opts.toggle: the owner's own (secure) toggle button, drawn here, placed
 --   by the owner over the head's left end (HEAD_H square at the top left)
@@ -159,51 +162,93 @@ function Tracker:SetQuests(quests, freeze)
         self.heights = {}
     end
     self.order = order
-    for _, r in ipairs(self.rows) do r:Hide() end
-    self.tops = {}
-    local y, shown, hidden = 0, 0, 0
+    for _, r in ipairs(self.rows) do r.inUse = false end
+    self.tops, self.rowOf = {}, {}
+    local y, shown = 0, 0
     for i, id in ipairs(order) do
         local q = byID[id]
         local r = self.rows[i] or questRow(self)
         self.rows[i] = r
         local h = q and self:DrawQuest(r, q) or 0
         if freeze then h = math.max(h, self.heights[id] or 0) end
-        local gap = (shown > 0) and S["space-4"] or 0
-        if not freeze and self.maxHeight and y + gap + h > self.maxHeight - HEAD_H - S["space-4"] - LINE_H then
-            hidden = hidden + 1
-        else
-            y = y + gap
-            self.heights[id] = h
-            self.tops[id] = y
-            if q then
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", 0, -y)
-                r:SetSize(self.width, h)
-                r:Show()
-            end
-            y = y + h
-            shown = shown + 1
+        y = y + ((shown > 0) and S["space-4"] or 0)
+        self.heights[id] = h
+        self.tops[id] = y
+        if q then
+            r.top, r.height, r.inUse = y, h, true
+            r:SetSize(self.width, h)
+            self.rowOf[id] = r
         end
-    end
-    -- more tracked than fit
-    if hidden > 0 then
-        self.more:ClearAllPoints()
-        self.more:SetPoint("TOPLEFT", 0, -(y + S["space-4"]))
-        self.more:SetValue(("%d more tracked"):format(hidden))
-        self.more:Show()
-        y = y + S["space-4"] + LINE_H
-    else
-        self.more:Hide()
+        y = y + h
+        shown = shown + 1
     end
     self.listHeight = y
     self.list:SetHeight(math.max(1, y))
     self:Fit()
+    self:ApplyScroll()
+end
+
+-- The quests' window: maxHeight less the head (all of them without one).
+function Tracker:ViewHeight()
+    if not self.maxHeight then return self.listHeight or 0 end
+    return math.max(LINE_H, self.maxHeight - HEAD_H - S["space-4"])
+end
+
+function Tracker:ScrollBy(px)
+    if self.scrollLocked then return end
+    self:SetScroll((self.scroll or 0) + px)
+end
+
+function Tracker:SetScroll(v)
+    local max = math.max(0, (self.listHeight or 0) - self:ViewHeight())
+    v = math.max(0, math.min(max, math.floor(v + 0.5)))
+    if v == self.scroll then return end
+    self.scroll = v
+    self:ApplyScroll()
+    if self.onScroll then self.onScroll() end
+end
+
+-- In combat with secure item buttons beside the titles: the list stays put.
+function Tracker:SetScrollLocked(on)
+    self.scrollLocked = on and true or false
+end
+
+-- The rows in the window shown, the rest hidden (so nothing out of sight
+-- takes a click); the thumb at the right edge while there's more.
+function Tracker:ApplyScroll()
+    local view = self:ViewHeight()
+    local max = math.max(0, (self.listHeight or 0) - view)
+    self.scroll = math.max(0, math.min(max, self.scroll or 0))
+    local scroll = self.scroll
+    for _, r in ipairs(self.rows) do
+        local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
+        if visible then
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
+            r:Show()
+        else
+            r:Hide()
+        end
+    end
+    if max > 0 then
+        local trackH = view
+        local thumbH = math.max(16, trackH * view / (self.listHeight or 1))
+        self.thumb:ClearAllPoints()
+        self.thumb:SetPoint("TOPRIGHT", self.clip, "TOPRIGHT", -1, -((trackH - thumbH) * scroll / max))
+        self.thumb:SetHeight(thumbH)
+        self.thumb:Show()
+    else
+        self.thumb:Hide()
+    end
 end
 
 -- Where a quest's title starts, down from the tracker's top (nil: not shown).
 function Tracker:QuestTop(questID)
     local top = self.tops and self.tops[questID]
     if not top then return nil end
+    top = top - (self.scroll or 0)
+    -- the item beside the title (2px over it, its own height) out of the window
+    if top - 2 < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
     return HEAD_H + S["space-4"] + top
 end
 
@@ -232,8 +277,16 @@ end
 
 function Tracker:Fit()
     local h = HEAD_H
-    if not self.collapsed and (self.listHeight or 0) > 0 then h = h + S["space-4"] + self.listHeight end
+    local list = math.min(self.listHeight or 0, self:ViewHeight())
+    if not self.collapsed and list > 0 then h = h + S["space-4"] + list end
+    self.clip:SetHeight(math.max(1, list))
     self:SetHeight(h)
+end
+
+function Tracker:SetMaxHeight(h)
+    self.maxHeight = h
+    self:Fit()
+    self:ApplyScroll()
 end
 
 -- The toggle's look (the toggle itself may be a secure button the owner
@@ -286,13 +339,26 @@ function UI.ObjectiveTracker(parent, opts)
     t:SetTitle(opts.title)
     t:SetMeta(opts.meta)
 
-    t.list = CreateFrame("Frame", nil, t)
-    t.list:SetPoint("TOPLEFT", 0, -(HEAD_H + S["space-4"]))
-    t.list:SetPoint("TOPRIGHT", 0, -(HEAD_H + S["space-4"]))
+    -- the quests' window: clips them (wide enough on the left for the
+    -- preview's item icons beside the titles)
+    local itemRoom = UI.Size("icon-md") + S["space-3"] + 2
+    t.clip = CreateFrame("Frame", nil, t)
+    t.clip:SetPoint("TOPLEFT", -itemRoom, -(HEAD_H + S["space-4"]))
+    t.clip:SetPoint("TOPRIGHT", S["space-3"], -(HEAD_H + S["space-4"]))
+    t.clip:SetHeight(1)
+    t.clip:SetClipsChildren(true)
+    t.list = CreateFrame("Frame", nil, t.clip)
+    t.list:SetPoint("TOPLEFT", itemRoom, 0)
+    t.list:SetWidth(t.width)
     t.list:SetHeight(1)
-    t.more = UI.Text(t.list, "caption", "ink-muted")
-    t.more:SetShadowed(true)
-    t.more:Hide()
+    -- where the window is in the list: a gilt-line thumb, 1px, right of the quests
+    t.thumb = t.clip:CreateTexture(nil, "OVERLAY")
+    t.thumb:SetColorTexture(UI.RGBA("gilt-line"))
+    t.thumb:SetWidth(1)
+    t.thumb:Hide()
+    t.scroll = 0
+    t:EnableMouseWheel(true)
+    t:SetScript("OnMouseWheel", function(self, delta) self:ScrollBy(-delta * (TITLE_H + LINE_H * 2)) end)
     t:SetCollapsed(false)
     return t
 end
