@@ -99,8 +99,10 @@
 --            packed entry ("hide" when missing, procs), a slot's member with
 --            a live condition (an engine group of its own in the slot) and a
 --            cell's effect are engine groups: their max goes to 0 and back.
---            LIMIT (untested in game): if the engine refuses that change in
---            combat, it applies when combat ends. Aura sounds stay registered
+--            The engine takes that change in combat too (confirmed in game:
+--            a "hide" buff with a stance condition follows stance switches
+--            mid-fight); a refused change would still apply when combat
+--            ends. Aura sounds stay registered
 --            for an entry hidden by a live condition.
 --   In a cooldown list a group's member's `when` rules it out (the cell
 --   shows the last one you know of the rest); a live one hides the cell.
