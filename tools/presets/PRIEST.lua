@@ -61,7 +61,7 @@ return {
     -- no talent points yet (below level 10): the level-30 buffs (Divine
     -- Spirit, Shadow Protection) would only remind of spells not yet known
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { onYou("Power Word: Shield"), "Mind Blast", onTarget("Holy Fire"), onTarget("Devouring Plague") },
+      essential = { "Mind Blast", onTarget("Holy Fire"), onTarget("Devouring Plague"), onYou("Power Word: Shield") },
       utility = { "Psychic Scream", onYou("Fade"), inGroup(onYou("Fear Ward")), inGroup("Divine Grace") },
       buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), RENEW },
       debuffs = { "Shadow Word: Pain" },

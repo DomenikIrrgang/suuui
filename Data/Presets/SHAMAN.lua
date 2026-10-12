@@ -153,8 +153,8 @@ ns.CooldownPresets = {
             { name = "Earthbind", icon = 3600, missing = "hide", source = "any", ids = { 3600 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Faerie Fire", icon = 770, missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },

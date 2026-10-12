@@ -66,7 +66,7 @@ end
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { bear("Bash"), bear("Growl"), bear(onYou("Enrage")), onYou("Nature's Grasp") },
+      essential = { bear(onYou("Enrage")), bear("Growl"), bear("Bash"), onYou("Nature's Grasp") },
       utility = { onYou("Barkskin"), casting(onYou("Innervate")), cat(onYou("Dash")), casting("Rebirth"), healing("Tranquility") },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
       debuffs = { casting("Moonfire"), "Faerie Fire", bear("Demoralizing Roar"), HOLDS, S.STUNS },
@@ -90,7 +90,7 @@ return {
           "Faerie Fire", S.physical({ druid = true }), S.STUNS },
       procs = { "Clearcasting" } },
     { id = "feralbear", name = "Feral (bear)", tree = 2,
-      essential = { bear("Primal Bite"), bear("Growl"), feralCharge(), bear("Bash"), bear(onYou("Enrage")), feral(onYou("Berserk")) },
+      essential = { bear("Primal Bite"), bear(onYou("Enrage")), feral(onYou("Berserk")), bear("Growl"), feralCharge(), bear("Bash") },
       -- Dash for the times you shift to cat
       utility = { bear(onYou("Frenzied Regeneration")), bear("Challenging Roar"), onYou("Barkskin"), casting(onYou("Innervate")),
           casting("Rebirth"), cat(onYou("Dash")) },

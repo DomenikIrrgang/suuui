@@ -13,10 +13,10 @@ if class ~= "ROGUE" then return end
 ns.CooldownPresets = {
     { id = "unspecced", name = "Unspecced", tree = 0, lists = {
         essential = {
-            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
-            { name = "Gouge", icon = 1776, effect = "target", when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 1776, 1777, 8629, 11285, 11286, 12540, 13579, 24698, 28456, 1324481 } },
             { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
+            { name = "Gouge", icon = 1776, effect = "target", when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 1776, 1777, 8629, 11285, 11286, 12540, 13579, 24698, 28456, 1324481 } },
             { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },
+            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
         },
         utility = {
             { name = "Evasion", icon = 4086, effect = "you", ids = { 4086, 5277, 15087 } },
@@ -34,8 +34,8 @@ ns.CooldownPresets = {
             { name = "Garrote", icon = 703, missing = "hide", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Faerie Fire", icon = 770, missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
@@ -87,11 +87,11 @@ ns.CooldownPresets = {
         essential = {
             { name = "Cold Blood", icon = 14177, effect = "you", ids = { 14177 } },
             { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
-            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
-            { name = "Gouge", icon = 1776, effect = "target", when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 1776, 1777, 8629, 11285, 11286, 12540, 13579, 24698, 28456, 1324481 } },
-            { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },
             { name = "Garrote", icon = 703, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
             { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
+            { name = "Gouge", icon = 1776, effect = "target", when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 1776, 1777, 8629, 11285, 11286, 12540, 13579, 24698, 28456, 1324481 } },
+            { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },
+            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
         },
         utility = {
             { name = "Evasion", icon = 4086, effect = "you", ids = { 4086, 5277, 15087 } },
@@ -122,8 +122,8 @@ ns.CooldownPresets = {
             { name = "Garrote", icon = 703, missing = "hide", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Faerie Fire", icon = 770, missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
@@ -162,13 +162,13 @@ ns.CooldownPresets = {
     } },
     { id = "combat", name = "Combat", tree = 2, lists = {
         essential = {
+            { name = "Riposte", icon = 5237, effect = "target", ids = { 5237, 6187, 6569, 14251 } },
             { name = "Adrenaline Rush", icon = 13750, effect = "you", ids = { 13750, 28752, 28753 } },
             { name = "Blade Flurry", icon = 1226883, effect = "you", ids = { 13877, 1226883, 1230700 } },
-            { name = "Riposte", icon = 5237, effect = "target", ids = { 5237, 6187, 6569, 14251 } },
-            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
+            { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
             { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
             { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },
-            { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
+            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
         },
         utility = {
             { name = "Evasion", icon = 4086, effect = "you", ids = { 4086, 5277, 15087 } },
@@ -186,8 +186,8 @@ ns.CooldownPresets = {
             { name = "Rupture", icon = 1943, ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Faerie Fire", icon = 770, missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
@@ -239,12 +239,12 @@ ns.CooldownPresets = {
         essential = {
             { name = "Ghostly Strike", icon = 14278, effect = "you", ids = { 14278 } },
             { name = "Premeditation", icon = 14183, effect = "you", ids = { 14183 } },
-            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
+            { name = "Ambush", icon = 8676, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 8676, 8678, 8724, 8725, 8727, 11267, 11268, 11269, 24337, 462718, 462719, 462720, 462721, 462722, 462723 } },
+            { name = "Garrote", icon = 703, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
+            { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
             { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "target", kinds = { "boss" }, ["not"] = true } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
             { name = "Feint", icon = 1966, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1966, 6768, 8637, 11303, 25302, 25976 } },
-            { name = "Ambush", icon = 8676, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 8676, 8678, 8724, 8725, 8727, 11267, 11268, 11269, 24337, 462718, 462719, 462720, 462721, 462722, 462723 } },
-            { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 1833, 6409, 14902 } },
-            { name = "Garrote", icon = 703, when = { conditions = { { type = "stance", stances = { "stealth" } } } }, ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
+            { name = "Kick", icon = 1766, ids = { 1766, 1767, 1768, 1769, 1775, 3467, 11978, 15610, 15614, 27613, 27814 } },
         },
         utility = {
             { name = "Preparation", icon = 14185, ids = { 14185, 422621 } },
@@ -265,8 +265,8 @@ ns.CooldownPresets = {
             { name = "Garrote", icon = 703, missing = "hide", ids = { 703, 8631, 8632, 8633, 8635, 8636, 8818, 11289, 11290, 462724, 462726, 462727, 462728, 462729, 462730, 1213442, 1231387 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Faerie Fire", icon = 770, missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },

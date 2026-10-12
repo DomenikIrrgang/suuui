@@ -32,6 +32,22 @@ local function talented(class, talentID, name)
         { type = "talent", talents = { talentID } } } } } }
 end
 
+-- Members you count only once you've learned them: while another player of
+-- the class is in your group (they may have it), or you know the spell
+-- yourself (a level 11 warrior has no Demoralizing Shout yet). For auras
+-- named like the spell that puts them up; by() for the rest (Charge Stun,
+-- Wound Poison, a pet's Growl).
+local function learned(classes, ...)
+    if type(classes) == "string" then classes = { classes } end
+    local out = {}
+    for _, name in ipairs({ ... }) do
+        out[#out + 1] = { name, when = { match = "any", conditions = {
+            { type = "classes", classes = classes, others = true },
+            { type = "talent", talents = { name } } } } }
+    end
+    return out
+end
+
 -- A list of members from several lists (by() results and plain names).
 local function members(...)
     local out = {}
@@ -64,11 +80,11 @@ local MY_JUDGEMENT = { group = "My Judgements", source = "mine", max = 1, icon =
 -- hunter pet's Growl counts as well). A Forever paladin taunts with
 -- Judgement of Fury (Seal of Fury's judgement); Hand of Reckoning exists in
 -- the client but no Forever paladin learns it.
--- (in a group only: solo, every mob is yours anyway)
-local TAUNTS = { group = "Taunts", source = "any", max = 2,
-    when = { conditions = { { type = "group", value = "solo", ["not"] = true } } },
-    members = members(by("WARRIOR", "Taunt", "Mocking Blow", "Challenging Shout"),
-        by({ "DRUID", "HUNTER" }, "Growl"), by("DRUID", "Challenging Roar"), by("PALADIN", "Judgement of Fury")) }
+-- (anywhere: in the open world you taunt mobs off players outside your
+-- group too; only while one is up, nothing to grey while none is)
+local TAUNTS = { group = "Taunts", source = "any", max = 2, missing = "hide",
+    members = members(learned("WARRIOR", "Taunt", "Mocking Blow", "Challenging Shout"),
+        by({ "DRUID", "HUNTER" }, "Growl"), learned("DRUID", "Challenging Roar"), by("PALADIN", "Judgement of Fury")) }
 -- Mages: one armor at a time, so one slot (Molten Armor isn't in Forever).
 local function armors(icon) return { group = "Armors", source = "mine", max = 1, icon = icon,
     members = { "Frost Armor", "Ice Armor", "Mage Armor" } } end
@@ -79,15 +95,15 @@ local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max
 -- Debuffs that don't stack across classes, from anyone (whoever put it up,
 -- you needn't): armor and attack power reduction, the attack-speed slow
 -- tanks want on their target, and healing reduction (against players only).
--- Each member counts only while its class is around (you or your group); with
--- none of them around, the slot is gone. Their icon is automatic: the first
+-- Each member counts only while another player of its class is in your
+-- group or you know it yourself; with none of them, the slot is gone. Their icon is automatic: the first
 -- member you know, else the first that can show.
 local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1,
-    members = members(by("WARRIOR", "Sunder Armor"), by("ROGUE", "Expose Armor")) }
+    members = members(learned("WARRIOR", "Sunder Armor"), learned("ROGUE", "Expose Armor")) }
 local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1,
-    members = members(by("WARRIOR", "Demoralizing Shout"), by("DRUID", "Demoralizing Roar"), talented("PALADIN", 9452, "Vindication")) }
+    members = members(learned("WARRIOR", "Demoralizing Shout"), learned("DRUID", "Demoralizing Roar"), talented("PALADIN", 9452, "Vindication")) }
 local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1,
-    members = members(by("WARRIOR", "Thunder Clap"), by("DRUID", "Hurricane")) }
+    members = members(learned("WARRIOR", "Thunder Clap"), learned("DRUID", "Hurricane")) }
 local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1,
     when = { conditions = { { type = "target", kinds = { "player" } } } },
     members = members(talented("WARRIOR", 12294, "Mortal Strike"),
@@ -140,5 +156,5 @@ return {
     MY_JUDGEMENT = MY_JUDGEMENT, OTHERS_JUDGEMENTS = OTHERS_JUDGEMENTS, TAUNTS = TAUNTS,
     ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
     HEALING_REDUCTION = HEALING_REDUCTION, STUNS = STUNS, with = with,
-    withClass = withClass, physical = physical, by = by, members = members,
+    withClass = withClass, physical = physical, by = by, learned = learned, members = members,
 }

@@ -84,7 +84,7 @@ return {
     { id = "protection", name = "Protection", tree = 2,
       -- Holy Shield's block charges show with the procs, its icon is the cooldown;
       -- Exorcism is for undead and demons (dimmed on anything else)
-      essential = { "Holy Shield", "Holy Strike", "Judgement", "Consecration", "Exorcism", onYou("Swift Judgement"), "Hammer of Wrath" },
+      essential = { "Holy Shield", "Holy Strike", "Judgement", "Consecration", "Exorcism", "Hammer of Wrath", onYou("Swift Judgement") },
       utility = { onYou("Templar's Bulwark"), TANK_SHIELDS, "Lay on Hands",
           onYou("Blessing of Protection"), onYou("Blessing of Freedom"), "Hammer of Justice", "Holy Wrath" },
       -- Seal of Fury is the taunt and the shield: never without it

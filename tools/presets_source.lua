@@ -10,6 +10,9 @@
 --   buffs                buffs on you (from anyone unless mine = true)
 --   debuffs              your debuffs on the target (always yours)
 --   procs                proc auras on you
+-- Essential in order: the rotation's damage or healing first (and its own
+-- burst cooldowns), then crowd control, defensives and taunts, interrupts
+-- last.
 -- An entry is a name, or { "Name", mine = true } for an aura only you cast,
 -- or a group: { group = "Seal", source = "mine"|"others"|"any", max = 1..4,
 -- icon = "Member name", members = { "Name", ... } } (one slot for several).

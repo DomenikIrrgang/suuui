@@ -31,7 +31,7 @@
 --     Sweeping Strikes have no condition (Forever's stance rules for them
 --     unverified).
 --   * Charge "cannot be used in combat": out of combat only.
--- Tanks' taunts (cooldowns and the Taunts slot) only matter in a group.
+-- Taunts show anywhere: in the open world you taunt mobs off strangers too.
 -- Debuffs you don't put up on purpose (Deep Wounds, Hamstring, Piercing
 -- Howl, stuns) hide while missing instead of greying with a target.
 
@@ -50,7 +50,6 @@ end
 local function stance(...) return { type = "stance", stances = { ... } } end
 local function inStance(...) return { conditions = { stance(...) } } end
 local OUT_OF_COMBAT = { type = "combat", ["not"] = true }
-local IN_GROUP = { conditions = { { type = "group", value = "solo", ["not"] = true } } }
 
 local BATTLE_SHOUT = { "Battle Shout", missing = "remind" }
 local CHARGE = { "Charge", when = { conditions = { OUT_OF_COMBAT } } }
@@ -63,8 +62,8 @@ local STUNS = S.with(S.STUNS, { missing = "hide" })
 -- target (grey there while it isn't up), not hidden
 local HEALING = S.with(S.HEALING_REDUCTION, { when = { conditions = { { type = "target", kinds = { "player" } } } } })
 HEALING.hidden = nil
--- Tanks (last debuff entry): only in a group
-local TAUNTS = S.with(S.TAUNTS, { when = IN_GROUP })
+-- Tanks: the last debuff entry
+local TAUNTS = S.TAUNTS
 
 return {
     -- levels 1-10 (and anyone without points): leveling with what's trained
@@ -97,12 +96,12 @@ return {
     { id = "protection", name = "Protection", tree = 3,
       essential = { "Shield Slam", { "Revenge", when = inStance("defensive") },
           you("Shield Block", { when = inStance("defensive") }), "Thunder Clap", you("Bloodrage") },
-      utility = { { "Taunt", when = IN_GROUP }, { "Mocking Blow", when = IN_GROUP }, { "Challenging Shout", when = IN_GROUP },
+      utility = { "Taunt", "Mocking Blow", "Challenging Shout",
           you("Shield Wall", { sound = "chime" }), you("Last Stand"), "Shield Bash", "Concussion Blow", DISARM,
           -- Vanguard: Defensive Stance charges too
           { "Charge", when = { conditions = { OUT_OF_COMBAT, stance("battle", "defensive") } } },
           { "Intercept", hidden = true }, you("Berserker Rage", { hidden = true, when = inStance("berserker") }) },
       buffs = { BATTLE_SHOUT },
-      debuffs = { S.physical({ tank = true }), STUNS, TAUNTS },
+      debuffs = { "Rend", S.physical({ tank = true }), STUNS, TAUNTS },
       procs = {} },
 }

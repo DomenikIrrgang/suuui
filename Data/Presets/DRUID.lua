@@ -13,9 +13,9 @@ if class ~= "DRUID" then return end
 ns.CooldownPresets = {
     { id = "unspecced", name = "Unspecced", tree = 0, lists = {
         essential = {
-            { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { name = "Growl", icon = 6795, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
             { name = "Enrage", icon = 3019, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Growl", icon = 6795, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
+            { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
             { name = "Nature's Grasp", icon = 16689, effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         utility = {
@@ -145,8 +145,8 @@ ns.CooldownPresets = {
             { name = "Faerie Fire", icon = 770, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
@@ -177,14 +177,14 @@ ns.CooldownPresets = {
     { id = "feralbear", name = "Feral (bear)", tree = 2, lists = {
         essential = {
             { name = "Primal Bite", icon = 407995, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
+            { name = "Enrage", icon = 3019, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Berserk", icon = 26662, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
             { name = "Growl", icon = 6795, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
             { group = true, name = "Feral Charge", icon = 414920, effect = "target", effectName = "Feral Charge", effectIDs = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 }, when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
                 { name = "Feral Charge", icon = 414920, ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", icon = 16979, ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
             { name = "Bash", icon = 5211, when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { name = "Enrage", icon = 3019, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
-            { name = "Berserk", icon = 26662, effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
         },
         utility = {
             { name = "Frenzied Regeneration", icon = 22842, effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 22842, 22845, 428708 } },
@@ -203,18 +203,18 @@ ns.CooldownPresets = {
             { name = "Faerie Fire", icon = 770, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
-                    { name = "Sunder Armor", icon = 7386, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
-                    { name = "Expose Armor", icon = 8647, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
+                    { name = "Sunder Armor", icon = 7386, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
+                    { name = "Expose Armor", icon = 8647, when = { match = "any", conditions = { { type = "classes", classes = { "ROGUE" }, others = true }, { type = "talent", talents = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } } } }, ids = { 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198 } },
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Curse of Recklessness", icon = 704, missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
                 { group = true, name = "Attack Power Reduction", source = "any", max = 1, icon = 1160, members = {
-                    { name = "Demoralizing Shout", icon = 1160, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 1160, 6190, 11554, 11555, 11556, 13730, 16244, 19778, 23511, 27579 } },
-                    { name = "Demoralizing Roar", icon = 99, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
+                    { name = "Demoralizing Shout", icon = 1160, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 1160, 6190, 11554, 11555, 11556, 13730, 16244, 19778, 23511, 27579 } } } }, ids = { 1160, 6190, 11554, 11555, 11556, 13730, 16244, 19778, 23511, 27579 } },
+                    { name = "Demoralizing Roar", icon = 99, when = { match = "any", conditions = { { type = "classes", classes = { "DRUID" }, others = true }, { type = "talent", talents = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } } } }, ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
                     { name = "Vindication", icon = 67, when = { match = "any", conditions = { { type = "classes", classes = { "PALADIN" }, others = true }, { type = "talent", talents = { 9452 } } } }, ids = { 67, 9452, 440667, 440668 } },
                 }, ids = { 67, 99, 1160, 1735, 6190, 9452, 9490, 9747, 9898, 10968, 11554, 11555, 11556, 13730, 15727, 15971, 16244, 19778, 20753, 23511, 27551, 27579, 440667, 440668 } },
                 { group = true, name = "Attack Speed Slows", source = "any", max = 1, icon = 6343, members = {
-                    { name = "Thunder Clap", icon = 6343, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
-                    { name = "Hurricane", icon = 16914, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
+                    { name = "Thunder Clap", icon = 6343, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } } } }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
+                    { name = "Hurricane", icon = 16914, when = { match = "any", conditions = { { type = "classes", classes = { "DRUID" }, others = true }, { type = "talent", talents = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
                 }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
             } },
             { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
@@ -236,12 +236,12 @@ ns.CooldownPresets = {
                 { name = "Blackout", icon = 15268, when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
                 { name = "War Stomp", icon = 45, ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18073, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
-            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
-                { name = "Taunt", icon = 355, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
-                { name = "Mocking Blow", icon = 694, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
-                { name = "Challenging Shout", icon = 1161, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 1161 } },
+            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, missing = "hide", members = {
+                { name = "Taunt", icon = 355, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
+                { name = "Mocking Blow", icon = 694, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 694, 7400, 7402, 20559, 20560, 21008 } } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
+                { name = "Challenging Shout", icon = 1161, when = { match = "any", conditions = { { type = "classes", classes = { "WARRIOR" }, others = true }, { type = "talent", talents = { 1161 } } } }, ids = { 1161 } },
                 { name = "Growl", icon = 6795, when = { conditions = { { type = "classes", classes = { "DRUID", "HUNTER" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
-                { name = "Challenging Roar", icon = 5209, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 5209 } },
+                { name = "Challenging Roar", icon = 5209, when = { match = "any", conditions = { { type = "classes", classes = { "DRUID" }, others = true }, { type = "talent", talents = { 5209 } } } }, ids = { 5209 } },
                 { name = "Judgement of Fury", icon = 20183, when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 20183, 20232, 20411, 20412, 20413, 20414, 1311650, 1311655 } },
             }, ids = { 355, 694, 1161, 1853, 2649, 3196, 5209, 6795, 7400, 7402, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 20183, 20232, 20411, 20412, 20413, 20414, 20559, 20560, 21008, 26281, 28140, 29060, 409372, 467346, 473701, 1218506, 1219541, 1311650, 1311655 } },
         },

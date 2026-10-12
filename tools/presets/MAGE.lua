@@ -57,7 +57,7 @@ return {
     -- No talents: Clearcasting needs Arcane Concentration, so it only shows
     -- once a point goes there (harmless till then).
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { "Fire Blast", FROST_NOVA, { "Cone of Cold", effect = "target" }, "Counterspell" },
+      essential = { "Fire Blast", { "Cone of Cold", effect = "target" }, FROST_NOVA, "Counterspell" },
       utility = { "Blink", { "Evocation", effect = "you" }, { "Mana Shield", effect = "you" },
                   WARDS },
       buffs = { armor("Frost Armor"), INTELLECT },
@@ -67,8 +67,8 @@ return {
     -- Arcane Blast stacks into Arcane Missiles (Missile Barrage) under
     -- Clearcasting; Arcane Power and Presence of Mind are the spec's buttons.
     { id = "arcane", name = "Arcane", tree = 1,
-      essential = { { "Arcane Power", effect = "you" }, { "Presence of Mind", effect = "you" },
-                    "Fire Blast", FROST_NOVA,
+      essential = { "Fire Blast", { "Arcane Power", effect = "you" }, { "Presence of Mind", effect = "you" },
+                    FROST_NOVA,
                     -- Improved Counterspell's silence covers the icon
                     { "Counterspell", effect = "target", effectName = "Counterspell - Silenced" } },
       utility = { "Blink", { "Evocation", effect = "you" }, { "Mana Shield", effect = "you" },
@@ -83,8 +83,8 @@ return {
     -- Hot Streak's instant Pyroblast; Fireball/Frostfire Bolt filler, Fire
     -- Blast and Blast Wave.
     { id = "fire", name = "Fire", tree = 2,
-      essential = { "Fire Blast", "Blast Wave", FROST_NOVA,
-                    { "Cone of Cold", effect = "target" }, "Counterspell" },
+      essential = { "Fire Blast", "Blast Wave", { "Cone of Cold", effect = "target" },
+                    FROST_NOVA, "Counterspell" },
       utility = { { "Combustion", effect = "you" }, "Blink", { "Evocation", effect = "you" },
                   { "Ice Block", effect = "you" }, { "Mana Shield", effect = "you" },
                   WARDS },
@@ -96,8 +96,8 @@ return {
     -- Frostbolt and Ice Lance on frozen targets (Frost Nova, Frostbite,
     -- Fingers of Frost); Ice Barrier on cooldown.
     { id = "frost", name = "Frost", tree = 3,
-      essential = { FROST_NOVA, { "Cone of Cold", effect = "target" },
-                    { "Ice Barrier", effect = "you" }, "Fire Blast", "Counterspell" },
+      essential = { { "Cone of Cold", effect = "target" }, "Fire Blast", FROST_NOVA,
+                    { "Ice Barrier", effect = "you" }, "Counterspell" },
       utility = { "Blink", { "Ice Block", effect = "you" }, "Cold Snap", { "Evocation", effect = "you" },
                   WARDS },
       buffs = { armor("Ice Armor"), INTELLECT },

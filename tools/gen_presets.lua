@@ -207,7 +207,8 @@ for _, t in pairs(WHEN) do
 end
 
 -- A talent condition's list: every name as all its spell IDs (the class's
--- talent rows), numbers as they are; an unknown name into invalid.
+-- talent rows, else any class's talent, else any spell of that name),
+-- numbers as they are; an unknown name into invalid.
 local function talentConditionIDs(list, class, cw)
     local out, seen = {}, {}
     local names = talentIDs[class]
@@ -217,6 +218,13 @@ local function talentConditionIDs(list, class, cw)
             ids = { v }
         elseif type(v) == "string" and names and names[v] then
             ids = names[v]
+        elseif type(v) == "string" and byName[v] then
+            -- not one of the class's talents: another class's talent or a
+            -- trainer spell (shared groups: "you know it yourself")
+            for _, other in pairs(talentIDs) do
+                if other[v] then ids = other[v]; break end
+            end
+            ids = ids or byName[v]
         elseif not names then
             invalid[#invalid + 1] = ("%s: talent %q: no class data for %s (tools/data/class_%s.tsv)"):format(cw, tostring(v), class, class:lower())
         else

@@ -71,14 +71,14 @@ local sap = { "Sap", missing = "hide" }
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { "Kick", target("Gouge"), kidney, feint },
+      essential = { kidney, target("Gouge"), feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract", opener("Sap") },
       buffs = { { "Slice and Dice", missing = "grey" } },
       debuffs = { "Rupture", garrote, S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
       procs = {} },
     { id = "assassination", name = "Assassination", tree = 1,
       -- Improved Kidney Shot: the stun is a damage window, so it leads
-      essential = { you("Cold Blood"), kidney, "Kick", target("Gouge"), feint, opener("Garrote"), opener("Cheap Shot") },
+      essential = { you("Cold Blood"), kidney, opener("Garrote"), opener("Cheap Shot"), target("Gouge"), feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract", opener("Sap") },
       buffs = { { "Slice and Dice", missing = "warn" }, { "Venom", missing = "warn" } },
       -- Mutilate and Venom want a poison up: grey while none is (on a hostile target)
@@ -86,8 +86,8 @@ return {
       procs = { "Remorseless" } },
     { id = "combat", name = "Combat", tree = 2,
       -- Riposte lights up after a parry by itself; its disarm shows on it
-      essential = { you("Adrenaline Rush"), you("Blade Flurry"), { "Riposte", effect = "target" }, "Kick", kidney, feint,
-          opener("Cheap Shot") },
+      essential = { { "Riposte", effect = "target" }, you("Adrenaline Rush"), you("Blade Flurry"), opener("Cheap Shot"),
+          kidney, feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Gouge"), target("Blind"), "Distract", opener("Sap") },
       buffs = { { "Slice and Dice", missing = "warn" } },
       debuffs = { "Rupture", S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
@@ -95,8 +95,8 @@ return {
     { id = "subtlety", name = "Subtlety", tree = 3,
       -- Premeditation's 20 sec to spend its combo points (shown out of
       -- Stealth too: its effect runs after the opener)
-      essential = { you("Ghostly Strike"), you("Premeditation"), "Kick", kidney, feint,
-          opener("Ambush"), opener("Cheap Shot"), opener("Garrote") },
+      essential = { you("Ghostly Strike"), you("Premeditation"), opener("Ambush"), opener("Garrote"),
+          opener("Cheap Shot"), kidney, feint, "Kick" },
       -- Elusiveness shortens Vanish and Blind
       utility = { "Preparation", you("Vanish"), target("Blind"), target("Gouge"), you("Evasion"), you("Sprint"), "Distract",
           opener("Sap") },
