@@ -298,6 +298,54 @@ for _, class in ipairs(classes) do
     end
 end
 
+-- The same spell tracked twice in one preset (warned): among the cooldown
+-- lists, and among the aura lists (single entries, shared slots' members and
+-- collections' entries alike) where whose overlaps (yours and others' don't;
+-- anyone's overlaps both). An aura shown on a cooldown's icon (effect) counts
+-- as yours. Hidden entries are marked: they double only once shown.
+local LIST_WHOSE = { buffs = "any", debuffs = "mine", procs = "mine" }
+local function overlap(a, b) return a == "any" or b == "any" or a == b end
+for _, class in ipairs(classes) do
+    for _, preset in ipairs(source[class]) do
+        local seen = { cooldown = {}, aura = {} }
+        local function note(kind, name, whose, where)
+            for _, prev in ipairs(seen[kind][name] or {}) do
+                if kind == "cooldown" or overlap(prev.whose, whose) then
+                    io.stderr:write(("duplicate: %s / %s: %q in %s and %s\n"):format(class, preset.name, name, prev.where, where))
+                end
+            end
+            seen[kind][name] = seen[kind][name] or {}
+            table.insert(seen[kind][name], { whose = whose, where = where })
+        end
+        local function walk(e, kind, whose, where, hidden)
+            if type(e) == "string" then return note(kind, e, whose, where .. (hidden and " (hidden)" or "")) end
+            if type(e) ~= "table" then return end
+            hidden = hidden or e.hidden
+            if e.collection then
+                for _, x in ipairs(e.entries or {}) do walk(x, kind, whose, where .. " / " .. e.collection, hidden) end
+            elseif e.group then
+                local w = e.source or whose
+                for _, m in ipairs(e.members or {}) do
+                    walk(m, kind, type(m) == "table" and m.source or w, where .. " / " .. e.group, hidden)
+                end
+                if kind == "cooldown" and e.effect then
+                    for _, m in ipairs(e.members or {}) do
+                        note("aura", e.effectName or (type(m) == "table" and m[1] or m), "mine", where .. " / " .. e.group .. " (effect)")
+                    end
+                end
+            else
+                local w = (e.mine and "mine") or e.source or whose
+                note(kind, e[1], w, where .. (hidden and " (hidden)" or ""))
+                if kind == "cooldown" and e.effect then note("aura", e.effectName or e[1], "mine", where .. " (effect)") end
+            end
+        end
+        for _, key in ipairs(LISTS) do
+            local kind = (key == "essential" or key == "utility") and "cooldown" or "aura"
+            for _, e in ipairs(preset[key] or {}) do walk(e, kind, LIST_WHOSE[key], key) end
+        end
+    end
+end
+
 -- Cooldowns the class can't learn on Forever (only for classes with data).
 for _, class in ipairs(classes) do
     local set = classSpells[class]
