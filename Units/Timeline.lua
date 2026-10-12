@@ -21,6 +21,7 @@ local M = SuuUI.RegisterModule({
         position = { point = "TOP", x = 0, y = -28 },
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
+        pullAlert = "all",   -- "all" | "last5" | "off": the countdown as an alert
     },
 })
 
@@ -132,19 +133,24 @@ function M:StartPull(seconds, from)
     end
     local endsAt = GetTime() + seconds
     local detail = from and ("from " .. from) or nil
-    -- the last five seconds as an alert, then "Pull!"
-    self.pullTicker = C_Timer.NewTicker(0.25, function()
+    -- the countdown as an alert (all of it, or the last five seconds), then "Pull!"
+    local mode = self:Get("pullAlert")
+    local function tick()
         local left = endsAt - GetTime()
         if left <= 0 then
-            SuuUI.ShowAlert("pull", "info", "Pull!", detail)
-            C_Timer.After(1.5, function() SuuUI.HideAlert("pull") end)
-            self.pullTicker:Cancel()
+            if mode ~= "off" then
+                SuuUI.ShowAlert("pull", "info", "Pull!", detail)
+                C_Timer.After(1.5, function() SuuUI.HideAlert("pull") end)
+            end
+            if self.pullTicker then self.pullTicker:Cancel() end
             self.pullTicker = nil
             self.pullID = nil
-        elseif left <= 5 then
+        elseif mode == "all" or (mode == "last5" and left <= 5) then
             SuuUI.ShowAlert("pull", "info", ("Pull in %d"):format(math.ceil(left)), detail)
         end
-    end)
+    end
+    self.pullTicker = C_Timer.NewTicker(0.25, tick)
+    tick()
     self:Refresh()
 end
 
@@ -241,6 +247,9 @@ local SECTION = {
         } },
         { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). In a group the leader's or an assistant's reaches everyone with SuuUI; combat ends it.", rows = {
             { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
+            { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
+              options = { { value = "all", label = "Whole countdown" }, { value = "last5", label = "Last 5 seconds" }, { value = "off", label = "Off" } },
+              description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
             { label = "Start one", control = "button", text = "Start a pull countdown",
               onClick = function() M:Pull() end },
         } },

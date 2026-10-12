@@ -9,8 +9,8 @@
 -- track: no panel, a thin gilt line `timeline-w` wide over the world, now at
 -- its left end (an ink mark), ticks every 5 seconds, "30s" over the right
 -- end. Each ability rides toward now: its icon (icon-md, a dark ring; amber
--- under `soonAt` seconds) on the line, its time and name under it, a badge
--- under those. What comes after the window is named right of the line
+-- under `soonAt` seconds) on the line, its time and name centred under it,
+-- a badge under those. What comes after the window is named right of the line
 -- ("then Inferno in 0:52 · +1 more").
 -- list: the older glass panel, soonest first, each row with a draining line.
 -- The positions move every frame while something is on it.
@@ -87,7 +87,9 @@ local function layoutTrack(t, now)
         local f = t.evs[i] or trackEvent(t)
         t.evs[i] = f
         local frac = x.r / win
-        local align = frac < 0.08 and "start" or frac > 0.92 and "end" or "mid"
+        -- always centred under its icon (near now too: held inside the line,
+        -- the label looked pushed aside)
+        local align = "mid"
         if f.align ~= align then alignEvent(f, align); f.align = align end
         local px = math.floor(frac * w + 0.5)
         f:ClearAllPoints()

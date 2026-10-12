@@ -92,7 +92,9 @@ function UI.Alert(parent)
     f.right = UI.Diamond(f, JEWEL, "ember")
     f.right:SetPoint("CENTER", f, "RIGHT", 0, 0)
     f.title = UI.Text(f, "alert", "ember-text")
-    f.title:SetPoint("TOP", 0, -S["space-4"])
+    -- the display face is small caps with no descenders: its line box
+    -- centres 2px high, so it sits 2px lower
+    f.title:SetPoint("TOP", 0, -S["space-4"] - 2)
     f.detail = UI.Text(f, "caption", "ink")
     f.detail:SetPoint("TOP", f.title, "BOTTOM", 0, -S["space-1"])
     f:SetAlert("danger", "")
