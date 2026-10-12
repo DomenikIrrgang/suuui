@@ -271,8 +271,60 @@ end
 
 local MAX_LINES = 500
 
+-- A name to copy: a small box with it selected, Ctrl+C, Esc or Enter closes.
+local copyBox
+local function copyName(name)
+    if not copyBox then
+        local p = UI.Panel(SuuUI.Root, { title = "Copy name", width = 260, height = 96 })
+        local field = UI.TextField(p.body, { width = 260 - S["space-5"] * 2 })
+        field:SetPoint("TOPLEFT")
+        p.field = field
+        p.hint = UI.Text(p.body, "caption", "ink-muted")
+        p.hint:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
+        p.hint:SetValue("Ctrl+C to copy · Esc closes")
+        field.edit:SetScript("OnEscapePressed", function() p:Hide() end)
+        field.edit:SetScript("OnEnterPressed", function() p:Hide() end)
+        UI.MakeModal(p)
+        copyBox = p
+    end
+    copyBox:Show()
+    copyBox.field.edit:SetText(name)
+    copyBox.field.edit:SetFocus()
+    copyBox.field.edit:HighlightText()
+end
+
+-- Right click on a player's name: SuuUI's own menu (Blizzard's, opened from
+-- an addon, runs tainted: copying a name is blocked then). Nothing in it
+-- needs a protected action.
+local function playerMenu(owner, name)
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return false end
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateTitle(name)
+        root:CreateButton("Whisper", function()
+            local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
+            if tell then tell(name, ChatFrame1) end
+        end)
+        root:CreateButton("Invite", function()
+            local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+            if invite then pcall(invite, name) end
+        end)
+        root:CreateButton("Copy name", function() copyName(name) end)
+        root:CreateButton("Add friend", function()
+            if C_FriendList and C_FriendList.AddFriend then pcall(C_FriendList.AddFriend, name) end
+        end)
+        root:CreateButton("Ignore", function()
+            if C_FriendList and C_FriendList.AddIgnore then pcall(C_FriendList.AddIgnore, name) end
+        end)
+    end)
+    return true
+end
+
 local function linkClick(frame, link, text, button)
-    if isSecret(link) then return end
+    if isSecret(link) or type(link) ~= "string" then return end
+    if button == "RightButton" then
+        local name = link:match("^player:([^:]+)")
+        if name and name ~= "" and playerMenu(frame, name) then return end
+    end
     pcall(SetItemRef, link, text, button, frame)
 end
 
