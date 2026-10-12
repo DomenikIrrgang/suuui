@@ -230,6 +230,7 @@ API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, 
 
 -- 0.11: the objective tracker
 API.UI.ObjectiveTracker = UI.ObjectiveTracker -- ObjectiveTracker(parent, { width, maxHeight, toggle }) -> t:SetQuests(list, freeze), t:SetCollapsed(on), t:SetMeta(text), t:QuestTop(questID)
+API.UI.TRACKER_HEAD_H = UI.TRACKER_HEAD_H -- the tracker head's height (its toggle's size)
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
 -- takes it away. detail: text, or a format whose arguments may be secret.
