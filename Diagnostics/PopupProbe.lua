@@ -16,6 +16,11 @@
 --                            on the cursor with nothing on it) one by one and
 --                            notes which the game blocks. Blizzard's "blocked"
 --                            message may show for those: that's the answer.
+--   /suu probe popups host   hosting test: the next logout countdown (/camp)
+--                            or delete question moves Blizzard's popup over a
+--                            SuuUI test panel at the left, everything but its
+--                            buttons invisible. Click Cancel (or No): does the
+--                            game take it as Blizzard's? Then /reload.
 
 local _, ns = ...
 
@@ -283,8 +288,80 @@ function PP.Try()
     step()
 end
 
+-- Hosting: Blizzard's popup moved over SuuUI's panel, only its buttons
+-- showing (its texts, art and other parts at alpha 0). Nothing written on
+-- Blizzard's frames but points and alpha.
+local HOSTED = { CAMP = true, QUIT = true, DELETE_ITEM = true, DELETE_GOOD_ITEM = true,
+                 DELETE_QUEST_ITEM = true, DELETE_GOOD_QUEST_ITEM = true }
+local hostPanel, hostArmed, hostHooked
+
+local function hostNote(s)
+    local p = SuuUIProbe.popups
+    if not p then return end
+    p.host = p.host or {}
+    p.host[#p.host + 1] = date("%H:%M:%S") .. " " .. s
+end
+
+local function host(which)
+    local dialog = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
+    if not dialog then hostNote("no visible dialog for " .. tostring(which)) return end
+    if not hostPanel then
+        hostPanel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        hostPanel:SetSize(340, 110)
+        hostPanel:SetPoint("LEFT", 60, 80)
+        hostPanel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+        hostPanel:SetBackdropColor(0.05, 0.05, 0.07, 0.92)
+        hostPanel:SetBackdropBorderColor(0.6, 0.5, 0.3, 0.8)
+        hostPanel.text = hostPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        hostPanel.text:SetPoint("TOPLEFT", 12, -12)
+        hostPanel.text:SetPoint("TOPRIGHT", -12, -12)
+        hostPanel.text:SetJustifyH("LEFT")
+    end
+    hostPanel.text:SetText("SuuUI hosting test (" .. which .. "): Blizzard's buttons below are its own. Click Cancel or No.")
+    hostPanel:Show()
+    -- everything but the buttons invisible
+    for _, region in ipairs({ dialog:GetRegions() }) do region:SetAlpha(0) end
+    for _, child in ipairs({ dialog:GetChildren() }) do
+        if child ~= dialog.ButtonContainer then child:SetAlpha(0) end
+    end
+    dialog:ClearAllPoints()
+    dialog:SetPoint("BOTTOM", hostPanel, "BOTTOM", 0, -10)
+    hostNote("hosted " .. which .. " on " .. tostring(dialog:GetName()))
+end
+
+local function hostTest()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = PP.Sample()
+    store.host = {}
+    hostArmed = true
+    if not hostHooked then
+        hostHooked = true
+        hooksecurefunc("StaticPopup_Show", function(which)
+            if hostArmed and HOSTED[which] then
+                hostArmed = false
+                C_Timer.After(0, function() host(which) end)
+            end
+        end)
+        if StaticPopup_Hide then
+            hooksecurefunc("StaticPopup_Hide", function(which)
+                if HOSTED[which] then
+                    hostNote("hidden " .. tostring(which))
+                    if hostPanel then hostPanel:Hide() end
+                end
+            end)
+        end
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({ "PLAYER_CAMPING", "LOGOUT_CANCEL", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "DELETE_ITEM_CONFIRM" }) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function(_, event, a, b) hostNote(event .. " " .. show(a) .. " " .. show(b)) end)
+    end
+    ns.Print("Popup probe: hosting armed. Type /camp (or start deleting an item), then click Cancel / No on the moved popup. /reload after.")
+end
+
 function PP.Command(arg)
     if arg == "try" then return PP.Try() end
+    if arg == "host" then return hostTest() end
     local s = PP.Sample()
     ns.Print(("Popup probe: %d popup kinds. Logging popups and request events until /reload."):format(s.dialogCount or 0))
 end
