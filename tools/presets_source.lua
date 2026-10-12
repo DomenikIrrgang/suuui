@@ -14,6 +14,40 @@
 -- or a group: { group = "Seal", source = "mine"|"others"|"any", max = 1..4,
 -- icon = "Member name", members = { "Name", ... } } (one slot for several).
 -- Group names are plural ("Seals"), so they read as groups next to spells.
+-- A member is a name, or { "Name", source = "mine"|"others"|"any" } for its
+-- own source (else the group's; the slot gets an engine group per source).
+-- In essential and utility a group (no source or max) is one cooldown: the
+-- last member the character knows, so list them in order of preference
+-- ({ group = "Shields", members = { "Divine Protection", "Divine Shield" } }
+-- shows Divine Shield once learned); behaviour as for a cooldown, its effect
+-- the shown member's own aura unless effectName says otherwise. Its members
+-- keep passive talents' IDs and get the trainer check each.
+-- In buffs, debuffs and procs, a collection: { collection = "Physical
+-- Debuffs", hidden = true?, entries = { "Name", { "Name", missing = "hide" },
+-- { group = ... } } }, entries shown side by side, each with its own
+-- behaviour; hidden applies to all. One level: a collection in a collection,
+-- or one in essential or utility, stops the generator.
+--
+-- Conditions (optional, `when = { ... }` on a { "Name", ... } entry, a
+-- group, a { "Name", ... } member or a collection; copied as they are, see
+-- UI/CooldownTracker.lua for when each is checked):
+--   when = { match = "all"|"any",             -- default "all"
+--            conditions = {
+--              { type = "group", value = "solo"|"group"|"raid" },
+--              { type = "classes", classes = { "DRUID", "WARLOCK", ... } },
+--              { type = "role", roles = { "TANK"|"HEALER"|"DAMAGER", ... } },
+--              { type = "stance", stances = { "battle"|"defensive"|"berserker"|
+--                "caster"|"bear"|"cat"|"moonkin"|"travel"|"aquatic"|"stealth"|
+--                "shadowform", ... } },
+--              { type = "combat" },
+--              { type = "instance", kinds = { "none"|"party"|"raid"|"pvp", ... } },
+--              { type = "target", kinds = { "boss"|"elite"|"player"|"normal", ... } },
+--            } }
+--   ["not"] = true on a condition turns it around:
+--   { "Battle Shout", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } } }
+-- A collection's `when` applies to everything in it. An unknown type, class
+-- token, role, stance, instance or target kind, or an empty list, stops the
+-- generator.
 --
 -- Behaviour (optional, on a { "Name", ... } entry or a group; the Cooldown
 -- Manager's Behaviour panel, copied into the player's lists as the preset's

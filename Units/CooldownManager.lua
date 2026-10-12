@@ -50,6 +50,31 @@ M:Migrate("essentialSize-30-52", function(values)
     if type(v) == "number" then values.essentialSize = math.max(30, math.min(52, v)) end
 end)
 
+-- Shared slots (groups) saved before every one had a uid get one, so the
+-- editor can follow them through moves and renames.
+M:Migrate("slot-uids", function(values)
+    local function give(lists, tag)
+        if type(lists) ~= "table" then return end
+        for key, list in pairs(lists) do
+            if type(list) == "table" then
+                for i, e in ipairs(list) do
+                    if type(e) == "table" and (e.group or e.collection) and not e.uid then e.uid = tag .. key .. i end
+                end
+            end
+        end
+    end
+    if type(values.setups) == "table" then
+        for class, specs in pairs(values.setups) do
+            if type(specs) == "table" then
+                for spec, s in pairs(specs) do
+                    if type(s) == "table" then give(s.lists, "m" .. tostring(class) .. tostring(spec)) end
+                end
+            end
+        end
+    end
+    give(values.lists, "m")
+end)
+
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 local isSecret = issecretvalue or function() return false end
 local _, CLASS = UnitClass("player")
@@ -70,13 +95,21 @@ local function deepCopy(t)
     return out
 end
 
+-- Shared slots and collections get a uid the editor follows them by (fold
+-- state, the Behaviour panel, matching the preset's in Changes): the same
+-- one for every copy of a preset, the shared slots in a collection after it.
 local function copyLists(p)
     local out = {}
     for _, key in ipairs(LIST_KEYS) do
         out[key] = {}
         for i, e in ipairs(p.lists[key] or {}) do
             local c = deepCopy(e)
-            if c.group then c.uid = c.uid or (p.id .. key .. i) end
+            if c.group or c.collection then c.uid = c.uid or (p.id .. key .. i) end
+            if c.collection then
+                for j, x in ipairs(c.entries or {}) do
+                    if x.group then x.uid = x.uid or (c.uid .. "." .. j) end
+                end
+            end
             out[key][#out[key] + 1] = c
         end
     end
@@ -336,7 +369,58 @@ local function mutate(fn)
     M:SetLists(lists, spec)
 end
 
--- A group's IDs: every member's, once, sorted; its icon stays one of them.
+--------------------------------------------------------------------------------
+-- Entries: single spells, shared slots and collections
+--------------------------------------------------------------------------------
+-- A list holds single entries, shared slots ({ group = true, members }: one
+-- icon; in an aura list whichever member is up, in a cooldown list the last
+-- member you know) and, in aura lists only, collections ({ collection = true,
+-- entries }: single entries and shared slots shown side by side, one level
+-- deep). The editor names an entry by its path: { key, i } in the list, j
+-- inside a collection, m a shared slot's member.
+
+local function newUid() return tostring(time()) .. math.random(1000, 9999) end
+
+-- The container a path points into (a list, a collection's entries or a
+-- shared slot's members), the index in it, and the shared slot it's in.
+local function locate(l, p)
+    local t, i = l[p.key], p.i
+    if t and p.j then t, i = t[p.i] and t[p.i].entries, p.j end
+    if t and p.m then
+        local slot = t[i]
+        if not (slot and slot.group) then return nil end
+        return slot.members, p.m, slot
+    end
+    return t, i
+end
+
+local function entryAt(l, p)
+    local t, i = locate(l, p)
+    return t and t[i]
+end
+
+local function samePath(a, b)
+    return a.key == b.key and a.i == b.i and a.j == b.j and a.m == b.m
+end
+
+-- fn(entry, path) for every entry of a list: collections and what they
+-- hold, shared slots and their members.
+local function walk(list, key, fn)
+    local function one(e, p)
+        fn(e, p)
+        if e.group then
+            for m, x in ipairs(e.members or {}) do fn(x, { key = key, i = p.i, j = p.j, m = m }) end
+        end
+    end
+    for i, e in ipairs(list or {}) do
+        one(e, { key = key, i = i })
+        if e.collection then
+            for j, x in ipairs(e.entries or {}) do one(x, { key = key, i = i, j = j }) end
+        end
+    end
+end
+
+-- A shared slot's IDs: every member's, once, sorted; its icon stays one of them.
 local function regroup(e)
     local seen, ids = {}, {}
     for _, m in ipairs(e.members or {}) do
@@ -350,7 +434,7 @@ local function regroup(e)
     if not e.icon and e.members and e.members[1] then e.icon = e.members[1].ids[1] end
 end
 
-local SOURCE_LABEL = { mine = "only yours", others = "only others'", any = "from anyone" }
+local SOURCE_LABEL = { mine = "only yours", others = "only others'", any = "anyone" }
 -- Whose aura a list counts unless an entry says otherwise (the tracker's
 -- defaults): buffs from anyone, your debuffs and procs only yours.
 local LIST_SOURCE = { buffs = "any", debuffs = "mine", procs = "mine" }
@@ -358,12 +442,162 @@ local function entrySource(e, key)
     return e.source or (e.group and "mine") or (e.mine and "mine") or LIST_SOURCE[key] or "mine"
 end
 
+--------------------------------------------------------------------------------
+-- Conditions: when an entry shows at all
+--------------------------------------------------------------------------------
+-- when = { match = "all" | "any", conditions = { cond, … } } on any entry (a
+-- shared slot's member in aura lists only); no when, or no conditions:
+-- always. Each cond is { type, ["not"] = true? } plus its type's values:
+--   group     value = "solo" | "group" | "raid"
+--   classes   classes = { "DRUID", … }  (anyone in your group, you included)
+--   role      roles = { "TANK", "HEALER", "DAMAGER" }
+--   stance    stances = { keys of your class's STANCES }
+--   combat    (in combat; not: out of combat)
+--   instance  kinds = { "none", "party", "raid", "pvp" }
+--   target    kinds = { "boss", "elite", "player", "normal" }
+-- The tracker checks them; the editor writes them and says them in words.
+
+local CLASSES = {
+    { value = "DRUID", label = "Druid" }, { value = "HUNTER", label = "Hunter" }, { value = "MAGE", label = "Mage" },
+    { value = "PALADIN", label = "Paladin" }, { value = "PRIEST", label = "Priest" }, { value = "ROGUE", label = "Rogue" },
+    { value = "SHAMAN", label = "Shaman" }, { value = "WARLOCK", label = "Warlock" }, { value = "WARRIOR", label = "Warrior" },
+}
+local ROLES = { { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
+-- Stances and forms per class: the chip, and the name in a sentence.
+local STANCES = {
+    WARRIOR = { { value = "battle", label = "Battle", name = "Battle Stance" }, { value = "defensive", label = "Defensive", name = "Defensive Stance" },
+                { value = "berserker", label = "Berserker", name = "Berserker Stance" } },
+    DRUID = { { value = "caster", label = "Caster", name = "caster form" }, { value = "bear", label = "Bear", name = "Bear Form" },
+              { value = "cat", label = "Cat", name = "Cat Form" }, { value = "moonkin", label = "Moonkin", name = "Moonkin Form" },
+              { value = "travel", label = "Travel", name = "Travel Form" }, { value = "aquatic", label = "Aquatic", name = "Aquatic Form" } },
+    ROGUE = { { value = "stealth", label = "Stealth", name = "Stealth" } },
+    PRIEST = { { value = "shadowform", label = "Shadowform", name = "Shadowform" } },
+}
+local INSTANCES = { { value = "none", label = "Open world", name = "the open world" }, { value = "party", label = "Dungeon", name = "a dungeon" },
+                    { value = "raid", label = "Raid", name = "a raid" }, { value = "pvp", label = "Battleground", name = "a battleground" } }
+local TARGETS = { { value = "boss", label = "Boss", name = "a boss" }, { value = "elite", label = "Elite", name = "an elite" },
+                  { value = "player", label = "Player", name = "a player" }, { value = "normal", label = "Normal", name = "a normal enemy" } }
+local CONDITION_TYPES = {
+    { value = "group", label = "In a group or raid" }, { value = "classes", label = "Class in your group" },
+    { value = "role", label = "Your role" }, { value = "stance", label = "Your stance / form" },
+    { value = "combat", label = "In combat" }, { value = "instance", label = "Instance" }, { value = "target", label = "Target is" },
+}
+
+-- A new condition of a type, with a first choice made.
+local function newCondition(kind)
+    if kind == "group" then return { type = "group", value = "group" } end
+    if kind == "classes" then return { type = "classes", classes = { CLASS } } end
+    if kind == "role" then return { type = "role", roles = { "TANK" } } end
+    if kind == "stance" then return { type = "stance", stances = { STANCES[CLASS] and STANCES[CLASS][1].value } } end
+    if kind == "instance" then return { type = "instance", kinds = { "party" } } end
+    if kind == "target" then return { type = "target", kinds = { "boss" } } end
+    return { type = "combat" }
+end
+
+-- "a, b or c"
+local function anyOf(words)
+    if #words <= 1 then return words[1] end
+    return table.concat(words, ", ", 1, #words - 1) .. " or " .. words[#words]
+end
+
+-- The words for a condition's choices: `field` names them in a sentence.
+local function picked(values, options, field)
+    local by, out = {}, {}
+    for _, o in ipairs(options) do by[o.value] = o end
+    for _, v in ipairs(values or {}) do
+        local o = by[v]
+        out[#out + 1] = o and o[field] or tostring(v):lower()
+    end
+    return out
+end
+
+local function stanceOptions()
+    local all = {}
+    for _, list in pairs(STANCES) do for _, o in ipairs(list) do all[#all + 1] = o end end
+    return all
+end
+local ALL_STANCES = stanceOptions()
+
+-- One condition as a phrase ("in a raid", "with a druid or warlock in your
+-- group"), or nil while it has nothing chosen. `short`: the row summary's
+-- words ("with a warlock", "Defensive").
+local function conditionPhrase(c, inGroup, short)
+    local no = c["not"]
+    if c.type == "group" then
+        if c.value == "solo" then return no and "in a group or raid" or (short and "solo" or "while solo") end
+        return (no and "not " or "") .. "in a " .. (c.value == "raid" and "raid" or "group")
+    elseif c.type == "classes" then
+        local names = {}
+        for _, v in ipairs(c.classes or {}) do names[#names + 1] = tostring(v):lower() end
+        if #names == 0 then return nil end
+        local who = (no and "without a " or "with a ") .. anyOf(names)
+        return short and who or (who .. (inGroup and " in it" or " in your group"))
+    elseif c.type == "role" then
+        local roles = picked(c.roles, ROLES, "label")
+        if #roles == 0 then return nil end
+        for i, r in ipairs(roles) do roles[i] = r:lower() end
+        if short then return (no and "not " or "") .. anyOf(roles) end
+        for i, r in ipairs(roles) do roles[i] = r == "damage" and r or ("a " .. r) end
+        return (no and "unless you play " or "while you play ") .. anyOf(roles)
+    elseif c.type == "stance" then
+        local names = picked(c.stances, ALL_STANCES, short and "label" or "name")
+        if #names == 0 then return nil end
+        if short then return (no and "not " or "") .. anyOf(names) end
+        return (no and "outside " or "in ") .. anyOf(names)
+    elseif c.type == "combat" then
+        return no and "out of combat" or "in combat"
+    elseif c.type == "instance" then
+        local names = picked(c.kinds, INSTANCES, "name")
+        if #names == 0 then return nil end
+        return (no and "outside " or "in ") .. anyOf(names)
+    elseif c.type == "target" then
+        local names = picked(c.kinds, TARGETS, "name")
+        if #names == 0 then return nil end
+        if short then return (no and "target not " or "target ") .. anyOf(names) end
+        return (no and "unless your target is " or "while your target is ") .. anyOf(names)
+    end
+end
+
+local function phrases(when, short)
+    local conds = when and when.conditions or {}
+    local inGroup = false
+    for _, c in ipairs(conds) do
+        if c.type == "group" and not c["not"] and c.value ~= "solo" then inGroup = true end
+    end
+    local out = {}
+    for _, c in ipairs(conds) do out[#out + 1] = conditionPhrase(c, inGroup, short) end
+    return out
+end
+
+-- The conditions as one sentence: "Faerie Fire shows in a raid, with a druid
+-- or warlock in it, out of combat." With none: "Always shows."
+local function conditionSentence(subject, when)
+    local list = phrases(when)
+    if #list == 0 then return "Always shows." end
+    local lead = subject and (subject .. " shows ") or "Shows "
+    if when.match == "any" then
+        return lead .. "when " .. (#list > 1 and ("any of these holds: " .. table.concat(list, "; ")) or list[1]) .. "."
+    end
+    return lead .. table.concat(list, ", ") .. "."
+end
+
+-- The conditions in a row's summary: "in a raid · with a warlock", or with
+-- Any of these, "in a raid or with a warlock".
+local function conditionWords(when)
+    local list = phrases(when, true)
+    if #list == 0 then return nil end
+    if when.match == "any" then return anyOf(list) end
+    return table.concat(list, " · ")
+end
+
 -- What the Behaviour panel sets on an entry (its Reset clears them all).
 local BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
-                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop" }
+                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when" }
 -- What else makes an entry differ from the preset's: shown or not, and a
--- group's own settings (its name is how it's matched).
-local ENTRY_KEYS = { "hidden", "ids", "max", "icon", "members" }
+-- shared slot's own settings and members (their whose and when included).
+local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members" }
+-- A collection's own settings.
+local COLLECTION_KEYS = { "name", "when", "hidden" }
 
 local function same(a, b)
     if type(a) ~= "table" or type(b) ~= "table" then return a == b end
@@ -384,20 +618,58 @@ local function changed(e, base, key)
 end
 
 -- How many entries differ from the preset the lists are based on: added,
--- removed, or changed (shown, behaviour, a group's settings).
+-- removed, changed (shown, behaviour, a shared slot's settings), or moved
+-- into or out of a collection. A collection counts once for itself (added,
+-- removed, renamed or its condition); it matches the preset's by uid (a
+-- preset's copy keeps the one copyLists gave it), else by name.
 function M:Changes()
     local spec = self:EditSpec()
     local p = findPreset(self:PresetId(spec))
     if not p then return 0 end
     local lists, n = self:Lists(spec), 0
     for _, key in ipairs(LIST_KEYS) do
-        local base, now = {}, {}
-        for _, e in ipairs(p.lists[key] or {}) do base[e.name] = e end
-        for _, e in ipairs(lists[key] or {}) do
-            now[e.name] = true
-            if not base[e.name] or changed(e, base[e.name], key) then n = n + 1 end
+        local base, cols = {}, {}
+        for i, e in ipairs(p.lists[key] or {}) do
+            if e.collection then
+                local uid = e.uid or (p.id .. key .. i)
+                cols[#cols + 1] = { e = e, uid = uid }
+                for _, x in ipairs(e.entries or {}) do base[x.name] = { e = x, parent = uid } end
+            else
+                base[e.name] = { e = e }
+            end
         end
-        for name in pairs(base) do if not now[name] then n = n + 1 end end
+        local seen, used = {}, {}
+        local function entry(e, parent)
+            local b = base[e.name]
+            seen[e.name] = true
+            if not b or b.parent ~= parent or changed(e, b.e, key) then n = n + 1 end
+        end
+        for _, e in ipairs(lists[key] or {}) do
+            if e.collection then
+                local match
+                for _, c in ipairs(cols) do
+                    if not used[c] and c.uid == e.uid then match = c; break end
+                end
+                if not match then
+                    for _, c in ipairs(cols) do
+                        if not used[c] and c.e.name == e.name then match = c; break end
+                    end
+                end
+                local differs = not match
+                if match then
+                    used[match] = true
+                    for _, k in ipairs(COLLECTION_KEYS) do
+                        if not same(e[k], match.e[k]) then differs = true end
+                    end
+                end
+                if differs then n = n + 1 end
+                for _, x in ipairs(e.entries or {}) do entry(x, match and match.uid or e.uid) end
+            else
+                entry(e, nil)
+            end
+        end
+        for name in pairs(base) do if not seen[name] then n = n + 1 end end
+        for _, c in ipairs(cols) do if not used[c] then n = n + 1 end end
     end
     return n
 end
@@ -434,8 +706,9 @@ local function spellbookByName()
     return out
 end
 
--- Returns spells by name, and (auras) the presets' groups by name with the
--- list each came from.
+-- Returns spells by name (shared slots' members and what collections hold
+-- included), and the presets' shared slots by name with the list each came
+-- from.
 local function candidates(kind)
     local byName, groups = {}, {}
     local function add(name, ids)
@@ -443,18 +716,19 @@ local function candidates(kind)
         byName[name] = byName[name] or {}
         local seen = {}
         for _, id in ipairs(byName[name]) do seen[id] = true end
-        for _, id in ipairs(ids) do if not seen[id] then table.insert(byName[name], id); seen[id] = true end end
+        for _, id in ipairs(ids or {}) do if not seen[id] then table.insert(byName[name], id); seen[id] = true end end
     end
     local keys = kind == "cooldown" and { "essential", "utility" } or { "buffs", "debuffs", "procs" }
     for _, p in ipairs(presets()) do
         for _, key in ipairs(keys) do
-            for _, e in ipairs(p.lists[key] or {}) do
+            walk(p.lists[key], key, function(e, path)
+                if e.collection then return end
                 if e.group then
                     groups[e.name] = groups[e.name] or { entry = e, key = key }
                 else
                     add(e.name, e.ids)
                 end
-            end
+            end)
         end
     end
     if kind == "cooldown" then
@@ -557,14 +831,15 @@ local function spellLookup(query)
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
 
--- An option's value as an entry: a name (every ID it carries) or "id:123".
+-- An option's value as an entry: a name (every ID it carries), "id:123", or
+-- "group:Name" (a preset's shared slot, a copy with its own uid).
 local function entryFor(value, byName, groups)
     local id = type(value) == "string" and tonumber(value:match("^id:(%d+)$"))
     if id then return { name = C_Spell.GetSpellName(id), ids = { id } } end
     local gname = type(value) == "string" and value:match("^group:(.+)$")
     if gname and groups and groups[gname] then
         local g = copy(groups[gname].entry)
-        g.uid = tostring(time()) .. math.random(1000, 9999)
+        g.uid = newUid()
         return g
     end
     if byName and byName[value] then return { name = value, ids = byName[value] } end
@@ -595,8 +870,12 @@ local function glyphButton(parent, kind, onClick)
     return b
 end
 
-local ROW_H, WIDTH = 30, 560
-local NEW_GROUP = "New group" -- a new group's name until you give it one
+local ROW_H, GAP, WIDTH = 30, 4, 560
+-- Nesting: each level steps in INDENT, and a rail runs down from the row it
+-- belongs to, under that row's fold chevron (RAIL_X from its left edge).
+local INDENT, RAIL_X = 34, 25
+-- what "+ Shared slot" and "+ Collection" are named until you rename them
+local NEW_SLOT, NEW_COLLECTION = "New shared slot", "New collection"
 
 local MISSING = {
     { value = "list", label = "List" },
@@ -607,8 +886,6 @@ local MISSING = {
 }
 local MISSING_LABEL = { hide = "hide", grey = "grey", warn = "warn", remind = "remind" }
 
--- One entry: icon, name, rank, then (right to left) remove, move, down, up,
--- and shown (cooldowns) or when missing (auras).
 -- The grip at a row's left edge: two columns of three dots.
 local function grip(parent)
     local g = CreateFrame("Frame", nil, parent)
@@ -624,89 +901,380 @@ local function grip(parent)
     return g
 end
 
--- One entry: grip, icon, name, rank, then (right to left) remove, move, and
--- shown (cooldowns) or when missing (auras). The row drags to reorder, into
--- any list of the same tab.
+-- The fold chevron of a collection or shared slot: down while open, right
+-- while folded.
+local function foldButton(parent, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(18, 18)
+    b.strokes = {}
+    for n = 1, 2 do
+        local t = b:CreateTexture(nil, "OVERLAY")
+        t:SetColorTexture(1, 1, 1, 1)
+        t:SetSize(6, 1.5)
+        b.strokes[n] = t
+    end
+    function b:SetOpen(open)
+        local a, c = self.strokes[1], self.strokes[2]
+        a:ClearAllPoints()
+        c:ClearAllPoints()
+        a:SetRotation(math.rad(-45))
+        c:SetRotation(math.rad(45))
+        if open then
+            a:SetPoint("CENTER", -2, 0)
+            c:SetPoint("CENTER", 2, 0)
+        else
+            a:SetPoint("CENTER", 0, 2)
+            c:SetPoint("CENTER", 0, -2)
+        end
+    end
+    function b:SetColor(name)
+        for _, t in ipairs(self.strokes) do t:SetVertexColor(UI.RGBA(name)) end
+    end
+    b:SetColor("ink-muted")
+    b:SetOpen(false)
+    b:SetScript("OnEnter", function(self) self:SetColor("gilt-text") end)
+    b:SetScript("OnLeave", function(self) self:SetColor("ink-muted") end)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+-- A shared slot's mark: two small stacked cards at its icon's corner.
+local function slotMark(parent, level)
+    local m = CreateFrame("Frame", nil, parent)
+    m:SetFrameLevel(level)
+    m:SetSize(11, 11)
+    for n = 0, 1 do
+        local card = CreateFrame("Frame", nil, m)
+        card:SetFrameLevel(m:GetFrameLevel() + 1 + n)
+        card:SetSize(8, 8)
+        card:SetPoint("TOPLEFT", n * 3, -n * 3)
+        UI.Fill(card, "surface-raised"):SetAllPoints()
+        UI.Border(card, "gilt")
+    end
+    return m
+end
+
+-- A collection's glyph in place of an icon: a gilt folder outline.
+local function folderGlyph(parent)
+    local g = CreateFrame("Frame", nil, parent)
+    g:SetSize(22, 22)
+    local body = CreateFrame("Frame", nil, g)
+    body:SetSize(17, 11)
+    body:SetPoint("CENTER", 0, -2)
+    UI.Border(body, "gilt")
+    local tab = CreateFrame("Frame", nil, g)
+    tab:SetSize(7, 3)
+    tab:SetPoint("BOTTOMLEFT", body, "TOPLEFT", 0, -1)
+    UI.Border(tab, "gilt")
+    return g
+end
+
+-- A cooldown shared slot shows the last member you know (upgrades last).
+local function knownMember(slot)
+    local members = slot.members or {}
+    for i = #members, 1, -1 do
+        if rankText(members[i]) ~= "Not learned" then return members[i] end
+    end
+end
+
+-- An entry's icon art: a single spell's rank you know, a shared slot's icon
+-- (a cooldown slot's: the member it shows).
+local function artOf(e, cooldown)
+    local id
+    if e.group and cooldown then
+        local m = knownMember(e) or (e.members or {})[1]
+        if m then id = select(2, rankText(m)) end
+    elseif e.group then
+        id = e.icon or (e.ids or {})[1]
+    elseif e.ids then
+        id = select(2, rankText(e))
+    end
+    return id and C_Spell.GetSpellTexture(id)
+end
+
+--------------------------------------------------------------------------------
+-- Moving entries: into and out of collections and shared slots
+--------------------------------------------------------------------------------
+
+-- An entry as a shared slot's member: its name and IDs, and in an aura list
+-- whose it counts (only where it differs from the slot's) and its condition.
+-- Its looks are the slot's.
+local function asMember(e, key, fromSlot, slot, slotKey)
+    local m = { name = e.name, ids = copy(e.ids) }
+    if LIST_INFO[slotKey].kind == "aura" then
+        local src = fromSlot and (e.source or entrySource(fromSlot, key)) or entrySource(e, key)
+        if src ~= entrySource(slot, slotKey) then m.source = src end
+        m.when = copy(e.when)
+    end
+    return m
+end
+
+-- A member leaving its shared slot, as a single entry that counts the same
+-- auras (whose it was, written down where the list counts otherwise).
+local function asSingle(m, slotKey, slot, key)
+    local e = { name = m.name, ids = copy(m.ids) }
+    if LIST_INFO[key].kind == "aura" then
+        local src = m.source or entrySource(slot, slotKey)
+        if src ~= LIST_SOURCE[key] then e.source = src end
+        e.when = copy(m.when)
+    end
+    return e
+end
+
+-- Moves the entry at `from` to the position `to` (an index past the end
+-- puts it last), turning it into a member or back as it enters or leaves a
+-- shared slot.
+local function moveEntry(l, from, to)
+    local srcT, srcI, srcSlot = locate(l, from)
+    local dstT, dstI, dstSlot = locate(l, to)
+    if not (srcT and srcT[srcI] and dstT) then return end
+    local e = table.remove(srcT, srcI)
+    if srcT == dstT and dstI > srcI then dstI = dstI - 1 end
+    if dstSlot and dstSlot ~= srcSlot then
+        e = asMember(e, from.key, srcSlot, dstSlot, to.key)
+    elseif srcSlot and not dstSlot then
+        e = asSingle(e, from.key, srcSlot, to.key)
+    end
+    table.insert(dstT, math.min(dstI, #dstT + 1), e)
+    if srcSlot then regroup(srcSlot) end
+    if dstSlot and dstSlot ~= srcSlot then regroup(dstSlot) end
+end
+
+-- "Make 'A + B' a shared slot": the slot takes A's place with A and B as its
+-- members, A's whose (aura lists, one at a time) and A's looks.
+local function combine(l, ontoPath, fromPath, uid, names)
+    local aT, aI = locate(l, ontoPath)
+    local bT, bI, bSlot = locate(l, fromPath)
+    local a, b = aT and aT[aI], bT and bT[bI]
+    if not (a and b) or a == b or a.name ~= names[1] or b.name ~= names[2] then return end
+    local key = ontoPath.key
+    local slot = { group = true, uid = uid, name = a.name .. " + " .. b.name, members = {}, hidden = a.hidden }
+    if LIST_INFO[key].kind == "aura" then slot.source, slot.max = entrySource(a, key), 1 end
+    -- (an aura's conditions stay with it as a member; a cooldown slot's
+    -- members have none, so A's become the slot's)
+    local cooldown = LIST_INFO[key].kind == "cooldown"
+    for _, k in ipairs(BEHAVIOUR_KEYS) do
+        if k ~= "when" or cooldown then slot[k] = copy(a[k]) end
+    end
+    slot.members[1] = asMember(a, key, nil, slot, key)
+    slot.members[2] = asMember(b, fromPath.key, bSlot, slot, key)
+    table.remove(bT, bI)
+    if bSlot then regroup(bSlot) end
+    for n, x in ipairs(aT) do
+        if x == a then aT[n] = slot; break end
+    end
+    regroup(slot)
+end
+
+-- Whether a dragged row may land on a target: a collection only between the
+-- list's own rows, a shared slot anywhere but in another slot, a single
+-- entry (or a member) anywhere, onto a single entry (a new shared slot) too.
+local function accepts(from, to)
+    local kind = from.kind
+    local plain = kind == "entry" or kind == "member"
+    if to.onto == "entry" then return plain and not samePath(from.path, to.path) end
+    if to.onto == "slot" then
+        local p = from.path
+        return plain and not (p.m and samePath({ key = p.key, i = p.i, j = p.j }, to.path))
+    end
+    if to.onto == "collection" then return kind ~= "collection" end
+    if to.path.m then return plain end
+    if to.path.j then return kind ~= "collection" end
+    return true
+end
+
+--------------------------------------------------------------------------------
+-- Rows
+--------------------------------------------------------------------------------
+
+-- The rails of the rows a row sits under: { level, faint } each, a
+-- collection's in gilt, a shared slot's fainter.
+local function setRails(fr, rails, level)
+    fr.rails = fr.rails or {}
+    for n, rl in ipairs(rails) do
+        local t = fr.rails[n]
+        if not t then
+            t = fr:CreateTexture(nil, "BACKGROUND", nil, 1)
+            t:SetWidth(1)
+            fr.rails[n] = t
+        end
+        t:SetColorTexture(UI.RGBA(rl.faint and "gilt-line" or "gilt"))
+        t:ClearAllPoints()
+        t:SetPoint("TOPLEFT", fr, "TOPLEFT", (rl.level - level) * INDENT + RAIL_X, 0)
+        t:SetHeight(ROW_H + GAP)
+        t:Show()
+    end
+    for n = #rails + 1, #fr.rails do fr.rails[n]:Hide() end
+end
+
+-- One row: grip, fold chevron (collections and shared slots), icon (a
+-- shared slot's with its mark, a collection's folder), name and summary,
+-- then (right to left) remove, Move to… (rows at the top of a list), Behaviour
+-- and shown. The row drags by its grip.
 local function buildEntryRow(parent)
     local r = CreateFrame("Frame", nil, parent)
     r:SetSize(WIDTH, ROW_H)
+    -- lit while a dragged row would land on it
+    r.dropFill = UI.Fill(r, "arcane-soft", "BACKGROUND")
+    r.dropFill:SetAllPoints()
+    r.dropFill:Hide()
+    r.dropEdge = UI.Border(r, "arcane")
+    r.dropEdge:SetShown(false)
     r.grip = grip(r)
     r.grip:SetPoint("LEFT")
+    r.fold = foldButton(r, function() parent:ToggleFold(r) end)
+    r.fold:SetPoint("LEFT", r.grip, "RIGHT", 6, 0)
     r.icon = UI.Icon(r, 22)
-    r.icon:SetPoint("LEFT", r.grip, "RIGHT", 6, 0)
+    r.icon:SetPoint("LEFT", r.fold, "RIGHT", 6, 0)
+    r.mark = slotMark(r, r.icon:GetFrameLevel() + 2)
+    r.mark:SetPoint("BOTTOMRIGHT", r.icon, "BOTTOMRIGHT", 4, -4)
+    r.folder = folderGlyph(r)
+    r.folder:SetPoint("CENTER", r.icon, "CENTER")
     r.name = UI.Text(r, "label", "ink")
     r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, 1)
     r.name:SetFixedWidth(180)
     r.rank = UI.Text(r, "caption", "ink-muted")
     r.rank:SetFixedWidth(180)
     r.rank:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 8, -1)
-    r.remove = glyphButton(r, "remove", function() mutate(function(l) table.remove(l[r.key], r.index) end) end)
+    r.strip = {}
+    r.remove = glyphButton(r, "remove", function() parent:RemoveAt(r.path) end)
     r.remove:SetPoint("RIGHT")
     r.move = UI.Select(r, { width = 104, placeholder = "Move to…", onChange = function(to)
         if not to then return end
         mutate(function(l)
-            local e = table.remove(l[r.key], r.index)
-            table.insert(l[to], e)
+            local e = table.remove(l[r.key], r.path.i)
+            if e then table.insert(l[to], e) end
         end)
     end })
-    r.move:SetPoint("RIGHT", r.remove, "LEFT", -6, 0)
-    r.edit = UI.Button(r, { text = "Edit group", width = 104, onClick = function() parent:OpenGroup(r.key, r.index) end })
-    r.edit:SetPoint("RIGHT", r.remove, "LEFT", -6, 0)
-    r.behaviour = UI.Button(r, { text = "Behaviour", width = 96, onClick = function() parent:OpenBehaviour(r.key, r.index) end })
-    r.behaviour:SetPoint("RIGHT", r.move, "LEFT", -8, 0)
+    r.behaviour = UI.Button(r, { text = "Behaviour", width = 96, onClick = function() parent:OpenBehaviour(r.path) end })
     r.shown = UI.Toggle(r, { onChange = function(v)
-        mutate(function(l) l[r.key][r.index].hidden = (not v) or nil end)
+        mutate(function(l)
+            local e = entryAt(l, r.path)
+            if e then e.hidden = (not v) or nil end
+        end)
     end })
-    r.shown:SetPoint("RIGHT", r.behaviour, "LEFT", -10, 0)
 
     -- drag to reorder: the editor tracks the cursor and drops
     r:EnableMouse(true)
     r:RegisterForDrag("LeftButton")
-    r:SetScript("OnEnter", function() r.grip:SetAlpha(1); for _, t in ipairs({ r.grip:GetRegions() }) do t:SetColorTexture(UI.RGBA("ink-muted")) end end)
+    r:SetScript("OnEnter", function() for _, t in ipairs({ r.grip:GetRegions() }) do t:SetColorTexture(UI.RGBA("ink-muted")) end end)
     r:SetScript("OnLeave", function() for _, t in ipairs({ r.grip:GetRegions() }) do t:SetColorTexture(UI.RGBA("ink-faint")) end end)
     r:SetScript("OnDragStart", function() parent:StartDrag(r) end)
     r:SetScript("OnDragStop", function() parent:StopDrag() end)
     return r
 end
 
-local function fillEntryRow(r, key, index, entry)
-    r.key, r.index = key, index
-    local info = LIST_INFO[key]
-    if entry.group then
-        local n = #(entry.members or {})
-        r.icon:SetArt(C_Spell.GetSpellTexture(entry.icon or (entry.ids or {})[1]))
-        r.icon:SetState("rest")
-        r.name:SetValue(entry.name or "Group")
-        r.name:SetColor(UI.RGBA("ink"))
-        r.rank:SetValue(("%d %s"):format(n, n == 1 and "spell" or "spells"))
+-- c = { key, path, entry, kind = "entry" | "slot" | "collection" | "member",
+--       level, open (folds), slot (a member's) }
+local function fillEntryRow(r, c)
+    local e, key, kind = c.entry, c.key, c.kind
+    r.key, r.path, r.kind, r.entry = key, c.path, kind, e
+    local cooldown = LIST_INFO[key].kind == "cooldown"
+    local member = kind == "member"
+    local parts, strip, dim = {}, {}, false
+    local function add(s) if s then parts[#parts + 1] = s end end
+    r.icon:SetShown(kind ~= "collection")
+    r.folder:SetShown(kind == "collection")
+    r.mark:SetShown(kind == "slot")
+    r.fold:SetShown(kind == "slot" or kind == "collection")
+    r.fold:SetOpen(c.open)
+
+    -- the summary, in words
+    if kind == "collection" then
+        add("collection · " .. #(e.entries or {}))
+        if not c.open then
+            for _, x in ipairs(e.entries or {}) do strip[#strip + 1] = artOf(x, cooldown) or false end
+        end
+    elseif kind == "slot" then
+        local n = #(e.members or {})
+        add("1 slot")
+        if cooldown then
+            local known = knownMember(e)
+            add(known and ("shows " .. known.name) or "none learned")
+            add(n == 1 and "1 spell" or (n .. " spells"))
+            dim = not known
+        else
+            add(n == 1 and "1 aura" or (n .. " auras"))
+            add(SOURCE_LABEL[entrySource(e, key)])
+        end
+        if not c.open then
+            for _, m in ipairs(e.members or {}) do strip[#strip + 1] = artOf(m, cooldown) or false end
+        end
     else
-        local rank, id = rankText(entry)
-        r.icon:SetArt(C_Spell.GetSpellTexture(id))
-        r.icon:SetState(rank == "Not learned" and "dim" or "rest")
-        r.name:SetValue(entry.name)
-        r.name:SetColor(UI.RGBA(rank == "Not learned" and "ink-muted" or "ink"))
-        -- whose, when it isn't the list's usual
-        local src = info.kind == "aura" and entrySource(entry, key)
-        local extra = src and src ~= LIST_SOURCE[key] and (" · " .. SOURCE_LABEL[src]) or ""
-        r.rank:SetValue(rank .. extra)
+        local rank = rankText(e)
+        dim = rank == "Not learned"
+        add(rank)
+        if member and cooldown then
+            if knownMember(c.slot) == e then add("shows now") end
+        elseif member then
+            add(SOURCE_LABEL[e.source or entrySource(c.slot, key)])
+        elseif cooldown then
+            if e.effect then add("shows " .. (e.effectName or "its effect")) end
+        else
+            -- whose, when it isn't the list's usual
+            local src = entrySource(e, key)
+            if src ~= LIST_SOURCE[key] then add(SOURCE_LABEL[src]) end
+        end
     end
-    r.move:SetShown(not entry.group)
-    r.edit:SetShown(entry.group and true or false)
-    local moves = {}
-    for _, k in ipairs(info.kind == "cooldown" and TABS.cooldowns or TABS.auras) do
-        if k ~= key then moves[#moves + 1] = { value = k, label = LIST_INFO[k].label } end
-    end
-    r.move:SetOptions(moves)
-    r.move:SetValue(nil)
-    local cooldown = info.kind == "cooldown"
-    r.shown:SetShown(cooldown)
-    if cooldown then r.shown:SetValue(not entry.hidden) end
+    -- its conditions, in words
+    if not (member and cooldown) then add(conditionWords(e.when)) end
     -- what the Behaviour panel changed, at a glance
-    if not cooldown and key ~= "procs" then
-        local m = entry.missing and MISSING_LABEL[entry.missing]
-        if m then r.rank:SetValue(r.rank:GetText() .. " · missing: " .. m) end
-    elseif cooldown and entry.effect then
-        r.rank:SetValue(r.rank:GetText() .. " · shows " .. (entry.effectName or "its effect"))
+    if not cooldown and key ~= "procs" and (kind == "entry" or kind == "slot") then
+        local m = e.missing and MISSING_LABEL[e.missing]
+        if m then add("missing: " .. m) end
+    end
+    r.rank:SetValue(table.concat(parts, " · "))
+
+    if kind == "collection" then
+        -- its name in the list heads' style
+        r.name:SetValue((e.name or "Collection"):upper())
+        r.name:SetColor("gilt-text")
+    else
+        r.name:SetValue(e.name or "Shared slot")
+        r.name:SetColor(dim and "ink-muted" or "ink")
+        r.icon:SetArt(artOf(e, cooldown))
+        r.icon:SetState(dim and "dim" or "rest")
+    end
+
+    -- right to left: remove, Move to… (top rows), Behaviour (not a cooldown
+    -- slot's members: theirs is the slot's), shown (not members)
+    local top = c.level == 0
+    r.move:SetShown(top)
+    r.behaviour:SetShown(not (member and cooldown))
+    r.shown:SetShown(not member)
+    local anchor, gap, used = r.remove, 6, r.remove:GetWidth()
+    for _, ctl in ipairs({ r.move, r.behaviour, r.shown }) do
+        if ctl:IsShown() then
+            ctl:ClearAllPoints()
+            ctl:SetPoint("RIGHT", anchor, "LEFT", -gap, 0)
+            used = used + gap + ctl:GetWidth()
+            anchor, gap = ctl, ctl == r.move and 8 or 10
+        end
+    end
+    if top then
+        local moves = {}
+        for _, k in ipairs(cooldown and TABS.cooldowns or TABS.auras) do
+            if k ~= key then moves[#moves + 1] = { value = k, label = LIST_INFO[k].label } end
+        end
+        r.move:SetOptions(moves)
+        r.move:SetValue(nil)
+    end
+    if not member then r.shown:SetValue(not e.hidden) end
+
+    -- folded: its members' icons after the summary, as many as fit
+    for _, t in ipairs(r.strip) do t:Hide() end
+    if #strip > 0 then
+        local x0 = math.min(r.rank:GetUnboundedStringWidth(), 180) + 6
+        local room = WIDTH - c.level * INDENT - used - 8 - 70 - x0
+        local count = math.min(#strip, math.max(0, math.floor((room + 2) / 16)))
+        for n = 1, count do
+            local t = r.strip[n] or UI.Icon(r, 14)
+            r.strip[n] = t
+            t:ClearAllPoints()
+            t:SetPoint("LEFT", r.rank, "LEFT", x0 + (n - 1) * 16, 0)
+            t:SetArt(strip[n] or nil)
+            t:Show()
+        end
     end
     r:Show()
 end
@@ -719,7 +1287,10 @@ local function buildEditor(parent)
         onChange = function(v) f.tab = v; f:Refresh() end })
     f.tabs:SetPoint("TOPLEFT")
     f.tabs:SetValue("cooldowns")
-    f.rows, f.heads, f.adds = {}, {}, {}
+    f.rows, f.heads, f.adds, f.addTos = {}, {}, {}, {}
+    -- folded or open, per collection and shared slot (by uid), this session:
+    -- collections start open, shared slots folded
+    f.fold = {}
 
     local function head(i)
         local h = f.heads[i]
@@ -737,36 +1308,100 @@ local function buildEditor(parent)
         return h
     end
 
-    -- "+ Add" at a list's foot: a Select of candidates, and a spell ID field.
+    -- The list's foot: "+ Add…" (a Select of candidates; a typed number finds
+    -- any spell by its ID), "+ Shared slot" and (aura lists) "+ Collection".
     local function addRow(i)
         local a = f.adds[i]
         if not a then
             a = CreateFrame("Frame", nil, f)
             a:SetSize(WIDTH, 34)
-            -- names from your spellbook and the presets; a typed number finds
-            -- any spell by its ID
             a.select = UI.Select(a, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,
                 onChange = function(value)
                     local e = value and entryFor(value, a.byName, a.groups)
                     if e then mutate(function(l) table.insert(l[a.key], e) end) end
                 end })
             a.select:SetPoint("LEFT")
-            a.newGroup = UI.Button(a, { text = "+ New group", width = 120, onClick = function()
-                local index
+            a.newSlot = UI.Button(a, { text = "+ Shared slot", onClick = function()
+                local uid = newUid()
+                f.fold[uid] = true -- open, so its "+ Add to" shows
                 mutate(function(l)
-                    table.insert(l[a.key], { group = true, uid = tostring(time()) .. math.random(1000, 9999),
-                        name = NEW_GROUP, source = "mine", max = 1, members = {}, ids = {} })
-                    index = #l[a.key]
+                    local slot = { group = true, uid = uid, name = NEW_SLOT, members = {}, ids = {} }
+                    if LIST_INFO[a.key].kind == "aura" then slot.source, slot.max = LIST_SOURCE[a.key], 1 end
+                    table.insert(l[a.key], slot)
                 end)
-                f:OpenGroup(a.key, index)
             end })
-            a.newGroup:SetPoint("LEFT", a.select, "RIGHT", 8, 0)
+            a.newSlot:SetPoint("LEFT", a.select, "RIGHT", 8, 0)
+            a.newCollection = UI.Button(a, { text = "+ Collection", onClick = function()
+                mutate(function(l)
+                    table.insert(l[a.key], { collection = true, uid = newUid(), name = NEW_COLLECTION, entries = {} })
+                end)
+            end })
+            a.newCollection:SetPoint("LEFT", a.newSlot, "RIGHT", 8, 0)
             f.adds[i] = a
         end
         return a
     end
 
-    -- Dragging: a ghost follows the cursor, an arcane line marks the drop.
+    -- "+ Add to <name>…" at the foot of an open collection or shared slot.
+    local function addToRow(n)
+        local a = f.addTos[n]
+        if not a then
+            a = CreateFrame("Frame", nil, f)
+            a:SetSize(WIDTH, ROW_H)
+            a.select = UI.Select(a, { width = 280, lookup = spellLookup, onChange = function(value)
+                local e = value and entryFor(value, a.byName, a.groups)
+                if not e then return end
+                mutate(function(l)
+                    local box = entryAt(l, a.path)
+                    if box and box.collection then
+                        box.entries = box.entries or {}
+                        table.insert(box.entries, e)
+                    elseif box and box.group then
+                        box.members = box.members or {}
+                        table.insert(box.members, { name = e.name, ids = e.ids })
+                        regroup(box)
+                    end
+                end)
+            end })
+            a.select:SetPoint("LEFT")
+            f.addTos[n] = a
+        end
+        return a
+    end
+
+    -- What an "+ Add" offers: what you cast or saw lately first, then
+    -- everything by name, and (where shared slots may go) the presets'
+    -- shared slots of this list. Nothing the list already has.
+    local function addOptions(kind, key, byName, groups, present, slots)
+        local top, taken = {}, {}
+        for _, r in ipairs(recent(kind)) do
+            if not present[r.name] and not taken[r.name] then
+                taken[r.name] = true
+                if not byName[r.name] then byName[r.name] = copy(r.ids) end
+                top[#top + 1] = { value = r.name, label = r.name }
+            end
+        end
+        local options = {}
+        for name in pairs(byName) do
+            if not present[name] and not taken[name] then options[#options + 1] = { value = name, label = name } end
+        end
+        for name, g in pairs(slots and groups or {}) do
+            if not present[name] and g.key == key then
+                options[#options + 1] = { value = "group:" .. name, label = name .. " (Shared slot)" }
+            end
+        end
+        table.sort(options, function(x, z) return x.label < z.label end)
+        if #top > 0 then
+            table.insert(top, 1, { heading = "Seen recently" })
+            top[#top + 1] = { heading = "All" }
+            for _, o in ipairs(options) do top[#top + 1] = o end
+            options = top
+        end
+        return options
+    end
+
+    -- Dragging: a ghost follows the cursor; an arcane line marks where the
+    -- row lands, an arcane edge the row it joins.
     f.ghost = CreateFrame("Frame", nil, UIParent)
     f.ghost:SetFrameStrata("TOOLTIP")
     f.ghost:SetSize(240, ROW_H)
@@ -782,31 +1417,68 @@ local function buildEditor(parent)
     f.line:SetHeight(2)
     f.line:Hide()
 
-    -- Where a drop at the cursor lands: { key, index } in the visible tab.
+    -- Where a drop at the cursor lands, in the visible tab: { path, frame }
+    -- to land at a position (the line goes over `frame`), or { onto, path,
+    -- frame } to land on a row: a single entry (a new shared slot), a shared
+    -- slot (joins it) or a collection (goes last in it). Rows that can take
+    -- one are split in four: the top quarter is before, the middle onto,
+    -- the bottom after.
     function f:DropTarget()
         local _, cy = GetCursorPosition()
         cy = cy / self:GetEffectiveScale()
-        local best
         for _, key in ipairs(TABS[self.tab]) do
             local L = self.layout[key]
             local top, bottom = L and L.head:GetTop(), L and L.add:GetBottom()
             if top and bottom and cy <= top and cy >= bottom then
-                local index = 1
-                for _, row in ipairs(L.rows) do
-                    local mid = (row:GetTop() + row:GetBottom()) / 2
-                    if cy < mid then index = index + 1 end
+                local items = L.items
+                local function at(n)
+                    local it = items[n]
+                    if it then return { path = it.before, frame = it.frame } end
+                    return { path = L.endPath, frame = L.add }
                 end
-                best = { key = key, index = index }
+                for n, it in ipairs(items) do
+                    local t, b = it.frame:GetTop(), it.frame:GetBottom() - GAP
+                    if t and b and cy <= t and cy > b then
+                        local h = t - b
+                        if it.onto then
+                            if cy > t - h / 4 then return at(n) end
+                            if cy > b + h / 4 then return { onto = it.onto, path = it.path, frame = it.frame } end
+                            return at(n + 1)
+                        end
+                        return cy > t - h / 2 and at(n) or at(n + 1)
+                    end
+                end
+                if items[1] and items[1].frame:GetTop() and cy > items[1].frame:GetTop() then return at(1) end
+                return at(#items + 1)
             end
         end
-        return best
+    end
+
+    function f:ShowDrop(t)
+        if self.lit then
+            self.lit.dropFill:Hide()
+            self.lit.dropEdge:SetShown(false)
+            self.lit = nil
+        end
+        self.line:Hide()
+        if not t then return end
+        if t.onto then
+            t.frame.dropFill:Show()
+            t.frame.dropEdge:SetShown(true)
+            self.lit = t.frame
+        else
+            self.line:ClearAllPoints()
+            self.line:SetPoint("BOTTOMLEFT", t.frame, "TOPLEFT", 0, 1)
+            self.line:SetPoint("BOTTOMRIGHT", t.frame, "TOPRIGHT", 0, 1)
+            self.line:Show()
+        end
     end
 
     function f:StartDrag(row)
-        self.drag = { key = row.key, index = row.index }
+        self.drag = { path = row.path, kind = row.kind }
         row:SetAlpha(0.4)
         self.dragRow = row
-        self.ghost.icon:SetArt(row.icon.art:GetTexture())
+        self.ghost.icon:SetArt(row.icon:IsShown() and row.icon.art:GetTexture() or nil)
         self.ghost.name:SetValue(row.name:GetText() or "")
         self.ghost:Show()
         self:SetScript("OnUpdate", function()
@@ -815,40 +1487,71 @@ local function buildEditor(parent)
             self.ghost:ClearAllPoints()
             self.ghost:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / s + 12, y / s)
             local t = self:DropTarget()
+            -- a drop that isn't allowed doesn't light up
+            if t and not accepts(self.drag, t) then t = nil end
             self.target = t
-            if t then
-                local L = self.layout[t.key]
-                local anchor = L.rows[t.index]
-                self.line:ClearAllPoints()
-                self.line:SetPoint("LEFT", self, "LEFT", 0, 0)
-                self.line:SetWidth(WIDTH)
-                if anchor then
-                    self.line:SetPoint("BOTTOM", anchor, "TOP", 0, 1)
-                else
-                    self.line:SetPoint("BOTTOM", L.add, "TOP", 0, 3)
-                end
-                self.line:Show()
-            else
-                self.line:Hide()
-            end
+            self:ShowDrop(t)
         end)
     end
 
     function f:StopDrag()
         self:SetScript("OnUpdate", nil)
         self.ghost:Hide()
-        self.line:Hide()
+        self:ShowDrop(nil)
         if self.dragRow then self.dragRow:SetAlpha(1) end
         local from, to = self.drag, self.target
         self.drag, self.target, self.dragRow = nil, nil, nil
         if not (from and to) then return end
-        local index = to.index
-        if to.key == from.key and index > from.index then index = index - 1 end
-        if to.key == from.key and index == from.index then return end
+        if to.onto == "entry" then
+            -- onto a single entry: offer a shared slot of the two
+            local lists = M:Lists(M:EditSpec())
+            local a, b = entryAt(lists, to.path), entryAt(lists, from.path)
+            if not (a and b) then return end
+            local names = { a.name, b.name }
+            local cooldown = LIST_INFO[to.path.key].kind == "cooldown"
+            UI.Confirm({
+                title = "Make a shared slot?",
+                text = ("Make \"%s + %s\" a shared slot? %s"):format(a.name, b.name, cooldown
+                    and "One icon: the last of them you know shows there."
+                    or "One icon: whichever is up shows there."),
+                confirm = "Make shared slot",
+                onConfirm = function()
+                    local uid = newUid()
+                    f.fold[uid] = true
+                    mutate(function(l) combine(l, to.path, from.path, uid, names) end)
+                end })
+            return
+        end
+        local dest = to.path
+        if to.onto == "slot" then
+            dest = { key = dest.key, i = dest.i, j = dest.j, m = math.huge }
+        elseif to.onto == "collection" then
+            dest = { key = dest.key, i = dest.i, j = math.huge }
+        end
+        mutate(function(l) moveEntry(l, from.path, dest) end)
+    end
+
+    function f:RemoveAt(path)
         mutate(function(l)
-            local e = table.remove(l[from.key], from.index)
-            table.insert(l[to.key], math.min(index, #l[to.key] + 1), e)
+            local t, i, slot = locate(l, path)
+            if t and t[i] then
+                table.remove(t, i)
+                if slot then regroup(slot) end
+            end
         end)
+    end
+
+    local function foldKey(e, p) return e.uid or (p.key .. p.i .. "." .. (p.j or "")) end
+
+    function f:IsOpen(e, p)
+        local v = self.fold[foldKey(e, p)]
+        if v == nil then return e.collection and true or false end
+        return v
+    end
+
+    function f:ToggleFold(r)
+        self.fold[foldKey(r.entry, r.path)] = not self:IsOpen(r.entry, r.path)
+        self:Refresh()
     end
 
     function f:Refresh()
@@ -856,307 +1559,449 @@ local function buildEditor(parent)
         for _, r in ipairs(self.rows) do r:Hide() end
         for _, h in ipairs(self.heads) do h:Hide() end
         for _, a in ipairs(self.adds) do a:Hide() end
+        for _, a in ipairs(self.addTos) do a:Hide() end
         local lists = M:Lists(M:EditSpec())
         local y = -(30 + 12)
-        local rowN = 0
+        local rowN, addN = 0, 0
+        local found = {}
         for i, key in ipairs(TABS[self.tab]) do
             local info = LIST_INFO[key]
+            local cooldown = info.kind == "cooldown"
             local list = lists[key] or {}
+            if not found[info.kind] then found[info.kind] = { candidates(info.kind) } end
+            local byName, groups = found[info.kind][1], found[info.kind][2]
+            local present, spells, nested = {}, 0, false
+            walk(list, key, function(e)
+                if e.name then present[e.name] = true end
+                if e.group or e.collection then nested = true else spells = spells + 1 end
+            end)
+
             local h = head(i)
             h.title:SetValue(info.label)
             h.note:SetValue(info.note)
-            h.count:SetValue(#list == 1 and "1 spell" or (#list .. " spells"))
+            local noun = cooldown and "spell" or "aura"
+            if nested then
+                h.count:SetValue(("%d %s · %d %s"):format(#list, #list == 1 and "entry" or "entries", spells, spells == 1 and noun or (noun .. "s")))
+            else
+                h.count:SetValue(#list == 1 and "1 spell" or (#list .. " spells"))
+            end
             h:ClearAllPoints()
             h:SetPoint("TOPLEFT", 0, y)
             h:Show()
-            local L = { rows = {}, head = h }
+            local L = { items = {}, head = h }
             self.layout[key] = L
             y = y - 38
-            for index, entry in ipairs(list) do
+
+            local function place(fr, level, rails)
+                fr:ClearAllPoints()
+                fr:SetPoint("TOPLEFT", level * INDENT, y)
+                fr:SetWidth(WIDTH - level * INDENT)
+                setRails(fr, rails, level)
+                fr:Show()
+                y = y - (ROW_H + GAP)
+            end
+            -- c: what fillEntryRow takes, plus rails, the position before
+            -- the row (where a drop over its top lands) and what may land on it
+            local function row(c)
                 rowN = rowN + 1
                 local r = self.rows[rowN] or buildEntryRow(self)
                 self.rows[rowN] = r
-                fillEntryRow(r, key, index, entry)
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", 0, y)
-                L.rows[#L.rows + 1] = r
-                y = y - (ROW_H + 4)
+                c.key = key
+                fillEntryRow(r, c)
+                place(r, c.level, c.rails)
+                L.items[#L.items + 1] = { frame = r, before = c.path, onto = c.onto, path = c.path }
             end
+            local function addTo(box, path, level, rails, endPath)
+                addN = addN + 1
+                local a = addToRow(addN)
+                a.path, a.byName, a.groups = path, byName, groups
+                a.select.placeholder = "+ Add to " .. (box.name or "it") .. "…"
+                a.select:SetOptions(addOptions(info.kind, key, byName, groups, present, box.collection))
+                a.select:SetValue(nil)
+                place(a, level, rails)
+                L.items[#L.items + 1] = { frame = a, before = endPath }
+            end
+            -- a single entry, or a shared slot and (open) its members
+            local function entryRows(e, p, level, rails)
+                if not e.group then
+                    row({ path = p, entry = e, kind = "entry", level = level, rails = rails, onto = "entry" })
+                    return
+                end
+                local open = self:IsOpen(e, p)
+                row({ path = p, entry = e, kind = "slot", level = level, rails = rails, open = open, onto = "slot" })
+                if not open then return end
+                local inner = { unpack(rails) }
+                inner[#inner + 1] = { level = level, faint = true }
+                local members = e.members or {}
+                for m, x in ipairs(members) do
+                    row({ path = { key = key, i = p.i, j = p.j, m = m }, entry = x, kind = "member", slot = e,
+                          level = level + 1, rails = inner })
+                end
+                addTo(e, p, level + 1, inner, { key = key, i = p.i, j = p.j, m = #members + 1 })
+            end
+
+            for index, e in ipairs(list) do
+                local p = { key = key, i = index }
+                if e.collection then
+                    local open = self:IsOpen(e, p)
+                    row({ path = p, entry = e, kind = "collection", level = 0, rails = {}, open = open, onto = "collection" })
+                    if open then
+                        local rails = { { level = 0 } }
+                        local entries = e.entries or {}
+                        for j, x in ipairs(entries) do entryRows(x, { key = key, i = index, j = j }, 1, rails) end
+                        addTo(e, p, 1, rails, { key = key, i = index, j = #entries + 1 })
+                    end
+                else
+                    entryRows(e, p, 0, {})
+                end
+            end
+
             local a = addRow(i)
             a.key = key
-            a.newGroup:SetShown(info.kind == "aura")
-            local present = {}
-            for _, e in ipairs(list) do present[e.name] = true end
-            a.byName, a.groups = candidates(info.kind)
-            -- what you cast or saw lately first, then everything by name
-            local top, taken = {}, {}
-            for _, r in ipairs(recent(info.kind)) do
-                if not present[r.name] and not taken[r.name] then
-                    taken[r.name] = true
-                    if not a.byName[r.name] then a.byName[r.name] = copy(r.ids) end
-                    top[#top + 1] = { value = r.name, label = r.name }
-                end
-            end
-            local options = {}
-            for name in pairs(a.byName) do
-                if not present[name] and not taken[name] then options[#options + 1] = { value = name, label = name } end
-            end
-            -- the presets' groups that belong in this list, marked as groups
-            for name, g in pairs(a.groups or {}) do
-                if not present[name] and g.key == key then
-                    options[#options + 1] = { value = "group:" .. name, label = name .. " (Group)" }
-                end
-            end
-            table.sort(options, function(x, z) return x.label < z.label end)
-            if #top > 0 then
-                table.insert(top, 1, { heading = "Seen recently" })
-                top[#top + 1] = { heading = "All" }
-                for _, o in ipairs(options) do top[#top + 1] = o end
-                options = top
-            end
-            a.select:SetOptions(options)
+            a.newCollection:SetShown(not cooldown) -- collections are for auras
+            a.byName, a.groups = byName, groups
+            a.select:SetOptions(addOptions(info.kind, key, byName, groups, present, true))
             a.select:SetValue(nil)
             a:ClearAllPoints()
             a:SetPoint("TOPLEFT", 0, y)
             a:Show()
             L.add = a
+            L.endPath = { key = key, i = #list + 1 }
             y = y - 46
         end
         self:SetHeight(-y)
-        if self.group and self.group:IsShown() then self:RefreshGroup() end
         if self.behaviour and self.behaviour:IsShown() then self:RefreshBehaviour() end
     end
 
     ---------------------------------------------------------------------------
-    -- The group panel: name, source, how many at once, icon, members
+    -- The Behaviour panel: per entry, a modal sized to what applies.
+    --   cooldown: when ready, pop, sound, on cooldown, show, when unusable,
+    --     edge, effect; a cooldown shared slot adds its name and shown
+    --   single aura: whose, when missing, edge, size, glow, timer, stacks,
+    --     amber, sounds
+    --   shared slot (auras): name, how many at once, icon, then as a single aura
+    --   a shared slot's member: whose only (how it looks is the slot's)
+    --   collection: name
+    -- and on every one of them, Conditions.
     ---------------------------------------------------------------------------
 
-    local GP_W = 380
-    local MEMBER_ROWS = 6
-    local function groupEntry()
-        local g = f.group
-        local list = M:Lists(M:EditSpec())[g.key] or {}
-        for i, e in ipairs(list) do
-            if e.group and e.uid == g.uid then g.index = i; return e end
-        end
-    end
-    local function mutateGroup(fn)
-        local g = f.group
-        mutate(function(l)
-            for _, e in ipairs(l[g.key] or {}) do
-                if e.group and e.uid == g.uid then fn(e); regroup(e) end
-            end
-        end)
-    end
-
-    local function buildGroupPanel()
-        local g = UI.Panel(SuuUI.Root, { title = "Group", width = GP_W, height = 520, solid = true })
-        UI.MakeModal(g) -- centred, over a dimmed screen; Esc or a click outside closes
-        local b = g.body
-        local y = 0
-        local function label(text)
-            local t = UI.Text(b, "caption", "ink-muted")
-            t:SetPoint("TOPLEFT", 0, -y)
-            t:SetValue(text)
-            y = y + 18
-        end
-        label("Name")
-        g.name = UI.TextField(b, { width = GP_W - 40, onChange = function(text)
-            if text and text ~= "" then mutateGroup(function(e) e.name = text end) end
-        end })
-        g.name:SetPoint("TOPLEFT", 0, -y); y = y + 40
-        label("Whose")
-        g.source = UI.Segmented(b, { options = {
-            { value = "mine", label = "Only yours" }, { value = "others", label = "Only others'" }, { value = "any", label = "Anyone" } },
-            onChange = function(v) mutateGroup(function(e) e.source = v end) end })
-        g.source:SetPoint("TOPLEFT", 0, -y); y = y + 40
-        label("How many at once")
-        g.max = UI.Stepper(b, { min = 1, max = 4, step = 1, onChange = function(v) mutateGroup(function(e) e.max = v end) end })
-        g.max:SetPoint("TOPLEFT", 0, -y); y = y + 40
-        label("Icon when none is up")
-        g.icon = UI.Select(b, { width = GP_W - 40, placeholder = "First spell", onChange = function(v)
-            if v then mutateGroup(function(e) e.icon = v end) end
-        end })
-        g.icon:SetPoint("TOPLEFT", 0, -y); y = y + 40
-        label("Spells")
-        g.membersTop = y
-        g.memberRows = {}
-        g.offset = 0
-        -- the spells: at most MEMBER_ROWS visible, the wheel scrolls
-        g.track = b:CreateTexture(nil, "ARTWORK")
-        g.track:SetColorTexture(UI.RGBA("gilt-faint"))
-        g.thumb = b:CreateTexture(nil, "OVERLAY")
-        g.thumb:SetColorTexture(UI.RGBA("ink-muted"))
-        g.wheel = CreateFrame("Frame", nil, b)
-        g.wheel:EnableMouseWheel(true)
-        g.wheel:SetScript("OnMouseWheel", function(_, delta)
-            g.offset = (g.offset or 0) - delta
-            f:RefreshGroup()
-        end)
-        g.add = UI.Select(b, { width = GP_W - 40, placeholder = "+ Add a spell (name or spell ID)", lookup = spellLookup,
-            onChange = function(value)
-                local m = value and entryFor(value, g.byName)
-                if m then
-                    mutateGroup(function(e)
-                        e.members = e.members or {}
-                        table.insert(e.members, m)
-                    end)
-                end
-            end })
-        g.done = UI.Button(b, { text = "Done", variant = "primary", width = 90, onClick = function() g:Hide() end })
-        -- "+ New group" closed (Done, Esc, a click outside) before it got a
-        -- spell or a name: nothing to keep
-        g:HookScript("OnHide", function()
-            local e = groupEntry()
-            if e and #(e.members or {}) == 0 and (e.name or NEW_GROUP) == NEW_GROUP then
-                mutate(function(l)
-                    for i, x in ipairs(l[g.key] or {}) do
-                        if x.group and x.uid == g.uid then table.remove(l[g.key], i); break end
-                    end
-                end)
-            end
-        end)
-        return g
-    end
-
-    function f:RefreshGroup()
-        local g = self.group
-        local e = groupEntry()
-        if not e then g:Hide(); return end
-        g:SetTitle(e.name or "Group")
-        g.name:SetValue(e.name or "")
-        g.source:SetValue(e.source or "mine")
-        g.max:SetValue(e.max or 1)
-        local iconOptions = {}
-        for _, m in ipairs(e.members or {}) do iconOptions[#iconOptions + 1] = { value = m.ids[1], label = m.name } end
-        g.icon:SetOptions(iconOptions)
-        g.icon:SetValue(e.icon)
-        -- members, each with a remove button; MEMBER_ROWS at a time
-        for _, row in ipairs(g.memberRows) do row:Hide() end
-        local members = e.members or {}
-        local maxOffset = math.max(0, #members - MEMBER_ROWS)
-        g.offset = math.max(0, math.min(g.offset or 0, maxOffset))
-        local y = g.membersTop
-        for i = 1, math.min(MEMBER_ROWS, #members) do
-            local index = g.offset + i
-            local m = members[index]
-            local row = g.memberRows[i]
-            if not row then
-                row = CreateFrame("Frame", nil, g.body)
-                row:SetSize(GP_W - 40, 26)
-                row.icon = UI.Icon(row, 20)
-                row.icon:SetPoint("LEFT")
-                row.label = UI.Text(row, "body", "ink")
-                row.label:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
-                row.remove = glyphButton(row, "remove", function()
-                    mutateGroup(function(x) table.remove(x.members, row.index) end)
-                end)
-                row.remove:SetPoint("RIGHT")
-                g.memberRows[i] = row
-            end
-            row.index = index
-            row:SetWidth(GP_W - 40 - (maxOffset > 0 and 10 or 0))
-            row.icon:SetArt(C_Spell.GetSpellTexture(m.ids[1]))
-            row.label:SetValue(m.name)
-            row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", 0, -y)
-            row:Show()
-            y = y + 28
-        end
-        -- the scroll area and its bar
-        local areaH = math.max(1, y - g.membersTop)
-        g.wheel:ClearAllPoints()
-        g.wheel:SetPoint("TOPLEFT", 0, -g.membersTop)
-        g.wheel:SetSize(GP_W - 40, areaH)
-        g.wheel:SetFrameLevel(g.body:GetFrameLevel())
-        g.track:SetShown(maxOffset > 0)
-        g.thumb:SetShown(maxOffset > 0)
-        if maxOffset > 0 then
-            g.track:ClearAllPoints()
-            g.track:SetPoint("TOPRIGHT", g.body, "TOPLEFT", GP_W - 40, -g.membersTop)
-            g.track:SetSize(3, areaH)
-            local thumbH = math.max(14, areaH * MEMBER_ROWS / #members)
-            g.thumb:ClearAllPoints()
-            g.thumb:SetPoint("TOP", g.track, "TOP", 0, -(areaH - thumbH) * g.offset / maxOffset)
-            g.thumb:SetSize(3, thumbH)
-        end
-        g.add:ClearAllPoints()
-        g.add:SetPoint("TOPLEFT", 0, -(y + 4))
-        -- Done under "+ Add a spell", and the panel as tall as its contents
-        local doneY = y + 4 + 30 + 16
-        g.done:ClearAllPoints()
-        g.done:SetPoint("TOPRIGHT", g.body, "TOPLEFT", GP_W - 40, -doneY)
-        g:SetHeight(g:BodyTop() + doneY + 30 + 20)
-        g.byName = candidates("aura")
-        local present = {}
-        for _, m in ipairs(e.members or {}) do present[m.name] = true end
-        local options = {}
-        for name in pairs(g.byName) do
-            if not present[name] then options[#options + 1] = { value = name, label = name } end
-        end
-        table.sort(options, function(x, z) return x.label < z.label end)
-        g.add:SetOptions(options)
-        g.add:SetValue(nil)
-    end
-
-    ---------------------------------------------------------------------------
-    -- The Behaviour panel: per entry, a modal. Cooldowns: when ready, pop,
-    -- sound, on cooldown, show, when unusable, edge. Auras: when missing,
-    -- edge, size, glow, digits, stacks, amber, sounds.
-    ---------------------------------------------------------------------------
-
-    local BP_W = 420
+    local BP_W = 520
+    local CW = BP_W - 40 -- the body's width
     local EDGES = { { value = "default", label = "By state" }, { value = "ink", label = "Ink" },
                     { value = "gilt", label = "Gilt" }, { value = "muted", label = "Muted" } }
     local SOUND_OPTIONS = { { value = "none", label = "None" }, { value = "chime", label = "Ready chime" },
                             { value = "ping", label = "Soft ping" }, { value = "proc", label = "Proc" },
                             { value = "warning", label = "Warning" } }
+    local WHOSE = { { value = "mine", label = "Only yours" }, { value = "others", label = "Only others'" }, { value = "any", label = "Anyone's" } }
 
-    -- The panel's entry in a list: by its uid (groups have one), else at its
-    -- index while that is still the same spell; nil once it's gone.
-    local function findEntry(list)
+    -- The panel's entry in the lists, and the shared slot it's a member of:
+    -- by uid (shared slots and collections have one; a member goes by its
+    -- slot's), else at its path while that is still the same spell; nil
+    -- once it's gone.
+    local function findEntry(l)
         local b = f.behaviour
-        if b.uid then
-            for i, e in ipairs(list or {}) do
-                if e.uid == b.uid then b.index = i; return e end
-            end
-            return nil
+        local uid = b.slotUid or b.uid
+        if uid then
+            local at
+            walk(l[b.key], b.key, function(e, p) if e.uid == uid and not p.m then at = p end end)
+            if not at then return nil end
+            b.path = b.slotUid and { key = at.key, i = at.i, j = at.j, m = b.path.m } or at
         end
-        local e = (list or {})[b.index]
-        if e and e.name == b.name then return e end
+        local t, i, slot = locate(l, b.path)
+        local e = t and t[i]
+        if e and (b.uid or e.name == b.name) then return e, slot end
     end
 
     local function mutateEntry(fn)
-        local b = f.behaviour
         mutate(function(l)
-            local e = findEntry(l[b.key])
-            if e then fn(e) end
+            local e, slot = findEntry(l)
+            if e then
+                fn(e, slot)
+                if slot then regroup(slot) end
+            end
         end)
     end
 
-    -- A label over a control, stacked down the panel's body.
-    local function stack(panel)
+    ---------------------------------------------------------------------------
+    -- Conditions: "Conditions" and All of these | Any of these, a row per
+    -- condition (Not, its type, its control under them, ✕), "+ Add
+    -- condition", then the sentence. Its height follows its rows.
+    ---------------------------------------------------------------------------
+
+    local COND_X = 56 -- a condition's control, under its type
+
+    -- Changes the entry's conditions; with none left it has no `when`.
+    local function mutateWhen(fn)
+        mutateEntry(function(e)
+            local w = copy(e.when) or {}
+            w.match, w.conditions = w.match or "all", w.conditions or {}
+            fn(w)
+            e.when = #w.conditions > 0 and w or nil
+        end)
+    end
+
+    local function setCondition(i, fn)
+        mutateWhen(function(w)
+            if w.conditions[i] then fn(w.conditions[i], w) end
+        end)
+    end
+
+    -- The types the Select offers: stance / form only for a class with one
+    -- (or a condition that already is one, from another class's setup).
+    local function conditionTypes(current)
+        local out = {}
+        for _, t in ipairs(CONDITION_TYPES) do
+            if t.value ~= "stance" or STANCES[CLASS] or current == "stance" then out[#out + 1] = t end
+        end
+        return out
+    end
+
+    local function buildConditionRow(parent)
+        local r = CreateFrame("Frame", nil, parent)
+        r:SetWidth(CW)
+        UI.Fill(r, "surface-sunk"):SetAllPoints()
+        UI.Border(r, "gilt-faint")
+        -- Not turns the condition around (ember while on)
+        r.notButton = CreateFrame("Button", nil, r)
+        r.notButton:SetSize(40, 30)
+        r.notButton:SetPoint("TOPLEFT", 8, -8)
+        r.notEdge = UI.Border(r.notButton, "gilt-line")
+        r.notText = UI.Text(r.notButton, "label", "ink-faint")
+        r.notText:SetPoint("CENTER")
+        r.notText:SetValue("Not")
+        r.notButton:SetScript("OnClick", function()
+            setCondition(r.index, function(c) c["not"] = (not c["not"]) or nil end)
+        end)
+        r.type = UI.Select(r, { width = 196, onChange = function(v)
+            if not v then return end
+            setCondition(r.index, function(c, w)
+                if c.type == v then return end
+                local new = newCondition(v)
+                new["not"] = c["not"]
+                w.conditions[r.index] = new
+            end)
+        end })
+        r.type:SetPoint("LEFT", r.notButton, "RIGHT", 8, 0)
+        r.remove = glyphButton(r, "remove", function()
+            mutateWhen(function(w) table.remove(w.conditions, r.index) end)
+        end)
+        r.remove:SetPoint("TOPRIGHT", -8, -12)
+
+        -- the type's controls, one set showing
+        local top = -(8 + 30 + 6)
+        local function chips(options, field)
+            local c = UI.ToggleChips(r, { options = options, onChange = function(values)
+                setCondition(r.index, function(cond) cond[field] = values end)
+            end })
+            c:SetPoint("TOPLEFT", COND_X, top)
+            return c
+        end
+        r.group = UI.Segmented(r, { options = { { value = "solo", label = "Solo" }, { value = "group", label = "Group" }, { value = "raid", label = "Raid" } },
+            onChange = function(v) setCondition(r.index, function(c) c.value = v end) end })
+        r.group:SetPoint("TOPLEFT", COND_X, top)
+        -- classes in two rows of chips, one list
+        local function classes()
+            local all = r.classesA:GetValue()
+            for _, v in ipairs(r.classesB:GetValue()) do all[#all + 1] = v end
+            setCondition(r.index, function(c) c.classes = all end)
+        end
+        r.classesA = UI.ToggleChips(r, { options = { unpack(CLASSES, 1, 5) }, onChange = classes })
+        r.classesA:SetPoint("TOPLEFT", COND_X, top)
+        r.classesB = UI.ToggleChips(r, { options = { unpack(CLASSES, 6, 9) }, onChange = classes })
+        r.classesB:SetPoint("TOPLEFT", COND_X, top - 32)
+        r.roles = chips(ROLES, "roles")
+        r.stances = STANCES[CLASS] and chips(STANCES[CLASS], "stances")
+        r.instance = chips(INSTANCES, "kinds")
+        r.target = chips(TARGETS, "kinds")
+        r.plain = UI.Text(r, "caption", "ink-faint")
+        r.plain:SetPoint("TOPLEFT", COND_X, top - 6)
+        r.controls = { r.group, r.classesA, r.classesB, r.roles, r.instance, r.target, r.plain, r.stances }
+        return r
+    end
+
+    local function fillConditionRow(r, c)
+        r.notEdge:SetColor(c["not"] and "ember" or "gilt-line")
+        r.notText:SetColor(c["not"] and "ember-text" or "ink-faint")
+        r.type:SetOptions(conditionTypes(c.type))
+        r.type:SetValue(c.type)
+        for _, ctl in pairs(r.controls) do ctl:Hide() end
+        local h = 26
+        if c.type == "group" then
+            r.group:SetValue(c.value or "group")
+            r.group:Show()
+            h = 30
+        elseif c.type == "classes" then
+            r.classesA:SetValue(c.classes)
+            r.classesB:SetValue(c.classes)
+            r.classesA:Show()
+            r.classesB:Show()
+            h = 58
+        elseif c.type == "role" then
+            r.roles:SetValue(c.roles)
+            r.roles:Show()
+        elseif c.type == "stance" and r.stances then
+            r.stances:SetValue(c.stances)
+            r.stances:Show()
+        elseif c.type == "instance" then
+            r.instance:SetValue(c.kinds)
+            r.instance:Show()
+        elseif c.type == "target" then
+            r.target:SetValue(c.kinds)
+            r.target:Show()
+        else
+            r.plain:SetValue(c.type == "combat" and "No options: while you're in combat."
+                or "Your class has no stances or forms.")
+            r.plain:Show()
+            h = 20
+        end
+        r.height = 8 + 30 + 6 + h + 8
+        r:SetHeight(r.height)
+    end
+
+    local function buildConditions(b)
+        local cs = CreateFrame("Frame", nil, b.body)
+        cs:SetWidth(CW)
+        b.sections[#b.sections + 1] = cs
+        local rule = UI.Hairline(cs, "gilt-faint")
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        local title = UI.Text(cs, "label", "gilt-text")
+        title:SetPoint("TOPLEFT", 0, -18)
+        title:SetValue("Conditions")
+        b.match = UI.Segmented(cs, { options = { { value = "all", label = "All of these" }, { value = "any", label = "Any of these" } },
+            onChange = function(v) mutateWhen(function(w) w.match = v end) end })
+        b.match:SetPoint("TOPRIGHT", 0, -12)
+        cs.rows = {}
+        b.addCondition = UI.Button(cs, { text = "+ Add condition", onClick = function()
+            -- the first type not used yet
+            mutateWhen(function(w)
+                local used, pick = {}, "combat"
+                for _, c in ipairs(w.conditions) do used[c.type] = true end
+                for _, t in ipairs(conditionTypes()) do
+                    if not used[t.value] then pick = t.value; break end
+                end
+                table.insert(w.conditions, newCondition(pick))
+            end)
+        end })
+        b.condSentence = UI.Text(cs, "body", "ink")
+        b.condSentence:SetWordWrap(true)
+        b.condSentence:SetJustifyH("LEFT")
+        b.condSentence:SetFixedWidth(CW)
+        b.condNote = UI.Text(cs, "caption", "ink-muted")
+        b.cond = cs
+    end
+
+    -- subject: the entry's name in the sentence (nil: "Shows …");
+    -- note: under it ("Applies to everything inside.")
+    local function fillConditions(b, e, subject, note)
+        local cs = b.cond
+        local conds = e.when and e.when.conditions or {}
+        b.match:SetValue(e.when and e.when.match or "all")
+        local y = 12 + 30 + 10
+        for _, r in ipairs(cs.rows) do r:Hide() end
+        for i, c in ipairs(conds) do
+            local r = cs.rows[i] or buildConditionRow(cs)
+            cs.rows[i] = r
+            r.index = i
+            fillConditionRow(r, c)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:Show()
+            y = y + r.height + 6
+        end
+        b.addCondition:ClearAllPoints()
+        b.addCondition:SetPoint("TOPLEFT", 0, -y)
+        y = y + 30 + 10
+        b.condSentence:SetValue(conditionSentence(subject, e.when))
+        b.condSentence:ClearAllPoints()
+        b.condSentence:SetPoint("TOPLEFT", 0, -y)
+        y = y + math.max(16, b.condSentence:GetStringHeight()) + 6
+        b.condNote:SetShown(note ~= nil)
+        if note then
+            b.condNote:SetValue(note)
+            b.condNote:ClearAllPoints()
+            b.condNote:SetPoint("TOPLEFT", 0, -y)
+            y = y + 16 + 4
+        end
+        cs.height = y + 8
+    end
+
+    -- A label over a control, stacked down a section.
+    local function stack(section)
         local y = 0
         return function(label, control, h)
             if label then
-                local t = UI.Text(panel.body, "caption", "ink-muted")
+                local t = UI.Text(section, "caption", "ink-muted")
                 t:SetPoint("TOPLEFT", 0, -y)
                 t:SetValue(label)
                 y = y + 18
             end
             control:SetPoint("TOPLEFT", 0, -y)
             y = y + (h or 30) + 12
+            section.height = y
             return y
         end
+    end
+
+    local function section(b)
+        local s = CreateFrame("Frame", nil, b.body)
+        s:SetWidth(CW)
+        b.sections[#b.sections + 1] = s
+        return s, stack(s)
     end
 
     local function buildBehaviour()
         local b = UI.Panel(SuuUI.Root, { title = "Behaviour", width = BP_W, height = 600, solid = true })
         UI.MakeModal(b)
+        b.sections = {}
+
+        -- a note on top: a member's slot, a cooldown slot's order
+        b.note = section(b)
+        b.note.height = 30 + 12
+        UI.Fill(b.note, "surface-sunk"):SetAllPoints()
+        UI.Border(b.note, "gilt-faint")
+        b.noteText = UI.Text(b.note, "caption", "ink-muted")
+        b.noteText:SetPoint("LEFT", 8, 0)
+        b.noteText:SetFixedWidth(CW - 16)
+        b.noteText:SetJustifyH("LEFT")
+
+        -- a shared slot's or collection's name, beside how many show at
+        -- once (aura slots) or shown (cooldown slots)
+        local nm = section(b)
+        nm.height = 18 + 30 + 12
+        local nameLabel = UI.Text(nm, "caption", "ink-muted")
+        nameLabel:SetPoint("TOPLEFT")
+        nameLabel:SetValue("Name")
+        b.name = UI.TextField(nm, { width = 240, onChange = function(text)
+            if text and text ~= "" then mutateEntry(function(e) e.name = text end) end
+        end })
+        b.name:SetPoint("TOPLEFT", 0, -18)
+        b.sideLabel = UI.Text(nm, "caption", "ink-muted")
+        b.sideLabel:SetPoint("TOPLEFT", 256, 0)
+        b.max = UI.Stepper(nm, { min = 1, max = 4, step = 1, onChange = function(v) mutateEntry(function(e) e.max = v end) end })
+        b.max:SetPoint("TOPLEFT", 256, -18)
+        b.slotShown = UI.Toggle(nm, { onChange = function(v) mutateEntry(function(e) e.hidden = (not v) or nil end) end })
+        b.slotShown:SetPoint("TOPLEFT", 256, -24)
+        b.naming = nm
+
+        -- an aura slot's icon while none of its auras is up
+        local ic, addI = section(b)
+        b.icon = UI.Select(ic, { width = 240, placeholder = "First spell", onChange = function(v)
+            if v then mutateEntry(function(e) e.icon = v end) end
+        end })
+        addI("Icon when none is up", b.icon)
+        b.iconSection = ic
+
+        -- a member's whose (unless set, the slot's)
+        local ms, addM = section(b)
+        b.memberSource = UI.Segmented(ms, { options = WHOSE, onChange = function(v)
+            mutateEntry(function(e, slot) e.source = v ~= entrySource(slot, f.behaviour.key) and v or nil end)
+        end })
+        addM("Whose", b.memberSource)
+        b.memberSection = ms
+
         -- cooldowns
-        local cd = CreateFrame("Frame", nil, b.body)
-        cd:SetAllPoints(b.body)
-        local add = stack({ body = cd })
+        local cd, add = section(b)
         b.ready = UI.Segmented(cd, { options = { { value = "normal", label = "Normal" }, { value = "glow", label = "Glow" }, { value = "pulse", label = "Pulse" } },
             onChange = function(v) mutateEntry(function(e) e.ready = v ~= "normal" and v or nil end) end })
         add("When ready", b.ready)
@@ -1201,15 +2046,13 @@ local function buildEditor(parent)
                 end
             end)
         end })
-        b.cdHeight = add("Effect (name or spell ID)", b.effectAura)
+        add("Effect (name or spell ID)", b.effectAura)
         b.cd = cd
 
         -- auras
-        local au = CreateFrame("Frame", nil, b.body)
-        au:SetAllPoints(b.body)
-        local addA = stack({ body = au })
-        -- whose aura counts (a group's is the same setting as in its panel)
-        b.source = UI.Segmented(au, { options = { { value = "mine", label = "Only yours" }, { value = "others", label = "Only others'" }, { value = "any", label = "Anyone's" } },
+        local au, addA = section(b)
+        -- whose aura counts (a shared slot's own setting; its members may differ)
+        b.source = UI.Segmented(au, { options = WHOSE,
             onChange = function(v)
                 mutateEntry(function(e)
                     e.mine = nil
@@ -1229,7 +2072,7 @@ local function buildEditor(parent)
         addA("Size", b.size)
         -- three switches in one row
         local row = CreateFrame("Frame", nil, au)
-        row:SetSize(BP_W - 40, 30)
+        row:SetSize(CW, 30)
         local function switch(x, label, onChange)
             local t = UI.Toggle(row, { onChange = onChange })
             t:SetPoint("LEFT", x, 0)
@@ -1242,34 +2085,54 @@ local function buildEditor(parent)
         b.digits = switch(120, "Timer", function(v) mutateEntry(function(e) e.digits = (not v) and false or nil end) end)
         b.stacks = switch(240, "Stacks", function(v) mutateEntry(function(e) e.stacks = (not v) and false or nil end) end)
         addA(nil, row)
-        b.expiring = UI.Stepper(au, { min = 1, max = 10, step = 1, unit = "s", onChange = function(v)
+        -- the amber threshold on one line, its label before it
+        local amber = CreateFrame("Frame", nil, au)
+        amber:SetSize(CW, 30)
+        local amberLabel = UI.Text(amber, "caption", "ink-muted")
+        amberLabel:SetPoint("LEFT")
+        amberLabel:SetValue("Timer turns amber in the last")
+        b.expiring = UI.Stepper(amber, { min = 1, max = 10, step = 1, unit = "s", onChange = function(v)
             mutateEntry(function(e) e.expiring = v ~= 3 and v or nil end) end })
-        addA("Timer turns amber in the last", b.expiring)
-        -- sounds: the engine plays them (registered on every tracker build)
-        local function soundSelect(field)
-            return UI.Select(au, { width = 220, options = SOUND_OPTIONS, onChange = function(v)
+        b.expiring:SetPoint("LEFT", amberLabel, "RIGHT", 12, 0)
+        addA(nil, amber)
+        -- sounds, three across: the engine plays them (registered on every
+        -- tracker build)
+        local sounds = CreateFrame("Frame", nil, au)
+        sounds:SetSize(CW, 48)
+        for n, s in ipairs({ { "soundAppear", "Sound when it appears" }, { "soundStack", "when it stacks up" }, { "soundDrop", "when it drops" } }) do
+            local field = s[1]
+            local t = UI.Text(sounds, "caption", "ink-muted")
+            t:SetPoint("TOPLEFT", (n - 1) * 150, 0)
+            t:SetValue(s[2])
+            b[field] = UI.Select(sounds, { width = 140, options = SOUND_OPTIONS, onChange = function(v)
                 mutateEntry(function(e) e[field] = v ~= "none" and v or nil end)
                 if v ~= "none" then UI.TrackerSound(v) end
             end })
+            b[field]:SetPoint("TOPLEFT", (n - 1) * 150, -18)
         end
-        b.soundAppear = soundSelect("soundAppear")
-        addA("Sound when it appears", b.soundAppear)
-        b.soundStack = soundSelect("soundStack")
-        addA("Sound when it stacks up", b.soundStack)
-        b.soundDrop = soundSelect("soundDrop")
-        b.auHeight = addA("Sound when it drops", b.soundDrop)
+        local h = addA(nil, sounds, 48)
         b.soundNote = UI.Text(au, "caption", "ink-muted")
         b.soundNote:SetWordWrap(true)
         b.soundNote:SetJustifyH("LEFT")
-        b.soundNote:SetFixedWidth(BP_W - 40)
-        b.soundNote:SetPoint("TOPLEFT", 0, -(b.auHeight - 6))
+        b.soundNote:SetFixedWidth(CW)
+        b.soundNote:SetPoint("TOPLEFT", 0, -(h - 6))
         b.soundNote:SetValue("The game plays these itself, in combat too, for this aura from anyone.")
+        au.height = h + 22
         b.au = au
 
+        buildConditions(b)
+
         b.reset = UI.Button(b.body, { text = "Reset", width = 90, onClick = function()
+            local ctx = f.behaviour.ctx
             mutateEntry(function(e)
-                if not e.group then e.source, e.mine = nil, nil end
-                for _, k in ipairs(BEHAVIOUR_KEYS) do e[k] = nil end
+                if ctx == "member" then
+                    e.source, e.when = nil, nil
+                elseif ctx == "collection" then
+                    e.when = nil
+                else
+                    if ctx == "single" then e.source, e.mine = nil, nil end
+                    for _, k in ipairs(BEHAVIOUR_KEYS) do e[k] = nil end
+                end
             end)
         end })
         b.done = UI.Button(b.body, { text = "Done", variant = "primary", width = 90, onClick = function() b:Hide() end })
@@ -1278,13 +2141,56 @@ local function buildEditor(parent)
 
     function f:RefreshBehaviour()
         local b = self.behaviour
-        local e = findEntry(M:Lists(M:EditSpec())[b.key])
+        local e, slot = findEntry(M:Lists(M:EditSpec()))
         if not e then b:Hide(); return end
         local cooldown = LIST_INFO[b.key].kind == "cooldown"
-        b:SetTitle(e.name or "Behaviour")
-        b.cd:SetShown(cooldown)
-        b.au:SetShown(not cooldown)
-        if cooldown then
+        local ctx = (e.collection and "collection") or (e.group and "slot") or (slot and "member") or "single"
+        b.ctx = ctx
+        local shown, meta
+        if ctx == "collection" then
+            local n = #(e.entries or {})
+            shown, meta = { b.naming, b.cond }, ("Collection · %d %s"):format(n, n == 1 and "entry" or "entries")
+        elseif ctx == "member" then
+            shown, meta = { b.note, b.memberSection, b.cond }, "In " .. (slot.name or "a shared slot")
+            b.noteText:SetValue("One slot: how it looks follows " .. (slot.name or "the shared slot") .. ".")
+        elseif ctx == "slot" then
+            local n = #(e.members or {})
+            if cooldown then
+                shown = { b.note, b.naming, b.cd, b.cond }
+                b.noteText:SetValue("Shows the last spell in the list you know: put upgrades last.")
+                meta = ("Shared slot · %d %s"):format(n, n == 1 and "spell" or "spells")
+            else
+                shown = { b.naming, b.iconSection, b.au, b.cond }
+                meta = ("Shared slot · %d %s"):format(n, n == 1 and "aura" or "auras")
+            end
+        else
+            shown = { cooldown and b.cd or b.au, b.cond }
+            meta = cooldown and ("Cooldown · " .. LIST_INFO[b.key].label)
+                or (b.path.j and "Single aura · in a collection" or "Single aura")
+        end
+        b:SetTitle(e.name or "Behaviour", meta)
+
+        if ctx == "slot" or ctx == "collection" then
+            b.name:SetValue(e.name or "")
+            b.sideLabel:SetShown(ctx == "slot")
+            b.sideLabel:SetValue(cooldown and "Shown" or "How many show at once")
+            b.max:SetShown(ctx == "slot" and not cooldown)
+            b.max:SetValue(e.max or 1)
+            b.slotShown:SetShown(ctx == "slot" and cooldown)
+            b.slotShown:SetValue(not e.hidden)
+        end
+        if ctx == "slot" and not cooldown then
+            local iconOptions = {}
+            for _, m in ipairs(e.members or {}) do
+                if m.ids and m.ids[1] then iconOptions[#iconOptions + 1] = { value = m.ids[1], label = m.name } end
+            end
+            b.icon:SetOptions(iconOptions)
+            b.icon:SetValue(e.icon)
+        end
+        if ctx == "member" then
+            b.memberSource:SetValue(e.source or entrySource(slot, b.key))
+        end
+        if cooldown and ctx ~= "member" then
             b.ready:SetValue(e.ready or "normal")
             b.pop:SetValue(e.pop == nil and "default" or (e.pop and "on" or "off"))
             b.sound:SetValue(e.sound or "none")
@@ -1308,7 +2214,7 @@ local function buildEditor(parent)
             b.effectAura:SetOptions(options)
             b.effectAura:SetValue(current)
             b.effectAura:SetDisabled(not e.effect)
-        else
+        elseif ctx == "single" or ctx == "slot" then
             b.source:SetValue(entrySource(e, b.key))
             b.missing:SetValue(e.missing or "list")
             b.missing:SetAlpha(b.key == "procs" and T.opacity["opacity-disabled"] or 1)
@@ -1322,40 +2228,41 @@ local function buildEditor(parent)
             b.soundStack:SetValue(e.soundStack or "none")
             b.soundDrop:SetValue(e.soundDrop or "none")
         end
-        local h = cooldown and b.cdHeight or (b.auHeight + 34)
+
+        -- conditions: on every entry (a cooldown slot's members have no panel)
+        fillConditions(b, e, ctx ~= "collection" and e.name or nil,
+            ctx == "collection" and "Applies to everything inside." or nil)
+
+        -- the sections that apply, stacked; Reset and Done under them
+        for _, s in ipairs(b.sections) do s:Hide() end
+        local h = 0
+        for _, s in ipairs(shown) do
+            s:ClearAllPoints()
+            s:SetPoint("TOPLEFT", b.body, "TOPLEFT", 0, -h)
+            s:SetHeight(s.height)
+            s:Show()
+            h = h + s.height
+        end
+        h = h + 10
         b.reset:ClearAllPoints()
         b.reset:SetPoint("TOPLEFT", b.body, "TOPLEFT", 0, -h)
         b.done:ClearAllPoints()
-        b.done:SetPoint("TOPRIGHT", b.body, "TOPLEFT", BP_W - 40, -h)
+        b.done:SetPoint("TOPRIGHT", b.body, "TOPLEFT", CW, -h)
         b:SetHeight(b:BodyTop() + h + 30 + 20)
     end
 
-    function f:OpenBehaviour(key, index)
-        local e = (M:Lists(M:EditSpec())[key] or {})[index]
+    function f:OpenBehaviour(path)
+        local t, i, slot = locate(M:Lists(M:EditSpec()), path)
+        local e = t and t[i]
         if not e then return end
         self.behaviour = self.behaviour or buildBehaviour()
         local b = self.behaviour
-        b.key, b.index, b.uid, b.name = key, index, e.uid, e.name
+        b.key, b.path, b.uid, b.name, b.slotUid = path.key, path, e.uid, e.name, slot and slot.uid
         self:RefreshBehaviour()
         b:Show()
     end
-
-    function f:OpenGroup(key, index)
-        local e = (M:Lists(M:EditSpec())[key] or {})[index]
-        if not (e and e.group) then return end
-        if not e.uid then
-            -- older groups (presets) get an id the panel can follow
-            mutate(function(l) l[key][index].uid = tostring(time()) .. math.random(1000, 9999) end)
-            e = M:Lists(M:EditSpec())[key][index]
-        end
-        self.group = self.group or buildGroupPanel()
-        self.group.key, self.group.uid, self.group.index = key, e.uid, index
-        self:RefreshGroup()
-        self.group:Show()
-    end
-    -- the panels close with the page (and the settings window)
+    -- the panel closes with the page (and the settings window)
     f:HookScript("OnHide", function()
-        if f.group then f.group:Hide() end
         if f.behaviour then f.behaviour:Hide() end
     end)
     -- "Seen recently" changes while the settings are closed
@@ -1374,7 +2281,7 @@ end
 local SECTION = {
     id = "cooldowns", label = "Cooldown Manager", category = "Frames", order = 26,
     groups = {
-        { title = "What it shows", description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. Per spell: shown or hidden (cooldowns), and what happens while it isn't up (auras): the list's choice, hidden (the others close up), grey in its place, or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
+        { title = "What it shows", description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. A shared slot puts several spells in one icon; a collection (auras) keeps entries together. Per entry: shown or hidden, and what happens while it isn't up (auras): the list's choice, hidden (the others close up), grey in its place, or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
             { label = "Your lists", control = "custom", build = buildPresetBar, stacked = true },
             { label = "Lists", control = "custom", build = buildEditor, stacked = true },
         } },

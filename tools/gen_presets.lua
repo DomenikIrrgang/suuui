@@ -118,6 +118,72 @@ local function iconID(class, ids)
     return ids[1]
 end
 
+-- Mistakes in the source's structure (a collection where it can't be, a
+-- condition the tracker doesn't know); they stop the run like unknown names.
+local invalid = {}
+
+-- Conditions (`when`), as the tracker reads them (UI/CooldownTracker.lua):
+-- each type's field and the values it takes.
+local CLASS_TOKENS = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local WHEN = {
+    group = { field = "value", values = { "solo", "group", "raid" }, one = true },
+    classes = { field = "classes", values = CLASS_TOKENS },
+    role = { field = "roles", values = { "TANK", "HEALER", "DAMAGER" } },
+    stance = { field = "stances", values = { "battle", "defensive", "berserker", "caster", "bear", "cat", "moonkin",
+                                             "travel", "aquatic", "stealth", "shadowform" } },
+    combat = {},
+    instance = { field = "kinds", values = { "none", "party", "raid", "pvp" } },
+    target = { field = "kinds", values = { "boss", "elite", "player", "normal" } },
+}
+for _, t in pairs(WHEN) do
+    t.set = {}
+    for _, v in ipairs(t.values or {}) do t.set[v] = true end
+end
+
+-- A source entry's `when`, checked (every mistake into invalid) and copied
+-- with only the keys the tracker reads; nil without one.
+local function checkWhen(when, where)
+    if when == nil then return nil end
+    local w = where .. ": when"
+    if type(when) ~= "table" or type(when.conditions) ~= "table" then
+        invalid[#invalid + 1] = w .. " needs conditions = { ... }"
+        return nil
+    end
+    if when.match ~= nil and when.match ~= "all" and when.match ~= "any" then
+        invalid[#invalid + 1] = ("%s: match %q isn't \"all\" or \"any\""):format(w, tostring(when.match))
+    end
+    local out = { match = when.match, conditions = {} }
+    for i, c in ipairs(when.conditions) do
+        local cw = ("%s condition %d"):format(w, i)
+        local t = type(c) == "table" and WHEN[c.type]
+        if not t then
+            invalid[#invalid + 1] = ("%s: unknown type %q"):format(cw, tostring(type(c) == "table" and c.type or c))
+        else
+            local copy = { type = c.type, ["not"] = c["not"] and true or nil }
+            if t.one then
+                if not t.set[c[t.field]] then
+                    invalid[#invalid + 1] = ("%s: %s %q isn't one of %s"):format(cw, t.field, tostring(c[t.field]), table.concat(t.values, ", "))
+                end
+                copy[t.field] = c[t.field]
+            elseif t.field then
+                local list = c[t.field]
+                if type(list) ~= "table" or #list == 0 then
+                    invalid[#invalid + 1] = ("%s: %s needs a list of %s"):format(cw, t.field, table.concat(t.values, ", "))
+                else
+                    for _, v in ipairs(list) do
+                        if not t.set[v] then
+                            invalid[#invalid + 1] = ("%s: %s %q isn't one of %s"):format(cw, t.field, tostring(v), table.concat(t.values, ", "))
+                        end
+                    end
+                    copy[t.field] = list
+                end
+            end
+            out.conditions[#out.conditions + 1] = copy
+        end
+    end
+    return out
+end
+
 -- The behaviour fields of a source entry; effectName (an aura's name) becomes
 -- effectIDs, every ID with that name, like any entry's.
 local function behaviour(entry, where, class)
@@ -137,6 +203,78 @@ local function behaviour(entry, where, class)
     return b
 end
 
+-- A group member: a name, or { "Name", source = "mine"|"others"|"any" } (its
+-- own source; else the group's).
+local function memberName(m) return type(m) == "table" and m[1] or m end
+
+-- A group: every member resolved, the union as its IDs. In aura lists the
+-- members leave out the class's passive talents; in cooldown lists they
+-- don't (a cooldown group shows the last member the player knows).
+local function resolveGroup(entry, key, where, class)
+    local cooldowns = not AURA_LISTS[key]
+    local gwhere = ("%s / group %s"):format(where, entry.group)
+    local g = { group = true, name = entry.group, cooldowns = cooldowns, source = entry.source or "mine", max = entry.max or 1,
+        members = {}, behaviour = behaviour(entry, gwhere, class), when = checkWhen(entry.when, gwhere) }
+    local union, seen = {}, {}
+    for _, m in ipairs(entry.members) do
+        local mname = memberName(m)
+        local mwhere = ("%s / group %s: %q"):format(where, entry.group, tostring(mname))
+        local ids = byName[mname]
+        if ids and not cooldowns then ids = auraIDs(class, ids, mwhere) end
+        if not ids then
+            missing[#missing + 1] = mwhere
+        else
+            g.members[#g.members + 1] = { name = mname, ids = ids, source = type(m) == "table" and m.source or nil,
+                when = type(m) == "table" and checkWhen(m.when, mwhere) or nil }
+            for _, id in ipairs(ids) do if not seen[id] then seen[id] = true; union[#union + 1] = id end end
+            if mname == entry.icon then g.icon = iconID(class, ids) end
+        end
+    end
+    table.sort(union)
+    g.ids = union
+    g.icon = g.icon or (g.members[1] and iconID(class, g.members[1].ids))
+    return g
+end
+
+-- A single entry: a name, or { "Name", behaviour... }.
+local function resolveSingle(entry, key, where, class)
+    local name = type(entry) == "table" and entry[1] or entry
+    local ids = byName[name]
+    local w = ("%s: %q"):format(where, tostring(name))
+    if ids and AURA_LISTS[key] then ids = auraIDs(class, ids, w) end
+    if not ids then
+        missing[#missing + 1] = w
+        return nil
+    end
+    return { name = name, ids = ids, mine = type(entry) == "table" and entry.mine or nil, behaviour = behaviour(entry, w, class),
+             when = type(entry) == "table" and checkWhen(entry.when, w) or nil }
+end
+
+-- Any entry of a list: a collection (aura lists only, one level: its
+-- entries are single entries and groups), a group, or a single entry.
+local function resolveEntry(entry, key, where, class, inCollection)
+    if type(entry) == "table" and entry.collection then
+        local cwhere = ("%s / collection %s"):format(where, tostring(entry.collection))
+        if inCollection then
+            invalid[#invalid + 1] = cwhere .. ": a collection inside a collection"
+            return nil
+        end
+        if not AURA_LISTS[key] then
+            invalid[#invalid + 1] = cwhere .. ": collections go in buffs, debuffs or procs only"
+            return nil
+        end
+        local c = { collection = true, name = entry.collection, hidden = entry.hidden, entries = {},
+                    when = checkWhen(entry.when, cwhere) }
+        for _, sub in ipairs(entry.entries or {}) do
+            c.entries[#c.entries + 1] = resolveEntry(sub, key, cwhere, class, true)
+        end
+        return c
+    elseif type(entry) == "table" and entry.group then
+        return resolveGroup(entry, key, where, class)
+    end
+    return resolveSingle(entry, key, where, class)
+end
+
 -- Resolve every entry first; report every unknown name at once.
 resolved = {}
 local classes = {}
@@ -152,39 +290,7 @@ for _, class in ipairs(classes) do
         for _, key in ipairs(LISTS) do
             local out = {}
             for _, entry in ipairs(preset[key] or {}) do
-                if type(entry) == "table" and entry.group then
-                    -- a group: every member resolved, the union as its IDs
-                    local g = { group = true, name = entry.group, source = entry.source or "mine", max = entry.max or 1, members = {},
-                        behaviour = behaviour(entry, ("%s / %s / %s / group %s"):format(class, preset.name, key, entry.group), class) }
-                    local union, seen = {}, {}
-                    for _, mname in ipairs(entry.members) do
-                        local ids = byName[mname]
-                        if ids and AURA_LISTS[key] then
-                            ids = auraIDs(class, ids, ("%s / %s / %s / group %s: %q"):format(class, preset.name, key, entry.group, mname))
-                        end
-                        if not ids then
-                            missing[#missing + 1] = ("%s / %s / %s / group %s: %q"):format(class, preset.name, key, entry.group, mname)
-                        else
-                            g.members[#g.members + 1] = { name = mname, ids = ids }
-                            for _, id in ipairs(ids) do if not seen[id] then seen[id] = true; union[#union + 1] = id end end
-                            if mname == entry.icon then g.icon = iconID(class, ids) end
-                        end
-                    end
-                    table.sort(union)
-                    g.ids = union
-                    g.icon = g.icon or (g.members[1] and iconID(class, g.members[1].ids))
-                    out[#out + 1] = g
-                else
-                    local name = type(entry) == "table" and entry[1] or entry
-                    local ids = byName[name]
-                    if ids and AURA_LISTS[key] then ids = auraIDs(class, ids, ("%s / %s / %s: %q"):format(class, preset.name, key, name)) end
-                    if not ids then
-                        missing[#missing + 1] = ("%s / %s / %s: %q"):format(class, preset.name, key, name)
-                    else
-                        out[#out + 1] = { name = name, ids = ids, mine = type(entry) == "table" and entry.mine or nil,
-                            behaviour = behaviour(entry, ("%s / %s / %s: %q"):format(class, preset.name, key, name), class) }
-                    end
-                end
+                out[#out + 1] = resolveEntry(entry, key, ("%s / %s / %s"):format(class, preset.name, key), class)
             end
             p.lists[key] = out
         end
@@ -199,9 +305,19 @@ for _, class in ipairs(classes) do
         for _, preset in ipairs(source[class]) do
             for _, key in ipairs({ "essential", "utility" }) do
                 for _, entry in ipairs(preset[key] or {}) do
-                    local name = type(entry) == "table" and entry[1] or entry
-                    if not set[name] then
-                        io.stderr:write(("warning: %s / %s / %s: %q isn't in the class's trainer or talents\n"):format(class, preset.name, key, name))
+                    -- a group: each member (a collection here is reported
+                    -- as misplaced)
+                    local names = { type(entry) == "table" and entry[1] or entry }
+                    if type(entry) == "table" and entry.collection then
+                        names = {}
+                    elseif type(entry) == "table" and entry.group then
+                        names = {}
+                        for _, m in ipairs(entry.members or {}) do names[#names + 1] = memberName(m) end
+                    end
+                    for _, name in ipairs(names) do
+                        if not set[name] then
+                            io.stderr:write(("warning: %s / %s / %s: %q isn't in the class's trainer or talents\n"):format(class, preset.name, key, tostring(name)))
+                        end
                     end
                 end
             end
@@ -217,11 +333,15 @@ if #passiveOnly > 0 then
     for _, w in ipairs(passiveOnly) do io.stderr:write("  ", w, "\n") end
 end
 
+if #invalid > 0 then
+    io.stderr:write(("%d mistakes in the source (misplaced entries, unknown conditions):\n"):format(#invalid))
+    for _, m in ipairs(invalid) do io.stderr:write("  ", m, "\n") end
+end
 if #missing > 0 then
     io.stderr:write(("%d names aren't in the client:\n"):format(#missing))
     for _, m in ipairs(missing) do io.stderr:write("  ", m, "\n") end
-    os.exit(1)
 end
+if #missing > 0 or #invalid > 0 then os.exit(1) end
 
 -- Behaviour fields as Lua: " key = value," each, in a fixed order.
 local function behaviourText(b)
@@ -239,10 +359,52 @@ local function behaviourText(b)
     return table.concat(parts)
 end
 
+-- A `when` as Lua: " when = { ... }," (empty without one). Keys in a fixed
+-- order: match, then each condition's type, its choice, not.
+local function whenText(when)
+    if not when then return "" end
+    local function list(values)
+        local parts = {}
+        for _, v in ipairs(values) do parts[#parts + 1] = ("%q"):format(v) end
+        return "{ " .. table.concat(parts, ", ") .. " }"
+    end
+    local conds = {}
+    for _, c in ipairs(when.conditions) do
+        local parts = { ("type = %q"):format(c.type) }
+        local t = WHEN[c.type]
+        if t.field and c[t.field] ~= nil then
+            parts[#parts + 1] = ("%s = %s"):format(t.field, t.one and ("%q"):format(c[t.field]) or list(c[t.field]))
+        end
+        if c["not"] then parts[#parts + 1] = '["not"] = true' end
+        conds[#conds + 1] = "{ " .. table.concat(parts, ", ") .. " }"
+    end
+    return (" when = {%s conditions = { %s } },"):format(when.match and (" match = %q,"):format(when.match) or "",
+        table.concat(conds, ", "))
+end
+
 local function idList(ids)
     local parts = {}
     for _, id in ipairs(ids) do parts[#parts + 1] = tostring(id) end
     return table.concat(parts, ", ")
+end
+
+-- An entry as Lua lines at `indent`: a collection (its entries one level
+-- in), a group (a cooldown list's without source and max), or a single one.
+local function writeEntry(lines, e, indent)
+    if e.collection then
+        lines[#lines + 1] = ("%s{ collection = true, name = %q,%s%s entries = {"):format(indent, e.name, e.hidden and " hidden = true," or "", whenText(e.when))
+        for _, sub in ipairs(e.entries) do writeEntry(lines, sub, indent .. "    ") end
+        lines[#lines + 1] = indent .. "} },"
+    elseif e.group then
+        local slot = e.cooldowns and "" or (" source = %q, max = %d,"):format(e.source, e.max)
+        lines[#lines + 1] = ("%s{ group = true, name = %q,%s icon = %d,%s%s members = {"):format(indent, e.name, slot, e.icon or 0, behaviourText(e.behaviour), whenText(e.when))
+        for _, m in ipairs(e.members) do
+            lines[#lines + 1] = ("%s    { name = %q,%s%s ids = { %s } },"):format(indent, m.name, m.source and (" source = %q,"):format(m.source) or "", whenText(m.when), idList(m.ids))
+        end
+        lines[#lines + 1] = ("%s}, ids = { %s } },"):format(indent, idList(e.ids))
+    else
+        lines[#lines + 1] = ("%s{ name = %q,%s%s%s ids = { %s } },"):format(indent, e.name, e.mine and " mine = true," or "", behaviourText(e.behaviour), whenText(e.when), idList(e.ids))
+    end
 end
 
 for _, class in ipairs(classes) do
@@ -265,17 +427,7 @@ for _, class in ipairs(classes) do
         lines[#lines + 1] = ("    { id = %q, name = %q, tree = %d, lists = {"):format(p.id, p.name, p.tree)
         for _, key in ipairs(LISTS) do
             lines[#lines + 1] = ("        %s = {"):format(key)
-            for _, e in ipairs(p.lists[key]) do
-                if e.group then
-                    lines[#lines + 1] = ("            { group = true, name = %q, source = %q, max = %d, icon = %d,%s members = {"):format(e.name, e.source, e.max, e.icon or 0, behaviourText(e.behaviour))
-                    for _, m in ipairs(e.members) do
-                        lines[#lines + 1] = ("                { name = %q, ids = { %s } },"):format(m.name, idList(m.ids))
-                    end
-                    lines[#lines + 1] = ("            }, ids = { %s } },"):format(idList(e.ids))
-                else
-                    lines[#lines + 1] = ("            { name = %q,%s%s ids = { %s } },"):format(e.name, e.mine and " mine = true," or "", behaviourText(e.behaviour), idList(e.ids))
-                end
-            end
+            for _, e in ipairs(p.lists[key]) do writeEntry(lines, e, "            ") end
             lines[#lines + 1] = "        },"
         end
         lines[#lines + 1] = "    } },"
