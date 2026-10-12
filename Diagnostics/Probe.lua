@@ -738,6 +738,10 @@ function ns.Probe.Command(arg)
         ns.TimelineProbe.Command(rest)
         return
     end
+    if sub == "micro" then
+        ns.MicroProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
