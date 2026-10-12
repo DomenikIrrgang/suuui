@@ -746,6 +746,10 @@ function ns.Probe.Command(arg)
         ns.MinimapProbe.Command(rest)
         return
     end
+    if sub == "chat" then
+        ns.ChatProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
