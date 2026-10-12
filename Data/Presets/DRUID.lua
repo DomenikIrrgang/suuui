@@ -13,31 +13,31 @@ if class ~= "DRUID" then return end
 ns.CooldownPresets = {
     { id = "unspecced", name = "Unspecced", tree = 0, lists = {
         essential = {
-            { name = "Bash", ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { name = "Growl", ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
-            { name = "Enrage", effect = "you", ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Bash", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
+            { name = "Growl", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
+            { name = "Enrage", effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         utility = {
-            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
-            { name = "Innervate", effect = "you", ids = { 29166, 456195 } },
-            { name = "Dash", effect = "you", ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
-            { name = "Rebirth", ids = { 20484, 20739, 20742, 20747, 20748 } },
-            { name = "Tranquility", ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
+            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
+            { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
+            { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Tranquility", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
         },
         buffs = {
             { name = "Mark of the Wild", missing = "remind", ids = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885, 16878, 24752, 364163, 1291335, 1310503 } },
             { name = "Thorns", missing = "remind", ids = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337, 22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308, 1291338, 1312955 } },
         },
         debuffs = {
-            { name = "Moonfire", ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
+            { name = "Moonfire", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
             { name = "Faerie Fire", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
-            { name = "Demoralizing Roar", ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
-            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, members = {
+            { name = "Demoralizing Roar", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
+            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, missing = "hide", members = {
                 { name = "Entangling Roots", ids = { 339, 1062, 5195, 5196, 9852, 9853, 11922, 12747, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
                 { name = "Hibernate", ids = { 2637, 18657, 18658 } },
             }, ids = { 339, 1062, 2637, 5195, 5196, 9852, 9853, 11922, 12747, 18657, 18658, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -63,31 +63,31 @@ ns.CooldownPresets = {
     } },
     { id = "balance", name = "Balance", tree = 1, lists = {
         essential = {
-            { name = "Hurricane", ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
-            { name = "Innervate", effect = "you", ids = { 29166, 456195 } },
-            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Hurricane", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
+            { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
+            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         utility = {
-            { name = "Rebirth", ids = { 20484, 20739, 20742, 20747, 20748 } },
-            { name = "Tranquility", ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
-            { name = "Dash", effect = "you", ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
-            { name = "Nature's Swiftness", effect = "you", ids = { 16188, 17116, 29274 } },
+            { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Tranquility", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
+            { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
+            { name = "Nature's Swiftness", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 16188, 17116, 29274 } },
         },
         buffs = {
             { name = "Mark of the Wild", missing = "remind", ids = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885, 16878, 24752, 364163, 1291335, 1310503 } },
             { name = "Thorns", missing = "remind", ids = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337, 22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308, 1291338, 1312955 } },
-            { name = "Moonkin Form", mine = true, missing = "remind", ids = { 24858 } },
+            { name = "Moonkin Form", mine = true, missing = "remind", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 24858 } },
         },
         debuffs = {
-            { name = "Moonfire", missing = "grey", ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
-            { name = "Insect Swarm", missing = "grey", ids = { 5570, 24974, 24975, 24976, 24977 } },
+            { name = "Moonfire", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
+            { name = "Insect Swarm", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 5570, 24974, 24975, 24976, 24977 } },
             { name = "Faerie Fire", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
-            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, members = {
+            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, missing = "hide", members = {
                 { name = "Entangling Roots", ids = { 339, 1062, 5195, 5196, 9852, 9853, 11922, 12747, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
                 { name = "Hibernate", ids = { 2637, 18657, 18658 } },
             }, ids = { 339, 1062, 2637, 5195, 5196, 9852, 9853, 11922, 12747, 18657, 18658, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -115,27 +115,34 @@ ns.CooldownPresets = {
     } },
     { id = "feralcat", name = "Feral (cat)", tree = 2, lists = {
         essential = {
-            { name = "Shifting Power", ids = { 1322605 } },
-            { name = "Primal Bite", ids = { 407995, 1238069, 1238070, 1238073 } },
-            { name = "Berserk", effect = "you", ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
-            { name = "Cower", ids = { 1742, 1747, 1748, 1749, 1750, 1751, 1753, 1754, 1755, 1756, 8998, 9000, 9892, 16697, 16698, 456333 } },
+            { name = "Shifting Power", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1322605 } },
+            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
+            { name = "Berserk", effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
+            { name = "Cower", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1742, 1747, 1748, 1749, 1750, 1751, 1753, 1754, 1755, 1756, 8998, 9000, 9892, 16697, 16698, 456333 } },
+            { name = "Bash", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
+                { name = "Feral Charge", ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
+                { name = "Feral Charge (Bear)", ids = { 16979 } },
+            }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
         },
         utility = {
-            { name = "Prowl", effect = "you", ids = { 5215, 6783, 8152, 9913, 24450, 24451, 24452, 24453, 24454, 24455, 1264489 } },
-            { name = "Dash", effect = "you", ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
-            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
-            { name = "Innervate", effect = "you", ids = { 29166, 456195 } },
-            { name = "Rebirth", ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Prowl", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 5215, 6783, 8152, 9913, 24450, 24451, 24452, 24453, 24454, 24455, 1264489 } },
+            { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
+            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
+            { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
         },
         buffs = {
             { name = "Mark of the Wild", missing = "remind", ids = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885, 16878, 24752, 364163, 1291335, 1310503 } },
             { name = "Thorns", missing = "remind", ids = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337, 22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308, 1291338, 1312955 } },
         },
         debuffs = {
-            { name = "Rip", missing = "grey", ids = { 1079, 9492, 9493, 9752, 9894, 9896, 1289141 } },
-            { name = "Rake", missing = "grey", ids = { 1822, 1823, 1824, 9904, 24331, 24332, 27556, 27638, 1289140 } },
-            { name = "Faerie Fire", missing = "grey", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
-            { name = "Pounce Bleed", ids = { 9007, 9824, 9826 } },
+            { collection = true, name = "Bleeds", when = { conditions = { { type = "stance", stances = { "cat" } } } }, entries = {
+                { name = "Rip", ids = { 1079, 9492, 9493, 9752, 9894, 9896, 1289141 } },
+                { name = "Rake", ids = { 1822, 1823, 1824, 9904, 24331, 24332, 27556, 27638, 1289140 } },
+                { name = "Pounce Bleed", missing = "hide", ids = { 9007, 9824, 9826 } },
+            } },
+            { name = "Faerie Fire", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -143,7 +150,7 @@ ns.CooldownPresets = {
                 }, ids = { 7386, 7405, 8380, 8647, 8648, 8649, 8650, 8651, 8652, 11197, 11198, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -169,30 +176,31 @@ ns.CooldownPresets = {
     } },
     { id = "feralbear", name = "Feral (bear)", tree = 2, lists = {
         essential = {
-            { name = "Primal Bite", ids = { 407995, 1238069, 1238070, 1238073 } },
-            { name = "Growl", ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
-            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", members = {
+            { name = "Primal Bite", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 407995, 1238069, 1238070, 1238073 } },
+            { name = "Growl", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1853, 2649, 6795, 14916, 14917, 14918, 14919, 14920, 14921, 14922, 14923, 14924, 14925, 14926, 14927, 409372, 1218506 } },
+            { group = true, name = "Feral Charge", icon = 1238122, effect = "target", when = { conditions = { { type = "stance", stances = { "bear" } } } }, members = {
                 { name = "Feral Charge", ids = { 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
                 { name = "Feral Charge (Bear)", ids = { 16979 } },
             }, ids = { 16979, 19675, 414920, 414921, 414923, 414925, 1238122, 1238124 } },
-            { name = "Bash", ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-            { name = "Enrage", effect = "you", ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
-            { name = "Berserk", effect = "you", ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
+            { name = "Bash", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
+            { name = "Enrage", effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 1640, 3019, 5229, 8269, 8599, 12317, 12686, 12795, 12880, 15061, 15097, 15716, 18501, 19516, 19953, 23537, 24318, 25503, 26527, 27897, 28131, 28468, 28747, 28798, 425415, 427066, 440483, 446327, 460862, 461347, 461348, 461349, 462885, 1223458, 1284435, 1288972, 1303979, 1323289 } },
+            { name = "Berserk", effect = "you", when = { conditions = { { type = "stance", stances = { "bear", "cat" } } } }, ids = { 23397, 26068, 26615, 26662, 27680, 28498, 365122, 368388, 417141, 424759, 442211, 1215885, 1231375, 1237939, 1289125 } },
         },
         utility = {
-            { name = "Frenzied Regeneration", effect = "you", ids = { 22842, 22845, 428708 } },
-            { name = "Challenging Roar", ids = { 5209 } },
-            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
-            { name = "Innervate", effect = "you", ids = { 29166, 456195 } },
-            { name = "Rebirth", ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Frenzied Regeneration", effect = "you", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 22842, 22845, 428708 } },
+            { name = "Challenging Roar", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5209 } },
+            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
+            { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Dash", effect = "you", when = { conditions = { { type = "stance", stances = { "cat" } } } }, ids = { 1850, 9821, 23099, 23100, 23109, 23110, 23111, 23112 } },
         },
         buffs = {
             { name = "Mark of the Wild", missing = "remind", ids = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885, 16878, 24752, 364163, 1291335, 1310503 } },
             { name = "Thorns", missing = "remind", ids = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337, 22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308, 1291338, 1312955 } },
         },
         debuffs = {
-            { name = "Lacerate", missing = "grey", ids = { 5422, 24118, 24119, 24120, 414644, 414647, 415760, 468843, 1235826, 1235827, 1299332 } },
-            { name = "Faerie Fire", missing = "grey", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+            { name = "Lacerate", when = { conditions = { { type = "stance", stances = { "bear" } } } }, ids = { 5422, 24118, 24119, 24120, 414644, 414647, 415760, 468843, 1235826, 1235827, 1299332 } },
+            { name = "Faerie Fire", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -209,7 +217,7 @@ ns.CooldownPresets = {
                     { name = "Hurricane", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
                 }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -228,7 +236,7 @@ ns.CooldownPresets = {
                 { name = "Blackout", when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
                 { name = "War Stomp", ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18073, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
-            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, members = {
+            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
                 { name = "Taunt", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
                 { name = "Mocking Blow", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
                 { name = "Challenging Shout", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 1161 } },
@@ -243,31 +251,31 @@ ns.CooldownPresets = {
     } },
     { id = "restoration", name = "Restoration", tree = 3, lists = {
         essential = {
-            { name = "Swiftmend", ids = { 18562 } },
-            { name = "Wild Growth", ids = { 408120, 1238214, 1238215 } },
-            { name = "Nature's Swiftness", effect = "you", ids = { 16188, 17116, 29274 } },
-            { name = "Innervate", effect = "you", ids = { 29166, 456195 } },
+            { name = "Swiftmend", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 18562 } },
+            { name = "Wild Growth", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 408120, 1238214, 1238215 } },
+            { name = "Nature's Swiftness", effect = "you", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 16188, 17116, 29274 } },
+            { name = "Innervate", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 29166, 456195 } },
         },
         utility = {
-            { name = "Tranquility", ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
-            { name = "Rebirth", ids = { 20484, 20739, 20742, 20747, 20748 } },
-            { name = "Barkskin", effect = "you", ids = { 20655, 22812, 428713, 1289128 } },
+            { name = "Tranquility", when = { conditions = { { type = "stance", stances = { "caster" } } } }, ids = { 740, 8918, 8920, 9862, 9863, 21791, 25817, 367070, 461718, 1253568, 1280634, 1324542 } },
+            { name = "Rebirth", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20484, 20739, 20742, 20747, 20748 } },
+            { name = "Barkskin", effect = "you", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 20655, 22812, 428713, 1289128 } },
             { name = "Nature's Grasp", effect = "you", ids = { 16689, 16810, 16811, 16812, 16813, 17329 } },
         },
         buffs = {
             { name = "Mark of the Wild", missing = "remind", ids = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885, 16878, 24752, 364163, 1291335, 1310503 } },
             { name = "Thorns", missing = "remind", ids = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337, 22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308, 1291338, 1312955 } },
-            { name = "Rejuvenation", mine = true, ids = { 774, 1058, 1430, 2090, 2091, 3627, 8070, 8910, 9839, 9840, 9841, 9842, 9843, 12160, 15981, 20664, 20701, 25299, 25972, 27532, 28716, 28722, 28723, 28724, 417057, 417058, 417059, 417060, 417061, 417062, 417063, 417064, 417065, 417066, 417068, 1219706, 1219707, 1219708, 1236307, 1242979, 1280564, 1308568, 1310499, 1310502, 1317516 } },
-            { name = "Regrowth", mine = true, ids = { 8936, 8938, 8939, 8940, 8941, 9750, 9856, 9857, 9858, 16561, 20665, 22373, 22695, 27637, 28744, 436937, 436938, 436939, 436940, 436942, 436943, 436944, 436945, 436946, 1306482 } },
+            { name = "Rejuvenation", mine = true, missing = "hide", ids = { 774, 1058, 1430, 2090, 2091, 3627, 8070, 8910, 9839, 9840, 9841, 9842, 9843, 12160, 15981, 20664, 20701, 25299, 25972, 27532, 28716, 28722, 28723, 28724, 417057, 417058, 417059, 417060, 417061, 417062, 417063, 417064, 417065, 417066, 417068, 1219706, 1219707, 1219708, 1236307, 1242979, 1280564, 1308568, 1310499, 1310502, 1317516 } },
+            { name = "Regrowth", mine = true, missing = "hide", ids = { 8936, 8938, 8939, 8940, 8941, 9750, 9856, 9857, 9858, 16561, 20665, 22373, 22695, 27637, 28744, 436937, 436938, 436939, 436940, 436942, 436943, 436944, 436945, 436946, 1306482 } },
         },
         debuffs = {
-            { name = "Moonfire", ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
-            { name = "Faerie Fire", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
-            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, members = {
+            { name = "Moonfire", missing = "hide", when = { conditions = { { type = "stance", stances = { "caster", "moonkin" } } } }, ids = { 8921, 8922, 8924, 8925, 8926, 8927, 8928, 8929, 9833, 9834, 9835, 15798, 20690, 21669, 22206, 23380, 24957, 27737, 429823, 1280468, 1316474, 1323651 } },
+            { name = "Faerie Fire", missing = "hide", ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
+            { group = true, name = "Crowd Controls", source = "mine", max = 1, icon = 339, missing = "hide", members = {
                 { name = "Entangling Roots", ids = { 339, 1062, 5195, 5196, 9852, 9853, 11922, 12747, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
                 { name = "Hibernate", ids = { 2637, 18657, 18658 } },
             }, ids = { 339, 1062, 2637, 5195, 5196, 9852, 9853, 11922, 12747, 18657, 18658, 19970, 19971, 19972, 19973, 19974, 19975, 20654, 20699, 21331, 22127, 22415, 22800, 24648, 26071, 28858, 435991, 460690, 1213253, 1263640, 1281781, 1294112, 1303308, 1316480, 1320095 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },

@@ -39,7 +39,7 @@ ns.CooldownPresets = {
                 { name = "Seal of Command", ids = { 20375, 20424, 20915, 20918, 20919, 20920 } },
                 { name = "Seal of Fury", ids = { 1037, 20163, 20231, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20451, 20452, 20453, 20454, 1311647, 1311649, 1311654, 1311656 } },
             }, ids = { 864, 1037, 1105, 3093, 3094, 3713, 7327, 20154, 20162, 20163, 20164, 20165, 20166, 20167, 20168, 20231, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 20305, 20306, 20307, 20308, 20333, 20334, 20340, 20347, 20348, 20349, 20350, 20351, 20356, 20357, 20375, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20424, 20451, 20452, 20453, 20454, 20915, 20918, 20919, 20920, 21082, 21084, 25713, 25735, 25736, 25737, 25738, 25739, 25740, 25741, 25742, 1311647, 1311649, 1311654, 1311656 } },
-            { group = true, name = "Blessings", source = "mine", max = 1, icon = 19740, missing = "remind", members = {
+            { group = true, name = "Blessings", source = "any", max = 1, icon = 19740, missing = "remind", members = {
                 { name = "Blessing of Might", ids = { 19740, 19834, 19835, 19836, 19837, 19838, 25291 } },
                 { name = "Greater Blessing of Might", ids = { 25782, 25916 } },
                 { name = "Blessing of Wisdom", ids = { 19742, 19850, 19852, 19853, 19854, 25290 } },
@@ -67,7 +67,7 @@ ns.CooldownPresets = {
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
                 { name = "Judgement of Justice", ids = { 20184, 25944, 25945 } },
             }, ids = { 20184, 20185, 20186, 20188, 20267, 20268, 20300, 20301, 20302, 20303, 20341, 20342, 20343, 20344, 20345, 20346, 20352, 20353, 20354, 20355, 21183, 25752, 25753, 25757, 25758, 25942, 25943, 25944, 25945, 28775, 456496 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -119,7 +119,7 @@ ns.CooldownPresets = {
                 { name = "Seal of Command", ids = { 20375, 20424, 20915, 20918, 20919, 20920 } },
                 { name = "Seal of Fury", ids = { 1037, 20163, 20231, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20451, 20452, 20453, 20454, 1311647, 1311649, 1311654, 1311656 } },
             }, ids = { 864, 1037, 1105, 3093, 3094, 3713, 7327, 20154, 20162, 20163, 20164, 20165, 20166, 20167, 20168, 20231, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 20305, 20306, 20307, 20308, 20333, 20334, 20340, 20347, 20348, 20349, 20350, 20351, 20356, 20357, 20375, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20424, 20451, 20452, 20453, 20454, 20915, 20918, 20919, 20920, 21082, 21084, 25713, 25735, 25736, 25737, 25738, 25739, 25740, 25741, 25742, 1311647, 1311649, 1311654, 1311656 } },
-            { group = true, name = "Blessings", source = "mine", max = 1, icon = 19742, missing = "remind", members = {
+            { group = true, name = "Blessings", source = "any", max = 1, icon = 19742, missing = "remind", members = {
                 { name = "Blessing of Might", ids = { 19740, 19834, 19835, 19836, 19837, 19838, 25291 } },
                 { name = "Greater Blessing of Might", ids = { 25782, 25916 } },
                 { name = "Blessing of Wisdom", ids = { 19742, 19850, 19852, 19853, 19854, 25290 } },
@@ -147,7 +147,7 @@ ns.CooldownPresets = {
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
                 { name = "Judgement of Justice", ids = { 20184, 25944, 25945 } },
             }, ids = { 20184, 20185, 20186, 20188, 20267, 20268, 20300, 20301, 20302, 20303, 20341, 20342, 20343, 20344, 20345, 20346, 20352, 20353, 20354, 20355, 21183, 25752, 25753, 25757, 25758, 25942, 25943, 25944, 25945, 28775, 456496 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -184,7 +184,7 @@ ns.CooldownPresets = {
         utility = {
             { name = "Templar's Bulwark", effect = "you", ids = { 1311015 } },
             { group = true, name = "Divine Shield", icon = 498, effect = "you", members = {
-                { name = "Divine Protection", ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
+                { name = "Divine Protection", when = { conditions = { { type = "group", value = "solo" } } }, ids = { 498, 5573, 13007, 27778, 27779, 458312, 458371, 1213300 } },
                 { name = "Divine Shield", ids = { 642, 659, 1020, 13874 } },
             }, ids = { 498, 642, 659, 1020, 5573, 13007, 13874, 27778, 27779, 458312, 458371, 1213300 } },
             { name = "Lay on Hands", ids = { 633, 2800, 9257, 10310, 17233 } },
@@ -204,7 +204,7 @@ ns.CooldownPresets = {
                 { name = "Seal of Fury", ids = { 1037, 20163, 20231, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20451, 20452, 20453, 20454, 1311647, 1311649, 1311654, 1311656 } },
             }, ids = { 864, 1037, 1105, 3093, 3094, 3713, 7327, 20154, 20162, 20163, 20164, 20165, 20166, 20167, 20168, 20231, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 20305, 20306, 20307, 20308, 20333, 20334, 20340, 20347, 20348, 20349, 20350, 20351, 20356, 20357, 20375, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20424, 20451, 20452, 20453, 20454, 20915, 20918, 20919, 20920, 21082, 21084, 25713, 25735, 25736, 25737, 25738, 25739, 25740, 25741, 25742, 1311647, 1311649, 1311654, 1311656 } },
             { name = "Righteous Fury", mine = true, missing = "remind", ids = { 25780, 407627, 407628 } },
-            { group = true, name = "Blessings", source = "mine", max = 1, icon = 20217, missing = "remind", members = {
+            { group = true, name = "Blessings", source = "any", max = 1, icon = 20217, missing = "remind", members = {
                 { name = "Blessing of Might", ids = { 19740, 19834, 19835, 19836, 19837, 19838, 25291 } },
                 { name = "Greater Blessing of Might", ids = { 25782, 25916 } },
                 { name = "Blessing of Wisdom", ids = { 19742, 19850, 19852, 19853, 19854, 25290 } },
@@ -224,7 +224,7 @@ ns.CooldownPresets = {
                 { name = "Frost Resistance Aura", ids = { 19888, 19897, 19898 } },
                 { name = "Fire Resistance Aura", ids = { 19891, 19899, 19900 } },
             }, ids = { 465, 643, 1032, 1876, 7294, 8258, 8990, 10290, 10291, 10292, 10293, 10298, 10299, 10300, 10301, 13008, 17232, 19746, 19876, 19888, 19891, 19895, 19896, 19897, 19898, 19899, 19900, 420998, 449669, 463620, 463621, 1232703, 1233344 } },
-            { name = "Iron Creed", mine = true, ids = { 1311033 } },
+            { name = "Iron Creed", mine = true, when = { conditions = { { type = "combat" } } }, ids = { 1311033 } },
         },
         debuffs = {
             { group = true, name = "My Judgements", source = "mine", max = 1, icon = 20188, members = {
@@ -250,7 +250,7 @@ ns.CooldownPresets = {
                     { name = "Hurricane", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
                 }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -269,7 +269,7 @@ ns.CooldownPresets = {
                 { name = "Blackout", when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
                 { name = "War Stomp", ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18073, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
-            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, members = {
+            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
                 { name = "Taunt", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
                 { name = "Mocking Blow", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
                 { name = "Challenging Shout", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 1161 } },
@@ -314,7 +314,7 @@ ns.CooldownPresets = {
                 { name = "Seal of Command", ids = { 20375, 20424, 20915, 20918, 20919, 20920 } },
                 { name = "Seal of Fury", ids = { 1037, 20163, 20231, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20451, 20452, 20453, 20454, 1311647, 1311649, 1311654, 1311656 } },
             }, ids = { 864, 1037, 1105, 3093, 3094, 3713, 7327, 20154, 20162, 20163, 20164, 20165, 20166, 20167, 20168, 20231, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 20305, 20306, 20307, 20308, 20333, 20334, 20340, 20347, 20348, 20349, 20350, 20351, 20356, 20357, 20375, 20415, 20416, 20417, 20418, 20419, 20421, 20422, 20423, 20424, 20451, 20452, 20453, 20454, 20915, 20918, 20919, 20920, 21082, 21084, 25713, 25735, 25736, 25737, 25738, 25739, 25740, 25741, 25742, 1311647, 1311649, 1311654, 1311656 } },
-            { group = true, name = "Blessings", source = "mine", max = 1, icon = 19740, missing = "remind", members = {
+            { group = true, name = "Blessings", source = "any", max = 1, icon = 19740, missing = "remind", members = {
                 { name = "Blessing of Might", ids = { 19740, 19834, 19835, 19836, 19837, 19838, 25291 } },
                 { name = "Greater Blessing of Might", ids = { 25782, 25916 } },
                 { name = "Blessing of Wisdom", ids = { 19742, 19850, 19852, 19853, 19854, 25290 } },
@@ -342,7 +342,7 @@ ns.CooldownPresets = {
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
                 { name = "Judgement of Justice", ids = { 20184, 25944, 25945 } },
             }, ids = { 20184, 20185, 20186, 20188, 20267, 20268, 20300, 20301, 20302, 20303, 20341, 20342, 20343, 20344, 20345, 20346, 20352, 20353, 20354, 20355, 21183, 25752, 25753, 25757, 25758, 25942, 25943, 25944, 25945, 28775, 456496 } },
-            { group = true, name = "Others' Judgements", source = "others", max = 3, icon = 20186, members = {
+            { group = true, name = "Others' Judgements", source = "others", max = 3, icon = 20186, missing = "hide", when = { conditions = { { type = "group", value = "group" } } }, members = {
                 { name = "Judgement of the Crusader", ids = { 20188, 20300, 20301, 20302, 20303, 21183, 25942, 25943, 456496 } },
                 { name = "Judgement of Wisdom", ids = { 20186, 20268, 20352, 20353, 20354, 20355, 25757, 25758 } },
                 { name = "Judgement of Light", ids = { 20185, 20267, 20341, 20342, 20343, 20344, 20345, 20346, 25752, 25753, 28775 } },
@@ -356,7 +356,7 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },

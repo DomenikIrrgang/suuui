@@ -1030,7 +1030,9 @@ function TR:Build()
             table.insert(self.built.remindDebuffs, r)
         else
             local slot = self:Slot(entry, "target", parts, auraSize(entry), auraLook(entry))
-            slot.withTarget = mode == "target" -- grey only while you have a hostile target
+            -- grey (and a warning's pulse) only while you have a hostile target:
+            -- a debuff can't be missing from nothing
+            slot.withTarget = mode == "target" or mode == "warn"
             slot.coll = collOf[entry]
             self:Watch(slot, whensOf[entry])
             table.insert(self.built.debuffs, slot)

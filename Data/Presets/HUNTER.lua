@@ -47,7 +47,7 @@ ns.CooldownPresets = {
                 { name = "Viper Sting", ids = { 3034, 14279, 14280 } },
             }, ids = { 1978, 3034, 3043, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 14279, 14280, 18545, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
             { name = "Wing Clip", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -102,13 +102,13 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", missing = "warn", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", missing = "warn", source = "any", when = { conditions = { { type = "target", kinds = { "boss", "elite" } } } }, ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, members = {
                 { name = "Serpent Sting", ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", ids = { 3043, 18545 } },
                 { name = "Viper Sting", ids = { 3034, 14279, 14280 } },
             }, ids = { 1978, 3034, 3043, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 14279, 14280, 18545, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
-            { name = "Wing Clip", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
+            { name = "Wing Clip", missing = "hide", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -117,7 +117,7 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -140,8 +140,8 @@ ns.CooldownPresets = {
         procs = {
             { group = true, name = "Aspect Procs", source = "mine", max = 1, icon = 6150, members = {
                 { name = "Quick Shots", ids = { 6150 } },
-                { name = "Quick Strikes", ids = { 1299448 } },
-            }, ids = { 6150, 1299448 } },
+                { name = "Quick Strikes", ids = { 469144, 1299448 } },
+            }, ids = { 6150, 469144, 1299448 } },
         },
     } },
     { id = "marksmanship", name = "Marksmanship", tree = 2, lists = {
@@ -174,13 +174,13 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", missing = "warn", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", missing = "warn", source = "any", when = { conditions = { { type = "target", kinds = { "boss", "elite" } } } }, ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, members = {
                 { name = "Serpent Sting", ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", ids = { 3043, 18545 } },
                 { name = "Viper Sting", ids = { 3034, 14279, 14280 } },
             }, ids = { 1978, 3034, 3043, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 14279, 14280, 18545, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
-            { name = "Wing Clip", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
+            { name = "Wing Clip", missing = "hide", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -189,7 +189,7 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -244,15 +244,15 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", missing = "warn", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", missing = "target", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { name = "Wing Clip", ids = { 2974, 14267, 14268, 14340, 27633, 1310180 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, members = {
                 { name = "Serpent Sting", ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", ids = { 3043, 18545 } },
                 { name = "Viper Sting", ids = { 3034, 14279, 14280 } },
             }, ids = { 1978, 3034, 3043, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 14279, 14280, 18545, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
-            { name = "Lacerating Strikes", ids = { 1310536 } },
-            { group = true, name = "Fire Traps", source = "mine", max = 1, icon = 13795, members = {
+            { name = "Lacerating Strikes", missing = "hide", ids = { 1310536 } },
+            { group = true, name = "Fire Traps", source = "mine", max = 1, icon = 13795, missing = "hide", members = {
                 { name = "Immolation Trap", ids = { 13795, 13797, 14298, 14299, 14300, 14301, 14302, 14303, 14304, 14305, 22910, 1213271, 1230613, 1230633, 1230639, 1230807, 1230899 } },
                 { name = "Explosive Trap", ids = { 13813, 14316, 14317 } },
                 { name = "Explosive Trap Effect", ids = { 13812, 14314, 14315 } },
@@ -265,7 +265,7 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },

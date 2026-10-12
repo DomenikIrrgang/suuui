@@ -8,34 +8,54 @@
 -- Siphon Life, Amplify Curse, Nightfall's Shadow Trance, Soul Harvest.
 -- Demonology: Soul Link, Demonic Sacrifice (2 hours; Demonic Pact keeps it
 -- with another demon out), Decimation (Soul Fire's cooldown -90%, so Soul
--- Fire is a rotation spell there), Demonic Brand. Destruction: Conflagrate,
--- Shadowburn, Incinerate, Shadow and Flame, Bane of Havoc.
+-- Fire is a rotation spell there; its 10 sec buff makes Soul Fire fast and
+-- free), Demonic Brand. Destruction: Conflagrate, Shadowburn, Incinerate,
+-- Shadow and Flame (20 sec buffs after Conflagrate / Shadowburn), Bane of
+-- Havoc.
 -- The warlock kit has few cooldowns, so the essential rows are short.
 -- Cooldowns whose aura only matters while it runs (Shadow Ward, Amplify
 -- Curse, Death Coil's horror, Fel Domination) show it on their icon
 -- (effect) instead of a buff/debuff entry of their own.
 -- Buffs of a minute or longer (armors, Soul Link, the sacrifice) are
 -- reminders: grey only while missing, out of combat.
--- Not tracked: Decimation's and Shadow and Flame's buffs (the client scan
--- has no aura by those names, only the passive talents), Master
--- Demonologist (automatic while a demon is out), pet abilities (Spell
--- Lock, Seduction: the pet's, not yours), Haunt (no Forever warlock learns
--- it), Bane of Doom as a cooldown (its debuff is in the Banes slot).
+-- Debuffs: your DoTs are one collection (DoTs) and grey only with a hostile
+-- target (the debuff default). The spec's core DoT (Corruption, Immolate)
+-- warns instead, in combat only: a warn slot doesn't wait for a target, so
+-- out of combat it would pulse on an empty row. In a group, other
+-- warlocks' curses on your target show (Others' Curses, hidden while none
+-- is up), so you pick a curse nobody has put up.
+-- Fear and Banish show only while up (no combat condition: a Banish before
+-- the pull keeps its timer).
+-- Not tracked: Master Demonologist (automatic while a demon is out), pet
+-- abilities (Spell Lock, Seduction: the pet's, not yours), Haunt (no
+-- Forever warlock learns it), Bane of Doom as a cooldown (its cooldown runs
+-- with its debuff, which is in the Banes slot: a cell for bosses only would
+-- show the same minute twice).
 
--- Only one Bane per warlock on a target (Havoc is also limited to 1 target).
 local S = dofile("tools/presets/shared.lua")
 
+-- Only one Bane per warlock on a target (Havoc is also limited to 1 target).
 local function banes(icon) return { group = "Banes", source = "mine", max = 1, icon = icon,
     members = { "Bane of Agony", "Bane of Doom", "Bane of Havoc" } } end
 -- Only one Curse per warlock on a target (Curse of Shadow isn't in Forever).
 local function curses(icon) return { group = "Curses", source = "mine", max = 1, icon = icon,
     members = { "Curse of Weakness", "Curse of Recklessness", "Curse of the Elements", "Curse of Tongues", "Curse of Exhaustion" } } end
+-- Other warlocks' curses on your target, in a group: a curse of the same
+-- kind doesn't stack across warlocks, so cast another one.
+local OTHERS_CURSES = { group = "Others' Curses", source = "others", max = 2, icon = "Curse of the Elements", missing = "hide",
+    when = { conditions = { { type = "group", value = "solo", ["not"] = true } } },
+    members = { "Curse of the Elements", "Curse of Recklessness", "Curse of Weakness", "Curse of Tongues" } }
 -- One armor at a time; 30 min, kept up.
 local function armors(icon) return { group = "Armors", source = "mine", max = 1, icon = icon, missing = "remind",
     members = { "Demon Skin", "Demon Armor" } } end
 -- Demonic Sacrifice: one effect at a time (2 hours), named per demon.
 local SACRIFICES = { group = "Sacrifices", source = "mine", max = 1, icon = "Burning Shadow", missing = "remind",
     members = { "Burning Shadow", "Touch of Fire", "Fel Stamina", "Fel Energy" } }
+
+-- Your DoTs side by side.
+local function dots(...) return { collection = "DoTs", entries = { ... } } end
+-- The spec's core DoT: warns while missing, in combat.
+local function core(name) return { name, missing = "warn", when = { conditions = { { type = "combat" } } } } end
 
 -- cooldowns shared by every spec
 local DEATH_COIL = { "Death Coil", effect = "target" }   -- the 3 sec horror
@@ -54,15 +74,16 @@ return {
       essential = { DEATH_COIL },
       utility = { SHADOW_WARD, "Howl of Terror", "Soul Fire" },
       buffs = { armors("Demon Skin") },
-      debuffs = { "Corruption", banes("Bane of Agony"), "Immolate", curses("Curse of Weakness"), { "Fear", missing = "hide" } },
+      debuffs = { dots("Corruption", banes("Bane of Agony"), "Immolate"), curses("Curse of Weakness"), OTHERS_CURSES,
+          { "Fear", missing = "hide" } },
       procs = {} },
     { id = "affliction", name = "Affliction", tree = 1,
       essential = { { "Amplify Curse", effect = "you" }, DEATH_COIL },
       utility = { SHADOW_WARD, "Howl of Terror", "Soul Fire" },
       buffs = { armors("Demon Armor") },
       -- Corruption and the Bane carry the spec (Soul Siphon counts them)
-      debuffs = with({ { "Corruption", missing = "warn" }, banes("Bane of Agony"), "Siphon Life", curses("Curse of Weakness"),
-          { "Wrack", missing = "hide" }, "Immolate" }, CC),
+      debuffs = with({ dots(core("Corruption"), banes("Bane of Agony"), "Siphon Life", "Immolate", { "Wrack", missing = "hide" }),
+          curses("Curse of Weakness"), OTHERS_CURSES }, CC),
       -- Soul Harvest: 10 sec of mana regeneration after a Drain Soul kill
       procs = { "Shadow Trance", "Soul Harvest" } },
     { id = "demonology", name = "Demonology", tree = 2,
@@ -72,15 +93,18 @@ return {
       -- Soul Link lasts as long as the demon, so its reminder doubles as
       -- "your demon is out"
       buffs = { armors("Demon Armor"), { "Soul Link", missing = "remind" }, SACRIFICES },
-      debuffs = with({ "Corruption", banes("Bane of Agony"), "Immolate", curses("Curse of the Elements"),
+      debuffs = with({ dots("Corruption", banes("Bane of Agony"), "Immolate"), curses("Curse of the Elements"), OTHERS_CURSES,
           { "Demonic Brand", missing = "hide" } }, CC),
-      procs = {} },
+      -- Decimation: Soul Fire fast and free for 10 sec (target below 35%)
+      procs = { "Decimation" } },
     { id = "destruction", name = "Destruction", tree = 3,
       essential = { "Conflagrate", "Shadowburn", DEATH_COIL },
       utility = { SHADOW_WARD, "Howl of Terror", "Soul Fire" },
       buffs = { armors("Demon Armor") },
       -- Immolate feeds Conflagrate and Incinerate's bonus
-      debuffs = with({ { "Immolate", missing = "warn" }, banes("Bane of Agony"), curses("Curse of the Elements"), "Corruption",
+      debuffs = with({ dots(core("Immolate"), banes("Bane of Agony"), "Corruption"), curses("Curse of the Elements"), OTHERS_CURSES,
           { "Shadow Vulnerability", missing = "hide" }, S.STUNS }, CC),
-      procs = {} },
+      -- Shadow and Flame: +10% Shadow (after Conflagrate) or Fire (after
+      -- Shadowburn) damage for 20 sec
+      procs = { "Shadow and Flame" } },
 }

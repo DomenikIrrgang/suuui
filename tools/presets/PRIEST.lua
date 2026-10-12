@@ -19,8 +19,17 @@
 -- Plague, Vampiric Embrace and Silence on the target) show it on the icon
 -- (effect) instead of a buff or debuff entry of their own.
 -- Buffs lasting a minute or more (Fortitude, Inner Fire, Divine Spirit,
--- Shadow Protection, Shadowform) are reminders: grey while missing, out of
--- combat.
+-- Shadow Protection) are reminders: grey while missing, out of combat.
+-- Shadowform is a warning instead (an ember slot, in combat too) while
+-- you're out of the form, and gone while in it (live stance condition):
+-- healing out of form is when you forget it. Renew on you is a heal you
+-- cast when hurt, not a buff you keep up: shown while up, no grey slot.
+-- Only in a group (static, rebuilt on roster changes out of combat): Divine
+-- Grace (can't be cast on yourself), Fear Ward (for the tank; a battleground
+-- or arena is a group too) and the Shadow Protection reminder (a group buff).
+-- Debuffs: Shadow Word: Pain grey with a hostile target (default); Shadow's
+-- warns only in combat with a target (a warn slot shows without one).
+-- Mind Flay (a channel) and Blackout's stuns show only while on the target.
 -- Racials: only the Human's Divine Grace (5 min) is in; it isn't drawn for
 -- other races. The other races' (Elune's Grace, Chastise, Shadowguard...)
 -- aren't on the Human trainer the class data comes from, so the generator
@@ -37,21 +46,31 @@ local SPIRITS = { group = "Spirits", source = "any", max = 1, icon = "Divine Spi
 local function remind(name) return { name, missing = "remind" } end
 local function onYou(name) return { name, effect = "you" } end
 local function onTarget(name) return { name, effect = "target" } end
+-- only while you're in a group (a party, raid, battleground or arena)
+local function inGroup(entry)
+    if type(entry) == "string" then entry = { entry } end
+    entry.when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }
+    return entry
+end
+local RENEW = { "Renew", missing = "hide" }
+-- out of Shadowform: an ember slot, in combat too; in the form, gone
+local SHADOWFORM = { "Shadowform", missing = "warn",
+    when = { conditions = { { type = "stance", stances = { "shadowform" }, ["not"] = true } } } }
 
 return {
     -- no talent points yet (below level 10): the level-30 buffs (Divine
     -- Spirit, Shadow Protection) would only remind of spells not yet known
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { onYou("Power Word: Shield"), "Mind Blast", onTarget("Holy Fire"), onTarget("Devouring Plague") },
-      utility = { "Psychic Scream", onYou("Fade"), onYou("Fear Ward"), "Divine Grace" },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), "Renew" },
+      utility = { "Psychic Scream", onYou("Fade"), inGroup(onYou("Fear Ward")), inGroup("Divine Grace") },
+      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), RENEW },
       debuffs = { "Shadow Word: Pain" },
       procs = {} },
     { id = "discipline", name = "Discipline", tree = 1,
       essential = { "Penance", onYou("Power Word: Shield"), onTarget("Holy Fire"), "Mind Blast" },
-      utility = { onYou("Power Infusion"), onYou("Inner Focus"), "Divine Grace", onYou("Fear Ward"),
+      utility = { onYou("Power Infusion"), onYou("Inner Focus"), inGroup("Divine Grace"), inGroup(onYou("Fear Ward")),
                   "Psychic Scream", onYou("Fade"), onTarget("Devouring Plague") },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, remind("Shadow Protection"), "Renew" },
+      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
       -- Weakened Soul on the friend you target: Renewed Hope's crit window,
       -- what Divine Grace clears; packed, so no grey slot on enemies
       debuffs = { "Shadow Word: Pain", { "Weakened Soul", missing = "hide" } },
@@ -60,18 +79,23 @@ return {
       -- Prayer of Mending on you shows on its icon; Holy Fire's dots feed
       -- Searing Light
       essential = { onYou("Prayer of Mending"), onYou("Power Word: Shield"), onTarget("Holy Fire"), "Mind Blast" },
-      utility = { onYou("Inner Focus"), "Divine Grace", onYou("Fear Ward"), "Psychic Scream", onYou("Fade"),
+      utility = { onYou("Inner Focus"), inGroup("Divine Grace"), inGroup(onYou("Fear Ward")), "Psychic Scream", onYou("Fade"),
                   onTarget("Devouring Plague") },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, remind("Shadow Protection"), "Renew" },
+      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
       debuffs = { "Shadow Word: Pain", { "Weakened Soul", missing = "hide" } },
       -- Inspiration and Blessed Recovery when they land on you
       procs = { "Inspiration", "Blessed Recovery" } },
     { id = "shadow", name = "Shadow", tree = 3,
       essential = { "Mind Blast", "Shadow Word: Death", onTarget("Devouring Plague"), onTarget("Vampiric Embrace") },
       utility = { onTarget("Silence"), onYou("Inner Focus"), "Psychic Scream", onYou("Fade"),
-                  onYou("Power Word: Shield"), onYou("Fear Ward") },
-      buffs = { remind("Shadowform"), remind("Inner Fire"), remind("Power Word: Fortitude"), remind("Shadow Protection"), SPIRITS },
-      -- the dot you keep up warns while it's off the target
-      debuffs = { { "Shadow Word: Pain", missing = "warn" }, "Mind Flay", S.STUNS },
+                  onYou("Power Word: Shield"), inGroup(onYou("Fear Ward")) },
+      buffs = { SHADOWFORM, remind("Inner Fire"), remind("Power Word: Fortitude"), inGroup(remind("Shadow Protection")), SPIRITS },
+      -- the dot you keep up warns while it's off the target, in combat with a
+      -- target (without one a warn slot would pulse at nothing); Mind Flay
+      -- and Blackout (a 10% proc) only while they're on it
+      debuffs = { { "Shadow Word: Pain", missing = "warn",
+                    when = { conditions = { { type = "combat" },
+                        { type = "target", kinds = { "boss", "elite", "normal", "player" } } } } },
+                  { "Mind Flay", missing = "hide" }, S.with(S.STUNS, { missing = "hide" }) },
       procs = { "Shadow Weaving", "Spirit Tap" } },
 }

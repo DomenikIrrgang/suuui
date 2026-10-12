@@ -13,19 +13,19 @@ if class ~= "WARRIOR" then return end
 ns.CooldownPresets = {
     { id = "unspecced", name = "Unspecced", tree = 0, lists = {
         essential = {
-            { name = "Overpower", ids = { 7384, 7887, 11584, 11585, 14895, 17198, 24407, 1282733 } },
+            { name = "Overpower", when = { conditions = { { type = "stance", stances = { "battle" } } } }, ids = { 7384, 7887, 11584, 11585, 14895, 17198, 24407, 1282733 } },
             { name = "Thunder Clap", ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
             { name = "Victory Rush", ids = { 402927, 403434 } },
             { name = "Execute", ids = { 5308, 7160, 20647, 20658, 20660, 20661, 20662, 26651 } },
             { name = "Bloodrage", effect = "you", ids = { 2687, 29131 } },
         },
         utility = {
-            { name = "Charge", ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
+            { name = "Charge", when = { conditions = { { type = "combat", ["not"] = true } } }, ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
             { name = "Intercept", ids = { 20252, 20616, 20617, 27577, 27826, 427745 } },
-            { name = "Pummel", ids = { 6552, 6554, 12555, 13491, 15615, 19639, 19640 } },
-            { name = "Shield Bash", ids = { 72, 1671, 1672, 11972 } },
-            { name = "Disarm", effect = "target", ids = { 676, 6713, 8379, 11879, 13534, 15752, 22691, 27581, 445282, 458880, 1225423, 1225428, 1236176, 1324558 } },
-            { name = "Berserker Rage", effect = "you", ids = { 18499 } },
+            { name = "Pummel", when = { conditions = { { type = "stance", stances = { "berserker" } } } }, ids = { 6552, 6554, 12555, 13491, 15615, 19639, 19640 } },
+            { name = "Shield Bash", when = { conditions = { { type = "stance", stances = { "battle", "defensive" } } } }, ids = { 72, 1671, 1672, 11972 } },
+            { name = "Disarm", effect = "target", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 676, 6713, 8379, 11879, 13534, 15752, 22691, 27581, 445282, 458880, 1225423, 1225428, 1236176, 1324558 } },
+            { name = "Berserker Rage", effect = "you", when = { conditions = { { type = "stance", stances = { "berserker" } } } }, ids = { 18499 } },
             { name = "Retaliation", effect = "you", ids = { 20230, 20240, 22857, 22858 } },
         },
         buffs = {
@@ -33,7 +33,7 @@ ns.CooldownPresets = {
         },
         debuffs = {
             { name = "Rend", ids = { 772, 1423, 6546, 6547, 6548, 11572, 11573, 11574, 11977, 12054, 13318, 13443, 13445, 13738, 14087, 14118, 16393, 16403, 16406, 16509, 17153, 17504, 18075, 18078, 18106, 18200, 18202, 21949, 1228262, 1294426, 1300787, 1310243, 1320824, 1321234 } },
-            { name = "Hamstring", ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
+            { name = "Hamstring", missing = "hide", ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -47,7 +47,7 @@ ns.CooldownPresets = {
                 { name = "Demoralizing Roar", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 99, 1735, 9490, 9747, 9898, 10968, 15727, 15971, 20753, 27551 } },
                 { name = "Vindication", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 67, 9452, 440667, 440668 } },
             }, ids = { 67, 99, 1160, 1735, 6190, 9452, 9490, 9747, 9898, 10968, 11554, 11555, 11556, 13730, 15727, 15971, 16244, 19778, 20753, 23511, 27551, 27579, 440667, 440668 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -81,10 +81,10 @@ ns.CooldownPresets = {
             { name = "Bloodrage", effect = "you", ids = { 2687, 29131 } },
         },
         utility = {
-            { name = "Charge", ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
+            { name = "Charge", when = { conditions = { { type = "combat", ["not"] = true } } }, ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
             { name = "Intercept", ids = { 20252, 20616, 20617, 27577, 27826, 427745 } },
             { name = "Pummel", ids = { 6552, 6554, 12555, 13491, 15615, 19639, 19640 } },
-            { name = "Berserker Rage", effect = "you", ids = { 18499 } },
+            { name = "Berserker Rage", effect = "you", when = { conditions = { { type = "stance", stances = { "berserker" } } } }, ids = { 18499 } },
             { name = "Recklessness", sound = "chime", effect = "you", ids = { 1719, 13847 } },
             { name = "Intimidating Shout", effect = "target", ids = { 5246, 19134, 20511, 29544, 1213465, 1270811 } },
             { name = "Spearing Strike", ids = { 1310222 } },
@@ -96,7 +96,7 @@ ns.CooldownPresets = {
         },
         debuffs = {
             { name = "Rend", ids = { 772, 1423, 6546, 6547, 6548, 11572, 11573, 11574, 11977, 12054, 13318, 13443, 13445, 13738, 14087, 14118, 16393, 16403, 16406, 16509, 17153, 17504, 18075, 18078, 18106, 18200, 18202, 21949, 1228262, 1294426, 1300787, 1310243, 1320824, 1321234 } },
-            { name = "Deep Wounds", ids = { 12162, 23255, 23256 } },
+            { name = "Deep Wounds", missing = "hide", ids = { 12162, 23255, 23256 } },
             { collection = true, name = "Physical Debuffs", entries = {
                 { group = true, name = "Armor Reduction", source = "any", max = 1, icon = 7386, members = {
                     { name = "Sunder Armor", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7386, 7405, 8380, 11596, 11597, 11971, 13444, 15502, 15572, 16145, 21081, 24317, 25051, 27991, 365663 } },
@@ -105,8 +105,8 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { name = "Hamstring", ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { name = "Hamstring", missing = "hide", ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -125,7 +125,7 @@ ns.CooldownPresets = {
                 { name = "Blackout", when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
                 { name = "War Stomp", ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18073, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
-            { group = true, name = "Healing Reduction", source = "any", max = 1, icon = 12294, hidden = true, members = {
+            { group = true, name = "Healing Reduction", source = "any", max = 1, icon = 12294, when = { conditions = { { type = "target", kinds = { "player" } } } }, members = {
                 { name = "Mortal Strike", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 9347, 12294, 13737, 15708, 16856, 17547, 19643, 21551, 21552, 21553, 24573, 27580 } },
                 { name = "Wound Poison", when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 13218, 13219, 13220, 13221, 13222, 13223, 13224, 13225, 13226, 13227 } },
                 { name = "Wound Poison II", when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 13228 } },
@@ -147,8 +147,8 @@ ns.CooldownPresets = {
         utility = {
             { name = "Pummel", ids = { 6552, 6554, 12555, 13491, 15615, 19639, 19640 } },
             { name = "Intercept", ids = { 20252, 20616, 20617, 27577, 27826, 427745 } },
-            { name = "Charge", ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
-            { name = "Berserker Rage", effect = "you", ids = { 18499 } },
+            { name = "Charge", when = { conditions = { { type = "combat", ["not"] = true } } }, ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
+            { name = "Berserker Rage", effect = "you", when = { conditions = { { type = "stance", stances = { "berserker" } } } }, ids = { 18499 } },
             { name = "Recklessness", sound = "chime", effect = "you", ids = { 1719, 13847 } },
             { name = "Intimidating Shout", effect = "target", ids = { 5246, 19134, 20511, 29544, 1213465, 1270811 } },
             { name = "Victory Rush", ids = { 402927, 403434 } },
@@ -165,10 +165,10 @@ ns.CooldownPresets = {
                 { name = "Faerie Fire", missing = "grey", source = "any", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 770, 778, 784, 1070, 6950, 9749, 9907, 13424, 13752, 16498, 20656, 21670, 1286041, 1288561, 1289452 } },
                 { name = "Curse of Recklessness", missing = "hide", source = "any", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
             } },
-            { name = "Deep Wounds", ids = { 12162, 23255, 23256 } },
-            { name = "Hamstring", hidden = true, ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
-            { name = "Piercing Howl", hidden = true, ids = { 10576, 12323, 23600 } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { name = "Deep Wounds", missing = "hide", ids = { 12162, 23255, 23256 } },
+            { name = "Hamstring", missing = "hide", hidden = true, ids = { 1715, 7372, 7373, 9080, 26141, 26211, 27584, 1236177 } },
+            { name = "Piercing Howl", missing = "hide", hidden = true, ids = { 10576, 12323, 23600 } },
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -196,23 +196,23 @@ ns.CooldownPresets = {
     { id = "protection", name = "Protection", tree = 3, lists = {
         essential = {
             { name = "Shield Slam", ids = { 8242, 15655, 23922, 23923, 23924, 23925, 446354, 1213462, 1236179 } },
-            { name = "Revenge", ids = { 6572, 6574, 7379, 11600, 11601, 12170, 19130, 25288, 28844 } },
-            { name = "Shield Block", effect = "you", ids = { 2565, 2570, 12169, 467891 } },
+            { name = "Revenge", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 6572, 6574, 7379, 11600, 11601, 12170, 19130, 25288, 28844 } },
+            { name = "Shield Block", effect = "you", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 2565, 2570, 12169, 467891 } },
             { name = "Thunder Clap", ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 413589, 461810, 461826, 461827, 461828, 461829, 461830 } },
             { name = "Bloodrage", effect = "you", ids = { 2687, 29131 } },
         },
         utility = {
-            { name = "Taunt", ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
-            { name = "Mocking Blow", ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
-            { name = "Challenging Shout", ids = { 1161 } },
+            { name = "Taunt", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
+            { name = "Mocking Blow", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
+            { name = "Challenging Shout", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 1161 } },
             { name = "Shield Wall", sound = "chime", effect = "you", ids = { 871, 15062, 29061, 1277424 } },
             { name = "Last Stand", effect = "you", ids = { 12975, 12976 } },
             { name = "Shield Bash", ids = { 72, 1671, 1672, 11972 } },
             { name = "Concussion Blow", ids = { 12809, 22427, 1324556 } },
-            { name = "Disarm", effect = "target", ids = { 676, 6713, 8379, 11879, 13534, 15752, 22691, 27581, 445282, 458880, 1225423, 1225428, 1236176, 1324558 } },
-            { name = "Charge", ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
+            { name = "Disarm", effect = "target", when = { conditions = { { type = "stance", stances = { "defensive" } } } }, ids = { 676, 6713, 8379, 11879, 13534, 15752, 22691, 27581, 445282, 458880, 1225423, 1225428, 1236176, 1324558 } },
+            { name = "Charge", when = { conditions = { { type = "combat", ["not"] = true }, { type = "stance", stances = { "battle", "defensive" } } } }, ids = { 100, 6178, 7370, 7371, 11578, 20508, 22120, 22911, 24023, 24193, 24315, 24408, 25821, 26177, 26178, 26179, 26184, 26185, 26186, 26201, 26202, 27685, 28343, 368127, 368368, 411684, 438538, 438540, 438541, 446367, 446369, 462937, 468500, 1213463, 1235538, 1240287, 1240288, 1240289 } },
             { name = "Intercept", hidden = true, ids = { 20252, 20616, 20617, 27577, 27826, 427745 } },
-            { name = "Berserker Rage", effect = "you", hidden = true, ids = { 18499 } },
+            { name = "Berserker Rage", effect = "you", hidden = true, when = { conditions = { { type = "stance", stances = { "berserker" } } } }, ids = { 18499 } },
         },
         buffs = {
             { name = "Battle Shout", missing = "remind", ids = { 5242, 6192, 6673, 9128, 11549, 11550, 11551, 24438, 25101, 25289, 26043, 26099, 27578 } },
@@ -235,7 +235,7 @@ ns.CooldownPresets = {
                     { name = "Hurricane", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16914, 17401, 17402, 27530, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
                 }, ids = { 6343, 8198, 8204, 8205, 11580, 11581, 11582, 13532, 16914, 17401, 17402, 27530, 413589, 461810, 461826, 461827, 461828, 461829, 461830, 1278759, 1278965, 1278968, 1289129, 1289130, 1316319 } },
             } },
-            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, members = {
+            { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
                 { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
                 { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
                 { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
@@ -254,7 +254,7 @@ ns.CooldownPresets = {
                 { name = "Blackout", when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
                 { name = "War Stomp", ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18073, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
-            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, members = {
+            { group = true, name = "Taunts", source = "any", max = 2, icon = 355, when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
                 { name = "Taunt", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 355, 3196, 26281, 28140, 29060, 467346, 473701, 1219541 } },
                 { name = "Mocking Blow", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 694, 7400, 7402, 20559, 20560, 21008 } },
                 { name = "Challenging Shout", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 1161 } },

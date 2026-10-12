@@ -55,17 +55,21 @@ local MY_JUDGEMENT = { group = "My Judgements", source = "mine", max = 1, icon =
 -- hunter pet's Growl counts as well). A Forever paladin taunts with
 -- Judgement of Fury (Seal of Fury's judgement); Hand of Reckoning exists in
 -- the client but no Forever paladin learns it.
+-- (in a group only: solo, every mob is yours anyway)
 local TAUNTS = { group = "Taunts", source = "any", max = 2, icon = "Taunt",
+    when = { conditions = { { type = "group", value = "solo", ["not"] = true } } },
     members = members(by("WARRIOR", "Taunt", "Mocking Blow", "Challenging Shout"),
         by({ "DRUID", "HUNTER" }, "Growl"), by("DRUID", "Challenging Roar"), by("PALADIN", "Judgement of Fury")) }
 -- Mages: one armor at a time, so one slot (Molten Armor isn't in Forever).
 local function armors(icon) return { group = "Armors", source = "mine", max = 1, icon = icon,
     members = { "Frost Armor", "Ice Armor", "Mage Armor" } } end
-local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max = 3, icon = "Judgement of Wisdom", members = JUDGEMENTS }
+-- (in a group only, and only while one is up)
+local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max = 3, icon = "Judgement of Wisdom",
+    missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = JUDGEMENTS }
 
 -- Debuffs that don't stack across classes, from anyone (whoever put it up,
 -- you needn't): armor and attack power reduction, the attack-speed slow
--- tanks want on their target, and healing reduction (PvP; hidden until shown).
+-- tanks want on their target, and healing reduction (against players only).
 -- Each member counts only while its class is around (you or your group); with
 -- none of them around, the slot is gone.
 local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1, icon = "Sunder Armor",
@@ -74,7 +78,8 @@ local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1
     members = members(by("WARRIOR", "Demoralizing Shout"), by("DRUID", "Demoralizing Roar"), by("PALADIN", "Vindication")) }
 local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1, icon = "Thunder Clap",
     members = members(by("WARRIOR", "Thunder Clap"), by("DRUID", "Hurricane")) }
-local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike", hidden = true,
+local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike",
+    when = { conditions = { { type = "target", kinds = { "player" } } } },
     members = members(by("WARRIOR", "Mortal Strike"),
         by("ROGUE", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV")) }
 
@@ -85,7 +90,8 @@ local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1
 -- warriors, rogues, druids (Bash) and hunters; Fire mages (Impact),
 -- Destruction warlocks (Pyroclasm), Shadow priests (Blackout).
 -- (War Stomp is a Tauren's, any class: no condition)
-local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice",
+-- (only while one is up: a stun isn't something you keep up)
+local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice", missing = "hide",
     members = members(by("PALADIN", "Hammer of Justice", "Holy Wrath", "Stun"), by("ROGUE", "Cheap Shot", "Kidney Shot"),
         by("DRUID", "Bash", "Pounce", "Starfire Stun"), by("WARRIOR", "Concussion Blow", "Charge Stun", "Intercept Stun"),
         by("HUNTER", "Intimidation", "Improved Concussive Shot"), by("MAGE", "Impact"), by("WARLOCK", "Pyroclasm"),
