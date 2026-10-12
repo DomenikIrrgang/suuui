@@ -153,6 +153,13 @@ local function row(self, i)
         r.note:SetPoint("RIGHT", -S["space-4"], 0)
         r.check = UI.Check(r, 14, "arcane")
         r.check:SetPoint("RIGHT", -S["space-4"], 0)
+        -- a heading's rule (above every heading but the first)
+        r.rule = r:CreateTexture(nil, "ARTWORK")
+        r.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+        r.rule:SetHeight(1)
+        r.rule:SetPoint("TOPLEFT", S["space-2"], -S["space-1"])
+        r.rule:SetPoint("TOPRIGHT", -S["space-2"], -S["space-1"])
+        r.rule:Hide()
         r:SetScript("OnEnter", function(b)
             if not (b.option.heading or b.option.disabled) then b.hover:Show() end
             if b.option.disabled and b.option.reason then
@@ -196,7 +203,7 @@ function Select:Refresh()
     for _, o in ipairs(self.options) do
         local text = o.heading or o.label
         if text then
-            local w = UI.MeasureText(o.heading and "caption" or "body", tostring(text))
+            local w = UI.MeasureText(o.heading and "header" or "body", tostring(text))
             local note = o.note and (UI.MeasureText("caption", tostring(o.note)) + S["space-3"]) or 0
             width = math.max(width, S["space-2"] * 2 + S["space-4"] * 2 + w + note + check + 8)
         end
@@ -232,21 +239,28 @@ function Select:Refresh()
         r:SetPoint("RIGHT", list, "RIGHT", -(S["space-2"] + (scrolling and 8 or 0)), 0)
         r.label:ClearAllPoints()
         if o.heading then
-            r:SetHeight(22)
-            r.label:SetStyle("caption")
-            r.label:SetColor("ink-muted")
-            r.label:SetPoint("LEFT", S["space-4"], -2)
+            -- a category: the header face in gilt, a rule above it (not
+            -- the first), set apart from the options under it
+            local first = i == 1
+            local hh = first and 22 or 30
+            r:SetHeight(hh)
+            r.label:SetStyle("header")
+            r.label:SetColor("gilt-text")
+            r.label:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
             r.label:SetValue(o.heading)
+            r.rule:SetShown(not first)
             r.box:Hide()
             r.check:Hide()
             r.icon:Hide()
             r.note:SetValue("")
-            y = y + 22
+            y = y + hh
         else
+            r.rule:Hide()
             local on = self.multiple and contains(self.value, o.value) or (not self.multiple and o.value == self.value)
             r:SetHeight(ROW_H)
             r.label:SetStyle("body")
-            r.label:SetColor(o.disabled and "ink-faint" or (on and "ink" or "ink-muted"))
+            -- every option in ink (the design's); the check marks the chosen one
+            r.label:SetColor(o.disabled and "ink-faint" or "ink")
             r.label:SetValue(o.label)
             r.icon:ClearAllPoints()
             local lead
@@ -309,7 +323,7 @@ function Select:Refresh()
         r.label:SetColor("ink-muted")
         r.label:SetPoint("LEFT", S["space-4"], -2)
         r.label:SetValue("No match")
-        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.note:SetValue("")
+        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.rule:Hide(); r.note:SetValue("")
         r:Show()
         y = y + 22
     end
