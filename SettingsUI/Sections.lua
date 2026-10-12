@@ -19,7 +19,7 @@ Registry.Register({
         { title = "Scale", description = "SuuUI draws one design pixel as one pixel of your screen, so frames keep their size on every resolution and only the space between them changes.",
           rows = {
             { label = "Automatic scale", control = "toggle",
-              description = "1 up to 1440p, larger on taller screens.",
+              description = "100% up to 1440p, larger on taller screens.",
               get = scaleIsAuto,
               set = function(on) return Settings.Set("ui", "scale", on and 0 or ns.UserScale()) end,
               isDefault = scaleIsAuto,
@@ -75,33 +75,48 @@ local function allProfiles()
     return options
 end
 
--- A Select of other profiles and a button that acts on the chosen one.
+-- A Select of other profiles and a button that acts on the chosen one. With
+-- `confirm`, the first click arms the button for a few seconds.
 local function pickAndAct(parent, label, act, confirm)
     local f = CreateFrame("Frame", nil, parent)
-    local choice
+    local choice, timer
     f.select = UI.Select(f, { width = 190, placeholder = "Choose a profile", options = otherProfiles(),
         onChange = function(v) choice = v end })
     f.select:SetPoint("LEFT")
-    local armed
+    local function disarm()
+        if timer then timer:Cancel(); timer = nil end
+        f.button:SetLabel(label)
+    end
+    -- the list follows profiles switched, created and deleted elsewhere
+    local function refresh()
+        local options = otherProfiles()
+        f.select:SetOptions(options)
+        local still = false
+        for _, o in ipairs(options) do if o.value == choice then still = true end end
+        if not still then
+            choice = nil
+            f.select:SetValue(nil)
+            disarm()
+        end
+    end
     f.button = UI.Button(f, { text = label, onClick = function(b)
         if not choice then return end
-        if confirm and not armed then
-            armed = true
+        if confirm and not timer then
             b:SetLabel("Click again")
-            C_Timer.After(3, function() armed = false; b:SetLabel(label) end)
+            timer = C_Timer.NewTimer(3, function() timer = nil; disarm() end)
             return
         end
-        armed = false
-        b:SetLabel(label)
+        disarm()
         local ok, err = act(choice)
         if not ok then ns.Print(err) end
         choice = nil
-        f.select:SetOptions(otherProfiles())
         f.select:SetValue(nil)
+        refresh()
     end })
     f.button:SetPoint("LEFT", f.select, "RIGHT", S["space-3"], 0)
     f:SetSize(190 + S["space-3"] + f.button:GetWidth(), 30)
-    ns.Events.On("SUUUI_PROFILE_CHANGED", function() f.select:SetOptions(otherProfiles()) end, f)
+    ns.Events.On("SUUUI_PROFILE_CHANGED", refresh, f)
+    ns.Events.On("SUUUI_PROFILES_CHANGED", refresh, f)
     return f
 end
 
@@ -109,12 +124,18 @@ local function newProfile(parent)
     local f = CreateFrame("Frame", nil, parent)
     f.name = UI.TextField(f, { width = 190, placeholder = "Name" })
     f.name:SetPoint("LEFT")
-    f.button = UI.Button(f, { text = "Create", onClick = function()
+    local function create()
         local name = strtrim(f.name:GetValue() or "")
         local ok, err = Profiles.Create(name)
         if ok then ok, err = Profiles.Use(name) end
         if not ok then ns.Print(err) else f.name:SetValue("") end
-    end })
+    end
+    -- Enter in the name field creates it too
+    f.name.edit:SetScript("OnEnterPressed", function(e)
+        create()
+        e:ClearFocus()
+    end)
+    f.button = UI.Button(f, { text = "Create", onClick = create })
     f.button:SetPoint("LEFT", f.name, "RIGHT", S["space-3"], 0)
     f:SetSize(190 + S["space-3"] + f.button:GetWidth(), 30)
     return f
@@ -134,15 +155,15 @@ local function roleRow(role, label)
 end
 
 local function resetAll(parent)
-    local armed
+    local timer
     local b = UI.Button(parent, { text = "Reset everything", onClick = function(self)
-        if not armed then
-            armed = true
+        if not timer then
             self:SetLabel("Click again to reset")
-            C_Timer.After(3, function() armed = false; self:SetLabel("Reset everything") end)
+            timer = C_Timer.NewTimer(3, function() timer = nil; self:SetLabel("Reset everything") end)
             return
         end
-        armed = false
+        timer:Cancel()
+        timer = nil
         self:SetLabel("Reset everything")
         Settings.Reset()
         ns.Print("Every setting in " .. Profiles.Current() .. " is back to its default.")
@@ -209,8 +230,13 @@ local function moduleRow(m)
         description = function()
             local parts = { m.description, m.builtIn and "Built in" or ("From " .. m.source) }
             local state = STATE[m.state] or m.state
-            if m.pendingReload then state = state .. ", " .. (m.enabledAtLoad and "off" or "on") .. " after a reload" end
-            if m.state == "errored" then state = state .. ": " .. (m.error or "") .. ". Turn it off and on to try again" end
+            local retry = m.state == "errored" and m.reloadToToggle and Settings.Get(m.id, "enabled")
+            if m.pendingReload and not retry then state = state .. ", " .. (m.enabledAtLoad and "off" or "on") .. " after a reload" end
+            if retry then
+                state = state .. ": " .. (m.error or "") .. ". It tries again after a reload"
+            elseif m.state == "errored" then
+                state = state .. ": " .. (m.error or "") .. ". Turn it off and on to try again"
+            end
             parts[#parts + 1] = state
             local out = {}
             for _, p in ipairs(parts) do if p and p ~= "" then out[#out + 1] = p end end

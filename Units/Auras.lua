@@ -36,56 +36,52 @@ local M = SuuUI.RegisterModule({
     },
 })
 
--- The containers that hang off a unit frame: where, and which setting.
+-- The containers that hang off a unit frame: their unit, where (point on
+-- the container, point on the frame, x, y), and which setting.
 local ATTACHED = {
-    player = { key = "showDebuffs", build = function(frame)
-        local c = UI.AuraContainer(frame, "player", {
-            size = "icon-lg", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 300,
-            groups = { { key = "debuffs", filter = { "HARMFUL" }, max = 16, dispel = true } },
-        })
-        if c then c.container:SetPoint("BOTTOMRIGHT", frame, "TOPRIGHT", 0, S["space-4"]) end
-        return c
-    end },
-    target = { key = "showTarget", build = function(frame)
-        local c = UI.AuraContainer(frame, "target", {
-            size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
-            groups = {
-                { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
-                { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
-            },
-        })
-        if c then c.container:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 0, S["space-4"]) end
-        return c
-    end },
-    focus = { key = "showFocus", build = function(frame)
-        local c = UI.AuraContainer(frame, "focus", {
-            size = "icon-md", anchor = "LEFT", growth = { "RIGHT", "DOWN" },
-            groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
-        })
-        if c then c.container:SetPoint("LEFT", frame, "RIGHT", S["space-2"], 0) end
-        return c
-    end },
+    player = { key = "showDebuffs", at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
+        size = "icon-lg", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 300,
+        groups = { { key = "debuffs", filter = { "HARMFUL" }, max = 16, dispel = true } },
+    } },
+    target = { key = "showTarget", at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
+        size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
+        groups = {
+            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
+            { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
+        },
+    } },
+    focus = { key = "showFocus", at = { "LEFT", "RIGHT", S["space-2"], 0 }, opts = {
+        size = "icon-md", anchor = "LEFT", growth = { "RIGHT", "DOWN" },
+        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
+    } },
 }
 for i = 1, 5 do
-    ATTACHED["boss" .. i] = { key = "showBoss", build = function(frame)
-        local c = UI.AuraContainer(frame, "boss" .. i, {
-            size = "icon-md", anchor = "RIGHT", growth = { "LEFT", "DOWN" },
-            groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
-        })
-        if c then c.container:SetPoint("RIGHT", frame, "LEFT", -S["space-2"], 0) end
-        return c
-    end }
+    ATTACHED["boss" .. i] = { key = "showBoss", at = { "RIGHT", "LEFT", -S["space-2"], 0 }, opts = {
+        size = "icon-md", anchor = "RIGHT", growth = { "LEFT", "DOWN" },
+        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
+    } }
 end
 
+-- The container is made once (the engine never frees one) and follows the
+-- anchor: when another frame is published under the name (a plugin's own
+-- target frame), it moves onto that frame.
 function M:Attach(name, frame)
     local def = ATTACHED[name]
     if not def then return end
     local c = self.attached[name]
     if frame and not c then
-        c = def.build(frame)
+        c = UI.AuraContainer(frame, name, def.opts)
         self.attached[name] = c
     end
-    if c then c.container:SetShown(frame ~= nil and self:Get(def.key)) end
+    if not c then return end
+    if frame and self.attachedTo[name] ~= frame then
+        self.attachedTo[name] = frame
+        local at = def.at
+        c.container:SetParent(frame)
+        c.container:ClearAllPoints()
+        c.container:SetPoint(at[1], frame, at[2], at[3], at[4])
+    end
+    c.container:SetShown(frame ~= nil and self:Get(def.key))
 end
 
 function M:ApplyOptions()
@@ -117,7 +113,7 @@ function M:OnEnable()
     SuuUI.SuppressBlizzard("DebuffFrame")
 
     if not self.attached then
-        self.attached = {}
+        self.attached, self.attachedTo = {}, {}
         -- Your buffs: their own movable holder, top right.
         local holder = CreateFrame("Frame", "SuuUIPlayerBuffs", SuuUI.Root)
         holder:SetSize(16 * (UI.Size("icon-lg") + S["space-2"]), 2 * (UI.Size("icon-lg") + S["space-2"]))

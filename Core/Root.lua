@@ -28,7 +28,7 @@ Settings.Veto("ui", "scale", function(v)
     if v ~= 0 and (v < 0.5 or v > 2) then return false, "the scale is 0 (automatic) or between 0.5 and 2" end
 end, "Root")
 
--- The scale core.scale = 0 picks: 1 up to 1440p, then in quarter steps.
+-- The scale ui.scale = 0 picks: 1 up to 1440p, then in quarter steps.
 local function autoScale()
     local h = Pixel.ScreenHeight()
     if h <= 1440 then return 1 end
@@ -42,10 +42,12 @@ end
 
 local applied
 
+-- The scale is read when the job runs, so a change queued in combat and then
+-- changed back still ends on the latest value.
 local function apply()
-    local scale = Pixel.PerfectScale() * ns.UserScale()
-    if scale == applied then return end
     Combat.Run("root:scale", function()
+        local scale = Pixel.PerfectScale() * ns.UserScale()
+        if scale == applied then return end
         root:SetScale(scale)
         applied = scale
         Events.Emit("SUUUI_ROOT_SCALED", scale)

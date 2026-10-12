@@ -29,8 +29,8 @@ end
 function M:UpdateVisibility()
     local f = self.timer
     local pos = self:Get("position")
-    local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
-    local healer = not issecretvalue(role) and role == "HEALER"
+    -- SuuUI's role (chosen, assigned or from talents), in a group only
+    local healer = IsInGroup() and SuuUI.Role() == "HEALER"
     local shown = not pos.hidden
         and not (self:Get("hideForHealers") and healer)
         and not (self:Get("inCombatOnly") and not UI.Flag(UnitAffectingCombat("player")))
@@ -65,9 +65,10 @@ function M:OnEnable()
     self.timer:Activate()
     self:RegisterMover(self.timer, { key = "position", label = "Swing timer" })
     self:RegisterSettings(SECTION)
-    for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE", "PLAYER_ROLES_ASSIGNED" }) do
+    for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE" }) do
         self:OnGameEvent(e, function() self:UpdateVisibility() end)
     end
+    self:On("SUUUI_ROLE_CHANGED", function() self:UpdateVisibility() end)
     for _, key in ipairs({ "inCombatOnly", "hideForHealers", "position" }) do
         self:Watch(key, function() self:UpdateVisibility() end)
     end

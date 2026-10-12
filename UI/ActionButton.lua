@@ -32,7 +32,7 @@ local isSecret = issecretvalue or function() return false end
 
 -- A value addon code can read, or the fallback when it is secret or missing.
 local function known(v, fallback)
-    if v == nil or isSecret(v) then return fallback end
+    if isSecret(v) or v == nil then return fallback end
     return v
 end
 
@@ -72,6 +72,10 @@ function AB:SetSlot(slot)
     local old = self.slot
     self.slot = slot
     if self.onSlotChanged then self.onSlotChanged(self, old, slot) end
+    -- A new slot starts without the old one's cooldown: a paging bar 1 would
+    -- otherwise pop "ready" on every page whose slot isn't cooling down.
+    self.coolingDown = false
+    Motion.AlphaTo(self.flash, 0, 0)
     self:Update()
 end
 

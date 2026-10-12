@@ -10,8 +10,8 @@
 -- Stance buttons cast their form by name; the row holds as many buttons as
 -- you have forms (relaid out of combat when you learn one). The pet bar shows
 -- itself while you have a pet and no vehicle (a secure state driver, so it
--- works in combat); right click toggles autocast (/petautocasttoggle), shown
--- as a dashed ink ring. Keys bound to the game's stance and pet commands
+-- works in combat), and in keybind mode; right click toggles autocast
+-- (/petautocasttoggle), shown as a dashed ink ring. Keys bound to the game's stance and pet commands
 -- click these buttons. Anything secure waits for the end of combat.
 
 local _, ns = ...
@@ -23,7 +23,7 @@ local SLOTS = 10
 local isSecret = issecretvalue or function() return false end
 
 local function known(v, fallback)
-    if v == nil or isSecret(v) then return fallback end
+    if isSecret(v) or v == nil then return fallback end
     return v
 end
 
@@ -236,16 +236,26 @@ end
 
 local PET_VISIBILITY = "[@pet,exists,nopossessbar,novehicleui] show; hide"
 
-function Pet:SetEnabled(on)
-    self.enabled = on and true or false
+-- Shown by its state driver; keybind mode shows it even without a pet, so
+-- its keys can be bound (the driver comes back when the mode ends). Out of
+-- combat.
+function Pet:UpdateShown()
     Combat.Run("classbar:shown:" .. self.name, function()
-        if self.enabled then
-            RegisterStateDriver(self.header, "visibility", PET_VISIBILITY)
-        else
-            UnregisterStateDriver(self.header, "visibility")
+        local binding = ns.KeybindMode and ns.KeybindMode.IsActive()
+        UnregisterStateDriver(self.header, "visibility")
+        if not self.enabled then
             self.header:Hide()
+        elseif binding then
+            self.header:Show()
+        else
+            RegisterStateDriver(self.header, "visibility", PET_VISIBILITY)
         end
     end, "Action bars")
+end
+
+function Pet:SetEnabled(on)
+    self.enabled = on and true or false
+    self:UpdateShown()
     self:UpdateBindings()
 end
 
@@ -295,6 +305,7 @@ function UI.PetBar(parent, opts)
     Events.OnUnit("UNIT_FLAGS", "pet", all, bar)
     Events.OnUnit("UNIT_AURA", "pet", all, bar)
     Events.OnGame("UPDATE_BINDINGS", function() bar:UpdateBindings() end, bar)
+    Events.On("SUUUI_KEYBINDMODE_CHANGED", function() bar:UpdateShown() end, bar)
     bar:SetEnabled(true)
     all()
     return bar

@@ -46,7 +46,7 @@ local M = SuuUI.RegisterModule({
         auras = 4,
         auraSide = "right",
         badges = "all",         -- "all" debuff types, or "removable" only
-        rangeAlpha = 0.42,
+        rangeAlpha = T.opacity["opacity-oor"],
     },
 })
 
@@ -62,9 +62,9 @@ local function powerFor(unit, A)
     if mode == "all" then return true end
     if mode == "none" then return false end
     local role = A.UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(unit)
-    if role and not isSecret(role) and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
+    if not isSecret(role) and role and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
     local _, class = A.UnitClass(unit)
-    return class and not isSecret(class) and HEALER_CLASS[class] or false
+    return not isSecret(class) and class and HEALER_CLASS[class] or false
 end
 
 --------------------------------------------------------------------------------
@@ -296,6 +296,9 @@ function M:LayoutFrames(frames, holder)
             f.auraClip:SetPoint("RIGHT", f, "LEFT", -S["space-2"], 0)
         end
         if f.auras then
+            -- the icons are as tall as the bar (Layout runs out of combat,
+            -- where the engine's buttons take a resize)
+            for _, g in ipairs(AURA_GROUPS) do f.auras:SetGroupSize(g.key, h) end
             local c = f.auras.container
             c:ClearAllPoints()
             if auraRight then
@@ -411,7 +414,7 @@ function M:UpdateRange()
             local inRange, checked = UnitInRange(f.unit)
             if isSecret(inRange) then
                 f:SetAlphaFromBoolean(inRange, 1, far)
-            elseif checked == false then
+            elseif not isSecret(checked) and checked == false then
                 f:SetAlpha(1)
             else
                 f:SetAlpha(inRange and 1 or far)
@@ -439,7 +442,7 @@ local SECTION = {
               description = "Up suits frames above the chat; across, a row in the middle of the screen." },
             { key = "width", label = "Width", control = "slider", min = 80, max = 300, step = 4, unit = "px", live = false },
             { key = "height", label = "Height", control = "slider", min = 18, max = 48, step = 2, unit = "px", live = false,
-              description = "The aura icons are as tall as the bars (after a /reload)." },
+              description = "The aura icons are as tall as the bars." },
             { key = "gap", label = "Gap", control = "slider", min = 0, max = 20, step = 1, unit = "px", live = false,
               description = "Move the frames in edit mode (General > Appearance > Edit layout)." },
         } },
@@ -463,7 +466,8 @@ local SECTION = {
             { key = "badges", label = "Debuff badges", control = "segmented",
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" } },
               description = "Magic, Curse, Poison, Disease as a badge and border on the frame, in combat too. Several at once: Magic shows over Curse, Poison, Disease." },
-            { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.05,
+            -- step 0.01: the default is the design's opacity-oor (0.42)
+            { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
               format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
               description = "How faint a party member out of your range is." },
         } },

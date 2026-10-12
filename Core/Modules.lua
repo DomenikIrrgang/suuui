@@ -77,8 +77,9 @@ function Module:Emit(message, ...) Events.Emit(message, ...) end
 function Module:OnGameEvent(event, fn) Events.OnGame(event, fn, self) end
 function Module:OnUnitEvent(event, units, fn) Events.OnUnit(event, units, fn, self) end
 
+-- Keys get an "m:" prefix so a module's never collide with the core's own.
 function Module:RunOutOfCombat(key, fn)
-    Combat.Run(self.id .. ":" .. tostring(key), fn, self.name)
+    Combat.Run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
 end
 
 function Module:RegisterCommand(name, help, fn)
@@ -124,6 +125,9 @@ end
 local function fail(m, phase)
     m.state = "errored"
     m.error = phase .. " failed"
+    -- Undo what a failed OnEnable got as far as building (frames shown,
+    -- anchors published). Fault.Call reports an error here and carries on.
+    if phase == "OnEnable" and m.OnDisable then Fault.Call(m.name, m.OnDisable, m) end
     cleanup(m)
     Events.Emit("SUUUI_MODULE_ERRORED", m.id)
 end
@@ -155,7 +159,8 @@ local function apply(m)
     if m.state == "incompatible" then return end
     local want = Settings.Get(m.id, "enabled")
     if m.reloadToToggle then
-        m.pendingReload = (want ~= m.enabledAtLoad) or nil
+        -- an errored module that is still on retries at the next load
+        m.pendingReload = (want ~= m.enabledAtLoad or (want and m.state == "errored")) or nil
         return
     end
     Combat.Run("module:" .. m.id, function()
@@ -261,7 +266,9 @@ local STATE_TEXT = {
 local function describe(m)
     local state = STATE_TEXT[m.state] or m.state
     if m.pendingReload then
-        state = state .. (" |cffffb23f(%s after /reload)|r"):format(m.enabledAtLoad and "off" or "on")
+        local retry = m.state == "errored" and Settings.Get(m.id, "enabled")
+        local after = (retry and "retries") or (m.enabledAtLoad and "off") or "on"
+        state = state .. (" |cffffb23f(%s after /reload)|r"):format(after)
     end
     local line = ("  %s  %s  %s  - %s"):format(m.id, m.name, state, m.builtIn and "built in" or m.source)
     if m.error then line = line .. "  (" .. m.error .. ")" end
@@ -278,7 +285,14 @@ local function toggle(arg, on)
     if not m then return ns.Print(("No module called \"%s\". /suu modules lists them."):format(arg)) end
     if m.state == "incompatible" then return ns.Print(m.name .. " " .. m.error .. ".") end
     if on and m.state == "errored" then
-        -- Turning an errored module on again is a retry.
+        -- Turning an errored module on again is a retry; one that replaces
+        -- protected frames can only retry from a fresh load.
+        if m.reloadToToggle then
+            Settings.Set(m.id, "enabled", true)
+            m.pendingReload = true
+            ns.Print(("%s tries again after a /reload."):format(m.name))
+            return print(describe(m))
+        end
         m.state = "disabled"
         if Settings.Get(m.id, "enabled") then apply(m) end
     end

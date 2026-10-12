@@ -53,6 +53,7 @@ function API.Spec() return ns.Roles.Spec() end
 -- Blizzard frames
 API.SuppressBlizzard = ns.SuppressBlizzard
 API.RestoreBlizzard = ns.RestoreBlizzard
+API.IsSuppressed = ns.IsSuppressed
 
 -- 0.2: the screen root, components, layouts and motion
 

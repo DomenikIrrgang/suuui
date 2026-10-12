@@ -156,12 +156,12 @@ end
 --------------------------------------------------------------------------------
 
 -- Whether a slot has a weapon that swings; nil when the client won't say.
+-- Only the off hand can lack one (the ranged row shows while you shoot).
 local function canSwing(kind)
-    if kind == SWING.MainHand then return true end
-    local _, oh, ranged = UnitAttackSpeed("player")
-    local speed = kind == SWING.OffHand and oh or ranged
-    if isSecret(speed) then return nil end
-    return type(speed) == "number" and speed > 0
+    if kind ~= SWING.OffHand then return true end
+    local _, oh = UnitAttackSpeed("player")
+    if isSecret(oh) then return nil end
+    return type(oh) == "number" and oh > 0
 end
 
 function ST:UpdateRows()

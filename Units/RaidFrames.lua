@@ -44,7 +44,7 @@ local M = SuuUI.RegisterModule({
         incoming = true,
         auras = 2,
         badges = "all",
-        rangeAlpha = 0.42,
+        rangeAlpha = T.opacity["opacity-oor"],
     },
 })
 
@@ -58,9 +58,9 @@ local function powerFor(unit, A)
     if mode == "all" then return true end
     if mode == "none" then return false end
     local role = A.UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(unit)
-    if role and not isSecret(role) and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
+    if not isSecret(role) and role and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
     local _, class = A.UnitClass(unit)
-    return class and not isSecret(class) and HEALER_CLASS[class] or false
+    return not isSecret(class) and class and HEALER_CLASS[class] or false
 end
 
 -- The bar height for the raid's size: the shorter one from 21 players up.
@@ -115,6 +115,14 @@ local function buildSelected(f)
     f.selected = sel
 end
 
+-- Whether a button's unit is you, read when its unit changes and after a
+-- fight: UnitIsUnit may be secret in combat, and a secret answer keeps the
+-- last one.
+local function updateIsMe(f)
+    local me = f.unit and UnitIsUnit(f.unit, "player")
+    if not isSecret(me) then f.isMe = me and true or false end
+end
+
 function M:StyleButton(button)
     if button.suuStyled then return end
     button.suuStyled = true
@@ -135,6 +143,7 @@ function M:StyleButton(button)
     f:HookScript("OnAttributeChanged", function(btn, name, value)
         if name ~= "unit" then return end
         btn:SetUnit(value, true)
+        updateIsMe(btn)
         if btn.auras then btn.auras:SetUnit(value or "none") end
         if value then
             if not btn.active then btn:Activate() end
@@ -145,6 +154,7 @@ function M:StyleButton(button)
     local unit = f:GetAttribute("unit")
     if unit then
         f:SetUnit(unit, true)
+        updateIsMe(f)
         if f.auras then f.auras:SetUnit(unit) end
         f:Activate()
     end
@@ -156,6 +166,11 @@ function M:ApplyAuraCount(f)
     -- the clip: n icons at the bar's right end, centred on its height
     local h = f:GetHeight()
     local size = iconSize(h)
+    -- the icons follow the bar's height (from 21 players too); the height
+    -- only changes out of combat, where the engine's buttons take a resize
+    if not InCombatLockdown() then
+        for _, g in ipairs(AURA_GROUPS) do f.auras:SetGroupSize(g.key, size) end
+    end
     f.auraClip:ClearAllPoints()
     f.auraClip:SetPoint("RIGHT", f, "RIGHT", -S["space-1"] - 1, 0)
     f.auraClip:SetSize(math.max(1, n * size + math.max(0, n - 1) * S["space-1"]), size)
@@ -315,13 +330,13 @@ function M:UpdateRange()
     local far = self:Get("rangeAlpha")
     for _, f in ipairs(self.buttons) do
         if f:IsVisible() then
-            if not f.unit or UnitIsUnit(f.unit, "player") == true then
+            if not f.unit or f.isMe then
                 f:SetAlpha(1)
             else
                 local inRange, checked = UnitInRange(f.unit)
                 if isSecret(inRange) then
                     f:SetAlphaFromBoolean(inRange, 1, far)
-                elseif checked == false then
+                elseif not isSecret(checked) and checked == false then
                     f:SetAlpha(1)
                 else
                     f:SetAlpha(inRange and 1 or far)
@@ -492,9 +507,8 @@ local SECTION = {
               options = { { value = 10, label = "10" }, { value = 20, label = "20" }, { value = 40, label = "40" } },
               description = "How many made-up people the preview shows.",
               get = function() return M.previewSize or 20 end,
-              set = function(v) M.previewSize = v; M:DrawPreview(); return true end,
-              isDefault = function() return (M.previewSize or 20) == 20 end,
-              reset = function() M.previewSize = 20; M:DrawPreview() end },
+              -- not a setting: no reset, never counts as a change
+              set = function(v) M.previewSize = v; M:DrawPreview(); return true end },
             { key = "arrangement", label = "Groups", control = "segmented",
               options = { { value = "columns", label = "Columns" }, { value = "rows", label = "Rows" } },
               description = "Columns: each group a column of five (the side layout). Rows: each group a row of five, group 1 on top (the healer layout)." },
@@ -526,7 +540,8 @@ local SECTION = {
             { key = "badges", label = "Debuff badges", control = "segmented",
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" } },
               description = "Magic, Curse, Poison, Disease as a badge and border, in combat too. A debuff covers Aggro." },
-            { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.05,
+            -- step 0.01: the default is the design's opacity-oor (0.42)
+            { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
               format = function(v) return ("%d%%"):format(v * 100 + 0.5) end },
         } },
     },
@@ -579,11 +594,14 @@ function M:OnEnable()
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
-        -- a token can now be someone else: redraw, re-scan auras
+        -- a token can now be someone else: redraw, re-scan auras (the
+        -- indicators' too)
         for _, f in ipairs(self.buttons) do
             if f.unit then
+                updateIsMe(f)
                 if f.auras then f.auras:Refresh() end
                 for _, list in pairs(f.dispelSets or {}) do for _, c in ipairs(list) do c:Refresh() end end
+                for _, c in ipairs(f.indicatorContainers or {}) do c:Refresh() end
             end
         end
         self:UpdateStates(); self:UpdateSelected(); self:UpdateRange()
@@ -609,7 +627,10 @@ function M:OnEnable()
         if not InCombatLockdown() and unit and (unit == "player" or unit:find("^party") or unit:find("^raid")) then presence(unit) end
     end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() C_Timer.After(0, function() presence() end) end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() presence() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        presence()
+        for _, f in ipairs(self.buttons) do updateIsMe(f) end
+    end)
     self.rangeTicker = C_Timer.NewTicker(0.3, function()
         if self.holder:IsVisible() then self:UpdateRange() end
     end)

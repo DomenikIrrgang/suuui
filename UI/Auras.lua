@@ -30,6 +30,8 @@
 --   })
 --   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids),
 --   c:SetFlow(anchor, growth)
+--   c:Release()                  -- 0.9: parked for reuse (no unit, hidden,
+--                                -- deaf) until the next SetUnit
 --   c:SetGroupSize(key, size)    -- 0.9: a group's icon size, live (out of combat:
 --                                -- in combat the engine's buttons refuse the resize)
 --
@@ -271,12 +273,35 @@ local function call(container, names, ...)
     return false
 end
 
+local listen -- below, with the re-scan events
+
 -- The unit goes last, after the groups (it decides which events the
--- container listens to), followed by a full re-scan.
+-- container listens to), followed by a full re-scan. A released container
+-- comes back with it: shown, and listening for its unit again.
 function AC:SetUnit(unit)
     self.unit = unit
     pcall(self.container.SetUnit, self.container, unit)
+    if self.released then
+        self.released = nil
+        listen(self, unit)
+        self.container:Show()
+    end
     self:Refresh()
+end
+
+-- 0.9: parks a container nothing uses any more. Engine containers can never
+-- be freed, so whoever rebuilds keeps them for reuse instead: released, one
+-- has no unit, is hidden and stops listening for its re-scan event. SetUnit
+-- brings it back.
+function AC:Release()
+    if self.released then return end
+    self:SetUnit("none")
+    if self.rescan then
+        ns.Events.Off(self.rescan, self)
+        self.rescan = nil
+    end
+    self.container:Hide()
+    self.released = true
 end
 
 -- A full re-scan. A container doesn't notice when its unit token points at a
@@ -289,6 +314,16 @@ local RESCAN = {
     target = "PLAYER_TARGET_CHANGED",
     focus = "PLAYER_FOCUS_CHANGED",
 }
+
+-- Re-scans whenever the unit's token may point at someone new.
+listen = function(self, unit)
+    local event = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT")
+        or ((unit:find("^party") or unit:find("^raid")) and "GROUP_ROSTER_UPDATE")
+    if event then
+        ns.Events.OnGame(event, function() self:Refresh() end, self)
+        self.rescan = event
+    end
+end
 
 -- The corner the icons start from and the way they grow, after creation.
 function AC:SetFlow(anchor, growth)
@@ -376,8 +411,6 @@ function UI.AuraContainer(parent, unit, opts)
         if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. group.key) end
     end
     self:SetUnit(unit)
-    local event = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT")
-        or ((unit:find("^party") or unit:find("^raid")) and "GROUP_ROSTER_UPDATE")
-    if event then ns.Events.OnGame(event, function() self:Refresh() end, self) end
+    listen(self, unit)
     return self
 end

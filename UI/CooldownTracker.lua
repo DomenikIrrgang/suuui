@@ -9,6 +9,8 @@
 --   t:SetOptions(opts)    -- { essentialSize, utilityInline, missingBuffs
 --                         -- ("hide"|"grey"), missingDebuffs ("hide"|"grey"|
 --                         -- "target"), readyPop, procHighlight }
+--   t:Stop(), t:Start()   -- 0.9: off (no events, aura sounds or containers in
+--                         -- use) and on again; a new tracker starts running
 --
 -- Cooldowns are SuuUI's own icons: whether a cooldown runs stays readable in
 -- combat, and its sweep comes from the engine's duration object. Each entry
@@ -52,7 +54,7 @@ local S = T.space
 
 local isSecret = issecretvalue or function() return false end
 local function known(v, fallback)
-    if v == nil or isSecret(v) then return fallback end
+    if isSecret(v) or v == nil then return fallback end
     return v
 end
 
@@ -183,7 +185,11 @@ function Cell:Update(opts)
 
     local usable, noMana = C_Spell.IsSpellUsable(id)
     local canUse = known(usable, true) and not known(noMana, false)
-    local useNow = self.reactive and not onCooldown and usable == true and not isSecret(usable)
+    -- A reactive ability lights up only while the game says it's usable. In
+    -- combat that answer can be secret: then it looks neither ready nor
+    -- "use now", just neutral.
+    local unsure = self.reactive and not onCooldown and isSecret(usable)
+    local useNow = self.reactive and not onCooldown and not isSecret(usable) and usable == true
 
     -- whether it shows at all: only when ready / only on cooldown, and hide
     -- on cooldown or while unusable
@@ -194,7 +200,7 @@ function Cell:Update(opts)
     self.wantShown = want
 
     local ready = e.ready or "normal"
-    if self.pulse:IsPlaying() then self.pulse:Stop(); self.icon:SetAlpha(1) end
+    local pulse = false
     if onCooldown then
         self.icon:SetBorder(nil)
         -- grey (desaturated) or dim (full colour, faded)
@@ -203,11 +209,23 @@ function Cell:Update(opts)
     elseif useNow then
         self.icon:SetBorder(nil)
         self.icon:SetState("ready")
+    elseif unsure then
+        self.icon:SetState("rest")
+        self.icon:SetBorder(nil)
+        self.icon:SetGlow(nil)
     else
         self.icon:SetState("rest")
         self.icon:SetBorder(EDGE[e.border] or "arcane")
         self.icon:SetGlow((ready == "glow" or ready == "pulse") and "glow-arcane" or nil)
-        if ready == "pulse" then self.pulse:Play() end
+        pulse = ready == "pulse"
+    end
+    -- "Pulse" keeps breathing across updates (they come many times a
+    -- second): it starts once and stops only when the cell leaves it
+    if pulse and not self.pulse:IsPlaying() then
+        self.pulse:Play()
+    elseif not pulse and self.pulse:IsPlaying() then
+        self.pulse:Stop()
+        self.icon:SetAlpha(1)
     end
     self.ring:SetShown(useNow and true or false)
     local alpha = 1
@@ -216,15 +234,13 @@ function Cell:Update(opts)
     self:SetAlpha(alpha)
 end
 
-local function buildCell(parent, entry, spellID, size)
+-- A cell of one size, not yet holding a spell (TR:Cell fills it).
+local function newCell(parent, size)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Cell)
     f:SetSize(size, size)
-    f.entry, f.spellID = entry, spellID
-    f.reactive = REACTIVE[entry.name] or false
     f.icon = UI.Icon(f, size)
     f.icon:SetAllPoints()
-    f.icon:SetArt(C_Spell.GetSpellTexture(spellID))
     f.cooldown = CreateFrame("Cooldown", nil, f.icon, "CooldownFrameTemplate")
     f.cooldown:SetPoint("TOPLEFT", 1, -1)
     f.cooldown:SetPoint("BOTTOMRIGHT", -1, 1)
@@ -250,21 +266,6 @@ local function buildCell(parent, entry, spellID, size)
     a:SetFromAlpha(1)
     a:SetToAlpha(0.55)
     a:SetDuration(0.6)
-    -- "Effect running": the effect's aura over the icon, above the sweep and
-    -- below the ready ring and flash
-    local fx = entry.effect == "you" and "player" or (entry.effect == "target" and "target")
-    local fxIDs = entry.effectIDs and #entry.effectIDs > 0 and entry.effectIDs or entry.ids
-    if fx and fxIDs and #fxIDs > 0 then
-        f.container = UI.AuraContainer(f, fx, {
-            size = size, anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" },
-            groups = { { key = "fx", filter = { fx == "player" and "HELPFUL" or "HARMFUL", "PLAYER" }, max = 1,
-                         include = fxIDs, border = "gilt", glow = "glow-ward" } },
-        })
-        if f.container then
-            f.container.container:SetPoint("TOPLEFT", f, "TOPLEFT")
-            f.container.container:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
-        end
-    end
     f:EnableMouse(false)
     return f
 end
@@ -287,10 +288,10 @@ local function auraLook(entry, base)
 end
 
 -- A fixed slot: the grey placeholder, and over it a one-icon container that
--- shows the entry's aura while it's up.
-local function buildSlot(parent, entry, unit, filter, size, look)
+-- shows the entry's aura while it's up (`copts`, its options). TR:Slot sets
+-- the placeholder's art.
+local function newSlot(parent, warn, max, size, unit, copts)
     local f = CreateFrame("Frame", nil, parent)
-    local max = entry.group and math.max(1, math.min(4, entry.max or 1)) or 1
     f:SetSize(max * size + (max - 1) * S["space-2"], size)
     -- the placeholder sits under the first place (where the first member lands)
     f.placeholder = CreateFrame("Frame", nil, f)
@@ -300,13 +301,13 @@ local function buildSlot(parent, entry, unit, filter, size, look)
     art:SetPoint("TOPLEFT", 1, -1)
     art:SetPoint("BOTTOMRIGHT", -1, 1)
     art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
-    art:SetTexture(iconFor(entry))
     art:SetDesaturated(true)
+    f.art = art
     UI.Fill(f.placeholder, "surface-sunk", "BACKGROUND"):SetAllPoints()
     UI.Border(f.placeholder, "gilt-hairline", { layer = "OVERLAY" })
     f.placeholder:SetAlpha(T.opacity["opacity-oor"])
     -- Warn: an ember edge inside the square that pulses slowly
-    if (entry.missing == "warn") then
+    if warn then
         UI.Border(f.placeholder, "ember", { inset = 1, layer = "OVERLAY" })
         local pulse = f.placeholder:CreateAnimationGroup()
         pulse:SetLooping("BOUNCE")
@@ -317,13 +318,7 @@ local function buildSlot(parent, entry, unit, filter, size, look)
         f.placeholder:SetAlpha(0.85)
         pulse:Play()
     end
-    look = look or {}
-    f.container = UI.AuraContainer(f, unit, {
-        size = size, anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" },
-        groups = { { key = "e", filter = filter, max = max, include = entry.ids,
-                     border = look.border, glow = look.glow, drain = look.drain,
-                     digits = look.digits, stacks = look.stacks, expiring = look.expiring } },
-    })
+    f.container = UI.AuraContainer(f, unit, copts)
     if f.container then
         f.container.container:SetPoint("TOPLEFT", f, "TOPLEFT")
         f.container.container:SetFrameLevel(f.placeholder:GetFrameLevel() + 2)
@@ -332,23 +327,19 @@ local function buildSlot(parent, entry, unit, filter, size, look)
 end
 
 -- A reminder: the grey icon alone, no live aura. Shown while the aura isn't
--- up, out of combat.
-local function buildReminder(parent, entry, unit, filter, size)
+-- up, out of combat. TR:Reminder sets what it reminds of.
+local function newReminder(parent, size)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(size, size)
     local art = f:CreateTexture(nil, "ARTWORK")
     art:SetPoint("TOPLEFT", 1, -1)
     art:SetPoint("BOTTOMRIGHT", -1, 1)
     art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
-    art:SetTexture(iconFor(entry))
     art:SetDesaturated(true)
+    f.art = art
     UI.Fill(f, "surface-sunk", "BACKGROUND"):SetAllPoints()
     UI.Border(f, "gilt-hairline", { layer = "OVERLAY" })
     f:SetAlpha(T.opacity["opacity-oor"])
-    f.unit, f.filter = unit, table.concat(filter, "|")
-    f.ids = {}
-    for _, id in ipairs(entry.ids) do f.ids[id] = true end
-    f:Hide()
     return f
 end
 
@@ -356,7 +347,7 @@ end
 local function auraUp(r)
     for i = 1, 40 do
         local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, r.unit, i, r.filter)
-        if not ok or not a or isSecret(a) then return false end
+        if not ok or isSecret(a) or not a then return false end
         if not isSecret(a.spellId) and r.ids[a.spellId] then return true end
     end
     return false
@@ -376,19 +367,135 @@ end
 -- Building
 --------------------------------------------------------------------------------
 
-function TR:Clear()
-    for _, list in pairs(self.built or {}) do
-        for _, f in ipairs(list) do
-            f:Hide()
-            if f.container then f.container.container:Hide() end
+-- Rebuilds reuse what earlier builds made: an engine aura container can
+-- never be freed, and cells and slots would pile up too. Each is kept under a
+-- key of everything fixed when it was made (for a container: its unit, size,
+-- flow and every group setting); a build takes a spare with the same key, or
+-- makes one. Clear hands everything back (containers released: no unit,
+-- hidden, deaf).
+
+-- Everything about a container that is fixed at creation, as one string.
+local function containerKey(unit, opts)
+    local parts = { unit, tostring(opts.size), tostring(opts.anchor), table.concat(opts.growth or {}, ",") }
+    for _, g in ipairs(opts.groups) do
+        parts[#parts + 1] = table.concat({ g.key, table.concat(g.filter, ","), tostring(g.max),
+            table.concat(g.include or {}, ","), table.concat(g.dispelTypes or {}, ","),
+            tostring(g.border), tostring(g.glow), tostring(g.drain), tostring(g.digits),
+            tostring(g.stacks), tostring(g.expiring), tostring(g.size) }, "/")
+    end
+    return table.concat(parts, ";")
+end
+
+-- A spare made under `key`, else a new one from make() (nil if it makes
+-- none); the second value is true for a new one.
+function TR:Take(key, make)
+    local spare = self.spare[key]
+    local thing = spare and table.remove(spare)
+    local fresh = not thing
+    if fresh then thing = make() end
+    if not thing then return nil end
+    self.taken[#self.taken + 1] = { key = key, thing = thing }
+    return thing, fresh
+end
+
+-- An aura container on the tracker.
+function TR:Aura(unit, opts)
+    local ac, fresh = self:Take("aura|" .. containerKey(unit, opts), function() return UI.AuraContainer(self, unit, opts) end)
+    if ac and not fresh then ac:SetUnit(unit) end
+    return ac
+end
+
+-- A cooldown cell for an entry: a clean state (a reused cell must not pop
+-- as "ready"), and its effect.
+function TR:Cell(entry, spellID, size)
+    local f = self:Take("cell|" .. size, function() return newCell(self, size) end)
+    f.entry, f.spellID = entry, spellID
+    f.reactive = REACTIVE[entry.name] or false
+    f.icon:SetArt(C_Spell.GetSpellTexture(spellID))
+    f.onCooldown, f.dirty, f.wantShown = nil, nil, nil
+    if f.pulse:IsPlaying() then f.pulse:Stop() end
+    f.icon:SetAlpha(1)
+    Motion.AlphaTo(f.flash, 0, 0)
+    f.cooldown:Clear()
+    f:SetAlpha(1)
+    f:Show()
+    -- "Effect running": the effect's aura over the icon, above the sweep and
+    -- below the ready ring and flash. It hangs on the tracker, not the cell,
+    -- so a cell hidden or dimmed on cooldown leaves the effect full.
+    f.container = nil
+    local fx = entry.effect == "you" and "player" or (entry.effect == "target" and "target")
+    local fxIDs = entry.effectIDs and #entry.effectIDs > 0 and entry.effectIDs or entry.ids
+    if fx and fxIDs and #fxIDs > 0 then
+        f.container = self:Aura(fx, {
+            size = size, anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" },
+            groups = { { key = "fx", filter = { fx == "player" and "HELPFUL" or "HARMFUL", "PLAYER" }, max = 1,
+                         include = fxIDs, border = "gilt", glow = "glow-ward" } },
+        })
+        if f.container then
+            local c = f.container.container
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", f, "TOPLEFT")
+            c:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
         end
     end
-    self.built = { essential = {}, utility = {}, buffs = {}, debuffs = {}, procs = {}, remindBuffs = {}, remindDebuffs = {} }
+    return f
+end
+
+-- A fixed slot for an aura entry.
+function TR:Slot(entry, unit, filter, size, look)
+    look = look or {}
+    local max = entry.group and math.max(1, math.min(4, entry.max or 1)) or 1
+    local copts = {
+        size = size, anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" },
+        groups = { { key = "e", filter = filter, max = max, include = entry.ids,
+                     border = look.border, glow = look.glow, drain = look.drain,
+                     digits = look.digits, stacks = look.stacks, expiring = look.expiring } },
+    }
+    local warn = entry.missing == "warn"
+    local f, fresh = self:Take(("slot|%s|%s"):format(tostring(warn), containerKey(unit, copts)),
+        function() return newSlot(self, warn, max, size, unit, copts) end)
+    if not fresh then
+        f:Show()
+        if f.container then f.container:SetUnit(unit) end
+    end
+    f.art:SetTexture(iconFor(entry))
+    f.entryGrey = nil
+    return f
+end
+
+-- A reminder for an aura entry (hidden until UpdateReminders shows it).
+function TR:Reminder(entry, unit, filter, size)
+    local f = self:Take("remind|" .. size, function() return newReminder(self, size) end)
+    f.art:SetTexture(iconFor(entry))
+    f.unit, f.filter = unit, table.concat(filter, "|")
+    f.ids = {}
+    for _, id in ipairs(entry.ids) do f.ids[id] = true end
+    f:Hide()
+    return f
+end
+
+-- Hands back everything built (kept for the next build).
+function TR:Clear()
+    for _, t in ipairs(self.taken or {}) do
+        local thing = t.thing
+        if t.key:find("^aura|") then
+            thing:Release()
+        else
+            thing:Hide()
+            -- a slot's own container goes with it
+            if t.key:find("^slot|") and thing.container then thing.container:Release() end
+        end
+        self.spare[t.key] = self.spare[t.key] or {}
+        table.insert(self.spare[t.key], thing)
+    end
+    self.taken = {}
+    self.built = { essential = {}, utility = {}, buffs = {}, debuffs = {}, remindBuffs = {}, remindDebuffs = {} }
     self.cells = {}
     self.leftFlow, self.rightFlow = nil, nil
 end
 
--- Builds the rows from the lists. Out of combat (it creates engine containers).
+-- Builds the rows from the lists. Out of combat (it creates engine containers,
+-- or takes spare ones).
 function TR:Build()
     self:Clear()
     local opts = self.opts or {}
@@ -409,7 +516,7 @@ function TR:Build()
         for _, entry in ipairs(lists[key] or {}) do
             local id = not entry.hidden and knownRank(entry)
             if id then
-                local cell = buildCell(self, entry, id, key == "essential" and essential or utility)
+                local cell = self:Cell(entry, id, key == "essential" and essential or utility)
                 table.insert(self.built[key], cell)
                 self.cells[#self.cells + 1] = cell
             end
@@ -436,17 +543,16 @@ function TR:Build()
         if mode == "hide" then
             leftGroups[#leftGroups + 1] = auraGroup("b" .. i, entry, filter)
         elseif mode == "remind" then
-            table.insert(self.built.remindBuffs, buildReminder(self, entry, "player", filter, auraSize(entry)))
+            table.insert(self.built.remindBuffs, self:Reminder(entry, "player", filter, auraSize(entry)))
         else
-            table.insert(self.built.buffs, buildSlot(self, entry, "player", filter, auraSize(entry), auraLook(entry)))
+            table.insert(self.built.buffs, self:Slot(entry, "player", filter, auraSize(entry), auraLook(entry)))
         end
     end
     for i, entry in ipairs(lists.procs or {}) do
         leftGroups[#leftGroups + 1] = auraGroup("p" .. i, entry, sourceFilter("HELPFUL", entry, "mine"), proc)
     end
     if #leftGroups > 0 then
-        self.leftFlow = UI.AuraContainer(self, "player", { size = aura, anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, groups = leftGroups })
-        if self.leftFlow then table.insert(self.built.procs, self.leftFlow.container) end
+        self.leftFlow = self:Aura("player", { size = aura, anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, groups = leftGroups })
     end
 
     -- Your debuffs on the target: hide packs them, growing right of the
@@ -463,16 +569,15 @@ function TR:Build()
         if mode == "hide" or (not entry.group and not knownRank(entry)) then
             groups[#groups + 1] = auraGroup("d" .. i, entry, filter)
         elseif mode == "remind" then
-            table.insert(self.built.remindDebuffs, buildReminder(self, entry, "target", filter, auraSize(entry)))
+            table.insert(self.built.remindDebuffs, self:Reminder(entry, "target", filter, auraSize(entry)))
         else
-            local slot = buildSlot(self, entry, "target", filter, auraSize(entry), auraLook(entry))
+            local slot = self:Slot(entry, "target", filter, auraSize(entry), auraLook(entry))
             slot.entryGrey = entry.missing == "grey" -- grey on its own: always shown
             table.insert(self.built.debuffs, slot)
         end
     end
     if #groups > 0 then
-        self.rightFlow = UI.AuraContainer(self, "target", { size = aura, anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, groups = groups })
-        if self.rightFlow then table.insert(self.built.procs, self.rightFlow.container) end
+        self.rightFlow = self:Aura("target", { size = aura, anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, groups = groups })
     end
     -- the timers row is as tall as its largest icon
     self.rowH = aura
@@ -507,7 +612,16 @@ function TR:Layout()
         for _, f in ipairs(list) do if f:IsShown() then out[#out + 1] = f end end
         return out
     end
-    local ess, util = shown(self.built.essential), shown(self.built.utility)
+    -- a cell hidden on cooldown keeps its place while it has an effect to
+    -- show there (the effect hangs on the tracker, over the cell's spot)
+    local function cells(list)
+        local out = {}
+        for _, f in ipairs(list) do
+            if f:IsShown() or (f.container and f.onCooldown) then out[#out + 1] = f end
+        end
+        return out
+    end
+    local ess, util = cells(self.built.essential), cells(self.built.utility)
     local function rowWidth(cells, gap)
         local w = 0
         for i, c in ipairs(cells) do w = w + c:GetWidth() + (i > 1 and gap or 0) end
@@ -626,7 +740,7 @@ function TR:UpdateMissing()
         slot.placeholder:Show()
         if mode == "target" and not slot.entryGrey then
             local hostile = UnitExists("target") and UnitCanAttack("player", "target")
-            if slot.SetAlphaFromBoolean and hostile ~= nil then
+            if slot.SetAlphaFromBoolean and (isSecret(hostile) or hostile ~= nil) then
                 slot:SetAlphaFromBoolean(hostile, 1, 0)
             else
                 slot:SetAlpha(UI.Flag(hostile) and 1 or 0)
@@ -687,39 +801,17 @@ function TR:SetOptions(opts)
     self.rebuild = true
 end
 
-function UI.CooldownTracker(parent, opts)
-    local t = CreateFrame("Frame", opts and opts.name, parent)
-    Mixin(t, TR)
-    t:SetSize(1, 1)
-    t.divider = UI.Fill(t, "gilt-line", "ARTWORK")
-    t.divider:Hide()
-    t.auraDivider = UI.Fill(t, "gilt-line", "ARTWORK")
-    t.auraDivider:Hide()
-    t:Clear()
-
-    -- One light pass per frame at most: rebuilds wait for the end of combat.
-    -- The driver is its own frame, so it runs while the tracker is hidden
-    -- (shown only in combat, or faded out on mouseover).
-    local dirty = true
-    t.driver = CreateFrame("Frame")
-    t.driver:SetScript("OnUpdate", function()
-        local self = t
-        if self.rebuild and not InCombatLockdown() then
-            self.rebuild = false
-            ns.Fault.Call("Cooldown Manager", self.Build, self)
-            dirty = false
-            return
-        end
-        local again = dirty
-        for _, cell in ipairs(self.cells or {}) do
-            if cell.dirty then cell.dirty = false; again = true end
-        end
-        if again then
-            dirty = false
-            ns.Fault.Call("Cooldown Manager", self.UpdateCooldowns, self)
-        end
-    end)
-    local function mark() dirty = true end
+-- Running: the driver and the game's events. Start rebuilds from the lists
+-- (if it has any); Stop takes the aura sounds back and hands back everything
+-- built, so a stopped tracker costs nothing. Out of combat.
+function TR:Start()
+    if self.running then return end
+    self.running = true
+    self.dirty = true
+    if self.lists then self.rebuild = true end
+    self.driver:Show()
+    local t = self
+    local function mark() t.dirty = true end
     -- Only events this client has (Forever renamed or dropped some).
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "SPELL_UPDATE_CHARGES",
@@ -744,5 +836,51 @@ function UI.CooldownTracker(parent, opts)
             if sig ~= t.knownSig then t.rebuild = true end
         end, t) end
     end
+end
+
+function TR:Stop()
+    if not self.running then return end
+    self.running = false
+    self.driver:Hide()
+    Events.OffAll(self)
+    clearAuraSounds()
+    self:Clear()
+    self.knownSig = nil
+end
+
+function UI.CooldownTracker(parent, opts)
+    local t = CreateFrame("Frame", opts and opts.name, parent)
+    Mixin(t, TR)
+    t:SetSize(1, 1)
+    t.divider = UI.Fill(t, "gilt-line", "ARTWORK")
+    t.divider:Hide()
+    t.auraDivider = UI.Fill(t, "gilt-line", "ARTWORK")
+    t.auraDivider:Hide()
+    t.spare, t.taken = {}, {}
+    t:Clear()
+
+    -- One light pass per frame at most: rebuilds wait for the end of combat.
+    -- The driver is its own frame, so it runs while the tracker is hidden
+    -- (shown only in combat, or faded out on mouseover).
+    t.driver = CreateFrame("Frame")
+    t.driver:Hide()
+    t.driver:SetScript("OnUpdate", function()
+        local self = t
+        if self.rebuild and not InCombatLockdown() then
+            self.rebuild = false
+            ns.Fault.Call("Cooldown Manager", self.Build, self)
+            self.dirty = false
+            return
+        end
+        local again = self.dirty
+        for _, cell in ipairs(self.cells or {}) do
+            if cell.dirty then cell.dirty = false; again = true end
+        end
+        if again then
+            self.dirty = false
+            ns.Fault.Call("Cooldown Manager", self.UpdateCooldowns, self)
+        end
+    end)
+    t:Start()
     return t
 end

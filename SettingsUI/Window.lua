@@ -91,20 +91,26 @@ local function bindRow(page, def)
     local isDefault = def.isDefault or (def.key and function() return Settings.IsDefault(namespace, def.key) end)
     local reset = def.reset or (def.key and function() Settings.Reset(namespace, def.key) end)
 
+    -- The row refreshes itself after every set and reset: a refused value goes
+    -- back, and rows whose get/set bypass Settings hear no SUUUI_SETTING_CHANGED.
     local row
     local ctl = buildControl(page.frame, def, function(v)
         if not set then return end
         local ok, reason = set(v)
         if ok == false then
             ns.Print(("%s wasn't changed: %s"):format(def.label, reason or "refused"))
-            row.refresh()
         end
+        row.refresh()
     end)
+    local doReset = reset and function()
+        reset()
+        row.refresh()
+    end
     row = UI.SettingRow(page.frame, {
         label = def.label, description = describe(def.description), control = ctl,
-        stacked = def.stacked, width = page.width, onReset = reset,
+        stacked = def.stacked, width = page.width, onReset = doReset,
     })
-    row.def = def
+    row.def, row.doReset = def, doReset
     row.isModified = function() return isDefault ~= nil and not isDefault() end
     row.refresh = function()
         if valued and get and ctl.SetValue then ctl:SetValue(get()) end
@@ -165,10 +171,14 @@ function Page:Refresh()
 end
 
 -- Shows the rows matching `q` (everything when q is empty); returns the count.
+-- A match on the section's label or a group's title or description shows all
+-- the rows under it.
 function Page:Filter(q)
     local total = 0
+    local sectionHit = q == "" or (self.section.label or ""):lower():find(q, 1, true)
     for _, g in ipairs(self.groups) do
-        local groupHit = q == "" or (g.def.title or ""):lower():find(q, 1, true)
+        local groupHit = sectionHit or (g.def.title or ""):lower():find(q, 1, true)
+            or (tostring(describe(g.def.description) or "")):lower():find(q, 1, true)
         local shown = 0
         for _, row in ipairs(g.boundRows) do
             local d = row.def
@@ -311,18 +321,19 @@ local function showPreview(section)
     end
 end
 
--- The view at its real size: centred in the column, or (wider than the
--- column) from its left edge, so its start shows and only its far end clips.
+-- The view at its real size: centred in the column, or (wider or taller than
+-- the column) from its left or top edge, so its start shows and only its far
+-- end clips.
 function W.PlacePreview()
     local p = frame.preview
     local view = p.view
     if not view then return end
     view:ClearAllPoints()
-    if view:GetWidth() > p.area:GetWidth() then
-        view:SetPoint("LEFT", p.area, "LEFT")
-    else
-        view:SetPoint("CENTER", p.area, "CENTER")
-    end
+    local wide = view:GetWidth() > p.area:GetWidth()
+    local tall = view:GetHeight() > p.area:GetHeight()
+    local point = (tall and "TOP" or "") .. (wide and "LEFT" or "")
+    if point == "" then point = "CENTER" end
+    view:SetPoint(point, p.area, point)
 end
 
 -- The section's note under its preview (previewNote, a string or function).
@@ -332,8 +343,26 @@ function W.PreviewNote()
     p.note:SetValue(note or "")
 end
 
+-- Reset section asks twice: the first click arms it for a few seconds.
+local resetTimer
+
+local function disarmReset()
+    if resetTimer then resetTimer:Cancel(); resetTimer = nil end
+    frame.resetSection:SetLabel("Reset section")
+end
+
 local function applyView()
     local any = false
+    if query ~= "" then
+        -- results in the nav's order, not the order the pages were built in
+        for _, section in ipairs(Registry.List()) do
+            local page = pages[section.id]
+            if page then
+                frame.pagesStack:Remove(page.frame)
+                frame.pagesStack:Add(page.frame)
+            end
+        end
+    end
     for id, page in pairs(pages) do
         if query == "" then
             page:Filter("")
@@ -348,6 +377,9 @@ local function applyView()
     end
     frame.empty:SetShown(query ~= "" and not any)
     frame.content:SetVerticalScroll(0)
+    -- it resets the open section, which a search doesn't show on its own
+    disarmReset()
+    frame.resetSection:SetEnabledState(query == "")
     W.RefreshNav()
 end
 
@@ -356,6 +388,7 @@ function W.Show(id)
     if not section then return end
     current = section.id
     getPage(section)
+    frame.search.edit:ClearFocus()
     if query ~= "" then
         query = ""
         frame.search:SetValue("")
@@ -373,10 +406,26 @@ function W.Search(text)
     applyView()
 end
 
-function W.RefreshAll()
-    if not frame then return end
+-- Refreshes come in bursts (a profile switch changes many settings, and
+-- runtime writes happen in combat): mark the pages dirty and refresh once,
+-- on the next frame, and only while the window is shown (OnShow catches up).
+local dirty, queued = false, false
+
+local function refreshNow()
+    dirty = false
     for _, page in pairs(pages) do page:Refresh() end
     W.RefreshNav()
+end
+
+function W.RefreshAll()
+    if not frame then return end
+    dirty = true
+    if queued or not frame:IsShown() then return end
+    queued = true
+    C_Timer.After(0, function()
+        queued = false
+        if dirty and frame:IsShown() then refreshNow() end
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -491,7 +540,10 @@ local function build()
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetPoint("CENTER")
     f:Hide()
-    f:SetScript("OnShow", function(self) Motion.Enter(self, T.duration["dur-fast"]) end)
+    f:SetScript("OnShow", function(self)
+        Motion.Enter(self, T.duration["dur-fast"])
+        if dirty then refreshNow() end
+    end)
     tinsert(UISpecialFrames, "SuuUISettings")
     frame = f
 
@@ -512,7 +564,10 @@ local function build()
     f.profile = UI.Select(f, { width = 190, options = profileOptions(), value = Profiles.Current(),
         onChange = function(name)
             local ok, err = Profiles.Use(name)
-            if not ok then ns.Print(err) end
+            if not ok then
+                ns.Print(err)
+                f.profile:SetValue(Profiles.Current())
+            end
         end })
     f.profile:SetPoint("RIGHT", f.close, "LEFT", -S["space-5"], 0)
     f.search = UI.TextField(f, { width = 280, placeholder = "Search settings", onTextChanged = W.Search })
@@ -572,18 +627,24 @@ local function build()
     import:SetPoint("LEFT")
     local export = UI.Button(foot, { text = "Export", onClick = W.Export })
     export:SetPoint("LEFT", import, "RIGHT", S["space-3"], 0)
-    local resetSection = UI.Button(foot, { text = "Reset section", onClick = function()
+    local resetSection = UI.Button(foot, { text = "Reset section", onClick = function(self)
         local page = pages[current]
-        if not page then return end
+        if not page or query ~= "" then return end
+        if not resetTimer then
+            self:SetLabel("Click again to reset")
+            resetTimer = C_Timer.NewTimer(3, function() resetTimer = nil; disarmReset() end)
+            return
+        end
+        disarmReset()
         for _, row in ipairs(page.rows) do
-            if row.isModified() and row.def.key then
-                Settings.Reset(row.def.namespace or page.section.namespace, row.def.key)
-            elseif row.isModified() and row.def.reset then
-                row.def.reset()
-            end
+            -- turning modules on and off is not a setting to reset
+            local namespace = row.def.namespace or page.section.namespace
+            local moduleToggle = row.def.key == "enabled" and ns.Modules.Get(namespace or "")
+            if row.doReset and row.isModified() and not moduleToggle then row.doReset() end
         end
     end })
     resetSection:SetPoint("LEFT", export, "RIGHT", S["space-3"], 0)
+    f.resetSection = resetSection
     local done = UI.Button(foot, { text = "Done", variant = "primary", onClick = function() f:Hide() end })
     done:SetPoint("RIGHT")
     local note = UI.Text(foot, "caption", "ink-muted")
@@ -592,11 +653,17 @@ local function build()
 
     -- Live: every settings change refreshes the rows and the nav.
     Events.On("SUUUI_SETTING_CHANGED", function() W.RefreshAll() end, "SettingsWindow")
-    Events.On("SUUUI_PROFILE_CHANGED", function()
+    -- Profiles switched, created, deleted or mapped to roles: the header's
+    -- picker and the Profiles page's lists follow.
+    local function profilesChanged()
         f.profile:SetOptions(profileOptions())
         f.profile:SetValue(Profiles.Current())
         W.RefreshAll()
-    end, "SettingsWindow")
+    end
+    for _, e in ipairs({ "SUUUI_PROFILE_CHANGED", "SUUUI_PROFILES_CHANGED", "SUUUI_ROLE_PROFILES_CHANGED",
+                         "SUUUI_ROLE_CHANGED" }) do
+        Events.On(e, profilesChanged, "SettingsWindow")
+    end
     Events.On("SUUUI_SETTINGS_SECTIONS_CHANGED", function()
         for id, page in pairs(pages) do
             if not Registry.Get(id) then

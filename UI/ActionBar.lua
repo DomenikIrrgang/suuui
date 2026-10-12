@@ -74,7 +74,7 @@ end
 -- Enabling a range check sends no first state: read it once.
 local function rangeNow(b)
     local r = b.slot and b.hasAction and IsActionInRange(b.slot)
-    b:SetOutOfRange(r ~= nil and not isSecret(r) and r == false)
+    b:SetOutOfRange(not isSecret(r) and r == false)
 end
 
 local function onSlotChanged(b, old, new)

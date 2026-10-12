@@ -119,13 +119,13 @@ end
 -- the game's AbbreviateNumbers, which returns a secret string the text can
 -- still show (or the value itself, shown with %d).
 local function shortNumber(v)
-    if v == nil then return nil end
     if isSecret(v) then
         local ok, text = pcall(AbbreviateNumbers, v)
         if ok and text ~= nil then return text end
         local ok2, plain = pcall(string.format, "%d", v)
         return ok2 and plain or v
     end
+    if v == nil then return nil end
     if v >= 1e6 then return ("%.1fm"):format(v / 1e6) end
     if v >= 1e5 then return ("%dk"):format(v / 1e3 + 0.5) end
     if v >= 1e4 then return ("%.0fk"):format(v / 1e3) end
@@ -438,7 +438,7 @@ function UF:UpdateIdentity()
     self.role:Hide()
     self.classDot:Hide()
     local marker
-    if role and not isSecret(role) and ROLE_ICON[role] then
+    if not isSecret(role) and role and ROLE_ICON[role] then
         self.role:SetTexture(ROLE_ICON[role])
         self.role:SetVertexColor(UI.RGBA(role == "DAMAGER" and "ink-muted" or "ink"))
         self.role:Show()
@@ -803,9 +803,9 @@ function UF:UpdateIndicatorPresence()
             local up = false
             for i = 1, 40 do
                 local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
-                if not ok or not a or issecretvalue and issecretvalue(a) then break end
+                if not ok or isSecret(a) or not a then break end
                 local id = a.spellId
-                if id and not (issecretvalue and issecretvalue(id)) and set[id] then up = true break end
+                if not isSecret(id) and id and set[id] then up = true break end
             end
             show = not up
         end
@@ -826,14 +826,23 @@ function UF:UpdateIndicatorPresence()
 end
 
 -- Preview indicators: the looks drawn directly, as if every aura were up
--- (a "missing" one as missing, so its look can be judged).
+-- (a "missing" one as missing, so its look can be judged). Frames are never
+-- freed either, so the looks are kept by identity, as the missing looks are.
 function UF:SetPreviewIndicators(list)
+    self.previewCache = self.previewCache or {}
     for _, look in ipairs(self.previewLooks or {}) do look:Hide() end
     self.previewLooks = {}
     for _, ind in ipairs(list or {}) do
-        local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
         local missing = ind.show == "missing"
-        self.previewLooks[#self.previewLooks + 1] = indicatorLook(self, self, ind, art, missing)
+        local key = indicatorKey(ind) .. "|" .. (missing and ("missing|" .. (ind.missingColor or "ember")) or "up")
+        local look = self.previewCache[key]
+        if not look then
+            local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
+            look = indicatorLook(self, self, ind, art, missing)
+            self.previewCache[key] = look
+        end
+        look:Show()
+        self.previewLooks[#self.previewLooks + 1] = look
     end
 end
 
@@ -1020,17 +1029,21 @@ function UF:Activate()
     Events.OnGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
     -- a group unit can become another person: redraw everything
     local grouped = self.unit:find("^party") or self.unit:find("^raid")
+    -- a role change moves the marker and may turn the power line on or off
+    -- (powerFor: tanks and healers)
     Events.OnGame("GROUP_ROSTER_UPDATE", function()
-        if grouped then self:Refresh() else self:UpdateIdentity() end
+        if grouped then self:Refresh() else self:UpdateIdentity(); self:UpdatePower() end
     end, self)
-    Events.OnGame("PLAYER_ROLES_ASSIGNED", function() self:UpdateIdentity() end, self)
+    Events.OnGame("PLAYER_ROLES_ASSIGNED", function() self:UpdateIdentity(); self:UpdatePower() end, self)
     if self.unit == "target" then
         Events.OnGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
     elseif self.unit == "focus" then
         Events.OnGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
     elseif self.unit == "targettarget" then
         Events.OnGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
-        onUnit(self, "UNIT_TARGET", function() self:Refresh() end)
+        -- your target picks another target: UNIT_TARGET fires for "target"
+        -- (never for "targettarget"), and the poll only redraws health
+        Events.OnUnit("UNIT_TARGET", "target", function() self:Refresh() end, self)
     elseif self.unit == "pet" then
         Events.OnUnit("UNIT_PET", "player", function() self:Refresh() end, self)
     elseif self.unit:find("^boss") then

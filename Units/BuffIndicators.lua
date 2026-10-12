@@ -129,6 +129,7 @@ local function mutate(fn)
 end
 
 function M:Publish()
+    self.publishPending = nil
     UI.SetGroupIndicators(self:List(self:ActiveSpec()))
 end
 
@@ -143,7 +144,7 @@ local ROW_H = 46
 local function spellLookup(query)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
     local name = id and C_Spell.GetSpellName(id)
-    if not name or isSecret(name) then return nil end
+    if isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
 
@@ -200,6 +201,20 @@ local SHOW_OPTIONS = { { value = "up", label = "While up" }, { value = "missing"
                        { value = "both", label = "Up or missing", reason = "Two tints would blend." } }
 
 local editPanel
+
+-- A change to the lists. While the Edit indicator modal is open, the live
+-- party and raid frames wait for it to close (Done, or the settings window
+-- closing hides it): each look (size, colour, position…) is an engine aura
+-- container on every group frame, which the engine never frees, so the
+-- steps on the way to a look mustn't each leave one behind. The previews
+-- (this section's and the modal's) follow every step.
+function M:ListsChanged()
+    if editPanel and editPanel:IsShown() then
+        self.publishPending = true
+    else
+        self:Publish()
+    end
+end
 
 local function editEntry() return editPanel and (M:List(M:EditSpec()))[editPanel.index] end
 
@@ -322,6 +337,8 @@ local function buildEditPanel()
     p.reset:SetPoint("BOTTOMLEFT", 0, 0)
     p.done = UI.Button(body, { text = "Done", variant = "primary", width = 90, onClick = function() p:Hide() end })
     p.done:SetPoint("BOTTOMRIGHT", 0, 0)
+    -- closed: the edits made in it go to the live frames (ListsChanged)
+    p:HookScript("OnHide", function() if M.publishPending then M:Publish() end end)
     return p
 end
 
@@ -641,7 +658,7 @@ local SECTION = {
 function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:Publish()
-    self:Watch("lists", function() self:Publish(); self:DrawPreview() end)
+    self:Watch("lists", function() self:ListsChanged(); self:DrawPreview() end)
     -- another spec: its list goes on the frames, and the editor follows
     self:On("SUUUI_SPEC_CHANGED", function()
         self.editSpec = nil
@@ -652,5 +669,6 @@ function M:OnEnable()
 end
 
 function M:OnDisable()
+    self.publishPending = nil
     UI.SetGroupIndicators({})
 end

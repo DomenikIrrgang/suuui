@@ -77,8 +77,15 @@ local BOSSES = 5
 
 local function standDownBlizzard()
     SuuUI.SuppressBlizzard("PlayerFrame", { children = children({ "powerBarAlt", "PowerBarAlt" }) })
-    SuuUI.SuppressBlizzard("TargetFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "DebuffFrame", "totFrame", "CcRemoverFrame" }) })
-    SuuUI.SuppressBlizzard("TargetFrameToT", { keepParent = true })
+    -- Blizzard's target of target is left alone while ours is off; it is a
+    -- child of the target frame, though, which stays stood down, so it
+    -- hides with it (the setting's description says so)
+    local targetChildren = { "spellbar", "castBar", "BuffFrame", "AurasFrame", "DebuffFrame", "CcRemoverFrame" }
+    if M:Get("showToT") then
+        targetChildren[#targetChildren + 1] = "totFrame"
+        SuuUI.SuppressBlizzard("TargetFrameToT", { keepParent = true })
+    end
+    SuuUI.SuppressBlizzard("TargetFrame", { children = children(targetChildren) })
     SuuUI.SuppressBlizzard("ComboFrame", { keepParent = true })
     if M:Get("showFocus") then
         SuuUI.SuppressBlizzard("FocusFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "totFrame" }) })
@@ -197,7 +204,7 @@ function M:UpdateThreat()
     local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     -- issecretvalue first: a truth test on a secret value would error.
     local danger = IsInGroup() and not issecretvalue(status) and status ~= nil and status >= 2
-        and role ~= "TANK"
+        and not (not issecretvalue(role) and role == "TANK")
     self.frames.player:SetState(danger and "danger" or nil, danger and "Aggro" or nil)
 end
 
@@ -249,7 +256,8 @@ local SECTION = {
     id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
     groups = {
         { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
-            { key = "showToT", label = "Target of target", control = "toggle", description = "Right of the target, centred on it." },
+            { key = "showToT", label = "Target of target", control = "toggle",
+              description = "Right of the target, centred on it. Blizzard's belongs to its target frame, so off there is none." },
             { key = "showFocus", label = "Focus", control = "toggle", description = "Right of centre, above the target of target." },
             { key = "showPet", label = "Pet", control = "toggle", description = "Under the player frame, with its focus or mana." },
             { key = "showBoss", label = "Boss frames", control = "toggle", description = "Top right, left of the tracker, one per boss." },

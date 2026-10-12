@@ -117,7 +117,9 @@ function Events.OnGame(event, fn, owner)
 end
 
 -- Unit events get a frame per registration, because RegisterUnitEvent filters
--- per frame. Freed frames are reused.
+-- per frame. It takes at most two units, so a longer list gets a frame per
+-- pair. Freed frames are reused. An event the client refuses is an error, as
+-- RegisterUnitEvent's own, and leaves no frame behind.
 local unitFrames = {}   -- { event, owner } -> frame
 local spareFrames = {}
 
@@ -125,11 +127,25 @@ function Events.OnUnit(event, units, fn, owner)
     assert(type(fn) == "function", "SuuUI Events: callback must be a function")
     assert(owner ~= nil, "SuuUI Events: an owner is required, so the listener can be removed")
     if type(units) == "string" then units = { units } end
-    local f = table.remove(spareFrames) or CreateFrame("Frame")
+    assert(type(units) == "table" and #units > 0, "SuuUI Events: a unit or a list of units is required")
     local name = OwnerName(owner)
-    f:SetScript("OnEvent", function(_, e, ...) Fault.Call(name, fn, e, ...) end)
-    f:RegisterUnitEvent(event, unpack(units))
-    unitFrames[{ event = event, owner = owner }] = f
+    local handler = function(_, e, ...) Fault.Call(name, fn, e, ...) end
+    for i = 1, #units, 2 do
+        local f = table.remove(spareFrames) or CreateFrame("Frame")
+        local ok, err
+        if units[i + 1] then
+            ok, err = pcall(f.RegisterUnitEvent, f, event, units[i], units[i + 1])
+        else
+            ok, err = pcall(f.RegisterUnitEvent, f, event, units[i])
+        end
+        if not ok then
+            f:UnregisterAllEvents()
+            spareFrames[#spareFrames + 1] = f
+            error(err, 0)
+        end
+        f:SetScript("OnEvent", handler)
+        unitFrames[{ event = event, owner = owner }] = f
+    end
 end
 
 --------------------------------------------------------------------------------

@@ -244,7 +244,9 @@ function UI.Segmented(parent, opts)
             if f.onChange then f.onChange(self.option.value) end
         end)
         b:SetScript("OnEnter", function(self)
-            if self.option.value ~= f.value and not self.option.disabled then self.label:SetColor("ink") end
+            if self.option.value ~= f.value and not self.option.disabled and not f.disabled then
+                self.label:SetColor("ink")
+            end
             if self.option.disabled and self.option.reason then
                 UI.ShowTooltip(self, { title = self.option.label, description = self.option.reason })
             end
@@ -292,7 +294,6 @@ Slider.SetDisabled = function(self, disabled)
     setDisabled(self, disabled)
     self.slider:SetEnabled(not self.disabled)
     self.slider:EnableMouse(not self.disabled)
-    self.slider:EnableMouseWheel(not self.disabled)
 end
 
 function UI.Slider(parent, opts)
@@ -339,7 +340,7 @@ function UI.Slider(parent, opts)
         local dia = UI.Diamond(s, d[1], d[2], "OVERLAY", 4 + i)
         dia:SetPoint("CENTER", thumb, "CENTER")
     end
-    s:EnableMouseWheel(true)
+    -- No mouse wheel: it belongs to the page the slider sits on, which scrolls.
     local function commit()
         if f.pending ~= nil and f.pending ~= f.committed then
             f.committed = f.pending
@@ -347,12 +348,6 @@ function UI.Slider(parent, opts)
         end
         f.pending = nil
     end
-    s:SetScript("OnMouseWheel", function(self, delta)
-        if f.disabled then return end
-        local step = f.step or (f.max - f.min) / 20
-        self:SetValue(math.max(f.min, math.min(f.max, self:GetValue() + delta * step)))
-        commit()
-    end)
     s:SetScript("OnMouseUp", commit)
     s:SetScript("OnValueChanged", function(_, v)
         if f.updating or f.disabled then return end
@@ -369,7 +364,8 @@ function UI.Slider(parent, opts)
 end
 
 --------------------------------------------------------------------------------
--- Stepper: minus, the number (typed or nudged, clamped), the unit, plus.
+-- Stepper: minus, the number (typed or nudged, clamped to min..max and to a
+-- whole number of steps from min), the unit, plus.
 --   { min, max, step = 1, value, unit = "px" }
 --------------------------------------------------------------------------------
 
@@ -377,6 +373,11 @@ local Stepper = {}
 
 function Stepper:Clamp(v)
     v = tonumber(v) or self.value or 0
+    if self.step and self.step > 0 then
+        local base = self.min or 0
+        v = base + math.floor((v - base) / self.step + 0.5) * self.step
+        v = tonumber(("%.4f"):format(v)) -- no float noise (0.1 steps make 0.30000000000000004)
+    end
     if self.min then v = math.max(self.min, v) end
     if self.max then v = math.min(self.max, v) end
     return v
@@ -388,6 +389,10 @@ function Stepper:SetValue(v)
 end
 
 function Stepper:Commit(v)
+    if self.disabled then
+        self:SetValue(self.value) -- drop what was typed
+        return
+    end
     v = self:Clamp(v)
     local changed = v ~= self.value
     self:SetValue(v)
@@ -399,6 +404,7 @@ Stepper.SetDisabled = function(self, disabled)
     self.edit:EnableMouse(not self.disabled)
     self.minus:EnableMouse(not self.disabled)
     self.plus:EnableMouse(not self.disabled)
+    if self.disabled then self.edit:ClearFocus() end
 end
 
 local function stepButton(parent, make)

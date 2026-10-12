@@ -59,10 +59,12 @@ local function stored(p, namespace, key)
     if t then return t[key] end
 end
 
+-- A stored value of another type than the default's (an old or hand-edited
+-- profile) is ignored, so the default applies.
 local function current(namespace, key)
     local d = default(namespace, key)
     local v = stored(profile, namespace, key)
-    if v == nil then return d end
+    if v == nil or type(v) ~= type(d) then return d end
     return v
 end
 
@@ -75,8 +77,9 @@ function Settings.Get(namespace, key)
 end
 
 function Settings.IsDefault(namespace, key)
-    default(namespace, key)
-    return stored(profile, namespace, key) == nil
+    local d = default(namespace, key)
+    local v = stored(profile, namespace, key)
+    return v == nil or type(v) ~= type(d)
 end
 
 -- Registered namespaces and their keys, sorted, for listings.
@@ -199,6 +202,26 @@ end
 -- Profiles
 --------------------------------------------------------------------------------
 
+-- Drops the values in profile data `p` that a veto refuses (judged against
+-- the default), so the default applies to them: a profile from an import,
+-- an older SuuUI or a hand edit can't bring in a value a Set would refuse.
+local function screen(p)
+    for id, list in pairs(vetoes) do
+        local namespace, key = id:match("^([^%.]+)%.(.+)$")
+        local v, d = stored(p, namespace, key), defaults[namespace][key]
+        if v ~= nil and type(v) == type(d) then
+            for _, veto in ipairs({ unpack(list) }) do
+                local ok, allowed = Fault.Call(OwnerName(veto.owner), veto.fn, Copy(v), Copy(d))
+                if ok and allowed == false then
+                    p[namespace][key] = nil
+                    if next(p[namespace]) == nil then p[namespace] = nil end
+                    break
+                end
+            end
+        end
+    end
+end
+
 function Profiles.Current()
     return db and db.chars[charKey]
 end
@@ -234,6 +257,7 @@ function Profiles.Use(text)
     if not name then return false, err end
     if name == Profiles.Current() then return true end
     local target, changed = db.profiles[name], {}
+    screen(target)
     for namespace, defs in pairs(defaults) do
         for key in pairs(defs) do
             if not Equal(stored(profile, namespace, key), stored(target, namespace, key)) then
@@ -264,6 +288,7 @@ function Profiles.Create(name, from)
         if not source then return false, err end
     end
     db.profiles[name] = Copy(db.profiles[source])
+    Events.Emit("SUUUI_PROFILES_CHANGED")
     return true
 end
 
@@ -274,12 +299,15 @@ function Profiles.Delete(text)
     if not name then return false, err end
     if name == Profiles.Current() then return false, "You are using " .. name .. "; switch to another profile first." end
     db.profiles[name] = nil
+    local unmapped = false
     for role, mapped in pairs(db.roleProfiles or {}) do
-        if mapped == name then db.roleProfiles[role] = nil end
+        if mapped == name then db.roleProfiles[role], unmapped = nil, true end
     end
     for char, mapped in pairs(db.chars) do
         if mapped == name then db.chars[char] = nil end
     end
+    Events.Emit("SUUUI_PROFILES_CHANGED")
+    if unmapped then Events.Emit("SUUUI_ROLE_PROFILES_CHANGED") end
     return true
 end
 
@@ -290,6 +318,7 @@ function Profiles.CopyFrom(text)
     if not name then return false, err end
     if name == Profiles.Current() then return true end
     local data, changed = Copy(db.profiles[name]), {}
+    screen(data)
     for namespace, defs in pairs(defaults) do
         for key in pairs(defs) do
             if not Equal(stored(profile, namespace, key), stored(data, namespace, key)) then
@@ -329,6 +358,17 @@ function Profiles.SetChosenRole(role)
     db.charRoles[charKey] = role ~= "auto" and role or nil
     Events.Emit("SUUUI_ROLE_PROFILES_CHANGED")
     return true
+end
+
+-- The role this character's profile was last switched for (Roles.lua), kept
+-- across sessions so a profile picked by hand survives a reload.
+function Profiles.LastRole()
+    return db and db.lastRoles and db.lastRoles[charKey]
+end
+
+function Profiles.SetLastRole(role)
+    db.lastRoles = db.lastRoles or {}
+    db.lastRoles[charKey] = role
 end
 
 -- A copy of a profile's stored values, for export.
@@ -380,6 +420,7 @@ local function bind()
     db.chars[charKey] = name
     db.profiles[name] = db.profiles[name] or {}
     profile = db.profiles[name]
+    screen(profile) -- the vetoes of every file of SuuUI are in by now
 end
 
 Events.OnGame("ADDON_LOADED", function(_, addon)

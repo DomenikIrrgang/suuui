@@ -11,8 +11,9 @@
 -- weak tables. Friendly units get a SuuUI plate in the open world: the name
 -- in its class (or friendly) colour, the debuffs you can remove instead of
 -- yours, a neutral cast (nothing to interrupt), no threat (they don't attack
--- you). Inside dungeons and raids the game locks friendly plates, so they
--- stay Blizzard's (and hidden, by default).
+-- you). Inside dungeons, raids, battlegrounds and arenas the game locks
+-- friendly plates, so they stay Blizzard's (hidden in dungeons and raids, by
+-- default). Your own plate (the personal resource display) stays Blizzard's.
 --
 -- The plate, top to bottom: up to four of your debuffs (icon-sm by default,
 -- engine aura container), the name in its reaction colour with the state
@@ -49,6 +50,7 @@ local M = SuuUI.RegisterModule({
         auraSize = 16,
         castBars = true,
         castTarget = true,
+        castKick = true,
         dimOthers = true,
         threat = true,
         healthText = true,
@@ -64,7 +66,6 @@ local LOW = 0.35
 local NAME_H, PCT_W = 14, 32
 
 -- SuuUI's own records, never keys on Blizzard's frames
-local ours = setmetatable({}, { __mode = "k" })     -- Blizzard nameplate -> SuuUI plate
 local hidden = setmetatable({}, { __mode = "k" })   -- Blizzard UnitFrame -> true while hidden
 local auraHome = setmetatable({}, { __mode = "k" }) -- moved aura frame -> its parent
 local byUnit = {}                                   -- "nameplateN" -> SuuUI plate
@@ -75,6 +76,21 @@ local function barH() return M:Get("barHeight") end
 -- text, centred on it) keeps a hair of air above the bar's border
 local ROW_GAP = S["space-2"]
 local function plateH() return NAME_H + ROW_GAP + barH() end
+
+-- A health amount for a StatusBar: a secret one goes through untouched (a
+-- secret value can't even be tested against nil), a missing one is `default`.
+local function amount(v, default)
+    if isSecret(v) then return v end
+    return v or default or 0
+end
+
+-- Inside an instance: dungeons and raids, and with `pvp` battlegrounds and
+-- arenas too.
+local function inInstance(pvp)
+    local _, kind = IsInInstance()
+    if kind == "party" or kind == "raid" then return true end
+    return pvp and (kind == "pvp" or kind == "arena") or false
+end
 
 local stash = CreateFrame("Frame")
 stash:Hide()
@@ -210,6 +226,7 @@ local function buildPlate(parent, api)
     f.cast = UI.CastBar(f, "none", { size = "plate", width = w, icon = false, target = true })
     f.cast:SetBarHeight(M:Get("castHeight"))
     f.cast:SetTargetShown(M:Get("castTarget"))
+    f.cast:SetKickShown(M:Get("castKick"))
     f.cast:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -S["space-1"])
     return f
 end
@@ -249,15 +266,15 @@ local function questObjective(unit)
         if not isSecret(kind) then
             if kind == LT.QuestTitle then
                 local id = line.id
-                questID = (id ~= nil and not isSecret(id)) and id or nil
+                questID = (not isSecret(id) and id ~= nil) and id or nil
             elseif kind == LT.QuestObjective then
                 local done = line.completed
-                if done == false and not isSecret(done) and (not questID or not onQuest or onQuest(questID)) then
+                if not isSecret(done) and done == false and (not questID or not onQuest or onQuest(questID)) then
                     local text = line.leftText
                     local pct = (not isSecret(text) and type(text) == "string") and text:match("(%d+)%s*%%")
                     if pct then return pct .. "%" end
                     local have, need = line.numFulfilled, line.numRequired
-                    if have and need and not isSecret(have) and not isSecret(need) and need > 1 then
+                    if not isSecret(have) and not isSecret(need) and have and need and need > 1 then
                         return have .. "/" .. need
                     end
                     return ""
@@ -303,12 +320,16 @@ end
 function Plate:UpdateHealth()
     local A, u = self.api, self.unit
     local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
-    self.health:SetMinMaxValues(0, max or 1)
-    self.health:SetValue(cur or 0)
-    self.healthLow:SetMinMaxValues(0, max or 1)
-    self.healthLow:SetValue(cur or 0)
+    self.health:SetMinMaxValues(0, amount(max, 1))
+    self.health:SetValue(amount(cur))
+    self.healthLow:SetMinMaxValues(0, amount(max, 1))
+    self.healthLow:SetValue(amount(cur))
     local curve = belowLow()
-    self.healthLow:SetAlpha(curve and (A.UnitHealthPercent(u, true, curve) or 0) or 0)
+    if curve then
+        self.healthLow:SetAlpha(amount(A.UnitHealthPercent(u, true, curve)))
+    else
+        self.healthLow:SetAlpha(0)
+    end
     if M:Get("healthText") and A.UnitHealthPercent and CurveConstants then
         local pct = A.UnitHealthPercent(u, true, CurveConstants.ScaleTo100)
         if isSecret(pct) then self.pct:SetFormattedText("%d%%", pct) else self.pct:SetFormattedText("%d%%", (pct or 0) + 0.5) end
@@ -325,12 +346,12 @@ function Plate:UpdateName()
     self.name:SetText(A.UnitName(u))
     local r = A.UnitReaction(u, "player")
     local color = "reaction-hostile"
-    if r ~= nil and not isSecret(r) then color = REACTION[r] or "reaction-friendly" end
+    if not isSecret(r) and r ~= nil then color = REACTION[r] or "reaction-friendly" end
     self.name:SetColor(color)
     -- friendly players in their class colour (never tested: may be secret)
     if self.friendly then
         local okPlayer, player = pcall(A.UnitIsPlayer, u)
-        if okPlayer and player ~= nil and not isSecret(player) and player then
+        if okPlayer and not isSecret(player) and player then
             local _, class = A.UnitClass(u)
             if type(class) ~= "nil" and C_ClassColor then
                 local ok, c = pcall(C_ClassColor.GetClassColor, class)
@@ -347,7 +368,7 @@ function Plate:UpdateThreat()
     local tone, word
     if M:Get("threat") and not self.friendly then
         local status = A.UnitThreatSituation("player", u)
-        if status ~= nil and not isSecret(status) then
+        if not isSecret(status) and status ~= nil then
             local tank
             if self.preview then tank = self.previewRole == "TANK" else tank = IsInGroup() and SuuUI.Role() == "TANK" end
             if tank then
@@ -359,8 +380,10 @@ function Plate:UpdateThreat()
         end
     end
     self.state = tone
-    self.badge:SetShown(tone ~= nil)
+    -- the state first, while a new badge is still hidden: it fades in each
+    -- time it appears
     if tone then self.badge:SetState(tone, word) end
+    self.badge:SetShown(tone ~= nil)
     self:SetPlateWidth(M:Get("width"))
     self:UpdateBorder()
 end
@@ -402,7 +425,7 @@ local function listen(f)
         f.events:SetScript("OnEvent", function(_, event)
             if not f.unit then return end
             if event == "UNIT_NAME_UPDATE" then f:UpdateName()
-            elseif event == "UNIT_THREAT_LIST_UPDATE" or event == "UNIT_THREAT_SITUATION_UPDATE" then f:UpdateThreat()
+            elseif event == "UNIT_THREAT_LIST_UPDATE" then f:UpdateThreat()
             else f:UpdateHealth() end
         end)
     end
@@ -443,6 +466,11 @@ function M:OnPlateAdded(unit)
     if not plate or plate:IsForbidden() then return end
     local uf = plate.UnitFrame
     if byUnit[unit] then release(byUnit[unit]); byUnit[unit] = nil end
+    -- your own plate (the personal resource display) stays Blizzard's
+    if UI.Flag(UnitIsUnit(unit, "player")) then
+        restoreBlizzard(uf)
+        return
+    end
     local friendly = not UI.Flag(UnitCanAttack("player", unit))
     if friendly and self:FriendlyStyled() then
         -- a friendly plate now; the recheck below still turns it into an
@@ -460,7 +488,7 @@ function M:OnPlateAdded(unit)
             C_Timer.After(0.2, function()
                 self.recheck[unit] = nil
                 local f = byUnit[unit]
-                if UnitExists(unit) and UI.Flag(UnitCanAttack("player", unit)) and (not f or f.friendly) then self:OnPlateAdded(unit) end
+                if self:IsEnabled() and UnitExists(unit) and UI.Flag(UnitCanAttack("player", unit)) and (not f or f.friendly) then self:OnPlateAdded(unit) end
             end)
         end
         return
@@ -468,11 +496,26 @@ function M:OnPlateAdded(unit)
     self:Attach(unit, plate, false)
 end
 
--- SuuUI's friendly plates: open world only (inside, the game locks them).
+-- A plate whose unit may have changed sides (a duel): laid again only when
+-- it did, otherwise just redrawn.
+function M:Recheck(unit)
+    local f = byUnit[unit]
+    if f and f.friendly == not UI.Flag(UnitCanAttack("player", unit)) then return f:Refresh() end
+    self:OnPlateAdded(unit)
+end
+
+-- SuuUI's friendly plates: open world only. Wider than the friendly CVar
+-- (ApplyFriendly), on purpose: the game locks friendly plates in battlegrounds
+-- and arenas too, so SuuUI's look is off there although they stay shown.
 function M:FriendlyStyled()
     if not self:Get("friendlyStyle") then return false end
-    local _, kind = IsInInstance()
-    return kind ~= "party" and kind ~= "raid" and kind ~= "pvp" and kind ~= "arena"
+    return not inInstance(true)
+end
+
+-- A SuuUI plate sits on Blizzard's with the bar's middle on its centre.
+local function anchor(f, plate)
+    f:ClearAllPoints()
+    f:SetPoint("BOTTOM", plate, "CENTER", 0, -(barH() / 2))
 end
 
 -- Lays a SuuUI plate on Blizzard's: an enemy's, or a friendly one (name,
@@ -485,10 +528,8 @@ function M:Attach(unit, plate, friendly)
     f.unit, f.friendly = unit, friendly
     questCache[unit] = nil
     byUnit[unit] = f
-    ours[plate] = f
     f:SetParent(plate)
-    f:ClearAllPoints()
-    f:SetPoint("BOTTOM", plate, "CENTER", 0, -(barH() / 2))
+    anchor(f, plate)
     f:SetFrameLevel(plate:GetFrameLevel() + 2)
     f:SetPlateWidth(self:Get("width"))
     listen(f)
@@ -514,8 +555,6 @@ function M:OnPlateRemoved(unit)
         byUnit[unit] = nil
         release(f)
     end
-    local plate = C_NamePlate.GetNamePlateForUnit(unit)
-    if plate and not plate:IsForbidden() then ours[plate] = nil end
 end
 
 function M:ApplyAuraCount(f)
@@ -530,22 +569,30 @@ function M:ForEach(fn)
     for _, f in ipairs(self.previewPlates or {}) do fn(f) end
 end
 
--- The sizes on every live and pooled plate. Aura icons resize out of combat
--- only (the engine's buttons refuse it in combat).
+-- The sizes and cast options on every live, pooled and preview plate. Aura
+-- icons resize out of combat only (the engine's buttons refuse it in combat).
 function M:ApplySizes()
     local function each(fn)
         for _, f in pairs(byUnit) do fn(f) end
         for _, f in ipairs(pool) do fn(f) end
     end
     local w = self:Get("width")
-    each(function(f)
+    local function apply(f)
         f.cast.totalW = w
         f.cast:SetWidth(w)
         f.cast:Arrange()
         f.cast:SetBarHeight(self:Get("castHeight"))
         f.cast:SetTargetShown(self:Get("castTarget"))
+        f.cast:SetKickShown(self:Get("castKick"))
         f:SetPlateWidth(w)
-    end)
+    end
+    each(apply)
+    for _, f in ipairs(self.previewPlates or {}) do apply(f) end
+    -- the bar's middle stays on Blizzard's plate's centre
+    for _, f in pairs(byUnit) do
+        local plate = f:GetParent()
+        if plate then anchor(f, plate) end
+    end
     self:RunOutOfCombat("auraSize", function()
         each(function(f)
             if f.auras then
@@ -575,15 +622,28 @@ function M:ApplyGameSettings()
     end)
 end
 
--- Friendly players' plates (Blizzard's) in the open world only: inside a
--- dungeon or raid the game locks them, and in a group they mostly cover the
--- fight. SuuUI owns the game's setting while this is on.
-function M:ApplyFriendly()
-    if not self:Get("friendlyOpenWorld") then return end
+-- The game's "show friendly players' plates": current clients call it
+-- nameplateShowFriendlyPlayers, older ones nameplateShowFriends. Written to
+-- whichever this client has (an unknown name reads back nil).
+local FRIENDLY_CVARS = { "nameplateShowFriendlyPlayers", "nameplateShowFriends" }
+
+local function showFriendly(on)
+    for _, name in ipairs(FRIENDLY_CVARS) do
+        if C_CVar.GetCVar(name) ~= nil then pcall(C_CVar.SetCVar, name, on and "1" or "0") end
+    end
+end
+
+-- Friendly players' plates in the open world only: inside a dungeon or raid
+-- the game locks them, and in a group they mostly cover the fight. Narrower
+-- than FriendlyStyled, on purpose: in battlegrounds and arenas they stay
+-- shown (Blizzard's look). SuuUI owns the game's setting while this is on;
+-- turned off (`released`), the plates come back once and the game's setting
+-- is yours again.
+function M:ApplyFriendly(released)
+    if not self:Get("friendlyOpenWorld") and not released then return end
     self:RunOutOfCombat("friendly", function()
-        local _, kind = IsInInstance()
-        local inside = kind == "party" or kind == "raid"
-        pcall(C_CVar.SetCVar, "nameplateShowFriends", inside and "0" or "1")
+        -- read again: the setting may have changed while combat lasted
+        showFriendly(not (self:Get("friendlyOpenWorld") and inInstance()))
     end)
 end
 
@@ -732,9 +792,11 @@ local SECTION = {
             { key = "auraSize", label = "Debuff size", control = "slider", min = 12, max = 28, step = 1, unit = "px", live = false,
               description = "Changes wait for the end of a fight." },
             { key = "castBars", label = "Cast bars", control = "toggle",
-              description = "Under the bar: arcane when you can interrupt it, a lock when you can't, your interrupt's state." },
+              description = "Under the bar: arcane when you can interrupt it, a lock when you can't." },
             { key = "castTarget", label = "Cast target", control = "toggle",
               description = "Who the spell is aimed at, under the spell name, in their class colour." },
+            { key = "castKick", label = "Your interrupt", control = "toggle",
+              description = "On interruptible casts: a diamond in arcane when your interrupt is ready, its seconds when it isn't." },
             { key = "castHeight", label = "Cast bar height", control = "slider", min = 4, max = 20, step = 1, unit = "px", live = false },
             { key = "healthText", label = "Health %", control = "toggle" },
             { key = "threat", label = "Threat badges", control = "toggle",
@@ -746,9 +808,9 @@ local SECTION = {
         } },
         { title = "Friendly nameplates", rows = {
             { key = "friendlyOpenWorld", label = "Only in the open world", control = "toggle",
-              description = "Friendly players' plates show in the open world and hide in dungeons and raids. Off: the game's own nameplate setting decides." },
+              description = "Friendly players' plates show in the open world and hide in dungeons and raids. Turning it off brings them back everywhere; from then on the game's own nameplate setting decides." },
             { key = "friendlyStyle", label = "SuuUI's look", control = "toggle",
-              description = "In the open world: the name in its class colour, the bar, health %, the debuffs you can remove and casts. Inside dungeons and raids the game keeps its own." },
+              description = "In the open world: the name in its class colour, the bar, health %, the debuffs you can remove and casts. Inside dungeons, raids, battlegrounds and arenas the game keeps its own." },
         } },
     },
 }
@@ -779,7 +841,7 @@ function M:OnEnable()
     self:OnGameEvent("QUEST_LOG_UPDATE", questsChanged)
     self:OnGameEvent("UNIT_QUEST_LOG_CHANGED", function(_, unit) if unit == "player" then questsChanged() end end)
     self:OnGameEvent("ZONE_CHANGED_NEW_AREA", function() self:ApplyFriendly() end)
-    self:Watch("friendlyOpenWorld", function() self:ApplyFriendly() end)
+    self:Watch("friendlyOpenWorld", function() self:ApplyFriendly(true) end)
     self:Watch("friendlyStyle", function()
         for i = 1, 40 do
             local unit = "nameplate" .. i
@@ -810,9 +872,9 @@ function M:OnEnable()
     self:On("SUUUI_ROLE_CHANGED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
     -- a unit can turn attackable (a duel): re-check its plate
     self:OnGameEvent("UNIT_FACTION", function(_, unit)
-        if unit and unit:find("^nameplate") then self:OnPlateAdded(unit) end
+        if unit and unit:find("^nameplate") and UnitExists(unit) then self:Recheck(unit) end
     end)
-    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "dimOthers", "threat", "healthText", "questMarks" }) do
+    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks" }) do
         self:Watch(key, function()
             for unit, f in pairs(byUnit) do
                 self:ApplyAuraCount(f)
@@ -821,9 +883,9 @@ function M:OnEnable()
                 end
                 f:Refresh()
             end
-            if key == "width" or key == "barHeight" or key == "castHeight" or key == "auraSize" or key == "castTarget" then
+            if key == "width" or key == "barHeight" or key == "castHeight" or key == "auraSize" or key == "castTarget" or key == "castKick" then
                 self:ApplySizes()
-                if key ~= "castHeight" and key ~= "auraSize" then self:ApplyGameSettings() end
+                if key == "width" or key == "barHeight" then self:ApplyGameSettings() end
             end
             self:DrawPreview()
         end)
@@ -835,4 +897,6 @@ function M:OnDisable()
         release(f)
         byUnit[unit] = nil
     end
+    -- Blizzard's plates back (the SetAlpha hook lets go once they aren't hidden)
+    for uf in pairs(hidden) do restoreBlizzard(uf) end
 end

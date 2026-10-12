@@ -245,7 +245,13 @@ function M:ApplyOptions()
     for id = 1, 4 do self.bars[id]:Layout(nil, nil, 12, px) end
     self.stance:SetButtonSize(math.floor(px * 0.9 + 0.5))
     self.pet:SetButtonSize(math.floor(px * 0.9 + 0.5))
-    UI.SetVisibility(self.dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"))
+    -- attached bars fade with the dock but sit outside it: hovering one
+    -- reveals a mouseover dock too
+    local attached = {}
+    for _, a in ipairs(self.attachable) do
+        if self:Get("attach" .. a.key) then attached[#attached + 1] = a.header end
+    end
+    UI.SetVisibility(self.dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"), attached)
     for i, bar in ipairs(self.bars) do bar:SetHotkeysShown(self:Get("keys" .. i)) end
     for _, bar in ipairs(self.bars) do bar:SetShowEmpty(self:Get("showEmpty")) end
     UI.SetActionTextSize(self:Get("textSize"))
@@ -481,7 +487,7 @@ function M:XPTooltip(owner)
     if kind == "xp" then
         GameTooltip:AddLine(("Level %d"):format(UnitLevel("player")), 1, 1, 1)
         GameTooltip:AddLine(("%s / %s XP (%d%%)"):format(BreakUpLargeNumbers(cur), BreakUpLargeNumbers(max), math.floor(cur / max * 100)), 0.85, 0.85, 0.85)
-        if rested > 0 then GameTooltip:AddLine(("Rested %s"):format(BreakUpLargeNumbers(rested)), 0.85, 0.85, 0.85) end
+        if not isSecret(rested) and rested > 0 then GameTooltip:AddLine(("Rested %s"):format(BreakUpLargeNumbers(rested)), 0.85, 0.85, 0.85) end
     else
         GameTooltip:AddLine(name, 1, 1, 1)
         GameTooltip:AddLine(("%s / %s"):format(BreakUpLargeNumbers(cur), BreakUpLargeNumbers(max)), 0.85, 0.85, 0.85)

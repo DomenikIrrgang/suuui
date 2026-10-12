@@ -37,6 +37,9 @@ local M = SuuUI.RegisterModule({
         -- recent[CLASS] = { cooldown = { { name, ids } … }, aura = { … } }:
         -- what "+ Add" offers first ("Seen recently"), newest first
         recent = {},
+        -- this module switched Blizzard's Cooldown Manager off (its CVar), so
+        -- turning the module off switches it back on
+        viewerOff = false,
     },
 })
 
@@ -189,7 +192,7 @@ function M:UpdateSpec()
     if spec ~= self.spec then
         self.spec = spec
         self.editSpec = nil -- the settings follow the new active spec
-        if self.tracker then self:Apply() end
+        if self.tracker and self:IsEnabled() then self:Apply() end
         self:Emit("SUUUI_COOLDOWNS_SETUP")
     end
 end
@@ -205,8 +208,13 @@ function M:Apply()
         procHighlight = self:Get("procHighlight"),
     })
     t:SetLists(self:Lists(self.spec))
+    self:ApplyVisibility()
+end
+
+-- Where and when it shows: nothing to rebuild.
+function M:ApplyVisibility()
     local pos = self:Get("position")
-    UI.SetVisibility(t, pos.hidden and "hidden" or self:Get("shows"))
+    UI.SetVisibility(self.tracker, pos.hidden and "hidden" or self:Get("shows"))
 end
 
 --------------------------------------------------------------------------------
@@ -349,7 +357,33 @@ local function entrySource(e, key)
     return e.source or (e.group and "mine") or (e.mine and "mine") or LIST_SOURCE[key] or "mine"
 end
 
--- How many entries differ from the preset the lists are based on.
+-- What the Behaviour panel sets on an entry (its Reset clears them all).
+local BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
+                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop" }
+-- What else makes an entry differ from the preset's: shown or not, and a
+-- group's own settings (its name is how it's matched).
+local ENTRY_KEYS = { "hidden", "ids", "max", "icon", "members" }
+
+local function same(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+    for k, v in pairs(a) do if not same(v, b[k]) then return false end end
+    for k in pairs(b) do if a[k] == nil then return false end end
+    return true
+end
+
+-- Whether an entry differs from the preset's entry of the same name.
+local function changed(e, base, key)
+    if entrySource(e, key) ~= entrySource(base, key) then return true end
+    for _, list in ipairs({ BEHAVIOUR_KEYS, ENTRY_KEYS }) do
+        for _, k in ipairs(list) do
+            if not same(e[k], base[k]) then return true end
+        end
+    end
+    return false
+end
+
+-- How many entries differ from the preset the lists are based on: added,
+-- removed, or changed (shown, behaviour, a group's settings).
 function M:Changes()
     local spec = self:EditSpec()
     local p = findPreset(self:PresetId(spec))
@@ -357,10 +391,10 @@ function M:Changes()
     local lists, n = self:Lists(spec), 0
     for _, key in ipairs(LIST_KEYS) do
         local base, now = {}, {}
-        for _, e in ipairs(p.lists[key] or {}) do base[e.name] = true end
+        for _, e in ipairs(p.lists[key] or {}) do base[e.name] = e end
         for _, e in ipairs(lists[key] or {}) do
             now[e.name] = true
-            if not base[e.name] or e.hidden or e.missing then n = n + 1 end
+            if not base[e.name] or changed(e, base[e.name], key) then n = n + 1 end
         end
         for name in pairs(base) do if not now[name] then n = n + 1 end end
     end
@@ -432,7 +466,7 @@ local function candidates(kind)
             for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
                 for i = 1, 40 do
                     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
-                    if not ok or not a or isSecret(a) or isSecret(a.spellId) then break end
+                    if not ok or isSecret(a) or not a or isSecret(a.spellId) then break end
                     add(a.name, { a.spellId })
                 end
             end
@@ -448,7 +482,7 @@ end
 local RECENT_MAX = 12
 
 local function remember(kind, name, id)
-    if not name or not id or isSecret(name) or isSecret(id) then return end
+    if isSecret(name) or isSecret(id) or not name or not id then return end
     local all = M:Get("recent")
     local mine = all[CLASS] and all[CLASS][kind] or {}
     for i = 1, math.min(3, #mine) do
@@ -474,21 +508,39 @@ local function recent(kind)
     return all[CLASS] and all[CLASS][kind] or {}
 end
 
--- Out of combat: the auras on you (anyone's) and yours on the target.
+-- Out of combat: the auras on you (anyone's) and yours on the target. Only
+-- names not yet in the list are added (newest first), in one write per scan.
 local function rememberAuras()
     if InCombatLockdown() then return end
+    local mine = recent("aura")
+    local seen, fresh = {}, {}
+    for _, r in ipairs(mine) do seen[r.name] = true end
     for _, scan in ipairs({ { "player", "HELPFUL" }, { "target", "HARMFUL|PLAYER" } }) do
         for i = 1, 40 do
             local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, scan[1], i, scan[2])
-            if not ok or not a or isSecret(a) or isSecret(a.spellId) then break end
-            remember("aura", a.name, a.spellId)
+            if not ok or isSecret(a) or not a or isSecret(a.spellId) then break end
+            local name = a.name
+            if not isSecret(name) and name and not seen[name] then
+                seen[name] = true
+                fresh[#fresh + 1] = { name = name, ids = { a.spellId } }
+            end
         end
     end
+    if #fresh == 0 then return end
+    for _, r in ipairs(mine) do
+        if #fresh >= RECENT_MAX then break end
+        fresh[#fresh + 1] = r
+    end
+    while #fresh > RECENT_MAX do table.remove(fresh) end
+    local all = copy(M:Get("recent"))
+    all[CLASS] = all[CLASS] or {}
+    all[CLASS].aura = fresh
+    M:Set("recent", all)
 end
 
 -- A spell you cast, if it's one of yours with a cooldown (or a preset's).
 local function rememberCast(spellID)
-    if not spellID or isSecret(spellID) or not (IsPlayerSpell and IsPlayerSpell(spellID)) then return end
+    if isSecret(spellID) or not spellID or not (IsPlayerSpell and IsPlayerSpell(spellID)) then return end
     local cd = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
     if cd and not isSecret(cd) and cd > 0 then
         remember("cooldown", C_Spell.GetSpellName(spellID), spellID)
@@ -500,7 +552,7 @@ end
 local function spellLookup(query)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
     local name = id and C_Spell.GetSpellName(id)
-    if not name or isSecret(name) then return nil end
+    if isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
 
@@ -543,6 +595,7 @@ local function glyphButton(parent, kind, onClick)
 end
 
 local ROW_H, WIDTH = 30, 560
+local NEW_GROUP = "New group" -- a new group's name until you give it one
 
 local MISSING = {
     { value = "list", label = "List" },
@@ -701,7 +754,7 @@ local function buildEditor(parent)
                 local index
                 mutate(function(l)
                     table.insert(l[a.key], { group = true, uid = tostring(time()) .. math.random(1000, 9999),
-                        name = "New group", source = "mine", max = 1, members = {}, ids = {} })
+                        name = NEW_GROUP, source = "mine", max = 1, members = {}, ids = {} })
                     index = #l[a.key]
                 end)
                 f:OpenGroup(a.key, index)
@@ -950,6 +1003,18 @@ local function buildEditor(parent)
                 end
             end })
         g.done = UI.Button(b, { text = "Done", variant = "primary", width = 90, onClick = function() g:Hide() end })
+        -- "+ New group" closed (Done, Esc, a click outside) before it got a
+        -- spell or a name: nothing to keep
+        g:HookScript("OnHide", function()
+            local e = groupEntry()
+            if e and #(e.members or {}) == 0 and (e.name or NEW_GROUP) == NEW_GROUP then
+                mutate(function(l)
+                    for i, x in ipairs(l[g.key] or {}) do
+                        if x.group and x.uid == g.uid then table.remove(l[g.key], i); break end
+                    end
+                end)
+            end
+        end)
         return g
     end
 
@@ -1046,10 +1111,24 @@ local function buildEditor(parent)
                             { value = "ping", label = "Soft ping" }, { value = "proc", label = "Proc" },
                             { value = "warning", label = "Warning" } }
 
+    -- The panel's entry in a list: by its uid (groups have one), else at its
+    -- index while that is still the same spell; nil once it's gone.
+    local function findEntry(list)
+        local b = f.behaviour
+        if b.uid then
+            for i, e in ipairs(list or {}) do
+                if e.uid == b.uid then b.index = i; return e end
+            end
+            return nil
+        end
+        local e = (list or {})[b.index]
+        if e and e.name == b.name then return e end
+    end
+
     local function mutateEntry(fn)
         local b = f.behaviour
         mutate(function(l)
-            local e = l[b.key] and l[b.key][b.index]
+            local e = findEntry(l[b.key])
             if e then fn(e) end
         end)
     end
@@ -1189,10 +1268,7 @@ local function buildEditor(parent)
         b.reset = UI.Button(b.body, { text = "Reset", width = 90, onClick = function()
             mutateEntry(function(e)
                 if not e.group then e.source, e.mine = nil, nil end
-                for _, k in ipairs({ "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
-                                     "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop" }) do
-                    e[k] = nil
-                end
+                for _, k in ipairs(BEHAVIOUR_KEYS) do e[k] = nil end
             end)
         end })
         b.done = UI.Button(b.body, { text = "Done", variant = "primary", width = 90, onClick = function() b:Hide() end })
@@ -1201,7 +1277,7 @@ local function buildEditor(parent)
 
     function f:RefreshBehaviour()
         local b = self.behaviour
-        local e = (M:Lists(M:EditSpec())[b.key] or {})[b.index]
+        local e = findEntry(M:Lists(M:EditSpec())[b.key])
         if not e then b:Hide(); return end
         local cooldown = LIST_INFO[b.key].kind == "cooldown"
         b:SetTitle(e.name or "Behaviour")
@@ -1254,10 +1330,13 @@ local function buildEditor(parent)
     end
 
     function f:OpenBehaviour(key, index)
+        local e = (M:Lists(M:EditSpec())[key] or {})[index]
+        if not e then return end
         self.behaviour = self.behaviour or buildBehaviour()
-        self.behaviour.key, self.behaviour.index = key, index
+        local b = self.behaviour
+        b.key, b.index, b.uid, b.name = key, index, e.uid, e.name
         self:RefreshBehaviour()
-        self.behaviour:Show()
+        b:Show()
     end
 
     function f:OpenGroup(key, index)
@@ -1273,13 +1352,21 @@ local function buildEditor(parent)
         self:RefreshGroup()
         self.group:Show()
     end
-    f:HookScript("OnHide", function() if f.group then f.group:Hide() end end)
+    -- the panels close with the page (and the settings window)
+    f:HookScript("OnHide", function()
+        if f.group then f.group:Hide() end
+        if f.behaviour then f.behaviour:Hide() end
+    end)
     -- "Seen recently" changes while the settings are closed
     f:HookScript("OnShow", function() f:Refresh() end)
 
     f:Refresh()
     M:Watch("setups", function() f:Refresh() end)
-    M:On("SUUUI_COOLDOWNS_SETUP", function() f:Refresh() end)
+    M:On("SUUUI_COOLDOWNS_SETUP", function()
+        -- another spec's lists: the Behaviour panel's entry isn't there
+        if f.behaviour then f.behaviour:Hide() end
+        f:Refresh()
+    end)
     return f
 end
 
@@ -1317,13 +1404,16 @@ local SECTION = {
 --------------------------------------------------------------------------------
 
 function M:OnEnable()
-    -- Blizzard's own manager would show beside this one.
+    -- Blizzard's own manager would show beside this one (it comes back when
+    -- this module turns off).
     if C_CVar and C_CVar.GetCVar and C_CVar.GetCVar("cooldownViewerEnabled") == "1" then
-        pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "0")
+        if pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "0") then self:Set("viewerOff", true) end
     end
     if not self.tracker then
         self.tracker = UI.CooldownTracker(SuuUI.Root, { name = "SuuUICooldownManager" })
         self.tracker.suuManagedShow = true
+    else
+        self.tracker:Start() -- turned on again
     end
     -- This character's spec, then the lists from before setups (once). A
     -- spec seen the first time starts from its preset (M:Setup).
@@ -1332,8 +1422,12 @@ function M:OnEnable()
     self:RegisterMover(self.tracker, { key = "position", label = "Cooldown Manager" })
     self:RegisterSettings(SECTION)
     self:Apply()
-    for _, key in ipairs({ "setups", "shows", "essentialSize", "utilityInline", "missingBuffs", "missingDebuffs", "readyPop", "procHighlight", "position" }) do
+    for _, key in ipairs({ "setups", "essentialSize", "utilityInline", "missingBuffs", "missingDebuffs", "readyPop", "procHighlight" }) do
         self:Watch(key, function() self:Apply() end)
+    end
+    -- moving it or when it shows doesn't rebuild it
+    for _, key in ipairs({ "shows", "position" }) do
+        self:Watch(key, function() self:ApplyVisibility() end)
     end
     -- "Seen recently" for "+ Add" (aura changes settle first)
     local pending = false
@@ -1354,6 +1448,17 @@ function M:OnEnable()
     end
 end
 
+-- Off: no events, driver or aura sounds, hidden in edit and keybind mode
+-- too, and Blizzard's manager back if this module switched it off.
 function M:OnDisable()
-    if self.tracker then self.tracker:Hide() end
+    if self.tracker then
+        self.tracker:Stop()
+        UI.SetVisibility(self.tracker, "hidden")
+    end
+    if self:Get("viewerOff") then
+        self:Set("viewerOff", false)
+        self:RunOutOfCombat("viewer", function()
+            if C_CVar and C_CVar.SetCVar then pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "1") end
+        end)
+    end
 end

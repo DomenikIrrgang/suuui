@@ -17,7 +17,8 @@
 --   bar:SetBarHeight(px)                          -- 0.9: the bar's height (a plate's spell line stays under it)
 --   bar:SetTargetShown(on)                        -- 0.9: the plate's target line, live
 --   bar:SetNeutral(on)                            -- 0.9: a friendly unit's cast: never "you can stop it"
---                                                 -- (no arcane layer, lock or interrupt)
+--                                                 -- (no arcane layer, lock or interrupt); a plate's
+--                                                 -- owner sets it, other bars at each cast start
 --
 -- Everything the client may hide is shown without being read: the fill runs
 -- from the cast's duration object (StatusBar:SetTimerDuration), the time is
@@ -97,7 +98,8 @@ function Interrupt.Find()
 end
 
 -- Seconds left on the interrupt's own cooldown, from when you last used it:
--- your own cast, always readable. 0 when it is up.
+-- your own cast, always readable (after a reload, the cooldown's own start,
+-- see Ready). 0 when it is up.
 function Interrupt.Remaining()
     if not Interrupt.usedAt then return 0 end
     return math.max(0, Interrupt.usedAt + Interrupt.cooldown - GetTime())
@@ -111,6 +113,15 @@ function Interrupt.Ready()
     local cd = C_Spell.GetSpellCooldown(Interrupt.spell)
     if not cd or isSecret(cd.isActive) then return nil end
     if not cd.isActive then return true end
+    if not Interrupt.usedAt then
+        -- used before a reload: SuuUI never saw the cast, so the cooldown's
+        -- own start and length stand in, when readable and longer than a
+        -- global cooldown
+        local start, length = cd.startTime, cd.duration
+        if not isSecret(start) and not isSecret(length) and start and length and length > 1.5 then
+            Interrupt.usedAt, Interrupt.cooldown = start, length
+        end
+    end
     return Interrupt.Remaining() <= 0
 end
 
@@ -367,6 +378,8 @@ end
 function CB:SetTargetShown(on)
     self.targetShown = on and true or false
     if self.target and not on then self.target:Hide() end
+    -- turned on mid-cast: the line shows now, not at the next cast
+    if on and self.duration then self:UpdateTarget() end
 end
 
 -- Who the spell is aimed at. The name (and class) may be secret: never
@@ -462,6 +475,12 @@ function CB:Start(channel)
     self.spell:SetText(name)
     if self.iconArt then self.iconArt:SetTexture(texture) end
     self:UpdateTarget()
+    if self.enemy and not self.plate then
+        -- a unit frame's bar: a friendly unit's cast is neutral (a plate's
+        -- owner decides that itself). Secret reads as attackable.
+        local attackable = UnitCanAttack("player", u)
+        self:SetNeutral(not isSecret(attackable) and not attackable)
+    end
     self:SetInterruptible(notInterruptible)
     self:UpdateKick()
     self:Show()

@@ -26,6 +26,11 @@ Settings.Register("layout", {
     gridSize = 16,
 })
 
+-- The grid divides by its size: 0 or less would put frames nowhere.
+Settings.Veto("layout", "gridSize", function(v)
+    if v < 4 or v > 32 then return false, "the grid size is between 4 and 32 px" end
+end, "EditMode")
+
 local movers = {}   -- list of mover records
 local active = false
 local selected
@@ -151,8 +156,17 @@ local function select(m)
     toolbar:Show()
 end
 
+-- Overlays are kept per frame, so a module turned off and on again gets its
+-- old overlay back instead of a new one. o.mover is the frame's current mover.
+local overlays = {}
+
 local function buildOverlay(m)
-    local o = CreateFrame("Button", nil, overlay)
+    local o = overlays[m.frame]
+    if o then
+        o.mover, m.overlay = m, o
+        return
+    end
+    o = CreateFrame("Button", nil, overlay)
     o:SetFrameLevel(overlay:GetFrameLevel() + 10)
     o:SetMovable(true)
     o:SetClampedToScreen(true)
@@ -175,10 +189,11 @@ local function buildOverlay(m)
     o.size:SetShadowed(true)
     o.size:SetPoint("TOPRIGHT", o, "BOTTOMRIGHT", 0, -3)
 
-    o:SetScript("OnEnter", function() sync(m) end)
-    o:SetScript("OnLeave", function() sync(m) end)
-    o:SetScript("OnClick", function() select(m) end)
+    o:SetScript("OnEnter", function(self) sync(self.mover) end)
+    o:SetScript("OnLeave", function(self) sync(self.mover) end)
+    o:SetScript("OnClick", function(self) select(self.mover) end)
     o:SetScript("OnDragStart", function(self)
+        local m = self.mover
         select(m)
         -- The frame a drag moves: the mover's own, or the one it is part of
         -- (opts.dragFrame: a bar attached to the dock moves the dock).
@@ -200,6 +215,7 @@ local function buildOverlay(m)
         end)
     end)
     o:SetScript("OnDragStop", function(self)
+        local m = self.mover
         self:SetScript("OnUpdate", nil)
         self:StopMovingOrSizing()
         local l, b, w, h = self:GetLeft(), self:GetBottom(), self:GetWidth(), self:GetHeight()
@@ -210,7 +226,18 @@ local function buildOverlay(m)
         end
         local point, x, y = anchorFor(l, b, w, h)
         save(m, point, snap(x), snap(y))
+        -- A drop that snaps back to the saved position changes no setting, so
+        -- nothing else puts the frame and the outlines back on the grid.
+        place(m)
+        C_Timer.After(0, function()
+            if not active then return end
+            for _, other in ipairs(movers) do
+                if other.overlay and other.overlay:IsShown() then sync(other) end
+            end
+        end)
     end)
+    o.mover = m
+    overlays[m.frame] = o
     m.overlay = o
 end
 
@@ -275,7 +302,10 @@ local function buildPanel()
     local buttons = CreateFrame("Frame", nil, p.body)
     local bs = Layout.Stack(buttons, { direction = "horizontal", gap = S["space-4"] })
     bs:Add(UI.Button(buttons, { text = "Reset all", onClick = function()
-        for _, m in ipairs(movers) do Settings.Reset(m.namespace, m.key) end
+        -- each mover's own reset (opts.reset), as the toolbar's Reset does
+        for _, m in ipairs(movers) do
+            if m.onReset then m.onReset() else Settings.Reset(m.namespace, m.key) end
+        end
     end }))
     bs:Add(UI.Button(buttons, { text = "Done", variant = "primary", onClick = function() EditMode.Exit() end }))
     stack:Add(buttons)
@@ -480,7 +510,11 @@ function EditMode.Unregister(owner)
         local m = movers[i]
         if m.owner == owner then
             Settings.Unwatch(m)
-            if m.overlay then m.overlay:Hide() end
+            if m.overlay then
+                m.overlay:SetScript("OnUpdate", nil)
+                m.overlay:StopMovingOrSizing()
+                m.overlay:Hide()
+            end
             if selected == m then select(nil) end
             table.remove(movers, i)
         end

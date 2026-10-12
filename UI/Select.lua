@@ -85,6 +85,7 @@ end
 function Select:SetDisabled(disabled)
     self.disabled = disabled and true or false
     self:SetAlpha(self.disabled and T.opacity["opacity-disabled"] or 1)
+    self.border:SetColor((not self.disabled and self:IsMouseOver()) and "gilt" or "gilt-line")
     if self.disabled then self:Close() end
 end
 
@@ -383,7 +384,7 @@ function UI.Select(parent, opts)
     f:SetScript("OnClick", function(self)
         if self.list and self.list:IsShown() then self:Close() else self:Open() end
     end)
-    f:SetScript("OnEnter", function(self) self.border:SetColor("gilt") end)
+    f:SetScript("OnEnter", function(self) if not self.disabled then self.border:SetColor("gilt") end end)
     f:SetScript("OnLeave", function(self) self.border:SetColor("gilt-line") end)
     f:SetScript("OnHide", function(self) self:Close() end)
     f:SetValue(opts.value)

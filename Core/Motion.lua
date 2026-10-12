@@ -23,6 +23,9 @@ local function smoothing(easing)
     return T.easing[easing].smoothing
 end
 
+-- Running AlphaTo fades, frame -> { from, to, start, duration }.
+local fades = {}
+
 -- One AnimationGroup per frame and preset, built on first use.
 local function group(frame, name, build)
     frame.suuMotion = frame.suuMotion or {}
@@ -40,6 +43,7 @@ function Motion.Stop(frame)
     if frame.suuMotion then
         for _, g in pairs(frame.suuMotion) do g:Stop() end
     end
+    fades[frame] = nil -- a running AlphaTo would override the alpha set here
     frame:SetAlpha(1)
 end
 
@@ -86,7 +90,6 @@ end
 -- Fades `frame` from its current alpha to `to` over `duration` (ease-out).
 -- One shared driver runs every fade, so it also works on secure frames,
 -- whose scripts can't be set in combat (alpha itself is never protected).
-local fades = {}
 local driver = CreateFrame("Frame")
 driver:Hide()
 driver:SetScript("OnUpdate", function(self)

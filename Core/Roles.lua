@@ -4,7 +4,8 @@
 -- your talents: the tree with the most points, read as a role per class.
 -- Each role can name a profile (Profiles.RoleProfile); when your role
 -- changes, SuuUI switches to that profile, out of combat only. A profile you
--- pick by hand stays until the role changes again.
+-- pick by hand stays until the role changes again, across reloads too: the
+-- role last switched for is saved per character.
 --
 --   ns.Roles.Current()   -> "TANK" | "HEALER" | "DAMAGER", and where it came
 --                           from: "chosen", "assigned" or "talents"
@@ -80,8 +81,10 @@ function Roles.Current()
     return (roles and roles[spec]) or "DAMAGER", "talents"
 end
 
--- Switches to the role's profile when the role changed (or at login), and
--- tells everyone when the spec changed (SUUUI_SPEC_CHANGED).
+-- Switches to the role's profile when the role differs from the one saved
+-- for this character (or when `force`: a mapping or role choice changed), and
+-- tells everyone when the spec or role changed (SUUUI_SPEC_CHANGED,
+-- SUUUI_ROLE_CHANGED).
 local lastRole, lastSpec
 local function apply(force)
     local spec = Roles.Spec()
@@ -89,10 +92,17 @@ local function apply(force)
         lastSpec = spec
         Events.Emit("SUUUI_SPEC_CHANGED", spec)
     end
-    local role = Roles.Current()
-    if role == lastRole and not force then return end
-    lastRole = role
-    Events.Emit("SUUUI_ROLE_CHANGED", role)
+    local role, source = Roles.Current()
+    -- Right after login the talents can read as unspent for a moment: a
+    -- character past level 10 with no tree read is that, not a real DPS role.
+    -- Wait for the talent events instead of switching away and back.
+    if source == "talents" and spec == 0 and UnitLevel("player") >= 10 then return end
+    if role ~= lastRole then
+        lastRole = role
+        Events.Emit("SUUUI_ROLE_CHANGED", role)
+    end
+    if role == Profiles.LastRole() and not force then return end
+    Profiles.SetLastRole(role)
     local name = Profiles.RoleProfile(role)
     if not name or name == Profiles.Current() then return end
     Combat.Run("roleProfile", function()
@@ -104,12 +114,18 @@ local function apply(force)
     end, "Profiles by role")
 end
 
--- Events come in bursts (a roster update fires several); settle first.
-local pending = false
+-- Events come in bursts (a roster update fires several); settle first. A
+-- forced check stays forced when an unforced one is already waiting.
+local pending, pendingForce = false, false
 local function soon(force)
+    pendingForce = pendingForce or force == true
     if pending then return end
     pending = true
-    C_Timer.After(0.5, function() pending = false; apply(force) end)
+    C_Timer.After(0.5, function()
+        local f = pendingForce
+        pending, pendingForce = false, false
+        apply(f)
+    end)
 end
 
 local valid = C_EventUtils and C_EventUtils.IsEventValid
@@ -118,7 +134,7 @@ local function on(event, fn)
 end
 
 Events.On("SUUUI_SETTINGS_READY", function()
-    on("PLAYER_ENTERING_WORLD", function() soon(lastRole == nil) end)
+    on("PLAYER_ENTERING_WORLD", function() soon() end)
     for _, e in ipairs({ "PLAYER_ROLES_ASSIGNED", "GROUP_ROSTER_UPDATE", "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED",
                          "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED", "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" }) do
         on(e, function() soon() end)
