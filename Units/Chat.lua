@@ -224,6 +224,7 @@ function M:SkinFrame(cf)
         -- Up and Down recall what you sent (the edit box's own history),
         -- without Alt
         if eb.SetAltArrowKeyMode then eb:SetAltArrowKeyMode(false) end
+        self:HistoryFor(eb)
         local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
         if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
         eb:SetFont(BODY_FONT, size, "")
@@ -454,6 +455,82 @@ function M:ApplyMirrorFont(cf)
     m:SetFont(BODY_FONT, size, "")
     m:SetShadowOffset(1, -1)
     m:SetShadowColor(0, 0, 0, 0.8)
+end
+
+--------------------------------------------------------------------------------
+-- History: what you sent (every channel, whispers), recalled with Up and
+-- Down. Taken from the chat events your own lines come back as and handed
+-- to the edit boxes' own history: the game recalls them, SuuUI never types
+-- into the input (its text would then be SuuUI's, and what's sent with it
+-- could be blocked). If Blizzard adds lines itself, SuuUI leaves it to it.
+--------------------------------------------------------------------------------
+
+local HISTORY_KEEP = 32
+-- chat event → the command that sends there
+local SENT = {
+    CHAT_MSG_SAY = "/s", CHAT_MSG_YELL = "/y", CHAT_MSG_EMOTE = "/e",
+    CHAT_MSG_PARTY = "/p", CHAT_MSG_PARTY_LEADER = "/p",
+    CHAT_MSG_RAID = "/raid", CHAT_MSG_RAID_LEADER = "/raid", CHAT_MSG_RAID_WARNING = "/rw",
+    CHAT_MSG_INSTANCE_CHAT = "/i", CHAT_MSG_INSTANCE_CHAT_LEADER = "/i",
+    CHAT_MSG_GUILD = "/g", CHAT_MSG_OFFICER = "/o",
+    CHAT_MSG_CHANNEL = "channel", CHAT_MSG_WHISPER_INFORM = "/w",
+}
+
+local function plain(v) return v ~= nil and not isSecret(v) end
+
+-- Your own line, as the command that sends it again; nil for anyone else's.
+local function sentLine(event, text, sender, channelNumber, guid)
+    local cmd = SENT[event]
+    if not cmd or not plain(text) or type(text) ~= "string" or text == "" then return nil end
+    if event == "CHAT_MSG_WHISPER_INFORM" then
+        if not plain(sender) or type(sender) ~= "string" or sender == "" then return nil end
+        return "/w " .. sender .. " " .. text
+    end
+    local me = UnitGUID("player")
+    if not (plain(guid) and plain(me) and guid == me) then return nil end
+    if cmd == "channel" then
+        if not plain(channelNumber) or type(channelNumber) ~= "number" or channelNumber <= 0 then return nil end
+        cmd = "/" .. channelNumber
+    end
+    return cmd .. " " .. text
+end
+
+-- An edit box gets its history: lines kept, what was sent so far, and a
+-- watch for Blizzard adding lines itself.
+function M:HistoryFor(eb)
+    if not (eb.AddHistoryLine and eb.GetHistoryLines) then return end
+    self.historyBoxes = self.historyBoxes or {}
+    if self.historyBoxes[eb] then return end
+    self.historyBoxes[eb] = true
+    if (eb:GetHistoryLines() or 0) < HISTORY_KEEP and eb.SetHistoryLines then eb:SetHistoryLines(HISTORY_KEEP) end
+    for _, line in ipairs(self.history or {}) do eb:AddHistoryLine(line) end
+    hooksecurefunc(eb, "AddHistoryLine", function()
+        if not self.addingHistory then self.blizzardHistory = true end
+    end)
+end
+
+function M:AddHistory(line)
+    if self.blizzardHistory then return end
+    self.history = self.history or {}
+    local list = self.history
+    if list[#list] == line then return end
+    list[#list + 1] = line
+    if #list > HISTORY_KEEP then table.remove(list, 1) end
+    self.addingHistory = true
+    for eb in pairs(self.historyBoxes or {}) do pcall(eb.AddHistoryLine, eb, line) end
+    self.addingHistory = nil
+end
+
+function M:WatchSent()
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    for event in pairs(SENT) do
+        if not valid or valid(event) then
+            self:OnGameEvent(event, function(_, text, sender, _, _, _, _, _, channelNumber, _, _, _, guid)
+                local line = sentLine(event, text, sender, channelNumber, guid)
+                if line then self:AddHistory(line) end
+            end)
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -859,6 +936,7 @@ function M:OnEnable()
             end)
         end
     end
+    self:WatchSent()
     self:Watch("globalTab", function() self:ApplyGlobalTab() end)
     self:Watch("position", function() C_Timer.After(0, function() self:PlaceChat() end) end)
     self:Watch("logHeight", function() self:Layout() end)
