@@ -275,13 +275,14 @@ local MAX_LINES = 500
 local copyBox
 local function copyName(name)
     if not copyBox then
-        local p = UI.Panel(SuuUI.Root, { title = "Copy name", width = 260, height = 96 })
+        local p = UI.Panel(SuuUI.Root, { title = "Copy name", width = 260, solid = true })
         local field = UI.TextField(p.body, { width = 260 - S["space-5"] * 2 })
         field:SetPoint("TOPLEFT")
         p.field = field
         p.hint = UI.Text(p.body, "caption", "ink-muted")
         p.hint:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
         p.hint:SetValue("Ctrl+C to copy · Esc closes")
+        p.body:SetHeight(field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
         field.edit:SetScript("OnEscapePressed", function() p:Hide() end)
         field.edit:SetScript("OnEnterPressed", function() p:Hide() end)
         UI.MakeModal(p)
