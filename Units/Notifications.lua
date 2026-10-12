@@ -300,7 +300,10 @@ function M:Host(dialog, which)
     end
     h.which, h.kind = which, kind
     h.id = "popup:" .. (dialog:GetName() or tostring(dialog))
-    -- the popup itself out of sight (its parts come onto the card)
+    -- the popup itself out of sight (its parts come onto the card); kept on
+    -- screen by its clamp otherwise
+    if h.clamped == nil then h.clamped = dialog:IsClampedToScreen() and true or false end
+    dialog:SetClampedToScreen(false)
     dialog:ClearAllPoints()
     dialog:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -OFF_SCREEN, OFF_SCREEN)
     h.data = self:CardData(h)
@@ -311,6 +314,7 @@ function M:Release(dialog)
     local h = self.hosts[dialog]
     if not h then return end
     self:Undo(h)
+    if h.clamped ~= nil then dialog:SetClampedToScreen(h.clamped) end
     self.hosts[dialog] = nil
     self:Rebuild()
 end

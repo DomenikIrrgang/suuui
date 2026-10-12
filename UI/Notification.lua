@@ -50,13 +50,21 @@ local function clock(s)
     return tostring(s)
 end
 
--- A quiet, primary or danger button of the card's own (a SuuUI note).
-local function noteButton(n, i)
-    local b = n.buttons[i]
+-- A quiet, primary or danger button of the card's own (a SuuUI note); one
+-- pool per look (a button's variant is set when it's made).
+local function noteButton(n, i, variant)
+    local pool = n.buttons[variant]
+    if not pool then pool = {}; n.buttons[variant] = pool end
+    local b = pool[i]
     if b then return b end
-    b = UI.Button(n.actionsRow, { text = "" })
+    b = UI.Button(n.actionsRow, { text = "", variant = variant == "primary" and "primary" or "quiet" })
     b:SetHeight(ACTION_H)
-    n.buttons[i] = b
+    if variant == "danger" then
+        b.border:SetColor("ember")
+        b.label:SetColor("ember-text")
+        b:HookScript("OnLeave", function(self) self.border:SetColor("ember") end)
+    end
+    pool[i] = b
     return b
 end
 
@@ -162,7 +170,9 @@ function Note:SetData(d)
         self.untilRow:Hide()
     end
     -- actions
-    for _, b in ipairs(self.buttons) do b:Hide() end
+    for _, pool in pairs(self.buttons) do
+        for _, b in ipairs(pool) do b:Hide() end
+    end
     local actions = d.actions or {}
     if d.host and d.host.buttons and d.host.buttons > 0 then
         place(self.actionsRow, ACTION_H)
@@ -171,13 +181,11 @@ function Note:SetData(d)
         local x = 0
         for i = #actions, 1, -1 do
             local a = actions[i]
-            local b = noteButton(self, i)
+            local b = noteButton(self, i, a.variant or "quiet")
             b:SetLabel(a.label or "")
             b:SetScript("OnClick", function() if a.onClick then a.onClick(self) end end)
             b:ClearAllPoints()
             b:SetPoint("RIGHT", -x, 0)
-            if a.variant == "danger" then b.border:SetColor("ember") else b.border:SetColor("gilt-line") end
-            b.label:SetColor(a.variant == "danger" and "ember-text" or "ink")
             b:Show()
             x = x + b:GetWidth() + S["space-3"]
         end
