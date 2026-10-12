@@ -57,6 +57,17 @@ local WAKE = { "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT
     "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM", "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }
 
 local hidden = CreateFrame("Frame")
+
+-- A window's font size: Blizzard's setting for it; a whisper window (no
+-- saved settings) keeps the one chosen in SuuUI's tab menu.
+local tempSizes = {}
+local function fontSize(cf)
+    if tempSizes[cf] then return tempSizes[cf] end
+    local id = cf:GetID()
+    local size = id and select(2, FCF_GetChatWindowInfo(id))
+    if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
+    return size
+end
 hidden:Hide()
 
 local function chatFrames()
@@ -230,27 +241,30 @@ function M:SkinFrame(cf)
         -- without Alt
         if eb.SetAltArrowKeyMode then eb:SetAltArrowKeyMode(false) end
         self:HistoryFor(eb)
-        local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
-        if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
-        eb:SetFont(BODY_FONT, size, "")
-        if eb.header then eb.header:SetFont(BODY_FONT, size, "") end
-        if eb.headerSuffix then eb.headerSuffix:SetFont(BODY_FONT, size, "") end
+        self:EditBoxFont(eb, fontSize(cf))
     end
+end
+
+function M:EditBoxFont(eb, size)
+    eb:SetFont(BODY_FONT, size, "")
+    if eb.header then eb.header:SetFont(BODY_FONT, size, "") end
+    if eb.headerSuffix then eb.headerSuffix:SetFont(BODY_FONT, size, "") end
 end
 
 -- SuuUI's body face at Blizzard's size for the window (its own setting),
 -- with the design's shadow. Checked again on each tick: the window's menu
 -- changes the size.
 function M:ApplyFont(cf)
-    local id = cf:GetID()
-    local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
-    if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
+    local size = fontSize(cf)
     self.fontSizes = self.fontSizes or {}
     if self.fontSizes[cf] == size then return false end
+    local first = self.fontSizes[cf] == nil
     self.fontSizes[cf] = size
     cf:SetFont(BODY_FONT, size, "")
     cf:SetShadowOffset(1, -1)
     cf:SetShadowColor(0, 0, 0, 0.8)
+    local eb = not first and cf:GetName() and _G[cf:GetName() .. "EditBox"]
+    if eb then self:EditBoxFont(eb, size) end
     return true
 end
 
@@ -278,25 +292,33 @@ end
 local MAX_LINES = 500
 
 -- A name to copy: a small box with it selected, Ctrl+C, Esc or Enter closes.
-local copyBox
-local function copyName(name)
-    if not copyBox then
-        local p = UI.Panel(SuuUI.Root, { title = "Copy name", width = 260, solid = true })
+-- A small box with one line of text (copy a name, name a window): Enter
+-- gives the text to `onAccept` (if any) and closes, Esc closes.
+local textBox
+local function askText(title, text, hint, onAccept)
+    if not textBox then
+        local p = UI.Panel(SuuUI.Root, { title = title, width = 260, solid = true })
         local field = UI.TextField(p.body, { width = 260 - S["space-5"] * 2 })
         field:SetPoint("TOPLEFT")
         p.field = field
         p.hint = UI.Text(p.body, "caption", "ink-muted")
         p.hint:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
-        p.hint:SetValue("Ctrl+C to copy · Esc closes")
         p.body:SetHeight(field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
         field.edit:SetScript("OnEscapePressed", function() p:Hide() end)
-        field.edit:SetScript("OnEnterPressed", function() p:Hide() end)
+        field.edit:SetScript("OnEnterPressed", function(edit)
+            local accept = p.onAccept
+            p:Hide()
+            if accept then accept(strtrim(edit:GetText() or "")) end
+        end)
         UI.MakeModal(p)
-        copyBox = p
+        textBox = p
     end
-    copyBox:Show()
-    local edit = copyBox.field.edit
-    edit:SetText(name)
+    textBox.title:SetValue(title)
+    textBox.hint:SetValue(hint)
+    textBox.onAccept = onAccept
+    textBox:Show()
+    local edit = textBox.field.edit
+    edit:SetText(text or "")
     edit:SetFocus()
     -- a frame later, once the box has its width: from the start, all selected
     -- (set before that, the text scrolls out of view to the left)
@@ -304,6 +326,10 @@ local function copyName(name)
         edit:SetCursorPosition(0)
         edit:HighlightText()
     end)
+end
+
+local function copyName(name)
+    askText("Copy name", name, "Ctrl+C to copy · Esc closes")
 end
 
 -- Right click on a player's name: SuuUI's own menu (Blizzard's, opened from
@@ -652,10 +678,7 @@ end
 function M:ApplyMirrorFont(cf)
     local m = self.mirrors and self.mirrors[cf]
     if not m then return end
-    local id = cf:GetID()
-    local size = (id and select(2, FCF_GetChatWindowInfo(id))) or 13
-    if isSecret(size) or type(size) ~= "number" or size <= 0 then size = 13 end
-    m:SetFont(BODY_FONT, size, "")
+    m:SetFont(BODY_FONT, fontSize(cf), "")
     m:SetShadowOffset(1, -1)
     m:SetShadowColor(0, 0, 0, 0.8)
 end
@@ -915,16 +938,71 @@ function M:CombatFilterBar(show)
     end
 end
 
--- Right click on a whisper tab: close it (Blizzard's tab, with its menu, is
--- out of reach now).
+-- Right click on a tab: what Blizzard's tab menu did (its tabs are out of
+-- reach now). Sizes and names go through the client's own chat window
+-- settings; Blizzard's chat settings open on the window.
+local FONT_SIZES = { 10, 11, 12, 13, 14, 15, 16, 18, 20 }
+
+function M:SetFontSize(cf, size)
+    if cf.isTemporary then
+        tempSizes[cf] = size
+    elseif SetChatWindowSize then
+        pcall(SetChatWindowSize, cf:GetID(), size)
+    end
+    if self:ApplyFont(cf) then self:ApplyMirrorFont(cf) end
+end
+
+function M:OpenChatSettings(cf)
+    if not ChatConfigFrame then return end
+    -- the window Blizzard's chat settings act on (its tab menu sets it so)
+    CURRENT_CHAT_FRAME_ID = cf:GetID()
+    if ChatConfigFrame:IsShown() then HideUIPanel(ChatConfigFrame) end
+    ShowUIPanel(ChatConfigFrame)
+end
+
+function M:NewWindow()
+    askText("New window", "", "A name · Enter makes it · Esc cancels", function(name)
+        if name == "" or not FCF_OpenNewWindow then return end
+        local ok, cf = pcall(FCF_OpenNewWindow, name)
+        C_Timer.After(0, function()
+            if not self:IsEnabled() then return end
+            self:SkinAll()
+            if ok and cf and self.mirrors and self.mirrors[cf] then self:Select(cf) end
+        end)
+    end)
+end
+
 function M:TabMenu(b)
     local cf = b.cf
-    if not (cf and cf.isTemporary and FCF_Close and MenuUtil and MenuUtil.CreateContextMenu) then return end
+    if not (cf and MenuUtil and MenuUtil.CreateContextMenu) then return end
     MenuUtil.CreateContextMenu(b, function(_, root)
-        root:CreateButton("Close", function()
-            pcall(FCF_Close, cf)
-            if self.selected == cf then self:Select(ChatFrame1) else self:UpdateTabs() end
-        end)
+        local sizes = root:CreateButton("Font size")
+        for _, size in ipairs(FONT_SIZES) do
+            sizes:CreateRadio(tostring(size), function() return fontSize(cf) == size end,
+                function() self:SetFontSize(cf, size) end)
+        end
+        if not cf.isTemporary then
+            root:CreateButton("Rename…", function()
+                local name = GetChatWindowInfo(cf:GetID())
+                askText("Rename window", plain(name) and name or "", "Enter saves · Esc cancels", function(text)
+                    if text ~= "" and SetChatWindowName then pcall(SetChatWindowName, cf:GetID(), text) end
+                    self:UpdateTabs()
+                end)
+            end)
+            if ChatConfigFrame then
+                root:CreateButton("Chat settings…", function() self:OpenChatSettings(cf) end)
+            end
+        end
+        if FCF_OpenNewWindow and (not FCF_CanOpenNewWindow or FCF_CanOpenNewWindow()) then
+            root:CreateButton("New window…", function() self:NewWindow() end)
+        end
+        if cf ~= ChatFrame1 and cf ~= ChatFrame2 and FCF_Close then
+            root:CreateDivider()
+            root:CreateButton("Close", function()
+                pcall(FCF_Close, cf)
+                if self.selected == cf then self:Select(ChatFrame1) else self:UpdateTabs() end
+            end)
+        end
     end)
 end
 
@@ -1148,7 +1226,7 @@ local function idleOff() return not M:Get("fadeIdle"), "Turn the idle fade on fi
 local SECTION = {
     id = "chat", label = "Chat", category = "World", order = 20,
     groups = {
-        { title = "Chat", description = "SuuUI shows Blizzard's chat windows as its own tabs: what goes in which window, other addons' filters and the input stay Blizzard's.", rows = {
+        { title = "Chat", description = "SuuUI shows Blizzard's chat windows as its own tabs: what goes in which window, other addons' filters and the input stay Blizzard's. Right click a tab for its font size, name, chat settings, a new window or closing it.", rows = {
             { key = "logHeight", label = "Height", control = "slider", min = 100, max = 400, step = 10, unit = "px", combat = true,
               description = "The lines' area; the panel adds the tabs and the input." },
             { key = "fadeIdle", label = "Fade when idle", control = "toggle",
