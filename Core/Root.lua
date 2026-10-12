@@ -22,6 +22,7 @@ ns.Root = root
 Settings.Register("ui", {
     scale = 0,             -- 0: automatic; otherwise 0.5 to 2
     reducedMotion = false, -- drop decorative motion, keep every value change
+    hideIssueReporter = false, -- the beta's bug report button (Blizzard_PTRFeedback)
 })
 
 Settings.Veto("ui", "scale", function(v)
@@ -57,3 +58,25 @@ end
 Events.On("SUUUI_SETTINGS_READY", apply, "Root")
 Events.On("SUUUI_PIXEL_CHANGED", apply, "Root")
 Settings.Watch("ui", "scale", apply, "Root")
+
+-- The beta's issue reporter (Blizzard_PTRFeedback's PTR_IssueReporter, the
+-- bug report button): kept hidden while ui.hideIssueReporter is on, shown
+-- again when it's turned off. It may load after SuuUI: looked for again on
+-- ADDON_LOADED.
+local reporterHooked = false
+local function issueReporter()
+    local f = _G.PTR_IssueReporter
+    if not f then return end
+    local hide = ns.Settings.Get("ui", "hideIssueReporter")
+    if not reporterHooked then
+        reporterHooked = true
+        hooksecurefunc(f, "Show", function(self)
+            if ns.Settings.Get("ui", "hideIssueReporter") then self:Hide() end
+        end)
+    end
+    if hide then f:Hide() else f:Show() end
+end
+ns.Events.OnGame("ADDON_LOADED", function(_, name) if name == "Blizzard_PTRFeedback" then issueReporter() end end, "Root")
+ns.Events.OnGame("PLAYER_LOGIN", issueReporter, "Root")
+ns.Settings.Watch("ui", "hideIssueReporter", issueReporter, "Root")
+
