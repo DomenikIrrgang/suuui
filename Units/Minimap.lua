@@ -38,6 +38,7 @@ local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEX .. "Glyphs\\"
 local ROUND_MASK = 186178
 local isSecret = issecretvalue or function() return false end
+local function readable(v) return not isSecret(v) and type(v) == "number" end
 local ZONE_H = T.type.header.lineHeight + T.type.caption.lineHeight
 local TIME_H = T.type.caption.lineHeight
 
@@ -128,6 +129,14 @@ local function decorate(disc, handlers)
     d.mail:SetPoint("TOPLEFT", over, "TOPLEFT", -4, -26)
     d.mail.tip = handlers.mailTip
     d.mail:Hide()
+    -- the instance difficulty: upper right (UpdateDifficulty)
+    d.difficulty = roundButton(over, 24, nil, 14)
+    d.difficulty:SetPoint("TOPRIGHT", over, "TOPRIGHT", 4, -26)
+    d.difficulty.text = UI.Text(d.difficulty, "numeric", "gilt-text")
+    d.difficulty.text:SetFont(SuuUI.Fonts.Get("numeric"):GetFont(), 10.5, "")
+    d.difficulty.text:SetPoint("CENTER", 0.5, 0)
+    d.difficulty:EnableMouse(true)
+    d.difficulty:Hide()
     -- zoom: lower right
     d.zoomIn = roundButton(over, 22, "plus", 12)
     d.zoomOut = roundButton(over, 22, "minus", 12)
@@ -298,29 +307,31 @@ function M:PlaceMinimap()
     Minimap:SetZoom(zoom)
 end
 
--- The instance difficulty badge (Blizzard's): out of the invisible cluster,
--- onto the ring's top right. It expects its parent to have Layout (our own
--- frame gets one, nothing written onto Blizzard's).
-function M:PlaceDifficulty()
-    local diff = MinimapCluster and MinimapCluster.InstanceDifficulty
-    local over = self.block and self.block.deco.over
-    if not (diff and over) or InCombatLockdown() then return end
-    if not over.Layout then over.Layout = function() end end
-    self.placingDiff = true
-    if diff:GetParent() ~= over then diff:SetParent(over) end
-    diff:ClearAllPoints()
-    diff:SetPoint("TOPRIGHT", over, "TOPRIGHT", 2, 1)
-    diff:SetFrameLevel(over:GetFrameLevel() + 4)
-    self.placingDiff = nil
-    if not self.diffHooked then
-        self.diffHooked = true
-        local function again()
-            if self.placingDiff or not self:IsEnabled() then return end
-            C_Timer.After(0, function() self:PlaceDifficulty() end)
-        end
-        hooksecurefunc(diff, "SetParent", again)
-        hooksecurefunc(diff, "SetPoint", again)
+-- The instance's difficulty: inside a dungeon or raid, a round badge on the
+-- ring's upper right with the group size (amber when heroic), the
+-- difficulty's name in its tooltip. Blizzard's own stays in the invisible
+-- cluster.
+function M:UpdateDifficulty()
+    local badge = self.block and self.block.deco.difficulty
+    if not badge then return end
+    local name, kind, difficultyID, difficultyName, maxPlayers = GetInstanceInfo()
+    local inside = not isSecret(kind) and (kind == "party" or kind == "raid")
+    if not inside or isSecret(difficultyID) then
+        badge:Hide()
+        return
     end
+    local heroic = false
+    if GetDifficultyInfo and readable(difficultyID) then
+        local _, _, isHeroic, _, displayHeroic = GetDifficultyInfo(difficultyID)
+        heroic = (not isSecret(isHeroic) and isHeroic) or (not isSecret(displayHeroic) and displayHeroic) or false
+    end
+    local size = readable(maxPlayers) and maxPlayers > 0 and tostring(maxPlayers) or "?"
+    badge.text:SetValue(size)
+    badge.text:SetColor(heroic and "amber" or "gilt-text")
+    local zone = (not isSecret(name) and name) or ""
+    local diff = (not isSecret(difficultyName) and difficultyName ~= "" and difficultyName) or (heroic and "Heroic" or "Normal")
+    badge.tip = function() return { title = diff, subtitle = zone, lines = { { "Group size", size } } } end
+    badge:Show()
 end
 
 function M:Guard()
@@ -379,6 +390,8 @@ function M:PreviewView(parent)
         f.sub:SetValue("Razor Hill")
         f.time:SetValue("21:40")
         f.deco.mail:Show()
+        f.deco.difficulty.text:SetValue("5")
+        f.deco.difficulty:Show()
         self.preview = f
     end
     self.preview:SetParent(parent)
@@ -439,7 +452,6 @@ function M:OnEnable()
     C_Timer.After(0, function()
         if not self:IsEnabled() then return end
         self:PlaceMinimap()
-        self:PlaceDifficulty()
         self:Guard()
         if not self.overlay then self:Overlay() end
     end)
@@ -452,13 +464,12 @@ function M:OnEnable()
     for _, e in ipairs({ "UPDATE_PENDING_MAIL", "MAIL_CLOSED", "PLAYER_ENTERING_WORLD" }) do
         self:OnGameEvent(e, function() self:UpdateMail() end)
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.pendingPlace then self:PlaceMinimap() end
-        self:PlaceDifficulty()
-    end)
-    for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_DIFFICULTY_CHANGED" }) do
-        self:OnGameEvent(e, function() C_Timer.After(0, function() if self:IsEnabled() then self:PlaceDifficulty() end end) end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingPlace then self:PlaceMinimap() end end)
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_DIFFICULTY_CHANGED", "GROUP_ROSTER_UPDATE" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:UpdateDifficulty() end) end
     end
+    self:UpdateDifficulty()
     self:OnGameEvent("CVAR_UPDATE", function() self:UpdateClock() end)
     if not self.ticker then
         self.ticker = C_Timer.NewTicker(10, function() if self:IsEnabled() then self:UpdateClock() end end)
