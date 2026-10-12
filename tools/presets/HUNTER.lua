@@ -12,10 +12,8 @@
 -- on Aspect of the Pack or the Wild: in one of them solo, the slot would
 -- remind you of an aspect you have up); stings (one per hunter on a target)
 -- are one slot.
--- Hunter's Mark: ranged specs mark what lives long, so it warns only on an
--- elite or boss target (live target condition; on trash it's left out, and
--- with no target nothing pulses); Survival marks everything (Expose Prey),
--- so it greys with any hostile target.
+-- Hunter's Mark: on every hostile target, grey while it's missing (every
+-- spec; Survival's Expose Prey needs it too).
 -- Situational debuffs pack (missing = "hide"): Wing Clip for the ranged
 -- specs, Lacerating Strikes (Mongoose Bite's bleed, not cast by itself) and
 -- the fire trap burns (the trap's cooldown cell already says when to trap).
@@ -54,11 +52,9 @@ local FIRE_TRAPS = { group = "Fire Traps", source = "mine", max = 1, icon = "Imm
 
 local RAPID_FIRE = { "Rapid Fire", effect = "you" }
 local CONCUSSIVE = { "Concussive Shot", effect = "target" }
--- one Hunter's Mark per target: another hunter's counts too. Ranged: warns
--- on elites and bosses only; Survival: grey with any hostile target.
-local MARK = { "Hunter's Mark", source = "any", missing = "warn",
-    when = { conditions = { { type = "target", kinds = { "boss", "elite" } } } } }
-local MARK_MELEE = { "Hunter's Mark", source = "any", missing = "target" }
+-- one Hunter's Mark per target: another hunter's counts too; grey with any
+-- hostile target while it's missing
+local MARK = { "Hunter's Mark", source = "any", missing = "target" }
 -- ranged specs clip only to kite: shown while up, no grey slot
 local WING_CLIP = { "Wing Clip", missing = "hide" }
 
@@ -67,7 +63,7 @@ return {
       essential = { "Arcane Shot", "Raptor Strike", "Mongoose Bite", SHOTS },
       utility = { CONCUSSIVE, RAPID_FIRE, "Freezing Trap", "Immolation Trap", "Disengage", "Feign Death" },
       buffs = { aspects("Aspect of the Hawk") },
-      debuffs = { { "Hunter's Mark", source = "any" }, STINGS, "Wing Clip", S.STUNS },
+      debuffs = { MARK, STINGS, "Wing Clip", S.STUNS },
       procs = {} },
     -- ranged with pet and hawks; Summon Hawk and Arcane Shot share one
     -- cooldown, both kept so the icon is there before Summon Hawk is learnt
@@ -92,7 +88,7 @@ return {
       utility = { { "Deterrence", effect = "you" }, RAPID_FIRE, "Disengage", "Feign Death", "Freezing Trap",
           FIRE_TRAP_CD },
       buffs = { aspects("Aspect of the Monkey") },
-      debuffs = { MARK_MELEE, "Wing Clip", STINGS, { "Lacerating Strikes", missing = "hide" }, FIRE_TRAPS, S.physical(),
+      debuffs = { MARK, "Wing Clip", STINGS, { "Lacerating Strikes", missing = "hide" }, FIRE_TRAPS, S.physical(),
           S.STUNS },
       procs = { "Expose Prey" } },
 }

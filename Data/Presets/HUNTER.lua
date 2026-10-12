@@ -40,7 +40,7 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", icon = 1130, source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", icon = 1130, missing = "target", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, fixedIcon = true, members = {
                 { name = "Serpent Sting", icon = 1978, ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", icon = 3043, ids = { 3043, 18545 } },
@@ -102,7 +102,7 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", icon = 1130, missing = "warn", source = "any", when = { conditions = { { type = "target", kinds = { "boss", "elite" } } } }, ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", icon = 1130, missing = "target", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, fixedIcon = true, members = {
                 { name = "Serpent Sting", icon = 1978, ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", icon = 3043, ids = { 3043, 18545 } },
@@ -174,7 +174,7 @@ ns.CooldownPresets = {
             }, ids = { 5118, 13159, 13161, 13163, 13165, 14318, 14319, 14320, 14321, 14322, 20043, 20190, 25296, 25406, 1299445, 1299446, 1299447 } },
         },
         debuffs = {
-            { name = "Hunter's Mark", icon = 1130, missing = "warn", source = "any", when = { conditions = { { type = "target", kinds = { "boss", "elite" } } } }, ids = { 1130, 14323, 14324, 14325, 1213268 } },
+            { name = "Hunter's Mark", icon = 1130, missing = "target", source = "any", ids = { 1130, 14323, 14324, 14325, 1213268 } },
             { group = true, name = "Stings", source = "mine", max = 1, icon = 1978, fixedIcon = true, members = {
                 { name = "Serpent Sting", icon = 1978, ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737, 1232979, 1232980, 1232981, 1232982, 1264747, 1287976 } },
                 { name = "Scorpid Sting", icon = 3043, ids = { 3043, 18545 } },
