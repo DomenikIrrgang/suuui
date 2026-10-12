@@ -67,9 +67,12 @@
 --     effectName = "Aura name"             when the aura's name isn't the spell's
 --   auras (buffs, debuffs, procs, and groups there)
 --     source = "mine"|"others"|"any"       whose (groups: the group's source)
---     missing = "hide"|"grey"|"warn"|"remind"   while it isn't up (remind:
---                                          grey only while missing, out of
---                                          combat; for buffs you keep up)
+--     missing = "hide"|"grey"|"target"|"warn"|"remind"   while it isn't up
+--                                          (default: buffs grey, debuffs
+--                                          "target" = grey only with a hostile
+--                                          target; remind: grey only while
+--                                          missing, out of combat; for buffs
+--                                          you keep up)
 --     size = "small"|"large"               (default normal)
 --     border = "ink"|"gilt"|"muted"; glow = true; digits = false (no timer);
 --     stacks = false; expiring = 1..10     seconds the timer turns amber

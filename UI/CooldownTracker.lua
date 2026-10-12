@@ -6,9 +6,10 @@
 --   local t = UI.CooldownTracker(parent, { name = "SuuUICooldownManager" })
 --   t:SetLists(lists)     -- { essential, utility, buffs, debuffs, procs }:
 --                         -- entries { name, ids = { ... }, mine }
---   t:SetOptions(opts)    -- { essentialSize, utilityInline, missingBuffs
---                         -- ("hide"|"grey"), missingDebuffs ("hide"|"grey"|
---                         -- "target"), readyPop, procHighlight }
+--   t:SetOptions(opts)    -- { essentialSize, utilityInline, readyPop,
+--                         -- procHighlight }; "when missing" is each aura
+--                         -- entry's own (entry.missing: buffs "grey",
+--                         -- debuffs "target" unless set)
 --   t:Stop(), t:Start()   -- 0.9: off (no events, aura sounds or containers in
 --                         -- use) and on again; a new tracker starts running
 --
@@ -854,7 +855,7 @@ function TR:Slot(entry, unit, parts, size, look)
     end
     self:WatchGroups(f.container, groups)
     f.art:SetTexture(iconFor(entry))
-    f.entryGrey, f.coll, f.whens, f.condOK = nil, nil, nil, nil
+    f.withTarget, f.coll, f.whens, f.condOK = nil, nil, nil, nil
     return f
 end
 
@@ -986,7 +987,7 @@ function TR:Build()
     -- isn't reminded of Shadow Protection); it packs with the hidden ones.
     for i, entry in ipairs(lists.buffs or {}) do
         local parts = auraParts("HELPFUL", entry, "any", ctx)
-        local mode = entry.missing or opts.missingBuffs
+        local mode = entry.missing or "grey"
         if mode == "hide" or not knowsEntry(entry) then
             auraGroups(leftGroups, "b" .. i, entry, parts)
         elseif mode == "remind" then
@@ -1015,7 +1016,7 @@ function TR:Build()
     -- remind you of something you can't cast); it packs with the hidden ones.
     local groups = {}
     for i, entry in ipairs(lists.debuffs or {}) do
-        local mode = entry.missing or opts.missingDebuffs
+        local mode = entry.missing or "target"
         local parts = auraParts("HARMFUL", entry, "mine", ctx)
         -- a single debuff you know no rank of gets no grey slot; groups always
         -- do (their members are often auras you don't cast directly, such as
@@ -1029,7 +1030,7 @@ function TR:Build()
             table.insert(self.built.remindDebuffs, r)
         else
             local slot = self:Slot(entry, "target", parts, auraSize(entry), auraLook(entry))
-            slot.entryGrey = entry.missing == "grey" -- grey on its own: always shown
+            slot.withTarget = mode == "target" -- grey only while you have a hostile target
             slot.coll = collOf[entry]
             self:Watch(slot, whensOf[entry])
             table.insert(self.built.debuffs, slot)
@@ -1233,14 +1234,19 @@ function TR:UpdateMissing()
     -- fixed slots are the grey ones: their placeholder always shows; a
     -- "with a target" list shows its debuff slots only on a hostile target
     for _, slot in ipairs(self.built.buffs) do slot.placeholder:Show() end
-    local mode = opts.missingDebuffs or "target"
+    -- the hairline goes with them when every debuff slot waits for a target
+    local allTarget = #self.built.debuffs > 0
+    for _, slot in ipairs(self.built.debuffs) do
+        if not slot.withTarget then allTarget = false end
+    end
+    if self.sepRight then self.sepRight.withTarget = allTarget end
     -- the debuff side's collection hairlines too: they'd stand alone between
     -- hidden slots
     local slots = { self.sepRight }
     for _, slot in ipairs(self.built.debuffs) do slots[#slots + 1] = slot end
     for _, slot in ipairs(slots) do
         if slot.placeholder then slot.placeholder:Show() end
-        if mode == "target" and not slot.entryGrey then
+        if slot.withTarget then
             local hostile = UnitExists("target") and UnitCanAttack("player", "target")
             if slot.SetAlphaFromBoolean and (isSecret(hostile) or hostile ~= nil) then
                 slot:SetAlphaFromBoolean(hostile, 1, 0)

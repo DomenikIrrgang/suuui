@@ -30,8 +30,6 @@ local M = SuuUI.RegisterModule({
         shows = "always",
         essentialSize = 40,
         utilityInline = false,
-        missingBuffs = "grey",
-        missingDebuffs = "target",
         readyPop = true,
         procHighlight = true,
         -- recent[CLASS] = { cooldown = { { name, ids } … }, aura = { … } }:
@@ -73,6 +71,41 @@ M:Migrate("slot-uids", function(values)
         end
     end
     give(values.lists, "m")
+end)
+
+-- "When missing" is each entry's own now: the list-wide Missing buffs and
+-- Missing debuffs settings are gone. A choice made there goes onto every buff
+-- or debuff that had none of its own (the defaults equal the old ones, so
+-- untouched setups don't change).
+M:Migrate("missing-per-entry", function(values)
+    local old = { buffs = values.missingBuffs, debuffs = values.missingDebuffs }
+    values.missingBuffs, values.missingDebuffs = nil, nil
+    local function set(e, mode)
+        if type(e) ~= "table" then return end
+        if e.collection then
+            for _, x in ipairs(e.entries or {}) do set(x, mode) end
+        elseif e.missing == nil then
+            e.missing = mode
+        end
+    end
+    local function apply(lists)
+        if type(lists) ~= "table" then return end
+        for key, mode in pairs(old) do
+            if type(mode) == "string" and type(lists[key]) == "table" then
+                for _, e in ipairs(lists[key]) do set(e, mode) end
+            end
+        end
+    end
+    if type(values.setups) == "table" then
+        for _, specs in pairs(values.setups) do
+            if type(specs) == "table" then
+                for _, s in pairs(specs) do
+                    if type(s) == "table" then apply(s.lists) end
+                end
+            end
+        end
+    end
+    apply(values.lists)
 end)
 
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
@@ -242,8 +275,6 @@ function M:Apply()
     t:SetOptions({
         essentialSize = self:Get("essentialSize"),
         utilityInline = self:Get("utilityInline"),
-        missingBuffs = self:Get("missingBuffs"),
-        missingDebuffs = self:Get("missingDebuffs"),
         readyPop = self:Get("readyPop"),
         procHighlight = self:Get("procHighlight"),
     })
@@ -877,14 +908,23 @@ local INDENT, RAIL_X = 34, 25
 -- what "+ Shared slot" and "+ Collection" are named until you rename them
 local NEW_SLOT, NEW_COLLECTION = "New shared slot", "New collection"
 
+-- While an aura isn't up, each entry's own choice (there's no list-wide
+-- one): buffs grey and debuffs "with a target" unless set.
 local MISSING = {
-    { value = "list", label = "List" },
     { value = "hide", label = "Hide" },
     { value = "grey", label = "Grey" },
     { value = "warn", label = "Warn" },
     { value = "remind", label = "Remind" },
 }
-local MISSING_LABEL = { hide = "hide", grey = "grey", warn = "warn", remind = "remind" }
+local MISSING_DEBUFF = {
+    { value = "hide", label = "Hide" },
+    { value = "grey", label = "Grey" },
+    { value = "target", label = "With a target" },
+    { value = "warn", label = "Warn" },
+    { value = "remind", label = "Remind" },
+}
+local MISSING_DEFAULT = { buffs = "grey", debuffs = "target", procs = "hide" }
+local MISSING_LABEL = { hide = "hide", grey = "grey", target = "with a target", warn = "warn", remind = "remind" }
 
 -- The grip at a row's left edge: two columns of three dots.
 local function grip(parent)
@@ -2072,9 +2112,14 @@ local function buildEditor(parent)
                 end)
             end })
         addA("Whose", b.source)
-        b.missing = UI.Segmented(au, { options = MISSING, onChange = function(v)
-            mutateEntry(function(e) e.missing = v ~= "list" and v or nil end) end })
+        -- (unset = the list's default: grey for buffs, with a target for debuffs)
+        local function setMissing(v)
+            mutateEntry(function(e) e.missing = v ~= MISSING_DEFAULT[f.behaviour.key] and v or nil end)
+        end
+        b.missing = UI.Segmented(au, { options = MISSING, onChange = setMissing })
         addA("When missing", b.missing)
+        b.missingDebuff = UI.Segmented(au, { options = MISSING_DEBUFF, onChange = setMissing })
+        b.missingDebuff:SetPoint(b.missing:GetPoint())
         b.auEdge = UI.Segmented(au, { options = EDGES, onChange = function(v)
             mutateEntry(function(e) e.border = v ~= "default" and v or nil end) end })
         addA("Edge", b.auEdge)
@@ -2227,8 +2272,12 @@ local function buildEditor(parent)
             b.effectAura:SetDisabled(not e.effect)
         elseif ctx == "single" or ctx == "slot" then
             b.source:SetValue(entrySource(e, b.key))
-            b.missing:SetValue(e.missing or "list")
-            b.missing:SetAlpha(b.key == "procs" and T.opacity["opacity-disabled"] or 1)
+            local debuff = b.key == "debuffs"
+            b.missing:SetShown(not debuff)
+            b.missingDebuff:SetShown(debuff)
+            local missing = debuff and b.missingDebuff or b.missing
+            missing:SetValue(e.missing or MISSING_DEFAULT[b.key])
+            missing:SetAlpha(b.key == "procs" and T.opacity["opacity-disabled"] or 1)
             b.auEdge:SetValue(e.border or "default")
             b.size:SetValue(e.size or "normal")
             b.glow:SetValue(e.glow and true or false)
@@ -2296,7 +2345,7 @@ end
 local SECTION = {
     id = "cooldowns", label = "Cooldown Manager", category = "Frames", order = 26,
     groups = {
-        { title = "What it shows", description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. A shared slot puts several spells in one icon; a collection (auras) keeps entries together. Per entry: shown or hidden, and what happens while it isn't up (auras): the list's choice, hidden (the others close up), grey in its place, or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
+        { title = "What it shows", description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. A shared slot puts several spells in one icon; a collection (auras) keeps entries together. Each entry decides for itself: shown or hidden, and what happens while it isn't up (auras): hidden (the others close up), grey in its place (debuffs: or only with a target), or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).", rows = {
             { label = "Your lists", control = "custom", build = buildPresetBar, stacked = true },
             { label = "Lists", control = "custom", build = buildEditor, stacked = true },
         } },
@@ -2308,12 +2357,6 @@ local SECTION = {
             { key = "utilityInline", label = "Utility", control = "segmented", combat = true,
               options = { { value = false, label = "Own row" }, { value = true, label = "After Essential" } },
               description = "After Essential keeps the block two rows tall (the healer layout)." },
-            { key = "missingBuffs", label = "Missing buffs", control = "segmented", combat = true,
-              options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Show grey" }, { value = "remind", label = "Remind" } },
-              description = "A tracked buff that isn't up: hidden (the others close up), grey in its place, or Remind: grey only while it's missing, out of combat." },
-            { key = "missingDebuffs", label = "Missing debuffs", control = "segmented", combat = true,
-              options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Show grey" }, { value = "target", label = "With a target" }, { value = "remind", label = "Remind" } },
-              description = "Your debuffs that aren't on the target: hidden (the others close up), grey, grey only while you have a hostile target, or Remind: grey only while it's missing from a hostile target, out of combat." },
             { key = "readyPop", label = "Pop when ready", control = "toggle", description = "A cooldown coming off cooldown pops with the arcane flash." },
             { key = "procHighlight", label = "Proc highlight", control = "toggle", combat = true, description = "Procs wear the arcane edge and glow." },
         } },
@@ -2343,7 +2386,7 @@ function M:OnEnable()
     self:RegisterMover(self.tracker, { key = "position", label = "Cooldown Manager" })
     self:RegisterSettings(SECTION)
     self:Apply()
-    for _, key in ipairs({ "setups", "essentialSize", "utilityInline", "missingBuffs", "missingDebuffs", "readyPop", "procHighlight" }) do
+    for _, key in ipairs({ "setups", "essentialSize", "utilityInline", "readyPop", "procHighlight" }) do
         self:Watch(key, function() self:Apply() end)
     end
     -- moving it or when it shows doesn't rebuild it
