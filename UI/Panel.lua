@@ -242,6 +242,15 @@ function UI.ScrollArea(parent, bar)
         child:SetScript("OnSizeChanged", update)
         update()
     end
+    -- content that got shorter (or a taller area) pulls the scroll back, so
+    -- no empty space stays at the bottom
+    local function clamp()
+        local max = math.max(0, child:GetHeight() - scroll:GetHeight())
+        if scroll:GetVerticalScroll() > max then scroll:SetVerticalScroll(max) end
+    end
+    scroll:HookScript("OnScrollRangeChanged", clamp)
+    scroll:HookScript("OnSizeChanged", clamp)
+    child:HookScript("OnSizeChanged", clamp)
     return scroll
 end
 
