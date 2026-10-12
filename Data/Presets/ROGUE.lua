@@ -60,6 +60,7 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Slice and Dice", ids = { 5171, 6434, 6774 } },
+            { name = "Venom", ids = { 1310703 } },
             { name = "Cold Blood", ids = { 14177 } },
             { name = "Sprint", ids = { 2983, 8696, 11305, 26542, 26543 } },
             { name = "Evasion", ids = { 4086, 5277, 15087 } },
@@ -151,6 +152,8 @@ ns.CooldownPresets = {
             { name = "Blind", ids = { 2094, 21060, 447563, 1303286, 1305855, 1324477 } },
         },
         procs = {
+            { name = "Thousand Cuts", ids = { 1310721, 1310723 } },
+            { name = "Cutthroat", ids = { 462708, 1241810 } },
         },
     } },
 }

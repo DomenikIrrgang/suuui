@@ -161,7 +161,7 @@ return {
         { id = "assassination", name = "Assassination", tree = 1,
           essential = { "Cold Blood", "Kidney Shot", "Kick", "Gouge", "Vanish" },
           utility = { "Sprint", "Evasion", "Blind", "Feint", "Distract", "Preparation" },
-          buffs = { "Slice and Dice", "Cold Blood", "Sprint", "Evasion", "Stealth" },
+          buffs = { "Slice and Dice", "Venom", "Cold Blood", "Sprint", "Evasion", "Stealth" },
           debuffs = { "Rupture", "Garrote", "Deadly Poison", "Wound Poison", "Crippling Poison", "Mind-numbing Poison", "Expose Armor", "Kidney Shot", "Cheap Shot", "Gouge" },
           procs = { "Remorseless" } },
         { id = "combat", name = "Combat", tree = 2,
@@ -175,7 +175,7 @@ return {
           utility = { "Sprint", "Evasion", "Blind", "Gouge", "Kidney Shot", "Distract" },
           buffs = { "Slice and Dice", "Ghostly Strike", "Stealth", "Evasion", "Sprint" },
           debuffs = { "Hemorrhage", "Rupture", "Garrote", "Expose Armor", "Sap", "Cheap Shot", "Kidney Shot", "Blind" },
-          procs = {} },
+          procs = { "Thousand Cuts", "Cutthroat" } },
     },
 
     PRIEST = {
