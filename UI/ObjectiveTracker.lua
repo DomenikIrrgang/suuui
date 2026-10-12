@@ -107,7 +107,7 @@ function Tracker:DrawQuest(r, q)
     r.quest = q
     r.title:SetValue(q.title or "")
     r.title:SetColor(DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
-    local w = self.width
+    local w = self.contentWidth or self.width
     local y = TITLE_H + S["space-1"]
     for _, l in ipairs(r.lines) do l:Hide() end
     if q.complete or q.failed then
@@ -177,7 +177,27 @@ local function entriesOf(quests)
     return entries
 end
 
+-- While the quests scroll they make room for the thumb at the right edge.
+local GUTTER = S["space-4"] + 1
+
 function Tracker:SetQuests(quests, freeze)
+    if freeze and self.contentWidth then
+        -- frozen: the width stays too
+        self:LayOut(quests, freeze)
+    else
+        self.contentWidth = self.width
+        self:LayOut(quests, freeze)
+        if self.maxHeight and (self.listHeight or 0) > self:ViewHeight() then
+            self.contentWidth = self.width - GUTTER
+            self:LayOut(quests, freeze)
+        end
+    end
+    self.list:SetWidth(self.contentWidth)
+    self:Fit()
+    self:ApplyScroll()
+end
+
+function Tracker:LayOut(quests, freeze)
     quests = quests or {}
     local byID = {}
     for _, q in ipairs(quests) do byID[q.questID] = q end
@@ -220,7 +240,7 @@ function Tracker:SetQuests(quests, freeze)
             self.heights[e.id] = h
             self.tops[e.id] = y
             r.top, r.height, r.inUse = y, h, q ~= nil
-            r:SetSize(self.width, math.max(1, h))
+            r:SetSize(self.contentWidth, math.max(1, h))
             y = y + h
             prev = "quest"
         else
@@ -230,7 +250,7 @@ function Tracker:SetQuests(quests, freeze)
             -- space-5 over a zone's heading after the one before
             if prev then y = y + S["space-5"] end
             z.text:SetValue(e.zone)
-            z:SetWidth(self.width)
+            z:SetWidth(self.contentWidth)
             z.top, z.height, z.inUse = y, LINE_H, true
             y = y + LINE_H
             prev = "zone"
@@ -238,8 +258,6 @@ function Tracker:SetQuests(quests, freeze)
     end
     self.listHeight = y
     self.list:SetHeight(math.max(1, y))
-    self:Fit()
-    self:ApplyScroll()
 end
 
 -- The quests' window: maxHeight less the head (all of them without one).
@@ -290,7 +308,8 @@ function Tracker:ApplyScroll()
         local trackH = view
         local thumbH = math.max(16, trackH * view / (self.listHeight or 1))
         self.thumb:ClearAllPoints()
-        self.thumb:SetPoint("TOPRIGHT", self.clip, "TOPRIGHT", -1, -((trackH - thumbH) * scroll / max))
+        -- at the tracker's right edge, the quests GUTTER clear of it
+        self.thumb:SetPoint("TOPRIGHT", self.list, "TOPLEFT", self.width, -((trackH - thumbH) * scroll / max))
         self.thumb:SetHeight(thumbH)
         self.thumb:Show()
     else
