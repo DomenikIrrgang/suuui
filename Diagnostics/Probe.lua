@@ -754,6 +754,10 @@ function ns.Probe.Command(arg)
         ns.QuestProbe.Command(rest)
         return
     end
+    if sub == "popups" then
+        ns.PopupProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
