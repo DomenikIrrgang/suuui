@@ -1956,11 +1956,16 @@ local function buildEditor(parent)
         b.sections = {}
 
         -- a note on top: a member's slot, a cooldown slot's order
+        -- (the box itself, then space-5 before the next section)
         b.note = section(b)
-        b.note.height = 30 + 12
-        UI.Fill(b.note, "surface-sunk"):SetAllPoints()
-        UI.Border(b.note, "gilt-faint")
-        b.noteText = UI.Text(b.note, "caption", "ink-muted")
+        b.note.height = 34 + T.space["space-5"]
+        local box = CreateFrame("Frame", nil, b.note)
+        box:SetPoint("TOPLEFT")
+        box:SetPoint("TOPRIGHT")
+        box:SetHeight(34)
+        UI.Fill(box, "surface-sunk"):SetAllPoints()
+        UI.Border(box, "gilt-faint")
+        b.noteText = UI.Text(box, "caption", "ink-muted")
         b.noteText:SetPoint("LEFT", 8, 0)
         b.noteText:SetFixedWidth(CW - 16)
         b.noteText:SetJustifyH("LEFT")
