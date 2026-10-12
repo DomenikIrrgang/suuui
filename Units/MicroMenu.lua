@@ -39,7 +39,9 @@ local ITEMS = {
     { key = "shop", glyph = "coin", label = "Shop", click = "StoreMicroButton" },
     { key = "worldmap", glyph = "map", label = "World map", onClick = function() ToggleWorldMap() end, bind = "TOGGLEWORLDMAP" },
     { key = "bags", glyph = "bag", label = "Bags", onClick = function() ToggleAllBags() end, bind = "OPENALLBAGS" },
-    { key = "menu", glyph = "menu", label = "Game menu", click = "MainMenuMicroButton" },
+    -- the game menu's Blizzard button doesn't answer a secure click on
+    -- Forever (EllesmereUI toggles the frame the same way)
+    { key = "menu", glyph = "menu", label = "Game menu", onClick = function() ToggleFrame(GameMenuFrame) end },
 }
 
 -- The chosen items this client has (a Blizzard button that's missing: left out).
