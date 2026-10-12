@@ -28,8 +28,9 @@
 --   /suu probe spells scan high   count (not save) spells from 1.4 to 3 million,
 --                            to check nothing lies beyond the main scan
 --   /suu probe spells off    stop recording
---   /suu probe spells find <name>   every spell ID with exactly that name (any
---                            range), saved in SuuUIProbe.spellFind[name]
+--   /suu probe spells find <name>[; <name>…]   every spell ID with exactly that
+--                            name (any range), several names in one pass,
+--                            saved in SuuUIProbe.spellFind[name]
 --   /suu probe spells clear  drop all spell data from the save file (it is
 --                            copied into tools/data once Claude has read it)
 
@@ -353,20 +354,31 @@ function SD.ScanHigh()
 end
 
 -- Every ID with exactly this name, 1 to 1.4 million.
-function SD.Find(name)
+-- Several names in one pass: "find Heating Up; Fingers of Frost".
+function SD.Find(text)
     if scanning then return end
-    if not name or name == "" then ns.Print("Spell data: /suu probe spells find <spell name>") return end
+    if not text or text == "" then ns.Print("Spell data: /suu probe spells find <spell name>[; <another>…]") return end
     if InCombatLockdown() then ns.Print("Spell data: the scan runs out of combat.") return end
+    local names, byLower = {}, {}
+    for part in text:gmatch("[^;]+") do
+        local name = part:match("^%s*(.-)%s*$")
+        if name ~= "" then
+            names[#names + 1] = name
+            byLower[name:lower()] = { name = name, ids = {} }
+        end
+    end
+    if #names == 0 then return end
     scanning = true
-    local target, nextID, found = name:lower(), 1, {}
-    ns.Print(("Spell data: looking for %q…"):format(name))
+    local nextID = 1
+    ns.Print(("Spell data: looking for %s…"):format(table.concat(names, ", ")))
     local ticker
     ticker = C_Timer.NewTicker(0, function()
         if InCombatLockdown() then return end
         local stopAt = debugprofilestop() + BUDGET
         while nextID <= SCAN_TO and debugprofilestop() < stopAt do
             local n = C_Spell.GetSpellName(nextID)
-            if n and not isSecret(n) and n:lower() == target then found[#found + 1] = nextID end
+            local hit = n and not isSecret(n) and byLower[n:lower()]
+            if hit then hit.ids[#hit.ids + 1] = nextID end
             nextID = nextID + 1
         end
         if nextID > SCAN_TO then
@@ -374,8 +386,12 @@ function SD.Find(name)
             scanning = false
             SuuUIProbe = SuuUIProbe or {}
             SuuUIProbe.spellFind = SuuUIProbe.spellFind or {}
-            SuuUIProbe.spellFind[name] = found
-            ns.Print(("Spell data: %q has %d IDs: %s. /reload to save."):format(name, #found, table.concat(found, ", ")))
+            for _, name in ipairs(names) do
+                local found = byLower[name:lower()].ids
+                SuuUIProbe.spellFind[name] = found
+                ns.Print(("Spell data: %q has %d IDs: %s."):format(name, #found, table.concat(found, ", ")))
+            end
+            ns.Print("Spell data: /reload to save.")
         end
     end)
 end
