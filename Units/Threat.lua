@@ -297,7 +297,6 @@ local SECTION = {
     id = "threat", label = "Damage & threat", category = "Insights", order = 50, merge = "damagemeter",
     preview = function(parent) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Threat",
-    previewNote = "Bottom right, left of the damage meter's place.",
     groups = {
         { title = "Threat meter", description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.", rows = {
             { key = "shows", label = "Show", control = "segmented", stacked = true,

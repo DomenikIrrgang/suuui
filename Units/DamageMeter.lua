@@ -176,11 +176,98 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
+-- The preview's stand-ins for C_DamageMeter and C_DeathRecap: a made-up
+-- raid fight with you in it (your name and class), the same shapes the game
+-- returns, so the preview behaves like the meter (types, fights, breakdowns,
+-- the death recap).
+local PREVIEW_DURATION = 102
+local PREVIEW = {
+    damage = { { "Morrow", "ROGUE", 98412 }, { "Lisset", "MAGE", 91870 }, { "Quell", "WARLOCK", 88240 }, { "Vosk", "WARRIOR", 84903 },
+        { "Corvane", "ROGUE", 80115 }, { "Arlo", "HUNTER", 77402 }, { "Grimbolt", "WARLOCK", 74950 }, { "Sylva", "HUNTER", 71288 },
+        { "Brannoc", "WARRIOR", 64130 }, { true, nil, 61775 }, { "Tamsin", "DRUID", 52004 }, { "Hadrin", "WARRIOR", 39410 } },
+    damageTaken = { { "Brannoc", "WARRIOR", 84210 }, { "Hadrin", "WARRIOR", 51230 }, { true, nil, 18420 }, { "Morrow", "ROGUE", 9310 }, { "Lisset", "MAGE", 6120 } },
+    avoidable = { { true, nil, 4120 }, { "Arlo", "HUNTER", 2980 }, { "Quell", "WARLOCK", 1210 } },
+    enemyDamageTaken = { { "Flamewaker Elite", "", 151200 }, { "Lava Surger", "", 98400 }, { "Ember Hound", "", 61200 } },
+    healing = { { "Ysolde", "PRIEST", 182440 }, { "Veyra", "SHAMAN", 171210 }, { "Aldric", "PALADIN", 160880 }, { "Thessaly", "DRUID", 120300 },
+        { "Oren", "PRIEST", 98500 }, { "Brannoc", "WARRIOR", 3020 }, { true, nil, 1840 } },
+    interrupts = { { "Morrow", "ROGUE", 7 }, { "Corvane", "ROGUE", 5 }, { "Vosk", "WARRIOR", 4 }, { true, nil, 3 }, { "Brannoc", "WARRIOR", 2 } },
+    dispels = { { "Ysolde", "PRIEST", 6 }, { "Aldric", "PALADIN", 4 }, { "Veyra", "SHAMAN", 3 } },
+    -- newest first, as the game returns them
+    deaths = { { "Arlo", "HUNTER", 0, 140, 3 }, { true, nil, 0, 124, 2 }, { "Grimbolt", "WARLOCK", 0, 72, 1 } },
+}
+PREVIEW.dps, PREVIEW.hps = PREVIEW.damage, PREVIEW.healing
+local PREVIEW_TYPE = {}
+for _, t in ipairs(UI.DAMAGE_METER_TYPES) do if t.value then PREVIEW_TYPE[Enum.DamageMeterType and Enum.DamageMeterType[t.enum] or t.value] = t.value end end
+local PREVIEW_SPELLS = { { 116, 0.42 }, { 2136, 0.18 }, { 120, 0.13 }, { 1449, 0.11 }, { 122, 0.09 }, { 6603, 0.07 } }
+local PREVIEW_HEALS = { { 2060, 0.38 }, { 139, 0.24 }, { 2061, 0.2 }, { 17, 0.12 }, { 596, 0.06 } }
+
+local function previewSession(meterType)
+    local key = PREVIEW_TYPE[meterType] or "damage"
+    local _, myClass = UnitClass("player")
+    local sources, total, max = {}, 0, 0
+    for i, p in ipairs(PREVIEW[key] or {}) do
+        local you = p[1] == true
+        local amount = p[3]
+        sources[i] = {
+            name = you and UnitName("player") or p[1], classFilename = you and myClass or p[2],
+            totalAmount = amount, amountPerSecond = amount / PREVIEW_DURATION, isLocalPlayer = you,
+            sourceGUID = "Preview-" .. i, deathTimeSeconds = p[4] or 0, deathRecapID = p[5] or 0,
+        }
+        total, max = total + amount, math.max(max, amount)
+    end
+    return { combatSources = sources, totalAmount = total, maxAmount = max, durationSeconds = PREVIEW_DURATION }
+end
+
+local PREVIEW_API = {
+    GetCombatSessionFromType = function(_, meterType) return previewSession(meterType) end,
+    GetCombatSessionFromID = function(_, meterType) return previewSession(meterType) end,
+    GetCombatSessionSourceFromType = function(_, meterType, guid)
+        local s = previewSession(meterType)
+        local src
+        for _, x in ipairs(s.combatSources) do if x.sourceGUID == guid or (guid == UnitGUID("player") and x.isLocalPlayer) then src = x end end
+        if not src then return { combatSpells = {}, totalAmount = 0, maxAmount = 0 } end
+        local heals = PREVIEW_TYPE[meterType] == "healing" or PREVIEW_TYPE[meterType] == "hps"
+        local spells = {}
+        for i, sp in ipairs(heals and PREVIEW_HEALS or PREVIEW_SPELLS) do
+            local amount = math.floor(src.totalAmount * sp[2])
+            spells[i] = { spellID = sp[1], totalAmount = amount, amountPerSecond = amount / PREVIEW_DURATION, creatureName = "" }
+        end
+        return { combatSpells = spells, totalAmount = src.totalAmount, maxAmount = spells[1] and spells[1].totalAmount or 0 }
+    end,
+    GetAvailableCombatSessions = function()
+        return { { sessionID = 29, name = "Flamewaker Elite", durationSeconds = 38 }, { sessionID = 30, name = "Majordomo Executus", durationSeconds = 96 },
+                 { sessionID = 31, name = "Ragnaros", durationSeconds = 151 } }
+    end,
+    GetSessionDurationSeconds = function(sessionType)
+        return sessionType == (Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Overall) and 385 or PREVIEW_DURATION
+    end,
+}
+PREVIEW_API.GetCombatSessionSourceFromID = PREVIEW_API.GetCombatSessionSourceFromType
+
+-- one recap for every death: oldest first here, newest first as returned
+local RECAP = {
+    { 21158, "Lava Burst", "SPELL_DAMAGE", 1180, 71, 5.8 }, { 20566, "Wrath of Ragnaros", "SPELL_DAMAGE", 1460, 52, 4.1 },
+    { 139, "Renew", "SPELL_HEAL", 410, 57, 3.0 }, { 6603, "Melee", "SWING_DAMAGE", 640, 49, 2.2 },
+    { 21158, "Lava Burst", "SPELL_DAMAGE", 1240, 32, 1.0 }, { 20565, "Magma Blast", "SPELL_DAMAGE", 2960, 0, 0, 1018 },
+}
+local PREVIEW_RECAP = {
+    GetRecapEvents = function()
+        local out = {}
+        for i = #RECAP, 1, -1 do
+            local e = RECAP[i]
+            out[#out + 1] = { spellId = e[1], spellName = e[2], event = e[3], amount = e[4], currentHP = e[5] * 40,
+                              timestamp = 1000 - e[6], overkill = e[7] or 0 }
+        end
+        return out
+    end,
+    GetRecapMaxHealth = function() return 4000 end,
+}
+
 function M:PreviewView(parent)
     if not self.preview then
         local view = CreateFrame("Frame", nil, parent)
         self.preview = view
-        self.previewMeter = UI.DamageMeter(view, { rows = self:Get("rows") })
+        self.previewMeter = UI.DamageMeter(view, { rows = self:Get("rows"), api = PREVIEW_API, recapApi = PREVIEW_RECAP })
         self.previewMeter:SetView("damage", "current")
     end
     local view = self.preview
@@ -213,7 +300,6 @@ local SECTION = {
     id = "damagemeter", label = "Damage & threat", category = "Insights", order = 50,
     preview = function(parent) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Damage & threat",
-    previewNote = "Your real meter data. In game the threat meter sits left of the damage meter in the bottom right corner, both the same height.",
     groups = {
         { title = "Damage meter", description = "Blizzard's own meter, restyled. Blizzard's meter window stays off while this one is on.", rows = {
             { key = "shows", label = "Show", control = "segmented", stacked = true,

@@ -5,7 +5,8 @@
 -- menu; then `rows` rows `meter-row` tall, the bar being the row.
 --
 --   local w = UI.DamageMeter(parent, { rows = 8, onView = fn(type, session),
---       onNewWindow = fn, onClose = fn (extra windows), onReset = fn, onSettings = fn })
+--       onNewWindow = fn, onClose = fn (extra windows), onReset = fn, onSettings = fn,
+--       api = C_DamageMeter stand-in, recapApi = C_DeathRecap stand-in })  -- 0.10: previews
 --   w:SetView(type, session)   -- "damage" … "deaths"; "current" | "overall" | a sessionID
 --   w:SetOptions({ numbers, barColor, marker, nameColor, pinYou })
 --   w:SetCanAddWindow(on)
@@ -443,8 +444,7 @@ local function sessionArg(session)
     return session == "overall" and ST.Overall or ST.Current, nil
 end
 
-local function fetch(session, typeValue)
-    local DM = C_DamageMeter
+local function fetch(DM, session, typeValue)
     local t = BY_VALUE[typeValue]
     if not (DM and t and Enum.DamageMeterType) then return nil end
     local meterType = Enum.DamageMeterType[t.enum]
@@ -455,8 +455,7 @@ local function fetch(session, typeValue)
     return ok and s or nil
 end
 
-local function fetchSource(session, typeValue, guid, creatureID)
-    local DM = C_DamageMeter
+local function fetchSource(DM, session, typeValue, guid, creatureID)
     local t = BY_VALUE[typeValue]
     local meterType = Enum.DamageMeterType[t.enum]
     local st, id = sessionArg(session)
@@ -472,10 +471,10 @@ local function inCombat() return InCombatLockdown() or UI.Flag(UnitAffectingComb
 -- newest first.
 function Meter:SessionOptions()
     local opts = {
-        { value = "current", label = "Current", note = clock(C_DamageMeter and C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)) },
+        { value = "current", label = "Current", note = clock(self.api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)) },
         { value = "overall", label = "Overall" },
     }
-    local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+    local ok, list = pcall(self.api.GetAvailableCombatSessions)
     if ok and type(list) == "table" and #list > 0 then
         opts[#opts + 1] = { heading = "Past fights" }
         for i = #list, math.max(1, #list - 19), -1 do
@@ -531,7 +530,7 @@ function Meter:SourceRow(src, i, top, total, fight)
     if deaths then
         d.main = since(src.deathTimeSeconds)
         local recap = src.deathRecapID
-        if readable(recap) and recap > 0 and C_DeathRecap then
+        if readable(recap) and recap > 0 and self.recapApi then
             d.open = function() self.drill = { kind = "recap", src = src, row = d }; self:Refresh() end
         end
         return d
@@ -575,7 +574,7 @@ end
 function Meter:RefreshList()
     local v = self.view
     local typeValue = self.type
-    local s = fetch(self.session, typeValue)
+    local s = fetch(self.api, self.session, typeValue)
     local sources = s and s.combatSources
     local deaths = typeValue == "deaths"
     if not sources or (not isSecret(sources) and #sources == 0) then
@@ -629,7 +628,7 @@ end
 function Meter:RefreshSpells()
     local drill = self.drill
     local typeValue = self.type
-    local data = fetchSource(self.session, typeValue, drill.guid, drill.creature)
+    local data = fetchSource(self.api, self.session, typeValue, drill.guid, drill.creature)
     local spells = data and data.combatSpells
     self.pinLine:Hide()
     self.note:SetVisible(false)
@@ -679,7 +678,7 @@ end
 function Meter:RefreshRecap()
     local src = self.drill.src
     local id = src.deathRecapID
-    local ok, events = pcall(C_DeathRecap.GetRecapEvents, id)
+    local ok, events = pcall(self.recapApi.GetRecapEvents, id)
     self.pinLine:Hide()
     if ok and issecrettable and issecrettable(events) then
         self:ShowEmpty("The recap is secret until combat ends.")
@@ -690,7 +689,7 @@ function Meter:RefreshRecap()
         return
     end
     self.empty:SetVisible(false)
-    local okMax, maxHP = pcall(C_DeathRecap.GetRecapMaxHealth, id)
+    local okMax, maxHP = pcall(self.recapApi.GetRecapMaxHealth, id)
     if not okMax then maxHP = nil end
     -- newest first: the last rows, oldest first
     local list = {}
@@ -776,11 +775,11 @@ function Meter:RefreshHead()
 end
 
 function Meter:Refresh()
-    if not C_DamageMeter then return end
+    if not self.api then return end
     -- a past fight that's gone: back to Current
     if type(self.session) == "number" then
         local found = false
-        local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+        local ok, list = pcall(self.api.GetAvailableCombatSessions)
         if ok and type(list) == "table" then
             for _, s in ipairs(list) do if s.sessionID == self.session then found = true end end
         end
@@ -801,6 +800,7 @@ function UI.DamageMeter(parent, opts)
     local w = CreateFrame("Frame", nil, parent)
     Mixin(w, Meter)
     w.opts = opts
+    w.api, w.recapApi = opts.api or C_DamageMeter, opts.recapApi or C_DeathRecap
     w.view = { numbers = "compact", barColor = "neutral", marker = "icon", nameColor = "class", pinYou = true }
     w.maxRows = math.max(4, opts.rows or 8)
     w.type, w.session = "damage", "current"
