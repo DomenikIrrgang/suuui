@@ -360,12 +360,20 @@ end
 -- Channels joined later move there too. Out of combat only.
 --------------------------------------------------------------------------------
 
-local function chatFn(name)
-    return _G["ChatFrame_" .. name] or (ChatFrameUtil and ChatFrameUtil[name])
+-- The channels a window is set to show (joined or not: GetChatWindowChannels
+-- lists name, id pairs).
+local function windowChannels(id)
+    local out = {}
+    local list = { GetChatWindowChannels(id) }
+    for i = 1, #list, 2 do
+        local name = list[i]
+        if type(name) == "string" and not isSecret(name) then out[#out + 1] = name end
+    end
+    return out
 end
 
 -- the numbered channels you're in, by name
-local function globalChannels()
+local function joinedChannels()
     local out = {}
     local list = { GetChannelList() }
     for i = 1, #list, 3 do
@@ -385,35 +393,43 @@ local function windowNamed(...)
     end
 end
 
+-- Channels live on the windows on this client: frame:AddChannel(name),
+-- frame:RemoveChannel(name), frame:RemoveAllMessageGroups() (/suu probe chat).
 function M:ApplyGlobalTab()
     if not self:Get("globalTab") or InCombatLockdown() then return end
-    local add, remove = chatFn("AddChannel"), chatFn("RemoveChannel")
-    if not (add and remove) then
+    local general = ChatFrame1
+    if not (general and general.AddChannel and general.RemoveChannel) then
         if not self.warnedGlobal then
             self.warnedGlobal = true
-            self:Print("This client's chat has no AddChannel/RemoveChannel: the Global tab can't be set up.")
+            self:Print("This client's chat windows have no AddChannel/RemoveChannel: the Global tab can't be set up.")
         end
         return
     end
     local global = windowNamed("Global")
     if not global then
-        -- a "Guild" tab becomes Global (its guild messages go back to General)
+        -- a "Guild" tab becomes Global (its guild messages go back to General), else a new tab
         local guild = windowNamed("Guild")
         if guild and FCF_SetWindowName then
             FCF_SetWindowName(guild, "Global")
-            local removeGroups = chatFn("RemoveAllMessageGroups")
-            if removeGroups then removeGroups(guild) end
+            if guild.RemoveAllMessageGroups then guild:RemoveAllMessageGroups() end
             global = guild
         elseif FCF_OpenNewWindow then
-            global = FCF_OpenNewWindow("Global")
-            local removeGroups = chatFn("RemoveAllMessageGroups")
-            if global and removeGroups then removeGroups(global) end
+            local made = FCF_OpenNewWindow("Global")
+            global = (type(made) == "table" and made) or windowNamed("Global")
+            if global and global.RemoveAllMessageGroups then global:RemoveAllMessageGroups() end
         end
     end
     if not global then return end
-    for _, channel in ipairs(globalChannels()) do
-        pcall(add, global, channel)
-        pcall(remove, ChatFrame1, channel)
+    -- everything General was set to show, and every channel you're in
+    local channels, seen = {}, {}
+    for _, list in ipairs({ windowChannels(general:GetID()), joinedChannels() }) do
+        for _, name in ipairs(list) do
+            if not seen[name] then seen[name] = true; channels[#channels + 1] = name end
+        end
+    end
+    for _, name in ipairs(channels) do
+        pcall(global.AddChannel, global, name)
+        pcall(general.RemoveChannel, general, name)
     end
 end
 
