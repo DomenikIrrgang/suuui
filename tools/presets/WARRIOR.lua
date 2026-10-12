@@ -92,7 +92,9 @@ return {
       -- Deep Wounds is an Arms talent most Fury builds still reach
       debuffs = { S.physical(), { "Deep Wounds", missing = "hide" }, { "Hamstring", hidden = true, missing = "hide" },
           { "Piercing Howl", hidden = true, missing = "hide" }, STUNS },
-      procs = { "Flurry", "Enrage" } },
+      -- Bloodlust Pursuit: Bloodthirst's 10% movement speed for 10 sec
+      -- (Forever's own spell, four IDs for its four ranks; unconfirmed in game)
+      procs = { "Flurry", "Enrage", "Bloodlust Pursuit" } },
     { id = "protection", name = "Protection", tree = 3,
       essential = { "Shield Slam", { "Revenge", when = inStance("defensive") }, "Thunder Clap",
           you("Shield Block", { when = inStance("defensive") }), you("Bloodrage") },

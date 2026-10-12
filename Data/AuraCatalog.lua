@@ -37,6 +37,7 @@ ns.AuraCatalog = {
     ["Blessing of Salvation"] = { classes = "Paladin", icon = 1038, ids = { 1038 } },
     ["Blessing of Wisdom"] = { classes = "Paladin", icon = 19742, ids = { 19742, 19850, 19852, 19853, 19854, 25290 } },
     ["Blind"] = { classes = "Rogue", icon = 2094, ids = { 2094, 21060, 447563, 1303286, 1305855, 1324477 } },
+    ["Bloodlust Pursuit"] = { classes = "Warrior", icon = 1220952, ids = { 1220952, 1220953, 1220954, 1220955 } },
     ["Bloodrage"] = { classes = "Warrior", icon = 2687, ids = { 2687, 29131 } },
     ["Bloodthrill"] = { classes = "Warrior", icon = 1289681, ids = { 1289681 } },
     ["Burning Shadow"] = { classes = "Warlock", icon = 18789, ids = { 18789 } },
