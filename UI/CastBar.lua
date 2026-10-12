@@ -3,13 +3,21 @@
 -- else stays neutral.
 --
 --   local bar = UI.CastBar(parent, "target", {
---       size = "sm",          -- "md" (cast, 24px: your own cast) or "sm" (cast-sm, 18px: under a unit frame)
+--       size = "sm",          -- "md" (cast, 24px: your own cast) or "sm" (cast-sm, 18px: under a unit frame),
+--                             -- or "plate" (cast-plate, 8px, the spell line under the bar: nameplates;
+--                             -- the spell's icon leads the line; the lock sits inside the bar's left end)
 --       width = 300,
 --       icon = true,          -- the spell's icon as a square at the left end
 --       kick = true,          -- your interrupt's state at the right end of interruptible casts
+--       target = true,        -- 0.9, plates: who the spell is aimed at, a line under the spell name
 --   })
 --   bar:Activate(); bar:Deactivate()
 --   bar:SetIconShown(on); bar:SetKickShown(on)   -- live, from the settings
+--   bar:SetUnit(unit)                             -- another unit (nameplate tokens are reused)
+--   bar:SetBarHeight(px)                          -- 0.9: the bar's height (a plate's spell line stays under it)
+--   bar:SetTargetShown(on)                        -- 0.9: the plate's target line, live
+--   bar:SetNeutral(on)                            -- 0.9: a friendly unit's cast: never "you can stop it"
+--                                                 -- (no arcane layer, lock or interrupt)
 --
 -- Everything the client may hide is shown without being read: the fill runs
 -- from the cast's duration object (StatusBar:SetTimerDuration), the time is
@@ -29,6 +37,7 @@ local WHITE = "Interface\\Buttons\\WHITE8X8"
 local LOCK = "Interface\\LFGFrame\\UI-LFG-ICON-LOCK"
 local DIR = Enum.StatusBarTimerDirection
 local isSecret = issecretvalue or function() return false end
+local LINE = 13 -- a plate's spell line under the bar
 
 --------------------------------------------------------------------------------
 -- Your interrupt: the first of your class's interrupts you know.
@@ -148,15 +157,16 @@ end
 function UI.CastBar(parent, unit, opts)
     opts = opts or {}
     local enemy = unit ~= "player"
-    local h = UI.Size(opts.size == "md" and "cast" or "cast-sm")
+    local plate = opts.size == "plate"
+    local h = UI.Size(opts.size == "md" and "cast" or (plate and "cast-plate" or "cast-sm"))
     local f = CreateFrame("Frame", opts.name, parent)
     Mixin(f, CB)
-    f.unit, f.opts, f.enemy = unit, opts, enemy
-    f:SetSize(UI.Size(opts.width or 300), h)
+    f.unit, f.opts, f.enemy, f.plate = unit, opts, enemy, plate
+    f:SetSize(UI.Size(opts.width or 300), plate and (h + S["space-1"] + LINE) or h)
     f:Hide()
 
     local x = 0
-    if opts.icon ~= false then
+    if opts.icon ~= false and not plate then
         f.icon = CreateFrame("Frame", nil, f)
         f.icon:SetSize(h, h)
         f.icon:SetPoint("TOPLEFT")
@@ -172,7 +182,12 @@ function UI.CastBar(parent, unit, opts)
     -- The bar: ground, the neutral (or locked) fill, then the arcane layer.
     local bar = CreateFrame("Frame", nil, f)
     bar:SetPoint("TOPLEFT", x, 0)
-    bar:SetPoint("BOTTOMRIGHT")
+    if plate then
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(h)
+    else
+        bar:SetPoint("BOTTOMRIGHT")
+    end
     f.bar = bar
     UI.Fill(bar, "surface-sunk"):SetAllPoints()
     local inner = CreateFrame("Frame", nil, bar)
@@ -220,19 +235,68 @@ function UI.CastBar(parent, unit, opts)
         lock:SetVertexColor(UI.RGBA("ink"))
         local ls = opts.size == "md" and 12 or 10
         lock:SetSize(ls, ls)
-        lock:SetPoint("LEFT", S["space-3"], 0)
         f.lockW = ls + S["space-2"]
+        if plate then
+            -- on a plate the lock sits inside the bar's left end, as tall as
+            -- the bar (8px at least), so the spell line keeps its icon
+            local px = math.max(8, h)
+            lock:SetSize(px, px)
+            lock:SetPoint("LEFT", 2, 0)
+            f.lock = lock
+        else
+            lock:SetPoint("LEFT", S["space-3"], 0)
+        end
     end
 
-    -- Text over everything.
+    -- Text over everything (a plate's: the line under the bar).
     local text = CreateFrame("Frame", nil, f)
-    text:SetAllPoints(bar)
+    if plate then
+        text:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-1"])
+        text:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, -S["space-1"])
+        text:SetHeight(LINE)
+    else
+        text:SetAllPoints(bar)
+    end
     text:SetFrameLevel(level + 5)
-    local pad = opts.size == "md" and S["space-4"] or S["space-3"]
-    f.time = UI.Text(text, "numeric", "ink")
+    if plate then
+        -- the spell's icon leads the line
+        local slot = CreateFrame("Frame", nil, text)
+        slot:SetSize(LINE, LINE)
+        slot:SetPoint("LEFT")
+        UI.Fill(slot, "surface-sunk"):SetAllPoints()
+        f.iconArt = slot:CreateTexture(nil, "ARTWORK")
+        f.iconArt:SetPoint("TOPLEFT", 1, -1)
+        f.iconArt:SetPoint("BOTTOMRIGHT", -1, 1)
+        f.iconArt:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        UI.Border(slot, "gilt-hairline")
+        f.lineIcon = slot
+        f.lockW = LINE + S["space-2"]
+    end
+    local pad = plate and 0 or (opts.size == "md" and S["space-4"] or S["space-3"])
+    f.time = UI.Text(text, plate and "caption" or "numeric", "ink")
     f.time:SetShadowed(true)
     f.time:SetPoint("RIGHT", -pad, 0)
-    f.spell = UI.Text(text, "label", "ink")
+    f.spell = UI.Text(text, plate and "caption" or "label", "ink")
+    -- a plate's target line: "› name" under the spell name, in the target's
+    -- class colour, only while the cast has a target
+    if plate and opts.target then
+        local t = CreateFrame("Frame", nil, f)
+        t:SetPoint("TOPLEFT", text, "BOTTOMLEFT", 0, 0)
+        t:SetPoint("TOPRIGHT", text, "BOTTOMRIGHT", 0, 0)
+        t:SetHeight(LINE)
+        t:SetFrameLevel(level + 5)
+        t.mark = UI.Text(t, "caption", "ink-muted")
+        t.mark:SetShadowed(true)
+        t.mark:SetPoint("LEFT", f.lockW or 0, 0)
+        t.mark:SetValue("›")
+        t.name = UI.Text(t, "caption", "ink")
+        t.name:SetShadowed(true)
+        t.name:SetWordWrap(false)
+        t.name:SetPoint("LEFT", t.mark, "RIGHT", 3, 0)
+        t.name:SetWidth(UI.Size(opts.width or 300) - (f.lockW or 0) - 12)
+        t:Hide()
+        f.target = t
+    end
     f.spell:SetShadowed(true)
     f.spell:SetPoint("LEFT", pad + (f.lockW or 0), 0)
     -- the name gives way to the time (and the interrupt): a fixed width, so a
@@ -244,7 +308,7 @@ function UI.CastBar(parent, unit, opts)
     if enemy and opts.kick ~= false then
         local k = CreateFrame("Frame", nil, f.arcane)
         k:SetFrameLevel(level + 6)
-        k:SetSize(28, h)
+        k:SetSize(28, plate and LINE or h)
         k:SetPoint("RIGHT", f.time, "LEFT", -S["space-2"], 0)
         k.glyph = UI.Diamond(k, opts.size == "md" and 8 or 7, "arcane")
         k.glyph:SetPoint("RIGHT", 0, 0)
@@ -267,11 +331,67 @@ function CB:Arrange()
     local x = (self.icon and self.iconShown) and self.h or 0
     if self.icon then self.icon:SetShown(self.iconShown) end
     if self.iconEdge then self.iconEdge:SetShown(self.iconShown) end
-    self.bar:ClearAllPoints()
-    self.bar:SetPoint("TOPLEFT", x, 0)
-    self.bar:SetPoint("BOTTOMRIGHT")
+    if not self.plate then
+        self.bar:ClearAllPoints()
+        self.bar:SetPoint("TOPLEFT", x, 0)
+        self.bar:SetPoint("BOTTOMRIGHT")
+    end
     local reserve = 40 + ((self.kick and self.kickShown) and 30 or 0)
     self.spell:SetWidth(self.totalW - x - self.pad * 2 - (self.lockW or 0) - reserve)
+    if self.target then self.target.name:SetWidth(self.totalW - (self.lockW or 0) - 12) end
+end
+
+-- The bar's height, live. On a plate only the bar changes (the spell line
+-- keeps its size under it); otherwise the icon square follows the bar.
+function CB:SetBarHeight(h)
+    self.h = h
+    if self.plate then
+        self.bar:SetHeight(h)
+        self:SetHeight(h + S["space-1"] + LINE)
+        if self.lock then self.lock:SetSize(math.max(8, h), math.max(8, h)) end
+        return
+    end
+    self:SetHeight(h)
+    if self.icon then self.icon:SetSize(h, h) end
+    if self.kick then self.kick:SetHeight(h) end
+    self:Arrange()
+end
+
+function CB:SetNeutral(on)
+    self.neutral = on and true or false
+    if self.arcane then self.arcane:SetAlpha(self.neutral and 0 or 1) end
+    if self.lockHost then self.lockHost:SetAlpha(0) end
+    self:UpdateKick()
+end
+
+function CB:SetTargetShown(on)
+    self.targetShown = on and true or false
+    if self.target and not on then self.target:Hide() end
+end
+
+-- Who the spell is aimed at. The name (and class) may be secret: never
+-- tested, only handed to the text and the colour.
+local function spellTarget(unit)
+    if not (UnitShouldDisplaySpellTargetName and UnitSpellTargetName) then return end
+    if not UnitShouldDisplaySpellTargetName(unit) then return end
+    local name = UnitSpellTargetName(unit)
+    if type(name) == "nil" then return end
+    return name, UnitSpellTargetClass and UnitSpellTargetClass(unit)
+end
+
+function CB:UpdateTarget()
+    local t = self.target
+    if not t then return end
+    if self.targetShown == false then return t:Hide() end
+    local ok, name, class = pcall(spellTarget, self.unit)
+    if not ok or type(name) == "nil" then return t:Hide() end
+    t.name:SetText(name)
+    t.name:SetColor("ink")
+    if type(class) ~= "nil" and C_ClassColor then
+        local okColor, c = pcall(C_ClassColor.GetClassColor, class)
+        if okColor and c then pcall(t.name.SetTextColor, t.name, c:GetRGB()) end
+    end
+    t:Show()
 end
 
 function CB:SetIconShown(on)
@@ -293,7 +413,7 @@ function CB:UpdateKick()
     local k = self.kick
     if not k then return end
     local ready = Interrupt.Ready()
-    k:SetShown(ready ~= nil and self.kickShown ~= false)
+    k:SetShown(ready ~= nil and self.kickShown ~= false and not self.neutral)
     if ready == nil then return end
     k.glyph:SetVertexColor(UI.RGBA(ready and "arcane" or "ink-faint"))
     k.secs:SetShown(not ready)
@@ -341,6 +461,7 @@ function CB:Start(channel)
     end
     self.spell:SetText(name)
     if self.iconArt then self.iconArt:SetTexture(texture) end
+    self:UpdateTarget()
     self:SetInterruptible(notInterruptible)
     self:UpdateKick()
     self:Show()
@@ -350,6 +471,11 @@ end
 -- notInterruptible may be a secret boolean: never tested, only handed to the engine.
 function CB:SetInterruptible(notInterruptible)
     if not self.arcane then return end
+    if self.neutral then
+        self.arcane:SetAlpha(0)
+        self.lockHost:SetAlpha(0)
+        return
+    end
     if not isSecret(notInterruptible) and notInterruptible == nil then notInterruptible = false end
     self.arcane:SetAlphaFromBoolean(notInterruptible, 0, 1)
     self.lockHost:SetAlphaFromBoolean(notInterruptible, 1, 0)
@@ -357,6 +483,7 @@ end
 
 function CB:Stop()
     self.duration = nil
+    if self.target then self.target:Hide() end
     self:Hide()
 end
 
@@ -411,4 +538,12 @@ function CB:Deactivate()
     Interrupt.bars[self] = nil
     Events.OffAll(self)
     self:Stop()
+end
+
+function CB:SetUnit(unit)
+    if unit == self.unit then return self:Refresh() end
+    local was = self.active
+    if was then self:Deactivate() end
+    self.unit = unit
+    if was and unit then self:Activate() end
 end

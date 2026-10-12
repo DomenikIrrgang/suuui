@@ -14,6 +14,14 @@
 -- flashes an ink sliver at the bar's end. An idle row rests at opacity-oor
 -- with "–". If the client hides a swing's length, that swing isn't drawn:
 -- never a number SuuUI can't read.
+--
+-- Auto Shot (the ranged row): the last half second of a shot is a cast you
+-- must stand still for, drawn as a hatched window at the bar's end. Moving
+-- inside it turns the edge, the window and the digits amber ("Moving"), and
+-- the shot waits until you stop. Whether Forever's client has that cast is
+-- learned: if shots keep firing on time while you run through the window,
+-- the window goes away (t:SetAutoShotWindow(on), opts.onNoAutoShotCast).
+--   t:SetAutoShotWindow(on)
 
 local _, ns = ...
 
@@ -33,14 +41,37 @@ local NEXT_SWING = {
     HUNTER = { 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266 },                    -- Raptor Strike
 }
 
-local DIGITS_W = 28
+local DIGITS_W = 40
 local QUEUE = 16
+local HATCH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga"
+local CAST = 0.5   -- Auto Shot's stand-still cast, seconds
+local GRACE = 0.35 -- a shot this late still counts as on time
 
 local ST = {}
 
 --------------------------------------------------------------------------------
 -- Rows
 --------------------------------------------------------------------------------
+
+-- The stand-still window at the end of the ranged bar: a hatch with a 1px
+-- left edge, ink at rest, amber while you move inside it.
+local function buildWindow(r)
+    local w = CreateFrame("Frame", nil, r)
+    w:SetPoint("TOPRIGHT", -1, -1)
+    w:SetPoint("BOTTOMRIGHT", -1, 1)
+    w:SetFrameLevel(r.bar:GetFrameLevel() + 1)
+    w.hatch = w:CreateTexture(nil, "ARTWORK")
+    w.hatch:SetAllPoints()
+    w.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
+    w.hatch:SetHorizTile(true)
+    w.hatch:SetVertTile(true)
+    w.edge = w:CreateTexture(nil, "OVERLAY")
+    w.edge:SetPoint("TOPLEFT")
+    w.edge:SetPoint("BOTTOMLEFT")
+    w.edge:SetWidth(1)
+    w:Hide()
+    r.window = w
+end
 
 local function buildRow(t, height)
     local r = CreateFrame("Frame", nil, t)
@@ -75,9 +106,11 @@ local function buildRow(t, height)
     r.flash:SetAlpha(0)
     r.digits = UI.Text(t, "micro", "ink")
     r.digits:SetShadowed(true)
-    r.digits:SetJustifyH("RIGHT")
+    -- the digits hang directly off the bar's end; the main hand's move past
+    -- the queued spell's icon while one waits (ST:UpdateQueued)
+    r.digits:SetJustifyH("LEFT")
     r.digits:SetWidth(DIGITS_W)
-    r.digits:SetPoint("LEFT", r, "RIGHT", S["space-2"] + QUEUE + S["space-2"], 0)
+    r.digits:SetPoint("LEFT", r, "RIGHT", S["space-2"], 0)
     r.duration = C_DurationUtil.CreateDuration()
     r:SetAlpha(T.opacity["opacity-oor"])
     r.digits:SetValue("–")
@@ -96,6 +129,9 @@ function UI.SwingTimer(parent, opts)
         [SWING.OffHand] = buildRow(t, oh),
         [SWING.Ranged] = buildRow(t, mh),
     }
+    buildWindow(t.rows[SWING.Ranged])
+    t.autoShotWindow = opts.autoShotWindow ~= false
+    t.onNoAutoShotCast = opts.onNoAutoShotCast
     t.rows[SWING.MainHand]:SetPoint("TOPLEFT")
     t.rows[SWING.Ranged]:SetPoint("TOPLEFT")
     t.rows[SWING.OffHand]:SetPoint("TOPLEFT", 0, -(mh + gap))
@@ -142,11 +178,57 @@ function ST:UpdateRows()
     self.rows[SWING.OffHand].digits:SetShown(self.rows[SWING.OffHand]:IsShown())
 end
 
+-- Delayed (moving inside the window) or at rest: colours of the ranged row.
+function ST:SetDelayed(r, delayed)
+    if r.delayed == delayed then return end
+    r.delayed = delayed
+    local token = delayed and "amber" or "ink-muted"
+    r.window.hatch:SetVertexColor(UI.RGBA(token, delayed and 0.6 or 0.2))
+    r.window.edge:SetColorTexture(UI.RGBA(token))
+    r.border:SetColor(delayed and "amber" or "gilt-hairline")
+    r.spark:SetColorTexture(UI.RGBA(delayed and "amber" or "ink"))
+    r.digits:SetColor(UI.RGBA(delayed and "amber" or "ink"))
+end
+
+function ST:SetAutoShotWindow(on)
+    self.autoShotWindow = on and true or false
+    local r = self.rows[SWING.Ranged]
+    if not self.autoShotWindow then
+        r.window:Hide()
+        self:SetDelayed(r, false)
+    end
+end
+
+-- A shot just landed: did it come on time although you ran through the whole
+-- window? Twice in a row means this client has no stand-still cast.
+function ST:LearnAutoShot(r, now)
+    if not (self.autoShotWindow and r.live and r.endsAt) then return end
+    local ranThrough = self.movingSince and self.movingSince <= r.endsAt - CAST
+    if not ranThrough then return end
+    if now <= r.endsAt + GRACE then
+        self.onTimeWhileMoving = (self.onTimeWhileMoving or 0) + 1
+        if self.onTimeWhileMoving >= 2 then
+            self:SetAutoShotWindow(false)
+            if self.onNoAutoShotCast then self.onNoAutoShotCast() end
+        end
+    else
+        self.onTimeWhileMoving = 0 -- the shot waited: the cast is real
+    end
+end
+
 function ST:Swing(length, kind)
     if isSecret(length) or isSecret(kind) then return end
     local r = self.rows[kind]
     if not r or type(length) ~= "number" or length <= 0 then return end
     local now = GetTime()
+    if kind == SWING.Ranged then
+        self:LearnAutoShot(r, now)
+        if self.autoShotWindow then
+            r.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / length)))
+            r.window:Show()
+        end
+        self:SetDelayed(r, false)
+    end
     if r.live then
         -- the previous swing landed: the ink sliver flashes at the end
         r.flash:SetAlpha(1)
@@ -163,11 +245,30 @@ end
 
 function ST:Tick()
     local now = GetTime()
-    for _, r in pairs(self.rows) do
-        if r.live then
+    for kind, r in pairs(self.rows) do
+        if r.live and kind == SWING.Ranged and self.autoShotWindow and self.shooting then
+            -- Auto Shot: moving inside the window holds the shot.
+            local left = r.endsAt - now
+            local delayed = self.moving and left <= CAST
+            self:SetDelayed(r, delayed)
+            if delayed then
+                r.digits:SetValue("Moving")
+            elseif left > 0 then
+                r.digits:SetValue(("%.1f"):format(left))
+            elseif not self.moving and now - math.max(r.endsAt, (self.stoppedAt or 0) + CAST) > GRACE then
+                -- standing still past the cast and still no shot: Auto Shot ended
+                r.live = false
+                r.window:Hide()
+                r:SetAlpha(T.opacity["opacity-oor"])
+                r.digits:SetValue("–")
+                r.bar:SetValue(0)
+                self:UpdateRows()
+            end
+        elseif r.live then
             local left = r.endsAt - now
             if left <= 0 then
                 r.live = false
+                if r.window then r.window:Hide(); self:SetDelayed(r, false) end
                 r:SetAlpha(T.opacity["opacity-oor"])
                 r.digits:SetValue("–")
                 r.bar:SetValue(0)
@@ -198,6 +299,9 @@ function ST:UpdateQueued()
         if not self.queued:IsShown() then ns.Motion.Pop(self.queued) end
     end
     self.queued:SetShown(found ~= nil)
+    local digits = self.rows[SWING.MainHand].digits
+    digits:ClearAllPoints()
+    digits:SetPoint("LEFT", self.rows[SWING.MainHand], "RIGHT", S["space-2"] + (found and (QUEUE + S["space-2"]) or 0), 0)
 end
 
 --------------------------------------------------------------------------------
@@ -211,6 +315,13 @@ function ST:Activate()
     self.nextSwing = NEXT_SWING[class]
     Events.OnGame("PLAYER_SWING", function(_, length, kind) self:Swing(length, kind) end, self)
     Events.OnGame("WEAPON_SLOT_CHANGED", function() self:UpdateRows() end, self)
+    -- Auto Shot: whether you shoot, and whether you move.
+    Events.OnGame("START_AUTOREPEAT_SPELL", function() self.shooting = true end, self)
+    Events.OnGame("STOP_AUTOREPEAT_SPELL", function() self.shooting = false end, self)
+    Events.OnGame("PLAYER_STARTED_MOVING", function() self.moving = true; self.movingSince = GetTime() end, self)
+    Events.OnGame("PLAYER_STOPPED_MOVING", function()
+        self.moving, self.movingSince, self.stoppedAt = false, nil, GetTime()
+    end, self)
     Events.OnGame("PLAYER_ENTERING_WORLD", function() self:UpdateRows() end, self)
     Events.OnUnit("UNIT_ATTACK_SPEED", "player", function() self:UpdateRows() end, self)
     if self.nextSwing then

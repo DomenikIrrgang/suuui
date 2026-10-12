@@ -717,6 +717,43 @@ function ns.Probe.Hide()
 end
 
 function ns.Probe.Command(arg)
+    local sub, rest = (arg or ""):match("^(%S*)%s*(.-)$")
+    if sub == "track" then
+        ns.TrackProbe.Command(rest)
+        return
+    end
+    if sub == "spells" then
+        ns.SpellData.Command(rest)
+        return
+    end
+    if sub == "plates" then
+        ns.PlateProbe.Command(rest)
+        return
+    end
+    if sub == "group" then
+        ns.GroupProbe.Command(rest)
+        return
+    end
+    if sub == "class" then
+        ns.ClassData.Command(rest)
+        return
+    end
+    if sub == "api" then
+        ns.ApiDocs.Command(rest)
+        return
+    end
+    if sub == "runtime" then
+        ns.ApiDocs.Runtime()
+        return
+    end
+    if sub == "filters" then
+        ns.ApiDocs.Filters()
+        return
+    end
+    if sub == "sound" then
+        if rest == "play" then ns.ApiDocs.SoundPlay() else ns.ApiDocs.Sound() end
+        return
+    end
     if arg == "show" then
         if SuuUIProbe and SuuUIProbe.lastReport then
             show(SuuUIProbe.lastReport)

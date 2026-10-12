@@ -49,6 +49,7 @@ local M = SuuUI.RegisterModule({
         nameColor = "game",
         showMeta = true,
         comboPoints = true,
+        debuffBadges = "all",   -- your frame: "all" debuff types, "removable", "off"
     },
 })
 
@@ -259,13 +260,19 @@ local SECTION = {
             { key = "showPower", label = "Power line", control = "toggle",
               description = "Mana, rage, energy or focus along the bottom of each bar. Low mana turns it amber." },
             { key = "healthText", label = "Health text", control = "segmented",
-              options = { { value = "percent", label = "64%" }, { value = "none", label = "None" } },
-              description = "The health percentage at the right end of each bar." },
+              options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
+                          { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
+              description = "At the right end of each bar: the health percentage, the current health, or both." },
             { key = "nameColor", label = "Name colour", control = "segmented",
               options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
               description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
             { key = "showMeta", label = "Level and classification", control = "toggle",
               description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
+        } },
+        { title = "Debuffs on you", rows = {
+            { key = "debuffBadges", label = "Debuff badges", control = "segmented",
+              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
+              description = "Magic, Curse, Poison, Disease on your frame as a badge and border, in combat too." },
         } },
         { title = "Combo points", rows = {
             { key = "comboPoints", label = "Combo points", control = "toggle",
@@ -315,10 +322,15 @@ function M:OnEnable()
 
     self.frames.player:Show()
     for _, f in pairs(self.allFrames) do f:Activate() end
+    -- A frame turned off in the settings gets no mover in edit mode.
     for _, d in ipairs(FRAMES) do
-        self:RegisterMover(self.frames[d.key], { key = d.position, label = d.label })
+        self:RegisterMover(self.frames[d.key], { key = d.position, label = d.label,
+            enabled = d.show and function() return self:Get(d.show) end or nil })
+        if d.show then self:Watch(d.show, SuuUI.EditMode.Refresh) end
     end
-    self:RegisterMover(self.bossHolder, { key = "bossPosition", label = "Boss frames" })
+    self:RegisterMover(self.bossHolder, { key = "bossPosition", label = "Boss frames",
+        enabled = function() return self:Get("showBoss") end })
+    self:Watch("showBoss", SuuUI.EditMode.Refresh)
     -- Published, so other modules (cast bars, auras) and plugins can attach to them.
     for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, self.frames[d.key]) end
     for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, self.bosses[i]) end
@@ -352,6 +364,10 @@ function M:OnEnable()
         self:Watch(key, function() self:UpdateVisibility() end)
     end
     self:UpdateThreat()
+    self:RunOutOfCombat("debuffBadges", function() self.frames.player:SetDispelBadges(self:Get("debuffBadges")) end)
+    self:Watch("debuffBadges", function()
+        self:RunOutOfCombat("debuffBadges", function() self.frames.player:SetDispelBadges(self:Get("debuffBadges")) end)
+    end)
 end
 
 function M:OnDisable()

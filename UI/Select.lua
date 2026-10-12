@@ -7,6 +7,12 @@
 --       value = "a", onChange = fn(value), width = 190, placeholder = "Choose",
 --       multiple = false,   -- the value is then a list; Select all / Clear at the top
 --       maxShown = 2,       -- multiple: past this many, the field reads "3 of 6"
+--       maxRows = 10,       -- rows the open list shows; longer lists scroll
+--                           -- (mouse wheel, a thin scrollbar on the right)
+--       search = true,      -- a search field at the top once the list is longer
+--                           -- than maxRows (false: never); Enter picks the first match
+--       lookup = fn(query), -- extra options for what was typed, shown first
+--                           -- (e.g. a spell found by its ID); implies a search field
 --   })
 --   select:SetOptions(options), select:SetValue(v), select:SetDisabled(disabled)
 --
@@ -20,6 +26,8 @@ local UI, T, Motion = ns.UI, ns.Tokens, ns.Motion
 local S = T.space
 
 local ROW_H = 28
+local MAX_ROWS = 10
+local SEARCH_H = 30
 
 --------------------------------------------------------------------------------
 -- One list at a time, plus a screen-wide catcher that closes it.
@@ -47,6 +55,7 @@ function Select:Summary()
         for _, o in ipairs(self.options) do
             if not o.heading and o.value == self.value then return o.label end
         end
+        if self.lookedUp and self.lookedUp.value == self.value then return self.lookedUp.label end
         return self.placeholder or ""
     end
     local chosen, total = {}, 0
@@ -80,7 +89,10 @@ function Select:SetDisabled(disabled)
 end
 
 function Select:Close()
-    if self.list then self.list:Hide() end
+    if self.list then
+        if self.list.search then self.list.search.edit:ClearFocus() end
+        self.list:Hide()
+    end
     if openList == self then
         openList = nil
         catcher:Hide()
@@ -100,6 +112,7 @@ local function choose(self, o)
         if self.onChange then self.onChange({ unpack(self.value) }) end
     else
         self:Close()
+        self.lookedUp = o
         if o.value ~= self.value then
             self:SetValue(o.value)
             if self.onChange then self.onChange(o.value) end
@@ -136,11 +149,50 @@ local function row(self, i)
     return list.rows[i]
 end
 
+-- The options the search leaves (headings only when something under them
+-- matches).
+function Select:View()
+    local q = (self.query or ""):lower()
+    if q == "" then return self.options end
+    local out, heading = {}, nil
+    if self.lookup then
+        for _, o in ipairs(self.lookup(self.query) or {}) do out[#out + 1] = o end
+    end
+    for _, o in ipairs(self.options) do
+        if o.heading then
+            heading = o
+        elseif tostring(o.label or ""):lower():find(q, 1, true) then
+            if heading then out[#out + 1] = heading; heading = nil end
+            out[#out + 1] = o
+        end
+    end
+    return out
+end
+
 function Select:Refresh()
     local list = self.list
     for _, r in ipairs(list.rows) do r:Hide() end
     local y = S["space-2"]
+    -- as wide as the longest entry needs (a narrow field can open a wide list)
     local width = math.max(self:GetWidth(), self.minListWidth or 0)
+    local check = (self.multiple and 14 + S["space-3"]) or (14 + S["space-3"])
+    for _, o in ipairs(self.options) do
+        local text = o.heading or o.label
+        if text then
+            local w = UI.MeasureText(o.heading and "caption" or "body", tostring(text))
+            local note = o.note and (UI.MeasureText("caption", tostring(o.note)) + S["space-3"]) or 0
+            width = math.max(width, S["space-2"] * 2 + S["space-4"] * 2 + w + note + check + 8)
+        end
+    end
+    local maxRows = self.maxRows or MAX_ROWS
+    local searching = self.search ~= false and (#self.options > maxRows or self.lookup ~= nil)
+    list.search:SetShown(searching)
+    if searching then
+        list.search:ClearAllPoints()
+        list.search:SetPoint("TOPLEFT", S["space-2"], -y)
+        list.search:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        y = y + SEARCH_H + S["space-2"]
+    end
     if self.multiple then
         list.bulk:SetPoint("TOPLEFT", S["space-2"] + S["space-4"], -y - 4)
         list.bulk:Show()
@@ -148,12 +200,19 @@ function Select:Refresh()
     else
         list.bulk:Hide()
     end
-    for i, o in ipairs(self.options) do
+    local view = self:View()
+    self.view = view
+    local maxOffset = math.max(0, #view - maxRows)
+    self.offset = math.max(0, math.min(self.offset or 0, maxOffset))
+    local scrolling = maxOffset > 0
+    local rowsTop = y
+    for i = 1, math.min(maxRows, #view) do
+        local o = view[self.offset + i]
         local r = row(self, i)
         r.option = o
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", S["space-2"], -y)
-        r:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        r:SetPoint("RIGHT", list, "RIGHT", -(S["space-2"] + (scrolling and 8 or 0)), 0)
         r.label:ClearAllPoints()
         if o.heading then
             r:SetHeight(22)
@@ -193,6 +252,35 @@ function Select:Refresh()
             y = y + ROW_H
         end
         r:Show()
+    end
+    -- the scrollbar: a thin track with a thumb for the visible part
+    list.track:SetShown(scrolling)
+    list.thumb:SetShown(scrolling)
+    if scrolling then
+        local trackH = y - rowsTop
+        list.track:ClearAllPoints()
+        list.track:SetPoint("TOPRIGHT", list, "TOPRIGHT", -S["space-2"] - 2, -rowsTop)
+        list.track:SetSize(3, trackH)
+        local thumbH = math.max(16, trackH * maxRows / #view)
+        list.thumb:ClearAllPoints()
+        list.thumb:SetPoint("TOP", list.track, "TOP", 0, -(trackH - thumbH) * self.offset / maxOffset)
+        list.thumb:SetSize(3, thumbH)
+    end
+    if #view == 0 then
+        local r = row(self, 1)
+        r.option = { heading = "No match" }
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", S["space-2"], -y)
+        r:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        r:SetHeight(22)
+        r.label:ClearAllPoints()
+        r.label:SetStyle("caption")
+        r.label:SetColor("ink-muted")
+        r.label:SetPoint("LEFT", S["space-4"], -2)
+        r.label:SetValue("No match")
+        r.box:Hide(); r.check:Hide(); r.note:SetValue("")
+        r:Show()
+        y = y + 22
     end
     list:SetSize(width, y + S["space-2"])
 end
@@ -239,12 +327,36 @@ function Select:Open()
             if self.onChange then self.onChange({}) end
         end)
         list.bulk = bulk
+
+        -- search (long lists) and the scrollbar
+        list.search = UI.TextField(list, { width = 100, placeholder = "Search", onTextChanged = function(text)
+            self.query, self.offset = text, 0
+            self:Refresh()
+        end })
+        list.search.edit:SetScript("OnEnterPressed", function(e)
+            for _, o in ipairs(self.view or {}) do
+                if not (o.heading or o.disabled) then choose(self, o); break end
+            end
+            e:ClearFocus()
+        end)
+        list.track = list:CreateTexture(nil, "ARTWORK")
+        list.track:SetColorTexture(UI.RGBA("gilt-faint"))
+        list.thumb = list:CreateTexture(nil, "OVERLAY")
+        list.thumb:SetColorTexture(UI.RGBA("ink-muted"))
+        list:EnableMouseWheel(true)
+        list:SetScript("OnMouseWheel", function(_, delta)
+            self.offset = (self.offset or 0) - delta * 3
+            self:Refresh()
+        end)
         self.list = list
     end
     self.list:ClearAllPoints()
     self.list:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+    self.query, self.offset = "", 0
+    self.list.search:SetValue("")
     self:Refresh()
     self.list:Show()
+    if self.list.search:IsShown() then self.list.search.edit:SetFocus() end
     Motion.Enter(self.list, T.duration["dur-fast"])
     openList = self
     catcher:SetFrameLevel(math.max(0, self.list:GetFrameLevel() - 1))
@@ -265,6 +377,7 @@ function UI.Select(parent, opts)
     f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
     f.multiple, f.maxShown, f.placeholder = opts.multiple, opts.maxShown, opts.placeholder
     f.minListWidth = opts.minListWidth
+    f.maxRows, f.search, f.lookup = opts.maxRows, opts.search, opts.lookup
     f.onChange = opts.onChange
     f.options = opts.options or {}
     f:SetScript("OnClick", function(self)

@@ -98,3 +98,15 @@ ns.RegisterCommand("errors", "List the errors SuuUI caught this session; \"/suu 
     end
     if arg ~= "full" then print("  /suu errors full adds the stacks.") end
 end)
+
+-- Protected calls the game blocked in combat ("Interface action failed because
+-- of an AddOn"). The game names only the function, so that is what is kept,
+-- with SuuUI's stack at the moment it fired when there is one.
+local blocked = CreateFrame("Frame")
+blocked:RegisterEvent("ADDON_ACTION_BLOCKED")
+blocked:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+blocked:SetScript("OnEvent", function(_, event, addon, func)
+    if addon ~= "SuuUI" then return end
+    local what = event == "ADDON_ACTION_FORBIDDEN" and "Forbidden" or "Blocked in combat"
+    Fault.Report("Taint", ("%s: %s"):format(what, tostring(func)), debugstack(2))
+end)

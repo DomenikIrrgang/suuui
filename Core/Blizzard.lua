@@ -12,7 +12,10 @@
 -- it taints code that reads secret values. If the game reparents the frame
 -- again, it goes back under the hidden parent on the next frame.
 -- keepParent only stops events and hides, for frames whose reparenting itself
--- would taint. Only a reload brings a suppressed frame back.
+-- would taint. noHide skips the Hide: for frames Edit Mode shows and hides
+-- through a protected setter (the action bars), where an addon's Hide taints
+-- the next combat transition; the hidden parent keeps them out of sight.
+-- Only a reload brings a suppressed frame back.
 
 local _, ns = ...
 
@@ -57,7 +60,7 @@ function ns.SuppressBlizzard(frame, opts)
         local child = resolve(frame, path)
         if type(child) == "table" and child.UnregisterAllEvents then child:UnregisterAllEvents() end
     end
-    if not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
+    if not opts.noHide and not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
     if opts.keepParent then return end
 
     reparent(frame)

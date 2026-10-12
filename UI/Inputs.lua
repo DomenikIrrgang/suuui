@@ -78,6 +78,23 @@ local function setDisabled(self, disabled)
     if self.EnableMouse then self:EnableMouse(not self.disabled) end
 end
 
+-- An EditBox given its text while hidden can open with that text scrolled
+-- out of view, or not drawn, until it changes: show it from the start and
+-- draw it again each time the box is shown.
+local function showText(e, text)
+    e:SetText(text)
+    e:SetCursorPosition(0)
+end
+
+local function redrawOnShow(e)
+    e:HookScript("OnShow", function(self)
+        if self:HasFocus() then return end
+        local text = self:GetText()
+        self:SetText("")
+        showText(self, text)
+    end)
+end
+
 --------------------------------------------------------------------------------
 -- Toggle: a 34x18 track with the Jewel's diamond as its knob.
 --------------------------------------------------------------------------------
@@ -367,7 +384,7 @@ end
 
 function Stepper:SetValue(v)
     self.value = v
-    self.edit:SetText(tostring(v or ""))
+    showText(self.edit, tostring(v or ""))
 end
 
 function Stepper:Commit(v)
@@ -417,6 +434,7 @@ function UI.Stepper(parent, opts)
     e:SetScript("OnEnterPressed", function(self) f:Commit(self:GetText()); self:ClearFocus() end)
     e:SetScript("OnEscapePressed", function(self) f:SetValue(f.value); self:ClearFocus() end)
     e:SetScript("OnEditFocusLost", function(self) f:Commit(self:GetText()) end)
+    redrawOnShow(e)
     f.edit = e
 
     local right = e
@@ -446,7 +464,7 @@ local TextField = {}
 
 function TextField:SetValue(text)
     self.value = text or ""
-    self.edit:SetText(self.value)
+    showText(self.edit, self.value)
     self.placeholder:SetShown(self.value == "" and not self.edit:HasFocus())
 end
 
@@ -475,6 +493,7 @@ function UI.TextField(parent, opts)
     e:SetPoint("TOPLEFT", S["space-4"], 0)
     e:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
     e:SetTextInsets(0, 0, 0, 0)
+    redrawOnShow(e)
     f.edit = e
 
     f.placeholder = UI.Text(f, "body", "ink-muted")

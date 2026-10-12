@@ -101,7 +101,9 @@ function M:OnEnable()
         self.player.suuManagedShow = true -- shown only while you cast
         self.attached = {}
     end
-    self:RegisterMover(self.player, { key = "playerPosition", label = "Your cast bar" })
+    self:RegisterMover(self.player, { key = "playerPosition", label = "Your cast bar",
+        enabled = function() return self:Get("showPlayer") end })
+    self:Watch("showPlayer", SuuUI.EditMode.Refresh)
     self:RegisterSettings(SECTION)
     self:ApplyOptions()
 

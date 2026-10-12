@@ -129,7 +129,9 @@ function M:OnEnable()
         if self.buffs then self.buffs.container:SetPoint("TOPRIGHT", holder, "TOPRIGHT") end
     end
     self.buffHolder.suuManagedShow = true
-    self:RegisterMover(self.buffHolder, { key = "buffPosition", label = "Your buffs" })
+    self:RegisterMover(self.buffHolder, { key = "buffPosition", label = "Your buffs",
+        enabled = function() return self:Get("showBuffs") end })
+    self:Watch("showBuffs", SuuUI.EditMode.Refresh)
     self:RegisterSettings(SECTION)
     self:ApplyOptions()
 

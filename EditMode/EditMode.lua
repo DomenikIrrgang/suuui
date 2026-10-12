@@ -37,12 +37,17 @@ local overlay       -- the full-screen edit layer: grid, movers, panel
 
 local function root() return ns.Root end
 
--- Places `frame` at `pos` (after combat if it is protected).
+-- Places `frame` at `pos` (after combat if it is protected). A mover with
+-- opts.place positions its frame itself (a bar attached to the dock).
 local function place(m)
     local pos = Settings.Get(m.namespace, m.key)
     Combat.Run("mover:" .. m.namespace .. "." .. m.key, function()
-        m.frame:ClearAllPoints()
-        m.frame:SetPoint(pos.point or "CENTER", root(), pos.point or "CENTER", pos.x or 0, pos.y or 0)
+        if m.customPlace then
+            m.customPlace()
+        else
+            m.frame:ClearAllPoints()
+            m.frame:SetPoint(pos.point or "CENTER", root(), pos.point or "CENTER", pos.x or 0, pos.y or 0)
+        end
         -- A frame whose visibility its module manages (a unit frame that shows
         -- only while its unit exists) reads position.hidden itself.
         if not m.frame.suuManagedShow then m.frame:SetShown(not pos.hidden) end
@@ -89,9 +94,15 @@ end
 -- Mover overlays
 --------------------------------------------------------------------------------
 
+-- A mover whose frame is turned off (opts.enabled says so) stays out of edit
+-- mode: hiding it there is for frames that are on.
+local function enabled(m)
+    return not m.enabled or m.enabled() and true or false
+end
+
 local function sync(m)
     local o = m.overlay
-    if not o then return end
+    if not o or not enabled(m) then return end
     local l, b, w, h = rect(m.frame)
     if not l then
         -- A frame that was never shown has no rectangle yet: show it to place it.
@@ -126,6 +137,15 @@ local function select(m)
     sync(m)
     local hidden = Settings.Get(m.namespace, m.key).hidden
     toolbar.hide:SetLabel(hidden and "Show" or "Hide")
+    local base = 3 + 60 + S["space-2"] + 60 + 3
+    if m.action then
+        toolbar.action:SetLabel(m.action.label())
+        toolbar.action:Show()
+        toolbar:SetWidth(base + S["space-2"] + 120)
+    else
+        toolbar.action:Hide()
+        toolbar:SetWidth(base)
+    end
     toolbar:ClearAllPoints()
     toolbar:SetPoint("BOTTOMRIGHT", m.overlay, "TOPRIGHT", 0, S["space-5"] + 6)
     toolbar:Show()
@@ -160,19 +180,35 @@ local function buildOverlay(m)
     o:SetScript("OnClick", function() select(m) end)
     o:SetScript("OnDragStart", function(self)
         select(m)
+        -- The frame a drag moves: the mover's own, or the one it is part of
+        -- (opts.dragFrame: a bar attached to the dock moves the dock).
+        local lead = m.dragFrame and m.dragFrame() or m.frame
+        local sl, sb = rect(lead)
+        local ol, ob = self:GetLeft(), self:GetBottom()
         self:StartMoving()
-        -- The real frame follows while dragging, unless it is protected.
+        -- The real frames follow while dragging (edit mode is never open in
+        -- combat, so protected frames may move too), and every other mover's
+        -- outline keeps up with them.
         self:SetScript("OnUpdate", function()
-            if m.frame:IsProtected() then return end
-            local l, b = self:GetLeft(), self:GetBottom()
-            m.frame:ClearAllPoints()
-            m.frame:SetPoint("BOTTOMLEFT", root(), "BOTTOMLEFT", l, b)
+            if InCombatLockdown() or not sl then return end
+            local dx, dy = self:GetLeft() - ol, self:GetBottom() - ob
+            lead:ClearAllPoints()
+            lead:SetPoint("BOTTOMLEFT", root(), "BOTTOMLEFT", sl + dx, sb + dy)
+            for _, other in ipairs(movers) do
+                if other ~= m and other.overlay and other.overlay:IsShown() then sync(other) end
+            end
         end)
     end)
     o:SetScript("OnDragStop", function(self)
         self:SetScript("OnUpdate", nil)
         self:StopMovingOrSizing()
-        local point, x, y = anchorFor(self:GetLeft(), self:GetBottom(), self:GetWidth(), self:GetHeight())
+        local l, b, w, h = self:GetLeft(), self:GetBottom(), self:GetWidth(), self:GetHeight()
+        -- opts.onDrop can take the drop over (and returns true when it did).
+        if m.onDrop and m.onDrop(snap(l), snap(b), w, h) then
+            C_Timer.After(0, function() if active then sync(m) end end)
+            return
+        end
+        local point, x, y = anchorFor(l, b, w, h)
         save(m, point, snap(x), snap(y))
     end)
     m.overlay = o
@@ -268,9 +304,19 @@ local function buildToolbar()
     end })
     bar.hide:SetPoint("LEFT", 3, 0)
     bar.reset = UI.Button(bar, { text = "Reset", width = 60, onClick = function()
-        if selected then Settings.Reset(selected.namespace, selected.key) end
+        if not selected then return end
+        if selected.onReset then selected.onReset() else Settings.Reset(selected.namespace, selected.key) end
     end })
     bar.reset:SetPoint("LEFT", bar.hide, "RIGHT", S["space-2"], 0)
+    -- A mover's own action (opts.action), e.g. "Attach to dock".
+    bar.action = UI.Button(bar, { text = "", width = 120, onClick = function()
+        local m = selected
+        if m and m.action then
+            m.action.onClick()
+            C_Timer.After(0, function() if active and selected == m then select(m) end end)
+        end
+    end })
+    bar.action:SetPoint("LEFT", bar.reset, "RIGHT", S["space-2"], 0)
     bar:SetSize(3 + 60 + S["space-2"] + 60 + 3, 36)
     return bar
 end
@@ -295,8 +341,14 @@ local function buildLayer()
         elseif nudge and selected then
             self:SetPropagateKeyboardInput(false)
             local step = IsShiftKeyDown() and 10 or 1
-            local pos = Settings.Get(selected.namespace, selected.key)
-            save(selected, pos.point or "CENTER", (pos.x or 0) + nudge[1] * step, (pos.y or 0) + nudge[2] * step)
+            local m = selected
+            local l, b, w, h = rect(m.frame)
+            if m.onDrop and l and m.onDrop(l + nudge[1] * step, b + nudge[2] * step, w, h) then
+                C_Timer.After(0, function() if active then sync(m) end end)
+            else
+                local pos = Settings.Get(m.namespace, m.key)
+                save(m, pos.point or "CENTER", (pos.x or 0) + nudge[1] * step, (pos.y or 0) + nudge[2] * step)
+            end
         else
             self:SetPropagateKeyboardInput(true)
         end
@@ -326,7 +378,7 @@ function EditMode.Enter()
     drawGrid()
     for _, m in ipairs(movers) do
         if not m.overlay then buildOverlay(m) end
-        m.overlay:Show()
+        m.overlay:SetShown(enabled(m))
         sync(m)
     end
     select(nil)
@@ -351,6 +403,19 @@ end
 
 function EditMode.Toggle()
     if active then EditMode.Exit() else EditMode.Enter() end
+end
+
+-- Re-reads every mover's `enabled` (a module calls it when one changes).
+function EditMode.Refresh()
+    if not active then return end
+    for _, m in ipairs(movers) do
+        if m.overlay then
+            local on = enabled(m)
+            m.overlay:SetShown(on)
+            if not on and selected == m then select(nil) end
+            if on then C_Timer.After(0, function() if active then sync(m) end end) end
+        end
+    end
 end
 
 -- A click anywhere but on a mover, the toolbar or the panel deselects.
@@ -382,6 +447,9 @@ function EditMode.Register(frame, opts, owner)
     local m = {
         frame = frame, namespace = opts.namespace, key = opts.key or "position",
         label = opts.label or frame:GetName() or "Frame", owner = owner,
+        enabled = opts.enabled,
+        customPlace = opts.place, onDrop = opts.onDrop, action = opts.action, onReset = opts.reset,
+        dragFrame = opts.dragFrame,
     }
     assert(type(Settings.Get(m.namespace, m.key)) == "table",
         "SuuUI RegisterMover: " .. m.namespace .. "." .. m.key .. " must be a position table in the defaults")
@@ -396,11 +464,16 @@ function EditMode.Register(frame, opts, owner)
     place(m)
     if active then
         buildOverlay(m)
-        m.overlay:Show()
+        m.overlay:SetShown(enabled(m))
         C_Timer.After(0, function() sync(m) end)
     end
     return m
 end
+
+-- For movers that place themselves: a frame's rectangle in root units, and
+-- the screen anchor edit mode would save for a rectangle.
+EditMode.Rect = rect
+EditMode.AnchorFor = anchorFor
 
 function EditMode.Unregister(owner)
     for i = #movers, 1, -1 do

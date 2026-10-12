@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.6.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.9.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.6.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors and cast bars |
+| `SuuUI.API_VERSION` | `"0.9.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -66,7 +66,7 @@ local M = SuuUI.RegisterModule({
 | `M:RunOutOfCombat(key, fn)` | Runs `fn` now, or after combat. A later call with the same key replaces a waiting one |
 | `M:RegisterCommand(name, help, fn)` | Adds `/suu <name>`; `fn(rest of the line)` |
 | `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
-| `M:RegisterMover(frame, { key = "position", label })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
+| `M:RegisterMover(frame, { key = "position", label, enabled })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
 | `M.id`, `M.name`, `M.source`, `M.builtIn`, `M.state` | |
@@ -78,6 +78,8 @@ local M = SuuUI.RegisterModule({
 | `SUUUI_SETTINGS_READY` | — |
 | `SUUUI_SETTING_CHANGED` | `namespace, key` |
 | `SUUUI_PROFILE_CHANGED` | `profileName` |
+| `SUUUI_SPEC_CHANGED` (0.9) | `spec` (the talent tree with the most points, 1-3; 0 unspecced) |
+| `SUUUI_ROLE_CHANGED` (0.9) | `role` ("TANK", "HEALER", "DAMAGER"), before any profile switch it causes |
 | `SUUUI_MODULE_REGISTERED` / `_ENABLED` / `_DISABLED` / `_ERRORED` | `moduleId` |
 | `SUUUI_SETTINGS_SECTIONS_CHANGED` | — |
 | `SUUUI_EDITMODE_CHANGED` | `active` |
@@ -100,8 +102,9 @@ local M = SuuUI.RegisterModule({
 | `SuuUI.Pixel.Size([region])` | One physical pixel in `region`'s units (UIParent by default) |
 | `SuuUI.Pixel.Snap(value, [region])` | `value` rounded to whole physical pixels |
 | `SuuUI.Pixel.PerfectScale()` | The effective scale at which one UI unit is one pixel |
-| `SuuUI.SuppressBlizzard(frame, [opts])` | Hides a Blizzard frame by reparenting it, after combat if needed. `opts.unregisterEvents` also stops its events; it then only comes back after a reload |
-| `SuuUI.RestoreBlizzard(frame)` | Gives it back; `false` if only a reload can |
+| `SuuUI.SuppressBlizzard(frame, [opts])` | Stands a Blizzard frame down: stops its events, hides it and moves it under a hidden parent (after combat for protected frames, never while the game's Edit Mode is open). `opts.children`: dotted paths of children whose events stop too. `opts.keepParent`: stop events and hide, but don't reparent. `opts.noHide`: reparent without calling Hide (frames Edit Mode shows through a protected setter, such as the action bars). Only a reload brings it back |
+| `SuuUI.IsSuppressed(frame)` | Whether a frame is stood down |
+| `SuuUI.RestoreBlizzard(frame)` | Kept for compatibility: always `false` for a suppressed frame (only a reload restores it) |
 
 ## The screen root (0.2)
 
@@ -149,6 +152,11 @@ M:RegisterSettings({
     id = "hello", label = "Hello",
     category = "Plugins",          -- Frames, Insights, World, General or Plugins (the default)
     order = 100,
+    -- optional: the live preview column (320px): the view at its real size,
+    -- centred (wider ones start at the column's left edge and clip on the right). Return the same frame each time.
+    preview = function(parent) return myPreviewFrame end,
+    previewTitle = "Live preview",
+    previewNote = function() return "5 frames at 200 × 28 px" end, -- 0.9
     groups = {
         { title = "Greeting", description = "…", rows = {
             { key = "greeting", label = "Greeting", control = "text", description = "What /suu hello says." },
@@ -160,7 +168,7 @@ M:RegisterSettings({
         } },
     },
     build = function(page) end,    -- optional: page:AddGroup(groupDef), page:Clear(), page:Refresh()
-    preview = function(parent) return frame end,  -- optional live preview (scaled to fit 320px)
+    preview = function(parent) return frame end,  -- optional live preview (real size, 320px column)
 })
 ```
 
@@ -198,6 +206,14 @@ end,
 |---|---|
 | `SuuUI.RegisterMover(frame, { namespace, key, label })` | The same for a frame outside a module |
 | `SuuUI.EditMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | |
+| `opts.place()` (0.8) | The mover positions its frame itself (e.g. relative to another frame) instead of from its position table |
+| `opts.onDrop(l, b, w, h)` (0.8) | Called with the dropped (or nudged) rectangle in root units; return `true` when it handled the drop, else the position table is saved as usual |
+| `opts.action = { label = fn, onClick = fn }` (0.8) | One extra button in the selected frame's toolbar (e.g. "Attach to dock") |
+| `opts.dragFrame()` (0.8) | The frame a drag moves live, when it isn't the mover's own (a bar attached to the dock moves the dock) |
+| `opts.reset()` (0.8) | What the toolbar's Reset does, instead of resetting the position table |
+| `SuuUI.EditMode.Rect(frame)`, `.AnchorFor(l, b, w, h)` (0.8) | A frame's rectangle in root units, and the screen anchor edit mode would save for a rectangle |
+| `opts.enabled` (0.8) | A function: while it returns false the frame is turned off and gets no mover in edit mode (a bar switched off in the settings). Hiding in edit mode is for frames that are on |
+| `SuuUI.EditMode.Refresh()` (0.8) | Re-reads every mover's `enabled`; call it when one changes |
 
 Settings: `layout.snap`, `layout.gridSize`.
 
@@ -216,8 +232,40 @@ Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` 
 
 | | |
 |---|---|
-| `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`. See `UI/UnitFrame.lua` for `opts` |
-| `SuuUI.UI.CastBar(parent, unit, { size, width, icon, kick })` | A cast bar; `:Activate()`, `:Deactivate()`, `:SetIconShown(on)`, `:SetKickShown(on)` |
+| `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`; 0.9: `:SetUnit(unit)`, `:Resize(w, h)`, `:SetDispelBadges("all"|"removable"|"off")` (debuff-type border and badge, in combat too) (out of combat) and the opts `height`, `lowHealth`, `incoming`, `powerFor(unit)`. See `UI/UnitFrame.lua` for `opts` |
+| Buff indicators (0.9) | `f:SetIndicators(list)` (live, out of combat) and `f:SetPreviewIndicators(list)` on a unit frame; `SuuUI.UI.GroupIndicators()` (list, version) and `SuuUI.UI.SetGroupIndicators(list)` (emits `SUUUI_INDICATORS_CHANGED`); an indicator is `{ name, ids, kind = "icon"|"square"|"border"|"fill", point, size, color, source = "mine"|"any" }`, `SuuUI.UI.INDICATOR_POINTS` lists the points |
+| `SuuUI.UI.UnitStandIn(person)` (0.9) | Stand-in Unit* functions for a preview: `person(unit)` returns `{ name, class, role, health (0-1), max, power, incoming, absorb, dead, you }`; pass the result as a unit frame's `opts.api` |
+| `SuuUI.Role()` (0.9) | Your role ("TANK", "HEALER", "DAMAGER") and where it came from ("chosen", "assigned", "talents"). Profiles can switch with it (General > Profiles > By role) |
+| `SuuUI.Spec()` (0.9) | The talent tree with the most points (1-3; 0 with none spent) and the points per tree |
+| `SuuUI.UI.CastBar(parent, unit, { size, width, icon, kick })` | A cast bar; `:Activate()`, `:Deactivate()`, `:SetIconShown(on)`, `:SetKickShown(on)`; 0.9: `size = "plate"`, `:SetUnit(unit)`, `:SetBarHeight(px)`, opt `target` (plates: the spell's target under the spell name) and `:SetTargetShown(on)`, `:SetNeutral(on)` (a friendly unit's cast: no arcane layer, lock or interrupt) |
 | `SuuUI.UI.Flag(v)` | A possibly secret boolean as a plain one (secret reads as false). Show from a secret boolean with `region:SetAlphaFromBoolean` instead |
 | `SuuUI.UI.MeasureText(style, text)` | A text's width, measured where no anchor chain can make it secret |
 | `SuuUI.Motion.AlphaTo(frame, alpha, duration)` | Fades to an alpha; works on secure frames in combat |
+| `SuuUI.UI.SwingTimer(parent, { width, name })` | The swing timer from the game's own `PLAYER_SWING`; `:Activate()`, `:Deactivate()` |
+
+## Auras (0.7)
+
+| | |
+|---|---|
+| `SuuUI.UI.AuraContainer(parent, unit, opts)` | An engine aura container styled as the design's AuraIcon. `opts`: `size` (token), `anchor`, `growth` (`{ "LEFT", "UP" }`), `lineWidth`, `groups` (`{ key, filter = { "HARMFUL", "PLAYER" }, max, dispel, cancel, drain }`). Returns `{ container, ... }` with `:SetUnit(unit)`, `:Refresh()`, `:SetGroupMax(key, n)`; 0.9: `:SetFlow(anchor, growth)`, `:SetGroupSize(key, size)` (live; out of combat, as the engine's buttons refuse it in combat). Addon code can't read auras in combat, so the engine fills it |
+| Group options (0.9) | `include = { spellIDs }` (only those spells), `dispelTypes = { "Curse" }` (only debuffs of those types, matched by the engine in combat too), `initialize = fn(button)` (build the button yourself, once, when the engine creates it: decorations hung on it show and hide with it, which is how party frames draw a debuff type's border and badge in combat) |
+
+## Action bars (0.8)
+
+SuuUI's own secure buttons: no Blizzard button template. Make them out of combat.
+
+| | |
+|---|---|
+| `SuuUI.UI.ActionBar(parent, opts)` | Up to 12 buttons on a secure header. `opts`: `name` (global name; buttons are `name .. "Button" .. i`), `slot` (first action slot), `count`, `columns`, `gap`, `size`, `binding` (the game's binding command prefix, e.g. `"MULTIACTIONBAR1BUTTON"`: every key bound to it clicks the button), `paging` (macro conditions, e.g. `SuuUI.UI.ActionBarPaging()`), `onPage(bar, page)`. Returns a bar with `.header`, `.buttons`, `:Page()`, `:SetHotkeysShown(on)`, `:SetShowEmpty(on)`, `:Layout(columns, gap)`, `:UpdateBindings()` |
+| `SuuUI.UI.SetVisibility(frame, mode)` | When a frame shows: `"always"`, `"combat"` (a secure driver, so it works for frames holding secure buttons), `"mouseover"` (fades in while the mouse is over it or you drag something) or `"hidden"`. Edit mode and keybind mode show every managed frame that isn't hidden. Bars: `bar:SetVisibility(mode)`, `bar:Layout(columns, gap, count, size)` |
+| `SuuUI.UI.ActionBarPaging()` | Bar 1's paging on Forever: override and vehicle bars, manual pages 2–6, then stance/form pages 7–10 |
+| `SuuUI.UI.ActionButton(parent, name, size)` | One button's art on a `SecureActionButtonTemplate` button (the bar sets the secure attributes). `:SetSlot(slot)`, `:SetHotkey(text)`, `:SetHotkeyShown(on)`, `:Update()` |
+| `SuuUI.UI.ShortKey(key)` | A binding in button size: `"SHIFT-1"` → `"S1"`, `"BUTTON4"` → `"M4"` |
+| `SuuUI.UI.StanceBar(parent, { name })` | Your stances or forms as `action-sm` buttons, one per form you know. `.header`, `:SetEnabled(on)`, `:SetHotkeysShown(on)` |
+| `SuuUI.UI.PetBar(parent, { name })` | The pet's 10 actions, shown while you have a pet; right click toggles autocast. `.header`, `:SetEnabled(on)`, `:SetHotkeysShown(on)` |
+| `SuuUI.UI.MakeModal(panel)` | Makes a panel a modal: centred over a dimmed screen (the game can't blur its interface), taking every click; Esc or a click on the shade closes it. `:Show()`/`:Hide()` as usual |
+| `SuuUI.UI.Confirm({ title, text, confirm, cancel, onConfirm, onCancel })` | A modal yes/no question; Cancel, Esc or a click outside counts as cancel |
+| `SuuUI.UI.CooldownTracker(parent, { name })` | SuuUI's own Cooldown Manager: `:SetLists({ essential, utility, buffs, debuffs, procs })` (entries `{ name, ids, mine }`), `:SetOptions({ essentialSize, utilityInline, missingBuffs, missingDebuffs, readyPop, procHighlight })`. Cooldowns are its own icons; buffs, debuffs and procs are engine aura containers with spell lists |
+| `SuuUI.CooldownPresets()` | Your class's presets: `{ { id, name, lists } }`, every entry carrying all the IDs with its name in Forever's client |
+| `SuuUI.KeybindMode.Enter()`, `.Exit()`, `.Toggle()`, `.IsActive()` | Keybind mode (`/suu keybind`): hover a button, press a key. It binds the game's own command for the button, so the game's Key Bindings window shows it too. Message: `SUUUI_KEYBINDMODE_CHANGED (active)` |
+| Bindable buttons | A button made with `SuuUI.UI.ActionButton` takes part in keybind mode when it has `b.bindCommand` (a game binding command) and `b.bindLabel`; `ActionBar`, `StanceBar` and `PetBar` set both |

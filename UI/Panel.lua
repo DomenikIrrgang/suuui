@@ -160,6 +160,113 @@ function UI.Panel(parent, opts)
 end
 
 --------------------------------------------------------------------------------
+-- Modal: a panel in the middle of the screen over a dark shade. The game
+-- can't blur the interface, so the background is dimmed instead; it takes
+-- every click, and a click on it, Esc or the panel's own buttons close.
+--
+--   UI.MakeModal(panel)             -- panel:Show()/Hide() bring the shade
+--   UI.Confirm({ title, text, confirm = "Replace", cancel = "Cancel",
+--                onConfirm = fn, onCancel = fn })
+--------------------------------------------------------------------------------
+
+-- One shade for every modal, made up front: full screen, on the DIALOG layer
+-- under the modal, taking every click.
+local shade = CreateFrame("Button", nil, ns.Root)
+shade:SetAllPoints(ns.Root)
+shade:SetFrameStrata("DIALOG")
+shade:EnableMouse(true)
+shade:RegisterForClicks("AnyUp")
+do
+    local t = shade:CreateTexture(nil, "BACKGROUND")
+    t:SetAllPoints()
+    t:SetColorTexture(0, 0, 0, 0.8)
+end
+shade:Hide()
+shade:SetScript("OnClick", function(self) if self.owner then self.owner:Hide() end end)
+
+local function attach(panel)
+    if not panel:IsShown() then return end
+    shade.owner = panel
+    shade:SetFrameLevel(1)
+    panel:SetFrameLevel(math.max(panel:GetFrameLevel(), 10))
+    shade:SetAlpha(1)
+    shade:Show()
+    panel:Raise()
+end
+
+function UI.MakeModal(panel)
+    panel:SetFrameStrata("DIALOG")
+    panel:SetToplevel(true)
+    panel:EnableMouse(true)
+    panel:SetClampedToScreen(true)
+    panel:ClearAllPoints()
+    panel:SetPoint("CENTER", ns.Root, "CENTER", 0, 40)
+    -- Esc closes it (other keys pass on to the game)
+    panel:EnableKeyboard(true)
+    panel:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" then
+            self:SetPropagateKeyboardInput(false)
+            self:Hide()
+        else
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
+    -- the shade comes with the panel, however it is shown
+    panel:HookScript("OnShow", function(self)
+        attach(self)
+        Motion.Enter(self, T.duration["dur-fast"])
+    end)
+    hooksecurefunc(panel, "Show", attach)
+    panel:HookScript("OnHide", function(self)
+        if shade.owner == self then
+            shade:Hide()
+            shade.owner = nil
+        end
+    end)
+    -- a new frame is already shown: start hidden so the first Show counts
+    panel:Hide()
+    return panel
+end
+
+local confirmPanel
+
+function UI.Confirm(opts)
+    if not confirmPanel then
+        local p = UI.Panel(ns.Root, { title = " ", width = 400, height = 170, solid = true })
+        p.text = UI.Text(p.body, "body", "ink")
+        p.text:SetWordWrap(true)
+        p.text:SetJustifyH("LEFT")
+        p.text:SetFixedWidth(360)
+        p.text:SetPoint("TOPLEFT")
+        p.ok = UI.Button(p, { text = "OK", variant = "primary", width = 110, onClick = function()
+            local fn = p.onConfirm
+            p.onCancel = nil
+            p:Hide()
+            if fn then fn() end
+        end })
+        p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+        p.cancel = UI.Button(p, { text = "Cancel", width = 100, onClick = function() p:Hide() end })
+        p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -8, 0)
+        p:HookScript("OnHide", function(self)
+            local fn = self.onCancel
+            self.onCancel, self.onConfirm = nil, nil
+            if fn then fn() end
+        end)
+        UI.MakeModal(p)
+        confirmPanel = p
+    end
+    local p = confirmPanel
+    p:SetTitle(opts.title or "Are you sure?")
+    p.text:SetValue(opts.text or "")
+    p.ok:SetLabel(opts.confirm or "OK")
+    p.cancel:SetLabel(opts.cancel or "Cancel")
+    p:Hide() -- an older question still open is cancelled first
+    p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
+    p:Show()
+    return p
+end
+
+--------------------------------------------------------------------------------
 -- SectionHeader: a label floating on the world, a gilt hairline fading out,
 -- and an optional meta caption. Give it a width.
 --------------------------------------------------------------------------------

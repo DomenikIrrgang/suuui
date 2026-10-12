@@ -17,8 +17,14 @@ local M = SuuUI.RegisterModule({
         position = { point = "BOTTOM", x = 0, y = 271 },
         inCombatOnly = true,
         hideForHealers = true,
+        autoShotWindow = true,
+        autoShotNoCast = false, -- learned: this client's Auto Shot fires while moving
     },
 })
+
+function M:ApplyAutoShot()
+    self.timer:SetAutoShotWindow(self:Get("autoShotWindow") and not self:Get("autoShotNoCast"))
+end
 
 function M:UpdateVisibility()
     local f = self.timer
@@ -39,12 +45,22 @@ local SECTION = {
               description = "Out of combat the timer is gone." },
             { key = "hideForHealers", label = "Hide when you heal", control = "toggle",
               description = "With the healer role in a group, there is no swing timer." },
+            { key = "autoShotWindow", label = "Auto Shot window", control = "toggle",
+              description = "The last half second of a shot, when you must stand still, hatched at the end of the ranged bar; it turns amber while you move. It switches itself off if this client's Auto Shot fires while moving.",
+              disabled = function()
+                  if M:Get("autoShotNoCast") then return true, "This client's Auto Shot fires while you move, so there is no window." end
+              end },
         } },
     },
 }
 
 function M:OnEnable()
-    self.timer = self.timer or UI.SwingTimer(SuuUI.Root, { width = 340, name = "SuuUISwingTimer" })
+    self.timer = self.timer or UI.SwingTimer(SuuUI.Root, { width = 340, name = "SuuUISwingTimer",
+        onNoAutoShotCast = function()
+            self:Set("autoShotNoCast", true)
+            self:Print("Auto Shot fired on time while you ran, so this client has no stand-still cast: the Auto Shot window is off.")
+        end })
+    self:ApplyAutoShot()
     self.timer.suuManagedShow = true
     self.timer:Activate()
     self:RegisterMover(self.timer, { key = "position", label = "Swing timer" })
@@ -55,6 +71,7 @@ function M:OnEnable()
     for _, key in ipairs({ "inCombatOnly", "hideForHealers", "position" }) do
         self:Watch(key, function() self:UpdateVisibility() end)
     end
+    self:Watch("autoShotWindow", function() self:ApplyAutoShot() end)
     self:UpdateVisibility()
 end
 

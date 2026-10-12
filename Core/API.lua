@@ -46,6 +46,10 @@ API.Pixel = {
     PerfectScale = ns.Pixel.PerfectScale,
 }
 
+-- 0.9: your role ("TANK", "HEALER", "DAMAGER") and where it came from
+-- ("chosen", "assigned", "talents"); your spec (talent tree 1-3, 0 unspecced)
+function API.Role() return ns.Roles.Current() end
+function API.Spec() return ns.Roles.Spec() end
 -- Blizzard frames
 API.SuppressBlizzard = ns.SuppressBlizzard
 API.RestoreBlizzard = ns.RestoreBlizzard
@@ -135,11 +139,26 @@ API.EditMode = {
     Exit = ns.EditMode.Exit,
     Toggle = ns.EditMode.Toggle,
     IsActive = ns.EditMode.IsActive,
+    Refresh = ns.EditMode.Refresh, -- 0.8: re-reads each mover's `enabled`
+    Rect = ns.EditMode.Rect,           -- 0.8: a frame's rectangle in root units
+    AnchorFor = ns.EditMode.AnchorFor, -- 0.8: the screen anchor for a rectangle
 }
 
 -- 0.5: unit frames
 
 API.UI.UnitFrame = UI.UnitFrame
+API.UI.AnchorPicker = UI.AnchorPicker -- 0.9: the 3×3 point grid (no offsets)
+API.UI.SwatchRow = UI.SwatchRow       -- 0.9: token colour swatches
+API.UI.ToggleChips = UI.ToggleChips   -- 0.9: on/off chips for choices that combine
+API.UI.INDICATOR_POINTS = UI.INDICATOR_POINTS -- 0.9: where an indicator can sit on a unit frame
+API.UI.GroupIndicators = UI.GroupIndicators   -- 0.9: the buff indicators group frames show, and a version
+API.UI.GROUP_TIERS = UI.GROUP_TIERS           -- 0.9: "5", "10", "20", "40"
+API.UI.GroupTier = UI.GroupTier               -- 0.9: the current group's size tier (or for a count)
+API.UI.IndicatorsFor = UI.IndicatorsFor       -- 0.9: the indicators of a list active at a tier
+API.UI.SetGroupIndicators = UI.SetGroupIndicators -- 0.9: set them (the Buff indicators module); emits SUUUI_INDICATORS_CHANGED
+API.UI.UnitStandIn = UI.UnitStandIn -- 0.9: Unit* stand-ins for previews: UnitStandIn(person) -> api for UnitFrame opts.api
+API.UI.DEBUFF_TYPES = UI.DEBUFF_TYPES -- 0.9: { "Magic", "Curse", "Poison", "Disease" }, drawn top first
+API.UI.UnitFrameCurveValue = UI.UnitFrameCurveValue -- 0.9: what a unit frame curve gives for a 0-1 fraction (preview stand-ins)
 API.UI.Flag = UI.Flag               -- a possibly secret boolean as a plain one (secret reads as false)
 API.UI.MeasureText = UI.MeasureText -- text width, safe where anchors make geometry secret
 API.Motion.AlphaTo = ns.Motion.AlphaTo
@@ -157,3 +176,29 @@ API.UI.SwingTimer = UI.SwingTimer
 
 -- 0.7: auras (engine aura containers, styled as the design's AuraIcon)
 API.UI.AuraContainer = UI.AuraContainer
+
+-- 0.8: action bars (SuuUI's own secure buttons; see UI/ActionBar.lua)
+API.UI.ActionButton = UI.ActionButton
+API.UI.ActionBar = UI.ActionBar
+API.UI.ActionBarPaging = UI.ActionBarPaging -- bar 1's paging conditions on Forever
+API.UI.ShortKey = UI.ShortKey               -- "SHIFT-1" -> "S1"
+API.UI.StanceBar = UI.StanceBar
+API.UI.CooldownTracker = UI.CooldownTracker
+API.UI.TrackerSound = UI.TrackerSound -- "chime", "ping", "proc", "warning" or a sound kit ID
+API.UI.MakeModal = UI.MakeModal -- a panel centred over a dimmed screen
+API.UI.Confirm = UI.Confirm     -- { title, text, confirm, cancel, onConfirm, onCancel }
+-- The Cooldown Manager presets of your class (only your class's data loads):
+-- { { id, name, lists = { essential, utility, buffs, debuffs, procs } }, ... },
+-- each entry { name, ids = { every ID with that name in the client }, mine }.
+function API.CooldownPresets() return ns.CooldownPresets or {} end
+API.UI.SetActionTextSize = UI.SetActionTextSize -- px, never below micro (9.5)
+API.UI.SetVisibility = UI.SetVisibility -- "always" | "combat" | "mouseover" | "hidden"
+
+-- Keybind mode: hover a button, press a key. Message: SUUUI_KEYBINDMODE_CHANGED (active).
+API.KeybindMode = {
+    Enter = ns.KeybindMode.Enter,
+    Exit = ns.KeybindMode.Exit,
+    Toggle = ns.KeybindMode.Toggle,
+    IsActive = ns.KeybindMode.IsActive,
+}
+API.UI.PetBar = UI.PetBar

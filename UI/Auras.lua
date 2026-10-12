@@ -15,10 +15,23 @@
 --           { key = "debuffs", filter = { "HARMFUL", "PLAYER" }, max = 16,
 --             dispel = true,       -- the dispel-type border on typed debuffs
 --             cancel = false,      -- right click cancels (your own buffs)
---             drain = "ink-muted" },
+--             drain = "fel",       -- the duration bar's colour (ink by default)
+--             include = { 6673, 5242 },    -- only these spell IDs (the engine
+--                                          -- matches them, so it works in combat)
+--             -- per-group looks (the Cooldown Manager's per-entry behaviour):
+--             border = "gilt",             -- edge token (gilt-hairline by default)
+--             glow = "glow-arcane",        -- a shadow token around the icon
+--             digits = false, stacks = false,
+--             expiring = 5,                -- seconds: digits amber below (default 3)
+--             size = "icon-md",            -- this group's icon size (default: the container's)
+--             dispelTypes = { "Curse" },   -- 0.9: only debuffs of these types (instead of include)
+--             initialize = fn(button) },   -- 0.9: build the button yourself (default: the AuraIcon)
 --       },
 --   })
---   c:SetUnit(unit), c:SetGroupMax(key, n)
+--   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids),
+--   c:SetFlow(anchor, growth)
+--   c:SetGroupSize(key, size)    -- 0.9: a group's icon size, live (out of combat:
+--                                -- in combat the engine's buttons refuse the resize)
 --
 -- Every call into the engine is pcall-guarded: an error inside one aborts the
 -- engine's whole button batch, and these APIs were still moving in the beta.
@@ -31,6 +44,7 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
+local dispelCandidates -- below, with the spell lists
 local CROP = 0.08
 local EXPIRING = 3 -- seconds: the duration digits turn amber below this
 
@@ -58,7 +72,8 @@ end
 -- under ten minutes, then minutes, then hours.
 --------------------------------------------------------------------------------
 
-local formatter, colorCurve
+local formatter
+local colorCurves = {}
 
 local function durationFormatter()
     if formatter ~= nil then return formatter or nil end
@@ -76,22 +91,24 @@ local function durationFormatter()
     return formatter or nil
 end
 
--- amber below EXPIRING seconds, ink above (a step curve over the remaining time)
-local function expiringColor()
-    if colorCurve ~= nil then return colorCurve or nil end
-    colorCurve = false
+-- amber below `seconds` (EXPIRING by default), ink above: a step curve over
+-- the remaining time
+local function expiringColor(seconds)
+    seconds = seconds or EXPIRING
+    if colorCurves[seconds] ~= nil then return colorCurves[seconds] or nil end
+    colorCurves[seconds] = false
     if not (C_CurveUtil and C_CurveUtil.CreateColorCurve) then return nil end
     local c = C_CurveUtil.CreateColorCurve()
     c:SetType(Enum.LuaCurveType.Step)
     c:AddPoint(0, CreateColor(UI.RGBA("amber")))
-    c:AddPoint(EXPIRING, CreateColor(UI.RGBA("ink")))
-    colorCurve = c
+    c:AddPoint(seconds, CreateColor(UI.RGBA("ink")))
+    colorCurves[seconds] = c
     return c
 end
 
-local function durationOptions()
+local function durationOptions(seconds)
     local opts = { textFormatter = durationFormatter() }
-    local curve = expiringColor()
+    local curve = expiringColor(seconds)
     if curve then
         local prop = Enum.DurationTextBindingProperty and Enum.DurationTextBindingProperty.RemainingDuration
         if prop == nil then prop = 0 end
@@ -102,8 +119,8 @@ end
 
 -- Registers the duration text, dropping options step by step if the engine
 -- refuses them (never let it throw).
-local function setDurationText(button, fs)
-    local opts = durationOptions()
+local function setDurationText(button, fs, seconds)
+    local opts = durationOptions(seconds)
     if pcall(button.SetDurationText, button, fs, opts) then return end
     opts.textColor = nil
     if pcall(button.SetDurationText, button, fs, opts) then return end
@@ -117,8 +134,10 @@ end
 local DISPEL_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle
     and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
 
-local function makeInitializer(group, size)
+local function makeInitializer(group, size, owner)
     return function(button)
+        -- the group's size now (SetGroupSize may have changed it)
+        size = owner.sizes[group.key] or size
         -- The engine's layout only anchors its buttons; their size is ours to
         -- set, and an unsized button renders nothing.
         pcall(button.SetSize, button, size, size)
@@ -138,7 +157,8 @@ local function makeInitializer(group, size)
         over:SetAllPoints()
         over:EnableMouse(false)
         over:SetFrameLevel(button:GetFrameLevel() + 2)
-        UI.Border(over, "gilt-hairline")
+        UI.Border(over, group.border or "gilt-hairline")
+        if group.glow then UI.Shadow(button, group.glow) end
 
         -- The dispel border: white edges the engine shows and tints per
         -- debuff type; hidden until it does.
@@ -156,14 +176,23 @@ local function makeInitializer(group, size)
             end
         end
 
-        -- The drain line along the bottom, and the text over everything.
+        -- The duration bar inside the bottom edge: 3px from icon-lg up, 2px
+        -- below, over the digits' dark fade so it reads on bright art; it drains right
+        -- to left. ink by default, fel for HoTs (group.drain). The engine
+        -- drives it, so it works in combat; it has no colour curve, so only
+        -- the digits turn amber near the end.
+        local barH = size >= 30 and 3 or 2
         local drain = CreateFrame("StatusBar", nil, button)
         drain:SetPoint("BOTTOMLEFT", 1, 1)
         drain:SetPoint("BOTTOMRIGHT", -1, 1)
-        drain:SetHeight(2)
+        drain:SetHeight(barH)
         drain:SetStatusBarTexture(WHITE)
-        drain:SetStatusBarColor(UI.RGBA(group.drain or "ink-muted"))
-        drain:SetFrameLevel(button:GetFrameLevel() + 4)
+        drain:SetStatusBarColor(UI.RGBA(group.drain or "ink"))
+        -- above the text layer: the digits' dark fade would dim it otherwise
+        drain:SetFrameLevel(button:GetFrameLevel() + 6)
+        -- No track behind it: the engine leaves the bar empty on permanent
+        -- auras (Devotion Aura), and a track would show there as an empty
+        -- strip. The digits' dark fade gives the fill its contrast.
 
         local text = CreateFrame("Frame", nil, button)
         text:SetAllPoints()
@@ -178,11 +207,14 @@ local function makeInitializer(group, size)
         scrim:SetHeight(math.floor(size * 0.6))
         scrim:SetColorTexture(1, 1, 1, 1)
         scrim:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.8), CreateColor(0, 0, 0, 0))
+        -- kept, so SetGroupSize can resize the buttons the engine already made
+        owner.buttons[#owner.buttons + 1] = { button = button, key = group.key, scrim = scrim }
         local duration = text:CreateFontString(nil, "OVERLAY")
         ns.Fonts.Apply(duration, size >= 30 and "numeric" or "micro")
         duration:SetShadowColor(0, 0, 0, 1)
         duration:SetShadowOffset(0, -1)
-        duration:SetPoint("BOTTOM", 0, size <= 16 and 2 or 3)
+        -- the digits sit just above the bar
+        duration:SetPoint("BOTTOM", 0, 1 + barH + (size >= 30 and 1 or 0))
         local stacks = text:CreateFontString(nil, "OVERLAY")
         ns.Fonts.Apply(stacks, "micro")
         stacks:SetShadowColor(0, 0, 0, 1)
@@ -203,8 +235,8 @@ local function makeInitializer(group, size)
         end
 
         pcall(button.SetIcon, button, icon)
-        pcall(button.SetApplicationCount, button, stacks, {})
-        setDurationText(button, duration)
+        if group.stacks ~= false then pcall(button.SetApplicationCount, button, stacks, {}) else stacks:Hide() end
+        if group.digits ~= false then setDurationText(button, duration, group.expiring) else duration:Hide(); scrim:Hide() end
         if button.SetDurationBar then
             local opts = {}
             if Enum.StatusBarInterpolation then opts.interpolation = Enum.StatusBarInterpolation.Immediate end
@@ -258,8 +290,57 @@ local RESCAN = {
     focus = "PLAYER_FOCUS_CHANGED",
 }
 
+-- The corner the icons start from and the way they grow, after creation.
+function AC:SetFlow(anchor, growth)
+    local c = self.container
+    call(c, { "SetFlowLayoutAnchorPoint", "SetAuraLayoutAnchorPoint" }, anchor or "TOPLEFT")
+    local g = growth or { "RIGHT", "DOWN" }
+    local h = FLOW[g[1] == "LEFT" and "Left" or "Right"]
+    local v = FLOW[g[2] == "UP" and "Up" or "Down"]
+    if h and v then call(c, { "SetFlowLayoutGrowthDirection", "SetAuraLayoutGrowthDirection" }, h, v) end
+    self:Refresh()
+end
+
+-- A group's icon size, live: the engine's layout, then the buttons it
+-- already made (theirs is ours to set). New buttons take it when made.
+function AC:SetGroupSize(key, size)
+    local px = UI.Size(size)
+    if self.sizes[key] == px then return end
+    self.sizes[key] = px
+    pcall(self.container.SetAuraGroupLayout, self.container, key,
+        { elementWidth = px, elementHeight = px, elementSpacing = self.spacing, lineSpacing = self.spacing })
+    for _, b in ipairs(self.buttons) do
+        if b.key == key then
+            pcall(b.button.SetSize, b.button, px, px)
+            pcall(b.scrim.SetHeight, b.scrim, math.floor(px * 0.6))
+        end
+    end
+    self:Refresh()
+end
+
 function AC:SetGroupMax(key, n)
     pcall(self.container.SetAuraGroupMaxFrameCount, self.container, key, n)
+end
+
+-- A spell list as the engine takes it: { includeSpellIDs = { [id] = true } }.
+local function candidates(ids)
+    if not ids then return nil end
+    local set = {}
+    for _, id in ipairs(ids) do set[id] = true end
+    return { includeSpellIDs = set }
+end
+
+-- Only debuffs of these types: { includeDispelTypes = { Curse = true } }.
+-- The engine matches them, in combat too (EllesmereUI's dispel slots).
+dispelCandidates = function(types)
+    local set = {}
+    for _, t in ipairs(types) do set[t] = true end
+    return { includeDispelTypes = set }
+end
+
+-- Only these spell IDs in group `key` (nil: no spell list).
+function AC:SetGroupSpells(key, ids)
+    return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, candidates(ids) or {})
 end
 
 function UI.AuraContainer(parent, unit, opts)
@@ -269,7 +350,7 @@ function UI.AuraContainer(parent, unit, opts)
         ns.Fault.Report("Auras", "the client has no aura containers: " .. tostring(container))
         return nil
     end
-    local self = setmetatable({ container = container, opts = opts }, { __index = AC })
+    local self = setmetatable({ container = container, opts = opts, sizes = {}, buttons = {} }, { __index = AC })
     -- a renderable rect from the start: the engine lays out from an OnUpdate
     container:SetSize(1, 1)
 
@@ -282,16 +363,21 @@ function UI.AuraContainer(parent, unit, opts)
     call(container, { "SetFlowLayoutMaximumLineSize", "SetAuraLayoutRowWidth" }, opts.lineWidth)
 
     local spacing = opts.spacing or S["space-2"]
+    self.spacing = spacing
     for _, group in ipairs(opts.groups) do
+        local gsize = group.size and UI.Size(group.size) or size
+        self.sizes[group.key] = gsize
         local added = pcall(container.AddAuraGroup, container, group.key, filterString(group.filter), {
             maxFrameCount = group.max or 16,
-            initializeFrame = makeInitializer(group, size),
-            layout = { elementWidth = size, elementHeight = size, elementSpacing = spacing, lineSpacing = spacing },
+            candidateFilters = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include),
+            initializeFrame = group.initialize or makeInitializer(group, gsize, self),
+            layout = { elementWidth = gsize, elementHeight = gsize, elementSpacing = spacing, lineSpacing = spacing },
         })
         if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. group.key) end
     end
     self:SetUnit(unit)
     local event = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT")
+        or ((unit:find("^party") or unit:find("^raid")) and "GROUP_ROSTER_UPDATE")
     if event then ns.Events.OnGame(event, function() self:Refresh() end, self) end
     return self
 end

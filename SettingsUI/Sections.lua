@@ -120,6 +120,19 @@ local function newProfile(parent)
     return f
 end
 
+-- One role's profile: "Don't switch" or a profile.
+local function roleRow(role, label)
+    return { label = label, control = "select", width = 220,
+        options = function()
+            local options = { { value = "none", label = "Don't switch" } }
+            for _, o in ipairs(allProfiles()) do options[#options + 1] = o end
+            return options
+        end,
+        description = ("When you're a %s, use this profile."):format(ns.Roles.LABEL[role]),
+        get = function() return Profiles.RoleProfile(role) or "none" end,
+        set = function(v) return Profiles.SetRoleProfile(role, v ~= "none" and v or nil) end }
+end
+
 local function resetAll(parent)
     local armed
     local b = UI.Button(parent, { text = "Reset everything", onClick = function(self)
@@ -153,6 +166,21 @@ Registry.Register({
             { label = "Delete a profile", control = "custom",
               build = function(p) return pickAndAct(p, "Delete", Profiles.Delete, true) end,
               description = "Characters using it go back to their own profile." },
+        } },
+        { title = "By role", description = "SuuUI can switch profiles with your role: set up a profile for each role, and the party frames, bars and everything else follow when you change spec or get a role in a group. It switches out of combat, and a profile you pick by hand stays until your role changes.", rows = {
+            { label = "Your role", control = "select", width = 220,
+              options = function()
+                  local now = ns.Roles.LABEL[(select(1, ns.Roles.Current()))]
+                  local auto = Profiles.ChosenRole() == "auto" and (" (now " .. now .. ")") or ""
+                  return { { value = "auto", label = "Automatic" .. auto, note = "The role a group gives you, else your talents" },
+                           { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "DPS" } }
+              end,
+              description = "Automatic: the role a group gives you (role check, group finder), else the talent tree with the most points.",
+              get = function() return Profiles.ChosenRole() end,
+              set = function(v) return Profiles.SetChosenRole(v) end },
+            roleRow("TANK", "Tank profile"),
+            roleRow("HEALER", "Healer profile"),
+            roleRow("DAMAGER", "DPS profile"),
         } },
         { title = "Share", rows = {
             { label = "Export", control = "button", text = "Export profile", onClick = function() ns.SettingsWindow.Export() end,

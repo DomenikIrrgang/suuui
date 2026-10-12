@@ -49,6 +49,7 @@ function Registry.Register(def, owner)
         build = def.build,
         preview = def.preview,
         previewTitle = def.previewTitle,
+        previewNote = def.previewNote,
         owner = owner,
     }
     sections[#sections + 1] = s

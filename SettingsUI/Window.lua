@@ -296,17 +296,40 @@ local function showPreview(section)
     frame.content:SetPoint("BOTTOMRIGHT", -((has and PREVIEW_W or 0) + S["space-6"]), FOOT_H)
     p.title:SetValue(section and section.previewTitle or "Live preview")
     if has then
-        local view = section.preview(p)
-        local avail = PREVIEW_W - S["space-5"] * 2
-        local w = view:GetWidth()
-        local scale = (w > avail) and (avail / w) or 1
-        view:SetScale(scale)
-        view:ClearAllPoints()
-        view:SetPoint("TOPLEFT", p.title, "BOTTOMLEFT", 0, -S["space-4"])
+        local view = section.preview(p.area)
+        view:SetScale(1)
         view:Show()
-        p.view = view
-        p.note:SetValue(scale < 1 and ("Shown at %d%% to fit"):format(scale * 100 + 0.5) or "")
+        p.view, p.section = view, section
+        if not view.suuNoteHooked then
+            view.suuNoteHooked = true
+            view:HookScript("OnSizeChanged", function(v)
+                if frame.preview.view == v then W.PlacePreview(); W.PreviewNote() end
+            end)
+        end
+        W.PlacePreview()
+        W.PreviewNote()
     end
+end
+
+-- The view at its real size: centred in the column, or (wider than the
+-- column) from its left edge, so its start shows and only its far end clips.
+function W.PlacePreview()
+    local p = frame.preview
+    local view = p.view
+    if not view then return end
+    view:ClearAllPoints()
+    if view:GetWidth() > p.area:GetWidth() then
+        view:SetPoint("LEFT", p.area, "LEFT")
+    else
+        view:SetPoint("CENTER", p.area, "CENTER")
+    end
+end
+
+-- The section's note under its preview (previewNote, a string or function).
+function W.PreviewNote()
+    local p = frame.preview
+    local note = p.section and describe(p.section.previewNote)
+    p.note:SetValue(note or "")
 end
 
 local function applyView()
@@ -520,6 +543,11 @@ local function build()
     preview.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     preview.note = UI.Text(preview, "caption", "ink-muted")
     preview.note:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+    -- where a section's view sits: under the title, above the note, clipped
+    preview.area = CreateFrame("Frame", nil, preview)
+    preview.area:SetPoint("TOPLEFT", preview.title, "BOTTOMLEFT", 0, -S["space-4"])
+    preview.area:SetPoint("BOTTOMRIGHT", preview, "BOTTOMRIGHT", -S["space-5"], S["space-5"] * 2 + 12)
+    preview.area:SetClipsChildren(true)
     f.preview = preview
 
     f.content = scrollArea(f)
@@ -598,4 +626,8 @@ end
 
 function W.Toggle()
     if frame and frame:IsShown() then frame:Hide() else W.Open() end
+end
+
+function W.Close()
+    if frame then frame:Hide() end
 end

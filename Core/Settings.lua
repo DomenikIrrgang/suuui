@@ -274,6 +274,9 @@ function Profiles.Delete(text)
     if not name then return false, err end
     if name == Profiles.Current() then return false, "You are using " .. name .. "; switch to another profile first." end
     db.profiles[name] = nil
+    for role, mapped in pairs(db.roleProfiles or {}) do
+        if mapped == name then db.roleProfiles[role] = nil end
+    end
     for char, mapped in pairs(db.chars) do
         if mapped == name then db.chars[char] = nil end
     end
@@ -298,6 +301,33 @@ function Profiles.CopyFrom(text)
     for k, v in pairs(data) do profile[k] = v end
     for _, c in ipairs(changed) do notify(c[1], c[2]) end
     Events.Emit("SUUUI_PROFILE_CHANGED", Profiles.Current())
+    return true
+end
+
+-- Profiles by role (account-wide): the profile each role switches to, or
+-- nil to leave the profile alone. Roles: TANK, HEALER, DAMAGER.
+function Profiles.RoleProfile(role)
+    local name = db and db.roleProfiles and db.roleProfiles[role]
+    if name and db.profiles[name] then return name end
+end
+
+function Profiles.SetRoleProfile(role, name)
+    db.roleProfiles = db.roleProfiles or {}
+    db.roleProfiles[role] = (name and db.profiles[name]) and name or nil
+    Events.Emit("SUUUI_ROLE_PROFILES_CHANGED")
+    return true
+end
+
+-- This character's role choice: "auto" (the assigned role, else talents) or
+-- a role it always counts as.
+function Profiles.ChosenRole()
+    return db and db.charRoles and db.charRoles[charKey] or "auto"
+end
+
+function Profiles.SetChosenRole(role)
+    db.charRoles = db.charRoles or {}
+    db.charRoles[charKey] = role ~= "auto" and role or nil
+    Events.Emit("SUUUI_ROLE_PROFILES_CHANGED")
     return true
 end
 
