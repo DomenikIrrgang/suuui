@@ -43,6 +43,8 @@ local M = SuuUI.RegisterModule({
 })
 
 local isSecret = issecretvalue or function() return false end
+-- a value that's there and readable
+local function plain(v) return v ~= nil and not isSecret(v) end
 local BODY_FONT = "Interface\\AddOns\\SuuUI\\Media\\Fonts\\Figtree-Regular.ttf"
 local PAD_X, PAD_TOP, PAD_BOTTOM = S["space-5"], S["space-2"], S["space-5"]
 local TABS_H, INPUT_H, GAP = 24, 30, S["space-3"]
@@ -643,8 +645,6 @@ local SENT = {
     CHAT_MSG_GUILD = "/g", CHAT_MSG_OFFICER = "/o",
     CHAT_MSG_CHANNEL = "channel", CHAT_MSG_WHISPER_INFORM = "/w",
 }
-
-local function plain(v) return v ~= nil and not isSecret(v) end
 
 -- What the input holds as a line to keep: a command as typed, a message
 -- with the command for where it goes.
