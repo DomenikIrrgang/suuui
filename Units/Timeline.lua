@@ -28,7 +28,7 @@ local M = SuuUI.RegisterModule({
         variant = "track",   -- "track" | "list" | "off"
         pullSeconds = 10,
         pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
-        pullVoice = "Heart", -- a voice in Media/Sounds/Countdown, or "off": the last ten seconds spoken
+        pullVoice = "Bella", -- a voice in Media/Sounds/Countdown, or "off": the last ten seconds spoken
         source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
         hideTheirs = true,   -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
         dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
@@ -39,7 +39,7 @@ local M = SuuUI.RegisterModule({
 M:Migrate("pullVoice-kokoro-3", function(values)
     local v = values.pullVoice
     if v == "David" or v == "Male" or v == "Fenrir" or v == "Puck" then values.pullVoice = "Michael"
-    elseif v == "Jim" or v == "Female" then values.pullVoice = "Heart" end
+    elseif v == "Jim" or v == "Female" then values.pullVoice = "Bella" end
 end)
 
 -- "Last 5 seconds" became "Last 10 seconds".
@@ -567,7 +567,7 @@ local SECTION = {
               options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
               description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
             { key = "pullVoice", label = "Voice", control = "segmented",
-              options = { { value = "Heart", label = "Heart" }, { value = "Bella", label = "Bella" }, { value = "Michael", label = "Michael" },
+              options = { { value = "Bella", label = "Bella" }, { value = "Heart", label = "Heart" }, { value = "Michael", label = "Michael" },
                           { value = "off", label = "Off" } }, stacked = true,
               description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then." },
             { label = "Listen", control = "button", text = "Hear the voice",
