@@ -1,6 +1,6 @@
 -- Units/Alerts.lua
 -- Alerts (step 1.11): one short-lived alert at a time, centred on the screen
--- 270px down from its top, and only in combat. Other modules raise them
+-- 320px down from its top, and only in combat. Other modules raise them
 -- through the public API (written against it, like a plugin would):
 --
 --   SuuUI.ShowAlert(key, tone, title, detail, ...)  -- detail: text, or a
@@ -21,7 +21,7 @@ local M = SuuUI.RegisterModule({
     description = "Short alerts in the middle of the screen when something needs you now: aggro, a pull.",
     api = "0.10",
     defaults = {
-        position = { point = "TOP", x = 0, y = -270 },
+        position = { point = "TOP", x = 0, y = -320 },
         sound = true,
     },
 })
@@ -101,7 +101,7 @@ end
 local SECTION = {
     id = "alerts", label = "Alerts", category = "Insights", order = 10,
     preview = function(parent) return M:PreviewView(parent) end,
-    previewNote = "In combat only, one at a time, 270px down from the top of the screen.",
+    previewNote = "In combat only, one at a time, 320px down from the top of the screen.",
     groups = {
         { title = "Alerts", description = "One line in the middle of the screen when something needs you now. Only in combat; the alert goes when the reason does.", rows = {
             { key = "sound", label = "Sound on danger", control = "toggle",

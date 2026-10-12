@@ -2,7 +2,8 @@
 -- The threat meter and the pull warning (step 1.11). A built-in module
 -- written against the public API only.
 --
--- The meter: your target's threat table, in combat with a hostile target,
+-- The meter: your target's threat table, in combat with a hostile target
+-- (Show "In combat"; "Always" keeps it on screen, empty without one),
 -- left of the damage meter's slot in the bottom right corner (its right edge
 -- 292px from the screen's, 28px up), always 8 rows tall. Rows by % (ranked)
 -- while the client lets SuuUI compare it; when the % is secret (bosses), by
@@ -23,13 +24,21 @@ local M = SuuUI.RegisterModule({
     api = "0.10",
     defaults = {
         position = { point = "BOTTOMRIGHT", x = -292, y = 28 },
-        shown = true,
+        shows = "combat",  -- "off" | "combat" | "always"
         who = "group",     -- "group" | "tanks" | "self"
         marker = "role",   -- "role" | "class" | "none"
         raw = false,
         warnPull = true,
     },
 })
+
+-- The toggle "Show the threat meter" became the choice Show: Off / In combat / Always.
+M:Migrate("shows", function(values)
+    if type(values.shown) == "boolean" then
+        values.shows = values.shown and "combat" or "off"
+    end
+    values.shown = nil
+end)
 
 local isSecret = issecretvalue or function() return false end
 local function readable(v) return not isSecret(v) and type(v) == "number" end
@@ -186,36 +195,33 @@ function M:Warn(rows)
 end
 
 function M:Update()
-    local active = inCombat() and hostileTarget()
-    local wantMeter = active and self:Get("shown") and not self:Get("position").hidden
-    if not active then
-        self.meter:Hide()
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.HideAlert("threat-aggro")
-        return
-    end
-    local rows, secret = readRows()
+    local hostile = hostileTarget()
+    local fighting = hostile and inCombat()
+    local shows = self:Get("shows")
+    local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
+    local rows, secret = {}, false
+    if hostile then rows, secret = readRows() end
     if wantMeter then
-        self.meter:SetTarget(UnitName("target"))
+        -- the name may be secret: passed on, never tested
+        if hostile then self.meter:SetTarget(UnitName("target")) else self.meter:SetTarget(nil) end
         self.meter:SetRows(rows, self:MeterOpts(secret))
         self.meter:Show()
     else
         self.meter:Hide()
     end
-    self:Warn(rows)
-end
-
--- In combat a driver reads the table every TICK (threat moves all the time);
--- out of combat everything goes.
-function M:SetRunning(on)
-    self.driver:SetShown(on and true or false)
-    if on then
-        self:Update()
+    if fighting then
+        self:Warn(rows)
     else
-        self.meter:Hide()
         SuuUI.HideAlert("threat-pull")
         SuuUI.HideAlert("threat-aggro")
     end
+end
+
+-- A driver reads the table every TICK (threat moves all the time) in combat,
+-- and out of combat too while the meter always shows.
+function M:Refresh()
+    self.driver:SetShown(inCombat() or self:Get("shows") == "always")
+    self:Update()
 end
 
 --------------------------------------------------------------------------------
@@ -255,17 +261,19 @@ function M:RefreshPreview()
 end
 
 local function meterOff()
-    return not M:Get("shown"), "Show the threat meter first."
+    return M:Get("shows") == "off", "Show the threat meter first."
 end
 
 local SECTION = {
     id = "threat", label = "Damage & threat", category = "Insights", order = 50,
     preview = function(parent) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Threat",
-    previewNote = "Bottom right, left of the damage meter's place, in combat with a hostile target.",
+    previewNote = "Bottom right, left of the damage meter's place.",
     groups = {
         { title = "Threat meter", description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.", rows = {
-            { key = "shown", label = "Show the threat meter", control = "toggle" },
+            { key = "shows", label = "Show", control = "segmented", stacked = true,
+              options = { { value = "off", label = "Off" }, { value = "combat", label = "In combat" }, { value = "always", label = "Always" } },
+              description = "In combat: while you fight a hostile target. Always: on screen all the time, empty without a hostile target." },
             { key = "who", label = "Who", control = "segmented", stacked = true, disabled = meterOff,
               options = { { value = "group", label = "Group" }, { value = "tanks", label = "Tanks and me" }, { value = "self", label = "Just me" } } },
             { key = "marker", label = "Before the name", control = "segmented", disabled = meterOff,
@@ -295,19 +303,19 @@ function M:OnEnable()
     end
     self.meter.suuManagedShow = true
     self:RegisterMover(self.meter, { key = "position", label = "Threat meter",
-        enabled = function() return self:Get("shown") end })
+        enabled = function() return self:Get("shows") ~= "off" end })
     self:RegisterSettings(SECTION)
-    self:Watch("shown", SuuUI.EditMode.Refresh)
+    self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:Refresh() end)
     for _, key in ipairs({ "who", "marker", "raw" }) do
         self:Watch(key, function() self:RefreshPreview(); if self.driver:IsShown() then self:Update() end end)
     end
-    for _, key in ipairs({ "shown", "warnPull", "position" }) do
+    for _, key in ipairs({ "warnPull", "position" }) do
         self:Watch(key, function() if self.driver:IsShown() then self:Update() end end)
     end
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:SetRunning(true) end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:SetRunning(false) end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Refresh() end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() if self.driver:IsShown() then self:Update() end end)
-    self:SetRunning(inCombat())
+    self:Refresh()
 end
 
 function M:OnDisable()
