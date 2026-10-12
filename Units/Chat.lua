@@ -223,7 +223,9 @@ end
 
 function M:SkinAll()
     for _, cf in ipairs(chatFrames()) do self:SkinFrame(cf) end
-    alphaOff(GeneralDockManager)
+    -- the dock's tab strip invisible, its mouse left alone: Blizzard's tab
+    -- dragging (reordering, undocking) runs through it
+    if GeneralDockManager then GeneralDockManager:SetAlpha(0) end
     for _, name in ipairs({ "QuickJoinToastButton", "ChatFrameMenuButton", "ChatFrameChannelButton",
                             "ChatFrameToggleVoiceDeafenButton", "ChatFrameToggleVoiceMuteButton" }) do
         alphaOff(_G[name])
