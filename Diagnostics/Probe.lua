@@ -758,6 +758,10 @@ function ns.Probe.Command(arg)
         ns.PopupProbe.Command(rest)
         return
     end
+    if sub == "bags" then
+        ns.BagProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
