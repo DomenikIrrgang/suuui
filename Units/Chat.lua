@@ -305,6 +305,12 @@ local function playerMenu(owner, name)
             local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
             if tell then tell(name, ChatFrame1) end
         end)
+        if FCF_OpenTemporaryWindow then
+            root:CreateButton("Whisper window", function()
+                local ok, cf = pcall(FCF_OpenTemporaryWindow, "WHISPER", name)
+                M:OpenedWindow(ok and cf or nil)
+            end)
+        end
         root:CreateButton("Invite", function()
             local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
             if invite then pcall(invite, name) end
@@ -418,6 +424,11 @@ function M:Windows()
     add(named("global"))
     for _, cf in ipairs(docked) do if not cf.isTemporary then add(cf) end end
     for _, cf in ipairs(docked) do add(cf) end
+    -- whisper windows Blizzard didn't dock (a closed one is hidden)
+    for _, name in ipairs(CHAT_FRAMES or {}) do
+        local cf = _G[name]
+        if cf and cf.isTemporary and cf:IsShown() then add(cf) end
+    end
     return out
 end
 
@@ -442,7 +453,9 @@ local function tabButton(m, i)
     b.unread:SetPoint("LEFT", b.label, "RIGHT", S["space-2"], 1)
     b:SetScript("OnEnter", function(self) if not self.active then self.label:SetColor("ink") end end)
     b:SetScript("OnLeave", function(self) if not self.active then self.label:SetColor("ink-muted") end end)
-    b:SetScript("OnClick", function(self) m:Select(self.cf) end)
+    b:SetScript("OnClick", function(self, button)
+        if button == "RightButton" then m:TabMenu(self) else m:Select(self.cf) end
+    end)
     p.tabButtons[i] = b
     return b
 end
@@ -474,6 +487,28 @@ function M:CombatFilterBar(show)
     else
         bar:Hide()
     end
+end
+
+-- Right click on a whisper tab: close it (Blizzard's tab, with its menu, is
+-- out of reach now).
+function M:TabMenu(b)
+    local cf = b.cf
+    if not (cf and cf.isTemporary and FCF_Close and MenuUtil and MenuUtil.CreateContextMenu) then return end
+    MenuUtil.CreateContextMenu(b, function(_, root)
+        root:CreateButton("Close", function()
+            pcall(FCF_Close, cf)
+            if self.selected == cf then self:Select(ChatFrame1) else self:UpdateTabs() end
+        end)
+    end)
+end
+
+-- A whisper window just opened from SuuUI's menu: skinned and shown.
+function M:OpenedWindow(cf)
+    C_Timer.After(0, function()
+        if not self:IsEnabled() then return end
+        self:SkinAll()
+        if cf and self.mirrors and self.mirrors[cf] then self:Select(cf) end
+    end)
 end
 
 function M:Select(cf)
