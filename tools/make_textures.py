@@ -22,6 +22,10 @@ gilt line at 176px; also the round buttons' edge), CircleBand.tga (256, the
 inset-anchor's 3px dark band just inside the edge at 176px), CircleSoft.tga
 (128, a disc fading out: round shadows and glows).
 
+ChatDiamond.tga (32, white): the class chip as an inline texture in chat
+lines (|T…|t, tinted by its colour arguments): a diamond half the height,
+centred, so at the line's height it's the design's 5px square turned 45°.
+
 PlayerArrow.tga (64, colour): your arrow on the minimap, the design's
 (Minimap: "M8 1.5l5 12.5-5-3-5 3z" on 16 units) in arcane with a dark rim
 and a soft arcane glow; the engine draws it untinted.
@@ -378,6 +382,24 @@ def circle(size, inner, outer, ss=4):
     return lambda x, y: (255, 255, 255, cache[(x, y)])
 
 
+def diamond(size, diagonal, ss=4):
+    """Alpha of a diamond `diagonal` (fraction of the size) wide, centred."""
+    r = size / 2
+    half = diagonal * size / 2
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss - r
+                    y = py + (sy + 0.5) / ss - r
+                    if abs(x) + abs(y) <= half:
+                        hits += 1
+            cache[(px, py)] = round(255 * hits / (ss * ss))
+    return lambda x, y: (255, 255, 255, cache[(x, y)])
+
+
 def soft_circle(size, core=0.6):
     """A disc solid to `core` of the radius, then a smooth fall to the edge."""
     r = size / 2
@@ -458,6 +480,7 @@ def main():
     jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))
     jobs.append(("CircleSoft.tga", 128, soft_circle(128)))
     jobs.append(("PlayerArrow.tga", 64, player_arrow()))
+    jobs.append(("ChatDiamond.tga", 32, diamond(32, 0.5)))
     only = set(os.sys.argv[1:])
     for name, size, pixel in jobs:
         if only and name not in only and os.path.splitext(os.path.basename(name))[0] not in only:

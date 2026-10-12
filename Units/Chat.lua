@@ -36,6 +36,9 @@ local M = SuuUI.RegisterModule({
         fadeIdle = true,
         idleDelay = 10,
         globalTab = true, -- the numbered (global) channels in a "Global" tab, not in General
+        timestamps = true,    -- the time before each line, while the chat is in use
+        classDiamonds = true, -- the class diamond before names
+        shortChannels = true, -- "2. Trade", not "[2. Trade - City]"
     },
 })
 
@@ -373,6 +376,159 @@ function M:MirrorFrame(cf)
     return m
 end
 
+--------------------------------------------------------------------------------
+-- Lines in the design's form: the time (ink-muted, only while the chat is
+-- in use), the tag without brackets ("Party", "2. Trade", "From", "Yell"),
+-- the class diamond before a name, the name in the line's colour. Taken
+-- from Blizzard's finished line (its links stay as they are); a secret line
+-- goes in whole. The combat log's lines are left as Blizzard writes them.
+--------------------------------------------------------------------------------
+
+local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
+local classByName = {}
+
+local function tail(fmt)
+    return type(fmt) == "string" and fmt:match("^%%s(.+)$") or nil
+end
+
+-- what follows the author in Blizzard's line → the tag the design puts first
+-- ("" for none)
+local VERBS
+local function verbs()
+    if VERBS then return VERBS end
+    VERBS = {}
+    local function add(fmt, tag) local t = tail(fmt); if t then VERBS[#VERBS + 1] = { tail = t, tag = tag } end end
+    add(_G.CHAT_SAY_GET, "")
+    add(_G.CHAT_YELL_GET, _G.CHAT_MSG_YELL or "Yell")
+    add(_G.CHAT_WHISPER_GET, "From")
+    add(_G.CHAT_BN_WHISPER_GET, "From")
+    return VERBS
+end
+
+local function classOf(name, lineID)
+    local guid
+    local get = C_ChatInfo and C_ChatInfo.GetChatLineSenderGUID
+    if get and lineID then
+        local ok, g = pcall(get, tonumber(lineID))
+        if ok and plain(g) then guid = g end
+    end
+    if guid and GetPlayerInfoByGUID then
+        local ok, _, class = pcall(GetPlayerInfoByGUID, guid)
+        if ok and plain(class) and class then return class end
+    end
+    local key = name and name:lower()
+    if key and classByName[key] then return classByName[key] end
+    local base = key and key:match("^([^%-]+)")
+    if base and base ~= key and classByName[base] then return classByName[base] end
+    local ok, _, class = pcall(UnitClass, name)
+    if ok and plain(class) and class then return class end
+    return nil
+end
+
+local function chip(class)
+    local c = class and T.color["class-" .. class:lower()]
+    if not c then return "" end
+    return ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(DIAMOND,
+        math.floor(c[1] * 255 + 0.5), math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
+end
+
+local function stripColour(s)
+    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+-- Blizzard's finished line → the design's (without the time).
+function M:FormatLine(text)
+    if not plain(text) or type(text) ~= "string" then return text end
+    local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
+    -- channel tags: no brackets, numbered ones without the zone
+    if short then
+        text = text:gsub("(|Hchannel:[^|]*|h)%[(.-)%](|h)", function(open, label, close)
+            return open .. label:gsub("%s+%-%s+.*$", "") .. close
+        end)
+    end
+    -- the say/yell/whisper verb after the first name → a tag before it
+    local head, link, after = text:match("^(.-)(|Hplayer:.-|h.-|h)(.*)$")
+    if link then
+        for _, v in ipairs(verbs()) do
+            if after:sub(1, #v.tail) == v.tail then
+                text = head .. (v.tag ~= "" and (v.tag .. " ") or "") .. link .. ": " .. after:sub(#v.tail + 1)
+                break
+            end
+        end
+    end
+    -- names: no brackets, the line's colour, the class diamond first
+    text = text:gsub("|Hplayer:([^|]*)|h%[(.-)%]|h", function(data, shown)
+        local name, lineID = data:match("^([^:]+):?(%d*)")
+        local mark = diamonds and chip(classOf(name, lineID ~= "" and lineID or nil)) or ""
+        return mark .. "|Hplayer:" .. data .. "|h" .. stripColour(shown) .. "|h"
+    end)
+    text = text:gsub("(|HBNplayer:[^|]*|h)%[(.-)%](|h)", "%1%2%3")
+    return text
+end
+
+local TIME_HEX = T.color["ink-muted"].hex
+
+-- One line into a mirror: kept (to show again with or without the time)
+-- and shown as the chat is now.
+function M:Put(m, text, r, g, b)
+    local line = { r = r, g = g, b = b, at = time() }
+    if m.raw or not plain(text) then
+        line.text, line.raw = text, true
+    else
+        line.text = self:FormatLine(text)
+    end
+    local lines = m.lines
+    lines[#lines + 1] = line
+    if #lines > MAX_LINES then table.remove(lines, 1) end
+    local withTime = self:ShowTimes()
+    -- drawn otherwise than its earlier lines: all again when it's next shown
+    if m.drawnWithTime ~= withTime then m.drawnWithTime = nil end
+    m:AddMessage(self:Render(line, withTime), r, g, b)
+end
+
+function M:ShowTimes()
+    return self:Get("timestamps") and (self.awake ~= false)
+end
+
+function M:Render(line, withTime)
+    if line.raw or not withTime then return line.text end
+    return "|cff" .. TIME_HEX .. date("%H:%M", line.at) .. "|r  " .. line.text
+end
+
+-- The mirror's lines again (the time came or went), where it was scrolled.
+function M:Redraw(m)
+    local withTime = self:ShowTimes()
+    if m.raw or m.drawnWithTime == withTime then return end
+    m.drawnWithTime = withTime
+    local offset = m.GetScrollOffset and m:GetScrollOffset() or 0
+    m:Clear()
+    for _, line in ipairs(m.lines) do m:AddMessage(self:Render(line, withTime), line.r, line.g, line.b) end
+    if offset > 0 and m.SetScrollOffset then pcall(m.SetScrollOffset, m, offset) end
+end
+
+-- The shown window now, the others when they're chosen.
+function M:RedrawShown()
+    if self.activeMirror then self:Redraw(self.activeMirror) end
+end
+
+-- Names' classes from the chat events (a line whose sender the client
+-- can't tell from its line id).
+function M:WatchClasses()
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    for _, e in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_EMOTE", "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER",
+                         "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING", "CHAT_MSG_INSTANCE_CHAT",
+                         "CHAT_MSG_INSTANCE_CHAT_LEADER", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_WHISPER",
+                         "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_CHANNEL" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function(_, _, sender, _, _, _, _, _, _, _, _, _, guid)
+                if not (plain(sender) and plain(guid) and type(sender) == "string" and guid) then return end
+                local ok, _, class = pcall(GetPlayerInfoByGUID, guid)
+                if ok and plain(class) and class then classByName[sender:lower()] = class end
+            end)
+        end
+    end
+end
+
 -- Whisper lines (to and from), kept for a whisper window opened later.
 local WHISPER_KEEP = 300
 local WHISPER_TYPES = { "WHISPER", "WHISPER_INFORM", "BN_WHISPER", "BN_WHISPER_INFORM" }
@@ -424,20 +580,23 @@ function M:Mirror(cf)
     if self.mirrors[cf] then return end
     local m = self:MirrorFrame(cf)
     self.mirrors[cf] = m
+    m.lines = {}
+    m.raw = cf == ChatFrame2
     self:ApplyMirrorFont(cf)
     local n = cf.GetNumMessages and cf:GetNumMessages() or 0
     for i = 1, n do
         local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
         if ok and text ~= nil then
-            m:AddMessage(text, r, g, b)
+            self:Put(m, text, r, g, b)
             if cf == ChatFrame1 then self:KeepWhisper(text, r, g, b) end
         end
     end
+    m.drawnWithTime = self:ShowTimes()
     -- the combat log clears and refills its window on a filter change
-    hooksecurefunc(cf, "Clear", function() m:Clear() end)
+    hooksecurefunc(cf, "Clear", function() m:Clear(); wipe(m.lines) end)
     hooksecurefunc(cf, "AddMessage", function(_, text, r, g, b, _, _, _, event)
         if text == nil then return end
-        m:AddMessage(text, r, g, b)
+        self:Put(m, text, r, g, b)
         if not cf.isTemporary then self:KeepWhisper(text, r, g, b, event) end
         if m ~= self.activeMirror and cf ~= ChatFrame2 then
             self.unread = self.unread or {}
@@ -736,7 +895,7 @@ function M:OpenedWindow(cf, name)
         local m = cf and self.mirrors and self.mirrors[cf]
         if not m then return end
         if name and m:GetNumMessages() == 0 then
-            for _, line in ipairs(self:WhispersWith(name)) do m:AddMessage(line.text, line.r, line.g, line.b) end
+            for _, line in ipairs(self:WhispersWith(name)) do self:Put(m, line.text, line.r, line.g, line.b) end
         end
         self:Select(cf)
     end)
@@ -749,6 +908,7 @@ function M:Select(cf)
         mirror:SetShown(frame == cf)
         if frame == cf then self.activeMirror = mirror end
     end
+    self:RedrawShown()
     self:CombatFilterBar(cf == ChatFrame2)
     self:UpdateTabs()
 end
@@ -842,6 +1002,7 @@ function M:Tick()
     end
     if awake ~= self.awake then
         self.awake = awake
+        self:RedrawShown()
         local a = awake and 1 or 0
         SuuUI.Motion.AlphaTo(p.deco, a, awake and 0.2 or 1.2)
         SuuUI.Motion.AlphaTo(p.tabs, a, awake and 0.2 or 1.2)
@@ -945,7 +1106,7 @@ local function idleOff() return not M:Get("fadeIdle"), "Turn the idle fade on fi
 local SECTION = {
     id = "chat", label = "Chat", category = "World", order = 20,
     groups = {
-        { title = "Chat", description = "Blizzard's chat in SuuUI's look: tabs, links, filters of other addons and the input all stay Blizzard's own. Each window's font size is its own setting (right click its tab).", rows = {
+        { title = "Chat", description = "SuuUI shows Blizzard's chat windows as its own tabs: what goes in which window, other addons' filters and the input stay Blizzard's.", rows = {
             { key = "logHeight", label = "Height", control = "slider", min = 100, max = 400, step = 10, unit = "px", combat = true,
               description = "The lines' area; the panel adds the tabs and the input." },
             { key = "fadeIdle", label = "Fade when idle", control = "toggle",
@@ -953,6 +1114,14 @@ local SECTION = {
             { key = "idleDelay", label = "Idle after", control = "slider", min = 5, max = 60, step = 1, unit = "s", disabled = idleOff },
             { key = "globalTab", label = "Global channels in their own tab", control = "toggle",
               description = "General, Trade, LocalDefense and the rest in a Global tab (your Guild tab renamed, or a new one); the General tab keeps everything else. Channels you join later go there too. Off: SuuUI leaves your tabs as they are." },
+        } },
+        { title = "Lines", rows = {
+            { key = "timestamps", label = "Timestamps", control = "toggle",
+              description = "The time before each line while you're using the chat; gone when it fades. Turn Blizzard's own off (Options › Social) so there's one." },
+            { key = "classDiamonds", label = "Class diamonds", control = "toggle",
+              description = "A diamond in the class colour before each name. Names take the line's colour." },
+            { key = "shortChannels", label = "Short channel names", control = "toggle",
+              description = "\"2. Trade\" rather than \"[2. Trade - City]\"; tags without brackets." },
         } },
     },
 }
@@ -1031,6 +1200,8 @@ function M:OnEnable()
         end
     end
     self:WatchSent()
+    self:WatchClasses()
+    self:Watch("timestamps", function() for _, m in pairs(self.mirrors or {}) do m.drawnWithTime = nil end; self:RedrawShown() end)
     self:Watch("globalTab", function() self:ApplyGlobalTab() end)
     self:Watch("position", function() C_Timer.After(0, function() self:PlaceChat() end) end)
     self:Watch("logHeight", function() self:Layout() end)
