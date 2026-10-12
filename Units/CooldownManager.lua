@@ -587,7 +587,9 @@ local function classTalents(class)
     if type(list) == "table" and #list > 0 then
         local out = {}
         for _, t in ipairs(list) do
-            if t.id then out[#out + 1] = { id = t.id, name = t.name or C_Spell.GetSpellName(t.id) or ("ID " .. t.id), tree = t.tree } end
+            if t.id then
+                out[#out + 1] = { id = t.id, name = t.name or C_Spell.GetSpellName(t.id) or ("ID " .. t.id), tree = t.tree, spec = t.spec }
+            end
         end
         table.sort(out, function(x, y) return x.name < y.name end)
         return out
