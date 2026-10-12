@@ -258,11 +258,17 @@ local function itemTest(off)
     end
     local b = testParent.button
     local info = C_Container.GetContainerItemInfo(0, 1)
-    if b.SetItemButtonTexture then pcall(b.SetItemButtonTexture, b, info and info.iconFileID) end
+    -- the template starts hidden; its art from the game's own helper
+    if SetItemButtonTexture then pcall(SetItemButtonTexture, b, info and info.iconFileID) end
     if b.icon and info then b.icon:SetTexture(info.iconFileID) end
     log.item = info and info.hyperlink or "empty"
     log.protected = show(b:IsProtected())
+    -- which bag and slot the template thinks it is (from the parent's ID)
+    log.bagID = b.GetBagID and call(b.GetBagID, b) or "no GetBagID"
+    log.slotID = call(b.GetID, b)
+    log.hasBagIDField = b.bagID ~= nil and show(b.bagID) or "no field"
     testParent:Show()
+    b:Show()
     ns.Print("Bag probe: a test button for your backpack's first slot (" .. tostring(log.item) .. ") above the middle. Right click it out of combat and in combat, then /reload.")
 end
 
