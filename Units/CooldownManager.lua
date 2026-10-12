@@ -1979,7 +1979,8 @@ local function buildEditor(parent)
             for _, id in ipairs(self.cond and self.cond.talents or {}) do have[id] = true end
             for _, t in ipairs(classTalents(self.talentClass)) do
                 if not have[t.id] then
-                    local tree = t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree))
+                    -- the spec's name (Data/Talents.lua), else the tree's number
+                    local tree = t.spec or (t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree)))
                     options[#options + 1] = { value = t.id, label = t.name, note = tree, icon = C_Spell.GetSpellTexture(t.id) }
                 end
             end
