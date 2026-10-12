@@ -226,9 +226,13 @@ end
 -- Calls the answers that do nothing without a request, one per half second,
 -- noting which the game blocks.
 local TRIES = {
-    { "AcceptGroup" }, { "AcceptResurrect" }, { "C_SummonInfo.ConfirmSummon" }, { "AcceptDuel" },
+    { "AcceptGroup" }, { "DeclineGroup" }, { "AcceptResurrect" }, { "DeclineResurrect" },
+    { "C_SummonInfo.ConfirmSummon" }, { "C_SummonInfo.CancelSummon" }, { "AcceptDuel" }, { "CancelDuel" },
     { "DeleteCursorItem", needsEmptyCursor = true }, { "ConfirmReadyCheck", args = { true } },
-    { "AcceptAreaSpiritHeal" }, { "RetrieveCorpse", needsAlive = true },
+    { "AcceptAreaSpiritHeal" }, { "CancelAreaSpiritHeal" }, { "RetrieveCorpse", needsAlive = true },
+    { "RepopMe", needsAlive = true }, { "CancelLogout" }, { "AcceptTrade", needsNoTrade = true },
+    { "CancelTrade", needsNoTrade = true }, { "AcceptProposal" }, { "RejectProposal" },
+    { "AcceptBattlefieldPort", args = { 1, false }, needsNoQueue = true },
 }
 
 function PP.Try()
@@ -263,9 +267,15 @@ function PP.Try()
             store.tries[path] = "skipped: something on the cursor"
         elseif t.needsAlive and UnitIsDeadOrGhost("player") then
             store.tries[path] = "skipped: dead"
+        elseif t.needsNoTrade and TradeFrame and TradeFrame:IsShown() then
+            store.tries[path] = "skipped: trading"
+        elseif t.needsNoQueue and GetBattlefieldStatus and GetBattlefieldStatus(1) ~= "none" then
+            store.tries[path] = "skipped: queued"
         else
+            store.tries[path] = ""
             local ok, err = pcall(fn, unpack(t.args or {}))
-            store.tries[path] = ok and "called" or ("error: " .. tostring(err):sub(1, 160))
+            -- a block noted while it ran stays (it comes inside the call)
+            store.tries[path] = (ok and "called" or ("error: " .. tostring(err):sub(1, 160))) .. store.tries[path]
         end
         C_Timer.After(0.5, step)
     end
