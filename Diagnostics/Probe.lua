@@ -742,6 +742,10 @@ function ns.Probe.Command(arg)
         ns.MicroProbe.Command(rest)
         return
     end
+    if sub == "minimap" then
+        ns.MinimapProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return

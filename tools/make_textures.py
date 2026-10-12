@@ -21,6 +21,10 @@ CircleEdge.tga (256, a ring 1/176 of the width at the edge: the minimap's 1px
 gilt line at 176px; also the round buttons' edge), CircleBand.tga (256, the
 inset-anchor's 3px dark band just inside the edge at 176px), CircleSoft.tga
 (128, a disc fading out: round shadows and glows).
+
+PlayerArrow.tga (64, colour): your arrow on the minimap, the design's
+(Minimap: "M8 1.5l5 12.5-5-3-5 3z" on 16 units) in arcane with a dark rim
+and a soft arcane glow; the engine draws it untinted.
 """
 
 import math
@@ -391,6 +395,50 @@ def soft_circle(size, core=0.6):
     return pixel
 
 
+def player_arrow(size=64, ss=4):
+    # the design's path on 16 units, centred, drawn in the middle 60% (room for the glow)
+    pts = [(8, 1.5), (13, 14), (8, 11), (3, 14)]
+    scale = size * 0.6 / 16
+    off = size * 0.2
+    poly = [(off + x * scale, off + y * scale) for x, y in pts]
+
+    def dist_outline(px, py):
+        best = 1e9
+        for (ax, ay), (bx, by) in zip(poly, poly[1:] + poly[:1]):
+            vx, vy = bx - ax, by - ay
+            ll = vx * vx + vy * vy
+            t = max(0, min(1, ((px - ax) * vx + (py - ay) * vy) / ll))
+            dx, dy = px - (ax + t * vx), py - (ay + t * vy)
+            best = min(best, math.hypot(dx, dy))
+        return best
+    arcane = (63, 208, 255)
+    rim = (8, 20, 28)
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            r = g = b = a = 0.0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                    inside = inside_polygon(x, y, poly)
+                    d = dist_outline(x, y)
+                    if inside and d > 1.6:
+                        c, al = arcane, 1.0
+                    elif inside or d <= 1.6:
+                        c, al = rim, 0.95
+                    else:
+                        glow = math.exp(-(d * d) / (2 * 4.0 * 4.0)) * 0.55
+                        c, al = arcane, glow
+                    r += c[0] * al; g += c[1] * al; b += c[2] * al; a += al
+            n = ss * ss
+            a /= n
+            if a > 0:
+                cache[(px, py)] = (round(r / n / a), round(g / n / a), round(b / n / a), round(255 * min(1, a)))
+            else:
+                cache[(px, py)] = (0, 0, 0, 0)
+    return lambda x, y: cache[(x, y)]
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "Glyphs"), exist_ok=True)
@@ -409,6 +457,7 @@ def main():
     jobs.append(("CircleEdge.tga", 256, circle(256, 1 - 2 / 176, 1)))
     jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))
     jobs.append(("CircleSoft.tga", 128, soft_circle(128)))
+    jobs.append(("PlayerArrow.tga", 64, player_arrow()))
     only = set(os.sys.argv[1:])
     for name, size, pixel in jobs:
         if only and name not in only and os.path.splitext(os.path.basename(name))[0] not in only:
