@@ -220,6 +220,7 @@ API.UI.Alert = UI.Alert             -- Alert(parent) -> a:SetAlert(tone, title, 
 API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts), m:SetMaxRows(n)
 API.UI.DamageMeter = UI.DamageMeter -- DamageMeter(parent, opts): one window on C_DamageMeter (see UI/DamageMeter.lua)
 API.UI.EncounterTimeline = UI.EncounterTimeline -- EncounterTimeline(parent, { variant, window, soonAt }) -> t:SetEvents(list), t:SetVariant(v), t:SetMeta(text)
+API.UI.Readiness = UI.Readiness -- Readiness(parent, { onReadyCheck }) -> r:SetRows(list), r:SetActionShown(on)
 API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
