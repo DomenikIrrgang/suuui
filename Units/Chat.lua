@@ -289,9 +289,15 @@ local function copyName(name)
         copyBox = p
     end
     copyBox:Show()
-    copyBox.field.edit:SetText(name)
-    copyBox.field.edit:SetFocus()
-    copyBox.field.edit:HighlightText()
+    local edit = copyBox.field.edit
+    edit:SetText(name)
+    edit:SetFocus()
+    -- a frame later, once the box has its width: from the start, all selected
+    -- (set before that, the text scrolls out of view to the left)
+    C_Timer.After(0, function()
+        edit:SetCursorPosition(0)
+        edit:HighlightText()
+    end)
 end
 
 -- Right click on a player's name: SuuUI's own menu (Blizzard's, opened from
@@ -308,7 +314,7 @@ local function playerMenu(owner, name)
         if FCF_OpenTemporaryWindow then
             root:CreateButton("Whisper window", function()
                 local ok, cf = pcall(FCF_OpenTemporaryWindow, "WHISPER", name)
-                M:OpenedWindow(ok and cf or nil)
+                M:OpenedWindow(ok and cf or nil, name)
             end)
         end
         root:CreateButton("Invite", function()
@@ -366,6 +372,50 @@ function M:MirrorFrame(cf)
     return m
 end
 
+-- Whisper lines (to and from), kept for a whisper window opened later.
+local WHISPER_KEEP = 300
+local WHISPER_TYPES = { "WHISPER", "WHISPER_INFORM", "BN_WHISPER", "BN_WHISPER_INFORM" }
+
+local function sameColor(info, r, g, b)
+    return info and type(r) == "number" and type(g) == "number" and type(b) == "number"
+        and math.abs(info.r - r) < 0.01 and math.abs(info.g - g) < 0.01 and math.abs(info.b - b) < 0.01
+end
+
+local function isWhisperLine(r, g, b, event)
+    if type(event) == "string" and not isSecret(event) then
+        return event:find("WHISPER", 1, true) ~= nil
+    end
+    if isSecret(r) or isSecret(g) or isSecret(b) then return false end
+    for _, t in ipairs(WHISPER_TYPES) do
+        if sameColor(ChatTypeInfo and ChatTypeInfo[t], r, g, b) then return true end
+    end
+    return false
+end
+
+function M:KeepWhisper(text, r, g, b, event)
+    if isSecret(text) or type(text) ~= "string" or not isWhisperLine(r, g, b, event) then return end
+    local who = text:match("|Hplayer:([^:|]+)")
+    if not who then return end
+    self.whispers = self.whispers or {}
+    local list = self.whispers
+    -- the same line in a second window
+    if list[#list] and list[#list].text == text then return end
+    list[#list + 1] = { who = who:lower(), text = text, r = r, g = g, b = b }
+    if #list > WHISPER_KEEP then table.remove(list, 1) end
+end
+
+-- The kept lines with a player: "Name" matches "Name-Realm" too.
+function M:WhispersWith(name)
+    local out = {}
+    local want = name:lower()
+    local base = want:match("^([^%-]+)")
+    for _, line in ipairs(self.whispers or {}) do
+        local who = line.who
+        if who == want or who:match("^([^%-]+)") == base then out[#out + 1] = line end
+    end
+    return out
+end
+
 -- Every line Blizzard adds to the window, copied (a secret one whole), and
 -- what it already holds.
 function M:Mirror(cf)
@@ -377,13 +427,17 @@ function M:Mirror(cf)
     local n = cf.GetNumMessages and cf:GetNumMessages() or 0
     for i = 1, n do
         local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
-        if ok and text ~= nil then m:AddMessage(text, r, g, b) end
+        if ok and text ~= nil then
+            m:AddMessage(text, r, g, b)
+            if cf == ChatFrame1 then self:KeepWhisper(text, r, g, b) end
+        end
     end
     -- the combat log clears and refills its window on a filter change
     hooksecurefunc(cf, "Clear", function() m:Clear() end)
-    hooksecurefunc(cf, "AddMessage", function(_, text, r, g, b)
+    hooksecurefunc(cf, "AddMessage", function(_, text, r, g, b, _, _, _, event)
         if text == nil then return end
         m:AddMessage(text, r, g, b)
+        if not cf.isTemporary then self:KeepWhisper(text, r, g, b, event) end
         if m ~= self.activeMirror and cf ~= ChatFrame2 then
             self.unread = self.unread or {}
             self.unread[cf] = true
@@ -502,12 +556,18 @@ function M:TabMenu(b)
     end)
 end
 
--- A whisper window just opened from SuuUI's menu: skinned and shown.
-function M:OpenedWindow(cf)
+-- A whisper window just opened from SuuUI's menu: skinned, the whispers
+-- with that player so far put in (Blizzard's starts empty), and shown.
+function M:OpenedWindow(cf, name)
     C_Timer.After(0, function()
         if not self:IsEnabled() then return end
         self:SkinAll()
-        if cf and self.mirrors and self.mirrors[cf] then self:Select(cf) end
+        local m = cf and self.mirrors and self.mirrors[cf]
+        if not m then return end
+        if name and m:GetNumMessages() == 0 then
+            for _, line in ipairs(self:WhispersWith(name)) do m:AddMessage(line.text, line.r, line.g, line.b) end
+        end
+        self:Select(cf)
     end)
 end
 
