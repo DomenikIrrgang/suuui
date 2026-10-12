@@ -243,10 +243,20 @@ function UI.ScrollArea(parent, bar)
         update()
     end
     -- content that got shorter (or a taller area) pulls the scroll back, so
-    -- no empty space stays at the bottom
-    local function clamp()
-        local max = math.max(0, child:GetHeight() - scroll:GetHeight())
+    -- no empty space stays at the bottom. A frame later: the sizes settle
+    -- only after the change (a panel that shrinks with its content), and the
+    -- game's own range is then the truth.
+    local pending = false
+    local function settle()
+        pending = false
+        local max = math.max(0, scroll:GetVerticalScrollRange())
         if scroll:GetVerticalScroll() > max then scroll:SetVerticalScroll(max) end
+        if scroll.track then updateBar(scroll) end
+    end
+    local function clamp()
+        if pending then return end
+        pending = true
+        C_Timer.After(0, settle)
     end
     scroll:HookScript("OnScrollRangeChanged", clamp)
     scroll:HookScript("OnSizeChanged", clamp)
