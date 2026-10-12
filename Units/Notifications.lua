@@ -32,6 +32,8 @@ local M = SuuUI.RegisterModule({
         position = { point = "TOPLEFT", x = 28, y = -76 },
         max = 5,
         requests = true,   -- Blizzard's popups as cards
+        durability = true, -- a note while your gear is badly damaged or broken
+        bagsFull = true,   -- a note while your bags are full
     },
 })
 
@@ -119,6 +121,62 @@ end
 function M:DismissAll()
     for id, d in pairs(self.notes) do
         if d.kind == "sticky" then self:Dismiss(id) end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI's own notes about the game
+--------------------------------------------------------------------------------
+
+-- Your gear: the worst piece's durability (0 broken, nil nothing to wear out).
+local function worstDurability()
+    local worst
+    for slot = 1, 19 do
+        local cur, max = GetInventoryItemDurability(slot)
+        if plain(cur) and plain(max) and cur and max and max > 0 then
+            local r = cur / max
+            if not worst or r < worst then worst = r end
+        end
+    end
+    return worst
+end
+
+function M:CheckDurability()
+    local worst = self:Get("durability") and worstDurability()
+    -- only when it changes (durability moves with every hit in combat)
+    local state = (worst and worst <= 0 and "broken") or (worst and worst <= 0.2 and "damaged") or "fine"
+    if state == self.durabilityState then return end
+    self.durabilityState = state
+    if worst and worst <= 0 then
+        self:Notify({ id = "suu:durability", kind = "until", tone = "danger", category = "Durability",
+            title = "Some of your gear is broken", icon = { glyph = "hammer" }, ["until"] = "Goes when you repair" })
+    elseif worst and worst <= 0.2 then
+        self:Notify({ id = "suu:durability", kind = "until", tone = "warning", category = "Durability",
+            title = "Your gear is badly damaged", icon = { glyph = "hammer" }, ["until"] = "Goes when you repair" })
+    elseif self.notes["suu:durability"] then
+        self:Dismiss("suu:durability")
+    end
+end
+
+-- Free slots in your general bags (backpack and bags 1-4; special bags
+-- hold only their own kind).
+local function freeSlots()
+    local free = 0
+    for bag = 0, (NUM_BAG_SLOTS or 4) do
+        local n, family = C_Container.GetContainerNumFreeSlots(bag)
+        if plain(n) and n and (not plain(family) or family == 0 or family == nil) then free = free + n end
+    end
+    return free
+end
+
+function M:CheckBags()
+    if self:Get("bagsFull") and freeSlots() == 0 then
+        if not self.notes["suu:bags"] then
+            self:Notify({ id = "suu:bags", kind = "until", tone = "warning", category = "Bags",
+                title = "Your bags are full", icon = { glyph = "bag" }, ["until"] = "Goes when you free a slot" })
+        end
+    elseif self.notes["suu:bags"] then
+        self:Dismiss("suu:bags")
     end
 end
 
@@ -527,6 +585,12 @@ local SECTION = {
             { key = "max", label = "Shown at once", control = "slider", min = 3, max = 8, step = 1,
               description = "The rest wait behind \"+N more\"." },
         } },
+        { title = "Notes", rows = {
+            { key = "durability", label = "Damaged gear", control = "toggle",
+              description = "Amber while a piece is at 20% or less, ember once one breaks; goes when you repair." },
+            { key = "bagsFull", label = "Full bags", control = "toggle",
+              description = "While your bags have no free slot; goes when one frees up." },
+        } },
     },
 }
 
@@ -571,6 +635,16 @@ function M:OnEnable()
         end)
     end
     self:HookWindows()
+    -- notes about the game
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "PLAYER_ENTERING_WORLD" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:CheckDurability() end) end
+    end
+    for _, e in ipairs({ "BAG_UPDATE_DELAYED", "PLAYER_ENTERING_WORLD" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:CheckBags() end) end
+    end
+    self:Watch("durability", function() self:CheckDurability() end)
+    self:Watch("bagsFull", function() self:CheckBags() end)
     -- the ready check's time
     self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)
         if plain(timeLeft) and type(timeLeft) == "number" and timeLeft > 0 then
