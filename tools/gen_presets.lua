@@ -36,13 +36,23 @@ end
 -- a class really has (trainer + talents), to warn about presets offering
 -- spells the class can't get on Forever.
 local classSpells = {}
+-- per class: the IDs of passive talents (an aura entry leaves them out: a
+-- passive can sit on you as a hidden aura, which would read as always up)
+-- and the IDs the class really has (talents, spellbooks: a group's icon)
+local passiveIDs, knownIDs = {}, {}
 for _, class in ipairs({ "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR" }) do
     local f = io.open(("tools/data/class_%s.tsv"):format(class:lower()))
     if f then
-        local set = {}
+        local set, passive, known = {}, {}, {}
+        passiveIDs[class], knownIDs[class] = passive, known
         for line in f:lines() do
             if line:sub(1, 1) ~= "#" then
-                local source, _, id, name = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
+                local source, _, id, name, _, _, active = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
+                if not source then source, _, id, name = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)") end
+                if source == "talent" and tonumber(id) then
+                    known[tonumber(id)] = true
+                    if active == "passive" then passive[tonumber(id)] = true end
+                end
                 if name and name ~= "" then
                     set[name] = true
                     if source == "talent" and tonumber(id) then
@@ -57,8 +67,8 @@ for _, class in ipairs({ "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST", "ROGUE"
         local book = io.open(("tools/data/spellbook_%s.tsv"):format(class:lower()))
         if book then
             for line in book:lines() do
-                local name = line:match("^%d+\t([^\t]*)")
-                if name then set[name] = true end
+                local id, name = line:match("^(%d+)\t([^\t]*)")
+                if name then set[name] = true; known[tonumber(id)] = true end
             end
             book:close()
         end
@@ -82,9 +92,35 @@ local source = dofile(SOURCE)
 local BEHAVIOUR = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "missing", "size",
                     "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "hidden", "source" }
 
+-- An aura's IDs without the class's passive talents (when anything else is
+-- left; otherwise warned about: the aura's own ID is still to be found).
+local AURA_LISTS = { buffs = true, debuffs = true, procs = true }
+local passiveOnly = {}
+local function auraIDs(class, ids, where)
+    local passive = passiveIDs[class]
+    if not passive then return ids end
+    local out = {}
+    for _, id in ipairs(ids) do if not passive[id] then out[#out + 1] = id end end
+    if #out == 0 then
+        passiveOnly[#passiveOnly + 1] = where
+        return ids
+    end
+    return out
+end
+
+-- The ID a group shows when none of its members is up: one the class really
+-- has (the lowest ID can be an NPC version with other art).
+local function iconID(class, ids)
+    local known = knownIDs[class]
+    if known then
+        for _, id in ipairs(ids) do if known[id] then return id end end
+    end
+    return ids[1]
+end
+
 -- The behaviour fields of a source entry; effectName (an aura's name) becomes
 -- effectIDs, every ID with that name, like any entry's.
-local function behaviour(entry, where)
+local function behaviour(entry, where, class)
     local b = {}
     if type(entry) ~= "table" then return b end
     for _, k in ipairs(BEHAVIOUR) do
@@ -95,7 +131,7 @@ local function behaviour(entry, where)
         if not ids then
             missing[#missing + 1] = ("%s: effectName %q"):format(where, entry.effectName)
         else
-            b.effectIDs, b.effectName = ids, entry.effectName
+            b.effectIDs, b.effectName = class and auraIDs(class, ids, where .. " effect") or ids, entry.effectName
         end
     end
     return b
@@ -119,30 +155,34 @@ for _, class in ipairs(classes) do
                 if type(entry) == "table" and entry.group then
                     -- a group: every member resolved, the union as its IDs
                     local g = { group = true, name = entry.group, source = entry.source or "mine", max = entry.max or 1, members = {},
-                        behaviour = behaviour(entry, ("%s / %s / %s / group %s"):format(class, preset.name, key, entry.group)) }
+                        behaviour = behaviour(entry, ("%s / %s / %s / group %s"):format(class, preset.name, key, entry.group), class) }
                     local union, seen = {}, {}
                     for _, mname in ipairs(entry.members) do
                         local ids = byName[mname]
+                        if ids and AURA_LISTS[key] then
+                            ids = auraIDs(class, ids, ("%s / %s / %s / group %s: %q"):format(class, preset.name, key, entry.group, mname))
+                        end
                         if not ids then
                             missing[#missing + 1] = ("%s / %s / %s / group %s: %q"):format(class, preset.name, key, entry.group, mname)
                         else
                             g.members[#g.members + 1] = { name = mname, ids = ids }
                             for _, id in ipairs(ids) do if not seen[id] then seen[id] = true; union[#union + 1] = id end end
-                            if mname == entry.icon then g.icon = ids[1] end
+                            if mname == entry.icon then g.icon = iconID(class, ids) end
                         end
                     end
                     table.sort(union)
                     g.ids = union
-                    g.icon = g.icon or (g.members[1] and g.members[1].ids[1])
+                    g.icon = g.icon or (g.members[1] and iconID(class, g.members[1].ids))
                     out[#out + 1] = g
                 else
                     local name = type(entry) == "table" and entry[1] or entry
                     local ids = byName[name]
+                    if ids and AURA_LISTS[key] then ids = auraIDs(class, ids, ("%s / %s / %s: %q"):format(class, preset.name, key, name)) end
                     if not ids then
                         missing[#missing + 1] = ("%s / %s / %s: %q"):format(class, preset.name, key, name)
                     else
                         out[#out + 1] = { name = name, ids = ids, mine = type(entry) == "table" and entry.mine or nil,
-                            behaviour = behaviour(entry, ("%s / %s / %s: %q"):format(class, preset.name, key, name)) }
+                            behaviour = behaviour(entry, ("%s / %s / %s: %q"):format(class, preset.name, key, name), class) }
                     end
                 end
             end
@@ -167,6 +207,14 @@ for _, class in ipairs(classes) do
             end
         end
     end
+end
+
+-- Auras that resolve only to a passive talent's ID: their own aura ID is
+-- missing (find it in game: /suu probe spells while the proc is up, or
+-- /suu probe spells find <name>, then tools/data/found.tsv).
+if #passiveOnly > 0 then
+    io.stderr:write(("%d auras resolve only to a passive talent's ID:\n"):format(#passiveOnly))
+    for _, w in ipairs(passiveOnly) do io.stderr:write("  ", w, "\n") end
 end
 
 if #missing > 0 then

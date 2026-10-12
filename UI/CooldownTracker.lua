@@ -81,6 +81,17 @@ local function knownRank(entry)
     end
 end
 
+-- Whether you know an entry's spell: a rank of it, or (a group) of any of
+-- its members. Auras cast by something else than your spell (totem buffs,
+-- Demonic Sacrifice's) read as unknown: they only show while up.
+local function knowsEntry(entry)
+    if not entry.group then return knownRank(entry) ~= nil end
+    for _, m in ipairs(entry.members or {}) do
+        if knownRank(m) then return true end
+    end
+    return false
+end
+
 -- An entry's art: the rank you know, else its lowest ID (Rank 1, the
 -- player's spell; the highest IDs are often NPC versions with other art).
 local function iconFor(entry)
@@ -537,10 +548,12 @@ function TR:Build()
     -- Each entry's "when missing" (its own, else the list's): grey keeps a
     -- fixed slot, hide joins the packed container beyond the fixed ones.
     local leftGroups = {}
+    -- A buff you don't know gets no grey slot or reminder (a level 12 priest
+    -- isn't reminded of Shadow Protection); it packs with the hidden ones.
     for i, entry in ipairs(lists.buffs or {}) do
         local filter = sourceFilter("HELPFUL", entry, "any")
         local mode = entry.missing or opts.missingBuffs
-        if mode == "hide" then
+        if mode == "hide" or not knowsEntry(entry) then
             leftGroups[#leftGroups + 1] = auraGroup("b" .. i, entry, filter)
         elseif mode == "remind" then
             table.insert(self.built.remindBuffs, self:Reminder(entry, "player", filter, auraSize(entry)))

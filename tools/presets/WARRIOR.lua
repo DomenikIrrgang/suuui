@@ -1,39 +1,70 @@
 -- tools/presets/WARRIOR.lua
 -- The Warrior presets (format: tools/presets_source.lua).
--- From Forever's own class data (trainer + talents, 2026-10-11): new
--- talent Spearing Strike (Arms); Victory Rush is trained (its IDs came from
--- /suu probe spells find, tools/data/found.tsv); possible procs
--- from new passives (Bloodthrill, Raging Blows, Bastion) are tracked as
--- procs, which show only while up. Taunt isn't on the trainer list (known
--- already at level 10).
+-- From Forever's own class data (trainer + talents, 2026-10-12):
+--   * Forever's trees: Arms has Spearing Strike (20 s, situational: giants,
+--     dragonkin, mounts), Bloodthrill (Rend lets Overpower through for 6 s),
+--     Improved Slam and Deep Wounds; Fury has Enrage, Flurry, Bloodthirst,
+--     Death Wish, Piercing Howl; Protection has Shield Slam, Concussion Blow,
+--     Last Stand. Bastion, Raging Blows, Master of Defense and Shield
+--     Specialization are passives with no aura, so they aren't procs.
+--   * Slam has a cooldown on Forever (18 s; Improved Slam takes 3 off), so
+--     it's an Arms rotation cooldown.
+--   * Victory Rush is trained (its IDs come from tools/data/found.tsv);
+--     Taunt and Defensive Stance are known before the trainer lists start.
+--   * Cooldowns whose buff/debuff only matters while it runs carry it as
+--     effect (Bloodrage, Recklessness, Shield Wall, Disarm ...) instead of
+--     a separate aura entry. Battle Shout (3 min) is a reminder.
+--   * Sunder Armor/Expose Armor and Demoralizing Shout/Roar don't stack, so
+--     each pair is one slot from anyone.
 
 local S = dofile("tools/presets/shared.lua")
-local mine, seal, blessing, armors = S.mine, S.seal, S.blessing, S.armors
-local MY_JUDGEMENT, OTHERS_JUDGEMENTS, TAUNTS = S.MY_JUDGEMENT, S.OTHERS_JUDGEMENTS, S.TAUNTS
+local TAUNTS = S.TAUNTS
+
+local function you(name, extra)
+    local e = { name, effect = "you" }
+    for k, v in pairs(extra or {}) do e[k] = v end
+    return e
+end
+local function onTarget(name) return { name, effect = "target" } end
+
+local BATTLE_SHOUT = { "Battle Shout", missing = "remind" }
+local ARMOR = { group = "Armor Debuffs", source = "any", max = 1, icon = "Sunder Armor",
+    members = { "Sunder Armor", "Expose Armor" } }
+local DEMORALIZING = { group = "Demoralizing Effects", source = "any", max = 1, icon = "Demoralizing Shout",
+    members = { "Demoralizing Shout", "Demoralizing Roar" } }
 
 return {
+    -- levels 1-10 (and anyone without points): leveling with what's trained
     { id = "unspecced", name = "Unspecced", tree = 0,
-      essential = { "Bloodrage", "Overpower", "Execute", "Victory Rush", "Thunder Clap" },
-      utility = { "Charge", "Intercept", "Berserker Rage", "Pummel", "Shield Bash", "Disarm" },
-      buffs = { "Battle Shout", "Bloodrage" },
-      debuffs = { "Rend", "Thunder Clap", "Demoralizing Shout", "Hamstring", "Sunder Armor" },
-      procs = { "Enrage" } },
+      essential = { "Overpower", "Thunder Clap", "Victory Rush", "Execute", you("Bloodrage") },
+      utility = { "Charge", "Intercept", "Pummel", "Shield Bash", onTarget("Disarm"), you("Berserker Rage"), you("Retaliation") },
+      buffs = { BATTLE_SHOUT },
+      debuffs = { "Rend", "Hamstring", ARMOR, "Demoralizing Shout" },
+      procs = {} },
     { id = "arms", name = "Arms", tree = 1,
-      essential = { "Mortal Strike", "Overpower", "Spearing Strike", "Sweeping Strikes", "Whirlwind", "Victory Rush", "Bloodrage" },
-      utility = { "Charge", "Intercept", "Pummel", "Berserker Rage", "Intimidating Shout", "Recklessness", "Retaliation", "Thunder Clap" },
-      buffs = { "Battle Shout", "Sweeping Strikes", "Recklessness", "Retaliation", "Berserker Rage", "Bloodrage" },
-      debuffs = { "Rend", "Mortal Strike", "Sunder Armor", "Hamstring", "Thunder Clap", "Demoralizing Shout", "Deep Wounds" },
-      procs = { "Bloodthrill" } },
+      -- Bloodthrill's window shows on Overpower (aura name differs)
+      essential = { "Mortal Strike", you("Overpower", { effectName = "Bloodthrill" }), "Slam", "Whirlwind", "Execute",
+          you("Sweeping Strikes"), you("Bloodrage") },
+      utility = { "Charge", "Intercept", "Pummel", you("Berserker Rage"), you("Recklessness", { sound = "chime" }),
+          onTarget("Intimidating Shout"), "Spearing Strike", "Victory Rush", you("Retaliation", { hidden = true }) },
+      buffs = { BATTLE_SHOUT },
+      -- Rend feeds Bloodthrill; Mortal Strike's healing cut is for PvP
+      debuffs = { "Rend", "Deep Wounds", ARMOR, "Hamstring", { "Mortal Strike", hidden = true } },
+      procs = {} },
     { id = "fury", name = "Fury", tree = 2,
-      essential = { "Bloodthirst", "Whirlwind", "Death Wish", "Victory Rush", "Bloodrage" },
-      utility = { "Pummel", "Intercept", "Berserker Rage", "Recklessness", "Intimidating Shout", "Piercing Howl", "Charge" },
-      buffs = { "Battle Shout", "Death Wish", "Recklessness", "Berserker Rage", "Bloodrage" },
-      debuffs = { "Sunder Armor", "Rend", "Demoralizing Shout", "Hamstring", "Piercing Howl", "Deep Wounds" },
-      procs = { "Flurry", "Enrage", "Raging Blows" } },
+      essential = { "Bloodthirst", "Whirlwind", "Execute", you("Death Wish"), you("Bloodrage") },
+      utility = { "Pummel", "Intercept", "Charge", you("Berserker Rage"), you("Recklessness", { sound = "chime" }),
+          onTarget("Intimidating Shout"), "Victory Rush" },
+      buffs = { BATTLE_SHOUT },
+      -- Deep Wounds is an Arms talent most Fury builds still reach
+      debuffs = { ARMOR, "Deep Wounds", { "Hamstring", hidden = true }, { "Piercing Howl", hidden = true } },
+      procs = { "Flurry", "Enrage" } },
     { id = "protection", name = "Protection", tree = 3,
-      essential = { "Shield Slam", "Revenge", "Shield Block", "Taunt", "Concussion Blow", "Bloodrage" },
-      utility = { "Charge", "Shield Wall", "Last Stand", "Challenging Shout", "Shield Bash", "Mocking Blow", "Disarm", "Berserker Rage", "Intercept", "Victory Rush" },
-      buffs = { "Battle Shout", "Shield Block", "Last Stand", "Shield Wall", "Bloodrage" },
-      debuffs = { TAUNTS, "Sunder Armor", "Rend", "Thunder Clap", "Demoralizing Shout", "Concussion Blow", "Disarm" },
-      procs = { "Bastion", "Enrage" } },
+      essential = { "Shield Slam", "Revenge", you("Shield Block"), onTarget("Thunder Clap"), you("Bloodrage") },
+      utility = { "Taunt", "Mocking Blow", "Challenging Shout", you("Shield Wall", { sound = "chime" }), you("Last Stand"),
+          "Shield Bash", onTarget("Concussion Blow"), onTarget("Disarm"), "Charge",
+          { "Intercept", hidden = true }, you("Berserker Rage", { hidden = true }) },
+      buffs = { BATTLE_SHOUT },
+      debuffs = { TAUNTS, ARMOR, DEMORALIZING },
+      procs = {} },
 }
