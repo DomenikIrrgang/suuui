@@ -231,6 +231,20 @@ API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, 
 -- 0.11: the objective tracker
 API.UI.ObjectiveTracker = UI.ObjectiveTracker -- ObjectiveTracker(parent, { width, maxHeight, toggle }) -> t:SetQuests(list, freeze), t:SetCollapsed(on), t:SetMeta(text), t:QuestTop(questID)
 API.UI.TRACKER_HEAD_H = UI.TRACKER_HEAD_H -- the tracker head's height (its toggle's size)
+-- 0.11: notifications
+API.UI.Notification = UI.Notification -- Notification(parent) -> n:SetData(d), n:SetRemaining(s), n:SetTitle(text)
+API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { max }) -> s:SetItems(list, inCombat), s:CardFor(id)
+-- A note in the notification stack (the Notifications module; nothing while
+-- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
+-- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
+function API.Notify(def)
+    local m = Modules.Get("notifications")
+    if m and m:IsEnabled() then return m:Notify(def) end
+end
+function API.DismissNotification(id)
+    local m = Modules.Get("notifications")
+    if m and m:IsEnabled() then m:Dismiss(id) end
+end
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
 -- takes it away. detail: text, or a format whose arguments may be secret.
