@@ -750,6 +750,10 @@ function ns.Probe.Command(arg)
         ns.ChatProbe.Command(rest)
         return
     end
+    if sub == "quest" then
+        ns.QuestProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
