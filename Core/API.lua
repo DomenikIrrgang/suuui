@@ -227,6 +227,9 @@ API.UI.EncounterTimeline = UI.EncounterTimeline -- EncounterTimeline(parent, { v
 API.UI.Readiness = UI.Readiness -- Readiness(parent, { onReadyCheck }) -> r:SetRows(list), r:SetActionShown(on)
 API.UI.MicroMenu = UI.MicroMenu -- MicroMenu(parent, { name }) -> m:SetItems({ { key, glyph, label, click | onClick } }), m:SetAlert(key, text)
 API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
+
+-- 0.11: the objective tracker
+API.UI.ObjectiveTracker = UI.ObjectiveTracker -- ObjectiveTracker(parent, { width, maxHeight, toggle }) -> t:SetQuests(list, freeze), t:SetCollapsed(on), t:SetMeta(text), t:QuestTop(questID)
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
 -- takes it away. detail: text, or a format whose arguments may be secret.
