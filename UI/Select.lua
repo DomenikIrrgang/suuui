@@ -2,7 +2,8 @@
 -- One choice (or several) from a list too long or wordy for Segmented.
 --
 --   UI.Select(parent, {
---       options = { { value = "a", label = "Alpha", note = "…", disabled = true, reason = "…" },
+--       options = { { value = "a", label = "Alpha", note = "…", disabled = true, reason = "…",
+--                     icon = <texture or file ID> },   -- 0.9: an icon left of the label
 --                   { heading = "Group title" }, … },
 --       value = "a", onChange = fn(value), width = 190, placeholder = "Choose",
 --       multiple = false,   -- the value is then a list; Select all / Clear at the top
@@ -133,6 +134,11 @@ local function row(self, i)
         r.box:SetPoint("LEFT", S["space-4"], 0)
         r.box:EnableMouse(false)
         r.label = UI.Text(r, "body", "ink")
+        -- an option's icon (spells, talents) left of its label
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(18, 18)
+        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        r.icon:Hide()
         r.note = UI.Text(r, "caption", "ink-muted")
         r.note:SetPoint("RIGHT", -S["space-4"], 0)
         r.check = UI.Check(r, 14, "arcane")
@@ -223,6 +229,7 @@ function Select:Refresh()
             r.label:SetValue(o.heading)
             r.box:Hide()
             r.check:Hide()
+            r.icon:Hide()
             r.note:SetValue("")
             y = y + 22
         else
@@ -231,15 +238,28 @@ function Select:Refresh()
             r.label:SetStyle("body")
             r.label:SetColor(o.disabled and "ink-faint" or (on and "ink" or "ink-muted"))
             r.label:SetValue(o.label)
+            r.icon:ClearAllPoints()
+            local lead
             if self.multiple then
                 r.box:Show()
                 r.box:SetValue(on)
-                r.label:SetPoint("LEFT", r.box, "RIGHT", S["space-3"], 0)
                 r.check:Hide()
+                r.icon:SetPoint("LEFT", r.box, "RIGHT", S["space-3"], 0)
+                lead = { r.box, S["space-3"] }
             else
                 r.box:Hide()
-                r.label:SetPoint("LEFT", S["space-4"], 0)
                 r.check:SetShown(on)
+                r.icon:SetPoint("LEFT", S["space-4"], 0)
+            end
+            if o.icon then
+                r.icon:SetTexture(o.icon)
+                r.icon:SetDesaturated(o.disabled and true or false)
+                r.icon:Show()
+                r.label:SetPoint("LEFT", r.icon, "RIGHT", S["space-2"], 0)
+            else
+                r.icon:Hide()
+                if lead then r.label:SetPoint("LEFT", lead[1], "RIGHT", lead[2], 0)
+                else r.label:SetPoint("LEFT", S["space-4"], 0) end
             end
             if o.font then r.label:SetFontObject(ns.Fonts.Get(o.font)) end
             r.note:SetValue(o.note or "")
@@ -279,7 +299,7 @@ function Select:Refresh()
         r.label:SetColor("ink-muted")
         r.label:SetPoint("LEFT", S["space-4"], -2)
         r.label:SetValue("No match")
-        r.box:Hide(); r.check:Hide(); r.note:SetValue("")
+        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.note:SetValue("")
         r:Show()
         y = y + 22
     end

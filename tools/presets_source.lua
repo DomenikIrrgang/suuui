@@ -14,6 +14,11 @@
 -- or a group: { group = "Seal", source = "mine"|"others"|"any", max = 1..4,
 -- icon = "Member name", members = { "Name", ... } } (one slot for several).
 -- Group names are plural ("Seals"), so they read as groups next to spells.
+-- icon is optional: named, the slot always shows that member's art while
+-- nothing is up (written as fixedIcon = true; a name that isn't a member
+-- stops the generator); left out, the tracker picks it: the first member the
+-- character knows, else the first whose condition is met, else the first
+-- member. Every member is written with its own art (icon = ID).
 -- A member is a name, or { "Name", source = "mine"|"others"|"any" } for its
 -- own source (else the group's; the slot gets an engine group per source).
 -- In essential and utility a group (no source or max) is one cooldown: the
@@ -34,7 +39,11 @@
 --   when = { match = "all"|"any",             -- default "all"
 --            conditions = {
 --              { type = "group", value = "solo"|"group"|"raid" },
---              { type = "classes", classes = { "DRUID", "WARLOCK", ... } },
+--              { type = "classes", classes = { "DRUID", "WARLOCK", ... },
+--                others = true },                -- others: not you, only the
+--                                                -- rest of your group
+--              { type = "talent", talents = { "Vindication", ... } },
+--                                                -- learned any of them
 --              { type = "role", roles = { "TANK"|"HEALER"|"DAMAGER", ... } },
 --              { type = "stance", stances = { "battle"|"defensive"|"berserker"|
 --                "caster"|"bear"|"cat"|"moonkin"|"travel"|"aquatic"|"stealth"|
@@ -45,9 +54,12 @@
 --            } }
 --   ["not"] = true on a condition turns it around:
 --   { "Battle Shout", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } } }
--- A collection's `when` applies to everything in it. An unknown type, class
--- token, role, stance, instance or target kind, or an empty list, stops the
--- generator.
+-- A collection's `when` applies to everything in it. Talents are names of
+-- the preset's class, from its talent rows in tools/data/class_<class>.tsv
+-- (/suu probe class), written as their spell IDs (a number passes as it is).
+-- An unknown type, class token, role, stance, instance or target kind,
+-- talent name, an `others` that isn't true or false, or an empty list, stops
+-- the generator.
 --
 -- Behaviour (optional, on a { "Name", ... } entry or a group; the Cooldown
 -- Manager's Behaviour panel, copied into the player's lists as the preset's

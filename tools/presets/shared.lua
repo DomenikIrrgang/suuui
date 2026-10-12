@@ -23,6 +23,15 @@ local function by(classes, ...)
     return out
 end
 
+-- A member that comes from a talent: it counts while another player of its
+-- class is in your group (they may have it), or you have the talent yourself.
+-- Shared groups serve every class, so the talent goes by its spell ID.
+local function talented(class, talentID, name)
+    return { { name, when = { match = "any", conditions = {
+        { type = "classes", classes = { class }, others = true },
+        { type = "talent", talents = { talentID } } } } } }
+end
+
 -- A list of members from several lists (by() results and plain names).
 local function members(...)
     local out = {}
@@ -56,7 +65,7 @@ local MY_JUDGEMENT = { group = "My Judgements", source = "mine", max = 1, icon =
 -- Judgement of Fury (Seal of Fury's judgement); Hand of Reckoning exists in
 -- the client but no Forever paladin learns it.
 -- (in a group only: solo, every mob is yours anyway)
-local TAUNTS = { group = "Taunts", source = "any", max = 2, icon = "Taunt",
+local TAUNTS = { group = "Taunts", source = "any", max = 2,
     when = { conditions = { { type = "group", value = "solo", ["not"] = true } } },
     members = members(by("WARRIOR", "Taunt", "Mocking Blow", "Challenging Shout"),
         by({ "DRUID", "HUNTER" }, "Growl"), by("DRUID", "Challenging Roar"), by("PALADIN", "Judgement of Fury")) }
@@ -71,16 +80,17 @@ local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max
 -- you needn't): armor and attack power reduction, the attack-speed slow
 -- tanks want on their target, and healing reduction (against players only).
 -- Each member counts only while its class is around (you or your group); with
--- none of them around, the slot is gone.
-local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1, icon = "Sunder Armor",
+-- none of them around, the slot is gone. Their icon is automatic: the first
+-- member you know, else the first that can show.
+local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1,
     members = members(by("WARRIOR", "Sunder Armor"), by("ROGUE", "Expose Armor")) }
-local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1, icon = "Demoralizing Shout",
-    members = members(by("WARRIOR", "Demoralizing Shout"), by("DRUID", "Demoralizing Roar"), by("PALADIN", "Vindication")) }
-local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1, icon = "Thunder Clap",
+local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1,
+    members = members(by("WARRIOR", "Demoralizing Shout"), by("DRUID", "Demoralizing Roar"), talented("PALADIN", 9452, "Vindication")) }
+local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1,
     members = members(by("WARRIOR", "Thunder Clap"), by("DRUID", "Hurricane")) }
-local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike",
+local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1,
     when = { conditions = { { type = "target", kinds = { "player" } } } },
-    members = members(by("WARRIOR", "Mortal Strike"),
+    members = members(talented("WARRIOR", 12294, "Mortal Strike"),
         by("ROGUE", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV")) }
 
 -- Every stun on the target, from anyone: whoever stuns sees what's already
@@ -91,7 +101,7 @@ local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1
 -- Destruction warlocks (Pyroclasm), Shadow priests (Blackout).
 -- (War Stomp is a Tauren's, any class: no condition)
 -- (only while one is up: a stun isn't something you keep up)
-local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice", missing = "hide",
+local STUNS = { group = "Stuns", source = "any", max = 2, missing = "hide",
     members = members(by("PALADIN", "Hammer of Justice", "Holy Wrath", "Stun"), by("ROGUE", "Cheap Shot", "Kidney Shot"),
         by("DRUID", "Bash", "Pounce", "Starfire Stun"), by("WARRIOR", "Concussion Blow", "Charge Stun", "Intercept Stun"),
         by("HUNTER", "Intimidation", "Improved Concussive Shot"), by("MAGE", "Impact"), by("WARLOCK", "Pyroclasm"),

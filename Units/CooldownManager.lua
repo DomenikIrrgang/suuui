@@ -451,17 +451,20 @@ local function walk(list, key, fn)
     end
 end
 
--- A shared slot's IDs: every member's, once, sorted; its icon stays one of them.
+-- A shared slot's IDs: every member's, once, sorted; its icon stays one of
+-- them (or a member's own icon). A fixed icon whose member left is no longer
+-- fixed.
 local function regroup(e)
-    local seen, ids = {}, {}
+    local seen, ids, art = {}, {}, {}
     for _, m in ipairs(e.members or {}) do
         for _, id in ipairs(m.ids or {}) do
             if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
         end
+        if m.icon then art[m.icon] = true end
     end
     table.sort(ids)
     e.ids = ids
-    if e.icon and not seen[e.icon] then e.icon = nil end
+    if e.icon and not (seen[e.icon] or art[e.icon]) then e.icon, e.fixedIcon = nil, nil end
     if not e.icon and e.members and e.members[1] then e.icon = e.members[1].ids[1] end
 end
 
@@ -480,12 +483,14 @@ end
 -- shared slot's member in aura lists only); no when, or no conditions:
 -- always. Each cond is { type, ["not"] = true? } plus its type's values:
 --   group     value = "solo" | "group" | "raid"
---   classes   classes = { "DRUID", … }  (anyone in your group, you included)
+--   classes   classes = { "DRUID", … }, others = true?  (anyone in your
+--             group, you included; others: anyone but you)
 --   role      roles = { "TANK", "HEALER", "DAMAGER" }
 --   stance    stances = { keys of your class's STANCES }
 --   combat    (in combat; not: out of combat)
 --   instance  kinds = { "none", "party", "raid", "pvp" }
 --   target    kinds = { "boss", "elite", "player", "normal" }
+--   talent    talents = { spellID, … }  (you have learned any of them)
 -- The tracker checks them; the editor writes them and says them in words.
 
 local CLASSES = {
@@ -512,6 +517,7 @@ local CONDITION_TYPES = {
     { value = "group", label = "In a group or raid" }, { value = "classes", label = "Class in your group" },
     { value = "role", label = "Your role" }, { value = "stance", label = "Your stance / form" },
     { value = "combat", label = "In combat" }, { value = "instance", label = "Instance" }, { value = "target", label = "Target is" },
+    { value = "talent", label = "Your talents" },
 }
 
 -- A new condition of a type, with a first choice made.
@@ -522,6 +528,7 @@ local function newCondition(kind)
     if kind == "stance" then return { type = "stance", stances = { STANCES[CLASS] and STANCES[CLASS][1].value } } end
     if kind == "instance" then return { type = "instance", kinds = { "party" } } end
     if kind == "target" then return { type = "target", kinds = { "boss" } } end
+    if kind == "talent" then return { type = "talent", talents = {} } end
     return { type = "combat" }
 end
 
@@ -540,6 +547,58 @@ local function picked(values, options, field)
         out[#out + 1] = o and o[field] or tostring(v):lower()
     end
     return out
+end
+
+-- A class's talents, learned or not, sorted by name: { id = spellID, name,
+-- tree } each. Any class's from the generated list (SuuUI.ClassTalents);
+-- without it, your own class's read live from every node of the active
+-- config's trees (kept once read: the config may not be there yet right
+-- after login).
+local liveTalents
+local function readLiveTalents()
+    if liveTalents then return liveTalents end
+    local out, seen = {}, {}
+    pcall(function()
+        local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
+        local info = cfg and C_Traits and C_Traits.GetConfigInfo(cfg)
+        for _, treeID in ipairs(info and info.treeIDs or {}) do
+            for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+                local ni = C_Traits.GetNodeInfo(cfg, nodeID)
+                for _, entryID in ipairs(ni and ni.entryIDs or {}) do
+                    local ei = C_Traits.GetEntryInfo(cfg, entryID)
+                    local di = ei and ei.definitionID and C_Traits.GetDefinitionInfo(ei.definitionID)
+                    local id = di and (di.spellID or di.overriddenSpellID)
+                    local name = id and not isSecret(id) and C_Spell.GetSpellName(id)
+                    if name and not isSecret(name) and not seen[id] then
+                        seen[id] = true
+                        out[#out + 1] = { id = id, name = name }
+                    end
+                end
+            end
+        end
+    end)
+    table.sort(out, function(x, y) return x.name < y.name end)
+    if #out > 0 then liveTalents = out end
+    return out
+end
+
+local function classTalents(class)
+    local list = SuuUI.ClassTalents and SuuUI.ClassTalents(class)
+    if type(list) == "table" and #list > 0 then
+        local out = {}
+        for _, t in ipairs(list) do
+            if t.id then out[#out + 1] = { id = t.id, name = t.name or C_Spell.GetSpellName(t.id) or ("ID " .. t.id), tree = t.tree } end
+        end
+        table.sort(out, function(x, y) return x.name < y.name end)
+        return out
+    end
+    if class == CLASS then return readLiveTalents() end
+    return {}
+end
+
+local function talentName(id)
+    local name = C_Spell.GetSpellName(id)
+    return (name and not isSecret(name)) and name or ("ID " .. tostring(id))
 end
 
 local function stanceOptions()
@@ -561,7 +620,17 @@ local function conditionPhrase(c, inGroup, short)
         local names = {}
         for _, v in ipairs(c.classes or {}) do names[#names + 1] = tostring(v):lower() end
         if #names == 0 then return nil end
-        local who = (no and "without a " or "with a ") .. anyOf(names)
+        local who
+        if c.others then
+            -- not you: "another paladin", or "a druid or paladin besides you"
+            if #names == 1 and c.classes[1] == CLASS then
+                who = (no and "without another " or "with another ") .. names[1]
+            else
+                who = (no and "without a " or "with a ") .. anyOf(names) .. " besides you"
+            end
+        else
+            who = (no and "without a " or "with a ") .. anyOf(names)
+        end
         return short and who or (who .. (inGroup and " in it" or " in your group"))
     elseif c.type == "role" then
         local roles = picked(c.roles, ROLES, "label")
@@ -586,6 +655,11 @@ local function conditionPhrase(c, inGroup, short)
         if #names == 0 then return nil end
         if short then return (no and "target not " or "target ") .. anyOf(names) end
         return (no and "unless your target is " or "while your target is ") .. anyOf(names)
+    elseif c.type == "talent" then
+        local names = {}
+        for _, id in ipairs(c.talents or {}) do names[#names + 1] = talentName(id) end
+        if #names == 0 then return nil end
+        return (no and "without " or "with ") .. anyOf(names)
     end
 end
 
@@ -623,7 +697,7 @@ end
 
 -- What the Behaviour panel sets on an entry (its Reset clears them all).
 local BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
-                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when" }
+                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when", "fixedIcon" }
 -- What else makes an entry differ from the preset's: shown or not, and a
 -- shared slot's own settings and members (their whose and when included).
 local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members" }
@@ -857,11 +931,20 @@ end
 
 -- What a typed number finds: the spell with that ID, as "Name · ID 123".
 -- Its value is "id:123"; adding it adds exactly that ID.
+-- The art of a list of IDs for a dropdown: the rank you know, else the first.
+local function idsArt(ids)
+    if not ids or not ids[1] then return nil end
+    for i = #ids, 1, -1 do
+        if IsPlayerSpell and IsPlayerSpell(ids[i]) then return C_Spell.GetSpellTexture(ids[i]) end
+    end
+    return C_Spell.GetSpellTexture(ids[1])
+end
+
 local function spellLookup(query)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
     local name = id and C_Spell.GetSpellName(id)
     if isSecret(name) or not name then return nil end
-    return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
+    return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id), icon = C_Spell.GetSpellTexture(id) } }
 end
 
 -- An option's value as an entry: a name (every ID it carries), "id:123", or
@@ -1020,14 +1103,21 @@ local function knownMember(slot)
 end
 
 -- An entry's icon art: a single spell's rank you know, a shared slot's icon
--- (a cooldown slot's: the member it shows).
+-- (a cooldown slot's: the member it shows; an aura slot's, unless its icon
+-- is fixed: the first member you know, else its icon).
 local function artOf(e, cooldown)
     local id
     if e.group and cooldown then
         local m = knownMember(e) or (e.members or {})[1]
         if m then id = select(2, rankText(m)) end
     elseif e.group then
-        id = e.icon or (e.ids or {})[1]
+        if not e.fixedIcon then
+            for _, m in ipairs(e.members or {}) do
+                local rank, known = rankText(m)
+                if rank ~= "Not learned" then id = known; break end
+            end
+        end
+        id = id or e.icon or (e.ids or {})[1]
     elseif e.ids then
         id = select(2, rankText(e))
     end
@@ -1420,16 +1510,19 @@ local function buildEditor(parent)
             if not present[r.name] and not taken[r.name] then
                 taken[r.name] = true
                 if not byName[r.name] then byName[r.name] = copy(r.ids) end
-                top[#top + 1] = { value = r.name, label = r.name }
+                top[#top + 1] = { value = r.name, label = r.name, icon = idsArt(r.ids) }
             end
         end
         local options = {}
         for name in pairs(byName) do
-            if not present[name] and not taken[name] then options[#options + 1] = { value = name, label = name } end
+            if not present[name] and not taken[name] then
+                options[#options + 1] = { value = name, label = name, icon = idsArt(byName[name]) }
+            end
         end
         for name, g in pairs(slots and groups or {}) do
             if not present[name] and g.key == key then
-                options[#options + 1] = { value = "group:" .. name, label = name .. " (Shared slot)" }
+                options[#options + 1] = { value = "group:" .. name, label = name .. " (Shared slot)",
+                    icon = g.entry and (g.entry.icon and C_Spell.GetSpellTexture(g.entry.icon) or idsArt(g.entry.ids)) or nil }
             end
         end
         table.sort(options, function(x, z) return x.label < z.label end)
@@ -1851,14 +1944,74 @@ local function buildEditor(parent)
         r.classesA:SetPoint("TOPLEFT", COND_X, top)
         r.classesB = UI.ToggleChips(r, { options = { unpack(CLASSES, 6, 9) }, onChange = classes })
         r.classesB:SetPoint("TOPLEFT", COND_X, top - 32)
+        -- you counted or not
+        r.classesOthers = UI.Segmented(r, { options = { { value = "me", label = "Counting you" }, { value = "others", label = "Others only" } },
+            onChange = function(v) setCondition(r.index, function(c) c.others = (v == "others") or nil end) end })
+        r.classesOthers:SetPoint("TOPLEFT", COND_X, top - 64)
         r.roles = chips(ROLES, "roles")
         r.stances = STANCES[CLASS] and chips(STANCES[CLASS], "stances")
         r.instance = chips(INSTANCES, "kinds")
         r.target = chips(TARGETS, "kinds")
         r.plain = UI.Text(r, "caption", "ink-faint")
         r.plain:SetPoint("TOPLEFT", COND_X, top - 6)
-        r.controls = { r.group, r.classesA, r.classesB, r.roles, r.instance, r.target, r.plain, r.stances }
+        -- talents: the chosen ones (icon, name, ✕), then a class (any: a
+        -- profile may serve another character) and "+ Add talent…" of its
+        -- talents (a typed number finds any spell by its ID)
+        r.talentRows = {}
+        r.talentClass = CLASS
+        r.talentClassSelect = UI.Select(r, { width = 160, options = CLASSES, value = CLASS, onChange = function(v)
+            if not v then return end
+            r.talentClass = v
+            r:TalentOptions()
+        end })
+        r.addTalent = UI.Select(r, { width = 300, placeholder = "+ Add talent…", lookup = spellLookup, onChange = function(v)
+            local id = tonumber(v) or (type(v) == "string" and tonumber(v:match("^id:(%d+)$")))
+            if not id then return end
+            setCondition(r.index, function(c)
+                c.talents = c.talents or {}
+                for _, x in ipairs(c.talents) do if x == id then return end end
+                c.talents[#c.talents + 1] = id
+            end)
+        end })
+        -- the chosen class's talents, without those already chosen
+        function r:TalentOptions()
+            local have, options = {}, {}
+            for _, id in ipairs(self.cond and self.cond.talents or {}) do have[id] = true end
+            for _, t in ipairs(classTalents(self.talentClass)) do
+                if not have[t.id] then
+                    local tree = t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree))
+                    options[#options + 1] = { value = t.id, label = t.name, note = tree, icon = C_Spell.GetSpellTexture(t.id) }
+                end
+            end
+            self.addTalent:SetOptions(options)
+            self.addTalent:SetValue(nil)
+        end
+        r.controls = { r.group, r.classesA, r.classesB, r.classesOthers, r.roles, r.instance, r.target, r.plain, r.stances,
+                       r.talentClassSelect, r.addTalent }
         return r
+    end
+
+    -- A chosen talent in a talent condition: icon, name, ✕.
+    local function talentRow(r, n)
+        local t = r.talentRows[n]
+        if t then return t end
+        t = CreateFrame("Frame", nil, r)
+        t:SetSize(300, 24)
+        t.icon = UI.Icon(t, 20)
+        t.icon:SetPoint("LEFT")
+        t.name = UI.Text(t, "label", "ink")
+        t.name:SetPoint("LEFT", t.icon, "RIGHT", 8, 0)
+        t.name:SetFixedWidth(240)
+        t.remove = glyphButton(t, "remove", function()
+            setCondition(r.index, function(c)
+                for i, x in ipairs(c.talents or {}) do
+                    if x == t.id then table.remove(c.talents, i); break end
+                end
+            end)
+        end)
+        t.remove:SetPoint("RIGHT")
+        r.talentRows[n] = t
+        return t
     end
 
     local function fillConditionRow(r, c)
@@ -1866,7 +2019,9 @@ local function buildEditor(parent)
         r.notText:SetColor(c["not"] and "ember-text" or "ink-faint")
         r.type:SetOptions(conditionTypes(c.type))
         r.type:SetValue(c.type)
+        r.cond = c
         for _, ctl in pairs(r.controls) do ctl:Hide() end
+        for _, t in ipairs(r.talentRows) do t:Hide() end
         local h = 26
         if c.type == "group" then
             r.group:SetValue(c.value or "group")
@@ -1875,9 +2030,11 @@ local function buildEditor(parent)
         elseif c.type == "classes" then
             r.classesA:SetValue(c.classes)
             r.classesB:SetValue(c.classes)
+            r.classesOthers:SetValue(c.others and "others" or "me")
             r.classesA:Show()
             r.classesB:Show()
-            h = 58
+            r.classesOthers:Show()
+            h = 64 + 30
         elseif c.type == "role" then
             r.roles:SetValue(c.roles)
             r.roles:Show()
@@ -1890,6 +2047,27 @@ local function buildEditor(parent)
         elseif c.type == "target" then
             r.target:SetValue(c.kinds)
             r.target:Show()
+        elseif c.type == "talent" then
+            local y = 8 + 30 + 6
+            for n, id in ipairs(c.talents or {}) do
+                local t = talentRow(r, n)
+                t.id = id
+                t.icon:SetArt(C_Spell.GetSpellTexture(id))
+                t.name:SetValue(talentName(id))
+                t:ClearAllPoints()
+                t:SetPoint("TOPLEFT", COND_X, -y)
+                t:Show()
+                y = y + 28
+            end
+            r.talentClassSelect:ClearAllPoints()
+            r.talentClassSelect:SetPoint("TOPLEFT", COND_X, -y)
+            r.talentClassSelect:SetValue(r.talentClass)
+            r.talentClassSelect:Show()
+            r.addTalent:ClearAllPoints()
+            r.addTalent:SetPoint("TOPLEFT", COND_X, -(y + 36))
+            r:TalentOptions()
+            r.addTalent:Show()
+            h = y + 36 + 30 - (8 + 30 + 6)
         else
             r.plain:SetValue(c.type == "combat" and "No options: while you're in combat."
                 or "Your class has no stances or forms.")
@@ -2039,8 +2217,14 @@ local function buildEditor(parent)
 
         -- an aura slot's icon while none of its auras is up
         local ic, addI = section(b)
+        -- Automatic: what can show (the first member you know, else the
+        -- icon); a member: always that one's
         b.icon = UI.Select(ic, { width = 240, placeholder = "First spell", onChange = function(v)
-            if v then mutateEntry(function(e) e.icon = v end) end
+            if v == "auto" then
+                mutateEntry(function(e) e.fixedIcon = nil end)
+            elseif v then
+                mutateEntry(function(e) e.icon, e.fixedIcon = v, true end)
+            end
         end })
         addI("Icon when none is up", b.icon)
         b.iconSection = ic
@@ -2238,12 +2422,13 @@ local function buildEditor(parent)
             b.slotShown:SetValue(not e.hidden)
         end
         if ctx == "slot" and not cooldown then
-            local iconOptions = {}
+            local iconOptions = { { value = "auto", label = "Automatic (what can show)" } }
             for _, m in ipairs(e.members or {}) do
-                if m.ids and m.ids[1] then iconOptions[#iconOptions + 1] = { value = m.ids[1], label = m.name } end
+                local art = m.icon or (m.ids and m.ids[1])
+                if art then iconOptions[#iconOptions + 1] = { value = art, label = m.name, icon = C_Spell.GetSpellTexture(art) } end
             end
             b.icon:SetOptions(iconOptions)
-            b.icon:SetValue(e.icon)
+            b.icon:SetValue(e.fixedIcon and e.icon or "auto")
         end
         if ctx == "member" then
             b.memberSource:SetValue(e.source or entrySource(slot, b.key))

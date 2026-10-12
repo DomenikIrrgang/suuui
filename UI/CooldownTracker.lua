@@ -39,13 +39,18 @@
 --   remind   shown grey only while the aura is NOT up, out of combat (the
 --            only time SuuUI can read auras); hidden in combat
 -- A group entry ({ group = true, name, members, ids = all members' IDs,
--- source = "mine"|"others"|"any", max = 1..4, icon }) is one slot for several
--- spells: the engine shows whichever members are up (up to max), each with
--- its own icon and time; with none up the group's icon follows "when
--- missing". Source maps to the filter: PLAYER, !PLAYER (verified valid), or
--- none. A member may have its own source ({ name, ids, source, when }):
--- members of different sources become one engine group per source in the
--- same slot, each with the slot's max.
+-- source = "mine"|"others"|"any", max = 1..4, icon, fixedIcon }) is one slot
+-- for several spells: the engine shows whichever members are up (up to max),
+-- each with its own icon and time; with none up the slot's icon follows "when
+-- missing". That icon is `icon` when fixedIcon is set; otherwise automatic:
+-- the first member (in order, those its conditions leave in) that you know,
+-- else the first whose `when` is met now (none: met), else `icon`; a
+-- member's art is its own `icon`, else its first ID. Picked at each build
+-- (a learned rank or a static condition's change rebuilds). Source maps to
+-- the filter: PLAYER, !PLAYER (verified valid), or none. A member may have
+-- its own source ({ name, ids, icon, source, when }): members of different
+-- sources become one engine group per source in the same slot, each with the
+-- slot's max.
 -- In a cooldown list a group is one cell: the LAST member you know (members
 -- in order of preference: Divine Protection, then Divine Shield once
 -- learned), with the group's behaviour; its effect is effectIDs, else that
@@ -58,8 +63,12 @@
 -- group's member, a collection):
 --   when = { match = "all"|"any" (default "all"), conditions = {
 --     { type = "group", value = "solo"|"group"|"raid" },  -- a raid is a group
---     { type = "classes", classes = { "DRUID", ... } },  -- someone in your
---                                                        -- group, you too
+--     { type = "classes", classes = { "DRUID", ... }, others = true? },
+--                                   -- someone in your group, you too; with
+--                                   -- others, only the others
+--     { type = "talent", talents = { spellID, ... } },  -- you've learned any
+--                                   -- of them (any class's: another's is
+--                                   -- never learned)
 --     { type = "role", roles = { "TANK"|"HEALER"|"DAMAGER", ... } },  -- SuuUI's
 --     { type = "stance", stances = { "battle"|"defensive"|"berserker"|"caster"|
 --       "bear"|"cat"|"moonkin"|"travel"|"aquatic"|"stealth"|"shadowform", ... } },
@@ -78,9 +87,12 @@
 -- applies to its entries (with each one's own: both must hold); a member's
 -- only to that member. Not met: left out (no grey slot, no reminder; a
 -- member: out of its slot).
---   static   group, classes, role, instance: checked when the tracker builds;
---            a roster, role or zone change that changes them rebuilds, after
---            combat. An entry they rule out isn't built.
+--   static   group, classes, role, instance, talent: checked when the tracker
+--            builds; a roster, role, zone or talent change that changes them
+--            rebuilds, after combat. An entry they rule out isn't built.
+--            Talents learned are read from the active talent config (a node
+--            with a rank, its entry's spell), kept until the talents or the
+--            spellbook change; a spell you know (IsPlayerSpell) counts too.
 --   live     stance, combat, target: an entry that turns on them is built
 --            and shown or hidden in place, in combat too, and its row closes
 --            up. Cells, fixed slots and reminders are SuuUI's frames. A
@@ -356,11 +368,12 @@ end
 local AURA_LISTS = { buffs = true, debuffs = true, procs = true }
 
 -- Static types are checked when the tracker builds (and again when the
--- group, role or zone changes); live ones in place, in combat too.
+-- group, role, zone or talents change); live ones in place, in combat too.
 local LIVE = { stance = true, combat = true, target = true }
 
 -- The list a condition chooses from; with nothing chosen it counts as absent.
-local CHOICES = { classes = "classes", role = "roles", stance = "stances", instance = "kinds", target = "kinds" }
+local CHOICES = { classes = "classes", role = "roles", stance = "stances", instance = "kinds", target = "kinds",
+                  talent = "talents" }
 
 -- Shapeshift forms by spell (checked against Forever's spell scan); the
 -- names of these spells, in the client's language, catch other IDs.
@@ -420,15 +433,16 @@ local function instanceKind()
     return INSTANCE[known(kind, "none")] or "none"
 end
 
--- The classes in your group, you included, as a set. A class the game
--- keeps secret counts as nobody's.
-local function rosterClasses()
+-- The classes in your group as a set: you included, or (others) only the
+-- others. A class the game keeps secret counts as nobody's.
+local function rosterClasses(others)
     local set = {}
     local function add(unit)
+        if others and known(UnitIsUnit(unit, "player"), false) then return end
         local _, class = UnitClass(unit)
         if not isSecret(class) and class then set[class] = true end
     end
-    add("player")
+    if not others then add("player") end
     if known(IsInRaid and IsInRaid(), false) then
         for i = 1, 40 do add("raid" .. i) end
     else
@@ -436,6 +450,62 @@ local function rosterClasses()
     end
     return set
 end
+
+-- The talents you've learned, as a set of spell IDs: every node of the
+-- active talent config with a rank (Forever lays the three trees out in one),
+-- its chosen entry's spell (else every entry's). Read once and kept until
+-- the talents or the spellbook change (forgetTalents); nil while there's no
+-- config to read (right after login), so it's read again next time.
+local talentCache
+
+local function hasRank(ni)
+    for _, k in ipairs({ "ranksPurchased", "activeRank", "currentRank" }) do
+        local r = ni[k]
+        if r ~= nil and not isSecret(r) and r > 0 then return true end
+    end
+    return false
+end
+
+local function readTalents()
+    local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
+    if cfg == nil or isSecret(cfg) or not C_Traits then return nil end
+    local info = C_Traits.GetConfigInfo(cfg)
+    if not (info and info.treeIDs) then return nil end
+    local set = {}
+    local function addEntry(entryID)
+        if entryID == nil or isSecret(entryID) then return end
+        local ei = C_Traits.GetEntryInfo(cfg, entryID)
+        local def = ei and ei.definitionID
+        local di = def and not isSecret(def) and C_Traits.GetDefinitionInfo(def)
+        if not di then return end
+        if di.spellID and not isSecret(di.spellID) then set[di.spellID] = true end
+        if di.overriddenSpellID and not isSecret(di.overriddenSpellID) then set[di.overriddenSpellID] = true end
+    end
+    for _, treeID in ipairs(info.treeIDs) do
+        for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+            local ni = C_Traits.GetNodeInfo(cfg, nodeID)
+            if ni and hasRank(ni) then
+                local active = ni.activeEntry and ni.activeEntry.entryID
+                if active ~= nil and not isSecret(active) then
+                    addEntry(active)
+                else
+                    for _, entryID in ipairs(ni.entryIDs or {}) do addEntry(entryID) end
+                end
+            end
+        end
+    end
+    return set
+end
+
+local function learnedTalents()
+    if not talentCache then
+        local ok, set = pcall(readTalents)
+        talentCache = ok and set or nil
+    end
+    return talentCache or {}
+end
+
+local function forgetTalents() talentCache = nil end
 
 -- What a pass over many conditions looks up once (ctx[key], from fn).
 local function look(ctx, key, fn)
@@ -466,7 +536,8 @@ local TEST = {
         return group
     end,
     classes = function(c, ctx)
-        local roster = look(ctx, "roster", rosterClasses)
+        local others = c.others and true or false
+        local roster = look(ctx, others and "rosterOthers" or "roster", function() return rosterClasses(others) end)
         for _, class in ipairs(c.classes) do
             if roster[class] then return true end
         end
@@ -487,6 +558,17 @@ local TEST = {
     end,
     target = function(c, ctx)
         return has(c.kinds, look(ctx, "target", targetKind))
+    end,
+    -- any of them learned: in the talent config, else a spell you know
+    talent = function(c, ctx)
+        local learned = look(ctx, "talents", learnedTalents)
+        for _, id in ipairs(c.talents) do
+            if type(id) == "number" then
+                if learned[id] then return true end
+                if IsPlayerSpell and known(IsPlayerSpell(id), false) then return true end
+            end
+        end
+        return false
     end,
 }
 
@@ -610,6 +692,24 @@ local function auraLook(entry, base)
     look.digits, look.stacks = entry.digits, entry.stacks
     look.expiring = entry.expiring
     return look
+end
+
+-- The art of a fixed slot or reminder while nothing is up: a single aura's
+-- (iconFor); a shared slot's `icon` when fixedIcon is set, else automatic:
+-- the first member (of those its conditions leave in) that you know, else
+-- the first whose `when` is met now (none: met), else `icon`. A member's art
+-- is its own `icon`, else its first ID.
+local function slotArt(entry, ctx)
+    if not entry.group or entry.fixedIcon then return iconFor(entry) end
+    local members = entry.members or {}
+    local function art(m) return C_Spell.GetSpellTexture(m.icon or m.ids[1]) end
+    for _, m in ipairs(members) do
+        if m.ids and #m.ids > 0 and knownRank(m) then return art(m) end
+    end
+    for _, m in ipairs(members) do
+        if m.ids and #m.ids > 0 and conditionMet(m.when, ctx) then return art(m) end
+    end
+    return iconFor(entry)
 end
 
 -- A fixed slot: the grey placeholder, and over it a one-icon container that
@@ -854,7 +954,7 @@ function TR:Slot(entry, unit, parts, size, look)
         end
     end
     self:WatchGroups(f.container, groups)
-    f.art:SetTexture(iconFor(entry))
+    f.art:SetTexture(slotArt(entry, {}))
     f.withTarget, f.coll, f.whens, f.condOK = nil, nil, nil, nil
     return f
 end
@@ -863,7 +963,7 @@ end
 -- parts' IDs, each under its filter.
 function TR:Reminder(entry, unit, parts, size)
     local f = self:Take("remind|" .. size, function() return newReminder(self, size) end)
-    f.art:SetTexture(iconFor(entry))
+    f.art:SetTexture(slotArt(entry, {}))
     f.unit, f.checks, f.coll, f.whens, f.condOK = unit, {}, nil, nil, nil
     for _, p in ipairs(parts) do
         local ids = {}
@@ -1423,9 +1523,9 @@ function TR:Start()
             if sig ~= t.knownSig then t.rebuild = true end
         end, t) end
     end
-    -- Static conditions: a group, role or zone change that changes what they
-    -- say rebuilds (after combat, like any rebuild). These come in bursts:
-    -- one look half a second after the first.
+    -- Static conditions: a group, role, zone or talent change that changes
+    -- what they say rebuilds (after combat, like any rebuild). These come in
+    -- bursts: one look half a second after the first.
     local function static()
         if t.condPending then return end
         t.condPending = true
@@ -1438,6 +1538,11 @@ function TR:Start()
         if not valid or valid(e) then Events.OnGame(e, static, t) end
     end
     Events.On("SUUUI_ROLE_CHANGED", static, t)
+    -- talents learned or unlearned: read them again, then the same look
+    for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "PLAYER_TALENT_UPDATE",
+                         "CHARACTER_POINTS_CHANGED", "SPELLS_CHANGED" }) do
+        if not valid or valid(e) then Events.OnGame(e, function() forgetTalents(); static() end, t) end
+    end
 end
 
 function TR:Stop()

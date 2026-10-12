@@ -21,33 +21,33 @@ ns.CooldownPresets = {
             { name = "Soul Fire", icon = 6353, ids = { 6353, 17924 } },
         },
         buffs = {
-            { group = true, name = "Armors", source = "mine", max = 1, icon = 687, missing = "remind", members = {
-                { name = "Demon Skin", ids = { 687, 696, 20798 } },
-                { name = "Demon Armor", ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
+            { group = true, name = "Armors", source = "mine", max = 1, icon = 687, fixedIcon = true, missing = "remind", members = {
+                { name = "Demon Skin", icon = 687, ids = { 687, 696, 20798 } },
+                { name = "Demon Armor", icon = 706, ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
             }, ids = { 687, 696, 706, 1086, 11733, 11734, 11735, 12956, 13787, 20798 } },
         },
         debuffs = {
             { collection = true, name = "DoTs", entries = {
                 { name = "Corruption", icon = 172, ids = { 172, 1107, 6222, 6223, 7648, 11671, 11672, 11673, 13530, 16402, 16985, 17510, 18088, 18376, 18656, 21068, 23439, 23642, 25311, 28829, 468242, 1213450, 1219428, 1223963 } },
-                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, members = {
-                    { name = "Bane of Agony", ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
-                    { name = "Bane of Doom", ids = { 603 } },
-                    { name = "Bane of Havoc", ids = { 1225228, 1243338, 1243339, 1324473 } },
+                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, fixedIcon = true, members = {
+                    { name = "Bane of Agony", icon = 980, ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
+                    { name = "Bane of Doom", icon = 603, ids = { 603 } },
+                    { name = "Bane of Havoc", icon = 1225228, ids = { 1225228, 1243338, 1243339, 1324473 } },
                 }, ids = { 603, 980, 1014, 1029, 6217, 11711, 11712, 11713, 1225228, 1243338, 1243339, 1324473 } },
                 { name = "Immolate", icon = 348, ids = { 348, 707, 1094, 2941, 8981, 9034, 9275, 9276, 11665, 11667, 11668, 11962, 11984, 12742, 15505, 15506, 15570, 15661, 15732, 15733, 17883, 18542, 20294, 20787, 20800, 20826, 25309, 1219425, 1235317, 1282590, 1316865 } },
             } },
-            { group = true, name = "Curses", source = "mine", max = 1, icon = 702, members = {
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
-                { name = "Curse of Exhaustion", ids = { 18223 } },
+            { group = true, name = "Curses", source = "mine", max = 1, icon = 702, fixedIcon = true, members = {
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+                { name = "Curse of Exhaustion", icon = 18223, ids = { 18223 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18223, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
-            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, fixedIcon = true, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
             { name = "Fear", icon = 5782, missing = "hide", ids = { 663, 5782, 6213, 6215, 12096, 12542, 22678, 26070, 26580, 27641, 27990, 29168, 30002, 411959, 469521, 469793, 469879, 1213452, 1222563, 1247087, 1271593, 1323802, 1324448, 1324451, 1324453 } },
         },
@@ -65,35 +65,35 @@ ns.CooldownPresets = {
             { name = "Soul Fire", icon = 6353, ids = { 6353, 17924 } },
         },
         buffs = {
-            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, missing = "remind", members = {
-                { name = "Demon Skin", ids = { 687, 696, 20798 } },
-                { name = "Demon Armor", ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
+            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, fixedIcon = true, missing = "remind", members = {
+                { name = "Demon Skin", icon = 687, ids = { 687, 696, 20798 } },
+                { name = "Demon Armor", icon = 706, ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
             }, ids = { 687, 696, 706, 1086, 11733, 11734, 11735, 12956, 13787, 20798 } },
         },
         debuffs = {
             { collection = true, name = "DoTs", entries = {
                 { name = "Corruption", icon = 172, missing = "warn", when = { conditions = { { type = "combat" } } }, ids = { 172, 1107, 6222, 6223, 7648, 11671, 11672, 11673, 13530, 16402, 16985, 17510, 18088, 18376, 18656, 21068, 23439, 23642, 25311, 28829, 468242, 1213450, 1219428, 1223963 } },
-                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, members = {
-                    { name = "Bane of Agony", ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
-                    { name = "Bane of Doom", ids = { 603 } },
-                    { name = "Bane of Havoc", ids = { 1225228, 1243338, 1243339, 1324473 } },
+                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, fixedIcon = true, members = {
+                    { name = "Bane of Agony", icon = 980, ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
+                    { name = "Bane of Doom", icon = 603, ids = { 603 } },
+                    { name = "Bane of Havoc", icon = 1225228, ids = { 1225228, 1243338, 1243339, 1324473 } },
                 }, ids = { 603, 980, 1014, 1029, 6217, 11711, 11712, 11713, 1225228, 1243338, 1243339, 1324473 } },
                 { name = "Siphon Life", icon = 18265, ids = { 18265, 18879, 18880, 18881, 1242957 } },
                 { name = "Immolate", icon = 348, ids = { 348, 707, 1094, 2941, 8981, 9034, 9275, 9276, 11665, 11667, 11668, 11962, 11984, 12742, 15505, 15506, 15570, 15661, 15732, 15733, 17883, 18542, 20294, 20787, 20800, 20826, 25309, 1219425, 1235317, 1282590, 1316865 } },
                 { name = "Wrack", icon = 1316697, missing = "hide", ids = { 1316697 } },
             } },
-            { group = true, name = "Curses", source = "mine", max = 1, icon = 702, members = {
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
-                { name = "Curse of Exhaustion", ids = { 18223 } },
+            { group = true, name = "Curses", source = "mine", max = 1, icon = 702, fixedIcon = true, members = {
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+                { name = "Curse of Exhaustion", icon = 18223, ids = { 18223 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18223, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
-            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, fixedIcon = true, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
             { name = "Fear", icon = 5782, missing = "hide", ids = { 663, 5782, 6213, 6215, 12096, 12542, 22678, 26070, 26580, 27641, 27990, 29168, 30002, 411959, 469521, 469793, 469879, 1213452, 1222563, 1247087, 1271593, 1323802, 1324448, 1324451, 1324453 } },
             { name = "Banish", icon = 710, missing = "hide", ids = { 710, 8994, 18647, 24466, 27565, 457569, 465352, 1324462, 1324463 } },
@@ -114,40 +114,40 @@ ns.CooldownPresets = {
             { name = "Howl of Terror", icon = 5484, ids = { 5484, 17928 } },
         },
         buffs = {
-            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, missing = "remind", members = {
-                { name = "Demon Skin", ids = { 687, 696, 20798 } },
-                { name = "Demon Armor", ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
+            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, fixedIcon = true, missing = "remind", members = {
+                { name = "Demon Skin", icon = 687, ids = { 687, 696, 20798 } },
+                { name = "Demon Armor", icon = 706, ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
             }, ids = { 687, 696, 706, 1086, 11733, 11734, 11735, 12956, 13787, 20798 } },
             { name = "Soul Link", icon = 19028, missing = "remind", ids = { 19028, 25228 } },
-            { group = true, name = "Sacrifices", source = "mine", max = 1, icon = 18789, missing = "remind", members = {
-                { name = "Burning Shadow", ids = { 18789 } },
-                { name = "Touch of Fire", ids = { 18791 } },
-                { name = "Fel Stamina", ids = { 18790 } },
-                { name = "Fel Energy", ids = { 18792 } },
+            { group = true, name = "Sacrifices", source = "mine", max = 1, icon = 18789, fixedIcon = true, missing = "remind", members = {
+                { name = "Burning Shadow", icon = 18789, ids = { 18789 } },
+                { name = "Touch of Fire", icon = 18791, ids = { 18791 } },
+                { name = "Fel Stamina", icon = 18790, ids = { 18790 } },
+                { name = "Fel Energy", icon = 18792, ids = { 18792 } },
             }, ids = { 18789, 18790, 18791, 18792 } },
         },
         debuffs = {
             { collection = true, name = "DoTs", entries = {
                 { name = "Corruption", icon = 172, ids = { 172, 1107, 6222, 6223, 7648, 11671, 11672, 11673, 13530, 16402, 16985, 17510, 18088, 18376, 18656, 21068, 23439, 23642, 25311, 28829, 468242, 1213450, 1219428, 1223963 } },
-                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, members = {
-                    { name = "Bane of Agony", ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
-                    { name = "Bane of Doom", ids = { 603 } },
-                    { name = "Bane of Havoc", ids = { 1225228, 1243338, 1243339, 1324473 } },
+                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, fixedIcon = true, members = {
+                    { name = "Bane of Agony", icon = 980, ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
+                    { name = "Bane of Doom", icon = 603, ids = { 603 } },
+                    { name = "Bane of Havoc", icon = 1225228, ids = { 1225228, 1243338, 1243339, 1324473 } },
                 }, ids = { 603, 980, 1014, 1029, 6217, 11711, 11712, 11713, 1225228, 1243338, 1243339, 1324473 } },
                 { name = "Immolate", icon = 348, ids = { 348, 707, 1094, 2941, 8981, 9034, 9275, 9276, 11665, 11667, 11668, 11962, 11984, 12742, 15505, 15506, 15570, 15661, 15732, 15733, 17883, 18542, 20294, 20787, 20800, 20826, 25309, 1219425, 1235317, 1282590, 1316865 } },
             } },
-            { group = true, name = "Curses", source = "mine", max = 1, icon = 440892, members = {
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
-                { name = "Curse of Exhaustion", ids = { 18223 } },
+            { group = true, name = "Curses", source = "mine", max = 1, icon = 440892, fixedIcon = true, members = {
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+                { name = "Curse of Exhaustion", icon = 18223, ids = { 18223 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18223, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
-            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, fixedIcon = true, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
             { name = "Demonic Brand", icon = 1293697, missing = "hide", ids = { 1293696, 1293697, 1293698, 1293699 } },
             { name = "Fear", icon = 5782, missing = "hide", ids = { 663, 5782, 6213, 6215, 12096, 12542, 22678, 26070, 26580, 27641, 27990, 29168, 30002, 411959, 469521, 469793, 469879, 1213452, 1222563, 1247087, 1271593, 1323802, 1324448, 1324451, 1324453 } },
@@ -169,53 +169,53 @@ ns.CooldownPresets = {
             { name = "Soul Fire", icon = 6353, ids = { 6353, 17924 } },
         },
         buffs = {
-            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, missing = "remind", members = {
-                { name = "Demon Skin", ids = { 687, 696, 20798 } },
-                { name = "Demon Armor", ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
+            { group = true, name = "Armors", source = "mine", max = 1, icon = 706, fixedIcon = true, missing = "remind", members = {
+                { name = "Demon Skin", icon = 687, ids = { 687, 696, 20798 } },
+                { name = "Demon Armor", icon = 706, ids = { 706, 1086, 11733, 11734, 11735, 12956, 13787 } },
             }, ids = { 687, 696, 706, 1086, 11733, 11734, 11735, 12956, 13787, 20798 } },
         },
         debuffs = {
             { collection = true, name = "DoTs", entries = {
                 { name = "Immolate", icon = 348, missing = "warn", when = { conditions = { { type = "combat" } } }, ids = { 348, 707, 1094, 2941, 8981, 9034, 9275, 9276, 11665, 11667, 11668, 11962, 11984, 12742, 15505, 15506, 15570, 15661, 15732, 15733, 17883, 18542, 20294, 20787, 20800, 20826, 25309, 1219425, 1235317, 1282590, 1316865 } },
-                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, members = {
-                    { name = "Bane of Agony", ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
-                    { name = "Bane of Doom", ids = { 603 } },
-                    { name = "Bane of Havoc", ids = { 1225228, 1243338, 1243339, 1324473 } },
+                { group = true, name = "Banes", source = "mine", max = 1, icon = 980, fixedIcon = true, members = {
+                    { name = "Bane of Agony", icon = 980, ids = { 980, 1014, 1029, 6217, 11711, 11712, 11713 } },
+                    { name = "Bane of Doom", icon = 603, ids = { 603 } },
+                    { name = "Bane of Havoc", icon = 1225228, ids = { 1225228, 1243338, 1243339, 1324473 } },
                 }, ids = { 603, 980, 1014, 1029, 6217, 11711, 11712, 11713, 1225228, 1243338, 1243339, 1324473 } },
                 { name = "Corruption", icon = 172, ids = { 172, 1107, 6222, 6223, 7648, 11671, 11672, 11673, 13530, 16402, 16985, 17510, 18088, 18376, 18656, 21068, 23439, 23642, 25311, 28829, 468242, 1213450, 1219428, 1223963 } },
             } },
-            { group = true, name = "Curses", source = "mine", max = 1, icon = 440892, members = {
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
-                { name = "Curse of Exhaustion", ids = { 18223 } },
+            { group = true, name = "Curses", source = "mine", max = 1, icon = 440892, fixedIcon = true, members = {
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+                { name = "Curse of Exhaustion", icon = 18223, ids = { 18223 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18223, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
-            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
-                { name = "Curse of the Elements", ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
-                { name = "Curse of Recklessness", ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
-                { name = "Curse of Weakness", ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
-                { name = "Curse of Tongues", ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
+            { group = true, name = "Others' Curses", source = "others", max = 2, icon = 440892, fixedIcon = true, missing = "hide", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, members = {
+                { name = "Curse of the Elements", icon = 440892, ids = { 11723, 11724, 402792, 440892, 1311676, 1311677, 1311680 } },
+                { name = "Curse of Recklessness", icon = 704, ids = { 704, 7658, 7659, 11717, 16231, 1225841 } },
+                { name = "Curse of Weakness", icon = 702, ids = { 702, 1108, 1109, 6205, 7646, 8552, 11707, 11708, 11980, 12493, 12741, 17227, 18267, 21007 } },
+                { name = "Curse of Tongues", icon = 1714, ids = { 1714, 11719, 12889, 13338, 15470, 25195, 402794, 444046 } },
             }, ids = { 702, 704, 1108, 1109, 1714, 6205, 7646, 7658, 7659, 8552, 11707, 11708, 11717, 11719, 11723, 11724, 11980, 12493, 12741, 12889, 13338, 15470, 16231, 17227, 18267, 21007, 25195, 402792, 402794, 440892, 444046, 1225841, 1311676, 1311677, 1311680 } },
             { name = "Shadow Vulnerability", icon = 17794, missing = "hide", ids = { 17794 } },
             { group = true, name = "Stuns", source = "any", max = 2, icon = 853, missing = "hide", members = {
-                { name = "Hammer of Justice", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
-                { name = "Holy Wrath", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
-                { name = "Stun", when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
-                { name = "Cheap Shot", when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 1833, 6409, 14902 } },
-                { name = "Kidney Shot", when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
-                { name = "Bash", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
-                { name = "Pounce", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 9005, 9823, 9827, 1229228, 1258520, 1264548 } },
-                { name = "Starfire Stun", when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16922 } },
-                { name = "Concussion Blow", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 12809, 22427, 1324556 } },
-                { name = "Charge Stun", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7922, 411688 } },
-                { name = "Intercept Stun", when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 20253, 20614, 20615, 427746 } },
-                { name = "Intimidation", when = { conditions = { { type = "classes", classes = { "HUNTER" } } } }, ids = { 7093, 19577, 24394, 1324494 } },
-                { name = "Improved Concussive Shot", when = { conditions = { { type = "classes", classes = { "HUNTER" } } } }, ids = { 19407, 19410, 22915, 24465, 28445, 1324511 } },
-                { name = "Impact", when = { conditions = { { type = "classes", classes = { "MAGE" } } } }, ids = { 11103, 12355, 1239832 } },
-                { name = "Pyroclasm", when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 18093, 1293803 } },
-                { name = "Blackout", when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
-                { name = "War Stomp", ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
+                { name = "Hammer of Justice", icon = 853, when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 853, 5588, 5589, 10308, 13005, 1213301, 1324513, 1324515, 1324516, 1324517 } },
+                { name = "Holy Wrath", icon = 23979, when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 2812, 10318, 23979, 28883, 429145, 429146, 1238817, 1238818, 1238819, 1238821 } },
+                { name = "Stun", icon = 25, when = { conditions = { { type = "classes", classes = { "PALADIN" } } } }, ids = { 25, 56, 2880, 9179, 17308, 20170, 20310, 23454, 24647, 27880, 429147, 436473, 461579, 461628, 1238096, 1289143, 1310438, 1323500 } },
+                { name = "Cheap Shot", icon = 1833, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 1833, 6409, 14902 } },
+                { name = "Kidney Shot", icon = 408, when = { conditions = { { type = "classes", classes = { "ROGUE" } } } }, ids = { 408, 8643, 8644, 27615, 1324474, 1324475 } },
+                { name = "Bash", icon = 5211, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 5211, 6798, 8983, 8984, 25515, 440586, 447891, 1260650, 1324487, 1324488, 1324490 } },
+                { name = "Pounce", icon = 9005, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 9005, 9823, 9827, 1229228, 1258520, 1264548 } },
+                { name = "Starfire Stun", icon = 16922, when = { conditions = { { type = "classes", classes = { "DRUID" } } } }, ids = { 16922 } },
+                { name = "Concussion Blow", icon = 12809, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 12809, 22427, 1324556 } },
+                { name = "Charge Stun", icon = 7922, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 7922, 411688 } },
+                { name = "Intercept Stun", icon = 20253, when = { conditions = { { type = "classes", classes = { "WARRIOR" } } } }, ids = { 20253, 20614, 20615, 427746 } },
+                { name = "Intimidation", icon = 19577, when = { conditions = { { type = "classes", classes = { "HUNTER" } } } }, ids = { 7093, 19577, 24394, 1324494 } },
+                { name = "Improved Concussive Shot", icon = 19407, when = { conditions = { { type = "classes", classes = { "HUNTER" } } } }, ids = { 19407, 19410, 22915, 24465, 28445, 1324511 } },
+                { name = "Impact", icon = 11103, when = { conditions = { { type = "classes", classes = { "MAGE" } } } }, ids = { 11103, 12355, 1239832 } },
+                { name = "Pyroclasm", icon = 18093, when = { conditions = { { type = "classes", classes = { "WARLOCK" } } } }, ids = { 18093, 1293803 } },
+                { name = "Blackout", icon = 15268, when = { conditions = { { type = "classes", classes = { "PRIEST" } } } }, ids = { 15268, 15269, 15323, 15324, 15325, 15326 } },
+                { name = "War Stomp", icon = 45, ids = { 45, 11876, 15593, 16727, 16740, 19482, 20549, 24375, 25188, 27758, 28125, 28725, 448707, 470031, 1222567, 1223459, 1323209 } },
             }, ids = { 25, 45, 56, 408, 853, 1833, 2812, 2880, 5211, 5588, 5589, 6409, 6798, 7093, 7922, 8643, 8644, 8983, 8984, 9005, 9179, 9823, 9827, 10308, 10318, 11103, 11876, 12355, 12809, 13005, 14902, 15268, 15269, 15323, 15324, 15325, 15326, 15593, 16727, 16740, 16922, 17308, 18093, 19407, 19410, 19482, 19577, 20170, 20253, 20310, 20549, 20614, 20615, 22427, 22915, 23454, 23979, 24375, 24394, 24465, 24647, 25188, 25515, 27615, 27758, 27880, 28125, 28445, 28725, 28883, 411688, 427746, 429145, 429146, 429147, 436473, 440586, 447891, 448707, 461579, 461628, 470031, 1213301, 1222567, 1223459, 1229228, 1238096, 1238817, 1238818, 1238819, 1238821, 1239832, 1258520, 1260650, 1264548, 1289143, 1293803, 1310438, 1323209, 1323500, 1324474, 1324475, 1324487, 1324488, 1324490, 1324494, 1324511, 1324513, 1324515, 1324516, 1324517, 1324556 } },
             { name = "Fear", icon = 5782, missing = "hide", ids = { 663, 5782, 6213, 6215, 12096, 12542, 22678, 26070, 26580, 27641, 27990, 29168, 30002, 411959, 469521, 469793, 469879, 1213452, 1222563, 1247087, 1271593, 1323802, 1324448, 1324451, 1324453 } },
             { name = "Banish", icon = 710, missing = "hide", ids = { 710, 8994, 18647, 24466, 27565, 457569, 465352, 1324462, 1324463 } },
