@@ -158,6 +158,13 @@ function MP.Sample(label)
         else
             s.sourceBreakdown = "no first source (" .. (ok and shape(sess) and "session read" or "session error") .. ")"
         end
+        -- your own breakdown by your GUID (always readable)
+        s.ownBreakdown = call(DM.GetCombatSessionSourceFromType, ST.Current, Enum.DamageMeterType.DamageDone, UnitGUID("player"))
+        -- the combat restriction (lags combat's end) and Blizzard's meter switch
+        if C_RestrictedActions and C_RestrictedActions.IsAddOnRestrictionActive and Enum.AddOnRestrictionType then
+            s.restricted = call(C_RestrictedActions.IsAddOnRestrictionActive, Enum.AddOnRestrictionType.Combat)
+        end
+        s.cvarDamageMeterEnabled = call(C_CVar.GetCVar, "damageMeterEnabled")
         -- a session by ID: the first available one
         local okList, list = pcall(DM.GetAvailableCombatSessions)
         local first = okList and type(list) == "table" and not isSecretTable(list) and list[1]
