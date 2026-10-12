@@ -2,7 +2,41 @@
 -- Groups and helpers several classes' presets use (see tools/presets_source.lua
 -- for the format). Each class file: local S = dofile("tools/presets/shared.lua").
 
+local unpack = table.unpack or unpack
+
 local function mine(name) return { name, mine = true } end
+
+-- "while one of these classes is in your group (you included)"
+local function withClass(...)
+    return { conditions = { { type = "classes", classes = { ... } } } }
+end
+
+-- Members of a class's own spells: they count only while someone of that
+-- class is around (you, or someone in your group). by("WARRIOR", "Sunder
+-- Armor") or by({ "DRUID", "HUNTER" }, "Growl") (a hunter's pet growls).
+local function by(classes, ...)
+    if type(classes) == "string" then classes = { classes } end
+    local out = {}
+    for _, name in ipairs({ ... }) do
+        out[#out + 1] = { name, when = withClass(unpack(classes)) }
+    end
+    return out
+end
+
+-- A list of members from several lists (by() results and plain names).
+local function members(...)
+    local out = {}
+    for _, part in ipairs({ ... }) do
+        if type(part) == "table" and part[1] == nil then part = {} end
+        if type(part) == "string" then out[#out + 1] = part
+        elseif type(part) == "table" and type(part[1]) == "table" then
+            for _, m in ipairs(part) do out[#out + 1] = m end
+        else
+            out[#out + 1] = part
+        end
+    end
+    return out
+end
 
 -- Paladin groups: one slot for your seal, your blessing on yourself, your
 -- judgement, and other paladins' judgements.
@@ -22,7 +56,8 @@ local MY_JUDGEMENT = { group = "My Judgements", source = "mine", max = 1, icon =
 -- Judgement of Fury (Seal of Fury's judgement); Hand of Reckoning exists in
 -- the client but no Forever paladin learns it.
 local TAUNTS = { group = "Taunts", source = "any", max = 2, icon = "Taunt",
-    members = { "Taunt", "Growl", "Mocking Blow", "Challenging Shout", "Challenging Roar", "Judgement of Fury" } }
+    members = members(by("WARRIOR", "Taunt", "Mocking Blow", "Challenging Shout"),
+        by({ "DRUID", "HUNTER" }, "Growl"), by("DRUID", "Challenging Roar"), by("PALADIN", "Judgement of Fury")) }
 -- Mages: one armor at a time, so one slot (Molten Armor isn't in Forever).
 local function armors(icon) return { group = "Armors", source = "mine", max = 1, icon = icon,
     members = { "Frost Armor", "Ice Armor", "Mage Armor" } } end
@@ -31,14 +66,17 @@ local OTHERS_JUDGEMENTS = { group = "Others' Judgements", source = "others", max
 -- Debuffs that don't stack across classes, from anyone (whoever put it up,
 -- you needn't): armor and attack power reduction, the attack-speed slow
 -- tanks want on their target, and healing reduction (PvP; hidden until shown).
+-- Each member counts only while its class is around (you or your group); with
+-- none of them around, the slot is gone.
 local ARMOR_REDUCTION = { group = "Armor Reduction", source = "any", max = 1, icon = "Sunder Armor",
-    members = { "Sunder Armor", "Expose Armor" } }
+    members = members(by("WARRIOR", "Sunder Armor"), by("ROGUE", "Expose Armor")) }
 local AP_REDUCTION = { group = "Attack Power Reduction", source = "any", max = 1, icon = "Demoralizing Shout",
-    members = { "Demoralizing Shout", "Demoralizing Roar", "Vindication" } }
+    members = members(by("WARRIOR", "Demoralizing Shout"), by("DRUID", "Demoralizing Roar"), by("PALADIN", "Vindication")) }
 local ATTACK_SLOWS = { group = "Attack Speed Slows", source = "any", max = 1, icon = "Thunder Clap",
-    members = { "Thunder Clap", "Hurricane" } }
+    members = members(by("WARRIOR", "Thunder Clap"), by("DRUID", "Hurricane")) }
 local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1, icon = "Mortal Strike", hidden = true,
-    members = { "Mortal Strike", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV" } }
+    members = members(by("WARRIOR", "Mortal Strike"),
+        by("ROGUE", "Wound Poison", "Wound Poison II", "Wound Poison III", "Wound Poison IV")) }
 
 -- Every stun on the target, from anyone: whoever stuns sees what's already
 -- on it, so stuns don't overlap (proc stuns included; Seal of Justice's is
@@ -46,15 +84,12 @@ local HEALING_REDUCTION = { group = "Healing Reduction", source = "any", max = 1
 -- Every preset of a class or spec that can stun has it: all paladins,
 -- warriors, rogues, druids (Bash) and hunters; Fire mages (Impact),
 -- Destruction warlocks (Pyroclasm), Shadow priests (Blackout).
+-- (War Stomp is a Tauren's, any class: no condition)
 local STUNS = { group = "Stuns", source = "any", max = 2, icon = "Hammer of Justice",
-    members = { "Hammer of Justice", "Cheap Shot", "Kidney Shot", "Bash", "Pounce", "Concussion Blow",
-        "Charge Stun", "Intercept Stun", "Intimidation", "War Stomp", "Holy Wrath", "Stun", "Impact",
-        "Starfire Stun", "Improved Concussive Shot", "Pyroclasm", "Blackout" } }
-
--- "while one of these classes is in your group (you included)"
-local function withClass(...)
-    return { conditions = { { type = "classes", classes = { ... } } } }
-end
+    members = members(by("PALADIN", "Hammer of Justice", "Holy Wrath", "Stun"), by("ROGUE", "Cheap Shot", "Kidney Shot"),
+        by("DRUID", "Bash", "Pounce", "Starfire Stun"), by("WARRIOR", "Concussion Blow", "Charge Stun", "Intercept Stun"),
+        by("HUNTER", "Intimidation", "Improved Concussive Shot"), by("MAGE", "Impact"), by("WARLOCK", "Pyroclasm"),
+        by("PRIEST", "Blackout"), "War Stomp") }
 
 -- The Physical Debuffs collection: armor reduction from anyone, Faerie Fire
 -- while a druid is in the group (any druid keeps it up: grey while missing),
@@ -89,5 +124,5 @@ return {
     MY_JUDGEMENT = MY_JUDGEMENT, OTHERS_JUDGEMENTS = OTHERS_JUDGEMENTS, TAUNTS = TAUNTS,
     ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
     HEALING_REDUCTION = HEALING_REDUCTION, STUNS = STUNS, with = with,
-    withClass = withClass, physical = physical,
+    withClass = withClass, physical = physical, by = by, members = members,
 }
