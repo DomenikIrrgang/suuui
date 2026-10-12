@@ -293,6 +293,7 @@ local HANDLERS = {
         else eachInSlot(slot, function(b) b:Update(); rangeNow(b) end) end
     end,
     ACTIONBAR_UPDATE_COOLDOWN = function() eachButton(function(b) b:UpdateCooldown() end) end,
+    SPELL_UPDATE_COOLDOWN = function() eachButton(function(b) b:UpdateCooldown() end) end,
     SPELL_UPDATE_CHARGES = function() eachButton(function(b) b:UpdateCount() end) end,
     BAG_UPDATE_DELAYED = function() eachButton(function(b) b:UpdateCount() end) end,
     ACTIONBAR_UPDATE_USABLE = function() eachButton(function(b) b:UpdateUsable() end) end,

@@ -346,7 +346,13 @@ function UI.ActionButton(parent, name, size)
     b.cooldown:SetSwipeColor(0, 0, 0, 0.7)
     b.cooldown:SetHideCountdownNumbers(false)
     if b.cooldown.SetCountdownFont then pcall(b.cooldown.SetCountdownFont, b.cooldown, "SuuUIFont_micro") end
-    b.cooldown:HookScript("OnCooldownDone", function() b:UpdateCooldown() end)
+    -- At the very end of a sweep the game can still call the cooldown (the
+    -- global one) active for a moment: the button would stay grey with
+    -- nothing left to end it. Look again a moment later.
+    b.cooldown:HookScript("OnCooldownDone", function()
+        b:UpdateCooldown()
+        C_Timer.After(0.1, function() b:UpdateCooldown() end)
+    end)
 
     -- Text, rings and the border over the sweep.
     local over = CreateFrame("Frame", nil, face)
