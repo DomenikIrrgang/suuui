@@ -464,8 +464,9 @@ end
 -- message as the command that sends it again: "/p hi", "/w Name hi"); your
 -- own lines coming back as chat events fill in if that key never reaches
 -- SuuUI. A recalled line is typed in by SuuUI, so what's sent with it runs
--- as SuuUI's: in combat Up and Down do nothing (a protected command or a
--- message in an encounter would be blocked).
+-- as SuuUI's: in combat Up and Down pass over protected commands (/cast,
+-- /target …: blocked then), and in an encounter's chat lockdown (messages
+-- blocked) they do nothing.
 --------------------------------------------------------------------------------
 
 local HISTORY_KEEP = 50
@@ -541,10 +542,40 @@ function M:AddHistory(line)
     self.recall = nil
 end
 
+-- A protected command (/cast, /target, /focus …): blocked in combat when
+-- SuuUI typed it in.
+local PROTECTED = {}
+for _, c in ipairs({ "cast", "castsequence", "castrandom", "use", "userandom", "target", "tar", "targetexact",
+                     "targetenemy", "targetfriend", "targetparty", "targetraid", "targetlasttarget", "targetlastenemy",
+                     "targetlastfriend", "cleartarget", "focus", "clearfocus", "assist", "click", "stopcasting",
+                     "stopattack", "startattack", "petattack", "petfollow", "petstay", "petpassive", "petdefensive",
+                     "petaggressive", "petassist", "equip", "equipslot", "equipset", "cancelaura", "cancelform",
+                     "dismount", "stopmacro", "changeactionbar", "swapactionbar", "worldmarker", "clearworldmarker" }) do
+    PROTECTED["/" .. c] = true
+end
+
+local function isProtectedLine(line)
+    local cmd = line:match("^(/%S+)")
+    if not cmd then return false end
+    cmd = cmd:lower()
+    if IsSecureCmd then
+        local ok, secure = pcall(IsSecureCmd, cmd)
+        if ok and plain(secure) then return secure and true or false end
+    end
+    return PROTECTED[cmd] or false
+end
+
+local function chatLockdown()
+    local f = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
+    if not f then return false end
+    local ok, locked = pcall(f)
+    return ok and plain(locked) and locked == true
+end
+
 -- Up: one line further back; Down: one forward, past the newest an empty
 -- input. A recall starts over once the text isn't the recalled line.
 function M:Recall(eb, step)
-    if InCombatLockdown() then return end
+    if chatLockdown() then return end
     local list = self:History()
     if #list == 0 then return end
     local r = self.recall
@@ -553,8 +584,11 @@ function M:Recall(eb, step)
         r = { eb = eb, index = #list + 1 }
         self.recall = r
     end
-    local index = math.max(1, math.min(#list + 1, r.index + step))
-    if index == r.index then return end
+    local index = r.index + step
+    if InCombatLockdown() then
+        while list[index] and isProtectedLine(list[index]) do index = index + step end
+    end
+    if index < 1 or index > #list + 1 then return end
     r.index = index
     eb:SetText(list[index] or "")
     eb:SetCursorPosition(#eb:GetText())
