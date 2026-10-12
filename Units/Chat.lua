@@ -393,31 +393,6 @@ local function windowNamed(...)
     end
 end
 
-function M:SaveDockOrder(global)
-    if not SetChatWindowDocked then return false end
-    local gid = global:GetID()
-    local others = {}
-    for i = 2, (NUM_CHAT_WINDOWS or 10) do
-        local docked = select(9, GetChatWindowInfo(i))
-        if i ~= gid and type(docked) == "number" and not isSecret(docked) and docked > 0 then
-            others[#others + 1] = { id = i, docked = docked }
-        end
-    end
-    table.sort(others, function(a, b) return a.docked < b.docked end)
-    local current = select(9, GetChatWindowInfo(gid))
-    local changed = isSecret(current) or current ~= 2
-    for n, w in ipairs(others) do if w.docked ~= n + 2 then changed = true end end
-    if not changed then return false end
-    SetChatWindowDocked(1, 1)
-    SetChatWindowDocked(gid, 2)
-    for n, w in ipairs(others) do SetChatWindowDocked(w.id, n + 2) end
-    if not self.toldReload then
-        self.toldReload = true
-        self:Print("The Global tab moves next to General after a /reload.")
-    end
-    return true
-end
-
 -- Channels live on the windows on this client: frame:AddChannel(name),
 -- frame:RemoveChannel(name), frame:RemoveAllMessageGroups() (/suu probe chat).
 function M:ApplyGlobalTab()
@@ -445,11 +420,9 @@ function M:ApplyGlobalTab()
         end
     end
     if not global then return end
-    -- second in the dock, after General: the saved order (SetChatWindowDocked,
-    -- what the game stores) is written, General 1, Global 2, the others after
-    -- in their order; the game docks them so on the next reload. The live
-    -- dock isn't touched (moving it from addon code upsets whisper windows).
-    self:SaveDockOrder(global)
+    -- (its place among the tabs is the player's: dragging it, as with any
+    -- tab; moving the dock from addon code upsets whisper windows, and the
+    -- game docks by its own order on load)
     -- everything General was set to show, and every channel you're in
     local channels, seen = {}, {}
     for _, list in ipairs({ windowChannels(general:GetID()), joinedChannels() }) do
