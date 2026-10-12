@@ -29,6 +29,7 @@ local M = SuuUI.RegisterModule({
         logHeight = 160,
         fadeIdle = true,
         idleDelay = 10,
+        globalTab = true, -- the numbered (global) channels in a "Global" tab, not in General
     },
 })
 
@@ -353,6 +354,70 @@ function M:Tick()
 end
 
 --------------------------------------------------------------------------------
+-- Global channels in their own tab (Blizzard's own chat settings, as its tab
+-- menu sets them): General keeps everything but the numbered channels; a
+-- "Global" tab (a "Guild" tab renamed, else a new one) shows only those.
+-- Channels joined later move there too. Out of combat only.
+--------------------------------------------------------------------------------
+
+local function chatFn(name)
+    return _G["ChatFrame_" .. name] or (ChatFrameUtil and ChatFrameUtil[name])
+end
+
+-- the numbered channels you're in, by name
+local function globalChannels()
+    local out = {}
+    local list = { GetChannelList() }
+    for i = 1, #list, 3 do
+        local name = list[i + 1]
+        if type(name) == "string" and not isSecret(name) then out[#out + 1] = name end
+    end
+    return out
+end
+
+-- the window with this name (any case), or nil
+local function windowNamed(...)
+    local wanted = {}
+    for _, n in ipairs({ ... }) do wanted[n:lower()] = true end
+    for i = 1, (NUM_CHAT_WINDOWS or 10) do
+        local name = GetChatWindowInfo(i)
+        if type(name) == "string" and not isSecret(name) and wanted[name:lower()] then return _G["ChatFrame" .. i] end
+    end
+end
+
+function M:ApplyGlobalTab()
+    if not self:Get("globalTab") or InCombatLockdown() then return end
+    local add, remove = chatFn("AddChannel"), chatFn("RemoveChannel")
+    if not (add and remove) then
+        if not self.warnedGlobal then
+            self.warnedGlobal = true
+            self:Print("This client's chat has no AddChannel/RemoveChannel: the Global tab can't be set up.")
+        end
+        return
+    end
+    local global = windowNamed("Global")
+    if not global then
+        -- a "Guild" tab becomes Global (its guild messages go back to General)
+        local guild = windowNamed("Guild")
+        if guild and FCF_SetWindowName then
+            FCF_SetWindowName(guild, "Global")
+            local removeGroups = chatFn("RemoveAllMessageGroups")
+            if removeGroups then removeGroups(guild) end
+            global = guild
+        elseif FCF_OpenNewWindow then
+            global = FCF_OpenNewWindow("Global")
+            local removeGroups = chatFn("RemoveAllMessageGroups")
+            if global and removeGroups then removeGroups(global) end
+        end
+    end
+    if not global then return end
+    for _, channel in ipairs(globalChannels()) do
+        pcall(add, global, channel)
+        pcall(remove, ChatFrame1, channel)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Settings
 --------------------------------------------------------------------------------
 
@@ -367,6 +432,8 @@ local SECTION = {
             { key = "fadeIdle", label = "Fade when idle", control = "toggle",
               description = "Ground, border, tabs and input fade; the lines stay. Back on the mouse, a new message or typing." },
             { key = "idleDelay", label = "Idle after", control = "slider", min = 5, max = 60, step = 1, unit = "s", disabled = idleOff },
+            { key = "globalTab", label = "Global channels in their own tab", control = "toggle",
+              description = "General, Trade, LocalDefense and the rest in a Global tab (your Guild tab renamed, or a new one); the General tab keeps everything else. Channels you join later go there too. Off: SuuUI leaves your tabs as they are." },
         } },
     },
 }
@@ -427,7 +494,20 @@ function M:OnEnable()
             end)
         end
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingPlace then self:PlaceChat() end end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        if self.pendingPlace then self:PlaceChat() end
+        self:ApplyGlobalTab()
+    end)
+    -- the channels settle a moment after login; joins and leaves later
+    C_Timer.After(3, function() if self:IsEnabled() then self:ApplyGlobalTab() end end)
+    for _, e in ipairs({ "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function()
+                C_Timer.After(0.5, function() if self:IsEnabled() then self:ApplyGlobalTab() end end)
+            end)
+        end
+    end
+    self:Watch("globalTab", function() self:ApplyGlobalTab() end)
     self:Watch("position", function() C_Timer.After(0, function() self:PlaceChat() end) end)
     self:Watch("logHeight", function() self:Layout() end)
     self:Watch("fadeIdle", function() self:Wake() end)
