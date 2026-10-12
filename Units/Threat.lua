@@ -63,22 +63,33 @@ local function playerClass()
 end
 
 -- The first threat drop you know and can use now, by name, or nil. A
--- cooldown's times are secret in combat, but whether it runs isn't.
+-- cooldown's times are secret in combat, but whether it runs (isActive)
+-- isn't. This client has no isOnGCD, and the global cooldown makes every
+-- spell read as running: while it runs (spell 29515, Forever's GCD
+-- reference) each drop keeps what it read before it started.
+local GCD_SPELL = 29515
+local dropReady = {}
+
+local function running(id)
+    local cd = C_Spell.GetSpellCooldown(id)
+    if not cd then return nil end
+    local active = cd.isActive
+    if not isSecret(active) and active ~= nil then return active and true or false end
+    if readable(cd.duration) then return cd.duration > 0 end
+    return nil
+end
+
 local function readyDrop()
+    local gcd = running(GCD_SPELL)
     for _, name in ipairs(THREAT_DROPS[playerClass()] or {}) do
         local info = C_Spell.GetSpellInfo(name)
         local id = info and info.spellID
         if id and not isSecret(id) and IsPlayerSpell(id) then
-            local cd = C_Spell.GetSpellCooldown(id)
-            if cd then
-                local active, gcd = cd.isActive, cd.isOnGCD
-                if not isSecret(gcd) and gcd then return name end
-                if not isSecret(active) and active ~= nil then
-                    if not active then return name end
-                elseif readable(cd.duration) and cd.duration <= 1.5 then
-                    return name
-                end
+            if not gcd or dropReady[name] == nil then
+                local r = running(id)
+                if r ~= nil then dropReady[name] = not r end
             end
+            if dropReady[name] then return name end
         end
     end
 end
