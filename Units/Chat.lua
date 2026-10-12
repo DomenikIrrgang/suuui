@@ -39,6 +39,7 @@ local M = SuuUI.RegisterModule({
         timestamps = true,    -- the time before each line, while the chat is in use
         classDiamonds = true, -- the class diamond before names
         shortChannels = true, -- "2. Trade", not "[2. Trade - City]"
+        recall = true,        -- Up and Down bring back what you sent
     },
 })
 
@@ -807,7 +808,7 @@ end
 -- Up: one line further back; Down: one forward, past the newest an empty
 -- input. A recall starts over once the text isn't the recalled line.
 function M:Recall(eb, step)
-    if chatLockdown() then return end
+    if not self:Get("recall") or chatLockdown() then return end
     local list = self:History()
     if #list == 0 then return end
     local r = self.recall
@@ -1307,6 +1308,10 @@ local SECTION = {
               description = "A diamond in the class colour before each name. Names take the line's colour." },
             { key = "shortChannels", label = "Short channel names", control = "toggle",
               description = "\"2. Trade\" rather than \"[2. Trade - City]\"; tags without brackets." },
+        } },
+        { title = "Input", rows = {
+            { key = "recall", label = "Up and Down recall", control = "toggle",
+              description = "Up and Down bring back what you sent (messages and commands, per character). SuuUI types the line in, so the game then treats the input as SuuUI's until you /reload: commands it protects typed in chat (/camp, /logout, /target, /focus) may be refused, and so may chat in a boss fight. Turn it off for dungeons and raids if that bites." },
         } },
     },
 }
