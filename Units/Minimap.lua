@@ -298,6 +298,31 @@ function M:PlaceMinimap()
     Minimap:SetZoom(zoom)
 end
 
+-- The instance difficulty badge (Blizzard's): out of the invisible cluster,
+-- onto the ring's top right. It expects its parent to have Layout (our own
+-- frame gets one, nothing written onto Blizzard's).
+function M:PlaceDifficulty()
+    local diff = MinimapCluster and MinimapCluster.InstanceDifficulty
+    local over = self.block and self.block.deco.over
+    if not (diff and over) or InCombatLockdown() then return end
+    if not over.Layout then over.Layout = function() end end
+    self.placingDiff = true
+    if diff:GetParent() ~= over then diff:SetParent(over) end
+    diff:ClearAllPoints()
+    diff:SetPoint("TOPRIGHT", over, "TOPRIGHT", 2, 1)
+    diff:SetFrameLevel(over:GetFrameLevel() + 4)
+    self.placingDiff = nil
+    if not self.diffHooked then
+        self.diffHooked = true
+        local function again()
+            if self.placingDiff or not self:IsEnabled() then return end
+            C_Timer.After(0, function() self:PlaceDifficulty() end)
+        end
+        hooksecurefunc(diff, "SetParent", again)
+        hooksecurefunc(diff, "SetPoint", again)
+    end
+end
+
 function M:Guard()
     if self.guarded then return end
     self.guarded = true
@@ -414,6 +439,7 @@ function M:OnEnable()
     C_Timer.After(0, function()
         if not self:IsEnabled() then return end
         self:PlaceMinimap()
+        self:PlaceDifficulty()
         self:Guard()
         if not self.overlay then self:Overlay() end
     end)
@@ -426,7 +452,13 @@ function M:OnEnable()
     for _, e in ipairs({ "UPDATE_PENDING_MAIL", "MAIL_CLOSED", "PLAYER_ENTERING_WORLD" }) do
         self:OnGameEvent(e, function() self:UpdateMail() end)
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingPlace then self:PlaceMinimap() end end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        if self.pendingPlace then self:PlaceMinimap() end
+        self:PlaceDifficulty()
+    end)
+    for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_DIFFICULTY_CHANGED" }) do
+        self:OnGameEvent(e, function() C_Timer.After(0, function() if self:IsEnabled() then self:PlaceDifficulty() end end) end)
+    end
     self:OnGameEvent("CVAR_UPDATE", function() self:UpdateClock() end)
     if not self.ticker then
         self.ticker = C_Timer.NewTicker(10, function() if self:IsEnabled() then self:UpdateClock() end end)
