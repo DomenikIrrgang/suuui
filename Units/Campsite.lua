@@ -4,6 +4,7 @@
 -- each phase begins. Camping has no window: everything comes from your own
 -- auras (probed 2026-10-13).
 --   Campfire Nearby (1283391)      → "Campfire nearby", until you rest
+--                                    (or for General › Campfire's seconds)
 --   Welcoming Campfire (1229739)   → "Resting by the fire", counting down
 --                                    the minute seated
 --   Camp Benefits (1229741)        → "Camp Benefits" for a few seconds
@@ -18,7 +19,9 @@ local M = SuuUI.RegisterModule({
     name = "Campfire",
     description = "Alerts at a campfire: one is near, resting by it, Camp Benefits gained.",
     api = "0.12",
-    defaults = {},
+    defaults = {
+        nearbyFor = 0, -- seconds the "Campfire nearby" alert stays; 0: until you rest or walk away
+    },
 })
 
 local isSecret = issecretvalue or function() return false end
@@ -68,8 +71,14 @@ function M:Alert(phase, a)
     if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
     if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     if phase == "nearby" then
-        -- stays until you have the benefits (or walk away)
+        -- stays until you rest (or walk away), or for the setting's seconds
         SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
+        local stay = self:Get("nearbyFor")
+        if not stay or stay <= 0 then return end
+        self.briefTimer = C_Timer.NewTimer(stay, function()
+            self.briefTimer = nil
+            SuuUI.HideAlert(KEY)
+        end)
         return
     elseif phase == "resting" then
         local function show()
@@ -157,6 +166,9 @@ local SECTION = {
     id = "campsite", label = "Campfire", category = "General", order = 26,
     groups = {
         { title = "Campfire alerts", description = "At a campfire SuuUI's alerts say what it does for you: a fire is near, the minute seated counting down, then Camp Benefits gained. They need the Alerts module; combat alerts come first.", rows = {
+            { key = "nearbyFor", label = "\"Campfire nearby\" stays", control = "slider", min = 0, max = 60, step = 5,
+              format = function(v) return v == 0 and "Until you rest" or (v .. " s") end,
+              description = "Until you sit down and rest (or walk away), or only this many seconds." },
             { label = "Show them", control = "button", text = "Nearby, resting, rested",
               description = "Each alert in turn, without a fire.",
               onClick = function()
