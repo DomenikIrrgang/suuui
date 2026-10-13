@@ -5,11 +5,28 @@
 -- and description. No ranks: Forever's trainers give none, and a spell's
 -- first rank is often known from level 1 (Holy Light), so SuuUI's Spellbook
 -- works ranks out in game from the ranks you know (by level).
+-- Also every spell ID the client has for each of those names (the ID scan,
+-- /suu probe spells scan: SuuUIProbe.spellScan.byName, and the Forever range
+-- scan's rows), as
+-- ns.TrainerSpellIDs[name]: the Spellbook picks a rank's own ID in game by
+-- the level the game says it is learned at, for the game's spell tooltip.
 --   lua tools/gen_trainer.lua "<WTF>/SavedVariables/SuuUI.lua"   (from the addon folder)
 
 local env = {}
 assert(loadfile(arg[1], "t", env))()
 local all = assert(env.SuuUIProbe and env.SuuUIProbe.classData, "no class data in the saved variables")
+local byName = env.SuuUIProbe.spellScan and env.SuuUIProbe.spellScan.byName or {}
+-- and Forever's own range (/suu probe spells scan forever: { id, name } rows)
+local forever = env.SuuUIProbe.spellScanForever and env.SuuUIProbe.spellScanForever.rows or {}
+for _, row in ipairs(forever) do
+    local id, name = row[1], row[2]
+    if type(id) == "number" and type(name) == "string" then
+        byName[name] = byName[name] or {}
+        local have = false
+        for _, r in pairs(byName[name]) do if (type(r) == "table" and r[1] or r) == id then have = true end end
+        if not have then table.insert(byName[name], { id }) end
+    end
+end
 
 local function q(s)
     return string.format("%q", tostring(s or "")):gsub("\\\n", "\\n")
@@ -55,6 +72,27 @@ for _, class in ipairs(classes) do
                 q(t.name), t.level, t.cost, q(t.school), t.icon and tostring(t.icon) or "nil", t.text and q(t.text) or "nil")
         end
         out[#out + 1] = "}"
+        out[#out + 1] = ""
+        out[#out + 1] = "-- Every spell ID with each name (players' ranks and the rest: picked in game)."
+        out[#out + 1] = "ns.TrainerSpellIDs = {"
+        local names, seen = {}, {}
+        for _, t in ipairs(list) do
+            if not seen[t.name] then seen[t.name] = true; names[#names + 1] = t.name end
+        end
+        table.sort(names)
+        local missing = 0
+        for _, name in ipairs(names) do
+            local ids = {}
+            for _, row in pairs(byName[name] or {}) do
+                local id = type(row) == "table" and row[1] or row
+                if type(id) == "number" then ids[#ids + 1] = id end
+            end
+            table.sort(ids)
+            if #ids == 0 then missing = missing + 1 end
+            out[#out + 1] = ("    [%s] = { %s },"):format(q(name), table.concat(ids, ", "))
+        end
+        out[#out + 1] = "}"
+        if missing > 0 then print(class, "names without IDs: " .. missing) end
         local f = assert(io.open(("Data/Trainer/%s.lua"):format(class), "w"))
         f:write(table.concat(out, "\n"), "\n")
         f:close()

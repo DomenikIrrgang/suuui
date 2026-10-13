@@ -12,8 +12,9 @@
 --                  more, cost (copper) })
 --
 -- note: a few words after the rank in ink-faint ("Level 18": a spell from an
--- earlier level still to train). Hovering a spell shows SuuUI's tooltip:
--- its name, rank, `text` and `meta` (what training it costs). The card takes
+-- earlier level still to train). Hovering a spell shows the game's spell
+-- tooltip when it carries `spellID` (then `meta` as a last line: what
+-- training it costs), else SuuUI's: its name, rank, `text` and `meta`. The card takes
 -- the mouse: c:IsHovered() says whether it is under it (it stays then); a
 -- click on it calls c.onClick (its owner dismisses it).
 --
@@ -72,9 +73,16 @@ function Card:Row(i)
     r:SetScript("OnEnter", function()
         local s = r.spell
         if not s then return end
+        if s.spellID then
+            GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+            GameTooltip:SetSpellByID(s.spellID)
+            if s.meta then GameTooltip:AddLine(s.meta, 1, 1, 1, true) end
+            GameTooltip:Show()
+            return
+        end
         UI.ShowTooltip(r, { title = s.name, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text, meta = s.meta })
     end)
-    r:SetScript("OnLeave", function() UI.HideTooltip() end)
+    r:SetScript("OnLeave", function() GameTooltip:Hide(); UI.HideTooltip() end)
     r:SetScript("OnMouseUp", function() if self.onClick then self.onClick() end end)
     self.rows[i] = r
     return r
@@ -158,7 +166,11 @@ function UI.LevelUp(parent)
     Mixin(f, Card)
     f.rows = {}
     f:EnableMouse(true)
-    f:SetScript("OnHide", function() UI.HideTooltip() end)
+    f:SetScript("OnHide", function()
+        UI.HideTooltip()
+        local owner = GameTooltip:GetOwner()
+        if owner and owner.GetParent and owner:GetParent() == f then GameTooltip:Hide() end
+    end)
     f:SetScript("OnMouseUp", function() if f.onClick then f.onClick() end end)
     f.ground = f:CreateTexture(nil, "BACKGROUND")
     f.ground:SetAllPoints()

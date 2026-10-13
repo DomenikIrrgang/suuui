@@ -295,3 +295,9 @@ end
 function API.TrainerSpells()
     return ns.TrainerSpells or {}
 end
+-- 0.12: every spell ID this client has for each of those names (players'
+-- ranks and others alike: { [name] = { id, ... } }); pick a rank by
+-- C_Spell.GetSpellLevelLearned.
+function API.TrainerSpellIDs()
+    return ns.TrainerSpellIDs or {}
+end

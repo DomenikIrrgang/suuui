@@ -212,6 +212,69 @@ function M:Unlearned(entries, learnedAll)
     return out
 end
 
+-- A trainer rank's own spell ID, for the game's spell tooltip: of every ID
+-- with its name (Data/Trainer, from the ID scan), the one the game says is
+-- learned at that level; its rank and icon settle a tie. nil when none fits
+-- (SuuUI's own tooltip then).
+function M:SpellIDFor(s)
+    local name, level = s.label or s.name, s.level
+    if not name or not level then return nil end
+    self.ids = self.ids or {}
+    local key = name .. "#" .. level
+    if self.ids[key] then return self.ids[key] end
+    local best, bestScore = nil, 0
+    for _, id in ipairs(SuuUI.TrainerSpellIDs()[name] or {}) do
+        local score = 0
+        local ok, learned = pcall(C_Spell.GetSpellLevelLearned, id)
+        if ok and learned == level then score = score + 4 end
+        if s.rank and C_Spell.GetSpellSubtext then
+            local okR, sub = pcall(C_Spell.GetSpellSubtext, id)
+            if okR and sub == ("Rank " .. s.rank) then score = score + 2 end
+        end
+        if s.icon and C_Spell.GetSpellTexture(id) == s.icon then score = score + 1 end
+        if score > bestScore then best, bestScore = id, score end
+    end
+    -- the level, or the rank and icon together (a miss isn't kept: the
+    -- game may not have loaded the spell's data yet)
+    if bestScore < 3 then return nil end
+    self.ids[key] = best
+    return best
+end
+
+-- The last line of an unlearned spell's tooltip: train now (arcane) and the
+-- cost in coin colours, or the level it comes at.
+local function hex(token) return T.color[token].hex end
+local function coinText(copper)
+    copper = tonumber(copper) or 0
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "|cff" .. hex("coin-gold") .. "g|r" end
+    if s > 0 then parts[#parts + 1] = s .. "|cff" .. hex("coin-silver") .. "s|r" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "|cff" .. hex("coin-copper") .. "c|r" end
+    return table.concat(parts, " ")
+end
+function M:TrainLine(s)
+    if s.level and s.level <= (UnitLevel("player") or 1) then
+        return "|cff" .. hex("arcane") .. "Train now at your class trainer|r  |cff" .. hex("ink") .. coinText(s.cost) .. "|r"
+    end
+    return "|cff" .. hex("ink-muted") .. "Learn at level " .. tostring(s.level) .. " · |r" .. coinText(s.cost)
+end
+
+-- An unlearned spell's tooltip: the game's own when its ID is found, with
+-- the training line under it; else SuuUI's.
+function M:ShowUnlearnedTip(owner, s)
+    local id = self:SpellIDFor(s)
+    if id then
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+        GameTooltip:SetSpellByID(id)
+        GameTooltip:AddLine(self:TrainLine(s), 1, 1, 1, true)
+        GameTooltip:Show()
+        return
+    end
+    UI.ShowTooltip(owner, { title = s.label, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text,
+        meta = s.status == "trainable" and ("Train now at your class trainer · " .. coins(s.cost)) or ("Learn at level " .. s.level) })
+end
+
 --------------------------------------------------------------------------------
 -- The page
 --------------------------------------------------------------------------------
@@ -359,8 +422,7 @@ function M:Build()
             if s.slot then GameTooltip:SetSpellBookItem(s.slot, BANK) else GameTooltip:SetSpellByID(s.spellID) end
             GameTooltip:Show()
         else
-            UI.ShowTooltip(c.button, { title = s.label, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text,
-                meta = s.status == "trainable" and ("Train now at your class trainer · " .. coins(s.cost)) or ("Learn at level " .. s.level) })
+            self:ShowUnlearnedTip(c.button, s)
         end
     end
     book.onLeave = function()
@@ -470,7 +532,8 @@ function M:NewBetween(from, to)
             local now = e.level >= from and e.level <= to
             if now or (older and e.level < from) then
                 list[#list + 1] = { icon = e.icon, name = e.label, rank = e.rank, isNew = e.fresh, cost = tonumber(e.cost) or 0,
-                    text = e.text, meta = ((e.level <= (UnitLevel("player") or 1)) and "Train now at your class trainer · " or ("Learn at level " .. e.level .. " · ")) .. coins(e.cost),
+                    text = e.text, meta = self:TrainLine(e),
+                    spellID = self:SpellIDFor(e), level = e.level,
                     old = not now, note = not now and ("Level " .. e.level) or nil }
             end
         end
