@@ -791,6 +791,10 @@ function ns.Probe.Command(arg)
         ns.TreeProbe.Command(rest)
         return
     end
+    if sub == "spellbook" then
+        ns.SpellbookProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
