@@ -31,7 +31,8 @@ local M = SuuUI.RegisterModule({
         showBuffs = true,
         showDebuffs = true,
         showTarget = true,
-        targetAuras = "all",    -- "all" (everyone's, yours first) or "mine"
+        targetDebuffs = "all",  -- on your target: "all" (everyone's, yours first) or "mine"
+        targetBuffs = "all",
         showFocus = true,
         showBoss = true,
         buffSize = UI.Size("icon-lg"),
@@ -40,6 +41,15 @@ local M = SuuUI.RegisterModule({
         debuffSize = UI.Size("icon-lg"),
     },
 })
+
+-- one target setting became two (debuffs, buffs)
+M:Migrate("targetSplit", function(values)
+    if values.targetAuras ~= nil then
+        values.targetDebuffs = values.targetDebuffs or values.targetAuras
+        values.targetBuffs = values.targetBuffs or values.targetAuras
+    end
+    values.targetAuras = nil
+end)
 
 -- The containers that hang off a unit frame: their unit, where (point on
 -- the container, point on the frame, x, y), and which setting.
@@ -50,7 +60,7 @@ local ATTACHED = {
     } },
     target = { key = "showTarget", at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
         size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
-        -- yours first; everyone else's after (targetAuras "mine" sets their max to 0)
+        -- yours first; everyone else's after ("mine" in targetDebuffs / targetBuffs sets their max to 0)
         groups = {
             { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
             { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
@@ -99,9 +109,8 @@ function M:ApplyOptions()
     -- the target's: everyone's, or only yours
     local target = self.attached and self.attached.target
     if target then
-        local all = self:Get("targetAuras") == "all"
-        target:SetGroupMax("theirs", all and 8 or 0)
-        target:SetGroupMax("theirBuffs", all and 8 or 0)
+        target:SetGroupMax("theirs", self:Get("targetDebuffs") == "all" and 8 or 0)
+        target:SetGroupMax("theirBuffs", self:Get("targetBuffs") == "all" and 8 or 0)
     end
     self:UpdateOffline()
     if self.buffs then
@@ -178,7 +187,10 @@ local SECTION = {
         { title = "On other frames", description = "Your focus and bosses: only the auras you cast. None on a player who is offline.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
               description = "Above the target frame: your debuffs and buffs first (HoTs, shields), then everyone else's." },
-            { key = "targetAuras", label = "Target's auras", control = "segmented",
+            { key = "targetDebuffs", label = "Target's debuffs", control = "segmented",
+              options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
+              disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },
+            { key = "targetBuffs", label = "Target's buffs", control = "segmented",
               options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
               disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },
             { key = "showFocus", label = "On your focus", control = "toggle", description = "Your debuffs, after the focus bar." },
@@ -220,7 +232,7 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateOffline() end)
     self:OnUnitEvent("UNIT_CONNECTION", { "target" }, function() self:UpdateOffline() end)
-    for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "targetAuras", "showFocus", "showBoss", "buffPosition" }) do
+    for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "targetDebuffs", "targetBuffs", "showFocus", "showBoss", "buffPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
 end
