@@ -312,8 +312,14 @@ function M:Build()
     end
     book:HookScript("OnShow", function() self:Shorten(); self:Render() end)
     book:HookScript("OnHide", function() self:Restore() end)
-    hooksecurefunc(f, "SetHeight", function() if not self.sizing and book:IsVisible() then C_Timer.After(0, function() self:Shorten() end) end end)
-    hooksecurefunc(f, "SetSize", function() if not self.sizing and book:IsVisible() then C_Timer.After(0, function() self:Shorten() end) end end)
+    -- Blizzard's UpdateSize sets the height again right after the window
+    -- shows (in the same frame): shortened at once, so the tall one is never
+    -- drawn (the flicker, found with /suu probe flicker)
+    local function again()
+        if not self.sizing and page:IsShown() then self:Shorten() end
+    end
+    hooksecurefunc(f, "SetHeight", again)
+    hooksecurefunc(f, "SetSize", again)
     book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
     self:Render()
 end
