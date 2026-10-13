@@ -73,17 +73,31 @@ function M:Schools()
     for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class) or {}) do
         if t.tree and t.spec and not trees[t.tree] then trees[t.tree] = t.spec end
     end
-    local function trainerIcon(name)
-        for _, t in ipairs(SuuUI.TrainerSpells() or {}) do
-            if t.school == name and t.icon then return t.icon end
+    -- a tree's own icon: the game's spec info (when its name is the tree's),
+    -- else the tree's earliest trainer spell (alphabetical was wrong: found
+    -- in game)
+    local _, _, classID = UnitClass("player")
+    local function treeIcon(name, tree)
+        local tries = {
+            function() local _, n, _, icon = GetSpecializationInfoForClassID(classID, tree); return n, icon end,
+            function() local _, n, _, icon = C_SpecializationInfo.GetSpecializationInfo(tree); return n, icon end,
+        }
+        for _, try in ipairs(tries) do
+            local ok, n, icon = pcall(try)
+            if ok and icon and n == name then return icon end
         end
+        local best
+        for _, t in ipairs(SuuUI.TrainerSpells() or {}) do
+            if t.school == name and t.icon and (not best or t.level < best.level) then best = t end
+        end
+        return best and best.icon
     end
     local out, used = {}, {}
     if book[1] then out[1] = book[1]; used[book[1]] = true end
     for tree = 1, 3 do
         local name = trees[tree]
         if name then
-            local s = byName[name] or { name = name, icon = trainerIcon(name) or 134400, first = 1, count = 0 }
+            local s = byName[name] or { name = name, icon = treeIcon(name, tree) or 134400, first = 1, count = 0 }
             out[#out + 1] = s
             used[s] = true
         end
