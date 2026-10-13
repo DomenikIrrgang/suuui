@@ -774,6 +774,10 @@ function ns.Probe.Command(arg)
         ns.CampProbe.Command(rest)
         return
     end
+    if sub == "partyauras" then
+        ns.PartyAuraProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
