@@ -258,10 +258,24 @@ function M:Render()
     local trainer = self:TrainerBySchool(schools)
     local tabs = {}
     local current, toTrain
+    local widest = 0
     for i, s in ipairs(schools) do
         local list, n = self:SchoolList(s, trainer)
+        for _, sp in ipairs(list) do
+            local name = (sp.label or "") .. ((sp.status ~= "learned" and sp.status ~= "passive" and sp.rank) and ("  Rank " .. sp.rank) or "")
+            widest = math.max(widest, UI.MeasureText("label", name), UI.MeasureText("caption", sp.sub or ""))
+        end
         tabs[i] = { label = s.name, icon = s.icon, trainable = n, active = i == self.school }
         if i == self.school then current, toTrain = list, n end
+    end
+    -- the window as wide as two columns of the longest name across every
+    -- school (steady while paging): page insets 2 × 20, the schools' column
+    -- 40 and its gap 12, two columns of icon 36 + 8 + text + 6, 20 apart;
+    -- at least 560 (the head's switches), at most Blizzard's 809
+    local want = math.floor(math.min(809, math.max(560, 40 + 52 + 2 * (50 + math.ceil(widest)) + 20)))
+    if want ~= self.wantWidth then
+        self.wantWidth = want
+        self:Shorten()
     end
     self.book:SetSchools(tabs)
     self.book:SetHead(schools[self.school].name, toTrain)
@@ -383,13 +397,14 @@ function M:Shorten()
     -- icons, 8px apart: 44), asked for in game; no longer tied to the
     -- Character window
     local target = TALL
-    local narrow = math.abs(f:GetWidth() - NARROW) < 1
+    local width = self.wantWidth or NARROW
+    local narrow = math.abs(f:GetWidth() - width) < 1
     if math.abs(f:GetHeight() - target) < 1 and narrow then return end
     if math.abs(f:GetHeight() - target) >= 1 then self.blizzHeight = f:GetHeight() end
     if not narrow then self.blizzWidth = f:GetWidth() end
     self.sizing = true
     f:SetHeight(target)
-    f:SetWidth(NARROW)
+    f:SetWidth(width)
     self.sizing = false
 end
 
