@@ -168,6 +168,33 @@ function M:Reagents(id)
     return list, can, sch
 end
 
+-- The header a category sits under (GetCategoryInfo's parentCategoryID up
+-- to the top).
+function M:RootOf(catID)
+    self.roots = self.roots or {}
+    if self.roots[catID] ~= nil then return self.roots[catID] end
+    local id, root, guard = catID, false, 0
+    while id and id ~= 0 and guard < 8 do
+        local ci = call(C_TradeSkillUI.GetCategoryInfo, id)
+        if not ci then break end
+        root = ci
+        id = ci.parentCategoryID
+        guard = guard + 1
+    end
+    self.roots[catID] = root
+    return root
+end
+
+-- A recipe of this game: not under another header than the profession's
+-- own. Forever's lists carry Season of Discovery's recipes under their own
+-- header (Blacksmithing: 507 recipes, probed 2026-10-14), which this realm
+-- doesn't have.
+function M:InGame(info, profession)
+    local root = info.categoryID and info.categoryID ~= 0 and self:RootOf(info.categoryID)
+    if not root or root.type ~= "header" or not profession then return true end
+    return root.name == profession
+end
+
 function M:Recipes()
     local base = call(C_TradeSkillUI.GetBaseProfessionInfo) or {}
     local data = { name = base.professionName, skill = base.skillLevel, max = base.maxSkillLevel,
@@ -179,7 +206,7 @@ function M:Recipes()
     local learned, total = 0, 0
     for _, id in ipairs(call(C_TradeSkillUI.GetAllRecipeIDs) or {}) do
         local info = call(C_TradeSkillUI.GetRecipeInfo, id)
-        if info and plain(info.name) and not info.isDummyRecipe then
+        if info and plain(info.name) and not info.isDummyRecipe and self:InGame(info, data.name) then
             total = total + 1
             if info.learned then learned = learned + 1 end
             local _, can = self:Reagents(id)

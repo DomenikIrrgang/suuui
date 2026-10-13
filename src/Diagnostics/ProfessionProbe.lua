@@ -100,6 +100,29 @@ function PP.Sample()
     for _, c in ipairs(cats) do
         if #store.categories < 30 then store.categories[#store.categories + 1] = show(c) .. " " .. call(C_TradeSkillUI.GetCategoryInfo, c) end
     end
+    -- every recipe's category up to its header, and how many under each
+    store.tree, store.perRoot = {}, {}
+    local seenCat = {}
+    for _, id in ipairs(ids) do
+        local info = raw(C_TradeSkillUI.GetRecipeInfo, id)
+        local cat = info and info.categoryID
+        local chain, root = {}, nil
+        local guard = 0
+        while cat and cat ~= 0 and guard < 8 do
+            local ci = raw(C_TradeSkillUI.GetCategoryInfo, cat)
+            if not ci then break end
+            if not seenCat[cat] then
+                seenCat[cat] = true
+                if #store.tree < 120 then store.tree[#store.tree + 1] = show(cat) .. " " .. show(ci) end
+            end
+            root = ci.name
+            chain[#chain + 1] = cat
+            cat = ci.parentCategoryID
+            guard = guard + 1
+        end
+        local key = tostring(root) .. (info and info.learned and " learned" or "")
+        store.perRoot[key] = (store.perRoot[key] or 0) + 1
+    end
     store.recipes = {}
     for i, id in ipairs(ids) do
         if i > 25 then break end
