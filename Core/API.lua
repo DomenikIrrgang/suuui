@@ -241,6 +241,7 @@ API.UI.Money = UI.Money         -- Money(parent) -> m:SetCopper(n)
 API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name, sortTip, characters }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
 API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
 API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
+API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
