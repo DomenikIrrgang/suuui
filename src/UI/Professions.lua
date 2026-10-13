@@ -14,7 +14,9 @@
 --   local p = UI.Professions(parent)
 --   p:SetTabs({ { key, label, icon, glyph } }, selected)   p.onTab(key)
 --   p:SetOverview({ primary = { card }, secondary = { card } })
---     card = { name, rank, icon, skill, max, crafting, spells = { spell } }
+--     card = { name, rank, icon, skill, max, crafting, spells = { spell } },
+--       or { name, rank, icon, untrained = true, hint } for one not learned
+--       (dimmed, the hint where the skill bar goes)
 --     spell = { name, icon, active, onClick, onEnter(owner), onLeave }
 --     p.onOpen(card)          -- a crafting profession's card clicked
 --   p:SetCrafting({ name, rank, skill, max, categories = { { name, recipes } },
@@ -156,6 +158,8 @@ local function makeCard(view)
     c.spells = {}
     c.empty = UI.Text(c, "caption", "ink-muted")
     c.empty:SetPoint("CENTER")
+    c.hint = UI.Text(c, "caption", "ink-faint")
+    c.hint:SetPoint("LEFT", c.skill, "LEFT", 0, 0)
     c:SetScript("OnEnter", function(self) if self.card and self.card.crafting then self.border:SetColor("gilt-line") end end)
     c:SetScript("OnLeave", function(self) self.border:SetColor("gilt-faint") end)
     c:SetScript("OnClick", function(self) if self.card and self.card.crafting and view.onOpen then view.onOpen(self.card) end end)
@@ -171,6 +175,7 @@ local function fillCard(c, card, empty)
     c.empty:SetShown(not has)
     if not has then
         c.empty:SetValue(empty or "Learn a profession from a trainer")
+        c.hint:Hide()
         for _, s in ipairs(c.spells) do s:Hide() end
         return
     end
@@ -178,6 +183,13 @@ local function fillCard(c, card, empty)
     c.name:SetValue(card.name or "")
     c.rank:SetValue(card.rank or "")
     c.open:SetValue("Recipes")
+    -- not learned: dimmed, how to learn it where the skill bar goes
+    local off = card.untrained and true or false
+    c.icon:SetState(off and "dim" or "rest")
+    c.name:SetColor(off and "ink-muted" or "gilt-text")
+    c.skill:SetShown(not off)
+    c.hint:SetShown(off)
+    c.hint:SetValue(card.hint or "")
     c.skill:SetSkill(card.skill, card.max)
     local x = 0
     for i, sp in ipairs(card.spells or {}) do

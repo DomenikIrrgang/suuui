@@ -97,24 +97,45 @@ function M:Profession(index)
     return card
 end
 
--- Primary (two slots), then secondary (First Aid, Fishing, Cooking).
+-- The secondary professions, always shown, learned or not (as Blizzard's
+-- book does: asked for in game), in its order.
+local SECONDARY = {
+    { skillLine = 185, name = "Cooking", icon = 133971 },
+    { skillLine = 356, name = "Fishing", icon = 136245 },
+    { skillLine = 129, name = "First Aid", icon = 135966 },
+}
+local EMPTY_ICON = 134939 -- INV_Scroll_04, Blizzard's empty slot
+
+local function untrained(def)
+    local name = def.name
+    local shown = call(C_TradeSkillUI.GetTradeSkillDisplayName, def.skillLine)
+    if plain(shown) and shown ~= "" then name = shown end
+    return { name = name, icon = call(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
+             skillLine = def.skillLine, untrained = true, rank = "Not learned",
+             hint = "Learn it from a " .. name .. " trainer" }
+end
+
+-- Primary (two slots, an empty one says how to fill it), then secondary.
+-- By skill line, not by GetProfessions' slots (Forever's order is its own:
+-- First Aid third).
 function M:Professions()
-    local p1, p2, _, fish, cook, faid = call(GetProfessions)
     local out = { primary = {}, secondary = {} }
-    for _, i in ipairs({ p1, p2 }) do out.primary[#out.primary + 1] = self:Profession(i) end
-    for _, i in ipairs({ faid, cook, fish }) do out.secondary[#out.secondary + 1] = self:Profession(i) end
-    -- Forever's order of GetProfessions isn't the retail one: anything left
-    -- over (another slot) still shows
-    local seen = {}
-    for _, c in ipairs(out.primary) do seen[c.skillLine] = true end
-    for _, c in ipairs(out.secondary) do seen[c.skillLine] = true end
-    for _, i in ipairs({ call(GetProfessions) }) do
-        local c = self:Profession(i)
-        if c and not seen[c.skillLine] then
-            seen[c.skillLine] = true
-            out.secondary[#out.secondary + 1] = c
+    local learned = {}
+    local slots = { call(GetProfessions) }
+    for i = 1, 6 do
+        local c = self:Profession(slots[i])
+        if c and c.skillLine and not learned[c.skillLine] then
+            learned[c.skillLine] = c
+            local secondary = false
+            for _, def in ipairs(SECONDARY) do if def.skillLine == c.skillLine then secondary = true end end
+            if not secondary then out.primary[#out.primary + 1] = c end
         end
     end
+    for i = #out.primary + 1, 2 do
+        out.primary[i] = { name = "Primary profession", icon = EMPTY_ICON, untrained = true, rank = "Not learned",
+                           hint = "Learn one from a profession trainer" }
+    end
+    for _, def in ipairs(SECONDARY) do out.secondary[#out.secondary + 1] = learned[def.skillLine] or untrained(def) end
     return out
 end
 
