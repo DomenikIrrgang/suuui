@@ -341,8 +341,14 @@ function Rewards:SetTrack(d)
     if not w or w <= 0 then w = 800 end
     local inner = w - LABEL_W -- room for the first and last labels
     local left = LABEL_W / 2
+    -- the whole track in the middle of the page (asked for in game): the
+    -- slots, the bar, the levels and names, the next reward
+    local contentH = SLOT + S["space-5"] + 6 + S["space-4"] + T.type.numeric.lineHeight
+        + T.type.caption.lineHeight * 2 + S["space-6"] + T.type.caption.lineHeight
+    local h = self:GetHeight() or 0
+    local top = math.max(0, math.floor((h - contentH) / 2))
     self.track:ClearAllPoints()
-    self.track:SetPoint("TOPLEFT", self, "TOPLEFT", left, -(SLOT + S["space-5"]))
+    self.track:SetPoint("TOPLEFT", self, "TOPLEFT", left, -(top + SLOT + S["space-5"]))
     self.track:SetWidth(inner)
     self.fill:SetWidth(math.max(0.01, inner * math.min(1, earned / max)))
     self.fill:SetShown(earned > 0)
@@ -385,11 +391,13 @@ function Rewards:SetTrack(d)
         st.label:SetColor(got and "ink" or "ink-muted")
         st.check:SetShown(s.collected and true or false)
         st:ClearAllPoints()
-        st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), 0)
+        st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), -top)
         st:Show()
     end
     for i = #stops + 1, #self.stops do self.stops[i]:Hide() end
     self.next:SetValue(d.next or "")
+    self.next:ClearAllPoints()
+    self.next:SetPoint("TOP", self, "TOP", 0, -(top + contentH - T.type.caption.lineHeight))
 end
 
 function UI.LegacyRewards(parent)
@@ -402,8 +410,6 @@ function UI.LegacyRewards(parent)
     f.fill:SetHeight(6)
     f.fill:SetPoint("TOPLEFT", f.track, "TOPLEFT")
     f.next = UI.Text(f, "caption", "ink-muted")
-    f.next:SetPoint("TOP", f, "TOP", 0, -(SLOT + S["space-5"] + 6 + S["space-4"] + T.type.numeric.lineHeight
-        + T.type.caption.lineHeight * 2 + S["space-6"]))
     f:SetScript("OnSizeChanged", function() if f.data then f:SetTrack(f.data) end end)
     return f
 end
