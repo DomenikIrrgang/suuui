@@ -265,8 +265,10 @@ function Inv:SetResults(list)
         r:Show()
     end
     for i = n + 1, #rows do rows[i]:Hide() end
+    -- never shorter than the grid it stands in for: the window keeps its size
+    if not self.showResults or not self.resultsMin then self.resultsMin = self.grid:GetHeight() end
+    self.results:SetHeight(math.max(SLOT, self.resultsMin or 0, n * SLOT + math.max(0, n - 1) * GAP))
     self.showResults = list ~= nil
-    self.results:SetHeight(math.max(SLOT, n * SLOT + math.max(0, n - 1) * GAP))
     self:FitBody()
     return list and (#list - n) or 0
 end

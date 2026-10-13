@@ -54,6 +54,7 @@ local M = SuuUI.RegisterModule({
 | `M:Veto(key, fn)` | `fn(new, old)` returning `false, reason` refuses a change. A refused value a profile brings in (switching, copying, importing) is dropped, so the default applies |
 | `M:CharData()` (0.11) | The module's own table for this character, saved with SuuUI: what it keeps that isn't a setting (a history, a cache). Never in a profile, an export or a reset. From `OnEnable` on |
 | `M:AllCharData()` / `M:CharKey()` / `M:ForgetCharData(key)` (0.12) | Every character's `CharData` table for the module (`{ [key] = data }`, this character's included), this character's key ("Name - Realm"), and dropping another character's table (never your own) |
+| `M:Guard(fn)` (0.12) | `fn` wrapped so an error in it is reported under the module's name (`/suu errors`, SuuUIDB.errors), as errors in its events and settings are: for callbacks from UI controls and timers |
 | `M:Migrate(id, fn)` (0.9) | `fn(values)` brings one profile's stored values of the module into a new shape (a renamed key, a changed type) by changing `values` in place. See *Migrations* |
 
 #### Migrations

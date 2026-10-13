@@ -485,6 +485,16 @@ function M:Foot()
     inv:SetMoney(money)
 end
 
+-- A refresh a moment after the typing stops (and after the game's own item
+-- search has run).
+function M:QueueRefresh()
+    if self.refreshTimer then self.refreshTimer:Cancel() end
+    self.refreshTimer = C_Timer.NewTimer(0.15, function()
+        self.refreshTimer = nil
+        if self:IsEnabled() then self:Guard(self.Refresh)(self) end
+    end)
+end
+
 -- The window as the picker, Bags/Bank, All characters and the search say.
 function M:Refresh()
     local inv = self.inv
@@ -767,12 +777,12 @@ function M:OnEnable()
     if not self.inv then
         self.savedSlots = {}
         self.inv = UI.Inventory(SuuUI.Root, { name = "SuuUIBags", title = "Bags", columns = self:Get("columns"), characters = true })
-        self.inv.who.onChange = function(key) self.who = key; self:Refresh() end
-        self.inv.view.onChange = function(v) self.view = v; self:Refresh() end
-        self.inv.all.onChange = function(on)
+        self.inv.who.onChange = self:Guard(function(key) self.who = key; self:Refresh() end)
+        self.inv.view.onChange = self:Guard(function(v) self.view = v; self:Refresh() end)
+        self.inv.all.onChange = self:Guard(function(on)
             self.inv.search.placeholder:SetValue(on and "Search every character" or "Search")
             self:Refresh()
-        end
+        end)
         -- back to your own bags when it closes
         self.inv:HookScript("OnHide", function()
             self.who, self.view, self.query = nil, "bags", ""
@@ -797,13 +807,13 @@ function M:OnEnable()
         self.bank.sort:SetScript("OnClick", sortBank)
         -- one search across both windows; it ends with them
         local function search(from, other)
-            from.search.onTextChanged = function(text)
+            from.search.onTextChanged = self:Guard(function(text)
                 other.search:SetValue(text or "")
                 if C_Container.SetItemSearch then C_Container.SetItemSearch(text or "") end
                 local wasLive = self:IsLive()
                 self.query = text or ""
-                if not (wasLive and self:IsLive()) then self:Refresh() end
-            end
+                if not (wasLive and self:IsLive()) then self:QueueRefresh() end
+            end)
             from:HookScript("OnHide", function()
                 if other:IsShown() then return end
                 if from.search.edit:GetText() ~= "" or other.search.edit:GetText() ~= "" then

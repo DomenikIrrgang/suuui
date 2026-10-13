@@ -75,6 +75,9 @@ function Module:CharData() return Settings.CharData(self.id) end
 function Module:AllCharData() return Settings.AllCharData(self.id) end
 function Module:CharKey() return Settings.CharKey() end
 function Module:ForgetCharData(key) return Settings.ForgetCharData(self.id, key) end
+-- fn wrapped so an error in it is reported (SuuUIDB.errors, /suu errors)
+-- under the module's name, as errors in its events are: for UI callbacks.
+function Module:Guard(fn) return function(...) return Fault.Call(self.name, fn, ...) end end
 function Module:Watch(key, fn) Settings.Watch(self.id, key, fn, self) end
 function Module:Veto(key, fn) Settings.Veto(self.id, key, fn, self) end
 
