@@ -485,8 +485,40 @@ function M:HideBlizzardRolls()
     away()
 end
 
--- /suu lootroll: a roll that isn't one (a bag item, made-up votes).
-function M:TestRoll()
+-- A made-up 40-player raid: 39 others, votes coming in over the roll.
+local RAID_NAMES = { "Ysolde", "Brannoc", "Morrow", "Kaelith", "Thessaly", "Veyra", "Orrin", "Ashka", "Doran", "Elspeth",
+    "Fenwick", "Garra", "Hollis", "Isolde", "Jorund", "Kestra", "Lunara", "Maelis", "Nerith", "Oskar", "Perrin", "Quilla",
+    "Rhosyn", "Sable", "Torvald", "Ulla", "Varek", "Wren", "Xandra", "Yorick", "Zephra", "Aldric", "Brisa", "Corin",
+    "Delphine", "Eamon", "Faela", "Gideon", "Halvard" }
+local RAID_CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+
+function M:TestRaidRoll(roll, id)
+    roll.roster, roll.classes = {}, {}
+    for i, name in ipairs(RAID_NAMES) do
+        roll.roster[i] = name
+        roll.classes[name] = RAID_CLASSES[(i * 7) % #RAID_CLASSES + 1]
+    end
+    roll.votes = { need = {}, greed = {}, disenchant = {}, pass = {} }
+    roll.group = 40
+    -- a shuffled order, most choose within 25 s, a few never do
+    local order = {}
+    for i, name in ipairs(RAID_NAMES) do order[i] = name end
+    for i = #order, 2, -1 do
+        local j = math.random(i)
+        order[i], order[j] = order[j], order[i]
+    end
+    local picks = { "pass", "pass", "pass", "greed", "greed", "need" }
+    for i = 1, #order - 3 do
+        C_Timer.After(1 + i * 0.6, function()
+            if not self.rolls[id] then return end
+            table.insert(roll.votes[picks[math.random(#picks)]], order[i])
+            self:ShowRoll(roll)
+        end)
+    end
+end
+
+-- /suu lootroll [raid]: a roll that isn't one (made-up votes; "raid": 40 players).
+function M:TestRoll(arg)
     if not (SuuUI.GetModule("notifications") and SuuUI.GetModule("notifications"):IsEnabled()) then
         self:Print("Rolls show in the notification stack: turn the Notifications module on.")
         return
@@ -505,13 +537,17 @@ function M:TestRoll()
     }
     roll.remaining = function() return math.max(0, 30 - (GetTime() - start)) end
     self.rolls[id] = roll
+    if arg == "raid" then
+        self:TestRaidRoll(roll, id)
+    else
+        -- someone makes up their mind, to see the waiting line change
+        C_Timer.After(8, function()
+            if not self.rolls[id] then return end
+            table.insert(roll.votes.greed, "Kaelith")
+            self:ShowRoll(roll)
+        end)
+    end
     self:ShowRoll(roll)
-    -- someone makes up their mind, to see the waiting line change
-    C_Timer.After(8, function()
-        if not self.rolls[id] then return end
-        table.insert(roll.votes.greed, "Kaelith")
-        self:ShowRoll(roll)
-    end)
     C_Timer.After(30, function()
         if not self.rolls[id] then return end
         self:EndRoll(id)
@@ -615,7 +651,8 @@ function M:OnEnable()
     end)
     -- rolls
     self.rolls, self.ended = self.rolls or {}, self.ended or {}
-    self:RegisterCommand("lootroll", "A test loot roll in the notification stack.", function() self:TestRoll() end)
+    self:RegisterCommand("lootroll", "A test loot roll in the notification stack; \"/suu lootroll raid\": in a 40-player raid.",
+        function(arg) self:TestRoll(arg) end)
     if self:RollsOn() then
         self:HideBlizzardRolls()
         self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime) self:StartRoll(rollID, rollTime) end)
