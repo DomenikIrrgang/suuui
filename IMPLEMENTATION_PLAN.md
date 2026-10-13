@@ -497,6 +497,7 @@ Everything below is built; it only waits for the right situation in game.
   - The hover aura list for raid units.
 - **Boards:** Tooltips.
 - **Confirm:** items, spells, units and the compare tooltips all look right, with no taint when hovering action buttons in combat.
+- **Probe (2026-10-13, `/suu probe tooltips`):** written, not yet run. Samples TooltipDataProcessor, C_TooltipInfo, the data and line types and Blizzard's tooltip frames (art, fonts, status bar); logs through the post call (reading only) the last tooltips per data type, their lines, colours and what is secret, in and out of combat, the unit tooltips' unit, and blocked actions.
 
 ### 2.8 Campsite strip
 - **Build:**

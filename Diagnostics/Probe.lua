@@ -766,6 +766,10 @@ function ns.Probe.Command(arg)
         ns.LootProbe.Command(rest)
         return
     end
+    if sub == "tooltips" then
+        ns.TooltipProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
