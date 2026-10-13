@@ -3,7 +3,7 @@
 -- alerts (the band in the middle of the screen that warns of aggro), as
 -- each phase begins. Camping has no window: everything comes from your own
 -- auras (probed 2026-10-13).
---   Campfire Nearby (1283391)      → "Campfire nearby" for a few seconds
+--   Campfire Nearby (1283391)      → "Campfire nearby", until you rest
 --   Welcoming Campfire (1229739)   → "Resting by the fire", counting down
 --                                    the minute seated
 --   Camp Benefits (1229741)        → "Camp Benefits" for a few seconds
@@ -68,7 +68,9 @@ function M:Alert(phase, a)
     if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
     if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     if phase == "nearby" then
+        -- stays until you have the benefits (or walk away)
         SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
+        return
     elseif phase == "resting" then
         local function show()
             local left = restLeft(a)
@@ -141,7 +143,7 @@ end
 function M:Sample(phase)
     local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600) }
     self:Alert(phase or "nearby", fake)
-    if phase == "resting" then
+    if phase ~= "rested" then
         -- a sample doesn't stay
         self.briefTimer = C_Timer.NewTimer(BRIEF, function()
             self.briefTimer = nil
