@@ -61,40 +61,35 @@ function M:Phase()
     return "nearby", nil
 end
 
--- What Camp Benefits does: its tooltip's text after the name, as one line
--- for the alert. The text is a heading ("Gained the following camp
--- benefits:") and a line per benefit (found in game): headings and the time
--- left are dropped, bullets stripped, each benefit's name before its ":"
--- kept (the explanations are long: found in game), joined with " · ".
-local MAX_EFFECT = 140
+-- What Camp Benefits does: its tooltip's text after the name, out of
+-- combat, as the alert's lines. The text is a heading ("Gained the following
+-- camp benefits:") and a line per benefit, "Tent: You received …" (found in
+-- game): the heading and the time left are dropped, bullets stripped, each
+-- benefit a line with its name in ink and what it does in ink-muted.
+local MAX_LINE = 110
 local function effectOf(a)
     if not a or not plain(a.auraInstanceID) or not a.auraInstanceID then return nil end
     if not (C_TooltipInfo and C_TooltipInfo.GetUnitBuffByAuraInstanceID) then return nil end
     local ok, data = pcall(C_TooltipInfo.GetUnitBuffByAuraInstanceID, "player", a.auraInstanceID)
     if not ok or not data or type(data.lines) ~= "table" then return nil end
-    local parts = {}
+    local muted = SuuUI.Tokens.color["ink-muted"].hex
+    local out = {}
     for i = 2, #data.lines do
         local text = data.lines[i].leftText
         if plain(text) and text then
             for line in text:gmatch("[^\r\n]+") do
                 line = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
                 line = line:gsub("^[%s%-%*•·]+", ""):gsub("%s+$", "")
-                local lower = line:lower()
-                if line ~= "" and not line:find(":$") and not lower:find("remaining", 1, true) then
-                    -- "Tent: You received a small amount of rest experience…": the name
-                    -- only (the buff's tooltip has the rest)
-                    local name = line:match("^([^:]+):%s") or line
-                    parts[#parts + 1] = (name:gsub("%.$", ""))
+                if line ~= "" and not line:find(":$") and not line:lower():find("remaining", 1, true) then
+                    if #line > MAX_LINE then line = line:sub(1, MAX_LINE):gsub("%s+%S*$", "") .. "…" end
+                    local name, rest = line:match("^([^:]+):%s+(.+)$")
+                    out[#out + 1] = name and (name .. ": |cff" .. muted .. rest .. "|r") or line
                 end
             end
         end
     end
-    local text = table.concat(parts, " · ")
-    if text == "" then return nil end
-    if #text > MAX_EFFECT then
-        text = text:sub(1, MAX_EFFECT):gsub("%s+%S*$", "") .. "…"
-    end
-    return text
+    if #out == 0 then return nil end
+    return table.concat(out, "\n"), #out
 end
 
 local function restLeft(a)
@@ -128,8 +123,11 @@ function M:Alert(phase, a)
         -- what you gained, with the time in the title
         local left = restLeft(a)
         local title = (left and left < 3500) and ("Camp Benefits · " .. clock(left) .. " left") or "Camp Benefits gained · 1h"
-        SuuUI.ShowAlert(KEY, "info", title, (a and a.effect) or effectOf(a) or "For the next hour")
-        self.briefTimer = C_Timer.NewTimer(BRIEF + 2, function()
+        local effect, count = effectOf(a)
+        if a and a.effect then effect, count = a.effect, 2 end
+        SuuUI.ShowAlert(KEY, "info", title, effect or "For the next hour")
+        -- longer with more to read: 6 s and 2 more per benefit, at most 16
+        self.briefTimer = C_Timer.NewTimer(math.min(16, BRIEF + 2 * (count or 1)), function()
             self.briefTimer = nil
             SuuUI.HideAlert(KEY)
         end)
@@ -194,7 +192,7 @@ end
 
 function M:Sample(phase)
     local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600),
-        effect = "(here: what Camp Benefits does, read from the buff itself)" }
+        effect = "Tent: |cffa39b8b(here: what it does, read from the buff itself)|r\nMana Well: |cffa39b8b(and each other benefit on its own line)|r" }
     self:Alert(phase or "nearby", fake)
     if phase ~= "rested" then
         -- a sample doesn't stay

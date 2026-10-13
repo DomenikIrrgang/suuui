@@ -12,7 +12,8 @@
 -- string when arguments follow (a target's name may be secret in a dungeon):
 -- they go to SetFormattedText untouched. A detail with a secret argument
 -- can't be measured, so the band then takes at least `notice-w` plus space-6
--- either side, and a longer detail is cut.
+-- either side, and a longer detail is cut. A plain detail may hold several
+-- lines ("\n"): the band grows down, as wide as the longest (0.12).
 
 local _, ns = ...
 
@@ -60,20 +61,33 @@ local function setDetail(self, detail, ...)
         self.detail:SetValue(detail)
     end
     if secret then return nil end
-    return UI.MeasureText("caption", n > 0 and detail:format(...) or detail)
+    local text = n > 0 and detail:format(...) or detail
+    local widest, lines = 0, 0
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        lines = lines + 1
+        widest = math.max(widest, UI.MeasureText("caption", line))
+    end
+    return widest, lines
 end
 
 function Alert:SetAlert(tone, title, detail, ...)
     self:SetTone(tone)
     self.title:SetValue(title or "")
     local titleW = UI.MeasureText("alert", title or "")
-    local detailW = setDetail(self, detail, ...)
+    local detailW, lines = setDetail(self, detail, ...)
+    lines = lines or 1
     local inner = math.max(titleW, detailW or UI.Size("notice-w"))
-    -- a secret detail: fixed width, cut at the band's edge
-    self.detail:SetWidth(detailW and 0 or inner)
-    self.detail:SetWordWrap(false)
+    -- a secret detail: fixed width, cut at the band's edge; several lines:
+    -- as wide as the longest, centred
+    if lines > 1 then
+        self.detail:SetWidth(math.ceil(detailW) + 2)
+        self.detail:SetWordWrap(true)
+    else
+        self.detail:SetWidth(detailW and 0 or inner)
+        self.detail:SetWordWrap(false)
+    end
     local h = S["space-4"] * 2 + T.type.alert.lineHeight
-    if self.detail:IsShown() then h = h + S["space-1"] + T.type.caption.lineHeight end
+    if self.detail:IsShown() then h = h + S["space-1"] + T.type.caption.lineHeight * lines end
     self:SetSize(math.ceil(inner) + S["space-6"] * 2, h)
 end
 
