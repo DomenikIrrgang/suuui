@@ -14,7 +14,8 @@
 -- note: a few words after the rank in ink-faint ("Level 18": a spell from an
 -- earlier level still to train). Hovering a spell shows SuuUI's tooltip:
 -- its name, rank, `text` and `meta` (what training it costs). The card takes
--- the mouse: c:IsHovered() says whether it is under it (it stays then).
+-- the mouse: c:IsHovered() says whether it is under it (it stays then); a
+-- click on it calls c.onClick (its owner dismisses it).
 --
 -- One column for up to four spells, two from five; at most ten rows (the
 -- caller says how many more in `more`).
@@ -74,13 +75,22 @@ function Card:Row(i)
         UI.ShowTooltip(r, { title = s.name, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text, meta = s.meta })
     end)
     r:SetScript("OnLeave", function() UI.HideTooltip() end)
+    r:SetScript("OnMouseUp", function() if self.onClick then self.onClick() end end)
     self.rows[i] = r
     return r
 end
 
--- Under the mouse: the card or one of its spells.
+-- Under the mouse: the card or one of its spells is what the mouse is on.
+-- Not its rectangle (IsMouseOver): turning the camera with a mouse button
+-- held hides the cursor where it was, over the card, and it never "left"
+-- (found in game: the card stayed).
 function Card:IsHovered()
-    return self:IsVisible() and self:IsMouseOver() or false
+    if not self:IsVisible() or (IsMouselooking and IsMouselooking()) then return false end
+    local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
+    for _, f in ipairs(foci) do
+        if f == self or (f and f.GetParent and f:GetParent() == self) then return true end
+    end
+    return false
 end
 
 function Card:SetLevelUp(d)
@@ -149,6 +159,7 @@ function UI.LevelUp(parent)
     f.rows = {}
     f:EnableMouse(true)
     f:SetScript("OnHide", function() UI.HideTooltip() end)
+    f:SetScript("OnMouseUp", function() if f.onClick then f.onClick() end end)
     f.ground = f:CreateTexture(nil, "BACKGROUND")
     f.ground:SetAllPoints()
     f.ground:SetColorTexture(UI.RGBA("surface-glass"))

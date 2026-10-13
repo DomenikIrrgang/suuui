@@ -15,7 +15,8 @@
 -- unless that one is more urgent (danger > warning > info); the one it
 -- replaced comes back when it goes, unless its owner hid it meanwhile (a
 -- level-up over the campfire alert). Danger alerts can play a sound. The
--- level-up card stays while the mouse is over it: hidden once it leaves.
+-- level-up card stays while the mouse is over it: hidden once it leaves; a
+-- click on it takes it away at once.
 
 local UI = SuuUI.UI
 
@@ -85,9 +86,9 @@ function M:StopHolding()
     if self.holding then self.holding:Cancel(); self.holding = nil end
 end
 
-function M:Hide(key)
+function M:Hide(key, now)
     -- the card under the mouse: it goes a moment after the mouse leaves
-    if key and key == self.current and self.card:IsShown() and self.card:IsHovered() then
+    if not now and key and key == self.current and self.card:IsShown() and self.card:IsHovered() then
         if not self.holding then
             local away = 0
             self.holding = C_Timer.NewTicker(0.2, function()
@@ -189,6 +190,9 @@ function M:OnEnable()
         self.card = UI.LevelUp(f)
         self.card:SetPoint("TOP")
         self.card:Hide()
+        self.card.onClick = function()
+            if self.current and self.card:IsShown() then self:Hide(self.current, true) end
+        end
         f:Hide()
         self.frame = f
     end
