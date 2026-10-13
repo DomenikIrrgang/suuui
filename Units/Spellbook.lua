@@ -332,14 +332,27 @@ function M:Shorten()
     local f = _G.PlayerSpellsFrame
     if not f or InCombatLockdown() then return end
     -- the Character window's height on screen, in this window's own scale
-    -- (they differ: found in game)
-    local cf = _G.CharacterFrame
-    local target = cf and (cf:GetHeight() * cf:GetEffectiveScale() / f:GetEffectiveScale()) or SHORT
+    -- (they differ: found in game). Blizzard sets the Character window's
+    -- scale when it first opens, so its height on screen is measured then
+    -- and kept (per character); until then the design's height.
+    local screen = self:CharData().characterHeight
+    local target = screen and (screen / f:GetEffectiveScale()) or SHORT
     if math.abs(f:GetHeight() - target) < 1 then return end
     self.blizzHeight = f:GetHeight()
     self.sizing = true
     f:SetHeight(target)
     self.sizing = false
+end
+
+-- The Character window's height on screen, whenever it shows or resizes.
+function M:MeasureCharacter()
+    local cf = _G.CharacterFrame
+    if not cf or not cf:IsVisible() then return end
+    local h = cf:GetHeight() * cf:GetEffectiveScale()
+    if h and h > 0 then
+        self:CharData().characterHeight = h
+        if self.book and self.book:IsVisible() then self:Shorten() end
+    end
 end
 
 function M:Restore()
@@ -352,6 +365,11 @@ function M:Restore()
 end
 
 function M:OnEnable()
+    local cf = _G.CharacterFrame
+    if cf then
+        cf:HookScript("OnShow", function() C_Timer.After(0, function() self:MeasureCharacter() end) end)
+        cf:HookScript("OnSizeChanged", function() self:MeasureCharacter() end)
+    end
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP" }) do
