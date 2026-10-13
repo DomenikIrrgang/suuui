@@ -12,6 +12,13 @@
 -- your bags beside it. Blizzard's bank frame opens and closes as always,
 -- off screen; SuuUI's window follows BANKFRAME_OPENED/CLOSED.
 -- One search runs across both.
+--
+-- Every character's bags and bank (step 2.5c, board "Bags window"): what
+-- each character carries is saved as it changes (the bank while you are at
+-- a banker), so the picker in the bags window's header shows another
+-- character's bags or bank from anywhere, read only and dated. "All
+-- characters" turns the search into a list of everything found on every
+-- character, and where. Settings › Bags › Characters forgets one.
 -- A built-in module written against the public API only.
 --
 -- The slots are Blizzard's own bag slot buttons (its template), each in a
@@ -26,7 +33,7 @@ local M = SuuUI.RegisterModule({
     id = "bags",
     name = "Bags",
     description = "SuuUI's bags: every bag in one window with search, sort and your money.",
-    api = "0.11",
+    api = "0.12",
     reloadToToggle = true,
     defaults = {
         position = { point = "BOTTOMRIGHT", x = -28, y = 96 },
@@ -193,15 +200,9 @@ end
 
 -- Every slot laid out again (bags or sizes changed), the counts, the money.
 function M:Rebuild()
-    if not self.inv then return end
+    if not (self.inv and self:IsLive()) then return end
     self:Fill(self.inv, self:Bags())
-    local note
-    if self:Get("reagentBag") and numSlots(REAGENT) > 0 then
-        local f = C_Container.GetContainerNumFreeSlots(REAGENT)
-        note = ("Reagent bag: %d free"):format(plain(f) and f or 0)
-    end
-    self.inv:SetNote(note)
-    self.inv:SetMoney(GetMoney())
+    self:Foot()
 end
 
 function M:RebuildBank()
@@ -209,6 +210,304 @@ function M:RebuildBank()
     local tabs = self:BankBags()
     local total = self:Fill(self.bank, tabs)
     self.bank:SetNote(("%s · %d slots"):format(#tabs > 1 and (#tabs .. " tabs") or "Bank", total))
+end
+
+--------------------------------------------------------------------------------
+-- Every character's bags and bank
+--------------------------------------------------------------------------------
+
+local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
+
+local function thousands(n)
+    local s = tostring(n)
+    while true do
+        local k
+        s, k = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+        if k == 0 then break end
+    end
+    return s
+end
+
+-- "just now", "12 min ago", "3 hours ago", "yesterday", "9 days ago"
+local function ago(t)
+    if type(t) ~= "number" then return "a while ago" end
+    local s = math.max(0, time() - t)
+    if s < 60 then return "just now" end
+    if s < 3600 then return ("%d min ago"):format(s / 60) end
+    if s < 86400 then
+        local h = math.floor(s / 3600)
+        return h == 1 and "an hour ago" or ("%d hours ago"):format(h)
+    end
+    local d = math.floor(s / 86400)
+    return d == 1 and "yesterday" or ("%d days ago"):format(d)
+end
+
+local function nameOf(link)
+    return type(link) == "string" and link:match("%[(.-)%]") or nil
+end
+
+local function itemTip(owner, link, extra)
+    local ref = type(link) == "string" and (link:match("|H(item:[^|]+)|h") or (link:match("^item:") and link))
+    if not ref then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:SetHyperlink(ref)
+    if extra then
+        GameTooltip:AddLine(" ")
+        for _, line in ipairs(extra) do GameTooltip:AddLine(line, 0.85, 0.82, 0.76) end
+    end
+    GameTooltip:Show()
+end
+
+local function classDiamond(class)
+    local c = class and T.color["class-" .. class:lower()]
+    if not c then return "" end
+    return ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t "):format(DIAMOND, c[1] * 255, c[2] * 255, c[3] * 255)
+end
+
+-- What the listed bags hold now: { slots = { {t, c, q, l} or false … }, size, free, seen }.
+local function snapshot(bags)
+    local slots, size, free = {}, 0, 0
+    for _, bag in ipairs(bags) do
+        local n = numSlots(bag)
+        for slot = 1, n do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            local e = false
+            if info and plain(info.iconFileID) and info.iconFileID then
+                e = { t = info.iconFileID, c = plain(info.stackCount) and info.stackCount or 1,
+                      q = plain(info.quality) and info.quality or 1, l = plain(info.hyperlink) and info.hyperlink or nil }
+            end
+            slots[#slots + 1] = e
+        end
+        if bag ~= REAGENT and bag ~= KEYRING then
+            size = size + n
+            local f = C_Container.GetContainerNumFreeSlots(bag)
+            if plain(f) and f then free = free + f end
+        end
+    end
+    return { slots = slots, size = size, free = free, seen = time() }
+end
+
+-- This character's entry: who, money, bags (and the bank while at a banker).
+-- An empty read (bags not in yet at login) never replaces a saved one.
+function M:SaveMe()
+    local d = self:CharData()
+    d.name, d.realm = UnitName("player"), GetRealmName()
+    d.class, d.level = select(2, UnitClass("player")), UnitLevel("player")
+    d.money, d.seen = GetMoney(), time()
+    local bags = snapshot(self:Bags())
+    if bags.size > 0 then d.bags = bags end
+    if self.atBank then
+        local bank = snapshot(self:BankBags())
+        if bank.size > 0 then d.bank = bank end
+    end
+end
+
+function M:QueueSave()
+    if self.saveTimer then return end
+    self.saveTimer = C_Timer.NewTimer(1, function()
+        self.saveTimer = nil
+        if self:IsEnabled() then self:SaveMe() end
+    end)
+end
+
+-- Saved characters, you first, then by name: { key, d, me }.
+function M:Characters()
+    local me, list = self:CharKey(), {}
+    for key, d in pairs(self:AllCharData()) do
+        if key == me or d.bags then list[#list + 1] = { key = key, d = d, me = key == me } end
+    end
+    table.sort(list, function(a, b)
+        if a.me ~= b.me then return a.me end
+        return (a.d.name or a.key) < (b.d.name or b.key)
+    end)
+    return list
+end
+
+local function label(c, myRealm)
+    local name = c.d.name or c.key
+    if c.d.realm and c.d.realm ~= myRealm then name = name .. "-" .. c.d.realm end
+    return c.d.level and (name .. " · " .. c.d.level) or name
+end
+
+function M:UpdatePicker()
+    local inv = self.inv
+    if not inv.who then return end
+    local opts, myRealm = {}, GetRealmName()
+    for _, c in ipairs(self:Characters()) do
+        opts[#opts + 1] = { value = c.key, label = label(c, myRealm), note = c.me and "you" or ago(c.d.seen) }
+    end
+    inv.who:SetOptions(opts)
+    inv.who:SetValue(self.who or self:CharKey())
+    inv.view:SetValue(self.view or "bags")
+end
+
+function M:ShowingResults()
+    return self.inv.all and self.inv.all.value and (self.query or "") ~= ""
+end
+
+-- Your own bags: Blizzard's live slots. Anything else is a saved copy.
+function M:IsLive()
+    if not self.inv then return false end
+    local who = self.who or self:CharKey()
+    return who == self:CharKey() and (self.view or "bags") == "bags" and not self:ShowingResults()
+end
+
+-- A saved slot: SuuUI's own, read only; its tooltip from the item's link,
+-- shift-click links it.
+function M:SavedSlot(i)
+    local b = self.savedSlots[i]
+    if b then return b end
+    b = UI.ItemSlot(self.inv.grid)
+    b:SetScript("OnEnter", function(slot) itemTip(slot, slot.link) end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    b:SetScript("OnClick", function(slot)
+        if slot.link and IsModifiedClick() and HandleModifiedItemClick then HandleModifiedItemClick(slot.link) end
+    end)
+    self.savedSlots[i] = b
+    return b
+end
+
+function M:HideSaved()
+    for _, b in ipairs(self.savedSlots) do b:Hide() end
+end
+
+function M:ShowSaved()
+    local inv, me = self.inv, self:CharKey()
+    local who, view = self.who or me, self.view or "bags"
+    local d = self:AllCharData()[who]
+    local box = d and d[view]
+    local q = (self.query or ""):lower()
+    local list = {}
+    for i, e in ipairs(box and box.slots or {}) do
+        local b = self:SavedSlot(i)
+        b.link = e and e.l or nil
+        if e then
+            local name = nameOf(e.l)
+            b.skin:SetItem({ icon = e.t, count = e.c, quality = QUALITY[e.q] or "common",
+                dim = q ~= "" and not (name and name:lower():find(q, 1, true)) })
+        else
+            b.skin:SetItem(nil)
+        end
+        list[i] = b
+    end
+    for i = #list + 1, #self.savedSlots do self.savedSlots[i]:Hide() end
+    inv:LayoutSlots(list)
+    inv:SetMeta(box and ("%d free of %d"):format(box.free or 0, box.size or 0) or "")
+    local where = view == "bank" and "bank" or "bags"
+    local banner
+    if who == me then
+        banner = box and ("Your bank as of your last visit (%s) · read only"):format(ago(box.seen))
+            or "Your bank shows here once you have visited a banker"
+    else
+        local name = d and d.name or who
+        banner = box and ("%s's %s as of %s · read only"):format(name, where, ago(box.seen or d.seen))
+            or ("%s's %s show here once %s has opened them"):format(name, where, name)
+    end
+    inv:SetBanner(banner)
+end
+
+-- "All characters": every item whose name holds the search, on every
+-- character's bags and bank, most first.
+function M:ShowResults()
+    local inv, me = self.inv, self:CharKey()
+    self:SaveMe()
+    local q = (self.query or ""):lower()
+    local found, order = {}, {}
+    for _, c in ipairs(self:Characters()) do
+        for _, where in ipairs({ "bags", "bank" }) do
+            local box = c.d[where]
+            for _, e in ipairs(box and box.slots or {}) do
+                local name = e and nameOf(e.l)
+                if name and name:lower():find(q, 1, true) then
+                    local id = e.l:match("item:(%d+)") or name
+                    local r = found[id]
+                    if not r then
+                        r = { icon = e.t, quality = QUALITY[e.q] or "common", label = name, link = e.l, count = 0, at = {} }
+                        found[id] = r
+                        order[#order + 1] = r
+                    end
+                    r.count = r.count + (e.c or 1)
+                    local at = r.at[#r.at]
+                    if not (at and at.c == c and at.where == where) then
+                        at = { c = c, where = where, count = 0 }
+                        r.at[#r.at + 1] = at
+                    end
+                    at.count = at.count + (e.c or 1)
+                end
+            end
+        end
+    end
+    table.sort(order, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
+        return a.label < b.label
+    end)
+    for _, r in ipairs(order) do
+        local parts, lines = {}, {}
+        for _, at in ipairs(r.at) do
+            local text = ("%s · %s ×%d"):format(at.c.d.name or at.c.key, at.where == "bank" and "Bank" or "Bags", at.count)
+            parts[#parts + 1] = classDiamond(at.c.d.class) .. text
+            lines[#lines + 1] = text
+        end
+        r.places = table.concat(parts, "   ")
+        r.lines = lines
+    end
+    self.more = inv:SetResults(order)
+    for _, row in ipairs(inv.resultRows) do
+        row:EnableMouse(true)
+        row.onEnter = function(rowFrame) if rowFrame.item then itemTip(rowFrame, rowFrame.item.link, rowFrame.item.lines) end end
+        row.onLeave = function() GameTooltip:Hide() end
+    end
+    inv:SetMeta(#order == 1 and "1 item" or ("%d items"):format(#order))
+    inv:SetBanner(nil)
+end
+
+-- The foot: the reagent bag on your own bags, else every character's gold;
+-- the money of whoever is shown.
+function M:Foot()
+    local inv, me = self.inv, self:CharKey()
+    local who = self.who or me
+    local chars, gold, money = self:Characters(), 0, nil
+    for _, c in ipairs(chars) do
+        local m = c.me and GetMoney() or c.d.money or 0
+        gold = gold + math.floor(m / 10000)
+        if c.key == who then money = m end
+    end
+    local note
+    if self:ShowingResults() and (self.more or 0) > 0 then
+        note = ("%d more: narrow the search"):format(self.more)
+    elseif self:IsLive() and self:Get("reagentBag") and numSlots(REAGENT) > 0 then
+        local f = C_Container.GetContainerNumFreeSlots(REAGENT)
+        note = ("Reagent bag: %d free"):format(plain(f) and f or 0)
+    elseif #chars > 1 then
+        note = ("%d characters · %sg in all"):format(#chars, thousands(gold))
+    end
+    inv:SetNote(note)
+    inv:SetMoney(money)
+end
+
+-- The window as the picker, Bags/Bank, All characters and the search say.
+function M:Refresh()
+    local inv = self.inv
+    if not (inv and inv:IsShown()) then return end
+    local live = self:IsLive()
+    for bag, f in pairs(self.bagFrames) do
+        if not isBank(bag) then f:SetShown(live) end
+    end
+    inv.sort:SetEnabled(live)
+    self.more = nil
+    if self:ShowingResults() then
+        self:HideSaved()
+        self:ShowResults()
+    elseif live then
+        self:HideSaved()
+        inv:SetResults(nil)
+        inv:SetBanner(nil)
+        self:Rebuild()
+    else
+        inv:SetResults(nil)
+        self:ShowSaved()
+    end
+    self:Foot()
 end
 
 --------------------------------------------------------------------------------
@@ -326,7 +625,8 @@ function M:Sync()
     if open and not self.inv:IsShown() then
         self:PlaceBags()
         self.inv:Show()
-        self:Rebuild()
+        self:UpdatePicker()
+        self:Refresh()
     elseif not open and self.inv:IsShown() then
         self.inv:Hide()
     end
@@ -379,8 +679,10 @@ local PREVIEW_ITEMS = {
 
 function M:PreviewView(parent)
     if not self.preview then
-        local inv = UI.Inventory(parent, { title = "Bags", columns = self:Get("columns") })
+        local inv = UI.Inventory(parent, { title = "Bags", columns = self:Get("columns"), characters = true })
         inv.onClose = function() end
+        inv.who:SetOptions({ { value = 1, label = (UnitName("player") or "You") .. " · " .. (UnitLevel("player") or 1) } })
+        inv.who:SetValue(1)
         local slots = {}
         for i = 1, 40 do
             local b = UI.ItemSlot(inv.grid)
@@ -390,12 +692,47 @@ function M:PreviewView(parent)
         inv.previewSlots = slots
         inv:LayoutSlots(slots)
         inv:SetMeta("28 free of 40")
-        inv:SetNote("Reagent bag: 6 free")
+        inv:SetNote("3 characters · 2,112g in all")
         inv:SetMoney(12043709)
         self.preview = inv
     end
     self.preview:SetParent(parent)
     return self.preview
+end
+
+-- A saved character to forget, and the button (click it twice).
+function M:ForgetRow(parent)
+    local f = CreateFrame("Frame", nil, parent)
+    local choice, timer
+    local function options()
+        local out, myRealm = {}, GetRealmName()
+        for _, c in ipairs(self:Characters()) do
+            if not c.me then out[#out + 1] = { value = c.key, label = label(c, myRealm), note = ago(c.d.seen) } end
+        end
+        return out
+    end
+    f.select = UI.Select(f, { width = 190, placeholder = "Choose a character", options = options(),
+        onChange = function(v) choice = v end })
+    f.select:SetPoint("LEFT")
+    f.button = UI.Button(f, { text = "Forget", onClick = function(b)
+        if not choice then return end
+        if not timer then
+            b:SetLabel("Click again")
+            timer = C_Timer.NewTimer(3, function() timer = nil; b:SetLabel("Forget") end)
+            return
+        end
+        timer:Cancel()
+        timer = nil
+        b:SetLabel("Forget")
+        self:ForgetCharData(choice)
+        choice = nil
+        f.select:SetOptions(options())
+        f.select:SetValue(nil)
+    end })
+    f.button:SetPoint("LEFT", f.select, "RIGHT", S["space-3"], 0)
+    f:SetSize(190 + S["space-3"] + f.button:GetWidth(), 30)
+    f:SetScript("OnShow", function() f.select:SetOptions(options()) end)
+    return f
 end
 
 local SECTION = {
@@ -406,6 +743,10 @@ local SECTION = {
             { key = "columns", label = "Slots per row", control = "slider", min = 6, max = 16, step = 1 },
             { key = "reagentBag", label = "Reagent bag", control = "toggle", description = "Its slots after your bags'." },
             { key = "keyring", label = "Keyring", control = "toggle", description = "Your keys after everything else." },
+        } },
+        { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
+            { label = "Forget a character", control = "custom", build = function(p) return M:ForgetRow(p) end,
+              description = "Takes their bags and bank out of the picker and the search, until they log in again." },
         } },
         { title = "Bank", description = "At a banker your bank opens in the same window, top centre, your bags beside it. Every bank tab you own in one grid; items move between them as always (right click, drag). One search runs across both. Move it in edit mode.", rows = {
             { key = "bank", label = "SuuUI's bank", control = "toggle", description = "Off: Blizzard's bank window." },
@@ -424,7 +765,18 @@ function M:OnEnable()
     self.skins = self.skins or {}
     self.parentHooked = self.parentHooked or {}
     if not self.inv then
-        self.inv = UI.Inventory(SuuUI.Root, { name = "SuuUIBags", title = "Bags", columns = self:Get("columns") })
+        self.savedSlots = {}
+        self.inv = UI.Inventory(SuuUI.Root, { name = "SuuUIBags", title = "Bags", columns = self:Get("columns"), characters = true })
+        self.inv.who.onChange = function(key) self.who = key; self:Refresh() end
+        self.inv.view.onChange = function(v) self.view = v; self:Refresh() end
+        self.inv.all.onChange = function(on)
+            self.inv.search.placeholder:SetValue(on and "Search every character" or "Search")
+            self:Refresh()
+        end
+        -- back to your own bags when it closes
+        self.inv:HookScript("OnHide", function()
+            self.who, self.view, self.query = nil, "bags", ""
+        end)
         self.inv:SetFrameStrata("MEDIUM")
         self.inv:SetToplevel(true)
         self.inv:EnableMouse(true)
@@ -448,6 +800,9 @@ function M:OnEnable()
             from.search.onTextChanged = function(text)
                 other.search:SetValue(text or "")
                 if C_Container.SetItemSearch then C_Container.SetItemSearch(text or "") end
+                local wasLive = self:IsLive()
+                self.query = text or ""
+                if not (wasLive and self:IsLive()) then self:Refresh() end
             end
             from:HookScript("OnHide", function()
                 if other:IsShown() then return end
@@ -467,20 +822,17 @@ function M:OnEnable()
     self:RegisterMover(self.bank, { key = "bankPosition", label = "Bank" })
     self:RegisterSettings(SECTION)
     self:Watch("columns", function(v)
-        for _, inv in ipairs({ self.inv, self.bank }) do
-            inv.columns = v
-            inv.search:SetWidth(inv:GridWidth() - 30 - S["space-3"])
-            inv.grid:SetWidth(inv:GridWidth())
-        end
-        self:Rebuild()
+        self.inv:SetColumns(v)
+        self.bank:SetColumns(v)
+        self:Refresh()
         self:RebuildBank()
     end)
     self:Watch("bank", function(on)
         self:HideBlizzardBank()
         if not on then self:HideBank() end
     end)
-    self:Watch("reagentBag", function() self:Rebuild() end)
-    self:Watch("keyring", function() self:Rebuild() end)
+    self:Watch("reagentBag", function() self:Refresh() end)
+    self:Watch("keyring", function() self:Refresh() end)
     -- Blizzard opening or closing bags, by any of its ways
     if not self.hooked then
         self.hooked = true
@@ -502,13 +854,24 @@ function M:OnEnable()
         self:OnGameEvent(e, function()
             if self.inv:IsShown() then self:Rebuild() end
             self:RebuildBank()
+            if e ~= "PLAYER_ENTERING_WORLD" then self:QueueSave() end
         end)
     end
     for _, e in ipairs({ "BANK_TABS_CHANGED", "PLAYERBANKSLOTS_CHANGED" }) do
         self:OnGameEvent(e, function() self:RebuildBank() end)
     end
-    self:OnGameEvent("BANKFRAME_OPENED", function() self:ShowBank() end)
-    self:OnGameEvent("BANKFRAME_CLOSED", function() self:HideBank() end)
+    self:OnGameEvent("BANKFRAME_OPENED", function()
+        self.atBank = true
+        self:ShowBank()
+        self:QueueSave()
+    end)
+    self:OnGameEvent("BANKFRAME_CLOSED", function()
+        if self.atBank then self:SaveMe() end
+        self.atBank = false
+        self:HideBank()
+    end)
+    self:OnGameEvent("PLAYER_LEVEL_UP", function() self:QueueSave() end)
+    self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveMe() end)
     self:OnGameEvent("ITEM_LOCK_CHANGED", function(_, bag, slot)
         if not (plain(bag) and plain(slot) and bag and slot) then return end
         local inv = self:InvFor(bag)
@@ -517,7 +880,10 @@ function M:OnEnable()
     for _, e in ipairs({ "BAG_UPDATE_COOLDOWN", "INVENTORY_SEARCH_UPDATE" }) do
         self:OnGameEvent(e, function() self:UpdateShown() end)
     end
-    self:OnGameEvent("PLAYER_MONEY", function() if self.inv:IsShown() then self.inv:SetMoney(GetMoney()) end end)
+    self:OnGameEvent("PLAYER_MONEY", function()
+        self:CharData().money = GetMoney()
+        if self.inv:IsShown() then self:Foot() end
+    end)
     self:Sync()
 end
 

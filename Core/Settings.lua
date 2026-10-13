@@ -493,6 +493,30 @@ function Settings.CharData(namespace)
     return mine[namespace]
 end
 
+-- Every character's data for a module ({ [charKey] = data }, this one's
+-- included: the same table CharData gives), and this character's key.
+function Settings.AllCharData(namespace)
+    assert(db, "SuuUI Settings: saved settings have not loaded yet")
+    local out = {}
+    for key, data in pairs(db.charData) do
+        if type(data) == "table" and type(data[namespace]) == "table" then out[key] = data[namespace] end
+    end
+    return out
+end
+
+function Settings.CharKey() return charKey end
+
+-- Drops a character's data for a module (the character's own stays put).
+function Settings.ForgetCharData(namespace, key)
+    assert(db, "SuuUI Settings: saved settings have not loaded yet")
+    if key == charKey then return false end
+    local data = db.charData[key]
+    if type(data) ~= "table" then return false end
+    data[namespace] = nil
+    if next(data) == nil then db.charData[key] = nil end
+    return true
+end
+
 local function bind()
     SuuUIDB = SuuUIDB or {}
     db = SuuUIDB

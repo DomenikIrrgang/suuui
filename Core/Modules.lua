@@ -31,7 +31,7 @@ ns.Modules = Modules
 
 local Events, Settings, Fault, Combat, Util = ns.Events, ns.Settings, ns.Fault, ns.Combat, ns.Util
 
-ns.API_VERSION = "0.11.0"
+ns.API_VERSION = "0.12.0"
 
 local RESERVED = { core = true, ui = true, layout = true }
 
@@ -72,6 +72,9 @@ function Module:Reset(key) return Settings.Reset(self.id, key) end
 -- 0.11: the module's own data for this character (a table it fills;
 -- saved, never part of a profile)
 function Module:CharData() return Settings.CharData(self.id) end
+function Module:AllCharData() return Settings.AllCharData(self.id) end
+function Module:CharKey() return Settings.CharKey() end
+function Module:ForgetCharData(key) return Settings.ForgetCharData(self.id, key) end
 function Module:Watch(key, fn) Settings.Watch(self.id, key, fn, self) end
 function Module:Veto(key, fn) Settings.Veto(self.id, key, fn, self) end
 

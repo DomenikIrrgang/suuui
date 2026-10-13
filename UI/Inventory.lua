@@ -12,6 +12,13 @@
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --
+-- With opts.characters (design board "Bags window"): a character picker in
+-- the header (inv.who, a bare Select, in place of the title), a row with
+-- Bags/Bank (inv.view, a Segmented) and "All characters" (inv.all, a
+-- Toggle), a line over the grid (inv:SetBanner(text): an eye and "… read
+-- only"), and a list of found items in place of the grid
+-- (inv:SetResults(list): { icon, quality, label, count, places }).
+--
 -- The live slots are Blizzard's own bag slot buttons (their clicks, drags
 -- and tooltips are Blizzard's: using an item stays allowed in combat); the
 -- skin hides their art and draws SuuUI's, keeping its own state in a table
@@ -172,6 +179,8 @@ end
 --------------------------------------------------------------------------------
 
 local Inv = {}
+local ROW = 30 -- the tool rows: search and sort; Bags/Bank and All characters
+local MAX_RESULTS = 10
 
 function Inv:GridWidth()
     return self.columns * SLOT + (self.columns - 1) * GAP
@@ -196,7 +205,7 @@ function Inv:SetMeta(text)
 end
 
 function Inv:SetMoney(copper)
-    self.money:SetCopper(copper)
+    if copper then self.money:SetCopper(copper) end
     self.money:SetShown(copper ~= nil)
 end
 
@@ -204,9 +213,89 @@ function Inv:SetNote(text)
     self.note:SetValue(text or "")
 end
 
--- The body's size (the panel follows it).
+-- The line over the grid ("Thessaly's bags as of 2 days ago · read only").
+function Inv:SetBanner(text)
+    if not self.banner then return end
+    self.banner.text:SetValue(text or "")
+    self.banner:SetShown(text ~= nil and text ~= "")
+    self:FitBody()
+end
+
+-- Found items in place of the grid (nil: the grid again). At most
+-- MAX_RESULTS rows; returns how many were left out.
+function Inv:SetResults(list)
+    if not self.results then return 0 end
+    local rows = self.resultRows
+    local n = list and math.min(#list, MAX_RESULTS) or 0
+    for i = 1, n do
+        local r = rows[i]
+        if not r then
+            r = CreateFrame("Frame", nil, self.results)
+            r:SetHeight(SLOT)
+            r.slot = UI.ItemSlot(r)
+            r.slot:SetPoint("LEFT")
+            r.slot:EnableMouse(false)
+            r.total = UI.Text(r, "numeric", "ink")
+            r.total:SetPoint("RIGHT")
+            r.total:SetJustifyH("RIGHT")
+            r.label = UI.Text(r, "label", "ink")
+            r.label:SetPoint("TOPLEFT", r.slot, "TOPRIGHT", S["space-4"], -1)
+            r.label:SetPoint("RIGHT", r.total, "LEFT", -S["space-4"], 0)
+            r.label:SetJustifyH("LEFT")
+            r.label:SetWordWrap(false)
+            r.places = UI.Text(r, "caption", "ink-muted")
+            r.places:SetPoint("BOTTOMLEFT", r.slot, "BOTTOMRIGHT", S["space-4"], 1)
+            r.places:SetPoint("RIGHT", r.total, "LEFT", -S["space-4"], 0)
+            r.places:SetJustifyH("LEFT")
+            r.places:SetWordWrap(false)
+            r:SetScript("OnEnter", function(self) if self.onEnter then self.onEnter(self) end end)
+            r:SetScript("OnLeave", function(self) if self.onLeave then self.onLeave(self) end end)
+            rows[i] = r
+        end
+        local item = list[i]
+        r.item = item
+        r.slot.skin:SetItem({ icon = item.icon, quality = item.quality })
+        r.label:SetValue(item.label or "")
+        r.label:SetColor((item.quality and item.quality ~= "common") and ("quality-" .. item.quality) or "ink")
+        r.places:SetValue(item.places or "")
+        r.total:SetValue(item.count and ("×" .. item.count) or "")
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * (SLOT + GAP))
+        r:SetWidth(self:GridWidth())
+        r:Show()
+    end
+    for i = n + 1, #rows do rows[i]:Hide() end
+    self.showResults = list ~= nil
+    self.results:SetHeight(math.max(SLOT, n * SLOT + math.max(0, n - 1) * GAP))
+    self:FitBody()
+    return list and (#list - n) or 0
+end
+
+-- Rows from the top: tools, the picker row, the banner, then the grid (or
+-- the found items), a rule and the foot. The panel follows the body.
 function Inv:FitBody()
-    local h = 30 + S["space-4"] + self.grid:GetHeight() + S["space-4"] + 1 + S["space-4"] + T.type.numeric.lineHeight
+    local y = ROW + S["space-4"]
+    if self.view then
+        self.pickRow:SetPoint("TOPLEFT", 0, -y)
+        y = y + ROW + S["space-4"]
+    end
+    if self.banner and self.banner:IsShown() then
+        self.banner:SetPoint("TOPLEFT", 0, -y)
+        y = y + T.type.caption.lineHeight + S["space-4"]
+    end
+    local content = self.grid
+    if self.results then
+        self.results:SetShown(self.showResults)
+        self.grid:SetShown(not self.showResults)
+        if self.showResults then content = self.results end
+    end
+    content:ClearAllPoints()
+    content:SetPoint("TOPLEFT", 0, -y)
+    content:SetWidth(self:GridWidth())
+    self.rule:ClearAllPoints()
+    self.rule:SetPoint("TOPLEFT", content, "BOTTOMLEFT", 0, -S["space-4"])
+    self.rule:SetPoint("TOPRIGHT", content, "BOTTOMRIGHT", 0, -S["space-4"])
+    local h = y + content:GetHeight() + S["space-4"] + 1 + S["space-4"] + T.type.numeric.lineHeight
     self.body:SetSize(self:GridWidth(), h)
 end
 
@@ -222,11 +311,43 @@ local function glyphButton(parent, glyph, tip)
     b.glyph:SetPoint("CENTER")
     b.glyph:SetVertexColor(UI.RGBA("ink"))
     b:SetScript("OnEnter", function(self)
-        self.edge:SetColor("gilt")
+        if self:IsEnabled() then self.edge:SetColor("gilt") end
         if tip then UI.ShowTooltip(self, tip) end
     end)
     b:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-line"); UI.HideTooltip() end)
+    hooksecurefunc(b, "SetEnabled", function(self, on) self:SetAlpha(on and 1 or T.opacity["opacity-disabled"]) end)
     return b
+end
+
+-- The header's character picker, the Bags/Bank and All characters row, the
+-- banner and the found items.
+local function buildCharacters(inv, body)
+    inv.title:Hide()
+    inv.who = UI.Select(inv, { bare = true, width = 220, textStyle = "header", textColor = "gilt-text", options = {} })
+    inv.who:SetPoint("LEFT", inv, "TOPLEFT", S["space-5"] - S["space-2"], -(S["space-5"] + T.type.header.lineHeight / 2))
+    inv.pickRow = CreateFrame("Frame", nil, body)
+    inv.pickRow:SetSize(1, ROW)
+    inv.view = UI.Segmented(inv.pickRow, { value = "bags", options = { { value = "bags", label = "Bags" }, { value = "bank", label = "Bank" } } })
+    inv.view:SetPoint("LEFT")
+    inv.allLabel = UI.Text(body, "label", "ink-muted")
+    inv.allLabel:SetValue("All characters")
+    inv.all = UI.Toggle(body, { value = false })
+    inv.all:SetPoint("RIGHT", inv.pickRow, "LEFT", inv:GridWidth(), 0)
+    inv.allLabel:SetPoint("RIGHT", inv.all, "LEFT", -S["space-4"], 0)
+    inv.banner = CreateFrame("Frame", nil, body)
+    inv.banner:SetSize(inv:GridWidth(), T.type.caption.lineHeight)
+    inv.banner.eye = inv.banner:CreateTexture(nil, "ARTWORK")
+    inv.banner.eye:SetTexture(GLYPHS .. "eye.tga")
+    inv.banner.eye:SetSize(12, 12)
+    inv.banner.eye:SetPoint("LEFT")
+    inv.banner.eye:SetVertexColor(UI.RGBA("ink-muted"))
+    inv.banner.text = UI.Text(inv.banner, "caption", "ink-muted")
+    inv.banner.text:SetPoint("LEFT", inv.banner.eye, "RIGHT", S["space-3"], 0)
+    inv.banner:Hide()
+    inv.results = CreateFrame("Frame", nil, body)
+    inv.results:SetSize(inv:GridWidth(), SLOT)
+    inv.results:Hide()
+    inv.resultRows = {}
 end
 
 function UI.Inventory(parent, opts)
@@ -244,15 +365,13 @@ function UI.Inventory(parent, opts)
     inv.search:SetPoint("TOPLEFT")
     -- the grid
     inv.grid = CreateFrame("Frame", nil, body)
-    inv.grid:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
     inv.grid:SetWidth(inv:GridWidth())
     inv.grid:SetHeight(SLOT)
+    if opts.characters then buildCharacters(inv, body) end
     -- the foot: a note and the money, over a gilt-faint rule
     inv.rule = body:CreateTexture(nil, "ARTWORK")
     inv.rule:SetColorTexture(UI.RGBA("gilt-faint"))
     inv.rule:SetHeight(1)
-    inv.rule:SetPoint("TOPLEFT", inv.grid, "BOTTOMLEFT", 0, -S["space-4"])
-    inv.rule:SetPoint("TOPRIGHT", inv.grid, "BOTTOMRIGHT", 0, -S["space-4"])
     inv.note = UI.Text(body, "caption", "ink-muted")
     inv.note:SetPoint("TOPLEFT", inv.rule, "BOTTOMLEFT", 0, -S["space-4"])
     inv.money = UI.Money(body)
@@ -260,4 +379,17 @@ function UI.Inventory(parent, opts)
     inv.money:Hide() -- until SetMoney: a bank holds no money
     inv:FitBody()
     return inv
+end
+
+-- After `columns` changed: the widths that follow it.
+function Inv:SetColumns(columns)
+    self.columns = columns
+    local w = self:GridWidth()
+    self.search:SetWidth(w - 30 - S["space-3"])
+    self.grid:SetWidth(w)
+    if self.all then
+        self.all:SetPoint("RIGHT", self.pickRow, "LEFT", w, 0)
+        self.banner:SetWidth(w)
+    end
+    self:FitBody()
 end
