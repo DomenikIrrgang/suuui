@@ -135,7 +135,8 @@ function M:SkinLegacy()
     })
     local list = {}
     for _, t in ipairs(LEGACY_TABS) do
-        local b = _G[t.name]
+        -- fields of the window on Forever, not globals (found in game: no tabs)
+        local b = f[t.name] or _G[t.name]
         if b then list[#list + 1] = { button = b, label = t.label, short = t.short or t.label } end
     end
     for _, def in ipairs(list) do
