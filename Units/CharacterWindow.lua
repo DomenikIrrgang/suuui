@@ -22,7 +22,6 @@ local S = T.space
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
-local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
 
 local SLOTS = { "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard", "Wrist", "Hands", "Waist", "Legs",
                 "Feet", "Finger0", "Finger1", "Trinket0", "Trinket1", "MainHand", "SecondaryHand", "Ranged" }
@@ -106,8 +105,11 @@ function M:BuildIdentity()
     id:SetPoint("TOPRIGHT", -44, -S["space-3"])
     id:SetHeight(T.type["unit-name-lg"].lineHeight)
     id:SetFrameLevel(host:GetFrameLevel() + 520)
+    -- the class diamond, centred on the name's line
+    id.diamond = UI.Diamond(id, 7, "ink", "OVERLAY")
+    id.diamond:SetPoint("CENTER", id, "LEFT", 4, 0)
     id.name = UI.Text(id, "unit-name-lg", "ink")
-    id.name:SetPoint("LEFT", 0, 0)
+    id.name:SetPoint("LEFT", 8 + S["space-3"], 0)
     id.line = UI.Text(id, "caption", "ink-muted")
     id.line:SetPoint("LEFT", id.name, "RIGHT", S["space-4"], -1)
     self.identity = id
@@ -129,8 +131,8 @@ function M:UpdateIdentity()
     if not id then return end
     local _, class = UnitClass("player")
     local c = class and T.color["class-" .. class:lower()]
-    local diamond = c and ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t "):format(DIAMOND, c[1] * 255, c[2] * 255, c[3] * 255) or ""
-    id.name:SetValue(diamond .. (UnitName("player") or ""))
+    if c then id.diamond:SetVertexColor(c[1], c[2], c[3], 1) end
+    id.name:SetValue(UnitName("player") or "")
     local parts = { "Level " .. (UnitLevel("player") or "?") }
     local race = UnitRace("player")
     if race then parts[#parts + 1] = race end
@@ -159,6 +161,108 @@ function M:SkinSlot(b)
     b:HookScript("OnShow", update)
     self.slotUpdates[#self.slotUpdates + 1] = update
     update()
+end
+
+-- The arrows beside the slots in Sets mode (each slot's popout button): a
+-- gilt chevron pointing away from the slot.
+local LEFT_COLUMN = { Head = true, Neck = true, Shoulder = true, Back = true, Chest = true, Shirt = true, Tabard = true, Wrist = true }
+local WEAPONS = { MainHand = true, SecondaryHand = true, Ranged = true }
+local GLYPH_DIR = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+
+function M:SkinPopout(slotName, b)
+    local p = b.popoutButton
+    if not p or p.suuSkinned then return end
+    p.suuSkinned = true
+    local glyph = p:CreateTexture(nil, "OVERLAY", nil, 7)
+    glyph:SetSize(12, 12)
+    glyph:SetPoint("CENTER")
+    glyph:SetVertexColor(UI.RGBA("gilt-text"))
+    if WEAPONS[slotName] then
+        glyph:SetTexture(GLYPH_DIR .. "chevronDown.tga")
+        glyph:SetRotation(math.pi)
+    else
+        glyph:SetTexture(GLYPH_DIR .. (LEFT_COLUMN[slotName] and "chevronRight" or "chevronLeft") .. ".tga")
+    end
+    local function hideArt()
+        for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+            local t = p[get] and p[get](p)
+            if t then t:SetAlpha(0) end
+        end
+        for _, r in ipairs({ p:GetRegions() }) do
+            if r ~= glyph and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+        end
+    end
+    hideArt()
+    p:HookScript("OnShow", hideArt)
+    p:HookScript("OnEnter", function() glyph:SetVertexColor(UI.RGBA("gilt")) end)
+    p:HookScript("OnLeave", function() glyph:SetVertexColor(UI.RGBA("gilt-text")) end)
+end
+
+-- The flyout of items for a slot: glass behind, SuuUI item slots.
+function M:SkinFlyout()
+    local fly = _G.EquipmentFlyoutFrame
+    if not fly or self.flyoutSkinned then return end
+    self.flyoutSkinned = true
+    local function skinButtons()
+        local holder = fly.buttonFrame or fly
+        for _, r in ipairs({ holder:GetRegions() }) do
+            if r:GetObjectType() == "Texture" and not r.suuArt then r:SetAlpha(0) end
+        end
+        if fly.Highlight then
+            for _, r in ipairs({ fly.Highlight:GetRegions() }) do r:SetAlpha(0) end
+        end
+        if not holder.suuBg then
+            holder.suuBg = holder:CreateTexture(nil, "BACKGROUND", nil, -8)
+            holder.suuBg.suuArt = true
+            holder.suuBg:SetColorTexture(UI.RGBA("surface-glass"))
+            holder.suuBg:SetAllPoints()
+            UI.Border(holder, "gilt-line")
+        end
+        for i = 1, 40 do
+            local b = _G["EquipmentFlyoutFrameButton" .. i]
+            if not b then break end
+            if not self.flyoutSkins[b] then self.flyoutSkins[b] = UI.SkinItemSlot(b) end
+            local icon = self.flyoutSkins[b].icon
+            self.flyoutSkins[b]:SetItem(icon and icon:GetTexture() and { icon = icon:GetTexture() } or nil)
+        end
+    end
+    self.flyoutSkins = {}
+    fly:HookScript("OnShow", function() C_Timer.After(0, skinButtons) end)
+    if type(_G.EquipmentFlyout_DisplayButton) == "function" then
+        hooksecurefunc("EquipmentFlyout_DisplayButton", function() C_Timer.After(0, skinButtons) end)
+    end
+end
+
+-- The new-set popup (name, icon, Okay, Cancel): glass in a gilt edge, its
+-- input, buttons and scrollbar through UI.Reskin; the icons stay.
+function M:SkinSetPopup()
+    local pop = _G.GearManagerPopupFrame or (_G.PaperDollFrame and _G.PaperDollFrame.GearManagerPopupFrame)
+    if not pop or pop.suuSkinned then return end
+    pop.suuSkinned = true
+    local function art(f)
+        if not f then return end
+        if f.NineSlice then f.NineSlice:SetAlpha(0) end
+        for _, r in ipairs({ f:GetRegions() }) do
+            if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+        end
+    end
+    art(pop)
+    art(pop.BorderBox)
+    if pop.BorderBox then
+        for _, c in ipairs({ pop.BorderBox:GetChildren() }) do
+            if c:GetObjectType() == "Frame" then art(c) end
+        end
+    end
+    local bg = pop:CreateTexture(nil, "BACKGROUND", nil, -8)
+    bg:SetColorTexture(UI.RGBA("surface-glass"))
+    bg:SetAllPoints()
+    local edge = CreateFrame("Frame", nil, pop)
+    edge:SetAllPoints()
+    edge:EnableMouse(false)
+    UI.Border(edge, "gilt-line")
+    local jewel = UI.Diamond(edge, 7, "gilt")
+    jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
+    pop:HookScript("OnShow", function() C_Timer.After(0, function() UI.Reskin(pop) end) end)
 end
 
 function M:UpdateSlots()
@@ -309,8 +413,8 @@ end
 --------------------------------------------------------------------------------
 
 -- Blizzard's second side button is the equipment sets, the third the
--- titles (found in game); shown as Stats | Titles | Sets.
-local SIDE = { { tab = 1, label = "Stats" }, { tab = 3, label = "Titles" }, { tab = 2, label = "Sets" } }
+-- titles (found in game); shown as Stats | Sets | Titles.
+local SIDE = { { tab = 1, label = "Stats" }, { tab = 2, label = "Sets" }, { tab = 3, label = "Titles" } }
 
 function M:SkinSidebar()
     local tabs = _G.PaperDollSidebarTabs
@@ -393,8 +497,13 @@ function M:SkinPaperDoll()
     self:UpdateIdentity()
     for _, s in ipairs(SLOTS) do
         local b = _G["Character" .. s .. "Slot"]
-        if b then self:SkinSlot(b) end
+        if b then
+            self:SkinSlot(b)
+            self:SkinPopout(s, b)
+        end
     end
+    self:SkinFlyout()
+    self:SkinSetPopup()
     self:SkinModel()
     self:SkinStatsPane()
     self:SkinSidebar()

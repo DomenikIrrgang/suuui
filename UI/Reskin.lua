@@ -100,14 +100,29 @@ function UI.ReskinStatusBar(bar)
         UI.Border(track, "gilt-hairline")
         bar.suuTrack = track
     end
-    if fill then
-        fill:SetTexture(WHITE)
+    local function flatten()
+        local f = ask(bar, "GetStatusBarTexture")
+        if not f then return end
+        local a = ask(f, "GetAtlas")
+        if a and a ~= "" then bar.suuAtlas = a end
+        bar.suuFlattening = true
+        f:SetTexture(WHITE)
         local word = bar.suuAtlas and bar.suuAtlas:lower():match("stat%-bar%-(%a+)")
-        fill:SetVertexColor(UI.RGBA(BAR_COLORS[word or ""] or "progress-fill"))
+        f:SetVertexColor(UI.RGBA(BAR_COLORS[word or ""] or "progress-fill"))
+        bar.suuFlattening = false
     end
+    if fill and not bar.suuFillHooked then
+        bar.suuFillHooked = true
+        -- Blizzard sets the fill again (its standing's atlas): flat again
+        local function again() if not bar.suuFlattening then flatten() end end
+        hooksecurefunc(fill, "SetAtlas", again)
+        if bar.SetStatusBarTexture then hooksecurefunc(bar, "SetStatusBarTexture", again) end
+    end
+    flatten()
     for _, r in ipairs({ bar:GetRegions() }) do
         if r:GetObjectType() == "FontString" then
             ns.Fonts.Apply(r, "numeric")
+            r:SetJustifyH("CENTER")
             r:SetTextColor(UI.RGBA("ink"))
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
@@ -142,6 +157,110 @@ function UI.ReskinCheckButton(b)
     b:HookScript("OnShow", draw)
     b.suuCheck = { box = box, draw = draw }
     draw()
+end
+
+-- Blizzard's panel button (Left/Middle/Right art, or a red button atlas) as
+-- SuuUI's quiet button: surface-raised, gilt-line edge (gilt on hover), its
+-- label in `label` ink; dimmed while disabled.
+function UI.ReskinButton(b)
+    if not b or b.suuButton then return end
+    for _, key in ipairs({ "Left", "Middle", "Right", "LeftSeparator", "RightSeparator" }) do
+        if b[key] and b[key].SetAlpha then b[key]:SetAlpha(0) end
+    end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        local t = ask(b, get)
+        if t then t:SetAlpha(0) end
+    end
+    local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
+    bg:SetColorTexture(UI.RGBA("surface-raised"))
+    bg:SetAllPoints()
+    local edge = UI.Border(b, "gilt-line")
+    b:HookScript("OnEnter", function() edge:SetColor("gilt") end)
+    b:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
+    local function draw()
+        b:SetAlpha(ask(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
+        local fs = ask(b, "GetFontString")
+        if fs then
+            ns.Fonts.Apply(fs, "label")
+            fs:SetTextColor(UI.RGBA("ink"))
+            fs:SetShadowOffset(0, 0)
+        end
+    end
+    hooksecurefunc(b, "SetEnabled", draw)
+    if b.Enable then hooksecurefunc(b, "Enable", draw) end
+    if b.Disable then hooksecurefunc(b, "Disable", draw) end
+    b.suuButton = { draw = draw }
+    draw()
+end
+
+-- An input box: Blizzard's Left/Middle/Right art away, surface-sunk inside a
+-- gilt-line edge (arcane while typing), body ink.
+function UI.ReskinEditBox(e)
+    if not e or e.suuEdit then return end
+    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do
+        if e[key] and e[key].SetAlpha then e[key]:SetAlpha(0) end
+    end
+    local name = e:GetName()
+    if name then
+        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do
+            local t = _G[name .. suffix]
+            if t and t.SetAlpha then t:SetAlpha(0) end
+        end
+    end
+    local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
+    bg:SetColorTexture(UI.RGBA("surface-sunk"))
+    bg:SetPoint("TOPLEFT", -4, 2)
+    bg:SetPoint("BOTTOMRIGHT", 2, -2)
+    local holder = CreateFrame("Frame", nil, e)
+    holder:SetPoint("TOPLEFT", bg)
+    holder:SetPoint("BOTTOMRIGHT", bg)
+    holder:EnableMouse(false)
+    local edge = UI.Border(holder, "gilt-line")
+    e:HookScript("OnEditFocusGained", function() edge:SetColor("arcane") end)
+    e:HookScript("OnEditFocusLost", function() edge:SetColor("gilt-line") end)
+    e:SetFontObject(ns.Fonts.Get("body"))
+    e:SetTextColor(UI.RGBA("ink"))
+    e.suuEdit = true
+end
+
+-- A small collapse/expand button (Statistics' sub-categories): SuuUI's
+-- minus or plus in gilt-text, following the state Blizzard sets.
+function UI.ReskinCollapseButton(b)
+    if not b or b.suuCollapse then return end
+    local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    glyph:SetSize(12, 12)
+    glyph:SetPoint("CENTER")
+    glyph:SetVertexColor(UI.RGBA("gilt-text"))
+    local function draw()
+        local t = ask(b, "GetNormalTexture")
+        local name = ""
+        if t then
+            name = (ask(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+            t:SetAlpha(0)
+        end
+        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+            local x = ask(b, get)
+            if x then x:SetAlpha(0) end
+        end
+        for _, r in ipairs({ b:GetRegions() }) do
+            if r ~= glyph and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+        end
+        local plus = name:find("plus") or name:find("expand") and not name:find("expanded")
+        glyph:SetTexture(GLYPHS .. (plus and "plus" or "minus") .. ".tga")
+    end
+    if b.SetNormalTexture then hooksecurefunc(b, "SetNormalTexture", draw) end
+    if b.SetNormalAtlas then hooksecurefunc(b, "SetNormalAtlas", draw) end
+    b:HookScript("OnClick", function() C_Timer.After(0, draw) end)
+    b.suuCollapse = { draw = draw }
+    draw()
+end
+
+local function isPanelButton(b)
+    if b.Left and b.Right and b.Middle then return true end
+    local t = ask(b, "GetNormalTexture")
+    if not t then return false end
+    local name = (ask(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+    return name:find("panel%-button") or name:find("redbutton") or name:find("128%-red") or name:find("common%-button") or false
 end
 
 --------------------------------------------------------------------------------
@@ -208,6 +327,14 @@ local function pass(f, depth, ctx)
     local kind = ask(f, "GetObjectType")
     if kind == "StatusBar" then UI.ReskinStatusBar(f); return end
     if kind == "CheckButton" and not f.suuNoCheck then UI.ReskinCheckButton(f) end
+    if kind == "EditBox" then UI.ReskinEditBox(f) end
+    if kind == "Button" then
+        local key = ask(f, "GetParentKey") or ""
+        if key:find("Collapse") or key:find("Expand") then UI.ReskinCollapseButton(f)
+        elseif not f.suuNoButton and isPanelButton(f) then UI.ReskinButton(f) end
+        if f.suuCollapse then f.suuCollapse.draw() end
+        if f.suuButton then f.suuButton.draw() end
+    end
     -- a ScrollBar (Blizzard's minimal one)
     if f.Track and f.Back and f.Forward then UI.ReskinScrollBar(f); return end
     -- a ScrollBox: its rows, one by one, now and after every update
