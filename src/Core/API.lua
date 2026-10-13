@@ -251,6 +251,7 @@ API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSourc
 API.UI.SpellTooltip = UI.SpellTooltip -- SpellTooltip(owner, spellID, extra[, anchor]): the game's spell tooltip with `extra` line(s) under it, kept through the game's redraws
 API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
 API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
+API.UI.CenterWindow = UI.CenterWindow -- CenterWindow(frame, on): a skinned window in the middle of the screen instead of the row under the micro menu (0.12)
 API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
 API.UI.TalentTree = UI.TalentTree -- TalentTree(parent) -> SetSpecs(list, viewing), SetData({ name, available, pending, editable, hint, trees = { { name, points, nodes, links } } }); onClick, onRemove, onEnter, onLeave, onApply, onUndo, onSpec, onActivate
 API.UI.TALENT_TREE_W = UI.TALENT_TREE_W -- the width the Talents page's three trees need

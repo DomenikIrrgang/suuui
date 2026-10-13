@@ -252,12 +252,28 @@ end
 local Row = { list = {}, seq = 0 }
 ns.WindowRow = Row
 
+-- A window asked to sit in the middle of the screen (its header included),
+-- out of the row; a protected one moves out of combat only.
+local function center(c)
+    local f = c.frame
+    if InCombatLockdown() and c.protected then
+        c.placeAfterCombat = true
+        return
+    end
+    f:ClearAllPoints()
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, -(c.rise or 0) / 2)
+end
+
 function Row.Layout()
     if Row.placing then return end
     local open = {}
+    Row.placing = true
     for _, c in ipairs(Row.list) do
-        if c.frame:IsShown() then open[#open + 1] = c end
+        if c.frame:IsShown() then
+            if c.centered then center(c) else open[#open + 1] = c end
+        end
     end
+    Row.placing = false
     if #open == 0 then return end
     table.sort(open, function(a, b) return (a.openedAt or 0) < (b.openedAt or 0) end)
     local anchor = ns.Anchors.Get(open[1].under)
@@ -284,6 +300,18 @@ function Row.Layout()
         end
     end
     Row.placing = false
+end
+
+-- In the middle of the screen (on) or back in the row (off): SuuUI's Talents
+-- tab centres the spells window while it shows (asked for in game).
+function UI.CenterWindow(frame, on)
+    local chrome = frame and frame.suuChrome
+    if not chrome or not chrome.under then return end
+    on = on and true or false
+    if chrome.centered == on then return end
+    chrome.centered = on
+    Row.Layout()
+    Row.Queue()
 end
 
 function Row.Queue()

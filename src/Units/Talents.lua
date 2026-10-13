@@ -372,15 +372,19 @@ function M:Build()
         call(C_SpecializationInfo.SetActiveSpecGroup, self.viewing)
     end
     -- shown with Blizzard's tab
+    -- in the middle of the screen while this tab shows (asked for in game);
+    -- the other tabs stay in the row under the micro menu
     tab:HookScript("OnShow", function()
         page:Show()
         self:Size()
+        UI.CenterWindow(f, true)
         self:Render()
     end)
     tab:HookScript("OnHide", function()
         page:Hide()
         UI.HideTooltip()
         self:Restore()
+        UI.CenterWindow(f, false)
     end)
     -- Blizzard sets the window's size again right after it shows
     local function again()
@@ -390,7 +394,7 @@ function M:Build()
     hooksecurefunc(f, "SetWidth", again)
     hooksecurefunc(f, "SetSize", again)
     page:HookScript("OnSizeChanged", function() if page:IsVisible() then self:QueueRender() end end)
-    if tab:IsShown() then self:Size() end
+    if tab:IsShown() then self:Size(); UI.CenterWindow(f, true) end
     self:Render()
 end
 
