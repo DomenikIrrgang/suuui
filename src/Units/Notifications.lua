@@ -232,9 +232,16 @@ local function unspentLegacy()
     return plain(q) and q or 0
 end
 
--- No button: the Legacy window is Blizzard's, and opening it from SuuUI's
--- code would taint Blizzard's window manager (Esc in combat); the micro
--- menu's Legacy button opens it securely.
+-- Open Legacy: Blizzard's own key (ToggleLegacySystemUI) only shows the
+-- window, which isn't one of the panels Blizzard's window manager places,
+-- so showing it from here taints nothing Esc relies on (checked in
+-- Blizzard's code, 2026-10-14).
+local function openLegacy()
+    if not _G.LegacySystemFrame and C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_LegacySystem") end
+    local f = _G.LegacySystemFrame
+    if f and not f:IsShown() then f:Show() end
+end
+
 function M:CheckLegacy()
     local n = self:Get("legacyPoints") and unspentLegacy() or 0
     if n == self.legacyPointsShown then return end
@@ -242,7 +249,8 @@ function M:CheckLegacy()
     if n > 0 then
         self:Notify({ id = "suu:legacy", kind = "until", tone = "info", category = "Legacy",
             title = n == 1 and "1 Legacy point to spend" or (n .. " Legacy points to spend"),
-            icon = { glyph = "trophy" }, ["until"] = "In the Legacy window; goes when you spend them" })
+            icon = { glyph = "trophy" }, ["until"] = "Goes when you spend them",
+            actions = { { label = "Open Legacy", variant = "primary", onClick = openLegacy } } })
     elseif self.notes["suu:legacy"] then
         self:Dismiss("suu:legacy")
     end
@@ -711,7 +719,7 @@ local SECTION = {
             { key = "talentPoints", label = "Talent points to spend", control = "toggle",
               description = "While you have talent points left, with a button that opens your talents; goes when you spend them." },
             { key = "legacyPoints", label = "Legacy points to spend", control = "toggle",
-              description = "While this character has Legacy points left; goes when you spend them in the Legacy window." },
+              description = "While this character has Legacy points left, with a button that opens the Legacy window; goes when you spend them." },
         } },
     },
 }
