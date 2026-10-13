@@ -181,7 +181,7 @@ end
 
 function M:Sample(phase)
     local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600),
-        effect = "Increases your Stamina and Spirit while you travel, and your rested experience." }
+        effect = "(here: what Camp Benefits does, read from the buff itself)" }
     self:Alert(phase or "nearby", fake)
     if phase ~= "rested" then
         -- a sample doesn't stay
