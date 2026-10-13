@@ -36,6 +36,7 @@ local M = SuuUI.RegisterModule({
         durability = true, -- a note while your gear is badly damaged or broken
         bagsFull = true,   -- a note while your bags are full
         talentPoints = true, -- a note while you have talent points to spend
+        legacyPoints = true, -- a note while you have Legacy points to spend
     },
 })
 
@@ -216,6 +217,34 @@ function M:CheckTalents()
             icon = { glyph = "tree" }, ["until"] = "Goes when you spend them", actions = actions })
     elseif self.notes["suu:talents"] then
         self:Dismiss("suu:talents")
+    end
+end
+
+-- Legacy points this character can still spend (the Legacy trees' currency;
+-- one config for all three trees: 1187 is Professions).
+local LEGACY_TREE = 1187
+local function unspentLegacy()
+    if not (C_Traits and C_Traits.GetConfigIDByTreeID) then return 0 end
+    local ok, configID = pcall(C_Traits.GetConfigIDByTreeID, LEGACY_TREE)
+    if not ok or not plain(configID) or not configID then return 0 end
+    local ok2, currency = pcall(C_Traits.GetTreeCurrencyInfo, configID, LEGACY_TREE, false)
+    local q = ok2 and currency and currency[1] and currency[1].quantity
+    return plain(q) and q or 0
+end
+
+-- No button: the Legacy window is Blizzard's, and opening it from SuuUI's
+-- code would taint Blizzard's window manager (Esc in combat); the micro
+-- menu's Legacy button opens it securely.
+function M:CheckLegacy()
+    local n = self:Get("legacyPoints") and unspentLegacy() or 0
+    if n == self.legacyPointsShown then return end
+    self.legacyPointsShown = n
+    if n > 0 then
+        self:Notify({ id = "suu:legacy", kind = "until", tone = "info", category = "Legacy",
+            title = n == 1 and "1 Legacy point to spend" or (n .. " Legacy points to spend"),
+            icon = { glyph = "trophy" }, ["until"] = "In the Legacy window; goes when you spend them" })
+    elseif self.notes["suu:legacy"] then
+        self:Dismiss("suu:legacy")
     end
 end
 
@@ -681,6 +710,8 @@ local SECTION = {
               description = "While your bags have no free slot; goes when one frees up." },
             { key = "talentPoints", label = "Talent points to spend", control = "toggle",
               description = "While you have talent points left, with a button that opens your talents; goes when you spend them." },
+            { key = "legacyPoints", label = "Legacy points to spend", control = "toggle",
+              description = "While this character has Legacy points left; goes when you spend them in the Legacy window." },
         } },
     },
 }
@@ -741,10 +772,14 @@ function M:OnEnable()
                          "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
         if not valid or valid(e) then
             -- a moment later: the points read right only after the change has landed
-            self:OnGameEvent(e, function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents() end end) end)
+            self:OnGameEvent(e, function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
         end
     end
+    if not valid or valid("MAJOR_FACTION_RENOWN_LEVEL_CHANGED") then
+        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
+    end
     self:Watch("talentPoints", function() self:CheckTalents() end)
+    self:Watch("legacyPoints", function() self:CheckLegacy() end)
     -- the ready check's time
     self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)
         if plain(timeLeft) and type(timeLeft) == "number" and timeLeft > 0 then
