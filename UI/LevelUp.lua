@@ -8,8 +8,11 @@
 -- with the title.
 --
 --   local c = UI.LevelUp(parent)
---   c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew } },
+--   c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew, note } },
 --                  more, cost (copper) })
+--
+-- note: a few words after the rank in ink-faint ("Level 18": a spell from an
+-- earlier level still to train).
 --
 -- One column for up to four spells, two from five; at most ten rows (the
 -- caller says how many more in `more`).
@@ -41,11 +44,12 @@ local function coins(copper)
     return table.concat(parts, " ")
 end
 
--- "Rank 3", "Rank 1 · New" or "New"
+-- "Rank 3", "Rank 1 · New", "New" or "Rank 2 · Level 18"
 local function rankLine(s)
     local parts = {}
     if s.rank then parts[#parts + 1] = "|cff" .. hex("ink-muted") .. "Rank " .. s.rank .. "|r" end
     if s.isNew then parts[#parts + 1] = "|cff" .. hex("arcane") .. "New|r" end
+    if s.note then parts[#parts + 1] = "|cff" .. hex("ink-faint") .. s.note .. "|r" end
     return table.concat(parts, "|cff" .. hex("ink-faint") .. " · |r")
 end
 

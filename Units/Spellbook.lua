@@ -30,6 +30,8 @@ local M = SuuUI.RegisterModule({
     defaults = {
         unlearned = true,
         allRanks = false,
+        levelUp = true,     -- the level-up card
+        untrained = false,  -- it lists earlier levels' spells still to train too
     },
 })
 
@@ -455,19 +457,24 @@ local LEVEL_UP = "suu:levelup"
 local SHOWN = 10
 
 -- The spells and ranks the trainer has for levels from..to that you don't
--- have: new spells first, then by name.
+-- have, and with the Untrained setting the earlier levels' ones too (their
+-- level as a note): this level's first, new spells first, then by name.
 function M:NewBetween(from, to)
     local schools = self:Schools()
     local trainer = self:TrainerBySchool(schools)
+    local older = self:Get("untrained")
     local list = {}
     for _, school in ipairs(schools) do
         for _, e in ipairs(self:Unlearned(trainer[school.name], self:Learned(school))) do
-            if e.level >= from and e.level <= to then
-                list[#list + 1] = { icon = e.icon, name = e.label, rank = e.rank, isNew = e.fresh, cost = tonumber(e.cost) or 0 }
+            local now = e.level >= from and e.level <= to
+            if now or (older and e.level < from) then
+                list[#list + 1] = { icon = e.icon, name = e.label, rank = e.rank, isNew = e.fresh, cost = tonumber(e.cost) or 0,
+                    old = not now, note = not now and ("Level " .. e.level) or nil }
             end
         end
     end
     table.sort(list, function(a, b)
+        if a.old ~= b.old then return b.old end
         if a.isNew ~= b.isNew then return a.isNew end
         if a.name ~= b.name then return a.name < b.name end
         return (a.rank or 0) < (b.rank or 0)
@@ -475,21 +482,46 @@ function M:NewBetween(from, to)
     return list
 end
 
--- The card for reaching `level` (and any level since `from`); false when
--- the trainer has nothing new.
-function M:ShowLevelUp(level, from)
+local function spells(n) return n == 1 and "1 spell" or (n .. " spells") end
+
+-- The card's content for reaching `level` (and any level since `from`); nil
+-- when the trainer has nothing for you.
+function M:LevelUpCard(level, from)
     local list = self:NewBetween(from or level, level)
-    if #list == 0 then return false end
-    local cost = 0
-    for _, sp in ipairs(list) do cost = cost + sp.cost end
+    if #list == 0 then return nil end
+    local cost, fresh, old = 0, 0, 0
+    for _, sp in ipairs(list) do
+        cost = cost + sp.cost
+        if sp.old then old = old + 1 else fresh = fresh + 1 end
+    end
+    local detail
+    if old == 0 then detail = (fresh == 1 and "1 new spell" or (fresh .. " new spells")) .. " to train"
+    elseif fresh == 0 then detail = spells(old) .. " still to train"
+    else detail = (fresh == 1 and "1 new spell" or (fresh .. " new spells")) .. ", " .. old .. " still to train" end
     local n = #list
-    SuuUI.ShowLevelUp(LEVEL_UP, {
+    return {
         title = "Level " .. level,
-        detail = n == 1 and "1 new spell to train" or (n .. " new spells to train"),
+        detail = detail,
         spells = list,
         more = n > SHOWN and ("+ " .. (n - SHOWN) .. " more in your Spellbook") or nil,
         cost = cost,
-    })
+    }, n
+end
+
+-- The next level that brings the trainer something (for the preview and
+-- /suu levelup).
+function M:NextLevelUp()
+    for l = (UnitLevel("player") or 1) + 1, 80 do
+        local def = self:LevelUpCard(l)
+        if def then return def end
+    end
+end
+
+-- The card for reaching `level`; false when the trainer has nothing for you.
+function M:ShowLevelUp(level, from)
+    local def, n = self:LevelUpCard(level, from)
+    if not def then return false end
+    SuuUI.ShowLevelUp(LEVEL_UP, def)
     -- 8 s and 1 more for each spell shown, 20 at most
     if self.levelTimer then self.levelTimer:Cancel() end
     self.levelTimer = C_Timer.NewTimer(math.min(20, 8 + math.min(n, SHOWN)), function()
@@ -509,9 +541,60 @@ function M:LevelGained(level)
         if not self.levelTo or InCombatLockdown() then return end
         local from, to = self.levelFrom, self.levelTo
         self.levelFrom, self.levelTo = nil, nil
-        pcall(self.ShowLevelUp, self, to, from)
+        if self:Get("levelUp") then pcall(self.ShowLevelUp, self, to, from) end
     end)
 end
+
+-- The next level's card on screen (the settings' button, /suu levelup).
+function M:PreviewLevelUp()
+    for l = (UnitLevel("player") or 1) + 1, 80 do
+        if self:ShowLevelUp(l) then return end
+    end
+    self:Print("Nothing left to learn from the trainer.")
+end
+
+-- The settings' preview: the next level's card at its real size.
+function M:PreviewView(parent)
+    if not self.previewView then
+        local view = CreateFrame("Frame", nil, parent)
+        view.card = UI.LevelUp(view)
+        view.card:SetPoint("TOPLEFT")
+        view.card:HookScript("OnSizeChanged", function(c) view:SetSize(c:GetWidth(), c:GetHeight()) end)
+        self.previewView = view
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace)
+            if namespace == self.id and view:IsVisible() then self:DrawPreview() end
+        end)
+    end
+    self.previewView:SetParent(parent)
+    self:DrawPreview()
+    return self.previewView
+end
+
+function M:DrawPreview()
+    local view = self.previewView
+    if not view then return end
+    local ok, def = pcall(self.NextLevelUp, self)
+    view.card:SetLevelUp(ok and def or { title = "Level " .. ((UnitLevel("player") or 1) + 1), detail = "Nothing left to learn from the trainer" })
+    view:SetSize(view.card:GetWidth(), view.card:GetHeight())
+end
+
+local SECTION = {
+    id = "spellbook", label = "Spellbook", category = "General", order = 27,
+    preview = function(parent) return M:PreviewView(parent) end,
+    previewNote = "Your next level that brings spells, as the card will show it.",
+    groups = {
+        { title = "Level up", description = "When you reach a level, a card where the alerts show lists what your class trainer now has for you, and what training all of it costs. Out of combat; a level gained in a fight waits for its end. It needs the Alerts module.", rows = {
+            { key = "levelUp", label = "Level-up card", control = "toggle",
+              description = "The new spells and ranks for 8 seconds, and a second more for each." },
+            { key = "untrained", label = "Spells still to train", control = "toggle",
+              description = "The card lists the spells from earlier levels you haven't trained yet too, with the level they came at, until you train them.",
+              disabled = function() if not M:Get("levelUp") then return true, "The level-up card is off." end end },
+            { label = "Try it", control = "button", text = "Show the card",
+              description = "Your next level's card on screen now.",
+              onClick = function() M:PreviewLevelUp() end },
+        } },
+    },
+}
 
 -- The Character window resized while the Spellbook shows: the same height.
 function M:MeasureCharacter()
@@ -544,6 +627,7 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
     SuuUI.AllowAlertOutOfCombat(LEVEL_UP)
+    self:RegisterSettings(SECTION)
     self:OnGameEvent("PLAYER_LEVEL_UP", function(_, level) self:LevelGained(level) end)
     self:RegisterCommand("levelup", "The level-up card without levelling: /suu levelup [level] (default: the next level that brings spells).", function(arg)
         local level = tonumber(arg)
@@ -551,10 +635,7 @@ function M:OnEnable()
             if not self:ShowLevelUp(level) then self:Print("Nothing new from the trainer at level " .. level .. ".") end
             return
         end
-        for l = (UnitLevel("player") or 1) + 1, 80 do
-            if self:ShowLevelUp(l) then return end
-        end
-        self:Print("Nothing left to learn from the trainer.")
+        self:PreviewLevelUp()
     end)
     self:SayToTrain()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
