@@ -48,6 +48,33 @@ function HP.Command()
             end
             f = EnumerateFrames(f)
         end
-        if #out == 0 then ns.Print("Hover tooltip probe: no tooltip on screen.") end
+        if #out == 0 then ns.Print("Hover tooltip probe: no tooltip SuuUI can see on screen.") end
+        -- what's under the mouse, and whether it draws its own tooltip
+        local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
+        local forbiddenTips = 0
+        local g = EnumerateFrames()
+        while g do
+            if g:IsForbidden() then forbiddenTips = forbiddenTips + 1 end
+            g = EnumerateFrames(g)
+        end
+        out.forbiddenFrames = forbiddenTips
+        ns.Print(("Forbidden frames in the UI: %d"):format(forbiddenTips))
+        for _, m in ipairs(foci or {}) do
+            local ok, text = pcall(function()
+                if m:IsForbidden() then return "under the mouse: a forbidden frame" end
+                local p = m:GetParent()
+                return ("under the mouse: %s (%s) protected=%s OnEnter=%s parent=%s (%s) GameTooltip shown=%s owner=%s"):format(
+                    m:GetName() or m:GetDebugName() or "?", m:GetObjectType(), show(m:IsProtected()),
+                    m:GetScript("OnEnter") and "yes" or "none",
+                    p and (p:GetName() or p:GetDebugName() or "?") or "nil", p and p:GetObjectType() or "-",
+                    show(GameTooltip:IsShown()), (function()
+                        local o = GameTooltip:GetOwner()
+                        return o and (o:GetName() or o:GetDebugName() or "?") or "nil"
+                    end)())
+            end)
+            local line = ok and text or ("under the mouse: error " .. tostring(text))
+            out[#out + 1] = line
+            ns.Print(line)
+        end
     end)
 end
