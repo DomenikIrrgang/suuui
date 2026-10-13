@@ -267,6 +267,11 @@ API.UI.CenterWindow = UI.CenterWindow -- CenterWindow(frame, on): a skinned wind
 API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
 API.UI.TalentTree = UI.TalentTree -- TalentTree(parent) -> SetSpecs(list, viewing), SetData({ name, available, pending, editable, hint, trees = { { name, points, nodes, links } } }); onClick, onRemove, onEnter, onLeave, onApply, onUndo, onSpec, onActivate
 API.UI.TALENT_TREE_W = UI.TALENT_TREE_W -- the width the Talents page's three trees need
+API.UI.TraitTooltip = UI.TraitTooltip -- TraitTooltip(owner, configID, nodeID, { name, treeName, conditions, canSpend, pending, needs, blocked }): the game's talent tooltip
+API.UI.LegacyPoints = UI.LegacyPoints -- LegacyPoints(parent) -> SetPoints({ earned, total, spent, cap, pending, character })
+API.UI.LegacyChallenges = UI.LegacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
+API.UI.LegacyRewards = UI.LegacyRewards -- LegacyRewards(parent) -> SetTrack({ earned, max, next, stops })
+API.UI.LEGACY_CARD_H = UI.LEGACY_CARD_H
 API.UI.LevelUp = UI.LevelUp -- LevelUp(parent) -> c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more, cost })
 API.UI.Reskin = UI.Reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
 API.UI.ReskinScrollBox = UI.ReskinScrollBox

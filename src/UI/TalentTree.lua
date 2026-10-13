@@ -8,8 +8,10 @@
 --   local tt = UI.TalentTree(parent)
 --   tt:SetSpecs(list, viewing)  -- { { label, name, active, locked } } or nil
 --                               -- (one spec: no row); viewing: an index
---   tt:SetData({ name, available, pending, editable, hint,
---       trees = { { name, points, nodes = { node }, links = { link } } } })
+--   tt:SetData({ name, available, pending, editable, hint, rows (7),
+--       trees = { { name, points, more, nodes = { node }, links = { link } } } })
+--     more: a line under the tree ("2 more talents in a future update")
+--   tt.noSummary = true   -- no summary line (a page with its own head)
 --     node = { row, col, rank, pending, max, icon, locked, canSpend, ... }
 --     link = { from = node, to = node, met }
 --   tt.onClick(node) / onRemove(node) / onEnter(button, node) / onLeave()
@@ -27,7 +29,8 @@ local S = T.space
 local CW, RH, OX, NS = 44, 46, 20, 32   -- column and row step, left inset, node size
 local ROWS = 7
 local GRAPH_W = 200
-local GRAPH_H = ROWS * RH - (RH - NS)
+local function graphH(rows) return rows * RH - (RH - NS) end
+local GRAPH_H = graphH(ROWS)
 local PAD = S["space-4"]
 local GAP = S["space-6"]
 local HEAD_H = 16
@@ -128,6 +131,8 @@ local function makePanel(tt)
     p.graph = CreateFrame("Frame", nil, p)
     p.graph:SetSize(GRAPH_W, GRAPH_H)
     p.graph:SetPoint("TOP", p, "TOP", 0, -(PAD + HEAD_H + PAD))
+    p.more = UI.Text(p, "caption", "ink-muted")
+    p.more:SetPoint("BOTTOM", p, "BOTTOM", 0, PAD)
     p.nodes, p.lines, p.heads = {}, {}, {}
     return p
 end
@@ -173,6 +178,8 @@ local function drawLink(p, i, l)
 end
 
 local function fillPanel(tt, p, t)
+    p.more:SetValue(t.more or "")
+    p.more:SetShown(t.more ~= nil)
     p.name:SetValue(t.name or "")
     p.points:SetValue(tostring(t.points or 0))
     local nodes = t.nodes or {}
@@ -233,7 +240,8 @@ function TT:Layout()
     end
     self.summary:ClearAllPoints()
     self.summary:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
-    top = top + T.type.label.lineHeight + S["space-5"]
+    self.summary:SetShown(not self.noSummary)
+    if not self.noSummary then top = top + T.type.label.lineHeight + S["space-5"] end
     self.treesRow:ClearAllPoints()
     self.treesRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
     self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
@@ -253,12 +261,17 @@ function TT:SetData(d)
     if not width or width <= 0 then width = UI.TALENT_TREE_W end
     local n = math.max(1, #trees)
     local panelW = math.max(PANEL_W, math.floor((width - GAP * (n - 1)) / n))
+    local rows = d.rows or ROWS
+    local anyMore = false
+    for _, t in ipairs(trees) do if t.more then anyMore = true end end
     for i, t in ipairs(trees) do
         local p = self.panels[i] or makePanel(self)
         self.panels[i] = p
         p:ClearAllPoints()
         p:SetPoint("TOPLEFT", self.treesRow, "TOPLEFT", (i - 1) * (panelW + GAP), 0)
-        p:SetSize(panelW, PAD + HEAD_H + PAD + GRAPH_H + PAD)
+        p.graph:SetHeight(graphH(rows))
+        p:SetSize(panelW, PAD + HEAD_H + PAD + graphH(rows) + PAD
+            + (anyMore and (S["space-3"] + T.type.caption.lineHeight) or 0))
         fillPanel(self, p, t)
         p:Show()
     end
@@ -325,3 +338,65 @@ function UI.TalentTree(parent)
     f:SetData({})
     return f
 end
+
+--------------------------------------------------------------------------------
+-- A talent's tooltip: the game's own, as Blizzard's talent buttons build it
+--------------------------------------------------------------------------------
+--   UI.TraitTooltip(owner, configID, nodeID, {
+--       name, treeName,      -- the title; the tree, for the game's "spend N
+--                            -- more points in the X tree" lines
+--       conditions,          -- the node's condition IDs
+--       canSpend, pending,   -- a click plans a point; planned ranks
+--       needs = { text },    -- more red lines (a talent above it)
+--       blocked = text,      -- why nothing can change now
+--   })
+-- The title, "Rank 2/5", the talent's text at this rank and the next, what a
+-- click does, what it still needs.
+
+local function plainValue(v) return v ~= nil and not (issecretvalue and issecretvalue(v)) end
+
+function UI.TraitTooltip(owner, configID, nodeID, o)
+    o = o or {}
+    local ok, ni = pcall(C_Traits.GetNodeInfo, configID, nodeID)
+    if not ok or not ni then return end
+    local tip = GameTooltip
+    tip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip_SetTitle(tip, o.name or "")
+    local current = plainValue(ni.currentRank) and ni.currentRank or 0
+    local max = plainValue(ni.maxRanks) and ni.maxRanks or 1
+    GameTooltip_AddHighlightLine(tip, (TALENT_BUTTON_TOOLTIP_RANK_FORMAT or "Rank %s/%s"):format(current, max))
+    local increased = plainValue(ni.ranksIncreased) and ni.ranksIncreased or 0
+    if ni.activeEntry and ni.activeEntry.entryID then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        tip:AppendInfo("GetTraitEntry", ni.activeEntry.entryID, (ni.activeEntry.rank or 0) + increased)
+    end
+    if ni.nextEntry and ni.nextEntry.entryID and (ni.ranksPurchased or 0) > 0 then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddHighlightLine(tip, TALENT_BUTTON_TOOLTIP_NEXT_RANK or "Next Rank:")
+        tip:AppendInfo("GetTraitEntry", ni.nextEntry.entryID, (ni.nextEntry.rank or 0) + increased)
+    end
+    if o.canSpend then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddInstructionLine(tip, TALENT_BUTTON_TOOLTIP_PURCHASE_INSTRUCTIONS or "Click to learn")
+    elseif (o.pending or 0) > 0 then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddDisabledLine(tip, "Right-click to take a planned point back")
+    end
+    local spacer = true
+    local function need(text, isError)
+        if spacer then GameTooltip_AddBlankLineToTooltip(tip); spacer = false end
+        if isError then GameTooltip_AddErrorLine(tip, text) else GameTooltip_AddHighlightLine(tip, text) end
+    end
+    local best
+    for _, condID in ipairs(o.conditions or {}) do
+        local okC, c = pcall(C_Traits.GetConditionInfo, configID, condID, false, o.treeName)
+        if okC and c and c.isMet == false and plainValue(c.tooltipText) and c.tooltipText ~= "" then
+            if not best or (c.spentAmountRequired or 0) > (best.spentAmountRequired or 0) then best = c end
+        end
+    end
+    if best then need(best.tooltipText) end
+    for _, text in ipairs(o.needs or {}) do need(text, true) end
+    if o.blocked then need(o.blocked, true) end
+    tip:Show()
+end
+

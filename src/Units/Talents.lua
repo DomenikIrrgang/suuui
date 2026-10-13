@@ -289,58 +289,18 @@ end
 -- what a click does, what it still needs in red); asked for in game.
 function M:ShowTip(button, n)
     local data = self.data
-    local configID = data and data.configID
-    local ni = configID and call(C_Traits.GetNodeInfo, configID, n.id)
-    if not ni then return end
-    local tip = GameTooltip
-    tip:SetOwner(button, "ANCHOR_RIGHT")
-    GameTooltip_SetTitle(tip, n.name)
-    local current = plain(ni.currentRank) and ni.currentRank or (n.rank + n.pending)
-    local max = plain(ni.maxRanks) and ni.maxRanks or n.max
-    GameTooltip_AddHighlightLine(tip, (TALENT_BUTTON_TOOLTIP_RANK_FORMAT or "Rank %s/%s"):format(current, max))
-    local increased = plain(ni.ranksIncreased) and ni.ranksIncreased or 0
-    if ni.activeEntry and ni.activeEntry.entryID then
-        GameTooltip_AddBlankLineToTooltip(tip)
-        tip:AppendInfo("GetTraitEntry", ni.activeEntry.entryID, (ni.activeEntry.rank or 0) + increased)
-    end
-    if ni.nextEntry and ni.nextEntry.entryID and (ni.ranksPurchased or 0) > 0 then
-        GameTooltip_AddBlankLineToTooltip(tip)
-        GameTooltip_AddHighlightLine(tip, TALENT_BUTTON_TOOLTIP_NEXT_RANK or "Next Rank:")
-        tip:AppendInfo("GetTraitEntry", ni.nextEntry.entryID, (ni.nextEntry.rank or 0) + increased)
-    end
-    -- what a click does
-    if n.canSpend then
-        GameTooltip_AddBlankLineToTooltip(tip)
-        GameTooltip_AddInstructionLine(tip, TALENT_BUTTON_TOOLTIP_PURCHASE_INSTRUCTIONS or "Click to learn")
-    elseif n.pending > 0 then
-        GameTooltip_AddBlankLineToTooltip(tip)
-        GameTooltip_AddDisabledLine(tip, "Right-click to take a planned point back")
-    end
-    -- what it still needs: the tree's points (the game's text, with the
-    -- tree's name), the talent above it, or why nothing can change now
-    local spacer = true
-    local function need(text, isError)
-        if spacer then GameTooltip_AddBlankLineToTooltip(tip); spacer = false end
-        if isError then GameTooltip_AddErrorLine(tip, text) else GameTooltip_AddHighlightLine(tip, text) end
-    end
-    local best
-    for _, condID in ipairs(n.conditions) do
-        local c = call(C_Traits.GetConditionInfo, configID, condID, false, n.tree.name)
-        if c and c.isMet == false and plain(c.tooltipText) and c.tooltipText ~= "" then
-            if not best or (c.spentAmountRequired or 0) > (best.spentAmountRequired or 0) then best = c end
-        end
-    end
-    if best then need(best.tooltipText) end
+    if not data then return end
+    local needs = {}
     if not n.meetsEdges then
         for _, from in ipairs(n.requires or {}) do
             if from.rank + from.pending < from.max then
-                need(("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name), true)
+                needs[#needs + 1] = ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
             end
         end
     end
     local editable, why = self:Editable()
-    if not editable and why then need(why, true) end
-    tip:Show()
+    UI.TraitTooltip(button, data.configID, n.id, { name = n.name, treeName = n.tree.name, conditions = n.conditions,
+        canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
 end
 
 function M:Purchase(n)
