@@ -12,6 +12,7 @@
 --       trees = { { name, points, more, nodes = { node }, links = { link } } } })
 --     more: a line under the tree ("2 more talents in a future update")
 --   tt.noSummary = true   -- no summary line (a page with its own head)
+--   tt.fillPanels = true  -- the trees' panels down to the foot (a taller page)
 --     node = { row, col, rank, pending, max, icon, locked, canSpend, ... }
 --     link = { from = node, to = node, met }
 --   tt.onClick(node) / onRemove(node) / onEnter(button, node) / onLeave()
@@ -270,8 +271,12 @@ function TT:SetData(d)
         p:ClearAllPoints()
         p:SetPoint("TOPLEFT", self.treesRow, "TOPLEFT", (i - 1) * (panelW + GAP), 0)
         p.graph:SetHeight(graphH(rows))
-        p:SetSize(panelW, PAD + HEAD_H + PAD + graphH(rows) + PAD
-            + (anyMore and (S["space-3"] + T.type.caption.lineHeight) or 0))
+        local h = PAD + HEAD_H + PAD + graphH(rows) + PAD + (anyMore and (S["space-3"] + T.type.caption.lineHeight) or 0)
+        if self.fillPanels then
+            local room = self.treesRow:GetHeight()
+            if room and room > h then h = room end
+        end
+        p:SetSize(panelW, h)
         fillPanel(self, p, t)
         p:Show()
     end

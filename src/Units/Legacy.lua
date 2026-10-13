@@ -342,10 +342,7 @@ function M:Render()
     local configID = self:ConfigID()
     local trees, rows, pending = {}, 3, 0
     if configID then trees, rows, pending = self:Trees(configID) end
-    if rows ~= self.treeRows then
-        self.treeRows = rows
-        if pages.tree:IsShown() and _G.LegacySystemFrame then self:Size(_G.LegacySystemFrame, "tree") end
-    end
+
     self.configID = configID
     points.pending = pending
     for _, view in pairs(pages) do view.points:SetPoints(points) end
@@ -413,6 +410,9 @@ function M:Page(f, kind)
     if kind == "tree" then
         view.body = UI.TalentTree(view)
         view.body.noSummary = true
+        view.body.fillPanels = true
+        -- its height settles after the first layout: again then
+        view.body:HookScript("OnSizeChanged", function() self:QueueRender() end)
         local body = view.body
         body.onClick = function(n)
             if not (n.canSpend and self.configID) then return end
@@ -455,23 +455,17 @@ function M:Page(f, kind)
     away()
     hooksecurefunc(blizz, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
     view:SetShown(blizz:IsShown())
-    blizz:HookScript("OnShow", function() view:Show(); self:Size(f, kind); self:Render() end)
+    blizz:HookScript("OnShow", function() view:Show(); self:Render() end)
     blizz:HookScript("OnHide", function() view:Hide(); GameTooltip:Hide() end)
     return view
 end
 
--- The window as tall as the page shown needs: the header, the points, the
--- page (two rows of cards; the trees and their foot; the track).
-local TREE_BODY = 8 + 16 + 8 + (3 * 46 - 14) + 8 + 6 + 14 + 12 + 38
-local TRACK_BODY = 36 + 12 + 6 + 8 + 16 + 28 + 20 + 14 + 12
-
-function M:Size(f, kind)
+-- One height for every tab (asked for in game): the header, the points and
+-- the challenges' two rows of cards; the trees' panels reach down to their
+-- foot.
+function M:Size(f)
     local S = T.space
-    local body
-    if kind == "tree" then body = TREE_BODY + (self.treeRows and (self.treeRows - 3) * 46 or 0)
-    elseif kind == "rewards" then body = TRACK_BODY
-    else body = 2 * UI.LEGACY_CARD_H + S["space-5"] end
-    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + body + 16)
+    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + 16)
 end
 
 function M:Build()
@@ -483,8 +477,8 @@ function M:Build()
         self.pages = nil
         return
     end
-    for kind, view in pairs(self.pages) do if view:IsShown() then self:Size(f, kind) end end
-    f:HookScript("OnShow", function() self:QueueRender() end)
+    self:Size(f)
+    f:HookScript("OnShow", function() self:Size(f); self:QueueRender() end)
     self:Render()
 end
 
