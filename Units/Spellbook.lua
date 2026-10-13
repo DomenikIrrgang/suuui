@@ -367,8 +367,16 @@ function M:Build()
             C_Spell.PickupSpell(s.spellID)
         end
     end
-    book:HookScript("OnShow", function() self:Shorten(); self:Render() end)
-    book:HookScript("OnHide", function() self:Restore() end)
+    -- Blizzard's maximise/minimise switches its own book between one and two
+    -- pages: nothing to do with SuuUI's page, so it goes while this tab shows
+    local function maxMin(on)
+        local mm = f.MaximizeMinimizeButton
+        if not mm then return end
+        mm:SetAlpha(on and 1 or 0)
+        for _, b in ipairs({ mm:GetChildren() }) do b:EnableMouse(on) end
+    end
+    book:HookScript("OnShow", function() maxMin(false); self:Shorten(); self:Render() end)
+    book:HookScript("OnHide", function() maxMin(true); self:Restore() end)
     -- Blizzard's UpdateSize sets the height again right after the window
     -- shows (in the same frame): shortened at once, so the tall one is never
     -- drawn (the flicker, found with /suu probe flicker)
