@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-beta.2 (2026-10-13)
+
+### Changed
+
+- SuuUI is now on **Wago Addons** too. The addon itself is unchanged since 0.2.0-beta.1.
+
 ## 0.2.0-beta.1 (2026-10-13)
 
 The first public beta of SuuUI: a full interface replacement for WoW Forever.
