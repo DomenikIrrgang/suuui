@@ -9,7 +9,7 @@
 --   local m = UI.Money(parent); m:SetCopper(n)
 --   local inv = UI.Inventory(parent, { title = "Bags", columns = 10 })
 --   inv:LayoutSlots(buttons)                -- in order, row by row
---   inv:SetMeta(text), inv:SetMoney(copper), inv:SetNote(text)
+--   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --
 -- The live slots are Blizzard's own bag slot buttons (their clicks, drags
@@ -257,6 +257,7 @@ function UI.Inventory(parent, opts)
     inv.note:SetPoint("TOPLEFT", inv.rule, "BOTTOMLEFT", 0, -S["space-4"])
     inv.money = UI.Money(body)
     inv.money:SetPoint("TOPRIGHT", inv.rule, "BOTTOMRIGHT", 0, -S["space-4"])
+    inv.money:Hide() -- until SetMoney: a bank holds no money
     inv:FitBody()
     return inv
 end
