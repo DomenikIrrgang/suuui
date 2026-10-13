@@ -30,7 +30,11 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 
 local STEP = 600          -- the grid's step in the tree's coordinates
 local TREE_GAP = 1500     -- more than this between columns: another tree
-local TALL = 528          -- the spells window's height on this tab (the Spellbook's)
+-- the spells window's height on this tab: the header's 44 and the foot's
+-- 16 around the page (summary, trees, foot: 426), and the specs' row with
+-- two talent groups
+local PAGE_H = 426
+local SPECS_H = 42
 
 --------------------------------------------------------------------------------
 -- The game's data
@@ -238,7 +242,7 @@ function M:Render()
     page:SetData({
         name = (best and best.points > 0) and best.name or (UnitClass("player")),
         trees = trees, available = data.available, pending = data.pending, editable = editable,
-        hint = (not editable and why) or "Click a talent to plan a point. Nothing changes until you apply; unlearning is at a class trainer.",
+        hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
     })
     self.class = class
 end
@@ -352,12 +356,13 @@ function M:Size()
     local f = _G.PlayerSpellsFrame
     if not f or InCombatLockdown() then return end
     local width = UI.TALENT_TREE_W + 40
+    local tall = 44 + PAGE_H + 16 + (self:SpecGroups() > 1 and SPECS_H or 0)
     local h, w = f:GetHeight(), f:GetWidth()
-    if math.abs(h - TALL) < 1 and math.abs(w - width) < 1 then return end
-    if math.abs(h - TALL) >= 1 then self.blizzHeight = h end
+    if math.abs(h - tall) < 1 and math.abs(w - width) < 1 then return end
+    if math.abs(h - tall) >= 1 then self.blizzHeight = h end
     if math.abs(w - width) >= 1 then self.blizzWidth = w end
     self.sizing = true
-    f:SetHeight(TALL)
+    f:SetHeight(tall)
     f:SetWidth(width)
     self.sizing = false
 end

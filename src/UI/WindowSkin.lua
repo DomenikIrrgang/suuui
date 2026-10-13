@@ -137,6 +137,12 @@ function UI.SkinWindow(frame, opts)
     local chrome = setmetatable({ frame = frame }, { __index = Chrome })
     frame.suuChrome = chrome
     chrome.protected = frame:IsProtected() and true or false
+    -- above the HUD (unit frames, bars): a window in the middle of the
+    -- screen sat under the player frame (found in game); the bags and the
+    -- loot window are on HIGH too. Skinned out of combat (protected ones).
+    if not (chrome.protected and InCombatLockdown()) and frame:GetFrameStrata() ~= "HIGH" then
+        frame:SetFrameStrata("HIGH")
+    end
     for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
     local inset = opts.topInset or 0
     local rise = HEAD_H - inset -- the header's height above the window's top
