@@ -122,7 +122,25 @@ function PP.Sample()
         end
         local key = tostring(root) .. (info and info.learned and " learned" or "")
         store.perRoot[key] = (store.perRoot[key] or 0) + 1
+        -- duplicates by name, disabled ones, past the level-60 range
+        if info then
+            local r = tostring(root)
+            store.names = store.names or {}
+            store.names[r] = store.names[r] or {}
+            local seen = store.names[r]
+            if seen[info.name] then
+                store.perRoot[r .. " duplicate names"] = (store.perRoot[r .. " duplicate names"] or 0) + 1
+                store.dupes = store.dupes or {}
+                if #store.dupes < 40 then store.dupes[#store.dupes + 1] = ("%s: %s and %s"):format(info.name, show(seen[info.name]), show(id)) end
+            else
+                seen[info.name] = id
+            end
+            if info.disabled then store.perRoot[r .. " disabled"] = (store.perRoot[r .. " disabled"] or 0) + 1 end
+            if (info.maxTrivialLevel or 0) > 300 then store.perRoot[r .. " trivial past 300"] = (store.perRoot[r .. " trivial past 300"] or 0) + 1 end
+            if (info.itemLevel or 0) > 70 then store.perRoot[r .. " item level past 70"] = (store.perRoot[r .. " item level past 70"] or 0) + 1 end
+        end
     end
+    store.names = nil
     store.recipes = {}
     for i, id in ipairs(ids) do
         if i > 25 then break end
