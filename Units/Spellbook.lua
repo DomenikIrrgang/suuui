@@ -371,6 +371,7 @@ end
 -- The Spellbook tab as tall as the Character window (asked for in game);
 -- Blizzard's height back for the other tabs. Out of combat (protected).
 local SHORT = 484
+local TALL = SHORT + 44
 -- as wide as the Character window with its stats pane: two columns of spell
 -- names need no more (Blizzard's 809 left space to the right: found in game)
 local NARROW = 631
@@ -378,14 +379,10 @@ local NARROW = 631
 function M:Shorten()
     local f = _G.PlayerSpellsFrame
     if not f or InCombatLockdown() then return end
-    -- the Character window's height: 484 once open (Blizzard sets it when it
-    -- shows; before its first show it is 424, which misled the first try;
-    -- both windows have scale 1: checked in game), its own while it shows
-    local cf = _G.CharacterFrame
-    local target = SHORT
-    if cf and cf:IsShown() and cf:GetHeight() > 0 then
-        target = cf:GetHeight() * cf:GetEffectiveScale() / f:GetEffectiveScale()
-    end
+    -- the Character window's open height and one row of spells more (36px
+    -- icons, 8px apart: 44), asked for in game; no longer tied to the
+    -- Character window
+    local target = TALL
     local narrow = math.abs(f:GetWidth() - NARROW) < 1
     if math.abs(f:GetHeight() - target) < 1 and narrow then return end
     if math.abs(f:GetHeight() - target) >= 1 then self.blizzHeight = f:GetHeight() end
