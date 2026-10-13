@@ -629,13 +629,17 @@ function M:OnEnable()
     SuuUI.AllowAlertOutOfCombat(LEVEL_UP)
     self:RegisterSettings(SECTION)
     self:OnGameEvent("PLAYER_LEVEL_UP", function(_, level) self:LevelGained(level) end)
-    self:RegisterCommand("levelup", "The level-up card without levelling: /suu levelup [level] (default: the next level that brings spells).", function(arg)
-        local level = tonumber(arg)
-        if level then
-            if not self:ShowLevelUp(level) then self:Print("Nothing new from the trainer at level " .. level .. ".") end
-            return
+    -- as if you went from where you are now to that level: everything the
+    -- levels in between bring, your settings applied (the card on or off
+    -- aside), in combat too
+    self:RegisterCommand("levelup", "Simulate reaching a level from where you are now: /suu levelup <level> (no level: the next one that brings spells).", function(arg)
+        local level = tonumber(arg and arg:match("%d+"))
+        if not level then return self:PreviewLevelUp() end
+        local now = UnitLevel("player") or 1
+        local from = level > now and (now + 1) or level
+        if not self:ShowLevelUp(level, from) then
+            self:Print(("Nothing from the trainer between level %d and %d."):format(from, level))
         end
-        self:PreviewLevelUp()
     end)
     self:SayToTrain()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
