@@ -225,6 +225,11 @@ function M:Remember(h, f)
 end
 
 function M:Undo(h)
+    -- every part loose first: the buttons hang off each other here (each
+    -- beside the next) and in Blizzard's layout the other way round, so
+    -- restoring one by one anchored a button to one depending on it (an
+    -- error, found in game)
+    for f in pairs(h.saved or {}) do f:ClearAllPoints() end
     for f, s in pairs(h.saved or {}) do
         if self.widths then self.widths[f] = nil end
         restorePoints(f, s.points)
