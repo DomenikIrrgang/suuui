@@ -53,15 +53,44 @@ end
 local BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
 local ITEM = Enum.SpellBookItemType or { Spell = 1, FutureSpell = 2, PetAction = 3, Flyout = 4 }
 
--- The schools: { name, icon, first, count } (General, then the specs).
+-- The schools: { name, icon, first, count } (General, then the three talent
+-- trees). A tree you have no spell in yet (at level 1) is there too, from
+-- the class's talents and the trainer's list: its spells to come show with
+-- their level (asked for in game).
 function M:Schools()
-    local out = {}
+    local book, byName = {}, {}
     for i = 1, C_SpellBook.GetNumSpellBookSkillLines() do
         local info = C_SpellBook.GetSpellBookSkillLineInfo(i)
         if info and not info.shouldHide and not info.isGuild then
-            out[#out + 1] = { name = info.name, icon = info.iconID, first = info.itemIndexOffset + 1,
-                count = info.numSpellBookItems }
+            local s = { name = info.name, icon = info.iconID, first = info.itemIndexOffset + 1, count = info.numSpellBookItems }
+            book[#book + 1] = s
+            byName[s.name] = s
         end
+    end
+    -- the trees, in order
+    local _, class = UnitClass("player")
+    local trees = {}
+    for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class) or {}) do
+        if t.tree and t.spec and not trees[t.tree] then trees[t.tree] = t.spec end
+    end
+    local function trainerIcon(name)
+        for _, t in ipairs(SuuUI.TrainerSpells() or {}) do
+            if t.school == name and t.icon then return t.icon end
+        end
+    end
+    local out, used = {}, {}
+    if book[1] then out[1] = book[1]; used[book[1]] = true end
+    for tree = 1, 3 do
+        local name = trees[tree]
+        if name then
+            local s = byName[name] or { name = name, icon = trainerIcon(name) or 134400, first = 1, count = 0 }
+            out[#out + 1] = s
+            used[s] = true
+        end
+    end
+    -- anything else the spellbook has (another client's lines)
+    for _, s in ipairs(book) do
+        if not used[s] then out[#out + 1] = s end
     end
     return out
 end
