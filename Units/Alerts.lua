@@ -102,12 +102,14 @@ function M:Hide(key, now)
         end
         return
     end
-    self:StopHolding()
     if key and key ~= self.current then
-        -- its owner is done with it: it won't come back either
+        -- its owner is done with it: it won't come back either (and the one
+        -- showing stays as it is: the threat meter says "no aggro" five
+        -- times a second, which cancelled the card's hold: found in game)
         if self.under and self.under.key == key then self.under = nil end
         return
     end
+    self:StopHolding()
     self.current, self.tone, self.last = nil, nil, nil
     if self.frame then self.frame:Hide() end
     -- the alert this one replaced, if it still holds

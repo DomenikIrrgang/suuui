@@ -42,8 +42,8 @@ function HP.Command()
     end
     if not HP.hooked then
         HP.hooked = true
-        hooksecurefunc(m, "Hide", function(_, key, now) if HP.note then HP.note(("Hide(%s, %s) -> %s"):format(tostring(key), tostring(now), HP.state())) end end)
-        hooksecurefunc(m, "StopHolding", function() if HP.note then HP.note("StopHolding -> " .. HP.state()) end end)
+        hooksecurefunc(m, "Hide", function(_, key, now) if HP.note and (key == nil or key == m.current or key == "suu:levelup") then HP.note(("Hide(%s, %s) -> %s"):format(tostring(key), tostring(now), HP.state())) end end)
+        hooksecurefunc(m, "StopHolding", function() if HP.note and m.holding then HP.note("StopHolding -> " .. HP.state()) end end)
         hooksecurefunc(m, "ShowLevelUp", function(_, key) if HP.note then HP.note(("ShowLevelUp(%s) -> %s"):format(tostring(key), HP.state())) end end)
         local ticker = CreateFrame("Frame")
         local acc = 0
