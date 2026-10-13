@@ -366,8 +366,23 @@ function M:Overlay()
     o:SetAllPoints()
     o:SetFrameLevel(self.block.disc:GetFrameLevel() + 15)
     o:EnableMouse(true)
-    if o.SetPassThroughButtons then o:SetPassThroughButtons("LeftButton") end
-    if o.SetPropagateMouseMotion then o:SetPropagateMouseMotion(true) end
+    -- left clicks (pings) and hovering pass through to the map; these two
+    -- are refused in combat, even on SuuUI's own frame (found in game after
+    -- a reload in combat): then they wait for its end
+    local function passThrough()
+        if o.SetPassThroughButtons then o:SetPassThroughButtons("LeftButton") end
+        if o.SetPropagateMouseMotion then o:SetPropagateMouseMotion(true) end
+    end
+    if InCombatLockdown() then
+        local wait = CreateFrame("Frame")
+        wait:RegisterEvent("PLAYER_REGEN_ENABLED")
+        wait:SetScript("OnEvent", function(frame)
+            frame:UnregisterAllEvents()
+            passThrough()
+        end)
+    else
+        passThrough()
+    end
     o:EnableMouseWheel(self:Get("wheelZoom"))
     Minimap:EnableMouseWheel(false)
     o:SetScript("OnMouseWheel", function(_, delta) self:Zoom(delta > 0 and 1 or -1) end)
