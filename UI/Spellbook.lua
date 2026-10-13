@@ -91,8 +91,26 @@ function Book:DrawCell(c)
 end
 
 function Book:SetSpells(list)
-    local width = self.grid:GetWidth()
-    local colW = (width - S["space-6"]) / COLUMNS
+    local width = self.main:GetWidth()
+    -- the columns as wide as the longest name or line on the page, the pair
+    -- centred; the rows centred between the head and the pager (found in
+    -- game: half-width columns left space to the right, and a gap below)
+    local widest = 0
+    for i = 1, self.rows * COLUMNS do
+        local s = list[i]
+        if s then
+            local name = (s.label or "") .. ((s.status ~= "learned" and s.status ~= "passive" and s.rank) and ("  Rank " .. s.rank) or "")
+            widest = math.max(widest, UI.MeasureText("label", name), UI.MeasureText("caption", s.sub or ""))
+        end
+    end
+    local colW = math.min((width - S["space-6"]) / COLUMNS, ICON + S["space-4"] + math.ceil(widest) + S["space-3"])
+    local used = COLUMNS * colW + (COLUMNS - 1) * S["space-6"]
+    local headH = 30 + S["space-4"]
+    local room = self.main:GetHeight() - headH - self.foot:GetHeight() - S["space-4"]
+    local gridH = self.rows * ICON + (self.rows - 1) * S["space-4"]
+    self.grid:ClearAllPoints()
+    self.grid:SetPoint("TOPLEFT", self.main, "TOPLEFT", math.max(0, (width - used) / 2), -(headH + math.max(0, (room - gridH) / 2)))
+    self.grid:SetSize(used, gridH)
     for i = 1, self.rows * COLUMNS do
         local c = cell(self, i)
         local s = list[i]
