@@ -399,13 +399,14 @@ local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
 local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
 local S = T.space
 local STRIP_H = UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 -- the track, a rule and room
+local STRIP_GAP = S["space-5"] -- between a page and the strip's rule (Apply touched it: found in game)
 
 function M:Page(f, kind)
     local blizz = f[PAGES[kind]]
     if not blizz then return nil end
     local view = CreateFrame("Frame", nil, f)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
-    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + STRIP_H)
+    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + STRIP_H + STRIP_GAP)
     view:SetFrameLevel(blizz:GetFrameLevel() + 50)
     view:EnableMouse(true)
     view.points = UI.LegacyPoints(view, { account = false })
@@ -467,7 +468,7 @@ end
 -- the challenges' two rows of cards; the trees' panels reach down to their
 -- foot.
 function M:Size(f)
-    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_H + 16)
+    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + STRIP_H + 16)
 end
 
 -- The reward track along the window's foot, on every tab; Blizzard's reward
