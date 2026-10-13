@@ -1,38 +1,33 @@
 -- Units/Campsite.lua
--- The campfire strip (step 2.8, design board "Campfire strip"): while a
--- fire is near, a small strip under your buffs says where you are with it.
--- Camping has no window: everything comes from your own auras (probed
--- 2026-10-13) and your campfire kit's cooldown.
---   Campfire Nearby (1283391)      → "Campfire nearby", how to rest
---   Welcoming Campfire (1229739)   → "Resting by the fire": the minute
---                                    seated, filling up
---   Camp Benefits (1229741)        → "Rested at the fire": the hour left
---                                    and what the benefits do (the aura's
---                                    own tooltip line)
---   Basic Campfire Kit (279981)    → its cooldown in the foot
--- Fires you pass (not the ones you light: those go out) are remembered per
--- character for the world map (3.5).
+-- Campfires (step 2.8): what a fire does for you, said through SuuUI's
+-- alerts (the band in the middle of the screen that warns of aggro), as
+-- each phase begins. Camping has no window: everything comes from your own
+-- auras (probed 2026-10-13).
+--   Campfire Nearby (1283391)      → "Campfire nearby" for a few seconds
+--   Welcoming Campfire (1229739)   → "Resting by the fire", counting down
+--                                    the minute seated
+--   Camp Benefits (1229741)        → "Camp Benefits" for a few seconds
+-- Camp Benefits wins over Welcoming Campfire (it comes back every minute
+-- while you stay seated). Combat alerts outrank these (info tone), and
+-- combat ending clears them. Fires you pass (not the ones you light: those
+-- go out) are remembered per character for the world map (3.5).
 -- A built-in module written against the public API only.
-
-local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
     id = "campsite",
     name = "Campfire",
-    description = "A strip under your buffs while a campfire is near: resting, Camp Benefits, your kit's cooldown.",
+    description = "Alerts at a campfire: one is near, resting by it, Camp Benefits gained.",
     api = "0.12",
-    defaults = {
-        underBuffs = true,
-        position = { point = "TOPRIGHT", x = -28, y = -260 },
-    },
+    defaults = {},
 })
 
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 
+local KEY = "suu:campfire"
 local NEARBY, WELCOMING, BENEFITS = 1283391, 1229739, 1229741
 local LIGHT_FIRE = 1307227 -- Basic Campfire (the kit's spell)
-local KIT = 279981
+local BRIEF = 6            -- seconds a "nearby" or "benefits" alert stays
 local MAX_FIRES = 100
 
 local function clock(s)
@@ -49,95 +44,69 @@ local function aura(spellID)
     return a
 end
 
--- What Camp Benefits does: its tooltip's second line (out of combat), kept.
-local effectCache = {}
-local function effectOf(a)
-    local id = a.auraInstanceID
-    if not plain(id) then return nil end
-    if effectCache[id] then return effectCache[id] end
-    if not (C_TooltipInfo and C_TooltipInfo.GetUnitBuffByAuraInstanceID) then return nil end
-    local ok, data = pcall(C_TooltipInfo.GetUnitBuffByAuraInstanceID, "player", id)
-    if not ok or not data or type(data.lines) ~= "table" then return nil end
-    for i = 2, #data.lines do
-        local text = data.lines[i].leftText
-        if plain(text) and text and text ~= "" then
-            effectCache[id] = text
-            return text
-        end
-    end
-end
-
 --------------------------------------------------------------------------------
--- The state
+-- Phases and their alerts
 --------------------------------------------------------------------------------
 
-function M:KitCooldown()
-    local count = C_Item and C_Item.GetItemCount and C_Item.GetItemCount(KIT)
-    if not plain(count) or not count or count == 0 then return nil end
-    local start, duration = C_Container.GetItemCooldown(KIT)
-    if plain(duration) and duration and duration > 0 and plain(start) then
-        return math.max(0, start + duration - GetTime())
-    end
-    return 0
-end
-
--- The strip's data, or nil (no fire near); unchanged when auras can't be read.
-function M:Read()
+-- "nearby", "resting", "rested" or nil; false when auras can't be read.
+function M:Phase()
     local near, welcoming, benefits = aura(NEARBY), aura(WELCOMING), aura(BENEFITS)
-    if near == false or welcoming == false or benefits == false then return self.last end
-    if not near and not welcoming then return nil end
-    local d = { cooldowns = {} }
-    local now = GetTime()
-    if welcoming then
-        d.phase = "resting"
-        local x, dur = welcoming.expirationTime, welcoming.duration
-        if plain(x) and plain(dur) and dur and dur > 0 then
-            d.endsAt, d.duration = x, dur
+    if near == false or welcoming == false or benefits == false then return false end
+    if not near and not welcoming then return nil, nil end
+    if benefits then return "rested", benefits end
+    if welcoming then return "resting", welcoming end
+    return "nearby", nil
+end
+
+local function restLeft(a)
+    if not a then return nil end
+    local x = a.expirationTime
+    if plain(x) and x and x > 0 then return x - GetTime() end
+end
+
+function M:Alert(phase, a)
+    if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
+    if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+    if phase == "nearby" then
+        SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
+    elseif phase == "resting" then
+        local function show()
+            local left = restLeft(a)
+            SuuUI.ShowAlert(KEY, "info", "Resting by the fire", left and ("Camp Benefits in " .. clock(left)) or "Stay seated for a minute")
         end
-    elseif benefits then
-        d.phase = "rested"
-        if plain(benefits.expirationTime) and benefits.expirationTime then d.endsAt = benefits.expirationTime end
-        d.benefits = { { icon = plain(benefits.icon) and benefits.icon or nil,
-            label = plain(benefits.name) and benefits.name or "Camp Benefits", effect = effectOf(benefits) } }
+        show()
+        self.ticker = C_Timer.NewTicker(0.5, show)
+        return
+    elseif phase == "rested" then
+        local left = restLeft(a)
+        SuuUI.ShowAlert(KEY, "info", "Camp Benefits", (left and left < 3500) and (clock(left) .. " left") or "For the next hour")
     else
-        d.phase = "nearby"
+        SuuUI.HideAlert(KEY)
+        return
     end
-    if d.endsAt then d.remaining = clock(d.endsAt - now) end
-    if d.duration then d.progress = 1 - (d.endsAt - now) / d.duration end
-    local kit = self:KitCooldown()
-    if kit then d.cooldowns[1] = { label = "Campfire kit", left = kit, remaining = kit > 0 and clock(kit) or "Ready" } end
-    return d
+    self.briefTimer = C_Timer.NewTimer(BRIEF, function()
+        self.briefTimer = nil
+        SuuUI.HideAlert(KEY)
+    end)
 end
 
 function M:Update()
-    local d = self.test or self:Read()
-    self.last = d
-    if not d then
-        self.strip:Hide()
-        if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+    local phase, a = self:Phase()
+    if phase == false then return end -- in combat: as it was
+    if phase == self.phase then return end
+    local was = self.phase
+    self.phase = phase
+    -- walking away while resting or rested: nothing to say
+    if not phase then
+        if self.ticker or self.briefTimer then self:Alert(nil) end
         return
     end
-    self.strip:SetData(d)
-    self.strip:Show()
-    if not self.ticker then
-        self.ticker = C_Timer.NewTicker(0.5, function() self:Tick() end)
+    -- a fire you just walked up to while already rested: say how long is left
+    if was == nil and phase == "rested" then
+        self:Alert("rested", a)
+        return
     end
-end
-
--- The times, twice a second.
-function M:Tick()
-    local d = self.last
-    if not d or d.test or not self.strip:IsShown() then return end
-    local now = GetTime()
-    local remaining, progress
-    if d.endsAt then
-        remaining = clock(d.endsAt - now)
-        if d.duration then progress = 1 - (d.endsAt - now) / d.duration end
-    end
-    local times = {}
-    local kit = not d.test and self:KitCooldown()
-    if kit then times[1] = kit > 0 and clock(kit) or "Ready" end
-    self.strip:SetTimes(remaining, progress, times)
+    self:Alert(phase, a)
 end
 
 --------------------------------------------------------------------------------
@@ -166,53 +135,33 @@ function M:RememberFire()
 end
 
 --------------------------------------------------------------------------------
--- Place
---------------------------------------------------------------------------------
-
-function M:Attached()
-    return self:Get("underBuffs") and SuuUI.GetAnchor("playerBuffs") or nil
-end
-
-function M:Place()
-    local buffs = self:Attached()
-    self.strip:ClearAllPoints()
-    if buffs then
-        self.strip:SetPoint("TOPRIGHT", buffs, "BOTTOMRIGHT", 0, -T.space["space-5"])
-    else
-        local pos = self:Get("position")
-        self.strip:SetPoint(pos.point or "TOPRIGHT", SuuUI.Root, pos.point or "TOPRIGHT", pos.x or 0, pos.y or 0)
-    end
-    SuuUI.EditMode.Refresh()
-end
-
---------------------------------------------------------------------------------
 -- Settings and a look without a fire
 --------------------------------------------------------------------------------
 
-local SAMPLES = {
-    nearby = { phase = "nearby", cooldowns = { { label = "Campfire kit", remaining = "Ready" } } },
-    resting = { phase = "resting", remaining = "0:42", progress = 0.3 },
-    rested = { phase = "rested", remaining = "58m",
-        benefits = { { icon = 7808144, label = "Camp Benefits", effect = "Rested at a campfire: the camp's features strengthen you for an hour." } },
-        cooldowns = { { label = "Campfire kit", remaining = "3:12" } } },
-}
-
-function M:PreviewView(parent)
-    if not self.preview then
-        self.preview = UI.Campsite(parent)
-        self.preview:SetData(SAMPLES.rested)
+function M:Sample(phase)
+    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600) }
+    self:Alert(phase or "nearby", fake)
+    if phase == "resting" then
+        -- a sample doesn't stay
+        self.briefTimer = C_Timer.NewTimer(BRIEF, function()
+            self.briefTimer = nil
+            if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+            SuuUI.HideAlert(KEY)
+        end)
     end
-    self.preview:SetParent(parent)
-    return self.preview
 end
 
 local SECTION = {
     id = "campsite", label = "Campfire", category = "General", order = 26,
-    preview = function(parent) return M:PreviewView(parent) end,
     groups = {
-        { title = "Campfire strip", description = "While a campfire is near: how to rest by it, the minute seated, then the hour of Camp Benefits and your kit's cooldown. /suu campsite nearby, resting or rested shows it without a fire.", rows = {
-            { key = "underBuffs", label = "Under your buffs", control = "toggle",
-              description = "Off, or with your buffs hidden: at its own place, which you move in edit mode." },
+        { title = "Campfire alerts", description = "At a campfire SuuUI's alerts say what it does for you: a fire is near, the minute seated counting down, then Camp Benefits gained. They need the Alerts module; combat alerts come first.", rows = {
+            { label = "Show them", control = "button", text = "Nearby, resting, rested",
+              description = "Each alert in turn, without a fire.",
+              onClick = function()
+                  M:Sample("nearby")
+                  C_Timer.After(BRIEF + 0.5, function() M:Sample("resting") end)
+                  C_Timer.After(BRIEF * 2 + 1, function() M:Sample("rested") end)
+              end },
         } },
     },
 }
@@ -222,19 +171,8 @@ local SECTION = {
 --------------------------------------------------------------------------------
 
 function M:OnEnable()
-    if not self.strip then
-        self.strip = UI.Campsite(SuuUI.Root)
-        self.strip:SetFrameStrata("MEDIUM")
-        self.strip:Hide()
-        self.strip.suuManagedShow = true -- shown while a fire is near
-    end
-    self:RegisterMover(self.strip, { key = "position", label = "Campfire strip",
-        enabled = function() return self:Attached() == nil end,
-        place = function() self:Place() end })
+    SuuUI.AllowAlertOutOfCombat(KEY)
     self:RegisterSettings(SECTION)
-    self:Watch("underBuffs", function() self:Place() end)
-    self:On("SUUUI_ANCHOR_CHANGED", function(_, name) if name == "playerBuffs" then self:Place() end end)
-    self:Place()
     self:OnUnitEvent("UNIT_AURA", { "player" }, function()
         local wasNear = self.near
         local near = aura(NEARBY)
@@ -247,20 +185,22 @@ function M:OnEnable()
     self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
         if plain(spellID) and spellID == LIGHT_FIRE then self.litAt = GetTime() end
     end)
-    for _, e in ipairs({ "BAG_UPDATE_COOLDOWN", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED" }) do
-        self:OnGameEvent(e, function() self:Update() end)
-    end
-    self:RegisterCommand("campsite", "The campfire strip without a fire: /suu campsite nearby, resting or rested (again to hide).", function(arg)
-        local sample = SAMPLES[arg or ""] or SAMPLES.nearby
-        if self.test == sample then self.test = nil else self.test = sample end
-        if self.test then self.test.test = true end
-        self:Update()
+    -- combat ending clears every alert: say again what still holds (after the
+    -- Alerts module has cleared)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        C_Timer.After(0.2, function() self.phase = "unknown"; self:Update() end)
     end)
+    self:RegisterCommand("campsite", "The campfire alerts without a fire: /suu campsite nearby, resting or rested.", function(arg)
+        self:Sample((arg == "resting" or arg == "rested") and arg or "nearby")
+    end)
+    -- what's true now, without an alert for it
     self.near = aura(NEARBY) and true or false
-    self:Update()
+    local phase = self:Phase()
+    if phase ~= false then self.phase = phase end
 end
 
 function M:OnDisable()
-    if self.strip then self.strip:Hide() end
     if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+    if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
+    SuuUI.HideAlert(KEY)
 end
