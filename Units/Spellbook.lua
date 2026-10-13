@@ -32,7 +32,7 @@ local M = SuuUI.RegisterModule({
         allRanks = false,
         levelUp = true,     -- the level-up card
         untrained = false,  -- it lists earlier levels' spells still to train too
-        levelUpFor = 0,     -- seconds it stays; 0: 8 and 1 more a spell, 20 at most
+        levelUpFor = 0,     -- seconds it stays; 0: 4 and 1 more for each spell shown
     },
 })
 
@@ -523,10 +523,10 @@ function M:ShowLevelUp(level, from)
     local def, n = self:LevelUpCard(level, from)
     if not def then return false end
     SuuUI.ShowLevelUp(LEVEL_UP, def)
-    -- the setting's seconds, or 8 s and 1 more for each spell shown, 20 at most
+    -- the setting's seconds, or 4 s and 1 more for each spell shown (14 at most)
     if self.levelTimer then self.levelTimer:Cancel() end
     local stay = tonumber(self:Get("levelUpFor")) or 0
-    if stay <= 0 then stay = math.min(20, 8 + math.min(n, SHOWN)) end
+    if stay <= 0 then stay = 4 + math.min(n, SHOWN) end
     self.levelTimer = C_Timer.NewTimer(stay, function()
         self.levelTimer = nil
         SuuUI.HideAlert(LEVEL_UP)
@@ -591,7 +591,7 @@ local SECTION = {
               description = "The new spells and ranks your trainer has for you when you reach a level." },
             { key = "levelUpFor", label = "Card stays", control = "slider", min = 0, max = 60, step = 5,
               format = function(v) return v == 0 and "By spells" or (v .. " s") end,
-              description = "By spells: 8 seconds and one more for each spell, 20 at most. Or always this many seconds.",
+              description = "By spells: 4 seconds and one more for each spell on the card. Or always this many seconds.",
               disabled = function() if not M:Get("levelUp") then return true, "The level-up card is off." end end },
             { key = "untrained", label = "Spells still to train", control = "toggle",
               description = "The card lists the spells from earlier levels you haven't trained yet too, with the level they came at, until you train them.",
