@@ -61,9 +61,11 @@ function M:Phase()
     return "nearby", nil
 end
 
--- What Camp Benefits does: its tooltip's text after the name (not the time
--- left), out of combat; at most ~90 characters, cut at a word.
-local MAX_EFFECT = 90
+-- What Camp Benefits does: its tooltip's text after the name, as one line
+-- for the alert. The text is a heading ("Gained the following camp
+-- benefits:") and a line per benefit (found in game): headings and the time
+-- left are dropped, bullets stripped, the benefits joined with " · ".
+local MAX_EFFECT = 140
 local function effectOf(a)
     if not a or not plain(a.auraInstanceID) or not a.auraInstanceID then return nil end
     if not (C_TooltipInfo and C_TooltipInfo.GetUnitBuffByAuraInstanceID) then return nil end
@@ -72,11 +74,18 @@ local function effectOf(a)
     local parts = {}
     for i = 2, #data.lines do
         local text = data.lines[i].leftText
-        if plain(text) and text and text ~= "" and not text:lower():find("remaining", 1, true) then
-            parts[#parts + 1] = text
+        if plain(text) and text then
+            for line in text:gmatch("[^\r\n]+") do
+                line = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+                line = line:gsub("^[%s%-%*•·]+", ""):gsub("%s+$", "")
+                local lower = line:lower()
+                if line ~= "" and not line:find(":$") and not lower:find("remaining", 1, true) then
+                    parts[#parts + 1] = line:gsub("%.$", "")
+                end
+            end
         end
     end
-    local text = table.concat(parts, " ")
+    local text = table.concat(parts, " · ")
     if text == "" then return nil end
     if #text > MAX_EFFECT then
         text = text:sub(1, MAX_EFFECT):gsub("%s+%S*$", "") .. "…"
