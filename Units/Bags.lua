@@ -10,7 +10,7 @@
 -- The bank (step 2.5b, boards "Bank" and "At the bank"): the same window
 -- with every purchased bank tab's slots, opened at a banker top centre with
 -- your bags beside it. Blizzard's bank frame opens and closes as always,
--- under the hidden parent; SuuUI's window follows BANKFRAME_OPENED/CLOSED.
+-- off screen; SuuUI's window follows BANKFRAME_OPENED/CLOSED.
 -- One search runs across both.
 -- A built-in module written against the public API only.
 --
@@ -233,17 +233,57 @@ function M:KeepHidden(f, keep)
     end)
 end
 
--- Blizzard's bank frame under the hidden parent (it keeps opening and
--- closing, Esc included), or back where it was with the setting off.
+-- Blizzard's bank frame opens and closes as always but out of sight: moved
+-- off screen and see-through, not hidden (its OnShow opens your bags, its
+-- OnHide ends the visit at the banker, Esc included). The game's panel
+-- manager places it again whenever panels change: it goes back off screen
+-- a frame later. With the setting off it returns to where Blizzard put it.
 function M:HideBlizzardBank()
     local f = _G.BankFrame
     if not f then return end
-    if self:Get("bank") then
-        self.bankParent = self.bankParent or f:GetParent()
-        self:KeepHidden(f, function() return self:Get("bank") end)
-    elseif self.bankParent and f:GetParent() == hidden then
-        f:SetParent(self.bankParent)
+    local on = self:IsEnabled() and self:Get("bank")
+    if not self.bankHooked then
+        self.bankHooked = true
+        self.bankClamped = f:IsClampedToScreen()
+        hooksecurefunc(f, "SetPoint", function(_, ...)
+            if self.movingBank then return end
+            self.bankPoint = { ... } -- where Blizzard put it
+            if self:IsEnabled() and self:Get("bank") then self:QueueBankAway() end
+        end)
+        f:HookScript("OnShow", function() if self:IsEnabled() and self:Get("bank") then self:BankAway() end end)
     end
+    if on then
+        self:BankAway()
+    else
+        f:SetAlpha(1)
+        f:SetClampedToScreen(self.bankClamped and true or false)
+        if self.bankPoint then
+            self.movingBank = true
+            f:ClearAllPoints()
+            f:SetPoint(unpack(self.bankPoint))
+            self.movingBank = false
+        end
+    end
+end
+
+function M:BankAway()
+    local f = _G.BankFrame
+    f:SetAlpha(0)
+    f:SetClampedToScreen(false)
+    self.movingBank = true
+    f:ClearAllPoints()
+    f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+    self.movingBank = false
+end
+
+function M:QueueBankAway()
+    if self.bankAwayQueued then return end
+    self.bankAwayQueued = true
+    _G.BankFrame:SetAlpha(0)
+    C_Timer.After(0, function()
+        self.bankAwayQueued = nil
+        if self:IsEnabled() and self:Get("bank") then self:BankAway() end
+    end)
 end
 
 -- Blizzard's bag frames under a hidden parent: they keep opening and
