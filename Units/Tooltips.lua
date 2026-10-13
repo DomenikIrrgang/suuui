@@ -255,6 +255,36 @@ function M:SkinAny(tooltip)
 end
 
 --------------------------------------------------------------------------------
+-- The aura buttons' own tooltip
+--------------------------------------------------------------------------------
+
+-- The game's aura buttons (buffs, the target's, party and raid auras) show
+-- a tooltip of the engine's that addon code can't touch; the engine takes a
+-- style for it instead (AuraContainerInbound.SetTooltipBackdrop, its options
+-- from the client's API documentation, 2026-10-13): surface-glass inside a
+-- 1px gilt-line edge. Its text stays the game's (no spell ID there).
+function M:StyleAuraTooltip()
+    local inbound = _G.AuraContainerInbound
+    if not (inbound and inbound.SetTooltipBackdrop and CreateColor) then return end
+    -- one physical pixel in UIParent units
+    local h = select(2, GetPhysicalScreenSize())
+    local scale = UIParent:GetEffectiveScale()
+    local px = (h and h > 0 and scale > 0) and (768 / h / scale) or 1
+    local bg, edge = { UI.RGBA("surface-glass") }, { UI.RGBA("gilt-line") }
+    local ok, err = pcall(inbound.SetTooltipBackdrop, {
+        backdropInfo = {
+            bgFile = "Interface\\Buttons\\WHITE8X8",
+            edgeFile = "Interface\\Buttons\\WHITE8X8",
+            edgeSize = px,
+            insets = { left = px, right = px, top = px, bottom = px },
+        },
+        centerColor = CreateColor(unpack(bg)),
+        borderColor = CreateColor(unpack(edge)),
+    })
+    if not ok then self:Print("couldn't style the aura tooltips: " .. tostring(err)) end
+end
+
+--------------------------------------------------------------------------------
 -- Spell IDs, and who cast an aura
 --------------------------------------------------------------------------------
 
@@ -399,10 +429,11 @@ function M:OnEnable()
             end)
         end
     end
+    self:StyleAuraTooltip()
     -- the aura panel's container made out of combat, ready for a fight
     if not InCombatLockdown() then self:AuraPanel() end
     for _, e in ipairs({ "UI_SCALE_CHANGED", "DISPLAY_SIZE_CHANGED" }) do
-        self:OnGameEvent(e, function() C_Timer.After(0, function() self:ApplyScale() end) end)
+        self:OnGameEvent(e, function() C_Timer.After(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
     end
     self:On("SUUUI_ROOT_SCALED", function() self:ApplyScale() end)
 end
