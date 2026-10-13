@@ -13,6 +13,9 @@
 --       close = CharacterFrameCloseButton,
 --       hide = { frame.NineSlice, frame.PortraitContainer, … },  -- alpha 0
 --       topInset = 20,   -- the window's own strip above its content, kept
+--       under = "microMenu", -- an anchor name: the window opens lined up
+--                            -- under it (its left edge, space-5 below), and
+--                            -- goes back there when Blizzard places it
 --   })
 --   chrome:SetTabs({ { button = tab, label = "Character", short = "Char",
 --                      selected = function() … end }, … })   -- in order
@@ -198,7 +201,31 @@ function UI.SkinWindow(frame, opts)
     chrome.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
 
     frame:HookScript("OnSizeChanged", function() chrome:LayoutTabs() end)
+
+    -- the panel-position rule: lined up under an anchor (the micro menu)
+    if opts.under then
+        chrome.under, chrome.rise = opts.under, rise
+        hooksecurefunc(frame, "SetPoint", function()
+            if chrome.placingWindow then return end
+            C_Timer.After(0, function() chrome:PlaceWindow() end)
+        end)
+        frame:HookScript("OnShow", function() chrome:PlaceWindow() end)
+    end
     return chrome
+end
+
+-- Under the anchor: the header's top left space-5 below its bottom left.
+function Chrome:PlaceWindow()
+    local anchor = self.under and ns.Anchors.Get(self.under)
+    if not anchor or not anchor:IsVisible() or InCombatLockdown() and self.frame:IsProtected() then return end
+    local f = self.frame
+    local scale = anchor:GetEffectiveScale() / f:GetEffectiveScale()
+    local left, bottom = anchor:GetLeft(), anchor:GetBottom()
+    if not (left and bottom) then return end
+    self.placingWindow = true
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * scale, bottom * scale - S["space-5"] - self.rise)
+    self.placingWindow = false
 end
 
 UI.WINDOW_HEAD_H = HEAD_H

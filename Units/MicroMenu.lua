@@ -172,6 +172,8 @@ function M:OnEnable()
     self:HideBlizzard()
     self:Layout()
     self:RegisterMover(self.menu, { key = "position", label = "Micro menu" })
+    -- "microMenu": windows open lined up under it
+    SuuUI.PublishAnchor("microMenu", self.menu)
     self:RegisterSettings(SECTION)
     self:ApplyShows()
     self:Watch("buttons", function()
@@ -189,5 +191,6 @@ function M:OnEnable()
 end
 
 function M:OnDisable()
+    SuuUI.PublishAnchor("microMenu", nil)
     if self.menu then self.menu:Hide() end
 end
