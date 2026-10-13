@@ -106,7 +106,20 @@ local blocked = CreateFrame("Frame")
 blocked:RegisterEvent("ADDON_ACTION_BLOCKED")
 blocked:RegisterEvent("ADDON_ACTION_FORBIDDEN")
 blocked:SetScript("OnEvent", function(_, event, addon, func)
-    if addon ~= ns.name then return end
     local what = event == "ADDON_ACTION_FORBIDDEN" and "Forbidden" or "Blocked in combat"
+    if addon ~= ns.name then
+        -- blamed on someone else (another addon, or a name the game makes
+        -- up): kept too, quietly, since SuuUI may still be the cause (found
+        -- in game: closing the spells window in combat failed and nothing
+        -- was logged)
+        if type(SuuUIDB) == "table" then
+            SuuUIDB.blocked = SuuUIDB.blocked or {}
+            local saved = SuuUIDB.blocked
+            saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), event = event, addon = tostring(addon), func = tostring(func),
+                combat = InCombatLockdown() and true or false, stack = debugstack(2) }
+            while #saved > 30 do table.remove(saved, 1) end
+        end
+        return
+    end
     Fault.Report("Taint", ("%s: %s"):format(what, tostring(func)), debugstack(2))
 end)
