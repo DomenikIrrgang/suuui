@@ -399,7 +399,10 @@ local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
 local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
 local S = T.space
 local STRIP_H = UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 -- the track, a rule and room
-local STRIP_GAP = S["space-5"] -- between a page and the strip's rule (Apply touched it: found in game)
+-- between a page and the strip's rule (Apply touched it: found in game): as
+-- much as the tree's foot leaves above its buttons (38 - 30), so they sit
+-- evenly between the two rules (asked for)
+local STRIP_GAP = 8
 
 function M:Page(f, kind)
     local blizz = f[PAGES[kind]]
