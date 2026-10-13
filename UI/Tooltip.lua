@@ -215,13 +215,17 @@ end
 function UI.SpellTooltip(owner, spellID, extra, anchor)
     hookSpellTips()
     local lines = type(extra) == "table" and extra or (extra and { extra } or {})
-    pending = { id = spellID, owner = owner, lines = lines }
+    -- the owner first: it hides what the tooltip showed, and its OnHide
+    -- clears `pending` (found in game)
     GameTooltip:SetOwner(owner, anchor or "ANCHOR_RIGHT")
+    local mine = { id = spellID, owner = owner, lines = lines }
+    pending = mine
     GameTooltip:SetSpellByID(spellID)
     -- no post-call in this client, or it didn't run: add them now
-    if hooked ~= "post" or not pending.added then
+    if hooked ~= "post" or not mine.added then
+        pending = mine
         addExtra(GameTooltip)
-        pending.added = true
+        mine.added = true
     end
     GameTooltip:Show()
 end
