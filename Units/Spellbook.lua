@@ -263,8 +263,10 @@ function M:Build()
     end
     for _, r in ipairs({ page:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
     local book = UI.Spellbook(page, { rows = 6 })
-    book:SetPoint("TOPLEFT", 20, -24)
-    book:SetPoint("BOTTOMRIGHT", -20, 16)
+    -- on the window itself (the window is shortened while this tab shows;
+    -- Blizzard's page keeps its own, taller size)
+    book:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    book:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
     book:SetFrameLevel(page:GetFrameLevel() + 50)
     book:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
     self.book = book
@@ -308,9 +310,36 @@ function M:Build()
             C_Spell.PickupSpell(s.spellID)
         end
     end
-    book:HookScript("OnShow", function() self:Render() end)
+    book:HookScript("OnShow", function() self:Shorten(); self:Render() end)
+    book:HookScript("OnHide", function() self:Restore() end)
+    hooksecurefunc(f, "SetHeight", function() if not self.sizing and book:IsVisible() then C_Timer.After(0, function() self:Shorten() end) end end)
+    hooksecurefunc(f, "SetSize", function() if not self.sizing and book:IsVisible() then C_Timer.After(0, function() self:Shorten() end) end end)
     book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
     self:Render()
+end
+
+-- The Spellbook tab as tall as the Character window (asked for in game);
+-- Blizzard's height back for the other tabs. Out of combat (protected).
+local SHORT = 484
+
+function M:Shorten()
+    local f = _G.PlayerSpellsFrame
+    if not f or InCombatLockdown() then return end
+    local target = (_G.CharacterFrame and _G.CharacterFrame:GetHeight()) or SHORT
+    if math.abs(f:GetHeight() - target) < 1 then return end
+    self.blizzHeight = f:GetHeight()
+    self.sizing = true
+    f:SetHeight(target)
+    self.sizing = false
+end
+
+function M:Restore()
+    local f = _G.PlayerSpellsFrame
+    if not f or not self.blizzHeight or InCombatLockdown() then return end
+    self.sizing = true
+    f:SetHeight(self.blizzHeight)
+    self.sizing = false
+    self.blizzHeight = nil
 end
 
 function M:OnEnable()
