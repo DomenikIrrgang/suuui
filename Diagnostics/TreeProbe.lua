@@ -7,6 +7,7 @@
 --
 --   /suu probe tree CharacterFrame 4   one frame by global name, or a path
 --                                      (PaperDollFrame.EquipmentManagerPane)
+--   /suu probe tree open               every window on screen now
 --   /suu probe tree character          the Character window and its panes
 --                                      (run it on each tab: a pane's rows
 --                                      exist once it has been shown)
@@ -108,6 +109,22 @@ function TP.Command(arg)
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.trees = SuuUIProbe.trees or {}
     local names = PRESETS[name:lower()] or { name }
+    -- "open": every named window on screen now (a top-level frame at least
+    -- 300 by 250, not SuuUI's)
+    if name:lower() == "open" then
+        names = {}
+        for _, c in ipairs({ UIParent:GetChildren() }) do
+            local ok, n = pcall(function()
+                if c:IsForbidden() or not c:IsVisible() then return nil end
+                local fname = c:GetName()
+                local w, h = c:GetSize()
+                if fname and not fname:find("^SuuUI") and w >= 300 and h >= 250 then return fname end
+            end)
+            if ok and n then names[#names + 1] = n end
+        end
+        SuuUIProbe.trees = SuuUIProbe.trees or {}
+        SuuUIProbe.trees._open = { date("%H:%M:%S") .. " " .. table.concat(names, ", ") }
+    end
     local done = {}
     for _, n in ipairs(names) do
         -- a global name, or a path through keys ("PaperDollFrame.EquipmentManagerPane")
