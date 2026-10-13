@@ -199,6 +199,47 @@ local function progressOf(id)
     end
 end
 
+-- A challenge's steps. A step that is another achievement (criteria type 8)
+-- carries that one's steps, to open in turn (Explorer: Eastern Kingdoms and
+-- Kalimdor, their zones, the zones' areas: asked for in game); a challenge
+-- whose only step is another achievement shows that one's steps instead.
+local CRITERIA_ACHIEVEMENT = 8
+
+local function countDone(id, n)
+    local done = 0
+    for k = 1, n do
+        local _, _, ok = call(GetAchievementCriteriaInfo, id, k)
+        if ok then done = done + 1 end
+    end
+    return done
+end
+
+local function stepsOf(id, depth)
+    depth = depth or 0
+    local n = call(GetAchievementNumCriteria, id) or 0
+    if n == 1 and depth < 4 then
+        local _, ctype, done, _, _, _, _, asset = call(GetAchievementCriteriaInfo, id, 1)
+        if ctype == CRITERIA_ACHIEVEMENT and plain(asset) and asset and not done then return stepsOf(asset, depth + 1) end
+    end
+    local out = {}
+    for k = 1, n do
+        local text, ctype, done, quantity, required, _, _, asset = call(GetAchievementCriteriaInfo, id, k)
+        local step = { text = text, done = done and true or false }
+        if ctype == CRITERIA_ACHIEVEMENT and plain(asset) and asset and depth < 4 then
+            local sub = call(GetAchievementNumCriteria, asset) or 0
+            if sub > 1 then
+                step.id = "a" .. asset
+                step.stepsN, step.stepsDone = sub, countDone(asset, sub)
+                step.steps = function() return stepsOf(asset, depth + 1) end
+            end
+        elseif plain(quantity) and plain(required) and required and required > 1 and not done then
+            step.count = { quantity, required }
+        end
+        out[#out + 1] = step
+    end
+    return out
+end
+
 local function challengeTip(owner, id, name, description, points)
     local tip = GameTooltip
     tip:SetOwner(owner, "ANCHOR_RIGHT")
@@ -231,23 +272,21 @@ local function itemsIn(category)
         if id and points then
             local item = { id = id, name = name, done = completed and true or false, points = points, order = i,
                 progress = (not completed) and progressOf(id) or nil }
-            -- the full list's detail: steps (zones, dungeons, bosses) or one count
+            -- the full list's detail: steps (zones, dungeons, bosses; other
+            -- achievements, which open in turn) or one count
             local n = call(GetAchievementNumCriteria, id) or 0
-            if n > 1 then
+            local single = n == 1 and select(2, call(GetAchievementCriteriaInfo, id, 1)) == CRITERIA_ACHIEVEMENT
+            if (n > 1 or single) and not completed then
+                local list = stepsOf(id)
                 local done = 0
-                for k = 1, n do
-                    local _, _, ok = call(GetAchievementCriteriaInfo, id, k)
-                    if ok then done = done + 1 end
+                for _, st in ipairs(list) do if st.done then done = done + 1 end end
+                if #list > 0 then
+                    item.stepsN, item.stepsDone = #list, done
+                    item.steps = function() return stepsOf(id) end
                 end
-                item.stepsN, item.stepsDone = n, done
-                item.steps = function()
-                    local out = {}
-                    for k = 1, n do
-                        local text, _, ok = call(GetAchievementCriteriaInfo, id, k)
-                        out[#out + 1] = { text = text, done = ok and true or false }
-                    end
-                    return out
-                end
+            elseif n > 1 then
+                item.stepsN, item.stepsDone = n, countDone(id, n)
+                item.steps = function() return stepsOf(id) end
             elseif n == 1 then
                 local _, _, ok, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
                 if not ok and plain(quantity) and plain(required) and required and required > 1 then

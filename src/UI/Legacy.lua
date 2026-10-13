@@ -358,8 +358,58 @@ local function makePanel(parent)
     p.bar = thinBar(p, 3)
     p.bar:SetPoint("TOPLEFT", p.name, "BOTTOMLEFT", 0, -S["space-3"])
     p.bar:SetPoint("RIGHT", p, "RIGHT", -PANEL_PAD, 0)
-    p.rows, p.steps = {}, {}
+    p.rows, p.steps, p.subrows = {}, {}, {}
     return p
+end
+
+-- Open steps from x, y: steps that are achievements as rows (they open in
+-- turn, one step further in), the others in columns; returns the new y.
+function Challenges:LayoutSteps(p, list, x, y, width)
+    local plainSteps = {}
+    local function grid()
+        if #plainSteps == 0 then return end
+        local cols = math.max(1, math.floor(width / STEP_W))
+        for n, step in ipairs(plainSteps) do
+            p.stepIndex = p.stepIndex + 1
+            local c = p.steps[p.stepIndex] or makeStep(p)
+            p.steps[p.stepIndex] = c
+            local col, row = (n - 1) % cols, math.floor((n - 1) / cols)
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", p, "TOPLEFT", x + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
+            c.check:SetShown(step.done and true or false)
+            c.ring:SetShown(not step.done)
+            c.hole:SetShown(not step.done)
+            local label = step.text or ""
+            if step.count then label = label .. "  |cff" .. hex("ink-muted") .. step.count[1] .. "/" .. step.count[2] .. "|r" end
+            c.text:SetValue(label)
+            c.text:SetColor(step.done and "ink-muted" or "ink")
+            c:Show()
+        end
+        y = y + S["space-1"] + math.ceil(#plainSteps / cols) * STEP_H + S["space-3"]
+        plainSteps = {}
+    end
+    for _, step in ipairs(list) do
+        if step.steps then
+            grid()
+            p.subIndex = p.subIndex + 1
+            local r = p.subrows[p.subIndex] or makeDetailRow(self, p)
+            p.subrows[p.subIndex] = r
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", p, "TOPLEFT", x, -y)
+            r:SetWidth(width)
+            fillDetailRow(self, r, { id = step.id, name = step.text, done = step.done,
+                stepsN = step.stepsN, stepsDone = step.stepsDone, steps = step.steps })
+            r:Show()
+            y = y + ROW_H + 2 + S["space-1"]
+            if self.expanded[step.id] and not step.done then
+                y = self:LayoutSteps(p, step.steps(), x + INDENT, y, width - INDENT)
+            end
+        else
+            plainSteps[#plainSteps + 1] = step
+        end
+    end
+    grid()
+    return y
 end
 
 -- A panel's rows and open steps; returns its height.
@@ -370,7 +420,7 @@ local function fillPanel(view, p, g, width)
     p.bar:SetFraction(#g.items > 0 and g.done / #g.items or 0)
     local y = PANEL_PAD + PANEL_HEAD
     local inner = width - PANEL_PAD * 2
-    local stepIndex = 0
+    p.stepIndex, p.subIndex = 0, 0
     for k, item in ipairs(g.items) do
         local r = p.rows[k] or makeDetailRow(view, p)
         p.rows[k] = r
@@ -380,29 +430,13 @@ local function fillPanel(view, p, g, width)
         fillDetailRow(view, r, item)
         r:Show()
         y = y + ROW_H + 2 + S["space-1"]
-        -- its steps, in columns, when open
         if item.stepsN and view.expanded[item.id] and item.steps then
-            local list = item.steps()
-            local cols = math.max(1, math.floor((inner - INDENT) / STEP_W))
-            for s2, step in ipairs(list) do
-                stepIndex = stepIndex + 1
-                local c = p.steps[stepIndex] or makeStep(p)
-                p.steps[stepIndex] = c
-                local col, row = (s2 - 1) % cols, math.floor((s2 - 1) / cols)
-                c:ClearAllPoints()
-                c:SetPoint("TOPLEFT", p, "TOPLEFT", PANEL_PAD + INDENT + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
-                c.check:SetShown(step.done and true or false)
-                c.ring:SetShown(not step.done)
-                c.hole:SetShown(not step.done)
-                c.text:SetValue(step.text or "")
-                c.text:SetColor(step.done and "ink-muted" or "ink")
-                c:Show()
-            end
-            y = y + S["space-1"] + math.ceil(#list / cols) * STEP_H + S["space-4"]
+            y = view:LayoutSteps(p, item.steps(), PANEL_PAD + INDENT, y, inner - INDENT)
         end
     end
     for k = #g.items + 1, #p.rows do p.rows[k]:Hide() end
-    for k = stepIndex + 1, #p.steps do p.steps[k]:Hide() end
+    for k = p.stepIndex + 1, #p.steps do p.steps[k]:Hide() end
+    for k = p.subIndex + 1, #p.subrows do p.subrows[k]:Hide() end
     local h = y + PANEL_PAD - S["space-1"]
     p:SetHeight(h)
     return h
