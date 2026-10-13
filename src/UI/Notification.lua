@@ -322,6 +322,17 @@ local ORDER = { action = 0, roll = 0, ["until"] = 1, sticky = 2, timed = 3 }
 
 local Stack = {}
 
+-- Notes out of sight (a window covers them), requests kept.
+function Stack:SetNotesHidden(on)
+    on = on and true or false
+    if self.notesHidden == on then return end
+    self.notesHidden = on
+    for _, card in pairs(self.cards) do
+        if card.data then card:SetShown(card.request or not on) end
+    end
+    self.foot:SetAlpha(on and 0 or 1)
+end
+
 function Stack:CardFor(id)
     return self.cards[id]
 end
@@ -355,11 +366,12 @@ function Stack:SetItems(items, inCombat)
         -- requests (popups to answer, loot rolls) above open windows; notes
         -- at the stack's own layer, under them (asked for in game)
         local request = d.kind == "action" or d.kind == "roll"
+        card.request = request
         card:SetFrameStrata(request and "DIALOG" or self:GetFrameStrata())
         card:SetData(d)
         card:ClearAllPoints()
         card:SetPoint("TOPLEFT", 0, -y)
-        card:Show()
+        card:SetShown(request or not self.notesHidden)
         y = y + card:GetHeight() + S["space-3"]
     end
     for id, card in pairs(self.cards) do

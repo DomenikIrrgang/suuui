@@ -131,11 +131,38 @@ function Chrome:UpdateTabs()
     end
 end
 
+local allChromes = {}
+
+-- Whether an open window (one in SuuUI's look, its header included) covers
+-- part of `frame`: notes under it hide (asked for in game: the windows'
+-- glass let them show through). Edges secret in combat count as not.
+function UI.IsCoveredByWindow(frame)
+    local l, r, t, b = frame:GetLeft(), frame:GetRight(), frame:GetTop(), frame:GetBottom()
+    local function plain(v) return v ~= nil and not (issecretvalue and issecretvalue(v)) end
+    if not (plain(l) and plain(r) and plain(t) and plain(b)) then return false end
+    local fs = frame:GetEffectiveScale()
+    l, r, t, b = l * fs, r * fs, t * fs, b * fs
+    for _, c in ipairs(allChromes) do
+        local w = c.frame
+        if w:IsVisible() then
+            local wl, wr, wt, wb = w:GetLeft(), w:GetRight(), w:GetTop(), w:GetBottom()
+            if plain(wl) and plain(wr) and plain(wt) and plain(wb) then
+                local ws = w:GetEffectiveScale()
+                wl, wr, wb = wl * ws, wr * ws, wb * ws
+                wt = (wt + (c.riseH or 0)) * ws
+                if l < wr and r > wl and b < wt and t > wb then return true end
+            end
+        end
+    end
+    return false
+end
+
 function UI.SkinWindow(frame, opts)
     if frame.suuChrome then return frame.suuChrome end
     opts = opts or {}
     local chrome = setmetatable({ frame = frame }, { __index = Chrome })
     frame.suuChrome = chrome
+    allChromes[#allChromes + 1] = chrome
     chrome.protected = frame:IsProtected() and true or false
     -- above the HUD (unit frames, bars): a window in the middle of the
     -- screen sat under the player frame (found in game); the bags and the
@@ -146,6 +173,7 @@ function UI.SkinWindow(frame, opts)
     for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
     local inset = opts.topInset or 0
     local rise = HEAD_H - inset -- the header's height above the window's top
+    chrome.riseH = rise
 
     -- the art, on the window itself (behind every pane)
     local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -8)

@@ -573,6 +573,10 @@ end
 -- popups out again now and then), popups anchored to a hosted one put back
 -- on screen.
 function M:Tick()
+    -- notes hide while an open window covers them (requests stay)
+    if self.stack and SuuUI.UI.IsCoveredByWindow then
+        self.stack:SetNotesHidden(SuuUI.UI.IsCoveredByWindow(self.stack))
+    end
     local now = GetTime()
     local changed = false
     for id, d in pairs(self.notes) do
