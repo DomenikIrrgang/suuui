@@ -10,6 +10,7 @@
 --   local inv = UI.Inventory(parent, { title = "Bags", columns = 10 })
 --   inv:LayoutSlots(buttons)                -- in order, row by row
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
+--   inv:SetAction({ text, onClick, tooltip }) or nil: a quiet button in the foot, before the note
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --
 -- With opts.characters (design board "Bags window"): a character picker in
@@ -213,6 +214,27 @@ function Inv:SetNote(text)
     self.note:SetValue(text or "")
 end
 
+-- A quiet button at the start of the foot (Sell junk), the note after it.
+function Inv:SetAction(action)
+    self.actionDef = action
+    if action then
+        if not self.action then
+            self.action = UI.Button(self.body, { text = action.text, onClick = function()
+                if self.actionDef and self.actionDef.onClick then self.actionDef.onClick() end
+            end })
+            self.action:HookScript("OnEnter", function(btn)
+                if self.actionDef and self.actionDef.tooltip then UI.ShowTooltip(btn, self.actionDef.tooltip) end
+            end)
+            self.action:HookScript("OnLeave", function() UI.HideTooltip() end)
+        end
+        self.action:SetLabel(action.text)
+        self.action:Show()
+    elseif self.action then
+        self.action:Hide()
+    end
+    self:FitBody()
+end
+
 -- The line over the grid ("Thessaly's bags as of 2 days ago · read only").
 function Inv:SetBanner(text)
     if not self.banner then return end
@@ -297,7 +319,21 @@ function Inv:FitBody()
     self.rule:ClearAllPoints()
     self.rule:SetPoint("TOPLEFT", content, "BOTTOMLEFT", 0, -S["space-4"])
     self.rule:SetPoint("TOPRIGHT", content, "BOTTOMRIGHT", 0, -S["space-4"])
-    local h = y + content:GetHeight() + S["space-4"] + 1 + S["space-4"] + T.type.numeric.lineHeight
+    -- the foot's line: the note and the money, or a button with them centred on it
+    local foot = T.type.numeric.lineHeight
+    self.note:ClearAllPoints()
+    self.money:ClearAllPoints()
+    if self.action and self.action:IsShown() then
+        foot = self.action:GetHeight()
+        self.action:ClearAllPoints()
+        self.action:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-4"])
+        self.note:SetPoint("LEFT", self.action, "RIGHT", S["space-4"], 0)
+        self.money:SetPoint("RIGHT", self.rule, "BOTTOMRIGHT", 0, -(S["space-4"] + foot / 2))
+    else
+        self.note:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-4"])
+        self.money:SetPoint("TOPRIGHT", self.rule, "BOTTOMRIGHT", 0, -S["space-4"])
+    end
+    local h = y + content:GetHeight() + S["space-4"] + 1 + S["space-4"] + foot
     self.body:SetSize(self:GridWidth(), h)
 end
 
@@ -375,9 +411,7 @@ function UI.Inventory(parent, opts)
     inv.rule:SetColorTexture(UI.RGBA("gilt-faint"))
     inv.rule:SetHeight(1)
     inv.note = UI.Text(body, "caption", "ink-muted")
-    inv.note:SetPoint("TOPLEFT", inv.rule, "BOTTOMLEFT", 0, -S["space-4"])
     inv.money = UI.Money(body)
-    inv.money:SetPoint("TOPRIGHT", inv.rule, "BOTTOMRIGHT", 0, -S["space-4"])
     inv.money:Hide() -- until SetMoney: a bank holds no money
     inv:FitBody()
     return inv

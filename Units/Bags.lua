@@ -19,6 +19,10 @@
 -- character's bags or bank from anywhere, read only and dated. "All
 -- characters" turns the search into a list of everything found on every
 -- character, and where. Settings › Bags › Characters forgets one.
+--
+-- Sell junk: at a vendor, with grey items in your bags, a button in the
+-- foot sells them one at a time, each slot read again just before it sells
+-- (still grey, still sellable, not locked, the vendor still open).
 -- A built-in module written against the public API only.
 --
 -- The slots are Blizzard's own bag slot buttons (its template), each in a
@@ -485,6 +489,85 @@ function M:Foot()
     inv:SetMoney(money)
 end
 
+--------------------------------------------------------------------------------
+-- Sell junk
+--------------------------------------------------------------------------------
+
+-- A grey item the vendor will buy: its sell price per item, or nil.
+local function junkAt(bag, slot)
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    if not (info and plain(info.quality) and info.quality == 0) then return nil end
+    if plain(info.hasNoValue) and info.hasNoValue then return nil end
+    if plain(info.isLocked) and info.isLocked then return nil end
+    local price = 0
+    if info.hyperlink and plain(info.hyperlink) then
+        local get = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+        price = select(11, get(info.hyperlink)) or 0
+    end
+    return price, plain(info.stackCount) and info.stackCount or 1
+end
+
+-- The grey items in your bags and what they fetch.
+function M:Junk()
+    local n, copper = 0, 0
+    for _, bag in ipairs(self:Bags()) do
+        if bag ~= KEYRING then
+            for slot = 1, numSlots(bag) do
+                local price, count = junkAt(bag, slot)
+                if price then n, copper = n + 1, copper + price * count end
+            end
+        end
+    end
+    return n, copper
+end
+
+local function coins(copper)
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    if g > 0 then return ("%dg %ds"):format(g, s) end
+    if s > 0 then return ("%ds %dc"):format(s, c) end
+    return ("%dc"):format(c)
+end
+
+-- One grey item a tick until none is left or the vendor closes.
+function M:SellJunk()
+    if self.selling then return end
+    self.selling = C_Timer.NewTicker(0.2, function(ticker)
+        local sold = false
+        if self.atMerchant and not InCombatLockdown() then
+            for _, bag in ipairs(self:Bags()) do
+                if bag ~= KEYRING then
+                    for slot = 1, numSlots(bag) do
+                        if junkAt(bag, slot) then
+                            C_Container.UseContainerItem(bag, slot)
+                            sold = true
+                            break
+                        end
+                    end
+                end
+                if sold then break end
+            end
+        end
+        if not sold then
+            ticker:Cancel()
+            self.selling = nil
+            self:UpdateJunk()
+        end
+    end)
+end
+
+-- The Sell junk button: at a vendor with something grey to sell.
+function M:UpdateJunk()
+    if not self.inv then return end
+    local n, copper = 0, 0
+    if self.atMerchant and self:IsLive() then n, copper = self:Junk() end
+    if n > 0 then
+        self.inv:SetAction({ text = "Sell junk", onClick = function() self:SellJunk() end,
+            tooltip = { title = "Sell junk", description = ("Sells your %d grey item%s for %s. Each is checked again just before it sells."):format(n, n == 1 and "" or "s", coins(copper)) } })
+    else
+        self.inv:SetAction(nil)
+    end
+end
+
 -- A refresh a moment after the typing stops (and after the game's own item
 -- search has run).
 function M:QueueRefresh()
@@ -518,6 +601,7 @@ function M:Refresh()
         self:ShowSaved()
     end
     self:Foot()
+    self:UpdateJunk()
 end
 
 --------------------------------------------------------------------------------
@@ -862,7 +946,7 @@ function M:OnEnable()
     end)
     for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_CONTAINER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
         self:OnGameEvent(e, function()
-            if self.inv:IsShown() then self:Rebuild() end
+            if self.inv:IsShown() then self:Rebuild(); self:UpdateJunk() end
             self:RebuildBank()
             if e ~= "PLAYER_ENTERING_WORLD" then self:QueueSave() end
         end)
@@ -881,6 +965,8 @@ function M:OnEnable()
         self:HideBank()
     end)
     self:OnGameEvent("PLAYER_LEVEL_UP", function() self:QueueSave() end)
+    self:OnGameEvent("MERCHANT_SHOW", function() self.atMerchant = true; self:UpdateJunk() end)
+    self:OnGameEvent("MERCHANT_CLOSED", function() self.atMerchant = false; self:UpdateJunk() end)
     self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveMe() end)
     self:OnGameEvent("ITEM_LOCK_CHANGED", function(_, bag, slot)
         if not (plain(bag) and plain(slot) and bag and slot) then return end
