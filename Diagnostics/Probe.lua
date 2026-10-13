@@ -787,6 +787,10 @@ function ns.Probe.Command(arg)
         ns.CharacterProbe.Command(rest)
         return
     end
+    if sub == "tree" then
+        ns.TreeProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
