@@ -10,6 +10,7 @@
 --   local n = UI.Notification(parent)
 --   n:SetData({ kind, tone, category, title, body, icon = { glyph | texture,
 --               tooltip = fn(owner) },
+--               bodyTooltip = { title, description },
 --               duration, remaining, soonAt, ["until"], item = { icon,
 --               label, quality }, confirmText, actions = { { label,
 --               variant = "primary"|"quiet"|"danger", onClick,
@@ -149,6 +150,7 @@ function Note:SetData(d)
         self.body:SetValue(d.body)
         local h = math.ceil(self.body:GetStringHeight())
         self.bodyRow:SetHeight(h)
+        self.bodyRow:EnableMouse(d.bodyTooltip ~= nil)
         place(self.bodyRow, h)
     else
         self.bodyRow:Hide()
@@ -273,6 +275,9 @@ function UI.Notification(parent)
     n.body:SetJustifyH("LEFT")
     n.body:SetWordWrap(true)
     n.body:SetPoint("TOPLEFT")
+    -- bodyTooltip: what hovering the body shows (everyone still choosing)
+    n.bodyRow:SetScript("OnEnter", function(self) if n.data and n.data.bodyTooltip then UI.ShowTooltip(self, n.data.bodyTooltip) end end)
+    n.bodyRow:SetScript("OnLeave", function() UI.HideTooltip() end)
 
     n.itemRow = CreateFrame("Frame", nil, n)
     n.item = UI.Icon(n.itemRow, 28)

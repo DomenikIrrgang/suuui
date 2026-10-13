@@ -255,6 +255,26 @@ local function classColored(name, known)
     return c and ("|cff" .. c.hex .. short(name) .. "|r") or short(name)
 end
 
+-- Everyone in your group but you, by name (the roll's own list in a test).
+local function roster(roll)
+    if roll.roster then return roll.roster end
+    local out = {}
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local name = UnitName("raid" .. i)
+            if plain(name) and name and not UnitIsUnit("raid" .. i, "player") then out[#out + 1] = name end
+        end
+    else
+        for i = 1, GetNumSubgroupMembers() do
+            local name = UnitName("party" .. i)
+            if plain(name) and name then out[#out + 1] = name end
+        end
+    end
+    return out
+end
+
+local WAITING_SHOWN = 4
+
 -- The roll's card, made again from what is known.
 function M:ShowRoll(roll)
     local actions = {}
@@ -274,18 +294,33 @@ function M:ShowRoll(roll)
             }
         end
     end
-    local voted = 0
-    for _, c in ipairs(CHOICES) do voted = voted + #roll.votes[c.key] end
-    local waiting = roll.group and math.max(0, roll.group - voted) or 0
+    -- who hasn't chosen yet: by name, in class colours (you aren't listed:
+    -- your own buttons say whether you have)
+    local chose = {}
+    for _, c in ipairs(CHOICES) do
+        for _, name in ipairs(roll.votes[c.key]) do chose[short(name)] = true end
+    end
+    local waiting = {}
+    for _, name in ipairs(roster(roll)) do
+        if not chose[short(name)] then waiting[#waiting + 1] = classColored(name, roll.classes) end
+    end
     local body = {}
     if roll.bind then body[#body + 1] = roll.bind end
-    if waiting > 0 and voted > 0 then body[#body + 1] = waiting .. " still choosing" end
+    local tip
+    if #waiting > 0 then
+        local shown = {}
+        for i = 1, math.min(#waiting, WAITING_SHOWN) do shown[i] = waiting[i] end
+        local line = "Waiting on " .. table.concat(shown, ", ")
+        if #waiting > WAITING_SHOWN then line = line .. (" and %d more"):format(#waiting - WAITING_SHOWN) end
+        body[#body + 1] = line
+        tip = { title = "Still choosing · " .. #waiting, description = table.concat(waiting, ", ") }
+    end
     local q = T.color["quality-" .. (roll.quality or "common")]
     SuuUI.Notify({
         id = "suu:roll:" .. roll.id, kind = "roll", category = "Loot roll",
         icon = { texture = roll.icon, tooltip = function(owner) self:ItemTip(owner, roll) end },
         title = (q and roll.quality ~= "common") and ("|cff" .. q.hex .. roll.name .. "|r") or roll.name,
-        body = #body > 0 and table.concat(body, " · ") or nil,
+        body = #body > 0 and table.concat(body, "\n") or nil, bodyTooltip = tip,
         duration = roll.duration, remaining = roll.remaining(),
         actions = actions,
     })
@@ -461,7 +496,9 @@ function M:TestRoll()
     local start = GetTime()
     local roll = {
         id = id, test = true, icon = 134939, name = "Plans: Protector's Silvered Chain Helm", quality = "rare",
-        link = "item:251382", classes = { Ysolde = "PRIEST", Brannoc = "WARRIOR", Morrow = "ROGUE" },
+        link = "item:251382",
+        classes = { Ysolde = "PRIEST", Brannoc = "WARRIOR", Morrow = "ROGUE", Kaelith = "MAGE", Thessaly = "DRUID" },
+        roster = { "Ysolde", "Brannoc", "Morrow", "Kaelith", "Thessaly" },
         duration = 30, bind = ITEM_BIND_ON_PICKUP or "Binds when picked up",
         can = { need = true, greed = true, pass = true }, reason = {},
         votes = { need = { "Ysolde" }, greed = { "Brannoc", "Morrow" }, disenchant = {}, pass = {} }, rolled = {}, group = 5,
@@ -469,6 +506,12 @@ function M:TestRoll()
     roll.remaining = function() return math.max(0, 30 - (GetTime() - start)) end
     self.rolls[id] = roll
     self:ShowRoll(roll)
+    -- someone makes up their mind, to see the waiting line change
+    C_Timer.After(8, function()
+        if not self.rolls[id] then return end
+        table.insert(roll.votes.greed, "Kaelith")
+        self:ShowRoll(roll)
+    end)
     C_Timer.After(30, function()
         if not self.rolls[id] then return end
         self:EndRoll(id)
