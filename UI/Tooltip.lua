@@ -176,3 +176,52 @@ if type(SharedTooltip_SetBackdropStyle) == "function" then
         if skinned[tooltip] then hideBlizzardArt(tooltip) end
     end)
 end
+
+--------------------------------------------------------------------------------
+-- A spell's game tooltip with lines of SuuUI's under it (0.12)
+--------------------------------------------------------------------------------
+-- UI.SpellTooltip(owner, spellID, extra[, anchor]): GameTooltip with the
+-- spell (SetSpellByID), then `extra` (text, or a list) as last lines. The
+-- game redraws the tooltip when a spell's data arrives (the first hover of a
+-- spell not loaded yet), which drops lines added after it: these are added
+-- in a post-call too, so every draw carries them (found in game: the cost
+-- showed only on the second hover).
+
+local pending -- { id, lines }
+
+local function addExtra(tooltip)
+    for _, line in ipairs(pending.lines) do tooltip:AddLine(line, 1, 1, 1, true) end
+end
+
+local hooked = false
+local function hookSpellTips()
+    if hooked then return end
+    hooked = true
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType and Enum.TooltipDataType.Spell then
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, function(tooltip, data)
+            if tooltip ~= GameTooltip or not pending then return end
+            local id = data and data.id
+            if issecretvalue and issecretvalue(id) then return end
+            if id == pending.id and tooltip:GetOwner() == pending.owner then
+                addExtra(tooltip)
+                pending.added = true
+            end
+        end)
+        hooked = "post"
+    end
+    GameTooltip:HookScript("OnHide", function() pending = nil end)
+end
+
+function UI.SpellTooltip(owner, spellID, extra, anchor)
+    hookSpellTips()
+    local lines = type(extra) == "table" and extra or (extra and { extra } or {})
+    pending = { id = spellID, owner = owner, lines = lines }
+    GameTooltip:SetOwner(owner, anchor or "ANCHOR_RIGHT")
+    GameTooltip:SetSpellByID(spellID)
+    -- no post-call in this client, or it didn't run: add them now
+    if hooked ~= "post" or not pending.added then
+        addExtra(GameTooltip)
+        pending.added = true
+    end
+    GameTooltip:Show()
+end

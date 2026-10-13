@@ -74,10 +74,7 @@ function Card:Row(i)
         local s = r.spell
         if not s then return end
         if s.spellID then
-            GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-            GameTooltip:SetSpellByID(s.spellID)
-            if s.meta then GameTooltip:AddLine(s.meta, 1, 1, 1, true) end
-            GameTooltip:Show()
+            UI.SpellTooltip(r, s.spellID, s.meta)
             return
         end
         UI.ShowTooltip(r, { title = s.name, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text, meta = s.meta })

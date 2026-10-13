@@ -265,10 +265,7 @@ end
 function M:ShowUnlearnedTip(owner, s)
     local id = self:SpellIDFor(s)
     if id then
-        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-        GameTooltip:SetSpellByID(id)
-        GameTooltip:AddLine(self:TrainLine(s), 1, 1, 1, true)
-        GameTooltip:Show()
+        UI.SpellTooltip(owner, id, self:TrainLine(s))
         return
     end
     UI.ShowTooltip(owner, { title = s.label, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text,
