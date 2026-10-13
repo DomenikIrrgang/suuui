@@ -14,6 +14,7 @@
 --                          -- "passive" | "trainable" | "future" }, a page's worth
 --   book:SetPage(page, pages); book.onPage = fn(delta)
 --   book.cells[i].button   -- a SecureActionButton (the owner sets what it casts)
+--   book:FitRows()         -- rows to the page's height (a page holds rows × 2)
 --   book.onEnter / onLeave / onDragStart = fn(i, cell)
 -- Cells are secure buttons: SetSpells changes only their look; their
 -- attributes are the owner's, and only out of combat.
@@ -114,6 +115,20 @@ function Book:SetSpells(list)
             c:Hide()
         end
     end
+end
+
+-- As many rows as the page's height holds (out of combat: the cells are
+-- secure buttons). Returns the rows.
+function Book:FitRows()
+    local h = self.main:GetHeight()
+    if not h or h <= 0 or InCombatLockdown() then return self.rows end
+    local room = h - (30 + S["space-4"]) - self.foot:GetHeight() - S["space-4"]
+    local rows = math.max(1, math.floor((room + S["space-4"]) / (ICON + S["space-4"])))
+    if rows ~= self.rows then
+        self.rows = rows
+        self.grid:SetHeight(rows * ICON + (rows - 1) * S["space-4"])
+    end
+    return rows
 end
 
 function Book:SetSchools(list)

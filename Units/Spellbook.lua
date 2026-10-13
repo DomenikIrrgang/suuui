@@ -31,7 +31,6 @@ local M = SuuUI.RegisterModule({
 
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
-local PER_PAGE = 12
 
 local function coins(copper)
     copper = tonumber(copper) or 0
@@ -224,10 +223,12 @@ function M:Render()
     self.book:SetSchools(tabs)
     self.book:SetHead(schools[self.school].name, toTrain)
     self.book:SetSwitches(self:Get("unlearned"), self:Get("allRanks"))
-    local pages = math.max(1, math.ceil(#current / PER_PAGE))
+    -- as many as the page holds
+    local perPage = self.book:FitRows() * 2
+    local pages = math.max(1, math.ceil(#current / perPage))
     self.page = math.min(math.max(1, self.page or 1), pages)
     local slice = {}
-    for i = 1, PER_PAGE do slice[i] = current[(self.page - 1) * PER_PAGE + i] end
+    for i = 1, perPage do slice[i] = current[(self.page - 1) * perPage + i] end
     self.slice = slice
     self.book:SetSpells(slice)
     self.book:SetPage(self.page, pages)
@@ -308,6 +309,7 @@ function M:Build()
         end
     end
     book:HookScript("OnShow", function() self:Render() end)
+    book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
     self:Render()
 end
 

@@ -6,9 +6,9 @@
 --         Spellbook; protected, so its parts move only out of combat) and the
 --         Legacy window (LegacySystemFrame: Tree, Challenges, Reward track):
 --         SuuUI's header, the tabs as text tabs along the top, Blizzard's
---         metal frame, portrait and title strip out of sight. The spells
---         window keeps Blizzard's place (it is 1218 wide, centred); Legacy
---         opens lined up under the micro menu.
+--         metal frame, portrait and title strip out of sight. Both open
+--         lined up under the micro menu (the protected spells window moved
+--         only out of combat).
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -76,6 +76,9 @@ function M:SkinSpells()
     local chrome = UI.SkinWindow(f, {
         title = "Talents", icon = "book", binding = "TOGGLETALENTS",
         close = _G.PlayerSpellsFrameCloseButton, topInset = 20,
+        -- under the micro menu like the others (found in game: Blizzard's
+        -- place put SuuUI's header against the top of the screen)
+        under = "microMenu",
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.PlayerSpellsFrameBg, f.TopTileStreaks },
     })
     -- the tabs (Blizzard's tab system, bottom left) along the top
