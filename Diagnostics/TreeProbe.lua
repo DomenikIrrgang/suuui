@@ -5,7 +5,8 @@
 -- its text and font. Saved in SuuUIProbe.trees[name] on /reload (each run
 -- replaces that name's entry).
 --
---   /suu probe tree CharacterFrame 4   one frame by global name
+--   /suu probe tree CharacterFrame 4   one frame by global name, or a path
+--                                      (PaperDollFrame.EquipmentManagerPane)
 --   /suu probe tree character          the Character window and its panes
 --                                      (run it on each tab: a pane's rows
 --                                      exist once it has been shown)
@@ -109,7 +110,9 @@ function TP.Command(arg)
     local names = PRESETS[name:lower()] or { name }
     local done = {}
     for _, n in ipairs(names) do
-        local f = _G[n]
+        -- a global name, or a path through keys ("PaperDollFrame.EquipmentManagerPane")
+        local f = _G
+        for part in n:gmatch("[^%.]+") do f = type(f) == "table" and f[part] or nil end
         if type(f) == "table" and f.GetObjectType then
             local out = { "at " .. date("%H:%M:%S") }
             walk(f, 0, depth, out, {})
