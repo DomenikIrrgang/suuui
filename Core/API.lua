@@ -234,6 +234,14 @@ API.UI.TRACKER_HEAD_H = UI.TRACKER_HEAD_H -- the tracker head's height (its togg
 -- 0.11: notifications
 API.UI.Notification = UI.Notification -- Notification(parent) -> n:SetData(d), n:SetRemaining(s), n:SetTitle(text)
 API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { max }) -> s:SetItems(list, inCombat), s:CardFor(id)
+-- 0.12: open or close the bags without Blizzard's bag functions (called
+-- from an addon they taint Esc in combat): SuuUI's bags when that module is
+-- on; else Blizzard's (ToggleAllBags).
+function API.ToggleBags()
+    local m = Modules.Get("bags")
+    if m and m:IsEnabled() and m.Toggle then return m:Toggle() end
+    ToggleAllBags()
+end
 -- 0.11: bags
 API.UI.SkinItemSlot = UI.SkinItemSlot -- SkinItemSlot(button) -> skin:SetItem({ icon, count, quality, dim, locked } or nil)
 API.UI.ItemSlot = UI.ItemSlot   -- ItemSlot(parent[, size]) -> a plain slot (b.skin)

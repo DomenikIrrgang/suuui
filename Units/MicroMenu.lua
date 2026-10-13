@@ -39,8 +39,10 @@ local ITEMS = {
     { key = "shop", glyph = "coin", label = "Shop", click = "StoreMicroButton" },
     { key = "worldmap", glyph = "map", label = "World map", onClick = function() ToggleWorldMap() end, bind = "TOGGLEWORLDMAP",
       open = function() return WorldMapFrame and WorldMapFrame:IsShown() end },
-    { key = "bags", glyph = "bag", label = "Bags", onClick = function() ToggleAllBags() end, bind = "OPENALLBAGS",
+    { key = "bags", glyph = "bag", label = "Bags", onClick = function() SuuUI.ToggleBags() end, bind = "OPENALLBAGS",
       open = function()
+          -- SuuUI's bags keep their own state (Blizzard's frames, hidden, may differ)
+          if _G.SuuUIBags then return _G.SuuUIBags:IsShown() end
           if ContainerFrameCombinedBags and ContainerFrameCombinedBags:IsShown() then return true end
           for i = 1, 6 do
               local f = _G["ContainerFrame" .. i]

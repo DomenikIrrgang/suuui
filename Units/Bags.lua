@@ -760,12 +760,47 @@ function M:HideBlizzardBags()
     end
 end
 
-local function anyBagOpen()
-    if not IsBagOpen then return false end
-    for bag = KEYRING, REAGENT do
-        if IsBagOpen(bag) then return true end
+-- Open or closed is SuuUI's own state, following Blizzard's open, close and
+-- toggle calls (hooked) but never calling them: Blizzard's bag code run from
+-- SuuUI's code writes its frames' fields as SuuUI's, and Esc, which closes
+-- the bags first, then counted as an addon's in combat and couldn't close
+-- any window ("Interface action failed", found in game with the spells
+-- window: /suu probe taint). Of the calls of one moment the last to return
+-- (the outermost: ToggleAllBags after the CloseBag inside it) decides.
+local OPENS = { OpenAllBags = true, OpenBag = true, OpenBackpack = true }
+local CLOSES = { CloseAllBags = true, CloseBag = true, CloseBackpack = true }
+
+function M:BagCall(name, frame)
+    local shown = self.inv and self.inv:IsShown() or false
+    if OPENS[name] then
+        -- opened for a window (a vendor, the mail): closed with it, unless
+        -- the bags were open before (Blizzard's own rule)
+        if name == "OpenAllBags" then
+            if not shown and not self.wantOpen then self.openedBy = frame and frame.GetName and frame:GetName() or nil end
+        end
+        self.wantOpen = true
+    elseif CLOSES[name] then
+        if name == "CloseAllBags" and frame and frame.GetName then
+            if frame:GetName() ~= self.openedBy then return end
+        end
+        self.openedBy = nil
+        self.wantOpen = false
+    else -- a toggle
+        self.openedBy = nil
+        self.wantOpen = not shown
     end
-    return false
+    self:QueueSync()
+end
+
+-- SuuUI's own ways (the micro menu, the close button): its window only.
+function M:SetOpen(on)
+    self.openedBy = nil
+    self.wantOpen = on and true or false
+    self:Sync()
+end
+
+function M:Toggle()
+    self:SetOpen(not (self.inv and self.inv:IsShown()))
 end
 
 -- The bags at their place, or beside the bank while it is open.
@@ -782,7 +817,7 @@ end
 
 function M:Sync()
     if not self.inv then return end
-    local open = anyBagOpen()
+    local open = self.wantOpen and true or false
     if open and not self.inv:IsShown() then
         self:PlaceBags()
         self.inv:Show()
@@ -944,7 +979,7 @@ function M:OnEnable()
         self.inv:SetToplevel(true)
         self.inv:EnableMouse(true)
         self.inv:Hide()
-        self.inv.onClose = function() CloseAllBags() end
+        self.inv.onClose = function() self:SetOpen(false) end
         self.inv.suuManagedShow = true -- it follows Blizzard's bags, not edit mode
         self.inv.sort:SetScript("OnClick", function()
             if C_Container.SortBags then pcall(C_Container.SortBags) end
@@ -1002,11 +1037,10 @@ function M:OnEnable()
         for _, name in ipairs({ "ToggleAllBags", "OpenAllBags", "CloseAllBags", "ToggleBag", "OpenBag", "CloseBag",
                                 "ToggleBackpack", "OpenBackpack", "CloseBackpack" }) do
             if type(_G[name]) == "function" then
-                hooksecurefunc(name, function() if self:IsEnabled() then self:QueueSync() end end)
+                hooksecurefunc(name, function(frame) if self:IsEnabled() then self:BagCall(name, frame) end end)
             end
         end
     end
-    for _, e in ipairs({ "BAG_OPEN", "BAG_CLOSED" }) do self:OnGameEvent(e, function() self:QueueSync() end) end
     -- what changes in the bags
     self:OnGameEvent("BAG_UPDATE", function(_, bag)
         if not plain(bag) then return end
