@@ -10,6 +10,11 @@ SuuUI is built with [wowlua](https://github.com/DomenikIrrgang/wowlua) (`wowlua 
 - `dist/` is build output; never edit it.
 - Release builds bundle every file into one. Code must not depend on its own file name: `debugstack` shows `SuuUI/SuuUI.lua` there (wowlua warns with W6001). `wowlua trace` maps in-game errors from a bundled build back to the source lines.
 
+## Builds per site
+
+- **CurseForge** (and Wago or WoWInterface, when added) must get **readable** code: the `readable` profile, bundled but never minified and without optimizations. Addon sites do not accept minified code; never give their targets a minifying level.
+- **GitHub Releases** carry SuuUI's own builds for the website: the `release` profile, always fully optimized (`max`, every optimization on).
+
 ## Versions
 
 SuuUI follows [semantic versioning](https://semver.org): `MAJOR.MINOR.PATCH`.
