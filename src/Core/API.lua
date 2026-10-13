@@ -253,6 +253,7 @@ API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one 
 API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
 API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
 API.UI.TalentTree = UI.TalentTree -- TalentTree(parent) -> SetSpecs(list, viewing), SetData({ name, available, pending, editable, hint, trees = { { name, points, nodes, links } } }); onClick, onRemove, onEnter, onLeave, onApply, onUndo, onSpec, onActivate
+API.UI.TALENT_TREE_W = UI.TALENT_TREE_W -- the width the Talents page's three trees need
 API.UI.LevelUp = UI.LevelUp -- LevelUp(parent) -> c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more, cost })
 API.UI.Reskin = UI.Reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
 API.UI.ReskinScrollBox = UI.ReskinScrollBox
