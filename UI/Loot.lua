@@ -1,0 +1,110 @@
+-- UI/Loot.lua
+-- The loot window (design board "Loot window and loot rolls"): a panel
+-- titled "Loot" with the corpse's name as its meta, one row per thing to
+-- take: its slot (36px, quality border, count) and its name in its quality
+-- colour; money as the coin and "42s 3c".
+--
+--   local lw = UI.LootWindow(parent, { name })
+--   lw:SetSource("Ember Hound")
+--   lw:SetItems({ { icon, count, quality, label, copper, locked }, … })
+--   lw.onClick = fn(index, mouseButton)   -- a row clicked
+--   lw.onEnter = fn(index, row), lw.onLeave = fn(index, row)
+--   lw.onClose = fn()                     -- the close button
+--   lw:FirstSlotOffset()                  -- the first slot's centre from the
+--                                         -- panel's top left (to put it
+--                                         -- under the cursor)
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+local S = T.space
+
+local SLOT = T.size["slot"]
+local GAP = S["space-2"]
+local WIDTH = 260
+local BODY_W = WIDTH - S["space-5"] * 2
+
+local LW = {}
+
+local function row(lw, i)
+    local r = lw.rows[i]
+    if r then return r end
+    r = CreateFrame("Button", nil, lw.body)
+    r:SetSize(BODY_W, SLOT)
+    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    r.hover = UI.Fill(r, "surface-raised", "BACKGROUND")
+    r.hover:SetAllPoints()
+    r.hover:Hide()
+    r.slot = UI.ItemSlot(r)
+    r.slot:SetPoint("LEFT")
+    r.slot:EnableMouse(false)
+    r.label = UI.Text(r, "label", "ink")
+    r.label:SetPoint("LEFT", r.slot, "RIGHT", S["space-4"], 0)
+    r.label:SetPoint("RIGHT", -S["space-3"], 0)
+    r.label:SetJustifyH("LEFT")
+    r.money = UI.Money(r)
+    r.money:SetPoint("LEFT", r.slot, "RIGHT", S["space-4"], 0)
+    r.money.text:ClearAllPoints()
+    r.money.text:SetPoint("LEFT")
+    r:SetScript("OnClick", function(self, button) if lw.onClick then lw.onClick(self.index, button) end end)
+    r:SetScript("OnEnter", function(self)
+        self.hover:Show()
+        lw.skins[self].hover = true
+        lw.skins[self]:Draw()
+        if lw.onEnter then lw.onEnter(self.index, self) end
+    end)
+    r:SetScript("OnLeave", function(self)
+        self.hover:Hide()
+        lw.skins[self].hover = false
+        lw.skins[self]:Draw()
+        if lw.onLeave then lw.onLeave(self.index, self) end
+    end)
+    lw.skins[r] = r.slot.skin
+    lw.rows[i] = r
+    return r
+end
+
+function LW:SetSource(text)
+    self:SetTitle("Loot", text or "")
+end
+
+-- items: { { index, icon, count, quality, label, copper, locked } … } in
+-- order; `index` is what onClick gets (the loot slot), default the position.
+function LW:SetItems(items)
+    for i, item in ipairs(items) do
+        local r = row(self, i)
+        r.index = item.index or i
+        r.slot.skin:SetItem({ icon = item.icon, count = item.count, quality = item.quality or "common", locked = item.locked })
+        if item.copper then
+            r.label:Hide()
+            r.money:SetCopper(item.copper)
+            r.money:Show()
+        else
+            r.money:Hide()
+            r.label:Show()
+            r.label:SetValue(item.label or "")
+            local q = item.quality
+            r.label:SetColor((q and q ~= "common") and ("quality-" .. q) or "ink")
+        end
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * (SLOT + GAP))
+        r:Show()
+    end
+    for i = #items + 1, #self.rows do self.rows[i]:Hide() end
+    local n = math.max(1, #items)
+    self.body:SetSize(BODY_W, n * SLOT + (n - 1) * GAP)
+end
+
+function LW:FirstSlotOffset()
+    return S["space-5"] + SLOT / 2, self:BodyTop() + SLOT / 2
+end
+
+function UI.LootWindow(parent, opts)
+    opts = opts or {}
+    local lw = UI.Panel(parent, { name = opts.name, title = "Loot", meta = "", closable = true,
+        onClose = function(p) if p.onClose then p.onClose() else p:Hide() end end })
+    Mixin(lw, LW)
+    lw.rows, lw.skins = {}, {}
+    lw:SetItems({})
+    return lw
+end

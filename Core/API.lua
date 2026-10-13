@@ -238,7 +238,8 @@ API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { m
 API.UI.SkinItemSlot = UI.SkinItemSlot -- SkinItemSlot(button) -> skin:SetItem({ icon, count, quality, dim, locked } or nil)
 API.UI.ItemSlot = UI.ItemSlot   -- ItemSlot(parent[, size]) -> a plain slot (b.skin)
 API.UI.Money = UI.Money         -- Money(parent) -> m:SetCopper(n)
-API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
+API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name, sortTip, characters }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
+API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
