@@ -85,6 +85,16 @@ function M:Collect()
     local info = call(C_Traits.GetConfigInfo, configID)
     local treeID = info and info.treeIDs and info.treeIDs[1]
     if not treeID then return nil end
+    -- what is learned: each node's rank while nothing is planned (the
+    -- game's committed rank counts planned ones too on Forever: found in
+    -- game, Apply stayed off and right-click did nothing)
+    local staged = call(C_Traits.ConfigHasStagedChanges, configID) == true
+    self.learned = self.learned or {}
+    if not staged or self.learnedFor ~= configID then
+        self.learnedFor = configID
+        if not staged then self.learned = {} end
+    end
+    local learned = self.learned
     -- the nodes, placed
     local nodes, byID = {}, {}
     local minY
@@ -93,11 +103,14 @@ function M:Collect()
         if ni and ni.isVisible ~= false and plain(ni.posX) and plain(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
             local talent = talentOf(configID, ni)
             if talent then
-                local active = ni.activeRank or 0
-                local current = ni.currentRank or active
+                local current = ni.currentRank or ni.activeRank or 0
+                if not staged then learned[nodeID] = current end
+                local base = learned[nodeID]
+                if base == nil then base = math.min(ni.activeRank or 0, current) end
+                base = math.min(base, current)
                 local n = {
                     id = nodeID, x = ni.posX, y = ni.posY, max = ni.maxRanks,
-                    rank = active, pending = math.max(0, current - active),
+                    rank = base, pending = current - base,
                     canPurchase = ni.canPurchaseRank and true or false,
                     canRefund = ni.canRefundRank and true or false,
                     open = ni.isAvailable and ni.meetsEdgeRequirements and true or false,
@@ -172,7 +185,9 @@ function M:Collect()
     if currency and currency[1] and plain(currency[1].quantity) then available = currency[1].quantity end
     local pending = 0
     for _, n in ipairs(nodes) do pending = pending + n.pending end
-    return { configID = configID, treeID = treeID, trees = trees, available = available, pending = pending, info = info }
+    -- planned changes the counts can't see still make Apply and Undo work
+    if staged and pending == 0 then pending = 1; self.unseenStaged = true else self.unseenStaged = nil end
+    return { configID = configID, treeID = treeID, trees = trees, available = available, pending = pending, info = info, staged = staged }
 end
 
 -- Why a node can't take a point: the tree's points, or a talent above it.
