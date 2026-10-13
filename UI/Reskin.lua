@@ -130,6 +130,82 @@ function UI.ReskinStatusBar(bar)
     end
 end
 
+-- A bar Blizzard draws itself (a frame with a Fill texture it sizes and
+-- tints: the reputation's standing bars): the fill flat in Blizzard's tint
+-- (the standing's colour), a track in a gilt-hairline edge, the text centred.
+function UI.ReskinFillBar(bar)
+    local fill = bar and bar.Fill
+    if not fill then return end
+    if not bar.suuFillBar then
+        bar.suuFillBar = true
+        for _, r in ipairs({ bar:GetRegions() }) do
+            local t = r:GetObjectType()
+            if t == "Texture" and r ~= fill then r:SetAlpha(0) end
+            if t == "MaskTexture" then pcall(fill.RemoveMaskTexture, fill, r) end
+        end
+        local h = math.max(6, math.min(14, fill:GetHeight() or 12))
+        local track = CreateFrame("Frame", nil, bar)
+        track:SetPoint("LEFT")
+        track:SetPoint("RIGHT")
+        track:SetHeight(h)
+        track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
+        UI.Fill(track, "track"):SetAllPoints()
+        UI.Border(track, "gilt-hairline")
+        fill:SetHeight(h - 2)
+        local flattening = false
+        local function flat()
+            if flattening then return end
+            flattening = true
+            fill:SetTexture(WHITE)
+            flattening = false
+        end
+        hooksecurefunc(fill, "SetAtlas", flat)
+        bar.suuFlat = flat
+    end
+    bar.suuFlat()
+    for _, r in ipairs({ bar:GetRegions() }) do
+        if r:GetObjectType() == "FontString" then
+            ns.Fonts.Apply(r, "numeric")
+            r:SetJustifyH("CENTER")
+            r:SetTextColor(UI.RGBA("ink"))
+            r:SetShadowColor(0, 0, 0, 1)
+            r:SetShadowOffset(0, -1)
+        end
+    end
+end
+
+-- Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge, its text
+-- in label ink, a chevron on the right.
+function UI.ReskinDropdown(d)
+    if not d or d.suuDropdown then return end
+    for _, r in ipairs({ d:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+    end
+    for _, key in ipairs({ "Arrow", "Background" }) do
+        if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end
+    end
+    local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
+    bg:SetColorTexture(UI.RGBA("surface-sunk"))
+    bg:SetAllPoints()
+    bg.suuArt = true
+    local edge = UI.Border(d, "gilt-line")
+    local chev = d:CreateTexture(nil, "OVERLAY", nil, 7)
+    chev:SetTexture(GLYPHS .. "chevronDown.tga")
+    chev:SetSize(12, 12)
+    chev:SetPoint("RIGHT", -S["space-3"], 0)
+    chev:SetVertexColor(UI.RGBA("ink-muted"))
+    chev.suuArt = true
+    d:HookScript("OnEnter", function() edge:SetColor("gilt") end)
+    d:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
+    local text = d.Text or d.text
+    if text then
+        ns.Fonts.Apply(text, "label")
+        text:SetTextColor(UI.RGBA("ink"))
+        text:SetShadowOffset(0, 0)
+    end
+    d.suuDropdown = true
+end
+
 function UI.ReskinCheckButton(b)
     if not b or b.suuCheck then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
@@ -164,8 +240,15 @@ end
 -- label in `label` ink; dimmed while disabled.
 function UI.ReskinButton(b)
     if not b or b.suuButton then return end
-    for _, key in ipairs({ "Left", "Middle", "Right", "LeftSeparator", "RightSeparator" }) do
+    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do
         if b[key] and b[key].SetAlpha then b[key]:SetAlpha(0) end
+    end
+    -- any other button art (an atlas with "button" in it)
+    for _, r in ipairs({ b:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then
+            local a = (ask(r, "GetAtlas") or ""):lower()
+            if a:find("button") then r:SetAlpha(0) end
+        end
     end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
         local t = ask(b, get)
@@ -209,8 +292,8 @@ function UI.ReskinEditBox(e)
     end
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
     bg:SetColorTexture(UI.RGBA("surface-sunk"))
-    bg:SetPoint("TOPLEFT", -4, 2)
-    bg:SetPoint("BOTTOMRIGHT", 2, -2)
+    bg:SetPoint("TOPLEFT", -4, -1)
+    bg:SetPoint("BOTTOMRIGHT", 0, 1)
     local holder = CreateFrame("Frame", nil, e)
     holder:SetPoint("TOPLEFT", bg)
     holder:SetPoint("BOTTOMRIGHT", bg)
@@ -256,7 +339,14 @@ function UI.ReskinCollapseButton(b)
 end
 
 local function isPanelButton(b)
-    if b.Left and b.Right and b.Middle then return true end
+    if b.Left and b.Right and (b.Middle or b.Center) then return true end
+    -- art with "button" in its atlas (not a list's collapse bar or a minus/plus)
+    for _, r in ipairs({ b:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then
+            local a = (ask(r, "GetAtlas") or ""):lower()
+            if a:find("button") and not a:find("list") and not a:find("minus") and not a:find("plus") then return true end
+        end
+    end
     local t = ask(b, "GetNormalTexture")
     if not t then return false end
     local name = (ask(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
@@ -311,6 +401,13 @@ local function reskinTexture(t, ctx)
     if a ~= "" and matchesAny(a, HIDE) then
         if a:find("collapseexpand") then ctx.head = true end
         t:SetAlpha(0)
+    elseif a:find("checkmark") and not a:find("minimal") and not t.suuMoved then
+        -- a list row's check (the equipment set you wear): its top right corner
+        local parent = t:GetParent()
+        t.suuMoved = true
+        t:ClearAllPoints()
+        t:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -S["space-2"], -S["space-2"])
+        t:SetSize(12, 12)
     elseif a:find("minus") or a:find("plus") then
         t:SetDesaturated(true)
         t:SetVertexColor(UI.RGBA("gilt-text"))
@@ -328,6 +425,14 @@ local function pass(f, depth, ctx)
     if kind == "StatusBar" then UI.ReskinStatusBar(f); return end
     if kind == "CheckButton" and not f.suuNoCheck then UI.ReskinCheckButton(f) end
     if kind == "EditBox" then UI.ReskinEditBox(f) end
+    if kind == "DropdownButton" or (f.Arrow and f.Text and kind == "Button" and not f.suuButton) then
+        UI.ReskinDropdown(f)
+        return
+    end
+    if f.Fill and ask(f.Fill, "GetObjectType") == "Texture" then
+        local a = (ask(f.Fill, "GetAtlas") or ""):lower()
+        if a:find("stat%-bar") or f.suuFillBar then UI.ReskinFillBar(f); return end
+    end
     if kind == "Button" then
         local key = ask(f, "GetParentKey") or ""
         if key:find("Collapse") or key:find("Expand") then UI.ReskinCollapseButton(f)

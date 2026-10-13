@@ -262,7 +262,22 @@ function M:SkinSetPopup()
     UI.Border(edge, "gilt-line")
     local jewel = UI.Diamond(edge, 7, "gilt")
     jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
-    pop:HookScript("OnShow", function() C_Timer.After(0, function() UI.Reskin(pop) end) end)
+    -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
+    local box = pop.BorderBox
+    local okay = box and (box.OkayButton or box.OkButton)
+    local grid = pop.IconSelector
+    local function fit()
+        if grid and okay then
+            grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (okay:GetTop() and pop:GetBottom())
+                and (okay:GetTop() - pop:GetBottom() + S["space-4"]) or 44)
+        end
+    end
+    pop:HookScript("OnShow", function()
+        C_Timer.After(0, function()
+            UI.Reskin(pop)
+            fit()
+        end)
+    end)
 end
 
 function M:UpdateSlots()
