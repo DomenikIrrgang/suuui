@@ -308,7 +308,9 @@ end
 -- The side buttons: Stats | Titles | Sets as a segmented row
 --------------------------------------------------------------------------------
 
-local SIDE = { { tab = 1, label = "Stats" }, { tab = 2, label = "Titles" }, { tab = 3, label = "Sets" } }
+-- Blizzard's second side button is the equipment sets, the third the
+-- titles (found in game); shown as Stats | Titles | Sets.
+local SIDE = { { tab = 1, label = "Stats" }, { tab = 3, label = "Titles" }, { tab = 2, label = "Sets" } }
 
 function M:SkinSidebar()
     local tabs = _G.PaperDollSidebarTabs
@@ -326,6 +328,7 @@ function M:SkinSidebar()
     for _, def in ipairs(SIDE) do
         local b = _G["PaperDollSidebarTab" .. def.tab]
         if b then
+            b.suuNoCheck = true
             alphaRegions(b)
             if b.Icon then b.Icon:SetAlpha(0) end
             for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture" }) do
@@ -395,16 +398,64 @@ function M:SkinPaperDoll()
     self:SkinModel()
     self:SkinStatsPane()
     self:SkinSidebar()
-    -- the toggle for the right pane: a small square with SuuUI's edge
+    -- the toggle for the right pane: a small square with SuuUI's edge and a
+    -- chevron pointing the way the pane goes
     local toggle = _G.CharacterFrameRightPaneToggleButton
     if toggle then
-        alphaRegions(toggle)
+        local function hideArt()
+            for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+                local t = toggle[get] and toggle[get](toggle)
+                if t then t:SetAlpha(0) end
+            end
+            for _, r in ipairs({ toggle:GetRegions() }) do
+                if r ~= toggle.suuChevron and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+            end
+        end
         local edge = UI.Border(toggle, "gilt-line")
-        local chev = UI.Chevron(toggle, "ink-muted")
+        local chev = toggle:CreateTexture(nil, "OVERLAY", nil, 7)
+        chev:SetSize(14, 14)
         chev:SetPoint("CENTER")
+        chev:SetVertexColor(UI.RGBA("ink-muted"))
+        toggle.suuChevron = chev
+        local right = _G.CharacterFrameRightPaneHost
+        local function draw()
+            hideArt()
+            chev:SetAlpha(1)
+            local open = right and right:IsShown()
+            chev:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. (open and "chevronLeft" or "chevronRight") .. ".tga")
+        end
         toggle:SetSize(22, 22)
-        toggle:HookScript("OnEnter", function() edge:SetColor("gilt") end)
-        toggle:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
+        toggle:HookScript("OnEnter", function() edge:SetColor("gilt"); chev:SetVertexColor(UI.RGBA("ink")) end)
+        toggle:HookScript("OnLeave", function() edge:SetColor("gilt-line"); chev:SetVertexColor(UI.RGBA("ink-muted")) end)
+        toggle:HookScript("OnClick", function() C_Timer.After(0, draw) end)
+        if right then
+            right:HookScript("OnShow", draw)
+            right:HookScript("OnHide", draw)
+        end
+        draw()
+    end
+    self:SkinPanes()
+end
+
+--------------------------------------------------------------------------------
+-- The other tabs, the titles and the equipment sets: Blizzard's lists and
+-- detail panes through UI.Reskin (rows, category bars, bars, check buttons)
+--------------------------------------------------------------------------------
+
+local PANES = { "ReputationFrame", "SkillsFrame", "PVPRankFrame", "TokenFrame", "StatisticsFrame" }
+
+function M:SkinPanes()
+    local function watch(f)
+        if not f or f.suuPane then return end
+        f.suuPane = true
+        f:HookScript("OnShow", function() C_Timer.After(0, function() UI.Reskin(f) end) end)
+        if f:IsShown() then UI.Reskin(f) end
+    end
+    for _, name in ipairs(PANES) do watch(_G[name]) end
+    local pd = _G.PaperDollFrame
+    if pd then
+        watch(pd.TitleManagerPane)
+        watch(pd.EquipmentManagerPane)
     end
 end
 

@@ -1,0 +1,272 @@
+-- UI/Reskin.lua
+-- Blizzard's list and detail parts in SuuUI's look, restyled in place (Phase
+-- 3's windows): rows, collapsible category bars, status bars, check
+-- buttons, the thin scrollbar, dividers. Clicks and data stay Blizzard's; a
+-- pass only changes how things look, so it can run again whenever Blizzard
+-- redraws (each ScrollBox update).
+--
+--   UI.Reskin(frame)              -- the frame and everything in it, once more
+--   UI.ReskinScrollBox(box)       -- its rows now and after every update
+--   UI.ReskinStatusBar(bar)       -- a flat bar on a track, standing colours kept
+--   UI.ReskinCheckButton(button)  -- a 16px box, arcane check
+--   UI.ReskinScrollBar(bar)       -- no track art, a 2px gilt-line thumb
+--
+-- What a pass does, by what it finds (Blizzard's atlas names, probed in the
+-- Character window 2026-10-13):
+--   *collapseExpand*, *ScrollLine*, *insideframe*, *stat-bar-BG*, the
+--   panes' backgrounds: hidden
+--   a row's minus/plus state icon: tinted gilt-text
+--   a category row (one with a collapse/expand bar): its name in `header`
+--   gilt-text, a gilt-faint rule under it
+--   *highlight*/*hover* textures: surface-raised; *select* ones: arcane-soft
+--   text: Blizzard's yellow and white become ink, grey ink-muted, green fel,
+--   red ember-text; the font follows the text's size (label, body, caption);
+--   big titles become `header` gilt-text
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+local S = T.space
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local isSecret = issecretvalue or function() return false end
+
+local HIDE = { "collapseexpand", "scrollline", "insideframe", "stat%-bar%-bg", "stat%-bg", "%-info%-.*%-bg",
+               "stattab", "button%-list%-header", "common%-search%-border", "plunderstorm" }
+local BAR_COLORS = {
+    red = "rep-hostile", orange = "rep-unfriendly", yellow = "rep-neutral", green = "rep-friendly",
+    blue = "progress-fill", purple = "arcane", gold = "gilt-text",
+}
+
+local function ask(r, method, ...)
+    if type(r[method]) ~= "function" then return nil end
+    local ok, a, b, c, d = pcall(r[method], r, ...)
+    if ok then return a, b, c, d end
+end
+
+local function matchesAny(s, list)
+    for _, p in ipairs(list) do if s:find(p) then return true end end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- Pieces
+--------------------------------------------------------------------------------
+
+function UI.ReskinScrollBar(bar)
+    if not bar or bar.suuReskinned then return end
+    bar.suuReskinned = true
+    local track = bar.Track
+    if track then
+        for _, r in ipairs({ track:GetRegions() }) do r:SetAlpha(0) end
+        local thumb = track.Thumb
+        if thumb then
+            for _, r in ipairs({ thumb:GetRegions() }) do r:SetAlpha(0) end
+            local t = thumb:CreateTexture(nil, "OVERLAY")
+            t:SetColorTexture(UI.RGBA("gilt-line"))
+            t:SetPoint("TOP")
+            t:SetPoint("BOTTOM")
+            t:SetWidth(2)
+        end
+    end
+    for _, key in ipairs({ "Back", "Forward" }) do
+        if bar[key] then bar[key]:SetAlpha(0) end
+    end
+end
+
+-- A flat fill on a track inside a gilt-hairline edge, as tall as Blizzard's
+-- fill; the colour from the fill's atlas (standing colours kept).
+function UI.ReskinStatusBar(bar)
+    if not bar then return end
+    local fill = ask(bar, "GetStatusBarTexture")
+    local atlas = fill and ask(fill, "GetAtlas")
+    if atlas and atlas ~= "" then bar.suuAtlas = atlas end
+    if not bar.suuReskinned then
+        bar.suuReskinned = true
+        for _, r in ipairs({ bar:GetRegions() }) do
+            local t = r:GetObjectType()
+            if t == "Texture" and r ~= fill then r:SetAlpha(0) end
+            if t == "MaskTexture" and fill then pcall(fill.RemoveMaskTexture, fill, r) end
+        end
+        local h = (fill and fill:GetHeight() or 12)
+        if h < 4 or h > bar:GetHeight() then h = math.min(14, bar:GetHeight()) end
+        local track = CreateFrame("Frame", nil, bar)
+        track:SetPoint("LEFT")
+        track:SetPoint("RIGHT")
+        track:SetHeight(h)
+        track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
+        UI.Fill(track, "track"):SetAllPoints()
+        UI.Border(track, "gilt-hairline")
+        bar.suuTrack = track
+    end
+    if fill then
+        fill:SetTexture(WHITE)
+        local word = bar.suuAtlas and bar.suuAtlas:lower():match("stat%-bar%-(%a+)")
+        fill:SetVertexColor(UI.RGBA(BAR_COLORS[word or ""] or "progress-fill"))
+    end
+    for _, r in ipairs({ bar:GetRegions() }) do
+        if r:GetObjectType() == "FontString" then
+            ns.Fonts.Apply(r, "numeric")
+            r:SetTextColor(UI.RGBA("ink"))
+            r:SetShadowColor(0, 0, 0, 1)
+            r:SetShadowOffset(0, -1)
+        end
+    end
+end
+
+function UI.ReskinCheckButton(b)
+    if not b or b.suuCheck then return end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
+        local t = ask(b, get)
+        if t then t:SetAlpha(0) end
+    end
+    local box = CreateFrame("Frame", nil, b)
+    box:SetSize(16, 16)
+    box:SetPoint("CENTER")
+    box:EnableMouse(false)
+    UI.Fill(box, "surface-sunk"):SetAllPoints()
+    local edge = UI.Border(box, "gilt-line")
+    local check = box:CreateTexture(nil, "OVERLAY")
+    check:SetTexture(GLYPHS .. "check.tga")
+    check:SetSize(14, 14)
+    check:SetPoint("CENTER")
+    check:SetVertexColor(UI.RGBA("arcane"))
+    local function draw()
+        local on = ask(b, "GetChecked")
+        check:SetShown(on and true or false)
+        edge:SetColor(on and "arcane" or "gilt-line")
+    end
+    hooksecurefunc(b, "SetChecked", draw)
+    b:HookScript("OnClick", draw)
+    b:HookScript("OnShow", draw)
+    b.suuCheck = { box = box, draw = draw }
+    draw()
+end
+
+--------------------------------------------------------------------------------
+-- Text
+--------------------------------------------------------------------------------
+
+local function textColor(r, g, b)
+    if not r then return "ink" end
+    if r > 0.9 and g > 0.7 and g < 0.9 and b < 0.2 then return "ink" end -- Blizzard's yellow
+    if r > 0.85 and g > 0.85 and b > 0.85 then return "ink" end
+    if g > 0.7 and r < 0.5 and b < 0.5 then return "fel" end
+    if r > 0.8 and g < 0.4 and b < 0.4 then return "ember-text" end
+    if math.abs(r - g) < 0.1 and math.abs(g - b) < 0.1 and r < 0.75 then return "ink-muted" end
+    return nil -- another colour of Blizzard's (a quality, a standing): kept
+end
+
+local function reskinText(fs, isHead)
+    if fs.suuSkip then return end
+    local _, size = ask(fs, "GetFont")
+    size = tonumber(size) or 12
+    local fo = ask(fs, "GetFontObject")
+    local foName = fo and ask(fo, "GetName") or ""
+    local text = ask(fs, "GetText")
+    local long = type(text) == "string" and not isSecret(text) and #text > 40
+    if isHead then
+        ns.Fonts.Apply(fs, "header")
+        fs:SetTextColor(UI.RGBA("gilt-text"))
+    elseif not long and (size >= 14 or foName:find("Med") or foName:find("Large")) then
+        ns.Fonts.Apply(fs, "header")
+        fs:SetTextColor(UI.RGBA("gilt-text"))
+    else
+        local r, g, b = ask(fs, "GetTextColor")
+        local token = textColor(r, g, b)
+        ns.Fonts.Apply(fs, foName:find("Number") and "numeric" or (size < 11 and "caption" or (long and "body" or "label")))
+        if token then fs:SetTextColor(UI.RGBA(token)) else fs:SetTextColor(r, g, b) end
+    end
+    fs:SetShadowOffset(0, 0)
+end
+
+--------------------------------------------------------------------------------
+-- A pass over a frame
+--------------------------------------------------------------------------------
+
+local function reskinTexture(t, ctx)
+    local atlas = ask(t, "GetAtlas")
+    local a = atlas and atlas:lower() or ""
+    local layer = ask(t, "GetDrawLayer")
+    if a ~= "" and matchesAny(a, HIDE) then
+        if a:find("collapseexpand") then ctx.head = true end
+        t:SetAlpha(0)
+    elseif a:find("minus") or a:find("plus") then
+        t:SetDesaturated(true)
+        t:SetVertexColor(UI.RGBA("gilt-text"))
+    elseif a:find("select") then
+        t:SetColorTexture(UI.RGBA("arcane-soft"))
+    elseif layer == "HIGHLIGHT" or a:find("highlight") or a:find("hover") then
+        t:SetColorTexture(UI.RGBA("surface-raised"))
+        t:SetAlpha(0.6)
+    end
+end
+
+local function pass(f, depth, ctx)
+    if depth > 6 or ask(f, "IsForbidden") then return end
+    local kind = ask(f, "GetObjectType")
+    if kind == "StatusBar" then UI.ReskinStatusBar(f); return end
+    if kind == "CheckButton" and not f.suuNoCheck then UI.ReskinCheckButton(f) end
+    -- a ScrollBar (Blizzard's minimal one)
+    if f.Track and f.Back and f.Forward then UI.ReskinScrollBar(f); return end
+    -- a ScrollBox: its rows, one by one, now and after every update
+    if f.ScrollTarget and f.ForEachFrame then UI.ReskinScrollBox(f); return end
+    local texts = {}
+    for _, r in ipairs({ f:GetRegions() }) do
+        local t = r:GetObjectType()
+        if t == "Texture" then reskinTexture(r, ctx)
+        elseif t == "FontString" then texts[#texts + 1] = r end
+    end
+    -- a category row: its name as a head, a rule under it
+    if ctx.head and depth == ctx.rowDepth then
+        for _, fs in ipairs(texts) do reskinText(fs, true) end
+        if not f.suuHeadRule then
+            f.suuHeadRule = f:CreateTexture(nil, "ARTWORK")
+            f.suuHeadRule:SetColorTexture(UI.RGBA("gilt-faint"))
+            f.suuHeadRule:SetHeight(1)
+            f.suuHeadRule:SetPoint("BOTTOMLEFT", S["space-3"], 0)
+            f.suuHeadRule:SetPoint("BOTTOMRIGHT", -S["space-3"], 0)
+        end
+    else
+        for _, fs in ipairs(texts) do reskinText(fs, false) end
+    end
+    for _, c in ipairs({ f:GetChildren() }) do pass(c, depth + 1, ctx) end
+end
+
+function UI.Reskin(frame)
+    if not frame then return end
+    pass(frame, 0, { rowDepth = 0 })
+end
+
+-- One row: a fresh context, so a category bar marks only its own row.
+local function reskinRow(row)
+    local ctx = { rowDepth = 0 }
+    -- a category bar is a texture of the row itself: look first
+    for _, r in ipairs({ row:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then
+            local a = ask(r, "GetAtlas")
+            if a and a:lower():find("collapseexpand") then ctx.head = true end
+        end
+    end
+    pass(row, 0, ctx)
+end
+
+function UI.ReskinScrollBox(box)
+    if not box or box.suuReskinBox then return end
+    box.suuReskinBox = true
+    local function all()
+        if box.ForEachFrame then
+            box:ForEachFrame(reskinRow)
+        elseif box.ScrollTarget then
+            for _, row in ipairs({ box.ScrollTarget:GetChildren() }) do reskinRow(row) end
+        end
+    end
+    if box.Update then hooksecurefunc(box, "Update", all) end
+    if box.RegisterCallback and box.Event and box.Event.OnDataRangeChanged then
+        box:RegisterCallback(box.Event.OnDataRangeChanged, all, box)
+    end
+    box:HookScript("OnShow", function() C_Timer.After(0, all) end)
+    if box.Shadows then box.Shadows:SetAlpha(0) end
+    all()
+end

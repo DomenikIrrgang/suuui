@@ -242,6 +242,11 @@ API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name, sor
 API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
 API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
 API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
+API.UI.Reskin = UI.Reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
+API.UI.ReskinScrollBox = UI.ReskinScrollBox
+API.UI.ReskinStatusBar = UI.ReskinStatusBar
+API.UI.ReskinCheckButton = UI.ReskinCheckButton
+API.UI.ReskinScrollBar = UI.ReskinScrollBar
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
