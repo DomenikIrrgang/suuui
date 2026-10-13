@@ -450,7 +450,9 @@ function CB:UpdateKick()
     if not k then return end
     local ready = Interrupt.Ready()
     k:SetShown(ready ~= nil and self.kickShown ~= false and not self.neutral)
-    if ready == nil then return end
+    -- unknown (secret in combat): its seconds go too, or every frame of the
+    -- cast asked for the cooldown again
+    if ready == nil then k.secs:Hide() return end
     k.glyph:SetVertexColor(UI.RGBA(ready and "arcane" or "ink-faint"))
     k.secs:SetShown(not ready)
 end

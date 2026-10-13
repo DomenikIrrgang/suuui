@@ -765,8 +765,17 @@ function Meter:RefreshHead()
     end
     -- the fight select (past fights change) and the time
     local opts = self:SessionOptions()
-    self.sessionSelect:SetOptions(opts)
-    self.sessionSelect:SetValue(self.session)
+    -- only when the fights changed: this runs every second in combat, and
+    -- rebuilding an open list dropped the hover on its rows
+    local sig = {}
+    for _, o in ipairs(opts) do sig[#sig + 1] = tostring(o.value) .. "=" .. tostring(o.label) end
+    sig = table.concat(sig, "|")
+    local list = self.sessionSelect.list
+    if sig ~= self.sessionSig or not (list and list:IsShown()) then
+        self.sessionSig = sig
+        self.sessionSelect:SetOptions(opts)
+        self.sessionSelect:SetValue(self.session)
+    end
     local time = ""
     if self.session == "current" then
         time = opts[1].note or ""
