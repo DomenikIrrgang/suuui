@@ -61,6 +61,29 @@ function M:Phase()
     return "nearby", nil
 end
 
+-- What Camp Benefits does: its tooltip's text after the name (not the time
+-- left), out of combat; at most ~90 characters, cut at a word.
+local MAX_EFFECT = 90
+local function effectOf(a)
+    if not a or not plain(a.auraInstanceID) or not a.auraInstanceID then return nil end
+    if not (C_TooltipInfo and C_TooltipInfo.GetUnitBuffByAuraInstanceID) then return nil end
+    local ok, data = pcall(C_TooltipInfo.GetUnitBuffByAuraInstanceID, "player", a.auraInstanceID)
+    if not ok or not data or type(data.lines) ~= "table" then return nil end
+    local parts = {}
+    for i = 2, #data.lines do
+        local text = data.lines[i].leftText
+        if plain(text) and text and text ~= "" and not text:lower():find("remaining", 1, true) then
+            parts[#parts + 1] = text
+        end
+    end
+    local text = table.concat(parts, " ")
+    if text == "" then return nil end
+    if #text > MAX_EFFECT then
+        text = text:sub(1, MAX_EFFECT):gsub("%s+%S*$", "") .. "…"
+    end
+    return text
+end
+
 local function restLeft(a)
     if not a then return nil end
     local x = a.expirationTime
@@ -89,8 +112,15 @@ function M:Alert(phase, a)
         self.ticker = C_Timer.NewTicker(0.5, show)
         return
     elseif phase == "rested" then
+        -- what you gained, with the time in the title
         local left = restLeft(a)
-        SuuUI.ShowAlert(KEY, "info", "Camp Benefits", (left and left < 3500) and (clock(left) .. " left") or "For the next hour")
+        local title = (left and left < 3500) and ("Camp Benefits · " .. clock(left) .. " left") or "Camp Benefits gained · 1h"
+        SuuUI.ShowAlert(KEY, "info", title, (a and a.effect) or effectOf(a) or "For the next hour")
+        self.briefTimer = C_Timer.NewTimer(BRIEF + 2, function()
+            self.briefTimer = nil
+            SuuUI.HideAlert(KEY)
+        end)
+        return
     else
         SuuUI.HideAlert(KEY)
         return
@@ -150,7 +180,8 @@ end
 --------------------------------------------------------------------------------
 
 function M:Sample(phase)
-    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600) }
+    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600),
+        effect = "Increases your Stamina and Spirit while you travel, and your rested experience." }
     self:Alert(phase or "nearby", fake)
     if phase ~= "rested" then
         -- a sample doesn't stay
