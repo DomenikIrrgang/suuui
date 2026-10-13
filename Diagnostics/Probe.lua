@@ -799,6 +799,10 @@ function ns.Probe.Command(arg)
         ns.FlickerProbe.Command(rest)
         return
     end
+    if sub == "talents" then
+        ns.TalentProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
