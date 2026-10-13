@@ -263,9 +263,18 @@ function M:SkinSetPopup()
     local jewel = UI.Diamond(edge, 7, "gilt")
     jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
     -- the chosen icon (top right) and the grid's icons: SuuUI's icon buttons
-    local area = box and box.SelectedIconArea
-    local chosen = area and (area.SelectedIconButton or area.SelectedIcon)
+    -- (the chosen icon: whichever button with an Icon sits outside the grid)
+    local function findChosen(f, depth)
+        if depth > 4 or f == pop.IconSelector then return nil end
+        if f ~= pop and f:GetObjectType() == "Button" and (f.Icon or f.icon) then return f end
+        for _, c in ipairs({ f:GetChildren() }) do
+            local hit = findChosen(c, depth + 1)
+            if hit then return hit end
+        end
+    end
+    local chosen
     local function icons()
+        chosen = chosen or findChosen(pop, 0)
         if chosen then UI.ReskinIconButton(chosen) end
         local sb = pop.IconSelector and (pop.IconSelector.ScrollBox or pop.IconSelector)
         if sb and sb.ForEachFrame then
@@ -537,8 +546,9 @@ function M:UpdateSidebar(hover)
     end
 end
 
--- Equip and Save together as wide as the set list's rows (New Set's edges).
-function M:AlignSetButtons()
+-- The set list as wide as Equip and Save together: its rows (New Set's
+-- edges) from Equip's left edge to Save's right edge (asked for in game).
+function M:AlignSetList()
     local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
     if not pane then return end
     local equip, save = pane.EquipSet, pane.SaveSet
@@ -552,20 +562,14 @@ function M:AlignSetButtons()
     if not (equip and save and box and box.ForEachFrame) then return end
     local first
     box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
-    if not first or not first:GetLeft() or not box:GetLeft() then return end
-    local width = first:GetWidth()
-    local gap = S["space-2"]
-    local half = (width - gap) / 2
-    -- where they stand now (height), from the row's left edge (width)
-    if not (equip:GetBottom() and pane:GetBottom() and pane:GetLeft()) then return end
-    local up = equip:GetBottom() - pane:GetBottom()
-    local left = first:GetLeft() - pane:GetLeft()
-    equip:ClearAllPoints()
-    equip:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", left, up)
-    equip:SetWidth(half)
-    save:ClearAllPoints()
-    save:SetPoint("TOPLEFT", equip, "TOPRIGHT", gap, 0)
-    save:SetWidth(half)
+    if not (first and first:GetLeft() and box:GetLeft() and equip:GetLeft() and save:GetRight() and pane:GetTop()) then return end
+    local inset = first:GetLeft() - box:GetLeft()
+    local rightInset = box:GetRight() - first:GetRight()
+    local top = box:GetTop() - pane:GetTop()
+    local bottom = box:GetBottom() - pane:GetBottom()
+    box:ClearAllPoints()
+    box:SetPoint("TOPLEFT", pane, "TOPLEFT", equip:GetLeft() - pane:GetLeft() - inset, top)
+    box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", save:GetRight() - pane:GetRight() + rightInset, bottom)
 end
 
 function M:SkinPaperDoll()
@@ -583,7 +587,7 @@ function M:SkinPaperDoll()
     self:SkinSetPopup()
     local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
     if pane then
-        pane:HookScript("OnShow", function() C_Timer.After(0.05, function() self:AlignSetButtons() end) end)
+        pane:HookScript("OnShow", function() C_Timer.After(0.05, function() self:AlignSetList() end) end)
     end
     self:SkinModel()
     self:SkinStatsPane()
