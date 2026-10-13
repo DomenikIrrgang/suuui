@@ -14,7 +14,8 @@
 -- combat ending clears them. A new alert takes the place of the one showing
 -- unless that one is more urgent (danger > warning > info); the one it
 -- replaced comes back when it goes, unless its owner hid it meanwhile (a
--- level-up over the campfire alert). Danger alerts can play a sound.
+-- level-up over the campfire alert). Danger alerts can play a sound. The
+-- level-up card stays while the mouse is over it: hidden once it leaves.
 
 local UI = SuuUI.UI
 
@@ -45,6 +46,7 @@ function M:Allowed(key, tone)
 end
 
 function M:Present(key, tone, shown, hidden, args)
+    self:StopHolding()
     local fresh = self.current ~= key or self.tone ~= tone
     self.current, self.tone = key, tone
     self.last = args
@@ -79,7 +81,27 @@ function M:AllowOutOfCombat(key)
     self.anytime[key] = true
 end
 
+function M:StopHolding()
+    if self.holding then self.holding:Cancel(); self.holding = nil end
+end
+
 function M:Hide(key)
+    -- the card under the mouse: it goes a moment after the mouse leaves
+    if key and key == self.current and self.card:IsShown() and self.card:IsHovered() then
+        if not self.holding then
+            local away = 0
+            self.holding = C_Timer.NewTicker(0.2, function()
+                if self.current ~= key then return self:StopHolding() end
+                away = self.card:IsHovered() and 0 or away + 0.2
+                if away >= 1 then
+                    self:StopHolding()
+                    self:Hide(key)
+                end
+            end)
+        end
+        return
+    end
+    self:StopHolding()
     if key and key ~= self.current then
         -- its owner is done with it: it won't come back either
         if self.under and self.under.key == key then self.under = nil end

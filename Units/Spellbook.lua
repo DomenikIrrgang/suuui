@@ -470,6 +470,7 @@ function M:NewBetween(from, to)
             local now = e.level >= from and e.level <= to
             if now or (older and e.level < from) then
                 list[#list + 1] = { icon = e.icon, name = e.label, rank = e.rank, isNew = e.fresh, cost = tonumber(e.cost) or 0,
+                    text = e.text, meta = ((e.level <= (UnitLevel("player") or 1)) and "Train now at your class trainer · " or ("Learn at level " .. e.level .. " · ")) .. coins(e.cost),
                     old = not now, note = not now and ("Level " .. e.level) or nil }
             end
         end

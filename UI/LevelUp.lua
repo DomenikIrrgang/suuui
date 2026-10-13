@@ -12,7 +12,9 @@
 --                  more, cost (copper) })
 --
 -- note: a few words after the rank in ink-faint ("Level 18": a spell from an
--- earlier level still to train).
+-- earlier level still to train). Hovering a spell shows SuuUI's tooltip:
+-- its name, rank, `text` and `meta` (what training it costs). The card takes
+-- the mouse: c:IsHovered() says whether it is under it (it stays then).
 --
 -- One column for up to four spells, two from five; at most ten rows (the
 -- caller says how many more in `more`).
@@ -65,8 +67,20 @@ function Card:Row(i)
     r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", S["space-4"], 0)
     r.rank = UI.Text(r, "caption", "ink-muted")
     r.rank:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, 0)
+    r:EnableMouse(true)
+    r:SetScript("OnEnter", function()
+        local s = r.spell
+        if not s then return end
+        UI.ShowTooltip(r, { title = s.name, subtitle = s.rank and ("Rank " .. s.rank) or nil, description = s.text, meta = s.meta })
+    end)
+    r:SetScript("OnLeave", function() UI.HideTooltip() end)
     self.rows[i] = r
     return r
+end
+
+-- Under the mouse: the card or one of its spells.
+function Card:IsHovered()
+    return self:IsVisible() and self:IsMouseOver() or false
 end
 
 function Card:SetLevelUp(d)
@@ -82,6 +96,7 @@ function Card:SetLevelUp(d)
     for i = 1, n do
         local s = spells[i]
         local r = self:Row(i)
+        r.spell = s
         r.icon:SetArt(s.icon or 134400)
         r.name:SetValue(s.name or "")
         r.rank:SetText(rankLine(s))
@@ -132,6 +147,8 @@ function UI.LevelUp(parent)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Card)
     f.rows = {}
+    f:EnableMouse(true)
+    f:SetScript("OnHide", function() UI.HideTooltip() end)
     f.ground = f:CreateTexture(nil, "BACKGROUND")
     f.ground:SetAllPoints()
     f.ground:SetColorTexture(UI.RGBA("surface-glass"))
