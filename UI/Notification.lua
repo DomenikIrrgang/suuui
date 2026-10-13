@@ -11,7 +11,8 @@
 --   n:SetData({ kind, tone, category, title, body, icon = { glyph | texture },
 --               duration, remaining, soonAt, ["until"], item = { icon,
 --               label, quality }, confirmText, actions = { { label,
---               variant = "primary"|"quiet"|"danger", onClick } },
+--               variant = "primary"|"quiet"|"danger", onClick,
+--               count, pressed, disabled, tooltip } },
 --               host = { buttons = n, confirm = true }, closable, onClose })
 --   n:SetRemaining(seconds)   -- the drain and the time, without a layout
 --   n:SetTitle(text)          -- a title that counts (logging out in 12 s)
@@ -64,6 +65,11 @@ local function noteButton(n, i, variant)
         b.label:SetColor("ember-text")
         b:HookScript("OnLeave", function(self) self.border:SetColor("ember") end)
     end
+    -- a choice made stays pressed in arcane (a loot roll's)
+    b.pressedBg = UI.Fill(b, "arcane-soft", "BACKGROUND", 1)
+    b.pressedBg:SetAllPoints()
+    b.pressedBg:Hide()
+    b:HookScript("OnLeave", function(self) if self.pressed then self.border:SetColor("arcane") end end)
     pool[i] = b
     return b
 end
@@ -182,8 +188,19 @@ function Note:SetData(d)
         for i = #actions, 1, -1 do
             local a = actions[i]
             local b = noteButton(self, i, a.variant or "quiet")
-            b:SetLabel(a.label or "")
-            b:SetScript("OnClick", function() if a.onClick then a.onClick(self) end end)
+            -- a count after the label: how many chose it (a loot roll's votes)
+            local text = a.label or ""
+            if a.count then
+                text = text .. "  |cff" .. T.color[a.count > 0 and "ink-muted" or "ink-faint"].hex .. a.count .. "|r"
+            end
+            b:SetLabel(text)
+            b.pressed = a.pressed and true or false
+            b.pressedBg:SetShown(b.pressed)
+            if b.variant ~= "primary" then b.border:SetColor(b.pressed and "arcane" or (a.variant == "danger" and "ember" or "gilt-line")) end
+            b.label:SetColor(b.pressed and "arcane" or (b.variant == "primary" and "on-signal" or (a.variant == "danger" and "ember-text" or "ink")))
+            b:SetEnabledState(not a.disabled or b.pressed)
+            b.tooltip = a.tooltip
+            b:SetScript("OnClick", function() if a.onClick and not a.disabled then a.onClick(self) end end)
             b:ClearAllPoints()
             b:SetPoint("RIGHT", -x, 0)
             b:Show()

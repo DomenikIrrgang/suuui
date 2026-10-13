@@ -86,8 +86,10 @@ local KINDS = {
 
 local nextNote = 0
 
--- def: { id?, kind = "timed"|"sticky"|"until", category, title, body, icon,
--- tone, duration (timed, default 8), ["until"] (the text), actions } → id
+-- def: { id?, kind = "timed"|"sticky"|"until"|"roll", category, title, body,
+-- icon, tone, duration (timed, default 8), ["until"] (the text), actions }
+-- → id. A request (roll) with duration and remaining counts down on its own
+-- and stays until it is dismissed.
 function M:Notify(def)
     if type(def) ~= "table" then return nil end
     nextNote = nextNote + 1
@@ -100,6 +102,8 @@ function M:Notify(def)
         d.duration = d.duration or 8
         d.endsAt = GetTime() + d.duration
         d.remaining = d.duration
+    elseif d.duration and d.remaining then
+        d.endsAt = GetTime() + d.remaining
     end
     d.onClose = function() self:Dismiss(id) end
     -- the same id again: replaced in place
@@ -495,7 +499,11 @@ function M:Tick()
     local now = GetTime()
     local changed = false
     for id, d in pairs(self.notes) do
-        if d.kind == "timed" and d.endsAt then
+        if d.kind ~= "timed" and d.endsAt then
+            d.remaining = math.max(0, d.endsAt - now)
+            local card = self.stack:CardFor(id)
+            if card then card:SetRemaining(d.remaining) end
+        elseif d.kind == "timed" and d.endsAt then
             d.remaining = d.endsAt - now
             if d.remaining <= 0 then
                 self.notes[id] = nil
