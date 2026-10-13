@@ -762,6 +762,10 @@ function ns.Probe.Command(arg)
         ns.BagProbe.Command(rest)
         return
     end
+    if sub == "loot" then
+        ns.LootProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return

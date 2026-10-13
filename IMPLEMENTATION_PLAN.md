@@ -487,6 +487,7 @@ Everything below is built; it only waits for the right situation in game.
   - `LootRoll` as request notifications: Need, Greed or Pass, vote counts with names on hover, and a drain line that turns `amber` under 10s. The result follows as a timed note.
 - **Boards:** Loot window and loot rolls.
 - **Confirm:** solo looting and auto-loot work, and a group roll shows its votes.
+- **Probe (2026-10-13, `/suu probe loot [take]`):** written, not yet run. Samples the loot and roll API, CVars, events and Blizzard's loot frames; logs each loot window's slots (secret or not), each group roll (item info, time), loot history and chat loot lines until /reload; `take` has SuuUI's own code call LootSlot on the next loot window.
 
 ### 2.7 Tooltips
 - **Build:**
