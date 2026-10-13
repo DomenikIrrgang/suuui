@@ -119,15 +119,35 @@ function M:Schools()
 end
 
 -- A school's learned spells, in the spellbook's order, flyouts unpacked.
+-- Every spell that is its own entry in the spellbook, in any school.
+local function ownEntries()
+    local ids = {}
+    for i = 1, C_SpellBook.GetNumSpellBookSkillLines() do
+        local line = C_SpellBook.GetSpellBookSkillLineInfo(i)
+        if line and not line.shouldHide then
+            for slot = line.itemIndexOffset + 1, line.itemIndexOffset + line.numSpellBookItems do
+                local info = C_SpellBook.GetSpellBookItemInfo(slot, BANK)
+                if info and info.itemType == ITEM.Spell and info.spellID then ids[info.spellID] = true end
+            end
+        end
+    end
+    return ids
+end
+
 function M:Learned(school)
     local list = {}
+    -- a flyout's spells, unpacked, but not those with their own entry
+    -- elsewhere (Forever's warrior has a stances flyout under Protection:
+    -- Battle Stance showed there and under Arms, found in game)
+    local own
     for slot = school.first, school.first + school.count - 1 do
         local info = C_SpellBook.GetSpellBookItemInfo(slot, BANK)
         if info and info.itemType == ITEM.Flyout and GetFlyoutInfo and info.actionID then
             local _, _, n = GetFlyoutInfo(info.actionID)
             for j = 1, n or 0 do
                 local spellID, _, known, name = GetFlyoutSlotInfo(info.actionID, j)
-                if known and spellID then
+                own = own or ownEntries()
+                if known and spellID and not own[spellID] then
                     local sub = C_Spell.GetSpellSubtext and C_Spell.GetSpellSubtext(spellID) or nil
                     list[#list + 1] = { label = name, spellID = spellID, rank = rankOf(sub), sub = sub,
                         icon = C_Spell.GetSpellTexture(spellID), status = "learned",
