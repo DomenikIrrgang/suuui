@@ -174,9 +174,11 @@ function UI.ReskinFillBar(bar)
         if r:GetObjectType() == "FontString" then
             ns.Fonts.Apply(r, "numeric")
             r:SetJustifyH("CENTER")
+            -- on the track's middle (the reputation's figures sit right there;
+            -- a pixel up was too high, found in game)
             r:ClearAllPoints()
-            r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 1)
-            r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 1)
+            r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 0)
+            r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 0)
             r:SetTextColor(UI.RGBA("ink"))
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
