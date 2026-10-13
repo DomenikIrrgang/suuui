@@ -535,8 +535,6 @@ function M:AddCounts(tooltip, data)
     if not plain(id) or type(id) ~= "number" then return end
     local counts = self:CountsFor(id)
     if #counts == 0 then return end
-    -- only you, only in your bags: you're looking at them already
-    if #counts == 1 and counts[1].c.me and counts[1].bags == counts[1].total then return end
     local muted, gilt = T.color["ink-muted"], T.color["gilt-text"]
     tooltip:AddLine(" ")
     local all = 0
