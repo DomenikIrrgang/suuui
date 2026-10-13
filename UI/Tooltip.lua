@@ -136,3 +136,43 @@ function UI.AttachTooltip(frame, data)
     frame:HookScript("OnEnter", function(self) UI.ShowTooltip(self, data) end)
     frame:HookScript("OnLeave", UI.HideTooltip)
 end
+
+--------------------------------------------------------------------------------
+-- Blizzard's tooltips in SuuUI's look (design board "Tooltips")
+--
+--   UI.SkinTooltip(tooltip)  -- GameTooltip, the compare tooltips, ItemRefTooltip
+--
+-- surface-glass under a gilt-line edge with the gilt diamond at the top left,
+-- drawn on the tooltip's own BACKGROUND layer; Blizzard's NineSlice at alpha
+-- 0 (again after each SharedTooltip_SetBackdropStyle, which runs on every
+-- show). Only art is added: lines, sizes, anchors and every set function stay
+-- Blizzard's.
+--------------------------------------------------------------------------------
+
+local skinned = {}
+
+local function hideBlizzardArt(tooltip)
+    if tooltip.NineSlice then tooltip.NineSlice:SetAlpha(0) end
+end
+
+function UI.SkinTooltip(tooltip)
+    if not tooltip or skinned[tooltip] then return end
+    local art = {}
+    art.bg = tooltip:CreateTexture(nil, "BACKGROUND", nil, -8)
+    art.bg:SetColorTexture(UI.RGBA("surface-glass"))
+    art.bg:SetAllPoints()
+    art.border = UI.Border(tooltip, "gilt-line", { layer = "BACKGROUND", sublevel = -7 })
+    art.ornament = UI.Diamond(tooltip, 7, "gilt", "OVERLAY", 7)
+    art.ornament:SetPoint("CENTER", tooltip, "TOPLEFT", 0, 0)
+    skinned[tooltip] = art
+    hideBlizzardArt(tooltip)
+    return art
+end
+
+function UI.IsTooltipSkinned(tooltip) return skinned[tooltip] ~= nil end
+
+if type(SharedTooltip_SetBackdropStyle) == "function" then
+    hooksecurefunc("SharedTooltip_SetBackdropStyle", function(tooltip)
+        if skinned[tooltip] then hideBlizzardArt(tooltip) end
+    end)
+end
