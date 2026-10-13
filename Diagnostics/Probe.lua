@@ -778,6 +778,10 @@ function ns.Probe.Command(arg)
         ns.PartyAuraProbe.Command(rest)
         return
     end
+    if sub == "hovertip" then
+        ns.HoverTipProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
