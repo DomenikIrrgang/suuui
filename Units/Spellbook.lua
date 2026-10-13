@@ -195,15 +195,21 @@ function M:Unlearned(entries, learnedAll)
     for _, name in ipairs(order) do
         local list = byName[name]
         table.sort(list, function(a, b) return a.level < b.level end)
+        local have = known[name] ~= nil
         local k = known[name] or { levels = {}, maxRank = 0, maxLevel = 0 }
         local ranked = k.ranked or #list > 1
         local next = k.maxRank
-        for _, t in ipairs(list) do
-            -- a rank at or below your best one's level is yours: the game
-            -- drops lower ranks from the book once a higher one is learned
-            -- (found in game: Devotion Aura Rank 3 alone at level 21 made
-            -- the level 1 and 10 ranks "Rank 4 and 5" to train)
-            if not k.levels[t.level] and t.level > k.maxLevel then
+        for i, t in ipairs(list) do
+            -- yours: a spell without ranks you know (a passive such as Parry:
+            -- the game gives it no level, found in game); a rank at or below
+            -- your best one's level (the game drops lower ranks from the book
+            -- once a higher one is learned: Devotion Aura Rank 3 alone at
+            -- level 21 made the level 1 and 10 ranks "Rank 4 and 5"); with no
+            -- levels to go by, as many ranks as your best one's number
+            local mine = (have and not k.ranked)
+                or k.levels[t.level] or t.level <= k.maxLevel
+                or (k.maxLevel == 0 and i <= k.maxRank)
+            if not mine then
                 next = next + 1
                 local trainable = t.level <= level
                 out[#out + 1] = { label = name, rank = ranked and next or nil, icon = t.icon, text = t.text, cost = t.cost,
