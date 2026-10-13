@@ -782,6 +782,10 @@ function ns.Probe.Command(arg)
         ns.HoverTipProbe.Command(rest)
         return
     end
+    if sub == "character" then
+        ns.CharacterProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return

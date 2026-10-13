@@ -527,6 +527,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
   - Character (C) with `CharacterSheet` and `StatList`; then Reputation (U), Currency, Player vs. Player (H), Skills and Statistics.
 - **Boards:** Character, Reputation, Currency, Player vs. Player, Statistics, Window frame.
 - **Confirm:** equipping, equipment sets and the HD/SD model toggle work, and the watched reputation drives the XP bar.
+- **Probe (2026-10-13, `/suu probe character`):** written, not yet run. CharacterFrame two levels deep, its panel attributes, tabs, equipment slots, side panes, model/HD-like children, the window's functions and C_ namespaces (equipment sets, reputation, currency, paper doll); which panes show per tab (run once per tab); a log of tab switches and the window opening and closing.
 
 ### 3.2 Spellbook, Talents and Legacy
 - **Build:**
