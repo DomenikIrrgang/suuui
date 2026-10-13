@@ -375,6 +375,7 @@ function M:Render()
     self.slice = slice
     self.book:SetSpells(slice)
     self.book:SetPage(self.page, pages)
+    self:UpdateCooldowns()
     -- what each button casts: learned spells only
     for i, c in ipairs(self.book.cells) do
         local s = slice[i]
@@ -386,6 +387,24 @@ function M:Render()
             b:SetAttribute("type", nil)
             b:SetAttribute("spell", nil)
         end
+    end
+end
+
+-- The cooldown sweeps on the page's learned spells (the global one too):
+-- whether one runs is readable, its timing only as the engine's duration
+-- object (secret in combat).
+local function plainBool(v) return v ~= nil and not isSecret(v) and v or false end
+function M:UpdateCooldowns()
+    local book = self.book
+    if not book or not book:IsVisible() then return end
+    for i in ipairs(book.cells) do
+        local s = self.slice and self.slice[i]
+        local id = s and (s.status == "learned") and s.spellID
+        local info = id and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(id)
+        local active = info and plainBool(info.isActive) or false
+        local gcd = info and plainBool(info.isOnGCD) or false
+        local d = active and C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(id) or nil
+        book:SetCooldown(i, active, gcd, d)
     end
 end
 
@@ -443,6 +462,12 @@ function M:Build()
         GameTooltip:Hide()
         UI.HideTooltip()
     end
+    -- a sweep ended: the game can call it active a moment longer
+    book.onCooldownDone = function()
+        self:UpdateCooldowns()
+        C_Timer.After(0.1, function() self:UpdateCooldowns() end)
+    end
+    book:HookScript("OnShow", function() self:UpdateCooldowns() end)
     book.onDragStart = function(i)
         local s = self.slice and self.slice[i]
         if not s or s.status ~= "learned" then return end
@@ -720,6 +745,12 @@ function M:OnEnable()
         end)
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
+    -- the sweeps: in combat too (only the look changes)
+    for _, e in ipairs({ "SPELL_UPDATE_COOLDOWN", "ACTIONBAR_UPDATE_COOLDOWN" }) do
+        if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid(e) then
+            self:OnGameEvent(e, function() self:UpdateCooldowns() end)
+        end
+    end
     -- the cost in ember when your money no longer covers it, and the setting
     self:OnGameEvent("PLAYER_MONEY", function()
         if self.book and self.book:IsVisible() then self:Render() end

@@ -21,6 +21,9 @@
 --   book:FitRows()         -- rows to the page's height (a page holds rows × 2)
 --   book:SetWidest(px)     -- the longest name anywhere: columns as wide on every page
 --   book.onEnter / onLeave / onDragStart = fn(i, cell)
+--   book:SetCooldown(i, active, gcd, duration)   -- the sweep over a spell's
+--                          -- icon: the engine's duration object (secret-safe);
+--                          -- the global cooldown sweeps without digits
 -- Cells are secure buttons: SetSpells changes only their look; their
 -- attributes are the owner's, and only out of combat.
 
@@ -70,8 +73,26 @@ local function cell(book, i)
         if book.onLeave then book.onLeave(i, c) end
     end)
     b:SetScript("OnDragStart", function() if book.onDragStart then book.onDragStart(i, c) end end)
+    c.cooldown = CreateFrame("Cooldown", nil, c.icon, "CooldownFrameTemplate")
+    c.cooldown:SetAllPoints(c.icon.art)
+    c.cooldown:SetDrawEdge(false)
+    c.cooldown:SetDrawBling(false)
+    c.cooldown:SetSwipeColor(0, 0, 0, 0.7)
+    if c.cooldown.SetCountdownFont then pcall(c.cooldown.SetCountdownFont, c.cooldown, "SuuUIFont_micro") end
+    c.cooldown:HookScript("OnCooldownDone", function() if book.onCooldownDone then book.onCooldownDone() end end)
     book.cells[i] = c
     return c
+end
+
+function Book:SetCooldown(i, active, gcd, duration)
+    local c = self.cells[i]
+    if not c then return end
+    if active and duration then
+        c.cooldown:SetCooldownFromDurationObject(duration)
+        c.cooldown:SetHideCountdownNumbers(gcd and true or false)
+    else
+        c.cooldown:Clear()
+    end
 end
 
 function Book:DrawCell(c)
