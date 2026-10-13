@@ -568,14 +568,14 @@ function M:AlignSetList()
         local first
         box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
         if not first or not first:GetLeft() then return end
+        -- the margins the list keeps around its rows (left; right: the scrollbar's room)
         local inset = first:GetLeft() - box:GetLeft()
+        local rightInset = box:GetRight() - first:GetRight()
         local top = box:GetTop() - pane:GetTop()
         local bottom = box:GetBottom() - pane:GetBottom()
-        local right = box:GetRight() - pane:GetRight()
-        local shift = equip:GetLeft() - first:GetLeft()
         box:ClearAllPoints()
-        box:SetPoint("TOPLEFT", pane, "TOPLEFT", box:GetLeft() and (equip:GetLeft() - pane:GetLeft() - inset) or 0, top)
-        box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", math.max(right, right - shift), bottom)
+        box:SetPoint("TOPLEFT", pane, "TOPLEFT", equip:GetLeft() - pane:GetLeft() - inset, top)
+        box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", save:GetRight() - pane:GetRight() + rightInset, bottom)
         self.setListMoved = true
     end
     box:ForEachFrame(function(row) row:SetWidth(width) end)
