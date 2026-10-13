@@ -115,6 +115,8 @@ function Book:SetSpells(list)
             c:Hide()
         end
     end
+    -- the rows a taller page had
+    for i = self.rows * COLUMNS + 1, #self.cells do self.cells[i]:Hide() end
 end
 
 -- As many rows as the page's height holds (out of combat: the cells are

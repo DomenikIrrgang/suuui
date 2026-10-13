@@ -325,7 +325,10 @@ local SHORT = 484
 function M:Shorten()
     local f = _G.PlayerSpellsFrame
     if not f or InCombatLockdown() then return end
-    local target = (_G.CharacterFrame and _G.CharacterFrame:GetHeight()) or SHORT
+    -- the Character window's height on screen, in this window's own scale
+    -- (they differ: found in game)
+    local cf = _G.CharacterFrame
+    local target = cf and (cf:GetHeight() * cf:GetEffectiveScale() / f:GetEffectiveScale()) or SHORT
     if math.abs(f:GetHeight() - target) < 1 then return end
     self.blizzHeight = f:GetHeight()
     self.sizing = true

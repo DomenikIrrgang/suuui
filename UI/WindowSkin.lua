@@ -219,14 +219,10 @@ function UI.SkinWindow(frame, opts)
         end)
     end
 
-    -- the panel-position rule: lined up under an anchor (the micro menu)
+    -- the panel-position rule: in a row under an anchor (the micro menu)
     if opts.under then
         chrome.under, chrome.rise = opts.under, rise
-        hooksecurefunc(frame, "SetPoint", function()
-            if chrome.placingWindow then return end
-            C_Timer.After(0, function() chrome:PlaceWindow() end)
-        end)
-        frame:HookScript("OnShow", function() chrome:PlaceWindow() end)
+        ns.WindowRow.Add(chrome)
     end
     return chrome
 end
@@ -245,18 +241,82 @@ function Chrome:SetBinding(binding)
     end
 end
 
--- Under the anchor: the header's top left space-5 below its bottom left.
-function Chrome:PlaceWindow()
-    local anchor = self.under and ns.Anchors.Get(self.under)
-    if not anchor or not anchor:IsVisible() or InCombatLockdown() and self.frame:IsProtected() then return end
-    local f = self.frame
-    local scale = anchor:GetEffectiveScale() / f:GetEffectiveScale()
+--------------------------------------------------------------------------------
+-- The window row: SuuUI-headed windows open in a row under the micro menu,
+-- in the order they opened, space-5 apart (the Character window, then the
+-- spells window beside it, …). Opening, closing or resizing one lays the
+-- row out again. A protected window moves only out of combat; the row goes
+-- on from where it stands.
+--------------------------------------------------------------------------------
+
+local Row = { list = {}, seq = 0 }
+ns.WindowRow = Row
+
+function Row.Layout()
+    if Row.placing then return end
+    local open = {}
+    for _, c in ipairs(Row.list) do
+        if c.frame:IsShown() then open[#open + 1] = c end
+    end
+    if #open == 0 then return end
+    table.sort(open, function(a, b) return (a.openedAt or 0) < (b.openedAt or 0) end)
+    local anchor = ns.Anchors.Get(open[1].under)
+    if not anchor or not anchor:IsVisible() then return end
+    local as = anchor:GetEffectiveScale()
     local left, bottom = anchor:GetLeft(), anchor:GetBottom()
     if not (left and bottom) then return end
-    self.placingWindow = true
-    f:ClearAllPoints()
-    f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * scale, bottom * scale - S["space-5"] - self.rise)
-    self.placingWindow = false
+    -- in screen units (coordinates times effective scale)
+    local x = left * as
+    local top = bottom * as - S["space-5"] * as
+    local gap = S["space-5"] * as
+    Row.placing = true
+    for _, c in ipairs(open) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+            local r = f:GetRight()
+            if r then x = r * es + gap end
+        else
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / es, top / es - c.rise)
+            x = x + f:GetWidth() * es + gap
+        end
+    end
+    Row.placing = false
 end
+
+function Row.Queue()
+    if Row.queued then return end
+    Row.queued = true
+    C_Timer.After(0, function()
+        Row.queued = false
+        Row.Layout()
+    end)
+end
+
+function Row.Add(chrome)
+    Row.list[#Row.list + 1] = chrome
+    local f = chrome.frame
+    f:HookScript("OnShow", function()
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        Row.Layout()
+        Row.Queue()
+    end)
+    f:HookScript("OnHide", Row.Queue)
+    f:HookScript("OnSizeChanged", Row.Queue)
+    -- Blizzard places its panels again now and then: back in the row
+    hooksecurefunc(f, "SetPoint", function() if not Row.placing then Row.Queue() end end)
+    if f:IsShown() then
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        Row.Queue()
+    end
+end
+
+local rowWait = CreateFrame("Frame")
+rowWait:RegisterEvent("PLAYER_REGEN_ENABLED")
+rowWait:SetScript("OnEvent", function() Row.Queue() end)
 
 UI.WINDOW_HEAD_H = HEAD_H
