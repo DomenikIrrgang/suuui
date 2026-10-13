@@ -111,7 +111,7 @@ end)
 | `SUUUI_ANCHOR_CHANGED` | `name, frame` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
-| `SUUUI_SPELLS_TO_TRAIN` | `count` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school) |
+| `SUUUI_SPELLS_TO_TRAIN` | `count, cost` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school, and what that costs in copper; `cost` is nil while its Training cost setting is off) |
 
 ## Design tokens and text
 

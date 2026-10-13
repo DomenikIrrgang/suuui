@@ -9,7 +9,10 @@
 --   local book = UI.Spellbook(parent, { rows = 6, edgeInset = 20 })  -- the page's
 --                          -- distance from the window's edge (the schools centre between)
 --   book:SetSchools({ { label, icon, trainable, active } }); book.onSchool = fn(i)
---   book:SetHead(title, toTrain)
+--   book:SetHead(title, toTrain[, all])   -- all = { count, cost (copper),
+--                          -- short (true: you can't afford it all) }: every
+--                          -- school's spells to train and what they cost,
+--                          -- after the school's count, as room allows
 --   book:SetSwitches(showUnlearned, allRanks); book.onSwitch = fn(key, on)
 --   book:SetSpells(list)   -- { label, rank, sub, icon, status = "learned" |
 --                          -- "passive" | "trainable" | "future" }, a page's worth
@@ -205,9 +208,56 @@ function Book:SetSchools(list)
     for i = #list + 1, #self.tabs do self.tabs[i]:Hide() end
 end
 
-function Book:SetHead(title, toTrain)
+local function hex(token) return T.color[token].hex end
+
+-- 3g 20s: the digits in ink and the units in coin colours, or all of it in
+-- ember-text when you can't afford it.
+local function coinText(copper, short)
+    copper = math.max(0, math.floor(tonumber(copper) or 0))
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local plain, parts = {}, {}
+    local function part(v, unit, token)
+        plain[#plain + 1] = v .. unit
+        parts[#parts + 1] = short and (v .. unit) or ("|cff" .. hex("ink") .. v .. "|r|cff" .. hex(token) .. unit .. "|r")
+    end
+    if g > 0 then part(g, "g", "coin-gold") end
+    if s > 0 then part(s, "s", "coin-silver") end
+    if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
+    local text = table.concat(parts, " ")
+    if short then text = "|cff" .. hex("ember-text") .. text .. "|r" end
+    return text, table.concat(plain, " ")
+end
+
+local function spells(n) return n .. (n == 1 and " spell" or " spells") end
+
+function Book:SetHead(title, toTrain, all)
     self.title:SetValue(title or "")
-    self.toTrain:SetValue((toTrain and toTrain > 0) and (toTrain .. (toTrain == 1 and " spell" or " spells") .. " to train") or "")
+    toTrain = toTrain or 0
+    local count = all and all.count or 0
+    if count <= 0 then
+        self.toTrain:SetValue(toTrain > 0 and (spells(toTrain) .. " to train") or "")
+        return
+    end
+    local cost, costPlain = coinText(all.cost, all.short)
+    local muted = "|cff" .. hex("ink-muted")
+    -- the longest form that fits before the switches
+    local forms
+    if toTrain == count then
+        forms = { { spells(toTrain) .. " to train", " · " }, { toTrain .. " to train", " · " } }
+    elseif toTrain > 0 then
+        forms = { { spells(toTrain) .. " to train", " · " .. count .. " in all · " }, { toTrain .. " to train", " · " .. count .. " in all · " },
+            { count .. " to train in all", " · " } }
+    else
+        forms = { { "", spells(count) .. " to train in other schools · " }, { "", count .. " to train elsewhere · " } }
+    end
+    local room = self.unlearned:GetParent():GetLeft() and self.toTrain:GetLeft()
+        and (self.unlearned:GetParent():GetLeft() - self.toTrain:GetLeft() - S["space-5"]) or math.huge
+    local pick = forms[#forms]
+    for _, f in ipairs(forms) do
+        if UI.MeasureText("caption", f[1] .. f[2] .. costPlain) <= room then pick = f break end
+    end
+    self.toTrain:SetText(pick[1] .. muted .. pick[2] .. "|r" .. cost)
+    self.toTrain.value = nil
 end
 
 function Book:SetSwitches(unlearned, allRanks)

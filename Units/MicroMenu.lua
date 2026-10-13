@@ -90,7 +90,17 @@ function M:UpdateActive()
 end
 
 -- Something to act on: unspent talent points; spells to train (the
--- Spellbook module says how many: SUUUI_SPELLS_TO_TRAIN).
+-- Spellbook module says how many and, unless its setting is off, what they
+-- cost: SUUUI_SPELLS_TO_TRAIN).
+local function coins(copper)
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if s > 0 then parts[#parts + 1] = s .. "s" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+    return table.concat(parts, " ")
+end
+
 function M:UpdateAlerts()
     if not self.menu then return end
     local talents = C_ClassTalents and C_ClassTalents.HasUnspentTalentPoints
@@ -99,7 +109,8 @@ function M:UpdateAlerts()
     local unspent = ok and not (issecretvalue and issecretvalue(has)) and has == true
     self.menu:SetAlert("talents", unspent and "Talent points to spend" or nil)
     local n = self.spellsToTrain or 0
-    self.menu:SetAlert("spellbook", n > 0 and ((n == 1 and "1 spell" or (n .. " spells")) .. " to train at your class trainer") or nil)
+    local cost = self.trainingCost and (" · " .. coins(self.trainingCost)) or ""
+    self.menu:SetAlert("spellbook", n > 0 and ((n == 1 and "1 spell" or (n .. " spells")) .. " to train at your class trainer" .. cost) or nil)
 end
 
 function M:ApplyShows()
@@ -187,8 +198,9 @@ function M:OnEnable()
         self:Watch(key, function() self:ApplyShows() end)
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingLayout then self:Layout() end end)
-    self:On("SUUUI_SPELLS_TO_TRAIN", function(_, n)
+    self:On("SUUUI_SPELLS_TO_TRAIN", function(_, n, cost)
         self.spellsToTrain = tonumber(n) or 0
+        self.trainingCost = tonumber(cost)
         self:UpdateAlerts()
     end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid

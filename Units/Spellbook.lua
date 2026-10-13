@@ -32,6 +32,7 @@ local M = SuuUI.RegisterModule({
         allRanks = false,
         levelUp = true,     -- the level-up card
         untrained = false,  -- it lists earlier levels' spells still to train too
+        trainingCost = true, -- what training it all costs: the page's head, the micro menu
         levelUpFor = 0,     -- seconds it stays; 0: 4 and 1 more for each spell shown
     },
 })
@@ -347,7 +348,9 @@ function M:Render()
     end
     self.book:SetWidest(widest)
     self.book:SetSchools(tabs)
-    self.book:SetHead(schools[self.school].name, toTrain)
+    local okAll, count, cost = pcall(self.CountToTrain, self)
+    local all = okAll and self:Get("trainingCost") and { count = count, cost = cost, short = (GetMoney() or 0) < cost } or nil
+    self.book:SetHead(schools[self.school].name, toTrain, all)
     self.book:SetSwitches(self:Get("unlearned"), self:Get("allRanks"))
     -- as many as the page holds
     local perPage = self.book:FitRows() * 2
@@ -488,15 +491,20 @@ end
 -- How many spells you could train now, across every school; said to the
 -- rest of SuuUI (the micro menu marks its Spellbook button) whenever it may
 -- have changed. Needs no window: the spellbook and trainer data are there.
+-- Returns the count and what training all of it costs (copper).
 function M:CountToTrain()
     local schools = self:Schools()
     local trainer = self:TrainerBySchool(schools)
-    local total = 0
+    local total, cost = 0, 0
     for _, s in ipairs(schools) do
-        local _, n = self:SchoolList(s, trainer)
-        total = total + n
+        for _, e in ipairs(self:Unlearned(trainer[s.name], self:Learned(s))) do
+            if e.status == "trainable" then
+                total = total + 1
+                cost = cost + (tonumber(e.cost) or 0)
+            end
+        end
     end
-    return total
+    return total, cost
 end
 
 function M:SayToTrain()
@@ -504,8 +512,8 @@ function M:SayToTrain()
     self.sayTimer = C_Timer.NewTimer(1, function()
         self.sayTimer = nil
         if not self:IsEnabled() then return end
-        local ok, n = pcall(self.CountToTrain, self)
-        if ok then self:Emit("SUUUI_SPELLS_TO_TRAIN", n) end
+        local ok, n, cost = pcall(self.CountToTrain, self)
+        if ok then self:Emit("SUUUI_SPELLS_TO_TRAIN", n, self:Get("trainingCost") and cost or nil) end
     end)
 end
 
@@ -647,6 +655,10 @@ local SECTION = {
     preview = function(parent) return M:PreviewView(parent) end,
     previewNote = "Your next level that brings spells, as the card will show it.",
     groups = {
+        { title = "Spells to train", description = "What your class trainer has for you now, across every school.", rows = {
+            { key = "trainingCost", label = "Training cost", control = "toggle",
+              description = "How many spells you can train in all and what that costs: in the Spellbook's head (in ember when you can't afford it all) and the micro menu's Spellbook tooltip." },
+        } },
         { title = "Level up", description = "When you reach a level, a card where the alerts show lists what your class trainer now has for you, and what training all of it costs. Out of combat; a level gained in a fight waits for its end. It needs the Alerts module.", rows = {
             { key = "levelUp", label = "Level-up card", control = "toggle",
               description = "The new spells and ranks your trainer has for you when you reach a level." },
@@ -694,6 +706,15 @@ function M:OnEnable()
         end)
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
+    -- the cost in ember when your money no longer covers it, and the setting
+    self:OnGameEvent("PLAYER_MONEY", function()
+        if self.book and self.book:IsVisible() then self:Render() end
+    end)
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        if namespace ~= self.id or key ~= "trainingCost" then return end
+        if self.book then self:Render() end
+        self:SayToTrain()
+    end)
     SuuUI.AllowAlertOutOfCombat(LEVEL_UP)
     self:RegisterSettings(SECTION)
     self:OnGameEvent("PLAYER_LEVEL_UP", function(_, level) self:LevelGained(level) end)
