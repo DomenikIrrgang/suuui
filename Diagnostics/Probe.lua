@@ -717,7 +717,8 @@ function ns.Probe.Hide()
 end
 
 function ns.Probe.Command(arg)
-    local sub, rest = (arg or ""):match("^(%S*)%s*(.-)$")
+    -- a full stop or comma copied along with the command is dropped
+    local sub, rest = (arg or ""):gsub("[%.,;:!]+%s*$", ""):match("^(%S*)%s*(.-)$")
     if sub == "track" then
         ns.TrackProbe.Command(rest)
         return
