@@ -352,6 +352,10 @@ function Stack:SetItems(items, inCombat)
             self.cards[d.id] = card
         end
         used[d.id] = true
+        -- requests (popups to answer, loot rolls) above open windows; notes
+        -- at the stack's own layer, under them (asked for in game)
+        local request = d.kind == "action" or d.kind == "roll"
+        card:SetFrameStrata(request and "DIALOG" or self:GetFrameStrata())
         card:SetData(d)
         card:ClearAllPoints()
         card:SetPoint("TOPLEFT", 0, -y)

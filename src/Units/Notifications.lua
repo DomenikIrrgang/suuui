@@ -248,7 +248,8 @@ end
 function M:Remember(h, f)
     h.saved = h.saved or {}
     if h.saved[f] then return h.saved[f] end
-    local s = { points = savePoints(f), width = f:GetWidth(), height = f:GetHeight(), alphas = {} }
+    local s = { points = savePoints(f), width = f:GetWidth(), height = f:GetHeight(), alphas = {},
+        strata = f:GetFrameStrata(), level = f:GetFrameLevel() }
     for _, r in ipairs({ f:GetRegions() }) do
         if r:GetObjectType() == "Texture" then s.alphas[r] = r:GetAlpha() end
     end
@@ -269,6 +270,8 @@ function M:Undo(h)
         if self.widths then self.widths[f] = nil end
         restorePoints(f, s.points)
         f:SetSize(s.width, s.height)
+        if s.strata then f:SetFrameStrata(s.strata) end
+        if s.level then f:SetFrameLevel(s.level) end
         for r, a in pairs(s.alphas) do r:SetAlpha(a) end
         if s.fs and s.font then s.fs:SetFontObject(s.font) end
         if s.fs and s.color then s.fs:SetTextColor(unpack(s.color)) end
@@ -396,6 +399,10 @@ function M:Attach(h)
     for k = #list, 1, -1 do
         local b, index = list[k].button, list[k].index
         local variant = (index == kind.primary and "primary") or (index == kind.danger and "danger") or "quiet"
+        -- over their card, which is on the dialog layer now
+        self:Remember(h, b)
+        b:SetFrameStrata(card:GetFrameStrata())
+        b:SetFrameLevel(card:GetFrameLevel() + 10)
         self:StyleButton(h, b, variant)
         b:ClearAllPoints()
         if after then
@@ -406,7 +413,12 @@ function M:Attach(h)
         after = b
     end
     local eb = h.editBox
-    if card.data and card.data.confirmText and eb then self:StyleEditBox(h, eb, card.confirmBox) end
+    if card.data and card.data.confirmText and eb then
+        self:Remember(h, eb)
+        eb:SetFrameStrata(card:GetFrameStrata())
+        eb:SetFrameLevel(card:GetFrameLevel() + 10)
+        self:StyleEditBox(h, eb, card.confirmBox)
+    end
 end
 
 -- A Blizzard popup: its buttons, text, time left and edit box.
@@ -681,7 +693,8 @@ function M:OnEnable()
     self.arts = self.arts or {}
     if not self.frame then
         self.frame = CreateFrame("Frame", "SuuUINotifications", SuuUI.Root)
-        self.frame:SetFrameStrata("HIGH")
+        -- under open windows (HIGH): notes; requests raise themselves
+        self.frame:SetFrameStrata("MEDIUM")
         self.frame:SetSize(T.size["notice-w"], 200)
         self.stack = UI.NotificationStack(self.frame, { max = self:Get("max") })
         self.stack:SetPoint("TOPLEFT")
