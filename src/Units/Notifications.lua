@@ -34,6 +34,7 @@ local M = SuuUI.RegisterModule({
         requests = true,   -- Blizzard's popups as cards
         durability = true, -- a note while your gear is badly damaged or broken
         bagsFull = true,   -- a note while your bags are full
+        talentPoints = true, -- a note while you have talent points to spend
     },
 })
 
@@ -181,6 +182,39 @@ function M:CheckBags()
         end
     elseif self.notes["suu:bags"] then
         self:Dismiss("suu:bags")
+    end
+end
+
+-- Talent points not spent yet (the active talent config's points to spend).
+local function unspentTalents()
+    if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_Traits) then return 0 end
+    local ok, configID = pcall(C_ClassTalents.GetActiveConfigID)
+    if not ok or not plain(configID) or not configID then return 0 end
+    local info = C_Traits.GetConfigInfo(configID)
+    local treeID = info and info.treeIDs and info.treeIDs[1]
+    if not treeID then return 0 end
+    local ok2, currency = pcall(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    local q = ok2 and currency and currency[1] and currency[1].quantity
+    return plain(q) and q or 0
+end
+
+function M:CheckTalents()
+    local n = self:Get("talentPoints") and unspentTalents() or 0
+    if n == self.talentPointsShown then return end
+    self.talentPointsShown = n
+    if n > 0 then
+        local talents = SuuUI.GetModule("talents")
+        local actions
+        if talents and talents:IsEnabled() then
+            actions = { { label = "Open talents", variant = "primary", onClick = function()
+                if not SuuUI.TalentsShown() then SuuUI.ToggleTalents() end
+            end } }
+        end
+        self:Notify({ id = "suu:talents", kind = "until", tone = "info", category = "Talents",
+            title = n == 1 and "1 talent point to spend" or (n .. " talent points to spend"),
+            icon = { glyph = "tree" }, ["until"] = "Goes when you spend them", actions = actions })
+    elseif self.notes["suu:talents"] then
+        self:Dismiss("suu:talents")
     end
 end
 
@@ -628,6 +662,8 @@ local SECTION = {
               description = "Amber while a piece is at 20% or less, ember once one breaks; goes when you repair." },
             { key = "bagsFull", label = "Full bags", control = "toggle",
               description = "While your bags have no free slot; goes when one frees up." },
+            { key = "talentPoints", label = "Talent points to spend", control = "toggle",
+              description = "While you have talent points left, with a button that opens your talents; goes when you spend them." },
         } },
     },
 }
@@ -683,6 +719,14 @@ function M:OnEnable()
     end
     self:Watch("durability", function() self:CheckDurability() end)
     self:Watch("bagsFull", function() self:CheckBags() end)
+    for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED", "PLAYER_TALENT_UPDATE",
+                         "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
+        if not valid or valid(e) then
+            -- a moment later: the points read right only after the change has landed
+            self:OnGameEvent(e, function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents() end end) end)
+        end
+    end
+    self:Watch("talentPoints", function() self:CheckTalents() end)
     -- the ready check's time
     self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)
         if plain(timeLeft) and type(timeLeft) == "number" and timeLeft > 0 then
