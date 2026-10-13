@@ -170,6 +170,20 @@ function M:MeterOpts(byState)
     return { show = self:Get("who"), marker = self:Get("marker"), raw = self:Get("raw"), byState = byState }
 end
 
+-- The alerts this module raised: only those are taken away again (the
+-- driver runs every tick, out of combat too while the meter always shows:
+-- it told the Alerts module "no aggro" five times a second, found in game).
+local raised = {}
+function M.Alert(key, ...)
+    raised[key] = true
+    SuuUI.ShowAlert(key, ...)
+end
+function M.Unalert(key)
+    if not raised[key] then return end
+    raised[key] = nil
+    SuuUI.HideAlert(key)
+end
+
 -- Whether the aggro alert applies: in a group, or with your pet on the mob.
 function M:AggroApplies(rows)
     local mode = self:Get("aggroAlert")
@@ -188,31 +202,31 @@ function M:Warn(rows)
     local status = me and me.status
     local tank = me and me.role == "TANK"
     if not readable(status) or tank then
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.HideAlert("threat-aggro")
+        M.Unalert("threat-pull")
+        M.Unalert("threat-aggro")
         return
     end
     local drop = readyDrop()
     local dropText = drop and (" · " .. drop .. " ready") or ""
     if status == 1 and self:Get("warnPull") then
-        SuuUI.HideAlert("threat-aggro")
+        M.Unalert("threat-aggro")
         -- whoever holds the mob: the first other row at 2-3
         local holder
         for _, r in ipairs(rows) do
             if not r.you and readable(r.status) and r.status >= 2 then holder = r break end
         end
         if holder then
-            SuuUI.ShowAlert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",
+            M.Alert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",
                 UnitName("target"), holder.name, dropText)
         else
-            SuuUI.ShowAlert("threat-pull", "warning", "You're about to pull", "%s%s", UnitName("target"), dropText)
+            M.Alert("threat-pull", "warning", "You're about to pull", "%s%s", UnitName("target"), dropText)
         end
     elseif status >= 2 and self:AggroApplies(rows) then
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.ShowAlert("threat-aggro", "danger", "You have drawn aggro", "%s%s", UnitName("target"), dropText)
+        M.Unalert("threat-pull")
+        M.Alert("threat-aggro", "danger", "You have drawn aggro", "%s%s", UnitName("target"), dropText)
     else
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.HideAlert("threat-aggro")
+        M.Unalert("threat-pull")
+        M.Unalert("threat-aggro")
     end
 end
 
@@ -234,8 +248,8 @@ function M:Update()
     if fighting then
         self:Warn(rows)
     else
-        SuuUI.HideAlert("threat-pull")
-        SuuUI.HideAlert("threat-aggro")
+        M.Unalert("threat-pull")
+        M.Unalert("threat-aggro")
     end
 end
 
@@ -361,6 +375,6 @@ end
 function M:OnDisable()
     if self.driver then self.driver:Hide() end
     if self.meter then self.meter:Hide() end
-    SuuUI.HideAlert("threat-pull")
-    SuuUI.HideAlert("threat-aggro")
+    M.Unalert("threat-pull")
+    M.Unalert("threat-aggro")
 end
