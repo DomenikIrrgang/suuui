@@ -32,6 +32,7 @@ local M = SuuUI.RegisterModule({
     defaults = {
         nameColors = true,
         groupAuras = true,
+        ids = true,           -- spell IDs, and who cast a buff or debuff
         anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
         position = { point = "BOTTOMRIGHT", x = -28, y = 96 },
     },
@@ -160,7 +161,10 @@ function M:AddAuraLines(tooltip, unit)
     for i = 1, math.min(#list, MAX_LINES) do
         local a, harmful = list[i].a, list[i].harmful
         local icon = plain(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
-        local mine = plain(a.isFromPlayerOrPlayerPet) and a.isFromPlayerOrPlayerPet and not harmful
+        -- yours: you (or your pet) cast it (isFromPlayerOrPlayerPet is true for
+        -- every aura on you, found in game)
+        local src = a.sourceUnit
+        local mine = not harmful and plain(src) and src ~= nil and (UnitIsUnit(src, "player") or UnitIsUnit(src, "pet"))
         local c = harmful and ember or ink
         local name = a.name .. (mine and (" |cff" .. muted.hex .. "(yours)|r") or "")
         local count = plain(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
@@ -231,6 +235,88 @@ function M:GroupAuras(tooltip)
 end
 
 --------------------------------------------------------------------------------
+-- Any of Blizzard's tooltips, the first time it shows something
+--------------------------------------------------------------------------------
+
+-- Tooltips SuuUI doesn't know by name (the aura buttons' own one, an
+-- addon's) get the look the first time they show the game's data.
+function M:SkinAny(tooltip)
+    if UI.IsTooltipSkinned(tooltip) then return end
+    if tooltip.IsForbidden and tooltip:IsForbidden() then return end
+    if tooltip.GetObjectType and tooltip:GetObjectType() ~= "GameTooltip" then return end
+    local name = tooltip:GetName()
+    -- a tooltip inside another one keeps its host's look
+    if name and name:find("Embedded") then return end
+    UI.SkinTooltip(tooltip)
+    local ui = UIParent:GetEffectiveScale()
+    if ui and ui > 0 and tooltip:GetParent() == UIParent then
+        tooltip:SetScale(SuuUI.Root:GetEffectiveScale() / ui)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Spell IDs, and who cast an aura
+--------------------------------------------------------------------------------
+
+function M:AddSpellID(tooltip, data)
+    if not self:Get("ids") then return end
+    local id = data and data.id
+    if not plain(id) or type(id) ~= "number" then return end
+    local m = T.color["ink-faint"]
+    tooltip:AddDoubleLine("Spell ID", tostring(id), m[1], m[2], m[3], m[1], m[2], m[3])
+    tooltip:Show()
+end
+
+-- After SetUnitAura & co: "From" and the caster in their class colour.
+function M:AddSource(tooltip, unit, auraInstanceID, index, filter)
+    if not self:Get("ids") then return end
+    if not plain(unit) or not unit then return end
+    local ok, a
+    if auraInstanceID then
+        ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, auraInstanceID)
+    else
+        ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, index, filter)
+    end
+    if not ok or not a then return end
+    local src = a.sourceUnit
+    if not plain(src) or not src then return end
+    local name = UnitName(src)
+    if not plain(name) or not name then return end
+    local color = T.color["ink"]
+    if UI.Flag(UnitIsPlayer(src)) then
+        local _, class = UnitClass(src)
+        if plain(class) and class and T.color["class-" .. class:lower()] then color = T.color["class-" .. class:lower()] end
+    end
+    if UI.Flag(UnitIsUnit(src, "player")) then name = name .. " (you)" end
+    local m = T.color["ink-faint"]
+    tooltip:AddDoubleLine("From", name, m[1], m[2], m[3], color[1], color[2], color[3])
+    tooltip:Show()
+end
+
+function M:HookAuraSources()
+    local api = getmetatable(GameTooltip)
+    api = api and api.__index
+    if type(api) ~= "table" then return end
+    local function hook(method, byID, defaultFilter)
+        if type(api[method]) ~= "function" then return end
+        hooksecurefunc(api, method, function(tooltip, unit, a2, a3)
+            if not self:IsEnabled() or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
+            if byID then
+                self:Guard(self.AddSource)(self, tooltip, unit, a2)
+            else
+                self:Guard(self.AddSource)(self, tooltip, unit, nil, a2, a3 or defaultFilter)
+            end
+        end)
+    end
+    hook("SetUnitAura", false, "HELPFUL")
+    hook("SetUnitBuff", false, "HELPFUL")
+    hook("SetUnitDebuff", false, "HARMFUL")
+    hook("SetUnitBuffByAuraInstanceID", true)
+    hook("SetUnitDebuffByAuraInstanceID", true)
+    hook("SetUnitAuraByAuraInstanceID", true)
+end
+
+--------------------------------------------------------------------------------
 -- Where a tooltip without an owner of its own opens
 --------------------------------------------------------------------------------
 
@@ -257,6 +343,8 @@ local SECTION = {
               description = "A player's name in their class colour, everyone else's in hostile, neutral or friendly." },
             { key = "groupAuras", label = "Group members' auras", control = "toggle",
               description = "Hovering a party or raid member lists their debuffs and buffs with the time left. In combat the game lets SuuUI show them only as icons: a small panel under the tooltip." },
+            { key = "ids", label = "Spell IDs and casters", control = "toggle",
+              description = "A spell's or ability's ID at the foot of its tooltip; on a buff or debuff also who cast it, in their class colour." },
             { key = "anchor", label = "Where they open", control = "segmented",
               options = { { value = "suuui", label = "SuuUI's place" }, { value = "blizzard", label = "Blizzard's" } },
               description = "For tooltips with no place of their own (the world, units). SuuUI's place: bottom right, above your bags while they're open; move it in edit mode." },
@@ -285,6 +373,17 @@ function M:OnEnable()
     if not self.hooked then
         self.hooked = true
         if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType then
+            TooltipDataProcessor.AddTooltipPostCall(TooltipDataProcessor.AllTypes or "ALL", function(tooltip)
+                if self:IsEnabled() then pcall(self.SkinAny, self, tooltip) end
+            end)
+            for _, kind in ipairs({ Enum.TooltipDataType.Spell, Enum.TooltipDataType.UnitAura }) do
+                if kind then
+                    TooltipDataProcessor.AddTooltipPostCall(kind, function(tooltip, data)
+                        if self:IsEnabled() then self:Guard(self.AddSpellID)(self, tooltip, data) end
+                    end)
+                end
+            end
+            self:HookAuraSources()
             TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
                 if not self:IsEnabled() then return end
                 pcall(self.ColorUnit, self, tooltip)
