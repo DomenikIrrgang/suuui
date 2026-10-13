@@ -242,6 +242,7 @@ API.UI.Inventory = UI.Inventory -- Inventory(parent, { title, columns, name, sor
 API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
 API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
 API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
+API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
 API.UI.Reskin = UI.Reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
 API.UI.ReskinScrollBox = UI.ReskinScrollBox
 API.UI.ReskinStatusBar = UI.ReskinStatusBar
@@ -279,4 +280,10 @@ end
 function API.HideAlert(key)
     local m = Modules.Get("alerts")
     if m and m:IsEnabled() then m:Hide(key) end
+end
+
+-- 0.12: what your class trainer teaches (Data/Trainer, from the class
+-- probes): { name, level, cost (copper), school, icon, text } for your class.
+function API.TrainerSpells()
+    return ns.TrainerSpells or {}
 end
