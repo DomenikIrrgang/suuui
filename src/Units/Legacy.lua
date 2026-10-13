@@ -231,6 +231,29 @@ local function itemsIn(category)
         if id and points then
             local item = { id = id, name = name, done = completed and true or false, points = points, order = i,
                 progress = (not completed) and progressOf(id) or nil }
+            -- the full list's detail: steps (zones, dungeons, bosses) or one count
+            local n = call(GetAchievementNumCriteria, id) or 0
+            if n > 1 then
+                local done = 0
+                for k = 1, n do
+                    local _, _, ok = call(GetAchievementCriteriaInfo, id, k)
+                    if ok then done = done + 1 end
+                end
+                item.stepsN, item.stepsDone = n, done
+                item.steps = function()
+                    local out = {}
+                    for k = 1, n do
+                        local text, _, ok = call(GetAchievementCriteriaInfo, id, k)
+                        out[#out + 1] = { text = text, done = ok and true or false }
+                    end
+                    return out
+                end
+            elseif n == 1 then
+                local _, _, ok, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
+                if not ok and plain(quantity) and plain(required) and required and required > 1 then
+                    item.count = { quantity, required }
+                end
+            end
             item.onEnter = function(owner) challengeTip(owner, id, name, description, points) end
             item.onLeave = function() GameTooltip:Hide() end
             -- how close: progress as a fraction, for the cards' order

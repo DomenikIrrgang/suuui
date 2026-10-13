@@ -212,11 +212,203 @@ function Challenges:SetCategories(list)
     end
     for i = #self.list + 1, #self.cards do self.cards[i]:Hide() end
     self:Layout()
-    if self.openIndex then self:Open(self.openIndex) end
+    -- a refresh (progress changed) keeps the open list where it was scrolled
+    if self.openIndex then self:Open(self.openIndex, true) end
 end
 
--- One category's full list, by sub-category.
-function Challenges:Open(i)
+--------------------------------------------------------------------------------
+-- One category's full list (asked for in game: groups you can't miss, real
+-- progress, a back button you can't miss): a bar with "All challenges", the
+-- category and its progress; each sub-category its own panel (small ones two
+-- to a row); a challenge with steps opens to show each step done or to do.
+--------------------------------------------------------------------------------
+
+local BAR_W = 64      -- a challenge's progress bar
+local STEP_W = 168    -- a step's column
+local STEP_H = T.type.body.lineHeight
+local INDENT = 12 + S["space-3"]
+
+-- a thin bar: track and fill
+local function thinBar(parent, h)
+    local b = CreateFrame("Frame", nil, parent)
+    b:SetHeight(h or 3)
+    b.track = UI.Fill(b, "track", "ARTWORK")
+    b.track:SetAllPoints()
+    b.fill = UI.Fill(b, "progress-fill", "ARTWORK", 1)
+    b.fill:SetPoint("TOPLEFT")
+    b.fill:SetPoint("BOTTOMLEFT")
+    function b:SetFraction(f)
+        f = math.max(0, math.min(1, f or 0))
+        local w = self:GetWidth()
+        self.fill:SetShown(f > 0 and w and w > 0)
+        if w and w > 0 then self.fill:SetWidth(math.max(0.01, w * f)) end
+        self.fraction = f
+    end
+    b:SetScript("OnSizeChanged", function(self) if self.fraction then self:SetFraction(self.fraction) end end)
+    return b
+end
+
+-- a step: a check (done, muted) or a hollow diamond (to do, bright), its text
+local function makeStep(parent)
+    local c = CreateFrame("Frame", nil, parent)
+    c:SetSize(STEP_W, STEP_H)
+    c.check = c:CreateTexture(nil, "ARTWORK")
+    c.check:SetTexture(GLYPHS .. "check.tga")
+    c.check:SetSize(10, 10)
+    c.check:SetPoint("LEFT", 0, 0)
+    c.check:SetVertexColor(UI.RGBA("ink-muted"))
+    c.ring = UI.Diamond(c, 7, "gilt-line", "ARTWORK", 1)
+    c.ring:SetPoint("CENTER", c, "LEFT", 5, 0)
+    c.hole = UI.Diamond(c, 4, "surface-sunk", "ARTWORK", 2)
+    c.hole:SetPoint("CENTER", c.ring, "CENTER")
+    c.text = UI.Text(c, "body", "ink")
+    c.text:SetPoint("LEFT", c, "LEFT", 16, 0)
+    c.text:SetPoint("RIGHT", c, "RIGHT", -S["space-3"], 0)
+    c.text:SetJustifyH("LEFT")
+    return c
+end
+
+-- a challenge in a panel: open/closed chevron (with steps), check or bullet,
+-- the name, its progress with a bar, its Legacy points
+local function makeDetailRow(view, parent)
+    local r = CreateFrame("Button", nil, parent)
+    r:SetHeight(ROW_H + 2)
+    r.hover = UI.Fill(r, "gilt-faint", "BACKGROUND", 1)
+    r.hover:SetAllPoints()
+    r.hover:Hide()
+    r.chevron = r:CreateTexture(nil, "ARTWORK")
+    r.chevron:SetSize(10, 10)
+    r.chevron:SetPoint("LEFT", 0, 0)
+    r.chevron:SetVertexColor(UI.RGBA("gilt-text"))
+    r.check = r:CreateTexture(nil, "ARTWORK")
+    r.check:SetTexture(GLYPHS .. "check.tga")
+    r.check:SetSize(11, 11)
+    r.check:SetPoint("LEFT", 0, 0)
+    r.check:SetVertexColor(UI.RGBA("ink-muted"))
+    r.bullet = UI.Diamond(r, 4, "ink-muted", "ARTWORK", 1)
+    r.bullet:SetPoint("CENTER", r, "LEFT", 5, 0)
+    r.worth = UI.Text(r, "caption", "gilt-text")
+    r.worth:SetPoint("RIGHT", r, "RIGHT", -S["space-2"], 0)
+    r.bar = thinBar(r, 3)
+    r.bar:SetWidth(BAR_W)
+    r.bar:SetPoint("RIGHT", r.worth, "LEFT", -S["space-5"], 0)
+    r.progress = UI.Text(r, "numeric", "ink")
+    r.progress:SetPoint("RIGHT", r.bar, "LEFT", -S["space-4"], 0)
+    r.name = UI.Text(r, "body", "ink")
+    r.name:SetPoint("LEFT", r, "LEFT", INDENT, 0)
+    r.name:SetPoint("RIGHT", r.progress, "LEFT", -S["space-4"], 0)
+    r.name:SetJustifyH("LEFT")
+    r:SetScript("OnEnter", function(self)
+        if self.item and self.item.stepsN then self.hover:Show() end
+        if self.item and self.item.onEnter then self.item.onEnter(self) end
+    end)
+    r:SetScript("OnLeave", function(self)
+        self.hover:Hide()
+        if self.item and self.item.onLeave then self.item.onLeave() end
+    end)
+    r:SetScript("OnClick", function(self)
+        local item = self.item
+        if not (item and item.stepsN) then return end
+        view.expanded[item.id] = not view.expanded[item.id]
+        view:Open(view.openIndex, true)
+    end)
+    return r
+end
+
+local function fillDetailRow(view, r, item)
+    r.item = item
+    local steps = item.stepsN and item.stepsN > 1
+    local open = steps and view.expanded[item.id]
+    r.chevron:SetShown(steps and not item.done)
+    r.chevron:SetTexture(GLYPHS .. (open and "chevronDown" or "chevronRight") .. ".tga")
+    r.check:SetShown(item.done and true or false)
+    r.bullet:SetShown(not item.done and not steps)
+    r.name:SetValue(item.name or "")
+    r.name:SetColor(item.done and "ink-muted" or "ink")
+    -- progress: steps done, or the count
+    local frac
+    if item.done then
+        r.progress:SetValue("")
+    elseif steps then
+        r.progress:SetValue((item.stepsDone or 0) .. "/" .. item.stepsN)
+        frac = (item.stepsDone or 0) / item.stepsN
+    elseif item.count then
+        r.progress:SetValue(item.count[1] .. "/" .. item.count[2])
+        frac = item.count[1] / item.count[2]
+    else
+        r.progress:SetValue("")
+    end
+    r.bar:SetShown(frac ~= nil)
+    if frac then r.bar:SetFraction(frac) end
+    r.worth:SetValue(item.points and ("+" .. item.points) or "")
+    r.worth:SetColor(item.done and "ink-muted" or "gilt-text")
+end
+
+local PANEL_PAD = S["space-5"]
+local PANEL_HEAD = T.type.header.lineHeight + S["space-3"] + 3 + S["space-4"]
+
+local function makePanel(parent)
+    local p = CreateFrame("Frame", nil, parent)
+    UI.Fill(p, "surface-sunk"):SetAllPoints()
+    UI.Border(p, "gilt-faint")
+    p.name = UI.Text(p, "header", "gilt-text")
+    p.name:SetPoint("TOPLEFT", PANEL_PAD, -PANEL_PAD)
+    p.count = UI.Text(p, "caption", "ink-muted")
+    p.count:SetPoint("TOPRIGHT", -PANEL_PAD, -PANEL_PAD - 2)
+    p.bar = thinBar(p, 3)
+    p.bar:SetPoint("TOPLEFT", p.name, "BOTTOMLEFT", 0, -S["space-3"])
+    p.bar:SetPoint("RIGHT", p, "RIGHT", -PANEL_PAD, 0)
+    p.rows, p.steps = {}, {}
+    return p
+end
+
+-- A panel's rows and open steps; returns its height.
+local function fillPanel(view, p, g, width)
+    p:SetWidth(width)
+    p.name:SetValue(g.name ~= "" and g.name or view.list[view.openIndex].name)
+    p.count:SetValue(g.done .. "/" .. #g.items)
+    p.bar:SetFraction(#g.items > 0 and g.done / #g.items or 0)
+    local y = PANEL_PAD + PANEL_HEAD
+    local inner = width - PANEL_PAD * 2
+    local stepIndex = 0
+    for k, item in ipairs(g.items) do
+        local r = p.rows[k] or makeDetailRow(view, p)
+        p.rows[k] = r
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", p, "TOPLEFT", PANEL_PAD, -y)
+        r:SetWidth(inner)
+        fillDetailRow(view, r, item)
+        r:Show()
+        y = y + ROW_H + 2 + S["space-1"]
+        -- its steps, in columns, when open
+        if item.stepsN and view.expanded[item.id] and item.steps then
+            local list = item.steps()
+            local cols = math.max(1, math.floor((inner - INDENT) / STEP_W))
+            for s2, step in ipairs(list) do
+                stepIndex = stepIndex + 1
+                local c = p.steps[stepIndex] or makeStep(p)
+                p.steps[stepIndex] = c
+                local col, row = (s2 - 1) % cols, math.floor((s2 - 1) / cols)
+                c:ClearAllPoints()
+                c:SetPoint("TOPLEFT", p, "TOPLEFT", PANEL_PAD + INDENT + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
+                c.check:SetShown(step.done and true or false)
+                c.ring:SetShown(not step.done)
+                c.hole:SetShown(not step.done)
+                c.text:SetValue(step.text or "")
+                c.text:SetColor(step.done and "ink-muted" or "ink")
+                c:Show()
+            end
+            y = y + S["space-1"] + math.ceil(#list / cols) * STEP_H + S["space-4"]
+        end
+    end
+    for k = #g.items + 1, #p.rows do p.rows[k]:Hide() end
+    for k = stepIndex + 1, #p.steps do p.steps[k]:Hide() end
+    local h = y + PANEL_PAD - S["space-1"]
+    p:SetHeight(h)
+    return h
+end
+
+function Challenges:Open(i, keep)
     local d = self.list[i]
     if not d then return self:Close() end
     self.openIndex = i
@@ -224,42 +416,47 @@ function Challenges:Open(i)
     self.detail:Show()
     self.detailTitle:SetValue(d.name or "")
     self.detailCount:SetValue((d.done or 0) .. "/" .. (d.total or 0))
-    local child = self.scroll.child
-    child:SetWidth(math.max(1, self.scroll:GetWidth()))
-    local y, n = 0, 0
-    for _, h in ipairs(self.heads) do h:Hide() end
-    for _, r in ipairs(self.detailRows) do r:Hide() end
-    local hi = 0
-    for _, g in ipairs(d.groups or {}) do
-        if g.name and g.name ~= "" and #(d.groups) > 1 then
-            hi = hi + 1
-            local h = self.heads[hi]
-            if not h then
-                h = UI.Text(child, "label", "gilt-text")
-                self.heads[hi] = h
-            end
-            h:ClearAllPoints()
-            h:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y - (y > 0 and S["space-4"] or 0))
-            h:SetValue(g.name .. "  |cff" .. hex("ink-muted") .. g.done .. "/" .. #g.items .. "|r")
-            h:Show()
-            y = y + (y > 0 and S["space-4"] or 0) + T.type.label.lineHeight + S["space-2"]
-        end
-        for _, item in ipairs(g.items) do
-            n = n + 1
-            local r = self.detailRows[n]
-            if not r then
-                r = makeRow(child)
-                self.detailRows[n] = r
-            end
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT", child, "RIGHT", -S["space-5"], 0)
-            fillRow(r, item)
-            r:Show()
-            y = y + ROW_H + S["space-2"]
-        end
+    self.detailBar:SetFraction((d.total or 0) > 0 and d.done / d.total or 0)
+    local scroll = self.scroll
+    local offset = keep and scroll:GetVerticalScroll() or 0
+    local child = scroll.child
+    local W = math.max(1, scroll:GetWidth() - S["space-5"])
+    child:SetWidth(W)
+    local gap = S["space-5"]
+    local half = math.floor((W - gap) / 2)
+    -- small groups two to a row, the rest the full width
+    local y, k, pending = 0, 0, nil
+    local function flush()
+        if pending then y = y + pending + gap; pending = nil end
     end
-    child:SetHeight(math.max(1, y))
+    for _, g in ipairs(d.groups or {}) do
+        k = k + 1
+        local p = self.panels[k] or makePanel(child)
+        self.panels[k] = p
+        local wide = #g.items > 4
+        for _, item in ipairs(g.items) do if item.stepsN and item.stepsN > 1 then wide = true end end
+        p:ClearAllPoints()
+        if wide then
+            flush()
+            local h = fillPanel(self, p, g, W)
+            p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+            y = y + h + gap
+        elseif pending then
+            local h = fillPanel(self, p, g, half)
+            p:SetPoint("TOPLEFT", child, "TOPLEFT", half + gap, -y)
+            pending = math.max(pending, h)
+            flush()
+        else
+            local h = fillPanel(self, p, g, half)
+            p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+            pending = h
+        end
+        p:Show()
+    end
+    flush()
+    for n = k + 1, #self.panels do self.panels[n]:Hide() end
+    child:SetHeight(math.max(1, y - gap))
+    scroll:SetVerticalScroll(keep and math.min(offset, math.max(0, y - scroll:GetHeight())) or 0)
 end
 
 function Challenges:Close()
@@ -271,33 +468,37 @@ end
 function UI.LegacyChallenges(parent)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Challenges)
-    f.cards, f.heads, f.detailRows = {}, {}, {}
+    f.cards = {}
     f.grid = CreateFrame("Frame", nil, f)
     f.grid:SetAllPoints()
-    -- the full list of one category
+    -- the full list of one category: a bar with the way back, the panels
+    f.expanded, f.panels = {}, {}
     f.detail = CreateFrame("Frame", nil, f)
     f.detail:SetAllPoints()
     f.detail:Hide()
-    f.back = CreateFrame("Button", nil, f.detail)
-    f.back.label = UI.Text(f.back, "caption", "gilt-text")
-    f.back.label:SetPoint("LEFT", 14, 0)
-    f.back.label:SetValue("All challenges")
-    f.back.glyph = f.back:CreateTexture(nil, "ARTWORK")
-    f.back.glyph:SetTexture(GLYPHS .. "chevronLeft.tga")
-    f.back.glyph:SetSize(10, 10)
-    f.back.glyph:SetPoint("LEFT")
-    f.back.glyph:SetVertexColor(UI.RGBA("gilt-text"))
-    f.back:SetSize(120, T.type.caption.lineHeight)
+    f.back = UI.Button(f.detail, { text = "All challenges", variant = "quiet", onClick = function() f:Close() end })
+    f.back.fixedWidth = true
+    f.back:SetWidth(f.back.label:GetUnboundedStringWidth() + S["space-5"] * 2 + 14)
+    f.back.label:ClearAllPoints()
+    f.back.label:SetPoint("CENTER", 7, 0)
+    -- the press moves the label 1px down: keep it beside the chevron
+    f.back:HookScript("OnMouseDown", function(b) if b:IsEnabled() then b.label:SetPoint("CENTER", 7, -1) end end)
+    f.back:HookScript("OnMouseUp", function(b) b.label:SetPoint("CENTER", 7, 0) end)
+    f.back.chevron = f.back:CreateTexture(nil, "OVERLAY")
+    f.back.chevron:SetTexture(GLYPHS .. "chevronLeft.tga")
+    f.back.chevron:SetSize(10, 10)
+    f.back.chevron:SetPoint("LEFT", S["space-5"], 0)
+    f.back.chevron:SetVertexColor(UI.RGBA("gilt-text"))
     f.back:SetPoint("TOPLEFT")
-    f.back:SetScript("OnClick", function() f:Close() end)
-    f.back:SetScript("OnEnter", function(self) self.label:SetColor("ink") end)
-    f.back:SetScript("OnLeave", function(self) self.label:SetColor("gilt-text") end)
     f.detailTitle = UI.Text(f.detail, "header", "gilt-text")
-    f.detailTitle:SetPoint("TOPLEFT", f.back, "BOTTOMLEFT", 0, -S["space-4"])
+    f.detailTitle:SetPoint("LEFT", f.back, "RIGHT", S["space-6"], 0)
     f.detailCount = UI.Text(f.detail, "caption", "ink-muted")
     f.detailCount:SetPoint("LEFT", f.detailTitle, "RIGHT", S["space-4"], 0)
+    f.detailBar = thinBar(f.detail, 4)
+    f.detailBar:SetPoint("LEFT", f.detailCount, "RIGHT", S["space-5"], 0)
+    f.detailBar:SetPoint("RIGHT", f.detail, "RIGHT", 0, 0)
     f.scroll = UI.ScrollArea(f.detail, 6)
-    f.scroll:SetPoint("TOPLEFT", f.detailTitle, "BOTTOMLEFT", 0, -S["space-5"])
+    f.scroll:SetPoint("TOPLEFT", f.back, "BOTTOMLEFT", 0, -S["space-5"])
     f.scroll:SetPoint("BOTTOMRIGHT", f.detail, "BOTTOMRIGHT", -10, 0)
     f:SetScript("OnSizeChanged", function() f:Layout() end)
     return f
