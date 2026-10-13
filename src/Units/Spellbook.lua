@@ -424,6 +424,25 @@ function M:Build()
         if part and part.SetAlpha then part:SetAlpha(0) end
     end
     for _, r in ipairs({ page:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
+    -- its spell buttons off screen too: see-through only, Blizzard's wider
+    -- page stuck out of the window and they took the mouse there (found in
+    -- game on the Talents tab, the same on this one). Back off screen
+    -- whenever Blizzard places them again (out of combat).
+    local spells = page.PagedSpellsFrame
+    if spells then
+        local function away()
+            if InCombatLockdown() then self.awayAfterCombat = true return end
+            self.placingSpells = true
+            spells:ClearAllPoints()
+            spells:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+            self.placingSpells = false
+        end
+        self.awaySpells = away
+        away()
+        hooksecurefunc(spells, "SetPoint", function()
+            if not self.placingSpells then C_Timer.After(0, away) end
+        end)
+    end
     local book = UI.Spellbook(page, { rows = 6, edgeInset = 20 })
     -- on the window itself (the window is shortened while this tab shows;
     -- Blizzard's page keeps its own, taller size)
@@ -779,6 +798,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.levelTo then self:LevelGained(self.levelTo) end
         if not self.book then self:Build() end
+        if self.awayAfterCombat and self.awaySpells then self.awayAfterCombat = nil; self.awaySpells() end
         if self.renderAfterCombat then
             self.renderAfterCombat = false
             self:Render()
