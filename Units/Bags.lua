@@ -20,6 +20,9 @@
 -- characters" turns the search into a list of everything found on every
 -- character, and where. Settings › Bags › Characters forgets one.
 --
+-- Item counts: an item's tooltip says which of your characters has how
+-- many, and where (bags, bank, equipped), from the same saved copies.
+--
 -- Sell junk: at a vendor, with grey items in your bags, a button in the
 -- foot sells them one at a time, each slot read again just before it sells
 -- (still grey, still sellable, not locked, the vendor still open).
@@ -45,6 +48,7 @@ local M = SuuUI.RegisterModule({
         reagentBag = true,
         keyring = false,
         bank = true,
+        itemCounts = true,
         bankPosition = { point = "TOP", x = -216, y = -240 },
     },
 })
@@ -304,6 +308,13 @@ function M:SaveMe()
         local bank = snapshot(self:BankBags())
         if bank.size > 0 then d.bank = bank end
     end
+    -- what you wear: item links by slot (head 1 … tabard 19)
+    local worn = {}
+    for slot = 1, 19 do
+        local link = GetInventoryItemLink("player", slot)
+        if plain(link) and link then worn[#worn + 1] = link end
+    end
+    d.equipped = worn
 end
 
 function M:QueueSave()
@@ -487,6 +498,64 @@ function M:Foot()
     end
     inv:SetNote(note)
     inv:SetMoney(money)
+end
+
+--------------------------------------------------------------------------------
+-- Item counts in tooltips
+--------------------------------------------------------------------------------
+
+local WHERE = { { key = "bags", label = "Bags" }, { key = "bank", label = "Bank" }, { key = "equipped", label = "Equipped" } }
+
+-- How many of item `id` each saved character has: { { c, total, bags, bank, equipped } } in picker order.
+function M:CountsFor(id)
+    local out = {}
+    local key = tostring(id)
+    for _, c in ipairs(self:Characters()) do
+        local n = { c = c, total = 0, bags = 0, bank = 0, equipped = 0 }
+        for _, where in ipairs({ "bags", "bank" }) do
+            local box = c.d[where]
+            for _, e in ipairs(box and box.slots or {}) do
+                if e and e.l and e.l:match("item:(%d+)") == key then
+                    n[where] = n[where] + (e.c or 1)
+                end
+            end
+        end
+        for _, link in ipairs(c.d.equipped or {}) do
+            if link:match("item:(%d+)") == key then n.equipped = n.equipped + 1 end
+        end
+        n.total = n.bags + n.bank + n.equipped
+        if n.total > 0 then out[#out + 1] = n end
+    end
+    return out
+end
+
+function M:AddCounts(tooltip, data)
+    if not self:Get("itemCounts") then return end
+    local id = data and data.id
+    if not plain(id) or type(id) ~= "number" then return end
+    local counts = self:CountsFor(id)
+    if #counts == 0 then return end
+    -- only you, only in your bags: you're looking at them already
+    if #counts == 1 and counts[1].c.me and counts[1].bags == counts[1].total then return end
+    local muted, gilt = T.color["ink-muted"], T.color["gilt-text"]
+    tooltip:AddLine(" ")
+    local all = 0
+    for _, n in ipairs(counts) do
+        local parts = {}
+        for _, w in ipairs(WHERE) do
+            if n[w.key] > 0 then parts[#parts + 1] = w.label .. " " .. n[w.key] end
+        end
+        local class = n.c.d.class and T.color["class-" .. n.c.d.class:lower()]
+        local name = n.c.d.name or n.c.key
+        if n.c.d.realm and n.c.d.realm ~= GetRealmName() then name = name .. "-" .. n.c.d.realm end
+        local left = classDiamond(n.c.d.class) .. (class and ("|cff" .. class.hex .. name .. "|r") or name)
+        tooltip:AddDoubleLine(left, table.concat(parts, " · "), 1, 1, 1, muted[1], muted[2], muted[3])
+        all = all + n.total
+    end
+    if #counts > 1 then
+        tooltip:AddDoubleLine("Total", tostring(all), gilt[1], gilt[2], gilt[3], gilt[1], gilt[2], gilt[3])
+    end
+    tooltip:Show() -- fit the new lines
 end
 
 --------------------------------------------------------------------------------
@@ -839,6 +908,8 @@ local SECTION = {
             { key = "keyring", label = "Keyring", control = "toggle", description = "Your keys after everything else." },
         } },
         { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
+            { key = "itemCounts", label = "Counts in item tooltips", control = "toggle",
+              description = "An item's tooltip lists which of your characters has how many, in their bags, bank or worn." },
             { label = "Forget a character", control = "custom", build = function(p) return M:ForgetRow(p) end,
               description = "Takes their bags and bank out of the picker and the search, until they log in again." },
         } },
@@ -965,6 +1036,15 @@ function M:OnEnable()
         self:HideBank()
     end)
     self:OnGameEvent("PLAYER_LEVEL_UP", function() self:QueueSave() end)
+    self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function() self:QueueSave() end)
+    if not self.tipHooked and TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType then
+        self.tipHooked = true
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
+            if not self:IsEnabled() then return end
+            if tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip then return end
+            self:Guard(self.AddCounts)(self, tooltip, data)
+        end)
+    end
     self:OnGameEvent("MERCHANT_SHOW", function() self.atMerchant = true; self:UpdateJunk() end)
     self:OnGameEvent("MERCHANT_CLOSED", function() self.atMerchant = false; self:UpdateJunk() end)
     self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveMe() end)
