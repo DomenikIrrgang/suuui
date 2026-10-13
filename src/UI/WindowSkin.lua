@@ -287,9 +287,10 @@ local Row = { list = {}, seq = 0 }
 ns.WindowRow = Row
 
 -- The windows asked to sit in the middle of the screen (their headers
--- included), out of the row: side by side in the order they opened, the
--- group centred, each one centred up and down (Talents and Legacy open
--- together: asked for in game). A protected one moves out of combat only.
+-- included), out of the row; opening one there closes the other (see
+-- Row.Add), so normally one: in the middle. Should two be open at once (a
+-- protected one can't be closed from here), side by side, the group
+-- centred. A protected one moves out of combat only.
 local function centerAll(list)
     if #list == 0 then return end
     table.sort(list, function(a, b) return (a.openedAt or 0) < (b.openedAt or 0) end)
@@ -378,6 +379,16 @@ function Row.Add(chrome)
     f:HookScript("OnShow", function()
         Row.seq = Row.seq + 1
         chrome.openedAt = Row.seq
+        -- the middle holds one window: opening one there closes the other
+        -- (Talents and Legacy: asked for in game); protected ones aren't
+        -- closed from here
+        if chrome.centered then
+            for _, other in ipairs(Row.list) do
+                if other ~= chrome and other.centered and not other.protected and other.frame:IsShown() then
+                    other.frame:Hide()
+                end
+            end
+        end
         Row.Layout()
         Row.Queue()
     end)
