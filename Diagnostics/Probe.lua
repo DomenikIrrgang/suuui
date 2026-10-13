@@ -795,6 +795,10 @@ function ns.Probe.Command(arg)
         ns.SpellbookProbe.Command(rest)
         return
     end
+    if sub == "flicker" then
+        ns.FlickerProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
