@@ -203,13 +203,18 @@ end, "Modules")
 -- Registration
 --------------------------------------------------------------------------------
 
--- The addon whose file called RegisterModule, from the call stack.
+-- The addon whose file called RegisterModule, from the call stack: the first
+-- frame of another addon, else SuuUI itself. SuuUI's own frames are skipped
+-- by addon, not by file, so this also holds when wowlua bundles SuuUI into
+-- one file.
 local function sourceAddon()
     local stack = debugstack(1, 8, 0) or ""
-    for addon, path in stack:gmatch("AddOns[/\\]([^/\\]+)[/\\]([^:\"%]]+)") do
-        if not (addon == ns.name and path:find("^Core[/\\]")) then return addon end
+    local own = false
+    for addon in stack:gmatch("AddOns[/\\]([^/\\]+)[/\\]") do
+        if addon ~= ns.name then return addon end
+        own = true
     end
-    return "?"
+    return own and ns.name or "?"
 end
 
 function Modules.Register(def)
