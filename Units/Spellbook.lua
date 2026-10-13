@@ -373,6 +373,7 @@ function M:Build()
         local mm = f.MaximizeMinimizeButton
         if not mm then return end
         mm:SetAlpha(on and 1 or 0)
+        if InCombatLockdown() then return end -- (inside a protected window)
         for _, b in ipairs({ mm:GetChildren() }) do b:EnableMouse(on) end
     end
     book:HookScript("OnShow", function() maxMin(false); self:Shorten(); self:Render() end)
