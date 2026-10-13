@@ -286,27 +286,42 @@ end
 local Row = { list = {}, seq = 0 }
 ns.WindowRow = Row
 
--- A window asked to sit in the middle of the screen (its header included),
--- out of the row; a protected one moves out of combat only.
-local function center(c)
-    local f = c.frame
-    if InCombatLockdown() and c.protected then
-        c.placeAfterCombat = true
-        return
+-- The windows asked to sit in the middle of the screen (their headers
+-- included), out of the row: side by side in the order they opened, the
+-- group centred, each one centred up and down (Talents and Legacy open
+-- together: asked for in game). A protected one moves out of combat only.
+local function centerAll(list)
+    if #list == 0 then return end
+    table.sort(list, function(a, b) return (a.openedAt or 0) < (b.openedAt or 0) end)
+    local us = UIParent:GetEffectiveScale()
+    local gap = S["space-5"] * us
+    local total = 0
+    for i, c in ipairs(list) do total = total + c.frame:GetWidth() * c.frame:GetEffectiveScale() + (i > 1 and gap or 0) end
+    local x = -total / 2
+    for _, c in ipairs(list) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        local w = f:GetWidth() * es
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+        else
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es, -(c.rise or 0) / 2)
+        end
+        x = x + w + gap
     end
-    f:ClearAllPoints()
-    f:SetPoint("CENTER", UIParent, "CENTER", 0, -(c.rise or 0) / 2)
 end
 
 function Row.Layout()
     if Row.placing then return end
-    local open = {}
-    Row.placing = true
+    local open, middle = {}, {}
     for _, c in ipairs(Row.list) do
         if c.frame:IsShown() then
-            if c.centered then center(c) else open[#open + 1] = c end
+            if c.centered then middle[#middle + 1] = c else open[#open + 1] = c end
         end
     end
+    Row.placing = true
+    centerAll(middle)
     Row.placing = false
     if #open == 0 then return end
     table.sort(open, function(a, b) return (a.openedAt or 0) < (b.openedAt or 0) end)
