@@ -107,9 +107,9 @@ function M:Update()
     if phase == self.phase then return end
     local was = self.phase
     self.phase = phase
-    -- walking away while resting or rested: nothing to say
+    -- walking away: its alert goes
     if not phase then
-        if self.ticker or self.briefTimer then self:Alert(nil) end
+        self:Alert(nil)
         return
     end
     -- a fire you just walked up to while already rested: say how long is left
