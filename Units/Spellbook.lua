@@ -8,7 +8,8 @@
 -- flyouts' spells unpacked); what you don't from the class trainer's list
 -- (Data/Trainer, from /suu probe class: name, level, cost, school, icon,
 -- description). Ranks for those are worked out by level: a trainer entry at
--- the level of a rank you know is that rank; the ones above follow it.
+-- or below the level of your best rank is yours (the book may hold only the
+-- best one); the ones above follow it.
 --
 -- Each learned spell is a SecureActionButton (type "spell"): clicking casts
 -- it, dragging puts it on a bar (C_SpellBook.PickupSpellBookItem, allowed
@@ -174,11 +175,14 @@ end
 
 -- The ranks you don't have yet, from the trainer's entries for each name.
 function M:Unlearned(entries, learnedAll)
-    local known = {} -- name -> { levels = set, maxRank, ranked }
+    local known = {} -- name -> { levels = set, maxLevel, maxRank, ranked }
     for _, s in ipairs(learnedAll) do
-        local k = known[s.label] or { levels = {}, maxRank = 0 }
+        local k = known[s.label] or { levels = {}, maxRank = 0, maxLevel = 0 }
         known[s.label] = k
-        if s.level then k.levels[s.level] = true end
+        if s.level then
+            k.levels[s.level] = true
+            if s.level > k.maxLevel then k.maxLevel = s.level end
+        end
         if s.rank and s.rank > k.maxRank then k.maxRank = s.rank end
         if s.rank then k.ranked = true end
     end
@@ -191,11 +195,15 @@ function M:Unlearned(entries, learnedAll)
     for _, name in ipairs(order) do
         local list = byName[name]
         table.sort(list, function(a, b) return a.level < b.level end)
-        local k = known[name] or { levels = {}, maxRank = 0 }
+        local k = known[name] or { levels = {}, maxRank = 0, maxLevel = 0 }
         local ranked = k.ranked or #list > 1
         local next = k.maxRank
         for _, t in ipairs(list) do
-            if not k.levels[t.level] then
+            -- a rank at or below your best one's level is yours: the game
+            -- drops lower ranks from the book once a higher one is learned
+            -- (found in game: Devotion Aura Rank 3 alone at level 21 made
+            -- the level 1 and 10 ranks "Rank 4 and 5" to train)
+            if not k.levels[t.level] and t.level > k.maxLevel then
                 next = next + 1
                 local trainable = t.level <= level
                 out[#out + 1] = { label = name, rank = ranked and next or nil, icon = t.icon, text = t.text, cost = t.cost,
