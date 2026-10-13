@@ -6,7 +6,8 @@
 -- an icon and its name over "Rank 3", "Passive", "Train now · 6g 50s" (arcane)
 -- or "Level 58"; a pager along the foot.
 --
---   local book = UI.Spellbook(parent, { rows = 6 })
+--   local book = UI.Spellbook(parent, { rows = 6, edgeInset = 20 })  -- the page's
+--                          -- distance from the window's edge (the schools centre between)
 --   book:SetSchools({ { label, icon, trainable, active } }); book.onSchool = fn(i)
 --   book:SetHead(title, toTrain)
 --   book:SetSwitches(showUnlearned, allRanks); book.onSwitch = fn(key, on)
@@ -161,7 +162,8 @@ function Book:SetSchools(list)
         t.jewel:SetShown(s.active and true or false)
         t:SetAlpha(s.active and 1 or 0.6)
         t:ClearAllPoints()
-        t:SetPoint("TOP", self.tabColumn, "TOP", -S["space-2"], -(i - 1) * (TAB + S["space-3"]))
+        -- centred between the window's edge (edgeInset to the left) and the divider
+        t:SetPoint("TOP", self.tabColumn, "TOPLEFT", (40 - self.edgeInset) / 2, -(i - 1) * (TAB + S["space-3"]))
         t:Show()
     end
     for i = #list + 1, #self.tabs do self.tabs[i]:Hide() end
@@ -199,6 +201,7 @@ function UI.Spellbook(parent, opts)
     local book = CreateFrame("Frame", nil, parent)
     Mixin(book, Book)
     book.rows = opts.rows or 6
+    book.edgeInset = opts.edgeInset or 0 -- from the window's edge to the page
     book.cells, book.tabs = {}, {}
     -- the schools' column and its rule
     book.tabColumn = CreateFrame("Frame", nil, book)

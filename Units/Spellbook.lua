@@ -305,7 +305,7 @@ function M:Build()
         if part and part.SetAlpha then part:SetAlpha(0) end
     end
     for _, r in ipairs({ page:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
-    local book = UI.Spellbook(page, { rows = 6 })
+    local book = UI.Spellbook(page, { rows = 6, edgeInset = 20 })
     -- on the window itself (the window is shortened while this tab shows;
     -- Blizzard's page keeps its own, taller size)
     book:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -362,6 +362,7 @@ function M:Build()
         if not self.sizing and page:IsShown() then self:Shorten() end
     end
     hooksecurefunc(f, "SetHeight", again)
+    hooksecurefunc(f, "SetWidth", again)
     hooksecurefunc(f, "SetSize", again)
     book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
     self:Render()
@@ -370,6 +371,9 @@ end
 -- The Spellbook tab as tall as the Character window (asked for in game);
 -- Blizzard's height back for the other tabs. Out of combat (protected).
 local SHORT = 484
+-- as wide as the Character window with its stats pane: two columns of spell
+-- names need no more (Blizzard's 809 left space to the right: found in game)
+local NARROW = 631
 
 function M:Shorten()
     local f = _G.PlayerSpellsFrame
@@ -382,10 +386,13 @@ function M:Shorten()
     if cf and cf:IsShown() and cf:GetHeight() > 0 then
         target = cf:GetHeight() * cf:GetEffectiveScale() / f:GetEffectiveScale()
     end
-    if math.abs(f:GetHeight() - target) < 1 then return end
-    self.blizzHeight = f:GetHeight()
+    local narrow = math.abs(f:GetWidth() - NARROW) < 1
+    if math.abs(f:GetHeight() - target) < 1 and narrow then return end
+    if math.abs(f:GetHeight() - target) >= 1 then self.blizzHeight = f:GetHeight() end
+    if not narrow then self.blizzWidth = f:GetWidth() end
     self.sizing = true
     f:SetHeight(target)
+    f:SetWidth(NARROW)
     self.sizing = false
 end
 
@@ -396,11 +403,12 @@ end
 
 function M:Restore()
     local f = _G.PlayerSpellsFrame
-    if not f or not self.blizzHeight or InCombatLockdown() then return end
+    if not f or InCombatLockdown() or not (self.blizzHeight or self.blizzWidth) then return end
     self.sizing = true
-    f:SetHeight(self.blizzHeight)
+    if self.blizzHeight then f:SetHeight(self.blizzHeight) end
+    if self.blizzWidth then f:SetWidth(self.blizzWidth) end
     self.sizing = false
-    self.blizzHeight = nil
+    self.blizzHeight, self.blizzWidth = nil, nil
 end
 
 function M:OnEnable()
