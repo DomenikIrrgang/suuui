@@ -546,8 +546,10 @@ function M:UpdateSidebar(hover)
     end
 end
 
--- The set list as wide as Equip and Save together: its rows (New Set's
--- edges) from Equip's left edge to Save's right edge (asked for in game).
+-- The set list's rows (New Set and every set) from Equip's left edge to
+-- Save's right edge (asked for in game). Blizzard's rows have a fixed width
+-- (widening the list didn't widen them): the list moves so its rows start
+-- at Equip's edge, and every row gets the width, again after each update.
 function M:AlignSetList()
     local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
     if not pane then return end
@@ -560,16 +562,23 @@ function M:AlignSetList()
     end
     local box = pane.ScrollBox
     if not (equip and save and box and box.ForEachFrame) then return end
-    local first
-    box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
-    if not (first and first:GetLeft() and box:GetLeft() and equip:GetLeft() and save:GetRight() and pane:GetTop()) then return end
-    local inset = first:GetLeft() - box:GetLeft()
-    local rightInset = box:GetRight() - first:GetRight()
-    local top = box:GetTop() - pane:GetTop()
-    local bottom = box:GetBottom() - pane:GetBottom()
-    box:ClearAllPoints()
-    box:SetPoint("TOPLEFT", pane, "TOPLEFT", equip:GetLeft() - pane:GetLeft() - inset, top)
-    box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", save:GetRight() - pane:GetRight() + rightInset, bottom)
+    if not (equip:GetLeft() and save:GetRight() and box:GetLeft() and pane:GetTop()) then return end
+    local width = save:GetRight() - equip:GetLeft()
+    if not self.setListMoved then
+        local first
+        box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
+        if not first or not first:GetLeft() then return end
+        local inset = first:GetLeft() - box:GetLeft()
+        local top = box:GetTop() - pane:GetTop()
+        local bottom = box:GetBottom() - pane:GetBottom()
+        local right = box:GetRight() - pane:GetRight()
+        local shift = equip:GetLeft() - first:GetLeft()
+        box:ClearAllPoints()
+        box:SetPoint("TOPLEFT", pane, "TOPLEFT", box:GetLeft() and (equip:GetLeft() - pane:GetLeft() - inset) or 0, top)
+        box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", math.max(right, right - shift), bottom)
+        self.setListMoved = true
+    end
+    box:ForEachFrame(function(row) row:SetWidth(width) end)
 end
 
 function M:SkinPaperDoll()
@@ -588,6 +597,10 @@ function M:SkinPaperDoll()
     local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
     if pane then
         pane:HookScript("OnShow", function() C_Timer.After(0.05, function() self:AlignSetList() end) end)
+        local box = pane.ScrollBox
+        if box and box.Update then
+            hooksecurefunc(box, "Update", function() if pane:IsVisible() then self:AlignSetList() end end)
+        end
     end
     self:SkinModel()
     self:SkinStatsPane()
