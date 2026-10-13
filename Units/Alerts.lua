@@ -6,12 +6,15 @@
 --   SuuUI.ShowAlert(key, tone, title, detail, ...)  -- detail: text, or a
 --       format whose arguments may be secret; tone "danger" | "warning" | "info"
 --   SuuUI.HideAlert(key)
+--   SuuUI.ShowLevelUp(key, def)   -- the level-up card (UI.LevelUp) in the
+--       alert's place, tone info: { title, detail, spells, more, cost }
 --
 -- An alert stays while its condition holds: its owner hides it (HideAlert),
 -- and the same key again updates it in place. Out of combat none show, and
 -- combat ending clears them. A new alert takes the place of the one showing
--- unless that one is more urgent (danger > warning > info); the owner raises
--- it again when it still matters. Danger alerts can play a sound.
+-- unless that one is more urgent (danger > warning > info); the one it
+-- replaced comes back when it goes, unless its owner hid it meanwhile (a
+-- level-up over the campfire alert). Danger alerts can play a sound.
 
 local UI = SuuUI.UI
 
@@ -29,21 +32,45 @@ local M = SuuUI.RegisterModule({
 local URGENCY = { info = 1, warning = 2, danger = 3 }
 local TEST_TIME = 4
 
-function M:Show(key, tone, title, detail, ...)
-    if not self.frame then return end
+-- May this key's alert show now, over the one showing?
+function M:Allowed(key, tone)
+    if not self.frame then return false end
     local inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
-    if not inCombat and not self.testing and not (self.anytime and self.anytime[key]) then return end
+    if not inCombat and not self.testing and not (self.anytime and self.anytime[key]) then return false end
     local current = self.current
-    if current and current ~= key and (URGENCY[self.tone] or 0) > (URGENCY[tone] or 0) then return end
-    local fresh = current ~= key or self.tone ~= tone
+    if current and current ~= key and (URGENCY[self.tone] or 0) > (URGENCY[tone] or 0) then return false end
+    -- the one it replaces, to come back
+    if current and current ~= key and self.last then self.under = self.last end
+    return true
+end
+
+function M:Present(key, tone, shown, hidden, args)
+    local fresh = self.current ~= key or self.tone ~= tone
     self.current, self.tone = key, tone
-    self.alert:SetAlert(tone, title, detail, ...)
+    self.last = args
+    if self.under and self.under.key == key then self.under = nil end
+    hidden:Hide()
+    shown:Show()
     if self:Get("position").hidden then return end
     self.frame:Show()
     if fresh then
-        SuuUI.Motion.Enter(self.alert)
+        SuuUI.Motion.Enter(shown)
         if tone == "danger" and self:Get("sound") then UI.TrackerSound("warning") end
     end
+end
+
+function M:Show(key, tone, title, detail, ...)
+    if not self:Allowed(key, tone) then return end
+    self.alert:SetAlert(tone, title, detail, ...)
+    self:Present(key, tone, self.alert, self.card,
+        { key = key, kind = "alert", n = select("#", ...) + 3, tone, title, detail, ... })
+end
+
+-- The level-up card in the alert's place (tone info).
+function M:ShowLevelUp(key, def)
+    if not self:Allowed(key, "info") then return end
+    self.card:SetLevelUp(def)
+    self:Present(key, "info", self.card, self.alert, { key = key, kind = "card", def = def })
 end
 
 -- A key whose alerts may show out of combat too (a pull countdown).
@@ -53,9 +80,20 @@ function M:AllowOutOfCombat(key)
 end
 
 function M:Hide(key)
-    if key and key ~= self.current then return end
-    self.current, self.tone = nil, nil
+    if key and key ~= self.current then
+        -- its owner is done with it: it won't come back either
+        if self.under and self.under.key == key then self.under = nil end
+        return
+    end
+    self.current, self.tone, self.last = nil, nil, nil
     if self.frame then self.frame:Hide() end
+    -- the alert this one replaced, if it still holds
+    local under = self.under
+    self.under = nil
+    if key and under then
+        if under.kind == "card" then self:ShowLevelUp(under.key, under.def)
+        else self:Show(under.key, unpack(under, 1, under.n)) end
+    end
 end
 
 -- An alert of each tone in turn, out of combat too (the settings' button).
@@ -126,6 +164,9 @@ function M:OnEnable()
         f:SetFrameStrata("HIGH")
         self.alert = UI.Alert(f)
         self.alert:SetPoint("TOP")
+        self.card = UI.LevelUp(f)
+        self.card:SetPoint("TOP")
+        self.card:Hide()
         f:Hide()
         self.frame = f
     end

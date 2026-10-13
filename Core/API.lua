@@ -243,6 +243,7 @@ API.UI.LootWindow = UI.LootWindow -- LootWindow(parent, { name }) -> lw:SetSourc
 API.UI.SkinTooltip = UI.SkinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
 API.UI.SkinWindow = UI.SkinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs()
 API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
+API.UI.LevelUp = UI.LevelUp -- LevelUp(parent) -> c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew } }, more, cost })
 API.UI.Reskin = UI.Reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
 API.UI.ReskinScrollBox = UI.ReskinScrollBox
 API.UI.ReskinStatusBar = UI.ReskinStatusBar
@@ -276,6 +277,13 @@ end
 function API.AllowAlertOutOfCombat(key)
     local m = Modules.Get("alerts")
     if m then m:AllowOutOfCombat(key) end
+end
+-- 0.12: the level-up card (UI.LevelUp) in the alert's place, tone info:
+-- def = { title, detail, spells = { { icon, name, rank, isNew } }, more,
+-- cost (copper) }. HideAlert(key) takes it away.
+function API.ShowLevelUp(key, def)
+    local m = Modules.Get("alerts")
+    if m and m:IsEnabled() then m:ShowLevelUp(key, def) end
 end
 function API.HideAlert(key)
     local m = Modules.Get("alerts")

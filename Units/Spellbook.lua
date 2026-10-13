@@ -14,6 +14,10 @@
 -- it, dragging puts it on a bar (C_SpellBook.PickupSpellBookItem, allowed
 -- for addons: probed 2026-10-13). The buttons are set out of combat only:
 -- switching school or page waits for the end of combat.
+--
+-- A level-up shows what it brings: the level-up card (UI.LevelUp, through
+-- SuuUI.ShowLevelUp) in the alerts' place, out of combat (a level gained in
+-- combat waits for its end). /suu levelup [level] shows it without one.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -191,6 +195,7 @@ function M:Unlearned(entries, learnedAll)
                 next = next + 1
                 local trainable = t.level <= level
                 out[#out + 1] = { label = name, rank = ranked and next or nil, icon = t.icon, text = t.text, cost = t.cost,
+                    fresh = known[name] == nil,
                     level = t.level, status = trainable and "trainable" or "future",
                     sub = trainable and ("Train now · " .. coins(t.cost)) or ("Level " .. t.level) }
             end
@@ -442,6 +447,72 @@ function M:SayToTrain()
     end)
 end
 
+--------------------------------------------------------------------------------
+-- What a level brings
+--------------------------------------------------------------------------------
+
+local LEVEL_UP = "suu:levelup"
+local SHOWN = 10
+
+-- The spells and ranks the trainer has for levels from..to that you don't
+-- have: new spells first, then by name.
+function M:NewBetween(from, to)
+    local schools = self:Schools()
+    local trainer = self:TrainerBySchool(schools)
+    local list = {}
+    for _, school in ipairs(schools) do
+        for _, e in ipairs(self:Unlearned(trainer[school.name], self:Learned(school))) do
+            if e.level >= from and e.level <= to then
+                list[#list + 1] = { icon = e.icon, name = e.label, rank = e.rank, isNew = e.fresh, cost = tonumber(e.cost) or 0 }
+            end
+        end
+    end
+    table.sort(list, function(a, b)
+        if a.isNew ~= b.isNew then return a.isNew end
+        if a.name ~= b.name then return a.name < b.name end
+        return (a.rank or 0) < (b.rank or 0)
+    end)
+    return list
+end
+
+-- The card for reaching `level` (and any level since `from`); false when
+-- the trainer has nothing new.
+function M:ShowLevelUp(level, from)
+    local list = self:NewBetween(from or level, level)
+    if #list == 0 then return false end
+    local cost = 0
+    for _, sp in ipairs(list) do cost = cost + sp.cost end
+    local n = #list
+    SuuUI.ShowLevelUp(LEVEL_UP, {
+        title = "Level " .. level,
+        detail = n == 1 and "1 new spell to train" or (n .. " new spells to train"),
+        spells = list,
+        more = n > SHOWN and ("+ " .. (n - SHOWN) .. " more in your Spellbook") or nil,
+        cost = cost,
+    })
+    -- 8 s and 1 more for each spell shown, 20 at most
+    if self.levelTimer then self.levelTimer:Cancel() end
+    self.levelTimer = C_Timer.NewTimer(math.min(20, 8 + math.min(n, SHOWN)), function()
+        self.levelTimer = nil
+        SuuUI.HideAlert(LEVEL_UP)
+    end)
+    return true
+end
+
+-- A level gained: now, or once combat ends.
+function M:LevelGained(level)
+    level = tonumber(level) or UnitLevel("player")
+    self.levelFrom = math.min(self.levelFrom or level, level)
+    self.levelTo = math.max(self.levelTo or level, level)
+    if InCombatLockdown() then return end
+    C_Timer.After(0.5, function()
+        if not self.levelTo or InCombatLockdown() then return end
+        local from, to = self.levelFrom, self.levelTo
+        self.levelFrom, self.levelTo = nil, nil
+        pcall(self.ShowLevelUp, self, to, from)
+    end)
+end
+
 -- The Character window resized while the Spellbook shows: the same height.
 function M:MeasureCharacter()
     if self.book and self.book:IsVisible() then self:Shorten() end
@@ -472,8 +543,22 @@ function M:OnEnable()
         end)
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
+    SuuUI.AllowAlertOutOfCombat(LEVEL_UP)
+    self:OnGameEvent("PLAYER_LEVEL_UP", function(_, level) self:LevelGained(level) end)
+    self:RegisterCommand("levelup", "The level-up card without levelling: /suu levelup [level] (default: the next level that brings spells).", function(arg)
+        local level = tonumber(arg)
+        if level then
+            if not self:ShowLevelUp(level) then self:Print("Nothing new from the trainer at level " .. level .. ".") end
+            return
+        end
+        for l = (UnitLevel("player") or 1) + 1, 80 do
+            if self:ShowLevelUp(l) then return end
+        end
+        self:Print("Nothing left to learn from the trainer.")
+    end)
     self:SayToTrain()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        if self.levelTo then self:LevelGained(self.levelTo) end
         if not self.book then self:Build() end
         if self.renderAfterCombat then
             self.renderAfterCombat = false
