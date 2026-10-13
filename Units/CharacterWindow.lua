@@ -262,24 +262,35 @@ function M:SkinSetPopup()
     UI.Border(edge, "gilt-line")
     local jewel = UI.Diamond(edge, 7, "gilt")
     jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
-    -- the chosen icon, top right: a SuuUI item slot showing Blizzard's icon
+    -- the chosen icon (top right) and the grid's icons: SuuUI's icon buttons
     local area = box and box.SelectedIconArea
     local chosen = area and (area.SelectedIconButton or area.SelectedIcon)
-    if chosen and not self.chosenSkin then
-        local icon = chosen.Icon or chosen.icon
-        local skin = UI.SkinItemSlot(chosen)
-        self.chosenSkin = skin
-        local busy = false
-        local function show()
-            if busy then return end
-            busy = true
-            local tex = skin.icon and skin.icon:GetTexture()
-            skin:SetItem(tex and { icon = tex } or nil)
-            busy = false
+    local function icons()
+        if chosen then UI.ReskinIconButton(chosen) end
+        local sb = pop.IconSelector and (pop.IconSelector.ScrollBox or pop.IconSelector)
+        if sb and sb.ForEachFrame then
+            sb:ForEachFrame(function(b) UI.ReskinIconButton(b) end)
         end
-        if icon then hooksecurefunc(icon, "SetTexture", show) end
-        pop:HookScript("OnShow", function() C_Timer.After(0, show) end)
     end
+    local sb = pop.IconSelector and pop.IconSelector.ScrollBox
+    if sb then
+        if sb.Update then hooksecurefunc(sb, "Update", icons) end
+        if sb.RegisterCallback and sb.Event and sb.Event.OnDataRangeChanged then
+            sb:RegisterCallback(sb.Event.OnDataRangeChanged, icons, self)
+        end
+    end
+    -- lined up with the window: its header's top, its bottom, space-4 beside it
+    local cf = _G.CharacterFrame
+    local placing = false
+    local function place()
+        if placing or not cf then return end
+        placing = true
+        pop:ClearAllPoints()
+        pop:SetPoint("TOPLEFT", cf, "TOPRIGHT", S["space-4"], (UI.WINDOW_HEAD_H or 61) - 20)
+        pop:SetPoint("BOTTOMLEFT", cf, "BOTTOMRIGHT", S["space-4"], 0)
+        placing = false
+    end
+    hooksecurefunc(pop, "SetPoint", function() if not placing then C_Timer.After(0, place) end end)
     -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
     local box = pop.BorderBox
     local okay = box and (box.OkayButton or box.OkButton)
@@ -291,9 +302,11 @@ function M:SkinSetPopup()
         end
     end
     pop:HookScript("OnShow", function()
+        place()
         C_Timer.After(0, function()
             UI.Reskin(pop)
             fit()
+            icons()
         end)
     end)
 end
@@ -524,6 +537,37 @@ function M:UpdateSidebar(hover)
     end
 end
 
+-- Equip and Save together as wide as the set list's rows (New Set's edges).
+function M:AlignSetButtons()
+    local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
+    if not pane then return end
+    local equip, save = pane.EquipSet, pane.SaveSet
+    if not (equip and save) then
+        for _, c in ipairs({ pane:GetChildren() }) do
+            local t = c.GetText and c:GetText()
+            if t == (EQUIPSET_EQUIP or "Equip") then equip = c elseif t == (SAVE or "Save") then save = c end
+        end
+    end
+    local box = pane.ScrollBox
+    if not (equip and save and box and box.ForEachFrame) then return end
+    local first
+    box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
+    if not first or not first:GetLeft() or not box:GetLeft() then return end
+    local width = first:GetWidth()
+    local gap = S["space-2"]
+    local half = (width - gap) / 2
+    -- where they stand now (height), from the row's left edge (width)
+    if not (equip:GetBottom() and pane:GetBottom() and pane:GetLeft()) then return end
+    local up = equip:GetBottom() - pane:GetBottom()
+    local left = first:GetLeft() - pane:GetLeft()
+    equip:ClearAllPoints()
+    equip:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", left, up)
+    equip:SetWidth(half)
+    save:ClearAllPoints()
+    save:SetPoint("TOPLEFT", equip, "TOPRIGHT", gap, 0)
+    save:SetWidth(half)
+end
+
 function M:SkinPaperDoll()
     self.slotSkins, self.slotUpdates = {}, {}
     self:BuildIdentity()
@@ -537,6 +581,10 @@ function M:SkinPaperDoll()
     end
     self:SkinFlyout()
     self:SkinSetPopup()
+    local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
+    if pane then
+        pane:HookScript("OnShow", function() C_Timer.After(0.05, function() self:AlignSetButtons() end) end)
+    end
     self:SkinModel()
     self:SkinStatsPane()
     self:SkinSidebar()

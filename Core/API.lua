@@ -247,6 +247,12 @@ API.UI.ReskinScrollBox = UI.ReskinScrollBox
 API.UI.ReskinStatusBar = UI.ReskinStatusBar
 API.UI.ReskinCheckButton = UI.ReskinCheckButton
 API.UI.ReskinScrollBar = UI.ReskinScrollBar
+API.UI.ReskinButton = UI.ReskinButton
+API.UI.ReskinEditBox = UI.ReskinEditBox
+API.UI.ReskinDropdown = UI.ReskinDropdown
+API.UI.ReskinIconButton = UI.ReskinIconButton
+API.UI.ReskinFillBar = UI.ReskinFillBar
+API.UI.ReskinCollapseButton = UI.ReskinCollapseButton
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id

@@ -216,6 +216,53 @@ function UI.ReskinDropdown(d)
     d.suuDropdown = true
 end
 
+-- An icon button (the set popup's grid and its chosen icon): every bit of
+-- Blizzard's frame art away, the icon cropped on a surface-sunk well in a
+-- gilt-hairline edge, gilt on hover, arcane while selected (Blizzard's own
+-- SelectedTexture says when).
+function UI.ReskinIconButton(b)
+    if not b then return end
+    local icon = b.Icon or b.icon
+    if not b.suuIcon then
+        local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
+        well:SetColorTexture(UI.RGBA("surface-sunk"))
+        well:SetAllPoints()
+        well.suuArt = true
+        local edgeHolder = CreateFrame("Frame", nil, b)
+        edgeHolder:SetAllPoints()
+        edgeHolder:EnableMouse(false)
+        edgeHolder:SetFrameLevel(b:GetFrameLevel() + 2)
+        local edge = UI.Border(edgeHolder, "gilt-hairline")
+        local st = { edge = edge, hover = false }
+        b.suuIcon = st
+        b:HookScript("OnEnter", function() st.hover = true; st.draw() end)
+        b:HookScript("OnLeave", function() st.hover = false; st.draw() end)
+        local sel = b.SelectedTexture or b.selectedTexture
+        st.draw = function()
+            local on = sel and sel:IsShown()
+            edge:SetColor(on and "arcane" or (st.hover and "gilt" or "gilt-hairline"))
+        end
+        if sel then
+            for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hooksecurefunc(sel, m, function() st.draw() end) end
+        end
+    end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture", "GetCheckedTexture" }) do
+        local t = ask(b, get)
+        if t and t ~= icon then t:SetAlpha(0) end
+    end
+    for _, r in ipairs({ b:GetRegions() }) do
+        if r:GetObjectType() == "Texture" and r ~= icon and not r.suuArt then r:SetAlpha(0) end
+    end
+    if icon then
+        icon:SetAlpha(1)
+        icon:ClearAllPoints()
+        icon:SetPoint("TOPLEFT", 1, -1)
+        icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
+    b.suuIcon.draw()
+end
+
 function UI.ReskinCheckButton(b)
     if not b or b.suuCheck then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
