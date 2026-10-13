@@ -64,7 +64,8 @@ end
 -- What Camp Benefits does: its tooltip's text after the name, as one line
 -- for the alert. The text is a heading ("Gained the following camp
 -- benefits:") and a line per benefit (found in game): headings and the time
--- left are dropped, bullets stripped, the benefits joined with " · ".
+-- left are dropped, bullets stripped, each benefit's name before its ":"
+-- kept (the explanations are long: found in game), joined with " · ".
 local MAX_EFFECT = 140
 local function effectOf(a)
     if not a or not plain(a.auraInstanceID) or not a.auraInstanceID then return nil end
@@ -80,7 +81,10 @@ local function effectOf(a)
                 line = line:gsub("^[%s%-%*•·]+", ""):gsub("%s+$", "")
                 local lower = line:lower()
                 if line ~= "" and not line:find(":$") and not lower:find("remaining", 1, true) then
-                    parts[#parts + 1] = line:gsub("%.$", "")
+                    -- "Tent: You received a small amount of rest experience…": the name
+                    -- only (the buff's tooltip has the rest)
+                    local name = line:match("^([^:]+):%s") or line
+                    parts[#parts + 1] = (name:gsub("%.$", ""))
                 end
             end
         end
