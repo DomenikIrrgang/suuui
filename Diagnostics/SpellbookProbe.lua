@@ -15,6 +15,13 @@
 --   /suu probe spellbook pickup   SuuUI's code picks up your first spell
 --                                 (as a drag would) and puts it back: may
 --                                 an addon? then /reload
+--   /suu probe spellbook cast     from now until /reload, every click on a
+--                                 spell in SuuUI's page (down and up, the
+--                                 button's attributes, combat, protected,
+--                                 what the mouse is on), blocked actions,
+--                                 cast events and error messages: click a
+--                                 spell out of combat, then in combat, then
+--                                 /reload. Saved in SuuUIProbe.castbook
 
 local _, ns = ...
 
@@ -211,8 +218,65 @@ function SP.Pickup()
     store.pickupTest = r
 end
 
+function SP.Cast()
+    local m = ns.Modules.Get("spellbook")
+    local book = m and m.book
+    if not book then ns.Print("Spellbook probe: open the Spellbook once first.") return end
+    SuuUIProbe = SuuUIProbe or {}
+    local log = {}
+    SuuUIProbe.castbook = { at = date("%H:%M:%S"), keyDownCVar = show(GetCVar and GetCVar("ActionButtonUseKeyDown")), log = log }
+    local t0 = GetTime()
+    local function note(s)
+        if #log < 300 then log[#log + 1] = ("%.2f %s %s"):format(GetTime() - t0, InCombatLockdown() and "[combat]" or "[calm]", s) end
+    end
+    SP.castNote = note
+    if SP.castHooked then note("re-armed") ns.Print("Spellbook probe: recording again. Click spells, then /reload.") return end
+    SP.castHooked = true
+    local function foci()
+        local out = {}
+        for _, f in ipairs(GetMouseFoci and GetMouseFoci() or {}) do
+            local ok, n = pcall(function() return f:GetDebugName() end)
+            out[#out + 1] = ok and n or tostring(f)
+        end
+        return table.concat(out, ", ")
+    end
+    local function describe(b)
+        local ok1, prot = pcall(b.IsProtected, b)
+        return ("type=%s spell=%s protected=%s shown=%s visible=%s mouse=%s alpha=%.2f foci=[%s]"):format(
+            show(b:GetAttribute("type")), show(b:GetAttribute("spell")), ok1 and show(prot) or "?",
+            show(b:IsShown()), show(b:IsVisible()), show(b:IsMouseEnabled()), b:GetEffectiveAlpha() or -1, foci())
+    end
+    local hooked = {}
+    local function hookCells()
+        for i, c in ipairs(book.cells or {}) do
+            local b = c.button
+            if b and not hooked[b] then
+                hooked[b] = true
+                b:HookScript("OnMouseDown", function(_, btn) SP.castNote(("cell %d mousedown %s %s"):format(i, tostring(btn), describe(b))) end)
+                b:HookScript("PreClick", function(_, btn, down) SP.castNote(("cell %d preclick %s down=%s %s"):format(i, tostring(btn), tostring(down), describe(b))) end)
+                b:HookScript("PostClick", function(_, btn, down) SP.castNote(("cell %d postclick %s down=%s"):format(i, tostring(btn), tostring(down))) end)
+            end
+        end
+    end
+    hookCells()
+    hooksecurefunc(book, "SetSpells", hookCells)
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+        pcall(f.RegisterEvent, f, e)
+    end
+    for _, e in ipairs({ "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED" }) do
+        pcall(f.RegisterUnitEvent, f, e, "player")
+    end
+    f:SetScript("OnEvent", function(_, e, a, b, c, d)
+        SP.castNote(("%s %s %s %s %s"):format(e, show(a), show(b), show(c), show(d)))
+    end)
+    note("armed " .. #(book.cells or {}) .. " cells")
+    ns.Print("Spellbook probe: recording clicks. Click a spell out of combat, then in combat, then /reload.")
+end
+
 function SP.Command(arg)
     if arg == "pickup" then return SP.Pickup() end
+    if arg == "cast" then return SP.Cast() end
     local store = SP.Sample()
     ns.Print(("Spellbook probe: %d schools sampled%s. Run it on another school too, then /reload."):format(#store.lines,
         store.page and ", Blizzard's page read" or " (open the spellbook to read Blizzard's page)"))
