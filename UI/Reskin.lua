@@ -123,6 +123,12 @@ function UI.ReskinStatusBar(bar)
         if r:GetObjectType() == "FontString" then
             ns.Fonts.Apply(r, "numeric")
             r:SetJustifyH("CENTER")
+            -- on the track's middle, a pixel up (the figures sit low otherwise)
+            if bar.suuTrack then
+                r:ClearAllPoints()
+                r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 1)
+                r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 1)
+            end
             r:SetTextColor(UI.RGBA("ink"))
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
@@ -151,6 +157,7 @@ function UI.ReskinFillBar(bar)
         track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
         UI.Fill(track, "track"):SetAllPoints()
         UI.Border(track, "gilt-hairline")
+        bar.suuTrack = track
         fill:SetHeight(h - 2)
         local flattening = false
         local function flat()
@@ -167,6 +174,9 @@ function UI.ReskinFillBar(bar)
         if r:GetObjectType() == "FontString" then
             ns.Fonts.Apply(r, "numeric")
             r:SetJustifyH("CENTER")
+            r:ClearAllPoints()
+            r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 1)
+            r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 1)
             r:SetTextColor(UI.RGBA("ink"))
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
@@ -290,6 +300,17 @@ function UI.ReskinEditBox(e)
             if t and t.SetAlpha then t:SetAlpha(0) end
         end
     end
+    -- whatever else Blizzard drew it with (its own art, a backdrop frame)
+    for _, r in ipairs({ e:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+    end
+    for _, c in ipairs({ e:GetChildren() }) do
+        if c.NineSlice then c.NineSlice:SetAlpha(0) end
+        for _, r in ipairs({ c:GetRegions() }) do
+            if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+        end
+    end
+    if e.NineSlice then e.NineSlice:SetAlpha(0) end
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
     bg:SetColorTexture(UI.RGBA("surface-sunk"))
     bg:SetPoint("TOPLEFT", -4, -1)

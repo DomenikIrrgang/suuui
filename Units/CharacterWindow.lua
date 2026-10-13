@@ -262,6 +262,24 @@ function M:SkinSetPopup()
     UI.Border(edge, "gilt-line")
     local jewel = UI.Diamond(edge, 7, "gilt")
     jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
+    -- the chosen icon, top right: a SuuUI item slot showing Blizzard's icon
+    local area = box and box.SelectedIconArea
+    local chosen = area and (area.SelectedIconButton or area.SelectedIcon)
+    if chosen and not self.chosenSkin then
+        local icon = chosen.Icon or chosen.icon
+        local skin = UI.SkinItemSlot(chosen)
+        self.chosenSkin = skin
+        local busy = false
+        local function show()
+            if busy then return end
+            busy = true
+            local tex = skin.icon and skin.icon:GetTexture()
+            skin:SetItem(tex and { icon = tex } or nil)
+            busy = false
+        end
+        if icon then hooksecurefunc(icon, "SetTexture", show) end
+        pop:HookScript("OnShow", function() C_Timer.After(0, show) end)
+    end
     -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
     local box = pop.BorderBox
     local okay = box and (box.OkayButton or box.OkButton)
