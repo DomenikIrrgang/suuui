@@ -1,0 +1,172 @@
+-- Diagnostics/LegacyProbe.lua
+-- "/suu probe legacy": what Forever's Legacy system gives an addon, for
+-- SuuUI's own Legacy pages (step 3.2d). Saved in SuuUIProbe.legacy on
+-- /reload.
+--   * points: the Legacy trees' currency (4225: spent, quantity, max), the
+--     reward faction's renown (2802: earned points), the most available
+--   * the three trees (1187 Professions, 1188 Adventure, 1189 Progression):
+--     their config, currency, groups, every node (position, ranks, edges,
+--     conditions, entries and their spell) and the conditions' texts
+--   * the reward track: the faction's data, every renown level and its rewards
+--   * the challenges: every achievement category (name, parent, counts) and
+--     the first achievements of each with their criteria
+--
+--   /suu probe legacy     (out of combat), then /reload
+
+local _, ns = ...
+
+local LP = {}
+ns.LegacyProbe = LP
+
+local isSecret = issecretvalue or function() return false end
+
+local function show(v, depth)
+    depth = depth or 0
+    if isSecret(v) then return "secret" end
+    if v == nil then return "nil" end
+    if type(v) == "table" then
+        if depth > 2 then return "{…}" end
+        local parts = {}
+        for k, x in pairs(v) do
+            parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
+            if #parts > 30 then break end
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return tostring(v)
+end
+
+local function call(fn, ...)
+    if type(fn) ~= "function" then return "missing" end
+    local res = { pcall(fn, ...) }
+    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    local parts = {}
+    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    return table.concat(parts, " | ")
+end
+
+local function raw(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c = pcall(fn, ...)
+    if ok then return a, b, c end
+end
+
+local TREES = { 1187, 1188, 1189 }
+local FACTION = 2802
+local CURRENCY = 4225
+
+local function sampleTree(store, treeID)
+    local t = { id = treeID }
+    store[#store + 1] = t
+    local configID = raw(C_Traits.GetConfigIDByTreeID, treeID)
+    t.config = show(configID)
+    if not configID or isSecret(configID) then return end
+    t.configInfo = call(C_Traits.GetConfigInfo, configID)
+    t.treeInfo = call(C_Traits.GetTreeInfo, configID, treeID)
+    t.currency = call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    t.staged = call(C_Traits.ConfigHasStagedChanges, configID)
+    t.canEdit = call(C_Traits.CanEditConfig, configID)
+    t.groups = call(C_Traits.GetGroupDisplayInfoByTreeID, treeID)
+    local nodes = raw(C_Traits.GetTreeNodes, treeID) or {}
+    t.nodeCount = #nodes
+    t.nodes = {}
+    local conds = {}
+    for i, nodeID in ipairs(nodes) do
+        if i > 80 then break end
+        local n = raw(C_Traits.GetNodeInfo, configID, nodeID)
+        local line = { id = nodeID }
+        if n then
+            line.pos = ("%s,%s"):format(show(n.posX), show(n.posY))
+            line.ranks = ("%s/%s purchased=%s active=%s"):format(show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased), show(n.activeRank))
+            line.state = ("visible=%s available=%s canPurchase=%s canRefund=%s meetsEdges=%s type=%s flags=%s groups=%s"):format(
+                show(n.isVisible), show(n.isAvailable), show(n.canPurchaseRank), show(n.canRefundRank),
+                show(n.meetsEdgeRequirements), show(n.type), show(n.flags), show(n.groupIDs))
+            local edges = {}
+            for _, e in ipairs(n.visibleEdges or {}) do edges[#edges + 1] = show(e) end
+            line.edges = table.concat(edges, " ")
+            line.conditions = show(n.conditionIDs)
+            for _, c in ipairs(n.conditionIDs or {}) do conds[c] = true end
+            local entries = {}
+            for _, entryID in ipairs(n.entryIDs or {}) do
+                local entry = raw(C_Traits.GetEntryInfo, configID, entryID)
+                local def = entry and entry.definitionID and raw(C_Traits.GetDefinitionInfo, entry.definitionID)
+                local spellID = def and def.spellID
+                entries[#entries + 1] = ("%s def=%s spell=%s name=%s icon=%s maxRanks=%s desc=%s"):format(show(entryID),
+                    show(entry and entry.definitionID), show(spellID), show(def and (def.overrideName or (spellID and C_Spell.GetSpellName(spellID)))),
+                    show(def and (def.overrideIcon or (spellID and C_Spell.GetSpellTexture(spellID)))), show(entry and entry.maxRanks),
+                    show(C_Traits.GetTraitDescription and raw(C_Traits.GetTraitDescription, entryID, 1)):sub(1, 120))
+            end
+            line.entries = entries
+        end
+        t.nodes[#t.nodes + 1] = line
+    end
+    t.conditions = {}
+    for c in pairs(conds) do
+        if #t.conditions < 30 then t.conditions[#t.conditions + 1] = show(c) .. " " .. call(C_Traits.GetConditionInfo, configID, c) end
+    end
+end
+
+function LP.Sample()
+    if C_AddOns and C_AddOns.IsAddOnLoaded and not C_AddOns.IsAddOnLoaded("Blizzard_LegacySystem") then
+        pcall(C_AddOns.LoadAddOn, "Blizzard_LegacySystem")
+    end
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
+    SuuUIProbe.legacy = store
+    -- points
+    store.points = {
+        renown = call(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION),
+        maxAvailable = call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, false),
+        maxAvailableSourced = call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, true),
+        blizzardInfo = LegacySystem and LegacySystem.GetCurrencyInfo and call(LegacySystem.GetCurrencyInfo) or "no LegacySystem",
+        constants = show(Constants and Constants.LegacyConsts),
+    }
+    -- the trees
+    store.trees = {}
+    for _, id in ipairs(TREES) do
+        local ok, err = pcall(sampleTree, store.trees, id)
+        if not ok then store.trees[#store.trees + 1] = { id = id, error = tostring(err) } end
+    end
+    -- the reward track
+    local mf = C_MajorFactions
+    store.rewards = {
+        faction = call(mf and mf.GetMajorFactionData, FACTION),
+        hidden = call(mf and mf.IsMajorFactionHiddenFromExpansionPage, FACTION),
+        levels = {},
+    }
+    local levels = mf and raw(mf.GetRenownLevels, FACTION) or {}
+    for i, lv in ipairs(levels) do
+        if i > 40 then break end
+        store.rewards.levels[#store.rewards.levels + 1] = show(lv) .. " REWARDS " .. call(mf.GetRenownRewardsForLevel, FACTION, lv.level)
+    end
+    -- the challenges (achievement categories)
+    store.challenges = { categories = {} }
+    local cats = raw(GetCategoryList) or {}
+    store.challenges.count = #cats
+    for i, cat in ipairs(cats) do
+        if i > 40 then break end
+        local name, parent = raw(GetCategoryInfo, cat)
+        local total, done, open = raw(GetCategoryNumAchievements, cat)
+        local c = { id = cat, name = show(name), parent = show(parent), counts = ("%s total, %s done, %s open"):format(show(total), show(done), show(open)), items = {} }
+        for j = 1, math.min(4, tonumber(total) or 0) do
+            local info = call(GetAchievementInfo, cat, j)
+            local id = raw(GetAchievementInfo, cat, j)
+            local crit = {}
+            local n = id and raw(GetAchievementNumCriteria, id) or 0
+            for k = 1, math.min(3, n or 0) do crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k) end
+            c.items[#c.items + 1] = info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300)
+        end
+        store.challenges.categories[#store.challenges.categories + 1] = c
+    end
+    return store
+end
+
+function LP.Command()
+    if InCombatLockdown() then ns.Print("Legacy probe: out of combat, please.") return end
+    local store = LP.Sample()
+    local nodes = 0
+    for _, t in ipairs(store.trees) do nodes = nodes + (t.nodeCount or 0) end
+    ns.Print(("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
+        #store.trees, nodes, #store.rewards.levels, store.challenges.count or 0))
+end

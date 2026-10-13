@@ -799,6 +799,10 @@ function ns.Probe.Command(arg)
         ns.FlickerProbe.Command(rest)
         return
     end
+    if sub == "legacy" then
+        ns.LegacyProbe.Command(rest)
+        return
+    end
     if sub == "taint" then
         ns.TaintProbe.Command(rest)
         return
