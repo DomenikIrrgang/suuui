@@ -328,8 +328,10 @@ function M:SchoolList(school, trainer)
     return list, toTrain
 end
 
-function M:Render()
-    if not self.book or not self.book:IsVisible() then return end
+-- force: also while the window is closed (out of combat), so the page and
+-- its buttons are ready before a fight: the buttons can't change in one.
+function M:Render(force)
+    if not self.book or not (force or self.book:IsVisible()) then return end
     if InCombatLockdown() then
         self.renderAfterCombat = true
         return
@@ -517,7 +519,8 @@ function M:Build()
     hooksecurefunc(f, "SetWidth", again)
     hooksecurefunc(f, "SetSize", again)
     book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
-    self:Render()
+    -- filled now, while the window is still closed
+    self:Render(true)
 end
 
 -- The Spellbook tab as tall as the Character window (asked for in game);
@@ -755,11 +758,18 @@ function M:OnEnable()
         cf:HookScript("OnShow", function() C_Timer.After(0, function() self:MeasureCharacter() end) end)
         cf:HookScript("OnSizeChanged", function() self:MeasureCharacter() end)
     end
+    -- Blizzard's spells window loads the first time it opens; in combat the
+    -- page couldn't be built then, and Blizzard's own showed (found in
+    -- game). Loaded now, out of combat, so the page is built and filled
+    -- before any fight.
+    if C_AddOns and C_AddOns.IsAddOnLoaded and not C_AddOns.IsAddOnLoaded("Blizzard_PlayerSpells") and not InCombatLockdown() then
+        pcall(C_AddOns.LoadAddOn, "Blizzard_PlayerSpells")
+    end
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP" }) do
         self:OnGameEvent(e, function()
-            if self.book then self:Render() end
+            if self.book then self:Render(true) end
             self:SayToTrain()
         end)
     end
@@ -801,7 +811,7 @@ function M:OnEnable()
         if self.awayAfterCombat and self.awaySpells then self.awayAfterCombat = nil; self.awaySpells() end
         if self.renderAfterCombat then
             self.renderAfterCombat = false
-            self:Render()
+            self:Render(true)
         end
     end)
 end
