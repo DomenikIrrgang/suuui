@@ -1,0 +1,162 @@
+-- Units/Windows.lua
+-- Blizzard's other windows in SuuUI's WindowFrame look (Phase 3), restyled
+-- in place through UI.SkinWindow: their clicks, tabs and panes stay
+-- Blizzard's. Each window is skinned when its addon has loaded.
+--   3.2a: the spells window (PlayerSpellsFrame: Specialization, Talents,
+--         Spellbook; protected, so its parts move only out of combat) and the
+--         Legacy window (LegacySystemFrame: Tree, Challenges, Reward track):
+--         SuuUI's header, the tabs as text tabs along the top, Blizzard's
+--         metal frame, portrait and title strip out of sight. The spells
+--         window keeps Blizzard's place (it is 1218 wide, centred); Legacy
+--         opens lined up under the micro menu.
+-- A built-in module written against the public API only.
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local M = SuuUI.RegisterModule({
+    id = "windows",
+    name = "Blizzard windows",
+    description = "The spells and Legacy windows in SuuUI's look.",
+    api = "0.12",
+    reloadToToggle = true,
+    defaults = {},
+})
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+
+-- A tab button's own label ("Talents").
+local function label(b)
+    local fs = b.Text or b.text
+    local t = fs and fs:GetText()
+    return type(t) == "string" and t or nil
+end
+
+--------------------------------------------------------------------------------
+-- The spells window
+--------------------------------------------------------------------------------
+
+-- The key each tab opens with.
+local SPELL_BINDINGS = { Spellbook = "TOGGLESPELLBOOK", Talents = "TOGGLETALENTS", Specialization = "TOGGLESPECIALIZATION" }
+
+-- Blizzard's maximise/minimise pair, next to the key chip: a gilt plus or
+-- minus on SuuUI's edge.
+local function skinMaxMin(chrome, mm)
+    if not mm then return end
+    for _, key in ipairs({ "MaximizeButton", "MinimizeButton" }) do
+        local b = mm[key]
+        if b then
+            for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+                local t = b[get] and b[get](b)
+                if t then t:SetAlpha(0) end
+            end
+            for _, r in ipairs({ b:GetRegions() }) do r:SetAlpha(0) end
+            local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
+            glyph:SetTexture(GLYPHS .. (key == "MaximizeButton" and "plus" or "minus") .. ".tga")
+            glyph:SetSize(12, 12)
+            glyph:SetPoint("CENTER")
+            glyph:SetVertexColor(UI.RGBA("ink-muted"))
+            local edge = UI.Border(b, "gilt-line")
+            edge:SetShown(false)
+            b:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
+            b:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+            b:SetSize(22, 22)
+        end
+    end
+    mm:SetSize(22, 22)
+    mm:ClearAllPoints()
+    local right = chrome.key or chrome.close
+    mm:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+    mm:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+end
+
+function M:SkinSpells()
+    local f = _G.PlayerSpellsFrame
+    if not f or f.suuChrome or InCombatLockdown() then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Talents", icon = "book", binding = "TOGGLETALENTS",
+        close = _G.PlayerSpellsFrameCloseButton, topInset = 20,
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.PlayerSpellsFrameBg, f.TopTileStreaks },
+    })
+    -- the tabs (Blizzard's tab system, bottom left) along the top
+    local system = f.TabSystem or f.tabSystem
+    local list = {}
+    if system then
+        for _, b in ipairs({ system:GetChildren() }) do
+            if b:IsObjectType("Button") and label(b) then
+                list[#list + 1] = { button = b, label = label(b), short = label(b),
+                    selected = function() return b.LeftActive and b.LeftActive:IsShown() or false end }
+            end
+        end
+        table.sort(list, function(a, b) return (a.button:GetLeft() or 0) < (b.button:GetLeft() or 0) end)
+        system:SetAlpha(1)
+    end
+    chrome:SetTabs(list)
+    -- the title and key chip follow the open tab
+    local function follow()
+        local title = _G.PlayerSpellsFrameTitleText and _G.PlayerSpellsFrameTitleText:GetText()
+        for _, def in ipairs(list) do
+            if def.selected() then
+                title = def.label
+                chrome:SetBinding(SPELL_BINDINGS[def.label])
+            end
+        end
+        if type(title) == "string" then chrome:SetTitle(title) end
+        chrome:UpdateTabs()
+    end
+    if _G.PlayerSpellsFrameTitleText then hooksecurefunc(_G.PlayerSpellsFrameTitleText, "SetText", follow) end
+    for _, def in ipairs(list) do def.button:HookScript("OnClick", function() C_Timer.After(0, follow) end) end
+    f:HookScript("OnShow", function() C_Timer.After(0, follow) end)
+    skinMaxMin(chrome, f.MaximizeMinimizeButton)
+    follow()
+    self.spells = chrome
+end
+
+--------------------------------------------------------------------------------
+-- The Legacy window
+--------------------------------------------------------------------------------
+
+local LEGACY_TABS = {
+    { name = "LegacyTreeTab", label = "Tree" },
+    { name = "LegacyChallengeTab", label = "Challenges" },
+    { name = "LegacyRewardTrackTab", label = "Reward track", short = "Rewards" },
+}
+
+function M:SkinLegacy()
+    local f = _G.LegacySystemFrame
+    if not f or f.suuChrome then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Legacy", icon = "trophy", close = _G.LegacySystemFrameCloseButton, topInset = 20,
+        under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.LegacySystemFrameBg, f.TopTileStreaks },
+    })
+    local list = {}
+    for _, t in ipairs(LEGACY_TABS) do
+        local b = _G[t.name]
+        if b then list[#list + 1] = { button = b, label = t.label, short = t.short or t.label } end
+    end
+    for _, def in ipairs(list) do
+        local b = def.button
+        def.selected = function() return b.SelectedTexture and b.SelectedTexture:IsShown() or false end
+    end
+    chrome:SetTabs(list)
+    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    self.legacy = chrome
+end
+
+--------------------------------------------------------------------------------
+-- Lifecycle
+--------------------------------------------------------------------------------
+
+function M:SkinAll()
+    self:SkinSpells()
+    self:SkinLegacy()
+end
+
+function M:OnEnable()
+    self:SkinAll()
+    -- their addons load on demand
+    self:OnGameEvent("ADDON_LOADED", function() self:SkinAll() end)
+    -- the spells window is protected: skinned after combat if it loaded during one
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:SkinAll() end)
+end

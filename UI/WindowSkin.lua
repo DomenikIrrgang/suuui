@@ -59,8 +59,9 @@ local function skinTab(chrome, def)
         if chrome.placing then return end
         C_Timer.After(0, function() chrome:LayoutTabs() end)
     end)
-    -- the selected look follows Blizzard's own selected texture
-    local sel = b.SelectedTexture
+    -- the selected look follows Blizzard's own selected texture (or the
+    -- texture the def names: a tab system's LeftActive)
+    local sel = def.selectedTexture or b.SelectedTexture or b.LeftActive
     if sel then
         for _, m in ipairs({ "Show", "Hide", "SetShown" }) do
             hooksecurefunc(sel, m, function() chrome:UpdateTabs() end)
@@ -81,6 +82,11 @@ end
 function Chrome:LayoutTabs()
     local tabs = self.tabs
     if not tabs then return end
+    -- a protected window (the spells window): its parts move only out of combat
+    if self.protected and InCombatLockdown() then
+        self.layoutAfterCombat = true
+        return
+    end
     local room = self.frame:GetWidth() - S["space-5"] * 2
     local function width(short, gap)
         local w = 0
@@ -130,7 +136,8 @@ function UI.SkinWindow(frame, opts)
     opts = opts or {}
     local chrome = setmetatable({ frame = frame }, { __index = Chrome })
     frame.suuChrome = chrome
-    for _, f in ipairs(opts.hide or {}) do if f then f:SetAlpha(0) end end
+    chrome.protected = frame:IsProtected() and true or false
+    for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
     local inset = opts.topInset or 0
     local rise = HEAD_H - inset -- the header's height above the window's top
 
@@ -201,6 +208,16 @@ function UI.SkinWindow(frame, opts)
     chrome.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
 
     frame:HookScript("OnSizeChanged", function() chrome:LayoutTabs() end)
+    if chrome.protected then
+        local wait = CreateFrame("Frame")
+        wait:RegisterEvent("PLAYER_REGEN_ENABLED")
+        wait:SetScript("OnEvent", function()
+            if chrome.layoutAfterCombat then
+                chrome.layoutAfterCombat = false
+                chrome:LayoutTabs()
+            end
+        end)
+    end
 
     -- the panel-position rule: lined up under an anchor (the micro menu)
     if opts.under then
@@ -212,6 +229,20 @@ function UI.SkinWindow(frame, opts)
         frame:HookScript("OnShow", function() chrome:PlaceWindow() end)
     end
     return chrome
+end
+
+-- The title, and the key chip for another binding (a window whose tabs
+-- open with different keys).
+function Chrome:SetTitle(text)
+    self.title:SetValue(text or "")
+end
+
+function Chrome:SetBinding(binding)
+    local key = binding and GetBindingKey(binding)
+    if self.key then
+        if key then self.key:SetKey(GetBindingText and GetBindingText(key, "KEY_") or key) end
+        self.key:SetShown(key ~= nil)
+    end
 end
 
 -- Under the anchor: the header's top left space-5 below its bottom left.
