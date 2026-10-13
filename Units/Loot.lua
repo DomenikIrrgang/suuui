@@ -249,8 +249,8 @@ local function classOf(name)
     end
 end
 
-local function classColored(name)
-    local class = classOf(name)
+local function classColored(name, known)
+    local class = (known and known[short(name)]) or classOf(name)
     local c = class and T.color["class-" .. class:lower()]
     return c and ("|cff" .. c.hex .. short(name) .. "|r") or short(name)
 end
@@ -262,7 +262,7 @@ function M:ShowRoll(roll)
         if c.key ~= "disenchant" or roll.canDisenchant then
             local who = roll.votes[c.key]
             local names = {}
-            for _, name in ipairs(who) do names[#names + 1] = classColored(name) end
+            for _, name in ipairs(who) do names[#names + 1] = classColored(name, roll.classes) end
             local can = roll.can[c.key] ~= false
             actions[#actions + 1] = {
                 label = c.label, count = #who, pressed = roll.choice == c.key,
@@ -283,12 +283,25 @@ function M:ShowRoll(roll)
     local q = T.color["quality-" .. (roll.quality or "common")]
     SuuUI.Notify({
         id = "suu:roll:" .. roll.id, kind = "roll", category = "Loot roll",
-        icon = { texture = roll.icon },
+        icon = { texture = roll.icon, tooltip = function(owner) self:ItemTip(owner, roll) end },
         title = (q and roll.quality ~= "common") and ("|cff" .. q.hex .. roll.name .. "|r") or roll.name,
         body = #body > 0 and table.concat(body, " · ") or nil,
         duration = roll.duration, remaining = roll.remaining(),
         actions = actions,
     })
+end
+
+-- The item's tooltip: the game's for an open roll, else from its link.
+function M:ItemTip(owner, roll, ended)
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    if not ended and not roll.test and self.rolls[roll.id] and GameTooltip.SetLootRollItem then
+        GameTooltip:SetLootRollItem(roll.id)
+    else
+        local ref = type(roll.link) == "string" and (roll.link:match("|H(item:[^|]+)|h") or roll.link)
+        if not ref then GameTooltip:Hide() return end
+        GameTooltip:SetHyperlink(ref)
+    end
+    GameTooltip:Show()
 end
 
 function M:Choose(roll, choice)
@@ -374,7 +387,8 @@ function M:Result(roll, winner)
         title = "Everyone passed on " .. roll.name
     end
     SuuUI.Notify({ id = "suu:rollresult:" .. roll.id, kind = "timed", duration = 6, category = "Loot",
-        icon = { texture = roll.icon }, title = title, body = body })
+        icon = { texture = roll.icon, tooltip = function(owner) self:ItemTip(owner, roll, true) end },
+        title = title, body = body })
 end
 
 function M:OnLootLine(text)
@@ -447,6 +461,7 @@ function M:TestRoll()
     local start = GetTime()
     local roll = {
         id = id, test = true, icon = 134939, name = "Plans: Protector's Silvered Chain Helm", quality = "rare",
+        link = "item:251382", classes = { Ysolde = "PRIEST", Brannoc = "WARRIOR", Morrow = "ROGUE" },
         duration = 30, bind = ITEM_BIND_ON_PICKUP or "Binds when picked up",
         can = { need = true, greed = true, pass = true }, reason = {},
         votes = { need = { "Ysolde" }, greed = { "Brannoc", "Morrow" }, disenchant = {}, pass = {} }, rolled = {}, group = 5,

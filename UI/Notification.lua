@@ -8,7 +8,8 @@
 -- repair"), the actions right-aligned, and a 2px drain along the foot.
 --
 --   local n = UI.Notification(parent)
---   n:SetData({ kind, tone, category, title, body, icon = { glyph | texture },
+--   n:SetData({ kind, tone, category, title, body, icon = { glyph | texture,
+--               tooltip = fn(owner) },
 --               duration, remaining, soonAt, ["until"], item = { icon,
 --               label, quality }, confirmText, actions = { { label,
 --               variant = "primary"|"quiet"|"danger", onClick,
@@ -76,6 +77,7 @@ end
 
 function Note:SetIcon(icon)
     icon = icon or {}
+    self.iconTip = icon.tooltip
     local art = self.iconArt
     if icon.glyph then
         art:SetTexture(GLYPHS .. icon.glyph .. ".tga")
@@ -249,6 +251,10 @@ function UI.Notification(parent)
     UI.Fill(n.icon, "surface-sunk"):SetAllPoints()
     UI.Border(n.icon, "gilt-hairline", { layer = "OVERLAY" })
     n.iconArt = n.icon:CreateTexture(nil, "ARTWORK")
+    -- icon.tooltip(owner): what hovering the icon shows (an item's tooltip)
+    n.icon:EnableMouse(true)
+    n.icon:SetScript("OnEnter", function(self) if n.iconTip then n.iconTip(self) end end)
+    n.icon:SetScript("OnLeave", function() if n.iconTip then GameTooltip:Hide() end end)
     n.icon:SetPoint("TOPLEFT")
     n.category = UI.Text(n.head, "caption", "ink-muted")
     n.category:SetJustifyH("LEFT")
