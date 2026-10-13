@@ -226,6 +226,7 @@ end
 
 function M:Undo(h)
     for f, s in pairs(h.saved or {}) do
+        if self.widths then self.widths[f] = nil end
         restorePoints(f, s.points)
         f:SetSize(s.width, s.height)
         for r, a in pairs(s.alphas) do r:SetAlpha(a) end
@@ -271,6 +272,24 @@ function M:StyleButton(h, b, variant)
         fs:SetTextColor(UI.RGBA(variant == "primary" and "on-signal" or variant == "danger" and "ember-text" or "ink"))
     end
     local w = math.max(64, math.ceil((fs and fs:GetUnboundedStringWidth() or 40) + S["space-4"] * 2))
+    -- and kept: Blizzard sizes its popup buttons again after showing them
+    -- (both 120 wide on the death popup, found in game: Release Spirit
+    -- over Recap)
+    self.widths = self.widths or {}
+    self.widths[b] = w
+    if not self.widthHooked then self.widthHooked = {} end
+    if not self.widthHooked[b] then
+        self.widthHooked[b] = true
+        local function keep()
+            local want = self.widths[b]
+            if not want or self.sizing or math.abs(b:GetWidth() - want) < 0.5 then return end
+            self.sizing = true
+            b:SetSize(want, ACTION_H)
+            self.sizing = false
+        end
+        hooksecurefunc(b, "SetWidth", keep)
+        hooksecurefunc(b, "SetSize", keep)
+    end
     b:SetSize(w, ACTION_H)
     local art = self:ArtFor(b)
     art.variant = variant
@@ -330,15 +349,21 @@ function M:Attach(h)
     end
     h.card = card
     local kind = h.kind
-    local x = 0
+    -- right to left, each beside the one after it: a width Blizzard sets
+    -- later can't make them overlap
     local list = h.buttons()
+    local after
     for k = #list, 1, -1 do
         local b, index = list[k].button, list[k].index
         local variant = (index == kind.primary and "primary") or (index == kind.danger and "danger") or "quiet"
-        local w = self:StyleButton(h, b, variant)
+        self:StyleButton(h, b, variant)
         b:ClearAllPoints()
-        b:SetPoint("RIGHT", card.actionsRow, "RIGHT", -x, 0)
-        x = x + w + S["space-3"]
+        if after then
+            b:SetPoint("RIGHT", after, "LEFT", -S["space-3"], 0)
+        else
+            b:SetPoint("RIGHT", card.actionsRow, "RIGHT", 0, 0)
+        end
+        after = b
     end
     local eb = h.editBox
     if card.data and card.data.confirmText and eb then self:StyleEditBox(h, eb, card.confirmBox) end
