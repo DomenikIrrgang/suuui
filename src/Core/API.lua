@@ -234,6 +234,17 @@ API.UI.TRACKER_HEAD_H = UI.TRACKER_HEAD_H -- the tracker head's height (its togg
 -- 0.11: notifications
 API.UI.Notification = UI.Notification -- Notification(parent) -> n:SetData(d), n:SetRemaining(s), n:SetTitle(text)
 API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { max }) -> s:SetItems(list, inCombat), s:CardFor(id)
+-- 0.12: SuuUI's Talents window (the talents module): open or close it, and
+-- whether it is open. False when that module is off.
+function API.ToggleTalents()
+    local m = Modules.Get("talents")
+    if m and m:IsEnabled() and m.Toggle then m:Toggle(); return true end
+    return false
+end
+function API.TalentsShown()
+    local m = Modules.Get("talents")
+    return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
+end
 -- 0.12: open or close the bags without Blizzard's bag functions (called
 -- from an addon they taint Esc in combat): SuuUI's bags when that module is
 -- on; else Blizzard's (ToggleAllBags).

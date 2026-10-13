@@ -206,11 +206,26 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
+-- The pages shown: SuuUI's own window, and the page over Blizzard's tab
+-- (when something opens that: a tutorial, a toast).
+function M:Pages()
+    local out = {}
+    for _, page in ipairs({ self.windowPage, self.page }) do
+        if page and page:IsVisible() then out[#out + 1] = page end
+    end
+    return out
+end
+
 function M:Render()
-    local page = self.page
-    if not page or not page:IsVisible() then return end
+    local pages = self:Pages()
+    if #pages == 0 then return end
     local data = self:Collect()
     self.data = data
+    self:FitWindow()
+    for _, page in ipairs(pages) do self:Fill(page, data) end
+end
+
+function M:Fill(page, data)
     -- the specs: only with two talent groups
     local groups, active = self:SpecGroups()
     if groups > 1 then
@@ -227,7 +242,6 @@ function M:Render()
         return
     end
     local editable, why = self:Editable()
-    local _, class = UnitClass("player")
     local trees = {}
     for i, t in ipairs(data.trees) do
         for _, n in ipairs(t.nodes) do
@@ -244,7 +258,6 @@ function M:Render()
         trees = trees, available = data.available, pending = data.pending, editable = editable,
         hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
     })
-    self.class = class
 end
 
 function M:QueueRender()
@@ -347,6 +360,76 @@ function M:Apply()
 end
 
 --------------------------------------------------------------------------------
+-- SuuUI's own Talents window (asked for in game: open beside the Spellbook,
+-- which Blizzard's spells window can't: one tab at a time). N and the micro
+-- menu's Talents button open it; in the middle of the screen.
+--------------------------------------------------------------------------------
+
+local HEAD_RISE = 40 -- the header above the window's top (SkinWindow, topInset 20)
+
+function M:WindowHeight()
+    return 44 + PAGE_H + 16 + (self:SpecGroups() > 1 and SPECS_H or 0)
+end
+
+function M:FitWindow()
+    local w = self.window
+    if w then w:SetSize(UI.TALENT_TREE_W + 40, self:WindowHeight()) end
+end
+
+function M:BuildWindow()
+    if self.window then return end
+    local f = CreateFrame("Frame", "SuuUITalents", UIParent)
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetClampedToScreen(true)
+    f:Hide()
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, -HEAD_RISE / 2)
+    local close = CreateFrame("Button", nil, f)
+    close:SetScript("OnClick", function() f:Hide() end)
+    UI.SkinWindow(f, { title = "Talents", icon = "tree", binding = "TOGGLETALENTS", close = close, topInset = 20 })
+    local page = UI.TalentTree(f)
+    page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    self:Wire(page)
+    self.windowPage = page
+    self.window = f
+    self:FitWindow()
+    f:SetScript("OnShow", function()
+        PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_OPEN or 839)
+        self:Render()
+        self:Emit("SUUUI_TALENTS_SHOWN", true)
+    end)
+    f:SetScript("OnHide", function()
+        PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_CLOSE or 840)
+        GameTooltip:Hide()
+        self:Emit("SUUUI_TALENTS_SHOWN", false)
+    end)
+    -- Esc closes it
+    tinsert(UISpecialFrames, "SuuUITalents")
+    -- the key: N (whatever opens Blizzard's talents) opens this one instead
+    local toggle = CreateFrame("Button", "SuuUITalentsToggle", UIParent)
+    toggle:SetScript("OnClick", function() self:Toggle() end)
+    self.bindOwner = CreateFrame("Frame")
+    self:BindKeys()
+end
+
+function M:Toggle()
+    if not self.window then return end
+    self.window:SetShown(not self.window:IsShown())
+end
+
+-- The talents key as an override binding onto SuuUI's button (out of combat:
+-- bindings can't change in one).
+function M:BindKeys()
+    if not self.bindOwner then return end
+    if InCombatLockdown() then self.bindAfterCombat = true return end
+    ClearOverrideBindings(self.bindOwner)
+    for _, key in ipairs({ GetBindingKey("TOGGLETALENTS") }) do
+        if key then SetOverrideBindingClick(self.bindOwner, false, key, "SuuUITalentsToggle") end
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Into the spells window
 --------------------------------------------------------------------------------
 
@@ -375,6 +458,20 @@ function M:Restore()
     if self.blizzWidth then f:SetWidth(self.blizzWidth) end
     self.sizing = false
     self.blizzHeight, self.blizzWidth = nil, nil
+end
+
+function M:Wire(page)
+    page.onClick = function(n) self:Purchase(n) end
+    page.onRemove = function(n) self:Refund(n) end
+    page.onEnter = function(b, n) self:ShowTip(b, n) end
+    page.onLeave = function() GameTooltip:Hide() end
+    page.onApply = function() self:Apply() end
+    page.onUndo = function() self:Undo() end
+    page.onSpec = function(i) self.viewing = i; self:Render() end
+    page.onActivate = function()
+        if InCombatLockdown() or not self.viewing then return end
+        call(C_SpecializationInfo.SetActiveSpecGroup, self.viewing)
+    end
 end
 
 function M:Build()
@@ -407,17 +504,7 @@ function M:Build()
     page:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
     page:SetShown(tab:IsShown())
     self.page = page
-    page.onClick = function(n) self:Purchase(n) end
-    page.onRemove = function(n) self:Refund(n) end
-    page.onEnter = function(b, n) self:ShowTip(b, n) end
-    page.onLeave = function() GameTooltip:Hide() end
-    page.onApply = function() self:Apply() end
-    page.onUndo = function() self:Undo() end
-    page.onSpec = function(i) self.viewing = i; self:Render() end
-    page.onActivate = function()
-        if InCombatLockdown() or not self.viewing then return end
-        call(C_SpecializationInfo.SetActiveSpecGroup, self.viewing)
-    end
+    self:Wire(page)
     -- shown with Blizzard's tab
     -- in the middle of the screen while this tab shows (asked for in game);
     -- the other tabs stay in the row under the micro menu
@@ -446,7 +533,9 @@ function M:Build()
 end
 
 function M:OnEnable()
+    self:BuildWindow()
     self:Build()
+    self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
@@ -457,6 +546,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if not self.page then self:Build() end
         if self.awayAfterCombat and self.away then self.awayAfterCombat = nil; self.away() end
+        if self.bindAfterCombat then self.bindAfterCombat = nil; self:BindKeys() end
         if self.page and self.page:IsVisible() then self:Size() end
         self:QueueRender()
     end)

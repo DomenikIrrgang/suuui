@@ -26,6 +26,11 @@ local M = SuuUI.RegisterModule({
 
 -- Everything the menu can hold, in Blizzard's order (World map and Bags,
 -- the design's, before the game menu). `click`: the Blizzard micro button.
+-- The Talents button when SuuUI's Talents window is on.
+local TALENTS_OWN = { key = "talents", glyph = "tree", label = "Talents", bind = "TOGGLETALENTS",
+    onClick = function() SuuUI.ToggleTalents() end,
+    open = function() return SuuUI.TalentsShown() end }
+
 local ITEMS = {
     { key = "character", glyph = "person", label = "Character", click = "CharacterMicroButton" },
     { key = "professions", glyph = "hammer", label = "Professions", click = "ProfessionMicroButton" },
@@ -62,6 +67,11 @@ function M:Items()
     for _, k in ipairs(self:Get("buttons")) do chosen[k] = true end
     local out = {}
     for _, item in ipairs(ITEMS) do
+        if item.key == "talents" and SuuUI.GetModule("talents") and SuuUI.GetModule("talents"):Get("enabled") then
+            -- SuuUI's own Talents window (the talents module; its setting is
+            -- known before it is enabled, which is after this module)
+            item = TALENTS_OWN
+        end
         if chosen[item.key] and (not item.click or _G[item.click]) then out[#out + 1] = item end
     end
     return out
@@ -88,7 +98,7 @@ end
 
 function M:UpdateActive()
     if not self.menu then return end
-    for _, item in ipairs(ITEMS) do self.menu:SetActive(item.key, isOpen(item)) end
+    for _, item in ipairs(self:Items()) do self.menu:SetActive(item.key, isOpen(item)) end
 end
 
 -- Something to act on: unspent talent points; spells to train (the
