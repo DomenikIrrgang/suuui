@@ -546,39 +546,12 @@ function M:UpdateSidebar(hover)
     end
 end
 
--- The set list's rows (New Set and every set) from Equip's left edge to
--- Save's right edge (asked for in game). Blizzard's rows have a fixed width
--- (widening the list didn't widen them): the list moves so its rows start
--- at Equip's edge, and every row gets the width, again after each update.
+-- New Set (its own button, centred above Equip and Save: probed 2026-10-13)
+-- exactly as wide as the two together, so the edges line up (asked for).
 function M:AlignSetList()
-    local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
-    if not pane then return end
-    local equip, save = pane.EquipSet, pane.SaveSet
-    if not (equip and save) then
-        for _, c in ipairs({ pane:GetChildren() }) do
-            local t = c.GetText and c:GetText()
-            if t == (EQUIPSET_EQUIP or "Equip") then equip = c elseif t == (SAVE or "Save") then save = c end
-        end
-    end
-    local box = pane.ScrollBox
-    if not (equip and save and box and box.ForEachFrame) then return end
-    if not (equip:GetLeft() and save:GetRight() and box:GetLeft() and pane:GetTop()) then return end
-    local width = save:GetRight() - equip:GetLeft()
-    if not self.setListMoved then
-        local first
-        box:ForEachFrame(function(row) if not first and row:IsShown() then first = row end end)
-        if not first or not first:GetLeft() then return end
-        -- the margins the list keeps around its rows (left; right: the scrollbar's room)
-        local inset = first:GetLeft() - box:GetLeft()
-        local rightInset = box:GetRight() - first:GetRight()
-        local top = box:GetTop() - pane:GetTop()
-        local bottom = box:GetBottom() - pane:GetBottom()
-        box:ClearAllPoints()
-        box:SetPoint("TOPLEFT", pane, "TOPLEFT", equip:GetLeft() - pane:GetLeft() - inset, top)
-        box:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", save:GetRight() - pane:GetRight() + rightInset, bottom)
-        self.setListMoved = true
-    end
-    box:ForEachFrame(function(row) row:SetWidth(width) end)
+    local new, equip, save = _G.PaperDollFrameNewSet, _G.PaperDollFrameEquipSet, _G.PaperDollFrameSaveSet
+    if not (new and equip and save and equip:GetLeft() and save:GetRight()) then return end
+    new:SetWidth(save:GetRight() - equip:GetLeft())
 end
 
 function M:SkinPaperDoll()
@@ -596,11 +569,7 @@ function M:SkinPaperDoll()
     self:SkinSetPopup()
     local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
     if pane then
-        pane:HookScript("OnShow", function() C_Timer.After(0.05, function() self:AlignSetList() end) end)
-        local box = pane.ScrollBox
-        if box and box.Update then
-            hooksecurefunc(box, "Update", function() if pane:IsVisible() then self:AlignSetList() end end)
-        end
+        pane:HookScript("OnShow", function() C_Timer.After(0, function() self:AlignSetList() end) end)
     end
     self:SkinModel()
     self:SkinStatsPane()
