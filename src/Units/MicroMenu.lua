@@ -101,7 +101,7 @@ function M:UpdateActive()
     for _, item in ipairs(self:Items()) do self.menu:SetActive(item.key, isOpen(item)) end
 end
 
--- Something to act on: unspent talent points; spells to train (the
+-- Something to act on: unspent talent points; Legacy points to spend; spells to train (the
 -- Spellbook module says how many and, unless its setting is off, what they
 -- cost: SUUUI_SPELLS_TO_TRAIN).
 local function coins(copper)
@@ -111,6 +111,19 @@ local function coins(copper)
     if s > 0 then parts[#parts + 1] = s .. "s" end
     if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
     return table.concat(parts, " ")
+end
+
+-- Legacy points this character can still spend (the Legacy trees' currency;
+-- one config for all three trees: 1187 is Professions).
+local LEGACY_TREE = 1187
+local function legacyToSpend()
+    if not (C_Traits and C_Traits.GetConfigIDByTreeID) then return 0 end
+    local ok, configID = pcall(C_Traits.GetConfigIDByTreeID, LEGACY_TREE)
+    if not ok or not configID or (issecretvalue and issecretvalue(configID)) then return 0 end
+    local ok2, info = pcall(C_Traits.GetTreeCurrencyInfo, configID, LEGACY_TREE, false)
+    local q = ok2 and info and info[1] and info[1].quantity
+    if q == nil or (issecretvalue and issecretvalue(q)) then return 0 end
+    return q
 end
 
 function M:UpdateAlerts()
@@ -123,6 +136,8 @@ function M:UpdateAlerts()
     local n = self.spellsToTrain or 0
     local cost = self.trainingCost and (" · " .. coins(self.trainingCost)) or ""
     self.menu:SetAlert("spellbook", n > 0 and ((n == 1 and "1 spell" or (n .. " spells")) .. " to train at your class trainer" .. cost) or nil)
+    local legacy = legacyToSpend()
+    self.menu:SetAlert("legacy", legacy > 0 and ((legacy == 1 and "1 Legacy point" or (legacy .. " Legacy points")) .. " to spend") or nil)
 end
 
 function M:ApplyShows()
@@ -216,7 +231,8 @@ function M:OnEnable()
         self:UpdateAlerts()
     end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
-    for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
+    for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD",
+                         "TRAIT_TREE_CURRENCY_INFO_UPDATED", "MAJOR_FACTION_RENOWN_LEVEL_CHANGED" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:UpdateAlerts() end) end
     end
 end
