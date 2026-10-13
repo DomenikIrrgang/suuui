@@ -207,10 +207,18 @@ function M:OnEnable()
     self:RegisterCommand("campsite", "The campfire alerts without a fire: /suu campsite nearby, resting or rested.", function(arg)
         self:Sample((arg == "resting" or arg == "rested") and arg or "nearby")
     end)
-    -- what's true now, without an alert for it
-    self.near = aura(NEARBY) and true or false
-    local phase = self:Phase()
-    if phase ~= false then self.phase = phase end
+    -- after a login or /reload by a fire: the alert for where you are, once
+    -- the game has your auras (and the Alerts module is up)
+    local function sayNow()
+        C_Timer.After(1, function()
+            if not self:IsEnabled() then return end
+            self.near = aura(NEARBY) and true or false
+            self.phase = "unknown"
+            self:Update()
+        end)
+    end
+    self:OnGameEvent("PLAYER_ENTERING_WORLD", sayNow)
+    sayNow()
 end
 
 function M:OnDisable()
