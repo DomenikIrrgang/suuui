@@ -13,6 +13,13 @@
 -- the unit after TooltipDataProcessor's post call; nothing it reads may be
 -- secret (a line's colour can be, even out of combat: probed 2026-10-13),
 -- and a secret unit is left as Blizzard coloured it.
+--
+-- A group member's auras (step 2.7b): hovering a party or raid member (on
+-- SuuUI's frames or in the world) lists their debuffs and buffs out of
+-- combat, each with its icon and time left. In combat addon code can't read
+-- auras at all (see the plan's client facts), so a small panel under the
+-- tooltip shows them instead, drawn by the game's own aura container: icons
+-- and timers, no names.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -24,6 +31,7 @@ local M = SuuUI.RegisterModule({
     reloadToToggle = true,
     defaults = {
         nameColors = true,
+        groupAuras = true,
         anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
         position = { point = "BOTTOMRIGHT", x = -28, y = 96 },
     },
@@ -114,6 +122,115 @@ function M:SkinStatusBar()
 end
 
 --------------------------------------------------------------------------------
+-- A group member's auras
+--------------------------------------------------------------------------------
+
+local MAX_LINES = 12
+local PER_ROW = 8
+
+local function groupUnit(unit)
+    if type(unit) ~= "string" then return false end
+    if unit:match("^party%d") or unit:match("^raid%d") then return true end
+    return unit == "player" and IsInGroup()
+end
+
+local function timeLeft(a)
+    local d, x = a.duration, a.expirationTime
+    if not (plain(d) and plain(x)) or not d or d <= 0 or not x then return "" end
+    local left = x - GetTime()
+    if left <= 0 then return "" end
+    if left < 60 then return ("%d"):format(left) end
+    if left < 3600 then return ("%dm"):format(left / 60) end
+    return ("%dh"):format(left / 3600)
+end
+
+-- Out of combat: the auras as lines (debuffs first, in ember), at most 12.
+function M:AddAuraLines(tooltip, unit)
+    local list = {}
+    for _, filter in ipairs({ "HARMFUL", "HELPFUL" }) do
+        for i = 1, 40 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+            if not ok or not a then break end
+            if plain(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
+        end
+    end
+    if #list == 0 then return end
+    local ink, ember, muted = T.color["ink"], T.color["ember-text"], T.color["ink-muted"]
+    tooltip:AddLine(" ")
+    for i = 1, math.min(#list, MAX_LINES) do
+        local a, harmful = list[i].a, list[i].harmful
+        local icon = plain(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
+        local mine = plain(a.isFromPlayerOrPlayerPet) and a.isFromPlayerOrPlayerPet and not harmful
+        local c = harmful and ember or ink
+        local name = a.name .. (mine and (" |cff" .. muted.hex .. "(yours)|r") or "")
+        local count = plain(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
+        tooltip:AddDoubleLine(icon .. name .. count, timeLeft(a), c[1], c[2], c[3], muted[1], muted[2], muted[3])
+    end
+    if #list > MAX_LINES then
+        tooltip:AddLine(("+%d more"):format(#list - MAX_LINES), muted[1], muted[2], muted[3])
+    end
+    tooltip:Show()
+end
+
+-- In combat: the game's aura container in a small panel under the tooltip.
+function M:AuraPanel()
+    if self.auraPanel then return self.auraPanel end
+    local size = UI.Size("icon-md")
+    local gap = T.space["space-2"]
+    local w = PER_ROW * size + (PER_ROW - 1) * gap
+    local p = UI.Panel(SuuUI.Root, { ornament = true, width = w + T.space["space-4"] * 2,
+        height = 3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"] })
+    p:SetFrameStrata("TOOLTIP")
+    p:Hide()
+    p.caption = UI.Text(p, "caption", "ink-muted")
+    p.caption:SetPoint("TOPLEFT", T.space["space-4"], -T.space["space-4"])
+    p.caption:SetValue("Auras")
+    p.holder = CreateFrame("Frame", nil, p)
+    p.holder:SetPoint("TOPLEFT", p.caption, "BOTTOMLEFT", 0, -T.space["space-2"])
+    p.holder:SetSize(w, 3 * size + 2 * gap)
+    p.auras = UI.AuraContainer(p.holder, "none", { size = "icon-md", spacing = gap, anchor = "TOPLEFT",
+        growth = { "RIGHT", "DOWN" }, lineWidth = w,
+        groups = {
+            { key = "debuffs", filter = { "HARMFUL" }, max = PER_ROW, dispel = true },
+            { key = "buffs", filter = { "HELPFUL" }, max = PER_ROW * 2 },
+        } })
+    if p.auras then p.auras.container:SetPoint("TOPLEFT", p.holder, "TOPLEFT") end
+    self.auraPanel = p
+    return p
+end
+
+function M:ShowAuraPanel(tooltip, unit)
+    local p = self:AuraPanel()
+    if not p.auras then return end
+    p.auras:SetUnit(unit)
+    p:ClearAllPoints()
+    local bar = _G.GameTooltipStatusBar
+    local below = (bar and bar:IsShown() and bar:GetParent() == tooltip) and bar or tooltip
+    p:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -T.space["space-2"])
+    p:Show()
+    self.auraFor = tooltip
+end
+
+function M:HideAuraPanel()
+    if self.auraPanel and self.auraPanel:IsShown() then
+        self.auraPanel:Hide()
+        if self.auraPanel.auras then self.auraPanel.auras:SetUnit("none") end
+    end
+    self.auraFor = nil
+end
+
+function M:GroupAuras(tooltip)
+    if not self:Get("groupAuras") or tooltip ~= GameTooltip or not tooltip.GetUnit then return end
+    local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
+    if not ok or not plain(unit) or not groupUnit(unit) then return end
+    if InCombatLockdown() then
+        self:ShowAuraPanel(tooltip, unit)
+    else
+        self:AddAuraLines(tooltip, unit)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Where a tooltip without an owner of its own opens
 --------------------------------------------------------------------------------
 
@@ -138,6 +255,8 @@ local SECTION = {
         { title = "Tooltips", description = "Blizzard's tooltips in SuuUI's look: items, spells, units and the compare tooltips. What they say stays the game's.", rows = {
             { key = "nameColors", label = "Name colours", control = "toggle",
               description = "A player's name in their class colour, everyone else's in hostile, neutral or friendly." },
+            { key = "groupAuras", label = "Group members' auras", control = "toggle",
+              description = "Hovering a party or raid member lists their debuffs and buffs with the time left. In combat the game lets SuuUI show them only as icons: a small panel under the tooltip." },
             { key = "anchor", label = "Where they open", control = "segmented",
               options = { { value = "suuui", label = "SuuUI's place" }, { value = "blizzard", label = "Blizzard's" } },
               description = "For tooltips with no place of their own (the world, units). SuuUI's place: bottom right, above your bags while they're open; move it in edit mode." },
@@ -167,15 +286,22 @@ function M:OnEnable()
         self.hooked = true
         if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType then
             TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
-                if self:IsEnabled() then pcall(self.ColorUnit, self, tooltip) end
+                if not self:IsEnabled() then return end
+                pcall(self.ColorUnit, self, tooltip)
+                self:Guard(self.GroupAuras)(self, tooltip)
             end)
         end
+        GameTooltip:HookScript("OnHide", function() self:HideAuraPanel() end)
+        -- another unit (or no unit) on the same tooltip: the panel goes
+        GameTooltip:HookScript("OnTooltipCleared", function() self:HideAuraPanel() end)
         if type(GameTooltip_SetDefaultAnchor) == "function" then
             hooksecurefunc("GameTooltip_SetDefaultAnchor", function(tooltip)
                 if self:IsEnabled() then self:Anchor(tooltip) end
             end)
         end
     end
+    -- the aura panel's container made out of combat, ready for a fight
+    if not InCombatLockdown() then self:AuraPanel() end
     for _, e in ipairs({ "UI_SCALE_CHANGED", "DISPLAY_SIZE_CHANGED" }) do
         self:OnGameEvent(e, function() C_Timer.After(0, function() self:ApplyScale() end) end)
     end
