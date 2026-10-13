@@ -508,6 +508,7 @@ Everything below is built; it only waits for the right situation in game.
   - Fires you pass are remembered for the map.
 - **Boards:** Campfire strip.
 - **Confirm:** walking up to a campfire shows the strip, and it leaves once you're out of range.
+- **Probe (2026-10-13, `/suu probe camp`):** written, not yet run (Forever has campfires, says the player; the first probe found no camping API). Scans globals and C_ functions, your spells and bag items for camp/fire/tent/rest words, your auras and rest state; logs each aura gained and lost with where you stood, resting changes, system and emote lines, camp item cooldowns and your casts until /reload.
 
 > At the end of Phase 2, the scenes At the bank and Busiest real moment match a screenshot taken in game.
 

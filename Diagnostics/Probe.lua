@@ -770,6 +770,10 @@ function ns.Probe.Command(arg)
         ns.TooltipProbe.Command(rest)
         return
     end
+    if sub == "camp" then
+        ns.CampProbe.Command(rest)
+        return
+    end
     if sub == "group" then
         ns.GroupProbe.Command(rest)
         return
