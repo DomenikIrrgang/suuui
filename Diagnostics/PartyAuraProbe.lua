@@ -20,11 +20,13 @@ local FILTERS = {
 }
 
 local function shownChildren(frame)
-    local n = 0
+    -- the engine's buttons answer IsShown with a secret: those count as "?"
+    local n, unknown = 0, 0
     for _, c in ipairs({ frame:GetChildren() }) do
-        if c:IsShown() then n = n + 1 end
+        local shown = c:IsShown()
+        if isSecret(shown) then unknown = unknown + 1 elseif shown then n = n + 1 end
     end
-    return n
+    return n, unknown
 end
 
 function PA.Command()
@@ -56,9 +58,10 @@ function PA.Command()
             if m and m.frames then
                 for _, f in ipairs(m.frames) do
                     if f.unit == unit and f.auras then
-                        line.icons = shownChildren(f.auras.container)
+                        local n, unknown = shownChildren(f.auras.container)
+                        line.icons, line.unknown = n, unknown
                         line.containerUnit = show(f.auras.unit)
-                        ns.Print(("%s frame: %d icons shown, container unit %s"):format(unit, line.icons, line.containerUnit))
+                        ns.Print(("%s frame: %d icons shown (%d secret), container unit %s"):format(unit, n, unknown, line.containerUnit))
                     end
                 end
             end
