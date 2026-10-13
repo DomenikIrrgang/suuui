@@ -11,8 +11,9 @@
 --     six cards, three to a row: a category's done/total, its bar and the
 --     challenges you're closest to (up to five); a card opens its full list
 --     (scrolling, by sub-category), "All challenges" goes back
---   UI.LegacyRewards(parent):SetTrack({ earned, max, next, stops = { stop } })
+--   UI.LegacyTrack(parent):SetTrack({ earned, total, max, next, stops = { stop } })
 --     stop = { at, name, icon, quality, collected, onEnter(owner), onLeave() }
+--     a strip for the window's foot: the account's points and the rewards
 
 local _, ns = ...
 
@@ -63,13 +64,20 @@ function Points:SetPoints(d)
     self.account:SetWidth(math.ceil(w) + 2)
 end
 
-function UI.LegacyPoints(parent)
+-- opts.account = false: this character's points only (the account's are
+-- on the track at the window's foot)
+function UI.LegacyPoints(parent, opts)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Points)
     f.account = block(f, "Legacy points · account")
     f.account:SetPoint("TOPLEFT")
     f.char = block(f, "Spent on this character")
-    f.char:SetPoint("TOPLEFT", f.account, "TOPRIGHT", S["space-6"], 0)
+    if opts and opts.account == false then
+        f.account:Hide()
+        f.char:SetPoint("TOPLEFT")
+    else
+        f.char:SetPoint("TOPLEFT", f.account, "TOPRIGHT", S["space-6"], 0)
+    end
     f.char:SetWidth(200)
     f:SetHeight(f.account:GetHeight())
     return f
@@ -296,61 +304,57 @@ function UI.LegacyChallenges(parent)
 end
 
 --------------------------------------------------------------------------------
--- The reward track
+-- The reward track: a strip along the window's foot (asked for in game, in
+-- place of its own tab): the account's points on the left, then the bar
+-- with a diamond at each reward's level, the reward's icon above it (dim
+-- until reached, a check once collected) and the level under it; the next
+-- reward under the bar. Names are in the icons' tooltips.
 --------------------------------------------------------------------------------
 
-local Rewards = {}
-local SLOT = 36
-local LABEL_W = 140
+local Track = {}
+local ICON = 24
+local LEFT_W = 150
+local TRACK_TOP = ICON + S["space-3"]
+UI.LEGACY_TRACK_H = TRACK_TOP + 6 + S["space-3"] + T.type.numeric.lineHeight + S["space-2"] + T.type.caption.lineHeight
 
-function Rewards:SetTrack(d)
+function Track:SetTrack(d)
     d = d or {}
     self.data = d
     local stops = d.stops or {}
     local max = (d.max and d.max > 0) and d.max or 1
     local earned = d.earned or 0
+    self.points.big:SetText(tostring(earned))
+    self.points.rest:SetText(" of " .. (d.total or 0) .. " earned")
     local w = self:GetWidth()
     if not w or w <= 0 then w = 800 end
-    local inner = w - LABEL_W -- room for the first and last labels
-    local left = LABEL_W / 2
-    -- the whole track in the middle of the page (asked for in game): the
-    -- slots, the bar, the levels and names, the next reward
-    local contentH = SLOT + S["space-5"] + 6 + S["space-4"] + T.type.numeric.lineHeight
-        + T.type.caption.lineHeight * 2 + S["space-6"] + T.type.caption.lineHeight
-    local h = self:GetHeight() or 0
-    local top = math.max(0, math.floor((h - contentH) / 2))
-    self.track:ClearAllPoints()
-    self.track:SetPoint("TOPLEFT", self, "TOPLEFT", left, -(top + SLOT + S["space-5"]))
-    self.track:SetWidth(inner)
+    local left = LEFT_W + ICON / 2
+    local inner = math.max(10, w - left - ICON / 2 - 4)
+    self.bar:ClearAllPoints()
+    self.bar:SetPoint("TOPLEFT", self, "TOPLEFT", left, -TRACK_TOP)
+    self.bar:SetWidth(inner)
     self.fill:SetWidth(math.max(0.01, inner * math.min(1, earned / max)))
     self.fill:SetShown(earned > 0)
     for i, s in ipairs(stops) do
         local st = self.stops[i]
         if not st then
             st = CreateFrame("Frame", nil, self)
-            st:SetSize(LABEL_W, SLOT + S["space-5"] + 6 + S["space-4"] + T.type.numeric.lineHeight + T.type.caption.lineHeight * 2)
-            st.slot = UI.ItemSlot(st, SLOT)
+            st:SetSize(ICON, UI.LEGACY_TRACK_H)
+            st.slot = UI.ItemSlot(st, ICON)
             st.slot:SetPoint("TOP", st, "TOP", 0, 0)
             st.slot:SetScript("OnEnter", function(b) if b.stop and b.stop.onEnter then b.stop.onEnter(b) end end)
             st.slot:SetScript("OnLeave", function(b) if b.stop and b.stop.onLeave then b.stop.onLeave() end end)
-            st.mark = UI.Diamond(st, 9, "gilt-line", "OVERLAY", 3)
-            st.mark:SetPoint("CENTER", st, "TOP", 0, -(SLOT + S["space-5"] + 3))
-            st.at = UI.Text(st, "numeric", "ink")
-            st.at:SetPoint("TOP", st, "TOP", 0, -(SLOT + S["space-5"] + 6 + S["space-4"]))
-            st.label = UI.Text(st, "caption", "ink-muted")
-            st.label:SetPoint("TOP", st.at, "BOTTOM", 0, -1)
-            st.label:SetWidth(LABEL_W - 8)
-            st.label:SetWordWrap(true)
-            st.label:SetJustifyH("CENTER")
-            -- the check on top of the slot's own border (under it, it didn't show)
             st.over = CreateFrame("Frame", nil, st.slot)
             st.over:SetAllPoints()
             st.over:SetFrameLevel(st.slot:GetFrameLevel() + 5)
             st.check = st.over:CreateTexture(nil, "OVERLAY", nil, 7)
             st.check:SetTexture(GLYPHS .. "check.tga")
-            st.check:SetSize(12, 12)
-            st.check:SetPoint("TOPRIGHT", st.slot, "TOPRIGHT", -2, -2)
+            st.check:SetSize(10, 10)
+            st.check:SetPoint("TOPRIGHT", st.slot, "TOPRIGHT", 3, 3)
             st.check:SetVertexColor(UI.RGBA("fel"))
+            st.mark = UI.Diamond(st, 9, "gilt-line", "OVERLAY", 3)
+            st.mark:SetPoint("CENTER", st, "TOP", 0, -(TRACK_TOP + 3))
+            st.at = UI.Text(st, "numeric", "ink-muted")
+            st.at:SetPoint("TOP", st, "TOP", 0, -(TRACK_TOP + 6 + S["space-3"]))
             self.stops[i] = st
         end
         local got = earned >= (s.at or 0)
@@ -358,30 +362,32 @@ function Rewards:SetTrack(d)
         st.slot.skin:SetItem({ icon = s.icon, quality = s.quality, dim = not got })
         st.mark:SetVertexColor(UI.RGBA(got and "gilt" or "gilt-line"))
         st.at:SetValue(tostring(s.at or 0))
-        st.at:SetColor(got and "gilt-text" or "ink")
-        st.label:SetValue(s.name or "")
-        st.label:SetColor(got and "ink" or "ink-muted")
+        st.at:SetColor(got and "gilt-text" or "ink-muted")
         st.check:SetShown(s.collected and true or false)
         st:ClearAllPoints()
-        st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), -top)
+        st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), 0)
         st:Show()
     end
     for i = #stops + 1, #self.stops do self.stops[i]:Hide() end
     self.next:SetValue(d.next or "")
-    self.next:ClearAllPoints()
-    self.next:SetPoint("TOP", self, "TOP", 0, -(top + contentH - T.type.caption.lineHeight))
 end
 
-function UI.LegacyRewards(parent)
+function UI.LegacyTrack(parent)
     local f = CreateFrame("Frame", nil, parent)
-    Mixin(f, Rewards)
+    Mixin(f, Track)
+    f:SetHeight(UI.LEGACY_TRACK_H)
     f.stops = {}
-    f.track = UI.Fill(f, "track", "ARTWORK")
-    f.track:SetHeight(6)
+    -- the account's points
+    f.points = block(f, "Legacy · account")
+    f.points:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -(TRACK_TOP - 18))
+    f.points:SetWidth(LEFT_W - 8)
+    f.bar = UI.Fill(f, "track", "ARTWORK")
+    f.bar:SetHeight(6)
     f.fill = UI.Fill(f, "progress-fill", "ARTWORK", 1)
     f.fill:SetHeight(6)
-    f.fill:SetPoint("TOPLEFT", f.track, "TOPLEFT")
+    f.fill:SetPoint("TOPLEFT", f.bar, "TOPLEFT")
     f.next = UI.Text(f, "caption", "ink-muted")
+    f.next:SetPoint("BOTTOM", f, "BOTTOM", LEFT_W / 2, 0)
     f:SetScript("OnSizeChanged", function() if f.data then f:SetTrack(f.data) end end)
     return f
 end

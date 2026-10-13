@@ -122,7 +122,7 @@ end
 local LEGACY_TABS = {
     { name = "LegacyTreeTab", label = "Tree" },
     { name = "LegacyChallengeTab", label = "Challenges" },
-    { name = "LegacyRewardTrackTab", label = "Reward track", short = "Rewards" },
+    { name = "LegacyRewardTrackTab", label = "Reward track", short = "Rewards", track = true },
 }
 
 function M:SkinLegacy()
@@ -133,11 +133,22 @@ function M:SkinLegacy()
         under = "microMenu",
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.LegacySystemFrameBg, f.TopTileStreaks },
     })
+    -- SuuUI's Legacy pages put the reward track along the window's foot:
+    -- then no tab for it (its button out of sight)
+    local legacy = SuuUI.GetModule("legacy")
+    local ownTrack = legacy and legacy:Get("enabled")
     local list = {}
     for _, t in ipairs(LEGACY_TABS) do
         -- fields of the window on Forever, not globals (found in game: no tabs)
         local b = f[t.name] or _G[t.name]
-        if b then list[#list + 1] = { button = b, label = t.label, short = t.short or t.label } end
+        if b and ownTrack and t.track then
+            b:SetAlpha(0)
+            b:EnableMouse(false)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        elseif b then
+            list[#list + 1] = { button = b, label = t.label, short = t.short or t.label }
+        end
     end
     for _, def in ipairs(list) do
         local b = def.button

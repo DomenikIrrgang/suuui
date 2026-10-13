@@ -16,7 +16,9 @@
 --   challenges achievement categories (Classes, Tradeskills, Dungeons, Raids,
 --             PvP, Adventure) and their sub-categories; only challenges that
 --             earn Legacy points ("Earn 1 Legacy Point.")
---   rewards   the faction's renown levels and their rewards
+--   rewards   the faction's renown levels and their rewards: a strip along the
+--             window's foot on every tab (asked for in game) instead of a tab;
+--             Blizzard's reward page, when it opens, switches to the tree
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -288,7 +290,7 @@ end
 
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
 
-function M:Rewards(earned)
+function M:Rewards(earned, total)
     local mf = C_MajorFactions
     local stops = {}
     for _, lv in ipairs((mf and call(mf.GetRenownLevels, FACTION)) or {}) do
@@ -327,7 +329,7 @@ function M:Rewards(earned)
             break
         end
     end
-    return { earned = earned, max = max, stops = stops,
+    return { earned = earned, total = total, max = max, stops = stops,
         next = nextText or "Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet." }
 end
 
@@ -359,9 +361,9 @@ function M:Render()
             editable = editable, hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply." })
     end
     if pages.challenges:IsVisible() then pages.challenges.body:SetCategories(self:Challenges()) end
-    if pages.rewards:IsVisible() then
+    if self.track and self.track:IsVisible() then
         self.namesPending = nil
-        pages.rewards.body:SetTrack(self:Rewards(points.earned))
+        self.track:SetTrack(self:Rewards(points.earned, points.total))
         -- item names still loading: once more in a moment
         self.nameTries = self.namesPending and (self.nameTries or 0) + 1 or 0
         if self.namesPending and self.nameTries <= 6 then C_Timer.After(0.5, function() self:QueueRender() end) end
@@ -393,17 +395,20 @@ function M:ShowTip(button, n)
 end
 
 -- One page: the points on top, its body under them, over Blizzard's page.
-local PAGES = { tree = "TreePage", challenges = "ChallengesPage", rewards = "RewardTrackPage" }
+local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
+local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
+local S = T.space
+local STRIP_H = UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 -- the track, a rule and room
 
 function M:Page(f, kind)
     local blizz = f[PAGES[kind]]
     if not blizz then return nil end
     local view = CreateFrame("Frame", nil, f)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
-    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + STRIP_H)
     view:SetFrameLevel(blizz:GetFrameLevel() + 50)
     view:EnableMouse(true)
-    view.points = UI.LegacyPoints(view)
+    view.points = UI.LegacyPoints(view, { account = false })
     view.points:SetPoint("TOPLEFT")
     view.points:SetPoint("TOPRIGHT")
     local S = T.space
@@ -435,10 +440,8 @@ function M:Page(f, kind)
             self:QueueRender()
         end
         body:Layout()
-    elseif kind == "challenges" then
-        view.body = UI.LegacyChallenges(view)
     else
-        view.body = UI.LegacyRewards(view)
+        view.body = UI.LegacyChallenges(view)
     end
     view.body:SetPoint("TOPLEFT", view.points, "BOTTOMLEFT", 0, -S["space-6"])
     view.body:SetPoint("BOTTOMRIGHT", view, "BOTTOMRIGHT", 0, 0)
@@ -464,8 +467,45 @@ end
 -- the challenges' two rows of cards; the trees' panels reach down to their
 -- foot.
 function M:Size(f)
-    local S = T.space
-    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + 16)
+    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_H + 16)
+end
+
+-- The reward track along the window's foot, on every tab; Blizzard's reward
+-- page out of sight, and the tree instead whenever it opens.
+function M:Strip(f)
+    local strip = CreateFrame("Frame", nil, f)
+    strip:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
+    strip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    strip:SetHeight(STRIP_H)
+    strip:SetFrameLevel(f:GetFrameLevel() + 150)
+    strip:EnableMouse(true)
+    local rule = UI.Fill(strip, "gilt-faint", "ARTWORK")
+    rule:SetHeight(1)
+    rule:SetPoint("TOPLEFT")
+    rule:SetPoint("TOPRIGHT")
+    self.track = UI.LegacyTrack(strip)
+    self.track:SetPoint("BOTTOMLEFT", strip, "BOTTOMLEFT", 0, 0)
+    self.track:SetPoint("BOTTOMRIGHT", strip, "BOTTOMRIGHT", 0, 0)
+    local blizz = f.RewardTrackPage
+    if blizz then
+        blizz:SetAlpha(0)
+        local placing = false
+        local function away()
+            placing = true
+            blizz:ClearAllPoints()
+            blizz:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+            placing = false
+        end
+        away()
+        hooksecurefunc(blizz, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+        local function toTree()
+            C_Timer.After(0, function()
+                if blizz:IsShown() and f.SelectPage then pcall(f.SelectPage, f, TREE_PAGE) end
+            end)
+        end
+        blizz:HookScript("OnShow", toTree)
+        if blizz:IsShown() then toTree() end
+    end
 end
 
 function M:Build()
@@ -473,10 +513,11 @@ function M:Build()
     if not f or self.pages then return end
     self.pages = {}
     for kind in pairs(PAGES) do self.pages[kind] = self:Page(f, kind) end
-    if not (self.pages.tree and self.pages.challenges and self.pages.rewards) then
+    if not (self.pages.tree and self.pages.challenges) then
         self.pages = nil
         return
     end
+    self:Strip(f)
     self:Size(f)
     f:HookScript("OnShow", function() self:Size(f); self:QueueRender() end)
     self:Render()
