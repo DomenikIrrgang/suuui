@@ -31,6 +31,7 @@ local M = SuuUI.RegisterModule({
         showBuffs = true,
         showDebuffs = true,
         showTarget = true,
+        targetAuras = "all",    -- "all" (everyone's, yours first) or "mine"
         showFocus = true,
         showBoss = true,
         buffSize = UI.Size("icon-lg"),
@@ -49,9 +50,12 @@ local ATTACHED = {
     } },
     target = { key = "showTarget", at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
         size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
+        -- yours first; everyone else's after (targetAuras "mine" sets their max to 0)
         groups = {
             { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
             { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
+            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true },
+            { key = "theirBuffs", filter = { "HELPFUL", "!PLAYER" }, max = 8 },
         },
     } },
     focus = { key = "showFocus", at = { "LEFT", "RIGHT", S["space-2"], 0 }, opts = {
@@ -92,6 +96,14 @@ end
 
 function M:ApplyOptions()
     for name in pairs(ATTACHED) do self:Attach(name, SuuUI.GetAnchor(name)) end
+    -- the target's: everyone's, or only yours
+    local target = self.attached and self.attached.target
+    if target then
+        local all = self:Get("targetAuras") == "all"
+        target:SetGroupMax("theirs", all and 8 or 0)
+        target:SetGroupMax("theirBuffs", all and 8 or 0)
+    end
+    self:UpdateOffline()
     if self.buffs then
         local pos = self:Get("buffPosition")
         local shown = self:Get("showBuffs") and not pos.hidden
@@ -99,6 +111,18 @@ function M:ApplyOptions()
         -- "playerBuffs": what sits under your buffs (the campfire strip) follows the holder
         SuuUI.PublishAnchor("playerBuffs", shown and self.buffHolder or nil)
     end
+end
+
+-- An offline player's auras are stale: the target's container goes see-through.
+function M:UpdateOffline()
+    local target = self.attached and self.attached.target
+    if not target then return end
+    local online = true
+    if UI.Flag(UnitExists("target")) and UI.Flag(UnitIsPlayer("target")) then
+        local c = UnitIsConnected("target")
+        if c ~= nil and not (issecretvalue and issecretvalue(c)) then online = c and true or false end
+    end
+    target.container:SetAlpha(online and 1 or 0)
 end
 
 -- Sizes, row length and growth, out of combat: the engine's buttons refuse a
@@ -151,9 +175,12 @@ local SECTION = {
               live = false, combat = true,
               disabled = function() if not M:Get("showDebuffs") then return true, "Your debuffs are off." end end },
         } },
-        { title = "On other frames", description = "Only the auras you cast.", rows = {
+        { title = "On other frames", description = "Your focus and bosses: only the auras you cast. None on a player who is offline.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
-              description = "Your debuffs on it, and your buffs on a friend (HoTs, shields), above the target frame." },
+              description = "Above the target frame: your debuffs and buffs first (HoTs, shields), then everyone else's." },
+            { key = "targetAuras", label = "Target's auras", control = "segmented",
+              options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
+              disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },
             { key = "showFocus", label = "On your focus", control = "toggle", description = "Your debuffs, after the focus bar." },
             { key = "showBoss", label = "On bosses", control = "toggle", description = "Your debuffs, left of each boss bar." },
         } },
@@ -184,11 +211,16 @@ function M:OnEnable()
     self:ApplyOptions()
     self:ApplyLayout()
 
-    self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
+    self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame)
+        self:Attach(name, frame)
+        if name == "target" then self:ApplyOptions() end
+    end)
     for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
         self:Watch(key, function() self:ApplyLayout() end)
     end
-    for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "showFocus", "showBoss", "buffPosition" }) do
+    self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateOffline() end)
+    self:OnUnitEvent("UNIT_CONNECTION", { "target" }, function() self:UpdateOffline() end)
+    for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "targetAuras", "showFocus", "showBoss", "buffPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
 end

@@ -47,6 +47,7 @@ local M = SuuUI.RegisterModule({
         incoming = true,
         auras = 4,
         auraSide = "right",
+        showBuffs = false,      -- their buffs after debuffs and defensives
         debuffBadges = "all",   -- "all" debuff types, "removable" or "off"
         rangeAlpha = T.opacity["opacity-oor"],
     },
@@ -88,6 +89,8 @@ local AURA_GROUPS = {
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
     { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
+    -- with showBuffs: the rest of their buffs (the defensives above aren't repeated)
+    { key = "buffs", filter = { "HELPFUL", "!EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" }, max = 6 },
 }
 
 local function buildAuras(f)
@@ -337,9 +340,25 @@ function M:ApplyOptions()
         f.opts.lowTint = self:Get("lowHealth")
         f.opts.incoming = self:Get("incoming")
         if f.active then f:Refresh() end
+        if f.auras then f.auras:SetGroupMax("buffs", self:Get("showBuffs") and 6 or 0) end
     end
     self:UpdateStates()
     self:UpdateRange()
+    self:UpdateOffline()
+end
+
+-- An offline member's auras are stale: their icons go see-through.
+function M:UpdateOffline()
+    for _, f in ipairs(self.frames) do
+        if f.auras then
+            local online = true
+            if UI.Flag(UnitExists(f.unit)) then
+                local c = UnitIsConnected(f.unit)
+                if c ~= nil and not isSecret(c) then online = c and true or false end
+            end
+            f.auras.container:SetAlpha(online and 1 or 0)
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -477,7 +496,10 @@ local SECTION = {
         } },
         { title = "Auras and states", rows = {
             { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 6, step = 1, combat = true,
-              description = "Beside each bar, in order: debuffs you can remove, defensives on them, other important debuffs. Your heals over time and shields go in Buff indicators." },
+              description = "Beside each bar, in order: debuffs you can remove, defensives on them, other important debuffs, then (with Show buffs) their buffs. None while someone is offline." },
+            { key = "showBuffs", label = "Show buffs", control = "toggle",
+              description = "Their buffs (Arcane Intellect and the like) after the rest, as far as the aura icons reach. Your own heals over time and shields are better as Buff indicators.",
+              disabled = function() if M:Get("auras") == 0 then return true, "No aura icons." end end },
             { key = "auraSide", label = "Aura side", control = "segmented", combat = true,
               options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } },
               disabled = function() if M:Get("auras") == 0 then return true, "No aura icons." end end },
@@ -524,7 +546,8 @@ function M:OnEnable()
         end)
     end
     self:Watch("showSolo", function() self:UpdateVisibility() end)
-    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }) do
+    self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)
+    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "debuffBadges", "rangeAlpha", "showBuffs" }) do
         self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
     end
     self:Watch("debuffBadges", function() self:RunOutOfCombat("badges", function() self:ApplyBadges() end) end)
@@ -536,7 +559,7 @@ function M:OnEnable()
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
-        self:UpdateStates(); self:UpdateSelected(); self:UpdateRange()
+        self:UpdateStates(); self:UpdateSelected(); self:UpdateRange(); self:UpdateOffline()
         -- someone changed raid group: "my group" missing looks follow
         for _, f in ipairs(self.frames) do f:UpdateIndicatorPresence() end
         -- indicators limited to some group sizes

@@ -155,6 +155,7 @@ function M:StyleButton(button)
         btn:SetUnit(value, true)
         updateIsMe(btn)
         if btn.auras then btn.auras:SetUnit(value or "none") end
+        M:UpdateOffline()
         if value then
             if not btn.active then btn:Activate() end
             btn:Refresh()
@@ -307,6 +308,22 @@ function M:ApplyOptions()
     end
     self:UpdateStates()
     self:UpdateRange()
+    self:UpdateOffline()
+end
+
+-- An offline player's auras are stale: their icons go see-through.
+function M:UpdateOffline()
+    for _, f in ipairs(self.buttons or {}) do
+        if f.auras then
+            local online = true
+            local unit = f.unit
+            if unit and UI.Flag(UnitExists(unit)) then
+                local c = UnitIsConnected(unit)
+                if c ~= nil and not isSecret(c) then online = c and true or false end
+            end
+            f.auras.container:SetAlpha(online and 1 or 0)
+        end
+    end
 end
 
 function M:ApplyIndicators()
@@ -664,6 +681,7 @@ function M:OnEnable()
     self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
+    self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
         -- a token can now be someone else: redraw, re-scan auras (the
         -- indicators' too)
