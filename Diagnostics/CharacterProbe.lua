@@ -45,11 +45,18 @@ local function keyedChildren(f)
     return out
 end
 
+-- Any widget: a frame, a texture, a font string, an animation (each answers
+-- only some of these).
 local function frameLine(f)
     if type(f) ~= "table" or not f.GetObjectType then return "missing" end
-    local w, h = f:GetSize()
-    return ("%s shown=%s protected=%s size=%dx%d strata=%s"):format(f:GetObjectType(), show(f:IsShown()),
-        show(f:IsProtected()), w or 0, h or 0, show(f:GetFrameStrata()))
+    local function ask(method)
+        if type(f[method]) ~= "function" then return nil end
+        local ok, a, b = pcall(f[method], f)
+        if ok then return a, b end
+    end
+    local w, h = ask("GetSize")
+    return ("%s shown=%s protected=%s size=%dx%d strata=%s"):format(f:GetObjectType(), show(ask("IsShown")),
+        show(ask("IsProtected")), tonumber(w) or 0, tonumber(h) or 0, show(ask("GetFrameStrata")))
 end
 
 -- A frame and its keyed children, two levels deep.
