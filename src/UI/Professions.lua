@@ -63,14 +63,19 @@ local function skillBar(parent)
     f.fill:SetHeight(6)
     f.fill:SetPoint("LEFT", f.track, "LEFT")
     function f:SetSkill(skill, max)
-        skill, max = skill or 0, (max and max > 0) and max or 1
-        self.num:SetValue(skill .. " / " .. max)
-        self.frac = math.min(1, skill / max)
-        local w = self.track:GetWidth()
-        self.fill:SetShown(self.frac > 0 and w > 0)
-        if w > 0 then self.fill:SetWidth(math.max(0.01, w * self.frac)) end
+        self.skill, self.max = skill or 0, max or 0
+        self.num:SetValue(self.skill .. " / " .. self.max)
+        self:Draw()
     end
-    f:SetScript("OnSizeChanged", function(self) if self.frac then self:SetSkill(self.frac * 100, 100) end end)
+    -- the fill from the numbers kept (the width settles after the first
+    -- layout: drawn again then, the numbers untouched)
+    function f:Draw()
+        local frac = (self.max or 0) > 0 and math.min(1, (self.skill or 0) / self.max) or 0
+        local w = self.track:GetWidth()
+        self.fill:SetShown(frac > 0 and w > 0)
+        if w > 0 then self.fill:SetWidth(math.max(0.01, w * frac)) end
+    end
+    f:SetScript("OnSizeChanged", function(self) if self.max then self:Draw() end end)
     return f
 end
 
