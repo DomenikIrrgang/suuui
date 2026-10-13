@@ -351,8 +351,25 @@ function M:Build()
     local f = _G.PlayerSpellsFrame
     local tab = f and f.TalentsFrame
     if not tab or self.page or InCombatLockdown() then return end
-    -- Blizzard's tab out of sight (it keeps working underneath; SuuUI's covers it)
+    -- Blizzard's tab out of sight: see-through and off screen, still shown
+    -- (its OnShow and OnHide drive this page). Only see-through, its 1212 ×
+    -- 681 stuck out of the smaller window, and its talent buttons took the
+    -- mouse there (tooltips, no camera: found in game). Back off screen
+    -- whenever Blizzard places it again (out of combat: the window is
+    -- protected).
     tab:SetAlpha(0)
+    local function away()
+        if InCombatLockdown() then self.awayAfterCombat = true return end
+        self.placingTab = true
+        tab:ClearAllPoints()
+        tab:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        self.placingTab = false
+    end
+    self.away = away
+    away()
+    hooksecurefunc(tab, "SetPoint", function()
+        if not self.placingTab then C_Timer.After(0, away) end
+    end)
     local page = UI.TalentTree(f)
     page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
@@ -409,6 +426,7 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if not self.page then self:Build() end
+        if self.awayAfterCombat and self.away then self.awayAfterCombat = nil; self.away() end
         if self.page and self.page:IsVisible() then self:Size() end
         self:QueueRender()
     end)
