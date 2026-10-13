@@ -306,8 +306,14 @@ function Row.Add(chrome)
     end)
     f:HookScript("OnHide", Row.Queue)
     f:HookScript("OnSizeChanged", Row.Queue)
-    -- Blizzard places its panels again now and then: back in the row
-    hooksecurefunc(f, "SetPoint", function() if not Row.placing then Row.Queue() end end)
+    -- Blizzard places its panels again now and then (right after showing
+    -- one too): back in the row at once, so no frame is drawn elsewhere
+    -- (a flicker, found in game); and again a frame later
+    hooksecurefunc(f, "SetPoint", function()
+        if Row.placing then return end
+        Row.Layout()
+        Row.Queue()
+    end)
     if f:IsShown() then
         Row.seq = Row.seq + 1
         chrome.openedAt = Row.seq
