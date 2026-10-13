@@ -6,6 +6,12 @@
 -- (B, the bag buttons, the mailbox, a vendor, the bank): Blizzard's bag
 -- frames still open and close, under a hidden parent, and SuuUI's window
 -- follows them. Bottom right, movable in edit mode.
+--
+-- The bank (step 2.5b, boards "Bank" and "At the bank"): the same window
+-- with every purchased bank tab's slots, opened at a banker top centre with
+-- your bags beside it. Blizzard's bank frame opens and closes as always,
+-- under the hidden parent; SuuUI's window follows BANKFRAME_OPENED/CLOSED.
+-- One search runs across both.
 -- A built-in module written against the public API only.
 --
 -- The slots are Blizzard's own bag slot buttons (its template), each in a
@@ -27,6 +33,8 @@ local M = SuuUI.RegisterModule({
         columns = 10,
         reagentBag = true,
         keyring = false,
+        bank = true,
+        bankPosition = { point = "TOP", x = -216, y = -240 },
     },
 })
 
@@ -35,6 +43,12 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 local KEYRING = -1
 local REAGENT = 5
+local BANK_FIRST = (Enum.BagIndex and Enum.BagIndex.CharacterBankTab_1) or 6
+local BANK_LAST = (Enum.BagIndex and Enum.BagIndex.CharacterBankTab_9) or 14
+local BANK_TYPE = Enum.BankType and Enum.BankType.Character
+local S = T.space
+
+local function isBank(bag) return bag >= BANK_FIRST and bag <= BANK_LAST end
 
 -- The bags shown, in order.
 function M:Bags()
@@ -49,6 +63,31 @@ local function numSlots(bag)
     return (plain(n) and n) or 0
 end
 
+-- The bank tabs you own, in order (the game's list; else every tab with slots).
+function M:BankBags()
+    local list = {}
+    if BANK_TYPE and C_Bank and C_Bank.FetchPurchasedBankTabIDs then
+        local ok, ids = pcall(C_Bank.FetchPurchasedBankTabIDs, BANK_TYPE)
+        if ok and type(ids) == "table" then
+            for _, id in ipairs(ids) do
+                if plain(id) and isBank(id) then list[#list + 1] = id end
+            end
+        end
+    end
+    if #list == 0 then
+        for bag = BANK_FIRST, BANK_LAST do
+            if numSlots(bag) > 0 then list[#list + 1] = bag end
+        end
+    end
+    return list
+end
+
+-- The window a bag's slots are in (nil: neither shows it).
+function M:InvFor(bag)
+    if isBank(bag) then return self.bank end
+    return self.inv
+end
+
 --------------------------------------------------------------------------------
 -- Slots
 --------------------------------------------------------------------------------
@@ -57,7 +96,7 @@ end
 function M:BagFrame(bag)
     local f = self.bagFrames[bag]
     if f then return f end
-    f = CreateFrame("Frame", nil, self.inv.grid)
+    f = CreateFrame("Frame", nil, self:InvFor(bag).grid)
     f:SetID(bag)
     f:SetSize(1, 1)
     f:SetPoint("TOPLEFT")
@@ -69,7 +108,8 @@ function M:SlotButton(bag, slot)
     self.buttons[bag] = self.buttons[bag] or {}
     local b = self.buttons[bag][slot]
     if b then return b end
-    local name = ("SuuUIBag%dSlot%d"):format(bag + 2, slot)
+    local name = isBank(bag) and ("SuuUIBank%dSlot%d"):format(bag - BANK_FIRST + 1, slot)
+        or ("SuuUIBag%dSlot%d"):format(bag + 2, slot)
     b = CreateFrame("ItemButton", name, self:BagFrame(bag), "ContainerFrameItemButtonTemplate")
     b:SetID(slot)
     self.skins[b] = UI.SkinItemSlot(b)
@@ -112,33 +152,49 @@ function M:UpdateBag(bag)
     for slot = 1, numSlots(bag) do self:UpdateSlot(bag, slot) end
 end
 
--- Every slot laid out again (bags or sizes changed), the counts, the money.
-function M:Rebuild()
-    if not self.inv then return end
-    local list = {}
+-- Every slot of every bag a shown window holds.
+function M:UpdateShown()
+    if self.inv and self.inv:IsShown() then
+        for _, bag in ipairs(self:Bags()) do self:UpdateBag(bag) end
+    end
+    if self.bank and self.bank:IsShown() then
+        for _, bag in ipairs(self:BankBags()) do self:UpdateBag(bag) end
+    end
+end
+
+-- One window's slots laid out in order: returns its slot count and free count.
+function M:Fill(inv, bags)
+    local list, shown = {}, {}
     local total, free = 0, 0
-    local shown = {}
-    for _, bag in ipairs(self:Bags()) do
+    for _, bag in ipairs(bags) do
         shown[bag] = true
         local n = numSlots(bag)
         for slot = 1, n do
-            local b = self:SlotButton(bag, slot)
-            list[#list + 1] = b
+            list[#list + 1] = self:SlotButton(bag, slot)
             self:UpdateSlot(bag, slot)
         end
         -- hide what the bag no longer has
         for slot = n + 1, #(self.buttons[bag] or {}) do self.buttons[bag][slot]:Hide() end
-        if bag >= 0 and bag <= 4 then
+        if bag ~= REAGENT and bag ~= KEYRING then
             total = total + n
             local f = C_Container.GetContainerNumFreeSlots(bag)
             if plain(f) and f then free = free + f end
         end
     end
     for bag, slots in pairs(self.buttons) do
-        if not shown[bag] then for _, b in ipairs(slots) do b:Hide() end end
+        if not shown[bag] and self:InvFor(bag) == inv then
+            for _, b in ipairs(slots) do b:Hide() end
+        end
     end
-    self.inv:LayoutSlots(list)
-    self.inv:SetMeta(("%d free of %d"):format(free, total))
+    inv:LayoutSlots(list)
+    inv:SetMeta(("%d free of %d"):format(free, total))
+    return total, free
+end
+
+-- Every slot laid out again (bags or sizes changed), the counts, the money.
+function M:Rebuild()
+    if not self.inv then return end
+    self:Fill(self.inv, self:Bags())
     local note
     if self:Get("reagentBag") and numSlots(REAGENT) > 0 then
         local f = C_Container.GetContainerNumFreeSlots(REAGENT)
@@ -148,12 +204,47 @@ function M:Rebuild()
     self.inv:SetMoney(GetMoney())
 end
 
+function M:RebuildBank()
+    if not (self.bank and self.bank:IsShown()) then return end
+    local tabs = self:BankBags()
+    local total = self:Fill(self.bank, tabs)
+    self.bank:SetNote(("%s · %d slots"):format(#tabs > 1 and (#tabs .. " tabs") or "Bank", total))
+end
+
 --------------------------------------------------------------------------------
 -- Opening with Blizzard's bags
 --------------------------------------------------------------------------------
 
 local hidden = CreateFrame("Frame")
 hidden:Hide()
+
+-- A Blizzard frame under the hidden parent, kept there (if Blizzard moves it
+-- again) while keep() says so.
+function M:KeepHidden(f, keep)
+    if f:GetParent() ~= hidden then f:SetParent(hidden) end
+    if self.parentHooked[f] then return end
+    self.parentHooked[f] = true
+    hooksecurefunc(f, "SetParent", function(frame, parent)
+        if parent ~= hidden and self:IsEnabled() and keep() then
+            C_Timer.After(0, function()
+                if frame:GetParent() ~= hidden and self:IsEnabled() and keep() then frame:SetParent(hidden) end
+            end)
+        end
+    end)
+end
+
+-- Blizzard's bank frame under the hidden parent (it keeps opening and
+-- closing, Esc included), or back where it was with the setting off.
+function M:HideBlizzardBank()
+    local f = _G.BankFrame
+    if not f then return end
+    if self:Get("bank") then
+        self.bankParent = self.bankParent or f:GetParent()
+        self:KeepHidden(f, function() return self:Get("bank") end)
+    elseif self.bankParent and f:GetParent() == hidden then
+        f:SetParent(self.bankParent)
+    end
+end
 
 -- Blizzard's bag frames under a hidden parent: they keep opening and
 -- closing (so every way of opening bags still works), out of sight.
@@ -165,17 +256,7 @@ function M:HideBlizzardBags()
         local f = _G[name]
         -- frames inside Blizzard's container go with it
         if f and f ~= container and container and f:GetParent() == container then f = nil end
-        if f then
-            if f:GetParent() ~= hidden then f:SetParent(hidden) end
-            if not self.parentHooked[f] then
-                self.parentHooked[f] = true
-                hooksecurefunc(f, "SetParent", function(frame, parent)
-                    if parent ~= hidden and self:IsEnabled() then
-                        C_Timer.After(0, function() if frame:GetParent() ~= hidden then frame:SetParent(hidden) end end)
-                    end
-                end)
-            end
-        end
+        if f then self:KeepHidden(f, function() return true end) end
     end
 end
 
@@ -187,15 +268,53 @@ local function anyBagOpen()
     return false
 end
 
+-- The bags at their place, or beside the bank while it is open.
+function M:PlaceBags()
+    local inv = self.inv
+    inv:ClearAllPoints()
+    if self.bank and self.bank:IsShown() then
+        inv:SetPoint("TOPLEFT", self.bank, "TOPRIGHT", S["space-5"], 0)
+    else
+        local pos = self:Get("position")
+        inv:SetPoint(pos.point or "CENTER", SuuUI.Root, pos.point or "CENTER", pos.x or 0, pos.y or 0)
+    end
+end
+
 function M:Sync()
     if not self.inv then return end
     local open = anyBagOpen()
     if open and not self.inv:IsShown() then
+        self:PlaceBags()
         self.inv:Show()
         self:Rebuild()
     elseif not open and self.inv:IsShown() then
         self.inv:Hide()
     end
+end
+
+-- At a banker (BANKFRAME_OPENED) and away again.
+function M:ShowBank()
+    if not (self.bank and self:Get("bank")) then return end
+    self:HideBlizzardBank()
+    self.bank:Show()
+    self:RebuildBank()
+    self:PlaceBags()
+end
+
+function M:HideBank()
+    if not self.bank or not self.bank:IsShown() then return end
+    self.bank:Hide()
+    self:PlaceBags()
+end
+
+local function closeBank()
+    if C_Bank and C_Bank.CloseBankFrame then C_Bank.CloseBankFrame()
+    elseif CloseBankFrame then CloseBankFrame() end
+end
+
+local function sortBank()
+    if not C_Container.SortBank then return end
+    if not (BANK_TYPE and pcall(C_Container.SortBank, BANK_TYPE)) then pcall(C_Container.SortBank) end
 end
 
 function M:QueueSync()
@@ -248,6 +367,9 @@ local SECTION = {
             { key = "reagentBag", label = "Reagent bag", control = "toggle", description = "Its slots after your bags'." },
             { key = "keyring", label = "Keyring", control = "toggle", description = "Your keys after everything else." },
         } },
+        { title = "Bank", description = "At a banker your bank opens in the same window, top centre, your bags beside it. Every bank tab you own in one grid; items move between them as always (right click, drag). One search runs across both. Move it in edit mode.", rows = {
+            { key = "bank", label = "SuuUI's bank", control = "toggle", description = "Off: Blizzard's bank window." },
+        } },
     },
 }
 
@@ -268,28 +390,54 @@ function M:OnEnable()
         self.inv:EnableMouse(true)
         self.inv:Hide()
         self.inv.onClose = function() CloseAllBags() end
-        self.inv.search.onTextChanged = function(text)
-            if C_Container.SetItemSearch then C_Container.SetItemSearch(text or "") end
-        end
+        self.inv.suuManagedShow = true -- it follows Blizzard's bags, not edit mode
         self.inv.sort:SetScript("OnClick", function()
             if C_Container.SortBags then pcall(C_Container.SortBags) end
         end)
-        self.inv:HookScript("OnHide", function()
-            -- a search ends with the window
-            if self.inv.search.edit:GetText() ~= "" then
-                self.inv.search:SetValue("")
-                if C_Container.SetItemSearch then C_Container.SetItemSearch("") end
+        self.bank = UI.Inventory(SuuUI.Root, { name = "SuuUIBank", title = "Bank", columns = self:Get("columns"),
+            sortTip = "Blizzard's own sort for your bank." })
+        self.bank:SetFrameStrata("MEDIUM")
+        self.bank:SetToplevel(true)
+        self.bank:EnableMouse(true)
+        self.bank:Hide()
+        self.bank.suuManagedShow = true -- shown at a banker
+        self.bank.onClose = closeBank
+        self.bank.sort:SetScript("OnClick", sortBank)
+        -- one search across both windows; it ends with them
+        local function search(from, other)
+            from.search.onTextChanged = function(text)
+                other.search:SetValue(text or "")
+                if C_Container.SetItemSearch then C_Container.SetItemSearch(text or "") end
             end
-        end)
+            from:HookScript("OnHide", function()
+                if other:IsShown() then return end
+                if from.search.edit:GetText() ~= "" or other.search.edit:GetText() ~= "" then
+                    from.search:SetValue("")
+                    other.search:SetValue("")
+                    if C_Container.SetItemSearch then C_Container.SetItemSearch("") end
+                end
+            end)
+        end
+        search(self.inv, self.bank)
+        search(self.bank, self.inv)
     end
     self:HideBlizzardBags()
+    self:HideBlizzardBank()
     self:RegisterMover(self.inv, { key = "position", label = "Bags" })
+    self:RegisterMover(self.bank, { key = "bankPosition", label = "Bank" })
     self:RegisterSettings(SECTION)
     self:Watch("columns", function(v)
-        self.inv.columns = v
-        self.inv.search:SetWidth(self.inv:GridWidth() - 30 - SuuUI.Tokens.space["space-3"])
-        self.inv.grid:SetWidth(self.inv:GridWidth())
+        for _, inv in ipairs({ self.inv, self.bank }) do
+            inv.columns = v
+            inv.search:SetWidth(inv:GridWidth() - 30 - S["space-3"])
+            inv.grid:SetWidth(inv:GridWidth())
+        end
         self:Rebuild()
+        self:RebuildBank()
+    end)
+    self:Watch("bank", function(on)
+        self:HideBlizzardBank()
+        if not on then self:HideBank() end
     end)
     self:Watch("reagentBag", function() self:Rebuild() end)
     self:Watch("keyring", function() self:Rebuild() end)
@@ -306,19 +454,28 @@ function M:OnEnable()
     for _, e in ipairs({ "BAG_OPEN", "BAG_CLOSED" }) do self:OnGameEvent(e, function() self:QueueSync() end) end
     -- what changes in the bags
     self:OnGameEvent("BAG_UPDATE", function(_, bag)
-        if self.inv:IsShown() and plain(bag) then self:UpdateBag(bag) end
+        if not plain(bag) then return end
+        local inv = self:InvFor(bag)
+        if inv and inv:IsShown() then self:UpdateBag(bag) end
     end)
     for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_CONTAINER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
-        self:OnGameEvent(e, function() if self.inv:IsShown() then self:Rebuild() end end)
+        self:OnGameEvent(e, function()
+            if self.inv:IsShown() then self:Rebuild() end
+            self:RebuildBank()
+        end)
     end
+    for _, e in ipairs({ "BANK_TABS_CHANGED", "PLAYERBANKSLOTS_CHANGED" }) do
+        self:OnGameEvent(e, function() self:RebuildBank() end)
+    end
+    self:OnGameEvent("BANKFRAME_OPENED", function() self:ShowBank() end)
+    self:OnGameEvent("BANKFRAME_CLOSED", function() self:HideBank() end)
     self:OnGameEvent("ITEM_LOCK_CHANGED", function(_, bag, slot)
-        if self.inv:IsShown() and plain(bag) and plain(slot) and slot then self:UpdateSlot(bag, slot) end
+        if not (plain(bag) and plain(slot) and bag and slot) then return end
+        local inv = self:InvFor(bag)
+        if inv and inv:IsShown() then self:UpdateSlot(bag, slot) end
     end)
     for _, e in ipairs({ "BAG_UPDATE_COOLDOWN", "INVENTORY_SEARCH_UPDATE" }) do
-        self:OnGameEvent(e, function()
-            if not self.inv:IsShown() then return end
-            for _, bag in ipairs(self:Bags()) do self:UpdateBag(bag) end
-        end)
+        self:OnGameEvent(e, function() self:UpdateShown() end)
     end
     self:OnGameEvent("PLAYER_MONEY", function() if self.inv:IsShown() then self.inv:SetMoney(GetMoney()) end end)
     self:Sync()
@@ -326,4 +483,5 @@ end
 
 function M:OnDisable()
     if self.inv then self.inv:Hide() end
+    if self.bank then self.bank:Hide() end
 end
