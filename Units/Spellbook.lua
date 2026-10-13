@@ -277,6 +277,7 @@ function M:Render()
         self.wantWidth = want
         self:Shorten()
     end
+    self.book:SetWidest(widest)
     self.book:SetSchools(tabs)
     self.book:SetHead(schools[self.school].name, toTrain)
     self.book:SetSwitches(self:Get("unlearned"), self:Get("allRanks"))

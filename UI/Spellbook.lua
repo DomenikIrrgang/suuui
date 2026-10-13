@@ -16,6 +16,7 @@
 --   book:SetPage(page, pages); book.onPage = fn(delta)
 --   book.cells[i].button   -- a SecureActionButton (the owner sets what it casts)
 --   book:FitRows()         -- rows to the page's height (a page holds rows × 2)
+--   book:SetWidest(px)     -- the longest name anywhere: columns as wide on every page
 --   book.onEnter / onLeave / onDragStart = fn(i, cell)
 -- Cells are secure buttons: SetSpells changes only their look; their
 -- attributes are the owner's, and only out of combat.
@@ -103,6 +104,9 @@ function Book:SetSpells(list)
             widest = math.max(widest, UI.MeasureText("label", name), UI.MeasureText("caption", s.sub or ""))
         end
     end
+    -- (the owner's widest name across every school, when given: the same
+    -- columns on every page, one spell alone included: found in game)
+    if self.widest then widest = math.max(widest, self.widest) end
     local colW = math.min((width - S["space-6"]) / COLUMNS, ICON + S["space-4"] + math.ceil(widest) + S["space-3"])
     local used = COLUMNS * colW + (COLUMNS - 1) * S["space-6"]
     local headH = 30 + S["space-4"]
@@ -150,6 +154,11 @@ function Book:FitRows()
         self.grid:SetHeight(rows * ICON + (rows - 1) * S["space-4"])
     end
     return rows
+end
+
+-- The longest name the book has anywhere (columns as wide on every page).
+function Book:SetWidest(px)
+    self.widest = px
 end
 
 function Book:SetSchools(list)
