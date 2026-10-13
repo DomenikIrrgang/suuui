@@ -6,7 +6,8 @@
 --     spells in the spellbook (Find Herbs, Fishing, Basic Campfire)
 --   * the open trade skill (C_TradeSkillUI): which one, ready, its recipes'
 --     info, categories, schematics (reagents and products), requirements
---     (tools), cooldowns, tracked, descriptions; your counts of the reagents
+--     (tools), cooldowns, tracked, descriptions, sources (where an unlearned
+--     one is learned); your counts of the reagents
 --   * C_TradeSkillUI's functions
 --
 --   /suu probe professions   with a profession's window open (cooking, first
@@ -112,6 +113,7 @@ function PP.Sample()
         r.outputLink = call(C_TradeSkillUI.GetRecipeItemLink, id)
         r.numMade = call(C_TradeSkillUI.GetRecipeNumItemsProduced, id)
         r.tools = call(C_TradeSkillUI.GetRecipeTools, id)
+        r.source = call(C_TradeSkillUI.GetRecipeSourceText, id)
         -- your counts of its reagents
         local sch = raw(C_TradeSkillUI.GetRecipeSchematic, id, false)
         local counts = {}

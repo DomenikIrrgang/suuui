@@ -14,22 +14,25 @@
 --   local p = UI.Professions(parent)
 --   p:SetTabs({ { key, label, icon, glyph } }, selected)   p.onTab(key)
 --   p:SetOverview({ primary = { card }, secondary = { card } })
---     card = { name, rank, icon, skill, max, crafting, spells = { spell } },
+--     card = { name, rank, icon, skill, max, crafting, recipes = { learned,
+--       total } (nil: not counted yet), spells = { spell } },
 --       or { name, rank, icon, untrained = true, hint } for one not learned
 --       (dimmed, the hint where the skill bar goes)
 --     spell = { name, icon, active, onClick, onEnter(owner), onLeave }
 --     p.onOpen(card)          -- a crafting profession's card clicked
---   p:SetCrafting({ name, rank, skill, max, categories = { { name, recipes } },
+--   p:SetCrafting({ name, rank, skill, max, recipes = { learned, total },
+--       categories = { { name, recipes } },
 --       selected (recipe id) })
 --     recipe = { id, name, difficulty (0 optimal .. 3 trivial), canMake,
 --       tracked, learned }
 --   p:SetRecipe(r)            -- the chosen recipe, or nil
 --     r = { name, quality (0-5), qualityName ("rare"), icon, makes, desc,
 --       tools = { { name, met } }, reagents = { { name, icon, quality,
---       qualityName, have, need } }, cooldown (text), tracked,
+--       qualityName, have, need } }, cooldown (text), source (where to
+--       learn it), tracked,
 --       canMake, ready, why, onProduct(owner), onReagent(i, owner) }
 --   p.onSelect(id), p.onRecipeEnter(recipe, owner), p.onSearch(text),
---   p.onFilters(list of "learned" | "materials" | "skillup"), p.onTrack(on),
+--   p.onFilters(list of "learned" | "unlearned" | "materials" | "skillup"), p.onTrack(on),
 --   p.onCreate(count), p.onCreateAll()
 
 local _, ns = ...
@@ -49,15 +52,23 @@ UI.PROFESSIONS_W, UI.PROFESSIONS_H = 720, 600
 
 local P = {}
 
--- a thin bar with its numbers ("83 / 150")
-local function skillBar(parent)
+-- a thin bar with its numbers ("83 / 150"), a caption before it ("Skill")
+local BAR_LABEL_W = 50
+local function skillBar(parent, label)
     local f = CreateFrame("Frame", nil, parent)
     f:SetHeight(T.type.numeric.lineHeight)
     f.num = UI.Text(f, "numeric", "ink")
     f.num:SetPoint("RIGHT")
     f.track = UI.Fill(f, "track", "ARTWORK")
     f.track:SetHeight(6)
-    f.track:SetPoint("LEFT")
+    if label then
+        f.label = UI.Text(f, "caption", "ink-muted")
+        f.label:SetPoint("LEFT")
+        f.label:SetValue(label)
+        f.track:SetPoint("LEFT", f, "LEFT", BAR_LABEL_W, 0)
+    else
+        f.track:SetPoint("LEFT")
+    end
     f.track:SetPoint("RIGHT", f.num, "LEFT", -S["space-4"], 0)
     f.fill = UI.Fill(f, "progress-fill", "ARTWORK", 1)
     f.fill:SetHeight(6)
@@ -157,9 +168,16 @@ local function makeCard(view)
     c.rank:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -1)
     c.open = UI.Text(c, "caption", "gilt-text")
     c.open:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"] - 2)
-    c.skill = skillBar(c)
+    c.skill = skillBar(c, "Skill")
     c.skill:SetPoint("TOPLEFT", c.icon, "BOTTOMLEFT", 0, -S["space-4"])
     c.skill:SetPoint("RIGHT", c, "RIGHT", -S["space-5"], 0)
+    -- a crafting profession's recipes: learned of all (counted when it was
+    -- last open)
+    c.recipes = skillBar(c, "Recipes")
+    c.recipes:SetPoint("TOPLEFT", c.skill, "BOTTOMLEFT", 0, -S["space-3"])
+    c.recipes:SetPoint("RIGHT", c, "RIGHT", -S["space-5"], 0)
+    c.recipesHint = UI.Text(c, "caption", "ink-faint")
+    c.recipesHint:SetPoint("LEFT", c.recipes, "LEFT", 0, 0)
     c.spells = {}
     c.empty = UI.Text(c, "caption", "ink-muted")
     c.empty:SetPoint("CENTER")
@@ -171,7 +189,7 @@ local function makeCard(view)
     return c
 end
 
-local CARD_H = S["space-5"] * 2 + 30 + S["space-4"] + T.type.numeric.lineHeight + S["space-4"] + 22
+local CARD_H = S["space-5"] * 2 + 30 + S["space-4"] + T.type.numeric.lineHeight * 2 + S["space-3"] + S["space-4"] + 22
 
 local function fillCard(c, card, empty)
     c.card = card
@@ -181,6 +199,7 @@ local function fillCard(c, card, empty)
     if not has then
         c.empty:SetValue(empty or "Learn a profession from a trainer")
         c.hint:Hide()
+        c.recipes:Hide(); c.recipesHint:Hide()
         for _, s in ipairs(c.spells) do s:Hide() end
         return
     end
@@ -196,6 +215,12 @@ local function fillCard(c, card, empty)
     c.hint:SetShown(off)
     c.hint:SetValue(card.hint or "")
     c.skill:SetSkill(card.skill, card.max)
+    local counted = card.crafting and not off and card.recipes
+    c.recipes:SetShown(counted and true or false)
+    if counted then c.recipes:SetSkill(card.recipes.learned, card.recipes.total) end
+    c.recipesHint:SetShown(card.crafting and not off and not counted or false)
+    c.recipesHint:SetValue("Recipes: open it once to count them")
+    local below = (card.crafting and not off) and c.recipes or c.skill
     local x = 0
     for i, sp in ipairs(card.spells or {}) do
         local s = c.spells[i] or makeSpell(c)
@@ -209,7 +234,7 @@ local function fillCard(c, card, empty)
         local w = 20 + S["space-3"] + math.ceil(s.label:GetUnboundedStringWidth()) + 2
         s:SetWidth(w)
         s:ClearAllPoints()
-        s:SetPoint("TOPLEFT", c.skill, "BOTTOMLEFT", x, -S["space-4"])
+        s:SetPoint("TOPLEFT", below, "BOTTOMLEFT", x, -S["space-4"])
         s:Show()
         x = x + w + S["space-5"]
     end
@@ -391,6 +416,7 @@ function P:SetRecipe(r)
         for _, x in ipairs(v.tools) do x:Hide() end
         for _, x in ipairs(v.reagents) do x:Hide() end
         v.cooldown:Hide()
+        v.source:Hide()
         v.why:Hide()
         return
     end
@@ -426,6 +452,16 @@ function P:SetRecipe(r)
         y = y + T.type.caption.lineHeight + 2
     end
     for i = #(r.tools or {}) + 1, #v.tools do v.tools[i]:Hide() end
+    -- where a recipe not learned yet comes from (the game's text)
+    v.source:SetShown(r.source ~= nil)
+    if r.source then
+        y = y + S["space-3"]
+        v.source:ClearAllPoints()
+        v.source:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+        v.source:SetWidth(math.max(100, v:GetWidth()))
+        v.source:SetValue(r.source)
+        y = y + v.source:GetStringHeight()
+    end
     y = y + S["space-5"]
     v.reagentHead:ClearAllPoints()
     v.reagentHead:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
@@ -465,6 +501,23 @@ function P:SetRecipe(r)
     v.why:SetValue(r.why or "")
 end
 
+-- Learned only and Unlearned only shut each other out: the one just picked
+-- stays.
+function P:FiltersChanged(list)
+    local had, has = {}, {}
+    for _, k in ipairs(self.filterList or {}) do had[k] = true end
+    for _, k in ipairs(list or {}) do has[k] = true end
+    if has.learned and has.unlearned then
+        local drop = had.learned and "learned" or "unlearned"
+        local kept = {}
+        for _, k in ipairs(list) do if k ~= drop then kept[#kept + 1] = k end end
+        list = kept
+        self.filters:SetValue(list)
+    end
+    self.filterList = list
+    if self.onFilters then self.onFilters(list) end
+end
+
 function P:SetCrafting(d)
     d = d or {}
     self.mode = "crafting"
@@ -472,8 +525,17 @@ function P:SetCrafting(d)
     self.overview:Hide()
     self.crafting:Show()
     self.craftName:SetValue(d.name or "")
-    self.craftSkill:SetSkill(d.skill, d.max)
     self.craftRank:SetValue(d.rank or "")
+    self.craftSkill:SetSkill(d.skill, d.max)
+    self.craftRecipes:SetShown(d.recipes ~= nil)
+    if d.recipes then self.craftRecipes:SetSkill(d.recipes.learned, d.recipes.total) end
+    -- the two bars share what the name and rank leave
+    local gap = S["space-5"]
+    local room = (self.crafting:GetWidth() or 0) - self.craftName:GetUnboundedStringWidth()
+        - self.craftRank:GetUnboundedStringWidth() - gap * 3
+    local bar = d.recipes and math.floor((room - gap) / 2) or room
+    self.craftSkill:SetWidth(math.max(80, bar))
+    self.craftRecipes:SetWidth(math.max(80, bar))
     self:DrawList()
 end
 
@@ -512,17 +574,19 @@ function UI.Professions(parent)
     f.craftRank:SetPoint("TOPRIGHT", 0, 0)
     f.craftName = UI.Text(f.crafting, "header", "gilt-text")
     f.craftName:SetPoint("TOPLEFT", 0, 0)
-    f.craftSkill = skillBar(f.crafting)
+    f.craftSkill = skillBar(f.crafting, "Skill")
     f.craftSkill:SetPoint("LEFT", f.craftName, "RIGHT", S["space-5"], 0)
-    f.craftSkill:SetPoint("RIGHT", f.craftRank, "LEFT", -S["space-5"], 0)
+    f.craftRecipes = skillBar(f.crafting, "Recipes")
+    f.craftRecipes:SetPoint("LEFT", f.craftSkill, "RIGHT", S["space-5"] * 2, 0)
     -- the list: search and filters, then the recipes
     f.search = UI.TextField(f.crafting, { width = LIST_W - 96 - S["space-3"], placeholder = "Search recipes",
         onTextChanged = function(text) if f.onSearch then f.onSearch(text) end end })
     f.search:SetPoint("TOPLEFT", f.crafting, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-5"]))
     f.filters = UI.Select(f.crafting, { multiple = true, width = 96, placeholder = "Filters", maxShown = 0,
-        options = { { value = "learned", label = "Learned only" }, { value = "materials", label = "Have materials" },
-            { value = "skillup", label = "Skill up" } },
-        value = { "learned" }, onChange = function(v) if f.onFilters then f.onFilters(v) end end })
+        options = { { value = "learned", label = "Learned only" }, { value = "unlearned", label = "Unlearned only" },
+            { value = "materials", label = "Have materials" }, { value = "skillup", label = "Skill up" } },
+        value = { "learned" }, onChange = function(v) f:FiltersChanged(v) end })
+    f.filterList = { "learned" }
     f.filters:SetPoint("LEFT", f.search, "RIGHT", S["space-3"], 0)
     f.listBox = CreateFrame("Frame", nil, f.crafting)
     f.listBox:SetPoint("TOPLEFT", f.search, "BOTTOMLEFT", 0, -S["space-4"])
@@ -564,6 +628,9 @@ function UI.Professions(parent)
     v.reagentHead = UI.Text(v, "header", "gilt-text")
     v.reagentHead:SetValue("Reagents")
     v.cooldown = UI.Text(v, "caption", "amber")
+    v.source = UI.Text(v, "caption", "ink-muted")
+    v.source:SetJustifyH("LEFT")
+    v.source:SetWordWrap(true)
     -- the foot: Track, quantity, Create all, Create
     v.foot = CreateFrame("Frame", nil, v)
     v.foot:SetPoint("BOTTOMLEFT")

@@ -88,6 +88,9 @@ function M:Profession(index)
         end
     end
     card.rank = card.rank or RANKS[max] or ""
+    -- its recipes, as counted when it was last open
+    local counts = skillLine and self:CharData().recipes
+    card.recipes = counts and counts[skillLine]
     if card.crafting then
         -- the crafting one's own spell opens it: no button for it on the card
         local rest = {}
@@ -173,12 +176,16 @@ function M:Recipes()
     local search = self.search and self.search ~= "" and self.search:lower() or nil
     local f = self.filters or {}
     local first
+    local learned, total = 0, 0
     for _, id in ipairs(call(C_TradeSkillUI.GetAllRecipeIDs) or {}) do
         local info = call(C_TradeSkillUI.GetRecipeInfo, id)
         if info and plain(info.name) and not info.isDummyRecipe then
+            total = total + 1
+            if info.learned then learned = learned + 1 end
             local _, can = self:Reagents(id)
             local diff = info.relativeDifficulty or 3
             local keep = (not f.learned or info.learned)
+                and (not f.unlearned or not info.learned)
                 and (not f.materials or can > 0)
                 and (not f.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned))
                 and (not search or info.name:lower():find(search, 1, true))
@@ -206,6 +213,13 @@ function M:Recipes()
         end)
     end
     data.categories = cats
+    -- learned of all, kept for the overview (it can only ask the open one)
+    if data.skillLine and total > 0 then
+        data.recipes = { learned = learned, total = total }
+        local saved = self:CharData()
+        saved.recipes = saved.recipes or {}
+        saved.recipes[data.skillLine] = data.recipes
+    end
     -- the one chosen in this profession, else the first
     local key = data.skillLine or 0
     local chosen = self.chosen[key]
@@ -262,6 +276,8 @@ function M:Recipe(id)
     if cd and cd > 0 then r.cooldown = SecondsToTime and SecondsToTime(cd) or (math.ceil(cd) .. " s") end
     r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false
     if not info.learned then
+        local source = call(C_TradeSkillUI.GetRecipeSourceText, id)
+        if plain(source) and type(source) == "string" and source ~= "" then r.source = source end
         r.why = "Not learned yet"
     elseif r.cooldown then
         r.why = "On cooldown"
