@@ -8,7 +8,8 @@
 --         SuuUI's header, the tabs as text tabs along the top, Blizzard's
 --         metal frame, portrait and title strip out of sight. Both open
 --         lined up under the micro menu (the protected spells window moved
---         only out of combat).
+--         only out of combat). The Legacy window opens in the middle of the
+--         screen instead (asked for in game), like SuuUI's Talents window.
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -156,6 +157,8 @@ function M:SkinLegacy()
     end
     chrome:SetTabs(list)
     f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    -- in the middle of the screen, like the Talents window (asked for in game)
+    UI.CenterWindow(f, true)
     self.legacy = chrome
 end
 
