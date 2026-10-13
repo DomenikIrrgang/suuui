@@ -364,9 +364,19 @@ local function isRed(r, g, b) return r and r > 0.8 and g < 0.4 and b < 0.4 end
 -- (its label left, its value right).
 function M:SkinStatRow(row)
     local texts = {}
+    -- a small square texture is an icon (a resistance's school): kept, the
+    -- rest (banners, backgrounds) away
+    local function texture(r)
+        local w, h = r:GetSize()
+        if w and h and w > 0 and w <= 24 and math.abs(w - h) < 3 then
+            r:SetAlpha(1)
+        else
+            r:SetAlpha(0)
+        end
+    end
     for _, r in ipairs({ row:GetRegions() }) do
         if r:GetObjectType() == "Texture" then
-            r:SetAlpha(0)
+            texture(r)
         elseif r:GetObjectType() == "FontString" and r:IsShown() then
             texts[#texts + 1] = r
         end
@@ -374,7 +384,7 @@ function M:SkinStatRow(row)
     for _, c in ipairs({ row:GetChildren() }) do
         for _, r in ipairs({ c:GetRegions() }) do
             if r:GetObjectType() == "Texture" then
-                r:SetAlpha(0)
+                texture(r)
             elseif r:GetObjectType() == "FontString" and r:IsShown() then
                 texts[#texts + 1] = r
             end
