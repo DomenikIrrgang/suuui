@@ -1582,8 +1582,11 @@ function UI.CooldownTracker(parent, opts)
     t.driver:Hide()
     t.driver:SetScript("OnUpdate", function()
         local self = t
-        if self.rebuild and not InCombatLockdown() then
+        -- (the first build doesn't wait: after a reload in combat there was
+        -- nothing until the fight ended, found in game)
+        if self.rebuild and (not InCombatLockdown() or not self.everBuilt) then
             self.rebuild = false
+            self.everBuilt = true
             ns.Fault.Call("Cooldown Manager", self.Build, self)
             self.dirty = false
             return

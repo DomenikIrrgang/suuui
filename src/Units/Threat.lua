@@ -25,6 +25,7 @@ local M = SuuUI.RegisterModule({
     name = "Threat meter",
     description = "Your target's threat in combat, and a warning before you pull.",
     api = "0.10",
+    combatSafe = true,
     defaults = {
         position = { point = "BOTTOMRIGHT", x = -292, y = 28 },
         shows = "combat",  -- "off" | "combat" | "always"

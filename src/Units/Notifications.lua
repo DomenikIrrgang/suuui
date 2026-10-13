@@ -26,6 +26,7 @@ local M = SuuUI.RegisterModule({
     name = "Notifications",
     description = "Requests (invites, resurrection, summons, duels, trades, deleting items, logging out) and notes as SuuUI cards at the top left.",
     api = "0.11",
+    combatSafe = true,
     reloadToToggle = true,
     defaults = {
         -- under the micro menu (28px down, 36px tall), space-5 clear

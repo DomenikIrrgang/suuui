@@ -19,6 +19,7 @@ local M = SuuUI.RegisterModule({
     name = "Damage meter",
     description = "Blizzard's own damage meter, restyled: damage, healing, interrupts, deaths, per fight.",
     api = "0.10",
+    combatSafe = true,
     defaults = {
         position = { point = "BOTTOMRIGHT", x = -28, y = 28 },
         shows = "always",      -- "always" | "group" | "combat" | "hidden"

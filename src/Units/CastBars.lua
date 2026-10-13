@@ -21,6 +21,7 @@ local M = SuuUI.RegisterModule({
     name = "Cast bars",
     description = "Your cast bar, and the casts of your target, focus and bosses with your interrupt's state.",
     api = "0.9",
+    combatSafe = true,
     reloadToToggle = true,
     defaults = {
         playerPosition = { point = "BOTTOM", x = 0, y = 292 },

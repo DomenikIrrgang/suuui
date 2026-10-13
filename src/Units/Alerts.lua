@@ -25,6 +25,7 @@ local M = SuuUI.RegisterModule({
     name = "Alerts",
     description = "Short alerts in the middle of the screen when something needs you now: aggro, a pull.",
     api = "0.10",
+    combatSafe = true,
     defaults = {
         position = { point = "TOP", x = 0, y = -320 },
         sound = true,

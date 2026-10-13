@@ -23,6 +23,7 @@ local M = SuuUI.RegisterModule({
     name = "Encounter timeline",
     description = "Upcoming boss abilities and SuuUI's pull countdown riding toward now, top centre.",
     api = "0.10",
+    combatSafe = true,
     defaults = {
         position = { point = "TOP", x = 0, y = -28 },
         variant = "track",   -- "track" | "list" | "off"

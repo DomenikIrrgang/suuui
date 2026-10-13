@@ -25,6 +25,7 @@ local M = SuuUI.RegisterModule({
     name = "Auras",
     description = "Your buffs and debuffs, and your debuffs on your target, focus and bosses.",
     api = "0.6",
+    combatSafe = true,
     reloadToToggle = true,
     defaults = {
         buffPosition = { point = "TOPRIGHT", x = -224, y = -28 },

@@ -17,6 +17,7 @@ local M = SuuUI.RegisterModule({
     name = "Readiness",
     description = "Between pulls: your group's big cooldowns (from everyone with SuuUI) and a Ready check button.",
     api = "0.10",
+    combatSafe = true,
     defaults = {
         position = { point = "TOPRIGHT", x = -28, y = -300 },
         shows = "instance", -- "instance" | "group" | "always" | "off"

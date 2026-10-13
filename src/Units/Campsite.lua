@@ -19,6 +19,7 @@ local M = SuuUI.RegisterModule({
     name = "Campfire",
     description = "Alerts at a campfire: one is near, resting by it, Camp Benefits gained.",
     api = "0.12",
+    combatSafe = true,
     defaults = {
         nearbyFor = 0, -- seconds the "Campfire nearby" alert stays; 0: until you rest or walk away
     },

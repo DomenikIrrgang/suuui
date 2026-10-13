@@ -20,6 +20,7 @@ local M = SuuUI.RegisterModule({
     name = "Cooldown Manager",
     description = "Your cooldowns, buffs, procs and your debuffs on the target, set up per class and spec.",
     api = "0.8",
+    combatSafe = true,
     defaults = {
         position = { point = "BOTTOM", x = 0, y = 322 },
         -- setups[CLASS][spec] = { preset, lists }: spec is the talent tree

@@ -10,6 +10,9 @@
 --       defaults = { greeting = "Hi" },
 --       enabledByDefault = true,
 --       reloadToToggle = false,       -- true for modules that replace protected frames
+--       combatSafe = false,           -- true when it makes no secure or protected
+--                                     -- frames: it starts at once after a reload
+--                                     -- in combat instead of when the fight ends
 --       OnInitialize = function(self) end,  -- once, before the first enable
 --       OnEnable = function(self) end,
 --       OnDisable = function(self) end,
@@ -188,7 +191,14 @@ local function start(m)
     Settings.Watch(m.id, "enabled", function() apply(m) end, "Modules")
     if m.state == "incompatible" then return end
     if m.enabledAtLoad then
-        Combat.Run("module:" .. m.id, function() enable(m) end, m.name)
+        -- after a reload in combat a module waits for the fight's end, unless
+        -- it makes no secure frames (found in game: buffs and the Cooldown
+        -- Manager were missing until the fight ended)
+        if m.combatSafe and InCombatLockdown() then
+            Fault.Call(m.name, function() enable(m) end)
+        else
+            Combat.Run("module:" .. m.id, function() enable(m) end, m.name)
+        end
     else
         m.state = "disabled"
     end
@@ -233,6 +243,7 @@ function Modules.Register(def)
         description = def.description,
         api = def.api,
         reloadToToggle = def.reloadToToggle and true or false,
+        combatSafe = def.combatSafe and true or false,
         OnInitialize = def.OnInitialize,
         OnEnable = def.OnEnable,
         OnDisable = def.OnDisable,

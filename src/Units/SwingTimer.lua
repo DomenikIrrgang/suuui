@@ -15,6 +15,7 @@ local M = SuuUI.RegisterModule({
     name = "Swing timer",
     description = "When your next swing or shot lands, from the game's own swing timer.",
     api = "0.9",
+    combatSafe = true,
     defaults = {
         position = { point = "BOTTOM", x = 0, y = 271 },
         shows = "combat", -- "off", "combat" or "always"

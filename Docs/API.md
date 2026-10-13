@@ -25,6 +25,7 @@ local M = SuuUI.RegisterModule({
     defaults = { greeting = "Hi" },
     enabledByDefault = true,      -- default true
     reloadToToggle = false,       -- true: turning it on or off takes effect after /reload
+    combatSafe = false,           -- true: no secure frames; after a reload in combat it starts at once (0.12)
     OnInitialize = function(self) end,  -- once, before the first enable
     OnEnable = function(self) end,
     OnDisable = function(self) end,
@@ -36,6 +37,7 @@ local M = SuuUI.RegisterModule({
 - Turning a module on or off waits for the end of combat.
 - If `OnInitialize` or `OnEnable` errors, the module is marked errored and turned off. The player sees one line, and SuuUI and the other modules keep running. `OnDisable` runs after a failed `OnEnable`, so it should cope with a half-built module. `/suu enable <id>` retries (a `reloadToToggle` module after the next `/reload`).
 - Use `reloadToToggle` for modules that replace protected Blizzard frames.
+- After a `/reload` in combat, modules start when the fight ends; one marked `combatSafe` (it makes no secure or protected frames) starts at once (0.12).
 
 | | |
 |---|---|
