@@ -252,38 +252,63 @@ function M:QueueRender()
     end)
 end
 
--- A node's tooltip: rank, what it does now and at the next rank, what it needs.
+-- A node's tooltip: the game's own, built as Blizzard's talent buttons build
+-- it (the title, "Rank 2/5", the talent's text at this rank and the next,
+-- what a click does, what it still needs in red); asked for in game.
 function M:ShowTip(button, n)
-    local total = n.rank + n.pending
-    local full = total >= n.max
-    local function describe(rank)
-        local text = n.entryID and C_Traits.GetTraitDescription and call(C_Traits.GetTraitDescription, n.entryID, rank)
-        if (not text or text == "") and n.spellID then text = C_Spell.GetSpellDescription(n.spellID) end
-        return plain(text) and text ~= "" and text or nil
+    local data = self.data
+    local configID = data and data.configID
+    local ni = configID and call(C_Traits.GetNodeInfo, configID, n.id)
+    if not ni then return end
+    local tip = GameTooltip
+    tip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip_SetTitle(tip, n.name)
+    local current = plain(ni.currentRank) and ni.currentRank or (n.rank + n.pending)
+    local max = plain(ni.maxRanks) and ni.maxRanks or n.max
+    GameTooltip_AddHighlightLine(tip, (TALENT_BUTTON_TOOLTIP_RANK_FORMAT or "Rank %s/%s"):format(current, max))
+    local increased = plain(ni.ranksIncreased) and ni.ranksIncreased or 0
+    if ni.activeEntry and ni.activeEntry.entryID then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        tip:AppendInfo("GetTraitEntry", ni.activeEntry.entryID, (ni.activeEntry.rank or 0) + increased)
     end
-    local desc = describe(math.max(1, total))
-    if total > 0 and not full then
-        local nextText = describe(total + 1)
-        if nextText then
-            desc = (desc and (desc .. "\n\n") or "") .. "|cff" .. T.color["ink-muted"].hex .. "Next rank|r\n" .. nextText
+    if ni.nextEntry and ni.nextEntry.entryID and (ni.ranksPurchased or 0) > 0 then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddHighlightLine(tip, TALENT_BUTTON_TOOLTIP_NEXT_RANK or "Next Rank:")
+        tip:AppendInfo("GetTraitEntry", ni.nextEntry.entryID, (ni.nextEntry.rank or 0) + increased)
+    end
+    -- what a click does
+    if n.canSpend then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddInstructionLine(tip, TALENT_BUTTON_TOOLTIP_PURCHASE_INSTRUCTIONS or "Click to learn")
+    elseif n.pending > 0 then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        GameTooltip_AddDisabledLine(tip, "Right-click to take a planned point back")
+    end
+    -- what it still needs: the tree's points (the game's text, with the
+    -- tree's name), the talent above it, or why nothing can change now
+    local spacer = true
+    local function need(text, isError)
+        if spacer then GameTooltip_AddBlankLineToTooltip(tip); spacer = false end
+        if isError then GameTooltip_AddErrorLine(tip, text) else GameTooltip_AddHighlightLine(tip, text) end
+    end
+    local best
+    for _, condID in ipairs(n.conditions) do
+        local c = call(C_Traits.GetConditionInfo, configID, condID, false, n.tree.name)
+        if c and c.isMet == false and plain(c.tooltipText) and c.tooltipText ~= "" then
+            if not best or (c.spentAmountRequired or 0) > (best.spentAmountRequired or 0) then best = c end
         end
     end
-    local sub = ("Rank %d/%d"):format(total, n.max)
-    if n.pending > 0 then sub = sub .. (" · %d planned, not applied"):format(n.pending) end
-    local meta
-    local editable = self:Editable()
-    if n.locked then
-        meta = self:Requires(self.data and self.data.configID, n) or "Locked"
-    elseif full then
-        meta = "All ranks learned" .. (n.pending > 0 and " · right-click to take one back" or "")
-    elseif n.canSpend then
-        meta = "|cff" .. T.color.arcane.hex .. "Click to plan a point|r" .. (n.pending > 0 and " · right-click to take one back" or "")
-    elseif n.pending > 0 then
-        meta = "Right-click to take one back"
-    elseif editable then
-        meta = self:Requires(self.data and self.data.configID, n) or "No points to spend"
+    if best then need(best.tooltipText) end
+    if not n.meetsEdges then
+        for _, from in ipairs(n.requires or {}) do
+            if from.rank + from.pending < from.max then
+                need(("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name), true)
+            end
+        end
     end
-    UI.ShowTooltip(button, { title = n.name, subtitle = sub, description = desc, meta = meta })
+    local editable, why = self:Editable()
+    if not editable and why then need(why, true) end
+    tip:Show()
 end
 
 function M:Purchase(n)
@@ -380,7 +405,7 @@ function M:Build()
     page.onClick = function(n) self:Purchase(n) end
     page.onRemove = function(n) self:Refund(n) end
     page.onEnter = function(b, n) self:ShowTip(b, n) end
-    page.onLeave = function() UI.HideTooltip() end
+    page.onLeave = function() GameTooltip:Hide() end
     page.onApply = function() self:Apply() end
     page.onUndo = function() self:Undo() end
     page.onSpec = function(i) self.viewing = i; self:Render() end
@@ -399,7 +424,7 @@ function M:Build()
     end)
     tab:HookScript("OnHide", function()
         page:Hide()
-        UI.HideTooltip()
+        GameTooltip:Hide()
         self:Restore()
         UI.CenterWindow(f, false)
     end)
