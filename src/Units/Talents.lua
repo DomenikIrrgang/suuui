@@ -372,12 +372,14 @@ function M:BuildWindow()
     self.windowPage = page
     self.window = f
     self:FitWindow()
-    f:SetScript("OnShow", function()
+    -- added beside the window row's own (SetScript replaced them: opening
+    -- Talents didn't close Legacy, found in game)
+    f:HookScript("OnShow", function()
         PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_OPEN or 839)
         self:Render()
         self:Emit("SUUUI_TALENTS_SHOWN", true)
     end)
-    f:SetScript("OnHide", function()
+    f:HookScript("OnHide", function()
         PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_CLOSE or 840)
         GameTooltip:Hide()
         self:Emit("SUUUI_TALENTS_SHOWN", false)
