@@ -306,8 +306,9 @@ function M:SkinSetPopup()
     local grid = pop.IconSelector
     local function fit()
         if grid and okay then
-            grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (okay:GetTop() and pop:GetBottom())
-                and (okay:GetTop() - pop:GetBottom() + S["space-4"]) or 44)
+            local top, bottom = okay:GetTop(), pop:GetBottom()
+            grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (plain(top) and plain(bottom))
+                and (top - bottom + S["space-4"]) or 44)
         end
     end
     pop:HookScript("OnShow", function()
@@ -402,7 +403,10 @@ function M:SkinStatRow(row)
         row.suuRule:SetPoint("TOPLEFT")
         row.suuRule:SetPoint("TOPRIGHT")
     end
-    local head = #texts == 1 or row:GetHeight() > 30
+    -- geometry can be secret (in combat): read only when it isn't (found in
+    -- game: comparing a secret left edge errored)
+    local function num(v) return plain(v) and v or nil end
+    local head = #texts == 1 or (num(row:GetHeight()) or 0) > 30
     row.suuRule:SetShown(not head)
     if head then
         for _, t in ipairs(texts) do
@@ -412,8 +416,14 @@ function M:SkinStatRow(row)
         end
         return
     end
-    table.sort(texts, function(a, b) return (a:GetLeft() or 0) < (b:GetLeft() or 0) end)
-    local label, value = texts[1], texts[#texts]
+    -- the label and the value: Blizzard's own keys, else left to right
+    local label, value = row.Label, row.Value
+    if not (label and value) then
+        local readable = true
+        for _, t in ipairs(texts) do if num(t:GetLeft()) == nil then readable = false end end
+        if readable then table.sort(texts, function(a, b) return a:GetLeft() < b:GetLeft() end) end
+        label, value = texts[1], texts[#texts]
+    end
     if label then
         SuuUI.Fonts.Apply(label, "body")
         label:SetTextColor(UI.RGBA("ink-muted"))
@@ -565,8 +575,10 @@ end
 -- exactly as wide as the two together, so the edges line up (asked for).
 function M:AlignSetList()
     local new, equip, save = _G.PaperDollFrameNewSet, _G.PaperDollFrameEquipSet, _G.PaperDollFrameSaveSet
-    if not (new and equip and save and equip:GetLeft() and save:GetRight()) then return end
-    new:SetWidth(save:GetRight() - equip:GetLeft())
+    if not (new and equip and save) then return end
+    local left, right = equip:GetLeft(), save:GetRight()
+    if not (plain(left) and plain(right)) then return end -- (secret in combat)
+    new:SetWidth(right - left)
 end
 
 function M:SkinPaperDoll()
