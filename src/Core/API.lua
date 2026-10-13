@@ -270,6 +270,9 @@ API.UI.TALENT_TREE_W = UI.TALENT_TREE_W -- the width the Talents page's three tr
 API.UI.TraitTooltip = UI.TraitTooltip -- TraitTooltip(owner, configID, nodeID, { name, treeName, conditions, canSpend, pending, needs, blocked }): the game's talent tooltip
 API.UI.LegacyPoints = UI.LegacyPoints -- LegacyPoints(parent[, { account = false }]) -> SetPoints({ earned, total, spent, cap, pending, character })
 API.UI.LegacyChallenges = UI.LegacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
+API.UI.Professions = UI.Professions -- Professions(parent) -> SetTabs(list, selected), SetOverview({ primary, secondary }), SetCrafting({ name, rank, skill, max, categories, selected }), SetRecipe(r); onTab, onOpen, onSelect, onRecipeEnter, onSearch, onFilters, onTrack, onCreate, onCreateAll
+API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
+API.UI.PROFESSIONS_H = UI.PROFESSIONS_H
 API.UI.LegacyTrack = UI.LegacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip
 API.UI.LEGACY_TRACK_H = UI.LEGACY_TRACK_H
 API.UI.LEGACY_CARD_H = UI.LEGACY_CARD_H

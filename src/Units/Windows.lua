@@ -10,6 +10,7 @@
 --         lined up under the micro menu (the protected spells window moved
 --         only out of combat). The Legacy window opens in the middle of the
 --         screen instead (asked for in game), like SuuUI's Talents window.
+--   3.3:  the professions window (ProfessionsFrame), in the middle too.
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -166,9 +167,28 @@ end
 -- Lifecycle
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- The professions window (3.3): SuuUI's header; the Professions module puts
+-- its pages over Blizzard's. In the middle of the screen, like Talents and
+-- Legacy.
+--------------------------------------------------------------------------------
+
+function M:SkinProfessions()
+    local f = _G.ProfessionsFrame
+    if not f or f.suuChrome or InCombatLockdown() then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Professions", icon = "hammer", binding = "TOGGLEPROFESSIONBOOK",
+        close = f.CloseButton, topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks },
+    })
+    UI.CenterWindow(f, true)
+    self.professions = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
+    self:SkinProfessions()
 end
 
 function M:OnEnable()

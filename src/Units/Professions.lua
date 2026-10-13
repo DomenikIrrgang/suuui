@@ -1,0 +1,453 @@
+-- Units/Professions.lua
+-- SuuUI's Professions pages (step 3.3, design boards "Professions ·
+-- Overview" and "Professions · Alchemy") over Blizzard's professions window,
+-- the way the Legacy pages sit over theirs: K, the micro menu, Esc and the
+-- trade skill's own opening and closing stay Blizzard's, the window is in
+-- SuuUI's look (the windows module), and Blizzard's pages and tabs are off
+-- screen (still shown: they drive this one).
+--   overview  your primary and secondary professions: rank, skill, their
+--             spells (a tracking spell toggles its tracking)
+--   crafting  the open trade skill's recipes (C_TradeSkillUI): by category,
+--             searched and filtered, and the chosen one: reagents, tools,
+--             cooldown, Track, Create (CraftRecipe)
+-- The rail switches pages: the overview is SuuUI's own; a profession opens
+-- its trade skill (C_TradeSkillUI.OpenTradeSkill).
+-- A built-in module written against the public API only.
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+
+local M = SuuUI.RegisterModule({
+    id = "professions",
+    name = "Professions",
+    description = "SuuUI's Professions pages: your professions at a glance, and the recipes of the one you open.",
+    api = "0.12",
+    reloadToToggle = true,
+    defaults = {},
+})
+
+local isSecret = issecretvalue or function() return false end
+local function plain(v) return v ~= nil and not isSecret(v) end
+
+local function call(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
+    if ok then return a, b, c, d, e, f, g, h, i, j, k end
+end
+
+local W, H = 720, 600
+local QUALITY_NAME = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
+-- the rank a skill cap stands for (a profession's first spell says it too)
+local RANKS = { [75] = "Apprentice", [150] = "Journeyman", [225] = "Expert", [300] = "Artisan" }
+
+--------------------------------------------------------------------------------
+-- Your professions
+--------------------------------------------------------------------------------
+
+-- Tracking (Find Minerals, Find Herbs): the minimap's list, by spell or name.
+local function trackingFor(spellID, name)
+    local mm = C_Minimap
+    if not (mm and mm.GetNumTrackingTypes and mm.GetTrackingInfo) then return nil end
+    for i = 1, (call(mm.GetNumTrackingTypes) or 0) do
+        local a, _, c, _, _, f = call(mm.GetTrackingInfo, i)
+        local tName, active, tSpell
+        if type(a) == "table" then
+            tName, active, tSpell = a.name, a.active, a.spellID
+        else
+            tName, active, tSpell = a, c, f
+        end
+        if (spellID and tSpell == spellID) or (name and tName == name) then return i, active and true or false end
+    end
+end
+
+function M:Profession(index)
+    if not index then return nil end
+    local name, icon, skill, max, numSpells, offset, skillLine = call(GetProfessionInfo, index)
+    if not plain(name) then return nil end
+    local card = { name = name, icon = icon, skill = skill, max = max, skillLine = skillLine, spells = {} }
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    for k = 1, (tonumber(numSpells) or 0) do
+        local info = call(C_SpellBook.GetSpellBookItemInfo, (tonumber(offset) or 0) + k, bank)
+        if info and info.spellID then
+            if k == 1 then
+                card.spellID = info.spellID
+                if info.subName and info.subName ~= "" then card.rank = info.subName end
+                card.crafting = call(C_TradeSkillUI.CanTradeSkillShowCraftingUI, info.spellID) and true or false
+            end
+            local spell = { name = info.name, icon = info.iconID, spellID = info.spellID }
+            local track, on = trackingFor(info.spellID, info.name)
+            if track then
+                spell.active = on
+                spell.onClick = function()
+                    call(C_Minimap.SetTracking, track, not on)
+                    self:QueueRender()
+                end
+            end
+            spell.onEnter = function(owner) UI.SpellTooltip(owner, info.spellID) end
+            spell.onLeave = function() GameTooltip:Hide() end
+            card.spells[#card.spells + 1] = spell
+        end
+    end
+    card.rank = card.rank or RANKS[max] or ""
+    if card.crafting then
+        -- the crafting one's own spell opens it: no button for it on the card
+        local rest = {}
+        for i, s in ipairs(card.spells) do if i > 1 then rest[#rest + 1] = s end end
+        card.spells = rest
+    end
+    return card
+end
+
+-- Primary (two slots), then secondary (First Aid, Fishing, Cooking).
+function M:Professions()
+    local p1, p2, _, fish, cook, faid = call(GetProfessions)
+    local out = { primary = {}, secondary = {} }
+    for _, i in ipairs({ p1, p2 }) do out.primary[#out.primary + 1] = self:Profession(i) end
+    for _, i in ipairs({ faid, cook, fish }) do out.secondary[#out.secondary + 1] = self:Profession(i) end
+    -- Forever's order of GetProfessions isn't the retail one: anything left
+    -- over (another slot) still shows
+    local seen = {}
+    for _, c in ipairs(out.primary) do seen[c.skillLine] = true end
+    for _, c in ipairs(out.secondary) do seen[c.skillLine] = true end
+    for _, i in ipairs({ call(GetProfessions) }) do
+        local c = self:Profession(i)
+        if c and not seen[c.skillLine] then
+            seen[c.skillLine] = true
+            out.secondary[#out.secondary + 1] = c
+        end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The open trade skill
+--------------------------------------------------------------------------------
+
+local function itemCount(itemID)
+    return call(C_Item.GetItemCount, itemID) or 0
+end
+
+-- The reagents a recipe needs (the required slots) and how many times you
+-- can make it from your bags.
+function M:Reagents(id)
+    local sch = call(C_TradeSkillUI.GetRecipeSchematic, id, false)
+    local list, can = {}, math.huge
+    for _, slot in ipairs(sch and sch.reagentSlotSchematics or {}) do
+        local reagent = slot.reagents and slot.reagents[1]
+        if reagent and reagent.itemID and slot.required ~= false then
+            local need = slot.quantityRequired or 1
+            local have = itemCount(reagent.itemID)
+            list[#list + 1] = { itemID = reagent.itemID, need = need, have = have }
+            can = math.min(can, math.floor(have / math.max(1, need)))
+        end
+    end
+    if can == math.huge then can = 0 end
+    return list, can, sch
+end
+
+function M:Recipes()
+    local base = call(C_TradeSkillUI.GetBaseProfessionInfo) or {}
+    local data = { name = base.professionName, skill = base.skillLevel, max = base.maxSkillLevel,
+                   skillLine = base.professionID, rank = RANKS[base.maxSkillLevel] or "" }
+    local cats, byCat = {}, {}
+    local search = self.search and self.search ~= "" and self.search:lower() or nil
+    local f = self.filters or {}
+    local first
+    for _, id in ipairs(call(C_TradeSkillUI.GetAllRecipeIDs) or {}) do
+        local info = call(C_TradeSkillUI.GetRecipeInfo, id)
+        if info and plain(info.name) and not info.isDummyRecipe then
+            local _, can = self:Reagents(id)
+            local diff = info.relativeDifficulty or 3
+            local keep = (not f.learned or info.learned)
+                and (not f.materials or can > 0)
+                and (not f.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned))
+                and (not search or info.name:lower():find(search, 1, true))
+            if keep then
+                local catID = info.categoryID or 0
+                local cat = byCat[catID]
+                if not cat then
+                    local ci = catID ~= 0 and call(C_TradeSkillUI.GetCategoryInfo, catID)
+                    cat = { name = (ci and ci.name) or "Other", order = (ci and ci.uiOrder) or 9999, recipes = {} }
+                    byCat[catID] = cat
+                    cats[#cats + 1] = cat
+                end
+                cat.recipes[#cat.recipes + 1] = { id = id, name = info.name, difficulty = diff, canMake = can,
+                    learned = info.learned and true or false, tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false }
+                first = first or id
+            end
+        end
+    end
+    table.sort(cats, function(a, b) if a.order ~= b.order then return a.order < b.order end return a.name < b.name end)
+    for _, cat in ipairs(cats) do
+        table.sort(cat.recipes, function(a, b)
+            if a.learned ~= b.learned then return a.learned end
+            if a.difficulty ~= b.difficulty then return a.difficulty < b.difficulty end
+            return a.name < b.name
+        end)
+    end
+    data.categories = cats
+    -- the one chosen in this profession, else the first
+    local key = data.skillLine or 0
+    local chosen = self.chosen[key]
+    local found = false
+    for _, cat in ipairs(cats) do for _, r in ipairs(cat.recipes) do if r.id == chosen then found = true end end end
+    if not found then
+        chosen = cats[1] and cats[1].recipes[1] and cats[1].recipes[1].id or nil
+        self.chosen[key] = chosen
+    end
+    data.selected = chosen
+    return data
+end
+
+local function itemTip(owner, itemID)
+    if not itemID then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:SetItemByID(itemID)
+    GameTooltip:Show()
+end
+
+function M:Recipe(id)
+    if not id then return nil end
+    local info = call(C_TradeSkillUI.GetRecipeInfo, id)
+    if not info then return nil end
+    local reagents, can, sch = self:Reagents(id)
+    local r = { name = info.name, icon = info.icon, canMake = can, reagents = {}, tools = {} }
+    local out = sch and sch.outputItemID
+    if out then
+        local name, _, quality, _, _, _, _, _, _, icon = call(C_Item.GetItemInfo, out)
+        r.name = name or info.name
+        r.quality = quality
+        r.qualityName = quality and QUALITY_NAME[quality]
+        r.icon = icon or info.icon
+        if not name then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, out) end
+        r.onProduct = function(owner) itemTip(owner, out) end
+    else
+        r.desc = call(C_TradeSkillUI.GetRecipeDescription, id, {})
+    end
+    local lo, hi = sch and sch.quantityMin, sch and sch.quantityMax
+    if lo and hi and hi > 1 then r.makes = hi end
+    for i, g in ipairs(reagents) do
+        local name, _, quality, _, _, _, _, _, _, icon = call(C_Item.GetItemInfo, g.itemID)
+        if not name then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, g.itemID) end
+        r.reagents[i] = { name = name, icon = icon or call(C_Item.GetItemIconByID, g.itemID), quality = quality,
+                          qualityName = quality and QUALITY_NAME[quality], have = g.have, need = g.need }
+    end
+    r.onReagent = function(i, owner) itemTip(owner, reagents[i] and reagents[i].itemID) end
+    local toolsMet = true
+    for _, t in ipairs(call(C_TradeSkillUI.GetRecipeRequirements, id) or {}) do
+        r.tools[#r.tools + 1] = { name = t.name, met = t.met and true or false }
+        if not t.met then toolsMet = false end
+    end
+    local cd = call(C_TradeSkillUI.GetRecipeCooldown, id)
+    if cd and cd > 0 then r.cooldown = SecondsToTime and SecondsToTime(cd) or (math.ceil(cd) .. " s") end
+    r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false
+    if not info.learned then
+        r.why = "Not learned yet"
+    elseif r.cooldown then
+        r.why = "On cooldown"
+    elseif not toolsMet then
+        r.why = "Requires " .. (r.tools[1] and r.tools[1].name or "a tool")
+    elseif can <= 0 then
+        r.why = "Missing reagents"
+    end
+    r.ready = r.why == nil
+    return r
+end
+
+--------------------------------------------------------------------------------
+-- The page
+--------------------------------------------------------------------------------
+
+function M:Tabs(profs)
+    local tabs = { { key = "overview", label = "Overview", glyph = "hammer" } }
+    for _, list in ipairs({ profs.primary, profs.secondary }) do
+        for _, c in ipairs(list) do
+            if c.crafting then tabs[#tabs + 1] = { key = c.skillLine, label = c.name, icon = c.icon, card = c } end
+        end
+    end
+    return tabs
+end
+
+function M:Render()
+    local view = self.view
+    if not (view and view:IsVisible()) then return end
+    self.waitingItems = false
+    local profs = self:Professions()
+    self.tabList = self:Tabs(profs)
+    local crafting = self.mode == "crafting" and call(C_TradeSkillUI.IsTradeSkillReady)
+    if crafting then
+        local data = self:Recipes()
+        view:SetTabs(self.tabList, data.skillLine)
+        view:SetCrafting(data)
+        view:SetRecipe(self:Recipe(data.selected))
+    else
+        view:SetTabs(self.tabList, "overview")
+        view:SetOverview(profs)
+    end
+end
+
+function M:QueueRender()
+    if self.renderQueued then return end
+    self.renderQueued = true
+    C_Timer.After(0.1, function()
+        self.renderQueued = nil
+        if self:IsEnabled() then self:Render() end
+    end)
+end
+
+-- A profession's recipes: its trade skill, opened (Blizzard's window then
+-- shows its crafting page, and this one follows).
+function M:Open(skillLine)
+    local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+    if base and base.professionID == skillLine and call(C_TradeSkillUI.IsTradeSkillReady) then
+        self.mode = "crafting"
+        self:Render()
+        return
+    end
+    if InCombatLockdown() then self:Print("Professions open out of combat.") return end
+    local ok, err = pcall(C_TradeSkillUI.OpenTradeSkill, skillLine)
+    if not ok then self:Print("That profession couldn't be opened here: " .. tostring(err)) end
+end
+
+function M:Craft(count)
+    local id = self.view and self.view.craftData and self.view.craftData.selected
+    if not id or InCombatLockdown() then return end
+    call(C_TradeSkillUI.CraftRecipe, id, math.max(1, count or 1))
+end
+
+function M:Wire(view)
+    view.onTab = function(key)
+        if key == "overview" then
+            self.mode = "overview"
+            self:Render()
+        else
+            self:Open(key)
+        end
+    end
+    view.onOpen = function(card) if card.skillLine then self:Open(card.skillLine) end end
+    view.onSelect = function(id)
+        local key = view.craftData and view.craftData.skillLine or 0
+        self.chosen[key] = id
+        self:Render()
+    end
+    view.onRecipeEnter = function(rec, owner)
+        local sch = call(C_TradeSkillUI.GetRecipeSchematic, rec.id, false)
+        if sch and sch.outputItemID then itemTip(owner, sch.outputItemID) end
+    end
+    view.onSearch = function(text)
+        self.search = text
+        self:QueueRender()
+    end
+    view.onFilters = function(list)
+        self.filters = {}
+        for _, k in ipairs(list or {}) do self.filters[k] = true end
+        self:Render()
+    end
+    view.onTrack = function(on)
+        local id = view.craftData and view.craftData.selected
+        if id then call(C_TradeSkillUI.SetRecipeTracked, id, on and true or false, false) end
+        self:QueueRender()
+    end
+    view.onCreate = function(count) self:Craft(count) end
+    view.onCreateAll = function()
+        local r = view.recipeData
+        if r then self:Craft(r.canMake) end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Over Blizzard's window
+--------------------------------------------------------------------------------
+
+-- A Blizzard part out of sight: see-through and off screen, still shown,
+-- and back off screen whenever Blizzard places it again. Out of combat (the
+-- window may hold secure spell buttons).
+function M:Away(part)
+    if not part or self.awayParts[part] then return end
+    self.awayParts[part] = true
+    part:SetAlpha(0)
+    local placing = false
+    local function away()
+        if InCombatLockdown() then self.awayAfterCombat = true return end
+        placing = true
+        part:ClearAllPoints()
+        part:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        placing = false
+    end
+    self.awayFns[#self.awayFns + 1] = away
+    away()
+    hooksecurefunc(part, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+end
+
+-- The window at SuuUI's size (Blizzard sizes it per page).
+function M:Size()
+    local f = _G.ProfessionsFrame
+    if not f or InCombatLockdown() then return end
+    if math.abs(f:GetWidth() - W) < 1 and math.abs(f:GetHeight() - H) < 1 then return end
+    self.sizing = true
+    f:SetSize(W, H)
+    self.sizing = false
+end
+
+function M:Build()
+    local f = _G.ProfessionsFrame
+    if not f or self.view or InCombatLockdown() then return end
+    self.awayParts, self.awayFns, self.chosen = {}, {}, {}
+    self.filters = { learned = true }
+    local view = UI.Professions(f)
+    view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    view:SetFrameLevel(f:GetFrameLevel() + 100)
+    view:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
+    self.view = view
+    self:Wire(view)
+    -- Blizzard's pages and tabs out of sight
+    self:Away(f.BookPage)
+    self:Away(f.CraftingPage)
+    self:Away(f.ProfessionsOverviewTab)
+    for _, tab in ipairs(f.rightProfessionTabs or {}) do self:Away(tab) end
+    self:Away(f.TabSystem)
+    -- the page follows Blizzard's: its book is the overview, its crafting
+    -- page the open trade skill
+    local function follow()
+        if f.CraftingPage and f.CraftingPage:IsShown() then self.mode = "crafting" else self.mode = "overview" end
+        self:QueueRender()
+    end
+    for _, page in ipairs({ f.BookPage, f.CraftingPage }) do
+        page:HookScript("OnShow", follow)
+        page:HookScript("OnHide", follow)
+    end
+    follow()
+    f:HookScript("OnShow", function() self:Size(); follow() end)
+    f:HookScript("OnHide", function() GameTooltip:Hide() end)
+    local function again() if not self.sizing and f:IsShown() then C_Timer.After(0, function() self:Size() end) end end
+    hooksecurefunc(f, "SetWidth", again)
+    hooksecurefunc(f, "SetHeight", again)
+    hooksecurefunc(f, "SetSize", again)
+    view:HookScript("OnSizeChanged", function() if view:IsVisible() then self:QueueRender() end end)
+    self:Size()
+end
+
+function M:OnEnable()
+    self:Build()
+    self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        if not self.view then self:Build() end
+        if self.awayAfterCombat then
+            self.awayAfterCombat = nil
+            for _, fn in ipairs(self.awayFns or {}) do fn() end
+        end
+        self:Size()
+    end)
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    for _, e in ipairs({ "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "TRADE_SKILL_SHOW",
+                         "TRADE_SKILL_CLOSE", "SKILL_LINES_CHANGED", "BAG_UPDATE_DELAYED", "TRACKED_RECIPE_UPDATE",
+                         "MINIMAP_UPDATE_TRACKING", "NEW_RECIPE_LEARNED" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
+        end
+    end
+    -- item names the game hadn't loaded yet
+    self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
+        if self.waitingItems and self.view and self.view:IsVisible() then self:QueueRender() end
+    end)
+end
