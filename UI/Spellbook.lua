@@ -43,7 +43,9 @@ local function cell(book, i)
     local b = CreateFrame("Button", nil, c, "SecureActionButtonTemplate")
     b:SetSize(ICON, ICON)
     b:SetPoint("LEFT")
-    b:RegisterForClicks("LeftButtonUp")
+    -- down and up: a secure button acts on the one the game's "cast on key
+    -- down" option says (on by default: up alone never cast, found in game)
+    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
     b:RegisterForDrag("LeftButton")
     c.button = b
     c.icon = UI.Icon(b, ICON)
