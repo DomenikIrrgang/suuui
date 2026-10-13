@@ -369,7 +369,7 @@ function M:SkinStatRow(row)
     local function texture(r)
         local atlas = (r.GetAtlas and r:GetAtlas() or ""):lower()
         local w, h = r:GetSize()
-        local isIcon = r:GetParentKey() == "Icon" or atlas:find("resistance") or atlas:find("icon")
+        local isIcon = (r.GetParentKey and r:GetParentKey() == "Icon") or atlas:find("resistance") or atlas:find("icon")
             or (w and h and w > 0 and w <= 24 and math.abs(w - h) < 3)
         if isIcon then
             -- (the resistances' are 33px in a 23px row: 18px)
