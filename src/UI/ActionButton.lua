@@ -162,6 +162,12 @@ end
 
 function AB:UpdateCooldown()
     if not self.hasAction then return end
+    -- stance and pet buttons have no action slot: their spell's cooldown
+    -- (the sweep's end looked up a slot of nil: an error on a stance change)
+    if not self.slot then
+        if self.cooldownSpell then self:ShowSpellCooldown(self.cooldownSpell) end
+        return
+    end
     local slot = self.slot
     local info = C_ActionBar.GetActionCooldown and C_ActionBar.GetActionCooldown(slot)
     local active = info and known(info.isActive, false) or false
@@ -172,6 +178,7 @@ end
 
 -- A spell's cooldown (stance and pet buttons).
 function AB:ShowSpellCooldown(spellID)
+    self.cooldownSpell = spellID
     local info = spellID and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
     local active = info and known(info.isActive, false) or false
     local gcd = info and known(info.isOnGCD, false) or false
