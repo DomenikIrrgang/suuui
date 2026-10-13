@@ -89,7 +89,8 @@ function M:UpdateActive()
     for _, item in ipairs(ITEMS) do self.menu:SetActive(item.key, isOpen(item)) end
 end
 
--- Something to act on: unspent talent points.
+-- Something to act on: unspent talent points; spells to train (the
+-- Spellbook module says how many: SUUUI_SPELLS_TO_TRAIN).
 function M:UpdateAlerts()
     if not self.menu then return end
     local talents = C_ClassTalents and C_ClassTalents.HasUnspentTalentPoints
@@ -97,6 +98,8 @@ function M:UpdateAlerts()
     if talents then ok, has = pcall(talents) end
     local unspent = ok and not (issecretvalue and issecretvalue(has)) and has == true
     self.menu:SetAlert("talents", unspent and "Talent points to spend" or nil)
+    local n = self.spellsToTrain or 0
+    self.menu:SetAlert("spellbook", n > 0 and ((n == 1 and "1 spell" or (n .. " spells")) .. " to train at your class trainer") or nil)
 end
 
 function M:ApplyShows()
@@ -184,6 +187,10 @@ function M:OnEnable()
         self:Watch(key, function() self:ApplyShows() end)
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingLayout then self:Layout() end end)
+    self:On("SUUUI_SPELLS_TO_TRAIN", function(_, n)
+        self.spellsToTrain = tonumber(n) or 0
+        self:UpdateAlerts()
+    end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:UpdateAlerts() end) end

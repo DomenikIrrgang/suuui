@@ -418,6 +418,30 @@ function M:Shorten()
     self.sizing = false
 end
 
+-- How many spells you could train now, across every school; said to the
+-- rest of SuuUI (the micro menu marks its Spellbook button) whenever it may
+-- have changed. Needs no window: the spellbook and trainer data are there.
+function M:CountToTrain()
+    local schools = self:Schools()
+    local trainer = self:TrainerBySchool(schools)
+    local total = 0
+    for _, s in ipairs(schools) do
+        local _, n = self:SchoolList(s, trainer)
+        total = total + n
+    end
+    return total
+end
+
+function M:SayToTrain()
+    if self.sayTimer then return end
+    self.sayTimer = C_Timer.NewTimer(1, function()
+        self.sayTimer = nil
+        if not self:IsEnabled() then return end
+        local ok, n = pcall(self.CountToTrain, self)
+        if ok then self:Emit("SUUUI_SPELLS_TO_TRAIN", n) end
+    end)
+end
+
 -- The Character window resized while the Spellbook shows: the same height.
 function M:MeasureCharacter()
     if self.book and self.book:IsVisible() then self:Shorten() end
@@ -442,8 +466,13 @@ function M:OnEnable()
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP" }) do
-        self:OnGameEvent(e, function() if self.book then self:Render() end end)
+        self:OnGameEvent(e, function()
+            if self.book then self:Render() end
+            self:SayToTrain()
+        end)
     end
+    self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
+    self:SayToTrain()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if not self.book then self:Build() end
         if self.renderAfterCombat then
