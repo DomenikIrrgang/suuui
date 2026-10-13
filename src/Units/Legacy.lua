@@ -183,7 +183,8 @@ local function progressOf(id)
     local n = call(GetAchievementNumCriteria, id) or 0
     if n == 1 then
         local _, _, done, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
-        if plain(quantity) and plain(required) and required and required > 1 and not done then
+        -- once started ("0/42000" said nothing)
+        if plain(quantity) and plain(required) and required and required > 1 and not done and quantity > 0 then
             return quantity .. "/" .. required
         end
     elseif n > 1 then
@@ -226,7 +227,7 @@ local function itemsIn(category)
         local id, name, _, completed, _, _, _, description, _, _, reward = call(GetAchievementInfo, category, i)
         local points = plain(reward) and reward and tonumber(reward:match("(%d+) Legacy Point"))
         if id and points then
-            local item = { id = id, name = name, done = completed and true or false, points = points,
+            local item = { id = id, name = name, done = completed and true or false, points = points, order = i,
                 progress = (not completed) and progressOf(id) or nil }
             item.onEnter = function(owner) challengeTip(owner, id, name, description, points) end
             item.onLeave = function() GameTooltip:Hide() end
@@ -267,12 +268,13 @@ function M:Challenges()
         end
         if #all > 0 then
             -- the card: what's closest first, then the rest, done last
+            -- (ties keep the game's order: Novice, Experienced, Master)
             local short = {}
-            for _, item in ipairs(all) do short[#short + 1] = item end
+            for k, item in ipairs(all) do item.seq = k; short[#short + 1] = item end
             table.sort(short, function(a, b)
                 if a.done ~= b.done then return not a.done end
                 if a.closeness ~= b.closeness then return a.closeness > b.closeness end
-                return (a.name or "") < (b.name or "")
+                return a.seq < b.seq
             end)
             list[#list + 1] = { name = name, done = done, total = #all, items = short, groups = groups }
         end
@@ -292,6 +294,14 @@ function M:Rewards(earned)
     for _, lv in ipairs((mf and call(mf.GetRenownLevels, FACTION)) or {}) do
         local rewards = call(mf.GetRenownRewardsForLevel, FACTION, lv.level) or {}
         local r = rewards[1]
+        -- the item's own name when the reward has none (found in game)
+        if r and (not r.name or r.name == "") and r.itemID then
+            r.name = (C_Item.GetItemNameByID and call(C_Item.GetItemNameByID, r.itemID)) or call(GetItemInfo, r.itemID)
+            if not r.name and C_Item.RequestLoadItemDataByID then
+                call(C_Item.RequestLoadItemDataByID, r.itemID)
+                self.namesPending = true
+            end
+        end
         if r then
             local quality = r.itemID and C_Item.GetItemQualityByID and call(C_Item.GetItemQualityByID, r.itemID)
             local stop = { at = lv.level, name = r.name, icon = r.icon, quality = QUALITY[quality or 3] or "rare",
@@ -332,6 +342,10 @@ function M:Render()
     local configID = self:ConfigID()
     local trees, rows, pending = {}, 3, 0
     if configID then trees, rows, pending = self:Trees(configID) end
+    if rows ~= self.treeRows then
+        self.treeRows = rows
+        if pages.tree:IsShown() and _G.LegacySystemFrame then self:Size(_G.LegacySystemFrame, "tree") end
+    end
     self.configID = configID
     points.pending = pending
     for _, view in pairs(pages) do view.points:SetPoints(points) end
@@ -348,7 +362,13 @@ function M:Render()
             editable = editable, hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply." })
     end
     if pages.challenges:IsVisible() then pages.challenges.body:SetCategories(self:Challenges()) end
-    if pages.rewards:IsVisible() then pages.rewards.body:SetTrack(self:Rewards(points.earned)) end
+    if pages.rewards:IsVisible() then
+        self.namesPending = nil
+        pages.rewards.body:SetTrack(self:Rewards(points.earned))
+        -- item names still loading: once more in a moment
+        self.nameTries = self.namesPending and (self.nameTries or 0) + 1 or 0
+        if self.namesPending and self.nameTries <= 6 then C_Timer.After(0.5, function() self:QueueRender() end) end
+    end
 end
 
 function M:QueueRender()
@@ -435,16 +455,23 @@ function M:Page(f, kind)
     away()
     hooksecurefunc(blizz, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
     view:SetShown(blizz:IsShown())
-    blizz:HookScript("OnShow", function() view:Show(); self:Render() end)
+    blizz:HookScript("OnShow", function() view:Show(); self:Size(f, kind); self:Render() end)
     blizz:HookScript("OnHide", function() view:Hide(); GameTooltip:Hide() end)
     return view
 end
 
--- The window as tall as the challenges' two rows of cards need.
-function M:Size(f)
+-- The window as tall as the page shown needs: the header, the points, the
+-- page (two rows of cards; the trees and their foot; the track).
+local TREE_BODY = 8 + 16 + 8 + (3 * 46 - 14) + 8 + 6 + 14 + 12 + 38
+local TRACK_BODY = 36 + 12 + 6 + 8 + 16 + 28 + 20 + 14 + 12
+
+function M:Size(f, kind)
     local S = T.space
-    local h = 44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + 16
-    f:SetHeight(h)
+    local body
+    if kind == "tree" then body = TREE_BODY + (self.treeRows and (self.treeRows - 3) * 46 or 0)
+    elseif kind == "rewards" then body = TRACK_BODY
+    else body = 2 * UI.LEGACY_CARD_H + S["space-5"] end
+    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + body + 16)
 end
 
 function M:Build()
@@ -456,8 +483,8 @@ function M:Build()
         self.pages = nil
         return
     end
-    self:Size(f)
-    f:HookScript("OnShow", function() self:Size(f); self:QueueRender() end)
+    for kind, view in pairs(self.pages) do if view:IsShown() then self:Size(f, kind) end end
+    f:HookScript("OnShow", function() self:QueueRender() end)
     self:Render()
 end
 
