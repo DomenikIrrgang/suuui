@@ -3,8 +3,8 @@
 -- Reward track"): Forever's account progression.
 --
 --   UI.LegacyPoints(parent):SetPoints({ earned, total, spent, cap, pending, character })
---     "Legacy points · account  16 of 81 earned", "Spent on Veyra  9 of 16",
---     and a pip for each point this character can spend
+--     "Legacy points · account  16 of 81 earned", "Spent on Veyra  9 of 16"
+--     (the design's pips left out: the numbers say it, asked for in game)
 --   UI.LegacyChallenges(parent):SetCategories(list)
 --     list = { { name, done, total, items = { item }, groups = { { name, items } } } }
 --     item = { name, done, progress ("45/150"), points, onEnter(owner), onLeave() }
@@ -49,16 +49,6 @@ local function block(f, caption)
     return b
 end
 
-local function pip(f)
-    local p = CreateFrame("Frame", nil, f)
-    p:SetSize(8, 8)
-    p.edge = UI.Diamond(p, 8, "ink-faint", "ARTWORK", 1)
-    p.edge:SetPoint("CENTER")
-    p.fill = UI.Diamond(p, 6, "surface", "ARTWORK", 2)
-    p.fill:SetPoint("CENTER")
-    return p
-end
-
 function Points:SetPoints(d)
     d = d or {}
     local earned, total = d.earned or 0, d.total or 0
@@ -71,29 +61,11 @@ function Points:SetPoints(d)
     local w = math.max(self.account.caption:GetUnboundedStringWidth(),
         self.account.big:GetUnboundedStringWidth() + self.account.rest:GetUnboundedStringWidth())
     self.account:SetWidth(math.ceil(w) + 2)
-    -- a pip per point this character can spend: spent ink, planned arcane
-    for i = 1, math.max(cap, #self.pips) do
-        local p = self.pips[i]
-        if i <= cap then
-            p = p or pip(self)
-            self.pips[i] = p
-            p:ClearAllPoints()
-            p:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -(cap - i) * 10, 6)
-            local on = i <= spent - pending
-            local planned = not on and i <= spent
-            p.edge:SetVertexColor(UI.RGBA(planned and "arcane" or (on and "ink" or "ink-faint")))
-            p.fill:SetVertexColor(UI.RGBA(planned and "arcane-soft" or (on and "ink" or "surface")))
-            p:Show()
-        elseif p then
-            p:Hide()
-        end
-    end
 end
 
 function UI.LegacyPoints(parent)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Points)
-    f.pips = {}
     f.account = block(f, "Legacy points · account")
     f.account:SetPoint("TOPLEFT")
     f.char = block(f, "Spent on this character")
