@@ -94,7 +94,10 @@ function M:ApplyOptions()
     for name in pairs(ATTACHED) do self:Attach(name, SuuUI.GetAnchor(name)) end
     if self.buffs then
         local pos = self:Get("buffPosition")
-        self.buffs.container:SetShown(self:Get("showBuffs") and not pos.hidden)
+        local shown = self:Get("showBuffs") and not pos.hidden
+        self.buffs.container:SetShown(shown)
+        -- "playerBuffs": what sits under your buffs (the campfire strip) follows the holder
+        SuuUI.PublishAnchor("playerBuffs", shown and self.buffHolder or nil)
     end
 end
 
@@ -191,6 +194,7 @@ function M:OnEnable()
 end
 
 function M:OnDisable()
+    SuuUI.PublishAnchor("playerBuffs", nil)
     if self.buffs then self.buffs.container:Hide() end
     for _, c in pairs(self.attached or {}) do c.container:Hide() end
 end

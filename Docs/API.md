@@ -256,7 +256,7 @@ Modules find each other's frames through published anchors, never through each o
 | `SuuUI.PublishAnchor(name, frame)` | Publishes a frame under a name (`nil` unpublishes) |
 | `SuuUI.GetAnchor(name)` | The frame, or `nil`; listen to `SUUUI_ANCHOR_CHANGED` for changes |
 
-Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames).
+Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show).
 
 ## Unit frames and cast bars (0.5, 0.6)
 
@@ -328,4 +328,5 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.SkinItemSlot(button)` / `SuuUI.UI.ItemSlot(parent, size)` / `SuuUI.UI.Money(parent)` (0.11) | SuuUI's item slot look on any button (Blizzard's bag slot template included: its own art hidden): `skin:SetItem({ icon, count, quality, dim, locked })` or `nil` for an empty slot; a plain slot (`b.skin`); money as "1,204g 37s 9c" (`m:SetCopper(n)`) |
 | `SuuUI.UI.LootWindow(parent, { name })` (0.12) | The loot window: "Loot" with the source as its meta, one row per thing (`lw:SetItems({ { index, icon, count, quality, label, copper, locked } })`: an item slot and the name in its quality colour, or money), `lw:SetSource(text)`, `lw.onClick(index, button)`, `lw.onEnter(index, row)` / `lw.onLeave`, `lw.onClose`; `lw:FirstSlotOffset()` (the first slot's centre from the top left, to open it under the cursor) |
 | `SuuUI.UI.SkinTooltip(tooltip)` (0.12) | SuuUI's look on one of Blizzard's tooltips (a `GameTooltip`): surface-glass, a gilt-line edge, the gilt diamond at the top left; its NineSlice hidden after every `SharedTooltip_SetBackdropStyle`. Lines and set functions stay Blizzard's |
+| `SuuUI.UI.Campsite(parent)` (0.12) | The campfire strip: `c:SetData({ phase = "nearby"\|"resting"\|"rested", remaining, progress, benefits = { { icon, label, effect } }, cooldowns = { { label, remaining } } })`, `c:SetTimes(remaining, progress, cooldownTimes)` (only the times) |
 | `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears) |
