@@ -127,7 +127,7 @@ local SLASH = { promote = "/gpromote ", demote = "/gdemote ", remove = "/gremove
 local function secureOver(button)
     local s = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
     s:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-    s:SetAllPoints(button)
+    s.target = button
     s:SetScript("OnEnter", function() local fn = button:GetScript("OnEnter"); if fn then fn(button) end end)
     s:SetScript("OnLeave", function() local fn = button:GetScript("OnLeave"); if fn then fn(button) end end)
     s:Hide()
@@ -174,6 +174,11 @@ function M:FootOverlays(m, actions)
             -- front when clicked and covered it, so the click reached the
             -- plain button under it (found in game)
             over:SetFrameStrata("DIALOG")
+            -- anchored only while shown: a secure button anchored to the
+            -- roster made the whole guild window protected (it couldn't
+            -- open in combat then)
+            over:ClearAllPoints()
+            if on then over:SetAllPoints(btn) end
             over:SetShown(on and true or false)
         end
     end
@@ -566,13 +571,31 @@ function M:FoldList()
     self:HideButtons(f, 0)
     -- and by their keys, whatever their labels say (Invite Member was still
     -- there by label alone, found in game)
+    -- off screen, and kept there (only see-through, the game showed it again)
     for _, b in ipairs({ f.InviteButton, f.GuildLogButton, f.CommunitiesControlFrame and f.CommunitiesControlFrame.InviteButton }) do
-        if b then b:SetAlpha(0); b:EnableMouse(false) end
+        if b then self:Away(b) end
     end
     self:LayChat()
 end
 
 local HIDDEN_BUTTONS = { ["View Log"] = true, ["Invite Member"] = true }
+
+-- A Blizzard part off screen, back there whenever Blizzard places it.
+function M:Away(part)
+    self.awayParts = self.awayParts or {}
+    if self.awayParts[part] or InCombatLockdown() then return end
+    self.awayParts[part] = true
+    local placing = false
+    local function away()
+        if InCombatLockdown() then return end
+        placing = true
+        part:ClearAllPoints()
+        part:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        placing = false
+    end
+    away()
+    hooksecurefunc(part, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+end
 
 function M:HideButtons(frame, depth)
     if depth > 4 or not frame or not frame.GetChildren then return end
@@ -671,7 +694,9 @@ function M:Follow()
     -- the rest in SuuUI's look: Blizzard's own parts restyled in place
     C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
     self.roster:SetShown(onRoster and true or false)
-    if not onRoster and not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide() end end
+    if not onRoster and not InCombatLockdown() then
+        for _, over in pairs(self.overs or {}) do over:Hide(); over:ClearAllPoints() end
+    end
     -- Blizzard's member list: under SuuUI's roster, and out of sight beside
     -- the chat (LayChat)
     if f.MemberList then f.MemberList:SetAlpha((onRoster or mode == modes.CHAT) and 0 or 1) end
@@ -714,7 +739,12 @@ function M:Build()
     log.suuOwn = true
     self.logPage = log
     f:HookScript("OnShow", function() self:Follow() end)
-    f:HookScript("OnHide", function() GameTooltip:Hide(); if self.details then self.details:Hide() end end)
+    f:HookScript("OnHide", function()
+        GameTooltip:Hide()
+        if self.details then self.details:Hide() end
+        -- the secure buttons let go of the window (it stays unprotected)
+        if not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide(); over:ClearAllPoints() end end
+    end)
     if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
     if f.SelectClub then hooksecurefunc(f, "SelectClub", function() C_Timer.After(0, function() self:Follow() end) end) end
     self:Follow()
