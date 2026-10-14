@@ -544,23 +544,66 @@ function M:FoldList()
         hooksecurefunc(list, "SetSize", again)
         hooksecurefunc(list, "SetPoint", again)
     end
-    -- Blizzard's View Log button: the Log tab has its job (asked for in game)
-    self:HideViewLog(f, 0)
+    -- Blizzard's View Log and Invite Member: the Log tab and the roster
+    -- have their jobs (asked for in game)
+    self:HideButtons(f, 0)
+    self:LayChat()
 end
 
-function M:HideViewLog(frame, depth)
+local HIDDEN_BUTTONS = { ["View Log"] = true, ["Invite Member"] = true }
+
+function M:HideButtons(frame, depth)
     if depth > 4 or not frame or not frame.GetChildren then return end
-    local label = _G.GUILD_VIEW_LOG or "View Log"
     for _, c in ipairs({ frame:GetChildren() }) do
         if c.GetObjectType and c:GetObjectType() == "Button" and not c.suuOwn then
             local fs = c.GetFontString and c:GetFontString()
             local text = fs and fs:GetText()
-            if text == label or text == "View Log" then
+            if type(text) == "string" and (HIDDEN_BUTTONS[text] or text == _G.GUILD_VIEW_LOG) then
                 c:SetAlpha(0)
                 c:EnableMouse(false)
             end
         end
-        if not c.suuOwn then self:HideViewLog(c, depth + 1) end
+        if not c.suuOwn then self:HideButtons(c, depth + 1) end
+    end
+end
+
+-- The chat across the whole width: Blizzard's member list beside it out of
+-- sight (the roster has it: asked for in game), the stream menu over the
+-- chat's left edge (it sat further right, found in game). Anchored to the
+-- window, and again whenever Blizzard places them.
+function M:LayChat()
+    local f = self.frame
+    if not f or not f.Chat then return end
+    local S = T.space
+    self.layingChat = true
+    if f.StreamDropdown then
+        f.StreamDropdown:ClearAllPoints()
+        f.StreamDropdown:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    end
+    f.Chat:ClearAllPoints()
+    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(44 + 24 + S["space-4"]))
+    f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + 30 + S["space-3"])
+    -- the member list beside the chat (in the chat's mode; the roster mode's
+    -- is under SuuUI's roster page anyway)
+    local modes = COMMUNITIES_FRAME_DISPLAY_MODES or {}
+    local mode = f.GetDisplayMode and f:GetDisplayMode()
+    if f.MemberList and mode == modes.CHAT then f.MemberList:SetAlpha(0) end
+    self.layingChat = false
+    if not self.chatHooked then
+        self.chatHooked = true
+        local function again() if not self.layingChat then C_Timer.After(0, function() self:LayChat() end) end end
+        hooksecurefunc(f.Chat, "SetPoint", again)
+        if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
+        -- the hidden member list takes no clicks in the chat's mode
+        if f.MemberList then
+            f.MemberList:HookScript("OnShow", again)
+        end
+    end
+    -- its clicks: none while hidden there
+    if f.MemberList then
+        local hidden = mode == modes.CHAT
+        f.MemberList:EnableMouse(not hidden)
+        if f.MemberList.ScrollBox then f.MemberList.ScrollBox:SetShown(not hidden) end
     end
 end
 
@@ -594,7 +637,9 @@ function M:Follow()
     C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
     self.roster:SetShown(onRoster and true or false)
     if not onRoster and not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide() end end
-    if f.MemberList then f.MemberList:SetAlpha(onRoster and 0 or 1) end
+    -- Blizzard's member list: under SuuUI's roster, and out of sight beside
+    -- the chat (LayChat)
+    if f.MemberList then f.MemberList:SetAlpha((onRoster or mode == modes.CHAT) and 0 or 1) end
     if f.GuildMemberListDropdown then f.GuildMemberListDropdown:SetAlpha(onRoster and 0 or 1) end
     if onRoster then
         if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
