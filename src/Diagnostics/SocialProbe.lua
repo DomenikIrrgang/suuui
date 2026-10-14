@@ -400,8 +400,49 @@ function SP.Lists()
     ns.Print(("Lists probe: %d recent allies, %s friend requests; /reload."):format(store.recentCount, tostring(store.invites.count)))
 end
 
+-- How Forever adds a friend: which systems are on, and which function the
+-- game's own windows call when you add one (watched until /reload). SuuUI's
+-- social pages step aside meanwhile, so the game's own lists can be used.
+local watching
+function SP.FriendSystem()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), calls = {} }
+    SuuUIProbe.friendSystem = store
+    store.legacy = call(C_FriendList and C_FriendList.IsLegacyFriendSystemEnabled)
+    store.titleFriends = call(C_BattleNet and C_BattleNet.AreTitleFriendsEnabled)
+    store.bnetList = call(C_BattleNet and C_BattleNet.IsBattleNetFriendsListEnabled)
+    store.bnetSupported = call(C_BattleNet and C_BattleNet.IsBattleNetFriendsListSupported)
+    store.customNames = call(C_BattleNet and C_BattleNet.AreTitleFriendCustomNamesEnabled)
+    if not watching then
+        watching = true
+        local function watch(tbl, tname, fname)
+            if tbl and type(tbl[fname]) == "function" then
+                hooksecurefunc(tbl, fname, function(...)
+                    local args = {}
+                    for i = 1, math.min(6, select("#", ...)) do args[i] = show((select(i, ...))) end
+                    local calls = SuuUIProbe.friendSystem.calls
+                    if #calls < 30 then calls[#calls + 1] = date("%H:%M:%S") .. " " .. tname .. "." .. fname .. "(" .. table.concat(args, ", ") .. ")" end
+                end)
+            end
+        end
+        for _, fn in ipairs({ "AddFriend", "AddOrRemoveFriend", "SetFriendNotes" }) do watch(C_FriendList, "C_FriendList", fn) end
+        for _, fn in ipairs({ "SendTitleFriendInviteByName", "SendVerifiedBattleNetFriendInvite", "BNCheckTitleFriendInviteToUnit",
+                              "BNCheckBattleTagInviteToRecentAlly", "InviteFriend", "SetCustomTitleFriendName" }) do
+            watch(C_BattleNet, "C_BattleNet", fn)
+        end
+        for _, fn in ipairs({ "SendTitleFriendRequest", "SendBattleTagFriendRequest" }) do watch(C_Club, "C_Club", fn) end
+        for _, fn in ipairs({ "BNSendFriendInvite", "BNSendFriendInviteByID", "BNSendVerifiedBattleNetFriendInvite" }) do watch(_G, "_G", fn) end
+    end
+    ns.SocialBlizzard = true
+    local social = ns.Modules and ns.Modules.Get and ns.Modules.Get("social")
+    if social and social.Follow then social:Follow() end
+    ns.Print(("Friend system: legacy friends %s, title friends %s. SuuUI's social pages step aside until /reload: add a friend with the game's own window (your alt is a safe test), then /reload."):format(
+        store.legacy, store.titleFriends))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
+    if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
     if rest == "frames" then SP.Frames() return end

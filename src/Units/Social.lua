@@ -599,6 +599,15 @@ end
 function M:Follow()
     local f = self.frame
     if not (f and self.view) then return end
+    -- a probe asked SuuUI's pages to step aside (the game's own in use)
+    if SuuUI.ProbeShowsBlizzardSocial and SuuUI.ProbeShowsBlizzardSocial() then
+        for _, page in ipairs({ self.view, self.raidPage, self.alliesPage, self.requestsPage }) do if page then page:Hide() end end
+        for _, part in ipairs({ self.friendsList, f.RaidFrame, f.RecentAlliesList, f.FriendRequestsList, f.BattleNetBar }) do
+            if part then part:SetAlpha(1) end
+        end
+        if self.friendsList then self.friendsList:ClearAllPoints(); self.friendsList:SetAllPoints(f.RecentAlliesList or f) end
+        return
+    end
     local list = self.friendsList
     local onContacts = f:IsShown() and list and list:IsShown()
     self.view:SetShown(onContacts and true or false)

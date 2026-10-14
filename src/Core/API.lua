@@ -296,6 +296,8 @@ function API.FullName(unit)
     if name and name ~= "" then return name end
     return (UnitName(unit or "player"))
 end
+-- A diagnostic asked the Social window's SuuUI pages to step aside.
+function API.ProbeShowsBlizzardSocial() return ns.SocialBlizzard and true or false end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
