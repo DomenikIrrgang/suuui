@@ -766,6 +766,43 @@ function SP.NoteList()
     end)
 end
 
+-- The game's member list as SuuUI's notes use it: where it is, how big,
+-- shown or not, its offline setting, how many members its data has and how
+-- many rows it made, and the game's member panel. Select a member in the
+-- roster first.
+function SP.Rows()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), rows = {} }
+    SuuUIProbe.guildRows = store
+    local f = _G.CommunitiesFrame
+    local list = f and f.MemberList
+    if not list then ns.Print("Rows probe: open the Guild window first.") return end
+    local p1, rel, p2, x, y = list:GetPoint(1)
+    store.list = ("shown=%s visible=%s alpha=%.2f %dx%d at %s>%s.%s %d,%d"):format(tostring(list:IsShown()), tostring(list:IsVisible()),
+        list:GetAlpha() or 0, math.floor(list:GetWidth() or 0), math.floor(list:GetHeight() or 0), tostring(p1),
+        tostring(rel and (rel.GetName and rel:GetName() or "?")), tostring(p2), math.floor(x or 0), math.floor(y or 0))
+    local box = list.ScrollBox
+    store.box = box and ("shown=%s visible=%s %dx%d"):format(tostring(box:IsShown()), tostring(box:IsVisible()),
+        math.floor(box:GetWidth() or 0), math.floor(box:GetHeight() or 0)) or "none"
+    store.cvar = tostring(GetCVar and GetCVar("communitiesShowOffline"))
+    store.showOffline = tostring(list.showOfflinePlayers)
+    store.expanded = tostring(list.expandedDisplay)
+    store.mode = tostring(f.GetDisplayMode and f:GetDisplayMode())
+    local dp = box and box.GetDataProvider and box:GetDataProvider()
+    store.data = dp and dp.GetSize and dp:GetSize() or "none"
+    if box and box.ForEachFrame then
+        box:ForEachFrame(function(row)
+            local info = row.memberInfo
+            store.rows[#store.rows + 1] = tostring(info and info.name) .. (row:IsShown() and "" or " (hidden)")
+        end)
+    end
+    local d = f.GuildMemberDetailFrame
+    local info = d and d.GetMemberInfo and d:GetMemberInfo()
+    store.detail = d and ("shown=%s member=%s"):format(tostring(d:IsShown()), tostring(info and info.name)) or "none"
+    store.members = (GetNumGuildMembers())
+    ns.Print(("Rows probe: %s rows of %s in the data, %s members; /reload."):format(#store.rows, tostring(store.data), tostring(store.members)))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
     if rest == "guildcontrol" then SP.GuildControl() return end
@@ -773,6 +810,7 @@ function SP.Command(rest)
     if rest == "menu" then SP.Menu() return end
     if rest == "notes" then SP.Notes() return end
     if rest == "notelist" then SP.NoteList() return end
+    if rest == "rows" then SP.Rows() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
