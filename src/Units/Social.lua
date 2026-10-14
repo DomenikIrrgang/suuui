@@ -256,6 +256,133 @@ function M:Wire(view)
 end
 
 --------------------------------------------------------------------------------
+-- Recent allies and friend requests (probed 2026-10-14: C_RecentAllies'
+-- characterData, stateData, interactionData; pins and notes; Battle.net
+-- invites through BNGetFriendInviteInfo)
+--------------------------------------------------------------------------------
+
+local function classFileOf(classID)
+    if not classID then return nil end
+    local info = C_CreatureInfo and C_CreatureInfo.GetClassInfo and C_CreatureInfo.GetClassInfo(classID)
+    if info and info.classFile then return info.classFile end
+    local _, file = GetClassInfo and GetClassInfo(classID)
+    return file
+end
+
+-- How you met them: the first interaction's own words, when it has any.
+local function metBy(a)
+    local list = a.interactionData and a.interactionData.interactions
+    local first = list and list[1]
+    if type(first) ~= "table" then return nil end
+    for _, key in ipairs({ "description", "text", "contextName", "name" }) do
+        local v = first[key]
+        if plain(v) and type(v) == "string" and v ~= "" then return v end
+    end
+end
+
+function M:Allies()
+    local ra = C_RecentAllies
+    local out = {}
+    for _, a in ipairs((ra and call(ra.GetRecentAllies)) or {}) do
+        local cd, sd = a.characterData or {}, a.stateData or {}
+        local name = plain(cd.fullName) and cd.fullName or cd.name
+        if name then
+            local file = classFileOf(cd.classID)
+            local online = sd.isOnline and true or false
+            local detail = {}
+            if cd.level and cd.level > 0 then detail[#detail + 1] = "Level " .. cd.level end
+            detail[#detail + 1] = online and (plain(sd.currentLocation) and sd.currentLocation or "Online") or "Offline"
+            local met = metBy(a)
+            if met then detail[#detail + 1] = met end
+            local guid = cd.guid
+            local row = { key = guid or name, guid = guid, name = name, online = online,
+                          color = file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil,
+                          detail = table.concat(detail, " · "),
+                          note = a.interactionData and plain(a.interactionData.note) and a.interactionData.note ~= "" and a.interactionData.note or nil,
+                          pinned = guid and call(ra.IsRecentAllyPinned, guid) or false,
+                          friend = guid and C_FriendList.IsFriend and call(C_FriendList.IsFriend, guid) or false,
+                          sent = sd.friendRequestSentThisSession }
+            local actions = {}
+            if online then actions[#actions + 1] = { label = "Whisper", onClick = function(r) self:Whisper(r.name) end } end
+            if not row.friend then
+                actions[#actions + 1] = { label = row.sent and "Requested" or "Add friend", disabled = row.sent,
+                    onClick = function(r) pcall(C_FriendList.AddFriend, r.name); self:QueueRender() end }
+            end
+            row.actions = actions
+            out[#out + 1] = row
+        end
+    end
+    table.sort(out, function(a, b)
+        if (a.pinned and true or false) ~= (b.pinned and true or false) then return a.pinned and true or false end
+        if a.online ~= b.online then return a.online end
+        return a.name < b.name
+    end)
+    return out
+end
+
+function M:Requests()
+    local out = {}
+    for i = 1, (call(BNGetNumFriendInvites)) or 0 do
+        local id, accountName, _, _, sent = call(BNGetFriendInviteInfo, i)
+        if id then
+            local when = ago(sent)
+            out[#out + 1] = { key = "inv:" .. tostring(id), glyph = true, online = true, name = accountName or "?",
+                detail = when and ("Sent " .. when) or "Wants to be your Battle.net friend",
+                actions = {
+                    { label = "Decline", onClick = function() if BNDeclineFriendInvite then pcall(BNDeclineFriendInvite, id) end; self:QueueRender() end },
+                    { label = "Accept", variant = "primary", onClick = function() if BNAcceptFriendInvite then pcall(BNAcceptFriendInvite, id) end; self:QueueRender() end },
+                } }
+        end
+    end
+    return out
+end
+
+function M:Whisper(name)
+    local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
+    if tell and name then tell(name) end
+end
+
+function M:RenderLists()
+    if self.alliesPage and self.alliesPage:IsVisible() then
+        self.alliesPage:SetData({ title = "Recent allies", rows = self:Allies(),
+            empty = "No one yet: the people you group with show up here." })
+    end
+    if self.requestsPage and self.requestsPage:IsVisible() then
+        self.requestsPage:SetData({ title = "Friend requests", rows = self:Requests(), empty = "No friend requests." })
+    end
+end
+
+function M:AllyMenu(row, owner)
+    local ra = C_RecentAllies
+    UI.ContextMenuFrom(owner, function(_, root)
+        root:CreateTitle(row.name)
+        if row.online then
+            root:CreateButton("Whisper", function() self:Whisper(row.name) end)
+            root:CreateButton("Invite", function()
+                local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+                if fn then pcall(fn, row.name) end
+            end)
+        end
+        if row.guid and ra and ra.SetRecentAllyPinned then
+            root:CreateButton(row.pinned and "Unpin" or "Pin", function()
+                pcall(ra.SetRecentAllyPinned, row.guid, not row.pinned)
+                C_Timer.After(0.2, function() self:RenderLists() end)
+            end)
+        end
+        if row.guid and ra and ra.SetRecentAllyNote and (not ra.CanSetRecentAllyNote or call(ra.CanSetRecentAllyNote)) then
+            root:CreateButton("Set note", function()
+                UI.Confirm({ title = "Note", text = "A note about this ally: only you see it.",
+                    input = { label = "Note", value = row.note or "" }, confirm = "Save",
+                    onConfirm = function(text)
+                        pcall(ra.SetRecentAllyNote, row.guid, text)
+                        C_Timer.After(0.2, function() self:RenderLists() end)
+                    end })
+            end)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
 -- The Raid page
 --------------------------------------------------------------------------------
 
@@ -479,14 +606,28 @@ function M:Follow()
     -- off it)
     local raid = f.RaidFrame
     local onRaid = f:IsShown() and raid and raid:IsShown()
-    -- the Battle.net bar see-through under either page (it sat over the
+    -- Recent allies and Requests over Blizzard's lists (see-through, in place)
+    local onAllies = f:IsShown() and f.RecentAlliesList and f.RecentAlliesList:IsShown()
+    local onRequests = f:IsShown() and f.FriendRequestsList and f.FriendRequestsList:IsShown()
+    if self.alliesPage then
+        self.alliesPage:SetShown(onAllies and true or false)
+        f.RecentAlliesList:SetAlpha(onAllies and 0 or 1)
+    end
+    if self.requestsPage then
+        self.requestsPage:SetShown(onRequests and true or false)
+        f.FriendRequestsList:SetAlpha(onRequests and 0 or 1)
+    end
+    if onAllies or onRequests then self:RenderLists() end
+    -- the Battle.net bar see-through under SuuUI's pages (it sat over the
     -- Raid page's head, found in game), and the pages above its buttons
     local bar = f.BattleNetBar
     if bar then
-        bar:SetAlpha((onContacts or onRaid) and 0 or 1)
+        local ours = onContacts or onRaid or onAllies or onRequests
+        bar:SetAlpha(ours and 0 or 1)
         local level = math.max(f:GetFrameLevel() + 100, bar:GetFrameLevel() + 30)
-        self.view:SetFrameLevel(level)
-        if self.raidPage then self.raidPage:SetFrameLevel(level) end
+        for _, page in ipairs({ self.view, self.raidPage, self.alliesPage, self.requestsPage }) do
+            if page then page:SetFrameLevel(level) end
+        end
     end
     if self.raidPage then
         self.raidPage:SetShown(onRaid and true or false)
@@ -514,6 +655,20 @@ function M:Build()
     view:Hide()
     self.view = view
     self:Wire(view)
+    -- Recent allies and Requests
+    local function listPage()
+        local page = UI.PeopleList(f)
+        page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+        page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+        page:EnableMouse(true)
+        page:Hide()
+        return page
+    end
+    if f.RecentAlliesList then
+        self.alliesPage = listPage()
+        self.alliesPage.onMenu = function(row, owner) self:AllyMenu(row, owner) end
+    end
+    if f.FriendRequestsList then self.requestsPage = listPage() end
     -- the Raid page
     if f.RaidFrame then
         local page = UI.RaidGroups(f)
@@ -554,6 +709,11 @@ function M:OnEnable()
         if not valid or valid(e) then
             self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
         end
+    end
+    -- requests and allies
+    for _, e in ipairs({ "BN_FRIEND_INVITE_ADDED", "BN_FRIEND_INVITE_REMOVED", "BN_FRIEND_INVITE_LIST_INITIALIZED",
+                         "FRIENDLIST_UPDATE" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:RenderLists() end) end
     end
     -- the raid's changes
     for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "UNIT_CONNECTION",

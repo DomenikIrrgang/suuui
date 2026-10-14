@@ -358,13 +358,15 @@ function SP.Lists()
     store.recentApi = namesIn(ra)
     store.recentEnabled = call(ra and ra.IsSystemEnabled)
     store.recentReady = call(ra and ra.IsRecentAllyDataReady)
-    if ra and ra.TryRequestRecentAlliesData then pcall(ra.TryRequestRecentAlliesData) end
+    -- (TryRequestRecentAlliesData is protected: an addon's call is blocked)
     local list = raw(ra and ra.GetRecentAllies) or {}
     store.recentCount = #list
     store.recent = {}
     for i, a in ipairs(list) do
         if i > 4 then break end
         store.recent[i] = show(a, 0)
+        local inter = a.interactionData and a.interactionData.interactions
+        store["interactions" .. i] = show(inter, -2)
     end
     store.invites = { count = call(BNGetNumFriendInvites), first = call(BNGetFriendInviteInfo, 1),
                       accept = type(BNAcceptFriendInvite), decline = type(BNDeclineFriendInvite),

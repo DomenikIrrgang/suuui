@@ -547,3 +547,137 @@ function UI.RaidGroups(parent)
     r:SetScript("OnSizeChanged", function(self) self:Layout() end)
     return r
 end
+
+--------------------------------------------------------------------------------
+-- A list of people (the Social window's Recent allies and Requests): a
+-- caption heading with its count, then a row each like the friends list's
+-- (class diamond, the name in class colour, a detail caption, a note in
+-- quotes, a pin), with its own buttons at the right; a right click asks
+-- the owner for a menu.
+--
+--   local l = UI.PeopleList(parent)
+--   l:SetData({ title, empty, rows = { { key, name, color, glyph, online,
+--       detail, note, pinned, actions = { { label, variant, onClick } } } } })
+--   l.onMenu(row, owner)
+--------------------------------------------------------------------------------
+
+local PL = {}
+
+local function plRow(l)
+    local r = CreateFrame("Button", nil, l.list.child)
+    r:SetHeight(ROW_H)
+    r:RegisterForClicks("RightButtonUp")
+    r.hover = UI.Fill(r, "gilt-faint", "BACKGROUND")
+    r.hover:SetAllPoints()
+    r.hover:Hide()
+    r.diamond = UI.Diamond(r, 7, "ink")
+    r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
+    r.glyph = r:CreateTexture(nil, "ARTWORK")
+    r.glyph:SetTexture(GLYPHS .. "people.tga")
+    r.glyph:SetSize(14, 14)
+    r.glyph:SetPoint("CENTER", r.diamond, "CENTER")
+    r.pin = r:CreateTexture(nil, "ARTWORK")
+    r.pin:SetTexture(GLYPHS .. "flag.tga")
+    r.pin:SetSize(11, 11)
+    r.pin:SetVertexColor(UI.RGBA("gilt-text"))
+    r.name = UI.Text(r, "label", "ink")
+    r.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
+    r.name:SetJustifyH("LEFT")
+    r.pin:SetPoint("LEFT", r.name, "RIGHT", S["space-3"], 0)
+    r.detail = UI.Text(r, "caption", "ink-muted")
+    r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
+    r.detail:SetJustifyH("LEFT")
+    r.buttons = {}
+    r:SetScript("OnEnter", function(self) self.hover:Show() end)
+    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
+    r:SetScript("OnClick", function(self) if self.row and l.onMenu then l.onMenu(self.row, self) end end)
+    return r
+end
+
+local function plButton(r, i, variant)
+    r.buttons[variant] = r.buttons[variant] or {}
+    local b = r.buttons[variant][i]
+    if not b then
+        b = UI.Button(r, { text = "", variant = variant })
+        r.buttons[variant][i] = b
+    end
+    return b
+end
+
+function PL:Draw()
+    local d = self.data or {}
+    local child = self.list.child
+    child:SetWidth(math.max(1, self.list:GetWidth()))
+    local rows = d.rows or {}
+    self.head.text:SetValue((d.title or "") .. " · " .. #rows)
+    self.head:SetShown(#rows > 0)
+    local y = #rows > 0 and (HEAD_H + S["space-1"]) or 0
+    for i, row in ipairs(rows) do
+        local r = self.rows[i] or plRow(self)
+        self.rows[i] = r
+        r.row = row
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+        r:SetPoint("RIGHT", child, "RIGHT")
+        r.diamond:SetShown(not row.glyph)
+        r.glyph:SetShown(row.glyph and true or false)
+        r.diamond:SetVertexColor(UI.RGBA(row.online and (row.color or "ink") or "ink-faint"))
+        r.glyph:SetVertexColor(UI.RGBA(row.online and "arcane" or "ink-muted"))
+        r.name:SetValue(row.name or "")
+        r.name:SetColor(row.online ~= false and (row.color or "ink") or "ink-muted")
+        r.pin:SetShown(row.pinned and true or false)
+        local detail = row.detail or ""
+        if row.note and row.note ~= "" then
+            detail = detail .. (detail ~= "" and "  " or "") .. "|cff" .. T.color["ink-faint"].hex .. "\"" .. row.note .. "\"|r"
+        end
+        r.detail:SetValue(detail)
+        -- its buttons, right-aligned
+        for _, pool in pairs(r.buttons) do for _, b in ipairs(pool) do b:Hide() end end
+        local x, used = 0, {}
+        local actions = row.actions or {}
+        for k = #actions, 1, -1 do
+            local a = actions[k]
+            local variant = a.variant or "quiet"
+            used[variant] = (used[variant] or 0) + 1
+            local b = plButton(r, used[variant], variant)
+            b:SetLabel(a.label)
+            b:SetEnabledState(not a.disabled)
+            b:SetScript("OnClick", function() if a.onClick and not a.disabled then a.onClick(row) end end)
+            b:ClearAllPoints()
+            b:SetPoint("RIGHT", r, "RIGHT", -(S["space-4"] + x), 0)
+            b:Show()
+            x = x + b:GetWidth() + S["space-3"]
+        end
+        r.name:SetPoint("RIGHT", r, "RIGHT", -(S["space-4"] + x + 14), 0)
+        r.detail:SetPoint("RIGHT", r, "RIGHT", -(S["space-4"] + x), 0)
+        r:Show()
+        y = y + ROW_H
+    end
+    for i = #rows + 1, #self.rows do self.rows[i]:Hide() end
+    self.empty:SetValue(d.empty or "")
+    self.empty:SetShown(#rows == 0)
+    child:SetHeight(math.max(1, y))
+end
+
+function PL:SetData(d)
+    self.data = d
+    self:Draw()
+end
+
+function UI.PeopleList(parent)
+    local l = CreateFrame("Frame", nil, parent)
+    Mixin(l, PL)
+    l.rows = {}
+    UI.Fill(l, "surface-sunk"):SetAllPoints()
+    UI.Border(l, "gilt-faint")
+    l.list = UI.ScrollArea(l, 2)
+    l.list:SetPoint("TOPLEFT", 1, -S["space-2"])
+    l.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
+    l.list:HookScript("OnSizeChanged", function() if l.data then l:Draw() end end)
+    l.head = makeHead(l)
+    l.head:SetPoint("TOPLEFT", l.list.child, "TOPLEFT")
+    l.head:SetPoint("RIGHT", l.list.child, "RIGHT")
+    l.empty = UI.Text(l, "caption", "ink-muted")
+    l.empty:SetPoint("CENTER")
+    return l
+end

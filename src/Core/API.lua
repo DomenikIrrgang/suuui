@@ -332,6 +332,7 @@ API.UI.ContextMenuFrom = UI.ContextMenuFrom -- ContextMenuFrom(owner, fn(owner, 
 API.UI.CloseContextMenu = UI.CloseContextMenu
 API.UI.Contacts = UI.Contacts -- Contacts(parent) -> SetData({ view, status, online, total, friends, ignored, selected }); onView, onStatus, onSelect, onWhisper, onInvite, onAdd, onIgnore, onUnignore, onMenu
 API.UI.RaidGroups = UI.RaidGroups -- RaidGroups(parent) -> SetData({ inRaid, inParty, canLead, reason, size, members }); onReadyCheck, onRoleCheck, onRaidInfo, onConvert, onMove, onSwap, onMember
+API.UI.PeopleList = UI.PeopleList -- PeopleList(parent) -> SetData({ title, empty, rows = { { key, name, color, glyph, online, detail, note, pinned, actions } } }); onMenu(row, owner)
 API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H
