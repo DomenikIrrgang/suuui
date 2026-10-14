@@ -69,6 +69,12 @@ function UI.ReskinScrollBar(bar)
             t:SetPoint("TOP")
             t:SetPoint("BOTTOM")
             t:SetWidth(2)
+            -- under the mouse: gilt and a little wider, so it reads as
+            -- something to grab (it showed no hover, found in game)
+            if thumb.HookScript then
+                thumb:HookScript("OnEnter", function() t:SetColorTexture(UI.RGBA("gilt")); t:SetWidth(4) end)
+                thumb:HookScript("OnLeave", function() t:SetColorTexture(UI.RGBA("gilt-line")); t:SetWidth(2) end)
+            end
         end
     end
     for _, key in ipairs({ "Back", "Forward" }) do

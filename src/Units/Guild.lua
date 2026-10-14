@@ -628,20 +628,30 @@ function M:LayChat()
         f.StreamDropdown:ClearAllPoints()
         f.StreamDropdown:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     end
-    -- the chat's visible edge (its inset frame stands out past it) at the
-    -- pages' 20px, like the menu over it (they sat 8px apart, found in game)
-    local inset = f.Chat.InsetFrame
-    local dl, dr = 0, 0
-    if inset and inset:GetLeft() and f.Chat:GetLeft() then
-        local a, b, c, d = inset:GetLeft(), f.Chat:GetLeft(), inset:GetRight(), f.Chat:GetRight()
-        local plain = function(v) return v and not (issecretvalue and issecretvalue(v)) end
-        if plain(a) and plain(b) and plain(c) and plain(d) then dl, dr = b - a, c - d end
+    -- the messages in SuuUI's own box (Blizzard's inset frame and its
+    -- corner art away), and the input line under it on its own: both edge
+    -- to edge at the pages' 20px (they overlapped and differed in width,
+    -- found in game)
+    local EDIT_H = 28
+    if f.Chat.InsetFrame then f.Chat.InsetFrame:SetAlpha(0) end
+    if not f.Chat.suuBox then
+        f.Chat.suuBox = f.Chat:CreateTexture(nil, "BACKGROUND", nil, -7)
+        f.Chat.suuBox:SetColorTexture(UI.RGBA("surface-sunk"))
+        f.Chat.suuBox:SetAllPoints()
+        f.Chat.suuEdge = UI.Border(f.Chat, "gilt-faint")
     end
-    self.chatInset = (dl > 0 or dr > 0) and { dl, dr } or self.chatInset
-    local inL, inR = (self.chatInset or { 0, 0 })[1], (self.chatInset or { 0, 0 })[2]
     f.Chat:ClearAllPoints()
-    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20 + inL, -(44 + 24 + S["space-4"]))
-    f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(20 + inR), 16 + 30 + S["space-3"])
+    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(44 + 24 + S["space-4"]))
+    f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + EDIT_H + S["space-3"])
+    local edit = f.ChatEditBox
+    if edit then
+        if UI.ReskinEditBox then UI.ReskinEditBox(edit) end
+        -- its look stands 4px out to the left (Reskin's field)
+        edit:ClearAllPoints()
+        edit:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20 + 4, 16 + 1)
+        edit:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + 1)
+        edit:SetHeight(EDIT_H - 2)
+    end
     -- the voice chat headset over the chat: out of sight
     if f.VoiceChatHeadset then f.VoiceChatHeadset:SetAlpha(0); f.VoiceChatHeadset:EnableMouse(false) end
     -- the member list beside the chat (in the chat's mode; the roster mode's
@@ -654,6 +664,7 @@ function M:LayChat()
         self.chatHooked = true
         local function again() if not self.layingChat then C_Timer.After(0, function() self:LayChat() end) end end
         hooksecurefunc(f.Chat, "SetPoint", again)
+        if f.ChatEditBox then hooksecurefunc(f.ChatEditBox, "SetPoint", again) end
         if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
         -- the hidden member list takes no clicks in the chat's mode
         if f.MemberList then
