@@ -2,11 +2,14 @@
 -- "/suu probe lfg": what ForeverLFG (the group finder library: the game's
 -- tool and the public chat channels as one list) can rely on.
 --   The tool: its categories and activities (Dungeons, Quests & Zones,
---   Custom, ...), its functions, your own listing, and a search started
---   two seconds later from a timer (no key or click behind it: can the
---   library refresh by itself, for "a new group needs your role"?), with
---   what a result holds and whether any of it is secret.
+--   Custom, ...) and their activities (per activity group, the game's
+--   way), its functions, your own listing.
+--   "/suu probe lfg timer" also searches from a timer, two seconds later:
+--   blocked (ADDON_ACTION_BLOCKED, 2026-10-14), the tool can't refresh by
+--   itself.
 --   Chat: the channels you're in.
+-- "/suu probe lfg click": a button; its click searches and saves your
+-- listing again unchanged (is a click enough for both?).
 -- "/suu probe lfg record": the public channels' messages (and say/yell),
 -- as they arrive, with the channel, author, zone, whether you were in
 -- combat or an instance and whether the text was secret; kept across
@@ -77,9 +80,21 @@ function LP.Snapshot()
     for _, cat in ipairs(okCats and cats or {}) do
         local okI, info = pcall(lfg.GetLfgCategoryInfo, cat)
         local entry = { id = cat, info = show(okI and info or nil), activities = {} }
-        local okA, acts = pcall(lfg.GetAvailableActivities, cat)
-        for i, a in ipairs(okA and acts or {}) do
-            if i > 60 then entry.activities[#entry.activities + 1] = "... " .. #acts .. " in all" break end
+        -- the game's way: per activity group, then the ones in none
+        local acts, seen = {}, {}
+        local okG, groups = pcall(lfg.GetAvailableActivityGroups, cat)
+        entry.groups = {}
+        for _, g in ipairs(okG and groups or {}) do
+            local okN, gname = pcall(lfg.GetActivityGroupInfo, g)
+            local okGA, ga = pcall(lfg.GetAvailableActivities, cat, g)
+            entry.groups[#entry.groups + 1] = ("%s %s: %d"):format(tostring(g), tostring(okN and gname), okGA and type(ga) == "table" and #ga or -1)
+            for _, a in ipairs(okGA and ga or {}) do if not seen[a] then seen[a] = true; acts[#acts + 1] = a end end
+        end
+        local okA, all = pcall(lfg.GetAvailableActivities, cat, nil)
+        entry.ungroupedCall = okA and type(all) == "table" and #all or ("error: " .. tostring(all))
+        for _, a in ipairs(okA and all or {}) do if not seen[a] then seen[a] = true; acts[#acts + 1] = a end end
+        for i, a in ipairs(acts) do
+            if i > 120 then entry.activities[#entry.activities + 1] = "... " .. #acts .. " in all" break end
             local okT, t = pcall(lfg.GetActivityInfoTable, a)
             if okT and type(t) == "table" then
                 entry.activities[#entry.activities + 1] = ("%d %s lvl %s-%s max %s group %s"):format(a, tostring(t.fullName),
@@ -99,6 +114,12 @@ function LP.Snapshot()
     local okR, a, b, c = pcall(GetLFGRoles)
     s.ownRoles = okR and ("leader=%s tank=%s healer=%s dps=%s"):format(tostring(a), tostring(b), tostring(c), tostring(select(4, GetLFGRoles()))) or "no GetLFGRoles"
     -- the chat channels you're in
+    s.serverChannels = {}
+    if EnumerateServerChannels then
+        for _, name in ipairs({ EnumerateServerChannels() }) do s.serverChannels[#s.serverChannels + 1] = tostring(name) end
+    end
+    local okL, lfgIndex, lfgName = pcall(GetChannelName, "LookingForGroup")
+    s.lookingForGroupJoined = okL and (tostring(lfgIndex) .. " " .. tostring(lfgName)) or "error"
     s.channels = {}
     local list = { GetChannelList() }
     for i = 1, #list, 3 do
@@ -146,6 +167,54 @@ function LP.TimerSearch()
             end
         end)
     end)
+end
+
+-- A click: a search, and your listing saved again unchanged (only if you
+-- have one), each with the game's verdict.
+function LP.ClickTest()
+    local s = store()
+    local lfg = C_LFGList
+    s.clickTest = { blocked = {} }
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "LFG_LIST_ACTIVE_ENTRY_UPDATE",
+                         "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do f:RegisterEvent(e) end
+    f:SetScript("OnEvent", function(_, event, a1, a2)
+        local t = s.clickTest
+        t.blocked[#t.blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+        if event == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then
+            local okR, count = pcall(lfg.GetSearchResults)
+            t.count = okR and show(count) or "error"
+        end
+    end)
+    local b = LP.button or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    LP.button = b
+    b:SetSize(320, 30)
+    b:ClearAllPoints()
+    b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+    b:SetFrameStrata("DIALOG")
+    b:SetText("LFG probe: click to search and re-save your listing")
+    b:SetScript("OnClick", function(self)
+        local t = s.clickTest
+        local okCats, cats = pcall(lfg.GetAvailableCategories)
+        local cat = okCats and cats and cats[1]
+        local ok, err = pcall(lfg.Search, cat, 0, 0, nil, false, nil, nil)
+        t.search = ok and "called" or ("error: " .. tostring(err))
+        local okE, entry = pcall(lfg.GetActiveEntryInfo)
+        if okE and type(entry) == "table" and not isSecret(entry) then
+            local okU, errU = pcall(lfg.UpdateListing, { activityIDs = entry.activityIDs,
+                newPlayerFriendly = entry.newPlayerFriendly, voiceMode = entry.voiceMode })
+            t.update = okU and "called" or ("error: " .. tostring(errU))
+        else
+            t.update = "no listing: skipped"
+        end
+        self:Hide()
+        C_Timer.After(5, function()
+            f:UnregisterAllEvents()
+            ns.Print("LFG probe: click test done; /reload.")
+        end)
+    end)
+    b:Show()
+    ns.Print("LFG probe: click the button at the top of the screen once.")
 end
 
 -- The recorder: public chat as it arrives.
@@ -202,6 +271,7 @@ function LP.Command(rest)
     rest = (rest or ""):lower()
     if rest == "record" then LP.Record(true) return end
     if rest == "stop" then LP.Record(false) return end
+    if rest == "click" then LP.ClickTest() return end
     if rest == "clear" then
         local s = store()
         s.record = { lines = {}, on = s.record and s.record.on or false }
@@ -209,7 +279,7 @@ function LP.Command(rest)
         return
     end
     LP.Snapshot()
-    LP.TimerSearch()
+    if rest == "timer" then LP.TimerSearch() end
     local s = store()
-    ns.Print(("LFG probe: %d categories, %d channels; a search from a timer in 2 seconds..."):format(#(s.categories or {}), #(s.channels or {})))
+    ns.Print(("LFG probe: %d categories, %d channels saved; /reload."):format(#(s.categories or {}), #(s.channels or {})))
 end
