@@ -280,6 +280,18 @@ local function metBy(a)
     end
 end
 
+-- Pinned: what was just chosen until the game's own data agrees (it comes
+-- back a moment later: a pin seemed to need two clicks, found in game).
+function M:Pinned(guid)
+    if not guid then return false end
+    local ra = C_RecentAllies
+    local actual = (ra and call(ra.IsRecentAllyPinned, guid)) and true or false
+    local wanted = self.pinWanted and self.pinWanted[guid]
+    if wanted == nil then return actual end
+    if wanted == actual then self.pinWanted[guid] = nil end
+    return wanted
+end
+
 function M:Allies()
     local ra = C_RecentAllies
     local out = {}
@@ -299,7 +311,7 @@ function M:Allies()
                           color = file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil,
                           detail = table.concat(detail, " · "),
                           note = a.interactionData and plain(a.interactionData.note) and a.interactionData.note ~= "" and a.interactionData.note or nil,
-                          pinned = guid and call(ra.IsRecentAllyPinned, guid) or false,
+                          pinned = self:Pinned(guid),
                           friend = guid and C_FriendList.IsFriend and call(C_FriendList.IsFriend, guid) or false,
                           sent = sd.friendRequestSentThisSession }
             local actions = {}
@@ -365,8 +377,13 @@ function M:AllyMenu(row, owner)
         end
         if row.guid and ra and ra.SetRecentAllyPinned then
             root:CreateButton(row.pinned and "Unpin" or "Pin", function()
-                pcall(ra.SetRecentAllyPinned, row.guid, not row.pinned)
-                C_Timer.After(0.2, function() self:RenderLists() end)
+                local want = not row.pinned
+                pcall(ra.SetRecentAllyPinned, row.guid, want)
+                self.pinWanted = self.pinWanted or {}
+                self.pinWanted[row.guid] = want
+                self:RenderLists()
+                -- and again once the game has it
+                C_Timer.After(1, function() self:RenderLists() end)
             end)
         end
         if row.guid and ra and ra.SetRecentAllyNote and (not ra.CanSetRecentAllyNote or call(ra.CanSetRecentAllyNote)) then
