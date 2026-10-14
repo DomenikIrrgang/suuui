@@ -634,6 +634,10 @@ function M:LayChat()
     -- found in game)
     local EDIT_H = 28
     if f.Chat.InsetFrame then f.Chat.InsetFrame:SetAlpha(0) end
+    -- the messages keep their own colours and spacing: the restyle pass
+    -- recoloured and re-fonted the lines on show, until a scroll redrew
+    -- them (found in game)
+    if f.Chat.MessageFrame then f.Chat.MessageFrame.suuOwn = true end
     if not f.Chat.suuBox then
         f.Chat.suuBox = f.Chat:CreateTexture(nil, "BACKGROUND", nil, -7)
         f.Chat.suuBox:SetColorTexture(UI.RGBA("surface-sunk"))
