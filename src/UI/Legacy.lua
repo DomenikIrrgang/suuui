@@ -12,7 +12,8 @@
 --     challenges you're closest to (up to five); a card opens its full list
 --     (scrolling, by sub-category), "All challenges" goes back
 --   UI.LegacyTrack(parent):SetTrack({ earned, total, max, next, stops = { stop } })
---     stop = { at, name, icon, quality, collected, onEnter(owner), onLeave() }
+--     stop = { at, icon, quality, collected, onEnter(owner), onLeave() }
+--       (its name goes in the tooltip onEnter shows)
 --     a strip for the window's foot: the account's points and the rewards
 
 local _, ns = ...

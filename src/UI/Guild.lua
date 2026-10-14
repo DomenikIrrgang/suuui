@@ -11,7 +11,7 @@
 -- visible, disabled, with the reason. Invite to guild bottom left.
 --
 --   local r = UI.GuildRoster(parent)
---   r:SetData({ online, total, showOffline, search, sort, members = { m },
+--   r:SetData({ online, total, showOffline, sort, members = { m },
 --       selected, actions = { whisper, invite, promote, demote, remove } })
 --     m = { key, name, class (its file name), className, level, zone, rank, rankIndex, note, officerNote,
 --       online, away, busy, lastOnline ("3 days ago") }
