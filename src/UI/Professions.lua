@@ -11,7 +11,8 @@
 --             product, what it needs (tools), its reagents (have / need), a
 --             cooldown, Track, a quantity, Create all and Create
 --
---   local p = UI.Professions(parent)
+--   local p = UI.Professions(parent, { edgeInset = 20 })  -- the page's distance
+--                          -- from the window's edge (the rail's tabs centre between)
 --   p:SetTabs({ { key, label, icon, glyph } }, selected)   p.onTab(key)
 --   p:SetOverview({ primary = { card }, secondary = { card } })
 --     card = { name, rank, icon, skill, max, crafting, recipes = { learned,
@@ -119,7 +120,9 @@ function P:SetTabs(list, selected)
         end
         b.owner, b.key, b.label = self, t.key, t.label
         b:ClearAllPoints()
-        b:SetPoint("TOP", self.rail, "TOP", 0, -(i - 1) * (32 + S["space-4"]))
+        -- centred between the divider and the window's edge (edgeInset past
+        -- the page), as the Spellbook's schools are
+        b:SetPoint("TOP", self.rail, "TOP", self.edgeInset / 2, -(i - 1) * (32 + S["space-4"]))
         if t.icon then
             b.icon:SetArt(t.icon)
             b.icon:Show()
@@ -543,9 +546,10 @@ end
 -- The whole
 --------------------------------------------------------------------------------
 
-function UI.Professions(parent)
+function UI.Professions(parent, opts)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, P)
+    f.edgeInset = opts and opts.edgeInset or 20
     f.tabs, f.cards, f.listRows, f.folded = {}, {}, {}, {}
     -- the rail
     f.rail = CreateFrame("Frame", nil, f)
