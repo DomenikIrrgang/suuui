@@ -1,0 +1,385 @@
+-- UI/GroupFinder.lua
+-- The Group Finder's Browse page (design component GroupFinder, "Browse"):
+-- one list of groups and players looking, from the game's tool and from
+-- chat (ForeverLFG), in two collapsible sections, Groups and Players.
+--   The bar: category, filter by activity, search, "Only what fits me",
+--   Show (groups / players / both); the tool's age and Refresh (the tool
+--   only searches on a click).
+--   A row (44px): a crown for a group or the player's class icon; the
+--   activity, a level chip, the reason it concerns you (arcane, with the
+--   row in arcane-soft and a 2px arcane edge); the leader in class colour,
+--   "Lvl 31 Mage", the play style or the chat post in quotes (the whole
+--   post on hover); role slots (or the roles offered), source badges, age;
+--   Whisper, and Invite for a player looking.
+--
+--   local b = UI.GroupFinderBrowse(parent)
+--   b:SetData({
+--       groups = { row }, players = { row }, collapsed = { groups, players },
+--       tool = { age = seconds | nil, stale = bool, searching = bool },
+--       category = value, categories = { { value, label } },
+--       activities = { value, ... }, activityOptions = { { value, label } },
+--       search = "", fits = bool, show = "both" | "group" | "player",
+--   })
+--     row = { key, activity, level ("29+"), newPlayerFriendly, reason, match,
+--             leader, class (file), who ("Lvl 31 Mage"), playstyle, post,
+--             slots = { "tank" | "healer" | "damage" | "member" | "need:tank" | "open" },
+--             offered = { tank, healer, damage }, members = { have, max },
+--             sources = { "Tool", "LookingForGroup", ... }, age ("2m"), canInvite }
+--   b.onRefresh(), b.onFilter(changes), b.onWhisper(row), b.onInvite(row),
+--   b.onToggle("groups" | "players")
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+local S = T.space
+
+local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+local GLYPHS = TEX .. "Glyphs\\"
+local ROLE_TEX = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
+
+local BAR_H = 30
+local HEAD_H = 26
+local ROW_H = 44
+local ICON = 18
+
+--------------------------------------------------------------------------------
+-- Small parts: a role icon, a source badge
+--------------------------------------------------------------------------------
+
+-- A role icon (design component RoleIcon): filled, needed (dashed: a dim
+-- edge), your role (arcane), a member of unknown role (a dot), open (hollow).
+local function roleIcon(parent)
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(ICON, ICON)
+    f.bg = UI.Fill(f, "surface-raised")
+    f.bg:SetAllPoints()
+    f.edge = UI.Border(f, "gilt-line")
+    f.glyph = f:CreateTexture(nil, "OVERLAY")
+    f.glyph:SetSize(ICON - 6, ICON - 6)
+    f.glyph:SetPoint("CENTER")
+    f.dot = UI.Diamond(f, 5, "ink-muted")
+    f.dot:SetPoint("CENTER")
+    function f:Set(kind, mine)
+        local need = kind:match("^need:(.+)$")
+        local role = need or kind
+        self.dot:Hide()
+        self.glyph:Show()
+        self.bg:Show()
+        self.edge:SetShown(true)
+        if ROLE_TEX[role] then
+            self.glyph:SetTexture(ROLE_TEX[role])
+            if need then
+                self.bg:Hide()
+                self.edge:SetColor(mine and "arcane" or "ink-faint")
+                self.glyph:SetVertexColor(UI.RGBA(mine and "arcane" or "ink-muted"))
+            else
+                self.edge:SetColor("gilt-line")
+                self.glyph:SetVertexColor(UI.RGBA("ink"))
+            end
+        elseif kind == "member" then
+            self.glyph:Hide(); self.bg:Hide(); self.edge:SetShown(false)
+            self.dot:SetVertexColor(UI.RGBA("ink-muted"))
+            self.dot:Show()
+        else
+            -- an open spot
+            self.glyph:Hide(); self.bg:Hide()
+            self.edge:SetColor("ink-faint")
+        end
+    end
+    return f
+end
+
+-- A source badge (design component SourceBadge): "Tool" or the channel.
+local function badge(parent)
+    local b = CreateFrame("Frame", nil, parent)
+    b:SetHeight(16)
+    UI.Fill(b, "surface-raised"):SetAllPoints()
+    UI.Border(b, "gilt-line")
+    b.text = UI.Text(b, "micro", "ink-muted")
+    b.text:SetPoint("CENTER")
+    function b:SetLabel(s)
+        self.text:SetValue(s)
+        self:SetWidth(math.ceil(self.text:GetUnboundedStringWidth()) + 10)
+    end
+    return b
+end
+
+--------------------------------------------------------------------------------
+-- A row
+--------------------------------------------------------------------------------
+
+local function makeRow(b)
+    local r = CreateFrame("Button", nil, b.list.child)
+    r:SetHeight(ROW_H)
+    r.match = UI.Fill(r, "arcane-soft", "BACKGROUND")
+    r.match:SetAllPoints()
+    r.edge = UI.Fill(r, "arcane", "ARTWORK")
+    r.edge:SetWidth(2)
+    r.edge:SetPoint("TOPLEFT")
+    r.edge:SetPoint("BOTTOMLEFT")
+    r.hover = UI.Fill(r, "gilt-faint", "BACKGROUND", 1)
+    r.hover:SetAllPoints()
+    r.hover:Hide()
+    r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
+    r.rule:SetHeight(1)
+    r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
+    r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+    r.lead = r:CreateTexture(nil, "ARTWORK")
+    r.lead:SetSize(20, 20)
+    r.lead:SetPoint("LEFT", S["space-4"], 0)
+    -- line 1
+    r.activity = UI.Text(r, "label", "ink")
+    r.activity:SetPoint("TOPLEFT", r.lead, "TOPRIGHT", S["space-4"], 8)
+    r.levelChip = CreateFrame("Frame", nil, r)
+    r.levelChip:SetHeight(14)
+    UI.Fill(r.levelChip, "surface-sunk"):SetAllPoints()
+    UI.Border(r.levelChip, "gilt-faint")
+    r.levelChip.text = UI.Text(r.levelChip, "micro", "ink-muted")
+    r.levelChip.text:SetPoint("CENTER")
+    r.reason = UI.Text(r, "caption", "arcane")
+    -- line 2
+    r.leader = UI.Text(r, "caption", "ink")
+    r.leader:SetPoint("TOPLEFT", r.activity, "BOTTOMLEFT", 0, -3)
+    r.who = UI.Text(r, "caption", "ink-muted")
+    r.who:SetPoint("LEFT", r.leader, "RIGHT", S["space-3"], 0)
+    r.post = UI.Text(r, "caption", "ink-muted")
+    r.post:SetPoint("LEFT", r.who, "RIGHT", S["space-4"], 0)
+    -- the right: Invite, Whisper, age, sources, roles
+    r.invite = UI.Button(r, { text = "Invite", variant = "quiet", onClick = function() if b.onInvite and r.data then b.onInvite(r.data) end end })
+    r.invite:SetHeight(24)
+    r.invite:SetPoint("RIGHT", -S["space-4"], 0)
+    r.whisper = UI.Button(r, { text = "Whisper", variant = "quiet", onClick = function() if b.onWhisper and r.data then b.onWhisper(r.data) end end })
+    r.whisper:SetHeight(24)
+    r.age = UI.Text(r, "caption", "ink-faint")
+    r.age:SetJustifyH("RIGHT")
+    r.age:SetWidth(30)
+    r.badges, r.slots = {}, {}
+    r.rolesLabel = UI.Text(r, "caption", "ink-muted")
+    r:SetScript("OnEnter", function(self)
+        self.hover:Show()
+        local d = self.data
+        if d and d.post and d.post ~= "" then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip_SetTitle(GameTooltip, d.leader or "")
+            GameTooltip_AddNormalLine(GameTooltip, d.post, true)
+            GameTooltip:Show()
+        end
+    end)
+    r:SetScript("OnLeave", function(self) self.hover:Hide(); GameTooltip:Hide() end)
+    return r
+end
+
+local function drawRow(b, r, d, y, width)
+    r.data = d
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", b.list.child, "TOPLEFT", 0, -y)
+    r:SetWidth(width)
+    r.match:SetShown(d.match and true or false)
+    r.edge:SetShown(d.match and true or false)
+    -- the leading icon: the player's class, or a group's crown
+    local atlas = d.class and GetClassAtlas and GetClassAtlas(d.class)
+    if d.isPlayer and atlas then
+        r.lead:SetAtlas(atlas)
+        r.lead:SetVertexColor(1, 1, 1, 1)
+    else
+        r.lead:SetTexture(GLYPHS .. "people.tga")
+        r.lead:SetVertexColor(UI.RGBA("gilt-text"))
+    end
+    r.activity:SetValue(d.activity or "")
+    if d.level then
+        r.levelChip.text:SetValue(d.level)
+        r.levelChip:SetWidth(math.ceil(r.levelChip.text:GetUnboundedStringWidth()) + 8)
+        r.levelChip:ClearAllPoints()
+        r.levelChip:SetPoint("LEFT", r.activity, "RIGHT", S["space-3"], 0)
+        r.levelChip:Show()
+    else
+        r.levelChip:Hide()
+    end
+    r.reason:SetValue(d.reason or "")
+    r.reason:ClearAllPoints()
+    r.reason:SetPoint("LEFT", d.level and r.levelChip or r.activity, "RIGHT", S["space-4"], 0)
+    local color = d.class and T.color["class-" .. d.class:lower()] and ("class-" .. d.class:lower()) or "ink"
+    r.leader:SetValue(d.leader or "")
+    r.leader:SetColor(color)
+    r.who:SetValue(d.who or "")
+    local post = d.playstyle or ""
+    if d.post and d.post ~= "" then post = (post ~= "" and (post .. "  ") or "") .. "\"" .. d.post .. "\"" end
+    r.post:SetValue(post)
+    -- the right side, from the right edge leftwards
+    r.invite:SetShown(d.canInvite and true or false)
+    r.whisper:ClearAllPoints()
+    r.whisper:SetPoint("RIGHT", d.canInvite and r.invite or r, d.canInvite and "LEFT" or "RIGHT", d.canInvite and -S["space-3"] or -S["space-4"], 0)
+    r.age:SetValue(d.age or "")
+    r.age:ClearAllPoints()
+    r.age:SetPoint("RIGHT", r.whisper, "LEFT", -S["space-4"], 0)
+    local anchor = r.age
+    for i = #(d.sources or {}), 1, -1 do
+        local bd = r.badges[i] or badge(r)
+        r.badges[i] = bd
+        bd:SetLabel(d.sources[i])
+        bd:ClearAllPoints()
+        bd:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)
+        bd:Show()
+        anchor = bd
+    end
+    for i = #(d.sources or {}) + 1, #r.badges do r.badges[i]:Hide() end
+    -- roles: a group's slots, or what a player offers
+    local slots = d.slots or {}
+    for i = #slots, 1, -1 do
+        local s = r.slots[i] or roleIcon(r)
+        r.slots[i] = s
+        s:Set(slots[i], d.mine and d.mine[slots[i]:match("^need:(.+)$") or ""])
+        s:ClearAllPoints()
+        s:SetPoint("RIGHT", anchor, "LEFT", i == #slots and -S["space-5"] or -3, 0)
+        s:Show()
+        anchor = s
+    end
+    for i = #slots + 1, #r.slots do r.slots[i]:Hide() end
+    r.rolesLabel:SetValue(d.isPlayer and #slots > 0 and "Roles:" or "")
+    r.rolesLabel:ClearAllPoints()
+    r.rolesLabel:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)
+    -- the text stops before the right side
+    local right = (r.rolesLabel:GetText() ~= "" and r.rolesLabel or anchor)
+    r.post:SetPoint("RIGHT", right, "LEFT", -S["space-4"], 0)
+    r.post:SetWordWrap(false)
+    r:Show()
+end
+
+--------------------------------------------------------------------------------
+-- The page
+--------------------------------------------------------------------------------
+
+local B = {}
+
+local function sectionHead(b, key, label)
+    local h = CreateFrame("Button", nil, b.list.child)
+    h:SetHeight(HEAD_H)
+    h.text = UI.Text(h, "header", "gilt-text")
+    h.text:SetPoint("LEFT", S["space-4"], 0)
+    h.count = UI.Text(h, "caption", "ink-muted")
+    h.count:SetPoint("LEFT", h.text, "RIGHT", S["space-3"], 0)
+    h.glyph = h:CreateTexture(nil, "ARTWORK")
+    h.glyph:SetSize(12, 12)
+    h.glyph:SetPoint("RIGHT", -S["space-4"], 0)
+    h.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    h.rule = UI.Hairline(h, "gilt-line", "out")
+    h.rule:SetPoint("LEFT", h.count, "RIGHT", S["space-4"], 0)
+    h.rule:SetPoint("RIGHT", h.glyph, "LEFT", -S["space-4"], 0)
+    h.label = label
+    h:SetScript("OnClick", function() if b.onToggle then b.onToggle(key) end end)
+    return h
+end
+
+function B:SetData(d)
+    self.data = d
+    -- the bar
+    self.category:SetOptions(d.categories or {})
+    self.category:SetValue(d.category)
+    self.activity:SetOptions(d.activityOptions or {})
+    self.activity:SetValue(d.activities or {})
+    if self.search:GetValue() ~= (d.search or "") and not self.search.edit:HasFocus() then self.search:SetValue(d.search or "") end
+    self.fits:SetValue(d.fits)
+    self.show:SetValue(d.show or "both")
+    -- the tool's age
+    local tool = d.tool or {}
+    local text
+    if tool.searching then text = "Searching the tool…"
+    elseif not tool.age then text = "Tool not searched yet"
+    else
+        local m = math.floor(tool.age / 60)
+        text = "Tool results " .. (m < 1 and "just now" or (m .. "m old")) .. (tool.stale and " · stale" or "")
+    end
+    self.staleText:SetValue(text)
+    self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
+    self:Draw()
+end
+
+function B:Draw()
+    local d = self.data
+    if not d then return end
+    local width = math.max(1, self.list:GetWidth())
+    self.list.child:SetWidth(width)
+    local y = 0
+    local used, heads = 0, 0
+    for _, key in ipairs({ "groups", "players" }) do
+        local rows = d[key] or {}
+        heads = heads + 1
+        local h = self.heads[key]
+        h:ClearAllPoints()
+        h:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
+        h:SetWidth(width)
+        h.text:SetValue(h.label)
+        h.count:SetValue(tostring(#rows))
+        local closed = d.collapsed and d.collapsed[key]
+        h.glyph:SetTexture(GLYPHS .. (closed and "chevronRight.tga" or "chevronDown.tga"))
+        h:Show()
+        y = y + HEAD_H
+        if not closed then
+            for _, row in ipairs(rows) do
+                used = used + 1
+                local r = self.rows[used] or makeRow(self)
+                self.rows[used] = r
+                drawRow(self, r, row, y, width)
+                y = y + ROW_H
+            end
+        end
+        y = y + S["space-3"]
+    end
+    for i = used + 1, #self.rows do self.rows[i]:Hide() end
+    self.list.child:SetHeight(math.max(1, y))
+    local none = #(d.groups or {}) + #(d.players or {}) == 0
+    self.empty:SetShown(none)
+end
+
+function UI.GroupFinderBrowse(parent)
+    local b = CreateFrame("Frame", nil, parent)
+    Mixin(b, B)
+    b.rows, b.heads = {}, {}
+    -- the bar
+    local function changed(t) if b.onFilter then b.onFilter(t) end end
+    b.category = UI.Select(b, { width = 150, placeholder = "Category",
+        onChange = function(v) changed({ category = v }) end })
+    b.category:SetPoint("TOPLEFT")
+    b.category:SetHeight(BAR_H)
+    b.activity = UI.Select(b, { width = 190, multiple = true, maxShown = 1, placeholder = "Filter by activity", maxRows = 12,
+        onChange = function(v) changed({ activities = v }) end })
+    b.activity:SetPoint("LEFT", b.category, "RIGHT", S["space-3"], 0)
+    b.activity:SetHeight(BAR_H)
+    b.search = UI.TextField(b, { width = 170, placeholder = "Search",
+        onTextChanged = function(text) changed({ search = text }) end })
+    b.search:SetPoint("LEFT", b.activity, "RIGHT", S["space-3"], 0)
+    b.fits = UI.Checkbox(b, { label = "Only what fits me", onChange = function(on) changed({ fits = on }) end })
+    b.fits:SetPoint("LEFT", b.search, "RIGHT", S["space-5"], 0)
+    b.show = UI.Select(b, { width = 120, options = {
+        { value = "both", label = "Both" }, { value = "group", label = "Groups" }, { value = "player", label = "Players looking" } },
+        onChange = function(v) changed({ show = v }) end })
+    b.show:SetPoint("LEFT", b.fits, "RIGHT", S["space-5"], 0)
+    b.show:SetHeight(BAR_H)
+    -- the tool's age and Refresh, at the right
+    b.refresh = UI.Button(b, { text = "Refresh", variant = "quiet", onClick = function() if b.onRefresh then b.onRefresh() end end })
+    b.refresh:SetHeight(BAR_H)
+    b.refresh:SetPoint("TOPRIGHT")
+    b.staleText = UI.Text(b, "caption", "ink-muted")
+    b.staleText:SetPoint("RIGHT", b.refresh, "LEFT", -S["space-4"], 0)
+    b.hourglass = b:CreateTexture(nil, "ARTWORK")
+    b.hourglass:SetTexture(GLYPHS .. "hourglass.tga")
+    b.hourglass:SetSize(12, 12)
+    b.hourglass:SetVertexColor(UI.RGBA("ink-muted"))
+    b.hourglass:SetPoint("RIGHT", b.staleText, "LEFT", -S["space-3"], 0)
+    -- the list
+    b.box = CreateFrame("Frame", nil, b)
+    b.box:SetPoint("TOPLEFT", 0, -(BAR_H + S["space-4"]))
+    b.box:SetPoint("BOTTOMRIGHT")
+    UI.Fill(b.box, "surface-sunk"):SetAllPoints()
+    UI.Border(b.box, "gilt-faint")
+    b.list = UI.ScrollArea(b.box, 2)
+    b.list:SetPoint("TOPLEFT", 1, -S["space-2"])
+    b.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
+    b.list:HookScript("OnSizeChanged", function() b:Draw() end)
+    b.heads.groups = sectionHead(b, "groups", "Groups")
+    b.heads.players = sectionHead(b, "players", "Players")
+    b.empty = UI.Text(b.box, "caption", "ink-muted")
+    b.empty:SetPoint("CENTER")
+    b.empty:SetValue("Nothing matches your filters. Refresh to search the tool.")
+    return b
+end

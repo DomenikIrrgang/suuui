@@ -8,6 +8,7 @@
 -- higher levels, new content) join as "tool:<id>" with the tool's name.
 --
 --   LFG.Catalogue.Get(key)            -- the activity
+--   LFG.Catalogue.Name(key)           -- what to call it
 --   LFG.Catalogue.ForTool(activityID) -- the key for a tool activity
 --   LFG.Catalogue.All(kind)           -- every activity (of a kind)
 --   LFG.Catalogue.Expand(key)         -- an umbrella ("dungeon:sm") as its parts
@@ -79,6 +80,24 @@ add("custom", "custom", 1064, nil)
 --------------------------------------------------------------------------------
 
 function C.Get(key) return byKey[key] end
+
+-- What to call it: the tool's name (the client's language), else the
+-- first word a language module has for it, in title case ("molten core").
+function C.Name(key)
+    local a = byKey[key]
+    if a and a.name then return a.name end
+    local Lang = LFG.Lang
+    local codes = LFG.Languages and LFG.Languages() or { "enUS" }
+    codes[#codes + 1] = "enUS"
+    for _, code in ipairs(codes) do
+        local m = Lang and Lang.modules[code]
+        local list = m and m.activities and m.activities[key]
+        if list and list[1] then
+            return (list[1]:gsub("(%a)([%w']*)", function(first, rest) return first:upper() .. rest end))
+        end
+    end
+    return key
+end
 function C.ForTool(activityID) return byTool[activityID] end
 
 function C.All(kind)

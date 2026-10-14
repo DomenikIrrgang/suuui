@@ -50,7 +50,7 @@ local function readResult(id, category)
         intent = (info.numMembers or 0) <= 1 and "player" or "group",
         comment = info.comment, age = info.age, delisted = info.isDelisted,
         newPlayerFriendly = info.newPlayerFriendly, playstyle = info.generalPlaystyle,
-        self = info.hasSelf, needed = {}, offered = {},
+        self = info.hasSelf, needed = {}, offered = {}, seenAt = LFG.Now(),
     }
     local okC, counts = pcall(L.GetSearchResultMemberCounts, id)
     -- (for a single player these are a whole group's open spots: not theirs)

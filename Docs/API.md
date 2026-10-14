@@ -373,4 +373,5 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.LFG.Catalogue` | `Get(key)`, `All(kind)`, `Expand(key)`, `ForTool(activityID)`: the activities ("dungeon:rfk", "zone:westfall", "raid:mc", "boss:azuregos", "tool:<id>") |
 | `SuuUI.LFG.Parser.Parse(text, { languages })` / `SuuUI.LFG.Lang.Register(code, def)` / `SuuUI.LFG.Languages()` | The chat parser on its own; a language module (see `Lang/enUS.lua`); the languages in use |
 | `SuuUI.LFG.IsHiddenChannel(name)` | Channels it reads but keeps off the chat windows (LookingForGroup) |
+| `SuuUI.UI.GroupFinderBrowse(parent)` | The Group Finder's Browse page: `b:SetData({ groups, players, collapsed, tool = { age, stale, searching }, category, categories, activities, activityOptions, search, fits, show })` (see UI/GroupFinder.lua for a row); `onRefresh`, `onFilter(changes)`, `onWhisper(row)`, `onInvite(row)`, `onToggle(section)` |
 

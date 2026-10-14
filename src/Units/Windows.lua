@@ -370,6 +370,43 @@ function M:SkinCommunities()
     self.communities = chrome
 end
 
+--------------------------------------------------------------------------------
+-- The group finder window (LFGParentFrame, the vanilla-style one on Forever;
+-- probed 2026-10-14): SuuUI's header, wider (the Group Finder module's
+-- Browse page lists tool and chat entries side by side), its own art away,
+-- its three side tabs (frames that switch on a click's release:
+-- LFGParentFrame_SetActiveTab) as text tabs along the header: Browse, List
+-- yourself, Who. The Group Finder module puts its pages over Blizzard's.
+--------------------------------------------------------------------------------
+
+M.GROUP_FINDER_SIZE = { 960, 600 }
+
+function M:SkinGroupFinder()
+    local f = _G.LFGParentFrame
+    if not f or f.suuChrome then return end
+    f:SetSize(M.GROUP_FINDER_SIZE[1], M.GROUP_FINDER_SIZE[2])
+    local chrome = UI.SkinWindow(f, {
+        title = "Group Finder", icon = "search", binding = "TOGGLEGROUPFINDER", close = _G.LFGParentFrameCloseButton,
+        topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.LFGParentFramePortrait, f.Inset, f.Bg, f.TopTileStreaks },
+    })
+    for _, region in ipairs({ f:GetRegions() }) do
+        if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
+    end
+    local browse, listing, who = _G.LFGBrowseFrame, _G.LFGListingFrame, _G.LFGWhoListFrame
+    local tabs = {}
+    for _, t in ipairs({ { f.BrowsingTab, "Browse", browse }, { f.ListingTab, "List yourself", listing, "List" },
+                         { f.WhoListingTab, "Who", who } }) do
+        if t[1] then
+            tabs[#tabs + 1] = { button = t[1], label = t[2], short = t[4] or t[2],
+                                selected = function() return t[3] and t[3]:IsShown() or false end }
+            if t[3] then t[3]:HookScript("OnShow", function() chrome:UpdateTabs() end) end
+        end
+    end
+    chrome:SetTabs(tabs)
+    self.groupFinder = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
@@ -377,6 +414,7 @@ function M:SkinAll()
     self:SkinFriends()
     self:SkinSocial()
     self:SkinCommunities()
+    self:SkinGroupFinder()
 end
 
 function M:OnEnable()
