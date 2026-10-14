@@ -16,6 +16,16 @@
 --               variant = "primary"|"quiet"|"danger", onClick,
 --               count, pressed, disabled, tooltip } },
 --               host = { buttons = n, confirm = true }, closable, onClose })
+--   0.13: presence = { online, source ("Battle.net", "Friend", the guild's
+--     name), people = { { name, color (a class token), tag (a BattleTag's
+--     #1234), detail ("Kaelith · World of Warcraft Forever"), whisper = fn,
+--     icon = { texture, coords } } }, invite = fn }: a friend or guild member
+--     came online (a status diamond in arcane, their class icon, the name in
+--     class colour, the detail, Invite; a click whispers) or went offline
+--     (one quiet line: an ink-faint diamond, the name in ink-muted, where
+--     they're from at the right). Several at once: one card, "4 guild members
+--     came online", each name whispering them (design board "Notifications ·
+--     Friends").
 --   n:SetRemaining(seconds)   -- the drain and the time, without a layout
 --   n:SetTitle(text)          -- a title that counts (logging out in 12 s)
 --   n.actionsRow, n.confirmBox  -- where hosted buttons and an edit box go
@@ -89,7 +99,8 @@ function Note:SetIcon(icon)
         art:SetVertexColor(UI.RGBA(icon.color or "ink"))
     else
         art:SetTexture(icon.texture or (GLYPHS .. "bell.tga"))
-        art:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        if icon.coords then art:SetTexCoord(unpack(icon.coords))
+        else art:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
         art:ClearAllPoints()
         art:SetPoint("TOPLEFT", 1, -1)
         art:SetPoint("BOTTOMRIGHT", -1, 1)
@@ -101,8 +112,188 @@ function Note:SetTitle(text)
     self.title:SetValue(text or "")
 end
 
+-- A name on a group presence card: whispers them.
+local function nameButton(n, i)
+    local b = n.names[i]
+    if b then return b end
+    b = CreateFrame("Button", nil, n.namesRow)
+    b.text = UI.Text(b, "label", "ink")
+    b.text:SetPoint("LEFT")
+    b:SetScript("OnEnter", function(self) self.text:SetAlpha(0.75) end)
+    b:SetScript("OnLeave", function(self) self.text:SetAlpha(1) end)
+    b:SetScript("OnClick", function(self) if self.person and self.person.whisper then self.person.whisper() end end)
+    n.names[i] = b
+    return b
+end
+
+-- The presence layout (see SetData's presence).
+function Note:SetPresence(d)
+    local p = d.presence
+    local people = p.people or {}
+    local single = #people == 1
+    for _, f in ipairs({ self.bodyRow, self.itemRow, self.confirmRow, self.untilRow }) do f:Hide() end
+    for _, pool in pairs(self.buttons) do for _, b in ipairs(pool) do b:Hide() end end
+    for _, b in ipairs(self.names) do b:Hide() end
+    self.namesRow:Hide()
+    self.time:Hide()
+    self.drain:Hide()
+    self.border:SetColor("gilt-line")
+    self.status:Show()
+    self.status:SetVertexColor(UI.RGBA(p.online and "arcane" or "ink-faint"))
+    -- a click on the card: whisper the one person on it
+    self.onCardClick = single and people[1].whisper or nil
+    if not p.online then
+        -- offline: one quiet line
+        self.icon:Hide()
+        self.close:Hide()
+        self.category:Hide()
+        local names = {}
+        for i, person in ipairs(people) do
+            if i > 2 then break end
+            names[#names + 1] = person.name
+        end
+        local text = table.concat(names, ", ")
+        if #people > 2 then text = text .. " and " .. (#people - 2) .. " more" end
+        self.title:SetValue(text .. (single and " went offline" or " went offline"))
+        self.title:SetColor("ink-muted")
+        self.source:SetValue(p.source or "")
+        self.source:Show()
+        local lineH = T.type.label.lineHeight
+        self.head:SetHeight(lineH)
+        self.status:ClearAllPoints()
+        self.status:SetPoint("CENTER", self.head, "LEFT", 4, 0)
+        self.title:SetWidth(WIDTH - PAD * 2 - 14 - self.source:GetUnboundedStringWidth() - S["space-4"])
+        self.title:ClearAllPoints()
+        self.title:SetPoint("LEFT", self.head, "LEFT", 14, 0)
+        self.source:ClearAllPoints()
+        self.source:SetPoint("RIGHT", self.head, "RIGHT")
+        self:SetHeight(PAD * 2 + lineH)
+        return PAD * 2 + lineH
+    end
+    -- online
+    self.icon:Show()
+    self.source:Hide()
+    self.close:Show()
+    if single and people[1].icon then
+        self:SetIcon(people[1].icon)
+    else
+        self:SetIcon({ glyph = p.glyph or "people" })
+    end
+    self.category:SetValue("Online · " .. (p.source or ""))
+    self.category:Show()
+    local title
+    if single then
+        local person = people[1]
+        title = person.name .. (person.tag and ("|cff" .. T.color["ink-faint"].hex .. person.tag .. "|r") or "")
+        self.title:SetColor(person.color or "ink")
+    else
+        title = #people .. " " .. (p.plural or "people") .. " came online"
+        self.title:SetColor("ink")
+    end
+    self.title:SetValue(title)
+    local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - 22 - S["space-3"]
+    self.title:SetWidth(textW)
+    self.category:SetWidth(textW - 10)
+    local titleH = T.type.label.lineHeight
+    local catH = T.type.caption.lineHeight
+    local headH = math.max(ICON, catH + titleH)
+    self.head:SetHeight(headH)
+    local top = math.max(0, (headH - catH - titleH) / 2)
+    local x = ICON + S["space-4"]
+    self.status:ClearAllPoints()
+    self.status:SetPoint("CENTER", self.head, "TOPLEFT", x + 3, -(top + catH / 2))
+    self.category:ClearAllPoints()
+    self.category:SetPoint("TOPLEFT", x + 10, -top)
+    self.title:ClearAllPoints()
+    self.title:SetPoint("TOPLEFT", x, -(top + catH))
+    local y = PAD + headH
+    if single then
+        local person = people[1]
+        if person.detail and person.detail ~= "" then
+            self.body:SetWidth(WIDTH - PAD * 2)
+            self.body:SetValue(person.detail)
+            local h = T.type.caption.lineHeight
+            y = y + S["space-3"]
+            self.bodyRow:ClearAllPoints()
+            self.bodyRow:SetPoint("TOPLEFT", PAD, -y)
+            self.bodyRow:SetPoint("TOPRIGHT", -PAD, -y)
+            self.bodyRow:SetHeight(h)
+            self.bodyRow:EnableMouse(false)
+            self.bodyRow:Show()
+            y = y + h
+        end
+        if p.invite then
+            y = y + S["space-3"]
+            self.actionsRow:ClearAllPoints()
+            self.actionsRow:SetPoint("TOPLEFT", PAD, -y)
+            self.actionsRow:SetPoint("TOPRIGHT", -PAD, -y)
+            self.actionsRow:SetHeight(ACTION_H)
+            self.actionsRow:Show()
+            local b = noteButton(self, 1, "quiet")
+            b:SetLabel("Invite")
+            b.pressed = false
+            b.pressedBg:SetShown(false)
+            b.border:SetColor("gilt-line")
+            b.label:SetColor("ink")
+            b:SetEnabledState(true)
+            b.tooltip = nil
+            b:SetScript("OnClick", function() p.invite() end)
+            b:ClearAllPoints()
+            b:SetPoint("RIGHT")
+            b:Show()
+            y = y + ACTION_H
+        else
+            self.actionsRow:Hide()
+        end
+    else
+        -- the names, each whispering them, wrapping
+        self.actionsRow:Hide()
+        y = y + S["space-3"]
+        local inner, x2, rowY = WIDTH - PAD * 2, 0, 0
+        local lineH = T.type.label.lineHeight
+        for i, person in ipairs(people) do
+            local b = nameButton(self, i)
+            b.person = person
+            local sep = i < #people and "," or ""
+            b.text:SetValue(person.name .. sep)
+            b.text:SetColor(person.color or "ink")
+            local w = math.ceil(b.text:GetUnboundedStringWidth())
+            if x2 > 0 and x2 + w > inner then x2 = 0; rowY = rowY + lineH + S["space-1"] end
+            b:SetSize(w, lineH)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", self.namesRow, "TOPLEFT", x2, -rowY)
+            b:Show()
+            x2 = x2 + w + S["space-3"]
+        end
+        local h = rowY + lineH
+        self.namesRow:ClearAllPoints()
+        self.namesRow:SetPoint("TOPLEFT", PAD, -y)
+        self.namesRow:SetPoint("TOPRIGHT", -PAD, -y)
+        self.namesRow:SetHeight(h)
+        self.namesRow:Show()
+        y = y + h
+    end
+    y = y + PAD
+    self:SetHeight(y)
+    -- the drain of a timed note
+    if d.duration and d.remaining then
+        self.drain:Show()
+        self.drain:SetColorTexture(UI.RGBA("gilt-line"))
+        self:SetRemaining(d.remaining)
+    end
+    return y
+end
+
 function Note:SetData(d)
     self.data = d
+    self.status:Hide()
+    self.source:Hide()
+    self.namesRow:Hide()
+    self.onCardClick = nil
+    if d.presence then return self:SetPresence(d) end
+    self.icon:Show()
+    self.category:Show()
+    self.title:SetColor("ink")
     local kind = d.kind or "timed"
     self.border:SetColor(TONE_EDGE[d.tone] or "gilt-line")
     self:SetIcon(d.icon)
@@ -306,6 +497,18 @@ function UI.Notification(parent)
     n.untilText:SetPoint("LEFT", n.untilGlyph, "RIGHT", S["space-2"], 0)
 
     n.actionsRow = CreateFrame("Frame", nil, n)
+
+    -- presence: the status diamond, where they're from (offline), the names
+    n.status = UI.Diamond(n.head, 6, "arcane")
+    n.status:Hide()
+    n.source = UI.Text(n.head, "caption", "ink-faint")
+    n.source:Hide()
+    n.namesRow = CreateFrame("Frame", nil, n)
+    n.namesRow:Hide()
+    n.names = {}
+    n:SetScript("OnMouseUp", function(self, button)
+        if button == "LeftButton" and self.onCardClick then self.onCardClick() end
+    end)
 
     n.drain = n:CreateTexture(nil, "OVERLAY")
     n.drain:SetPoint("BOTTOMLEFT", 1, 1)

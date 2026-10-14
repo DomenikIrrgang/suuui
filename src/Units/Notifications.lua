@@ -37,6 +37,11 @@ local M = SuuUI.RegisterModule({
         bagsFull = true,   -- a note while your bags are full
         talentPoints = true, -- a note while you have talent points to spend
         legacyPoints = true, -- a note while you have Legacy points to spend
+        -- friends and guild members coming online / going offline
+        presenceBnetOnline = true, presenceBnetOffline = true,
+        presenceFriendOnline = true, presenceFriendOffline = true,
+        presenceGuildOnline = true, presenceGuildOffline = false,
+        presenceHideChat = true, -- the game's own lines in chat hidden
     },
 })
 
@@ -254,6 +259,231 @@ function M:CheckLegacy()
     elseif self.notes["suu:legacy"] then
         self:Dismiss("suu:legacy")
     end
+end
+
+--------------------------------------------------------------------------------
+-- Friends and guild members coming online and going offline (design board
+-- "Notifications · Friends"; probed 2026-10-14). Character friends and
+-- guild members come as the game's system line ("[Name] has come online.",
+-- "Name has gone offline."); Battle.net friends as their own events. Who it
+-- is decides the card: a Battle.net friend, a friend, a guild member.
+-- Arrivals within a few seconds share one card; in combat they wait. The
+-- game's own lines in chat (and its Battle.net toast) can be hidden.
+--------------------------------------------------------------------------------
+
+-- A pattern from one of the game's format strings: "%s" a capture, the
+-- rest literal.
+local function patternOf(fmt)
+    if type(fmt) ~= "string" then return nil end
+    local parts = {}
+    -- the text between the "%s"s (one more "%s" at the end closes the last)
+    for piece in (fmt .. "%s"):gmatch("(.-)%%s") do
+        parts[#parts + 1] = (piece:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"))
+    end
+    return "^" .. table.concat(parts, "(.-)") .. "$"
+end
+
+local ONLINE = patternOf(ERR_FRIEND_ONLINE_SS)    -- link, name
+local OFFLINE = patternOf(ERR_FRIEND_OFFLINE_S)   -- name
+local BATCH = 2.5                                  -- seconds that share one card
+
+local CLASS_FILES = {}
+for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
+    for file, name in pairs(list) do CLASS_FILES[name] = file end
+end
+
+local GAMES = { App = "Battle.net", BSAp = "Battle.net Mobile", WTCG = "Hearthstone", Hero = "Heroes of the Storm",
+                Pro = "Overwatch", S2 = "StarCraft II", S1 = "StarCraft", D3 = "Diablo III", Fen = "Diablo IV",
+                ANBS = "Diablo Immortal", VIPR = "Call of Duty", W3 = "Warcraft III", GRY = "Warcraft Rumble" }
+
+local function classIcon(file)
+    local c = file and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[file]
+    if not c then return nil end
+    return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = c }
+end
+
+local function classColor(file)
+    return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil
+end
+
+local function whisper(name)
+    local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
+    if tell then tell(name) end
+end
+
+local function invite(name)
+    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+    if fn then pcall(fn, name) end
+end
+
+-- A character friend or guild member by name: kind and the card's person.
+function M:WhoIs(name)
+    local short = Ambiguate and Ambiguate(name, "short") or name
+    local fl = C_FriendList
+    local info = fl and fl.GetFriendInfo and fl.GetFriendInfo(short)
+    if info and plain(info.name) then
+        local file = info.guid and select(2, GetPlayerInfoByGUID(info.guid)) or CLASS_FILES[info.className or ""]
+        local where = {}
+        if info.level and info.level > 0 then where[#where + 1] = "Level " .. info.level end
+        if plain(info.area) and info.area and info.area ~= "" then where[#where + 1] = info.area end
+        return "friend", { name = short, color = classColor(file), icon = classIcon(file),
+            detail = table.concat(where, " · "), whisper = function() whisper(name) end, inviteName = name }
+    end
+    if IsInGuild() then
+        for i = 1, (GetNumGuildMembers()) or 0 do
+            local full, rank, _, level, _, zone, _, _, _, _, file = GetGuildRosterInfo(i)
+            if full and (Ambiguate and Ambiguate(full, "short") or full) == short then
+                local where = {}
+                if rank and rank ~= "" then where[#where + 1] = rank end
+                if level and level > 0 then where[#where + 1] = "Level " .. level end
+                if zone and zone ~= "" then where[#where + 1] = zone end
+                return "guild", { name = short, color = classColor(file), icon = classIcon(file),
+                    detail = table.concat(where, " · "), whisper = function() whisper(full) end, inviteName = full }
+            end
+        end
+    end
+    return nil
+end
+
+-- A Battle.net friend's card person (their account name is protected text
+-- the game draws; SuuUI never reads it).
+function M:BnetPerson(accountID)
+    local info = C_BattleNet and C_BattleNet.GetAccountInfoByID and C_BattleNet.GetAccountInfoByID(accountID)
+    if not info then return nil end
+    local game = info.gameAccountInfo or {}
+    local person = { name = info.accountName or info.battleTag or "?" }
+    if plain(info.battleTag) and info.battleTag then person.tag = info.battleTag:match("(#%d+)$") end
+    person.whisper = function()
+        local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or ChatFrame_SendBNetTell
+        if tell and info.accountName then tell(info.accountName) end
+    end
+    if game.clientProgram == (BNET_CLIENT_WOW or "WoW") and plain(game.characterName) and game.characterName then
+        local file = CLASS_FILES[game.className or ""]
+        person.color = classColor(file)
+        person.icon = classIcon(file)
+        local where = plain(game.richPresence) and game.richPresence ~= "" and game.richPresence
+            or (plain(game.areaName) and game.areaName) or "World of Warcraft"
+        person.detail = game.characterName .. " · " .. where
+        if game.wowProjectID == WOW_PROJECT_ID and game.realmName and game.realmName ~= "" then
+            person.inviteName = game.characterName .. "-" .. game.realmName
+        end
+    else
+        person.detail = GAMES[game.clientProgram or ""] or "Battle.net"
+    end
+    return person
+end
+
+local KINDS_OF = {
+    bnet = { setting = "presenceBnet", source = "Battle.net", plural = "Battle.net friends", glyph = "people" },
+    friend = { setting = "presenceFriend", source = "Friend", plural = "friends", glyph = "people" },
+    guild = { setting = "presenceGuild", plural = "guild members", glyph = "flag" },
+}
+
+-- One more arrival or departure; a card once the burst is over.
+function M:Presence(kind, online, person)
+    local k = KINDS_OF[kind]
+    if not (k and person) then return end
+    if not self:Get(k.setting .. (online and "Online" or "Offline")) then return end
+    self.presence = self.presence or {}
+    local key = kind .. (online and "+" or "-")
+    local q = self.presence[key]
+    if not q then
+        q = { kind = kind, online = online, people = {} }
+        self.presence[key] = q
+        C_Timer.After(BATCH, function() self:FlushPresence(key) end)
+    end
+    for _, x in ipairs(q.people) do if x.name == person.name then return end end
+    q.people[#q.people + 1] = person
+end
+
+function M:FlushPresence(key)
+    local q = self.presence and self.presence[key]
+    if not q then return end
+    -- in combat they wait for the fight's end
+    if InCombatLockdown() then q.held = true return end
+    self.presence[key] = nil
+    if not self:IsEnabled() or #q.people == 0 then return end
+    local k = KINDS_OF[q.kind]
+    local source = k.source or (GetGuildInfo("player")) or "Guild"
+    local single = #q.people == 1 and q.people[1]
+    self.presenceCount = (self.presenceCount or 0) + 1
+    self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = q.online and 6 or 4,
+        presence = { online = q.online, source = source, people = q.people, plural = k.plural, glyph = k.glyph,
+                     invite = q.online and single and single.inviteName and function() invite(single.inviteName) end or nil } })
+end
+
+-- The game's system line: who, and whether it's theirs to show.
+function M:SystemLine(msg)
+    if not plain(msg) or type(msg) ~= "string" then return end
+    local online, name = true, nil
+    if ONLINE then
+        local _, n = msg:match(ONLINE)
+        name = n
+    end
+    if not name and OFFLINE then
+        name = msg:match(OFFLINE)
+        online = false
+    end
+    if not name or name == UnitName("player") then return end
+    -- a link's name keeps its colour codes out
+    name = name:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local kind, person = self:WhoIs(name)
+    if kind then self:Presence(kind, online, person) end
+end
+
+-- Is this one of the game's online/offline lines (for the chat filter)?
+local function isPresenceLine(msg)
+    if not plain(msg) or type(msg) ~= "string" then return false end
+    return (ONLINE and msg:match(ONLINE) ~= nil) or (OFFLINE and msg:match(OFFLINE) ~= nil)
+end
+
+function M:HookPresence()
+    if self.presenceHooked then return end
+    self.presenceHooked = true
+    local add = (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter) or ChatFrame_AddMessageEventFilter
+    if add then
+        add("CHAT_MSG_SYSTEM", function(_, _, msg)
+            if self:IsEnabled() and self:Get("presenceHideChat") and isPresenceLine(msg) then return true end
+            return false
+        end)
+        add("CHAT_MSG_BN_INLINE_TOAST_ALERT", function(_, _, process)
+            if self:IsEnabled() and self:Get("presenceHideChat")
+                and (process == "FRIEND_ONLINE" or process == "FRIEND_OFFLINE") then return true end
+            return false
+        end)
+    end
+    -- Battle.net's own toast (bottom right) for the same: away while SuuUI
+    -- shows Battle.net friends
+    local toast = _G.BNToastFrame
+    if toast then
+        toast:HookScript("OnShow", function(f)
+            if not self:IsEnabled() then return end
+            local t = f.toastType
+            local online = t == (BN_TOAST_TYPE_ONLINE or 1)
+            local offline = t == (BN_TOAST_TYPE_OFFLINE or 2)
+            if (online and self:Get("presenceBnetOnline")) or (offline and self:Get("presenceBnetOffline")) then f:Hide() end
+        end)
+    end
+end
+
+-- Test: one card of each (no one has to log in).
+function M:TestPresence()
+    local function sample(name, file, detail)
+        return { name = name, color = classColor(file), icon = classIcon(file), detail = detail, whisper = function() end }
+    end
+    local bn = sample("Kaelith", "PRIEST", "Kaelith · Eastern Plaguelands")
+    bn.tag = "#1137"
+    local q = function(kind, online, people, inviteName)
+        local k = KINDS_OF[kind]
+        self.presenceCount = (self.presenceCount or 0) + 1
+        self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = online and 12 or 10,
+            presence = { online = online, source = k.source or (GetGuildInfo("player")) or "Guild", people = people,
+                         plural = k.plural, glyph = k.glyph, invite = inviteName and function() end or nil } })
+    end
+    q("bnet", true, { bn }, "x")
+    q("friend", true, { sample("Brannoc", "WARRIOR", "Level 58 · Eastern Plaguelands") }, "x")
+    q("guild", true, { sample("Lyra", "MAGE"), sample("Thorn", "ROGUE"), sample("Maelis", "PALADIN"), sample("Durn", "HUNTER") })
+    q("guild", false, { sample("Ysolde", "DRUID") })
 end
 
 --------------------------------------------------------------------------------
@@ -689,7 +919,13 @@ local PREVIEW = {
       actions = { { label = "Yes", variant = "danger" }, { label = "No" } } },
     { id = "p3", kind = "until", category = "Durability", title = "Your gear is badly damaged", icon = { glyph = "hammer" },
       tone = "warning", ["until"] = "Goes when you repair" },
-    { id = "p4", kind = "timed", category = "Bags", title = "Your bags are full", icon = { glyph = "bag" }, duration = 8, remaining = 5 },
+    { id = "p4", kind = "timed", presence = { online = true, source = "Battle.net", people = {
+        { name = "Kaelith", tag = "#1137", color = "class-priest", detail = "Kaelith · Eastern Plaguelands",
+          icon = { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes",
+                   coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS.PRIEST } } }, invite = function() end },
+      duration = 6, remaining = 4 },
+    { id = "p5", kind = "timed", presence = { online = false, source = "Guild", people = { { name = "Ysolde" } } },
+      duration = 4, remaining = 3 },
 }
 
 function M:PreviewView(parent)
@@ -720,6 +956,16 @@ local SECTION = {
               description = "While you have talent points left, with a button that opens your talents; goes when you spend them." },
             { key = "legacyPoints", label = "Legacy points to spend", control = "toggle",
               description = "While this character has Legacy points left, with a button that opens the Legacy window; goes when you spend them." },
+        } },
+        { title = "Friends and guild", description = "A card when someone comes online or goes offline: who, what they're playing or where they are; click it to whisper them. Several at once share one card; in combat they wait. /suu presence shows one of each.", rows = {
+            { key = "presenceBnetOnline", label = "Battle.net friends online", control = "toggle" },
+            { key = "presenceBnetOffline", label = "Battle.net friends offline", control = "toggle" },
+            { key = "presenceFriendOnline", label = "Friends online", control = "toggle" },
+            { key = "presenceFriendOffline", label = "Friends offline", control = "toggle" },
+            { key = "presenceGuildOnline", label = "Guild members online", control = "toggle" },
+            { key = "presenceGuildOffline", label = "Guild members offline", control = "toggle" },
+            { key = "presenceHideChat", label = "Hide the game's online and offline lines in chat", control = "toggle",
+              description = "The \"has come online\" and \"has gone offline\" lines, and Battle.net's own popup for them while SuuUI shows Battle.net friends." },
         } },
     },
 }
@@ -797,7 +1043,27 @@ function M:OnEnable()
     self:OnGameEvent("READY_CHECK_FINISHED", function() self.readyEndsAt = nil end)
     -- in combat notes wait; out of it they come back
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Rebuild() end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Rebuild() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        self:Rebuild()
+        -- online/offline held in the fight
+        for key, q in pairs(self.presence or {}) do if q.held then self:FlushPresence(key) end end
+    end)
+    -- friends and guild members coming and going
+    self:HookPresence()
+    self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, _, msg) self:SystemLine(msg) end)
+    if not valid or valid("BN_FRIEND_ACCOUNT_ONLINE") then
+        self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, _, id)
+            if plain(id) and id then self:Presence("bnet", true, self:BnetPerson(id)) end
+        end)
+        self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, _, id)
+            if plain(id) and id then self:Presence("bnet", false, self:BnetPerson(id)) end
+        end)
+    end
+    -- the roster asked for now and then, so a guild member's line finds them
+    if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
+    self:RegisterCommand("presence", "test: shows a card for each kind of friend coming online and going offline", function()
+        self:TestPresence()
+    end)
     self:RegisterCommand("notify", "test: shows one notification of each kind", function()
         self:Notify({ kind = "timed", category = "Test", title = "A timed note", body = "It goes by itself after 8 seconds.", icon = { glyph = "bell" } })
         self:Notify({ kind = "sticky", category = "Test", title = "A sticky note", body = "It stays until you close it.", icon = { glyph = "mail" } })
