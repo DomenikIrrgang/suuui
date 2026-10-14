@@ -25,7 +25,9 @@ Status: **draft for review**. Everything under "What the game allows" was probed
 |---|---|
 | Channels on the server | General, LocalDefense, **LookingForGroup**, Trade, Services, TradeLocal (in cities), plus addon channels (BigfootWorldChannel, MeetingStone) and ChromieTime. |
 | LookingForGroup | You aren't in it by default. Joining works from a timer (at login), but the game then adds it to a chat window, so the library takes it off every window each time it joins. SuuUI's chat Global tab must skip it too. |
-| Messages | `CHAT_MSG_CHANNEL`, `CHAT_MSG_SAY` and `CHAT_MSG_YELL` reach addons with readable text, author and channel, even inside a dungeon out of combat. Real posts include **Korean** ("심연 나락 가실힐러님 모셔요~"). **Open:** whether text becomes secret in combat or inside instances (the recorder is collecting). |
+| Messages | `CHAT_MSG_CHANNEL`, `CHAT_MSG_SAY` and `CHAT_MSG_YELL` reach addons with readable text, author and channel, also inside a dungeon and **in combat there** (15 of 15 lines readable in Ragefire Chasm, one during a fight). Raids not yet seen. |
+| Who posts | On an English shard, LookingForGroup carries English, **Korean** and **Chinese** posts ("심연 나락 가실힐러님 모셔요~", "濕地-1補"). Leaders repost every minute or two; replies like "." and "NO" are noise. |
+| Language preference | `C_AccountServices.RequestPreferredPlaySettings()`, then `GetPreferredPlaySettings()` after `PREFERRED_PLAY_SETTINGS_UPDATED`: locale ID 1. `GetPreferredLocales()` names them: 1 English, 12 LatAm Spanish, 14 Brazilian Portuguese (this region). Datacenters: NA-West, NA-East, AU. The tool's language filter knows enUS, koKR, zhCN, zhTW, deDE, frFR, esES, esMX, ptBR, itIT, ruRU (default enUS). |
 | Sending | `SendChatMessage` to public channels only works from a click. |
 
 ## Where it lives
@@ -57,7 +59,7 @@ Activity {
 
 - **Sources of the catalogue:**
   - the tool: whatever categories it offers at run time (dungeons, zones, custom; raids at higher levels);
-  - SuuUI's quest data: quests by ID and name, with their zone and level;
+  - quests: from quest links (exact ID; the title from the game, `C_QuestLog.GetTitleForQuestID`) and from your quest log (titles, zones, levels). SuuUI has no quest database, so a typed quest name is recognised only when it's in your log;
   - a hand-made list: dungeon abbreviations, raids, world bosses, named elites and group areas.
 - Raids, world bosses, elites and events are in it from the start (hand-made list for chat). Raids from the tool join them once it offers them.
 
@@ -126,7 +128,7 @@ From one message to an entry (or nothing):
 3. **Intent:**
    - LFM, LF1M, LF2M, "need", "looking for more", "lf tank": a group;
    - LFG, "lf group", "looking for group", "lf dungeon": a player.
-4. **Activity:** match words and abbreviations against the catalogue (longest match first: "sm cath" before "sm"). Quest names fuzzy against SuuUI's quest data. Zone names.
+4. **Activity:** match words and abbreviations against the catalogue (longest match first: "sm cath" before "sm"). Quest links give the quest; typed quest names are matched against the quests in your log only. Zone names.
 5. **Roles and size:**
    - tank/heal/healer/dps/damage and their slang;
    - class names ("need priest" means a healer, "need warrior" a tank for dungeons);
@@ -146,11 +148,11 @@ The parser itself knows no language: every word it looks for comes from a **lang
   - activity aliases (abbreviations and nicknames).
   Activity, zone and quest **names** come from the game itself in the client's language, so modules only add what players type besides them.
 - **Which modules are used:**
-  - your Forever language preference (the "preferred play settings" that shard players by language);
-  - the client's own language;
-  - any extra languages switched on in the settings.
-  Every module ships with SuuUI; only the chosen ones are used. **Open:** the probe shows how the preference reads (`/suu probe lfg lang`).
-- English is written first; Korean follows (seen on the server), then others as players ask.
+  - your Forever language preference (`C_AccountServices`, above) and the client's own language: always;
+  - **by script:** a message written in another script (Hangul, Chinese characters, Cyrillic) is read with that language's module when SuuUI has one, whatever your preference (an English shard carries Korean and Chinese posts);
+  - Latin-script languages besides yours (German, Spanish, ...) only when switched on in the settings, since their words overlap with English.
+  Every module ships with SuuUI and registers itself; only the chosen ones are used.
+- English is written first; Korean and Chinese follow (both seen on the server), then others as players ask.
 
 The recorder (`/suu probe lfg record`) collects real lines to tune this. A small offline script in `tools/` replays recorded lines through the parser and prints what it made of each, so rules can be checked against real chat without being in game.
 
@@ -231,6 +233,5 @@ Listing yourself isn't in the library's API, because addon code can't do it. The
 
 ## Open questions
 
-1. **Language preference:** how Forever's preference reads for an addon, and how its locale IDs map to languages (`/suu probe lfg lang`).
-2. **Secret chat:** whether chat text becomes secret in combat or inside instances (the recorder is collecting); the parser must skip those lines.
-3. **Chat volume:** the beta's channels are quiet; the parser is tuned on recorded lines as they come in.
+1. **Chat volume:** the beta's channels are quiet; the parser is tuned on recorded lines as they come in (the recorder keeps running).
+2. **Raids:** whether chat text stays readable in raid combat (not seen yet).
