@@ -638,11 +638,12 @@ function SP.Notes()
     local guid, note
     local ok, err = pcall(function()
         local me = Ambiguate(SuuUI.FullName("player"), "short")
-        for i = 1, (call(GetNumGuildMembers)) or 0 do
-            local name = call(GetGuildRosterInfo, i)
+        -- the game's values as they are (this file's call() formats them as text)
+        for i = 1, (GetNumGuildMembers()) or 0 do
+            local r = { GetGuildRosterInfo(i) }
+            local name = r[1]
             if name and not (issecretvalue and issecretvalue(name)) and Ambiguate(name, "short") == me then
-                note = select(7, call(GetGuildRosterInfo, i))
-                guid = select(17, call(GetGuildRosterInfo, i))
+                note, guid = r[7], r[17]
                 break
             end
         end
