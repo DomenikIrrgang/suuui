@@ -393,7 +393,21 @@ function M:SkinGroupFinder()
     for _, region in ipairs({ f:GetRegions() }) do
         if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
     end
+    -- the eye (strata HIGH, over the header's tabs) out of sight and out of the way
+    local eye = _G.LFGParentFramePortrait
+    if eye then eye:SetAlpha(0); eye:EnableMouse(false) end
     local browse, listing, who = _G.LFGBrowseFrame, _G.LFGListingFrame, _G.LFGWhoListFrame
+    -- each page is a whole Blizzard frame of its own over the window (found in
+    -- game): its metal frame, portrait ring, "Looking For Group" title and
+    -- backdrops away; its controls stay
+    for _, page in ipairs({ browse, listing, who }) do
+        for _, key in ipairs({ "NineSlice", "PortraitContainer", "TitleContainer", "Bg", "TopTileStreaks", "BackgroundArt",
+                               "headerBackground", "insideFrame", "BarTop", "BarMiddle", "Inset", "RolesSection",
+                               "DividerFrame" }) do
+            local part = page[key]
+            if part and part.SetAlpha then part:SetAlpha(0) end
+        end
+    end
     local tabs = {}
     for _, t in ipairs({ { f.BrowsingTab, "Browse", browse }, { f.ListingTab, "List yourself", listing, "List" },
                          { f.WhoListingTab, "Who", who } }) do
