@@ -166,7 +166,10 @@ end
 --
 --   UI.MakeModal(panel)             -- panel:Show()/Hide() bring the shade
 --   UI.Confirm({ title, text, confirm = "Replace", cancel = "Cancel",
---                onConfirm = fn, onCancel = fn })
+--                onConfirm = fn, onCancel = fn,
+--                typeToConfirm = "UNLEARN" })  -- 0.13: a field under the text;
+--                -- the confirm button only works once it says this word
+--                -- (any case), Enter then confirms
 --------------------------------------------------------------------------------
 
 -- One shade for every modal, made up front: full screen, on the DIALOG layer
@@ -309,16 +312,24 @@ function UI.Confirm(opts)
         p.text:SetJustifyH("LEFT")
         p.text:SetFixedWidth(360)
         p.text:SetPoint("TOPLEFT")
-        p.ok = UI.Button(p, { text = "OK", variant = "primary", width = 110, onClick = function()
+        local function confirm()
+            if p.word and (p.field:GetValue() or ""):upper() ~= p.word then return end
             local fn = p.onConfirm
             p.onCancel = nil
             p:Hide()
             if fn then fn() end
-        end })
+        end
+        p.ok = UI.Button(p, { text = "OK", variant = "primary", width = 110, onClick = confirm })
         p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+        p.prompt = UI.Text(p.body, "caption", "ink-muted")
+        p.field = UI.TextField(p.body, { width = 200, onTextChanged = function(text)
+            if p.word then p.ok:SetEnabledState((text or ""):upper() == p.word) end
+        end })
+        p.field.edit:HookScript("OnEnterPressed", function() confirm() end)
         p.cancel = UI.Button(p, { text = "Cancel", width = 100, onClick = function() p:Hide() end })
         p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -8, 0)
         p:HookScript("OnHide", function(self)
+            self.field.edit:ClearFocus() -- never keep the keyboard once gone
             local fn = self.onCancel
             self.onCancel, self.onConfirm = nil, nil
             if fn then fn() end
@@ -333,7 +344,22 @@ function UI.Confirm(opts)
     p.cancel:SetLabel(opts.cancel or "Cancel")
     p:Hide() -- an older question still open is cancelled first
     p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
+    -- a word to type first
+    p.word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil
+    p.prompt:SetShown(p.word ~= nil)
+    p.field:SetShown(p.word ~= nil)
+    p.field:SetValue("")
+    p.ok:SetEnabledState(p.word == nil)
+    if p.word then
+        p.prompt:ClearAllPoints()
+        p.prompt:SetPoint("TOPLEFT", p.text, "BOTTOMLEFT", 0, -12)
+        p.prompt:SetValue(("Type %q to confirm."):format(p.word))
+        p.field:ClearAllPoints()
+        p.field:SetPoint("TOPLEFT", p.prompt, "BOTTOMLEFT", 0, -6)
+    end
+    p:SetHeight(170 + (p.word and 54 or 0))
     p:Show()
+    if p.word then p.field.edit:SetFocus() end
     return p
 end
 

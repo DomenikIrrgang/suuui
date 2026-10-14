@@ -194,7 +194,7 @@ API.UI.CooldownTracker = UI.CooldownTracker
 API.UI.TrackerSound = UI.TrackerSound -- "chime", "ping", "proc", "warning" or a sound kit ID
 API.UI.MakeModal = UI.MakeModal -- a panel centred over a dimmed screen
 API.UI.ScrollArea = UI.ScrollArea -- 0.9: ScrollArea(parent[, bar]) -> a mouse-wheel scroll frame, content in .child, a thin bar `bar` px right of it while it overflows
-API.UI.Confirm = UI.Confirm     -- { title, text, confirm, cancel, onConfirm, onCancel }
+API.UI.Confirm = UI.Confirm     -- { title, text, confirm, cancel, onConfirm, onCancel, typeToConfirm }
 -- The Cooldown Manager presets of your class (only your class's data loads):
 -- { { id, name, lists = { essential, utility, buffs, debuffs, procs } }, ... },
 -- each entry { name, ids = { every ID with that name in the client }, mine }.

@@ -113,6 +113,8 @@ function M:Unlearn(name, skillLine)
         text = "Your " .. name .. " skill and every recipe you know in it are lost. Learning it again starts from 1.",
         confirm = "Unlearn",
         cancel = "Keep it",
+        -- as the game's own asks (found in game)
+        typeToConfirm = "UNLEARN",
         onConfirm = function()
             local ok, err = pcall(AbandonSkill, skillLine)
             if not ok then self:Print(name .. " couldn't be unlearned: " .. tostring(err)) end
