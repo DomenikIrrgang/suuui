@@ -244,13 +244,16 @@ end
 -- while hovered, the chosen one marked by an arcane check. The game reuses
 -- its menu frames for every menu, so all of it is undone when it closes.
 local menus = setmetatable({}, { __mode = "k" })
+local rowMenu = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
+local hooked = setmetatable({}, { __mode = "k" })
 
 local function restoreMenu(st)
     for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
     st.undo = {}
     st.panel:Hide()
     for _, t in pairs(st.marks) do t:Hide() end
-    for _, t in pairs(st.hovers) do t:Hide() end
+    st.hover:Hide()
+    st.nMarks = 0
     st.active = false
 end
 
@@ -300,38 +303,45 @@ local function menuRow(st, row)
         end
     end
     for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
-    -- SuuUI's hover and mark (kept on the row, shown only while it's ours)
-    local hover = st.hovers[row]
-    if not hover then
-        hover = row:CreateTexture(nil, "BACKGROUND", nil, -8)
-        hover:SetColorTexture(UI.RGBA("arcane-soft"))
-        hover:SetAllPoints()
-        hover.suuArt = true
-        hover:Hide()
-        st.hovers[row] = hover
-        row:HookScript("OnEnter", function() if st.active then hover:Show() end end)
-        row:HookScript("OnLeave", function() hover:Hide() end)
+    -- SuuUI's hover and mark: on its own panel behind the rows (the game
+    -- forbids new textures on its menu rows)
+    rowMenu[row] = st
+    if not hooked[row] then
+        hooked[row] = true
+        row:HookScript("OnEnter", function(self)
+            local owner = rowMenu[self]
+            if owner and owner.active then
+                owner.hover:ClearAllPoints()
+                owner.hover:SetAllPoints(self)
+                owner.hover:Show()
+            end
+        end)
+        row:HookScript("OnLeave", function(self)
+            local owner = rowMenu[self]
+            if owner then owner.hover:Hide() end
+        end)
     end
-    hover:Hide()
-    local mark = st.marks[row]
-    if not mark then
-        mark = row:CreateTexture(nil, "OVERLAY", nil, 7)
-        mark:SetTexture(GLYPHS .. "check.tga")
-        mark:SetSize(12, 12)
-        mark:SetVertexColor(UI.RGBA("arcane"))
-        mark.suuArt = true
-        st.marks[row] = mark
+    if chosen then
+        st.nMarks = st.nMarks + 1
+        local mark = st.marks[st.nMarks]
+        if not mark then
+            mark = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            mark:SetTexture(GLYPHS .. "check.tga")
+            mark:SetSize(12, 12)
+            mark:SetVertexColor(UI.RGBA("arcane"))
+            st.marks[st.nMarks] = mark
+        end
+        mark:ClearAllPoints()
+        if indicator then mark:SetPoint("CENTER", indicator, "CENTER", 0, 0) else mark:SetPoint("LEFT", row, "LEFT", 2, 0) end
+        mark:Show()
     end
-    mark:ClearAllPoints()
-    if indicator then mark:SetPoint("CENTER", indicator, "CENTER", 0, 0) else mark:SetPoint("LEFT", row, "LEFT", 2, 0) end
-    mark:SetShown(chosen and true or false)
 end
 
 function UI.ReskinMenu(menu)
     if not menu or ask(menu, "IsForbidden") then return end
     local st = menus[menu]
     if not st then
-        st = { undo = {}, marks = {}, hovers = {} }
+        st = { undo = {}, marks = {}, nMarks = 0 }
         local panel = CreateFrame("Frame", nil, menu)
         panel:SetAllPoints()
         panel:SetFrameLevel(menu:GetFrameLevel())
@@ -340,6 +350,9 @@ function UI.ReskinMenu(menu)
         UI.Border(panel, "gilt-line")
         UI.Shadow(panel, "shadow-panel")
         UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        st.hover = panel:CreateTexture(nil, "ARTWORK")
+        st.hover:SetColorTexture(UI.RGBA("arcane-soft"))
+        st.hover:Hide()
         st.panel = panel
         menus[menu] = st
         menu:HookScript("OnHide", function() if st.active then restoreMenu(st) end end)
