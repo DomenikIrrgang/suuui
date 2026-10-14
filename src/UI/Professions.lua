@@ -242,7 +242,15 @@ local function makeCard(view)
     return c
 end
 
-local CARD_H = S["space-5"] * 2 + 30 + S["space-4"] + T.type.numeric.lineHeight * 2 + S["space-3"] + S["space-4"] + 22
+-- a card's height: its head and bars, then its spells one under another
+-- (side by side they ran into the Unlearn glyph: found in game), as many
+-- rows as the profession with the most has
+local SPELL_H = 22
+local function cardHeight(rows)
+    rows = math.max(1, rows or 1)
+    return S["space-5"] * 2 + 30 + S["space-4"] + T.type.numeric.lineHeight * 2 + S["space-3"] + S["space-4"]
+        + rows * SPELL_H + (rows - 1) * S["space-2"]
+end
 
 local function fillCard(c, card, empty)
     c.card = card
@@ -276,7 +284,7 @@ local function fillCard(c, card, empty)
     c.recipesHint:SetValue("Recipes: open it once to count them")
     c.unlearn:SetShown(card.onUnlearn ~= nil)
     local below = (card.crafting and not off) and c.recipes or c.skill
-    local x = 0
+    local y = S["space-4"]
     for i, sp in ipairs(card.spells or {}) do
         local s = c.spells[i] or makeSpell(c)
         c.spells[i] = s
@@ -289,9 +297,9 @@ local function fillCard(c, card, empty)
         local w = 20 + S["space-3"] + math.ceil(s.label:GetUnboundedStringWidth()) + 2
         s:SetWidth(w)
         s:ClearAllPoints()
-        s:SetPoint("TOPLEFT", below, "BOTTOMLEFT", x, -S["space-4"])
+        s:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -y)
         s:Show()
-        x = x + w + S["space-5"]
+        y = y + SPELL_H + S["space-2"]
     end
     for i = #(card.spells or {}) + 1, #c.spells do c.spells[i]:Hide() end
 end
@@ -303,6 +311,11 @@ function P:SetOverview(d)
     self.crafting:Hide()
     local w = self.overview:GetWidth()
     if not w or w <= 0 then w = UI.PROFESSIONS_W - 40 - RAIL_W - S["space-5"] end
+    local rows = 1
+    for _, list in ipairs({ d.primary or {}, d.secondary or {} }) do
+        for _, card in pairs(list) do rows = math.max(rows, #(card.spells or {})) end
+    end
+    local cardH = cardHeight(rows)
     local gap = S["space-5"]
     local y = 0
     self.primaryHead:ClearAllPoints()
@@ -316,11 +329,11 @@ function P:SetOverview(d)
         self.cards[i] = c
         c:ClearAllPoints()
         c:SetPoint("TOPLEFT", self.overview, "TOPLEFT", (i - 1) * (half + gap), -y)
-        c:SetSize(half, CARD_H)
+        c:SetSize(half, cardH)
         fillCard(c, d.primary and d.primary[i])
         c:Show()
     end
-    y = y + CARD_H + S["space-6"]
+    y = y + cardH + S["space-6"]
     self.secondaryHead:ClearAllPoints()
     self.secondaryHead:SetPoint("TOPLEFT", self.overview, "TOPLEFT", 0, -y)
     self.secondaryHead:SetValue("Secondary professions")
@@ -333,8 +346,8 @@ function P:SetOverview(d)
         self.cards[2 + i] = c
         local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
         c:ClearAllPoints()
-        c:SetPoint("TOPLEFT", self.overview, "TOPLEFT", col * (third + gap), -(y + row * (CARD_H + gap)))
-        c:SetSize(third, CARD_H)
+        c:SetPoint("TOPLEFT", self.overview, "TOPLEFT", col * (third + gap), -(y + row * (cardH + gap)))
+        c:SetSize(third, cardH)
         if sec[i] then
             fillCard(c, sec[i])
             c:Show()
