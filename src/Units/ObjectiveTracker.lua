@@ -355,9 +355,12 @@ function M:InBossFight()
     return self.holder:GetAttribute("state-boss") == "1" or (self.encounter and self:Get("collapseInBossFights"))
 end
 
+-- The head's toggle folds the quests only (the Recipes section stays:
+-- asked for in game); a boss fight folds everything.
 function M:ApplyCollapse()
-    local collapsed = self:Get("collapsed") or self:InBossFight()
-    self.tracker:SetCollapsed(collapsed and true or false)
+    self.tracker:SetCollapsed(self:InBossFight() and true or false)
+    self.tracker:SetQuestsCollapsed(self:Get("collapsed"))
+    self:QueueRefresh()
 end
 
 -- The saved collapse and the boss setting, into the secure side (out of combat).

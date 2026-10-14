@@ -15,6 +15,8 @@
 --                                 --   it), count ("×3", arcane, after it): the
 --                                 --   Recipes tracker draws recipes this way
 --   t:SetCollapsed(on)            -- only the head
+--   t:SetQuestsCollapsed(on)      -- 0.13: the quests folded, the Recipes
+--                                 -- section still shown (then SetQuests)
 --   t:QuestTop(questID)           -- where a quest's title starts (px down
 --                                 -- from the tracker's top), for its item;
 --                                 -- nil while scrolled out of sight
@@ -288,9 +290,12 @@ function Tracker:LayOut(quests, freeze)
         entries = entriesOf(quests)
         self.heights = {}
     end
-    -- the recipes after the quests (frozen too: they sit below every quest)
+    -- the recipes after the quests (frozen too: they sit below every quest);
+    -- the quests folded away: only the recipes
     local kept = {}
-    for _, e in ipairs(entries) do if not (e.section or e.recipe) then kept[#kept + 1] = e end end
+    for _, e in ipairs(entries) do
+        if not (e.section or e.recipe) and not self.questsCollapsed then kept[#kept + 1] = e end
+    end
     entries = kept
     local byRecipe = {}
     if self.recipes and #self.recipes > 0 then
@@ -455,9 +460,21 @@ end
 function Tracker:SetCollapsed(on)
     self.collapsed = on and true or false
     self.list:SetShown(not self.collapsed)
-    self.plus:SetShown(self.collapsed)
-    self.minus:SetShown(not self.collapsed)
+    self:DrawToggle()
     self:Fit()
+end
+
+-- 0.13: only the quests folded away; the sections after them (Recipes)
+-- stay (asked for in game). Takes effect with the next SetQuests.
+function Tracker:SetQuestsCollapsed(on)
+    self.questsCollapsed = on and true or false
+    self:DrawToggle()
+end
+
+function Tracker:DrawToggle()
+    local folded = self.collapsed or self.questsCollapsed
+    self.plus:SetShown(folded and true or false)
+    self.minus:SetShown(not folded)
 end
 
 function Tracker:Fit()
