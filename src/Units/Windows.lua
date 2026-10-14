@@ -248,23 +248,36 @@ function M:SkinSocial()
     -- its four tab buttons down the right side as text tabs along the header,
     -- like every other window (asked for in game); top to bottom they open
     -- the friends list, Recent Allies, Friend Requests and Raid. Which one is
-    -- lit follows the content actually shown.
+    -- lit follows the content actually shown. Set up when the window opens
+    -- (the buttons aren't there, or have no size, when it's skinned at login)
+    f:HookScript("OnShow", function() C_Timer.After(0, function() self:SocialTabs() end) end)
+    if f:IsShown() then self:SocialTabs() end
+    self.social = chrome
+end
+
+function M:SocialTabs()
+    local f = _G.SocialUIFrame
+    local chrome = f and f.suuChrome
+    if not chrome then return end
+    if chrome.tabs then chrome:UpdateTabs() return end
     local function friendsList()
         for _, c in ipairs({ f:GetChildren() }) do
             if c.FilterBar and c ~= f.RecentAlliesList and c ~= f.FriendRequestsList then return c end
         end
     end
+    -- the side buttons: f's own unnamed buttons, about 54 square (the close
+    -- button has a name)
     local buttons = {}
     for _, c in ipairs({ f:GetChildren() }) do
-        if c:GetObjectType() == "Button" and not c:GetName() and math.abs((c:GetWidth() or 0) - 54) < 3
-            and math.abs((c:GetHeight() or 0) - 55) < 3 then
-            buttons[#buttons + 1] = c
+        if c:GetObjectType() == "Button" and not c:GetName() then
+            local w, h = c:GetWidth() or 0, c:GetHeight() or 0
+            if w > 40 and w < 70 and h > 40 and h < 70 then buttons[#buttons + 1] = c end
         end
     end
+    if #buttons < 4 then return end
     table.sort(buttons, function(a, b) return (a:GetTop() or 0) > (b:GetTop() or 0) end)
-    local list = friendsList()
     local pages = {
-        { label = "Friends", frame = list },
+        { label = "Friends", frame = friendsList() },
         { label = "Recent allies", short = "Allies", frame = f.RecentAlliesList },
         { label = "Requests", frame = f.FriendRequestsList },
         { label = "Raid", frame = f.RaidFrame },
@@ -275,14 +288,10 @@ function M:SkinSocial()
         if page then
             tabs[#tabs + 1] = { button = b, label = page.label, short = page.short or page.label,
                                 selected = function() return page.frame and page.frame:IsShown() or false end }
-            if page.frame then
-                page.frame:HookScript("OnShow", function() chrome:UpdateTabs() end)
-            end
+            if page.frame then page.frame:HookScript("OnShow", function() chrome:UpdateTabs() end) end
         end
     end
-    if #tabs > 0 then chrome:SetTabs(tabs) end
-    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
-    self.social = chrome
+    chrome:SetTabs(tabs)
 end
 
 function M:SkinAll()
