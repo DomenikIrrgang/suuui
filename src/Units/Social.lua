@@ -708,9 +708,9 @@ function M:Build()
     self.frame, self.friendsList = f, list
     self.awayParts = {}
     local view = UI.Contacts(f)
-    -- 8px higher than the other pages: your name's row sat far under the
+    -- 18px higher than the other pages: your name's row sat far under the
     -- header's divider (asked for in game)
-    view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -36)
+    view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -26)
     view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
     view:SetFrameLevel(f:GetFrameLevel() + 100)
     view:EnableMouse(true)
