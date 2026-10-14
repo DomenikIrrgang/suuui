@@ -487,6 +487,10 @@ function M:RecipeOpener()
             -- its profession already open: only the recipe chosen
             SuuUI.OpenRecipe(b.recipeID)
         end
+        -- the next click decides afresh (opened, closed, chosen by now)
+        C_Timer.After(0.3, function()
+            if b:IsShown() and b.row and b:IsMouseOver() and not InCombatLockdown() then self:RowEnter(b.row) end
+        end)
     end)
     b:SetScript("OnEnter", function() if b.row then b.row:LockHighlight() end end)
     b:SetScript("OnLeave", function()
