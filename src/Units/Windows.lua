@@ -245,6 +245,43 @@ function M:SkinSocial()
     for _, region in ipairs({ f:GetRegions() }) do
         if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
     end
+    -- its four tab buttons down the right side as text tabs along the header,
+    -- like every other window (asked for in game); top to bottom they open
+    -- the friends list, Recent Allies, Friend Requests and Raid. Which one is
+    -- lit follows the content actually shown.
+    local function friendsList()
+        for _, c in ipairs({ f:GetChildren() }) do
+            if c.FilterBar and c ~= f.RecentAlliesList and c ~= f.FriendRequestsList then return c end
+        end
+    end
+    local buttons = {}
+    for _, c in ipairs({ f:GetChildren() }) do
+        if c:GetObjectType() == "Button" and not c:GetName() and math.abs((c:GetWidth() or 0) - 54) < 3
+            and math.abs((c:GetHeight() or 0) - 55) < 3 then
+            buttons[#buttons + 1] = c
+        end
+    end
+    table.sort(buttons, function(a, b) return (a:GetTop() or 0) > (b:GetTop() or 0) end)
+    local list = friendsList()
+    local pages = {
+        { label = "Friends", frame = list },
+        { label = "Recent allies", short = "Allies", frame = f.RecentAlliesList },
+        { label = "Requests", frame = f.FriendRequestsList },
+        { label = "Raid", frame = f.RaidFrame },
+    }
+    local tabs = {}
+    for i, b in ipairs(buttons) do
+        local page = pages[i]
+        if page then
+            tabs[#tabs + 1] = { button = b, label = page.label, short = page.short or page.label,
+                                selected = function() return page.frame and page.frame:IsShown() or false end }
+            if page.frame then
+                page.frame:HookScript("OnShow", function() chrome:UpdateTabs() end)
+            end
+        end
+    end
+    if #tabs > 0 then chrome:SetTabs(tabs) end
+    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
     self.social = chrome
 end
 

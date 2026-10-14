@@ -349,8 +349,58 @@ function SP.Mouse()
     ns.Print(("Mouse probe: %s under the mouse; /reload."):format(tostring(store.top)))
 end
 
+-- Recent Allies and Friend Requests: what their APIs give.
+function SP.Lists()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.socialLists = store
+    local ra = C_RecentAllies
+    store.recentApi = namesIn(ra)
+    store.recentEnabled = call(ra and ra.IsSystemEnabled)
+    store.recentReady = call(ra and ra.IsRecentAllyDataReady)
+    if ra and ra.TryRequestRecentAlliesData then pcall(ra.TryRequestRecentAlliesData) end
+    local list = raw(ra and ra.GetRecentAllies) or {}
+    store.recentCount = #list
+    store.recent = {}
+    for i, a in ipairs(list) do
+        if i > 4 then break end
+        store.recent[i] = show(a, 0)
+    end
+    store.invites = { count = call(BNGetNumFriendInvites), first = call(BNGetFriendInviteInfo, 1),
+                      accept = type(BNAcceptFriendInvite), decline = type(BNDeclineFriendInvite),
+                      cbn = call(C_BattleNet and C_BattleNet.GetFriendInviteInfo, 1) }
+    -- the lists' own frames: what their rows hold (the first row's keys)
+    local f = _G.SocialUIFrame
+    for _, key in ipairs({ "RecentAlliesList", "FriendRequestsList" }) do
+        local lst = f and f[key]
+        local box = lst and lst.ScrollBox
+        local target = box and box.ScrollTarget
+        local first = target and select(1, target:GetChildren())
+        local keys = {}
+        if first then for k in pairs(first) do if type(k) == "string" then keys[#keys + 1] = k end end end
+        table.sort(keys)
+        store[key] = { shown = show(lst and lst:IsShown()), rowKeys = keys }
+    end
+    -- the side buttons: their fields (which page each opens)
+    store.sideButtons = {}
+    if f then
+        for _, c in ipairs({ f:GetChildren() }) do
+            if c:GetObjectType() == "Button" and not c:GetName() and math.abs((c:GetWidth() or 0) - 54) < 3 then
+                local fields = {}
+                for k, v in pairs(c) do
+                    if type(k) == "string" and type(v) ~= "table" and type(v) ~= "function" then fields[#fields + 1] = k .. "=" .. tostring(v) end
+                end
+                table.sort(fields)
+                store.sideButtons[#store.sideButtons + 1] = ("top=%d %s"):format(math.floor(c:GetTop() or 0), table.concat(fields, " "))
+            end
+        end
+    end
+    ns.Print(("Lists probe: %d recent allies, %s friend requests; /reload."):format(store.recentCount, tostring(store.invites.count)))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
+    if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
     if rest == "frames" then SP.Frames() return end
     -- the roster asked for first: it's often empty until then
