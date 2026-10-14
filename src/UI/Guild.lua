@@ -440,7 +440,7 @@ function MB:Layout()
     if not w or w < 100 then return end
     -- space-6 between the message and Edit (a little more room, asked for in game)
     local right = self.edit:IsShown() and (self.edit:GetWidth() + S["space-5"] + S["space-6"]) or S["space-5"]
-    local left = S["space-5"] + 12 + S["space-3"] + self.head:GetStringWidth() + S["space-4"]
+    local left = S["space-5"] + 12 + S["space-3"] + self.head:GetStringWidth() + S["space-6"]
     self.message:SetWidth(math.max(60, w - left - right))
     -- as tall as the text really is, the same room above and below it
     local th = math.max(self.message:GetStringHeight() or 0, self.head:GetStringHeight() or 0, 14)
@@ -475,7 +475,8 @@ function UI.GuildMotdBanner(parent)
     b.message:SetJustifyV("TOP")
     b.message:SetWordWrap(true)
     b.message:SetMaxLines(2)
-    b.message:SetPoint("LEFT", b.head, "RIGHT", S["space-4"], 0)
+    -- space-6 after the label (a little more room, asked for in game)
+    b.message:SetPoint("LEFT", b.head, "RIGHT", S["space-6"], 0)
     b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if b.onEdit then b.onEdit() end end })
     b.edit:SetHeight(22)
     b.edit:SetPoint("RIGHT", -S["space-5"], 0)
