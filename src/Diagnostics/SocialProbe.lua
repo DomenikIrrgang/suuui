@@ -440,8 +440,76 @@ function SP.FriendSystem()
         store.legacy, store.titleFriends))
 end
 
+-- Guild control: the ranks and their permissions, and whether an addon may
+-- change them. Every write puts back what's already there (nothing
+-- changes); blocked or forbidden calls are caught by their events.
+function SP.GuildControl()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), ranks = {}, blocked = {}, writes = {} }
+    SuuUIProbe.guildControl = store
+    if not IsInGuild() then ns.Print("Guild control probe: not in a guild.") return end
+    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+    store.leader = call(IsGuildLeader)
+    -- the functions there are
+    local fns = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and type(v) == "function" and (k:find("^GuildControl") or k:find("^GuildSet") or k:find("Rank") and k:find("Guild")) then
+            fns[#fns + 1] = k
+        end
+    end
+    table.sort(fns)
+    store.globals = fns
+    store.guildInfoApi = namesIn(C_GuildInfo)
+    -- the flags' labels
+    store.labels = {}
+    for i = 1, 25 do
+        local label = _G["GUILDCONTROL_OPTION" .. i]
+        if label then store.labels[#store.labels + 1] = i .. "=" .. tostring(label) end
+    end
+    -- the ranks and their flags
+    local n = tonumber((raw(GuildControlGetNumRanks))) or 0
+    store.numRanks = n
+    for i = 1, n do
+        local name = raw(GuildControlGetRankName, i)
+        if GuildControlSetRank then pcall(GuildControlSetRank, i) end
+        store.ranks[i] = { name = show(name), flags = call(GuildControlGetRankFlags),
+                           byOrder = call(C_GuildInfo and C_GuildInfo.GuildControlGetRankFlags, i) }
+    end
+    -- the writes, each putting back what's there; the game's verdict comes
+    -- as an event
+    local listener = CreateFrame("Frame")
+    listener:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    listener:RegisterEvent("ADDON_ACTION_BLOCKED")
+    local current
+    listener:SetScript("OnEvent", function(_, event, addon, fn)
+        store.blocked[#store.blocked + 1] = event .. " " .. tostring(fn) .. " during " .. tostring(current)
+    end)
+    local function try(label, fn, ...)
+        current = label
+        local ok, err = pcall(fn, ...)
+        store.writes[#store.writes + 1] = label .. ": " .. (ok and "called" or ("error " .. tostring(err):sub(1, 120)))
+    end
+    if n > 1 and GuildControlSetRank then
+        local lowest = n
+        local name = raw(GuildControlGetRankName, lowest)
+        try("GuildControlSetRank", GuildControlSetRank, lowest)
+        local flags = { raw(GuildControlGetRankFlags) }
+        if GuildControlSetRankFlag and flags[1] ~= nil then
+            try("GuildControlSetRankFlag(1, same)", GuildControlSetRankFlag, 1, flags[1] and true or false)
+        end
+        if GuildControlSaveRank and name then try("GuildControlSaveRank(same name)", GuildControlSaveRank, name) end
+    end
+    local motd = raw(GetGuildRosterMOTD)
+    if motd and C_GuildInfo and C_GuildInfo.SetMOTD then try("C_GuildInfo.SetMOTD(same)", C_GuildInfo.SetMOTD, motd) end
+    local info = raw(GetGuildInfoText)
+    if info and C_GuildInfo and C_GuildInfo.SetInfoText then try("C_GuildInfo.SetInfoText(same)", C_GuildInfo.SetInfoText, info) end
+    C_Timer.After(2, function() listener:UnregisterAllEvents() end)
+    ns.Print(("Guild control probe: %d ranks; writes tried, blocked ones recorded. /reload in a few seconds."):format(n))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
+    if rest == "guildcontrol" then SP.GuildControl() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
