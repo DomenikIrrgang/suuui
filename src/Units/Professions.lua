@@ -68,10 +68,15 @@ function M:Profession(index)
     for k = 1, (tonumber(numSpells) or 0) do
         local info = call(C_SpellBook.GetSpellBookItemInfo, (tonumber(offset) or 0) + k, bank)
         if info and info.spellID then
-            if k == 1 then
+            -- the profession's own spell: the one that opens its crafting
+            -- window, else the one with its name (Fishing). Not simply the
+            -- first: Forever lists the camp abilities first (Tanning, Bait
+            -- and Tackle ended up on a bar, found in game)
+            local crafts = call(C_TradeSkillUI.CanTradeSkillShowCraftingUI, info.spellID) and true or false
+            if not info.isPassive and (crafts or (info.name == name and not card.crafting)) then
                 card.spellID = info.spellID
+                card.crafting = card.crafting or crafts
                 if info.subName and info.subName ~= "" then card.rank = info.subName end
-                card.crafting = call(C_TradeSkillUI.CanTradeSkillShowCraftingUI, info.spellID) and true or false
             end
             local spell = { name = info.name, icon = info.iconID, spellID = info.spellID }
             local track, on = trackingFor(info.spellID, info.name)
@@ -101,10 +106,11 @@ function M:Profession(index)
     -- its recipes, as counted when it was last open
     local counts = skillLine and self:CharData().recipes
     card.recipes = counts and counts[skillLine]
-    if card.crafting then
-        -- the crafting one's own spell opens it: no button for it on the card
+    if card.spellID then
+        -- its own spell is the card (dragged, or clicked to open it): not
+        -- again among its spells
         local rest = {}
-        for i, s in ipairs(card.spells) do if i > 1 then rest[#rest + 1] = s end end
+        for _, sp in ipairs(card.spells) do if sp.spellID ~= card.spellID then rest[#rest + 1] = sp end end
         card.spells = rest
     end
     return card
