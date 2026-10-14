@@ -621,11 +621,65 @@ function SP.Menu()
     ns.Print(("Menu probe: armed on %d dropdowns. Open the Settings tab's Page or Rank dropdown."):format(n))
 end
 
+-- Guild notes: C_GuildInfo.SetNote is restricted (HasRestrictions in the
+-- game's API docs). Can a secure button's macro save one through /run?
+-- The probe puts a button in the middle of the screen; a click saves your
+-- own public note unchanged, and the game's verdict (blocked or not) is
+-- recorded. The old note functions are looked up too.
+function SP.Notes()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), blocked = {}, legacy = {} }
+    SuuUIProbe.guildNotes = store
+    for _, fn in ipairs({ "GuildRosterSetPublicNote", "GuildRosterSetOfficerNote", "SetGuildRosterSelection", "GetGuildRosterSelection" }) do
+        store.legacy[fn] = type(_G[fn])
+    end
+    if InCombatLockdown() then ns.Print("Notes probe: out of combat, please.") return end
+    local guid = UnitGUID("player")
+    local note = ""
+    for i = 1, (call(GetNumGuildMembers)) or 0 do
+        local g = select(17, call(GetGuildRosterInfo, i))
+        if g == guid then note = select(7, call(GetGuildRosterInfo, i)) or "" break end
+    end
+    store.note = show(note)
+    if type(note) ~= "string" then note = "" end
+    note = note:gsub("\\", "\\\\"):gsub("\"", "\\\"")
+    local b = SP.notesButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
+    SP.notesButton = b
+    b:SetSize(260, 30)
+    b:ClearAllPoints()
+    b:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
+    b:SetFrameStrata("DIALOG")
+    b:SetText("Notes probe: click to save your note")
+    b:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
+    b:SetAttribute("type1", "macro")
+    b:SetAttribute("macrotext1", ('/run C_GuildInfo.SetNote("%s", "%s", true)'):format(guid, note))
+    store.macro = b:GetAttribute("macrotext1")
+    local listener = CreateFrame("Frame")
+    listener:RegisterEvent("ADDON_ACTION_BLOCKED")
+    listener:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    listener:RegisterEvent("MACRO_ACTION_BLOCKED")
+    listener:RegisterEvent("MACRO_ACTION_FORBIDDEN")
+    listener:SetScript("OnEvent", function(_, event, a1, a2)
+        store.blocked[#store.blocked + 1] = event .. " " .. tostring(a1) .. " " .. tostring(a2)
+    end)
+    b:SetScript("PostClick", function(self)
+        store.clicked = date("%H:%M:%S")
+        C_Timer.After(1, function()
+            listener:UnregisterAllEvents()
+            self:Hide()
+            ns.Print(("Notes probe: %s; /reload."):format(#store.blocked > 0 and "blocked" or "not blocked"))
+        end)
+    end)
+    b:Show()
+    ns.Print("Notes probe: click the button in the middle of the screen once.")
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
     if rest == "guildcontrol" then SP.GuildControl() return end
     if rest == "guildui" then SP.GuildUI() return end
     if rest == "menu" then SP.Menu() return end
+    if rest == "notes" then SP.Notes() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
