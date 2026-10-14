@@ -827,7 +827,7 @@ function UI.ReskinDialog(f)
 end
 
 -- One of the game's shared popups (StaticPopup1-4: the guild note popup)
--- in SuuUI's look while it shows that dialog: glass inside a gilt-line edge
+-- in SuuUI's look while it shows that dialog: solid surface inside a gilt-line edge
 -- with the corner diamond, its text in body ink, the edit box as a sunk
 -- field, Accept as the primary (arcane) button, the others quiet. The game
 -- reuses these frames for every popup, so it's all undone when it hides.
@@ -880,7 +880,8 @@ function UI.ReskinPopup(dialog)
     local st = popups[dialog]
     if not st then
         st = { undo = {}, skins = {} }
-        local panel = skinFrame(dialog, "surface-glass", "gilt-line")
+        -- solid: it opens over windows, whose text showed through the glass
+        local panel = skinFrame(dialog, "surface", "gilt-line")
         UI.Shadow(panel, "shadow-panel")
         UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
         st.skins[dialog] = panel
