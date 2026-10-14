@@ -270,6 +270,26 @@ function LP.Join()
     end)
 end
 
+-- Leave LookingForGroup, then join it again from a timer (nothing you
+-- pressed behind it, as the library would at login).
+function LP.TimerJoin()
+    local s = store()
+    local t = { events = {} }
+    s.timerJoin = t
+    verdicts(t.events, 8)
+    pcall(LeaveChannelByName, "LookingForGroup")
+    C_Timer.After(3, function()
+        local ok, err = pcall(JoinChannelByName, "LookingForGroup")
+        t.call = ok and "called" or ("error: " .. tostring(err))
+        C_Timer.After(2, function()
+            local okN, index, name = pcall(GetChannelName, "LookingForGroup")
+            t.joined = okN and (tostring(index) .. " " .. tostring(name)) or "error"
+            t.windows = table.concat(windowsWith("LookingForGroup"), ",")
+            ns.Print(("LFG probe: joined from a timer: %s (windows %s); /reload."):format(t.joined, t.windows ~= "" and t.windows or "none"))
+        end)
+    end)
+end
+
 -- A button whose click removes your listing (you're delisted).
 function LP.Delist()
     local s = store()
@@ -308,6 +328,9 @@ local function record(event, text, author, _, channelName, _, _, _, _, channelBa
     local s = store()
     local r = s.record
     if not (r and r.on) then return end
+    -- every event that arrives, saved or not
+    r.seen = r.seen or {}
+    r.seen[event] = (r.seen[event] or 0) + 1
     local inInstance, kind = IsInInstance()
     local line = {
         date("%H:%M:%S"),
@@ -356,6 +379,7 @@ function LP.Command(rest)
     if rest == "stop" then LP.Record(false) return end
     if rest == "click" then LP.ClickTest() return end
     if rest == "join" then LP.Join() return end
+    if rest == "timerjoin" then LP.TimerJoin() return end
     if rest == "delist" then LP.Delist() return end
     if rest == "clear" then
         local s = store()
