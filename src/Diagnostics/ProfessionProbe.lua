@@ -1,13 +1,16 @@
 -- Diagnostics/ProfessionProbe.lua
 -- "/suu probe professions": what Forever's professions give an addon, for
--- SuuUI's own Professions window (step 3.3). Saved in SuuUIProbe.professions
--- on /reload.
+-- SuuUI's own Professions window (step 3.3). Saved in
+-- SuuUIProbe.professions[skillLine] on /reload, one per profession probed.
 --   * your professions (GetProfessions, GetProfessionInfo) and each one's
 --     spells in the spellbook (Find Herbs, Fishing, Basic Campfire)
 --   * the open trade skill (C_TradeSkillUI): which one, ready, its recipes'
 --     info, categories, schematics (reagents and products), requirements
 --     (tools), cooldowns, tracked, descriptions, sources (where an unlearned
 --     one is learned); your counts of the reagents
+--   * every recipe of the open trade skill in one line (id, name, category,
+--     learned, skill line ability, grey level; Forever's recipe info has no
+--     yellow level)
 --   * C_TradeSkillUI's functions
 --
 --   /suu probe professions   with a profession's window open (cooking, first
@@ -63,7 +66,11 @@ end
 function PP.Sample()
     SuuUIProbe = SuuUIProbe or {}
     local store = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
-    SuuUIProbe.professions = store
+    -- one per profession (its skill line), so each open window keeps its own;
+    -- a probe from before that layout (a single one) is dropped
+    local saved = SuuUIProbe.professions
+    if type(saved) ~= "table" or saved.at then saved = {} end
+    SuuUIProbe.professions = saved
     store.api = namesIn(C_TradeSkillUI)
     -- your professions
     local list = { raw(GetProfessions) }
@@ -87,6 +94,9 @@ function PP.Sample()
     -- the open trade skill
     store.ready = call(C_TradeSkillUI.IsTradeSkillReady)
     store.base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+    local base = raw(C_TradeSkillUI.GetBaseProfessionInfo)
+    store.name = base and base.professionName
+    saved[base and base.professionID or 0] = store
     store.child = call(C_TradeSkillUI.GetChildProfessionInfo)
     store.isNPC = call(C_TradeSkillUI.IsNPCCrafting)
     store.isGuild = call(C_TradeSkillUI.IsTradeSkillGuild)
@@ -101,10 +111,18 @@ function PP.Sample()
         if #store.categories < 30 then store.categories[#store.categories + 1] = show(c) .. " " .. call(C_TradeSkillUI.GetCategoryInfo, c) end
     end
     -- every recipe's category up to its header, and how many under each
-    store.tree, store.perRoot = {}, {}
+    -- and every recipe, one line each: id|name|category|learned|ability|grey
+    store.tree, store.perRoot, store.all = {}, {}, {}
     local seenCat = {}
     for _, id in ipairs(ids) do
         local info = raw(C_TradeSkillUI.GetRecipeInfo, id)
+        if info then
+            store.all[#store.all + 1] = ("%d|%s|%d|%d|%d|%d"):format(id, show(info.name), tonumber(info.categoryID) or 0,
+                info.learned and 1 or 0, tonumber(info.skillLineAbilityID) or 0,
+                tonumber(info.maxTrivialLevel) or 0)
+        else
+            store.all[#store.all + 1] = ("%d|nil"):format(id)
+        end
         local cat = info and info.categoryID
         local chain, root = {}, nil
         local guard = 0
@@ -174,6 +192,6 @@ end
 
 function PP.Command()
     local store = PP.Sample()
-    ns.Print(("Profession probe: %d professions, %d recipes in the open window (ready: %s). /reload to save."):format(
-        #store.professions, store.recipeCount or 0, tostring(store.ready)))
+    ns.Print(("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
+        tostring(store.name or "no profession window open"), #store.all, tostring(store.ready)))
 end
