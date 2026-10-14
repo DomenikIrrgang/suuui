@@ -554,7 +554,12 @@ function M:BuildDetails()
             if InCombatLockdown() then
                 self:Print("Notes can be changed out of combat.")
             else
-                self:Print(("%s isn't in the game's member list yet; /reload once if they're offline."):format(p.member.name))
+                local list = self:BlizzList()
+                if not p.member.online and list and not list.showOfflinePlayers then
+                    self:Print("Offline members' notes can be changed after a /reload (the game's member list adds them then).")
+                else
+                    self:Print(("%s isn't in the game's member list yet; try again in a moment."):format(p.member.name))
+                end
             end
         end })
         -- placed from the body's top in ShowDetails, never anchored to a
@@ -1158,9 +1163,11 @@ end
 
 function M:OnEnable()
     -- the game's member list with offline members too (notes for them go
-    -- through it); it reads this setting once, when it loads
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_Communities")
-    if not loaded then pcall(SetCVar, "communitiesShowOffline", "1") end
+    -- through it). It reads this setting once, when it loads, and may load
+    -- before SuuUI (found in game): saved every time, so it holds from the
+    -- next load on; SuuUI can't change the loaded list without tainting it
+    local setCVar = (C_CVar and C_CVar.SetCVar) or SetCVar
+    if setCVar then pcall(setCVar, "communitiesShowOffline", "1") end
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
