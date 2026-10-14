@@ -12,6 +12,9 @@
 -- listing again unchanged (is a click enough for both?).
 -- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
 -- window. "/suu probe lfg delist": a button whose click delists you.
+-- "/suu probe lfg live": starts ForeverLFG and reports its events;
+-- "/suu probe lfg entries": the merged list; "/suu probe lfg refresh [cat]":
+-- a tool search (2 Dungeons, 116 Quests & Zones, 120 Custom).
 -- "/suu probe lfg record": the public channels' messages (and say/yell),
 -- as they arrive, with the channel, author, zone, whether you were in
 -- combat or an instance and whether the text was secret; kept across
@@ -381,6 +384,63 @@ function LP.Lang()
     end)
 end
 
+-- The library live (until the Group Finder module starts it): its events
+-- in chat (short) and in SuuUIProbe.lfg.live (all), the merged list on
+-- request, a tool search from your command.
+local liveHooked
+function LP.Live()
+    local LFG = ns.LFG
+    local s = store()
+    s.live = s.live or {}
+    local log = s.live
+    local function note(text, show)
+        log[#log + 1] = date("%H:%M:%S ") .. text
+        while #log > 2000 do table.remove(log, 1) end
+        if show then ns.Print("LFG: " .. text) end
+    end
+    local function describe(e)
+        local roles = {}
+        for side, set in pairs(e.roles or {}) do
+            for role, v in pairs(set) do roles[#roles + 1] = side:sub(1, 1) .. ":" .. role .. (type(v) == "number" and v or "") end
+        end
+        local src = {}
+        for k in pairs(e.sources) do src[#src + 1] = k end
+        table.sort(src)
+        return ("%s [%s] %s %s roles %s need %s (%s) conf %.2f \"%s\""):format(e.key, table.concat(src, "+"), e.intent or "?",
+            table.concat(e.activities, ","), table.concat(roles, " "), tostring(e.need), e.leader and e.leader.class or "?",
+            e.confidence or 0, (e.text or ""):sub(1, 60))
+    end
+    if not liveHooked then
+        liveHooked = true
+        LFG.On("EntryAdded", function(e) note("added " .. describe(e), false) end)
+        LFG.On("EntryUpdated", function(e) note("updated " .. describe(e), false) end)
+        LFG.On("EntryRemoved", function(e, why) note("removed " .. e.key .. " (" .. tostring(why) .. ")", false) end)
+        LFG.On("Match", function(e, reasons) note("MATCH " .. table.concat(reasons, ",") .. ": " .. describe(e), true) end)
+        LFG.On("ToolSearched", function(cat, n) note("tool searched " .. tostring(cat) .. ": " .. tostring(n), true) end)
+        LFG.On("ToolSearchFailed", function(cat) note("tool search failed " .. tostring(cat), true) end)
+        LFG.On("ToolStale", function(cat, age) note("tool stale " .. tostring(cat) .. " age " .. tostring(age and math.floor(age)), true) end)
+        LFG.On("ListingChanged", function(l) note("listing " .. (l and table.concat(l.activities, ",") or "none"), true) end)
+        LFG.On("ListingExpiring", function(left) note("listing runs out in " .. tostring(left), true) end)
+        LFG.On("Delisted", function() note("delisted", true) end)
+        LFG.On("Contacted", function(e, what) note("contacted " .. e.key .. ": " .. what, true) end)
+    end
+    LFG.Start()
+    note(("started: languages %s"):format(table.concat(LFG.Languages(), ",")), true)
+end
+
+function LP.Entries()
+    local LFG = ns.LFG
+    local list = LFG.Entries()
+    ns.Print(("LFG: %d entries"):format(#list))
+    for i, e in ipairs(list) do
+        if i > 15 then ns.Print("...") break end
+        local src = {}
+        for k in pairs(e.sources) do src[#src + 1] = k end
+        ns.Print(("  %s [%s] %s %s need %s"):format(e.key, table.concat(src, "+"), e.intent or "?",
+            table.concat(e.activities, ","), tostring(e.need)))
+    end
+end
+
 -- The recorder: public chat as it arrives.
 local recorder
 local CHAT_EVENTS = { "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL" }
@@ -442,6 +502,14 @@ function LP.Command(rest)
     if rest == "join" then LP.Join() return end
     if rest == "timerjoin" then LP.TimerJoin() return end
     if rest == "lang" then LP.Lang() return end
+    if rest == "live" then LP.Live() return end
+    if rest == "entries" then LP.Entries() return end
+    local cat = rest:match("^refresh ?(%d*)$")
+    if cat then
+        local ok = ns.LFG.Refresh(tonumber(cat))
+        ns.Print("LFG: searching the tool " .. (ok and "" or "(failed) ") .. (cat ~= "" and cat or "2"))
+        return
+    end
     if rest == "delist" then LP.Delist() return end
     if rest == "clear" then
         local s = store()

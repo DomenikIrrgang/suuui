@@ -355,3 +355,22 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.GuildControl(host, GuildControlUI)` | The Guild window's Settings tab: the game's guild control window (load `Blizzard_GuildControlUI` first) laid out in `host` in SuuUI's look, its controls still the game's own so your clicks save. `c:Layout()` again after the game redraws a page (it follows the game's own updates itself) |
 | `SuuUI.UI.GuildMotdBanner(parent)` | The guild's message of the day pinned to the top of a box: `b:SetData({ text, canEdit })` (no text: hidden), `b:Height()` (0 when hidden), `b.onEdit`, `b.edit` |
 | `SuuUI.UI.ReskinDialog(frame)` / `SuuUI.UI.ReskinMenu(menu)` / `SuuUI.UI.ReskinPopup(dialog)` | One of Blizzard's small dialogs (the guild's text editor) as a SuuUI panel, its clicks still Blizzard's; an open Blizzard menu in the context menu's look, undone when it closes (the game reuses its menu frames); one of the game's shared popups (StaticPopup1-4) likewise, undone when it hides. `UI.ReskinDropdown` now restyles the menu its dropdown opens |
+
+## Group finder: ForeverLFG (0.13)
+
+`SuuUI.LFG` is a library with no UI: the game's group finder (the tool) and the public chat channels as one list of groups and players looking for groups. Its design, and what the game allows, is in `Docs/ForeverLFG.md`. It does nothing until `Start()` (SuuUI's Group Finder module calls it).
+
+| | |
+|---|---|
+| `SuuUI.LFG.Start()` / `Stop()` | Starts reading the tool and chat, joins LookingForGroup (and keeps it off the chat windows); stops |
+| `SuuUI.LFG.Configure({ channels, joinLookingForGroup, hideLookingForGroup, chatExpiry, staleAfter, expiringSoon, minConfidence, extraLanguages })` | Its settings (`SuuUI.LFG.config` holds the defaults) |
+| `SuuUI.LFG.On(event, fn)` / `Off(event, fn)` | Events: `EntryAdded(entry)`, `EntryUpdated(entry)`, `EntryRefreshed(entry)` (posted again, unchanged), `EntryRemoved(entry, reason)`, `Match(entry, reasons)`, `Contacted(entry, "full" \| "gone" \| "reposted")`, `ToolSearched(category, count)`, `ToolSearchFailed(category)`, `ToolStale(category, age)`, `ListingChanged(listing)`, `ListingExpiring(secondsLeft)`, `Delisted()` |
+| `SuuUI.LFG.Entries(filter)` / `Entry(key)` | The merged list (newest first); `filter = { intent, kinds, activities, sources, minConfidence, search, notYou }`. An entry: `key` (the leader's whole name), `intent` ("group" \| "player"), `activities`, `quests`, `roles = { needed, offered }`, `classes`, `need`, `members`, `level`, `leader`, `text`, `confidence`, `sources = { tool, chat }` |
+| `SuuUI.LFG.Refresh(category)` | Searches the tool. Only from a click or key press (the game blocks it otherwise); 2 Dungeons, 116 Quests & Zones, 120 Custom |
+| `SuuUI.LFG.Listing()` / `Delist()` | Your listing (activities, roles, comment, play style, time left); delisting from a click. Making or changing a listing is blocked for addon code: use the game's own listing panel |
+| `SuuUI.LFG.Whisper(entry)` / `CanInvite(entry)` / `Invite(entry)` | An empty whisper to the leader; inviting a single player looking (the tool's rule; there's no sign-up on Forever) |
+| `SuuUI.LFG.Interest()` / `Watch(key, on)` / `MatchReasons(entry)` | What you're after (listing, roles, quests, level, zone, watches); an activity to hear about; why an entry concerns you: "role", "activity", "player", "quest", "zone", "boss", "friend" |
+| `SuuUI.LFG.Catalogue` | `Get(key)`, `All(kind)`, `Expand(key)`, `ForTool(activityID)`: the activities ("dungeon:rfk", "zone:westfall", "raid:mc", "boss:azuregos", "tool:<id>") |
+| `SuuUI.LFG.Parser.Parse(text, { languages })` / `SuuUI.LFG.Lang.Register(code, def)` / `SuuUI.LFG.Languages()` | The chat parser on its own; a language module (see `Lang/enUS.lua`); the languages in use |
+| `SuuUI.LFG.IsHiddenChannel(name)` | Channels it reads but keeps off the chat windows (LookingForGroup) |
+

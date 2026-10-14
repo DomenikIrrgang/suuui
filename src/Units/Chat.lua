@@ -1207,7 +1207,13 @@ function M:ApplyGlobalTab()
         end
     end
     for _, name in ipairs(channels) do
-        pcall(global.AddChannel, global, name)
+        -- channels the group finder reads but keeps out of chat
+        -- (LookingForGroup): on no window
+        if SuuUI.LFG and SuuUI.LFG.IsHiddenChannel and SuuUI.LFG.IsHiddenChannel(name) then
+            pcall(global.RemoveChannel, global, name)
+        else
+            pcall(global.AddChannel, global, name)
+        end
         pcall(general.RemoveChannel, general, name)
     end
 end

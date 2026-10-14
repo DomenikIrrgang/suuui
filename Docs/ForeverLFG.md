@@ -32,7 +32,20 @@ Status: **draft for review**. Everything under "What the game allows" was probed
 
 ## Where it lives
 
-`src/Libs/ForeverLFG/`, loaded before the modules, published as `SuuUI.LFG`. It keeps its own saved data per character (activity history, recent entries for a short while).
+`src/Libs/ForeverLFG/`, loaded before the modules, published as `SuuUI.LFG` (documented in `Docs/API.md`):
+
+| File | |
+|---|---|
+| `LFG.lua` | Settings, events, start and stop |
+| `Catalogue.lua` | The activities: a language-free table (keys, kinds, the tool's IDs, sizes), the tool's names and levels at run time |
+| `Parser.lua` | One chat line to what it asks for; pure Lua, no game API |
+| `Lang/enUS.lua` | English words (more languages as modules) |
+| `Store.lua` | The merged list, expiry |
+| `Chat.lua` | The chat source; joining LookingForGroup and keeping it off the chat windows |
+| `Tool.lua` | The tool source; refresh, staleness, your listing, delist, invite, whisper |
+| `Interest.lua` | What you're after, languages, matching, groups you contacted |
+
+`tools/lfg_parse.lua` replays recorded chat (or lines given to it) through the same parser outside the game: `lua tools/lfg_parse.lua <SuuUI.lua SavedVariables>`.
 
 - **Library (no UI):** sources, parser, catalogue, merged list, matching, events.
 - **SuuUI module `groupfinder`:** the Group Finder window, the restyled listing panel and the notifications. It uses only `SuuUI.LFG` and the public UI API.
@@ -193,18 +206,23 @@ The tool can only be searched from your click or key press, so:
 ## Events
 
 ```
-SuuUI.LFG:On(event, fn)
+SuuUI.LFG.On(event, fn)
 
 EntryAdded(entry)              a new group or player
-EntryUpdated(entry, changes)   roles, members, text or sources changed
-EntryRemoved(entry, reason)    expired, delisted, left the search results
-Match(entry, reasons)          an entry concerns you (see Match)
-ToolSearched(category)         a search came back
-ToolStale(age)                 your results are older than the threshold while you're listed or watching
+EntryUpdated(entry)            roles, members, text or sources changed
+EntryRefreshed(entry)          posted again, unchanged (only fresher)
+EntryRemoved(entry, reason)    "expired", "delisted", "gone" (left the search results), "merged", "stopped"
+Match(entry, reasons)          an entry concerns you, for reasons it didn't before
+Contacted(entry, what)         a group you whispered: "full", "gone", "reposted"
+ToolSearched(category, count)  a search came back
+ToolSearchFailed(category)
+ToolStale(category, age)       results for what you're listed for or watch are older than the threshold
 ListingChanged(listing|nil)    your own listing was made, changed or removed
+ListingExpiring(secondsLeft)   your listing runs out soon
+Delisted()                     your listing ended or was removed
 ```
 
-## API (draft)
+## API
 
 ```
 SuuUI.LFG.Entries(filter)      -- the merged list; filter = { kinds, activities, intent, sources, minConfidence }
