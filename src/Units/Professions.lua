@@ -84,10 +84,15 @@ function M:Profession(index)
             end
             spell.onEnter = function(owner) UI.SpellTooltip(owner, info.spellID) end
             spell.onLeave = function() GameTooltip:Hide() end
+            spell.onDrag = function() self:Pickup(info.spellID) end
             card.spells[#card.spells + 1] = spell
         end
     end
     card.rank = card.rank or RANKS[max] or ""
+    if card.spellID then
+        local id = card.spellID
+        card.onDrag = function() self:Pickup(id) end
+    end
     -- unlearning goes through the game's own confirmation, as Blizzard's
     -- book does (StaticPopup "UNLEARN_SKILL", data: the skill line)
     if skillLine then
@@ -142,6 +147,16 @@ local function untrained(def)
     return { name = name, icon = call(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
              skillLine = def.skillLine, untrained = true, rank = "Not learned",
              hint = "Learn it from a " .. name .. " trainer" }
+end
+
+-- A profession's spell on the cursor, to put on an action bar.
+function M:Pickup(spellID)
+    if not spellID then return end
+    if C_Spell and C_Spell.PickupSpell then
+        C_Spell.PickupSpell(spellID)
+    elseif PickupSpell then
+        PickupSpell(spellID)
+    end
 end
 
 -- Primary (two slots, an empty one says how to fill it), then secondary.

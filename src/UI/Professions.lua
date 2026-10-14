@@ -19,7 +19,8 @@
 --       total } (nil: not counted yet), spells = { spell } },
 --       or { name, rank, icon, untrained = true, hint } for one not learned
 --       (dimmed, the hint where the skill bar goes)
---     spell = { name, icon, active, onClick, onEnter(owner), onLeave }
+--     spell = { name, icon, active, onClick, onEnter(owner), onLeave, onDrag }
+--     card.onDrag()           -- the card dragged (its profession's own spell)
 --     card.onUnlearn()        -- a learned one: the trash glyph in its corner
 --     p.onOpen(card)          -- a crafting profession's card clicked
 --   p:SetCrafting({ name, rank, skill, max, recipes = { learned, total },
@@ -157,6 +158,9 @@ local function makeSpell(parent)
     s:SetScript("OnClick", function(self) if self.spell and self.spell.onClick then self.spell.onClick() end end)
     s:SetScript("OnEnter", function(self) if self.spell and self.spell.onEnter then self.spell.onEnter(self) end end)
     s:SetScript("OnLeave", function(self) if self.spell and self.spell.onLeave then self.spell.onLeave() end end)
+    -- onto an action bar (Disenchant: asked for in game)
+    s:RegisterForDrag("LeftButton")
+    s:SetScript("OnDragStart", function(self) if self.spell and self.spell.onDrag then self.spell.onDrag() end end)
     return s
 end
 
@@ -223,6 +227,9 @@ local function makeCard(view)
         self.border:SetColor("gilt-faint")
     end)
     c:SetScript("OnClick", function(self) if self.card and self.card.crafting and view.onOpen then view.onOpen(self.card) end end)
+    -- the card dragged: the profession's own spell (Enchanting) onto a bar
+    c:RegisterForDrag("LeftButton")
+    c:SetScript("OnDragStart", function(self) if self.card and self.card.onDrag then self.card.onDrag() end end)
     return c
 end
 
