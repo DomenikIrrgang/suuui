@@ -360,6 +360,90 @@ local function itemTip(owner, itemID)
     GameTooltip:Show()
 end
 
+-- Where a recipe not learned yet is learned, from SuuUI's recipe data (the
+-- game has none: GetRecipeSourceText is nil): its recipe item and where
+-- that is (vendors of your faction, drops, chests, quests, packages), a
+-- trainer, or that it isn't known yet.
+local MY_FACTION = ({ Alliance = "A", Horde = "H" })[UnitFactionGroup("player") or ""]
+
+local function inkText(s) return "|cff" .. T.color.ink.hex .. s .. "|r" end
+
+local function place(name, zone)
+    if zone and zone ~= "" then return inkText(name) .. ", " .. zone end
+    return inkText(name)
+end
+
+function M:Source(id)
+    local list = SuuUI.RecipeSources(id)
+    if not list then return { lines = { "Where this recipe is learned isn't known yet." } } end
+    local out = { lines = {} }
+    local lines = out.lines
+    local profession = self.view and self.view.craftData and self.view.craftData.name
+    for _, s in ipairs(list) do
+        if s.t == "t" then
+            lines[#lines + 1] = "From " .. (profession and ("a " .. profession .. " trainer") or "a profession trainer")
+        elseif s.t == "a" then
+            lines[#lines + 1] = "Learned automatically with the profession"
+        elseif s.t == "i" and s.i then
+            local name, _, quality, _, _, _, _, _, _, icon = call(C_Item.GetItemInfo, s.i)
+            if not name then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, s.i) end
+            local have = call(C_Item.GetItemCount, s.i, true) or 0
+            local itemID = s.i
+            out.item = { icon = icon or call(C_Item.GetItemIconByID, s.i), name = name, quality = quality,
+                         qualityName = quality and QUALITY_NAME[quality], note = have > 0 and "In your bags" or nil,
+                         onEnter = function(owner) itemTip(owner, itemID) end }
+            local known = false
+            -- vendors: yours, else say the other faction's sell it
+            local mine, theirs = {}, 0
+            for _, v in ipairs(s.v or {}) do
+                local vName, zone, faction = strsplit("|", v)
+                if faction == "" or not MY_FACTION or faction:find(MY_FACTION, 1, true) then
+                    mine[#mine + 1] = place(vName, zone)
+                else
+                    theirs = theirs + 1
+                end
+            end
+            for i = 1, math.min(3, #mine) do lines[#lines + 1] = "Sold by " .. mine[i] end
+            if #mine > 3 then lines[#lines + 1] = "and " .. (#mine - 3) .. " more vendors" end
+            if #mine == 0 and theirs > 0 then lines[#lines + 1] = "Sold only by the other faction's vendors" end
+            known = known or #mine > 0 or theirs > 0
+            -- drops: the first two, how many more
+            local drops = s.d or {}
+            local total = s.dn or #drops
+            if total > 8 then
+                lines[#lines + 1] = ("A world drop (%d creatures), e.g. %s"):format(total, place(strsplit("|", drops[1] or "")))
+            else
+                for i = 1, math.min(2, #drops) do
+                    local dName, zone = strsplit("|", drops[i])
+                    lines[#lines + 1] = "Dropped by " .. place(dName, zone)
+                end
+                if total > 2 then lines[#lines + 1] = "and " .. (total - 2) .. " more creatures" end
+            end
+            known = known or total > 0
+            for i, o in ipairs(s.o or {}) do
+                if i > 2 then break end
+                local oName, zone = strsplit("|", o)
+                lines[#lines + 1] = "Found in " .. place(oName, zone)
+                known = true
+            end
+            for _, q in ipairs(s.q or {}) do
+                local title = call(C_QuestLog.GetTitleForQuestID, q)
+                if not title then call(C_QuestLog.RequestLoadQuestByID, q) end
+                lines[#lines + 1] = "Reward of the quest " .. inkText(title or ("#" .. q))
+                known = true
+            end
+            for _, c in ipairs(s.c or {}) do
+                local cName = call(C_Item.GetItemNameByID, c)
+                if not cName then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, c) end
+                lines[#lines + 1] = "Inside " .. inkText(cName or "a container")
+                known = true
+            end
+            if not known then lines[#lines + 1] = "Where to get it isn't known yet." end
+        end
+    end
+    return out
+end
+
 function M:Recipe(id)
     if not id then return nil end
     local info = call(C_TradeSkillUI.GetRecipeInfo, id)
@@ -396,8 +480,7 @@ function M:Recipe(id)
     if cd and cd > 0 then r.cooldown = SecondsToTime and SecondsToTime(cd) or (math.ceil(cd) .. " s") end
     r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false
     if not info.learned then
-        local source = call(C_TradeSkillUI.GetRecipeSourceText, id)
-        if plain(source) and type(source) == "string" and source ~= "" then r.source = source end
+        r.source = self:Source(id)
         r.why = "Not learned yet"
     elseif r.cooldown then
         r.why = "On cooldown"
@@ -598,7 +681,7 @@ function M:OnEnable()
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "TRADE_SKILL_SHOW",
                          "TRADE_SKILL_CLOSE", "SKILL_LINES_CHANGED", "BAG_UPDATE_DELAYED", "TRACKED_RECIPE_UPDATE",
-                         "MINIMAP_UPDATE_TRACKING", "NEW_RECIPE_LEARNED" }) do
+                         "MINIMAP_UPDATE_TRACKING", "NEW_RECIPE_LEARNED", "QUEST_DATA_LOAD_RESULT" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
         end

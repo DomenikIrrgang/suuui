@@ -331,6 +331,15 @@ end
 -- 0.12: every spell ID this client has for each of those names (players'
 -- ranks and others alike: { [name] = { id, ... } }); pick a rank by
 -- C_Spell.GetSpellLevelLearned.
+-- Where a profession recipe is learned (Data/RecipeSources.lua, made by
+-- tools/gen_recipe_sources.py): a list of { t = "t" } (trainer), { t = "a" }
+-- (automatic) or { t = "i", i = itemID, v, d, dn, o, q, c } (a recipe item:
+-- sold by, dropped by and how many, found in, quest rewards, inside), or nil
+-- when it isn't known.
+function API.RecipeSources(recipeID)
+    return ns.RecipeSources and ns.RecipeSources[recipeID]
+end
+
 function API.TrainerSpellIDs()
     return ns.TrainerSpellIDs or {}
 end

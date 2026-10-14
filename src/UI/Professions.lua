@@ -32,7 +32,8 @@
 --     r = { name, quality (0-5), qualityName ("rare"), icon, makes, desc,
 --       tools = { { name, met } }, reagents = { { name, icon, quality,
 --       qualityName, have, need } }, cooldown (text), source (where to
---       learn it), tracked,
+--       learn it: { item = { icon, name, quality, qualityName, note,
+--       onEnter(owner) }, lines = { text } }), tracked,
 --       canMake, ready, why, onProduct(owner), onReagent(i, owner) }
 --   p.onSelect(id), p.onRecipeEnter(recipe, owner), p.onSearch(text),
 --   p.onFilters(list of "learned" | "unlearned" | "materials" | "skillup"), p.onTrack(on),
@@ -485,6 +486,8 @@ function P:SetRecipe(r)
         for _, x in ipairs(v.reagents) do x:Hide() end
         v.cooldown:Hide()
         v.source:Hide()
+        v.sourceHead:Hide()
+        v.sourceItem:Hide()
         v.why:Hide()
         return
     end
@@ -520,15 +523,37 @@ function P:SetRecipe(r)
         y = y + T.type.caption.lineHeight + 2
     end
     for i = #(r.tools or {}) + 1, #v.tools do v.tools[i]:Hide() end
-    -- where a recipe not learned yet comes from (the game's text)
-    v.source:SetShown(r.source ~= nil)
-    if r.source then
-        y = y + S["space-3"]
-        v.source:ClearAllPoints()
-        v.source:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
-        v.source:SetWidth(math.max(100, v:GetWidth()))
-        v.source:SetValue(r.source)
-        y = y + v.source:GetStringHeight()
+    -- where a recipe not learned yet is learned: its recipe item (hover
+    -- for its tooltip) and where that is, or a trainer
+    local src = r.source
+    v.sourceHead:SetShown(src ~= nil)
+    v.sourceItem:SetShown(src ~= nil and src.item ~= nil)
+    v.source:SetShown(src ~= nil and src.lines ~= nil and #src.lines > 0)
+    if src then
+        y = y + S["space-5"]
+        v.sourceHead:ClearAllPoints()
+        v.sourceHead:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+        y = y + T.type.header.lineHeight + S["space-3"]
+        local item = src.item
+        if item then
+            local row = v.sourceItem
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+            row:SetPoint("RIGHT", v, "RIGHT")
+            row.slot.skin:SetItem({ icon = item.icon, quality = item.qualityName })
+            row.name:SetValue(item.name or "…")
+            row.name:SetColor(QUALITY[item.quality or 1] or "ink")
+            row.count:SetValue(item.note or "")
+            row.count:SetColor("fel")
+            y = y + 32 + S["space-2"]
+        end
+        if src.lines and #src.lines > 0 then
+            v.source:ClearAllPoints()
+            v.source:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+            v.source:SetWidth(math.max(100, v:GetWidth()))
+            v.source:SetValue(table.concat(src.lines, "\n"))
+            y = y + v.source:GetStringHeight()
+        end
     end
     y = y + S["space-5"]
     v.reagentHead:ClearAllPoints()
@@ -700,6 +725,15 @@ function UI.Professions(parent, opts)
     v.source = UI.Text(v, "caption", "ink-muted")
     v.source:SetJustifyH("LEFT")
     v.source:SetWordWrap(true)
+    v.source:SetSpacing(2)
+    v.sourceHead = UI.Text(v, "header", "gilt-text")
+    v.sourceHead:SetValue("Source")
+    v.sourceItem = makeReagent(f)
+    v.sourceItem.slot:SetScript("OnEnter", function(self)
+        local src = f.recipeData and f.recipeData.source
+        if src and src.item and src.item.onEnter then src.item.onEnter(self) end
+    end)
+    v.sourceItem:Hide()
     -- the foot: Track, quantity, Create all, Create
     v.foot = CreateFrame("Frame", nil, v)
     v.foot:SetPoint("BOTTOMLEFT")
