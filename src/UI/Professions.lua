@@ -461,7 +461,7 @@ end
 --------------------------------------------------------------------------------
 
 local function makeReagent(view)
-    local r = CreateFrame("Frame", nil, view.recipe)
+    local r = CreateFrame("Frame", nil, view.recipe.body)
     r:SetHeight(32)
     r.slot = UI.ItemSlot(r, 30)
     r.slot:SetPoint("LEFT")
@@ -479,6 +479,9 @@ end
 function P:SetRecipe(r)
     self.recipeData = r
     local v = self.recipe
+    local c = v.body
+    local w = v.scroll:GetWidth()
+    if w and w > 0 then c:SetWidth(w) end
     v.none:SetShown(r == nil)
     for _, part in ipairs({ v.product, v.title, v.makes, v.desc, v.reagentHead, v.foot }) do part:SetShown(r ~= nil) end
     if not r then
@@ -503,7 +506,7 @@ function P:SetRecipe(r)
     for i, t in ipairs(r.tools or {}) do
         local line = v.tools[i]
         if not line then
-            line = CreateFrame("Frame", nil, v)
+            line = CreateFrame("Frame", nil, c)
             line:SetHeight(T.type.caption.lineHeight + 2)
             line.glyph = line:CreateTexture(nil, "ARTWORK")
             line.glyph:SetSize(11, 11)
@@ -514,7 +517,7 @@ function P:SetRecipe(r)
         end
         line:ClearAllPoints()
         line:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
-        line:SetPoint("RIGHT", v, "RIGHT")
+        line:SetPoint("RIGHT", c, "RIGHT")
         line.glyph:SetTexture(GLYPHS .. (t.met and "check" or "close") .. ".tga")
         line.glyph:SetVertexColor(UI.RGBA(t.met and "fel" or "ember-text"))
         line.text:SetValue("Requires " .. (t.name or ""))
@@ -539,7 +542,7 @@ function P:SetRecipe(r)
             local row = v.sourceItem
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
-            row:SetPoint("RIGHT", v, "RIGHT")
+            row:SetPoint("RIGHT", c, "RIGHT")
             row.slot.skin:SetItem({ icon = item.icon, quality = item.qualityName })
             row.name:SetValue(item.name or "…")
             row.name:SetColor(QUALITY[item.quality or 1] or "ink")
@@ -550,7 +553,7 @@ function P:SetRecipe(r)
         if src.lines and #src.lines > 0 then
             v.source:ClearAllPoints()
             v.source:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
-            v.source:SetWidth(math.max(100, v:GetWidth()))
+            v.source:SetWidth(math.max(100, c:GetWidth()))
             v.source:SetValue(table.concat(src.lines, "\n"))
             y = y + v.source:GetStringHeight()
         end
@@ -565,7 +568,7 @@ function P:SetRecipe(r)
         row.slot.index = i
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
-        row:SetPoint("RIGHT", v, "RIGHT")
+        row:SetPoint("RIGHT", c, "RIGHT")
         local short = (g.have or 0) < (g.need or 0)
         row.slot.skin:SetItem({ icon = g.icon, quality = g.qualityName, dim = short })
         row.name:SetValue(g.name or "…")
@@ -581,6 +584,14 @@ function P:SetRecipe(r)
         v.cooldown:ClearAllPoints()
         v.cooldown:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -(y + S["space-3"]))
         v.cooldown:SetValue("Cooldown " .. r.cooldown)
+        y = y + S["space-3"] + T.type.caption.lineHeight
+    end
+    -- taller than the pane: it scrolls (a long Source pushed the reagents
+    -- under the foot: found in game); a new recipe starts at its top
+    c:SetHeight(math.max(1, y))
+    if self.recipeShown ~= r.name then
+        self.recipeShown = r.name
+        v.scroll:SetVerticalScroll(0)
     end
     v.track:SetValue(r.tracked and true or false)
     local ready = r.ready and true or false
@@ -703,30 +714,45 @@ function UI.Professions(parent, opts)
     v.none = UI.Text(v, "caption", "ink-muted")
     v.none:SetPoint("CENTER")
     v.none:SetValue("Choose a recipe")
-    v.product = UI.ItemSlot(v, 36)
+    -- the foot: Track, quantity, Create all, Create
+    v.foot = CreateFrame("Frame", nil, v)
+    v.foot:SetPoint("BOTTOMLEFT")
+    v.foot:SetPoint("BOTTOMRIGHT")
+    v.foot:SetHeight(30)
+    v.why = UI.Text(v, "caption", "ember-text")
+    v.why:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", 0, S["space-3"])
+    -- everything above it scrolls when it's taller than the pane
+    v.scroll = UI.ScrollArea(v, S["space-3"])
+    v.scroll:SetPoint("TOPLEFT")
+    v.scroll:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", -S["space-4"],
+        S["space-3"] + T.type.caption.lineHeight + S["space-3"])
+    v.body = v.scroll.child
+    v.scroll:HookScript("OnSizeChanged", function(self) v.body:SetWidth(math.max(1, self:GetWidth())) end)
+    local c = v.body
+    v.product = UI.ItemSlot(c, 36)
     v.product:SetPoint("TOPLEFT")
     v.product:SetScript("OnEnter", function(self) if f.recipeData and f.recipeData.onProduct then f.recipeData.onProduct(self) end end)
     v.product:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    v.title = UI.Text(v, "unit-name-lg", "ink")
+    v.title = UI.Text(c, "unit-name-lg", "ink")
     v.title:SetPoint("TOPLEFT", v.product, "TOPRIGHT", S["space-5"], 0)
-    v.title:SetPoint("RIGHT", v, "RIGHT")
+    v.title:SetPoint("RIGHT", c, "RIGHT")
     v.title:SetJustifyH("LEFT")
-    v.makes = UI.Text(v, "caption", "ink-muted")
+    v.makes = UI.Text(c, "caption", "ink-muted")
     v.makes:SetPoint("TOPLEFT", v.title, "BOTTOMLEFT", 0, -1)
-    v.desc = UI.Text(v, "caption", "ink-muted")
+    v.desc = UI.Text(c, "caption", "ink-muted")
     v.desc:SetPoint("TOPLEFT", v.makes, "BOTTOMLEFT", 0, -1)
-    v.desc:SetPoint("RIGHT", v, "RIGHT")
+    v.desc:SetPoint("RIGHT", c, "RIGHT")
     v.desc:SetJustifyH("LEFT")
     v.desc:SetWordWrap(true)
     v.tools, v.reagents = {}, {}
-    v.reagentHead = UI.Text(v, "header", "gilt-text")
+    v.reagentHead = UI.Text(c, "header", "gilt-text")
     v.reagentHead:SetValue("Reagents")
-    v.cooldown = UI.Text(v, "caption", "amber")
-    v.source = UI.Text(v, "caption", "ink-muted")
+    v.cooldown = UI.Text(c, "caption", "amber")
+    v.source = UI.Text(c, "caption", "ink-muted")
     v.source:SetJustifyH("LEFT")
     v.source:SetWordWrap(true)
     v.source:SetSpacing(2)
-    v.sourceHead = UI.Text(v, "header", "gilt-text")
+    v.sourceHead = UI.Text(c, "header", "gilt-text")
     v.sourceHead:SetValue("Source")
     v.sourceItem = makeReagent(f)
     v.sourceItem.slot:SetScript("OnEnter", function(self)
@@ -734,11 +760,6 @@ function UI.Professions(parent, opts)
         if src and src.item and src.item.onEnter then src.item.onEnter(self) end
     end)
     v.sourceItem:Hide()
-    -- the foot: Track, quantity, Create all, Create
-    v.foot = CreateFrame("Frame", nil, v)
-    v.foot:SetPoint("BOTTOMLEFT")
-    v.foot:SetPoint("BOTTOMRIGHT")
-    v.foot:SetHeight(30)
     v.create = UI.Button(v.foot, { text = "Create", variant = "primary",
         onClick = function() if f.onCreate then f.onCreate(v.qty.value or 1) end end })
     v.create:SetPoint("BOTTOMRIGHT")
@@ -749,8 +770,6 @@ function UI.Professions(parent, opts)
     v.qty:SetPoint("RIGHT", v.createAll, "LEFT", -S["space-3"], 0)
     v.track = UI.Checkbox(v.foot, { label = "Track", onChange = function(on) if f.onTrack then f.onTrack(on) end end })
     v.track:SetPoint("LEFT", v.foot, "LEFT", 0, 0)
-    v.why = UI.Text(v, "caption", "ember-text")
-    v.why:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", 0, S["space-3"])
     f:SetRecipe(nil)
     return f
 end

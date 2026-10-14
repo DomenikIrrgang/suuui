@@ -472,10 +472,20 @@ function M:Recipe(id)
     end
     r.onReagent = function(i, owner) itemTip(owner, reagents[i] and reagents[i].itemID) end
     local toolsMet = true
+    -- one line per tool: the game can list one twice (Hoof-Shaped Foot
+    -- Pedal: Arclight Spanner, found in game); met if any of them is
+    local byName = {}
     for _, t in ipairs(call(C_TradeSkillUI.GetRecipeRequirements, id) or {}) do
-        r.tools[#r.tools + 1] = { name = t.name, met = t.met and true or false }
-        if not t.met then toolsMet = false end
+        local line = t.name and byName[t.name]
+        if line then
+            line.met = line.met or (t.met and true or false)
+        else
+            line = { name = t.name, met = t.met and true or false }
+            r.tools[#r.tools + 1] = line
+            if t.name then byName[t.name] = line end
+        end
     end
+    for _, t in ipairs(r.tools) do if not t.met then toolsMet = false end end
     local cd = call(C_TradeSkillUI.GetRecipeCooldown, id)
     if cd and cd > 0 then r.cooldown = SecondsToTime and SecondsToTime(cd) or (math.ceil(cd) .. " s") end
     r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false
