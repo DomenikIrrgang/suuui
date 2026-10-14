@@ -456,19 +456,9 @@ function M:Source(id)
     end
     for _, s in ipairs(list) do
         if s.t == "t" then
-            -- the trainers recorded teaching it (yours), else any
-            local mine = {}
-            for _, n in ipairs(s.n or {}) do
-                local tName, zone, faction = strsplit("|", n)
-                if faction == "" or not MY_FACTION or faction:find(MY_FACTION, 1, true) then
-                    mine[#mine + 1] = place(tName, zone)
-                end
-            end
-            for i = 1, math.min(3, #mine) do lines[#lines + 1] = "Taught by " .. mine[i] end
-            if #mine > 3 then lines[#lines + 1] = more(#mine - 3, "trainer") end
-            if #mine == 0 then
-                lines[#lines + 1] = "From " .. (profession and (article(profession) .. " " .. profession .. " trainer") or "a profession trainer")
-            end
+            -- any trainer of the profession: there are many, in every city
+            -- (asked for in game: no names)
+            lines[#lines + 1] = "From " .. (profession and (article(profession) .. " " .. profession .. " trainer") or "a profession trainer")
         elseif s.t == "a" then
             lines[#lines + 1] = "Learned automatically with the profession"
         elseif s.t == "i" and s.i then
