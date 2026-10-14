@@ -564,6 +564,11 @@ function M:FoldList()
     -- Blizzard's View Log and Invite Member: the Log tab and the roster
     -- (Invite to guild) have their jobs (asked for in game)
     self:HideButtons(f, 0)
+    -- and by their keys, whatever their labels say (Invite Member was still
+    -- there by label alone, found in game)
+    for _, b in ipairs({ f.InviteButton, f.GuildLogButton, f.CommunitiesControlFrame and f.CommunitiesControlFrame.InviteButton }) do
+        if b then b:SetAlpha(0); b:EnableMouse(false) end
+    end
     self:LayChat()
 end
 
@@ -574,7 +579,7 @@ function M:HideButtons(frame, depth)
     for _, c in ipairs({ frame:GetChildren() }) do
         if c.GetObjectType and c:GetObjectType() == "Button" and not c.suuOwn then
             local fs = c.GetFontString and c:GetFontString()
-            local text = fs and fs:GetText()
+            local text = (fs and fs:GetText()) or (c.GetText and c:GetText())
             if type(text) == "string" and (HIDDEN_BUTTONS[text] or text == _G.GUILD_VIEW_LOG) then
                 c:SetAlpha(0)
                 c:EnableMouse(false)
