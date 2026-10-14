@@ -7,6 +7,7 @@
 --
 --   LFG.Interest()            -- { listed, roles, quests, level, zone, watches }
 --   LFG.Watch(key, on)        -- an activity to hear about without listing
+--   LFG.Watches()             -- { key = true } of those
 --   LFG.Languages()           -- the language modules to read with
 --   LFG.MatchReasons(entry)   -- { "role", "activity", ... } for one entry
 --   events: Match(entry, newReasons), Contacted(entry, what)
@@ -21,7 +22,6 @@ local _, ns = ...
 local LFG = ns.LFG
 
 local I = {}
-LFG.Interest = I
 
 I.watches = {}
 
@@ -111,6 +111,8 @@ end
 function LFG.Watch(key, on)
     I.watches[key] = on and true or nil
 end
+
+function LFG.Watches() return I.watches end
 
 --------------------------------------------------------------------------------
 -- Matching

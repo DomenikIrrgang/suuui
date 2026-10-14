@@ -198,7 +198,7 @@ local function watchedCategories()
         end
     end
     for _, key in ipairs(listing and listing.activities or {}) do addFor(key) end
-    for key in pairs(LFG.Interest and LFG.Interest.watches or {}) do addFor(key) end
+    for key in pairs(LFG.Watches and LFG.Watches() or {}) do addFor(key) end
     return cats, listing
 end
 
