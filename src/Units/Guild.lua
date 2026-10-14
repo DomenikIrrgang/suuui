@@ -240,8 +240,9 @@ end
 --     included (its communitiesShowOffline setting, read when it loads);
 --   - the details panel's Edit is a secure button that clicks that
 --     member's row there (the game picks them);
---   - then the game's own note box (invisible) takes Edit's place: the
---     click's release, or a second click, opens the game's note popup.
+--   - then the game's own note box (invisible) takes Edit's place and Edit
+--     reads "Click again": the second click opens the game's note popup
+--     (the first one's release doesn't reach it, found in game).
 function M:BlizzList()
     return self.frame and self.frame.MemberList
 end
@@ -282,6 +283,7 @@ function M:StowNoteBoxes()
     for _, box in ipairs({ d.NoteBackground, d.OfficerNoteBackground }) do
         if box and box.suuPlaced then
             box.suuPlaced = nil
+            if box.suuEdit then box.suuEdit:SetLabel("Edit") end
             box:ClearAllPoints()
             box:SetPoint("TOPLEFT", d, "TOPLEFT", 0, 0)
         end
@@ -296,6 +298,9 @@ function M:PlaceNoteBox(officer, edit)
     local box = officer and d.OfficerNoteBackground or d.NoteBackground
     if not box then return end
     box.suuPlaced = true
+    box.suuEdit = edit
+    -- armed, the way Remove is: the second click opens the game's note box
+    edit:SetLabel("Click again")
     box:ClearAllPoints()
     box:SetAllPoints(edit)
     box:SetFrameStrata("DIALOG")
