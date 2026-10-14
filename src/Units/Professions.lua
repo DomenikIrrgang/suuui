@@ -115,13 +115,8 @@ function M:Profession(index)
     -- its recipes, as counted when it was last open
     local counts = skillLine and self:CharData().recipes
     card.recipes = counts and counts[skillLine]
-    if card.spellID then
-        -- its own spell is the card (dragged, or clicked to open it): not
-        -- again among its spells
-        local rest = {}
-        for _, sp in ipairs(card.spells) do if sp.spellID ~= card.spellID then rest[#rest + 1] = sp end end
-        card.spells = rest
-    end
+    -- every spell stays listed, its own included (Fishing was missing
+    -- under Fishing: found in game)
     return card
 end
 
