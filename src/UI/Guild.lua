@@ -3,8 +3,8 @@
 -- search, Show offline (off by default), "7 online · 26 members"; columns
 -- Name, Level, Class (its icon and name), Zone, Rank, Note (click a heading to sort; rank order by
 -- default); names in class colour with the class diamond, Away and Busy as
--- neutral badges, offline members' names in class colour too and the rest of
--- their row in ink-faint, with how long ago in place
+-- neutral badges, offline members' names in class colour too but faded
+-- (opacity-disabled) and the rest of their row in ink-faint, with how long ago in place
 -- of the zone. The selected member's actions along the foot: Whisper and
 -- Invite; Promote, Demote and Remove only when your rank may and only for
 -- members below you (Remove in ember); anything your rank can't do stays
@@ -135,7 +135,9 @@ function G:Draw()
         -- the name in its class colour, online or not (asked for in game);
         -- an offline member's other columns stay ink-faint
         local color = m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or (m.online and "ink" or "ink-faint")
-        r.diamond:SetVertexColor(UI.RGBA(color))
+        -- offline: still the class colour, greyed out like the rest of the row
+        local fade = m.online and 1 or T.opacity["opacity-disabled"]
+        r.diamond:SetVertexColor(UI.RGBA(color, fade))
         r.diamond:ClearAllPoints()
         r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
         local values = { name = m.name, level = m.level and tostring(m.level) or "", class = m.className or "",
@@ -148,7 +150,8 @@ function G:Draw()
             t:SetPoint("LEFT", r, "LEFT", cols[i].x + indent, 0)
             t:SetWidth(cols[i].w - indent)
             t:SetValue(values[key] or "")
-            t:SetColor(i == 1 and color or (m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint"))
+            if i == 1 then t:SetColor(color, fade)
+            else t:SetColor(m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint") end
             if key == "class" then
                 local atlas = m.class and GetClassAtlas and GetClassAtlas(m.class)
                 local coords = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
@@ -161,7 +164,7 @@ function G:Draw()
                 end
                 r.classIcon:SetShown((atlas or coords) and true or false)
                 r.classIcon:SetDesaturated(not m.online)
-                r.classIcon:SetAlpha(m.online and 1 or 0.6)
+                r.classIcon:SetAlpha(fade)
                 r.classIcon:ClearAllPoints()
                 r.classIcon:SetPoint("LEFT", r, "LEFT", cols[i].x, 0)
             end
