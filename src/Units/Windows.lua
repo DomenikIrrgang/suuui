@@ -294,12 +294,55 @@ function M:SocialTabs()
     chrome:SetTabs(tabs)
 end
 
+--------------------------------------------------------------------------------
+-- The guild window (Blizzard's Communities window, J; 3.4): SuuUI's header,
+-- every texture of its own away, its side tabs (Chat, Roster, Info) as text
+-- tabs along the header; the play-style tab left out for now. The Guild
+-- module puts its pages over Blizzard's.
+--------------------------------------------------------------------------------
+
+function M:SkinCommunities()
+    local f = _G.CommunitiesFrame
+    if not f or f.suuChrome then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Guild", icon = "flag", binding = "TOGGLEGUILDTAB", close = _G.CommunitiesFrameCloseButton,
+        topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.CommunitiesFrameInset, f.Bg, f.TopTileStreaks,
+                 f.PortraitOverlay },
+    })
+    for _, region in ipairs({ f:GetRegions() }) do
+        if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
+    end
+    skinMaxMin(chrome, f.MaxMinButtonFrame)
+    local tabs = {}
+    for _, t in ipairs({ { f.ChatTab, "Chat" }, { f.RosterTab, "Roster" }, { f.GuildInfoTab, "Info" } }) do
+        local b = t[1]
+        if b then
+            tabs[#tabs + 1] = { button = b, label = t[2], short = t[2],
+                                selected = function() return b.GetChecked and b:GetChecked() or false end }
+            b:HookScript("OnClick", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+        end
+    end
+    if #tabs > 0 then chrome:SetTabs(tabs) end
+    -- the play-style and benefits tabs out of sight
+    for _, b in ipairs({ f.GuildPreferredPlaySettingsTab, f.GuildBenefitsTab }) do
+        if b then
+            b:SetAlpha(0)
+            b:EnableMouse(false)
+        end
+    end
+    if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() chrome:UpdateTabs() end) end
+    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    self.communities = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
     self:SkinProfessions()
     self:SkinFriends()
     self:SkinSocial()
+    self:SkinCommunities()
 end
 
 function M:OnEnable()
