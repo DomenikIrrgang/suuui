@@ -825,3 +825,101 @@ function UI.ReskinDialog(f)
     end
     pass(f, 0, { rowDepth = 0 })
 end
+
+-- One of the game's shared popups (StaticPopup1-4: the guild note popup)
+-- in SuuUI's look while it shows that dialog: glass inside a gilt-line edge
+-- with the corner diamond, its text in body ink, the edit box as a sunk
+-- field, Accept as the primary (arcane) button, the others quiet. The game
+-- reuses these frames for every popup, so it's all undone when it hides.
+-- SuuUI's art lives on its own child frames (shown only while it's ours).
+local popups = setmetatable({}, { __mode = "k" })
+
+local function skinFrame(parent, fill, edge, level)
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetAllPoints()
+    f:SetFrameLevel(level or parent:GetFrameLevel())
+    f:EnableMouse(false)
+    f.fill = UI.Fill(f, fill)
+    f.fill:SetAllPoints()
+    f.edge = UI.Border(f, edge)
+    f:Hide()
+    return f
+end
+
+local function restorePopup(st)
+    for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
+    st.undo = {}
+    for _, f in pairs(st.skins) do f:Hide() end
+    st.active = false
+end
+
+local function popupButton(st, b, primary)
+    if not (b and b:IsShown()) then return end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        local t = ask(b, get)
+        if t then hideRegion(st, t) end
+    end
+    for _, r in ipairs({ b:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
+    end
+    local skin = st.skins[b]
+    if not skin then
+        skin = skinFrame(b, primary and "arcane" or "surface-raised", primary and "arcane" or "gilt-line")
+        st.skins[b] = skin
+        b:HookScript("OnEnter", function() if st.active and not primary then skin.edge:SetColor("gilt") end end)
+        b:HookScript("OnLeave", function() if st.active and not primary then skin.edge:SetColor("gilt-line") end end)
+    end
+    skin.edge:SetColor(primary and "arcane" or "gilt-line")
+    skin:Show()
+    local fs = ask(b, "GetFontString")
+    if fs then menuText(st, fs, primary and "on-signal" or "ink"); ns.Fonts.Apply(fs, "label") end
+end
+
+function UI.ReskinPopup(dialog)
+    if not dialog or ask(dialog, "IsForbidden") then return end
+    local st = popups[dialog]
+    if not st then
+        st = { undo = {}, skins = {} }
+        local panel = skinFrame(dialog, "surface-glass", "gilt-line")
+        UI.Shadow(panel, "shadow-panel")
+        UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        st.skins[dialog] = panel
+        popups[dialog] = st
+        dialog:HookScript("OnHide", function() if st.active then restorePopup(st) end end)
+    end
+    if st.active then restorePopup(st) end
+    st.active = true
+    st.skins[dialog]:Show()
+    -- the game's frame art
+    for _, key in ipairs({ "Border", "NineSlice", "BG", "Bg" }) do
+        local part = dialog[key]
+        if part and part.SetAlpha then hideRegion(st, part) end
+    end
+    for _, r in ipairs({ dialog:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
+    end
+    local text = dialog.Text
+    if text then menuText(st, text, "ink") end
+    -- the edit box: a sunk field
+    local edit = dialog.EditBox
+    if edit and edit:IsShown() then
+        if edit.NineSlice then hideRegion(st, edit.NineSlice) end
+        for _, r in ipairs({ edit:GetRegions() }) do
+            if r:GetObjectType() == "Texture" then hideRegion(st, r) end
+        end
+        local skin = st.skins[edit]
+        if not skin then
+            skin = skinFrame(edit, "surface-sunk", "gilt-line")
+            skin:ClearAllPoints()
+            skin:SetPoint("TOPLEFT", -4, 2)
+            skin:SetPoint("BOTTOMRIGHT", 4, -2)
+            st.skins[edit] = skin
+        end
+        skin:Show()
+    end
+    local container = dialog.ButtonContainer
+    for i = 1, 4 do
+        local b = (container and container["Button" .. i]) or dialog["button" .. i]
+        popupButton(st, b, i == 1)
+    end
+end

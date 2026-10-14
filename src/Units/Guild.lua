@@ -1159,6 +1159,19 @@ function M:Build()
     self:Follow()
 end
 
+-- The game's note popup (opened by its own note box, notes) in SuuUI's look.
+local NOTE_POPUP = "SET_GUILD_COMMUNITIY_NOTE"
+
+function M:HookNotePopup()
+    if self.notePopupHooked or type(StaticPopup_Show) ~= "function" then return end
+    self.notePopupHooked = true
+    hooksecurefunc("StaticPopup_Show", function(which)
+        if which ~= NOTE_POPUP or not self:IsEnabled() then return end
+        local dialog = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
+        if dialog then UI.ReskinPopup(dialog) end
+    end)
+end
+
 function M:OnEnable()
     -- the game's member list with offline members too (notes for them go
     -- through it). It reads this setting once, when it loads, and may load
@@ -1166,6 +1179,7 @@ function M:OnEnable()
     -- next load on; SuuUI can't change the loaded list without tainting it
     local setCVar = (C_CVar and C_CVar.SetCVar) or SetCVar
     if setCVar then pcall(setCVar, "communitiesShowOffline", "1") end
+    self:HookNotePopup()
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid

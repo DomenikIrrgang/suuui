@@ -359,6 +359,7 @@ API.UI.ReskinIconButton = UI.ReskinIconButton
 API.UI.ReskinFillBar = UI.ReskinFillBar
 API.UI.ReskinDialog = UI.ReskinDialog -- ReskinDialog(frame): one of Blizzard's small dialogs (a text editor) as a SuuUI panel
 API.UI.ReskinMenu = UI.ReskinMenu -- ReskinMenu(menu): an open Blizzard menu in the context menu's look until it closes
+API.UI.ReskinPopup = UI.ReskinPopup -- ReskinPopup(dialog): one of the game's shared popups in SuuUI's look until it hides
 API.UI.ReskinCollapseButton = UI.ReskinCollapseButton
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
