@@ -10,6 +10,8 @@
 --   Chat: the channels you're in.
 -- "/suu probe lfg click": a button; its click searches and saves your
 -- listing again unchanged (is a click enough for both?).
+-- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
+-- window. "/suu probe lfg delist": a button whose click delists you.
 -- "/suu probe lfg record": the public channels' messages (and say/yell),
 -- as they arrive, with the channel, author, zone, whether you were in
 -- combat or an instance and whether the text was secret; kept across
@@ -217,6 +219,87 @@ function LP.ClickTest()
     ns.Print("LFG probe: click the button at the top of the screen once.")
 end
 
+-- Watch for the game's verdict on what follows.
+local function verdicts(list, seconds)
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE",
+                         "LFG_LIST_ACTIVE_ENTRY_UPDATE" }) do f:RegisterEvent(e) end
+    f:SetScript("OnEvent", function(_, event, a1, a2)
+        list[#list + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+    end)
+    C_Timer.After(seconds or 5, function() f:UnregisterAllEvents() end)
+end
+
+local function windowsWith(channel)
+    local out = {}
+    for i = 1, (NUM_CHAT_WINDOWS or 10) do
+        local list = { GetChatWindowChannels(i) }
+        for j = 1, #list, 2 do
+            if type(list[j]) == "string" and list[j]:lower() == channel:lower() then out[#out + 1] = i end
+        end
+    end
+    return out
+end
+
+-- Join LookingForGroup (from your command), then take it off every chat
+-- window: can the library read it without it showing in chat?
+function LP.Join()
+    local s = store()
+    local t = { events = {} }
+    s.join = t
+    verdicts(t.events, 6)
+    local ok, err = pcall(JoinChannelByName, "LookingForGroup")
+    t.call = ok and "called" or ("error: " .. tostring(err))
+    C_Timer.After(1.5, function()
+        local okN, index, name = pcall(GetChannelName, "LookingForGroup")
+        t.joined = okN and (tostring(index) .. " " .. tostring(name)) or "error"
+        local before = windowsWith("LookingForGroup")
+        t.windowsBefore = table.concat(before, ",")
+        for _, i in ipairs(before) do
+            local cf = _G["ChatFrame" .. i]
+            if cf and cf.RemoveChannel then
+                local okR, errR = pcall(cf.RemoveChannel, cf, "LookingForGroup")
+                t["remove" .. i] = okR and "called" or ("error: " .. tostring(errR))
+            end
+        end
+        C_Timer.After(1, function()
+            t.windowsAfter = table.concat(windowsWith("LookingForGroup"), ",")
+            ns.Print(("LFG probe: LookingForGroup %s, on windows %s, after removing: %s; /reload."):format(t.joined,
+                t.windowsBefore ~= "" and t.windowsBefore or "none", t.windowsAfter ~= "" and t.windowsAfter or "none"))
+        end)
+    end)
+end
+
+-- A button whose click removes your listing (you're delisted).
+function LP.Delist()
+    local s = store()
+    local t = { events = {} }
+    s.delist = t
+    local lfg = C_LFGList
+    local okH, has = pcall(lfg.HasActiveEntryInfo)
+    t.listedBefore = okH and tostring(has) or "error"
+    local b = LP.delistButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    LP.delistButton = b
+    b:SetSize(320, 30)
+    b:ClearAllPoints()
+    b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+    b:SetFrameStrata("DIALOG")
+    b:SetText("LFG probe: click to delist yourself")
+    b:SetScript("OnClick", function(self)
+        verdicts(t.events, 4)
+        local ok, err = pcall(lfg.RemoveListing)
+        t.call = ok and "called" or ("error: " .. tostring(err))
+        self:Hide()
+        C_Timer.After(2, function()
+            local okA, after = pcall(lfg.HasActiveEntryInfo)
+            t.listedAfter = okA and tostring(after) or "error"
+            ns.Print(("LFG probe: listed before %s, after %s; /reload."):format(t.listedBefore, t.listedAfter))
+        end)
+    end)
+    b:Show()
+    ns.Print("LFG probe: click the button at the top of the screen to delist yourself.")
+end
+
 -- The recorder: public chat as it arrives.
 local recorder
 local CHAT_EVENTS = { "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL" }
@@ -272,6 +355,8 @@ function LP.Command(rest)
     if rest == "record" then LP.Record(true) return end
     if rest == "stop" then LP.Record(false) return end
     if rest == "click" then LP.ClickTest() return end
+    if rest == "join" then LP.Join() return end
+    if rest == "delist" then LP.Delist() return end
     if rest == "clear" then
         local s = store()
         s.record = { lines = {}, on = s.record and s.record.on or false }
