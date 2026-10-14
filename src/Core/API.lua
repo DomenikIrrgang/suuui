@@ -330,6 +330,7 @@ API.UI.PROFESSION_FILTER_DEFAULTS = UI.PROFESSION_FILTER_DEFAULTS -- the recipe 
 API.UI.ContextMenu = UI.ContextMenu -- ContextMenu(owner, { title, items = { { label, onClick, disabled } | { separator = true } } }): a right-click menu at the cursor, in the tooltip's look
 API.UI.ContextMenuFrom = UI.ContextMenuFrom -- ContextMenuFrom(owner, fn(owner, root)): the same, described like MenuUtil's (root:CreateTitle, CreateButton, CreateDivider)
 API.UI.CloseContextMenu = UI.CloseContextMenu
+API.UI.Contacts = UI.Contacts -- Contacts(parent) -> SetData({ view, status, online, total, friends, ignored, selected }); onView, onStatus, onSelect, onWhisper, onInvite, onAdd, onIgnore, onUnignore, onMenu
 API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H

@@ -185,10 +185,55 @@ function M:SkinProfessions()
     self.professions = chrome
 end
 
+--------------------------------------------------------------------------------
+-- The friends window (3.4): SuuUI's header; Contacts and Raid as tabs (the
+-- Social module puts its pages over Blizzard's); Quick Join left out
+-- (asked: not used on Forever).
+--------------------------------------------------------------------------------
+
+local FRIENDS_TABS = {
+    { name = "FriendsFrameTab1", label = "Contacts", tab = 1 },
+    { name = "FriendsFrameTab3", label = "Raid", tab = 3 },
+}
+
+function M:SkinFriends()
+    local f = _G.FriendsFrame
+    if not f or f.suuChrome then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Social", icon = "people", binding = "TOGGLESOCIAL", close = _G.FriendsFrameCloseButton,
+        topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.FriendsFrameInset, f.Bg, f.TopTileStreaks },
+    })
+    local list = {}
+    for _, t in ipairs(FRIENDS_TABS) do
+        local b = _G[t.name]
+        if b then
+            local index = t.tab
+            list[#list + 1] = { button = b, label = t.label, short = t.label,
+                selected = function() return (f.selectedTab or (PanelTemplates_GetSelectedTab and PanelTemplates_GetSelectedTab(f))) == index end }
+        end
+    end
+    chrome:SetTabs(list)
+    -- Quick Join's tab out of sight
+    local qj = _G.FriendsFrameTab4
+    if qj then
+        qj:SetAlpha(0)
+        qj:EnableMouse(false)
+        qj:ClearAllPoints()
+        qj:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+    end
+    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    if PanelTemplates_SetTab then
+        hooksecurefunc("PanelTemplates_SetTab", function(frame) if frame == f then chrome:UpdateTabs() end end)
+    end
+    self.friends = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
     self:SkinProfessions()
+    self:SkinFriends()
 end
 
 function M:OnEnable()

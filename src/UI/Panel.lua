@@ -167,6 +167,8 @@ end
 --   UI.MakeModal(panel)             -- panel:Show()/Hide() bring the shade
 --   UI.Confirm({ title, text, confirm = "Replace", cancel = "Cancel",
 --                onConfirm = fn, onCancel = fn,
+--                input = { label, placeholder, value }, -- 0.13: a text to
+--                -- enter, given to onConfirm(text); OK once there is some
 --                typeToConfirm = "UNLEARN" })  -- 0.13: a field under the text;
 --                -- the confirm button only works once it says this word
 --                -- (any case), Enter then confirms
@@ -361,11 +363,13 @@ function UI.Confirm(opts)
         p.text:SetFixedWidth(360)
         p.text:SetPoint("TOPLEFT")
         local function confirm()
-            if p.word and (p.field:GetValue() or ""):upper() ~= p.word then return end
+            local text = p.field:GetValue() or ""
+            if p.word and text:upper() ~= p.word then return end
+            if p.input and strtrim(text) == "" then return end
             local fn = p.onConfirm
             p.onCancel = nil
             p:Hide()
-            if fn then fn() end
+            if fn then fn(p.input and strtrim(text) or nil) end
         end
         p.ok = UI.Button(p, { text = "OK", variant = "primary", width = 110, onClick = confirm })
         p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
@@ -383,6 +387,7 @@ function UI.Confirm(opts)
         p.prompt:SetPoint("TOP")
         p.field = UI.TextField(p.group, { width = 200, onTextChanged = function(text)
             if p.word then p.ok:SetEnabledState((text or ""):upper() == p.word) end
+            if p.input then p.ok:SetEnabledState(strtrim(text or "") ~= "") end
         end })
         p.field:SetPoint("BOTTOM")
         p.field.edit:HookScript("OnEnterPressed", function() confirm() end)
@@ -404,15 +409,20 @@ function UI.Confirm(opts)
     p.cancel:SetLabel(opts.cancel or "Cancel")
     p:Hide() -- an older question still open is cancelled first
     p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
-    -- a word to type first
+    -- a word to type first, or something to enter (0.13: input = { label,
+    -- placeholder }: onConfirm gets the text; OK once there is some)
     p.word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil
-    p.group:SetShown(p.word ~= nil)
-    p.field:SetValue("")
-    p.ok:SetEnabledState(p.word == nil)
-    if p.word then p.prompt:SetValue(("Type %q to confirm."):format(p.word)) end
-    p:SetHeight(170 + (p.word and (p.group:GetHeight() + 12) or 0))
+    p.input = opts.input
+    local field = p.word or p.input
+    p.group:SetShown(field and true or false)
+    p.field:SetValue(p.input and p.input.value or "")
+    p.ok:SetEnabledState(not field or (p.input and (p.input.value or "") ~= "") or false)
+    if p.word then p.prompt:SetValue(("Type %q to confirm."):format(p.word))
+    elseif p.input then p.prompt:SetValue(p.input.label or "") end
+    if p.field.placeholder then p.field.placeholder:SetValue(p.input and p.input.placeholder or "") end
+    p:SetHeight(170 + (field and (p.group:GetHeight() + 12) or 0))
     p:Show()
-    if p.word then p.field.edit:SetFocus() end
+    if field then p.field.edit:SetFocus() end
     return p
 end
 
