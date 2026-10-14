@@ -239,6 +239,12 @@ function M:SkinSocial()
         topInset = 20, under = "microMenu",
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.SocialUIFrameInset, _G.SocialUIFrameBg, f.TopTileStreaks },
     })
+    -- every other texture of the window's own away too: one behind the
+    -- content (under the Battle.net bar) darkened half the page, found in
+    -- game; SuuUI's glass stays
+    for _, region in ipairs({ f:GetRegions() }) do
+        if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
+    end
     self.social = chrome
 end
 
