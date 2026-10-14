@@ -320,6 +320,67 @@ function LP.Delist()
     ns.Print("LFG probe: click the button at the top of the screen to delist yourself.")
 end
 
+-- Forever's language preference (its "preferred play settings", which
+-- shard players by language): what an addon can read of it, plus the
+-- client's own locale and the tool's language filters.
+function LP.Lang()
+    local s = store()
+    local t = {}
+    s.lang = t
+    t.clientLocale = tostring(GetLocale and GetLocale())
+    local acc = C_AccountServices
+    t.api = acc and "C_AccountServices" or "missing"
+    local function read(label)
+        if not acc then return end
+        local ok, loaded, localeID, dcID, localeDate, dcDate, cooldown = pcall(acc.GetPreferredPlaySettings)
+        t[label] = ok and ("loaded=%s locale=%s datacenter=%s localeChanged=%s cooldownDays=%s"):format(tostring(loaded),
+            tostring(localeID), tostring(dcID), tostring(localeDate), tostring(cooldown)) or ("error: " .. tostring(loaded))
+    end
+    read("before")
+    if acc then
+        local okL, ids, names = pcall(acc.GetPreferredLocales)
+        t.locales = {}
+        if okL and type(ids) == "table" then
+            for i, id in ipairs(ids) do t.locales[#t.locales + 1] = tostring(id) .. " " .. tostring(names and names[i]) end
+        else
+            t.locales[1] = "error: " .. tostring(ids)
+        end
+        local okD, dids, dnames = pcall(acc.GetPreferredDatacenterLocalities)
+        t.datacenters = {}
+        for i, id in ipairs(okD and type(dids) == "table" and dids or {}) do t.datacenters[#t.datacenters + 1] = tostring(id) .. " " .. tostring(dnames and dnames[i]) end
+        local okF, canLocale, canDC = pcall(acc.GetPreferredPlaySettingsFeatures)
+        t.features = okF and ("canChangeLocale=%s canChangeDatacenter=%s"):format(tostring(canLocale), tostring(canDC)) or "error"
+    end
+    -- the tool's language filters
+    local lfg = C_LFGList
+    if lfg then
+        for _, fn in ipairs({ "GetLanguageSearchFilter", "GetDefaultLanguageSearchFilter", "GetAvailableLanguageSearchFilter" }) do
+            local ok, v = pcall(lfg[fn])
+            t[fn] = ok and show(v) or ("error: " .. tostring(v))
+        end
+    end
+    -- ask for it, and read again when it comes
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PREFERRED_PLAY_SETTINGS_UPDATED")
+    f:SetScript("OnEvent", function(self)
+        self:UnregisterAllEvents()
+        t.event = "PREFERRED_PLAY_SETTINGS_UPDATED"
+        read("after")
+        ns.Print("LFG probe: language preference read; /reload.")
+    end)
+    if acc and acc.RequestPreferredPlaySettings then
+        local ok, started = pcall(acc.RequestPreferredPlaySettings)
+        t.request = ok and tostring(started) or ("error: " .. tostring(started))
+    end
+    C_Timer.After(6, function()
+        if not t.event then
+            f:UnregisterAllEvents()
+            read("after6s")
+            ns.Print("LFG probe: language preference: no event in 6 seconds (saved); /reload.")
+        end
+    end)
+end
+
 -- The recorder: public chat as it arrives.
 local recorder
 local CHAT_EVENTS = { "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL" }
@@ -380,6 +441,7 @@ function LP.Command(rest)
     if rest == "click" then LP.ClickTest() return end
     if rest == "join" then LP.Join() return end
     if rest == "timerjoin" then LP.TimerJoin() return end
+    if rest == "lang" then LP.Lang() return end
     if rest == "delist" then LP.Delist() return end
     if rest == "clear" then
         local s = store()
