@@ -785,6 +785,14 @@ function M:LayChat()
     f.Chat:ClearAllPoints()
     f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(top + (bh > 0 and bh + S["space-4"] or 0)))
     f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + EDIT_H + S["space-3"])
+    -- the messages inside the box with room around them (they ran over its
+    -- top and bottom edges and sat tight on its left, found in game)
+    local mf = f.Chat.MessageFrame
+    if mf then
+        mf:ClearAllPoints()
+        mf:SetPoint("TOPLEFT", f.Chat, "TOPLEFT", S["space-5"], -S["space-4"])
+        mf:SetPoint("BOTTOMRIGHT", f.Chat, "BOTTOMRIGHT", -(S["space-5"] + 8), S["space-4"])
+    end
     -- the stream dropdown in the messages box's top right corner
     if f.StreamDropdown then
         f.StreamDropdown:ClearAllPoints()
@@ -814,6 +822,7 @@ function M:LayChat()
         hooksecurefunc(f.Chat, "SetPoint", again)
         if f.ChatEditBox then hooksecurefunc(f.ChatEditBox, "SetPoint", again) end
         if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
+        if f.Chat.MessageFrame then hooksecurefunc(f.Chat.MessageFrame, "SetPoint", again) end
         -- the hidden member list takes no clicks in the chat's mode
         if f.MemberList then
             f.MemberList:HookScript("OnShow", again)
