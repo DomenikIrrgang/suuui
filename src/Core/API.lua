@@ -271,6 +271,8 @@ API.UI.TraitTooltip = UI.TraitTooltip -- TraitTooltip(owner, configID, nodeID, {
 API.UI.LegacyPoints = UI.LegacyPoints -- LegacyPoints(parent[, { account = false }]) -> SetPoints({ earned, total, spent, cap, pending, character })
 API.UI.LegacyChallenges = UI.LegacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
 API.UI.Professions = UI.Professions -- Professions(parent) -> SetTabs(list, selected), SetOverview({ primary, secondary }), SetCrafting({ name, rank, skill, max, categories, selected }), SetRecipe(r); onTab, onOpen, onSelect, onRecipeEnter, onSearch, onFilters, onTrack, onCreate, onCreateAll
+API.UI.PROFESSION_FILTER_DEFAULTS = UI.PROFESSION_FILTER_DEFAULTS -- the recipe list's filters at rest: { show = "learned", difficulty = {}, quality = {}, other = {} }
+API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H
 API.UI.LegacyTrack = UI.LegacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip

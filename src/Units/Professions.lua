@@ -299,13 +299,39 @@ function M:InGame(info, profession)
     return root.name == profession
 end
 
+-- The game's relativeDifficulty (0 optimal .. 3 trivial) as the filter's keys.
+local DIFFICULTY_KEYS = { [0] = "optimal", "medium", "easy", "trivial" }
+
+-- The skill a recipe requires: its recipe item's, the trainers' (this
+-- account's recordings first, else the shipped data); nil if not known.
+function M:SkillFor(id, profession, name)
+    local need
+    local mine = self:Recorded(profession, name)
+    for _, src in ipairs(SuuUI.RecipeSources(id) or {}) do
+        local skill = src.s
+        if src.t == "t" and mine and mine.skill then skill = mine.skill end
+        if skill and (not need or skill < need) then need = skill end
+    end
+    if not need and mine and mine.skill then need = mine.skill end
+    return need
+end
+
 function M:Recipes()
     local base = call(C_TradeSkillUI.GetBaseProfessionInfo) or {}
     local data = { name = base.professionName, skill = base.skillLevel, max = base.maxSkillLevel,
                    skillLine = base.professionID }  -- no rank here: the overview has it (asked for in game)
     local cats, byCat = {}, {}
     local search = self.search and self.search ~= "" and self.search:lower() or nil
-    local f = self.filters or {}
+    -- the filters (FilterMenu groups): show one of all/learned/unlearned;
+    -- difficulty and product quality, none chosen = any; other toggles
+    local f = self.filters or UI.PROFESSION_FILTER_DEFAULTS
+    local function set(list)
+        local out = {}
+        for _, v in ipairs(list or {}) do out[v] = true end
+        return out
+    end
+    local difficulties, qualities, other = set(f.difficulty), set(f.quality), set(f.other)
+    local anyDifficulty, anyQuality = next(difficulties) == nil, next(qualities) == nil
     local first
     local learned, total = 0, 0
     for _, id in ipairs(call(C_TradeSkillUI.GetAllRecipeIDs) or {}) do
@@ -315,10 +341,14 @@ function M:Recipes()
             if info.learned then learned = learned + 1 end
             local _, can = self:Reagents(id)
             local diff = info.relativeDifficulty or 3
-            local keep = (not f.learned or info.learned)
-                and (not f.unlearned or not info.learned)
-                and (not f.materials or can > 0)
-                and (not f.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned))
+            -- the product's quality is in the recipe's link ("|cnIQ3:")
+            local quality = type(info.hyperlink) == "string" and tonumber(info.hyperlink:match("IQ(%d)")) or nil
+            local keep = (f.show ~= "learned" or info.learned)
+                and (f.show ~= "unlearned" or not info.learned)
+                and (anyDifficulty or difficulties[DIFFICULTY_KEYS[diff] or "trivial"])
+                and (anyQuality or (quality ~= nil and qualities[quality]))
+                and (not other.materials or can > 0)
+                and (not other.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned))
                 and (not search or info.name:lower():find(search, 1, true))
             if keep then
                 local catID = info.categoryID or 0
@@ -330,19 +360,35 @@ function M:Recipes()
                     cats[#cats + 1] = cat
                 end
                 cat.recipes[#cat.recipes + 1] = { id = id, name = info.name, difficulty = diff, canMake = can,
-                    learned = info.learned and true or false, tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false }
+                    learned = info.learned and true or false, tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false,
+                    need = self.sort == "skill" and self:SkillFor(id, data.name, info.name) or nil }
                 first = first or id
             end
         end
     end
     table.sort(cats, function(a, b) if a.order ~= b.order then return a.order < b.order end return a.name < b.name end)
-    for _, cat in ipairs(cats) do
-        table.sort(cat.recipes, function(a, b)
+    -- the sort orders recipes inside their categories, which stay
+    local sort = self.sort or "category"
+    local function byName(a, b) return a.name < b.name end
+    local orders = {
+        category = function(a, b)
             if a.learned ~= b.learned then return a.learned end
             if a.difficulty ~= b.difficulty then return a.difficulty < b.difficulty end
-            return a.name < b.name
-        end)
-    end
+            return byName(a, b)
+        end,
+        difficulty = function(a, b)
+            if a.difficulty ~= b.difficulty then return a.difficulty < b.difficulty end
+            return byName(a, b)
+        end,
+        -- a skill not known yet goes last
+        skill = function(a, b)
+            local x, y = a.need or math.huge, b.need or math.huge
+            if x ~= y then return x < y end
+            return byName(a, b)
+        end,
+        name = byName,
+    }
+    for _, cat in ipairs(cats) do table.sort(cat.recipes, orders[sort] or orders.category) end
     data.categories = cats
     -- learned of all, kept for the overview (it can only ask the open one)
     if data.skillLine and total > 0 then
@@ -664,9 +710,15 @@ function M:Wire(view)
         self.search = text
         self:QueueRender()
     end
-    view.onFilters = function(list)
-        self.filters = {}
-        for _, k in ipairs(list or {}) do self.filters[k] = true end
+    -- the filters and the sort, kept for this character
+    view.onFilters = function(value)
+        self.filters = value
+        self:CharData().filters = value
+        self:Render()
+    end
+    view.onSort = function(key)
+        self.sort = key
+        self:CharData().sort = key
         self:Render()
     end
     view.onTrack = function(on)
@@ -719,7 +771,8 @@ function M:Build()
     local f = _G.ProfessionsFrame
     if not f or self.view or InCombatLockdown() then return end
     self.awayParts, self.awayFns, self.chosen = {}, {}, {}
-    self.filters = { learned = true }
+    local saved = self:CharData()
+    self.filters, self.sort = saved.filters or UI.PROFESSION_FILTER_DEFAULTS, saved.sort or "category"
     local view = UI.Professions(f)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
@@ -727,6 +780,8 @@ function M:Build()
     view:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
     self.view = view
     self:Wire(view)
+    view:SetFilters(self.filters)
+    view:SetSort(self.sort)
     -- Blizzard's pages and tabs out of sight
     self:Away(f.BookPage)
     self:Away(f.CraftingPage)

@@ -4,6 +4,8 @@
 --   UI.Select(parent, {
 --       options = { { value = "a", label = "Alpha", note = "…", disabled = true, reason = "…",
 --                     icon = <texture or file ID> },   -- 0.9: an icon left of the label
+--                   -- 0.13: summary = "Sort: Skill", what the closed field
+--                   -- shows for it (the list keeps the label)
 --                   { heading = "Group title" }, … },
 --       value = "a", onChange = fn(value), width = 190, placeholder = "Choose",
 --       multiple = false,   -- the value is then a list; Select all / Clear at the top
@@ -58,7 +60,7 @@ end
 function Select:Summary()
     if not self.multiple then
         for _, o in ipairs(self.options) do
-            if not o.heading and o.value == self.value then return o.label end
+            if not o.heading and o.value == self.value then return o.summary or o.label end
         end
         if self.lookedUp and self.lookedUp.value == self.value then return self.lookedUp.label end
         return self.placeholder or ""

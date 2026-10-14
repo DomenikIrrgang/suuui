@@ -36,7 +36,10 @@
 --       onEnter(owner) }, lines = { text } }), tracked,
 --       canMake, ready, why, onProduct(owner), onReagent(i, owner) }
 --   p.onSelect(id), p.onRecipeEnter(recipe, owner), p.onSearch(text),
---   p.onFilters(list of "learned" | "unlearned" | "materials" | "skillup"), p.onTrack(on),
+--   p.onFilters({ show = "all" | "learned" | "unlearned", difficulty = { "optimal",
+--       "medium", "easy", "trivial" }, quality = { 0..4 }, other = { "materials",
+--       "skillup" } }), p.onSort("category" | "difficulty" | "skill" | "name"),
+--   p:SetFilters(value), p:SetSort(key), p.onTrack(on),
 --   p.onCreate(count), p.onCreateAll()
 
 local _, ns = ...
@@ -605,22 +608,36 @@ function P:SetRecipe(r)
     v.why:SetValue(r.why or "")
 end
 
--- Learned only and Unlearned only shut each other out: the one just picked
--- stays.
-function P:FiltersChanged(list)
-    local had, has = {}, {}
-    for _, k in ipairs(self.filterList or {}) do had[k] = true end
-    for _, k in ipairs(list or {}) do has[k] = true end
-    if has.learned and has.unlearned then
-        local drop = had.learned and "learned" or "unlearned"
-        local kept = {}
-        for _, k in ipairs(list) do if k ~= drop then kept[#kept + 1] = k end end
-        list = kept
-        self.filters:SetValue(list)
-    end
-    self.filterList = list
-    if self.onFilters then self.onFilters(list) end
-end
+-- The recipe list's filters (design board "Professions · Filters"):
+-- what the module reads, by group key.
+local FILTER_GROUPS = {
+    { key = "show", label = "Show", kind = "one", options = {
+        { value = "all", label = "All" }, { value = "learned", label = "Learned" },
+        { value = "unlearned", label = "Unlearned" } } },
+    { key = "difficulty", label = "Difficulty", kind = "many", options = {
+        { value = "optimal", label = "Optimal", color = "quest-very-difficult" },
+        { value = "medium", label = "Medium", color = "quest-difficult" },
+        { value = "easy", label = "Easy", color = "quest-standard" },
+        { value = "trivial", label = "Trivial", color = "quest-trivial" } } },
+    { key = "quality", label = "Product quality", kind = "many", options = {
+        { value = 0, label = "Poor", color = "quality-poor" }, { value = 1, label = "Common", color = "quality-common" },
+        { value = 2, label = "Uncommon", color = "quality-uncommon" }, { value = 3, label = "Rare", color = "quality-rare" },
+        { value = 4, label = "Epic", color = "quality-epic" } } },
+    { key = "other", label = "Other", kind = "toggles", options = {
+        { value = "materials", label = "Have materials" }, { value = "skillup", label = "Skill up" } } },
+}
+UI.PROFESSION_FILTER_DEFAULTS = { show = "learned", difficulty = {}, quality = {}, other = {} }
+
+local SORTS = {
+    { value = "category", label = "Category", summary = "Sort: Category" },
+    { value = "difficulty", label = "Difficulty", summary = "Sort: Difficulty" },
+    { value = "skill", label = "Skill required", summary = "Sort: Skill" },
+    { value = "name", label = "Name", summary = "Sort: Name" },
+}
+
+-- The saved choices back in the controls.
+function P:SetFilters(value) self.filterMenu:SetValue(value) end
+function P:SetSort(key) self.sort:SetValue(key or "category") end
 
 function P:SetCrafting(d)
     d = d or {}
@@ -683,18 +700,20 @@ function UI.Professions(parent, opts)
     f.craftSkill:SetPoint("LEFT", f.craftName, "RIGHT", S["space-5"], 0)
     f.craftRecipes = skillBar(f.crafting, "Recipes")
     f.craftRecipes:SetPoint("LEFT", f.craftSkill, "RIGHT", S["space-5"] * 2, 0)
-    -- the list: search and filters, then the recipes
-    f.search = UI.TextField(f.crafting, { width = LIST_W - 96 - S["space-3"], placeholder = "Search recipes",
+    -- the list: search on its own row, the filters and the sort under it
+    -- (one row of the three didn't fit the 250 px column), then the recipes
+    f.search = UI.TextField(f.crafting, { width = LIST_W, placeholder = "Search recipes",
         onTextChanged = function(text) if f.onSearch then f.onSearch(text) end end })
     f.search:SetPoint("TOPLEFT", f.crafting, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-5"]))
-    f.filters = UI.Select(f.crafting, { multiple = true, width = 96, placeholder = "Filters", maxShown = 0,
-        options = { { value = "learned", label = "Learned only" }, { value = "unlearned", label = "Unlearned only" },
-            { value = "materials", label = "Have materials" }, { value = "skillup", label = "Skill up" } },
-        value = { "learned" }, onChange = function(v) f:FiltersChanged(v) end })
-    f.filterList = { "learned" }
-    f.filters:SetPoint("LEFT", f.search, "RIGHT", S["space-3"], 0)
+    local half = math.floor((LIST_W - S["space-3"]) / 2)
+    f.filterMenu = UI.FilterMenu(f.crafting, { groups = FILTER_GROUPS, defaults = UI.PROFESSION_FILTER_DEFAULTS,
+        width = half, onChange = function(v) if f.onFilters then f.onFilters(v) end end })
+    f.filterMenu:SetPoint("TOPLEFT", f.search, "BOTTOMLEFT", 0, -S["space-3"])
+    f.sort = UI.Select(f.crafting, { width = LIST_W - half - S["space-3"], options = SORTS, value = "category",
+        onChange = function(v) if f.onSort then f.onSort(v) end end })
+    f.sort:SetPoint("LEFT", f.filterMenu, "RIGHT", S["space-3"], 0)
     f.listBox = CreateFrame("Frame", nil, f.crafting)
-    f.listBox:SetPoint("TOPLEFT", f.search, "BOTTOMLEFT", 0, -S["space-4"])
+    f.listBox:SetPoint("TOPLEFT", f.filterMenu, "BOTTOMLEFT", 0, -S["space-4"])
     f.listBox:SetPoint("BOTTOM", f.crafting, "BOTTOM", 0, 0)
     f.listBox:SetWidth(LIST_W)
     UI.Fill(f.listBox, "surface-sunk"):SetAllPoints()
