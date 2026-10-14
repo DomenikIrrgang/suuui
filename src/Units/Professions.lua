@@ -740,13 +740,20 @@ end
 
 -- A recipe opened (the tracker's click): its profession's window, and the
 -- recipe chosen once its list is there.
+-- Not C_TradeSkillUI.OpenRecipe: it's protected (an addon's call is
+-- blocked, found in game); the profession's trade skill opened the way the
+-- rail does, then the recipe chosen.
 function M:OpenRecipe(recipeID)
     if not recipeID then return end
     if InCombatLockdown() then self:Print("Professions open out of combat.") return end
     self.pendingRecipe = recipeID
-    pcall(C_TradeSkillUI.OpenRecipe, recipeID)
-    self.mode = "crafting"
-    self:QueueRender()
+    local line, _, parent = call(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
+    local skillLine = (parent and parent ~= 0) and parent or line
+    if not skillLine then
+        self:Print("That recipe's profession couldn't be found.")
+        return
+    end
+    self:Open(skillLine)
 end
 
 function M:Craft(count)

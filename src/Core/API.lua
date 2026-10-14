@@ -246,7 +246,12 @@ end
 function API.OpenRecipe(recipeID)
     local m = Modules.Get("professions")
     if m and m:IsEnabled() and m.OpenRecipe then return m:OpenRecipe(recipeID) end
-    if C_TradeSkillUI and C_TradeSkillUI.OpenRecipe then pcall(C_TradeSkillUI.OpenRecipe, recipeID) end
+    -- C_TradeSkillUI.OpenRecipe is protected (blocked from an addon): the
+    -- recipe's profession opened instead
+    local line, _, parent = C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe
+        and C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+    local skillLine = (parent and parent ~= 0) and parent or line
+    if skillLine and C_TradeSkillUI.OpenTradeSkill then pcall(C_TradeSkillUI.OpenTradeSkill, skillLine) end
 end
 function API.TalentsShown()
     local m = Modules.Get("talents")
