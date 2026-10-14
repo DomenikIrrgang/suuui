@@ -322,7 +322,7 @@ end
 --------------------------------------------------------------------------------
 
 function M:Tabs(profs)
-    local tabs = { { key = "overview", label = "Overview", glyph = "hammer" } }
+    local tabs = { { key = "overview", label = "Overview", icon = "Interface\\ICONS\\INV_SideTab_Professions_c60" } }
     for _, list in ipairs({ profs.primary, profs.secondary }) do
         for _, c in ipairs(list) do
             if c.crafting then tabs[#tabs + 1] = { key = c.skillLine, label = c.name, icon = c.icon, card = c } end
