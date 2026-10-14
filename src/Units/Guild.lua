@@ -525,10 +525,16 @@ end
 -- job: asked for in game); kept as thin as a line, so the window's own
 -- panes, which hang off it, move left into its place.
 function M:FoldList()
-    local list = self.frame and self.frame.CommunitiesList
+    local f = self.frame
+    local list = f and f.CommunitiesList
     if not list then return end
     list:SetAlpha(0)
+    -- its width comes from its anchors: anchored again as a 1px strip at the
+    -- window's left edge (setting the width alone left a gap, found in game)
     self.folding = true
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -44)
+    list:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 8, 16)
     list:SetWidth(1)
     self.folding = false
     if not self.listHooked then
@@ -536,6 +542,25 @@ function M:FoldList()
         local function again() if not self.folding then C_Timer.After(0, function() self:FoldList() end) end end
         hooksecurefunc(list, "SetWidth", again)
         hooksecurefunc(list, "SetSize", again)
+        hooksecurefunc(list, "SetPoint", again)
+    end
+    -- Blizzard's View Log button: the Log tab has its job (asked for in game)
+    self:HideViewLog(f, 0)
+end
+
+function M:HideViewLog(frame, depth)
+    if depth > 4 or not frame or not frame.GetChildren then return end
+    local label = _G.GUILD_VIEW_LOG or "View Log"
+    for _, c in ipairs({ frame:GetChildren() }) do
+        if c.GetObjectType and c:GetObjectType() == "Button" and not c.suuOwn then
+            local fs = c.GetFontString and c:GetFontString()
+            local text = fs and fs:GetText()
+            if text == label or text == "View Log" then
+                c:SetAlpha(0)
+                c:EnableMouse(false)
+            end
+        end
+        if not c.suuOwn then self:HideViewLog(c, depth + 1) end
     end
 end
 
@@ -582,12 +607,8 @@ function M:Build()
     if not f or self.roster then return end
     self.frame = f
     local page = UI.GuildRoster(f)
-    local left = f.CommunitiesList
-    if left then
-        page:SetPoint("TOPLEFT", left, "TOPRIGHT", 12, 0)
-    else
-        page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
-    end
+    -- from the window's left edge (Blizzard's list is folded away)
+    page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
     page:SetFrameLevel(f:GetFrameLevel() + 100)
     page:EnableMouse(true)
