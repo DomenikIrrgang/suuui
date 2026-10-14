@@ -654,7 +654,9 @@ function SP.Notes()
         ns.Print("Notes probe: couldn't read your guild GUID (saved); /reload.")
         return
     end
-    if type(note) ~= "string" or store.noteSecret then note = "" end
+    -- an unreadable note is never overwritten: stop instead
+    if store.noteSecret then ns.Print("Notes probe: your note is a secret value (saved); /reload.") return end
+    if type(note) ~= "string" then note = "" end
     store.note = note
     note = note:gsub("\\", "\\\\"):gsub("\"", "\\\"")
     local b = SP.notesButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
