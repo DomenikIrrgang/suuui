@@ -339,27 +339,86 @@ local function slot(r, g, i)
     b:SetScript("OnClick", function(self, button)
         if self.member and r.onMember then r.onMember(self.member, button, self) end
     end)
+    -- dragging: the member kept from the start (a roster update can redraw
+    -- the slots meanwhile: their member was gone at the drop, found in
+    -- game), a card following the cursor, the slot under it in arcane
     b:SetScript("OnDragStart", function(self)
         if not (self.member and r.data and r.data.canLead) or InCombatLockdown() then return end
-        r.dragging = self
+        r.dragging, r.dragMember = self, self.member
         self:SetAlpha(0.5)
+        r:StartGhost(self.member)
     end)
     b:SetScript("OnDragStop", function(self)
         self:SetAlpha(1)
-        local from = r.dragging
-        r.dragging = nil
-        if not from then return end
-        -- where it was let go: a slot of this page
-        local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
-        local to = foci and foci[1]
-        if not (to and to.group and to.pos) or to == from then r:Draw() return end
+        local member = r.dragMember
+        local to = r:StopGhost()
+        r.dragging, r.dragMember = nil, nil
+        if not member then return end
+        if not (to and to.group and to.pos) or to.member == member then r:Draw() return end
         if to.member then
-            if r.onSwap then r.onSwap(from.member.index, to.member.index) end
+            if r.onSwap then r.onSwap(member.index, to.member.index) end
         elseif r.onMove then
-            r.onMove(from.member.index, to.group)
+            r.onMove(member.index, to.group)
         end
     end)
     return b
+end
+
+-- The slot of this page under the cursor, if any.
+function R:SlotUnderCursor()
+    for g = 1, 8 do
+        for i = 1, 5 do
+            local b = self.slots[g][i]
+            if b:IsVisible() and b:IsMouseOver() then return b end
+        end
+    end
+end
+
+function R:StartGhost(m)
+    local gh = self.ghost
+    if not gh then
+        gh = CreateFrame("Frame", nil, UIParent)
+        gh:SetFrameStrata("TOOLTIP")
+        gh:SetSize(160, SLOT_H)
+        UI.Fill(gh, "surface-raised"):SetAllPoints()
+        UI.Border(gh, "arcane")
+        gh.role = gh:CreateTexture(nil, "ARTWORK")
+        gh.role:SetSize(12, 12)
+        gh.role:SetPoint("LEFT", S["space-3"], 0)
+        gh.name = UI.Text(gh, "label", "ink")
+        gh.name:SetPoint("LEFT", gh.role, "RIGHT", S["space-3"], 0)
+        gh:SetScript("OnUpdate", function(f)
+            local scale = f:GetEffectiveScale()
+            local x, y = GetCursorPosition()
+            f:ClearAllPoints()
+            f:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / scale + 12, y / scale)
+            -- where they'd go
+            local over = self:SlotUnderCursor()
+            if over ~= self.overSlot then
+                if self.overSlot then self.overSlot.edge:SetColor(self.overSlot.member and (self.overSlot.member.you and "ink" or "gilt-hairline") or "gilt-faint") end
+                if over and over ~= self.dragging then over.edge:SetColor("arcane") end
+                self.overSlot = over
+            end
+        end)
+        self.ghost = gh
+    end
+    gh.role:SetShown(ROLE_ICON[m.role or ""] ~= nil)
+    if ROLE_ICON[m.role or ""] then gh.role:SetTexture(ROLE_ICON[m.role]) end
+    gh.name:SetValue(m.name or "")
+    gh.name:SetColor(m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or "ink")
+    gh:SetWidth(math.max(120, math.ceil(gh.name:GetUnboundedStringWidth()) + 12 + S["space-3"] * 3))
+    gh:Show()
+end
+
+-- The ghost away; the slot it was over (the drop's target).
+function R:StopGhost()
+    local over = self:SlotUnderCursor()
+    if self.ghost then self.ghost:Hide() end
+    if self.overSlot then
+        self.overSlot.edge:SetColor(self.overSlot.member and (self.overSlot.member.you and "ink" or "gilt-hairline") or "gilt-faint")
+        self.overSlot = nil
+    end
+    return over
 end
 
 function R:Draw()
