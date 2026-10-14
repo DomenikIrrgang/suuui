@@ -35,6 +35,17 @@ local function call(fn, ...)
 end
 
 local W, H = 720, 600
+
+-- "a" or "an" before a word, by its first letter's sound ("an Engineering
+-- trainer", "a Blacksmithing trainer"; asked for in game)
+local function article(word)
+    return (word or ""):match("^[AEIOUaeiou]") and "an" or "a"
+end
+
+-- "1 more vendor", "3 more vendors"
+local function more(n, noun)
+    return "and " .. n .. " more " .. noun .. (n == 1 and "" or "s")
+end
 local QUALITY_NAME = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
 -- the rank a skill cap stands for (a profession's first spell says it too)
 local RANKS = { [75] = "Apprentice", [150] = "Journeyman", [225] = "Expert", [300] = "Artisan" }
@@ -140,7 +151,7 @@ end
 function M:Unlearn(name, skillLine)
     UI.Confirm({
         title = "Unlearn " .. name .. "?",
-        text = "Your " .. name .. " skill and every recipe you know in it are lost. Learning it again starts from 1.",
+        text = "You lose your " .. name .. " skill and every " .. name .. " recipe you know. If you learn it again, you start at 1.",
         confirm = "Unlearn",
         cancel = "Keep it",
         -- as the game's own asks (found in game)
@@ -171,7 +182,7 @@ local function untrained(def)
     if plain(shown) and shown ~= "" then name = shown end
     return { name = name, icon = call(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
              skillLine = def.skillLine, untrained = true, rank = "Not learned",
-             hint = "Learn it from a " .. name .. " trainer" }
+             hint = "Learn it from " .. article(name) .. " " .. name .. " trainer" }
 end
 
 -- A profession's spell on the cursor, to put on an action bar.
@@ -199,7 +210,7 @@ function M:PickupOpener(name, icon, spellID)
             return
         end
     end
-    if InCombatLockdown() then self:Print("Macros can't be made in combat: drag it again afterwards.") return end
+    if InCombatLockdown() then self:Print("Macros can't be made in combat. Drag it again after the fight.") return end
     local ok, index = pcall(CreateMacro, name:sub(1, 16), icon or 134400, body, true)
     if not ok or not index then
         self:Print("No free character macro slot for " .. name .. ".")
@@ -381,7 +392,7 @@ function M:Source(id)
     local profession = self.view and self.view.craftData and self.view.craftData.name
     for _, s in ipairs(list) do
         if s.t == "t" then
-            lines[#lines + 1] = "From " .. (profession and ("a " .. profession .. " trainer") or "a profession trainer")
+            lines[#lines + 1] = "From " .. (profession and (article(profession) .. " " .. profession .. " trainer") or "a profession trainer")
         elseif s.t == "a" then
             lines[#lines + 1] = "Learned automatically with the profession"
         elseif s.t == "i" and s.i then
@@ -404,20 +415,20 @@ function M:Source(id)
                 end
             end
             for i = 1, math.min(3, #mine) do lines[#lines + 1] = "Sold by " .. mine[i] end
-            if #mine > 3 then lines[#lines + 1] = "and " .. (#mine - 3) .. " more vendors" end
+            if #mine > 3 then lines[#lines + 1] = more(#mine - 3, "vendor") end
             if #mine == 0 and theirs > 0 then lines[#lines + 1] = "Sold only by the other faction's vendors" end
             known = known or #mine > 0 or theirs > 0
             -- drops: the first two, how many more
             local drops = s.d or {}
             local total = s.dn or #drops
             if total > 8 then
-                lines[#lines + 1] = ("A world drop (%d creatures), e.g. %s"):format(total, place(strsplit("|", drops[1] or "")))
+                lines[#lines + 1] = ("A world drop from %d creatures, such as %s"):format(total, place(strsplit("|", drops[1] or "")))
             else
                 for i = 1, math.min(2, #drops) do
                     local dName, zone = strsplit("|", drops[i])
                     lines[#lines + 1] = "Dropped by " .. place(dName, zone)
                 end
-                if total > 2 then lines[#lines + 1] = "and " .. (total - 2) .. " more creatures" end
+                if total > 2 then lines[#lines + 1] = more(total - 2, "creature") end
             end
             known = known or total > 0
             for i, o in ipairs(s.o or {}) do
@@ -429,7 +440,7 @@ function M:Source(id)
             for _, q in ipairs(s.q or {}) do
                 local title = call(C_QuestLog.GetTitleForQuestID, q)
                 if not title then call(C_QuestLog.RequestLoadQuestByID, q) end
-                lines[#lines + 1] = "Reward of the quest " .. inkText(title or ("#" .. q))
+                lines[#lines + 1] = "Rewarded by the quest " .. inkText(title or ("#" .. q))
                 known = true
             end
             for _, c in ipairs(s.c or {}) do
