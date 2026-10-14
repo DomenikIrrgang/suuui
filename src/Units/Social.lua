@@ -279,6 +279,82 @@ function M:TestRaid()
     self:RenderRaid()
 end
 
+-- Raid Info: your lockouts in a SuuUI panel beside the window (Blizzard's
+-- own box wasn't in SuuUI's look, found in game): each saved instance, its
+-- difficulty, how far you got and when it resets.
+function M:Lockouts()
+    local out = {}
+    for i = 1, (call(GetNumSavedInstances)) or 0 do
+        local name, _, reset, _, locked, extended, _, isRaid, maxPlayers, difficultyName, numEncounters, progress = call(GetSavedInstanceInfo, i)
+        if plain(name) and name and (locked or extended) then
+            out[#out + 1] = { name = name, difficulty = difficultyName, reset = reset, extended = extended,
+                              raid = isRaid, size = maxPlayers, bosses = numEncounters, done = progress }
+        end
+    end
+    return out
+end
+
+function M:DrawLockouts()
+    local p = self.lockoutPanel
+    if not (p and p:IsShown()) then return end
+    local list = self:Lockouts()
+    p.rows = p.rows or {}
+    local y = 0
+    for i, l in ipairs(list) do
+        local r = p.rows[i]
+        if not r then
+            r = CreateFrame("Frame", nil, p.body)
+            r:SetHeight(T.type.label.lineHeight + T.type.caption.lineHeight + 2)
+            r.name = UI.Text(r, "label", "ink")
+            r.name:SetPoint("TOPLEFT")
+            r.progress = UI.Text(r, "numeric", "ink")
+            r.progress:SetPoint("TOPRIGHT")
+            r.detail = UI.Text(r, "caption", "ink-muted")
+            r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -2)
+            p.rows[i] = r
+        end
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
+        r:SetPoint("RIGHT", p.body, "RIGHT")
+        r.name:SetValue(l.name)
+        r.progress:SetValue((l.bosses and l.bosses > 0) and (l.done .. " / " .. l.bosses) or "")
+        local detail = {}
+        if plain(l.difficulty) and l.difficulty and l.difficulty ~= "" then detail[#detail + 1] = l.difficulty end
+        if l.reset and l.reset > 0 then detail[#detail + 1] = "resets in " .. (SecondsToTime and SecondsToTime(l.reset, true) or (math.ceil(l.reset / 3600) .. " h")) end
+        if l.extended then detail[#detail + 1] = "extended" end
+        r.detail:SetValue(table.concat(detail, " · "))
+        r:Show()
+        y = y + r:GetHeight() + T.space["space-4"]
+    end
+    for i = #list + 1, #p.rows do p.rows[i]:Hide() end
+    p.empty:SetShown(#list == 0)
+    p.body:SetHeight(math.max(T.type.body.lineHeight, y))
+    p:Fit()
+end
+
+function M:ToggleLockouts()
+    local f = self.frame
+    if not f then return end
+    local p = self.lockoutPanel
+    if not p then
+        p = UI.Panel(f, { title = "Raid lockouts", width = 300, closable = true, solid = true })
+        p:SetFrameLevel(f:GetFrameLevel() + 200)
+        p.empty = UI.Text(p.body, "body", "ink-muted")
+        p.empty:SetPoint("TOPLEFT")
+        p.empty:SetValue("You aren't saved to any instance.")
+        p:Hide()
+        self.lockoutPanel = p
+    end
+    p:ClearAllPoints()
+    -- beside the window, past its tabs down the right side
+    p:SetPoint("TOPLEFT", f, "TOPRIGHT", 72, 0)
+    p:SetShown(not p:IsShown())
+    if p:IsShown() then
+        if RequestRaidInfo then RequestRaidInfo() end
+        self:DrawLockouts()
+    end
+end
+
 function M:RaidMembers()
     if self.raidTest then return self.raidTest end
     local out = {}
@@ -308,13 +384,7 @@ end
 function M:WireRaid(page)
     page.onReadyCheck = function() if DoReadyCheck then DoReadyCheck() end end
     page.onRoleCheck = function() if InitiateRolePoll then pcall(InitiateRolePoll) end end
-    page.onRaidInfo = function()
-        local info = (self.frame and self.frame.RaidInfoFrame) or _G.RaidInfoFrame
-        if not info then return end
-        if RequestRaidInfo then RequestRaidInfo() end
-        info:SetShown(not info:IsShown())
-        info:SetFrameLevel(page:GetFrameLevel() + 20)
-    end
+    page.onRaidInfo = function() self:ToggleLockouts() end
     page.onConvert = function()
         local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or ConvertToRaid
         if convert then pcall(convert) end
@@ -493,6 +563,10 @@ function M:OnEnable()
                 if self.raidPage and self.raidPage:IsVisible() then C_Timer.After(0.1, function() self:RenderRaid() end) end
             end)
         end
+    end
+    -- the lockouts as they come in
+    if not valid or valid("UPDATE_INSTANCE_INFO") then
+        self:OnGameEvent("UPDATE_INSTANCE_INFO", function() self:DrawLockouts() end)
     end
     self:RegisterCommand("raidtest", "test: the Raid page with 17 made-up members to drag around", function() self:TestRaid() end)
 end
