@@ -734,6 +734,23 @@ function M:RecordTrainer()
         end
     end
     local services, profession = {}, nil
+    -- what the trainer reports, kept for the last trainer opened (the
+    -- recorder saved nothing at the first trainers: found in game)
+    local raw = { at = date("%Y-%m-%d %H:%M:%S"), npc = UnitName("npc"), count = call(GetNumTrainerServices),
+                  tradeskill = IsTradeskillTrainer and tostring(call(IsTradeskillTrainer)) or "missing",
+                  skillReq = GetTrainerServiceSkillReq and "ok" or "missing",
+                  skillLine = GetTrainerServiceSkillLine and "ok" or "missing", services = {} }
+    local function show(...)
+        local out = {}
+        for i = 1, select("#", ...) do out[i] = tostring((select(i, ...))) end
+        return table.concat(out, " | ")
+    end
+    for i = 1, math.min(8, raw.count or 0) do
+        raw.services[i] = "info: " .. show(pcall(GetTrainerServiceInfo, i))
+            .. "  req: " .. (GetTrainerServiceSkillReq and show(pcall(GetTrainerServiceSkillReq, i)) or "-")
+            .. "  line: " .. (GetTrainerServiceSkillLine and show(pcall(GetTrainerServiceSkillLine, i)) or "-")
+    end
+    self:CharData().trainerLast = raw
     for i = 1, (call(GetNumTrainerServices) or 0) do
         -- this client answers name, availability, icon
         local name, a, b = call(GetTrainerServiceInfo, i)
@@ -764,7 +781,11 @@ function M:RecordTrainer()
     -- a class trainer, a riding trainer: not ours (unless the game says
     -- it's a profession trainer and only the skill's name is missing)
     if not profession and IsTradeskillTrainer and call(IsTradeskillTrainer) then profession = "?" end
-    if not profession or #services == 0 then return end
+    if not profession or #services == 0 then
+        self:Print(("%s's %d services weren't recorded: not recognised as a profession trainer. /reload and tell Claude."):format(
+            UnitName("npc") or "This trainer", #services))
+        return
+    end
     local guid = UnitGUID("npc")
     local npcID = guid and tonumber((select(6, strsplit("-", guid))))
     local saved = self:CharData()
