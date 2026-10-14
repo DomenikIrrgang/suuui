@@ -319,6 +319,7 @@ GLYPHS = {
     "chevronLeft": "M15 6l-6 6 6 6",
     "chevronRight": "M9 6l6 6-6 6",
     "chevronDown": "M6 9l6 6 6-6",
+    "chevronUp": "M6 15l6-6 6 6",
     "check": "M5 12.5l4.5 4.5L19 7",
 }
 

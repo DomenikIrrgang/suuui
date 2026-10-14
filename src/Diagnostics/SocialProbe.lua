@@ -540,18 +540,30 @@ end
 
 function SP.GuildUI()
     SuuUIProbe = SuuUIProbe or {}
-    local store = { at = date("%Y-%m-%d %H:%M:%S"), tree = {} }
-    SuuUIProbe.guildUI = store
     if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
     local ui = _G.GuildControlUI
     if not ui then ns.Print("Guild UI probe: no GuildControlUI.") return end
-    store.size = ("%dx%d"):format(math.floor(ui:GetWidth() or 0), math.floor(ui:GetHeight() or 0))
-    store.shown = ui:IsShown()
-    store.keys = {}
-    for k, v in pairs(ui) do if type(k) == "string" and type(v) ~= "function" then store.keys[#store.keys + 1] = k .. "=" .. type(v) end end
-    table.sort(store.keys)
-    tree(ui, 1, store.tree, "")
-    ns.Print(("Guild UI probe: %d lines saved; /reload."):format(#store.tree))
+    -- one dump per page, kept across runs: open each page and run it again
+    local store = type(SuuUIProbe.guildUI) == "table" and SuuUIProbe.guildUI or {}
+    SuuUIProbe.guildUI = store
+    store.at = date("%Y-%m-%d %H:%M:%S")
+    store.pages = store.pages or {}
+    local cur = ui.currFrame
+    local key = cur and cur:GetName() or "?"
+    local out = {}
+    -- frames the page shows outside itself (a purchase prompt, a popup)
+    local named = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and (k:find("^GuildControl") or k:find("^GuildBank")) and type(v) == "table"
+            and v.IsShown and v.GetObjectType then
+            local ok, shown = pcall(v.IsShown, v)
+            if ok and shown then named[#named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
+        end
+    end
+    table.sort(named)
+    if cur then tree(cur, 1, out, "") end
+    store.pages[key] = { at = store.at, tree = out, shownNamed = named }
+    ns.Print(("Guild UI probe: %s, %d lines saved; /reload."):format(key, #out))
 end
 
 function SP.Command(rest)

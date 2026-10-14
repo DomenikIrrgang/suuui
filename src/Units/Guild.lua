@@ -235,8 +235,8 @@ end
 -- tab of their own, for those who may change them). SuuUI can't change
 -- them itself (GuildControlSetRank, SetMOTD and SetInfoText are forbidden
 -- to addons: /suu probe social guildcontrol), but your clicks inside
--- Blizzard's window are yours and save (found in game). Its contents keep
--- their own fonts: SuuUI's wider ones made the labels run into each other.
+-- Blizzard's window are yours and save (found in game). UI.GuildControl
+-- lays its controls out in SuuUI's look (design component GuildControl).
 function M:GuildSettings() self:ShowOwn("settings") end
 
 function M:HostSettings(on)
@@ -251,7 +251,8 @@ function M:HostSettings(on)
         cover:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
         cover:SetFrameLevel(f:GetFrameLevel() + 150)
         cover:EnableMouse(true)
-        UI.Fill(cover, "surface-glass"):SetAllPoints()
+        -- solid: the chat underneath never shows through
+        UI.Fill(cover, "surface"):SetAllPoints()
         cover.suuOwn = true
         cover:Hide()
         self.settingsCover = cover
@@ -259,25 +260,12 @@ function M:HostSettings(on)
     self.settingsCover:SetShown(on and true or false)
     if not ui then return end
     if on then
-        if not self.hostedSettings then
-            self.hostedSettings = true
-            ui.suuOwn = true
-            ui:SetParent(self.settingsCover)
-            -- its own frame art away; its contents as they are
-            for _, part in ipairs({ ui.NineSlice, ui.TitleContainer, ui.Bg, ui.TopTileStreaks, ui.PortraitContainer }) do
-                if part then part:SetAlpha(0) end
-            end
-            for _, region in ipairs({ ui:GetRegions() }) do
-                if region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
-            end
-            for _, c in ipairs({ ui:GetChildren() }) do
-                if c.GetName and c:GetName() and c:GetName():find("CloseButton") then c:SetAlpha(0); c:EnableMouse(false) end
-            end
-        end
-        ui:ClearAllPoints()
-        ui:SetPoint("TOP", self.settingsCover, "TOP", 0, 0)
         ui:SetFrameLevel(self.settingsCover:GetFrameLevel() + 5)
+        if not self.hostedSettings then
+            self.hostedSettings = UI.GuildControl(self.settingsCover, ui)
+        end
         ui:Show()
+        self.hostedSettings:Layout()
     elseif self.hostedSettings and ui:IsShown() then
         ui:Hide()
     end
