@@ -20,8 +20,9 @@
 -- Left click a quest: its details on the map; right click: focus, share,
 -- stop tracking.
 -- Tracked recipes (asked for in game: Blizzard's tracker showed them, this
--- one didn't; their own category, not among the quests): a second block
--- under the quests, "Recipes" with its own toggle: each recipe's product
+-- one didn't; their own category, not among the quests): a Recipes section
+-- after the quests in the same list (they scroll together within the
+-- height), its own head and toggle: each recipe's product
 -- icon and name (quality colour), "×3" when you can make it, its reagents
 -- as objectives ("Iron Bar 3/6", checked once you have them), or "Ready to
 -- craft". Left click opens it in Professions; right click: open, stop
@@ -357,7 +358,6 @@ end
 function M:ApplyCollapse()
     local collapsed = self:Get("collapsed") or self:InBossFight()
     self.tracker:SetCollapsed(collapsed and true or false)
-    self:ApplyRecipesCollapse()
 end
 
 -- The saved collapse and the boss setting, into the secure side (out of combat).
@@ -473,28 +473,6 @@ function M:RecipeClick(recipeID, button, row)
     end)
 end
 
--- The Recipes block under the quests (at the top when no quest is tracked).
-function M:RefreshRecipes(questsShown)
-    local r = self.recipesTracker
-    if not r then return end
-    local list = self:TrackedRecipes()
-    r:SetQuests(list)
-    r:SetMeta(#list == 1 and "1 recipe" or (#list .. " recipes"))
-    r:ClearAllPoints()
-    if questsShown then
-        r:SetPoint("TOPLEFT", self.tracker, "BOTTOMLEFT", 0, -S["space-6"])
-    else
-        r:SetPoint("TOPLEFT", self.frame, "TOPLEFT")
-    end
-    r:SetShown(#list > 0)
-end
-
-function M:ApplyRecipesCollapse()
-    if not self.recipesTracker then return end
-    local collapsed = self:Get("recipesCollapsed") or self:InBossFight()
-    self.recipesTracker:SetCollapsed(collapsed and true or false)
-end
-
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
@@ -506,6 +484,12 @@ function M:Refresh()
     local combat = InCombatLockdown()
     -- in combat, with item buttons placed: keep everyone where they are
     local freeze = combat and (self.itemsShown or 0) > 0
+    -- the tracked recipes: their own section after the quests, in the same
+    -- list, so they scroll together within the tracker's height (asked for
+    -- in game: a block of their own sat too low on the screen)
+    local recipes = self:TrackedRecipes()
+    self.tracker:SetRecipes(recipes, self:Get("recipesCollapsed"),
+        #recipes == 1 and "1 recipe" or (#recipes .. " recipes"))
     self.tracker:SetQuests(quests, freeze)
     local n = #quests
     self.tracker:SetMeta(n == 1 and "1 quest" or (n .. " quests"))
@@ -519,9 +503,9 @@ function M:Refresh()
     end
     -- nothing tracked: nothing shown (the frame itself stays: it holds
     -- secure buttons, and its visibility is the Shows setting's)
-    self.tracker:SetAlpha(n == 0 and 0 or 1)
-    self.toggle:SetAlpha(n == 0 and 0 or 1)
-    self:RefreshRecipes(n > 0)
+    local empty = n == 0 and #recipes == 0
+    self.tracker:SetAlpha(empty and 0 or 1)
+    self.toggle:SetAlpha(empty and 0 or 1)
 end
 
 -- Many quest events come at once: one refresh on the next frame.
@@ -610,16 +594,11 @@ function M:OnEnable()
             if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
         end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
-        -- the tracked recipes: their own block, a plain toggle (no secure
-        -- parts in it)
-        self.recipesTracker = UI.ObjectiveTracker(self.frame, { width = WIDTH, maxHeight = 260 })
-        self.recipesTracker:SetTitle("Recipes")
-        self.recipesTracker.onQuestClick = function(id, button, row) self:RecipeClick(id, button, row) end
-        self.recipesTracker.onToggle = function()
+        self.tracker.onRecipeClick = function(id, button, row) self:RecipeClick(id, button, row) end
+        self.tracker.onSectionToggle = function()
             self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
-            self:ApplyRecipesCollapse()
+            self:Refresh()
         end
-        self.recipesTracker:Hide()
         local wait, resort = 0, 10
         self.frame:SetScript("OnUpdate", function(_, elapsed)
             -- as you move, the nearest quests come up (not in combat: the
@@ -652,7 +631,6 @@ function M:OnEnable()
     self:Watch("maxHeight", function() self:ApplySize() end)
     self:Watch("items", function() self:Refresh() end)
     self:Watch("recipes", function() self:Refresh() end)
-    self:ApplyRecipesCollapse()
     self:Watch("collapseInBossFights", function() self:ApplySecure() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",

@@ -21,6 +21,11 @@
 --   t:ScrollBy(px), t:SetScrollLocked(on), t.onScroll() -- the wheel scrolls
 --                                 -- the quests within maxHeight
 --   t.onToggle, t.onQuestClick(questID, button) -- set by the owner
+--   t:SetRecipes(list, collapsed, meta) -- 0.13: a Recipes section after the
+--                                 -- quests, its own head in the list (they
+--                                 -- scroll together); entries like quests
+--                                 -- (questID = the recipe ID); then SetQuests
+--   t.onRecipeClick(recipeID, button, row), t.onSectionToggle("recipes")
 --   opts.toggle: the owner's own (secure) toggle button, drawn here, placed
 --   by the owner over the head's left end (HEAD_H square at the top left)
 --
@@ -107,7 +112,12 @@ local function questRow(t)
     end)
     r:SetScript("OnLeave", function() UI.HideTooltip() end)
     r:SetScript("OnClick", function(self, button)
-        if t.onQuestClick and self.quest then t.onQuestClick(self.quest.questID, button, self) end
+        if not self.quest then return end
+        if self.quest.recipe then
+            if t.onRecipeClick then t.onRecipeClick(self.quest.questID, button, self) end
+        elseif t.onQuestClick then
+            t.onQuestClick(self.quest.questID, button, self)
+        end
     end)
     return r
 end
@@ -183,6 +193,43 @@ local function zoneRow(t)
     return z
 end
 
+-- A section's head inside the list (0.13: Recipes, under the quests): like
+-- the tracker's own head, its own toggle, title, rule and meta; it scrolls
+-- with the list, so quests and recipes share the tracker's height.
+local function sectionRow(t)
+    local h = CreateFrame("Frame", nil, t.list)
+    h:SetHeight(HEAD_H)
+    h.toggle = CreateFrame("Button", nil, h)
+    h.toggle:SetSize(HEAD_H, HEAD_H)
+    h.toggle:SetPoint("LEFT")
+    UI.Fill(h.toggle, "surface-glass", "BACKGROUND"):SetAllPoints()
+    h.toggle.edge = UI.Border(h.toggle, "gilt-line")
+    h.toggle:SetScript("OnEnter", function(self) self.edge:SetColor("gilt") end)
+    h.toggle:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-line") end)
+    h.toggle:SetScript("OnClick", function() if t.onSectionToggle and h.key then t.onSectionToggle(h.key) end end)
+    h.plus = UI.Plus(h.toggle, "gilt-text")
+    h.plus:SetPoint("CENTER")
+    h.minus = UI.Minus(h.toggle, "gilt-text")
+    h.minus:SetPoint("CENTER")
+    h.label = UI.Text(h, "header", "gilt-text")
+    h.label:SetShadowed(true)
+    h.label:SetPoint("LEFT", HEAD_H + S["space-3"], 0)
+    h.meta = UI.Text(h, "caption", "ink-muted")
+    h.meta:SetShadowed(true)
+    h.meta:SetPoint("RIGHT")
+    h.rule = UI.Hairline(h, "gilt-line", "out")
+    h.rule:SetPoint("LEFT", h.label, "RIGHT", S["space-3"], 0)
+    h.rule:SetPoint("RIGHT", h.meta, "LEFT", -S["space-3"], 0)
+    return h
+end
+
+-- The recipes section (shown after the quests): t:SetRecipes(list, collapsed, meta)
+function Tracker:SetRecipes(list, collapsed, meta)
+    self.recipes = list or {}
+    self.recipesCollapsed = collapsed and true or false
+    self.recipesMeta = meta
+end
+
 -- The list's entries: a zone heading wherever the zone changes (quests
 -- carry `zone`; none: no headings), then its quests.
 local function entriesOf(quests)
@@ -241,14 +288,56 @@ function Tracker:LayOut(quests, freeze)
         entries = entriesOf(quests)
         self.heights = {}
     end
+    -- the recipes after the quests (frozen too: they sit below every quest)
+    local kept = {}
+    for _, e in ipairs(entries) do if not (e.section or e.recipe) then kept[#kept + 1] = e end end
+    entries = kept
+    local byRecipe = {}
+    if self.recipes and #self.recipes > 0 then
+        entries[#entries + 1] = { section = "recipes" }
+        if not self.recipesCollapsed then
+            for _, rcp in ipairs(self.recipes) do
+                byRecipe[rcp.questID] = rcp
+                entries[#entries + 1] = { recipe = rcp.questID }
+            end
+        end
+    end
     self.entries = entries
     for _, r in ipairs(self.rows) do r.inUse = false end
     for _, z in ipairs(self.zoneRows) do z.inUse = false end
+    for _, h in ipairs(self.sectionRows) do h.inUse = false end
     self.tops = {}
     local y, prev = 0, nil
-    local nQuest, nZone = 0, 0
+    local nQuest, nZone, nSection = 0, 0, 0
     for _, e in ipairs(entries) do
-        if e.id then
+        if e.section then
+            nSection = nSection + 1
+            local h = self.sectionRows[nSection] or sectionRow(self)
+            self.sectionRows[nSection] = h
+            -- space-6 over a section after the quests
+            if prev then y = y + S["space-6"] end
+            h.key = e.section
+            h.label:SetValue("Recipes")
+            h.meta:SetValue(self.recipesMeta or "")
+            h.plus:SetShown(self.recipesCollapsed)
+            h.minus:SetShown(not self.recipesCollapsed)
+            h:SetWidth(self.contentWidth)
+            h.top, h.height, h.inUse = y, HEAD_H, true
+            y = y + HEAD_H
+            prev = "section"
+        elseif e.recipe then
+            nQuest = nQuest + 1
+            local r = self.rows[nQuest] or questRow(self)
+            self.rows[nQuest] = r
+            local rcp = byRecipe[e.recipe]
+            rcp.recipe = true
+            local h = self:DrawQuest(r, rcp)
+            if prev == "quest" then y = y + S["space-4"] elseif prev == "section" then y = y + S["space-4"] end
+            r.top, r.height, r.inUse = y, h, true
+            r:SetSize(self.contentWidth, math.max(1, h))
+            y = y + h
+            prev = "quest"
+        elseif e.id then
             nQuest = nQuest + 1
             local r = self.rows[nQuest] or questRow(self)
             self.rows[nQuest] = r
@@ -312,7 +401,7 @@ function Tracker:ApplyScroll()
     local max = math.max(0, (self.listHeight or 0) - view)
     self.scroll = math.max(0, math.min(max, self.scroll or 0))
     local scroll = self.scroll
-    for _, pool in ipairs({ self.rows, self.zoneRows }) do
+    for _, pool in ipairs({ self.rows, self.zoneRows, self.sectionRows }) do
         for _, r in ipairs(pool) do
             local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
             if visible then
@@ -403,6 +492,7 @@ function UI.ObjectiveTracker(parent, opts)
     t:SetSize(t.width, HEAD_H)
     t.rows = {}
     t.zoneRows = {}
+    t.sectionRows = {}
     t.heights = {}
 
     t.head = CreateFrame("Frame", nil, t)
