@@ -4,8 +4,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW%20Forever-interface%2016001-C9A75A?style=for-the-badge&labelColor=131116" alt="WoW Forever, interface 16001">
-  <img src="https://img.shields.io/badge/version-0.1.5-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.1.5">
-  <img src="https://img.shields.io/badge/status-in%20development-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: in development">
+  <img src="https://img.shields.io/badge/version-0.2.0--beta.2-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.2.0-beta.2">
+  <img src="https://img.shields.io/badge/status-beta-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: beta">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
 </p>
@@ -69,14 +69,33 @@ It is built for the realities of the modern client: values the game hides from a
 |---|---|
 | **Action bars** | A dock for bars 1–4 plus bars 5–8, stance and pet bars, visibility rules (always, in combat, on mouseover), and a keybind mode: hover a button, press a key. |
 | **Cooldown Manager** | SuuUI's own cooldown and aura tracker with ready-made presets for **every class and spec**. Shared slots (one icon for several spells, or the best spell you know), collections, reminders for missing buffs, effects shown on cooldown icons, sounds — and **conditions** on anything: group or raid, classes in your group, role, stance or form, combat, instance, target type and talents. |
+| **Alerts & threat** | Alerts for threat and aggro, and for being about to pull. A threat meter for your group. A pull countdown on the game's own countdown, so your whole group sees it, with or without a boss mod. |
+| **Damage meter** | Damage, healing, interrupts, dispels, deaths and more, per fight or overall, on the game's own combat data. |
+| **Encounter timeline & readiness** | Boss abilities riding toward "now", also from DBM or BigWigs timers. A readiness panel showing whose big cooldowns are ready before the pull. |
 
 ### Everyday
 | | |
 |---|---|
+| **Chat** | Tabs, message categories, a global panel for public channels, conversations and a cleaner input field. |
+| **Minimap & micro menu** | SuuUI's own minimap and micro menu, with the Jewel. |
+| **Bags** | Bags and bank with sorting, a search across all your characters, and selling junk at a vendor. |
+| **Objective tracker** | Quests with their objectives and quest items, plus tracked profession recipes. |
+| **Notifications** | One stack for repairs, full bags, ready checks, loot rolls, requests, battlegrounds, and friends and guild members coming online. |
+| **Loot & tooltips** | The loot window and loot rolls, and the game's tooltips in SuuUI's look. |
+| **Campsite** | Alerts for Campfire's camp benefits. |
 | **Settings window** | Searchable, every change live, previews at real size, plain-language descriptions. |
 | **Edit mode** | Move every SuuUI frame on a snap grid; reset one frame or all of them. |
 | **Profiles** | Any number of profiles, switched automatically by your role, with import and export. |
-| **Micro menu & bags** | Blizzard's micro menu and bag bar, placed in edit mode, with visibility and scale settings (SuuUI's own are on the roadmap). |
+
+### Windows
+| | |
+|---|---|
+| **Character** | Forever's character window in SuuUI's look, with its stats and every tab. |
+| **Spellbook & talents** | A spellbook that shows cooldowns and the spells you can train. A talent picker. A level-up card with your new spells. The Legacy window. |
+| **Professions** | SuuUI's own professions window: your professions at a glance, recipe lists with filters, where each recipe is learned, and tracking. |
+| **Social** | Friends, recent allies and friend requests. Raid groups where you drag members between groups. |
+| **Guild** | Guild chat with the message of the day. A roster with class, notes and member details. Guild information and the guild log. Guild settings: ranks, permissions, bank tabs. |
+| **Group Finder** *(in development)* | One list of groups and players looking for groups, from the game's group finder and from public chat (LookingForGroup, Trade, General). Whisper or invite from the list. |
 
 ---
 
@@ -84,18 +103,21 @@ It is built for the realities of the modern client: values the game hides from a
 
 > **Requirements:** the WoW Forever client (interface `16001`).
 
-1. Download or clone this repository into your AddOns folder. The folder **must be named `SuuUI`**:
-   ```sh
-   cd "<World of Warcraft>/_classic_beta_/Interface/AddOns"
-   git clone git@github.com:DomenikIrrgang/suuui.git SuuUI
-   ```
+1. Install **SuuUI** from **CurseForge** or **Wago Addons** (search for SuuUI in either app), or download the zip from [GitHub Releases](https://github.com/DomenikIrrgang/suuui/releases) and unpack it into `<World of Warcraft>/_classic_beta_/Interface/AddOns`.
 2. Start the game (or type `/reload`) and make sure **SuuUI** is enabled in the AddOns list.
 3. Type **`/suu`** to open the settings.
 
-To update, pull the latest changes and `/reload`:
+### From source
+
+This repository is the source, not the addon itself. It is built with [wowlua](https://github.com/DomenikIrrgang/wowlua):
+
 ```sh
-cd "<World of Warcraft>/_classic_beta_/Interface/AddOns/SuuUI" && git pull
+git clone git@github.com:DomenikIrrgang/suuui.git
+cd suuui
+wowlua install --release   # builds SuuUI and installs it into your game's AddOns folder (--wow <path> to name it)
 ```
+
+`wowlua dev` rebuilds and installs on every change; then `/reload` in game.
 
 ---
 
@@ -106,6 +128,7 @@ cd "<World of Warcraft>/_classic_beta_/Interface/AddOns/SuuUI" && git pull
 | `/suu` | Open or close the settings window |
 | `/suu edit` | Edit mode: move SuuUI's frames on a snap grid |
 | `/suu keybind` | Keybind mode: hover an action button and press a key |
+| `/suu pull [seconds]` | Start a pull countdown (`0` cancels) |
 | `/suu modules` | List every module (built in and from plugins) with its state |
 | `/suu enable <id>` · `/suu disable <id>` | Turn a module on or off |
 | `/suu profile` | Show profiles · `use`, `new`, `delete <name>` |
@@ -125,10 +148,11 @@ SuuUI is built in small increments, each one confirmed in game before the next b
 | Phase | Content | State |
 |---|---|---|
 | **0 · Foundation** | Tokens and fonts, core services, module system and plugin API, primitives, settings window, edit mode | ✅ Done |
-| **1 · Combat HUD** | Unit frames, cast bars and swing timer, auras, action bars, Cooldown Manager, party and raid frames, nameplates | ✅ Done |
-| | Alerts, threat meter and pull warning · damage meter · encounter timeline and readiness | 🔷 Next |
-| **2 · World & everyday play** | Minimap, chat, objective tracker, notifications, bags and bank, loot, tooltips | ◇ Planned |
-| **3 · Blizzard windows** | Character, spellbook and talents, professions, social, guild and group finder, world map | ◇ Planned |
+| **1 · Combat HUD** | Unit frames, cast bars and swing timer, auras, action bars, Cooldown Manager, party and raid frames, nameplates, alerts and threat meter, damage meter, encounter timeline and readiness | ✅ Done |
+| **2 · World & everyday play** | Minimap, chat, objective tracker, notifications, bags and bank, loot, tooltips, campsite | ✅ Done |
+| **3 · Blizzard windows** | Character, spellbook, talents and Legacy, professions, social and guild | ✅ Done |
+| | Group finder | 🔷 In progress |
+| | World map and map pins · quest log, mail, merchant, trainer, auction house, collections | ◇ Planned |
 | **4 · Depth & release** | Density and accessibility presets, performance and taint pass, plugin developer kit, release | ◇ Planned |
 
 ---
@@ -139,24 +163,28 @@ SuuUI is meant to be extended. Every built-in module is written against the same
 
 - **Plugin API:** [`Docs/API.md`](Docs/API.md) — modules, settings and migrations, the settings window, edit mode, events, components (unit frames, cast bars, aura containers, …) and design tokens.
 - **Example plugin:** [`Examples/SuuUI_HelloPlugin`](Examples/SuuUI_HelloPlugin) — a minimal module with its own settings section.
-- **Diagnostics:** `/suu probe` checks which client APIs SuuUI relies on; further probes collect spell, talent, nameplate and group data from the live client.
+- **Group finder library:** [`Docs/ForeverLFG.md`](Docs/ForeverLFG.md): `SuuUI.LFG`, the game's group finder and public chat as one list, with events. SuuUI's Group Finder is built on it the way a plugin would be.
+- **Diagnostics:** `/suu probe` checks which client APIs SuuUI relies on. Further probes (`/suu probe <topic>`) record what the live client allows, from spells and talents to the group finder and the guild.
 
 <details>
 <summary><b>Project layout</b></summary>
 
 ```
-SuuUI/
-├── Core/          tokens, fonts, events, settings & profiles, modules, roles, public API
-├── UI/            components: unit frame, cast bar, action button, aura container, cooldown tracker, inputs, panels
-├── SettingsUI/    the settings window and its sections
-├── EditMode/      moving frames on a snap grid
-├── Units/         the built-in modules (unit, party and raid frames, nameplates, action bars, Cooldown Manager, …)
-├── Data/          generated data: Cooldown Manager presets, talents, the aura catalog
-├── Diagnostics/   probes that read the live client
-├── Media/         fonts and textures
-├── tools/         generators for the presets and data (run with Lua from the addon folder)
-├── Docs/          API documentation and README assets
-└── Examples/      a sample plugin
+suuui/
+├── src/
+│   ├── Core/         tokens, fonts, events, settings & profiles, modules, roles, public API
+│   ├── UI/           components: unit frame, cast bar, action button, windows, roster, group finder, …
+│   ├── SettingsUI/   the settings window and its sections
+│   ├── EditMode/     moving frames on a snap grid
+│   ├── Units/        the built-in modules (frames, bars, chat, bags, windows, guild, group finder, …)
+│   ├── Libs/         ForeverLFG, the group finder library
+│   ├── Data/         generated data: Cooldown Manager presets, talents, the aura catalog, recipe sources
+│   └── Diagnostics/  probes that read the live client
+├── Media/            fonts, textures and sounds
+├── tools/            generators for the presets and data, the chat parser replay (run with Lua)
+├── Docs/             API documentation, the ForeverLFG design, README assets
+├── Examples/         a sample plugin
+└── wowlua.json       the build: TOC fields, assets, release profiles and publish targets
 ```
 </details>
 

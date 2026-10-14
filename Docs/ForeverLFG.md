@@ -1,8 +1,14 @@
-# ForeverLFG: design (draft)
+# ForeverLFG: design
 
 ForeverLFG is a library inside SuuUI. It collects groups and players looking for groups from two sources, the game's group finder ("the tool") and the public chat channels, and turns both into one list. It has no UI of its own. It offers a public API and events, and SuuUI's Group Finder module and notifications are built on top of it like any plugin would be.
 
-Status: **draft for review**. Everything under "What the game allows" was probed in game on 2026-10-14 (`/suu probe lfg`, `/suu probe social`). Points still open are marked **Open** and listed at the end.
+Status: **approved** on 2026-10-14. Everything under "What the game allows" was probed in game that day (`/suu probe lfg`, `/suu probe social`).
+
+What is built:
+- **The library**, all of it, except the parts marked **Not built yet**.
+- **The Group Finder's Browse page**, the first of five stages; the rest are in `IMPLEMENTATION_PLAN.md`, step 3.4.
+
+Points still open are marked **Open** and listed at the end.
 
 ## What the game allows (probed)
 
@@ -58,23 +64,26 @@ What a group can be for. The catalogue is built from the tool's activities plus 
 
 ```
 Activity {
-  id            -- "dungeon:deadmines", "zone:westfall", "quest:166", "boss:azuregos"
-  kind          -- "dungeon" | "raid" | "zone" | "quest" | "boss" | "elite" | "event" | "custom"
-  name          -- "Deadmines"
-  aliases       -- { "dm", "vc", "deadmines", ... } per language
-  toolActivity  -- the tool's activity ID (799), or nil (quests, bosses, elites)
-  level         -- { min, max } suggested
+  key           -- "dungeon:wc", "zone:westfall", "raid:mc", "boss:azuregos", "custom", "tool:<id>"
+  kind          -- "dungeon" | "raid" | "zone" | "boss" | "custom" | "other"
+  name          -- the tool's name in the client's language ("Wailing Caverns"), read at run time
+  toolActivity  -- the tool's activity ID (796), or nil (raids and bosses the tool doesn't offer yet)
+  category      -- the tool's category (2, 116, 120), toolGroup its activity group
+  level         -- { min, max } suggested (the tool's, else the hand-made list's)
   size          -- 5, 10, 40, or nil
-  zone          -- the zone it's in (map ID), for "in your zone"
-  quest         -- quest ID for kind "quest"
+  parts         -- an umbrella's activities: "dungeon:sm" is the four Scarlet Monastery wings
 }
 ```
+
+The table in `Catalogue.lua` knows no language: keys, kinds, the tool's IDs (the same in every client language) and sizes. What players type for an activity besides its name ("wc", "vc", "dm") comes from the language modules. An activity the tool offers that isn't in the table (raids at higher levels, new content) joins as `tool:<id>` with the tool's name.
+
+Quests aren't activities: an entry carries the quest IDs it's for in `quests`.
 
 - **Sources of the catalogue:**
   - the tool: whatever categories it offers at run time (dungeons, zones, custom; raids at higher levels);
   - quests: from quest links (exact ID; the title from the game, `C_QuestLog.GetTitleForQuestID`) and from your quest log (titles, zones, levels). SuuUI has no quest database, so a typed quest name is recognised only when it's in your log;
-  - a hand-made list: dungeon abbreviations, raids, world bosses, named elites and group areas.
-- Raids, world bosses, elites and events are in it from the start (hand-made list for chat). Raids from the tool join them once it offers them.
+  - a hand-made list: raids, world bosses and the umbrellas (Scarlet Monastery, Stratholme, Dire Maul, the four dragons). **Not built yet:** named elites, group areas and world events.
+- Raids and world bosses are in it from the start, from the hand-made list, so chat can name them. Raids from the tool join them once it offers them.
 
 ### Entry
 
@@ -84,23 +93,29 @@ One group or player looking. The same leader seen in the tool and in chat is **o
 Entry {
   key           -- the leader's whole name ("Suther Stargazer"), the merge key
   intent        -- "group" (a group looking for players, LFM) | "player" (a player looking for a group, LFG)
-  activities    -- { Activity id, ... } (one or more; "any" when unknown)
+  activities    -- { Activity key, ... } (none when unknown)
+  quests        -- { quest ID, ... }
   roles = {
     needed      -- { tank = n | true, healer = ..., damage = ... }  (groups)
     offered     -- { tank = true, ... }                             (players)
   }
-  size          -- { members, max } when known
+  classes       -- { WARRIOR = true, ... } asked for by class
+  need          -- how many more players, when known
+  members       -- { have, max } when known
   level         -- { min, max } when stated ("40+")
   leader        -- { name, class, level, guid } (what's known)
   text          -- the tool's comment or the chat message, as written
+  confidence    -- 0..1 (1 from the tool; chat: how sure the parser is)
+  you           -- your own listing or post
   sources = {
-    tool        -- { resultID, age, delisted, newPlayerFriendly, playstyle } or nil
-    chat        -- { channel, lastPost, posts } or nil
+    tool        -- { resultID, category, age, seenAt, delisted, newPlayerFriendly, playstyle, comment, ... } or nil
+    chat        -- { channel, text, lastPost, posts, ... } or nil
   }
-  firstSeen, lastSeen, expiresAt
-  confidence    -- 0..1 (chat only: how sure the parser is)
+  firstSeen, lastSeen
 }
 ```
+
+A tool result's leader name often arrives a moment after the search (found in game). Until then the result is stored as `tool:<resultID>`. Once the name comes, the entry is renamed, or merged into that leader's chat entry (`EntryRemoved(entry, "merged")` for the old one).
 
 - **Expiry:**
   - **Tool entries** last until the next search no longer has them, or they're delisted.
@@ -160,6 +175,7 @@ The parser itself knows no language: every word it looks for comes from a **lang
   - number words;
   - activity aliases (abbreviations and nicknames).
   Activity, zone and quest **names** come from the game itself in the client's language, so modules only add what players type besides them.
+- **Built so far:** English (`Lang/enUS.lua`). Korean and Chinese posts are dropped until their modules exist.
 - **Which modules are used:**
   - your Forever language preference (`C_AccountServices`, above) and the client's own language: always;
   - **by script:** a message written in another script (Hangul, Chinese characters, Cyrillic) is read with that language's module when SuuUI has one, whatever your preference (an English shard carries Korean and Chinese posts);
@@ -175,7 +191,7 @@ The Group Finder offers to post your listing as an ad to LookingForGroup (or ano
 
 ## Notifications
 
-Every kind can be switched on or off, and each has its own options (sound, only from the tool or also from chat, the least parser confidence for chat, not in combat, not in instances). The same entry never notifies twice within a few minutes.
+**Not built yet** (stage 2). Every kind can be switched on or off, and each has its own options (sound, only from the tool or also from chat, the least parser confidence for chat, not in combat, not in instances). The same entry never notifies twice within a few minutes.
 
 | Notification | When |
 |---|---|
@@ -198,8 +214,8 @@ Whispering a leader opens an empty whisper (no ready-made text).
 The tool can only be searched from your click or key press, so:
 
 - **When it searches:**
-  - opening the Group Finder searches (that's your click);
-  - the Refresh button searches.
+  - the Refresh button searches (built);
+  - opening the Group Finder searches, since that's your click (**not built yet**).
 - **When it's stale:** while you're listed or watching something, the results go stale after a few minutes. The library then fires **`ToolStale`**, and the notification offers **Refresh** and **Delist** (both work from that click).
 - **Chat is live:** chat entries keep arriving and matching without any refresh.
 
@@ -225,22 +241,33 @@ Delisted()                     your listing ended or was removed
 ## API
 
 ```
-SuuUI.LFG.Entries(filter)      -- the merged list; filter = { kinds, activities, intent, sources, minConfidence }
+SuuUI.LFG.Start() / Stop()     -- nothing runs before Start (the Group Finder module calls it)
+SuuUI.LFG.Configure(t)         -- SuuUI.LFG.config holds the defaults
+SuuUI.LFG.Entries(filter)      -- the merged list; filter = { intent, kinds, activities, sources, minConfidence, search, notYou }
 SuuUI.LFG.Entry(key)
-SuuUI.LFG.Catalogue()          -- activities by kind
+SuuUI.LFG.Catalogue            -- .Get(key), .Name(key), .All(kind), .Expand(key), .ForTool(activityID)
 SuuUI.LFG.Interest()           -- what the library thinks you're after
-SuuUI.LFG.Watch(activityId, on)
-SuuUI.LFG.Refresh(category)    -- only from a click or key press (the game's rule)
-SuuUI.LFG.Delist()             -- only from a click
-SuuUI.LFG.Whisper(entry, text) -- opens a whisper to the leader
+SuuUI.LFG.Watch(key, on) / Watches()
+SuuUI.LFG.MatchReasons(entry)  -- "role", "activity", "player", "quest", "zone", "boss", "friend"
+SuuUI.LFG.Refresh(category)    -- only from a click or key press (the game's rule); 2, 116, 120
+SuuUI.LFG.ToolAge(category)    -- seconds since that category's last search
+SuuUI.LFG.Listing() / Delist() -- your listing; delisting only from a click
+SuuUI.LFG.Whisper(entry)       -- opens an empty whisper to the leader
 SuuUI.LFG.CanInvite(entry)     -- single players looking (the tool's rule)
 SuuUI.LFG.Invite(entry)
-SuuUI.LFG.Parse(text, channel) -- the parser on its own (for tools and tests)
+SuuUI.LFG.Languages()          -- the language modules in use
+SuuUI.LFG.Parser.Parse(text, { languages }) -- the parser on its own (tools/lfg_parse.lua)
+SuuUI.LFG.Lang.Register(code, def)          -- a language module
+SuuUI.LFG.IsHiddenChannel(name) -- LookingForGroup, which SuuUI's chat skips
 ```
+
+`Docs/API.md` has the same with each function's details.
 
 Listing yourself isn't in the library's API, because addon code can't do it. The Group Finder module hosts the game's listing panel instead.
 
 ## Settings (in the settings window)
+
+**Not built yet** (stage 4). Until then, the library runs on its defaults (`SuuUI.LFG.config`).
 
 - Channels to read: LookingForGroup, General, Trade, Services, Say, Yell.
 - Join LookingForGroup, and keep it out of chat (on by default).
@@ -253,3 +280,6 @@ Listing yourself isn't in the library's API, because addon code can't do it. The
 
 1. **Chat volume:** the beta's channels are quiet; the parser is tuned on recorded lines as they come in (the recorder keeps running).
 2. **Raids:** whether chat text stays readable in raid combat (not seen yet).
+3. **A lost chat post:** in the first live run, a real LookingForGroup post ("LAST SPOT WC -- 1 TANK /w me") made no entry, though replaying it offline parses it. `/suu probe lfg entries` now counts what happens to each chat line (seen, secret, channel off, nothing found, low confidence, entries, errors) and keeps the last error; the next run in game will show where it went.
+4. **Before List yourself and Who are built:** the play style and voice chat option lists, Who's filter and columns, and the level ranges of Forever's own dungeons are still to be probed.
+5. **When search results turn secret** ("chat messaging lockdown"): not seen yet.

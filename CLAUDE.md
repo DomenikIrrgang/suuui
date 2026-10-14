@@ -2,13 +2,22 @@
 
 ## Building with wowlua
 
-SuuUI is built with [wowlua](https://github.com/DomenikIrrgang/wowlua) (`wowlua --version` ≥ 0.8).
+SuuUI is built with [wowlua](https://github.com/DomenikIrrgang/wowlua) (`wowlua --version` ≥ 0.8.2).
 
 - The addon's Lua and XML files live in `src/`. `wowlua.json` describes the addon (title, notes, saved variables, flavor `camelot` for WoW Forever) and **generates** `SuuUI.toc`; there is no TOC file in the repository. Change TOC fields in `wowlua.json`.
-- **Load order** is `build.load-order` in `wowlua.json`. A new file goes into that list at the place it must load (files depend on each other through `ns`).
-- `wowlua dev` builds and syncs the addon into `_classic_beta_/Interface/AddOns/SuuUI` on every change; `/reload` in game. `wowlua build --release` builds what gets published (`dist/release/SuuUI`): one bundled, minified `SuuUI.lua`.
+- **Load order** is worked out by wowlua (0.8.2): it orders files by the table fields they define and read, so there is no list to keep. `wowlua toc` shows the order it chose. It can only follow tables it can trace: create a shared table plainly (`ns.X = {}`), or a write through it warns W1033 and its order is lost.
+- `wowlua check` checks the sources without building. `wowlua install --release` builds once and installs into `_classic_beta_/Interface/AddOns/SuuUI` (use it after every change; then `/reload` in game). `wowlua dev` builds and syncs on every change, with wowlua's in-game profiling tools. `wowlua build --release` builds what gets published (`dist/release/SuuUI`): one bundled, minified `SuuUI.lua`.
+- The game's `Interface/AddOns/SuuUI` folder is build output too: never edit it; edit `src/`.
 - `dist/` is build output; never edit it.
 - Release builds bundle every file into one. Code must not depend on its own file name: `debugstack` shows `SuuUI/SuuUI.lua` there (wowlua warns with W6001). `wowlua trace` maps in-game errors from a bundled build back to the source lines.
+
+## Working on SuuUI
+
+- **Modules and the public API.** Every feature is a module (`SuuUI.RegisterModule`) that can be turned off. Modules use only the public API: `SuuUI.*` and `SuuUI.UI.*`, exported in `src/Core/API.lua`. A UI function that a module calls but that isn't exported there is nil in game ("attempt to call a nil value"). Document each new export in `Docs/API.md` under the API version it arrives in; additions since the last release go into the version in `src/Core/Modules.lua` (`API_VERSION`).
+- **No automated tests yet.** Check a change with `wowlua check`, then in game.
+- **Probes first.** WoW Forever blocks some things that other clients allow (secret values, restricted functions). `/suu probe <topic>` (`src/Diagnostics`) records what the client allows into `SuuUIProbe` in the SavedVariables (written on `/reload`). Probe before designing anything the game may block. For taint, use `/suu probe taint`, never `/console taintLog` (on Forever it breaks Blizzard frames and writes nothing).
+- **Blizzard's own UI code for Forever** is mirrored at [Gethe/wow-ui-source](https://github.com/Gethe/wow-ui-source), branch `forever`. Its `Blizzard_APIDocumentationGenerated` marks restricted functions (`HasRestrictions`).
+- **Design docs:** `IMPLEMENTATION_PLAN.md` (the build plan, with what was probed and confirmed per step) and `Docs/ForeverLFG.md` (the group finder library).
 
 ## Builds per site
 
@@ -34,7 +43,7 @@ Before setting a tag:
 
 1. Find the previous release tag (`git describe --tags --abbrev=0`) and read every change since it (`git log <tag>..HEAD`, plus the diffs where a subject is unclear).
 2. Choose the next version by the rules above, and set it as `package.version` in `wowlua.json`.
-3. Write the changelog: add a section at the top of `CHANGELOG.md`, headed `## <version> (<YYYY-MM-DD>)` with the exact version. Write it for players, in plain language: group the entries under **New**, **Changed** and **Fixed** (leave out empty groups), one line per change a player or plugin author notices. Leave out internal refactors, probes and plan updates. `wowlua publish` uploads exactly this section.
+3. Write the changelog: add a section at the top of `CHANGELOG.md`, headed `## <version> (<YYYY-MM-DD>)` with the exact version. If an `## Unreleased` section is there (kept up to date between releases), it becomes this section: rename it and check it against the log. Write it for players, in plain language: group the entries under **New**, **Changed** and **Fixed** (leave out empty groups), one line per change a player or plugin author notices. Leave out internal refactors, probes and plan updates. `wowlua publish` uploads exactly this section.
 4. Check it: `wowlua publish --dry-run` packages the release and shows what each site would receive, without uploading.
 5. Commit (`Release <version>`), create the tag (`git tag -a v<version> -m "SuuUI <version>"`), and push both (`git push && git push origin v<version>`). Then watch the CI run until the upload succeeds.
 
