@@ -316,6 +316,21 @@ function M:SkillFor(id, profession, name)
     return need
 end
 
+-- The level the item a recipe makes requires; nil when it makes none or
+-- the item isn't loaded yet (asked for, then sorted again).
+function M:UseLevel(id)
+    local sch = call(C_TradeSkillUI.GetRecipeSchematic, id, false)
+    local out = sch and sch.outputItemID
+    if not out then return nil end
+    local name, _, _, _, minLevel = call(C_Item.GetItemInfo, out)
+    if not name then
+        self.waitingItems = true
+        call(C_Item.RequestLoadItemDataByID, out)
+        return nil
+    end
+    return minLevel or 0
+end
+
 function M:Recipes()
     local base = call(C_TradeSkillUI.GetBaseProfessionInfo) or {}
     local data = { name = base.professionName, skill = base.skillLevel, max = base.maxSkillLevel,
@@ -361,7 +376,8 @@ function M:Recipes()
                 end
                 cat.recipes[#cat.recipes + 1] = { id = id, name = info.name, difficulty = diff, canMake = can,
                     learned = info.learned and true or false, tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false,
-                    need = self.sort == "skill" and self:SkillFor(id, data.name, info.name) or nil }
+                    need = self.sort == "skill" and self:SkillFor(id, data.name, info.name) or nil,
+                    use = self.sort == "level" and self:UseLevel(id) or nil }
                 first = first or id
             end
         end
@@ -383,6 +399,13 @@ function M:Recipes()
         -- a skill not known yet goes last
         skill = function(a, b)
             local x, y = a.need or math.huge, b.need or math.huge
+            if x ~= y then return x < y end
+            return byName(a, b)
+        end,
+        -- the level the product needs to be used; none (enchants) or not
+        -- loaded yet goes last
+        level = function(a, b)
+            local x, y = a.use or math.huge, b.use or math.huge
             if x ~= y then return x < y end
             return byName(a, b)
         end,

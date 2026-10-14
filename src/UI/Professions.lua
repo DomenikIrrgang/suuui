@@ -38,7 +38,7 @@
 --   p.onSelect(id), p.onRecipeEnter(recipe, owner), p.onSearch(text),
 --   p.onFilters({ show = "all" | "learned" | "unlearned", difficulty = { "optimal",
 --       "medium", "easy", "trivial" }, quality = { 0..4 }, other = { "materials",
---       "skillup" } }), p.onSort("category" | "difficulty" | "skill" | "name"),
+--       "skillup" } }), p.onSort("category" | "difficulty" | "skill" | "level" | "name"),
 --   p:SetFilters(value), p:SetSort(key), p.onTrack(on),
 --   p.onCreate(count), p.onCreateAll()
 
@@ -632,6 +632,7 @@ local SORTS = {
     { value = "category", label = "Category", summary = "Sort: Category" },
     { value = "difficulty", label = "Difficulty", summary = "Sort: Difficulty" },
     { value = "skill", label = "Skill required", summary = "Sort: Skill" },
+    { value = "level", label = "Level to use", summary = "Sort: Level" },
     { value = "name", label = "Name", summary = "Sort: Name" },
 }
 
