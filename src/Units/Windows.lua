@@ -229,11 +229,25 @@ function M:SkinFriends()
     self.friends = chrome
 end
 
+-- Forever's own social window (SocialUIFrame, O): SuuUI's header; its
+-- tabs down the right side stay Blizzard's for now.
+function M:SkinSocial()
+    local f = _G.SocialUIFrame
+    if not f or f.suuChrome then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Social", icon = "people", binding = "TOGGLESOCIAL", close = _G.SocialUIFrameCloseButton,
+        topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, _G.SocialUIFrameInset, _G.SocialUIFrameBg, f.TopTileStreaks },
+    })
+    self.social = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
     self:SkinProfessions()
     self:SkinFriends()
+    self:SkinSocial()
 end
 
 function M:OnEnable()

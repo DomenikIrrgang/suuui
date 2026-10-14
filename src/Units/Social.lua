@@ -1,11 +1,14 @@
 -- Units/Social.lua
 -- SuuUI's Social pages (step 3.4, design component SocialWindow) over
--- Blizzard's friends window (FriendsFrame, O), the way the Legacy and
--- Professions pages sit over theirs: the key, the micro menu and Esc stay
--- Blizzard's, the window is in SuuUI's look (the windows module), and
--- Blizzard's own parts for the tab are off screen (still shown: they
--- drive it). Probed 2026-10-14: Contacts (with Friends, Recent Allies and
--- Recruit A Friend under it), Raid and Quick Join; none of it protected.
+-- Forever's own social window (SocialUIFrame, O: not the classic
+-- FriendsFrame, which it no longer shows; found with /suu probe social
+-- mouse, 2026-10-14), the way the Legacy and Professions pages sit over
+-- theirs: the key, the micro menu and Esc stay Blizzard's, the window is in
+-- SuuUI's look (the windows module), and Blizzard's own friends list and
+-- Battle.net bar are off screen (still shown: they drive it). The window:
+-- the Battle.net bar, the friends list (search, filter, Add New Friend),
+-- Recent Allies, Friend Requests, Raid, four tabs down its right side;
+-- the ignored in a small window of its own. None of it protected.
 --   Contacts  Battle.net and character friends, online first, with their
 --             notes; Whisper, Invite, Add friend; the ignored; your status
 -- A built-in module written against the public API only.
@@ -30,8 +33,6 @@ local function call(fn, ...)
     if ok then return a, b, c, d, e, f, g, h end
 end
 
-local W, H = 440, 580
-local CONTACTS_TAB = 1
 
 local CLASS_FILES = {}
 for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
@@ -275,20 +276,22 @@ function M:Away(part)
     hooksecurefunc(part, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
 end
 
-function M:Size()
-    local f = _G.FriendsFrame
-    if not f or InCombatLockdown() then return end
-    if math.abs(f:GetWidth() - W) < 1 and math.abs(f:GetHeight() - H) < 1 then return end
-    self.sizing = true
-    f:SetSize(W, H)
-    self.sizing = false
+
+
+-- The window's friends list: the content frame with a filter bar that is
+-- neither Recent Allies nor Friend Requests.
+local function friendsList(f)
+    for _, c in ipairs({ f:GetChildren() }) do
+        if c.FilterBar and c ~= f.RecentAlliesList and c ~= f.FriendRequestsList then return c end
+    end
 end
 
--- The Contacts page while Blizzard's Contacts tab is the one shown.
+-- The Contacts page while the window shows its friends list.
 function M:Follow()
-    local f = _G.FriendsFrame
+    local f = self.frame
     if not (f and self.view) then return end
-    local onContacts = f:IsShown() and (f.selectedTab or (PanelTemplates_GetSelectedTab and PanelTemplates_GetSelectedTab(f))) == CONTACTS_TAB
+    local list = self.friendsList
+    local onContacts = f:IsShown() and list and list:IsShown()
     self.view:SetShown(onContacts and true or false)
     if onContacts then
         if C_FriendList and C_FriendList.ShowFriends then pcall(C_FriendList.ShowFriends) end
@@ -297,8 +300,11 @@ function M:Follow()
 end
 
 function M:Build()
-    local f = _G.FriendsFrame
+    local f = _G.SocialUIFrame
     if not f or self.view then return end
+    local list = friendsList(f)
+    if not list then return end
+    self.frame, self.friendsList = f, list
     self.awayParts = {}
     local view = UI.Contacts(f)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -308,27 +314,26 @@ function M:Build()
     view:Hide()
     self.view = view
     self:Wire(view)
-    -- Blizzard's Contacts parts out of sight
-    for _, part in ipairs({ f.FriendsTabHeader or _G.FriendsTabHeader, _G.FriendsListFrame, _G.RecentAlliesFrame,
-                            _G.RecruitAFriendFrame }) do
-        self:Away(part)
-    end
-    f:HookScript("OnShow", function() self:Size(); self:Follow() end)
+    -- Blizzard's friends list and Battle.net bar out of sight (the page has
+    -- both); Recent Allies, Friend Requests and Raid stay Blizzard's for now
+    self:Away(list)
+    self:Away(f.BattleNetBar)
+    -- the page follows the window's content
+    f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide() end)
-    if FriendsFrame_ShowSubFrame then hooksecurefunc("FriendsFrame_ShowSubFrame", function() self:Follow() end) end
-    if PanelTemplates_SetTab then
-        hooksecurefunc("PanelTemplates_SetTab", function(frame) if frame == f then self:Follow() end end)
+    for _, c in ipairs({ list, f.RecentAlliesList, f.FriendRequestsList, f.RaidFrame }) do
+        if c then
+            c:HookScript("OnShow", function() self:Follow() end)
+            c:HookScript("OnHide", function() self:Follow() end)
+        end
     end
-    local function again() if not self.sizing and f:IsShown() then C_Timer.After(0, function() self:Size() end) end end
-    hooksecurefunc(f, "SetWidth", again)
-    hooksecurefunc(f, "SetHeight", again)
-    hooksecurefunc(f, "SetSize", again)
-    self:Size()
     self:Follow()
 end
 
 function M:OnEnable()
     self:Build()
+    -- the window may load on demand
+    self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "FRIENDLIST_UPDATE", "BN_FRIEND_INFO_CHANGED", "BN_FRIEND_ACCOUNT_ONLINE",
                          "BN_FRIEND_ACCOUNT_OFFLINE", "BN_FRIEND_LIST_SIZE_CHANGED", "IGNORELIST_UPDATE",
@@ -337,5 +342,4 @@ function M:OnEnable()
             self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
         end
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Size() end)
 end
