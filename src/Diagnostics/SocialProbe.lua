@@ -507,9 +507,57 @@ function SP.GuildControl()
     ns.Print(("Guild control probe: %d ranks; writes tried, blocked ones recorded. /reload in a few seconds."):format(n))
 end
 
+-- Blizzard's guild control window: every frame and text in it, with its
+-- anchor, so the parts that run into each other can be moved apart. Open
+-- the Settings tab on the page to look at (Rank Permissions) first.
+local function anchorOf(r)
+    local ok, point, rel, relPoint, x, y = pcall(r.GetPoint, r, 1)
+    if not ok or not point then return "" end
+    local relName = rel and ((rel.GetName and rel:GetName()) or rel.suuProbeKey or "?") or "nil"
+    return (" @%s>%s.%s %d,%d"):format(point, tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
+end
+
+local function tree(f, depth, out, prefix)
+    if depth > 6 or not f or not f.GetChildren or #out >= 600 then return end
+    local keys = {}
+    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
+    for _, r in ipairs({ f:GetRegions() }) do
+        if r:GetObjectType() == "FontString" then
+            r.suuProbeKey = keys[r]
+            out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d%s \"%s\""):format(prefix, r:GetName() or keys[r] or "?", show(r:IsShown()),
+                math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r), show(r:GetText()))
+        end
+    end
+    for _, c in ipairs({ f:GetChildren() }) do
+        c.suuProbeKey = keys[c]
+        local fs = c.Text or c.text or (c.GetFontString and c:GetFontString())
+        local text = (fs and fs.GetText) and (" \"" .. show(fs:GetText()) .. "\"") or ""
+        out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(prefix, c:GetName() or keys[c] or "?", c:GetObjectType(),
+            show(c:IsShown()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), anchorOf(c), text)
+        tree(c, depth + 1, out, prefix .. "  ")
+    end
+end
+
+function SP.GuildUI()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), tree = {} }
+    SuuUIProbe.guildUI = store
+    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+    local ui = _G.GuildControlUI
+    if not ui then ns.Print("Guild UI probe: no GuildControlUI.") return end
+    store.size = ("%dx%d"):format(math.floor(ui:GetWidth() or 0), math.floor(ui:GetHeight() or 0))
+    store.shown = ui:IsShown()
+    store.keys = {}
+    for k, v in pairs(ui) do if type(k) == "string" and type(v) ~= "function" then store.keys[#store.keys + 1] = k .. "=" .. type(v) end end
+    table.sort(store.keys)
+    tree(ui, 1, store.tree, "")
+    ns.Print(("Guild UI probe: %d lines saved; /reload."):format(#store.tree))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
     if rest == "guildcontrol" then SP.GuildControl() return end
+    if rest == "guildui" then SP.GuildUI() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
