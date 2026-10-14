@@ -290,6 +290,7 @@ function M:BuildDetails()
     local f = self.frame
     local S = T.space
     local p = UI.Panel(f, { title = " ", width = 320, closable = true, solid = true })
+    p.suuOwn = true
     p:SetFrameLevel(f:GetFrameLevel() + 200)
     p:SetPoint("TOPLEFT", f, "TOPRIGHT", 12, 0)
     local b = p.body
@@ -377,6 +378,40 @@ end
 -- Over Blizzard's window
 --------------------------------------------------------------------------------
 
+-- The Info page's data.
+function M:RenderInfo()
+    local page = self.infoPage
+    if not (page and page:IsVisible()) then return end
+    local counts = {}
+    for _, m in ipairs((self:Members())) do counts[m.rankIndex] = (counts[m.rankIndex] or 0) + 1 end
+    local ranks = {}
+    for i = 1, (call(GuildControlGetNumRanks)) or 0 do
+        ranks[#ranks + 1] = { name = call(GuildControlGetRankName, i), count = counts[i - 1] or 0 }
+    end
+    local motd = call(GetGuildRosterMOTD)
+    local info = call(GetGuildInfoText)
+    page:SetData({ motd = plain(motd) and motd or nil, info = plain(info) and info or nil,
+                   canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
+end
+
+function M:EditInfo(key)
+    local motd = key == "motd"
+    local current = motd and call(GetGuildRosterMOTD) or call(GetGuildInfoText)
+    UI.Confirm({ title = motd and "Message of the day" or "Guild information",
+        text = motd and "Everyone in the guild sees it when they log in." or "What the guild is about, for its members.",
+        input = { label = motd and "Message" or "Information", value = plain(current) and current or "" }, confirm = "Save",
+        onConfirm = function(text)
+            if motd then
+                local set = (C_GuildInfo and C_GuildInfo.SetMOTD) or GuildSetMOTD
+                if set then pcall(set, text) end
+            else
+                local set = (C_GuildInfo and C_GuildInfo.SetInfoText) or SetGuildInfoText
+                if set then pcall(set, text) end
+            end
+            C_Timer.After(0.5, function() self:RenderInfo() end)
+        end })
+end
+
 -- The roster page while the window shows your guild's roster.
 function M:Follow()
     local f = self.frame
@@ -386,6 +421,15 @@ function M:Follow()
     local club = f.GetSelectedClubId and f:GetSelectedClubId()
     local guild = C_Club and C_Club.GetGuildClubId and C_Club.GetGuildClubId()
     local onRoster = f:IsShown() and guild and club == guild and mode ~= nil and mode == modes.ROSTER
+    local onInfo = f:IsShown() and guild and club == guild and mode ~= nil and mode == modes.GUILD_INFO
+    if self.infoPage then
+        self.infoPage:SetShown(onInfo and true or false)
+        local blizz = f.GuildDetailsFrame
+        if blizz then blizz:SetAlpha(onInfo and 0 or 1) end
+        if onInfo then self:RenderInfo() end
+    end
+    -- the rest in SuuUI's look: Blizzard's own parts restyled in place
+    C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
     self.roster:SetShown(onRoster and true or false)
     if not onRoster and not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide() end end
     if f.MemberList then f.MemberList:SetAlpha(onRoster and 0 or 1) end
@@ -412,7 +456,17 @@ function M:Build()
     page:EnableMouse(true)
     page:Hide()
     self.roster = page
+    page.suuOwn = true
     self:Wire(page)
+    -- the Info page
+    local info = UI.GuildInfo(f)
+    info:SetAllPoints(page)
+    info:SetFrameLevel(f:GetFrameLevel() + 100)
+    info:EnableMouse(true)
+    info:Hide()
+    info.suuOwn = true
+    info.onEdit = function(key) self:EditInfo(key) end
+    self.infoPage = info
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide(); if self.details then self.details:Hide() end end)
     if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
@@ -430,6 +484,7 @@ function M:OnEnable()
         for _, over in pairs(self.overs or {}) do over:Hide() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender() end)
+    if not valid or valid("GUILD_MOTD") then self:OnGameEvent("GUILD_MOTD", function() self:RenderInfo() end) end
     for _, e in ipairs({ "GUILD_ROSTER_UPDATE", "PLAYER_GUILD_UPDATE", "GUILD_RANKS_UPDATE", "GROUP_ROSTER_UPDATE" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function() if self.roster and self.roster:IsVisible() then self:QueueRender() end end)

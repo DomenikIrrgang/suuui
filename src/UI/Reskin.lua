@@ -6,6 +6,7 @@
 -- redraws (each ScrollBox update).
 --
 --   UI.Reskin(frame)              -- the frame and everything in it, once more
+--                                 -- (frames marked suuOwn = true skipped)
 --   UI.ReskinScrollBox(box)       -- its rows now and after every update
 --   UI.ReskinStatusBar(bar)       -- a flat bar on a track, standing colours kept
 --   UI.ReskinCheckButton(button)  -- a 16px box, arcane check
@@ -491,6 +492,9 @@ end
 
 local function pass(f, depth, ctx)
     if depth > 6 or ask(f, "IsForbidden") then return end
+    -- SuuUI's own frames inside a Blizzard window (pages, the skin's header):
+    -- never restyled
+    if f.suuOwn then return end
     local kind = ask(f, "GetObjectType")
     if kind == "StatusBar" then UI.ReskinStatusBar(f); return end
     if kind == "CheckButton" and not f.suuNoCheck then UI.ReskinCheckButton(f) end

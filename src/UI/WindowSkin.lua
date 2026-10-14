@@ -186,6 +186,7 @@ function UI.SkinWindow(frame, opts)
     edgeHolder:SetPoint("BOTTOMRIGHT")
     edgeHolder:SetFrameLevel(frame:GetFrameLevel() + 499)
     edgeHolder:EnableMouse(false)
+    edgeHolder.suuOwn = true
     chrome.edge = UI.Border(edgeHolder, "gilt-line")
 
     -- the header: diamond, icon, title, key, close; the tab row under it
@@ -194,6 +195,7 @@ function UI.SkinWindow(frame, opts)
     head:SetPoint("TOPRIGHT", 0, rise)
     head:SetHeight(HEAD_H)
     head:SetFrameLevel(frame:GetFrameLevel() + 500)
+    head.suuOwn = true
     chrome.head = head
     chrome.jewel = UI.Diamond(head, 7, "gilt")
     chrome.jewel:SetPoint("CENTER", head, "TOPLEFT", 0, 0)

@@ -253,3 +253,96 @@ function UI.GuildRoster(parent)
     g.empty:SetValue("No one matches.")
     return g
 end
+
+--------------------------------------------------------------------------------
+-- The Info page (design component GuildWindow, "Info"): the message of the
+-- day, the guild information and the ranks with how many hold each; Edit
+-- on the first two when your rank may.
+--
+--   local i = UI.GuildInfo(parent)
+--   i:SetData({ motd, info, canEditMotd, canEditInfo, ranks = { { name, count } } })
+--   i.onEdit("motd" | "info")
+--------------------------------------------------------------------------------
+
+local I = {}
+
+function I:SetData(d)
+    self.data = d
+    local function block(b, text, can, empty)
+        b.text:SetValue((text and text ~= "") and text or ("|cff" .. T.color["ink-faint"].hex .. empty .. "|r"))
+        b.edit:SetShown(can and true or false)
+    end
+    block(self.motd, d.motd, d.canEditMotd, "No message of the day.")
+    block(self.info, d.info, d.canEditInfo, "No guild information yet.")
+    self:Layout()
+    for i, r in ipairs(d.ranks or {}) do
+        local row = self.rankRows[i]
+        if not row then
+            row = CreateFrame("Frame", nil, self.ranks)
+            row:SetHeight(T.type.body.lineHeight + S["space-2"])
+            row.name = UI.Text(row, "body", "ink")
+            row.name:SetPoint("LEFT")
+            row.count = UI.Text(row, "numeric", "ink-muted")
+            row.count:SetPoint("RIGHT")
+            self.rankRows[i] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", self.ranks, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-3"] + (i - 1) * row:GetHeight()))
+        row:SetPoint("RIGHT", self.ranks, "RIGHT")
+        row.name:SetValue(r.name or "")
+        row.count:SetValue(tostring(r.count or 0))
+        row:Show()
+    end
+    for i = #(d.ranks or {}) + 1, #self.rankRows do self.rankRows[i]:Hide() end
+end
+
+-- The two text blocks one under another in the left column, the ranks right.
+function I:Layout()
+    local w = self:GetWidth()
+    if not w or w <= 0 then return end
+    local gap = S["space-6"]
+    local left = math.floor((w - gap) * 0.62)
+    local y = 0
+    for _, b in ipairs({ self.motd, self.info }) do
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -y)
+        b:SetWidth(left)
+        b.text:SetWidth(left - S["space-5"] * 2)
+        local h = T.type.header.lineHeight + S["space-3"] + math.max(T.type.body.lineHeight * 2, math.ceil(b.text:GetStringHeight())) + S["space-5"] * 2
+        b:SetHeight(h)
+        y = y + h + S["space-5"]
+    end
+    self.ranks:ClearAllPoints()
+    self.ranks:SetPoint("TOPLEFT", self, "TOPLEFT", left + gap, 0)
+    self.ranks:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT")
+end
+
+local function infoBlock(i, title, key)
+    local b = CreateFrame("Frame", nil, i)
+    UI.Fill(b, "surface-sunk"):SetAllPoints()
+    UI.Border(b, "gilt-faint")
+    b.head = UI.Text(b, "header", "gilt-text")
+    b.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+    b.head:SetValue(title)
+    b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if i.onEdit then i.onEdit(key) end end })
+    b.edit:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+    b.text = UI.Text(b, "body", "ink")
+    b.text:SetPoint("TOPLEFT", b.head, "BOTTOMLEFT", 0, -S["space-3"])
+    b.text:SetJustifyH("LEFT")
+    b.text:SetWordWrap(true)
+    return b
+end
+
+function UI.GuildInfo(parent)
+    local i = CreateFrame("Frame", nil, parent)
+    Mixin(i, I)
+    i.rankRows = {}
+    i.motd = infoBlock(i, "Message of the day", "motd")
+    i.info = infoBlock(i, "Guild information", "info")
+    i.ranks = CreateFrame("Frame", nil, i)
+    i.ranks.head = UI.Text(i.ranks, "header", "gilt-text")
+    i.ranks.head:SetPoint("TOPLEFT")
+    i.ranks.head:SetValue("Ranks")
+    i:SetScript("OnSizeChanged", function(self) if self.data then self:Layout() end end)
+    return i
+end
