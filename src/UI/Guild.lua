@@ -438,7 +438,8 @@ function MB:Layout()
     if not self.has then return end
     local w = self:GetWidth()
     if not w or w < 100 then return end
-    local right = self.edit:IsShown() and (self.edit:GetWidth() + S["space-5"] + S["space-4"]) or S["space-5"]
+    -- space-6 between the message and Edit (a little more room, asked for in game)
+    local right = self.edit:IsShown() and (self.edit:GetWidth() + S["space-5"] + S["space-6"]) or S["space-5"]
     local left = S["space-5"] + 12 + S["space-3"] + self.head:GetStringWidth() + S["space-4"]
     self.message:SetWidth(math.max(60, w - left - right))
     -- as tall as the text really is, the same room above and below it
