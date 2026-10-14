@@ -211,6 +211,14 @@ function M:Render()
     page:SetData({ online = online, total = total, showOffline = showOffline, sort = self.sort or "rank",
                    members = shown, selected = self.selected, actions = actions })
     self:FootOverlays(selected, actions)
+    -- the open details panel with the member's fresh data (a saved note)
+    local p = self.details
+    if p and p:IsShown() and p.member then
+        for _, m in ipairs(all) do
+            if m.key == p.member.key then self:ShowDetails(m) break end
+        end
+    end
+    self:SizeBlizzList()
 end
 
 function M:QueueRender()
@@ -222,17 +230,113 @@ function M:QueueRender()
     end)
 end
 
-function M:Note(m, officer)
-    UI.Confirm({ title = officer and "Officer note" or "Note",
-        text = officer and ("Only officers who may read officer notes see this one on " .. m.name .. ".")
-            or ("Everyone in the guild sees " .. m.name .. "'s note."),
-        input = { label = officer and "Officer note" or "Note", value = (officer and m.officerNote or m.note) or "" }, confirm = "Save",
-        onConfirm = function(text)
-            if C_GuildInfo and C_GuildInfo.SetNote and m.guid then
-                pcall(C_GuildInfo.SetNote, m.guid, text, not officer)
-            end
-            self:QueueRender()
-        end })
+-- Guild notes: C_GuildInfo.SetNote is restricted (the game's API docs;
+-- even a secure macro's /run is forbidden: /suu probe social notes). What
+-- saves is the game's own note box on its member panel, showing a member
+-- the game picked itself from its own member list (/suu probe social
+-- notelist, confirmed in game 2026-10-14). So:
+--   - the game's member list is kept tall enough for everyone, off screen
+--     (its rows are filled by the game, untainted), offline members
+--     included (its communitiesShowOffline setting, read when it loads);
+--   - the details panel's Edit is a secure button that clicks that
+--     member's row there (the game picks them);
+--   - then the game's own note box (invisible) takes Edit's place: the
+--     click's release, or a second click, opens the game's note popup.
+function M:BlizzList()
+    return self.frame and self.frame.MemberList
+end
+
+function M:SizeBlizzList()
+    local list = self:BlizzList()
+    if not list or InCombatLockdown() then return end
+    local n = (call(GetNumGuildMembers)) or 0
+    self.placingList = true
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+    list:SetSize(400, n * 24 + 80)
+    self.placingList = false
+    if not self.listHooked then
+        self.listHooked = true
+        local function again() if not self.placingList then C_Timer.After(0, function() self:SizeBlizzList() end) end end
+        hooksecurefunc(list, "SetPoint", again)
+        hooksecurefunc(list, "SetSize", again)
+    end
+end
+
+-- The game's row for a member (by GUID), if it has one.
+function M:BlizzRow(guid)
+    local list = self:BlizzList()
+    if not (guid and list and list.ScrollBox and list.ScrollBox.ForEachFrame) then return nil end
+    local found
+    list.ScrollBox:ForEachFrame(function(row)
+        local info = row.memberInfo
+        if not found and info and info.guid == guid then found = row end
+    end)
+    return found
+end
+
+-- The game's own note boxes, back on its (off screen) member panel.
+function M:StowNoteBoxes()
+    local d = self.frame and self.frame.GuildMemberDetailFrame
+    if not d or InCombatLockdown() then return end
+    for _, box in ipairs({ d.NoteBackground, d.OfficerNoteBackground }) do
+        if box and box.suuPlaced then
+            box.suuPlaced = nil
+            box:ClearAllPoints()
+            box:SetPoint("TOPLEFT", d, "TOPLEFT", 0, 0)
+        end
+    end
+end
+
+-- The game's note box over SuuUI's Edit (invisible: the panel it belongs
+-- to is see-through and off screen).
+function M:PlaceNoteBox(officer, edit)
+    local d = self.frame and self.frame.GuildMemberDetailFrame
+    if not d then return end
+    local box = officer and d.OfficerNoteBackground or d.NoteBackground
+    if not box then return end
+    box.suuPlaced = true
+    box:ClearAllPoints()
+    box:SetAllPoints(edit)
+    box:SetFrameStrata("DIALOG")
+end
+
+-- The details panel's two Edits: secure buttons on top that click the
+-- member's row in the game's list (out of combat; anchored only while
+-- shown, the way the roster's are).
+function M:NoteOverlays(m)
+    local p = self.details
+    if not p or InCombatLockdown() then return end
+    self.noteOvers = self.noteOvers or {}
+    self:StowNoteBoxes()
+    local row = m and p:IsVisible() and self:BlizzRow(m.guid)
+    for _, officer in ipairs({ false, true }) do
+        local edit = officer and p.officerEdit or p.noteEdit
+        local over = self.noteOvers[officer]
+        if not over then
+            over = secureOver(edit)
+            over:SetAttribute("type1", "click")
+            over:HookScript("PostClick", function(o)
+                if InCombatLockdown() then return end
+                o:Hide()
+                o:ClearAllPoints()
+                self:PlaceNoteBox(officer, edit)
+            end)
+            self.noteOvers[officer] = over
+        end
+        local on = row and edit:IsVisible() and edit:IsEnabled()
+        over:SetAttribute("clickbutton1", on and row or nil)
+        over:SetFrameStrata("DIALOG")
+        over:ClearAllPoints()
+        if on then over:SetAllPoints(edit) end
+        over:SetShown(on and true or false)
+    end
+end
+
+function M:HideNoteOverlays()
+    if InCombatLockdown() then return end
+    for _, over in pairs(self.noteOvers or {}) do over:Hide(); over:ClearAllPoints() end
+    self:StowNoteBoxes()
 end
 
 -- Guild settings: Blizzard's own guild control window (ranks and what each
@@ -306,9 +410,9 @@ function M:Menu(m, owner)
         root:CreateTitle(m.name)
         if a.whisper.enabled then root:CreateButton("Whisper", function() self:Act("whisper", m) end) end
         if a.invite.enabled then root:CreateButton("Invite", function() self:Act("invite", m) end) end
-        if call(CanEditPublicNote) or m.you then root:CreateButton("Set note", function() self:Note(m, false) end) end
+        if call(CanEditPublicNote) or m.you then root:CreateButton("Set note", function() self:ShowDetails(m) end) end
         if C_GuildInfo and call(C_GuildInfo.CanEditOfficerNote) then
-            root:CreateButton("Set officer note", function() self:Note(m, true) end)
+            root:CreateButton("Set officer note", function() self:ShowDetails(m) end)
         end
     end)
 end
@@ -354,8 +458,15 @@ function M:BuildDetails()
         local head = UI.Text(b, "caption", "gilt-text")
         head:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -S["space-5"])
         head:SetValue(label)
+        -- the secure button on top does the work (NoteOverlays); reaching
+        -- this one means it couldn't be there
         local edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function()
-            if p.member then self:Note(p.member, officer) end
+            if not p.member then return end
+            if InCombatLockdown() then
+                self:Print("Notes can be changed out of combat.")
+            else
+                self:Print(("%s isn't in the game's member list yet; /reload once if they're offline."):format(p.member.name))
+            end
         end })
         edit:SetPoint("RIGHT", b, "RIGHT", 0, 0)
         edit:SetPoint("TOP", head, "TOP", 0, 4)
@@ -375,6 +486,7 @@ function M:BuildDetails()
     p.whisper:SetPoint("LEFT")
     p.invite = UI.Button(p.row1, { text = "Invite", variant = "quiet", onClick = function() if p.member then self:Act("invite", p.member) end end })
     p.invite:SetPoint("LEFT", p.whisper, "RIGHT", S["space-3"], 0)
+    p:HookScript("OnHide", function() self:HideNoteOverlays() end)
     self.details = p
     return p
 end
@@ -424,6 +536,7 @@ function M:ShowDetails(m)
     p.invite:SetEnabledState(a.invite.enabled and true or false)
     p:Fit()
     p:Show()
+    self:NoteOverlays(m)
 end
 
 --------------------------------------------------------------------------------
@@ -927,6 +1040,13 @@ function M:Build()
     log:Hide()
     log.suuOwn = true
     self.logPage = log
+    -- the game's member panel: picked by the notes' secure buttons, never
+    -- seen (see-through, off screen); only its note boxes come over (notes)
+    local detail = f.GuildMemberDetailFrame
+    if detail then
+        detail:SetAlpha(0)
+        self:Away(detail)
+    end
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function()
         GameTooltip:Hide()
@@ -942,6 +1062,10 @@ function M:Build()
 end
 
 function M:OnEnable()
+    -- the game's member list with offline members too (notes for them go
+    -- through it); it reads this setting once, when it loads
+    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_Communities")
+    if not loaded then pcall(SetCVar, "communitiesShowOffline", "1") end
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
@@ -950,6 +1074,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
         for _, over in pairs(self.overs or {}) do over:Hide() end
         for _, over in pairs(self.infoOvers or {}) do over:Hide() end
+        for _, over in pairs(self.noteOvers or {}) do over:Hide() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
     -- the new message comes with the event; the game's own copy
