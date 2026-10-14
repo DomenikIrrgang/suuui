@@ -634,14 +634,28 @@ function SP.Notes()
         store.legacy[fn] = type(_G[fn])
     end
     if InCombatLockdown() then ns.Print("Notes probe: out of combat, please.") return end
-    local guid = UnitGUID("player")
-    local note = ""
-    for i = 1, (call(GetNumGuildMembers)) or 0 do
-        local g = select(17, call(GetGuildRosterInfo, i))
-        if g == guid then note = select(7, call(GetGuildRosterInfo, i)) or "" break end
+    -- you in the roster, by name (as the roster finds you); every step caught
+    local guid, note
+    local ok, err = pcall(function()
+        local me = Ambiguate(SuuUI.FullName("player"), "short")
+        for i = 1, (call(GetNumGuildMembers)) or 0 do
+            local name = call(GetGuildRosterInfo, i)
+            if name and not (issecretvalue and issecretvalue(name)) and Ambiguate(name, "short") == me then
+                note = select(7, call(GetGuildRosterInfo, i))
+                guid = select(17, call(GetGuildRosterInfo, i))
+                break
+            end
+        end
+    end)
+    store.find = ok and "ok" or tostring(err)
+    store.guidSecret = guid ~= nil and issecretvalue and issecretvalue(guid) or false
+    store.noteSecret = note ~= nil and issecretvalue and issecretvalue(note) or false
+    if type(guid) ~= "string" or store.guidSecret then
+        ns.Print("Notes probe: couldn't read your guild GUID (saved); /reload.")
+        return
     end
-    store.note = show(note)
-    if type(note) ~= "string" then note = "" end
+    if type(note) ~= "string" or store.noteSecret then note = "" end
+    store.note = note
     note = note:gsub("\\", "\\\\"):gsub("\"", "\\\"")
     local b = SP.notesButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
     SP.notesButton = b
