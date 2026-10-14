@@ -440,13 +440,16 @@ function M:RenderInfo()
     local info = call(GetGuildInfoText)
     page:SetData({ motd = plain(motd) and motd or nil, info = plain(info) and info or nil,
                    canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
+    self:InfoOverlays()
 end
 
 -- Edit: Blizzard's own edit box for it (SetMOTD and SetInfoText are
--- forbidden to addon code; what you save in Blizzard's box is yours):
--- its "[Click to edit]" for the message of the day or the guild's
--- information, clicked.
-function M:EditInfo(key)
+-- forbidden to addon code; what you save in Blizzard's box is yours): its
+-- "[Click to edit]" for the message of the day or the guild's information.
+-- Opened from addon code, its Accept would count as SuuUI's and be blocked,
+-- so the Info page's Edit buttons are secure buttons on top that click
+-- Blizzard's (InfoOverlays); this is the fallback when they can't be.
+function M:BlizzEdits()
     local details = self.frame and self.frame.GuildDetailsFrame
     local found = {}
     local function walk(fr, depth)
@@ -467,12 +470,67 @@ function M:EditInfo(key)
         if math.abs(al - bl) > 40 then return al < bl end
         return (a:GetTop() or 0) > (b:GetTop() or 0)
     end)
-    local button = found[key == "motd" and 1 or 2]
+    return { motd = found[1], info = found[2] }
+end
+
+function M:EditInfo(key)
+    local button = self:BlizzEdits()[key]
     if button and button.Click then
         button:Click()
         return
     end
     self:EditInfoOwn(key)
+end
+
+-- The Info page's Edit buttons: secure buttons on top that click Blizzard's
+-- "[Click to edit]" (out of combat; anchored only while shown, the way the
+-- roster's are, so the window never turns protected).
+function M:InfoOverlays()
+    local page = self.infoPage
+    if not page or InCombatLockdown() then return end
+    self.infoOvers = self.infoOvers or {}
+    local blizz = page:IsVisible() and self:BlizzEdits() or {}
+    for _, key in ipairs({ "motd", "info" }) do
+        local block = page[key]
+        local over = self.infoOvers[key]
+        if not over and block then
+            over = secureOver(block.edit)
+            over:SetAttribute("type1", "click")
+            over:HookScript("PostClick", function() C_Timer.After(0, function() self:SkinTextEdit() end) end)
+            self.infoOvers[key] = over
+        end
+        if over then
+            local target = blizz[key]
+            local on = target and block.edit:IsVisible()
+            over:SetAttribute("clickbutton1", target)
+            over:SetFrameStrata("DIALOG")
+            over:ClearAllPoints()
+            if on then over:SetAllPoints(block.edit) end
+            over:SetShown(on and true or false)
+        end
+    end
+end
+
+function M:HideInfoOverlays()
+    if InCombatLockdown() then return end
+    for _, over in pairs(self.infoOvers or {}) do over:Hide(); over:ClearAllPoints() end
+end
+
+-- Blizzard's edit box for the message of the day and the information, in
+-- SuuUI's look.
+function M:SkinTextEdit()
+    local dlg = _G.CommunitiesGuildTextEditFrame or _G.GuildTextEditFrame
+    if not dlg then
+        for k, v in pairs(_G) do
+            if type(k) == "string" and k:find("GuildTextEditFrame$") and type(v) == "table" and v.GetObjectType then dlg = v break end
+        end
+    end
+    if not dlg then return end
+    if not dlg.suuHooked then
+        dlg.suuHooked = true
+        dlg:HookScript("OnShow", function() UI.ReskinDialog(dlg) end)
+    end
+    if dlg:IsShown() then UI.ReskinDialog(dlg) end
 end
 
 function M:EditInfoOwn(key)
@@ -770,7 +828,7 @@ function M:Follow()
         self.infoPage:SetShown(onInfo and true or false)
         local blizz = f.GuildDetailsFrame
         if blizz then blizz:SetAlpha(onInfo and 0 or 1) end
-        if onInfo then self:RenderInfo() end
+        if onInfo then self:RenderInfo() else self:HideInfoOverlays() end
     end
     -- the rest in SuuUI's look: Blizzard's own parts restyled in place
     C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
@@ -825,7 +883,9 @@ function M:Build()
         if self.details then self.details:Hide() end
         -- the secure buttons let go of the window (it stays unprotected)
         if not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide(); over:ClearAllPoints() end end
+        self:HideInfoOverlays()
     end)
+    self:SkinTextEdit()
     if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
     if f.SelectClub then hooksecurefunc(f, "SelectClub", function() C_Timer.After(0, function() self:Follow() end) end) end
     self:Follow()
@@ -839,8 +899,9 @@ function M:OnEnable()
     -- wait for its end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
         for _, over in pairs(self.overs or {}) do over:Hide() end
+        for _, over in pairs(self.infoOvers or {}) do over:Hide() end
     end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
     if not valid or valid("GUILD_MOTD") then self:OnGameEvent("GUILD_MOTD", function() self:RenderInfo() end) end
     if not valid or valid("GUILD_EVENT_LOG_UPDATE") then self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function() self:RenderLog() end) end
     if not valid or valid("CLUB_ADDED") then

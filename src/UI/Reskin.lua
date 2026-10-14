@@ -734,3 +734,94 @@ function UI.ReskinScrollBox(box)
     if box.Shadows then box.Shadows:SetAlpha(0) end
     all()
 end
+
+-- One of Blizzard's small dialogs (the guild's text editor for the message
+-- of the day and the information) as a SuuUI panel: its frame art away,
+-- surface-glass inside a gilt-line edge with the gilt corner diamond, its
+-- title in `header` gilt-text, its corner close as SuuUI's cross, the box
+-- inside on surface-sunk in a gilt-line edge, the rest (buttons, the text,
+-- the scrollbar) by the usual pass. Its clicks stay Blizzard's.
+local function dialogBox(c)
+    -- a frame holding the text (Blizzard's inset box): its own art away
+    if c.suuBox then return end
+    c.suuBox = true
+    if c.NineSlice then c.NineSlice:SetAlpha(0) end
+    for _, r in ipairs({ c:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+    end
+    local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
+    bg:SetColorTexture(UI.RGBA("surface-sunk"))
+    bg:SetAllPoints()
+    bg.suuArt = true
+    UI.Border(c, "gilt-line")
+    -- the text inside: the box is its field already (no second edge)
+    local function walk(fr, depth)
+        if depth > 4 then return end
+        for _, k in ipairs({ fr:GetChildren() }) do
+            if k:GetObjectType() == "EditBox" then
+                k.suuEdit = true
+                k:SetFontObject(ns.Fonts.Get("body"))
+                k:SetTextColor(UI.RGBA("ink"))
+            end
+            walk(k, depth + 1)
+        end
+    end
+    walk(c, 0)
+end
+
+function UI.ReskinDialog(f)
+    if not f or ask(f, "IsForbidden") then return end
+    if not f.suuDialog then
+        f.suuDialog = true
+        for _, r in ipairs({ f:GetRegions() }) do
+            local kind = r:GetObjectType()
+            if kind == "Texture" then
+                r:SetAlpha(0)
+            elseif kind == "FontString" then
+                ns.Fonts.Apply(r, "header")
+                r:SetTextColor(UI.RGBA("gilt-text"))
+                r:SetShadowOffset(0, 0)
+                r.suuSkip = true
+            end
+        end
+        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do
+            if f[key] and f[key].SetAlpha then f[key]:SetAlpha(0) end
+        end
+        local panel = CreateFrame("Frame", nil, f)
+        panel:SetAllPoints()
+        panel:SetFrameLevel(f:GetFrameLevel())
+        panel:EnableMouse(false)
+        panel.suuOwn = true
+        UI.Fill(panel, "surface-glass"):SetAllPoints()
+        UI.Border(panel, "gilt-line")
+        UI.Shadow(panel, "shadow-panel")
+        UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        for _, c in ipairs({ f:GetChildren() }) do
+            local kind = c:GetObjectType()
+            local name = c:GetName() or ""
+            local text = ask(c, "GetText")
+            if kind == "Button" and (name:find("Close") or c == f.CloseButton) and (not text or text == "") then
+                -- the corner close: SuuUI's cross
+                for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+                    local t = ask(c, get)
+                    if t then t:SetAlpha(0) end
+                end
+                for _, r in ipairs({ c:GetRegions() }) do
+                    if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+                end
+                c:SetSize(22, 22)
+                c:ClearAllPoints()
+                c:SetPoint("TOPRIGHT", f, "TOPRIGHT", -S["space-3"], -S["space-3"])
+                local border = UI.Border(c, "gilt-line")
+                border:SetShown(false)
+                local cross = UI.Cross(c, 10, "ink-muted")
+                cross:SetPoint("CENTER")
+                c:HookScript("OnEnter", function() border:SetShown(true); cross:SetColor("ink") end)
+                c:HookScript("OnLeave", function() border:SetShown(false); cross:SetColor("ink-muted") end)
+            elseif kind == "Frame" or kind == "ScrollFrame" then
+                if (c:GetWidth() or 0) > 100 and (c:GetHeight() or 0) > 40 then dialogBox(c) end
+            end
+        end
+    end
+    pass(f, 0, { rowDepth = 0 })
+end
