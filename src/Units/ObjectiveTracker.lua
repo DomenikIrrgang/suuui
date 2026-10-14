@@ -481,7 +481,12 @@ function M:RecipeOpener()
         if button == "LeftButton" and b.recipeID then SuuUI.ExpectRecipe(b.recipeID) end
     end)
     b:HookScript("PostClick", function(_, button)
-        if button == "RightButton" and b.row then self:RecipeMenu(b.recipeID, b.row) end
+        if button == "RightButton" and b.row then
+            self:RecipeMenu(b.recipeID, b.row)
+        elseif button == "LeftButton" and not b.casting and b.recipeID then
+            -- its profession already open: only the recipe chosen
+            SuuUI.OpenRecipe(b.recipeID)
+        end
     end)
     b:SetScript("OnEnter", function() if b.row then b.row:LockHighlight() end end)
     b:SetScript("OnLeave", function()
@@ -497,10 +502,18 @@ end
 function M:RowEnter(row)
     if not (row.quest and row.quest.recipe) or InCombatLockdown() then return end
     local id = row.quest.questID
-    local spell = SuuUI.ProfessionOpener(recipeSkillLine(id))
+    local line = recipeSkillLine(id)
+    local spell = SuuUI.ProfessionOpener(line)
     if not spell then return end
     local b = self:RecipeOpener()
     b.recipeID, b.row = id, row
+    -- its profession already open: no cast (it would close the window again,
+    -- found in game), the click only chooses the recipe
+    local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+    local open = base and base.professionID == line and call(C_TradeSkillUI.IsTradeSkillReady)
+        and ProfessionsFrame and ProfessionsFrame:IsShown()
+    b.casting = not open
+    b:SetAttribute("type1", b.casting and "spell" or nil)
     b:SetAttribute("spell1", spell)
     b:ClearAllPoints()
     b:SetAllPoints(row)
