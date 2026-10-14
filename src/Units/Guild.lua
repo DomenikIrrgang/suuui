@@ -412,6 +412,130 @@ function M:EditInfo(key)
         end })
 end
 
+--------------------------------------------------------------------------------
+-- The log, the club picker, Join or create
+--------------------------------------------------------------------------------
+
+local LOG = {
+    invite = "%s invited %s", join = "%s joined the guild", promote = "%s promoted %s to %s",
+    demote = "%s demoted %s to %s", remove = "%s removed %s", quit = "%s left the guild",
+}
+
+function M:RenderLog()
+    local page = self.logPage
+    if not (page and page:IsVisible()) then return end
+    local lines = {}
+    local n = (call(GetNumGuildEvents)) or 0
+    for i = n, 1, -1 do
+        local kind, p1, p2, rank, y, mo, d, h = call(GetGuildEventInfo, i)
+        local fmt = LOG[kind or ""]
+        if fmt then
+            local text = fmt:format(p1 or "?", p2 or "?", rank or "?")
+            local when
+            if (y or 0) > 0 then when = y .. (y == 1 and " year ago" or " years ago")
+            elseif (mo or 0) > 0 then when = mo .. (mo == 1 and " month ago" or " months ago")
+            elseif (d or 0) > 0 then when = d .. (d == 1 and " day ago" or " days ago")
+            elseif (h or 0) > 0 then when = h .. (h == 1 and " hour ago" or " hours ago")
+            else when = "just now" end
+            lines[#lines + 1] = { text = text, when = when }
+        end
+    end
+    page:SetData({ lines = lines })
+end
+
+function M:ShowLog(on)
+    self.logShown = on and true or false
+    if on and QueryGuildEventLog then pcall(QueryGuildEventLog) end
+    self:Follow()
+    local chrome = self.frame and self.frame.suuChrome
+    if chrome then chrome:UpdateTabs() end
+end
+
+-- Your guild and communities, the guild first.
+function M:Clubs()
+    local out = {}
+    for _, c in ipairs((C_Club and call(C_Club.GetSubscribedClubs)) or {}) do
+        if c.clubId and plain(c.name) then
+            out[#out + 1] = { value = c.clubId, label = c.name, guild = c.clubType == (Enum.ClubType and Enum.ClubType.Guild or 2) }
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.guild ~= b.guild then return a.guild end
+        return a.label < b.label
+    end)
+    return out
+end
+
+-- Blizzard's own Join or Create Community entry in its (hidden) list.
+function M:JoinOrCreate()
+    local list = self.frame and self.frame.CommunitiesList
+    local box = list and list.ScrollBox
+    local found
+    if box and box.ForEachFrame then
+        box:ForEachFrame(function(b)
+            local fs = b.Name or b.Text or (b.GetFontString and b:GetFontString())
+            local text = fs and fs.GetText and fs:GetText()
+            if not found and type(text) == "string" and (text:find("Join") or text:find("Create")) then found = b end
+        end)
+    end
+    if found and found.Click then found:Click() else self:Print("The game's Join or Create Community isn't available here.") end
+end
+
+-- The picker in the header's tab row, right, and the + beside it.
+function M:BuildPicker()
+    local f = self.frame
+    local chrome = f and f.suuChrome
+    if not chrome or self.picker then return end
+    local S = T.space
+    local plus = CreateFrame("Button", nil, chrome.head)
+    plus:SetSize(22, 22)
+    plus:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], 2)
+    plus.edge = UI.Border(plus, "gilt-line")
+    plus.glyph = UI.Plus(plus, "ink-muted")
+    plus.glyph:SetPoint("CENTER")
+    plus:SetScript("OnEnter", function(self2)
+        self2.edge:SetColor("gilt")
+        GameTooltip:SetOwner(self2, "ANCHOR_BOTTOMRIGHT")
+        GameTooltip_SetTitle(GameTooltip, "Join or create a community")
+        GameTooltip:Show()
+    end)
+    plus:SetScript("OnLeave", function(self2) self2.edge:SetColor("gilt-line"); GameTooltip:Hide() end)
+    plus:SetScript("OnClick", function() self:JoinOrCreate() end)
+    local picker = UI.Select(chrome.head, { bare = true, width = 220, textStyle = "label", textColor = "ink",
+        options = self:Clubs(), onChange = function(id)
+            self.logShown = false
+            if f.SelectClub then f:SelectClub(id) end
+        end })
+    picker:SetPoint("RIGHT", plus, "LEFT", -S["space-3"], 0)
+    self.picker, self.plus = picker, plus
+end
+
+function M:UpdatePicker()
+    if not self.picker then return end
+    self.picker:SetOptions(self:Clubs())
+    local f = self.frame
+    local club = f.GetSelectedClubId and f:GetSelectedClubId()
+    if club then self.picker:SetValue(club) end
+end
+
+-- Blizzard's communities list on the left, folded away (the picker has its
+-- job: asked for in game); kept as thin as a line, so the window's own
+-- panes, which hang off it, move left into its place.
+function M:FoldList()
+    local list = self.frame and self.frame.CommunitiesList
+    if not list then return end
+    list:SetAlpha(0)
+    self.folding = true
+    list:SetWidth(1)
+    self.folding = false
+    if not self.listHooked then
+        self.listHooked = true
+        local function again() if not self.folding then C_Timer.After(0, function() self:FoldList() end) end end
+        hooksecurefunc(list, "SetWidth", again)
+        hooksecurefunc(list, "SetSize", again)
+    end
+end
+
 -- The roster page while the window shows your guild's roster.
 function M:Follow()
     local f = self.frame
@@ -420,8 +544,18 @@ function M:Follow()
     local mode = f.GetDisplayMode and f:GetDisplayMode()
     local club = f.GetSelectedClubId and f:GetSelectedClubId()
     local guild = C_Club and C_Club.GetGuildClubId and C_Club.GetGuildClubId()
-    local onRoster = f:IsShown() and guild and club == guild and mode ~= nil and mode == modes.ROSTER
-    local onInfo = f:IsShown() and guild and club == guild and mode ~= nil and mode == modes.GUILD_INFO
+    local isGuild = f:IsShown() and guild and club == guild
+    if not isGuild then self.logShown = false end
+    local onLog = isGuild and self.logShown
+    local onRoster = isGuild and not onLog and mode ~= nil and mode == modes.ROSTER
+    local onInfo = isGuild and not onLog and mode ~= nil and mode == modes.GUILD_INFO
+    if self.logPage then
+        self.logPage:SetShown(onLog and true or false)
+        if onLog then self:RenderLog() end
+    end
+    self:BuildPicker()
+    self:UpdatePicker()
+    self:FoldList()
     if self.infoPage then
         self.infoPage:SetShown(onInfo and true or false)
         local blizz = f.GuildDetailsFrame
@@ -467,6 +601,14 @@ function M:Build()
     info.suuOwn = true
     info.onEdit = function(key) self:EditInfo(key) end
     self.infoPage = info
+    -- the Log page: over the whole content, the chat's parts included
+    local log = UI.GuildLog(f)
+    log:SetAllPoints(page)
+    log:SetFrameLevel(f:GetFrameLevel() + 150)
+    log:EnableMouse(true)
+    log:Hide()
+    log.suuOwn = true
+    self.logPage = log
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide(); if self.details then self.details:Hide() end end)
     if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
@@ -485,6 +627,12 @@ function M:OnEnable()
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender() end)
     if not valid or valid("GUILD_MOTD") then self:OnGameEvent("GUILD_MOTD", function() self:RenderInfo() end) end
+    if not valid or valid("GUILD_EVENT_LOG_UPDATE") then self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function() self:RenderLog() end) end
+    if not valid or valid("CLUB_ADDED") then
+        for _, e in ipairs({ "CLUB_ADDED", "CLUB_REMOVED", "CLUB_UPDATED" }) do
+            self:OnGameEvent(e, function() self:UpdatePicker() end)
+        end
+    end
     for _, e in ipairs({ "GUILD_ROSTER_UPDATE", "PLAYER_GUILD_UPDATE", "GUILD_RANKS_UPDATE", "GROUP_ROSTER_UPDATE" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function() if self.roster and self.roster:IsVisible() then self:QueueRender() end end)

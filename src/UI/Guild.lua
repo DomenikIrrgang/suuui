@@ -346,3 +346,64 @@ function UI.GuildInfo(parent)
     i:SetScript("OnSizeChanged", function(self) if self.data then self:Layout() end end)
     return i
 end
+
+--------------------------------------------------------------------------------
+-- The Log page: the guild's event log (who invited, promoted, demoted,
+-- removed whom; who joined or left), newest first, how long ago at the right.
+--
+--   local l = UI.GuildLog(parent)
+--   l:SetData({ lines = { { text, when } } })
+--------------------------------------------------------------------------------
+
+local L = {}
+
+function L:SetData(d)
+    self.data = d
+    local child = self.list.child
+    child:SetWidth(math.max(1, self.list:GetWidth()))
+    local y = 0
+    for i, line in ipairs(d.lines or {}) do
+        local r = self.rows[i]
+        if not r then
+            r = CreateFrame("Frame", nil, child)
+            r:SetHeight(T.type.body.lineHeight + S["space-3"])
+            r.when = UI.Text(r, "caption", "ink-faint")
+            r.when:SetPoint("RIGHT", -S["space-4"], 0)
+            r.text = UI.Text(r, "body", "ink")
+            r.text:SetPoint("LEFT", S["space-5"], 0)
+            r.text:SetPoint("RIGHT", r.when, "LEFT", -S["space-4"], 0)
+            r.text:SetJustifyH("LEFT")
+            r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
+            r.rule:SetHeight(1)
+            r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
+            r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+            self.rows[i] = r
+        end
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+        r:SetPoint("RIGHT", child, "RIGHT")
+        r.text:SetValue(line.text or "")
+        r.when:SetValue(line.when or "")
+        r:Show()
+        y = y + r:GetHeight()
+    end
+    for i = #(d.lines or {}) + 1, #self.rows do self.rows[i]:Hide() end
+    self.empty:SetShown(#(d.lines or {}) == 0)
+    child:SetHeight(math.max(1, y))
+end
+
+function UI.GuildLog(parent)
+    local l = CreateFrame("Frame", nil, parent)
+    Mixin(l, L)
+    l.rows = {}
+    UI.Fill(l, "surface-sunk"):SetAllPoints()
+    UI.Border(l, "gilt-faint")
+    l.list = UI.ScrollArea(l, 2)
+    l.list:SetPoint("TOPLEFT", 1, -S["space-2"])
+    l.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
+    l.list:HookScript("OnSizeChanged", function() if l.data then l:SetData(l.data) end end)
+    l.empty = UI.Text(l, "caption", "ink-muted")
+    l.empty:SetPoint("CENTER")
+    l.empty:SetValue("Nothing has happened in the guild yet.")
+    return l
+end
