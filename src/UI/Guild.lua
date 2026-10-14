@@ -1,7 +1,7 @@
 -- UI/Guild.lua
 -- The Guild window's Roster page (design component GuildWindow, "Roster"):
 -- search, Show offline (off by default), "7 online · 26 members"; columns
--- Name, Level, Zone, Rank, Note (click a heading to sort; rank order by
+-- Name, Level, Class (its icon and name), Zone, Rank, Note (click a heading to sort; rank order by
 -- default); names in class colour with the class diamond, Away and Busy as
 -- neutral badges, offline members' names in class colour too and the rest of
 -- their row in ink-faint, with how long ago in place
@@ -13,7 +13,7 @@
 --   local r = UI.GuildRoster(parent)
 --   r:SetData({ online, total, showOffline, search, sort, members = { m },
 --       selected, actions = { whisper, invite, promote, demote, remove } })
---     m = { key, name, class, level, zone, rank, rankIndex, note, officerNote,
+--     m = { key, name, class (its file name), className, level, zone, rank, rankIndex, note, officerNote,
 --       online, away, busy, lastOnline ("3 days ago") }
 --     actions.x = { enabled, why } (also guildInvite, which needs
 --     no member)
@@ -35,6 +35,7 @@ local FOOT_H = 26
 local COLUMNS = {
     { key = "name", label = "Name", width = 0.30 },
     { key = "level", label = "Level", fixed = 44, align = "RIGHT" },
+    { key = "class", label = "Class", fixed = 104 },
     { key = "zone", label = "Zone", width = 0.26 },
     { key = "rank", label = "Rank", width = 0.18 },
     { key = "note", label = "Note", width = 0.26 },
@@ -71,6 +72,8 @@ local function makeRow(g)
     r.hover:SetAllPoints()
     r.hover:Hide()
     r.diamond = UI.Diamond(r, 6, "ink")
+    r.classIcon = r:CreateTexture(nil, "ARTWORK")
+    r.classIcon:SetSize(16, 16)
     r.cells = {}
     for i, c in ipairs(COLUMNS) do
         local t = UI.Text(r, i == 1 and "label" or "caption", "ink")
@@ -135,14 +138,33 @@ function G:Draw()
         r.diamond:SetVertexColor(UI.RGBA(color))
         r.diamond:ClearAllPoints()
         r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
-        local values = { m.name, m.level and tostring(m.level) or "", m.online and (m.zone or "") or (m.lastOnline or "Offline"),
-                         m.rank or "", m.note or "" }
+        local values = { name = m.name, level = m.level and tostring(m.level) or "", class = m.className or "",
+                         zone = m.online and (m.zone or "") or (m.lastOnline or "Offline"), rank = m.rank or "", note = m.note or "" }
         for i, t in ipairs(r.cells) do
+            local key = COLUMNS[i].key
+            -- the class column: its icon, then its name
+            local indent = key == "class" and (16 + S["space-3"]) or 0
             t:ClearAllPoints()
-            t:SetPoint("LEFT", r, "LEFT", cols[i].x, 0)
-            t:SetWidth(cols[i].w)
-            t:SetValue(values[i] or "")
-            t:SetColor(i == 1 and color or (m.online and (i == 5 and "ink-muted" or "ink") or "ink-faint"))
+            t:SetPoint("LEFT", r, "LEFT", cols[i].x + indent, 0)
+            t:SetWidth(cols[i].w - indent)
+            t:SetValue(values[key] or "")
+            t:SetColor(i == 1 and color or (m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint"))
+            if key == "class" then
+                local atlas = m.class and GetClassAtlas and GetClassAtlas(m.class)
+                local coords = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
+                if atlas then
+                    r.classIcon:SetAtlas(atlas)
+                    r.classIcon:SetTexCoord(0, 1, 0, 1)
+                elseif coords then
+                    r.classIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
+                    r.classIcon:SetTexCoord(unpack(coords))
+                end
+                r.classIcon:SetShown((atlas or coords) and true or false)
+                r.classIcon:SetDesaturated(not m.online)
+                r.classIcon:SetAlpha(m.online and 1 or 0.6)
+                r.classIcon:ClearAllPoints()
+                r.classIcon:SetPoint("LEFT", r, "LEFT", cols[i].x, 0)
+            end
         end
         local status = m.busy and "Busy" or (m.away and "Away") or nil
         r.badge:SetShown(status ~= nil and m.online)

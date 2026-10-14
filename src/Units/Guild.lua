@@ -56,7 +56,7 @@ function M:Members()
     if not IsInGuild() then return all, 0, 0 end
     local me = SuuUI.FullName("player")
     for i = 1, (call(GetNumGuildMembers)) or 0 do
-        local name, rank, rankIndex, level, _, zone, note, officerNote, isOnline, status, file = call(GetGuildRosterInfo, i)
+        local name, rank, rankIndex, level, className, zone, note, officerNote, isOnline, status, file = call(GetGuildRosterInfo, i)
         local guid = select(17, call(GetGuildRosterInfo, i))
         if plain(name) and name then
             local short = Ambiguate(name, "guild")
@@ -64,6 +64,7 @@ function M:Members()
                         zone = plain(zone) and zone or nil, note = plain(note) and note or nil,
                         officerNote = plain(officerNote) and officerNote or nil, online = isOnline and true or false,
                         away = status == 1, busy = status == 2, class = file, guid = guid,
+                        className = plain(className) and className or nil,
                         you = Ambiguate(name, "short") == Ambiguate(me, "short") }
             if not m.online then m.lastOnline = lastOnline(i) end
             if m.online then online = online + 1 end
@@ -79,6 +80,11 @@ local SORTS = {
     level = function(a, b) if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) > (b.level or 0) end return a.name < b.name end,
     zone = function(a, b)
         local x, y = a.online and (a.zone or "") or "~", b.online and (b.zone or "") or "~"
+        if x ~= y then return x < y end
+        return a.name < b.name
+    end,
+    class = function(a, b)
+        local x, y = a.className or "~", b.className or "~"
         if x ~= y then return x < y end
         return a.name < b.name
     end,
