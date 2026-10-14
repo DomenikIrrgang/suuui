@@ -101,18 +101,23 @@ function M:Profession(index)
     if own and own.subName and own.subName ~= "" then card.rank = own.subName end
     card.rank = card.rank or RANKS[max] or ""
     -- the card dragged onto a bar opens the profession's window, as
-    -- Blacksmithing's own spell does. When another spell opens it (Fishing:
-    -- Bait and Tackle, Skinning: Tanning, Mining: Smelting), a macro with
-    -- the profession's name and icon that casts it (asked for in game: the
-    -- default UI can't either)
+    -- Blacksmithing's own spell does: its own spell, else the spell that
+    -- opens it (Mining: Smelting). When a spell with the profession's name
+    -- only casts (Fishing, Skinning) and another opens the window (Bait and
+    -- Tackle, Tanning), a macro with the profession's name and icon that
+    -- casts the opener (asked for in game: the default UI can't either)
     if own and ownCrafts then
         card.spellID = own.spellID
         local id = own.spellID
         card.onDrag = function() self:Pickup(id) end
-    elseif craftSpell then
+    elseif own and craftSpell then
         card.spellID = craftSpell.spellID
         local opener = craftSpell.spellID
         card.onDrag = function() self:PickupOpener(name, icon, opener) end
+    elseif craftSpell then
+        card.spellID = craftSpell.spellID
+        local id = craftSpell.spellID
+        card.onDrag = function() self:Pickup(id) end
     elseif own then
         card.spellID = own.spellID
         local id = own.spellID
