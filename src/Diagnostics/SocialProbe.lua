@@ -102,8 +102,15 @@ function SP.Sample()
     store.bnet = { count = call(BNGetNumFriends), api = namesIn(C_BattleNet), first = {},
                    connected = call(BNConnected), myInfo = call(BNGetInfo) }
     local bnCount = raw(BNGetNumFriends)
+    store.bnet.games = {}
     for i = 1, math.min(4, tonumber(bnCount) or 0) do
         store.bnet.first[i] = call(C_BattleNet and C_BattleNet.GetFriendAccountInfo, i)
+        -- what they're playing: each game account (character, zone, client)
+        local n = raw(C_BattleNet and C_BattleNet.GetFriendNumGameAccounts, i)
+        store.bnet.games[i] = { count = show(n) }
+        for j = 1, math.min(3, tonumber(n) or 0) do
+            store.bnet.games[i][j] = call(C_BattleNet.GetFriendGameAccountInfo, i, j)
+        end
     end
     -- the guild
     store.guild = {
@@ -120,6 +127,18 @@ function SP.Sample()
     for i = 1, math.min(10, tonumber(raw(GuildControlGetNumRanks)) or 0) do
         store.guild.rankNames[i] = call(GuildControlGetRankName, i)
     end
+    -- the guild's community: its chat streams (the Guild window's Chat)
+    local clubID = raw(C_Club and C_Club.GetGuildClubId)
+    store.guild.club = show(clubID)
+    if clubID then
+        store.guild.clubInfo = call(C_Club.GetClubInfo, clubID)
+        store.guild.streams = call(C_Club.GetStreams, clubID)
+        store.guild.memberCount = show(#(raw(C_Club.GetClubMembers, clubID) or {}))
+        local me = raw(C_Club.GetMemberInfoForSelf, clubID)
+        store.guild.self = show(me)
+    end
+    store.guild.news = call(C_GuildInfo and C_GuildInfo.GetGuildNewsInfo, 1)
+    store.guild.events = call(GetNumGuildEvents)
     -- the raid
     store.raid = { inRaid = call(IsInRaid), members = call(GetNumGroupMembers), first = call(GetRaidRosterInfo, 1) }
     -- the group finder
@@ -138,6 +157,8 @@ function SP.Sample()
         store.lfg.categories[#store.lfg.categories + 1] = c
     end
     store.lfgBrowse = namesIn(C_LFGBrowse)
+    store.lfg.activeEntry = call(lfg and lfg.GetActiveEntryInfo)
+    store.lfg.filters = call(lfg and lfg.GetAvailableLanguageSearchFilter)
     -- Blizzard's frames
     store.frames = {}
     for _, name in ipairs({ "FriendsFrame", "CommunitiesFrame", "GuildFrame", "LFGListFrame", "PVEFrame",
@@ -190,9 +211,41 @@ function SP.Listen(store)
     end)
 end
 
+-- One group finder search in the first category: whether an addon may
+-- search, and what a result looks like.
+function SP.Search(store)
+    local lfg = C_LFGList
+    local cat = (raw(lfg and lfg.GetAvailableCategories) or {})[1]
+    store.lfgSearch = { category = show(cat) }
+    if not cat then return end
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+    f:RegisterEvent("LFG_LIST_SEARCH_FAILED")
+    f:SetScript("OnEvent", function(self, event)
+        self:UnregisterAllEvents()
+        local s = SuuUIProbe.social.lfgSearch
+        s.event = event
+        local count, list = raw(lfg.GetSearchResults)
+        s.count = show(count)
+        s.results = {}
+        for i, id in ipairs(list or {}) do
+            if i > 4 then break end
+            s.results[i] = call(lfg.GetSearchResultInfo, id)
+            s["members" .. i] = call(lfg.GetSearchResultMemberCounts, id)
+            s["leader" .. i] = call(lfg.GetSearchResultMemberInfo, id, 1)
+        end
+    end)
+    store.lfgSearch.call = call(lfg.Search, cat)
+end
+
 function SP.Command()
+    -- the roster asked for first: it's often empty until then
+    if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) elseif GuildRoster then pcall(GuildRoster) end
     local store = SP.Sample()
     SP.Listen(store)
+    SP.Search(store)
+    -- again once the roster has come in
+    C_Timer.After(3, function() SP.Sample() end)
     ns.Print(("Social probe: %s friends, %s Battle.net friends, guild members %s. Listening for online/offline for ten minutes; /reload after."):format(
         store.friends.count, store.bnet.count, store.guild.members))
 end
