@@ -16,8 +16,8 @@
 --   Guild ranks       two columns of five rows: "Rank 3", the name, move up,
 --                     move down, remove; "New rank" in the next free row
 --   Rank permissions  left: Members and Guild bank; right: the Officer card
---   Bank tabs, Discord  the dropdowns in the head row; the rest as the game
---                     draws it until probed
+--   Bank tabs         the bought tabs as a table, the tab to buy as a card
+--   Discord           linked: a card with Unlink; not linked: the link flow
 
 local _, ns = ...
 
@@ -492,31 +492,298 @@ function GuildControl:Permissions(page)
 end
 
 --------------------------------------------------------------------------------
--- Bank tab permissions and Discord: the head row and their area; their
--- contents follow once probed
+-- Buttons: one of the game's buttons as SuuUI's quiet, primary (arcane, for
+-- Purchase and Link) or destructive (an ember edge, for Unlink) button
 --------------------------------------------------------------------------------
+
+local function button(b, variant)
+    if not b then return end
+    if b.suuStyled then b.suuStyled() return end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        local t = ask(b, get)
+        if t then t:SetAlpha(0) end
+    end
+    hideArt(b)
+    local primary, danger = variant == "primary", variant == "danger"
+    local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
+    bg:SetColorTexture(UI.RGBA(primary and "arcane" or "surface-raised"))
+    bg:SetAllPoints()
+    bg.suuArt = true
+    local rest = primary and "arcane" or (danger and "ember" or "gilt-line")
+    local edge = UI.Border(b, rest)
+    local hover = false
+    local function draw()
+        local on = ask(b, "IsEnabled") ~= false
+        b:SetAlpha(on and 1 or T.opacity["opacity-disabled"])
+        edge:SetColor((on and hover and not primary) and (danger and "ember-text" or "gilt") or rest)
+        local fs = ask(b, "GetFontString")
+        if fs then
+            ns.Fonts.Apply(fs, "label")
+            fs:SetTextColor(UI.RGBA(primary and "on-signal" or (danger and "ember-text" or "ink")))
+            fs:SetShadowOffset(0, 0)
+        end
+    end
+    b:HookScript("OnEnter", function() hover = true; draw() end)
+    b:HookScript("OnLeave", function() hover = false; draw() end)
+    hooksecurefunc(b, "SetEnabled", draw)
+    if b.Enable then hooksecurefunc(b, "Enable", draw) end
+    if b.Disable then hooksecurefunc(b, "Disable", draw) end
+    b.suuStyled = draw
+    draw()
+end
+
+--------------------------------------------------------------------------------
+-- Bank tab permissions: the bought tabs as a table (Tab, View tab, Deposit
+-- items, Withdrawals per day; 40px rows on surface-sunk), the tab left to
+-- buy as a card under it, or alone and centred while none is bought. The
+-- game's rows: GuildControlBankTabN, Owned or Buy (probed 2026-10-14).
+--------------------------------------------------------------------------------
+
+local TAB_ROW = 40
+local COL_W = 140
+local COLUMNS = { "View tab", "Deposit items", "Withdrawals per day" }
+local BUY_W, BUY_H = 420, 100
 
 function GuildControl:Bank(page)
     local base = page:GetName() or "GuildControlUIRankBankFrame"
     self:HeadRow(_G[base .. "RankDropdown"])
     local inset = _G[base .. "Inset"]
-    if inset then
-        hideArt(inset)
-        inset:ClearAllPoints()
-        inset:SetPoint("TOPLEFT", page, "TOPLEFT", 0, TOP)
-        inset:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", 0, 0)
-        local scroll = _G[base .. "InsetScrollFrame"]
-        if scroll then
-            scroll:ClearAllPoints()
-            scroll:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
-            scroll:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", -16, 0)
-            if scroll.ScrollBar then UI.ReskinScrollBar(scroll.ScrollBar) end
+    local scroll = _G[base .. "InsetScrollFrame"]
+    if not (inset and scroll) then return end
+    hideArt(inset)
+    inset:ClearAllPoints()
+    inset:SetPoint("TOPLEFT", page, "TOPLEFT", 0, TOP)
+    inset:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", 0, 0)
+    if scroll.ScrollBar then UI.ReskinScrollBar(scroll.ScrollBar) end
+    local W = math.floor(inset:GetWidth() - 16)
+    if W < 300 then W = 740 end
+    local function center(k) return W - (#COLUMNS - k) * COL_W - COL_W / 2 end
+    -- the tabs the game shows
+    local tabs, owned = {}, 0
+    for i = 1, 8 do
+        local t = _G["GuildControlBankTab" .. i]
+        if t and t:IsShown() then
+            tabs[#tabs + 1] = t
+            local o = _G[t:GetName() .. "Owned"]
+            if o and o:IsShown() then owned = owned + 1 end
         end
     end
+    -- the table's head
+    local head = self.bankHead
+    if not head then
+        head = deco(page)
+        head:SetHeight(24)
+        head.tab = UI.Text(head, "caption", "ink-muted")
+        head.tab:SetValue("Tab")
+        head.tab:SetPoint("LEFT", S["space-4"], 0)
+        head.cols = {}
+        for k, label in ipairs(COLUMNS) do
+            head.cols[k] = UI.Text(head, "caption", "ink-muted")
+            head.cols[k]:SetValue(label)
+        end
+        self.bankHead = head
+    end
+    head:ClearAllPoints()
+    head:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
+    head:SetWidth(W)
+    for k, fs in ipairs(head.cols) do
+        fs:ClearAllPoints()
+        fs:SetPoint("CENTER", head, "LEFT", center(k), 0)
+    end
+    head:SetShown(owned > 0)
+    scroll:ClearAllPoints()
+    scroll:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, owned > 0 and -24 or 0)
+    scroll:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", -16, 0)
+    local child = scroll:GetScrollChild()
+    if not child then return end
+    local y = 0
+    for i, t in ipairs(tabs) do
+        local name = t:GetName()
+        if _G[name .. "Bg"] then _G[name .. "Bg"]:SetAlpha(0) end
+        local o, buy = _G[name .. "Owned"], _G[name .. "Buy"]
+        t:ClearAllPoints()
+        if o and o:IsShown() then
+            t:SetSize(W, TAB_ROW)
+            t:SetPoint("TOPLEFT", child, "TOPLEFT", 0, y)
+            y = y - TAB_ROW
+            if not o.suuFill then
+                o.suuFill = o:CreateTexture(nil, "BACKGROUND", nil, -7)
+                o.suuFill:SetColorTexture(UI.RGBA("surface-sunk"))
+                o.suuFill:SetAllPoints()
+                o.suuRule = o:CreateTexture(nil, "ARTWORK")
+                o.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+                o.suuRule:SetHeight(1)
+                o.suuRule:SetPoint("BOTTOMLEFT")
+                o.suuRule:SetPoint("BOTTOMRIGHT")
+            end
+            local icon, tabName = _G[name .. "OwnedTabIcon"], _G[name .. "OwnedTabName"]
+            if icon then
+                icon:SetSize(28, 28)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                icon:ClearAllPoints()
+                icon:SetPoint("LEFT", o, "LEFT", S["space-4"], 0)
+            end
+            if tabName then
+                style(tabName, "label", "ink")
+                tabName:SetJustifyH("LEFT")
+                tabName:ClearAllPoints()
+                tabName:SetPoint("LEFT", icon or o, icon and "RIGHT" or "LEFT", S["space-4"], 0)
+            end
+            for k, key in ipairs({ "ViewCheck", "DepositCheck" }) do
+                local cb = _G[name .. "Owned" .. key]
+                if cb then
+                    UI.ReskinCheckButton(cb)
+                    cb:SetSize(20, 20)
+                    cb:ClearAllPoints()
+                    cb:SetPoint("CENTER", o, "LEFT", center(k), 0)
+                    local fs = _G[name .. "Owned" .. key .. "Text"]
+                    if fs then fs:SetAlpha(0) end
+                end
+            end
+            local box = _G[name .. "OwnedStackBox"]
+            if box then
+                UI.ReskinEditBox(box)
+                box:SetSize(64, 22)
+                box:ClearAllPoints()
+                box:SetPoint("CENTER", o, "LEFT", center(3), 0)
+                if _G[name .. "OwnedStackBoxLabelText"] then _G[name .. "OwnedStackBoxLabelText"]:SetAlpha(0) end
+            end
+        elseif buy then
+            -- the tab to buy: a card, centred while none is bought
+            local alone = owned == 0
+            local w = alone and BUY_W or W
+            if owned > 0 then y = y - S["space-5"] end
+            t:SetSize(w, BUY_H)
+            t:SetPoint("TOPLEFT", child, "TOPLEFT", alone and math.floor((W - w) / 2) or 0, y)
+            y = y - BUY_H
+            if not buy.suuFill then
+                buy.suuFill = buy:CreateTexture(nil, "BACKGROUND", nil, -7)
+                buy.suuFill:SetColorTexture(UI.RGBA("surface-sunk"))
+                buy.suuFill:SetAllPoints()
+                buy.suuEdge = UI.Border(buy, "gilt-faint")
+                buy.suuWhich = UI.Text(buy, "caption", "ink-muted")
+            end
+            local text, cost, money = _G[name .. "BuyBuyText"], _G[name .. "BuyCostLabel"], _G[name .. "BuyCostMoneyFrame"]
+            if text then
+                style(text, "header", "gilt-text")
+                text:SetText(alone and "Buy the first tab?" or "Buy the next tab?")
+                text:ClearAllPoints()
+                text:SetPoint("TOP", buy, "TOP", 0, -S["space-5"])
+            end
+            if cost then cost:SetAlpha(0) end
+            buy.suuWhich:SetValue(("Tab %d · cost"):format(i))
+            local mw = money and money:GetWidth() or 50
+            local lw = buy.suuWhich:GetStringWidth()
+            buy.suuWhich:ClearAllPoints()
+            buy.suuWhich:SetPoint("TOPLEFT", buy, "TOP", -math.floor((lw + S["space-3"] + mw) / 2), -40)
+            if money then
+                money:ClearAllPoints()
+                money:SetPoint("LEFT", buy.suuWhich, "RIGHT", S["space-3"], 0)
+            end
+            local purchase = _G[name .. "BuyPurchaseButton"]
+            if purchase then
+                button(purchase, "primary")
+                local fs = ask(purchase, "GetFontString")
+                if fs then fs:SetText("Purchase") end
+                purchase:SetSize(140, 26)
+                purchase:ClearAllPoints()
+                purchase:SetPoint("BOTTOM", buy, "BOTTOM", 0, S["space-5"])
+            end
+        end
+    end
+    child:SetSize(W, math.max(1, -y))
+end
+
+--------------------------------------------------------------------------------
+-- Discord settings: linked, a card with the server, the channel, Separate
+-- Discord chat and Unlink (DiscordLinkFrame); not linked, the game's link
+-- flow in a centred card
+--------------------------------------------------------------------------------
+
+local LINKED_W, LINKED_H = 460, 176
+
+function GuildControl:Linked(page, link)
+    local card = self.linkedCard
+    if not card then
+        card = deco(page)
+        card:SetSize(LINKED_W, LINKED_H)
+        UI.Fill(card, "surface-sunk"):SetAllPoints()
+        UI.Border(card, "gilt-faint")
+        card.diamond = UI.Diamond(card, 8, "arcane")
+        card.foot = UI.Text(card, "caption", "ink-muted")
+        card.foot:SetValue("Unlinking stops sharing messages between guild chat and the channel.")
+        self.linkedCard = card
+    end
+    card:ClearAllPoints()
+    card:SetPoint("TOP", page, "TOP", 0, TOP)
+    local shown = link:IsShown()
+    card:SetShown(shown)
+    if not shown then return end
+    local pad = S["space-5"]
+    link:ClearAllPoints()
+    link:SetAllPoints(card)
+    local title = _G.DiscordLinkFrameLinkedTitle
+    if title then
+        style(title, "header", "gilt-text")
+        title:SetText("Discord linked")
+        title:SetJustifyH("LEFT")
+        title:SetSize(0, T.type.header.lineHeight)
+        title:ClearAllPoints()
+        title:SetPoint("TOPLEFT", card, "TOPLEFT", pad + 16, -pad)
+        card.diamond:ClearAllPoints()
+        card.diamond:SetPoint("CENTER", title, "LEFT", -10, 0)
+    end
+    local prev = title
+    for _, key in ipairs({ "DiscordLinkFrameLinkedServer", "DiscordLinkFrameLinkedChannel" }) do
+        local fs = _G[key]
+        if fs then
+            style(fs, "body", "ink-muted")
+            fs:SetJustifyH("LEFT")
+            fs:SetWidth(LINKED_W - 2 * pad)
+            fs:ClearAllPoints()
+            fs:SetPoint("TOPLEFT", card, "TOPLEFT", pad, 0)
+            if prev then
+                fs:ClearAllPoints()
+                fs:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", prev == title and -16 or 0, prev == title and -S["space-4"] or -S["space-2"])
+            end
+            prev = fs
+        end
+    end
+    local sep = link.SeparateStream
+    if sep then
+        sep:ClearAllPoints()
+        sep:SetSize(LINKED_W - 2 * pad, 24)
+        sep:SetPoint("TOPLEFT", prev or card, prev and "BOTTOMLEFT" or "TOPLEFT", 0, -S["space-5"])
+        local cb = sep.Button
+        if cb then
+            UI.ReskinCheckButton(cb)
+            cb:SetSize(20, 20)
+            cb:ClearAllPoints()
+            cb:SetPoint("LEFT", sep, "LEFT", 0, 0)
+        end
+        if sep.Label then
+            style(sep.Label, "label", "ink")
+            sep.Label:SetText("Separate Discord chat from guild chat")
+            sep.Label:SetJustifyH("LEFT")
+            sep.Label:ClearAllPoints()
+            sep.Label:SetPoint("LEFT", cb or sep, cb and "RIGHT" or "LEFT", S["space-3"], 0)
+        end
+    end
+    local unlink = _G.DiscordLinkFrameButton
+    if unlink then
+        button(unlink, "danger")
+        unlink:SetSize(100, 26)
+        unlink:ClearAllPoints()
+        unlink:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -pad, pad)
+    end
+    card.foot:ClearAllPoints()
+    card.foot:SetPoint("LEFT", card, "BOTTOMLEFT", pad, pad + 13)
+    card.foot:SetPoint("RIGHT", unlink or card, unlink and "LEFT" or "RIGHT", -S["space-5"], 0)
 end
 
 function GuildControl:Discord(page)
     self:HeadRow()
+    if _G.DiscordLinkFrame then self:Linked(page, _G.DiscordLinkFrame) end
     local base = page:GetName() or "GuildControlUIRankDiscordFrame"
     local server, channel, link = _G[base .. "ServerDropdown"], _G[base .. "ChannelDropdown"], _G[base .. "ChannelButton"]
     -- not linked: the game's link flow in a centred 420px card
@@ -526,9 +793,11 @@ function GuildControl:Discord(page)
         d:SetSize(420, 230)
         UI.Fill(d, "surface-sunk"):SetAllPoints()
         UI.Border(d, "gilt-faint")
+        d.diamond = UI.Diamond(d, 8, "ink-faint")
         d.title = UI.Text(d, "header", "gilt-text")
         d.title:SetValue("Not linked to Discord")
-        d.title:SetPoint("TOP", 0, -S["space-5"])
+        d.title:SetPoint("TOP", 8, -S["space-5"])
+        d.diamond:SetPoint("CENTER", d.title, "LEFT", -10, 0)
         self.discordDeco = d
     end
     d:ClearAllPoints()
@@ -567,7 +836,7 @@ function GuildControl:Discord(page)
         err:SetWidth(w)
     end
     if link then
-        UI.ReskinButton(link)
+        button(link, "primary")
         link:SetSize(w, 26)
         link:ClearAllPoints()
         link:SetPoint("BOTTOMLEFT", d, "BOTTOMLEFT", pad, pad)

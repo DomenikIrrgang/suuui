@@ -222,7 +222,146 @@ function UI.ReskinDropdown(d)
         text:SetTextColor(UI.RGBA("ink"))
         text:SetShadowOffset(0, 0)
     end
+    -- the menu it opens: in SuuUI's look while it's this dropdown's
+    local event = DropdownButtonMixin and DropdownButtonMixin.Event and DropdownButtonMixin.Event.OnMenuOpen
+    if d.RegisterCallback and event then
+        d:RegisterCallback(event, function()
+            local manager = Menu and Menu.GetManager and Menu.GetManager()
+            local menu = manager and manager.GetOpenMenu and manager:GetOpenMenu()
+            if not menu then return end
+            UI.ReskinMenu(menu)
+            -- its rows may come a frame later
+            C_Timer.After(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
+        end, d)
+    end
     d.suuDropdown = true
+end
+
+-- One of Blizzard's menus (Menu.GetManager():GetOpenMenu(), probed
+-- 2026-10-14: a common-dropdown-bg texture, 20px rows with a radio or check
+-- and a highlight, the rows' text) in the context menu's look: glass, a
+-- gilt-line edge, the gilt corner diamond, rows in body ink on arcane-soft
+-- while hovered, the chosen one marked by an arcane check. The game reuses
+-- its menu frames for every menu, so all of it is undone when it closes.
+local menus = setmetatable({}, { __mode = "k" })
+
+local function restoreMenu(st)
+    for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
+    st.undo = {}
+    st.panel:Hide()
+    for _, t in pairs(st.marks) do t:Hide() end
+    for _, t in pairs(st.hovers) do t:Hide() end
+    st.active = false
+end
+
+local function hideRegion(st, r)
+    if r.suuArt then return end
+    local a = r:GetAlpha()
+    if a == 0 then return end
+    r:SetAlpha(0)
+    st.undo[#st.undo + 1] = function() r:SetAlpha(a) end
+end
+
+local function menuText(st, fs, color)
+    local fo = fs:GetFontObject()
+    local file, size, flags = fs:GetFont()
+    local r, g, b, a = fs:GetTextColor()
+    local sx, sy = fs:GetShadowOffset()
+    st.undo[#st.undo + 1] = function()
+        if fo then fs:SetFontObject(fo) elseif file then fs:SetFont(file, size, flags) end
+        fs:SetTextColor(r, g, b, a)
+        fs:SetShadowOffset(sx, sy)
+    end
+    ns.Fonts.Apply(fs, "body")
+    fs:SetTextColor(UI.RGBA(color))
+    fs:SetShadowOffset(0, 0)
+end
+
+local function menuRow(st, row)
+    local chosen, indicator
+    local texts = {}
+    for _, r in ipairs({ row:GetRegions() }) do
+        local kind = r:GetObjectType()
+        if kind == "Texture" and not r.suuArt then
+            local atlas = (ask(r, "GetAtlas") or ""):lower()
+            if atlas:find("common%-dropdown%-icon") then
+                -- the chosen row's tick
+                if r:IsShown() then chosen = true end
+                indicator = indicator or r
+                hideRegion(st, r)
+            elseif atlas:find("common%-dropdown%-tick") then
+                indicator = r
+                hideRegion(st, r)
+            elseif r:GetDrawLayer() == "HIGHLIGHT" or not r:IsShown() then
+                hideRegion(st, r)
+            end
+        elseif kind == "FontString" then
+            texts[#texts + 1] = r
+        end
+    end
+    for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
+    -- SuuUI's hover and mark (kept on the row, shown only while it's ours)
+    local hover = st.hovers[row]
+    if not hover then
+        hover = row:CreateTexture(nil, "BACKGROUND", nil, -8)
+        hover:SetColorTexture(UI.RGBA("arcane-soft"))
+        hover:SetAllPoints()
+        hover.suuArt = true
+        hover:Hide()
+        st.hovers[row] = hover
+        row:HookScript("OnEnter", function() if st.active then hover:Show() end end)
+        row:HookScript("OnLeave", function() hover:Hide() end)
+    end
+    hover:Hide()
+    local mark = st.marks[row]
+    if not mark then
+        mark = row:CreateTexture(nil, "OVERLAY", nil, 7)
+        mark:SetTexture(GLYPHS .. "check.tga")
+        mark:SetSize(12, 12)
+        mark:SetVertexColor(UI.RGBA("arcane"))
+        mark.suuArt = true
+        st.marks[row] = mark
+    end
+    mark:ClearAllPoints()
+    if indicator then mark:SetPoint("CENTER", indicator, "CENTER", 0, 0) else mark:SetPoint("LEFT", row, "LEFT", 2, 0) end
+    mark:SetShown(chosen and true or false)
+end
+
+function UI.ReskinMenu(menu)
+    if not menu or ask(menu, "IsForbidden") then return end
+    local st = menus[menu]
+    if not st then
+        st = { undo = {}, marks = {}, hovers = {} }
+        local panel = CreateFrame("Frame", nil, menu)
+        panel:SetAllPoints()
+        panel:SetFrameLevel(menu:GetFrameLevel())
+        panel:EnableMouse(false)
+        UI.Fill(panel, "surface-glass"):SetAllPoints()
+        UI.Border(panel, "gilt-line")
+        UI.Shadow(panel, "shadow-panel")
+        UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        st.panel = panel
+        menus[menu] = st
+        menu:HookScript("OnHide", function() if st.active then restoreMenu(st) end end)
+    end
+    -- a second pass (the rows came later) starts from the game's look again
+    if st.active then restoreMenu(st) end
+    st.active = true
+    st.panel:Show()
+    for _, r in ipairs({ menu:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
+    end
+    local rows = {}
+    for _, c in ipairs({ menu:GetChildren() }) do
+        if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
+    end
+    local target = menu.ScrollBox and menu.ScrollBox.ScrollTarget
+    if target and menu.ScrollBox:IsShown() then
+        for _, c in ipairs({ target:GetChildren() }) do
+            if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
+        end
+    end
+    for _, row in ipairs(rows) do menuRow(st, row) end
 end
 
 -- An icon button (the set popup's grid and its chosen icon): every bit of
