@@ -212,11 +212,58 @@ local function updateBar(scroll)
     local on = max >= 1 and viewH > 0
     track:SetShown(on)
     thumb:SetShown(on)
+    if scroll.grip then scroll.grip:SetShown(on) end
     if not on then return end
     local thumbH = math.max(24, viewH * viewH / (viewH + max))
     thumb:SetHeight(thumbH)
     thumb:ClearAllPoints()
     thumb:SetPoint("TOP", track, "TOP", 0, -(viewH - thumbH) * math.min(1, scroll:GetVerticalScroll() / max))
+end
+
+-- The bar takes the mouse: drag the thumb, or press the track and the thumb
+-- jumps there and follows (only the wheel scrolled: found in game).
+local function followCursor(scroll)
+    local track, thumb = scroll.track, scroll.thumb
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local range = viewH - thumb:GetHeight()
+    local top = track:GetTop()
+    if max <= 0 or range <= 0 or not top then return end
+    local _, y = GetCursorPosition()
+    y = y / track:GetEffectiveScale()
+    local pos = (top - y) - (scroll.grab or 0)
+    scroll:SetVerticalScroll(max * math.min(1, math.max(0, pos / range)))
+end
+
+local function makeGrip(scroll, parent)
+    local grip = CreateFrame("Button", nil, parent)
+    grip:SetPoint("TOP", scroll.track, "TOP")
+    grip:SetPoint("BOTTOM", scroll.track, "BOTTOM")
+    grip:SetWidth(12)
+    grip:SetFrameLevel(scroll:GetFrameLevel() + 5)
+    grip:RegisterForClicks("AnyUp")
+    grip:SetScript("OnMouseDown", function()
+        local track, thumb = scroll.track, scroll.thumb
+        local thumbTop = thumb:GetTop()
+        if not thumbTop then return end
+        local _, y = GetCursorPosition()
+        y = y / track:GetEffectiveScale()
+        local at = thumbTop - y
+        -- on the thumb: keep the spot grabbed; on the track: its middle
+        scroll.grab = (at >= 0 and at <= thumb:GetHeight()) and at or thumb:GetHeight() / 2
+        scroll.dragging = true
+        followCursor(scroll)
+    end)
+    grip:SetScript("OnMouseUp", function() scroll.dragging = false end)
+    grip:SetScript("OnUpdate", function()
+        if scroll.dragging then
+            if not IsMouseButtonDown("LeftButton") then scroll.dragging = false return end
+            followCursor(scroll)
+        end
+    end)
+    grip:SetScript("OnEnter", function() scroll.thumb:SetColorTexture(UI.RGBA("ink")) end)
+    grip:SetScript("OnLeave", function() scroll.thumb:SetColorTexture(UI.RGBA("ink-muted")) end)
+    return grip
 end
 
 function UI.ScrollArea(parent, bar)
@@ -238,6 +285,7 @@ function UI.ScrollArea(parent, bar)
         scroll.track:SetWidth(3)
         scroll.thumb = UI.Fill(parent, "ink-muted", "OVERLAY")
         scroll.thumb:SetWidth(3)
+        scroll.grip = makeGrip(scroll, parent)
         local function update() updateBar(scroll) end
         scroll:SetScript("OnScrollRangeChanged", update)
         scroll:SetScript("OnVerticalScroll", update)
