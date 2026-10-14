@@ -104,7 +104,8 @@ function M:OnMessage(prefix, text, _, sender)
     if prefix ~= PREFIX or isSecret(text) or type(text) ~= "string" then return end
     if isSecret(sender) or type(sender) ~= "string" then return end
     local who = Ambiguate(sender, "short")
-    if who == UnitName("player") then return end
+    -- whole names: Forever's characters have surnames (SuuUI.FullName)
+    if who == Ambiguate(SuuUI.FullName("player"), "short") then return end
     if text == "RDYQ" then
         self:ShareSoon()
         return
@@ -127,10 +128,12 @@ end
 
 -- The group's members (you first) as { name, class }.
 local function roster()
-    local out = { { name = UnitName("player"), class = playerClass(), you = true } }
+    local out = { { name = Ambiguate(SuuUI.FullName("player"), "short"), class = playerClass(), you = true } }
     local function add(unit)
         if UnitExists(unit) and not UI.Flag(UnitIsUnit(unit, "player")) then
-            local name = UnitName(unit)
+            -- the whole name, as their messages carry it (Forever's surnames)
+            local name = SuuUI.FullName(unit)
+            if not isSecret(name) and name then name = Ambiguate(name, "short") end
             local _, class = UnitClass(unit)
             if not isSecret(name) and name then
                 out[#out + 1] = { name = name, class = (not isSecret(class)) and class or nil }

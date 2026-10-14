@@ -132,7 +132,7 @@ function M:UpdateIdentity()
     local _, class = UnitClass("player")
     local c = class and T.color["class-" .. class:lower()]
     if c then id.diamond:SetVertexColor(c[1], c[2], c[3], 1) end
-    id.name:SetValue(UnitName("player") or "")
+    id.name:SetValue(SuuUI.FullName("player") or "")
     local parts = { "Level " .. (UnitLevel("player") or "?") }
     local race = UnitRace("player")
     if race then parts[#parts + 1] = race end

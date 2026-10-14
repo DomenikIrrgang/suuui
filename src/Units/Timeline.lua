@@ -482,7 +482,7 @@ function M:OnMessage(prefix, text, _, sender)
     if not seconds then return end
     if isSecret(sender) or type(sender) ~= "string" then return end
     -- our own message comes back: already started
-    local me = UnitName("player")
+    local me = Ambiguate(SuuUI.FullName("player"), "short")
     if Ambiguate(sender, "short") == me then return end
     self:StartPull(tonumber(seconds), Ambiguate(sender, "short"))
 end

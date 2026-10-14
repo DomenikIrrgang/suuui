@@ -204,7 +204,9 @@ end
 local LINES
 local function lines()
     if LINES then return LINES end
-    local me = UnitName("player")
+    -- the whole name (Forever's characters have surnames: SuuUI.FullName)
+    local me = SuuUI.FullName("player")
+    me = me:match("^([^%-]+)") or me
     LINES = {}
     local function add(global, fn) local p = pattern(_G[global]); if p then LINES[#LINES + 1] = { p, fn } end end
     -- votes: (who, item)
@@ -240,12 +242,12 @@ end
 
 -- A group member's class ("MAGE"), by name.
 local function classOf(name)
-    if short(name) == UnitName("player") then return select(2, UnitClass("player")) end
+    if short(name) == short(SuuUI.FullName("player")) then return select(2, UnitClass("player")) end
     local prefix, n = IsInRaid() and "raid" or "party", GetNumGroupMembers()
     for i = 1, n do
         local unit = prefix .. i
-        local un = UnitName(unit)
-        if plain(un) and un == short(name) then return select(2, UnitClass(unit)) end
+        local un = SuuUI.FullName(unit)
+        if plain(un) and short(un) == short(name) then return select(2, UnitClass(unit)) end
     end
 end
 
@@ -261,13 +263,13 @@ local function roster(roll)
     local out = {}
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
-            local name = UnitName("raid" .. i)
-            if plain(name) and name and not UnitIsUnit("raid" .. i, "player") then out[#out + 1] = name end
+            local name = SuuUI.FullName("raid" .. i)
+            if plain(name) and name and not UnitIsUnit("raid" .. i, "player") then out[#out + 1] = short(name) end
         end
     else
         for i = 1, GetNumSubgroupMembers() do
-            local name = UnitName("party" .. i)
-            if plain(name) and name then out[#out + 1] = name end
+            local name = SuuUI.FullName("party" .. i)
+            if plain(name) and name then out[#out + 1] = short(name) end
         end
     end
     return out
@@ -343,7 +345,7 @@ function M:Choose(roll, choice)
     if roll.choice then return end
     if roll.test then
         roll.choice = choice.key
-        table.insert(roll.votes[choice.key], UnitName("player"))
+        table.insert(roll.votes[choice.key], short(SuuUI.FullName("player")))
         self:ShowRoll(roll)
         return
     end
@@ -409,7 +411,7 @@ end
 
 function M:Result(roll, winner)
     local title, body
-    local me = UnitName("player")
+    local me = short(SuuUI.FullName("player"))
     if winner then
         local r = roll.rolled[short(winner)]
         title = (short(winner) == me and "You" or short(winner)) .. " won " .. roll.name
@@ -441,7 +443,7 @@ function M:OnLootLine(text)
                         end
                     end
                     table.insert(roll.votes[choice], short(who))
-                    if short(who) == UnitName("player") then roll.choice = choice end
+                    if short(who) == short(SuuUI.FullName("player")) then roll.choice = choice end
                     if self.rolls[roll.id] then self:ShowRoll(roll) end
                 end
             elseif what == "rolled" then
@@ -551,7 +553,7 @@ function M:TestRoll(arg)
     C_Timer.After(30, function()
         if not self.rolls[id] then return end
         self:EndRoll(id)
-        roll.rolled = { Ysolde = { label = "Need", value = 87 }, [UnitName("player")] = { label = "Need", value = 42 } }
+        roll.rolled = { Ysolde = { label = "Need", value = 87 }, [short(SuuUI.FullName("player"))] = { label = "Need", value = 42 } }
         self:Result(roll, "Ysolde")
     end)
 end
