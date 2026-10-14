@@ -65,7 +65,7 @@ function M:Profession(index)
     if not plain(name) then return nil end
     local card = { name = name, icon = icon, skill = skill, max = max, skillLine = skillLine, spells = {} }
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
-    local own, craftSpell
+    local own, ownCrafts, craftSpell
     for k = 1, (tonumber(numSpells) or 0) do
         local info = call(C_SpellBook.GetSpellBookItemInfo, (tonumber(offset) or 0) + k, bank)
         if info and info.spellID then
@@ -78,7 +78,7 @@ function M:Profession(index)
             card.crafting = card.crafting or crafts
             if not info.isPassive then
                 if info.name == name then
-                    own = info
+                    own, ownCrafts = info, crafts
                 elseif crafts and not craftSpell then
                     craftSpell = info
                 end
@@ -98,14 +98,24 @@ function M:Profession(index)
             card.spells[#card.spells + 1] = spell
         end
     end
-    own = own or craftSpell
-    if own then
-        card.spellID = own.spellID
-        if own.subName and own.subName ~= "" then card.rank = own.subName end
-    end
+    if own and own.subName and own.subName ~= "" then card.rank = own.subName end
     card.rank = card.rank or RANKS[max] or ""
-    if card.spellID then
-        local id = card.spellID
+    -- the card dragged onto a bar opens the profession's window, as
+    -- Blacksmithing's own spell does. When another spell opens it (Fishing:
+    -- Bait and Tackle, Skinning: Tanning, Mining: Smelting), a macro with
+    -- the profession's name and icon that casts it (asked for in game: the
+    -- default UI can't either)
+    if own and ownCrafts then
+        card.spellID = own.spellID
+        local id = own.spellID
+        card.onDrag = function() self:Pickup(id) end
+    elseif craftSpell then
+        card.spellID = craftSpell.spellID
+        local opener = craftSpell.spellID
+        card.onDrag = function() self:PickupOpener(name, icon, opener) end
+    elseif own then
+        card.spellID = own.spellID
+        local id = own.spellID
         card.onDrag = function() self:Pickup(id) end
     end
     -- unlearning: SuuUI's confirmation, then the game's (M:Unlearn)
@@ -167,6 +177,30 @@ function M:Pickup(spellID)
     elseif PickupSpell then
         PickupSpell(spellID)
     end
+end
+
+-- A character macro that opens a profession's window by casting the spell
+-- that does, under the profession's name and icon; one already made (same
+-- text) is used again.
+function M:PickupOpener(name, icon, spellID)
+    local spell = call(C_Spell.GetSpellName, spellID)
+    if not spell then return end
+    local body = "/cast " .. spell
+    local first = (MAX_ACCOUNT_MACROS or 120) + 1
+    local _, chars = GetNumMacros()
+    for i = first, first + (chars or 0) - 1 do
+        if GetMacroBody(i) and strtrim(GetMacroBody(i)) == body then
+            PickupMacro(i)
+            return
+        end
+    end
+    if InCombatLockdown() then self:Print("Macros can't be made in combat: drag it again afterwards.") return end
+    local ok, index = pcall(CreateMacro, name:sub(1, 16), icon or 134400, body, true)
+    if not ok or not index then
+        self:Print("No free character macro slot for " .. name .. ".")
+        return
+    end
+    PickupMacro(index)
 end
 
 -- Primary (two slots, an empty one says how to fill it), then secondary.
@@ -236,12 +270,15 @@ function M:RootOf(catID)
     return root
 end
 
--- A recipe of this game: not under another header than the profession's
--- own. Forever's lists carry Season of Discovery's recipes under their own
--- header (Blacksmithing: 507 recipes, probed 2026-10-14), which this realm
--- doesn't have.
+-- A recipe of this game: in a category, and not under another header than
+-- the profession's own. Forever's lists carry Season of Discovery's recipes
+-- under their own header (Blacksmithing: 507 recipes, probed 2026-10-14),
+-- which this realm doesn't have, and one of them in no category at all
+-- (Mining's Smelt Obsidian-Infused Thorium Bar, the only recipe without one
+-- across all twelve professions).
 function M:InGame(info, profession)
-    local root = info.categoryID and info.categoryID ~= 0 and self:RootOf(info.categoryID)
+    if not info.categoryID or info.categoryID == 0 then return false end
+    local root = self:RootOf(info.categoryID)
     if not root or root.type ~= "header" or not profession then return true end
     return root.name == profession
 end
