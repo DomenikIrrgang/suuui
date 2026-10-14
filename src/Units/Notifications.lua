@@ -466,25 +466,38 @@ function M:HookPresence()
     end
 end
 
--- Test: one card of each (no one has to log in).
+-- Test: one card of each (no one has to log in). The single cards are your
+-- own character, so Whisper and Invite really act (on you); the group card
+-- is made up.
 function M:TestPresence()
-    local function sample(name, file, detail)
-        return { name = name, color = classColor(file), icon = classIcon(file), detail = detail, whisper = function() end }
+    local me, realm = UnitName("player"), GetNormalizedRealmName and GetNormalizedRealmName()
+    local full = realm and (me .. "-" .. realm) or me
+    local _, file = UnitClass("player")
+    local zone = GetRealZoneText and GetRealZoneText() or ""
+    local function mine(detail)
+        return { name = me, color = classColor(file), icon = classIcon(file), detail = detail,
+                 whisper = function() whisper(full) end, inviteName = full }
     end
-    local bn = sample("Kaelith", "PRIEST", "Kaelith · Eastern Plaguelands")
-    bn.tag = "#1137"
-    local q = function(kind, online, people, inviteName)
+    local function sample(name, f)
+        return { name = name, color = classColor(f), icon = classIcon(f), whisper = function() whisper(name) end }
+    end
+    local function card(kind, online, people)
         local k = KINDS_OF[kind]
+        local single = #people == 1 and people[1]
         self.presenceCount = (self.presenceCount or 0) + 1
-        self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = online and 12 or 10,
+        self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = online and 20 or 15,
             presence = { online = online, source = k.source or (GetGuildInfo("player")) or "Guild", people = people,
-                         plural = k.plural, glyph = k.glyph, invite = inviteName and function() end or nil } })
+                         plural = k.plural, glyph = k.glyph,
+                         invite = online and single and single.inviteName and function() invite(single.inviteName) end or nil } })
     end
-    q("bnet", true, { bn }, "x")
-    q("friend", true, { sample("Brannoc", "WARRIOR", "Level 58 · Eastern Plaguelands") }, "x")
-    q("guild", true, { sample("Ardent", "SHAMAN", "Officer · Level 60 · Durotar") }, "x")
-    q("guild", true, { sample("Lyra", "MAGE"), sample("Thorn", "ROGUE"), sample("Maelis", "PALADIN"), sample("Durn", "HUNTER") })
-    q("guild", false, { sample("Ysolde", "DRUID") })
+    local bn = mine(me .. " · " .. zone)
+    bn.tag = "#1137"
+    card("bnet", true, { bn })
+    card("friend", true, { mine("Level " .. UnitLevel("player") .. " · " .. zone) })
+    local rank = select(2, GetGuildInfo("player"))
+    card("guild", true, { mine((rank and (rank .. " · ") or "") .. "Level " .. UnitLevel("player") .. " · " .. zone) })
+    card("guild", true, { sample("Lyra", "MAGE"), sample("Thorn", "ROGUE"), sample("Maelis", "PALADIN"), sample("Durn", "HUNTER") })
+    card("guild", false, { sample("Ysolde", "DRUID") })
 end
 
 --------------------------------------------------------------------------------
