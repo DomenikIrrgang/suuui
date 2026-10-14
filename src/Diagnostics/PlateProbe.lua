@@ -69,7 +69,7 @@ local function environment()
     end
     -- other nameplate addons: two would fight over the same plates
     local loaded = {}
-    for _, name in ipairs({ "EllesmereUINameplates", "Plater", "Kui_Nameplates", "TidyPlates_ThreatPlates", "Platynator", "NeatPlates" }) do
+    for _, name in ipairs({ "Plater", "Kui_Nameplates", "TidyPlates_ThreatPlates", "Platynator", "NeatPlates" }) do
         if C_AddOns.IsAddOnLoaded(name) then loaded[#loaded + 1] = name end
     end
     env.otherPlateAddons = #loaded > 0 and table.concat(loaded, ", ") or "none"

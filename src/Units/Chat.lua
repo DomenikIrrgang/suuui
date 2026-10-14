@@ -15,7 +15,7 @@
 -- SuuUI's windows open with SetItemRef; shift-click inserts them. A built-in
 -- module written against the public API only.
 --
--- Rules from EllesmereUIChat on this client (see IMPLEMENTATION_PLAN 2.2):
+-- Rules for chat on this client (see IMPLEMENTATION_PLAN 2.2):
 -- no FCF_* hooks, no writes to the tab alpha globals, no hooks on edit box
 -- scripts, no fields on Blizzard frames, and chat frame geometry is never
 -- read: ChatFrame1 is placed from the panel's own rectangle (SetPointBase,
@@ -197,7 +197,7 @@ function M:SkinFrame(cf)
     emptyTextures(buttons)
     -- Blizzard shows these again with its own fades: the scroll-to-bottom
     -- button hides itself whenever shown; the scrollbar's steppers go to a
-    -- hidden frame, its track and thumb invisible (EllesmereUI's way)
+    -- hidden frame, its track and thumb invisible
     local sb = cf.ScrollToBottomButton
     if sb then
         alphaOff(sb)

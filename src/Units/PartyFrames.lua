@@ -16,7 +16,7 @@
 -- Auras are the engine's (aura containers): debuffs you can remove first
 -- (dispel-coloured edge), then defensives, then the other debuffs raid
 -- frames show; buffs come only through buff indicators. Debuff types (Magic, Curse, Poison,
--- Disease) are slots, as EllesmereUI does it: per type a one-aura container
+-- Disease) are slots: per type a one-aura container
 -- filtered to that type, whose button carries that type's border and badge
 -- across the whole frame. The engine shows and hides it, so it works in
 -- combat, where addon code can't read auras. Aggro comes from the threat

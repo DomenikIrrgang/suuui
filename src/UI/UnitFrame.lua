@@ -675,8 +675,7 @@ function UF:Resize(w, h)
 end
 
 --------------------------------------------------------------------------------
--- Buff indicators (healers' HoTs and shields), EllesmereUI's Buff Manager
--- idea. Each indicator watches some spells (every rank) on the unit:
+-- Buff indicators (healers' HoTs and shields). Each indicator watches some spells (every rank) on the unit:
 --   { name, ids = { ... }, kind = "icon" | "square" | "border" | "fill",
 --     point = "TOPRIGHT", size = 12, color = "fel", source = "mine" | "any",
 --     show = "up" | "missing" | "both", missingColor = "ember",
@@ -1006,7 +1005,7 @@ function UI.UnitStandIn(person)
 end
 
 --------------------------------------------------------------------------------
--- Debuff-type badges, in combat too (EllesmereUI's technique). Per type, an
+-- Debuff-type badges, in combat too. Per type, an
 -- engine aura container that holds at most one debuff of that type. Its
 -- button draws nothing itself; the decoration hung on it when the engine
 -- creates it (writes to these buttons are refused once auras are secret)

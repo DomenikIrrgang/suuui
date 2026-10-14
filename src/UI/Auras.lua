@@ -372,7 +372,7 @@ local function candidates(ids)
 end
 
 -- Only debuffs of these types: { includeDispelTypes = { Curse = true } }.
--- The engine matches them, in combat too (EllesmereUI's dispel slots).
+-- The engine matches them, in combat too.
 dispelCandidates = function(types)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end

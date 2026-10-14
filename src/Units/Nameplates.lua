@@ -2,8 +2,7 @@
 -- Enemy nameplates (step 1.10): SuuUI's own plate laid on Blizzard's, the
 -- design's Nameplate. A built-in module written against the public API only.
 --
--- The technique EllesmereUI proves on this client (and /suu probe plates
--- confirmed): on NAME_PLATE_UNIT_ADDED, an attackable unit gets a pooled
+-- The technique (/suu probe plates confirmed it on this client): on NAME_PLATE_UNIT_ADDED, an attackable unit gets a pooled
 -- SuuUI plate parented to Blizzard's nameplate; Blizzard's UnitFrame stays
 -- (it is what you click, and moving it breaks click selection) at alpha 0,
 -- its aura icons moved to a hidden frame (they trap the mouse even at alpha

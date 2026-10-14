@@ -56,7 +56,7 @@ local ITEMS = {
           return false
       end },
     -- the game menu's Blizzard button doesn't answer a secure click on
-    -- Forever (EllesmereUI toggles the frame the same way)
+    -- Forever, so the frame is toggled
     { key = "menu", glyph = "menu", label = "Game menu", onClick = function() ToggleFrame(GameMenuFrame) end,
       open = function() return GameMenuFrame and GameMenuFrame:IsShown() end },
 }
