@@ -411,6 +411,15 @@ function M:Recipes()
         end,
         name = byName,
     }
+    -- by category: each category's own; any other sort runs across them
+    -- all, one list without headers (asked for in game)
+    if sort ~= "category" and orders[sort] then
+        local all = {}
+        for _, cat in ipairs(cats) do
+            for _, r in ipairs(cat.recipes) do all[#all + 1] = r end
+        end
+        cats = #all > 0 and { { recipes = all, flat = true } } or {}
+    end
     for _, cat in ipairs(cats) do table.sort(cat.recipes, orders[sort] or orders.category) end
     data.categories = cats
     -- learned of all, kept for the overview (it can only ask the open one)

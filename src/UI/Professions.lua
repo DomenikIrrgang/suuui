@@ -26,6 +26,7 @@
 --   p:SetCrafting({ name, rank, skill, max, recipes = { learned, total },
 --       categories = { { name, recipes } },
 --       selected (recipe id) })
+--     a category with flat = true: no header (a list sorted across them all)
 --     recipe = { id, name, difficulty (0 optimal .. 3 trivial), canMake,
 --       tracked, learned }
 --   p:SetRecipe(r)            -- the chosen recipe, or nil
@@ -427,17 +428,20 @@ function P:DrawList()
         return r
     end
     for _, cat in ipairs(d.categories or {}) do
-        local r = row()
-        local folded = self.folded[cat.name]
-        r.category, r.recipe = cat.name, nil
-        r.chevron:SetTexture(GLYPHS .. (folded and "chevronRight" or "chevronDown") .. ".tga")
-        r.chevron:Show()
-        r.eye:Hide()
-        r.sel:Hide(); r.selEdge:Hide()
-        r.label:SetStyle("header")
-        r.label:SetColor("gilt-text")
-        r.label:SetValue(cat.name or "")
-        r.count:SetValue(tostring(#(cat.recipes or {})))
+        -- a flat list (sorted across categories): no header, never folded
+        local folded = not cat.flat and self.folded[cat.name]
+        if not cat.flat then
+            local r = row()
+            r.category, r.recipe = cat.name, nil
+            r.chevron:SetTexture(GLYPHS .. (folded and "chevronRight" or "chevronDown") .. ".tga")
+            r.chevron:Show()
+            r.eye:Hide()
+            r.sel:Hide(); r.selEdge:Hide()
+            r.label:SetStyle("header")
+            r.label:SetColor("gilt-text")
+            r.label:SetValue(cat.name or "")
+            r.count:SetValue(tostring(#(cat.recipes or {})))
+        end
         if not folded then
             for _, rec in ipairs(cat.recipes or {}) do
                 local rr = row()
