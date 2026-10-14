@@ -260,13 +260,14 @@ function UI.GuildRoster(parent)
 end
 
 --------------------------------------------------------------------------------
--- The Info page (design component GuildWindow, "Info"): the message of the
--- day, the guild information and the ranks with how many hold each; Edit
--- on the first two when your rank may.
+-- The Info page (design component GuildWindow, "Info"): the guild
+-- information down the whole left side (Edit when your rank may), the ranks
+-- with how many hold each at the right. The message of the day lives on the
+-- Chat tab (GuildMotdBanner).
 --
 --   local i = UI.GuildInfo(parent)
---   i:SetData({ motd, info, canEditMotd, canEditInfo, ranks = { { name, count } } })
---   i.onEdit("motd" | "info")
+--   i:SetData({ info, canEditInfo, ranks = { { name, count } } })
+--   i.onEdit("info")
 --------------------------------------------------------------------------------
 
 local I = {}
@@ -277,7 +278,6 @@ function I:SetData(d)
         b.text:SetValue((text and text ~= "") and text or ("|cff" .. T.color["ink-faint"].hex .. empty .. "|r"))
         b.edit:SetShown(can and true or false)
     end
-    block(self.motd, d.motd, d.canEditMotd, "No message of the day.")
     block(self.info, d.info, d.canEditInfo, "No guild information yet.")
     self:Layout()
     for i, r in ipairs(d.ranks or {}) do
@@ -301,22 +301,18 @@ function I:SetData(d)
     for i = #(d.ranks or {}) + 1, #self.rankRows do self.rankRows[i]:Hide() end
 end
 
--- The two text blocks one under another in the left column, the ranks right.
+-- The guild information down the left column, the ranks right.
 function I:Layout()
     local w = self:GetWidth()
     if not w or w <= 0 then return end
     local gap = S["space-6"]
     local left = math.floor((w - gap) * 0.62)
-    local y = 0
-    for _, b in ipairs({ self.motd, self.info }) do
-        b:ClearAllPoints()
-        b:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -y)
-        b:SetWidth(left)
-        b.text:SetWidth(left - S["space-5"] * 2)
-        local h = T.type.header.lineHeight + S["space-3"] + math.max(T.type.body.lineHeight * 2, math.ceil(b.text:GetStringHeight())) + S["space-5"] * 2
-        b:SetHeight(h)
-        y = y + h + S["space-5"]
-    end
+    local b = self.info
+    b:ClearAllPoints()
+    b:SetPoint("TOPLEFT", self, "TOPLEFT", 0, 0)
+    b:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", 0, 0)
+    b:SetWidth(left)
+    b.text:SetWidth(left - S["space-5"] * 2)
     self.ranks:ClearAllPoints()
     self.ranks:SetPoint("TOPLEFT", self, "TOPLEFT", left + gap, 0)
     self.ranks:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT")
@@ -342,7 +338,6 @@ function UI.GuildInfo(parent)
     local i = CreateFrame("Frame", nil, parent)
     Mixin(i, I)
     i.rankRows = {}
-    i.motd = infoBlock(i, "Message of the day", "motd")
     i.info = infoBlock(i, "Guild information", "info")
     i.ranks = CreateFrame("Frame", nil, i)
     i.ranks.head = UI.Text(i.ranks, "header", "gilt-text")

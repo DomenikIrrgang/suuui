@@ -458,10 +458,8 @@ function M:RenderInfo()
     for i = 1, (call(GuildControlGetNumRanks)) or 0 do
         ranks[#ranks + 1] = { name = call(GuildControlGetRankName, i), count = counts[i - 1] or 0 }
     end
-    local motd = self:Motd()
     local info = call(GetGuildInfoText)
-    page:SetData({ motd = plain(motd) and motd or nil, info = plain(info) and info or nil,
-                   canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
+    page:SetData({ info = plain(info) and info or nil, canEditInfo = call(CanEditGuildInfo), ranks = ranks })
     self:InfoOverlays()
 end
 

@@ -336,7 +336,7 @@ API.UI.Contacts = UI.Contacts -- Contacts(parent) -> SetData({ view, status, onl
 API.UI.RaidGroups = UI.RaidGroups -- RaidGroups(parent) -> SetData({ inRaid, inParty, canLead, reason, size, members }); onReadyCheck, onRoleCheck, onRaidInfo, onConvert, onMove, onSwap, onMember
 API.UI.PeopleList = UI.PeopleList -- PeopleList(parent) -> SetData({ title, empty, rows = { { key, name, color, glyph, online, detail, note, pinned, actions } } }); onMenu(row, owner)
 API.UI.GuildRoster = UI.GuildRoster -- GuildRoster(parent) -> SetData({ online, total, showOffline, sort, members, selected, actions }); onSearch, onShowOffline, onSort, onSelect, onAction(name, member), onMenu
-API.UI.GuildInfo = UI.GuildInfo -- GuildInfo(parent) -> SetData({ motd, info, canEditMotd, canEditInfo, ranks }); onEdit("motd" | "info")
+API.UI.GuildInfo = UI.GuildInfo -- GuildInfo(parent) -> SetData({ info, canEditInfo, ranks }); onEdit("info")
 API.UI.GuildLog = UI.GuildLog -- GuildLog(parent) -> SetData({ lines = { { text, when } } })
 API.UI.GuildControl = UI.GuildControl -- GuildControl(host, GuildControlUI) -> Layout(): the game's guild control laid out in host
 API.UI.GuildMotdBanner = UI.GuildMotdBanner -- GuildMotdBanner(parent) -> SetData({ text, canEdit }), Height(); onEdit
