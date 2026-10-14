@@ -14,10 +14,11 @@
 --       selected, actions = { whisper, invite, promote, demote, remove } })
 --     m = { key, name, class, level, zone, rank, rankIndex, note, officerNote,
 --       online, away, busy, lastOnline ("3 days ago") }
---     actions.x = { enabled, why }
+--     actions.x = { enabled, why } (also guildInvite and settings, which need
+--     no member)
 --   r.onSearch(text), r.onShowOffline(on), r.onSort(column), r.onSelect(key),
 --   r.onAction(name, member) ("whisper", "invite", "promote", "demote",
---   "remove", "guildInvite"), r.onMenu(member, owner)
+--   "remove", "guildInvite", "settings"), r.onMenu(member, owner)
 
 local _, ns = ...
 
@@ -167,6 +168,8 @@ function G:Draw()
     end
     self.guildInvite:SetEnabledState(a.guildInvite and a.guildInvite.enabled and true or false)
     self.guildInvite.reason = a.guildInvite and not a.guildInvite.enabled and a.guildInvite.why or nil
+    self.settings:SetEnabledState(a.settings and a.settings.enabled and true or false)
+    self.settings.reason = a.settings and not a.settings.enabled and a.settings.why or nil
     self.selectedMember = selected
 end
 
@@ -201,6 +204,8 @@ function UI.GuildRoster(parent)
     -- the foot: Invite to guild left; the member's actions right
     g.guildInvite = footButton(g, "Invite to guild", "quiet", function() if g.onAction then g.onAction("guildInvite") end end)
     g.guildInvite:SetPoint("BOTTOMLEFT")
+    g.settings = footButton(g, "Guild settings", "quiet", function() if g.onAction then g.onAction("settings") end end)
+    g.settings:SetPoint("LEFT", g.guildInvite, "RIGHT", S["space-3"], 0)
     local prev
     for _, def in ipairs({ { "remove", "Remove", "danger" }, { "demote", "Demote", "quiet" }, { "promote", "Promote", "quiet" },
                            { "invite", "Invite", "primary" }, { "whisper", "Whisper", "quiet" } }) do

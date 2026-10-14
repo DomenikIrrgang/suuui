@@ -94,6 +94,7 @@ function M:Actions(m)
     local out = {}
     local inviteGuild = call(CanGuildInvite)
     out.guildInvite = { enabled = inviteGuild, why = "Your rank can't invite to the guild." }
+    out.settings = { enabled = call(IsGuildLeader), why = "Only the Guild Master can change the guild's settings." }
     if not m then return out end
     local mine = self:MyRank()
     local below = m.rankIndex > mine
@@ -224,7 +225,23 @@ function M:Note(m, officer)
         end })
 end
 
+-- Guild settings: Blizzard's guild control window (ranks and what each
+-- may do), shown directly (it isn't one of the panels Blizzard's window
+-- manager places from addon code without tainting).
+function M:GuildSettings()
+    if C_AddOns and C_AddOns.LoadAddOn and not _G.GuildControlUI then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+    local ui = _G.GuildControlUI
+    if not ui then self:Print("The guild's settings aren't available here.") return end
+    if ui:IsShown() then ui:Hide() return end
+    ui:ClearAllPoints()
+    ui:SetPoint("TOPLEFT", self.frame, "TOPRIGHT", 12, 0)
+    ui:SetFrameStrata("DIALOG")
+    ui:Show()
+    if SuuUI.UI.Reskin then SuuUI.UI.Reskin(ui) end
+end
+
 function M:Act(action, m)
+    if action == "settings" then self:GuildSettings() return end
     if action == "guildInvite" then
         UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
             input = { label = "Name", placeholder = "Name" }, confirm = "Invite",
@@ -545,12 +562,12 @@ function M:FoldList()
         hooksecurefunc(list, "SetPoint", again)
     end
     -- Blizzard's View Log and Invite Member: the Log tab and the roster
-    -- have their jobs (asked for in game)
+    -- (Invite to guild) have their jobs (asked for in game)
     self:HideButtons(f, 0)
     self:LayChat()
 end
 
-local HIDDEN_BUTTONS = { ["View Log"] = true }
+local HIDDEN_BUTTONS = { ["View Log"] = true, ["Invite Member"] = true }
 
 function M:HideButtons(frame, depth)
     if depth > 4 or not frame or not frame.GetChildren then return end
@@ -561,9 +578,6 @@ function M:HideButtons(frame, depth)
             if type(text) == "string" and (HIDDEN_BUTTONS[text] or text == _G.GUILD_VIEW_LOG) then
                 c:SetAlpha(0)
                 c:EnableMouse(false)
-            elseif text == "Invite Member" then
-                -- kept, at the top right (asked for in game)
-                self.inviteButton = c
             end
         end
         if not c.suuOwn then self:HideButtons(c, depth + 1) end
@@ -597,12 +611,6 @@ function M:LayChat()
     f.Chat:ClearAllPoints()
     f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20 + inL, -(44 + 24 + S["space-4"]))
     f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(20 + inR), 16 + 30 + S["space-3"])
-    -- Invite Member at the top right, on the menu's row
-    local invite = self.inviteButton
-    if invite then
-        invite:ClearAllPoints()
-        invite:SetPoint("TOPRIGHT", f, "TOPRIGHT", -20, -44)
-    end
     -- the voice chat headset over the chat: out of sight
     if f.VoiceChatHeadset then f.VoiceChatHeadset:SetAlpha(0); f.VoiceChatHeadset:EnableMouse(false) end
     -- the member list beside the chat (in the chat's mode; the roster mode's
@@ -616,7 +624,6 @@ function M:LayChat()
         local function again() if not self.layingChat then C_Timer.After(0, function() self:LayChat() end) end end
         hooksecurefunc(f.Chat, "SetPoint", again)
         if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
-        if self.inviteButton then hooksecurefunc(self.inviteButton, "SetPoint", again) end
         -- the hidden member list takes no clicks in the chat's mode
         if f.MemberList then
             f.MemberList:HookScript("OnShow", again)
