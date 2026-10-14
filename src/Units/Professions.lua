@@ -88,6 +88,11 @@ function M:Profession(index)
         end
     end
     card.rank = card.rank or RANKS[max] or ""
+    -- unlearning goes through the game's own confirmation, as Blizzard's
+    -- book does (StaticPopup "UNLEARN_SKILL", data: the skill line)
+    if skillLine and StaticPopupDialogs and StaticPopupDialogs.UNLEARN_SKILL then
+        card.onUnlearn = function() StaticPopup_Show("UNLEARN_SKILL", name, nil, skillLine) end
+    end
     -- its recipes, as counted when it was last open
     local counts = skillLine and self:CharData().recipes
     card.recipes = counts and counts[skillLine]

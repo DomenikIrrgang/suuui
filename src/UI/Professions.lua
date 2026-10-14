@@ -20,6 +20,7 @@
 --       or { name, rank, icon, untrained = true, hint } for one not learned
 --       (dimmed, the hint where the skill bar goes)
 --     spell = { name, icon, active, onClick, onEnter(owner), onLeave }
+--     card.onUnlearn()        -- a learned one: the trash glyph on hover
 --     p.onOpen(card)          -- a crafting profession's card clicked
 --   p:SetCrafting({ name, rank, skill, max, recipes = { learned, total },
 --       categories = { { name, recipes } },
@@ -186,8 +187,46 @@ local function makeCard(view)
     c.empty:SetPoint("CENTER")
     c.hint = UI.Text(c, "caption", "ink-faint")
     c.hint:SetPoint("LEFT", c.skill, "LEFT", 0, 0)
-    c:SetScript("OnEnter", function(self) if self.card and self.card.crafting then self.border:SetColor("gilt-line") end end)
-    c:SetScript("OnLeave", function(self) self.border:SetColor("gilt-faint") end)
+    -- Unlearn: a quiet trash glyph in the bottom right corner while the
+    -- mouse is on the card (a learned one); the game's own confirmation
+    c.unlearn = CreateFrame("Button", nil, c)
+    c.unlearn:SetSize(22, 22)
+    c.unlearn:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-4"])
+    c.unlearn.edge = UI.Border(c.unlearn, "gilt-line")
+    c.unlearn.edge:SetShown(false)
+    c.unlearn.glyph = c.unlearn:CreateTexture(nil, "ARTWORK")
+    c.unlearn.glyph:SetTexture(GLYPHS .. "trash.tga")
+    c.unlearn.glyph:SetSize(13, 13)
+    c.unlearn.glyph:SetPoint("CENTER")
+    c.unlearn.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    c.unlearn:Hide()
+    local function hover(on)
+        on = on and c.card and c.card.onUnlearn and true or false
+        c.unlearn:SetShown(on)
+    end
+    c.unlearn:SetScript("OnEnter", function(self)
+        self.edge:SetShown(true)
+        self.glyph:SetVertexColor(UI.RGBA("ember-text"))
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip_SetTitle(GameTooltip, "Unlearn " .. (c.card and c.card.name or ""))
+        GameTooltip_AddNormalLine(GameTooltip, "Your skill and recipes in it are lost.")
+        GameTooltip:Show()
+    end)
+    c.unlearn:SetScript("OnLeave", function(self)
+        self.edge:SetShown(false)
+        self.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        GameTooltip:Hide()
+        hover(c:IsMouseOver())
+    end)
+    c.unlearn:SetScript("OnClick", function() if c.card and c.card.onUnlearn then c.card.onUnlearn() end end)
+    c:SetScript("OnEnter", function(self)
+        if self.card and self.card.crafting then self.border:SetColor("gilt-line") end
+        hover(true)
+    end)
+    c:SetScript("OnLeave", function(self)
+        self.border:SetColor("gilt-faint")
+        hover(self.unlearn:IsMouseOver())
+    end)
     c:SetScript("OnClick", function(self) if self.card and self.card.crafting and view.onOpen then view.onOpen(self.card) end end)
     return c
 end
@@ -202,6 +241,7 @@ local function fillCard(c, card, empty)
     if not has then
         c.empty:SetValue(empty or "Learn a profession from a trainer")
         c.hint:Hide()
+        c.unlearn:Hide()
         c.recipes:Hide(); c.recipesHint:Hide()
         for _, s in ipairs(c.spells) do s:Hide() end
         return
@@ -223,6 +263,7 @@ local function fillCard(c, card, empty)
     if counted then c.recipes:SetSkill(card.recipes.learned, card.recipes.total) end
     c.recipesHint:SetShown(card.crafting and not off and not counted or false)
     c.recipesHint:SetValue("Recipes: open it once to count them")
+    c.unlearn:SetShown(card.onUnlearn ~= nil and c:IsMouseOver())
     local below = (card.crafting and not off) and c.recipes or c.skill
     local x = 0
     for i, sp in ipairs(card.spells or {}) do
