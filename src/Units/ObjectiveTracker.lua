@@ -507,12 +507,13 @@ function M:RowEnter(row)
     if not spell then return end
     local b = self:RecipeOpener()
     b.recipeID, b.row = id, row
-    -- its profession already open: no cast (it would close the window again,
-    -- found in game), the click only chooses the recipe
+    -- its profession already open: no cast (it would close the window, found
+    -- in game), the click only chooses the recipe; unless it's the one shown
+    -- already: then the cast closes the window, a toggle (asked for)
     local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
     local open = base and base.professionID == line and call(C_TradeSkillUI.IsTradeSkillReady)
         and ProfessionsFrame and ProfessionsFrame:IsShown()
-    b.casting = not open
+    b.casting = not open or SuuUI.ShownRecipe() == id
     b:SetAttribute("type1", b.casting and "spell" or nil)
     b:SetAttribute("spell1", spell)
     b:ClearAllPoints()

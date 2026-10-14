@@ -279,6 +279,13 @@ function API.ExpectRecipe(recipeID)
     local m = Modules.Get("professions")
     if m and m:IsEnabled() then m.pendingRecipe = recipeID end
 end
+-- 0.13: the recipe SuuUI's Professions window shows right now, or nil.
+function API.ShownRecipe()
+    local m = Modules.Get("professions")
+    local view = m and m:IsEnabled() and m.view
+    if not (view and view:IsVisible() and m.mode == "crafting" and view.craftData) then return nil end
+    return view.craftData.selected
+end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
