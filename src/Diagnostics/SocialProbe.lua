@@ -238,7 +238,40 @@ function SP.Search(store)
     store.lfgSearch.call = call(lfg.Search, cat)
 end
 
-function SP.Command()
+-- Forever's two-part names ("Suther Stargazer"): what each API gives for
+-- your own character, and the C_PlayerInfo functions there are.
+function SP.Names()
+    SuuUIProbe = SuuUIProbe or {}
+    local n = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.names = n
+    n.UnitName = call(UnitName, "player")
+    n.UnitFullName = call(UnitFullName, "player")
+    n.GetUnitName = call(GetUnitName, "player", true)
+    n.UnitNameUnmodified = call(UnitNameUnmodified, "player")
+    n.UnitNameFull = call(_G.UnitNameFull, "player")
+    n.UnitNameWithSurname = call(_G.UnitNameWithSurname, "player")
+    n.realm = call(GetNormalizedRealmName)
+    n.guid = call(UnitGUID, "player")
+    n.byGUID = call(GetPlayerInfoByGUID, UnitGUID("player"))
+    n.playerInfoApi = namesIn(C_PlayerInfo)
+    local surname = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and type(v) == "function" and (k:lower():find("surname") or k:lower():find("fullname")) then
+            surname[#surname + 1] = k .. " = " .. call(v, "player")
+        end
+    end
+    table.sort(surname)
+    n.globals = surname
+    local club = raw(C_Club and C_Club.GetGuildClubId)
+    n.clubSelf = club and call(C_Club.GetMemberInfoForSelf, club) or "no guild"
+    n.target = call(UnitName, "target")
+    n.targetFull = call(UnitFullName, "target")
+    ns.Print("Names probe: saved; /reload. (Target another player first if you can.)")
+    return n
+end
+
+function SP.Command(rest)
+    if rest == "names" then SP.Names() return end
     -- the roster asked for first: it's often empty until then
     if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) elseif GuildRoster then pcall(GuildRoster) end
     local store = SP.Sample()
