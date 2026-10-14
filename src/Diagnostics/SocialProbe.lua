@@ -94,19 +94,19 @@ function SP.Sample()
         count = call(fl and fl.GetNumFriends), online = call(fl and fl.GetNumOnlineFriends),
         api = namesIn(fl), first = {},
     }
-    for i = 1, math.min(4, tonumber(raw(fl and fl.GetNumFriends)) or 0) do
+    for i = 1, math.min(4, tonumber((raw(fl and fl.GetNumFriends))) or 0) do
         store.friends.first[i] = call(fl.GetFriendInfoByIndex, i)
     end
     store.ignores = call(fl and fl.GetNumIgnores)
     -- Battle.net
     store.bnet = { count = call(BNGetNumFriends), api = namesIn(C_BattleNet), first = {},
                    connected = call(BNConnected), myInfo = call(BNGetInfo) }
-    local bnCount = raw(BNGetNumFriends)
+    local bnCount = (raw(BNGetNumFriends))
     store.bnet.games = {}
     for i = 1, math.min(4, tonumber(bnCount) or 0) do
         store.bnet.first[i] = call(C_BattleNet and C_BattleNet.GetFriendAccountInfo, i)
         -- what they're playing: each game account (character, zone, client)
-        local n = raw(C_BattleNet and C_BattleNet.GetFriendNumGameAccounts, i)
+        local n = (raw(C_BattleNet and C_BattleNet.GetFriendNumGameAccounts, i))
         store.bnet.games[i] = { count = show(n) }
         for j = 1, math.min(3, tonumber(n) or 0) do
             store.bnet.games[i][j] = call(C_BattleNet.GetFriendGameAccountInfo, i, j)
@@ -121,10 +121,10 @@ function SP.Sample()
         canRemove = call(CanGuildRemove), canPromote = call(CanGuildPromote), isLeader = call(IsGuildLeader),
         guildInfoApi = namesIn(C_GuildInfo), clubApi = namesIn(C_Club), first = {}, rankNames = {},
     }
-    for i = 1, math.min(5, tonumber(raw(GetNumGuildMembers)) or 0) do
+    for i = 1, math.min(5, tonumber((raw(GetNumGuildMembers))) or 0) do
         store.guild.first[i] = call(GetGuildRosterInfo, i)
     end
-    for i = 1, math.min(10, tonumber(raw(GuildControlGetNumRanks)) or 0) do
+    for i = 1, math.min(10, tonumber((raw(GuildControlGetNumRanks))) or 0) do
         store.guild.rankNames[i] = call(GuildControlGetRankName, i)
     end
     -- the guild's community: its chat streams (the Guild window's Chat)
