@@ -10,14 +10,14 @@ Status: **draft for review**. Everything under "What the game allows" was probed
 
 | | Result |
 |---|---|
-| Categories | **Dungeons** (29 activities, including Forever's own: Excavation Site: Wetlands, Ruins of Lordaeron, City of Dalaran, Hall of Thanes), **Quests & Zones** (40 activities, one per zone, in the groups Kalimdor and Eastern Kingdoms), **Custom** (1). There's no raid category. |
+| Categories | **Dungeons** (29 activities, including Forever's own: Excavation Site: Wetlands, Ruins of Lordaeron, City of Dalaran, Hall of Thanes), **Quests & Zones** (40 activities, one per zone, in the groups Kalimdor and Eastern Kingdoms), **Custom** (1). There's no raid category at level 22. Raids will appear at higher levels, so the library reads categories and activities at run time and never hard-codes them. |
 | Activities | `GetAvailableActivityGroups(category)`, then `GetAvailableActivities(category, group)`. Each has a name, a suggested maximum level and a size (5 for dungeons, 10 for Upper Blackrock Spire, 0 for zones). |
 | Search | Works from a click or a key press (a typed command counts). **Blocked from a timer** (`ADDON_ACTION_BLOCKED`), so the library can't refresh the tool by itself. |
 | Results | `GetSearchResultInfo`: activity IDs, leader name (sometimes missing), number of members, age, comment, name, delisted, new player friendly, play style. `GetSearchResultMemberCounts`: tanks, healers and damage still needed. Results include single players looking for a group (1 member). They are secret during "chat messaging lockdown" (game docs). **Open:** when that lockdown applies. |
 | Your listing | `GetActiveEntryInfo` (activities, comment, new player friendly, play style, voice) and `GetLFGRoles` (leader, tank, healer, damage) can be read. |
 | Create or update a listing | **Blocked** from addon code, even from a click. Listing yourself goes through the game's own listing panel, which SuuUI restyles and lays out (your clicks on its controls save, like the guild Settings tab). |
 | Delist | `RemoveListing` works from a click. |
-| Joining a group | The game's own tool has no sign-up. It offers **Invite** (`C_PartyInfo.InviteUnit`) only for single players, and otherwise you whisper the leader. `ApplyToGroup` exists but the game's UI doesn't use it. **Open:** whether it works on Forever. |
+| Joining a group | There's no sign-up on Forever (`ApplyToGroup` exists but doesn't work there). The tool offers **Invite** (`C_PartyInfo.InviteUnit`) only for single players, and otherwise you whisper the leader. |
 
 ### Chat
 
@@ -56,10 +56,10 @@ Activity {
 ```
 
 - **Sources of the catalogue:**
-  - the tool: dungeons, zones, custom;
+  - the tool: whatever categories it offers at run time (dungeons, zones, custom; raids at higher levels);
   - SuuUI's quest data: quests by ID and name, with their zone and level;
   - a hand-made list: dungeon abbreviations, raids, world bosses, named elites and group areas.
-- **Open:** whether raids should be in it, since the tool has none.
+- Raids, world bosses, elites and events are in it from the start (hand-made list for chat). Raids from the tool join them once it offers them.
 
 ### Entry
 
@@ -89,7 +89,7 @@ Entry {
 
 - **Expiry:**
   - **Tool entries** last until the next search no longer has them, or they're delisted.
-  - **Chat entries** expire some minutes after their last post. Posting again refreshes them. **Open:** how many minutes (5? 10?).
+  - **Chat entries** expire 5 minutes after their last post by default (a setting). Posting again refreshes them.
 - **Merge:** the same `key` from both sources becomes one entry. The tool's data (roles, members) wins and the chat text is kept alongside. If the same leader posts different activities, they're added to the entry.
 
 ### What you're after (the "interest")
@@ -111,7 +111,7 @@ A rule decides whether an entry concerns you: entry × interest → matched or n
 - A group needs a role you play, for an activity you're listed for or watching.
 - A group (or a player) for a quest in your quest log.
 - A group in your zone for open-world content near your level.
-- **Open:** which of these notify, and which only sort or highlight in the list (see below).
+- Which matches notify is up to you (see Notifications); all of them sort and highlight in the list.
 
 ## The chat parser
 
@@ -134,9 +134,49 @@ From one message to an entry (or nothing):
 6. **Level:** "40+", "lvl 35-40".
 7. **Confidence** from how many parts matched. Below a threshold, the line is dropped or kept only as "maybe".
 
-Languages: English first. **Open:** Korean (seen on the server) and others.
+### Languages
+
+The parser itself knows no language: every word it looks for comes from a **language module**.
+
+- **A module per language** (`Lang/enUS.lua`, `Lang/koKR.lua`, ...) supplies:
+  - intent words (LFM, LFG, "need", "suche", "구해요", ...);
+  - role and class words;
+  - noise words (trade, recruiting, boosts);
+  - number words;
+  - activity aliases (abbreviations and nicknames).
+  Activity, zone and quest **names** come from the game itself in the client's language, so modules only add what players type besides them.
+- **Which modules are used:**
+  - your Forever language preference (the "preferred play settings" that shard players by language);
+  - the client's own language;
+  - any extra languages switched on in the settings.
+  Every module ships with SuuUI; only the chosen ones are used. **Open:** the probe shows how the preference reads (`/suu probe lfg lang`).
+- English is written first; Korean follows (seen on the server), then others as players ask.
 
 The recorder (`/suu probe lfg record`) collects real lines to tune this. A small offline script in `tools/` replays recorded lines through the parser and prints what it made of each, so rules can be checked against real chat without being in game.
+
+## Your own ad
+
+The Group Finder offers to post your listing as an ad to LookingForGroup (or another channel you pick), written in your language from your listing (activity, roles needed or offered), and editable before it goes. The game only lets public chat messages be sent from your click, so posting is always a click, never automatic or repeated by itself.
+
+## Notifications
+
+Every kind can be switched on or off, and each has its own options (sound, only from the tool or also from chat, the least parser confidence for chat, not in combat, not in instances). The same entry never notifies twice within a few minutes.
+
+| Notification | When |
+|---|---|
+| **Your role is needed** | A group for an activity you're listed for or watching needs a role you play. |
+| **New group for your activity** | A new group for an activity you're listed for or watching, whatever it needs. |
+| **A player for your group** | You lead a group (listed or advertising) and a player looking for that activity offers a role you still need. |
+| **Quest group** | A group or player for a quest in your quest log. |
+| **In your zone** | A group in your current zone for open-world content (group quests, elites) near your level. |
+| **World boss or event** | A group forming for a world boss or world event. |
+| **Friends and guild** | A friend or guild member lists themselves or advertises. |
+| **Results are stale** | You're listed or watching and the tool's results are older than a set time: **Refresh** and **Delist** buttons. |
+| **Your listing runs out soon** | Your listing is close to its end (the tool gives its time left): **Open listing** and **Delist**. |
+| **You were delisted** | Your listing ended or was removed. |
+| **A group you contacted** | A group whose leader you whispered fills up, is delisted, or posts again still needing your role. |
+
+Whispering a leader opens an empty whisper (no ready-made text).
 
 ## Freshness of the tool
 
@@ -185,15 +225,12 @@ Listing yourself isn't in the library's API, because addon code can't do it. The
 - Channels to read: LookingForGroup, General, Trade, Services, Say, Yell.
 - Join LookingForGroup, and keep it out of chat (on by default).
 - Chat entries expire after N minutes.
-- Notifications: which matches notify. The stale-tool reminder on or off.
+- Notifications: each kind on or off, with its options (above).
+- Languages: extra language modules besides your preference and your client's.
+- Your ad: the channel it goes to.
 
 ## Open questions
 
-1. **Raids:** should the catalogue include raids, world bosses and elites, since the tool has no raid category?
-2. **Languages:** English only first, or Korean (seen) too? Others?
-3. **Notifications:** which matches notify (listed activity plus your role? quests in your log? your zone?), and which only highlight in the list?
-4. **Chat expiry:** after how many minutes does a chat post expire?
-5. **Ads to chat:** should the Group Finder offer to post your own ad to LookingForGroup (on your click)?
-6. **Sign-up:** probe `ApplyToGroup`? It sends a real request to a real group.
-7. **Secret chat:** the recorder will show whether chat text is secret in combat or instances; the parser must skip those lines.
-8. **Whisper text:** a ready-made whisper ("Hi, tank for Deadmines?") or an empty whisper?
+1. **Language preference:** how Forever's preference reads for an addon, and how its locale IDs map to languages (`/suu probe lfg lang`).
+2. **Secret chat:** whether chat text becomes secret in combat or inside instances (the recorder is collecting); the parser must skip those lines.
+3. **Chat volume:** the beta's channels are quiet; the parser is tuned on recorded lines as they come in.
