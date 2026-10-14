@@ -384,13 +384,59 @@ local function place(name, zone)
     return inkText(name)
 end
 
+-- What the trainers this account recorded teach (every character's), by
+-- profession and recipe name: the skill and the trainers. Built once,
+-- again after a new recording.
+function M:Recorded(profession, recipe)
+    if not self.recordedIndex then
+        local index = {}
+        for _, data in pairs(self:AllCharData()) do
+            for _, rec in pairs(data.trainers or {}) do
+                local faction = ({ Alliance = "A", Horde = "H" })[rec.faction or ""] or ""
+                local where = (rec.npc or "?") .. "|" .. (rec.zone or "") .. "|" .. faction
+                for _, sv in ipairs(rec.services or {}) do
+                    if sv.name then
+                        local key = (rec.profession or "") .. "\0" .. sv.name:lower()
+                        local t = index[key] or { trainers = {} }
+                        index[key] = t
+                        if sv.rank and (not t.skill or sv.rank < t.skill) then t.skill = sv.rank end
+                        if not tContains(t.trainers, where) then t.trainers[#t.trainers + 1] = where end
+                    end
+                end
+            end
+        end
+        self.recordedIndex = index
+    end
+    return profession and recipe and self.recordedIndex[profession .. "\0" .. recipe:lower()]
+end
+
 function M:Source(id)
+    local craft = self.view and self.view.craftData
+    local profession = craft and craft.name
+    -- the shipped data, with what this account's own characters recorded
+    -- at trainers on top (it shows at once, before any update)
     local list = SuuUI.RecipeSources(id)
+    local info = call(C_TradeSkillUI.GetRecipeInfo, id)
+    local mine = self:Recorded(profession, info and info.name)
+    if mine then
+        local merged, found = {}, false
+        for i, src in ipairs(list or {}) do
+            if src.t == "t" then
+                local names = {}
+                for _, n in ipairs(mine.trainers) do names[#names + 1] = n end
+                for _, n in ipairs(src.n or {}) do if not tContains(names, n) then names[#names + 1] = n end end
+                merged[i] = { t = "t", s = mine.skill or src.s, n = names }
+                found = true
+            else
+                merged[i] = src
+            end
+        end
+        if not found then merged[#merged + 1] = { t = "t", s = mine.skill, n = mine.trainers } end
+        list = merged
+    end
     if not list then return { lines = { "Where this recipe is learned isn't known yet." } } end
     local out = { lines = {} }
     local lines = out.lines
-    local craft = self.view and self.view.craftData
-    local profession = craft and craft.name
     -- the skill it needs (on its recipe item, or recorded at trainers), as
     -- the game words it; ember while yours is short
     local need
@@ -778,6 +824,7 @@ function M:RecordTrainer()
     local npcID = guid and tonumber((select(6, strsplit("-", guid))))
     local saved = self:CharData()
     saved.trainers = saved.trainers or {}
+    self.recordedIndex = nil
     saved.trainers[npcID or UnitName("npc") or "?"] = {
         npc = UnitName("npc"), npcID = npcID, zone = GetRealZoneText(), subzone = GetSubZoneText(),
         faction = UnitFactionGroup("player"), profession = profession,
