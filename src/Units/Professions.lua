@@ -376,7 +376,7 @@ function M:Recipes()
                 end
                 cat.recipes[#cat.recipes + 1] = { id = id, name = info.name, difficulty = diff, canMake = can,
                     learned = info.learned and true or false, tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false) and true or false,
-                    need = self.sort == "skill" and self:SkillFor(id, data.name, info.name) or nil,
+                    need = (self.sort == "skill" or self.sort == "level") and self:SkillFor(id, data.name, info.name) or nil,
                     use = self.sort == "level" and self:UseLevel(id) or nil }
                 first = first or id
             end
@@ -404,8 +404,12 @@ function M:Recipes()
         end,
         -- the level the product needs to be used; none (enchants) or not
         -- loaded yet goes last
+        -- the same level (level 0: reagents, tools): by the skill required
+        -- (asked for in game), then the name
         level = function(a, b)
             local x, y = a.use or math.huge, b.use or math.huge
+            if x ~= y then return x < y end
+            x, y = a.need or math.huge, b.need or math.huge
             if x ~= y then return x < y end
             return byName(a, b)
         end,
