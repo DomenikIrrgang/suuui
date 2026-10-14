@@ -94,7 +94,6 @@ function M:Actions(m)
     local out = {}
     local inviteGuild = call(CanGuildInvite)
     out.guildInvite = { enabled = inviteGuild, why = "Your rank can't invite to the guild." }
-    out.settings = { enabled = call(IsGuildLeader), why = "Only the Guild Master can change the guild's settings." }
     if not m then return out end
     local mine = self:MyRank()
     local below = m.rankIndex > mine
@@ -272,7 +271,6 @@ function M:HostSettings(on)
 end
 
 function M:Act(action, m)
-    if action == "settings" then self:GuildSettings() return end
     if action == "guildInvite" then
         UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
             input = { label = "Name", placeholder = "Name" }, confirm = "Invite",
@@ -471,32 +469,9 @@ end
 -- Blizzard's (InfoOverlays); this is the fallback when they can't be.
 function M:BlizzEdits()
     local details = self.frame and self.frame.GuildDetailsFrame
-    local found = {}
-    local function walk(fr, depth)
-        if depth > 5 or not fr or not fr.GetChildren then return end
-        for _, c in ipairs({ fr:GetChildren() }) do
-            if c.GetObjectType and c:GetObjectType() == "Button" then
-                local fs = c.GetFontString and c:GetFontString()
-                local text = (fs and fs:GetText()) or (c.GetText and c:GetText()) or ""
-                if type(text) == "string" and text:lower():find("edit") then found[#found + 1] = c end
-            end
-            walk(c, depth + 1)
-        end
-    end
-    walk(details, 0)
-    -- the left column's two, top to bottom: the message of the day, then the information
-    table.sort(found, function(a, b)
-        local al, bl = a:GetLeft() or 0, b:GetLeft() or 0
-        if math.abs(al - bl) > 40 then return al < bl end
-        return (a:GetTop() or 0) > (b:GetTop() or 0)
-    end)
-    local placed = found[1] and found[1]:GetLeft() and (not found[2] or found[2]:GetLeft())
-    if placed then
-        self.editCache = { motd = found[1], info = found[2] }
-        return self.editCache
-    end
-    -- Blizzard's page not laid out (the chat showing): the pair seen last
-    return self.editCache or { motd = found[1], info = found[2] }
+    local info = (details and details.Info) or _G.CommunitiesFrameGuildDetailsFrameInfo
+    -- by their keys (probed: EditMOTDButton, EditDetailsButton)
+    return { motd = info and info.EditMOTDButton, info = info and info.EditDetailsButton }
 end
 
 function M:EditInfo(key)
@@ -877,7 +852,7 @@ function M:Follow()
         self.infoPage:SetShown(onInfo and true or false)
         local blizz = f.GuildDetailsFrame
         if blizz then blizz:SetAlpha(onInfo and 0 or 1) end
-        if onInfo then self:RenderInfo() else self:HideInfoOverlays() end
+        if onInfo then self:RenderInfo() else self:InfoOverlays() end
     end
     -- the rest in SuuUI's look: Blizzard's own parts restyled in place
     C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
