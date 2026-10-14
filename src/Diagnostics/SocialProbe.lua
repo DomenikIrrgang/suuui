@@ -270,8 +270,52 @@ function SP.Names()
     return n
 end
 
+-- What the windows are made of: each child (its key on the parent, or its
+-- global name), shown, protected, size, and its own children two levels
+-- down. Open each window once before (they load on first use).
+local function children(f, depth, out, prefix)
+    if depth > 3 or not f or not f.GetChildren then return end
+    -- keys on the parent, for frames without a global name
+    local keys = {}
+    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
+    for _, c in ipairs({ f:GetChildren() }) do
+        if #out >= 400 then return end
+        local name = c:GetName() or keys[c] or "?"
+        local text = ""
+        local fs = c.Text or c.text or (c.GetFontString and c:GetFontString())
+        if fs and fs.GetText then text = " \"" .. show(fs:GetText()) .. "\"" end
+        out[#out + 1] = ("%s%s [%s] shown=%s prot=%s %dx%d%s"):format(prefix, name, c:GetObjectType(), show(c:IsShown()),
+            show(c:IsProtected()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), text)
+        children(c, depth + 1, out, prefix .. "  ")
+    end
+end
+
+function SP.Frames()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.socialFrames = store
+    for _, addon in ipairs({ "Blizzard_Communities", "Blizzard_GuildUI", "Blizzard_RaidUI", "Blizzard_LookingForGroupUI" }) do
+        if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, addon) end
+    end
+    for _, name in ipairs({ "FriendsFrame", "RaidFrame", "CommunitiesFrame", "LFGParentFrame", "LFGBrowseFrame",
+                            "LFGListingFrame", "WhoFrame" }) do
+        local f = _G[name]
+        local out = {}
+        if f then children(f, 1, out, "") end
+        store[name] = f and out or "missing"
+    end
+    -- the functions that open them
+    store.openers = {}
+    for _, fn in ipairs({ "ToggleFriendsFrame", "ToggleGuildFrame", "ToggleCommunitiesFrame", "ToggleLFGParentFrame",
+                          "ToggleRaidFrame", "FriendsFrame_ShowSubFrame", "ToggleLFDParentFrame", "PVEFrame_ToggleFrame" }) do
+        store.openers[fn] = type(_G[fn])
+    end
+    ns.Print("Social frames probe: saved; /reload.")
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
+    if rest == "frames" then SP.Frames() return end
     -- the roster asked for first: it's often empty until then
     if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) elseif GuildRoster then pcall(GuildRoster) end
     local store = SP.Sample()
