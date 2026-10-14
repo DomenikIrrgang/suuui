@@ -4,7 +4,7 @@ Target client: WoW Forever beta 1.60.1 (`## Interface: 16001`, game type `camelo
 
 Sources of truth:
 - **Design system:** https://claude.ai/artifact/NcdJv21GMnN9gaQ5mF1oSw. It holds the brand book (`README.md`), `tokens.json`, `group-frames.md` and a spec for every component.
-- **Design canvas:** https://claude.ai/artifact/2Esuzrf8QLJVm2WWGcDYfF. It has three pages: Components, Scenes and Windows and settings. Boards for parts not built yet end in "(planned)".
+- **Design canvas:** https://claude.ai/artifact/2Esuzrf8QLJVm2WWGcDYfF. It has nine pages by area: HUD and combat; Group, raid and enemy frames; World, chat, bags and notifications; Scenes; Character, guild and social; Group Finder; Spells, talents, professions and map; Settings window; Cooldown Manager settings and edit mode. Boards for parts not built yet end in "(planned)".
 
 ---
 
