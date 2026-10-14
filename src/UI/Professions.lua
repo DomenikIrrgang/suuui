@@ -635,8 +635,8 @@ function P:SetCrafting(d)
     if d.recipes then self.craftRecipes:SetSkill(d.recipes.learned, d.recipes.total) end
     -- the two bars share what the name and rank leave
     local gap = S["space-5"]
-    local room = (self.crafting:GetWidth() or 0) - self.craftName:GetUnboundedStringWidth()
-        - self.craftRank:GetUnboundedStringWidth() - gap * 3
+    local rankW = (d.rank and d.rank ~= "") and (self.craftRank:GetUnboundedStringWidth() + gap) or 0
+    local room = (self.crafting:GetWidth() or 0) - self.craftName:GetUnboundedStringWidth() - rankW - gap * 2
     local bar = d.recipes and math.floor((room - gap) / 2) or room
     self.craftSkill:SetWidth(math.max(80, bar))
     self.craftRecipes:SetWidth(math.max(80, bar))

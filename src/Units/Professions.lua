@@ -302,7 +302,7 @@ end
 function M:Recipes()
     local base = call(C_TradeSkillUI.GetBaseProfessionInfo) or {}
     local data = { name = base.professionName, skill = base.skillLevel, max = base.maxSkillLevel,
-                   skillLine = base.professionID, rank = RANKS[base.maxSkillLevel] or "" }
+                   skillLine = base.professionID }  -- no rank here: the overview has it (asked for in game)
     local cats, byCat = {}, {}
     local search = self.search and self.search ~= "" and self.search:lower() or nil
     local f = self.filters or {}
