@@ -27,7 +27,8 @@
 --                                 -- quests, its own head in the list (they
 --                                 -- scroll together); entries like quests
 --                                 -- (questID = the recipe ID); then SetQuests
---   t.onRecipeClick(recipeID, button, row), t.onSectionToggle("recipes")
+--   t.onRecipeClick(recipeID, button, row), t.onSectionToggle("recipes"),
+--   t.onRowEnter(row)             -- the mouse onto an entry (row.quest)
 --   opts.toggle: the owner's own (secure) toggle button, drawn here, placed
 --   by the owner over the head's left end (HEAD_H square at the top left)
 --
@@ -111,6 +112,7 @@ local function questRow(t)
     r.preview:Hide()
     r:SetScript("OnEnter", function(self)
         if self.quest and self.quest.tooltip then UI.ShowTooltip(self, self.quest.tooltip) end
+        if t.onRowEnter and self.quest then t.onRowEnter(self) end
     end)
     r:SetScript("OnLeave", function() UI.HideTooltip() end)
     r:SetScript("OnClick", function(self, button)

@@ -253,6 +253,32 @@ function API.OpenRecipe(recipeID)
     local skillLine = (parent and parent ~= 0) and parent or line
     if skillLine and C_TradeSkillUI.OpenTradeSkill then pcall(C_TradeSkillUI.OpenTradeSkill, skillLine) end
 end
+-- 0.13: the spell that opens a profession's window (Smelting for Mining,
+-- Tanning for Skinning's camp recipes), by its skill line; nil if you
+-- don't have it. Opening a profession from an addon is protected: cast
+-- this from a secure button instead.
+function API.ProfessionOpener(skillLine)
+    if not (GetProfessions and C_SpellBook and C_TradeSkillUI) then return nil end
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    for _, index in pairs({ GetProfessions() }) do
+        local _, _, _, _, numSpells, offset, line = GetProfessionInfo(index)
+        if line == skillLine then
+            for k = 1, (numSpells or 0) do
+                local info = C_SpellBook.GetSpellBookItemInfo((offset or 0) + k, bank)
+                if info and info.spellID and not info.isPassive
+                    and C_TradeSkillUI.CanTradeSkillShowCraftingUI(info.spellID) then
+                    return info.spellID
+                end
+            end
+        end
+    end
+end
+-- 0.13: the recipe to choose once its profession's window opens (the
+-- professions module; opened by casting ProfessionOpener's spell).
+function API.ExpectRecipe(recipeID)
+    local m = Modules.Get("professions")
+    if m and m:IsEnabled() then m.pendingRecipe = recipeID end
+end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false

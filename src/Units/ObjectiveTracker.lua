@@ -461,18 +461,75 @@ function M:TrackedRecipes()
     return out
 end
 
-function M:RecipeClick(recipeID, button, row)
-    if button == "LeftButton" then
-        SuuUI.OpenRecipe(recipeID)
-        return
-    end
+-- Opening a profession from an addon is protected (blocked from the
+-- tracker, found in game): out of combat a secure button lies over the
+-- recipe under the mouse and casts the spell that opens its profession, as
+-- an action bar would; the Professions window then chooses the recipe. A
+-- right click on it is SuuUI's menu. In combat the rows take the clicks.
+local function recipeSkillLine(recipeID)
+    local line, _, parent = call(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
+    return (parent and parent ~= 0) and parent or line
+end
+
+function M:RecipeOpener()
+    if self.opener then return self.opener end
+    local b = CreateFrame("Button", "SuuUIRecipeOpener", self.frame, "SecureActionButtonTemplate")
+    -- down and up: the action fires on the one ActionButtonUseKeyDown picks
+    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp", "RightButtonUp")
+    b:SetAttribute("type1", "spell")
+    b:HookScript("PreClick", function(_, button)
+        if button == "LeftButton" and b.recipeID then SuuUI.ExpectRecipe(b.recipeID) end
+    end)
+    b:HookScript("PostClick", function(_, button)
+        if button == "RightButton" and b.row then self:RecipeMenu(b.recipeID, b.row) end
+    end)
+    b:SetScript("OnEnter", function() if b.row then b.row:LockHighlight() end end)
+    b:SetScript("OnLeave", function()
+        if b.row then b.row:UnlockHighlight() end
+        if not InCombatLockdown() then b:Hide() end
+    end)
+    b:Hide()
+    self.opener = b
+    return b
+end
+
+-- The mouse onto a tracked recipe: the secure opener over it (out of combat).
+function M:RowEnter(row)
+    if not (row.quest and row.quest.recipe) or InCombatLockdown() then return end
+    local id = row.quest.questID
+    local spell = SuuUI.ProfessionOpener(recipeSkillLine(id))
+    if not spell then return end
+    local b = self:RecipeOpener()
+    b.recipeID, b.row = id, row
+    b:SetAttribute("spell1", spell)
+    b:ClearAllPoints()
+    b:SetAllPoints(row)
+    b:SetFrameLevel(row:GetFrameLevel() + 5)
+    b:Show()
+end
+
+function M:RecipeMenu(recipeID, row)
     UI.ContextMenuFrom(row, function(_, root)
         if row.quest and row.quest.title then root:CreateTitle(row.quest.title) end
-        root:CreateButton("Open recipe", function() SuuUI.OpenRecipe(recipeID) end)
         root:CreateButton("Stop tracking", function()
             pcall(C_TradeSkillUI.SetRecipeTracked, recipeID, false, false)
         end)
     end)
+end
+
+-- The row's own clicks: in combat (no opener then), or the profession
+-- already open (choosing the recipe needs no cast).
+function M:RecipeClick(recipeID, button, row)
+    if button == "LeftButton" then
+        local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+        if base and base.professionID == recipeSkillLine(recipeID) and call(C_TradeSkillUI.IsTradeSkillReady) then
+            SuuUI.OpenRecipe(recipeID)
+        elseif InCombatLockdown() then
+            self:Print("Professions open out of combat.")
+        end
+        return
+    end
+    self:RecipeMenu(recipeID, row)
 end
 
 --------------------------------------------------------------------------------
@@ -505,6 +562,8 @@ function M:Refresh()
     end
     -- nothing tracked: nothing shown (the frame itself stays: it holds
     -- secure buttons, and its visibility is the Shows setting's)
+    -- the list moved under it: the opener waits for the mouse again
+    if self.opener and self.opener:IsShown() and not combat then self.opener:Hide() end
     local empty = n == 0 and #recipes == 0
     self.tracker:SetAlpha(empty and 0 or 1)
     self.toggle:SetAlpha(empty and 0 or 1)
@@ -597,6 +656,7 @@ function M:OnEnable()
         end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
         self.tracker.onRecipeClick = function(id, button, row) self:RecipeClick(id, button, row) end
+        self.tracker.onRowEnter = function(row) self:RowEnter(row) end
         self.tracker.onSectionToggle = function()
             self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
             self:Refresh()
@@ -661,6 +721,8 @@ function M:OnEnable()
     end
     -- secure item buttons can't move in combat: neither does the list then
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        -- the recipe opener away (a profession can't open in combat)
+        if self.opener then self.opener:Hide() end
         self.tracker:SetScrollLocked((self.itemsShown or 0) > 0)
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
