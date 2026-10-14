@@ -3,8 +3,8 @@
 Target client: WoW Forever beta 1.60.1 (`## Interface: 16001`, game type `camelot`). It runs the 12.1 (Midnight) engine with vanilla content, so the secret-values restrictions apply.
 
 Sources of truth:
-- **Design system:** https://claude.ai/artifact/NcdJv21GMnN9gaQ5mF1oSw. It holds the brand book (`README.md`), `tokens.json`, `group-frames.md` and 70 component specs.
-- **Design canvas:** https://claude.ai/artifact/2Esuzrf8QLJVm2WWGcDYfF. It has three pages: Components, Scenes and Windows and settings, 64 boards in all.
+- **Design system:** https://claude.ai/artifact/NcdJv21GMnN9gaQ5mF1oSw. It holds the brand book (`README.md`), `tokens.json`, `group-frames.md` and a spec for every component.
+- **Design canvas:** https://claude.ai/artifact/2Esuzrf8QLJVm2WWGcDYfF. It has three pages: Components, Scenes and Windows and settings. Boards for parts not built yet end in "(planned)".
 
 ---
 
