@@ -468,8 +468,8 @@ function M:BuildDetails()
                 self:Print(("%s isn't in the game's member list yet; /reload once if they're offline."):format(p.member.name))
             end
         end })
-        edit:SetPoint("RIGHT", b, "RIGHT", 0, 0)
-        edit:SetPoint("TOP", head, "TOP", 0, 4)
+        -- placed from the body's top in ShowDetails, never anchored to a
+        -- text: the notes' secure buttons hang off it
         local text = UI.Text(b, "body", "ink")
         text:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 0, -S["space-3"])
         text:SetPoint("RIGHT", b, "RIGHT")
@@ -522,7 +522,12 @@ function M:ShowDetails(m)
     p.officer:SetWidth(p.body:GetWidth())
     local cap, lbl = T.type.caption.lineHeight, T.type.label.lineHeight
     local y = lbl + 2 + cap
+    -- each Edit level with its heading (4px above its top)
+    p.noteEdit:ClearAllPoints()
+    p.noteEdit:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -(y + S["space-5"]) + 4)
     y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(p.note:GetStringHeight()))
+    p.officerEdit:ClearAllPoints()
+    p.officerEdit:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -(y + S["space-5"]) + 4)
     if canView then
         y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(p.officer:GetStringHeight()))
     end
