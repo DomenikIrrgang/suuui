@@ -21,7 +21,7 @@
 --     #1234), detail ("Kaelith · World of Warcraft Forever"), whisper = fn,
 --     icon = { texture, coords } } }, invite = fn }: a friend or guild member
 --     came online (a status diamond in arcane, their class icon, the name in
---     class colour, the detail, Invite; a click whispers) or went offline
+--     class colour, the detail, Whisper and Invite; a click whispers) or went offline
 --     (one quiet line: an ink-faint diamond, the name in ink-muted, where
 --     they're from at the right). Several at once: one card, "4 guild members
 --     came online", each name whispering them (design board "Notifications ·
@@ -154,7 +154,7 @@ function Note:SetPresence(d)
         end
         local text = table.concat(names, ", ")
         if #people > 2 then text = text .. " and " .. (#people - 2) .. " more" end
-        self.title:SetValue(text .. (single and " went offline" or " went offline"))
+        self.title:SetValue(text .. " went offline")
         self.title:SetColor("ink-muted")
         self.source:SetValue(p.source or "")
         self.source:Show()
@@ -222,25 +222,34 @@ function Note:SetPresence(d)
             self.bodyRow:Show()
             y = y + h
         end
-        if p.invite then
+        -- Whisper (always) and Invite (when they can be invited), right-aligned
+        local actions = {}
+        if person.whisper then actions[#actions + 1] = { label = "Whisper", onClick = person.whisper } end
+        if p.invite then actions[#actions + 1] = { label = "Invite", onClick = p.invite } end
+        if #actions > 0 then
             y = y + S["space-3"]
             self.actionsRow:ClearAllPoints()
             self.actionsRow:SetPoint("TOPLEFT", PAD, -y)
             self.actionsRow:SetPoint("TOPRIGHT", -PAD, -y)
             self.actionsRow:SetHeight(ACTION_H)
             self.actionsRow:Show()
-            local b = noteButton(self, 1, "quiet")
-            b:SetLabel("Invite")
-            b.pressed = false
-            b.pressedBg:SetShown(false)
-            b.border:SetColor("gilt-line")
-            b.label:SetColor("ink")
-            b:SetEnabledState(true)
-            b.tooltip = nil
-            b:SetScript("OnClick", function() p.invite() end)
-            b:ClearAllPoints()
-            b:SetPoint("RIGHT")
-            b:Show()
+            local x = 0
+            for i = #actions, 1, -1 do
+                local a = actions[i]
+                local btn = noteButton(self, i, "quiet")
+                btn:SetLabel(a.label)
+                btn.pressed = false
+                btn.pressedBg:SetShown(false)
+                btn.border:SetColor("gilt-line")
+                btn.label:SetColor("ink")
+                btn:SetEnabledState(true)
+                btn.tooltip = nil
+                btn:SetScript("OnClick", function() a.onClick() end)
+                btn:ClearAllPoints()
+                btn:SetPoint("RIGHT", -x, 0)
+                btn:Show()
+                x = x + btn:GetWidth() + S["space-3"]
+            end
             y = y + ACTION_H
         else
             self.actionsRow:Hide()
