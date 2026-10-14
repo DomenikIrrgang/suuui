@@ -575,6 +575,9 @@ function M:FoldList()
     for _, b in ipairs({ f.InviteButton, f.GuildLogButton, f.CommunitiesControlFrame and f.CommunitiesControlFrame.InviteButton }) do
         if b then self:Away(b) end
     end
+    -- Blizzard's control strip (Guild settings, recruitment, community
+    -- settings): the roster's own Guild settings has its job (asked for)
+    if f.CommunitiesControlFrame then self:Away(f.CommunitiesControlFrame) end
     self:LayChat()
 end
 
