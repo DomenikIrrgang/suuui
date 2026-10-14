@@ -399,6 +399,14 @@ function M:Source(id)
         local short = craft and (craft.skill or 0) < need
         lines[#lines + 1] = (short and "|cff" .. T.color["ember-text"].hex or "|cff" .. T.color.ink.hex)
             .. "Requires " .. (profession or "skill") .. " (" .. need .. ")|r"
+    else
+        -- a trainer recipe nobody has recorded yet (Forever's new ones)
+        for _, s in ipairs(list) do
+            if s.t == "t" then
+                lines[#lines + 1] = "The skill it requires isn't known yet"
+                break
+            end
+        end
     end
     for _, s in ipairs(list) do
         if s.t == "t" then
@@ -713,8 +721,9 @@ end
 --------------------------------------------------------------------------------
 -- Profession trainers, recorded: what each teaches and the skill it asks
 -- for (the game keeps that on the server: no data file has it). Saved per
--- character (CharData().trainers, by the trainer's NPC ID);
--- tools/merge_trainer_records.lua gathers them for the recipe data.
+-- character (CharData().trainers, by the trainer's NPC ID), quietly: players
+-- who send their SavedVariables help fill in the recipe data
+-- (tools/merge_trainer_records.lua, tools/update_recipe_sources.sh).
 --------------------------------------------------------------------------------
 
 local PROFESSION_NAMES = {}
@@ -734,23 +743,6 @@ function M:RecordTrainer()
         end
     end
     local services, profession = {}, nil
-    -- what the trainer reports, kept for the last trainer opened (the
-    -- recorder saved nothing at the first trainers: found in game)
-    local raw = { at = date("%Y-%m-%d %H:%M:%S"), npc = UnitName("npc"), count = call(GetNumTrainerServices),
-                  tradeskill = IsTradeskillTrainer and tostring(call(IsTradeskillTrainer)) or "missing",
-                  skillReq = GetTrainerServiceSkillReq and "ok" or "missing",
-                  skillLine = GetTrainerServiceSkillLine and "ok" or "missing", services = {} }
-    local function show(...)
-        local out = {}
-        for i = 1, select("#", ...) do out[i] = tostring((select(i, ...))) end
-        return table.concat(out, " | ")
-    end
-    for i = 1, math.min(8, raw.count or 0) do
-        raw.services[i] = "info: " .. show(pcall(GetTrainerServiceInfo, i))
-            .. "  req: " .. (GetTrainerServiceSkillReq and show(pcall(GetTrainerServiceSkillReq, i)) or "-")
-            .. "  line: " .. (GetTrainerServiceSkillLine and show(pcall(GetTrainerServiceSkillLine, i)) or "-")
-    end
-    self:CharData().trainerLast = raw
     for i = 1, (call(GetNumTrainerServices) or 0) do
         -- this client answers name, availability, icon
         local name, a, b = call(GetTrainerServiceInfo, i)
@@ -781,11 +773,7 @@ function M:RecordTrainer()
     -- a class trainer, a riding trainer: not ours (unless the game says
     -- it's a profession trainer and only the skill's name is missing)
     if not profession and IsTradeskillTrainer and call(IsTradeskillTrainer) then profession = "?" end
-    if not profession or #services == 0 then
-        self:Print(("%s's %d services weren't recorded: not recognised as a profession trainer. /reload and tell Claude."):format(
-            UnitName("npc") or "This trainer", #services))
-        return
-    end
+    if not profession or #services == 0 then return end
     local guid = UnitGUID("npc")
     local npcID = guid and tonumber((select(6, strsplit("-", guid))))
     local saved = self:CharData()
@@ -795,10 +783,6 @@ function M:RecordTrainer()
         faction = UnitFactionGroup("player"), profession = profession,
         at = date("%Y-%m-%d %H:%M"), services = services,
     }
-    local withSkill = 0
-    for _, sv in ipairs(services) do if sv.rank then withSkill = withSkill + 1 end end
-    self:Print(("Recorded %s's %d %s recipes (%d with the skill they need). Thanks!"):format(
-        UnitName("npc") or "the trainer", #services, profession, withSkill))
 end
 
 function M:OnEnable()

@@ -17,4 +17,5 @@ if [ $# -eq 0 ]; then
 fi
 lua tools/merge_trainer_records.lua tools/data/trainer_records.tsv "$@"
 python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.lua \
-    --itemsparse "$CACHE/ItemSparse.csv" --trainers tools/data/trainer_records.tsv
+    --itemsparse "$CACHE/ItemSparse.csv" --trainers tools/data/trainer_records.tsv \
+    --cmangos tools/data/cmangos_trainers.tsv

@@ -19,8 +19,12 @@
 #   the client tables), and for trainer recipes from the trainers SuuUI
 #   recorded in game (tools/data/trainer_records.tsv,
 #   tools/merge_trainer_records.lua): the game keeps those on the server.
+#   Recipes no trainer is recorded for yet take Classic's value from
+#   cMaNGOS (tools/data/cmangos_trainers.tsv, GPL-3.0); Forever's own new
+#   recipes have none until recorded.
 #   python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.lua \
 #       [--itemsparse <wago>/ItemSparse.csv] [--trainers tools/data/trainer_records.tsv]
+#       [--cmangos tools/data/cmangos_trainers.tsv]
 import csv, json, os, sys
 
 SRC, OUT = sys.argv[1:3]
@@ -89,10 +93,20 @@ def named(entries):
     # a place without a name says nothing ("Dropped by" and no one)
     return [e for e in entries or [] if e.get('name')]
 
-def trainer(t):
+# Classic's trainer skill by recipe ID (cMaNGOS), for recipes not recorded
+classic = {}
+path = OPTS.get('--cmangos')
+if path and os.path.exists(path):
+    lines = [l for l in open(path, encoding='utf-8') if not l.startswith('#')]
+    for r in csv.DictReader(lines, delimiter='\t', quoting=csv.QUOTE_NONE):
+        if r['skill']:
+            classic[int(r['recipeID'])] = int(r['skill'])
+
+def trainer(t, recipeID=None):
     parts = ['t = "t"']
-    if t and t['skill']:
-        parts.append('s = %d' % t['skill'])
+    skill = (t and t['skill']) or classic.get(recipeID)
+    if skill:
+        parts.append('s = %d' % skill)
     if t and t['trainers']:
         parts.append('n = { %s }' % ', '.join(lua(p) for p in t['trainers']))
     return '{ ' + ', '.join(parts) + ' }'
@@ -100,7 +114,7 @@ def trainer(t):
 def source(s, recipe):
     t = s['type']
     if t == 'trainer':
-        return trainer(taught.get((recipe['profession'], (recipe['name'] or '').lower())))
+        return trainer(taught.get((recipe['profession'], (recipe['name'] or '').lower())), recipe['recipeID'])
     if t == 'auto':
         return '{ t = "a" }'
     parts = ['t = "i"', 'i = %d' % s['itemID']]
@@ -137,6 +151,8 @@ lines = [
     '--   recipes: %s' % about.get('recipes', ''),
     '--   sources: %s' % about.get('sources', ''),
     '--   fetched %s' % about.get('fetched', ''),
+    '--   skill needed: recipe items (client tables); trainers recorded in game by SuuUI, else',
+    '--   Classic\'s from cMaNGOS classic-db (GPL-3.0, tools/data/cmangos_trainers.tsv)',
     '',
     'local _, ns = ...',
     '',
@@ -147,7 +163,7 @@ for r in sorted(data['recipes'], key=lambda r: r['recipeID']):
     # a trainer recorded teaching it, which the data didn't know of
     t = taught.get((r['profession'], (r['name'] or '').lower()))
     if t and not any(s['type'] == 'trainer' for s in r.get('sources') or []):
-        srcs.append(trainer(t))
+        srcs.append(trainer(t, r['recipeID']))
     if srcs:
         lines.append('    [%d] = { %s }, -- %s' % (r['recipeID'], ', '.join(srcs), r['name']))
 lines.append('}')
