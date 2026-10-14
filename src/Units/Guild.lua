@@ -497,10 +497,8 @@ function M:Menu(m, owner)
         root:CreateTitle(m.name)
         if a.whisper.enabled then root:CreateButton("Whisper", function() self:Act("whisper", m) end) end
         if a.invite.enabled then root:CreateButton("Invite", function() self:Act("invite", m) end) end
-        if call(CanEditPublicNote) or m.you then root:CreateButton("Set note", function() self:ShowDetails(m) end) end
-        if C_GuildInfo and call(C_GuildInfo.CanEditOfficerNote) then
-            root:CreateButton("Set officer note", function() self:ShowDetails(m) end)
-        end
+        -- notes: in the details panel (the game's own note box; the menu
+        -- can't pick the member in the game's list)
     end)
 end
 
