@@ -219,6 +219,11 @@ function M:Render()
         end
     end
     self:SizeBlizzList()
+    -- the row under the layer may show someone else now
+    local over = self.rowOver
+    if over and over:IsShown() and over.row and over.row.member and not InCombatLockdown() then
+        over:SetAttribute("clickbutton1", self:BlizzRow(over.row.member.guid))
+    end
 end
 
 function M:QueueRender()
@@ -292,7 +297,7 @@ end
 
 -- The game's note box over SuuUI's Edit (invisible: the panel it belongs
 -- to is see-through and off screen).
-function M:PlaceNoteBox(officer, edit)
+function M:PlaceNoteBox(officer, edit, direct)
     local d = self.frame and self.frame.GuildMemberDetailFrame
     if not d then return end
     local box = officer and d.OfficerNoteBackground or d.NoteBackground
@@ -300,7 +305,8 @@ function M:PlaceNoteBox(officer, edit)
     box.suuPlaced = true
     box.suuEdit = edit
     -- armed, the way Remove is: the second click opens the game's note box
-    edit:SetLabel("Click again")
+    -- (picked through the roster row: the first one does)
+    if not direct then edit:SetLabel("Click again") end
     box:ClearAllPoints()
     box:SetAllPoints(edit)
     box:SetFrameStrata("DIALOG")
@@ -314,6 +320,18 @@ function M:NoteOverlays(m)
     if not p or InCombatLockdown() then return end
     self.noteOvers = self.noteOvers or {}
     self:StowNoteBoxes()
+    -- the game picked them already (the roster row's layer): its note boxes
+    -- straight over Edit, one click
+    local d = self.frame and self.frame.GuildMemberDetailFrame
+    local picked = d and d:IsShown() and d.GetMemberInfo and d:GetMemberInfo()
+    if m and p:IsVisible() and picked and picked.guid == m.guid then
+        for _, over in pairs(self.noteOvers) do over:Hide(); over:ClearAllPoints() end
+        for _, officer in ipairs({ false, true }) do
+            local edit = officer and p.officerEdit or p.noteEdit
+            if edit:IsVisible() and edit:IsEnabled() then self:PlaceNoteBox(officer, edit, true) end
+        end
+        return
+    end
     local row = m and p:IsVisible() and self:BlizzRow(m.guid)
     for _, officer in ipairs({ false, true }) do
         local edit = officer and p.officerEdit or p.noteEdit
@@ -336,6 +354,70 @@ function M:NoteOverlays(m)
         if on then over:SetAllPoints(edit) end
         over:SetShown(on and true or false)
     end
+end
+
+-- One click for notes: while the mouse is over a roster row, a secure
+-- button on top of it also clicks the member's row in the game's own list
+-- (the game picks them), and passes the click on to SuuUI's row (its
+-- selection, the details panel); the panel's Edit is then the game's note
+-- box at once. Right clicks pass through to the row (its menu), a double
+-- click goes to the row (whisper). Out of combat; anchored only while
+-- there, so the window doesn't stay protected.
+function M:RowOver(row, m)
+    if InCombatLockdown() or not (row and m) then return end
+    local over = self.rowOver
+    if not over then
+        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        if over.SetPassThroughButtons then pcall(over.SetPassThroughButtons, over, "RightButton", "MiddleButton") end
+        over:SetAttribute("type1", "click")
+        over:SetScript("OnLeave", function(o)
+            local r = o.row
+            self:HideRowOver()
+            local fn = r and r:GetScript("OnLeave")
+            if fn then fn(r) end
+        end)
+        over:HookScript("PostClick", function(o, _, down)
+            -- the release is the row's click
+            if down then return end
+            local r = o.row
+            if r and r.member and self.roster and self.roster.onSelect then self.roster.onSelect(r.member.key) end
+        end)
+        over:SetScript("OnDoubleClick", function(o)
+            local r = o.row
+            local fn = r and r:GetScript("OnDoubleClick")
+            if fn then fn(r) end
+        end)
+        over:Hide()
+        self.rowOver = over
+    end
+    over.row = row
+    over:SetAttribute("clickbutton1", self:BlizzRow(m.guid))
+    if over:IsShown() and over.anchoredTo == row then return end
+    over.anchoredTo = row
+    over:SetFrameStrata("DIALOG")
+    over:ClearAllPoints()
+    over:SetAllPoints(row)
+    over:Show()
+end
+
+function M:RowLeft(row)
+    local over = self.rowOver
+    -- the layer itself came over the row: the row keeps its hover
+    if over and over:IsShown() and over.row == row and over:IsMouseOver() then
+        local fn = row:GetScript("OnEnter")
+        if fn then fn(row) end
+        return
+    end
+    self:HideRowOver()
+end
+
+function M:HideRowOver()
+    local over = self.rowOver
+    if not over or InCombatLockdown() then return end
+    over:Hide()
+    over:ClearAllPoints()
+    over.row, over.anchoredTo = nil, nil
 end
 
 function M:HideNoteOverlays()
@@ -434,6 +516,8 @@ function M:Wire(page)
     end
     page.onAction = function(action, m) self:Act(action, m) end
     page.onMenu = function(m, owner) self:Menu(m, owner) end
+    page.onRowEnter = function(row, m) self:RowOver(row, m) end
+    page.onRowLeave = function(row) self:RowLeft(row) end
 end
 
 --------------------------------------------------------------------------------
@@ -1064,6 +1148,7 @@ function M:Build()
         -- the secure buttons let go of the window (it stays unprotected)
         if not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide(); over:ClearAllPoints() end end
         self:HideInfoOverlays()
+        self:HideRowOver()
     end)
     self:SkinTextEdit()
     if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
@@ -1085,6 +1170,7 @@ function M:OnEnable()
         for _, over in pairs(self.overs or {}) do over:Hide() end
         for _, over in pairs(self.infoOvers or {}) do over:Hide() end
         for _, over in pairs(self.noteOvers or {}) do over:Hide() end
+        if self.rowOver then self.rowOver:Hide() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
     -- the new message comes with the event; the game's own copy

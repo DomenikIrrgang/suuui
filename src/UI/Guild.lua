@@ -19,7 +19,9 @@
 --     no member)
 --   r.onSearch(text), r.onShowOffline(on), r.onSort(column), r.onSelect(key),
 --   r.onAction(name, member) ("whisper", "invite", "promote", "demote",
---   "remove", "guildInvite"), r.onMenu(member, owner)
+--   "remove", "guildInvite"), r.onMenu(member, owner), r.onRowEnter(row, member) and
+--   r.onRowLeave(row) (a layer over the hovered row: the row's own scripts are
+--   row:Click(button), row's OnEnter/OnLeave/OnDoubleClick)
 
 local _, ns = ...
 
@@ -88,6 +90,7 @@ local function makeRow(g)
     r.badge.text:SetPoint("CENTER")
     r:SetScript("OnEnter", function(self)
         self.hover:Show()
+        if g.onRowEnter and self.member then g.onRowEnter(self, self.member) end
         local m = self.member
         if m and m.officerNote and m.officerNote ~= "" then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -97,7 +100,11 @@ local function makeRow(g)
             GameTooltip:Show()
         end
     end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide(); GameTooltip:Hide() end)
+    r:SetScript("OnLeave", function(self)
+        self.hover:Hide()
+        GameTooltip:Hide()
+        if g.onRowLeave then g.onRowLeave(self) end
+    end)
     r:SetScript("OnClick", function(self, button)
         if not self.member then return end
         if g.onSelect then g.onSelect(self.member.key) end
