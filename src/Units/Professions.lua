@@ -106,7 +106,7 @@ function M:Profession(index)
 end
 
 -- Unlearning: SuuUI's modal confirmation (asked for in game), then the
--- game's AbandonSkill.
+-- game's C_SkillInfo.AbandonSkill.
 function M:Unlearn(name, skillLine)
     UI.Confirm({
         title = "Unlearn " .. name .. "?",
@@ -116,7 +116,10 @@ function M:Unlearn(name, skillLine)
         -- as the game's own asks (found in game)
         typeToConfirm = "UNLEARN",
         onConfirm = function()
-            local ok, err = pcall(AbandonSkill, skillLine)
+            -- Forever's is C_SkillInfo.AbandonSkill (the old global is
+            -- gone: "attempt to call a nil value", /suu probe unlearn)
+            local abandon = (C_SkillInfo and C_SkillInfo.AbandonSkill) or AbandonSkill
+            local ok, err = pcall(abandon, skillLine)
             if not ok then self:Print(name .. " couldn't be unlearned: " .. tostring(err)) end
             self:QueueRender()
         end,
