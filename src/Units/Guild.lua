@@ -230,6 +230,12 @@ function M:Act(action, m)
         return
     end
     if not m then return end
+    if SLASH[action] then
+        -- the click reached the plain button, not the secure one on top
+        self:Print(("%s: the secure button wasn't under the mouse (%s)."):format(action,
+            InCombatLockdown() and "in combat" or (self.overs and self.overs[action] and (self.overs[action]:IsShown() and "shown" or "hidden") or "not made")))
+        return
+    end
     if action == "whisper" then
         local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
         if tell then tell(m.full) end
