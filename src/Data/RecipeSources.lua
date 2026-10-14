@@ -9,17 +9,17 @@ local _, ns = ...
 ns.RecipeSources = {
     [2149] = { { t = "a" } }, -- Handstitched Leather Boots
     [2152] = { { t = "a" } }, -- Light Armor Kit
-    [2153] = { { t = "t" } }, -- Handstitched Leather Pants
+    [2153] = { { t = "t", s = 15, n = { "Randal Worth|Stormwind City|A" } } }, -- Handstitched Leather Pants
     [2158] = { { t = "i", i = 2406, s = 65, o = { "Hidden Strongbox|Alterac Mountains", "Tattered Chest|", "Battered Chest|Redridge Mountains" } } }, -- Fine Leather Boots
     [2159] = { { t = "t" } }, -- Fine Leather Cloak
-    [2160] = { { t = "t" } }, -- Embossed Leather Vest
-    [2161] = { { t = "t" } }, -- Embossed Leather Boots
-    [2162] = { { t = "t" } }, -- Embossed Leather Cloak
+    [2160] = { { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Embossed Leather Vest
+    [2161] = { { t = "t", s = 50, n = { "Randal Worth|Stormwind City|A" } } }, -- Embossed Leather Boots
+    [2162] = { { t = "t", s = 40, n = { "Randal Worth|Stormwind City|A" } } }, -- Embossed Leather Cloak
     [2163] = { { t = "i", i = 2407, s = 40, o = { "Hidden Strongbox|Alterac Mountains", "Tattered Chest|", "Battered Chest|Redridge Mountains" } } }, -- White Leather Jerkin
     [2164] = { { t = "i", i = 2408, s = 50, o = { "Hidden Strongbox|Alterac Mountains", "Tattered Chest|", "Battered Chest|Redridge Mountains" } } }, -- Fine Leather Gloves
     [2165] = { { t = "t" } }, -- Medium Armor Kit
     [2166] = { { t = "t" } }, -- Toughened Leather Armor
-    [2167] = { { t = "t" } }, -- Dark Leather Boots
+    [2167] = { { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Dark Leather Boots
     [2168] = { { t = "t" } }, -- Dark Leather Cloak
     [2169] = { { t = "i", i = 2409, s = 75, d = { "Flesh Eater|Duskwood|24-25", "Harvest Golem|Westfall|11-12", "Skeletal Warrior|Duskwood|21-22", "Defias Smuggler|Westfall|11-12" }, dn = 562, o = { "Tattered Chest|", "Battered Chest|Redridge Mountains", "Solid Chest|Wetlands" }, c = { 6307 } } }, -- Dark Leather Tunic
     [2329] = { { t = "t" } }, -- Elixir of Minor Strength
@@ -162,12 +162,12 @@ ns.RecipeSources = {
     [3513] = { { t = "i", i = 3874, s = 160, d = { "Rock Elemental|Badlands|39-40", "Stitches|Duskwood|35", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 407, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 16882, 16883 } } }, -- Polished Steel Boots
     [3515] = { { t = "i", i = 3875, s = 175, d = { "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Deathstrike Tarantula|Swamp of Sorrows|40-41", "Thrashtail Basilisk|Stranglethorn Vale|41-42", "Bloodsail Warlock|Stranglethorn Vale|41-43" }, dn = 31, c = { 4634 } } }, -- Golden Scale Boots
     [3569] = { { t = "t" } }, -- Smelt Steel
-    [3753] = { { t = "t" } }, -- Handstitched Leather Belt
+    [3753] = { { t = "t", s = 25, n = { "Randal Worth|Stormwind City|A" } } }, -- Handstitched Leather Belt
     [3755] = { { t = "a" } }, -- Linen Bag
-    [3756] = { { t = "t" } }, -- Embossed Leather Gloves
+    [3756] = { { t = "t", s = 40, n = { "Randal Worth|Stormwind City|A" } } }, -- Embossed Leather Gloves
     [3757] = { { t = "t" } }, -- Woolen Bag
     [3758] = { { t = "i", i = 4292, s = 75, d = { "Flesh Eater|Duskwood|24-25", "Harvest Golem|Westfall|11-12", "Skeletal Warrior|Duskwood|21-22", "Defias Smuggler|Westfall|11-12" }, dn = 559, o = { "Tattered Chest|", "Battered Chest|Redridge Mountains", "Solid Chest|Wetlands" }, c = { 4632, 6307 } } }, -- Green Woolen Bag
-    [3759] = { { t = "t" } }, -- Embossed Leather Pants
+    [3759] = { { t = "t", s = 50, n = { "Randal Worth|Stormwind City|A" } } }, -- Embossed Leather Pants
     [3760] = { { t = "t" } }, -- Hillman's Cloak
     [3761] = { { t = "t" } }, -- Fine Leather Tunic
     [3762] = { { t = "i", i = 4293, s = 75, d = { "Harvest Golem|Westfall|11-12", "Skeletal Warrior|Duskwood|21-22", "Defias Smuggler|Westfall|11-12", "Riverpaw Taskmaster|Westfall|17-18" }, dn = 554, o = { "Hidden Strongbox|Alterac Mountains", "Tattered Chest|", "Battered Chest|Redridge Mountains" }, c = { 6307 } } }, -- Hillman's Leather Vest
@@ -190,7 +190,7 @@ ns.RecipeSources = {
     [3779] = { { t = "i", i = 4301, s = 175, d = { "Shadowmaw Panther|Stranglethorn Vale|37-38", "Crystal Spine Basilisk|Stranglethorn Vale|34-35", "Zanzil Witch Doctor|Stranglethorn Vale|44", "Bloodsail Mage|Stranglethorn Vale|39-41" }, dn = 32, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" } } }, -- Barbaric Belt
     [3780] = { { t = "t" } }, -- Heavy Armor Kit
     [3813] = { { t = "t" } }, -- Small Silk Pack
-    [3816] = { { t = "t" } }, -- Cured Light Hide
+    [3816] = { { t = "t", s = 30, n = { "Randal Worth|Stormwind City|A" } } }, -- Cured Light Hide
     [3817] = { { t = "t" } }, -- Cured Medium Hide
     [3818] = { { t = "t" } }, -- Cured Heavy Hide
     [3839] = { { t = "t" } }, -- Bolt of Silk Cloth
@@ -230,15 +230,15 @@ ns.RecipeSources = {
     [3918] = { { t = "a" } }, -- Rough Blasting Powder
     [3919] = { { t = "a" } }, -- Rough Dynamite
     [3920] = { { t = "a" } }, -- Crafted Light Shot
-    [3922] = { { t = "t" } }, -- Handful of Copper Bolts
-    [3923] = { { t = "t" } }, -- Rough Copper Bomb
-    [3924] = { { t = "t" } }, -- Copper Tube
-    [3925] = { { t = "t" } }, -- Rough Boomstick
-    [3926] = { { t = "t" } }, -- Copper Modulator
+    [3922] = { { t = "t", s = 30, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Handful of Copper Bolts
+    [3923] = { { t = "t", s = 30, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Rough Copper Bomb
+    [3924] = { { t = "t", s = 50, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Copper Tube
+    [3925] = { { t = "t", s = 50, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Rough Boomstick
+    [3926] = { { t = "t", s = 65, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Copper Modulator
     [3928] = { { t = "i", i = 4408, s = 75, o = { "Tattered Chest|", "Battered Chest|Redridge Mountains", "Solid Chest|Wetlands" } } }, -- Mechanical Squirrel
-    [3929] = { { t = "t" } }, -- Coarse Blasting Powder
-    [3930] = { { t = "t" } }, -- Crafted Heavy Shot
-    [3931] = { { t = "t" } }, -- Coarse Dynamite
+    [3929] = { { t = "t", s = 75, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Coarse Blasting Powder
+    [3930] = { { t = "t", s = 75, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Crafted Heavy Shot
+    [3931] = { { t = "t", s = 75, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Coarse Dynamite
     [3932] = { { t = "t" } }, -- Target Dummy
     [3933] = { { t = "i", i = 4409, s = 100, d = { "Flesh Eater|Duskwood|24-25", "Harvest Golem|Westfall|11-12", "Skeletal Warrior|Duskwood|21-22", "Defias Smuggler|Westfall|11-12" }, dn = 564, o = { "Tattered Chest|", "Battered Chest|Redridge Mountains", "Solid Chest|Wetlands" } } }, -- Small Seaforium Charge
     [3934] = { { t = "t" } }, -- Flying Tiger Goggles
@@ -275,7 +275,7 @@ ns.RecipeSources = {
     [3971] = { { t = "i", i = 7742, s = 200, v = { "Zan Shivsproket|Alterac Mountains|AH" }, d = { "Mekgineer Thermaplugg|Gnomeregan|34" }, dn = 1 } }, -- Gnomish Cloaking Device
     [3972] = { { t = "i", i = 4417, s = 200, d = { "Rock Elemental|Badlands|39-40", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Hunter|Stranglethorn Vale|34-35", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 419, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 11422 } } }, -- Large Seaforium Charge
     [3973] = { { t = "t" } }, -- Silver Contact
-    [3977] = { { t = "t" } }, -- Crude Scope
+    [3977] = { { t = "t", s = 60, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Crude Scope
     [3978] = { { t = "t" } }, -- Standard Scope
     [3979] = { { t = "i", i = 13310, s = 180, v = { "Mazk Snipeshot|Stranglethorn Vale|AH" } } }, -- Accurate Scope
     [4073] = { { t = "t" } }, -- Mechanical Dragonling
@@ -340,7 +340,7 @@ ns.RecipeSources = {
     [7421] = { { t = "a" } }, -- Runed Copper Rod
     [7426] = { { t = "t" } }, -- Enchant Chest - Minor Absorption
     [7428] = { { t = "a" } }, -- Enchant Bracer - Minor Deflect
-    [7430] = { { t = "t" } }, -- Arclight Spanner
+    [7430] = { { t = "t", s = 50, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Arclight Spanner
     [7443] = { { t = "i", i = 6342, s = 20, v = { "Jessara Cordell|Stormwind City|A", "Nata Dawnstrider|Thunder Bluff|H", "Kithas|Orgrimmar|H", "Vaean|Darnassus|A", "Thaddeus Webb|Undercity|H", "Tilli Thistlefuzz|Ironforge|A" }, d = { "Carnivous the Breaker|Darkshore|16" }, dn = 1, o = { "Hidden Strongbox|Alterac Mountains", "Tattered Chest|", "Battered Chest|Redridge Mountains" }, c = { 6307 } } }, -- Enchant Chest - Minor Intellect
     [7454] = { { t = "t" } }, -- Enchant Cloak - Minor Resistance
     [7457] = { { t = "t" } }, -- Enchant Bracer - Minor Stamina
@@ -433,10 +433,10 @@ ns.RecipeSources = {
     [8895] = { { t = "i", i = 7192, s = 130, d = { "Mekgineer Thermaplugg|Gnomeregan|34" }, dn = 1 }, { t = "i", i = 221339 } }, -- Goblin Rocket Boots
     [9058] = { { t = "a" } }, -- Handstitched Leather Cloak
     [9059] = { { t = "a" } }, -- Handstitched Leather Bracers
-    [9060] = { { t = "t" } }, -- Light Leather Quiver
-    [9062] = { { t = "t" } }, -- Small Leather Ammo Pouch
+    [9060] = { { t = "t", s = 25, n = { "Randal Worth|Stormwind City|A" } } }, -- Light Leather Quiver
+    [9062] = { { t = "t", s = 25, n = { "Randal Worth|Stormwind City|A" } } }, -- Small Leather Ammo Pouch
     [9064] = { { t = "i", i = 7288, s = 30, o = { "Tattered Chest|", "Battered Chest|Redridge Mountains", "Solid Chest|Wetlands" }, c = { 6307 } } }, -- Rugged Leather Pants
-    [9065] = { { t = "t" } }, -- Light Leather Bracers
+    [9065] = { { t = "t", s = 45, n = { "Randal Worth|Stormwind City|A" } } }, -- Light Leather Bracers
     [9068] = { { t = "t" } }, -- Light Leather Pants
     [9070] = { { t = "i", i = 7289, s = 75, v = { "Clyde Ranthal|Redridge Mountains|A" } } }, -- Black Whelp Cloak
     [9072] = { { t = "i", i = 7290, s = 95, v = { "Wenna Silkbeard|Wetlands|A" } } }, -- Red Whelp Gloves
@@ -1571,9 +1571,9 @@ ns.RecipeSources = {
     [1227723] = { { t = "i", i = 239149, s = 250 } }, -- Crusader's Knapsack
     [1227724] = { { t = "i", i = 239150, s = 290 } }, -- Crimson Dawnwoven Bag
     [1228088] = { { t = "i", i = 239222, s = 250 } }, -- Pop-Up Shrub
-    [1229432] = { { t = "t" } }, -- Camp Tent
+    [1229432] = { { t = "t", s = 20, n = { "Randal Worth|Stormwind City|A" } } }, -- Camp Tent
     [1229504] = { { t = "t" } }, -- Faction Banner
-    [1229517] = { { t = "t" } }, -- Camp Chair
+    [1229517] = { { t = "t", s = 20, n = { "Maris Granger|Stormwind City|A" } } }, -- Camp Chair
     [1229705] = { { t = "t" } }, -- Incense Candle
     [1229737] = { { t = "a" } }, -- Basic Campfire
     [1229745] = { { t = "t" } }, -- Fish Bowl
@@ -1582,7 +1582,7 @@ ns.RecipeSources = {
     [1230171] = { { t = "t" } }, -- Sharpening Wheel
     [1230564] = { { t = "t" } }, -- Mana Well
     [1230643] = { { t = "t" } }, -- Enchanted Lute
-    [1230656] = { { t = "t" } }, -- Reagent Bot
+    [1230656] = { { t = "t", s = 20, n = { "Sprite Jumpsprocket|Stormwind City|A" } } }, -- Reagent Bot
     [1231128] = { { t = "i", i = 241191, s = 280 } }, -- Enchant Weapon - Grand Crusader
     [1231139] = { { t = "i", i = 241195, s = 280 } }, -- Enchant 2H Weapon - Grand Arcanist
     [1231164] = { { t = "i", i = 241201, s = 280 } }, -- Enchant Weapon - Grand Sorcerer
@@ -2059,10 +2059,10 @@ ns.RecipeSources = {
     [1255140] = { { t = "i", i = 252767, s = 60, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" } } }, -- Defender's Leather Belt
     [1255141] = { { t = "i", i = 252766, s = 60, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" } } }, -- Trapper's Leather Belt
     [1255142] = { { t = "i", i = 252765, s = 60, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" } } }, -- Brawler's Leather Belt
-    [1255143] = { { t = "i", i = 252764, s = 35, v = { "Granny Finespindle|Ironforge|A" } } }, -- Moonglow Boots
-    [1255144] = { { t = "i", i = 252763, s = 35, v = { "Granny Finespindle|Ironforge|A" } } }, -- Murloc Scale Shoes
-    [1255145] = { { t = "i", i = 252762, s = 35, v = { "Granny Finespindle|Ironforge|A" } } }, -- Dark Leather Boots
-    [1255146] = { { t = "i", i = 252761, s = 35, v = { "Granny Finespindle|Ironforge|A" } } }, -- Black Whelp Slippers
+    [1255143] = { { t = "i", i = 252764, s = 35, v = { "Granny Finespindle|Ironforge|A" } }, { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Moonglow Boots
+    [1255144] = { { t = "i", i = 252763, s = 35, v = { "Granny Finespindle|Ironforge|A" } }, { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Murloc Scale Shoes
+    [1255145] = { { t = "i", i = 252762, s = 35, v = { "Granny Finespindle|Ironforge|A" } }, { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Dark Leather Boots
+    [1255146] = { { t = "i", i = 252761, s = 35, v = { "Granny Finespindle|Ironforge|A" } }, { t = "t", s = 35, n = { "Randal Worth|Stormwind City|A" } } }, -- Black Whelp Slippers
     [1255241] = { { t = "i", i = 252949 } }, -- Cleansing Stew
     [1257013] = { { t = "i", i = 253665, s = 5, v = { "Alexandra Bolero|Stormwind City|A", "Jennabink Powerseam|Wetlands|A", "Rann Flamespinner|Loch Modan|A", "Lohgan Eva|Duskwood|A", "Mallen Swain|Hillsbrad Foothills|H", "Danielle Zipstitch|Duskwood|A" } } }, -- Linen Reagent Bag
     [1257017] = { { t = "i", i = 253668, s = 70, v = { "Alexandra Bolero|Stormwind City|A", "Jennabink Powerseam|Wetlands|A", "Rann Flamespinner|Loch Modan|A", "Lohgan Eva|Duskwood|A", "Mallen Swain|Hillsbrad Foothills|H", "Danielle Zipstitch|Duskwood|A" } } }, -- Woolen Reagent Bag
