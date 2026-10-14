@@ -3,19 +3,51 @@
 # tools/data/forever_recipes.json (tools/gen_recipes.py) into
 # src/Data/RecipeSources.lua.
 #   ns.RecipeSources[recipeID] = { source, ... }
-#     { t = "t" }                              a profession trainer
+#     { t = "t", s = skill,                    a profession trainer, the skill
+#       n = { "Name|Zone|Faction" } }          it asks for and the trainers
+#                                              that teach it (recorded in game)
 #     { t = "a" }                              learned automatically
-#     { t = "i", i = itemID,                   a recipe item, and where it is:
+#     { t = "i", i = itemID, s = skill,        a recipe item (the skill it
+#                                              needs), and where it is:
 #       v = { "Name|Zone|A" },                 sold by (faction A, H or none)
 #       d = { "Name|Zone|Level" }, dn = n,     dropped by (the first few, of n)
 #       o = { "Name|Zone" },                   found in (chests, objects)
 #       q = { questID },                       a quest's reward
 #       c = { itemID } }                       inside (packages, lockboxes)
 #   An item with none of these: where it is isn't known yet.
-#   python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.lua
-import json, sys
+#   The skill a recipe needs: on its recipe item (ItemSparse.RequiredSkillRank,
+#   the client tables), and for trainer recipes from the trainers SuuUI
+#   recorded in game (tools/data/trainer_records.tsv,
+#   tools/merge_trainer_records.lua): the game keeps those on the server.
+#   python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.lua \
+#       [--itemsparse <wago>/ItemSparse.csv] [--trainers tools/data/trainer_records.tsv]
+import csv, json, os, sys
 
 SRC, OUT = sys.argv[1:3]
+OPTS = dict(zip(sys.argv[3::2], sys.argv[4::2]))
+
+# the skill a recipe item asks for
+itemSkill = {}
+if OPTS.get('--itemsparse'):
+    for r in csv.DictReader(open(OPTS['--itemsparse'], encoding='utf-8')):
+        rank = int(r.get('RequiredSkillRank') or 0)
+        if rank > 0:
+            itemSkill[int(r['ID'])] = rank
+
+# what the trainers SuuUI recorded teach: (profession, recipe name) -> skill, trainers
+taught = {}
+path = OPTS.get('--trainers')
+if path and os.path.exists(path):
+    lines = [l for l in open(path, encoding='utf-8') if not l.startswith('#')]
+    for r in csv.DictReader(lines, delimiter='\t', quoting=csv.QUOTE_NONE):
+        key = (r['profession'], r['recipe'].lower())
+        t = taught.setdefault(key, {'skill': None, 'trainers': []})
+        if r['skill']:
+            t['skill'] = min(int(r['skill']), t['skill'] or 10**6)
+        faction = {'Alliance': 'A', 'Horde': 'H'}.get(r['faction'], '')
+        place = '|'.join([r['npc'], r['zone'], faction])
+        if place not in t['trainers']:
+            t['trainers'].append(place)
 MAX_DROPS, MAX_VENDORS, MAX_OBJECTS = 4, 6, 3
 
 def lua(s):
@@ -57,13 +89,23 @@ def named(entries):
     # a place without a name says nothing ("Dropped by" and no one)
     return [e for e in entries or [] if e.get('name')]
 
-def source(s):
+def trainer(t):
+    parts = ['t = "t"']
+    if t and t['skill']:
+        parts.append('s = %d' % t['skill'])
+    if t and t['trainers']:
+        parts.append('n = { %s }' % ', '.join(lua(p) for p in t['trainers']))
+    return '{ ' + ', '.join(parts) + ' }'
+
+def source(s, recipe):
     t = s['type']
     if t == 'trainer':
-        return '{ t = "t" }'
+        return trainer(taught.get((recipe['profession'], (recipe['name'] or '').lower())))
     if t == 'auto':
         return '{ t = "a" }'
     parts = ['t = "i"', 'i = %d' % s['itemID']]
+    if itemSkill.get(s['itemID']):
+        parts.append('s = %d' % itemSkill[s['itemID']])
     vendors = named(s.get('vendors'))
     if vendors:
         parts.append('v = { %s }' % ', '.join(npc(v, 'faction') for v in vendors[:MAX_VENDORS]))
@@ -101,9 +143,13 @@ lines = [
     'ns.RecipeSources = {',
 ]
 for r in sorted(data['recipes'], key=lambda r: r['recipeID']):
-    srcs = r.get('sources') or []
+    srcs = [source(s, r) for s in r.get('sources') or []]
+    # a trainer recorded teaching it, which the data didn't know of
+    t = taught.get((r['profession'], (r['name'] or '').lower()))
+    if t and not any(s['type'] == 'trainer' for s in r.get('sources') or []):
+        srcs.append(trainer(t))
     if srcs:
-        lines.append('    [%d] = { %s }, -- %s' % (r['recipeID'], ', '.join(source(s) for s in srcs), r['name']))
+        lines.append('    [%d] = { %s }, -- %s' % (r['recipeID'], ', '.join(srcs), r['name']))
 lines.append('}')
 open(OUT, 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
 print('%d recipes into %s' % (len(lines) - 10, OUT))
