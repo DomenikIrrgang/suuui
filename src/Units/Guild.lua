@@ -119,6 +119,63 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
+local SLASH = { promote = "/gpromote ", demote = "/gdemote ", remove = "/gremove " }
+
+-- A secure button over one of the panel's buttons (on UIParent: a secure
+-- child would make the guild window protected).
+local function secureOver(button)
+    local s = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+    s:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+    s:SetAllPoints(button)
+    s:SetScript("OnEnter", function() local fn = button:GetScript("OnEnter"); if fn then fn(button) end end)
+    s:SetScript("OnLeave", function() local fn = button:GetScript("OnLeave"); if fn then fn(button) end end)
+    s:Hide()
+    return s
+end
+
+-- The roster foot's Promote, Demote and Remove: secure buttons on top that
+-- run the slash command for the selected member (out of combat).
+function M:FootOverlays(m, actions)
+    local page = self.roster
+    if not page then return end
+    self.overs = self.overs or {}
+    local combat = InCombatLockdown()
+    for key in pairs(SLASH) do
+        local btn = page.buttons[key]
+        local over = self.overs[key]
+        if not over and btn and not combat then
+            over = secureOver(btn)
+            over:HookScript("PostClick", function()
+                if InCombatLockdown() then return end
+                if key == "remove" and not over.armed then
+                    -- the first click arms it
+                    over.armed = true
+                    btn:SetLabel("Click again")
+                    over:SetAttribute("type1", "macro")
+                    return
+                end
+                over.armed = nil
+                if key == "remove" then btn:SetLabel("Remove"); over:SetAttribute("type1", nil) end
+                C_Timer.After(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
+            end)
+            self.overs[key] = over
+        end
+        if over and not combat then
+            local on = m and actions[key] and actions[key].enabled and page:IsVisible()
+            if over.member ~= m then
+                over.armed = nil
+                if key == "remove" then btn:SetLabel("Remove") end
+            end
+            over.member = m
+            over:SetAttribute("type1", (on and key ~= "remove" or (on and over.armed)) and "macro" or nil)
+            over:SetAttribute("macrotext1", m and (SLASH[key] .. m.full) or "")
+            over:SetFrameStrata(page:GetFrameStrata())
+            over:SetFrameLevel(btn:GetFrameLevel() + 5)
+            over:SetShown(on and true or false)
+        end
+    end
+end
+
 function M:Render()
     local page = self.roster
     if not (page and page:IsVisible()) then return end
@@ -137,8 +194,10 @@ function M:Render()
     end
     table.sort(shown, SORTS[self.sort or "rank"] or SORTS.rank)
     self.members = all
+    local actions = self:Actions(selected)
     page:SetData({ online = online, total = total, showOffline = showOffline, sort = self.sort or "rank",
-                   members = shown, selected = self.selected, actions = self:Actions(selected) })
+                   members = shown, selected = self.selected, actions = actions })
+    self:FootOverlays(selected, actions)
 end
 
 function M:QueueRender()
@@ -177,11 +236,6 @@ function M:Act(action, m)
     elseif action == "invite" then
         local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
         if fn then pcall(fn, m.full) end
-    elseif action == "promote" or action == "demote" or action == "remove" then
-        -- forbidden to addons (C_GuildInfo.Promote: "Forbidden", found in
-        -- game): the member's details, whose buttons are secure
-        self:ShowDetails(m)
-        return
     end
     C_Timer.After(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
 end
@@ -195,12 +249,6 @@ function M:Menu(m, owner)
         if call(CanEditPublicNote) or m.you then root:CreateButton("Set note", function() self:Note(m, false) end) end
         if C_GuildInfo and call(C_GuildInfo.CanEditOfficerNote) then
             root:CreateButton("Set officer note", function() self:Note(m, true) end)
-        end
-        if a.promote.enabled or a.demote.enabled or a.remove.enabled then
-            root:CreateDivider()
-            if a.promote.enabled then root:CreateButton("Promote", function() self:Act("promote", m) end) end
-            if a.demote.enabled then root:CreateButton("Demote", function() self:Act("demote", m) end) end
-            if a.remove.enabled then root:CreateButton("Remove from guild", function() self:Act("remove", m) end) end
         end
     end)
 end
@@ -221,25 +269,13 @@ end
 
 --------------------------------------------------------------------------------
 -- A member's details: a SuuUI panel beside the window (Blizzard's roster
--- opens one on a click; SuuUI's did nothing, found in game). Promote,
--- Demote and Remove are forbidden to addon code, so their buttons carry
--- secure buttons on top that run the game's own slash commands (/gpromote,
--- /gdemote, /gremove) on your click; Remove asks for a second click.
+-- opens one on a click; SuuUI's did nothing, found in game): who, where,
+-- the notes with Edit, Whisper and Invite. Promote, Demote and Remove stay
+-- on the roster's foot (asked for in game), where they're secure: they're
+-- forbidden to addon code, so secure buttons on top of them run the game's
+-- own slash commands (/gpromote, /gdemote, /gremove) on your click; Remove
+-- asks for a second click.
 --------------------------------------------------------------------------------
-
-local SLASH = { promote = "/gpromote ", demote = "/gdemote ", remove = "/gremove " }
-
--- A secure button over one of the panel's buttons (on UIParent: a secure
--- child would make the guild window protected).
-local function secureOver(button)
-    local s = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-    s:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-    s:SetAllPoints(button)
-    s:SetScript("OnEnter", function() local fn = button:GetScript("OnEnter"); if fn then fn(button) end end)
-    s:SetScript("OnLeave", function() local fn = button:GetScript("OnLeave"); if fn then fn(button) end end)
-    s:Hide()
-    return s
-end
 
 function M:BuildDetails()
     if self.details then return self.details end
@@ -278,37 +314,6 @@ function M:BuildDetails()
     p.whisper:SetPoint("LEFT")
     p.invite = UI.Button(p.row1, { text = "Invite", variant = "quiet", onClick = function() if p.member then self:Act("invite", p.member) end end })
     p.invite:SetPoint("LEFT", p.whisper, "RIGHT", S["space-3"], 0)
-    p.row2 = CreateFrame("Frame", nil, b)
-    p.row2:SetHeight(26)
-    p.rank = {}
-    local prev
-    for _, def in ipairs({ { "promote", "Promote" }, { "demote", "Demote" }, { "remove", "Remove" } }) do
-        local key = def[1]
-        local btn = UI.Button(p.row2, { text = def[2], variant = "quiet" })
-        if key == "remove" then btn.border:SetColor("ember"); btn.label:SetColor("ember-text") end
-        if prev then btn:SetPoint("LEFT", prev, "RIGHT", S["space-3"], 0) else btn:SetPoint("LEFT") end
-        btn:HookScript("OnEnter", function(self2)
-            if self2.reason then UI.ShowTooltip(self2, { title = def[2], description = self2.reason }) end
-        end)
-        btn:HookScript("OnLeave", function() UI.HideTooltip() end)
-        local over = secureOver(btn)
-        over:HookScript("PostClick", function()
-            if InCombatLockdown() then return end
-            if key == "remove" and not over.armed then
-                -- the first click arms it
-                over.armed = true
-                btn:SetLabel("Click again to remove")
-                over:SetAttribute("type1", "macro")
-                return
-            end
-            over.armed = nil
-            if key == "remove" then btn:SetLabel("Remove"); over:SetAttribute("type1", nil) end
-            C_Timer.After(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
-        end)
-        p.rank[key] = { button = btn, over = over }
-        prev = btn
-    end
-    p:HookScript("OnHide", function() for _, r in pairs(p.rank) do if not InCombatLockdown() then r.over:Hide() end end end)
     self.details = p
     return p
 end
@@ -352,29 +357,10 @@ function M:ShowDetails(m)
     p.row1:ClearAllPoints()
     p.row1:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
     p.row1:SetPoint("RIGHT", p.body, "RIGHT")
-    p.row2:ClearAllPoints()
-    p.row2:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -(y + 26 + S["space-3"]))
-    p.row2:SetPoint("RIGHT", p.body, "RIGHT")
-    p.body:SetHeight(y + 26 + S["space-3"] + 26)
+    p.body:SetHeight(y + 26)
     local a = self:Actions(m)
     p.whisper:SetEnabledState(a.whisper.enabled and true or false)
     p.invite:SetEnabledState(a.invite.enabled and true or false)
-    local combat = InCombatLockdown()
-    for key, r in pairs(p.rank) do
-        local s = a[key] or {}
-        local on = s.enabled and not combat
-        r.button:SetEnabledState(on and true or false)
-        r.button.reason = not s.enabled and s.why or (combat and "Not in combat.") or nil
-        if key == "remove" then r.button:SetLabel("Remove") end
-        if not combat then
-            r.over.armed = nil
-            r.over:SetAttribute("type1", (on and key ~= "remove") and "macro" or nil)
-            r.over:SetAttribute("macrotext1", SLASH[key] .. m.full)
-            r.over:SetFrameStrata(p:GetFrameStrata())
-            r.over:SetFrameLevel(r.button:GetFrameLevel() + 5)
-            r.over:SetShown(on and true or false)
-        end
-    end
     p:Fit()
     p:Show()
 end
@@ -393,6 +379,7 @@ function M:Follow()
     local guild = C_Club and C_Club.GetGuildClubId and C_Club.GetGuildClubId()
     local onRoster = f:IsShown() and guild and club == guild and mode ~= nil and mode == modes.ROSTER
     self.roster:SetShown(onRoster and true or false)
+    if not onRoster and not InCombatLockdown() then for _, over in pairs(self.overs or {}) do over:Hide() end end
     if f.MemberList then f.MemberList:SetAlpha(onRoster and 0 or 1) end
     if f.GuildMemberListDropdown then f.GuildMemberListDropdown:SetAlpha(onRoster and 0 or 1) end
     if onRoster then
@@ -432,11 +419,9 @@ function M:OnEnable()
     -- the details' secure buttons away when a fight starts (rank changes
     -- wait for its end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-        if self.details then for _, r in pairs(self.details.rank) do r.over:Hide() end end
+        for _, over in pairs(self.overs or {}) do over:Hide() end
     end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.details and self.details:IsShown() and self.details.member then self:ShowDetails(self.details.member) end
-    end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender() end)
     for _, e in ipairs({ "GUILD_ROSTER_UPDATE", "PLAYER_GUILD_UPDATE", "GUILD_RANKS_UPDATE", "GROUP_ROSTER_UPDATE" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function() if self.roster and self.roster:IsVisible() then self:QueueRender() end end)
