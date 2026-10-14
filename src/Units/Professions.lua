@@ -65,18 +65,23 @@ function M:Profession(index)
     if not plain(name) then return nil end
     local card = { name = name, icon = icon, skill = skill, max = max, skillLine = skillLine, spells = {} }
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    local own, craftSpell
     for k = 1, (tonumber(numSpells) or 0) do
         local info = call(C_SpellBook.GetSpellBookItemInfo, (tonumber(offset) or 0) + k, bank)
         if info and info.spellID then
-            -- the profession's own spell: the one that opens its crafting
-            -- window, else the one with its name (Fishing). Not simply the
-            -- first: Forever lists the camp abilities first (Tanning, Bait
-            -- and Tackle ended up on a bar, found in game)
+            -- the profession's own spell: the one with its name (Skinning,
+            -- Fishing, Blacksmithing), else the one that opens its crafting
+            -- window (Smelting for Mining). Not the first, nor any crafting
+            -- one: on Forever the camp abilities (Tanning, Bait and Tackle)
+            -- come first and open the crafting window too (found in game)
             local crafts = call(C_TradeSkillUI.CanTradeSkillShowCraftingUI, info.spellID) and true or false
-            if not info.isPassive and (crafts or (info.name == name and not card.crafting)) then
-                card.spellID = info.spellID
-                card.crafting = card.crafting or crafts
-                if info.subName and info.subName ~= "" then card.rank = info.subName end
+            card.crafting = card.crafting or crafts
+            if not info.isPassive then
+                if info.name == name then
+                    own = info
+                elseif crafts and not craftSpell then
+                    craftSpell = info
+                end
             end
             local spell = { name = info.name, icon = info.iconID, spellID = info.spellID }
             local track, on = trackingFor(info.spellID, info.name)
@@ -93,13 +98,17 @@ function M:Profession(index)
             card.spells[#card.spells + 1] = spell
         end
     end
+    own = own or craftSpell
+    if own then
+        card.spellID = own.spellID
+        if own.subName and own.subName ~= "" then card.rank = own.subName end
+    end
     card.rank = card.rank or RANKS[max] or ""
     if card.spellID then
         local id = card.spellID
         card.onDrag = function() self:Pickup(id) end
     end
-    -- unlearning goes through the game's own confirmation, as Blizzard's
-    -- book does (StaticPopup "UNLEARN_SKILL", data: the skill line)
+    -- unlearning: SuuUI's confirmation, then the game's (M:Unlearn)
     if skillLine then
         card.onUnlearn = function() self:Unlearn(name, skillLine) end
     end
