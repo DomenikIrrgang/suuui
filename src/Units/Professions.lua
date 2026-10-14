@@ -717,6 +717,15 @@ function M:Open(skillLine)
     if not ok then self:Print("That profession couldn't be opened here: " .. tostring(err)) end
 end
 
+-- A link into the chat line being typed, or a new one opened with it.
+function M:ToChat(link)
+    local util = ChatFrameUtil
+    local insert = (util and util.InsertLink) or ChatEdit_InsertLink
+    if insert and insert(link) then return end
+    local open = (util and util.OpenChat) or ChatFrame_OpenChat
+    if open then open(link) end
+end
+
 function M:Craft(count)
     local id = self.view and self.view.craftData and self.view.craftData.selected
     if not id or InCombatLockdown() then return end
@@ -763,6 +772,14 @@ function M:Wire(view)
         self:QueueRender()
     end
     view.onCreate = function(count) self:Craft(count) end
+    view.onLink = function()
+        local link = call(C_TradeSkillUI.GetTradeSkillListLink)
+        if link then self:ToChat(link) else self:Print("This profession can't be linked here.") end
+    end
+    view.onLinkRecipe = function(id)
+        local link = call(C_TradeSkillUI.GetRecipeLink, id)
+        if link then self:ToChat(link) end
+    end
     view.onCreateAll = function()
         local r = view.recipeData
         if r then self:Craft(r.canMake) end

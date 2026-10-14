@@ -41,7 +41,9 @@
 --       "medium", "easy", "trivial" }, quality = { 0..4 }, other = { "materials",
 --       "skillup" } }), p.onSort("category" | "difficulty" | "skill" | "level" | "name"),
 --   p:SetFilters(value), p:SetSort(key), p.onTrack(on),
---   p.onCreate(count), p.onCreateAll()
+--   p.onCreate(count), p.onCreateAll(),
+--   p.onLink()                -- the Link button: the profession in chat
+--   p.onLinkRecipe(id)        -- a recipe or its product Shift-clicked
 
 local _, ns = ...
 
@@ -403,6 +405,9 @@ local function makeListRow(view)
         if self.category then
             view.folded[self.category] = not view.folded[self.category]
             view:DrawList()
+        elseif self.recipe and IsModifiedClick("CHATLINK") and view.onLinkRecipe then
+            -- Shift-click: the recipe's link in chat
+            view.onLinkRecipe(self.recipe.id)
         elseif self.recipe and view.onSelect then
             view.onSelect(self.recipe.id)
         end
@@ -658,8 +663,9 @@ function P:SetCrafting(d)
     -- the two bars share what the name and rank leave
     local gap = S["space-5"]
     local rankW = (d.rank and d.rank ~= "") and (self.craftRank:GetUnboundedStringWidth() + gap) or 0
+    rankW = rankW + self.link:GetWidth() + gap
     local room = (self.crafting:GetWidth() or 0) - self.craftName:GetUnboundedStringWidth() - rankW - gap * 2
-    local bar = d.recipes and math.floor((room - gap) / 2) or room
+    local bar = d.recipes and math.floor((room - gap * 2) / 2) or room
     self.craftSkill:SetWidth(math.max(80, bar))
     self.craftRecipes:SetWidth(math.max(80, bar))
     self:DrawList()
@@ -705,6 +711,35 @@ function UI.Professions(parent, opts)
     f.craftSkill:SetPoint("LEFT", f.craftName, "RIGHT", S["space-5"], 0)
     f.craftRecipes = skillBar(f.crafting, "Recipes")
     f.craftRecipes:SetPoint("LEFT", f.craftSkill, "RIGHT", S["space-5"] * 2, 0)
+    -- Link: the profession in chat, at the end of the head row (design
+    -- board "Professions · Link")
+    f.link = CreateFrame("Button", nil, f.crafting)
+    f.link:SetSize(22, 22)
+    f.link:SetPoint("RIGHT", f.crafting, "TOPRIGHT", 0, -T.type.header.lineHeight / 2)
+    f.link.edge = UI.Border(f.link, "gilt-line")
+    f.link.edge:SetShown(false)
+    f.link.glyph = f.link:CreateTexture(nil, "ARTWORK")
+    f.link.glyph:SetTexture(GLYPHS .. "chain.tga")
+    f.link.glyph:SetSize(14, 14)
+    f.link.glyph:SetPoint("CENTER")
+    f.link.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    f.link:SetScript("OnEnter", function(self)
+        self.edge:SetShown(true)
+        self.glyph:SetVertexColor(UI.RGBA("ink"))
+        local name = f.craftData and f.craftData.name or "this profession"
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip_SetTitle(GameTooltip, "Link " .. name .. " in chat")
+        GameTooltip_AddNormalLine(GameTooltip, "Whoever clicks it sees your recipes.")
+        GameTooltip_AddBlankLineToTooltip(GameTooltip)
+        GameTooltip_AddNormalLine(GameTooltip, "Shift-click a recipe, in the list or its product, to link that recipe.")
+        GameTooltip:Show()
+    end)
+    f.link:SetScript("OnLeave", function(self)
+        self.edge:SetShown(false)
+        self.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        GameTooltip:Hide()
+    end)
+    f.link:SetScript("OnClick", function() if f.onLink then f.onLink() end end)
     -- the list: search on its own row, the filters and the sort under it
     -- (one row of the three didn't fit the 250 px column), then the recipes
     f.search = UI.TextField(f.crafting, { width = LIST_W, placeholder = "Search recipes",
@@ -756,6 +791,11 @@ function UI.Professions(parent, opts)
     v.product = UI.ItemSlot(c, 36)
     v.product:SetPoint("TOPLEFT")
     v.product:SetScript("OnEnter", function(self) if f.recipeData and f.recipeData.onProduct then f.recipeData.onProduct(self) end end)
+    v.product:SetScript("OnClick", function()
+        if IsModifiedClick("CHATLINK") and f.onLinkRecipe and f.craftData and f.craftData.selected then
+            f.onLinkRecipe(f.craftData.selected)
+        end
+    end)
     v.product:SetScript("OnLeave", function() GameTooltip:Hide() end)
     v.title = UI.Text(c, "unit-name-lg", "ink")
     v.title:SetPoint("TOPLEFT", v.product, "TOPRIGHT", S["space-5"], 0)
