@@ -144,8 +144,9 @@ function LFG.MatchReasons(e, interest)
             if interest.roles[role] then reasons[#reasons + 1] = "role" break end
         end
     end
-    -- a player for your group: you lead a listed group (or are listed alone as a group-to-be)
-    if e.intent == "player" and forMine and interest.listing and (not IsInGroup() or UnitIsGroupLeader("player")) then
+    -- a player for your group: you're listed and lead a group (listed alone,
+    -- you're a player looking yourself, found in game)
+    if e.intent == "player" and forMine and interest.listing and IsInGroup() and UnitIsGroupLeader("player") then
         reasons[#reasons + 1] = "player"
     end
     for _, q in ipairs(e.quests) do if interest.quests[q] then reasons[#reasons + 1] = "quest" break end end

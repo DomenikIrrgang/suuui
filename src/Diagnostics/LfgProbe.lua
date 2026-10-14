@@ -431,7 +431,10 @@ end
 function LP.Entries()
     local LFG = ns.LFG
     local list = LFG.Entries()
-    ns.Print(("LFG: %d entries"):format(#list))
+    local st = LFG.Chat.stats or {}
+    ns.Print(("LFG: %d entries; chat lines seen %d, secret %d, channel off %d, not group %d, low confidence %d, entries %d, errors %d%s"):format(
+        #list, st.seen or 0, st.secret or 0, st.channelOff or 0, st.nothing or 0, st.lowConfidence or 0, st.entries or 0,
+        st.errors or 0, LFG.Chat.lastError and (" (" .. LFG.Chat.lastError .. ")") or ""))
     for i, e in ipairs(list) do
         if i > 15 then ns.Print("...") break end
         local src = {}

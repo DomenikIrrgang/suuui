@@ -53,7 +53,8 @@ local function readResult(id, category)
         self = info.hasSelf, needed = {}, offered = {},
     }
     local okC, counts = pcall(L.GetSearchResultMemberCounts, id)
-    if okC and tableOK(counts) then
+    -- (for a single player these are a whole group's open spots: not theirs)
+    if data.intent == "group" and okC and tableOK(counts) then
         local need = 0
         for role, field in pairs({ tank = "TANK_REMAINING", healer = "HEALER_REMAINING", damage = "DAMAGER_REMAINING" }) do
             local n = counts[field]
@@ -74,6 +75,18 @@ local function readResult(id, category)
     data.members = { info.numMembers or 1, size or 5 }
     local name = (data.leader and data.leader.name) or info.leaderName
     return (type(name) == "string" and not isSecret(name)) and name or ("tool:" .. id), data
+end
+
+-- Results by ID: the key each is stored under (a result's leader name
+-- often comes a moment after the search, found in game: "tool:<id>" until then).
+T.keys = {}
+
+local function store(id, key, data)
+    local old = T.keys[id]
+    if old and old ~= key then LFG.Store.Rename(old, key) end
+    T.keys[id] = key
+    if data.delisted then LFG.Store.Drop(key, "tool", "delisted")
+    else LFG.Store.Put(key, "tool", data) end
 end
 
 local function received()
@@ -98,8 +111,7 @@ local function received()
         local key, data = readResult(id, category)
         if key then
             seen[key] = true
-            if data.delisted then LFG.Store.Drop(key, "tool", "delisted")
-            else LFG.Store.Put(key, "tool", data) end
+            store(id, key, data)
         end
     end
     -- the ones this category's search no longer has
@@ -121,8 +133,9 @@ local function updated(id)
     end)
     local key, data = readResult(id, category)
     if not key then return end
-    if data.delisted then LFG.Store.Drop(key, "tool", "delisted") else LFG.Store.Put(key, "tool", data) end
+    store(id, key, data)
 end
+
 
 --------------------------------------------------------------------------------
 -- From a click

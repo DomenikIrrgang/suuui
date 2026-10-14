@@ -41,10 +41,17 @@ LFG.Lang.Register("enUS", {
     },
     -- "lf" before a role is a group ("LF tank for RFK"); before an activity
     -- it's a player ("LF RFK")
-    Extract = function(hay, r, hits)
+    Extract = function(hay, r, hits, norm)
         if hay:find(" lf ", 1, true) then
             if next(r.roles) or next(r.classes) then hits.group = true else hits.player = true end
         end
+        -- "1 tank", "2 dps": that many open for the role
+        local open = 0
+        for _, w in ipairs({ "tanks?", "heals?", "healers?", "dps" }) do
+            local n = norm:match(" (%d) " .. w .. " ")
+            if n then open = open + tonumber(n) end
+        end
+        if open > 0 then r.need = r.need or open; hits.group = true end
     end,
     activities = {
         ["dungeon:rfc"] = { "ragefire chasm", "ragefire", "rfc" },

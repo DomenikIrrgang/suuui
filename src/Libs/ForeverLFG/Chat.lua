@@ -64,9 +64,16 @@ local function player()
     return SuuUI and SuuUI.FullName and SuuUI.FullName("player")
 end
 
+-- What happened to the lines, for diagnostics: seen, secret, channel off,
+-- not group content, below the confidence, entries made; the last error.
+CH.stats = { seen = 0, secret = 0, channelOff = 0, nothing = 0, lowConfidence = 0, entries = 0, errors = 0 }
+
+local function count(k) CH.stats[k] = (CH.stats[k] or 0) + 1 end
+
 -- One line.
 function CH.Read(event, text, author, _, channelName, _, _, _, _, channelBase, _, _, guid)
-    if isSecret(text) or isSecret(author) or type(text) ~= "string" or type(author) ~= "string" then return end
+    count("seen")
+    if isSecret(text) or isSecret(author) or type(text) ~= "string" or type(author) ~= "string" then count("secret") return end
     local channel
     if event == "CHAT_MSG_CHANNEL" then
         channel = (type(channelBase) == "string" and channelBase ~= "" and channelBase) or channelName
@@ -76,9 +83,11 @@ function CH.Read(event, text, author, _, channelName, _, _, _, _, channelBase, _
     else
         channel = event == "CHAT_MSG_SAY" and "SAY" or "YELL"
     end
-    if not LFG.config.channels[channel] then return end
+    if not LFG.config.channels[channel] then count("channelOff") return end
     local r = LFG.Parser.Parse(text, { languages = LFG.Languages() })
-    if not r or r.confidence < (LFG.config.minConfidence or 0.5) then return end
+    if not r then count("nothing") return end
+    if r.confidence < (LFG.config.minConfidence or 0.5) then count("lowConfidence") return end
+    count("entries")
     local key = author
     local old = LFG.Entry(key)
     local prev = old and old.sources.chat
@@ -107,7 +116,11 @@ LFG.AddPart({
                 C_Timer.After(0.5, CH.Hide)
                 return
             end
-            CH.Read(event, ...)
+            local ok, err = pcall(CH.Read, event, ...)
+            if not ok then
+                count("errors")
+                CH.lastError = tostring(err)
+            end
         end)
         -- after the login's own channel joins
         C_Timer.After(5, CH.Join)

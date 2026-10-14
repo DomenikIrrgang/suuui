@@ -7,6 +7,8 @@
 -- code outside the game.
 --
 --   local r, why = LFG.Parser.Parse(text, { languages = { "enUS" } })
+-- A module's Extract(hay, r, hits, norm) reads what words alone can't (hay:
+-- the line with what was matched blanked; norm: the whole line, cleaned).
 --   r = { intent = "group" | "player" | nil, activities = { key, ... },
 --         quests = { id, ... }, roles = { tank, healer, damage = true },
 --         classes = { WARRIOR = true, ... }, need = n, members = { have, max },
@@ -190,7 +192,7 @@ function P.Parse(text, opts)
                 end
             end
             -- a language's own patterns (counts written its way, ...)
-            if c.module.Extract then c.module.Extract(hay, r, hits) end
+            if c.module.Extract then c.module.Extract(hay, r, hits, normalize(text)) end
         end
     end
     -- numbers, the same in every language: "lf2m", "need 2", "4/5", "40+", "35-40", "lvl 28"
