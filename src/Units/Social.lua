@@ -341,7 +341,7 @@ function M:ToggleLockouts()
         p:SetFrameLevel(f:GetFrameLevel() + 200)
         p.empty = UI.Text(p.body, "body", "ink-muted")
         p.empty:SetPoint("TOPLEFT")
-        p.empty:SetValue("You aren't saved to any instance.")
+        p.empty:SetValue("No active lockouts.")
         p:Hide()
         self.lockoutPanel = p
     end
