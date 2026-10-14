@@ -140,6 +140,11 @@ function M:Ignored()
     return out
 end
 
+function M:BattleTag()
+    local _, tag = call(BNGetInfo)
+    return plain(tag) and tag or nil
+end
+
 function M:Status()
     local _, _, _, _, afk, dnd = call(BNGetInfo)
     if dnd then return "busy" elseif afk then return "away" end
@@ -155,7 +160,7 @@ function M:Render()
     if not (view and view:IsVisible()) then return end
     local friends, online = self:Friends()
     self.friends = friends
-    view:SetData({ view = self.mode or "friends", status = self:Status(), online = online, total = #friends,
+    view:SetData({ view = self.mode or "friends", status = self:Status(), me = self:BattleTag(), online = online, total = #friends,
                    friends = friends, ignored = self:Ignored(), selected = self.selected })
 end
 

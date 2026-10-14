@@ -13,8 +13,9 @@
 --
 --   local c = UI.Contacts(parent)
 --   c:SetData({ view = "friends" | "ignored", status = "available" | "away" |
---       "busy", online, total, friends = { row }, ignored = { name },
---       selected = key })
+--       "busy", me = "Suu#2397" (your BattleTag, shown at the top with the
+--       status: the game's Battle.net bar's job), online, total,
+--       friends = { row }, ignored = { name }, selected = key })
 --     row = { key, bnet, name, character, color (class token), online,
 --       detail, note, away, busy, whisper = bool, invite = bool, why (invite) }
 --   c.onView(view), c.onStatus(status), c.onSelect(key), c.onWhisper(row),
@@ -211,8 +212,15 @@ function C:Draw()
     self.selectedRow = selected
 end
 
+local STATUS_COLOR = { available = "arcane", away = "amber", busy = "ember" }
+
 function C:SetData(d)
     self.data = d
+    -- you: your BattleTag (its number faint) and your status
+    local me = d.me or ""
+    local name, number = me:match("^(.-)(#%d+)$")
+    self.me:SetValue(name and (name .. "|cff" .. T.color["ink-faint"].hex .. number .. "|r") or me)
+    self.meDot:SetVertexColor(UI.RGBA(STATUS_COLOR[d.status or "available"] or "arcane"))
     self.views:SetValue(d.view or "friends")
     self.count:SetValue((d.online or 0) .. " of " .. (d.total or 0) .. " online")
     self.count:SetShown((d.view or "friends") == "friends")
@@ -234,9 +242,14 @@ function UI.Contacts(parent)
     Mixin(c, C)
     c.rows, c.heads = {}, {}
     -- the top: Friends / Ignored, how many are online, your status
+    -- you: status diamond and BattleTag, the status menu on the right
+    c.meDot = UI.Diamond(c, 8, "arcane")
+    c.meDot:SetPoint("CENTER", c, "TOPLEFT", 6, -TOP_H / 2)
+    c.me = UI.Text(c, "label", "ink")
+    c.me:SetPoint("LEFT", c, "TOPLEFT", 6 + S["space-4"] + 2, -TOP_H / 2)
     c.views = UI.Segmented(c, { options = { { value = "friends", label = "Friends" }, { value = "ignored", label = "Ignored" } },
         onChange = function(v) if c.onView then c.onView(v) end end })
-    c.views:SetPoint("TOPLEFT")
+    c.views:SetPoint("TOPLEFT", 0, -(TOP_H + S["space-4"]))
     c.count = UI.Text(c, "caption", "ink-muted")
     c.count:SetPoint("LEFT", c.views, "RIGHT", S["space-5"], 0)
     c.status = UI.Select(c, { width = 120, value = "available", options = {
@@ -259,7 +272,7 @@ function UI.Contacts(parent)
     c.whisper:SetPoint("RIGHT", c.invite, "LEFT", -S["space-3"], 0)
     -- the list
     c.box = CreateFrame("Frame", nil, c)
-    c.box:SetPoint("TOPLEFT", c, "TOPLEFT", 0, -(TOP_H + S["space-4"]))
+    c.box:SetPoint("TOPLEFT", c, "TOPLEFT", 0, -(TOP_H * 2 + S["space-4"] * 2))
     c.box:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", 0, FOOT_H + S["space-4"])
     UI.Fill(c.box, "surface-sunk"):SetAllPoints()
     UI.Border(c.box, "gilt-faint")
