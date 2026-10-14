@@ -437,6 +437,11 @@ function M:RenderInfo()
         ranks[#ranks + 1] = { name = call(GuildControlGetRankName, i), count = counts[i - 1] or 0 }
     end
     local motd = call(GetGuildRosterMOTD)
+    if self.freshMotd then
+        -- until the game's copy has caught up
+        if plain(motd) and motd == self.freshMotd then self.freshMotd = nil end
+        motd = self.freshMotd or motd
+    end
     local info = call(GetGuildInfoText)
     page:SetData({ motd = plain(motd) and motd or nil, info = plain(info) and info or nil,
                    canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
@@ -529,6 +534,11 @@ function M:SkinTextEdit()
     if not dlg.suuHooked then
         dlg.suuHooked = true
         dlg:HookScript("OnShow", function() UI.ReskinDialog(dlg) end)
+        -- saved or not: the page shows what the game has now
+        dlg:HookScript("OnHide", function()
+            if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
+            for _, t in ipairs({ 0.3, 1.5 }) do C_Timer.After(t, function() self:RenderInfo() end) end
+        end)
     end
     if dlg:IsShown() then UI.ReskinDialog(dlg) end
 end
@@ -902,7 +912,14 @@ function M:OnEnable()
         for _, over in pairs(self.infoOvers or {}) do over:Hide() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
-    if not valid or valid("GUILD_MOTD") then self:OnGameEvent("GUILD_MOTD", function() self:RenderInfo() end) end
+    -- the new message comes with the event; the game's own copy
+    -- (GetGuildRosterMOTD) can lag behind it
+    if not valid or valid("GUILD_MOTD") then
+        self:OnGameEvent("GUILD_MOTD", function(_, motd)
+            if plain(motd) then self.freshMotd = motd end
+            self:RenderInfo()
+        end)
+    end
     if not valid or valid("GUILD_EVENT_LOG_UPDATE") then self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function() self:RenderLog() end) end
     if not valid or valid("CLUB_ADDED") then
         for _, e in ipairs({ "CLUB_ADDED", "CLUB_REMOVED", "CLUB_UPDATED" }) do
@@ -911,7 +928,10 @@ function M:OnEnable()
     end
     for _, e in ipairs({ "GUILD_ROSTER_UPDATE", "PLAYER_GUILD_UPDATE", "GUILD_RANKS_UPDATE", "GROUP_ROSTER_UPDATE" }) do
         if not valid or valid(e) then
-            self:OnGameEvent(e, function() if self.roster and self.roster:IsVisible() then self:QueueRender() end end)
+            self:OnGameEvent(e, function()
+                if self.roster and self.roster:IsVisible() then self:QueueRender() end
+                if self.infoPage and self.infoPage:IsVisible() then self:RenderInfo() end
+            end)
         end
     end
 end
