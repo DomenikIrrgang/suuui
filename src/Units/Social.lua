@@ -255,6 +255,7 @@ function M:Wire(view)
             if row.invite then root:CreateButton("Invite", function() invite(row) end) end
             root:CreateButton("Set note", function() self:SetNote(row) end)
             root:CreateDivider()
+            if not row.bnet then root:CreateButton("Ignore", function() self:Ignore(row.name) end) end
             root:CreateButton("Remove friend", function() self:Remove(row) end)
         end)
     end
@@ -370,6 +371,16 @@ function M:AddFriend(name)
     pcall(fl.AddFriend, name)
 end
 
+-- Ignore a player by their whole name (a confirmation first).
+function M:Ignore(name)
+    if not name or name == "" then return end
+    UI.Confirm({ title = "Ignore " .. name .. "?", text = "You won't see their messages, invites or trades. Unignore them on the Ignored list.",
+        confirm = "Ignore", onConfirm = function()
+            pcall(C_FriendList.AddIgnore, name)
+            C_Timer.After(0.3, function() self:QueueRender() end)
+        end })
+end
+
 function M:Whisper(name)
     local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
     if tell and name then tell(name) end
@@ -407,6 +418,7 @@ function M:AllyMenu(row, owner)
                 C_Timer.After(1, function() self:RenderLists() end)
             end)
         end
+        root:CreateButton("Ignore", function() self:Ignore(row.name) end)
         if row.guid and ra and ra.SetRecentAllyNote and (not ra.CanSetRecentAllyNote or call(ra.CanSetRecentAllyNote)) then
             root:CreateButton("Set note", function()
                 UI.Confirm({ title = "Note", text = "A note about this ally: only you see it.",
@@ -584,6 +596,7 @@ function M:WireRaid(page)
                     local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
                     if tell then tell(m.name) end
                 end)
+                root:CreateButton("Ignore", function() self:Ignore(m.name) end)
             end
             if lead and not m.you and m.unit then
                 root:CreateDivider()
