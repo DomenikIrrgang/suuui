@@ -243,9 +243,9 @@ function UI.Contacts(parent)
     c.rows, c.heads = {}, {}
     -- the top: Friends / Ignored, how many are online, your status
     -- you: status diamond and BattleTag, the status menu on the right
-    c.meDot = UI.Diamond(c, 8, "arcane")
+    c.meDot = UI.Diamond(c, 9, "arcane")
     c.meDot:SetPoint("CENTER", c, "TOPLEFT", 6, -TOP_H / 2)
-    c.me = UI.Text(c, "label", "ink")
+    c.me = UI.Text(c, "unit-name-lg", "ink")
     c.me:SetPoint("LEFT", c, "TOPLEFT", 6 + S["space-4"] + 2, -TOP_H / 2)
     c.views = UI.Segmented(c, { options = { { value = "friends", label = "Friends" }, { value = "ignored", label = "Ignored" } },
         onChange = function(v) if c.onView then c.onView(v) end end })
