@@ -271,3 +271,220 @@ function UI.Contacts(parent)
     c.empty:SetPoint("CENTER")
     return c
 end
+
+--------------------------------------------------------------------------------
+-- The Raid page (design component SocialWindow, "Raid"): "17 of 40", then
+-- Ready check, Role check (leader or assistant; disabled with the reason
+-- otherwise) and Raid Info; eight groups of five as surface-sunk wells,
+-- each player a row with their role icon, the name in class colour, a
+-- crown for the leader and a star for assistants; you in an ink border;
+-- offline players at opacity-oor; empty slots in a faint edge. The leader
+-- (and assistants) drag players between groups: onto an empty slot moves
+-- them, onto a player swaps the two. Not in a raid: the explanation, and
+-- "Convert to raid" in a party.
+--
+--   local r = UI.RaidGroups(parent)
+--   r:SetData({ inRaid, inParty, canLead, reason, size, members = { { index,
+--       name, class, role, group, leader, assistant, online, dead, you } } })
+--   r.onReadyCheck(), r.onRoleCheck(), r.onRaidInfo(), r.onConvert(),
+--   r.onMove(index, group), r.onSwap(index, otherIndex), r.onMember(member, button, owner)
+--------------------------------------------------------------------------------
+
+local ROLE_ICON = {
+    TANK = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleTank.tga",
+    HEALER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleHealer.tga",
+    DAMAGER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleDamage.tga",
+}
+local SLOT_H = 22
+local GROUP_LABEL_H = T.type.caption.lineHeight + S["space-2"]
+
+local R = {}
+
+local function slot(r, g, i)
+    local b = CreateFrame("Button", nil, r.groups[g])
+    b:SetHeight(SLOT_H)
+    b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    b:RegisterForDrag("LeftButton")
+    b.group, b.pos = g, i
+    b.fill = UI.Fill(b, "surface-raised")
+    b.fill:SetAllPoints()
+    b.edge = UI.Border(b, "gilt-faint")
+    b.role = b:CreateTexture(nil, "ARTWORK")
+    b.role:SetSize(12, 12)
+    b.role:SetPoint("LEFT", S["space-3"], 0)
+    b.name = UI.Text(b, "label", "ink")
+    b.name:SetPoint("LEFT", b.role, "RIGHT", S["space-3"], 0)
+    b.name:SetPoint("RIGHT", b, "RIGHT", -22, 0)
+    b.name:SetJustifyH("LEFT")
+    b.rank = b:CreateTexture(nil, "ARTWORK")
+    b.rank:SetSize(12, 12)
+    b.rank:SetPoint("RIGHT", -S["space-3"], 0)
+    b:SetScript("OnEnter", function(self)
+        if r.dragging and r.dragging ~= self then self.edge:SetColor("arcane") end
+        if self.member then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip_SetTitle(GameTooltip, self.member.name)
+            local m = self.member
+            local line = (m.level and m.level > 0 and ("Level " .. m.level .. " ") or "") .. (m.className or "")
+            if line ~= "" then GameTooltip_AddNormalLine(GameTooltip, line) end
+            if m.zone and m.zone ~= "" then GameTooltip_AddNormalLine(GameTooltip, m.zone) end
+            if not m.online then GameTooltip_AddNormalLine(GameTooltip, "Offline") end
+            GameTooltip:Show()
+        end
+    end)
+    b:SetScript("OnLeave", function(self)
+        self.edge:SetColor(self.member and (self.member.you and "ink" or "gilt-hairline") or "gilt-faint")
+        GameTooltip:Hide()
+    end)
+    b:SetScript("OnClick", function(self, button)
+        if self.member and r.onMember then r.onMember(self.member, button, self) end
+    end)
+    b:SetScript("OnDragStart", function(self)
+        if not (self.member and r.data and r.data.canLead) or InCombatLockdown() then return end
+        r.dragging = self
+        self:SetAlpha(0.5)
+    end)
+    b:SetScript("OnDragStop", function(self)
+        self:SetAlpha(1)
+        local from = r.dragging
+        r.dragging = nil
+        if not from then return end
+        -- where it was let go: a slot of this page
+        local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
+        local to = foci and foci[1]
+        if not (to and to.group and to.pos) or to == from then r:Draw() return end
+        if to.member then
+            if r.onSwap then r.onSwap(from.member.index, to.member.index) end
+        elseif r.onMove then
+            r.onMove(from.member.index, to.group)
+        end
+    end)
+    return b
+end
+
+function R:Draw()
+    local d = self.data or {}
+    local inRaid = d.inRaid
+    self.notIn:SetShown(not inRaid)
+    self.convert:SetShown(not inRaid and d.inParty and true or false)
+    self.convert:SetEnabledState(d.canLead and true or false)
+    for _, g in ipairs(self.groups) do g:SetShown(inRaid and true or false) end
+    self.count:SetShown(inRaid and true or false)
+    for _, b in ipairs({ self.ready, self.roles }) do
+        b:SetShown(inRaid and true or false)
+        b:SetEnabledState(d.canLead and true or false)
+        b.reason = not d.canLead and (d.reason or "Only the leader or an assistant can.") or nil
+    end
+    self.info:Show()
+    if not inRaid then return end
+    local n = 0
+    local byGroup = {}
+    for _, m in ipairs(d.members or {}) do
+        byGroup[m.group] = byGroup[m.group] or {}
+        table.insert(byGroup[m.group], m)
+        n = n + 1
+    end
+    self.count:SetValue(n .. " of " .. (d.size or 40))
+    for g = 1, 8 do
+        local list = byGroup[g] or {}
+        for i = 1, 5 do
+            local b = self.slots[g][i]
+            local m = list[i]
+            b.member = m
+            if m then
+                b.fill:Show()
+                b.role:SetShown(ROLE_ICON[m.role or ""] ~= nil)
+                if ROLE_ICON[m.role or ""] then
+                    b.role:SetTexture(ROLE_ICON[m.role])
+                    b.role:SetVertexColor(UI.RGBA(m.role == "DAMAGER" and "ink-muted" or "ink"))
+                end
+                b.name:SetValue(m.name or "")
+                b.name:SetColor(m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or "ink")
+                b.rank:SetShown(m.leader or m.assistant or false)
+                if m.leader then b.rank:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+                elseif m.assistant then b.rank:SetTexture("Interface\\GroupFrame\\UI-Group-AssistantIcon") end
+                b.edge:SetColor(m.you and "ink" or "gilt-hairline")
+                b:SetAlpha(m.online and 1 or T.opacity["opacity-oor"])
+            else
+                b.fill:Hide()
+                b.role:Hide()
+                b.rank:Hide()
+                b.name:SetValue("")
+                b.edge:SetColor("gilt-faint")
+                b:SetAlpha(1)
+            end
+        end
+    end
+end
+
+function R:SetData(d)
+    self.data = d
+    self:Draw()
+end
+
+-- The groups laid out: two columns of four, filling the page's width.
+function R:Layout()
+    local w = self:GetWidth()
+    if not w or w <= 0 then return end
+    local gap = S["space-5"]
+    local colW = math.floor((w - gap) / 2)
+    local top = 30 + S["space-5"]
+    local groupH = GROUP_LABEL_H + 5 * SLOT_H + 4 * S["space-1"]
+    for g = 1, 8 do
+        local col, row = (g - 1) % 2, math.floor((g - 1) / 2)
+        local f = self.groups[g]
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", self, "TOPLEFT", col * (colW + gap), -(top + row * (groupH + S["space-5"])))
+        f:SetSize(colW, groupH)
+    end
+end
+
+local function headButton(parent, text, variant, onClick)
+    local b = UI.Button(parent, { text = text, variant = variant, onClick = onClick })
+    b:HookScript("OnEnter", function(self)
+        if self.reason and not self:IsEnabled() then UI.ShowTooltip(self, { title = text, description = self.reason }) end
+    end)
+    b:HookScript("OnLeave", function() UI.HideTooltip() end)
+    return b
+end
+
+function UI.RaidGroups(parent)
+    local r = CreateFrame("Frame", nil, parent)
+    Mixin(r, R)
+    r.count = UI.Text(r, "header", "gilt-text")
+    r.count:SetPoint("TOPLEFT", 0, -6)
+    r.info = headButton(r, "Raid Info", "quiet", function() if r.onRaidInfo then r.onRaidInfo() end end)
+    r.info:SetPoint("TOPRIGHT")
+    r.roles = headButton(r, "Role check", "quiet", function() if r.onRoleCheck then r.onRoleCheck() end end)
+    r.roles:SetPoint("RIGHT", r.info, "LEFT", -S["space-3"], 0)
+    r.ready = headButton(r, "Ready check", "quiet", function() if r.onReadyCheck then r.onReadyCheck() end end)
+    r.ready:SetPoint("RIGHT", r.roles, "LEFT", -S["space-3"], 0)
+    r.groups, r.slots = {}, {}
+    for g = 1, 8 do
+        local f = CreateFrame("Frame", nil, r)
+        UI.Fill(f, "surface-sunk"):SetAllPoints()
+        f.label = UI.Text(f, "caption", "gilt-text")
+        f.label:SetPoint("TOPLEFT", S["space-3"], -S["space-1"])
+        f.label:SetValue("Group " .. g)
+        r.groups[g] = f
+        r.slots[g] = {}
+        for i = 1, 5 do
+            local b = slot(r, g, i)
+            b:SetPoint("TOPLEFT", f, "TOPLEFT", S["space-2"], -(GROUP_LABEL_H + (i - 1) * (SLOT_H + S["space-1"])))
+            b:SetPoint("RIGHT", f, "RIGHT", -S["space-2"], 0)
+            r.slots[g][i] = b
+        end
+    end
+    -- not in a raid
+    r.notIn = UI.Text(r, "body", "ink-muted")
+    r.notIn:SetPoint("TOPLEFT", 0, -(30 + S["space-6"]))
+    r.notIn:SetPoint("RIGHT", r, "RIGHT")
+    r.notIn:SetWordWrap(true)
+    r.notIn:SetJustifyH("LEFT")
+    r.notIn:SetValue("You aren't in a raid. Raids are groups of more than five, for the biggest dungeons and fights. A party's leader can turn it into one.")
+    r.convert = UI.Button(r, { text = "Convert to raid", variant = "primary",
+        onClick = function() if r.onConvert then r.onConvert() end end })
+    r.convert:SetPoint("TOPLEFT", r.notIn, "BOTTOMLEFT", 0, -S["space-5"])
+    r:SetScript("OnSizeChanged", function(self) self:Layout() end)
+    return r
+end

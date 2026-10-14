@@ -256,6 +256,118 @@ function M:Wire(view)
 end
 
 --------------------------------------------------------------------------------
+-- The Raid page
+--------------------------------------------------------------------------------
+
+local TEST_NAMES = { { "Kaelith Dawnmere", "PRIEST", "HEALER" }, { "Brannoc Ironvale", "WARRIOR", "TANK" },
+    { "Lyra Sunwhisper", "MAGE", "DAMAGER" }, { "Thorn Blackmoor", "ROGUE", "DAMAGER" }, { "Maelis Brightforge", "PALADIN", "HEALER" },
+    { "Durn Stonehoof", "HUNTER", "DAMAGER" }, { "Ysolde Thornvale", "DRUID", "DAMAGER" }, { "Ardent Stormcall", "SHAMAN", "HEALER" },
+    { "Vesh Nightfall", "WARLOCK", "DAMAGER" }, { "Corwin Hale", "WARRIOR", "DAMAGER" }, { "Sable Ashgrove", "MAGE", "DAMAGER" },
+    { "Mira Quell", "PRIEST", "HEALER" }, { "Torvald Grim", "WARRIOR", "TANK" }, { "Elric Vane", "ROGUE", "DAMAGER" },
+    { "Nessa Brook", "HUNTER", "DAMAGER" }, { "Ulric Moss", "DRUID", "HEALER" } }
+
+function M:TestRaid()
+    if self.raidTest then self.raidTest = nil; self:RenderRaid(); return end
+    local members = { { index = 1, name = SuuUI.FullName("player"), class = select(2, UnitClass("player")), role = "DAMAGER",
+                        group = 1, leader = true, online = true, you = true } }
+    for i, t in ipairs(TEST_NAMES) do
+        members[#members + 1] = { index = i + 1, name = t[1], class = t[2], role = t[3], group = math.floor(i / 5) + 1,
+                                  assistant = i == 3, online = i ~= 9, level = 60 }
+    end
+    self.raidTest = members
+    self:Print("Raid test: 17 made-up members; drag them between groups. /suu raidtest again to end it.")
+    self:RenderRaid()
+end
+
+function M:RaidMembers()
+    if self.raidTest then return self.raidTest end
+    local out = {}
+    if not IsInRaid() then return out end
+    for i = 1, GetNumGroupMembers() do
+        local name, rank, group, level, className, file, zone, online, dead, _, _, combatRole = GetRaidRosterInfo(i)
+        if plain(name) and name then
+            local unit = "raid" .. i
+            local role = (plain(combatRole) and combatRole ~= "NONE" and combatRole) or UnitGroupRolesAssigned(unit)
+            out[#out + 1] = { index = i, unit = unit, name = name, class = file, className = className, level = level, zone = zone,
+                              role = role ~= "NONE" and role or nil, group = group, leader = rank == 2, assistant = rank == 1,
+                              online = online and true or false, dead = dead, you = UI.Flag(UnitIsUnit(unit, "player")) }
+        end
+    end
+    return out
+end
+
+function M:RenderRaid()
+    local page = self.raidPage
+    if not (page and page:IsVisible()) then return end
+    local test = self.raidTest ~= nil
+    local canLead = test or UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
+    page:SetData({ inRaid = test or IsInRaid(), inParty = IsInGroup() and not IsInRaid(), canLead = canLead and true or false,
+                   reason = InCombatLockdown() and "Not in combat." or nil, size = 40, members = self:RaidMembers() })
+end
+
+function M:WireRaid(page)
+    page.onReadyCheck = function() if DoReadyCheck then DoReadyCheck() end end
+    page.onRoleCheck = function() if InitiateRolePoll then pcall(InitiateRolePoll) end end
+    page.onRaidInfo = function()
+        local info = (self.frame and self.frame.RaidInfoFrame) or _G.RaidInfoFrame
+        if not info then return end
+        if RequestRaidInfo then RequestRaidInfo() end
+        info:SetShown(not info:IsShown())
+        info:SetFrameLevel(page:GetFrameLevel() + 20)
+    end
+    page.onConvert = function()
+        local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or ConvertToRaid
+        if convert then pcall(convert) end
+    end
+    page.onMove = function(index, group)
+        if self.raidTest then
+            for _, m in ipairs(self.raidTest) do if m.index == index then m.group = group end end
+            return self:RenderRaid()
+        end
+        if InCombatLockdown() then return end
+        pcall(SetRaidSubgroup, index, group)
+    end
+    page.onSwap = function(a, b)
+        if self.raidTest then
+            local ma, mb
+            for _, m in ipairs(self.raidTest) do
+                if m.index == a then ma = m elseif m.index == b then mb = m end
+            end
+            if ma and mb then ma.group, mb.group = mb.group, ma.group end
+            return self:RenderRaid()
+        end
+        if InCombatLockdown() then return end
+        pcall(SwapRaidSubgroup, a, b)
+    end
+    page.onMember = function(m, button, owner)
+        if button ~= "RightButton" then return end
+        local lead = UnitIsGroupLeader("player")
+        UI.ContextMenuFrom(owner, function(_, root)
+            root:CreateTitle(m.name)
+            if not m.you then
+                root:CreateButton("Whisper", function()
+                    local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
+                    if tell then tell(m.name) end
+                end)
+            end
+            if lead and not m.you and m.unit then
+                root:CreateDivider()
+                if m.assistant then
+                    root:CreateButton("Demote from assistant", function() pcall(DemoteAssistant, m.unit) end)
+                else
+                    root:CreateButton("Promote to assistant", function() pcall(PromoteToAssistant, m.unit) end)
+                end
+                root:CreateButton("Make leader", function() pcall(PromoteToLeader, m.unit) end)
+                root:CreateButton("Remove from group", function()
+                    local remove = (C_PartyInfo and C_PartyInfo.UninviteUnit) or UninviteUnit
+                    if remove then pcall(remove, m.unit) end
+                end)
+            end
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Over Blizzard's window
 --------------------------------------------------------------------------------
 
@@ -294,6 +406,15 @@ function M:Follow()
     local onContacts = f:IsShown() and list and list:IsShown()
     self.view:SetShown(onContacts and true or false)
     if f.BattleNetBar then f.BattleNetBar:SetAlpha(onContacts and 0 or 1) end
+    -- the Raid page over Blizzard's (see-through, in place: Raid Info hangs
+    -- off it)
+    local raid = f.RaidFrame
+    local onRaid = f:IsShown() and raid and raid:IsShown()
+    if self.raidPage then
+        self.raidPage:SetShown(onRaid and true or false)
+        if raid then raid:SetAlpha(onRaid and 0 or 1) end
+        if onRaid then self:RenderRaid() end
+    end
     if onContacts then
         if C_FriendList and C_FriendList.ShowFriends then pcall(C_FriendList.ShowFriends) end
         self:QueueRender()
@@ -315,6 +436,17 @@ function M:Build()
     view:Hide()
     self.view = view
     self:Wire(view)
+    -- the Raid page
+    if f.RaidFrame then
+        local page = UI.RaidGroups(f)
+        page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+        page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+        page:SetFrameLevel(f:GetFrameLevel() + 100)
+        page:EnableMouse(true)
+        page:Hide()
+        self.raidPage = page
+        self:WireRaid(page)
+    end
     -- Blizzard's friends list out of sight (the page has its own); the
     -- Battle.net bar stays where it is (the other tabs hang under it: moved
     -- away, they went with it, found in game), only see-through while the
@@ -345,4 +477,14 @@ function M:OnEnable()
             self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
         end
     end
+    -- the raid's changes
+    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "UNIT_CONNECTION",
+                         "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function()
+                if self.raidPage and self.raidPage:IsVisible() then C_Timer.After(0.1, function() self:RenderRaid() end) end
+            end)
+        end
+    end
+    self:RegisterCommand("raidtest", "test: the Raid page with 17 made-up members to drag around", function() self:TestRaid() end)
 end
