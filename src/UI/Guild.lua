@@ -409,12 +409,13 @@ end
 -- Chat tab's messages box (design component GuildMotdBanner): surface-raised
 -- with a gilt-faint edge (its bottom is the box's top), a pushpin and
 -- "Message of the day" in `header` gilt-text, the message in `body` ink,
--- two lines at most (cut short with an ellipsis, the whole message in a
+-- all centred on its middle with the same room above and below, two lines
+-- at most (cut short with an ellipsis, the whole message in a
 -- tooltip then). Edit at the right only when your rank may. No message, no
 -- banner.
 --
 --   local b = UI.GuildMotdBanner(parent)
---   b:SetData({ text, canEdit })   -- b:GetHeight(): 34 or 52, 0 when empty
+--   b:SetData({ text, canEdit })   -- b:Height(): the text's height and its padding, 0 when empty
 --   b.onEdit()                      -- b.edit is the Edit button
 --------------------------------------------------------------------------------
 
@@ -440,10 +441,10 @@ function MB:Layout()
     local right = self.edit:IsShown() and (self.edit:GetWidth() + S["space-5"] + S["space-4"]) or S["space-5"]
     local left = S["space-5"] + 12 + S["space-3"] + self.head:GetStringWidth() + S["space-4"]
     self.message:SetWidth(math.max(60, w - left - right))
-    local lines = self.message:GetNumLines() or 1
-    local lh = T.type.body.lineHeight
-    local h = 2 * S["space-4"] + math.min(2, math.max(1, lines)) * lh
-    if self:GetHeight() ~= h then self:SetHeight(h) end
+    -- as tall as the text really is, the same room above and below it
+    local th = math.max(self.message:GetStringHeight() or 0, self.head:GetStringHeight() or 0, 14)
+    local h = math.ceil(2 * S["space-4"] + th)
+    if math.abs(self:GetHeight() - h) > 0.5 then self:SetHeight(h) end
 end
 
 function MB:Height()
@@ -461,10 +462,11 @@ function UI.GuildMotdBanner(parent)
     b.pin:SetTexture(GLYPHS .. "pushpin.tga")
     b.pin:SetSize(12, 12)
     b.pin:SetVertexColor(UI.RGBA("gilt-text"))
-    b.pin:SetPoint("TOPLEFT", S["space-5"], -(S["space-4"] + 3))
+    -- all of it centred on the banner's middle, one line or two
+    b.pin:SetPoint("LEFT", S["space-5"], 0)
     b.head = UI.Text(b, "header", "gilt-text")
     b.head:SetValue("Message of the day")
-    b.head:SetPoint("TOPLEFT", b.pin, "TOPRIGHT", S["space-3"], 3)
+    b.head:SetPoint("LEFT", b.pin, "RIGHT", S["space-3"], 0)
     b.message = b:CreateFontString(nil, "OVERLAY")
     ns.Fonts.Apply(b.message, "body")
     b.message:SetTextColor(UI.RGBA("ink"))
@@ -472,10 +474,10 @@ function UI.GuildMotdBanner(parent)
     b.message:SetJustifyV("TOP")
     b.message:SetWordWrap(true)
     b.message:SetMaxLines(2)
-    b.message:SetPoint("TOPLEFT", b.head, "TOPRIGHT", S["space-4"], 1)
+    b.message:SetPoint("LEFT", b.head, "RIGHT", S["space-4"], 0)
     b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if b.onEdit then b.onEdit() end end })
     b.edit:SetHeight(22)
-    b.edit:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-4"] - 2))
+    b.edit:SetPoint("RIGHT", -S["space-5"], 0)
     b:SetScript("OnSizeChanged", function() b:Layout() end)
     -- cut short: the whole message on hover
     b:SetScript("OnEnter", function(self)
