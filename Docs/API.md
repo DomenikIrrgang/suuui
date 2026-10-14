@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.11.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character |
+| `SuuUI.API_VERSION` | `"0.13.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -337,3 +337,18 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.TrainerSpells()` (0.12) | What your class trainer teaches: `{ { name, level, cost, school, icon, text } }` (cost in copper; Data/Trainer, from the class probes; no ranks) |
 | `SuuUI.TrainerSpellIDs()` | 0.12: every spell ID this client has for each trainer spell name, `{ [name] = { id, ... } }` (players' ranks and others alike; pick a rank with `C_Spell.GetSpellLevelLearned`) |
 | `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears) |
+
+## Professions, menus and social (0.13)
+
+| | |
+|---|---|
+| `SuuUI.FullName(unit)` | A unit's whole name. Forever's characters have a surname: its `UnitName` returns first name and surname where other clients give name and realm; this gives "Suther Stargazer" (with "-Realm" for another realm), the form whispers, invites, the roster and chat use |
+| `SuuUI.UI.ContextMenu(owner, { title, items = { { label, onClick, disabled } \| { separator = true } } })` | SuuUI's right-click menu in the tooltip's look, at the cursor; a click outside, Esc or a choice closes it. `UI.ContextMenuFrom(owner, fn(owner, root))` builds the same from MenuUtil's generator shape (`root:CreateTitle`, `CreateButton`, `CreateDivider`); `UI.CloseContextMenu()` |
+| `SuuUI.UI.FilterMenu(parent, { groups, defaults, value, placeholder, width, onChange })` | A grouped filter field and panel: groups of `kind` `"one"` (a Segmented row), `"many"` (chips with a colour diamond, none = any) or `"toggles"` (checkboxes); "Filters · N" counts choices off the defaults; Reset. `menu:SetValue(v)`, `GetValue()`, `Count()`, `Close()` |
+| `SuuUI.UI.Confirm({ …, typeToConfirm, input })` | `typeToConfirm = "UNLEARN"`: the confirm button works once that word is typed; `input = { label, placeholder, value }`: a text to enter, given to `onConfirm(text)` |
+| `SuuUI.UI.Professions(parent, { edgeInset })` | The Professions window's body (overview cards, a profession's recipe list and the chosen recipe); see UI/Professions.lua's header for its data |
+| `SuuUI.RecipeSources(recipeID)` | Where a profession recipe is learned (Data/RecipeSources.lua): `{ { t = "t", s, n } \| { t = "a" } \| { t = "i", i, s, v, d, dn, o, q, c } }` (trainer with the skill it asks; automatic; a recipe item with its skill, vendors, drops, chests, quests, containers), or nil |
+| `SuuUI.OpenRecipe(recipeID)` / `SuuUI.ShownRecipe()` / `SuuUI.ExpectRecipe(recipeID)` / `SuuUI.ProfessionOpener(skillLine)` | A recipe in SuuUI's Professions window (its profession opened, the recipe chosen); the recipe it shows; the recipe to choose once its window opens; the spell that opens a profession's window. Opening a profession from addon code is protected: cast `ProfessionOpener`'s spell from a secure button |
+| `SuuUI.UI.ObjectiveTracker`: `t:SetRecipes(list, collapsed, meta)`, `t:SetQuestsCollapsed(on)`, `t.onRecipeClick`, `t.onSectionToggle`, `t.onRowEnter` | Tracked recipes as a section after the quests, in the same scrolling list; entries take `color`, `icon` and `count` |
+| `SuuUI.Notify({ presence = { online, source, people, invite } })` | A friend or guild member came online or went offline (the Notification card's presence mode) |
+| `SuuUI.UI.Contacts(parent)` | The Social window's Contacts page: `c:SetData({ view, status, online, total, friends, ignored, selected })`; `onView`, `onStatus`, `onSelect`, `onWhisper`, `onInvite`, `onAdd`, `onIgnore`, `onUnignore`, `onMenu` |
