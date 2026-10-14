@@ -321,7 +321,10 @@ function M:SkinCommunities()
         local g = SuuUI.GetModule("guild")
         return g and g:IsEnabled() and g or nil
     end
-    local function logShown() local g = guild(); return g and g.logShown or false end
+    -- the guild module's own pages (Log, Settings): while one shows,
+    -- Blizzard's tabs aren't the lit one
+    local function own(key) local g = guild(); return g and g.ownPage == key or false end
+    local function anyOwn() local g = guild(); return g and g.ownPage ~= nil or false end
     for _, t in ipairs({ { f.ChatTab, "Chat" }, { f.RosterTab, "Roster" }, { f.GuildInfoTab, "Info" } }) do
         local b = t[1]
         if b then
@@ -329,24 +332,29 @@ function M:SkinCommunities()
             -- game); they're tabs, drawn by SetTabs
             b.suuOwn = true
             tabs[#tabs + 1] = { button = b, label = t[2], short = t[2],
-                                selected = function() return not logShown() and b.GetChecked and b:GetChecked() or false end }
+                                selected = function() return not anyOwn() and b.GetChecked and b:GetChecked() or false end }
             b:HookScript("OnClick", function()
                 local g = guild()
-                if g and g.ShowLog then g:ShowLog(false) end
+                if g and g.ShowOwn then g:ShowOwn(nil) end
                 C_Timer.After(0, function() chrome:UpdateTabs() end)
             end)
         end
     end
     local gm = SuuUI.GetModule("guild")
     if gm and gm:Get("enabled") then
-        local logTab = CreateFrame("Button", nil, f)
-        logTab:SetScript("OnClick", function()
-            local g = guild()
-            if g and g.ShowLog then g:ShowLog(true) end
-            chrome:UpdateTabs()
-        end)
-        tabs[#tabs + 1] = { button = logTab, label = "Log", short = "Log", selected = logShown }
-        chrome.logTab = logTab
+        local function ownTab(key, label)
+            local b = CreateFrame("Button", nil, f)
+            b:SetScript("OnClick", function()
+                local g = guild()
+                if g and g.ShowOwn then g:ShowOwn(key) end
+                chrome:UpdateTabs()
+            end)
+            tabs[#tabs + 1] = { button = b, label = label, short = label, selected = function() return own(key) end }
+            return b
+        end
+        chrome.logTab = ownTab("log", "Log")
+        -- Settings: the Guild Master's (the ranks and what each may do)
+        if IsGuildLeader and IsGuildLeader() then chrome.settingsTab = ownTab("settings", "Settings") end
     end
     if #tabs > 0 then chrome:SetTabs(tabs) end
     -- the play-style and benefits tabs out of sight

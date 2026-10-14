@@ -230,19 +230,57 @@ function M:Note(m, officer)
         end })
 end
 
--- Guild settings: Blizzard's guild control window (ranks and what each
--- may do), shown directly (it isn't one of the panels Blizzard's window
--- manager places from addon code without tainting).
-function M:GuildSettings()
-    if C_AddOns and C_AddOns.LoadAddOn and not _G.GuildControlUI then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+-- Guild settings: Blizzard's own guild control window (ranks and what each
+-- may do) hosted on the Settings tab (asked for in game: the settings in a
+-- tab of their own, for those who may change them). SuuUI can't change
+-- them itself (GuildControlSetRank, SetMOTD and SetInfoText are forbidden
+-- to addons: /suu probe social guildcontrol), but your clicks inside
+-- Blizzard's window are yours and save (found in game). Its contents keep
+-- their own fonts: SuuUI's wider ones made the labels run into each other.
+function M:GuildSettings() self:ShowOwn("settings") end
+
+function M:HostSettings(on)
+    local f = self.frame
+    if not f then return end
+    if on and not _G.GuildControlUI and C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
     local ui = _G.GuildControlUI
-    if not ui then self:Print("The guild's settings aren't available here.") return end
-    if ui:IsShown() then ui:Hide() return end
-    ui:ClearAllPoints()
-    ui:SetPoint("TOPLEFT", self.frame, "TOPRIGHT", 12, 0)
-    ui:SetFrameStrata("DIALOG")
-    ui:Show()
-    if SuuUI.UI.Reskin then SuuUI.UI.Reskin(ui) end
+    -- a cover over Blizzard's own page underneath
+    if not self.settingsCover then
+        local cover = CreateFrame("Frame", nil, f)
+        cover:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+        cover:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+        cover:SetFrameLevel(f:GetFrameLevel() + 150)
+        cover:EnableMouse(true)
+        UI.Fill(cover, "surface-glass"):SetAllPoints()
+        cover.suuOwn = true
+        cover:Hide()
+        self.settingsCover = cover
+    end
+    self.settingsCover:SetShown(on and true or false)
+    if not ui then return end
+    if on then
+        if not self.hostedSettings then
+            self.hostedSettings = true
+            ui.suuOwn = true
+            ui:SetParent(self.settingsCover)
+            -- its own frame art away; its contents as they are
+            for _, part in ipairs({ ui.NineSlice, ui.TitleContainer, ui.Bg, ui.TopTileStreaks, ui.PortraitContainer }) do
+                if part then part:SetAlpha(0) end
+            end
+            for _, region in ipairs({ ui:GetRegions() }) do
+                if region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
+            end
+            for _, c in ipairs({ ui:GetChildren() }) do
+                if c.GetName and c:GetName() and c:GetName():find("CloseButton") then c:SetAlpha(0); c:EnableMouse(false) end
+            end
+        end
+        ui:ClearAllPoints()
+        ui:SetPoint("TOP", self.settingsCover, "TOP", 0, 0)
+        ui:SetFrameLevel(self.settingsCover:GetFrameLevel() + 5)
+        ui:Show()
+    elseif self.hostedSettings and ui:IsShown() then
+        ui:Hide()
+    end
 end
 
 function M:Act(action, m)
@@ -416,7 +454,40 @@ function M:RenderInfo()
                    canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
 end
 
+-- Edit: Blizzard's own edit box for it (SetMOTD and SetInfoText are
+-- forbidden to addon code; what you save in Blizzard's box is yours):
+-- its "[Click to edit]" for the message of the day or the guild's
+-- information, clicked.
 function M:EditInfo(key)
+    local details = self.frame and self.frame.GuildDetailsFrame
+    local found = {}
+    local function walk(fr, depth)
+        if depth > 5 or not fr or not fr.GetChildren then return end
+        for _, c in ipairs({ fr:GetChildren() }) do
+            if c.GetObjectType and c:GetObjectType() == "Button" then
+                local fs = c.GetFontString and c:GetFontString()
+                local text = (fs and fs:GetText()) or (c.GetText and c:GetText()) or ""
+                if type(text) == "string" and text:lower():find("edit") then found[#found + 1] = c end
+            end
+            walk(c, depth + 1)
+        end
+    end
+    walk(details, 0)
+    -- the left column's two, top to bottom: the message of the day, then the information
+    table.sort(found, function(a, b)
+        local al, bl = a:GetLeft() or 0, b:GetLeft() or 0
+        if math.abs(al - bl) > 40 then return al < bl end
+        return (a:GetTop() or 0) > (b:GetTop() or 0)
+    end)
+    local button = found[key == "motd" and 1 or 2]
+    if button and button.Click then
+        button:Click()
+        return
+    end
+    self:EditInfoOwn(key)
+end
+
+function M:EditInfoOwn(key)
     local motd = key == "motd"
     local current = motd and call(GetGuildRosterMOTD) or call(GetGuildInfoText)
     UI.Confirm({ title = motd and "Message of the day" or "Guild information",
@@ -465,9 +536,11 @@ function M:RenderLog()
     page:SetData({ lines = lines })
 end
 
-function M:ShowLog(on)
-    self.logShown = on and true or false
-    if on and QueryGuildEventLog then pcall(QueryGuildEventLog) end
+-- SuuUI's own pages over the window: "log", "settings", or nil (Blizzard's
+-- tab's own page).
+function M:ShowOwn(key)
+    self.ownPage = key
+    if key == "log" and QueryGuildEventLog then pcall(QueryGuildEventLog) end
     self:Follow()
     local chrome = self.frame and self.frame.suuChrome
     if chrome then chrome:UpdateTabs() end
@@ -528,7 +601,7 @@ function M:BuildPicker()
     plus:SetScript("OnClick", function() self:JoinOrCreate() end)
     local picker = UI.Select(chrome.head, { bare = true, width = 220, textStyle = "label", textColor = "ink",
         options = self:Clubs(), onChange = function(id)
-            self.logShown = false
+            self.ownPage = nil
             if f.SelectClub then f:SelectClub(id) end
         end })
     picker:SetPoint("RIGHT", plus, "LEFT", -S["space-3"], 0)
@@ -692,10 +765,12 @@ function M:Follow()
     local club = f.GetSelectedClubId and f:GetSelectedClubId()
     local guild = C_Club and C_Club.GetGuildClubId and C_Club.GetGuildClubId()
     local isGuild = f:IsShown() and guild and club == guild
-    if not isGuild then self.logShown = false end
-    local onLog = isGuild and self.logShown
-    local onRoster = isGuild and not onLog and mode ~= nil and mode == modes.ROSTER
-    local onInfo = isGuild and not onLog and mode ~= nil and mode == modes.GUILD_INFO
+    if not isGuild then self.ownPage = nil end
+    local onLog = isGuild and self.ownPage == "log"
+    local onSettings = isGuild and self.ownPage == "settings"
+    self:HostSettings(onSettings)
+    local onRoster = isGuild and not self.ownPage and mode ~= nil and mode == modes.ROSTER
+    local onInfo = isGuild and not self.ownPage and mode ~= nil and mode == modes.GUILD_INFO
     if self.logPage then
         self.logPage:SetShown(onLog and true or false)
         if onLog then self:RenderLog() end
