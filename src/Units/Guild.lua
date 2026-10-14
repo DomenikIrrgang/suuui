@@ -169,8 +169,10 @@ function M:FootOverlays(m, actions)
             over.member = m
             over:SetAttribute("type1", (on and key ~= "remove" or (on and over.armed)) and "macro" or nil)
             over:SetAttribute("macrotext1", m and (SLASH[key] .. m.full) or "")
-            over:SetFrameStrata(page:GetFrameStrata())
-            over:SetFrameLevel(btn:GetFrameLevel() + 5)
+            -- a layer over the window's own (HIGH): a window comes to the
+            -- front when clicked and covered it, so the click reached the
+            -- plain button under it (found in game)
+            over:SetFrameStrata("DIALOG")
             over:SetShown(on and true or false)
         end
     end
