@@ -756,10 +756,6 @@ function M:LayChat()
     if not f or not f.Chat then return end
     local S = T.space
     self.layingChat = true
-    if f.StreamDropdown then
-        f.StreamDropdown:ClearAllPoints()
-        f.StreamDropdown:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
-    end
     -- the messages in SuuUI's own box (Blizzard's inset frame and its
     -- corner art away), and the input line under it on its own: both edge
     -- to edge at the pages' 20px (they overlapped and differed in width,
@@ -776,8 +772,9 @@ function M:LayChat()
         f.Chat.suuBox:SetAllPoints()
         f.Chat.suuEdge = UI.Border(f.Chat, "gilt-faint")
     end
-    -- the message of the day on top of the box: its bottom edge is the box's top
-    local top = 44 + 24 + S["space-4"]
+    -- the message of the day in a box of its own at the top, the messages
+    -- space-4 under it (asked for in game)
+    local top = 44
     local banner = self.motdBanner
     local bh = banner and banner:Height() or 0
     if banner then
@@ -786,8 +783,14 @@ function M:LayChat()
         banner:SetPoint("TOPRIGHT", f, "TOPRIGHT", -20, -top)
     end
     f.Chat:ClearAllPoints()
-    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(top + (bh > 0 and bh - 1 or 0)))
+    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(top + (bh > 0 and bh + S["space-4"] or 0)))
     f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + EDIT_H + S["space-3"])
+    -- the stream dropdown in the messages box's top right corner
+    if f.StreamDropdown then
+        f.StreamDropdown:ClearAllPoints()
+        f.StreamDropdown:SetPoint("TOPRIGHT", f.Chat, "TOPRIGHT", -S["space-3"], -S["space-3"])
+        f.StreamDropdown:SetFrameLevel(math.max(f.StreamDropdown:GetFrameLevel(), f.Chat:GetFrameLevel() + 10))
+    end
     local edit = f.ChatEditBox
     if edit then
         if UI.ReskinEditBox then UI.ReskinEditBox(edit) end
