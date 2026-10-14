@@ -197,7 +197,7 @@ local function makeCard(view)
     c.unlearn.edge:SetShown(false)
     c.unlearn.glyph = c.unlearn:CreateTexture(nil, "ARTWORK")
     c.unlearn.glyph:SetTexture(GLYPHS .. "trash.tga")
-    c.unlearn.glyph:SetSize(13, 13)
+    c.unlearn.glyph:SetSize(14, 14) -- even, like the button: whole pixels each side
     c.unlearn.glyph:SetPoint("CENTER")
     c.unlearn.glyph:SetVertexColor(UI.RGBA("ink-faint"))
     c.unlearn:SetFrameLevel(c:GetFrameLevel() + 5)
