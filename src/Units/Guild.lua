@@ -426,6 +426,28 @@ end
 -- Over Blizzard's window
 --------------------------------------------------------------------------------
 
+-- The message of the day: the one the last GUILD_MOTD brought until the
+-- game's own copy has caught up.
+function M:Motd()
+    local motd = call(GetGuildRosterMOTD)
+    if self.freshMotd then
+        if plain(motd) and motd == self.freshMotd then self.freshMotd = nil end
+        motd = self.freshMotd or motd
+    end
+    return plain(motd) and motd or nil
+end
+
+-- The Chat tab's message of the day banner (design component
+-- GuildMotdBanner): only on your guild's chat, gone without a message.
+function M:RenderBanner()
+    local b = self.motdBanner
+    if not b then return end
+    local text = self.onChat and self:Motd() or nil
+    b:SetData({ text = text, canEdit = call(CanEditMOTD) })
+    self:LayChat()
+    self:InfoOverlays()
+end
+
 -- The Info page's data.
 function M:RenderInfo()
     local page = self.infoPage
@@ -436,12 +458,7 @@ function M:RenderInfo()
     for i = 1, (call(GuildControlGetNumRanks)) or 0 do
         ranks[#ranks + 1] = { name = call(GuildControlGetRankName, i), count = counts[i - 1] or 0 }
     end
-    local motd = call(GetGuildRosterMOTD)
-    if self.freshMotd then
-        -- until the game's copy has caught up
-        if plain(motd) and motd == self.freshMotd then self.freshMotd = nil end
-        motd = self.freshMotd or motd
-    end
+    local motd = self:Motd()
     local info = call(GetGuildInfoText)
     page:SetData({ motd = plain(motd) and motd or nil, info = plain(info) and info or nil,
                    canEditMotd = call(CanEditMOTD), canEditInfo = call(CanEditGuildInfo), ranks = ranks })
@@ -475,7 +492,13 @@ function M:BlizzEdits()
         if math.abs(al - bl) > 40 then return al < bl end
         return (a:GetTop() or 0) > (b:GetTop() or 0)
     end)
-    return { motd = found[1], info = found[2] }
+    local placed = found[1] and found[1]:GetLeft() and (not found[2] or found[2]:GetLeft())
+    if placed then
+        self.editCache = { motd = found[1], info = found[2] }
+        return self.editCache
+    end
+    -- Blizzard's page not laid out (the chat showing): the pair seen last
+    return self.editCache or { motd = found[1], info = found[2] }
 end
 
 function M:EditInfo(key)
@@ -491,28 +514,35 @@ end
 -- "[Click to edit]" (out of combat; anchored only while shown, the way the
 -- roster's are, so the window never turns protected).
 function M:InfoOverlays()
-    local page = self.infoPage
-    if not page or InCombatLockdown() then return end
+    if InCombatLockdown() then return end
     self.infoOvers = self.infoOvers or {}
-    local blizz = page:IsVisible() and self:BlizzEdits() or {}
-    for _, key in ipairs({ "motd", "info" }) do
-        local block = page[key]
+    local page, banner = self.infoPage, self.motdBanner
+    local mine = {
+        motd = page and page.motd and page.motd.edit,
+        info = page and page.info and page.info.edit,
+        banner = banner and banner.edit,
+    }
+    local blizz
+    for key, button in pairs(mine) do
         local over = self.infoOvers[key]
-        if not over and block then
-            over = secureOver(block.edit)
+        if not over then
+            over = secureOver(button)
             over:SetAttribute("type1", "click")
             over:HookScript("PostClick", function() C_Timer.After(0, function() self:SkinTextEdit() end) end)
             self.infoOvers[key] = over
         end
-        if over then
-            local target = blizz[key]
-            local on = target and block.edit:IsVisible()
-            over:SetAttribute("clickbutton1", target)
-            over:SetFrameStrata("DIALOG")
-            over:ClearAllPoints()
-            if on then over:SetAllPoints(block.edit) end
-            over:SetShown(on and true or false)
+        local on = button:IsVisible()
+        local target
+        if on then
+            blizz = blizz or self:BlizzEdits()
+            target = blizz[key == "banner" and "motd" or key]
+            on = target ~= nil
         end
+        over:SetAttribute("clickbutton1", target)
+        over:SetFrameStrata("DIALOG")
+        over:ClearAllPoints()
+        if on then over:SetAllPoints(button) end
+        over:SetShown(on and true or false)
     end
 end
 
@@ -537,7 +567,7 @@ function M:SkinTextEdit()
         -- saved or not: the page shows what the game has now
         dlg:HookScript("OnHide", function()
             if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
-            for _, t in ipairs({ 0.3, 1.5 }) do C_Timer.After(t, function() self:RenderInfo() end) end
+            for _, t in ipairs({ 0.3, 1.5 }) do C_Timer.After(t, function() self:RenderInfo(); self:RenderBanner() end) end
         end)
     end
     if dlg:IsShown() then UI.ReskinDialog(dlg) end
@@ -773,8 +803,17 @@ function M:LayChat()
         f.Chat.suuBox:SetAllPoints()
         f.Chat.suuEdge = UI.Border(f.Chat, "gilt-faint")
     end
+    -- the message of the day on top of the box: its bottom edge is the box's top
+    local top = 44 + 24 + S["space-4"]
+    local banner = self.motdBanner
+    local bh = banner and banner:Height() or 0
+    if banner then
+        banner:ClearAllPoints()
+        banner:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -top)
+        banner:SetPoint("TOPRIGHT", f, "TOPRIGHT", -20, -top)
+    end
     f.Chat:ClearAllPoints()
-    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(44 + 24 + S["space-4"]))
+    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(top + (bh > 0 and bh - 1 or 0)))
     f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + EDIT_H + S["space-3"])
     local edit = f.ChatEditBox
     if edit then
@@ -827,6 +866,8 @@ function M:Follow()
     self:HostSettings(onSettings)
     local onRoster = isGuild and not self.ownPage and mode ~= nil and mode == modes.ROSTER
     local onInfo = isGuild and not self.ownPage and mode ~= nil and mode == modes.GUILD_INFO
+    self.onChat = isGuild and not self.ownPage and mode ~= nil and mode == modes.CHAT
+    self:RenderBanner()
     if self.logPage then
         self.logPage:SetShown(onLog and true or false)
         if onLog then self:RenderLog() end
@@ -878,6 +919,14 @@ function M:Build()
     info:Hide()
     info.suuOwn = true
     info.onEdit = function(key) self:EditInfo(key) end
+    -- the Chat tab's message of the day, pinned over the messages
+    local banner = UI.GuildMotdBanner(f)
+    banner:SetFrameLevel(f:GetFrameLevel() + 20)
+    banner.suuOwn = true
+    banner.onEdit = function() self:EditInfo("motd") end
+    -- one line or two: the box follows
+    banner:HookScript("OnSizeChanged", function() if not self.layingChat then self:LayChat() end end)
+    self.motdBanner = banner
     self.infoPage = info
     -- the Log page: over the whole content, the chat's parts included
     local log = UI.GuildLog(f)
@@ -918,6 +967,7 @@ function M:OnEnable()
         self:OnGameEvent("GUILD_MOTD", function(_, motd)
             if plain(motd) then self.freshMotd = motd end
             self:RenderInfo()
+            self:RenderBanner()
         end)
     end
     if not valid or valid("GUILD_EVENT_LOG_UPDATE") then self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function() self:RenderLog() end) end
@@ -931,6 +981,7 @@ function M:OnEnable()
             self:OnGameEvent(e, function()
                 if self.roster and self.roster:IsVisible() then self:QueueRender() end
                 if self.infoPage and self.infoPage:IsVisible() then self:RenderInfo() end
+                if self.onChat then self:RenderBanner() end
             end)
         end
     end

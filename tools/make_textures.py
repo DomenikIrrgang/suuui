@@ -320,6 +320,7 @@ GLYPHS = {
     "chevronRight": "M9 6l6 6-6 6",
     "chevronDown": "M6 9l6 6 6-6",
     "chevronUp": "M6 15l6-6 6 6",
+    "pushpin": "M9 3h6M10 3v6l-3.5 4.5h11L14 9V3M12 13.5V21",
     "check": "M5 12.5l4.5 4.5L19 7",
 }
 

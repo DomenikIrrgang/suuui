@@ -339,6 +339,7 @@ API.UI.GuildRoster = UI.GuildRoster -- GuildRoster(parent) -> SetData({ online, 
 API.UI.GuildInfo = UI.GuildInfo -- GuildInfo(parent) -> SetData({ motd, info, canEditMotd, canEditInfo, ranks }); onEdit("motd" | "info")
 API.UI.GuildLog = UI.GuildLog -- GuildLog(parent) -> SetData({ lines = { { text, when } } })
 API.UI.GuildControl = UI.GuildControl -- GuildControl(host, GuildControlUI) -> Layout(): the game's guild control laid out in host
+API.UI.GuildMotdBanner = UI.GuildMotdBanner -- GuildMotdBanner(parent) -> SetData({ text, canEdit }), Height(); onEdit
 API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H

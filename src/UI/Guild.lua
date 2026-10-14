@@ -412,3 +412,89 @@ function UI.GuildLog(parent)
     l.empty:SetValue("Nothing has happened in the guild yet.")
     return l
 end
+
+--------------------------------------------------------------------------------
+-- GuildMotdBanner: the guild's message of the day pinned to the top of the
+-- Chat tab's messages box (design component GuildMotdBanner): surface-raised
+-- with a gilt-faint edge (its bottom is the box's top), a pushpin and
+-- "Message of the day" in `header` gilt-text, the message in `body` ink,
+-- two lines at most (cut short with an ellipsis, the whole message in a
+-- tooltip then). Edit at the right only when your rank may. No message, no
+-- banner.
+--
+--   local b = UI.GuildMotdBanner(parent)
+--   b:SetData({ text, canEdit })   -- b:GetHeight(): 34 or 52, 0 when empty
+--   b.onEdit()                      -- b.edit is the Edit button
+--------------------------------------------------------------------------------
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local MB = {}
+
+function MB:SetData(d)
+    self.data = d
+    local text = d and d.text
+    local has = type(text) == "string" and text ~= ""
+    self.has = has
+    self:SetShown(has)
+    if not has then return end
+    self.edit:SetShown(d.canEdit and true or false)
+    self.message:SetText(text)
+    self:Layout()
+end
+
+function MB:Layout()
+    if not self.has then return end
+    local w = self:GetWidth()
+    if not w or w < 100 then return end
+    local right = self.edit:IsShown() and (self.edit:GetWidth() + S["space-5"] + S["space-4"]) or S["space-5"]
+    local left = S["space-5"] + 12 + S["space-3"] + self.head:GetStringWidth() + S["space-4"]
+    self.message:SetWidth(math.max(60, w - left - right))
+    local lines = self.message:GetNumLines() or 1
+    local lh = T.type.body.lineHeight
+    local h = 2 * S["space-4"] + math.min(2, math.max(1, lines)) * lh
+    if self:GetHeight() ~= h then self:SetHeight(h) end
+end
+
+function MB:Height()
+    return self.has and self:GetHeight() or 0
+end
+
+function UI.GuildMotdBanner(parent)
+    local b = CreateFrame("Frame", nil, parent)
+    Mixin(b, MB)
+    b:SetHeight(2 * S["space-4"] + T.type.body.lineHeight)
+    UI.Fill(b, "surface-raised"):SetAllPoints()
+    UI.Border(b, "gilt-faint")
+    b:EnableMouse(true)
+    b.pin = b:CreateTexture(nil, "OVERLAY")
+    b.pin:SetTexture(GLYPHS .. "pushpin.tga")
+    b.pin:SetSize(12, 12)
+    b.pin:SetVertexColor(UI.RGBA("gilt-text"))
+    b.pin:SetPoint("TOPLEFT", S["space-5"], -(S["space-4"] + 3))
+    b.head = UI.Text(b, "header", "gilt-text")
+    b.head:SetValue("Message of the day")
+    b.head:SetPoint("TOPLEFT", b.pin, "TOPRIGHT", S["space-3"], 3)
+    b.message = b:CreateFontString(nil, "OVERLAY")
+    ns.Fonts.Apply(b.message, "body")
+    b.message:SetTextColor(UI.RGBA("ink"))
+    b.message:SetJustifyH("LEFT")
+    b.message:SetJustifyV("TOP")
+    b.message:SetWordWrap(true)
+    b.message:SetMaxLines(2)
+    b.message:SetPoint("TOPLEFT", b.head, "TOPRIGHT", S["space-4"], 1)
+    b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if b.onEdit then b.onEdit() end end })
+    b.edit:SetHeight(22)
+    b.edit:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-4"] - 2))
+    b:SetScript("OnSizeChanged", function() b:Layout() end)
+    -- cut short: the whole message on hover
+    b:SetScript("OnEnter", function(self)
+        if not (self.has and self.message:IsTruncated()) then return end
+        GameTooltip:SetOwner(self.message, "ANCHOR_BOTTOMLEFT", 0, 0)
+        GameTooltip_SetTitle(GameTooltip, "Message of the day")
+        GameTooltip_AddNormalLine(GameTooltip, self.data.text, true)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    b:Hide()
+    return b
+end
