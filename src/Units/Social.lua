@@ -405,11 +405,19 @@ function M:Follow()
     local list = self.friendsList
     local onContacts = f:IsShown() and list and list:IsShown()
     self.view:SetShown(onContacts and true or false)
-    if f.BattleNetBar then f.BattleNetBar:SetAlpha(onContacts and 0 or 1) end
     -- the Raid page over Blizzard's (see-through, in place: Raid Info hangs
     -- off it)
     local raid = f.RaidFrame
     local onRaid = f:IsShown() and raid and raid:IsShown()
+    -- the Battle.net bar see-through under either page (it sat over the
+    -- Raid page's head, found in game), and the pages above its buttons
+    local bar = f.BattleNetBar
+    if bar then
+        bar:SetAlpha((onContacts or onRaid) and 0 or 1)
+        local level = math.max(f:GetFrameLevel() + 100, bar:GetFrameLevel() + 30)
+        self.view:SetFrameLevel(level)
+        if self.raidPage then self.raidPage:SetFrameLevel(level) end
+    end
     if self.raidPage then
         self.raidPage:SetShown(onRaid and true or false)
         if raid then raid:SetAlpha(onRaid and 0 or 1) end
