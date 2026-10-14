@@ -137,7 +137,7 @@ ns.RecipeSources = {
     [3448] = { { t = "t" } }, -- Lesser Invisibility Potion
     [3449] = { { t = "i", i = 6068, v = { "Bliztik|Duskwood|AH", "Montarr|Thousand Needles|H" } } }, -- Shadow Oil
     [3450] = { { t = "i", i = 3830, d = { "Rock Elemental|Badlands|39-40", "Nightbane Dark Runner|Duskwood|28-29", "Splinter Fist Warrior|Duskwood|29-30", "Zzarc' Vul|Duskwood|33" }, dn = 330, o = { "Solid Chest|Duskwood", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" } } }, -- Elixir of Lesser Fortitude
-    [3451] = { { t = "i", i = 3831, d = { "Rock Elemental|Badlands|39-40", "Zzarc' Vul|Duskwood|33", "Eliza||31", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 333, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 4637, 16883 } } }, -- Troll's Blood Elixir
+    [3451] = { { t = "i", i = 3831, d = { "Rock Elemental|Badlands|39-40", "Zzarc' Vul|Duskwood|33", "Eliza|Duskwood|31", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 333, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 4637, 16883 } } }, -- Troll's Blood Elixir
     [3452] = { { t = "t" } }, -- Mana Potion
     [3453] = { { t = "i", i = 3832, d = { "Rock Elemental|Badlands|39-40", "Stalvan Mistmantle|Duskwood|32", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 395, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" } } }, -- Draught of Detect Lesser Invisibility
     [3454] = { { t = "i", i = 14634, v = { "Bro'kin|Alterac Mountains|AH" } } }, -- Frost Oil
@@ -149,7 +149,7 @@ ns.RecipeSources = {
     [3496] = { { t = "i", i = 12163, v = { "Zarena Cromwind|Stranglethorn Vale|AH" } } }, -- Moonsteel Broadsword
     [3497] = { { t = "i", i = 3868, d = { "Rock Elemental|Badlands|39-40", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35", "Bloodscalp Hunter|Stranglethorn Vale|34-35" }, dn = 387, o = { "Alterac Granite|Hillsbrad Foothills", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" }, c = { 4634, 4636, 16883 } } }, -- Frost Tiger Blade
     [3498] = { { t = "i", i = 12164, v = { "Vharr|Stranglethorn Vale|H", "Jaquilina Dramet|Stranglethorn Vale|AH" } } }, -- Massive Iron Axe
-    [3500] = { { t = "i", i = 3869, d = { "Rock Elemental|Badlands|39-40", "Stitches||35", "Bloodscalp Hunter|Stranglethorn Vale|34-35", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 407, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 4637, 16883 } } }, -- Shadow Crescent Axe
+    [3500] = { { t = "i", i = 3869, d = { "Rock Elemental|Badlands|39-40", "Stitches|Duskwood|35", "Bloodscalp Hunter|Stranglethorn Vale|34-35", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 407, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 4637, 16883 } } }, -- Shadow Crescent Axe
     [3501] = { { t = "t" } }, -- Green Iron Bracers
     [3502] = { { t = "t" } }, -- Green Iron Helm
     [3503] = { { t = "i", i = 6047, v = { "Krinkle Goodsteel|Tanaris|AH" } } }, -- Golden Scale Coif
@@ -159,7 +159,7 @@ ns.RecipeSources = {
     [3507] = { { t = "i", i = 3872, d = { "Rock Elemental|Badlands|39-40", "Nightbane Dark Runner|Duskwood|28-29", "Nightbane Vile Fang|Duskwood|29-30", "Bone Chewer|Duskwood|26-27" }, dn = 405, o = { "Solid Chest|Duskwood", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" }, c = { 4633, 4634, 4636, 16883 } } }, -- Golden Scale Leggings
     [3508] = { { t = "t" } }, -- Green Iron Hauberk
     [3511] = { { t = "i", i = 3873, d = { "Rock Elemental|Badlands|39-40", "Stalvan Mistmantle|Duskwood|32", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 390, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 4637, 16883 } } }, -- Golden Scale Cuirass
-    [3513] = { { t = "i", i = 3874, d = { "Rock Elemental|Badlands|39-40", "Stitches||35", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 407, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 16882, 16883 } } }, -- Polished Steel Boots
+    [3513] = { { t = "i", i = 3874, d = { "Rock Elemental|Badlands|39-40", "Stitches|Duskwood|35", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 407, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 16882, 16883 } } }, -- Polished Steel Boots
     [3515] = { { t = "i", i = 3875, d = { "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Deathstrike Tarantula|Swamp of Sorrows|40-41", "Thrashtail Basilisk|Stranglethorn Vale|41-42", "Bloodsail Warlock|Stranglethorn Vale|41-43" }, dn = 31, c = { 4634 } } }, -- Golden Scale Boots
     [3569] = { { t = "t" } }, -- Smelt Steel
     [3753] = { { t = "t" } }, -- Handstitched Leather Belt
@@ -215,7 +215,7 @@ ns.RecipeSources = {
     [3860] = { { t = "i", i = 4352, d = { "Rock Elemental|Badlands|39-40", "Nightbane Dark Runner|Duskwood|28-29", "Nightbane Vile Fang|Duskwood|29-30", "Bone Chewer|Duskwood|26-27" }, dn = 387, o = { "Solid Chest|Duskwood", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" } } }, -- Boots of the Enchanter
     [3861] = { { t = "t" } }, -- Long Silken Cloak
     [3862] = { { t = "i", i = 4355, v = { "Micha Yance|Hillsbrad Foothills|A", "Ghok'kah|Dustwallow Marsh|H" } } }, -- Icy Cloak
-    [3863] = { { t = "i", i = 4353, d = { "Rock Elemental|Badlands|39-40", "Stitches||35", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 402, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 5758, 16883 } } }, -- Spider Belt
+    [3863] = { { t = "i", i = 4353, d = { "Rock Elemental|Badlands|39-40", "Stitches|Duskwood|35", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 402, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4634, 4636, 5758, 16883 } } }, -- Spider Belt
     [3864] = { { t = "i", i = 4356, d = { "Skullsplitter Warrior|Stranglethorn Vale|39-40", "Stranglethorn Raptor|Stranglethorn Vale|33-34", "Mosh'Ogg Spellcrafter|Stranglethorn Vale|43-44", "Swamp Jaguar|Swamp of Sorrows|36-37" }, dn = 25 } }, -- Star Belt
     [3865] = { { t = "t" } }, -- Bolt of Mageweave
     [3866] = { { t = "t" } }, -- Stylish Red Shirt
@@ -304,7 +304,7 @@ ns.RecipeSources = {
     [6618] = { { t = "i", i = 5643, v = { "Hagrus|Orgrimmar|H", "Ulthir|Darnassus|A" } } }, -- Great Rage Potion
     [6624] = { { t = "i", i = 5642, v = { "Kor'geld|Orgrimmar|H", "Ulthir|Darnassus|A", "Soolie Berryfizz|Ironforge|A" } } }, -- Free Action Potion
     [6661] = { { t = "t" } }, -- Barbaric Harness
-    [6686] = { { t = "i", i = 5771, v = { "Gina MacGregor|Westfall|A", "Mahu|Thunder Bluff|H", "Andrew Hilbert|Silverpine Forest|H", "Valdaron|Darkshore|A" }, d = { "Defias Looter|Westfall|13-14", "Pyrewood Tailor|Silverpine Forest|14-15", "Moonrage Tailor||14-15" }, dn = 3 } }, -- Red Linen Bag
+    [6686] = { { t = "i", i = 5771, v = { "Gina MacGregor|Westfall|A", "Mahu|Thunder Bluff|H", "Andrew Hilbert|Silverpine Forest|H", "Valdaron|Darkshore|A" }, d = { "Defias Looter|Westfall|13-14", "Pyrewood Tailor|Silverpine Forest|14-15", "Moonrage Tailor|Silverpine Forest|14-15" }, dn = 3 } }, -- Red Linen Bag
     [6688] = { { t = "i", i = 5772, v = { "Amy Davenport|Redridge Mountains|A", "Jennabink Powerseam|Wetlands|A", "Rann Flamespinner|Loch Modan|A", "Mahu|Thunder Bluff|H", "Borya|Orgrimmar|H", "Wrahk|The Barrens|H" }, d = { "Defias Renegade Mage|Westfall|18-19", "Hillsbrad Tailor|Hillsbrad Foothills|24-25" }, dn = 2 } }, -- Red Woolen Bag
     [6690] = { { t = "t" } }, -- Lesser Wizard's Robe
     [6692] = { { t = "i", i = 5773, d = { "Defias Enchanter|Duskwood|26-27", "Dark Strand Voidcaller|Darkshore|28-29", "Grimtotem Geomancer|Thousand Needles|25-27" }, dn = 3 } }, -- Robes of Arcana
@@ -423,9 +423,9 @@ ns.RecipeSources = {
     [8786] = { { t = "i", i = 7089, v = { "Jun'ha|Arathi Highlands|H", "Brienna Starglow|Feralas|A", "Norvin Alderman|Alterac Mountains|" } } }, -- Azure Silk Cloak
     [8789] = { { t = "i", i = 7087, v = { "Xizk Goodstitch|Stranglethorn Vale|AH", "Norvin Alderman|Alterac Mountains|" } } }, -- Crimson Silk Cloak
     [8791] = { { t = "t" } }, -- Crimson Silk Vest
-    [8793] = { { t = "i", i = 7084, d = { "Rock Elemental|Badlands|39-40", "Eliza||31", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 394, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 16883 } } }, -- Crimson Silk Shoulders
+    [8793] = { { t = "i", i = 7084, d = { "Rock Elemental|Badlands|39-40", "Eliza|Duskwood|31", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35" }, dn = 394, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 16883 } } }, -- Crimson Silk Shoulders
     [8795] = { { t = "i", i = 7085, d = { "Rock Elemental|Badlands|39-40", "Bloodscalp Warrior|Stranglethorn Vale|33-34", "Bloodscalp Scout|Stranglethorn Vale|34-35", "Bloodscalp Berserker|Stranglethorn Vale|36-37" }, dn = 408, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 9265, 16883 } } }, -- Azure Shoulders
-    [8797] = { { t = "i", i = 7086, d = { "Rock Elemental|Badlands|39-40", "Farmer Ray|Hillsbrad Foothills|23", "Stitches||35", "Bloodscalp Warrior|Stranglethorn Vale|33-34" }, dn = 408, o = { "Alterac Granite|Hillsbrad Foothills", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" }, c = { 4634, 4636, 4637, 16883 } } }, -- Earthen Silk Belt
+    [8797] = { { t = "i", i = 7086, d = { "Rock Elemental|Badlands|39-40", "Farmer Ray|Hillsbrad Foothills|23", "Stitches|Duskwood|35", "Bloodscalp Warrior|Stranglethorn Vale|33-34" }, dn = 408, o = { "Alterac Granite|Hillsbrad Foothills", "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands" }, c = { 4634, 4636, 4637, 16883 } } }, -- Earthen Silk Belt
     [8799] = { { t = "t" } }, -- Crimson Silk Pantaloons
     [8802] = { { t = "i", i = 7088, v = { "Vizzklick|Tanaris|AH", "Stitch Pinwizzle|Riverglades|AH" } } }, -- Crimson Silk Robe
     [8804] = { { t = "t" } }, -- Crimson Silk Gloves
@@ -535,10 +535,10 @@ ns.RecipeSources = {
     [10558] = { { t = "t" } }, -- Nightscape Boots
     [10560] = { { t = "i", i = 8389, d = { "Skullsplitter Hunter|Stranglethorn Vale|41-42", "Skullsplitter Spiritchaser|Stranglethorn Vale|44", "Mosh'Ogg Mauler|Stranglethorn Vale|43-44", "Mosh'Ogg Lord|Stranglethorn Vale|45" }, dn = 570, o = { "Solid Chest|Stranglethorn Vale", "Ancient Treasure|Uldaman", "Captain's Chest|Tanaris" }, c = { 4637, 4638, 5758, 16884 } } }, -- Big Voodoo Pants
     [10562] = { { t = "i", i = 8390, d = { "Blue Dragonspawn|Azshara|50-51", "Skullsplitter Hunter|Stranglethorn Vale|41-42", "Venture Co. Strip Miner|Stranglethorn Vale|40-41", "Mosh'Ogg Mauler|Stranglethorn Vale|43-44" }, dn = 538, o = { "Solid Chest|Stranglethorn Vale", "Ancient Treasure|Uldaman", "Solid Chest|The Hinterlands" }, c = { 4637, 4638 } } }, -- Big Voodoo Cloak
-    [10564] = { { t = "i", i = 8400, d = { "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw||45", "Andre Firebeard|Tanaris|45" }, dn = 3 } }, -- Tough Scorpid Shoulders
+    [10564] = { { t = "i", i = 8400, d = { "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw|Tanaris|45", "Andre Firebeard|Tanaris|45" }, dn = 3 } }, -- Tough Scorpid Shoulders
     [10566] = { { t = "i", i = 8406, q = { 2851, 2858 } } }, -- Wild Leather Boots
     [10568] = { { t = "i", i = 8401, d = { "Wastewander Rogue|Tanaris|43-44" }, dn = 1 } }, -- Tough Scorpid Leggings
-    [10570] = { { t = "i", i = 8402, d = { "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw||45", "Andre Firebeard|Tanaris|45" }, dn = 3 } }, -- Tough Scorpid Helm
+    [10570] = { { t = "i", i = 8402, d = { "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw|Tanaris|45", "Andre Firebeard|Tanaris|45" }, dn = 3 } }, -- Tough Scorpid Helm
     [10572] = { { t = "i", i = 8407, q = { 2852, 2859 } } }, -- Wild Leather Leggings
     [10574] = { { t = "i", i = 8408, q = { 2853, 2860 } } }, -- Wild Leather Cloak
     [10619] = { { t = "t" } }, -- Dragonscale Gauntlets
@@ -636,7 +636,7 @@ ns.RecipeSources = {
     [12597] = { { t = "i", i = 10602, v = { "Knaz Blunderflame|Stranglethorn Vale|AH", "Yuka Screwspigot|Burning Steppes|AH" } } }, -- Deadly Scope
     [12599] = { { t = "t" } }, -- Mithril Casing
     [12603] = { { t = "t" } }, -- Mithril Frag Bomb
-    [12607] = { { t = "i", i = 10603, d = { "Rock Elemental|Badlands|39-40", "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Bloodscalp Witch Doctor|Stranglethorn Vale|37", "Skullsplitter Warrior|Stranglethorn Vale|39-40" }, dn = 458, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 11423, 16884 } } }, -- Catseye Ultra Goggles
+    [12607] = { { t = "i", i = 10603, d = { "Rock Elemental|Badlands|39-40", "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Bloodscalp Witch Doctor|Stranglethorn Vale|37", "Skullsplitter Warrior|Stranglethorn Vale|39-40" }, dn = 456, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637, 11423, 16884 } } }, -- Catseye Ultra Goggles
     [12609] = { { t = "t" } }, -- Catseye Draught
     [12614] = { { t = "i", i = 10604, d = { "Rock Elemental|Badlands|39-40", "Blue Dragonspawn|Azshara|50-51", "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Bloodscalp Witch Doctor|Stranglethorn Vale|37" }, dn = 412, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4637 } } }, -- Mithril Heavy-bore Rifle
     [12615] = { { t = "i", i = 10605, d = { "Bloodscalp Headhunter|Stranglethorn Vale|36-37", "Mosh'Ogg Mauler|Stranglethorn Vale|43-44", "Lashtail Raptor|Stranglethorn Vale|35-36", "Jungle Stalker|Stranglethorn Vale|40-41" }, dn = 156, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4636, 4637 } } }, -- Spellpower Goggles Xtreme
@@ -726,7 +726,7 @@ ns.RecipeSources = {
     [13846] = { { t = "i", i = 11204, d = { "Rock Elemental|Badlands|39-40", "Blue Dragonspawn|Azshara|50-51", "Bloodscalp Berserker|Stranglethorn Vale|36-37", "Bloodscalp Witch Doctor|Stranglethorn Vale|37" }, dn = 421, o = { "Solid Chest|Stranglethorn Vale", "Solid Chest|Arathi Highlands", "Alliance Strongbox|" }, c = { 4637 } } }, -- Enchant Bracer - Greater Spirit
     [13858] = { { t = "t" } }, -- Enchant Chest - Superior Stamina
     [13868] = { { t = "i", i = 11205, d = { "Swampwalker|Swamp of Sorrows|38-39", "Swampwalker Elder|Swamp of Sorrows|39-40", "Tangled Horror|Swamp of Sorrows|40-41", "Mire Lord|Swamp of Sorrows|42" }, dn = 5 } }, -- Enchant Gloves - Advanced Herbalism
-    [13882] = { { t = "i", i = 11206, d = { "Syndicate Assassin|Alterac Mountains|38-39", "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw||45" }, dn = 3 } }, -- Enchant Cloak - Lesser Agility
+    [13882] = { { t = "i", i = 11206, d = { "Syndicate Assassin|Alterac Mountains|38-39", "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw|Tanaris|45" }, dn = 3 } }, -- Enchant Cloak - Lesser Agility
     [13887] = { { t = "t" } }, -- Enchant Gloves - Strength
     [13890] = { { t = "t" } }, -- Enchant Boots - Minor Speed
     [13898] = { { t = "i", i = 11207, d = { "Pyromancer Loregrain|Blackrock Depths|52" }, dn = 1 } }, -- Enchant Weapon - Fiery Weapon
@@ -753,7 +753,7 @@ ns.RecipeSources = {
     [14930] = { { t = "t" } }, -- Quickdraw Quiver
     [14932] = { { t = "t" } }, -- Thick Leather Ammo Pouch
     [15255] = { { t = "t" } }, -- Mechanical Repair Kit
-    [15292] = { { t = "i", i = 11610, d = { "Grizzle||54" }, dn = 1 } }, -- Dark Iron Pulverizer
+    [15292] = { { t = "i", i = 11610, d = { "Grizzle|Blackrock Depths|54" }, dn = 1 } }, -- Dark Iron Pulverizer
     [15293] = { { t = "i", i = 11614, d = { "Anvilrage Marshal|Blackrock Depths|54-55", "Doomforge Dragoon|Blackrock Depths|54-55", "Doomforge Arcanasmith|Blackrock Depths|54-55", "Ragereaver Golem|Blackrock Depths|54-55" }, dn = 8, o = { "Blacksmithing Plans|Blackrock Depths" } } }, -- Dark Iron Mail
     [15294] = { { t = "i", i = 11611, d = { "Hammered Patron|Blackrock Depths|48-52", "Ribbly's Crony|Blackrock Depths|48-52" }, dn = 2 } }, -- Dark Iron Sunderer
     [15295] = { { t = "i", i = 11615, d = { "Anvilrage Overseer|Blackrock Depths|48-49", "Anvilrage Warden|Blackrock Depths|49-50", "Anvilrage Guardsman|Blackrock Depths|50-51", "Anvilrage Footman|Blackrock Depths|51-52" }, dn = 14, o = { "Blacksmithing Plans|Blackrock Depths" } } }, -- Dark Iron Shoulders
@@ -774,7 +774,7 @@ ns.RecipeSources = {
     [15933] = { { t = "i", i = 16110, v = { "Malygen|Felwood|A", "Bale|Felwood|H", "Himmik|Winterspring|AH" } } }, -- Monster Omelet
     [15935] = { { t = "i", i = 12226, v = { "Abigail Shiel|Tirisfal Glades|H" } } }, -- Crispy Bat Wing
     [15972] = { { t = "t" } }, -- Glinting Steel Dagger
-    [15973] = { { t = "i", i = 12261, d = { "Skullsplitter Warrior|Stranglethorn Vale|39-40", "Adolescent Whelp|Swamp of Sorrows|34-35", "Torn Fin Tidehunter|Hillsbrad Foothills|31-32", "Boulderfist Magus|Arathi Highlands|36-37" }, dn = 26, o = { "Arena Treasure Chest|" }, c = { 4636 } } }, -- Searing Golden Blade
+    [15973] = { { t = "i", i = 12261, d = { "Skullsplitter Warrior|Stranglethorn Vale|39-40", "Adolescent Whelp|Swamp of Sorrows|34-35", "Torn Fin Tidehunter|Hillsbrad Foothills|31-32", "Boulderfist Magus|Arathi Highlands|36-37" }, dn = 26, o = { "Arena Treasure Chest|Stranglethorn Vale" }, c = { 4636 } } }, -- Searing Golden Blade
     [16153] = { { t = "t" } }, -- Smelt Thorium
     [16639] = { { t = "t" } }, -- Dense Grinding Stone
     [16640] = { { t = "t" } }, -- Dense Weightstone
@@ -797,7 +797,7 @@ ns.RecipeSources = {
     [16657] = { { t = "i", i = 12700, q = { 7654 } } }, -- Imperial Plate Boots
     [16658] = { { t = "i", i = 12701, q = { 7657 } } }, -- Imperial Plate Helm
     [16659] = { { t = "i", i = 12702, d = { "Skeletal Executioner|Western Plaguelands|53-55", "Rotting Ghoul|Western Plaguelands|54-55", "Diseased Grizzly|Western Plaguelands|55-56", "Scarlet Paladin|Western Plaguelands|55-56" }, dn = 113, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Radiant Circlet
-    [16660] = { { t = "i", i = 12698, d = { "Hive'Zora Tunneler|Silithus|58-59" }, dn = 1, o = { "Arena Treasure Chest|" } }, { t = "i", i = 227891 } }, -- Dawnbringer Shoulders
+    [16660] = { { t = "i", i = 12698, d = { "Hive'Zora Tunneler|Silithus|58-59" }, dn = 1, o = { "Arena Treasure Chest|Stranglethorn Vale" } }, { t = "i", i = 227891 } }, -- Dawnbringer Shoulders
     [16661] = { { t = "i", i = 12703, v = { "Magnus Frostwake|Western Plaguelands|AH" }, d = { "Skeletal Acolyte|Western Plaguelands|55-56", "Enslaved Druid of the Talon|Teldrassil|10", "Haunting Vision|Western Plaguelands|57-58", "Tyrant Devilsaur|Un'Goro Crater|54-55" }, dn = 127, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Storm Gauntlets
     [16662] = { { t = "i", i = 12704, d = { "Blue Dragonspawn|Azshara|50-51", "Red Dragonspawn|Wetlands|57-58", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60" }, dn = 536, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758 } } }, -- Thorium Leggings
     [16663] = { { t = "i", i = 12705, q = { 7656 } } }, -- Imperial Plate Chest
@@ -805,10 +805,10 @@ ns.RecipeSources = {
     [16665] = { { t = "i", i = 12707, d = { "Scarlet Cavalier|Western Plaguelands|56-58" }, dn = 1 } }, -- Runic Plate Boots
     [16667] = { { t = "i", i = 12696, q = { 5127 } } }, -- Demon Forged Breastplate
     [16724] = { { t = "i", i = 12711, d = { "Skeletal Sorcerer|Western Plaguelands|51-52", "Wailing Death|Western Plaguelands|56-57", "Devouring Ooze|Western Plaguelands|55-56", "Carrion Lurker|Western Plaguelands|52-53" }, dn = 121, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758 } } }, -- Whitesoul Helm
-    [16725] = { { t = "i", i = 12713, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 455, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|" } } }, -- Radiant Leggings
+    [16725] = { { t = "i", i = 12713, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 455, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Radiant Leggings
     [16726] = { { t = "i", i = 12714, d = { "Strashaz Warrior|Dustwallow Marsh|59-60" }, dn = 1 } }, -- Runic Plate Helm
-    [16728] = { { t = "i", i = 12716, d = { "Venom Belcher|Stratholme|60-61", "Molten Destroyer|Molten Core|63", "Firelord|Molten Core|61-62", "Ancient Core Hound|Molten Core|62" }, dn = 8, o = { "Arena Treasure Chest|" } } }, -- Helm of the Great Chief
-    [16729] = { { t = "i", i = 12717, d = { "Blackhand Elite|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Rage Talon Captain|Blackrock Spire|62", "Thuzadin Necromancer|Stratholme|59-61" }, dn = 8, o = { "Arena Treasure Chest|" } } }, -- Lionheart Helm
+    [16728] = { { t = "i", i = 12716, d = { "Venom Belcher|Stratholme|60-61", "Molten Destroyer|Molten Core|63", "Firelord|Molten Core|61-62", "Ancient Core Hound|Molten Core|62" }, dn = 8, o = { "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Helm of the Great Chief
+    [16729] = { { t = "i", i = 12717, d = { "Blackhand Elite|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Rage Talon Captain|Blackrock Spire|62", "Thuzadin Necromancer|Stratholme|59-61" }, dn = 8, o = { "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Lionheart Helm
     [16730] = { { t = "i", i = 12715, q = { 7658 } } }, -- Imperial Plate Leggings
     [16731] = { { t = "i", i = 12718, d = { "Strashaz Myrmidon|Dustwallow Marsh|60-61" }, dn = 1 } }, -- Runic Breastplate
     [16732] = { { t = "i", i = 12719, d = { "Scarlet Smith|Western Plaguelands|59" }, dn = 1 } }, -- Runic Plate Leggings
@@ -865,13 +865,13 @@ ns.RecipeSources = {
     [17577] = { { t = "i", i = 13497, d = { "Cobalt Mageweaver|Winterspring|57-58" }, dn = 1 } }, -- Greater Arcane Protection Potion
     [17578] = { { t = "i", i = 13499, d = { "Dark Adept|Eastern Plaguelands|59", "Shadowmage|Eastern Plaguelands|59-60" }, dn = 2 } }, -- Greater Shadow Protection Potion
     [17579] = { { t = "i", i = 13500 } }, -- Greater Holy Protection Potion
-    [17580] = { { t = "i", i = 13501, v = { "Magnus Frostwake|Western Plaguelands|AH" }, d = { "Darkmaster Gandling||61" }, dn = 1 } }, -- Major Mana Potion
+    [17580] = { { t = "i", i = 13501, v = { "Magnus Frostwake|Western Plaguelands|AH" }, d = { "Darkmaster Gandling|Scholomance|61" }, dn = 1 } }, -- Major Mana Potion
     [17632] = { { t = "i", i = 13517 } }, -- Alchemist's Stone
     [17634] = { { t = "i", i = 13518, d = { "Searing Ghoul|Western Plaguelands|55-56", "Hungering Wraith|Western Plaguelands|56-58", "Wailing Death|Western Plaguelands|56-57", "Scarlet Worker|Western Plaguelands|55-57" }, dn = 122, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Flask of Petrification
     [17635] = { { t = "i", i = 13519, d = { "General Drakkisath|Blackrock Spire|62" }, dn = 1 } }, -- Flask of the Titans
-    [17636] = { { t = "i", i = 13520, d = { "Balnazzar||62" }, dn = 1 } }, -- Flask of Distilled Wisdom
+    [17636] = { { t = "i", i = 13520, d = { "Balnazzar|Stratholme|62" }, dn = 1 } }, -- Flask of Distilled Wisdom
     [17637] = { { t = "i", i = 13521, d = { "Ras Frostwhisper|Scholomance|62" }, dn = 1 } }, -- Flask of Supreme Power
-    [17638] = { { t = "i", i = 13522, d = { "Gyth||62" }, dn = 1 } }, -- Flask of Chromatic Resistance
+    [17638] = { { t = "i", i = 13522, d = { "Gyth|Blackrock Spire|62" }, dn = 1 } }, -- Flask of Chromatic Resistance
     [18238] = { { t = "i", i = 13939, v = { "Gikkix|Tanaris|AH" } } }, -- Spotted Yellowtail
     [18239] = { { t = "i", i = 13940, v = { "Kelsey Yance|Stranglethorn Vale|AH" } } }, -- Cooked Glossy Mightfish
     [18240] = { { t = "i", i = 13942, v = { "Gikkix|Tanaris|AH" } } }, -- Grilled Squid
@@ -903,7 +903,7 @@ ns.RecipeSources = {
     [18419] = { { t = "i", i = 14483, v = { "Lorelae Wintersong|Moonglade|AH" } } }, -- Felcloth Pants
     [18420] = { { t = "i", i = 14484, d = { "Blue Dragonspawn|Azshara|50-51", "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Skeletal Terror|Western Plaguelands|52-54" }, dn = 611, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758, 16885 } } }, -- Brightcloth Cloak
     [18421] = { { t = "i", i = 14485, d = { "Dark Summoner|Eastern Plaguelands|55-56" }, dn = 1 } }, -- Wizardweave Leggings
-    [18422] = { { t = "i", i = 14486, d = { "Overmaster Pyron||52" }, dn = 1 } }, -- Cloak of Fire
+    [18422] = { { t = "i", i = 14486, d = { "Overmaster Pyron|Blackrock Depths|52" }, dn = 1 } }, -- Cloak of Fire
     [18423] = { { t = "i", i = 14488, v = { "Darnall|Moonglade|AH" } } }, -- Runecloth Boots
     [18424] = { { t = "i", i = 14489, d = { "Red Wyrmkin|Wetlands|58-59", "Scalebane Lieutenant|Wetlands|60-61", "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52" }, dn = 518, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 19296 } } }, -- Frostweave Pants
     [18434] = { { t = "i", i = 14490, d = { "Thaurissan Firewalker|Burning Steppes|53-55" }, dn = 1 } }, -- Cindercloth Pants
@@ -918,17 +918,17 @@ ns.RecipeSources = {
     [18445] = { { t = "i", i = 14499, d = { "Blue Dragonspawn|Azshara|50-51", "Red Wyrmkin|Wetlands|58-59", "Scalebane Lieutenant|Wetlands|60-61", "Scalebane Royal Guard|Wetlands|61-62" }, dn = 515, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 16885 } } }, -- Mooncloth Bag
     [18446] = { { t = "i", i = 14500, d = { "Dark Caster|Eastern Plaguelands|56-57" }, dn = 1 } }, -- Wizardweave Robe
     [18447] = { { t = "i", i = 14501, d = { "Searing Ghoul|Western Plaguelands|55-56", "Hungering Wraith|Western Plaguelands|56-58", "Scarlet Worker|Western Plaguelands|55-57", "Enslaved Druid of the Talon|Teldrassil|10" }, dn = 114, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758 } } }, -- Mooncloth Vest
-    [18448] = { { t = "i", i = 14507, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Wailing Death|Western Plaguelands|56-57", "Enslaved Druid of the Talon|Teldrassil|10" }, dn = 131, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|" } } }, -- Mooncloth Shoulders
-    [18449] = { { t = "i", i = 14504, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 452, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|" }, c = { 5760 } } }, -- Runecloth Shoulders
+    [18448] = { { t = "i", i = 14507, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Wailing Death|Western Plaguelands|56-57", "Enslaved Druid of the Talon|Teldrassil|10" }, dn = 131, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Mooncloth Shoulders
+    [18449] = { { t = "i", i = 14504, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 452, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|Stranglethorn Vale" }, c = { 5760 } } }, -- Runecloth Shoulders
     [18450] = { { t = "i", i = 14505, d = { "Dark Caster|Eastern Plaguelands|56-57" }, dn = 1 } }, -- Wizardweave Turban
     [18451] = { { t = "i", i = 14506, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 471, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|Blackrock Depths" }, c = { 5760 } } }, -- Felcloth Robe
     [18452] = { { t = "i", i = 14509, d = { "Blackhand Elite|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Thuzadin Necromancer|Stratholme|59-61", "Soulflayer|Zul'Gurub|61" }, dn = 13 } }, -- Mooncloth Circlet
     [18453] = { { t = "i", i = 14508, d = { "Red Dragonspawn|Wetlands|57-58", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61" }, dn = 473, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|Blackrock Depths" }, c = { 5760 } } }, -- Felcloth Shoulders
     [18454] = { { t = "i", i = 14511, d = { "Blackhand Assassin|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Molten Destroyer|Molten Core|63", "Firelord|Molten Core|61-62" }, dn = 8 } }, -- Gloves of Spell Mastery
     [18455] = { { t = "i", i = 14510, d = { "Blackhand Iron Guard|Blackrock Spire|60-61", "Gurubashi Berserker|Alterac Valley|62", "Lava Annihilator|Molten Core|61-62", "Firewalker|Molten Core|61-62" }, dn = 11 } }, -- Bottomless Bag
-    [18456] = { { t = "i", i = 14512, d = { "Balnazzar||62" }, dn = 1 } }, -- Truefaith Vestments
+    [18456] = { { t = "i", i = 14512, d = { "Balnazzar|Stratholme|62" }, dn = 1 } }, -- Truefaith Vestments
     [18457] = { { t = "i", i = 14513, d = { "Firebrand Pyromancer|Blackrock Spire|57-58" }, dn = 1 } }, -- Robe of the Archmage
-    [18458] = { { t = "i", i = 14514, d = { "Darkmaster Gandling||61" }, dn = 1 } }, -- Robe of the Void
+    [18458] = { { t = "i", i = 14514, d = { "Darkmaster Gandling|Scholomance|61" }, dn = 1 } }, -- Robe of the Void
     [18560] = { { t = "i", i = 14526, v = { "Qia|Winterspring|AH" } } }, -- Mooncloth
     [18629] = { { t = "t" } }, -- Runecloth Bandage
     [18630] = { { t = "t" } }, -- Heavy Runecloth Bandage
@@ -951,7 +951,7 @@ ns.RecipeSources = {
     [19065] = { { t = "i", i = 15739, d = { "Jaedenar Cultist|Felwood|51-52" }, dn = 1 } }, -- Runic Leather Bracers
     [19066] = { { t = "i", i = 15740, v = { "Qia|Winterspring|AH" } } }, -- Frostsaber Boots
     [19067] = { { t = "i", i = 15741, v = { "Leonard Porter|Western Plaguelands|A", "Werg Thickblade|Tirisfal Glades|H" } } }, -- Stormshroud Pants
-    [19068] = { { t = "i", i = 15742, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Executioner|Western Plaguelands|53-55", "Slavering Ghoul|Western Plaguelands|50-52", "Diseased Grizzly|Western Plaguelands|55-56" }, dn = 69, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758 } }, { t = "i", i = 20253, v = { "Meilosh|Felwood|" }, o = { "Arena Treasure Chest|" } } }, -- Warbear Harness
+    [19068] = { { t = "i", i = 15742, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Executioner|Western Plaguelands|53-55", "Slavering Ghoul|Western Plaguelands|50-52", "Diseased Grizzly|Western Plaguelands|55-56" }, dn = 69, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758 } }, { t = "i", i = 20253, v = { "Meilosh|Felwood|" }, o = { "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Warbear Harness
     [19070] = { { t = "i", i = 15743, d = { "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62", "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52" }, dn = 523, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758 } } }, -- Heavy Scorpid Belt
     [19071] = { { t = "i", i = 15744, d = { "Jadefire Trickster|Felwood|52-53" }, dn = 1 } }, -- Wicked Leather Headband
     [19072] = { { t = "i", i = 15745, d = { "Scalebane Lieutenant|Wetlands|60-61", "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Skeletal Terror|Western Plaguelands|52-54" }, dn = 514, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 16885 } } }, -- Runic Leather Belt
@@ -997,7 +997,7 @@ ns.RecipeSources = {
     [19790] = { { t = "i", i = 16041, v = { "Gearcutter Cogspinner|Ironforge|A" } } }, -- Thorium Grenade
     [19791] = { { t = "i", i = 16042, v = { "Gearcutter Cogspinner|Ironforge|A" } } }, -- Thorium Widget
     [19792] = { { t = "i", i = 16043, d = { "Blue Dragonspawn|Azshara|50-51", "Mai'Zoth|Stranglethorn Vale|47", "Red Wyrmkin|Wetlands|58-59", "Gorlash|Stranglethorn Vale|47" }, dn = 608, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758, 19035 } } }, -- Thorium Rifle
-    [19793] = { { t = "i", i = 16044, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Acolyte|Western Plaguelands|55-56", "Slavering Ghoul|Western Plaguelands|50-52", "Searing Ghoul|Western Plaguelands|55-56" }, dn = 114, o = { "Large Solid Chest|", "Arena Treasure Chest|" }, c = { 5758 } } }, -- Lifelike Mechanical Toad
+    [19793] = { { t = "i", i = 16044, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Acolyte|Western Plaguelands|55-56", "Slavering Ghoul|Western Plaguelands|50-52", "Searing Ghoul|Western Plaguelands|55-56" }, dn = 114, o = { "Large Solid Chest|", "Arena Treasure Chest|Stranglethorn Vale" }, c = { 5758 } } }, -- Lifelike Mechanical Toad
     [19794] = { { t = "i", i = 16045, d = { "Spitelash Siren|Azshara|50-52" }, dn = 1 } }, -- Spellpower Goggles Xtreme Plus
     [19795] = { { t = "i", i = 16047, v = { "Xizzer Fizzbolt|Winterspring|AH", "Kor'gar|Riverglades|A" } } }, -- Thorium Tube
     [19796] = { { t = "i", i = 16048, d = { "Doomforge Craftsman|Blackrock Depths|52-54" }, dn = 1 } }, -- Dark Iron Rifle
@@ -1009,7 +1009,7 @@ ns.RecipeSources = {
     [19819] = { { t = "i", i = 16052, d = { "Crimson Inquisitor|Stratholme|59-60" }, dn = 1 } }, -- Voice Amplification Modulator
     [19825] = { { t = "i", i = 16053, d = { "Doomforge Arcanasmith|Blackrock Depths|54-55" }, dn = 1 } }, -- Master Engineer's Goggles
     [19830] = { { t = "i", i = 16054, d = { "Cobalt Mageweaver|Winterspring|57-58" }, dn = 1 } }, -- Arcanite Dragonling
-    [19831] = { { t = "i", i = 16055, d = { "Hungering Wraith|Western Plaguelands|56-58", "Wailing Death|Western Plaguelands|56-57", "Vile Slime|Western Plaguelands|54-55", "Scarlet Paladin|Western Plaguelands|55-56" }, dn = 147, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Arcane Bomb
+    [19831] = { { t = "i", i = 16055, d = { "Hungering Wraith|Western Plaguelands|56-58", "Wailing Death|Western Plaguelands|56-57", "Vile Slime|Western Plaguelands|54-55", "Scarlet Paladin|Western Plaguelands|55-56" }, dn = 146, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Arcane Bomb
     [19833] = { { t = "i", i = 16056, d = { "Mossflayer Shadowhunter|Eastern Plaguelands|58-59" }, dn = 1 } }, -- Flawless Arcanite Rifle
     [20008] = { { t = "i", i = 16214, d = { "Vilebranch Shadowcaster|The Hinterlands|47-48" }, dn = 1 } }, -- Enchant Bracer - Greater Intellect
     [20009] = { { t = "i", i = 16218, d = { "Blue Dragonspawn|Azshara|50-51", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Gorlash|Stranglethorn Vale|47" }, dn = 609, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758 } } }, -- Enchant Bracer - Superior Spirit
@@ -1084,12 +1084,12 @@ ns.RecipeSources = {
     [22866] = { { t = "i", i = 18414, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60", "Gordok Reaver|Dire Maul|58-59" }, dn = 3, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Belt of the Archmage
     [22867] = { { t = "i", i = 18415, d = { "Gordok Reaver|Dire Maul|58-59" }, dn = 1, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Felcloth Gloves
     [22868] = { { t = "i", i = 18416, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60", "Gordok Reaver|Dire Maul|58-59" }, dn = 3, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Inferno Gloves
-    [22869] = { { t = "i", i = 18417, d = { "Gordok Bushwacker||58-59" }, dn = 1, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Mooncloth Gloves
+    [22869] = { { t = "i", i = 18417, d = { "Gordok Bushwacker|Dire Maul|58-59" }, dn = 1, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Mooncloth Gloves
     [22870] = { { t = "i", i = 18418, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60", "Gordok Reaver|Dire Maul|58-59" }, dn = 3, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Cloak of Warding
     [22902] = { { t = "i", i = 18487, v = { "Shen'dralar Provisioner|Dire Maul|AH" } } }, -- Mooncloth Robe
     [22921] = { { t = "i", i = 18514, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60" }, dn = 2, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Girdle of Insight
     [22922] = { { t = "i", i = 18515, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Mongoose Boots
-    [22923] = { { t = "i", i = 18516, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60", "Gordok Reaver|Dire Maul|58-59", "Gordok Bushwacker||58-59" }, dn = 4, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Swift Flight Bracers
+    [22923] = { { t = "i", i = 18516, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60", "Gordok Reaver|Dire Maul|58-59", "Gordok Bushwacker|Dire Maul|58-59" }, dn = 4, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Swift Flight Bracers
     [22926] = { { t = "i", i = 18517, d = { "Felhunter||60" }, dn = 1, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Chromatic Cloak
     [22927] = { { t = "i", i = 18518, d = { "Felhunter||60", "Gordok Warlock|Dire Maul|59-60" }, dn = 2, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Hide of the Wild
     [22928] = { { t = "i", i = 18519, d = { "Felhunter||60" }, dn = 1, o = { "Knot Thimblejack's Cache|Dire Maul" } } }, -- Shifting Cloak
@@ -1104,7 +1104,7 @@ ns.RecipeSources = {
     [23078] = { { t = "i", i = 18653, d = { "Plugger Spazzring|Blackrock Depths|55" }, dn = 1 } }, -- Goblin Jumper Cables XL
     [23079] = { { t = "i", i = 18655 } }, -- Major Recombobulator
     [23080] = { { t = "i", i = 18656, v = { "Xizzer Fizzbolt|Winterspring|AH" } } }, -- Powerful Seaforium Charge
-    [23081] = { { t = "i", i = 18657, d = { "Solakar Flamewreath||60" }, dn = 1 } }, -- Hyper-Radiant Flame Reflector
+    [23081] = { { t = "i", i = 18657, d = { "Solakar Flamewreath|Blackrock Spire|60" }, dn = 1 } }, -- Hyper-Radiant Flame Reflector
     [23082] = { { t = "i", i = 18658, d = { "Crimson Inquisitor|Stratholme|59-60" }, dn = 1 } }, -- Ultra-Flash Shadow Reflector
     [23096] = { { t = "i", i = 18654, d = { "Weapon Technician|Blackrock Depths|55-56" }, dn = 1 } }, -- Alarm-O-Bot
     [23129] = { { t = "i", i = 18661, d = { "Weapon Technician|Blackrock Depths|55-56" }, dn = 1 } }, -- World Enlarger
@@ -1240,7 +1240,7 @@ ns.RecipeSources = {
     [27660] = { { t = "i", i = 22309, d = { "Magister Kalendris|Dire Maul|60" }, dn = 1 } }, -- Big Bag of Enchantment
     [27724] = { { t = "i", i = 22310, v = { "Mishta|Silithus|AH" } } }, -- Cenarion Herb Bag
     [27725] = { { t = "i", i = 22312, v = { "Mishta|Silithus|AH" } } }, -- Satchel of Cenarius
-    [27829] = { { t = "i", i = 22388, d = { "Weapon Technician|Blackrock Depths|55-56", "Risen Guard|Scholomance|57-59", "Spectral Researcher|Scholomance|58-60", "Plagued Hatchling|Scholomance|57-59" }, dn = 8, o = { "Arena Treasure Chest|" } } }, -- Titanic Leggings
+    [27829] = { { t = "i", i = 22388, d = { "Weapon Technician|Blackrock Depths|55-56", "Risen Guard|Scholomance|57-59", "Spectral Researcher|Scholomance|58-60", "Plagued Hatchling|Scholomance|57-59" }, dn = 8, o = { "Arena Treasure Chest|Stranglethorn Vale" } } }, -- Titanic Leggings
     [27830] = { { t = "i", i = 22390, d = { "Gurubashi Berserker|Alterac Valley|62", "Ancient Core Hound|Molten Core|62", "Mad Servant|Zul'Gurub|61", "Vekniss Guardian|Ahn'Qiraj|61" }, dn = 8 } }, -- Persuader
     [27832] = { { t = "i", i = 22389, d = { "Razzashi Broodwidow|Zul'Gurub|61", "Firelord|Molten Core|61-62", "Ancient Core Hound|Molten Core|62", "Lava Elemental|Molten Core|61-62" }, dn = 8 } }, -- Sageblade
     [27837] = { { t = "i", i = 22392, v = { "Meilosh|Felwood|" } } }, -- Enchant 2H Weapon - Agility
@@ -1275,7 +1275,7 @@ ns.RecipeSources = {
     [424641] = { { t = "i", i = 210178 } }, -- Shredder Autosalvage Unit
     [426607] = { { t = "i", i = 210709 } }, -- Elixir of Coalesced Regret
     [427061] = { { t = "i", i = 210779 } }, -- Mantle of the Second War
-    [428424] = { { t = "i", i = 211247, v = { "Elaine Compton|Stormwind City|A", "Jornah|Orgrimmar|H", "||", "Gishah|Undercity|H", "||", "Marcy Baker|Darnassus|A" } } }, -- Phoenix Bindings
+    [428424] = { { t = "i", i = 211247, v = { "Elaine Compton|Stormwind City|A", "Jornah|Orgrimmar|H", "Gishah|Undercity|H", "Marcy Baker|Darnassus|A" } } }, -- Phoenix Bindings
     [429348] = { { t = "t" } }, -- Shifting Silver Breastplate
     [429351] = { { t = "t" } }, -- Extraplanar Spidersilk Boots
     [429354] = { { t = "t" } }, -- Void-Touched Leather Gloves
@@ -1292,7 +1292,7 @@ ns.RecipeSources = {
     [435903] = { { t = "i", i = 215138 } }, -- Enchant Chest - Retricutioner
     [435904] = { { t = "i", i = 215152 } }, -- Glowing Gneuro-Linked Cowl
     [435906] = { { t = "i", i = 215383 } }, -- Reflective Truesilver Braincage
-    [435908] = { { t = "i", i = 215155, v = { "||" } } }, -- Tempered Interference-Negating Helmet
+    [435908] = { { t = "i", i = 215155 } }, -- Tempered Interference-Negating Helmet
     [435910] = { { t = "i", i = 215384 } }, -- Low-Background Truesilver Plates
     [435949] = { { t = "i", i = 215422 } }, -- Glowing Hyperconductive Scale Coif
     [435951] = { { t = "i", i = 215423 } }, -- Gneuro-Conductive Channeler's Hood
@@ -1523,7 +1523,7 @@ ns.RecipeSources = {
     [1223791] = { { t = "t" } }, -- Icebane Bracers
     [1224607] = { { t = "i", i = 238298 } }, -- Scarlet Augur's Hood
     [1224608] = { { t = "i", i = 238299 } }, -- Scarlet Augur's Mantle
-    [1224609] = { { t = "i", i = 238300, d = { "||", "||" }, dn = 2 } }, -- Scarlet Augur's Vestments
+    [1224609] = { { t = "i", i = 238300 } }, -- Scarlet Augur's Vestments
     [1224610] = { { t = "i", i = 238301 } }, -- Scarlet Augur's Cuffs
     [1224611] = { { t = "i", i = 238302 } }, -- Scarlet Augur's Mitts
     [1224612] = { { t = "i", i = 238303 } }, -- Scarlet Augur's Strap
@@ -1771,7 +1771,7 @@ ns.RecipeSources = {
     [1252254] = { { t = "i", i = 251357, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" } } }, -- Protector's Boots
     [1252255] = { { t = "i", i = 251358, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" } } }, -- Acolyte's Boots
     [1252256] = { { t = "i", i = 251359, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" } } }, -- Crusader's Boots
-    [1252257] = { { t = "i", i = 251360, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" }, d = { "Sneed||20", "Rhahk'Zor|The Deadmines|19", "Kresh|Wailing Caverns|20", "Lord Cobrahn|Wailing Caverns|20" }, dn = 4 } }, -- Veteran's Gloves
+    [1252257] = { { t = "i", i = 251360, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" }, d = { "Sneed|The Deadmines|20", "Rhahk'Zor|The Deadmines|19", "Kresh|Wailing Caverns|20", "Lord Cobrahn|Wailing Caverns|20" }, dn = 4 } }, -- Veteran's Gloves
     [1252258] = { { t = "i", i = 251361, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" }, d = { "Kresh|Wailing Caverns|20", "Fel Steed|Shadowfang Keep|19-20" }, dn = 2 } }, -- Guard's Gloves
     [1252259] = { { t = "i", i = 251362, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" }, d = { "Oggleflint|Ragefire Chasm|16" }, dn = 1 } }, -- Protector's Gloves
     [1252260] = { { t = "i", i = 251363, v = { "Gor'mak|The Barrens|H", "Stondry Darkhammer|Redridge Mountains|A" } } }, -- Acolyte's Gloves
@@ -2041,10 +2041,10 @@ ns.RecipeSources = {
     [1255121] = { { t = "i", i = 252786, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" } } }, -- Brawler's Leather Boots
     [1255123] = { { t = "i", i = 252784, v = { "Mahu|Thunder Bluff|H", "Tamar|Orgrimmar|H", "Saenorion|Darnassus|A", "Joseph Moore|Undercity|H", "Bombus Finespindle|Ironforge|A", "Jillian Tanner|Stormwind City|A" } } }, -- Forceful Medium Armor Kit
     [1255124] = { { t = "i", i = 252783, v = { "Mahu|Thunder Bluff|H", "Tamar|Orgrimmar|H", "Saenorion|Darnassus|A", "Joseph Moore|Undercity|H", "Bombus Finespindle|Ironforge|A", "Jillian Tanner|Stormwind City|A" } } }, -- Mystic Medium Armor Kit
-    [1255125] = { { t = "i", i = 252782, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Lord Cobrahn|Wailing Caverns|20", "Lady Anacondra||20" }, dn = 2 } }, -- Wisdom's Leather Gloves
+    [1255125] = { { t = "i", i = 252782, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Lord Cobrahn|Wailing Caverns|20", "Lady Anacondra|Wailing Caverns|20" }, dn = 2 } }, -- Wisdom's Leather Gloves
     [1255126] = { { t = "i", i = 252781, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Cookie|The Deadmines|20", "Fel Steed|Shadowfang Keep|19-20" }, dn = 2 } }, -- Stormrider's Leather Gloves
     [1255127] = { { t = "i", i = 252780, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Bazzalan|Ragefire Chasm|16" }, dn = 1 } }, -- Totemic Leather Gloves
-    [1255128] = { { t = "i", i = 252779, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Sneed||20", "Mr. Smite|The Deadmines|20", "Kresh|Wailing Caverns|20" }, dn = 3 } }, -- Defender's Leather Gloves
+    [1255128] = { { t = "i", i = 252779, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Sneed|The Deadmines|20", "Mr. Smite|The Deadmines|20", "Kresh|Wailing Caverns|20" }, dn = 3 } }, -- Defender's Leather Gloves
     [1255129] = { { t = "i", i = 252778, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Captain Greenskin|The Deadmines|20" }, dn = 1 } }, -- Trapper's Leather Gloves
     [1255130] = { { t = "i", i = 252777, v = { "Pawani|The Barrens|H", "Daniel Stitchsong|Redridge Mountains|A" }, d = { "Captain Greenskin|The Deadmines|20" }, dn = 1 } }, -- Brawler's Leather Gloves
     [1255131] = { { t = "i", i = 252776 } }, -- Wisdom's Leather Armor
@@ -2074,7 +2074,7 @@ ns.RecipeSources = {
     [1257373] = { { t = "i", i = 253896, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Shadow Boots
     [1257374] = { { t = "i", i = 253898, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Pearly Boots
     [1257375] = { { t = "i", i = 253900, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Shining Boots
-    [1257376] = { { t = "i", i = 253902, d = { "Sneed||20", "Rethilgore|Shadowfang Keep|20" }, dn = 2 } }, -- Filigreed Pristine Gown
+    [1257376] = { { t = "i", i = 253902, d = { "Sneed|The Deadmines|20", "Rethilgore|Shadowfang Keep|20" }, dn = 2 } }, -- Filigreed Pristine Gown
     [1257377] = { { t = "i", i = 253904, d = { "Fel Steed|Shadowfang Keep|19-20", "Jergosh the Invoker|Ragefire Chasm|16" }, dn = 2 } }, -- Filigreed Silky Gown
     [1257378] = { { t = "i", i = 253906, d = { "Mr. Smite|The Deadmines|20" }, dn = 1 } }, -- Filigreed Flame Gown
     [1257379] = { { t = "i", i = 253908, d = { "Miner Johnson|The Deadmines|19", "Fel Steed|Shadowfang Keep|19-20", "Shadow Charger|Shadowfang Keep|20-21", "Rethilgore|Shadowfang Keep|20" }, dn = 4 } }, -- Filigreed Shadow Gown
@@ -2097,7 +2097,7 @@ ns.RecipeSources = {
     [1257396] = { { t = "i", i = 253942, d = { "Lord Pythas|Wailing Caverns|21", "Baron Silverlaine|Shadowfang Keep|24" }, dn = 2 } }, -- Filigreed Flame Leggings
     [1257397] = { { t = "i", i = 253944 } }, -- Filigreed Shadow Leggings
     [1257398] = { { t = "i", i = 253946, d = { "Razorclaw the Butcher|Shadowfang Keep|22" }, dn = 1 } }, -- Filigreed Pearly Leggings
-    [1257399] = { { t = "i", i = 253948, d = { "Edwin VanCleef|The Deadmines|21", "Mutanus the Devourer||22", "Skum|Wailing Caverns|21", "Archmage Arugal|Shadowfang Keep|26" }, dn = 5 } }, -- Filigreed Shining Leggings
+    [1257399] = { { t = "i", i = 253948, d = { "Edwin VanCleef|The Deadmines|21", "Mutanus the Devourer|Wailing Caverns|22", "Skum|Wailing Caverns|21", "Archmage Arugal|Shadowfang Keep|26" }, dn = 5 } }, -- Filigreed Shining Leggings
     [1257400] = { { t = "i", i = 253950, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Pristine Circlet
     [1257401] = { { t = "i", i = 253952, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Silky Circlet
     [1257402] = { { t = "i", i = 253954, v = { "Jim'bek|The Barrens|H", "Mivin Shadowweave|Redridge Mountains|A" } } }, -- Flame Circlet
@@ -2206,7 +2206,7 @@ ns.RecipeSources = {
     [1262978] = { { t = "i", i = 273102 } }, -- Cookie's Feast
     [1262980] = { { t = "i", i = 273106, d = { "Shadetooth||" }, dn = 1 } }, -- Greenhouse
     [1262982] = { { t = "i", i = 273109, d = { "Houndmaster Loksey|Scarlet Monastery|34" }, dn = 1 } }, -- Trapper's Workbench
-    [1262985] = { { t = "i", i = 273098, d = { "Lady Anacondra||20" }, dn = 1 } }, -- Field Guide
+    [1262985] = { { t = "i", i = 273098, d = { "Lady Anacondra|Wailing Caverns|20" }, dn = 1 } }, -- Field Guide
     [1262990] = { { t = "i", i = 273141, d = { "Gelihast|Blackfathom Deeps|26" }, dn = 1 } }, -- Fishing Rack
     [1262996] = { { t = "i", i = 273105, d = { "Commander Springvale|Shadowfang Keep|24" }, dn = 1 } }, -- Toxin Study
     [1262998] = { { t = "i", i = 273119 } }, -- Fishing Hut
@@ -2214,7 +2214,7 @@ ns.RecipeSources = {
     [1263005] = { { t = "i", i = 273085, d = { "Rath'mael|Ruins Of Lordaeron|" }, dn = 1 } }, -- Fermenter
     [1263031] = { { t = "i", i = 273096, d = { "Razorclaw the Butcher|Shadowfang Keep|22" }, dn = 1 } }, -- Tanning Rack
     [1263032] = { { t = "i", i = 273099, d = { "Unstable Sentinel||" }, dn = 1 } }, -- Spinning Wheel
-    [1263034] = { { t = "i", i = 273092, d = { "Sneed||20" }, dn = 1 } }, -- Repair Bot
+    [1263034] = { { t = "i", i = 273092, d = { "Sneed|The Deadmines|20" }, dn = 1 } }, -- Repair Bot
     [1263041] = { { t = "i", i = 273086, d = { "Gilnid|The Deadmines|20" }, dn = 1 } }, -- Anvil
     [1263056] = { { t = "i", i = 273103, d = { "Rath'mael|Ruins Of Lordaeron|" }, dn = 1 } }, -- Arcane Salvager
     [1263067] = { { t = "i", i = 273115 } }, -- Iron Oven
@@ -2506,5 +2506,5 @@ ns.RecipeSources = {
     [1319163] = { { t = "i", i = 286085 } }, -- Large Purple Rocket Cluster
     [1319164] = { { t = "i", i = 286086 } }, -- Large White Rocket Cluster
     [1319165] = { { t = "i", i = 286087 } }, -- Large Yellow Rocket Cluster
-    [1319313] = { { t = "i", i = 286153, o = { "|" } } }, -- Plated Armorfish
+    [1319313] = { { t = "i", i = 286153 } }, -- Plated Armorfish
 }

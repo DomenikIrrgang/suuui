@@ -25,12 +25,37 @@ def lua(s):
 # Forever's AreaTable lacks; tools/gen_recipes.py knows them too)
 ZONE_FIXES = {'zone 1585': 'Blackrock Depths'}
 
-def zone(z):
-    z = z or ''
-    return ZONE_FIXES.get(z, z)
+# places QuestieDB gives no zone, where there is only one (dungeon bosses,
+# creatures of one zone). Chests that spawn in many zones (Tattered Chest,
+# Large Solid Chest) and wanderers stay without one.
+NAME_ZONES = {
+    'Sneed': 'The Deadmines',
+    'Lady Anacondra': 'Wailing Caverns',
+    'Mutanus the Devourer': 'Wailing Caverns',
+    'Darkmaster Gandling': 'Scholomance',
+    'Balnazzar': 'Stratholme',
+    'Gyth': 'Blackrock Spire',
+    'Solakar Flamewreath': 'Blackrock Spire',
+    'Overmaster Pyron': 'Blackrock Depths',
+    'Grizzle': 'Blackrock Depths',
+    'Gordok Bushwacker': 'Dire Maul',
+    'Stitches': 'Duskwood',
+    'Eliza': 'Duskwood',
+    'Wastewander Scofflaw': 'Tanaris',
+    'Moonrage Tailor': 'Silverpine Forest',
+    'Arena Treasure Chest': 'Stranglethorn Vale',
+}
+
+def zone(z, name=None):
+    z = ZONE_FIXES.get(z or '', z or '')
+    return z or NAME_ZONES.get(name or '', '')
 
 def npc(n, third):
-    return lua('|'.join([n.get('name') or '', zone(n.get('zone')), str(n.get(third) or '')]))
+    return lua('|'.join([n.get('name') or '', zone(n.get('zone'), n.get('name')), str(n.get(third) or '')]))
+
+def named(entries):
+    # a place without a name says nothing ("Dropped by" and no one)
+    return [e for e in entries or [] if e.get('name')]
 
 def source(s):
     t = s['type']
@@ -39,16 +64,16 @@ def source(s):
     if t == 'auto':
         return '{ t = "a" }'
     parts = ['t = "i"', 'i = %d' % s['itemID']]
-    vendors = s.get('vendors') or []
+    vendors = named(s.get('vendors'))
     if vendors:
         parts.append('v = { %s }' % ', '.join(npc(v, 'faction') for v in vendors[:MAX_VENDORS]))
-    drops = s.get('drops') or []
+    drops = named(s.get('drops'))
     if drops:
         parts.append('d = { %s }' % ', '.join(npc(d, 'level') for d in drops[:MAX_DROPS]))
         parts.append('dn = %d' % len(drops))
     seen, objects = set(), []
-    for o in s.get('objects') or []:
-        key = (o.get('name') or '', zone(o.get('zone')))
+    for o in named(s.get('objects')):
+        key = (o.get('name'), zone(o.get('zone'), o.get('name')))
         if key not in seen:
             seen.add(key)
             objects.append(lua('|'.join(key)))
