@@ -424,7 +424,7 @@ function M:SystemLine(msg)
         name = msg:match(OFFLINE)
         online = false
     end
-    if not name or name == UnitName("player") then return end
+    if not name or Ambiguate(name, "short") == SuuUI.FullName("player") then return end
     -- a link's name keeps its colour codes out
     name = name:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     local kind, person = self:WhoIs(name)
@@ -470,8 +470,10 @@ end
 -- own character, so Whisper and Invite really act (on you); the group card
 -- is made up.
 function M:TestPresence()
-    local me, realm = UnitName("player"), GetNormalizedRealmName and GetNormalizedRealmName()
-    local full = realm and (me .. "-" .. realm) or me
+    -- the whole name: Forever's characters have a surname (UnitName's
+    -- second value), which whispers need
+    local full = SuuUI.FullName("player")
+    local me = full
     local _, file = UnitClass("player")
     local zone = GetRealZoneText and GetRealZoneText() or ""
     local function mine(detail)

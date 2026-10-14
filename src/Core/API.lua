@@ -286,6 +286,16 @@ function API.ShownRecipe()
     if not (view and view:IsVisible() and m.mode == "crafting" and view.craftData) then return nil end
     return view.craftData.selected
 end
+-- 0.13: a unit's whole name. Forever's characters have a surname, and
+-- its UnitName returns the two parts where other clients give name and
+-- realm ("Suther", "Stargazer": probed 2026-10-14); GetUnitName(unit, true)
+-- gives "Suther Stargazer" (with "-Realm" for another realm), the form
+-- whispers, invites, the roster and chat use.
+function API.FullName(unit)
+    local name = GetUnitName and GetUnitName(unit or "player", true)
+    if name and name ~= "" then return name end
+    return (UnitName(unit or "player"))
+end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
