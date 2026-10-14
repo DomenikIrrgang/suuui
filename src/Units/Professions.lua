@@ -90,8 +90,8 @@ function M:Profession(index)
     card.rank = card.rank or RANKS[max] or ""
     -- unlearning goes through the game's own confirmation, as Blizzard's
     -- book does (StaticPopup "UNLEARN_SKILL", data: the skill line)
-    if skillLine and StaticPopupDialogs and StaticPopupDialogs.UNLEARN_SKILL then
-        card.onUnlearn = function() StaticPopup_Show("UNLEARN_SKILL", name, nil, skillLine) end
+    if skillLine then
+        card.onUnlearn = function() self:Unlearn(name, skillLine) end
     end
     -- its recipes, as counted when it was last open
     local counts = skillLine and self:CharData().recipes
@@ -103,6 +103,30 @@ function M:Profession(index)
         card.spells = rest
     end
     return card
+end
+
+-- Unlearning: the game's confirmation when it has one (Blizzard's book's
+-- "UNLEARN_SKILL", which may not be loaded: no button showed, found in
+-- game), else SuuUI's own with the same words and AbandonSkill.
+function M:Unlearn(name, skillLine)
+    if StaticPopupDialogs.UNLEARN_SKILL then
+        StaticPopup_Show("UNLEARN_SKILL", name, nil, skillLine)
+        return
+    end
+    if not StaticPopupDialogs.SUUUI_UNLEARN_SKILL then
+        StaticPopupDialogs.SUUUI_UNLEARN_SKILL = {
+            text = UNLEARN_SKILL or "Do you really want to unlearn %s?",
+            button1 = ACCEPT or "Accept",
+            button2 = CANCEL or "Cancel",
+            OnAccept = function(_, data) if data then AbandonSkill(data) end end,
+            timeout = 60,
+            whileDead = true,
+            exclusive = true,
+            showAlert = true,
+            hideOnEscape = true,
+        }
+    end
+    StaticPopup_Show("SUUUI_UNLEARN_SKILL", name, nil, skillLine)
 end
 
 -- The secondary professions, always shown, learned or not (as Blizzard's
