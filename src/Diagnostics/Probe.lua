@@ -811,6 +811,10 @@ function ns.Probe.Command(arg)
         ns.SocialProbe.Command(rest)
         return
     end
+    if sub == "lfg" then
+        ns.LfgProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
