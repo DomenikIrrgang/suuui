@@ -293,6 +293,7 @@ function M:Follow()
     local list = self.friendsList
     local onContacts = f:IsShown() and list and list:IsShown()
     self.view:SetShown(onContacts and true or false)
+    if f.BattleNetBar then f.BattleNetBar:SetAlpha(onContacts and 0 or 1) end
     if onContacts then
         if C_FriendList and C_FriendList.ShowFriends then pcall(C_FriendList.ShowFriends) end
         self:QueueRender()
@@ -314,10 +315,12 @@ function M:Build()
     view:Hide()
     self.view = view
     self:Wire(view)
-    -- Blizzard's friends list and Battle.net bar out of sight (the page has
-    -- both); Recent Allies, Friend Requests and Raid stay Blizzard's for now
+    -- Blizzard's friends list out of sight (the page has its own); the
+    -- Battle.net bar stays where it is (the other tabs hang under it: moved
+    -- away, they went with it, found in game), only see-through while the
+    -- page covers it. Recent Allies, Friend Requests and Raid stay
+    -- Blizzard's for now.
     self:Away(list)
-    self:Away(f.BattleNetBar)
     -- the page follows the window's content
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide() end)
