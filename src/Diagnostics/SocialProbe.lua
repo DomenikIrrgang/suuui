@@ -691,12 +691,88 @@ function SP.Notes()
     ns.Print("Notes probe: click the button in the middle of the screen once.")
 end
 
+-- Guild notes through the game's own member list (asked for: try it): the
+-- list made tall enough for everyone (under SuuUI's roster), its rows' data
+-- checked for taint, a secure button that clicks your row, then the game's
+-- member panel brought forward: click your Note there and Accept it
+-- unchanged. Every step's verdict is saved. Open Guild > Roster first.
+local function secure(t, key)
+    if not (t and issecurevariable) then return "?" end
+    local ok, by = issecurevariable(t, key)
+    return ok and "secure" or ("tainted by " .. tostring(by))
+end
+
+function SP.NoteList()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), rows = {}, blocked = {}, steps = {} }
+    SuuUIProbe.guildNoteList = store
+    local f = _G.CommunitiesFrame
+    local list = f and f.MemberList
+    if not (f and f:IsShown() and list and list.ScrollBox) then ns.Print("Note list probe: open Guild > Roster first.") return end
+    if InCombatLockdown() then ns.Print("Note list probe: out of combat, please.") return end
+    store.selectedClubId = secure(f, "selectedClubId")
+    store.mode = tostring(f.GetDisplayMode and f:GetDisplayMode())
+    -- tall enough for everyone, where it is
+    local n = (GetNumGuildMembers()) or 0
+    local top = list:GetTop() and (list:GetTop() - f:GetTop()) or -60
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", f, "TOPLEFT", 20, top)
+    list:SetSize(math.max(300, list:GetWidth() or 300), n * 22 + 60)
+    store.steps[#store.steps + 1] = "list made " .. (n * 22 + 60) .. "px tall for " .. n
+    local listener = CreateFrame("Frame")
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do listener:RegisterEvent(e) end
+    listener:SetScript("OnEvent", function(_, event, a1, a2)
+        store.blocked[#store.blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+    end)
+    C_Timer.After(1, function()
+        local me = Ambiguate(SuuUI.FullName("player"), "short")
+        local mine
+        list.ScrollBox:ForEachFrame(function(row)
+            local info = row.memberInfo
+            local name = info and info.name
+            store.rows[#store.rows + 1] = ("%s memberInfo=%s"):format(tostring(name), secure(row, "memberInfo"))
+            if name and Ambiguate(name, "short") == me then mine = row end
+        end)
+        store.steps[#store.steps + 1] = #store.rows .. " rows exist"
+        if not mine then ns.Print("Note list probe: your row isn't there (saved); /reload.") return end
+        local b = SP.noteListButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
+        SP.noteListButton = b
+        b:SetSize(300, 30)
+        b:ClearAllPoints()
+        b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+        b:SetFrameStrata("FULLSCREEN_DIALOG")
+        b:SetText("Note list probe: click to pick yourself")
+        b:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
+        b:SetAttribute("type1", "click")
+        b:SetAttribute("clickbutton1", mine)
+        b:SetScript("PostClick", function(self)
+            C_Timer.After(0.3, function()
+                self:Hide()
+                local d = f.GuildMemberDetailFrame
+                store.steps[#store.steps + 1] = ("detail shown=%s name=%s clubId=%s memberId=%s"):format(
+                    tostring(d and d:IsShown()), tostring(d and d.Name and d.Name:GetText()),
+                    secure(d, "clubId"), secure(d, "memberId"))
+                if not (d and d:IsShown()) then ns.Print("Note list probe: the game's panel didn't open (saved); /reload.") return end
+                -- the game's own panel in front of everything
+                d:SetFrameStrata("FULLSCREEN_DIALOG")
+                d:SetAlpha(1)
+                d:ClearAllPoints()
+                d:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                ns.Print("Note list probe: now click your Note in the game's panel and press Accept without changing it; then /reload.")
+            end)
+        end)
+        b:Show()
+        ns.Print("Note list probe: click the button at the top of the screen.")
+    end)
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
     if rest == "guildcontrol" then SP.GuildControl() return end
     if rest == "guildui" then SP.GuildUI() return end
     if rest == "menu" then SP.Menu() return end
     if rest == "notes" then SP.Notes() return end
+    if rest == "notelist" then SP.NoteList() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end
