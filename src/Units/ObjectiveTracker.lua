@@ -382,8 +382,8 @@ function M:QuestClick(questID, button, row)
         if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, questID) end
         return
     end
-    if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
-    MenuUtil.CreateContextMenu(row, function(_, root)
+    -- SuuUI's menu, in the tooltip's look (asked for in game)
+    UI.ContextMenuFrom(row, function(_, root)
         local title = C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)
         if plain(title) and title then root:CreateTitle(title) end
         if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
@@ -466,8 +466,7 @@ function M:RecipeClick(recipeID, button, row)
         SuuUI.OpenRecipe(recipeID)
         return
     end
-    if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
-    MenuUtil.CreateContextMenu(row, function(_, root)
+    UI.ContextMenuFrom(row, function(_, root)
         if row.quest and row.quest.title then root:CreateTitle(row.quest.title) end
         root:CreateButton("Open recipe", function() SuuUI.OpenRecipe(recipeID) end)
         root:CreateButton("Stop tracking", function()

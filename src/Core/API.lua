@@ -279,6 +279,9 @@ API.UI.LegacyPoints = UI.LegacyPoints -- LegacyPoints(parent[, { account = false
 API.UI.LegacyChallenges = UI.LegacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
 API.UI.Professions = UI.Professions -- Professions(parent) -> SetTabs(list, selected), SetOverview({ primary, secondary }), SetCrafting({ name, rank, skill, max, categories, selected }), SetRecipe(r); onTab, onOpen, onSelect, onRecipeEnter, onSearch, onFilters, onTrack, onCreate, onCreateAll
 API.UI.PROFESSION_FILTER_DEFAULTS = UI.PROFESSION_FILTER_DEFAULTS -- the recipe list's filters at rest: { show = "learned", difficulty = {}, quality = {}, other = {} }
+API.UI.ContextMenu = UI.ContextMenu -- ContextMenu(owner, { title, items = { { label, onClick, disabled } | { separator = true } } }): a right-click menu at the cursor, in the tooltip's look
+API.UI.ContextMenuFrom = UI.ContextMenuFrom -- ContextMenuFrom(owner, fn(owner, root)): the same, described like MenuUtil's (root:CreateTitle, CreateButton, CreateDivider)
+API.UI.CloseContextMenu = UI.CloseContextMenu
 API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H

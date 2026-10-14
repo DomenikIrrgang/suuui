@@ -345,8 +345,8 @@ end
 -- an addon, runs tainted: copying a name is blocked then). Nothing in it
 -- needs a protected action.
 local function playerMenu(owner, name)
-    if not (MenuUtil and MenuUtil.CreateContextMenu) then return false end
-    MenuUtil.CreateContextMenu(owner, function(_, root)
+    -- in the tooltip's look (asked for in game)
+    UI.ContextMenuFrom(owner, function(_, root)
         root:CreateTitle(name)
         root:CreateButton("Whisper", function()
             local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
@@ -952,8 +952,8 @@ end
 -- settings, Chat › Windows.
 function M:TabMenu(b)
     local cf = b.cf
-    if not (cf and cf.isTemporary and FCF_Close and MenuUtil and MenuUtil.CreateContextMenu) then return end
-    MenuUtil.CreateContextMenu(b, function(_, root)
+    if not (cf and cf.isTemporary and FCF_Close) then return end
+    UI.ContextMenuFrom(b, function(_, root)
         root:CreateButton("Close", function() self:CloseWindow(cf) end)
     end)
 end
