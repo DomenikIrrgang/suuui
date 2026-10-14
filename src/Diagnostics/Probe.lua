@@ -803,6 +803,10 @@ function ns.Probe.Command(arg)
         ns.ProfessionProbe.Command(rest)
         return
     end
+    if sub == "unlearn" then
+        ns.UnlearnProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
