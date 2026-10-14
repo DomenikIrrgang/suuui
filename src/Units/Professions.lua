@@ -688,6 +688,76 @@ function M:Build()
     self:Size()
 end
 
+--------------------------------------------------------------------------------
+-- Profession trainers, recorded: what each teaches and the skill it asks
+-- for (the game keeps that on the server: no data file has it). Saved per
+-- character (CharData().trainers, by the trainer's NPC ID);
+-- tools/merge_trainer_records.lua gathers them for the recipe data.
+--------------------------------------------------------------------------------
+
+local PROFESSION_NAMES = {}
+for _, n in ipairs({ "Alchemy", "Blacksmithing", "Enchanting", "Engineering", "Herbalism", "Leatherworking",
+                     "Mining", "Skinning", "Tailoring", "Cooking", "First Aid", "Fishing" }) do PROFESSION_NAMES[n] = true end
+
+function M:RecordTrainer()
+    if self.recording or not GetNumTrainerServices then return end
+    self.recording = true
+    -- every service, not only what you can learn now; the trainer's own
+    -- filters back afterwards
+    local kinds, before = { "available", "unavailable", "used" }, {}
+    if SetTrainerServiceTypeFilter then
+        for _, k in ipairs(kinds) do
+            before[k] = GetTrainerServiceTypeFilter and call(GetTrainerServiceTypeFilter, k)
+            pcall(SetTrainerServiceTypeFilter, k, 1)
+        end
+    end
+    local services, profession = {}, nil
+    for i = 1, (call(GetNumTrainerServices) or 0) do
+        -- this client answers name, availability, icon
+        local name, a, b = call(GetTrainerServiceInfo, i)
+        local kind = (a == "available" or a == "unavailable" or a == "used" or a == "header") and a or b
+        if plain(name) and kind ~= "header" then
+            local skillName, skillRank = call(GetTrainerServiceSkillReq, i)
+            local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i)
+            local cost = call(GetTrainerServiceCost, i)
+            local level = GetTrainerServiceLevelReq and call(GetTrainerServiceLevelReq, i)
+            local line = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i)
+            if plain(skillName) and PROFESSION_NAMES[skillName] then profession = profession or skillName end
+            if plain(line) and PROFESSION_NAMES[line] then profession = profession or line end
+            services[#services + 1] = {
+                name = name, skill = plain(skillName) and skillName or nil,
+                rank = plain(skillRank) and tonumber(skillRank) or nil,
+                cost = plain(cost) and tonumber(cost) or nil, level = plain(level) and tonumber(level) or nil,
+                item = plain(link) and type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil,
+                line = plain(line) and line or nil,
+            }
+        end
+    end
+    if SetTrainerServiceTypeFilter then
+        for _, k in ipairs(kinds) do
+            if before[k] ~= nil then pcall(SetTrainerServiceTypeFilter, k, before[k] and 1 or 0) end
+        end
+    end
+    self.recording = false
+    -- a class trainer, a riding trainer: not ours (unless the game says
+    -- it's a profession trainer and only the skill's name is missing)
+    if not profession and IsTradeskillTrainer and call(IsTradeskillTrainer) then profession = "?" end
+    if not profession or #services == 0 then return end
+    local guid = UnitGUID("npc")
+    local npcID = guid and tonumber((select(6, strsplit("-", guid))))
+    local saved = self:CharData()
+    saved.trainers = saved.trainers or {}
+    saved.trainers[npcID or UnitName("npc") or "?"] = {
+        npc = UnitName("npc"), npcID = npcID, zone = GetRealZoneText(), subzone = GetSubZoneText(),
+        faction = UnitFactionGroup("player"), profession = profession,
+        at = date("%Y-%m-%d %H:%M"), services = services,
+    }
+    local withSkill = 0
+    for _, sv in ipairs(services) do if sv.rank then withSkill = withSkill + 1 end end
+    self:Print(("Recorded %s's %d %s recipes (%d with the skill they need). Thanks!"):format(
+        UnitName("npc") or "the trainer", #services, profession, withSkill))
+end
+
 function M:OnEnable()
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
@@ -707,6 +777,8 @@ function M:OnEnable()
             self:OnGameEvent(e, function() if self.view and self.view:IsVisible() then self:QueueRender() end end)
         end
     end
+    -- profession trainers: what they teach, recorded once they've listed it
+    self:OnGameEvent("TRAINER_SHOW", function() C_Timer.After(0.3, function() self:RecordTrainer() end) end)
     -- item names the game hadn't loaded yet
     self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
         if self.waitingItems and self.view and self.view:IsVisible() then self:QueueRender() end
