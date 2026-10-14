@@ -517,12 +517,18 @@ local function anchorOf(r)
     return (" @%s>%s.%s %d,%d"):format(point, tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
 end
 
-local function tree(f, depth, out, prefix)
+local function tree(f, depth, out, prefix, textures)
     if depth > 6 or not f or not f.GetChildren or #out >= 600 then return end
     local keys = {}
     for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
     for _, r in ipairs({ f:GetRegions() }) do
-        if r:GetObjectType() == "FontString" then
+        if textures and r:GetObjectType() == "Texture" then
+            local okA, atlas = pcall(r.GetAtlas, r)
+            local okT, file = pcall(r.GetTexture, r)
+            out[#out + 1] = ("%s. %s [Tex] shown=%s a=%.2f %dx%d%s atlas=%s file=%s"):format(prefix, r:GetName() or keys[r] or "?",
+                show(r:IsShown()), r:GetAlpha() or 0, math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r),
+                tostring(okA and atlas or nil), tostring(okT and file or nil))
+        elseif r:GetObjectType() == "FontString" then
             r.suuProbeKey = keys[r]
             out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d%s \"%s\""):format(prefix, r:GetName() or keys[r] or "?", show(r:IsShown()),
                 math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r), show(r:GetText()))
@@ -534,7 +540,7 @@ local function tree(f, depth, out, prefix)
         local text = (fs and fs.GetText) and (" \"" .. show(fs:GetText()) .. "\"") or ""
         out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(prefix, c:GetName() or keys[c] or "?", c:GetObjectType(),
             show(c:IsShown()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), anchorOf(c), text)
-        tree(c, depth + 1, out, prefix .. "  ")
+        tree(c, depth + 1, out, prefix .. "  ", textures)
     end
 end
 
@@ -561,15 +567,65 @@ function SP.GuildUI()
         end
     end
     table.sort(named)
-    if cur then tree(cur, 1, out, "") end
+    if cur then tree(cur, 1, out, "", true) end
     store.pages[key] = { at = store.at, tree = out, shownNamed = named }
     ns.Print(("Guild UI probe: %s, %d lines saved; /reload."):format(key, #out))
+end
+
+-- The menu a Blizzard dropdown opens (the guild control's Page and Rank):
+-- what it's made of, to restyle it. Run it, then open one of them.
+function SP.Menu()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), api = {}, opened = {} }
+    SuuUIProbe.blizzMenu = store
+    store.api.Menu = Menu and namesIn(Menu) or "missing"
+    local manager = Menu and Menu.GetManager and Menu.GetManager()
+    store.api.manager = manager and namesIn(manager) or "missing"
+    store.api.events = (DropdownButtonMixin and DropdownButtonMixin.Event) and namesIn(DropdownButtonMixin.Event) or "missing"
+    store.api.eventRegistry = {}
+    local function dump(label, menu)
+        if not menu or not menu.GetChildren then return end
+        local out = {}
+        out[#out + 1] = ("%s [%s] %dx%d strata=%s"):format(menu:GetName() or "?", menu:GetObjectType(),
+            math.floor(menu:GetWidth() or 0), math.floor(menu:GetHeight() or 0), tostring(menu:GetFrameStrata()))
+        local keys = {}
+        for k, v in pairs(menu) do keys[#keys + 1] = k .. "=" .. type(v) end
+        table.sort(keys)
+        store.opened[#store.opened + 1] = { label = label, tree = out, keys = keys }
+        tree(menu, 1, out, "  ", true)
+    end
+    local n = 0
+    for _, name in ipairs({ "GuildControlUINavigationDropdown", "GuildControlUIRankSettingsFrameRankDropdown",
+                            "GuildControlUIRankBankFrameRankDropdown" }) do
+        local dd = _G[name]
+        local event = DropdownButtonMixin and DropdownButtonMixin.Event and DropdownButtonMixin.Event.OnMenuOpen
+        if dd and dd.RegisterCallback and event then
+            n = n + 1
+            dd:RegisterCallback(event, function(_, ...)
+                local args = { ... }
+                for i, a in ipairs(args) do
+                    store.api.eventRegistry[#store.api.eventRegistry + 1] = ("%s arg%d %s"):format(name, i,
+                        type(a) == "table" and (a.GetObjectType and a:GetObjectType() or "table") or type(a))
+                end
+                C_Timer.After(0.1, function()
+                    for i, a in ipairs(args) do
+                        if type(a) == "table" and a.GetChildren and a ~= dd then dump(name .. " arg" .. i, a) end
+                    end
+                    local open = manager and manager.GetOpenMenu and manager:GetOpenMenu()
+                    if open then dump(name .. " GetOpenMenu", open) end
+                    ns.Print("Menu probe: saved; /reload.")
+                end)
+            end, store)
+        end
+    end
+    ns.Print(("Menu probe: armed on %d dropdowns. Open the Settings tab's Page or Rank dropdown."):format(n))
 end
 
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
     if rest == "guildcontrol" then SP.GuildControl() return end
     if rest == "guildui" then SP.GuildUI() return end
+    if rest == "menu" then SP.Menu() return end
     if rest == "friends" then SP.FriendSystem() return end
     if rest == "lists" then SP.Lists() return end
     if rest == "mouse" then SP.Mouse() return end

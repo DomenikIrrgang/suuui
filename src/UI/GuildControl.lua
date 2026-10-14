@@ -25,7 +25,9 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
-local HEAD_H = 30
+-- the head row: the 24px dropdowns, then space-5 down to its rule
+local BAND_H = 24
+local HEAD_H = BAND_H + S["space-5"]
 local TOP = -(HEAD_H + S["space-5"])
 local ROW_H = 30
 local ICON_B = 26
@@ -186,10 +188,16 @@ function UI.GuildControl(host, ui)
     head:SetHeight(HEAD_H)
     head:SetFrameLevel(ui:GetFrameLevel() + 1)
     c.head = head
-    c.pageLabel = UI.Text(head, "caption", "ink-muted")
+    local band = CreateFrame("Frame", nil, head)
+    band:SetPoint("TOPLEFT")
+    band:SetPoint("TOPRIGHT")
+    band:SetHeight(BAND_H)
+    band:EnableMouse(false)
+    c.band = band
+    c.pageLabel = UI.Text(band, "caption", "ink-muted")
     c.pageLabel:SetValue("Page")
     c.pageLabel:SetPoint("LEFT", 0, 0)
-    c.extra = UI.Text(head, "caption", "ink-muted")
+    c.extra = UI.Text(band, "caption", "ink-muted")
     c.extra:SetPoint("RIGHT", 0, 0)
     local rule = head:CreateTexture(nil, "ARTWORK")
     rule:SetColorTexture(UI.RGBA("gilt-faint"))
@@ -479,7 +487,7 @@ function GuildControl:Permissions(page)
         local fs = auth.Text or _G[base .. "Checkbox18Text"]
         local tw = fs and fs:GetStringWidth() or 130
         auth:ClearAllPoints()
-        auth:SetPoint("RIGHT", self.head, "RIGHT", -(tw + S["space-3"]), 0)
+        auth:SetPoint("RIGHT", self.band, "RIGHT", -(tw + S["space-3"]), 0)
     end
 end
 
