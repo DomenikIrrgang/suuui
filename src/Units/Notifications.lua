@@ -482,6 +482,7 @@ function M:TestPresence()
     end
     q("bnet", true, { bn }, "x")
     q("friend", true, { sample("Brannoc", "WARRIOR", "Level 58 · Eastern Plaguelands") }, "x")
+    q("guild", true, { sample("Ardent", "SHAMAN", "Officer · Level 60 · Durotar") }, "x")
     q("guild", true, { sample("Lyra", "MAGE"), sample("Thorn", "ROGUE"), sample("Maelis", "PALADIN"), sample("Durn", "HUNTER") })
     q("guild", false, { sample("Ysolde", "DRUID") })
 end
