@@ -21,8 +21,16 @@ MAX_DROPS, MAX_VENDORS, MAX_OBJECTS = 4, 6, 3
 def lua(s):
     return '"' + str(s).replace('\\', '\\\\').replace('"', '\\"') + '"'
 
+# zones the recipe data couldn't name ("zone 1585": an ID QuestieDB uses that
+# Forever's AreaTable lacks; tools/gen_recipes.py knows them too)
+ZONE_FIXES = {'zone 1585': 'Blackrock Depths'}
+
+def zone(z):
+    z = z or ''
+    return ZONE_FIXES.get(z, z)
+
 def npc(n, third):
-    return lua('|'.join([n.get('name') or '', n.get('zone') or '', str(n.get(third) or '')]))
+    return lua('|'.join([n.get('name') or '', zone(n.get('zone')), str(n.get(third) or '')]))
 
 def source(s):
     t = s['type']
@@ -40,7 +48,7 @@ def source(s):
         parts.append('dn = %d' % len(drops))
     seen, objects = set(), []
     for o in s.get('objects') or []:
-        key = (o.get('name') or '', o.get('zone') or '')
+        key = (o.get('name') or '', zone(o.get('zone')))
         if key not in seen:
             seen.add(key)
             objects.append(lua('|'.join(key)))

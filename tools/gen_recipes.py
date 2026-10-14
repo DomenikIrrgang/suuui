@@ -29,6 +29,9 @@ skill = {r['ID']: r['DisplayName_lang'] for r in rows('SkillLine')}
 spellName = {r['ID']: r['Name_lang'] for r in rows('SpellName')}
 cats = {r['ID']: r for r in rows('TradeSkillCategory')}
 area = {r['ID']: r['AreaName_lang'] for r in rows('AreaTable')}
+# zone IDs QuestieDB uses that Forever's AreaTable doesn't have (its NPCs there
+# say which: 1585 holds the Anvilrage, Doomforge and Lord Roccor)
+ZONE_FIXES = {'1585': 'Blackrock Depths'}
 itemName = {r['ID']: r['Display_lang'] for r in rows('ItemSparse')}
 
 effects = collections.defaultdict(list)
@@ -55,7 +58,7 @@ def ids(s): return [x for x in (s or '').split(',') if x]
 def zone(z):
     if not z or z == '0': return ''
     if not z.isdigit(): return z.replace('_', ' ').title()   # a correction's zone by name
-    return area.get(z, f'zone {z}')
+    return area.get(z) or ZONE_FIXES.get(z) or f'zone {z}'
 def npc(i):
     n = qnpcs.get(i)
     if not n: return {'id': int(i), 'name': None}

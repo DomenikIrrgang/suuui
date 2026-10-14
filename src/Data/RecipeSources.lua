@@ -729,7 +729,7 @@ ns.RecipeSources = {
     [13882] = { { t = "i", i = 11206, d = { "Syndicate Assassin|Alterac Mountains|38-39", "Wastewander Assassin|Tanaris|44-45", "Wastewander Scofflaw||45" }, dn = 3 } }, -- Enchant Cloak - Lesser Agility
     [13887] = { { t = "t" } }, -- Enchant Gloves - Strength
     [13890] = { { t = "t" } }, -- Enchant Boots - Minor Speed
-    [13898] = { { t = "i", i = 11207, d = { "Pyromancer Loregrain|zone 1585|52" }, dn = 1 } }, -- Enchant Weapon - Fiery Weapon
+    [13898] = { { t = "i", i = 11207, d = { "Pyromancer Loregrain|Blackrock Depths|52" }, dn = 1 } }, -- Enchant Weapon - Fiery Weapon
     [13905] = { { t = "t" } }, -- Enchant Shield - Greater Spirit
     [13915] = { { t = "i", i = 11208, d = { "Blue Dragonspawn|Azshara|50-51", "Skullsplitter Hunter|Stranglethorn Vale|41-42", "Mosh'Ogg Shaman|Stranglethorn Vale|43-44", "Jungle Stalker|Stranglethorn Vale|40-41" }, dn = 546, o = { "Solid Chest|Stranglethorn Vale", "Ancient Treasure|Uldaman", "Captain's Chest|Tanaris" }, c = { 4637, 4638, 5758, 16884 } }, { t = "i", i = 215140 } }, -- Enchant Weapon - Demonslaying
     [13917] = { { t = "t" } }, -- Enchant Chest - Superior Intellect
@@ -754,11 +754,11 @@ ns.RecipeSources = {
     [14932] = { { t = "t" } }, -- Thick Leather Ammo Pouch
     [15255] = { { t = "t" } }, -- Mechanical Repair Kit
     [15292] = { { t = "i", i = 11610, d = { "Grizzle||54" }, dn = 1 } }, -- Dark Iron Pulverizer
-    [15293] = { { t = "i", i = 11614, d = { "Anvilrage Marshal|zone 1585|54-55", "Doomforge Dragoon|zone 1585|54-55", "Doomforge Arcanasmith|zone 1585|54-55", "Ragereaver Golem|zone 1585|54-55" }, dn = 8, o = { "Blacksmithing Plans|zone 1585" } } }, -- Dark Iron Mail
-    [15294] = { { t = "i", i = 11611, d = { "Hammered Patron|zone 1585|48-52", "Ribbly's Crony|zone 1585|48-52" }, dn = 2 } }, -- Dark Iron Sunderer
-    [15295] = { { t = "i", i = 11615, d = { "Anvilrage Overseer|zone 1585|48-49", "Anvilrage Warden|zone 1585|49-50", "Anvilrage Guardsman|zone 1585|50-51", "Anvilrage Footman|zone 1585|51-52" }, dn = 14, o = { "Blacksmithing Plans|zone 1585" } } }, -- Dark Iron Shoulders
-    [15296] = { { t = "i", i = 11612, d = { "Ribbly Screwspigot|zone 1585|53" }, dn = 1 } }, -- Dark Iron Plate
-    [15596] = { { t = "i", i = 11813, d = { "Lord Roccor|zone 1585|51" }, dn = 1 } }, -- Smoking Heart of the Mountain
+    [15293] = { { t = "i", i = 11614, d = { "Anvilrage Marshal|Blackrock Depths|54-55", "Doomforge Dragoon|Blackrock Depths|54-55", "Doomforge Arcanasmith|Blackrock Depths|54-55", "Ragereaver Golem|Blackrock Depths|54-55" }, dn = 8, o = { "Blacksmithing Plans|Blackrock Depths" } } }, -- Dark Iron Mail
+    [15294] = { { t = "i", i = 11611, d = { "Hammered Patron|Blackrock Depths|48-52", "Ribbly's Crony|Blackrock Depths|48-52" }, dn = 2 } }, -- Dark Iron Sunderer
+    [15295] = { { t = "i", i = 11615, d = { "Anvilrage Overseer|Blackrock Depths|48-49", "Anvilrage Warden|Blackrock Depths|49-50", "Anvilrage Guardsman|Blackrock Depths|50-51", "Anvilrage Footman|Blackrock Depths|51-52" }, dn = 14, o = { "Blacksmithing Plans|Blackrock Depths" } } }, -- Dark Iron Shoulders
+    [15296] = { { t = "i", i = 11612, d = { "Ribbly Screwspigot|Blackrock Depths|53" }, dn = 1 } }, -- Dark Iron Plate
+    [15596] = { { t = "i", i = 11813, d = { "Lord Roccor|Blackrock Depths|51" }, dn = 1 } }, -- Smoking Heart of the Mountain
     [15628] = { { t = "i", i = 11828, d = { "Mekgineer Thermaplugg|Gnomeregan|34" }, dn = 1, c = { 11422 } } }, -- Pet Bombling
     [15633] = { { t = "i", i = 11827, d = { "Crowd Pummeler 9-60|Gnomeregan|32" }, dn = 1, c = { 11423 } } }, -- Lil' Smoky
     [15833] = { { t = "t" } }, -- Dreamless Sleep Potion
@@ -848,7 +848,7 @@ ns.RecipeSources = {
     [17555] = { { t = "i", i = 13479, d = { "Scarlet Cleric|Eastern Plaguelands|54-55", "Scarlet Curate|Eastern Plaguelands|55-56", "Scarlet Archmage|Eastern Plaguelands|55-57", "Scarlet Enchanter|Eastern Plaguelands|53-55" }, dn = 4 } }, -- Elixir of the Sages
     [17557] = { { t = "i", i = 13481, c = { 15699 } } }, -- Elixir of Brute Force
     [17559] = { { t = "i", i = 13482, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } } }, -- Transmute: Air to Fire
-    [17560] = { { t = "i", i = 13483, v = { "Plugger Spazzring|zone 1585|AH" } } }, -- Transmute: Fire to Earth
+    [17560] = { { t = "i", i = 13483, v = { "Plugger Spazzring|Blackrock Depths|AH" } } }, -- Transmute: Fire to Earth
     [17561] = { { t = "i", i = 13484, v = { "Meilosh|Felwood|" } } }, -- Transmute: Earth to Water
     [17562] = { { t = "i", i = 13485, v = { "Magnus Frostwake|Western Plaguelands|AH" } } }, -- Transmute: Water to Air
     [17563] = { { t = "i", i = 13486, d = { "Blue Dragonspawn|Azshara|50-51", "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Slavering Ghoul|Western Plaguelands|50-52" }, dn = 120, o = { "Solid Chest|The Hinterlands", "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands" }, c = { 5758 } } }, -- Transmute: Undeath to Water
@@ -921,9 +921,9 @@ ns.RecipeSources = {
     [18448] = { { t = "i", i = 14507, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Sorcerer|Western Plaguelands|51-52", "Wailing Death|Western Plaguelands|56-57", "Enslaved Druid of the Talon|Teldrassil|10" }, dn = 131, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|" } } }, -- Mooncloth Shoulders
     [18449] = { { t = "i", i = 14504, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 452, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Arena Treasure Chest|" }, c = { 5760 } } }, -- Runecloth Shoulders
     [18450] = { { t = "i", i = 14505, d = { "Dark Caster|Eastern Plaguelands|56-57" }, dn = 1 } }, -- Wizardweave Turban
-    [18451] = { { t = "i", i = 14506, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 471, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|zone 1585" }, c = { 5760 } } }, -- Felcloth Robe
+    [18451] = { { t = "i", i = 14506, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Wyrmkin Firebrand|Wetlands|61-62" }, dn = 471, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|Blackrock Depths" }, c = { 5760 } } }, -- Felcloth Robe
     [18452] = { { t = "i", i = 14509, d = { "Blackhand Elite|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Thuzadin Necromancer|Stratholme|59-61", "Soulflayer|Zul'Gurub|61" }, dn = 13 } }, -- Mooncloth Circlet
-    [18453] = { { t = "i", i = 14508, d = { "Red Dragonspawn|Wetlands|57-58", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61" }, dn = 473, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|zone 1585" }, c = { 5760 } } }, -- Felcloth Shoulders
+    [18453] = { { t = "i", i = 14508, d = { "Red Dragonspawn|Wetlands|57-58", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61" }, dn = 473, o = { "Solid Chest|Eastern Plaguelands", "Large Solid Chest|", "Dark Coffer|Blackrock Depths" }, c = { 5760 } } }, -- Felcloth Shoulders
     [18454] = { { t = "i", i = 14511, d = { "Blackhand Assassin|Blackrock Spire|60-61", "Blackhand Iron Guard|Blackrock Spire|60-61", "Molten Destroyer|Molten Core|63", "Firelord|Molten Core|61-62" }, dn = 8 } }, -- Gloves of Spell Mastery
     [18455] = { { t = "i", i = 14510, d = { "Blackhand Iron Guard|Blackrock Spire|60-61", "Gurubashi Berserker|Alterac Valley|62", "Lava Annihilator|Molten Core|61-62", "Firewalker|Molten Core|61-62" }, dn = 11 } }, -- Bottomless Bag
     [18456] = { { t = "i", i = 14512, d = { "Balnazzar||62" }, dn = 1 } }, -- Truefaith Vestments
@@ -967,7 +967,7 @@ ns.RecipeSources = {
     [19082] = { { t = "i", i = 15756, v = { "Jase Farlane|Eastern Plaguelands|AH" } } }, -- Runic Leather Headband
     [19083] = { { t = "i", i = 15757, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Skeletal Flayer|Western Plaguelands|50-51" }, dn = 530, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758, 16885 } } }, -- Wicked Leather Pants
     [19084] = { { t = "i", i = 15758, v = { "Nergal|Un'Goro Crater|AH" } } }, -- Devilsaur Gauntlets
-    [19085] = { { t = "i", i = 15759, v = { "Plugger Spazzring|zone 1585|AH" } } }, -- Black Dragonscale Breastplate
+    [19085] = { { t = "i", i = 15759, v = { "Plugger Spazzring|Blackrock Depths|AH" } } }, -- Black Dragonscale Breastplate
     [19086] = { { t = "i", i = 15760, d = { "Vilebranch Hideskinner|The Hinterlands|48-49" }, dn = 1 } }, -- Ironfeather Breastplate
     [19087] = { { t = "i", i = 15761, d = { "Winterfall Totemic|Winterspring|54-55" }, dn = 1 } }, -- Frostsaber Gloves
     [19088] = { { t = "i", i = 15762, v = { "Zannok Hidepiercer|Silithus|AH" } } }, -- Heavy Scorpid Helm
@@ -976,7 +976,7 @@ ns.RecipeSources = {
     [19091] = { { t = "i", i = 15765, d = { "Red Dragonspawn|Wetlands|57-58", "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61" }, dn = 458, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5760 } } }, -- Runic Leather Pants
     [19092] = { { t = "i", i = 15768, d = { "Ghoul Ravener|Stratholme|58-59" }, dn = 1 } }, -- Wicked Leather Belt
     [19093] = { { t = "i", i = 15769 } }, -- Onyxia Scale Cloak
-    [19094] = { { t = "i", i = 15770, d = { "Anvilrage Marshal|zone 1585|54-55" }, dn = 1 } }, -- Black Dragonscale Shoulders
+    [19094] = { { t = "i", i = 15770, d = { "Anvilrage Marshal|Blackrock Depths|54-55" }, dn = 1 } }, -- Black Dragonscale Shoulders
     [19095] = { { t = "i", i = 15771, d = { "Decaying Horror|Western Plaguelands|56-57" }, dn = 1 } }, -- Living Breastplate
     [19097] = { { t = "i", i = 15772, d = { "Muculent Ooze|Un'Goro Crater|48-50", "Primal Ooze|Un'Goro Crater|50-52", "Glutinous Ooze|Un'Goro Crater|52-54", "Cloned Ooze||50-52" }, dn = 4 } }, -- Devilsaur Leggings
     [19098] = { { t = "i", i = 15773, d = { "Spectral Researcher|Scholomance|58-60" }, dn = 1 } }, -- Wicked Leather Armor
@@ -986,7 +986,7 @@ ns.RecipeSources = {
     [19103] = { { t = "i", i = 15777, d = { "Crimson Battle Mage|Stratholme|59-60" }, dn = 1 } }, -- Runic Leather Shoulders
     [19104] = { { t = "i", i = 15779, d = { "Winterfall Ursa|Winterspring|57-58" }, dn = 1 } }, -- Frostsaber Tunic
     [19106] = { { t = "i", i = 15780 } }, -- Onyxia Scale Breastplate
-    [19107] = { { t = "i", i = 15781, d = { "Anvilrage Captain|zone 1585|55-56" }, dn = 1 } }, -- Black Dragonscale Leggings
+    [19107] = { { t = "i", i = 15781, d = { "Anvilrage Captain|Blackrock Depths|55-56" }, dn = 1 } }, -- Black Dragonscale Leggings
     [19435] = { { t = "t" } }, -- Mooncloth Boots
     [19567] = { { t = "t" } }, -- Salt Shaker
     [19666] = { { t = "t" } }, -- Silver Skeleton Key
@@ -1000,14 +1000,14 @@ ns.RecipeSources = {
     [19793] = { { t = "i", i = 16044, d = { "Skeletal Flayer|Western Plaguelands|50-51", "Skeletal Acolyte|Western Plaguelands|55-56", "Slavering Ghoul|Western Plaguelands|50-52", "Searing Ghoul|Western Plaguelands|55-56" }, dn = 114, o = { "Large Solid Chest|", "Arena Treasure Chest|" }, c = { 5758 } } }, -- Lifelike Mechanical Toad
     [19794] = { { t = "i", i = 16045, d = { "Spitelash Siren|Azshara|50-52" }, dn = 1 } }, -- Spellpower Goggles Xtreme Plus
     [19795] = { { t = "i", i = 16047, v = { "Xizzer Fizzbolt|Winterspring|AH", "Kor'gar|Riverglades|A" } } }, -- Thorium Tube
-    [19796] = { { t = "i", i = 16048, d = { "Doomforge Craftsman|zone 1585|52-54" }, dn = 1 } }, -- Dark Iron Rifle
-    [19799] = { { t = "i", i = 16049, d = { "Weapon Technician|zone 1585|55-56" }, dn = 1 } }, -- Dark Iron Bomb
+    [19796] = { { t = "i", i = 16048, d = { "Doomforge Craftsman|Blackrock Depths|52-54" }, dn = 1 } }, -- Dark Iron Rifle
+    [19799] = { { t = "i", i = 16049, d = { "Weapon Technician|Blackrock Depths|55-56" }, dn = 1 } }, -- Dark Iron Bomb
     [19800] = { { t = "i", i = 16051, d = { "Red Wyrmkin|Wetlands|58-59", "Red Scalebane|Wetlands|59-60", "Scalebane Lieutenant|Wetlands|60-61", "Skeletal Flayer|Western Plaguelands|50-51" }, dn = 507, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" }, c = { 5758 } } }, -- Thorium Shells
     [19804] = { { t = "t" } }, -- Arcanite Dragonling
     [19814] = { { t = "i", i = 16046, v = { "Xizzer Fizzbolt|Winterspring|AH", "Kor'gar|Riverglades|A" } } }, -- Masterwork Target Dummy
     [19815] = { { t = "i", i = 16050, v = { "Xizzer Fizzbolt|Winterspring|AH" } } }, -- Delicate Arcanite Converter
     [19819] = { { t = "i", i = 16052, d = { "Crimson Inquisitor|Stratholme|59-60" }, dn = 1 } }, -- Voice Amplification Modulator
-    [19825] = { { t = "i", i = 16053, d = { "Doomforge Arcanasmith|zone 1585|54-55" }, dn = 1 } }, -- Master Engineer's Goggles
+    [19825] = { { t = "i", i = 16053, d = { "Doomforge Arcanasmith|Blackrock Depths|54-55" }, dn = 1 } }, -- Master Engineer's Goggles
     [19830] = { { t = "i", i = 16054, d = { "Cobalt Mageweaver|Winterspring|57-58" }, dn = 1 } }, -- Arcanite Dragonling
     [19831] = { { t = "i", i = 16055, d = { "Hungering Wraith|Western Plaguelands|56-58", "Wailing Death|Western Plaguelands|56-57", "Vile Slime|Western Plaguelands|54-55", "Scarlet Paladin|Western Plaguelands|55-56" }, dn = 147, o = { "Solid Chest|Burning Steppes", "Solid Chest|Eastern Plaguelands", "Large Solid Chest|" } } }, -- Arcane Bomb
     [19833] = { { t = "i", i = 16056, d = { "Mossflayer Shadowhunter|Eastern Plaguelands|58-59" }, dn = 1 } }, -- Flawless Arcanite Rifle
@@ -1041,17 +1041,17 @@ ns.RecipeSources = {
     [20648] = { { t = "t" } }, -- Medium Leather
     [20649] = { { t = "t" } }, -- Heavy Leather
     [20650] = { { t = "t" } }, -- Thick Leather
-    [20848] = { { t = "i", i = 17017, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Flarecore Mantle
-    [20849] = { { t = "i", i = 17018, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Flarecore Gloves
-    [20853] = { { t = "i", i = 17022, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Corehound Boots
-    [20854] = { { t = "i", i = 17023, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Molten Helm
-    [20855] = { { t = "i", i = 17025, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Black Dragonscale Boots
-    [20872] = { { t = "i", i = 17049, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Fiery Chain Girdle
-    [20873] = { { t = "i", i = 17053, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Fiery Chain Shoulders
-    [20874] = { { t = "i", i = 17051, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Bracers
-    [20876] = { { t = "i", i = 17052, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Leggings
-    [20890] = { { t = "i", i = 17059, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Reaver
-    [20897] = { { t = "i", i = 17060, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Destroyer
+    [20848] = { { t = "i", i = 17017, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Flarecore Mantle
+    [20849] = { { t = "i", i = 17018, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Flarecore Gloves
+    [20853] = { { t = "i", i = 17022, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Corehound Boots
+    [20854] = { { t = "i", i = 17023, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Molten Helm
+    [20855] = { { t = "i", i = 17025, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Black Dragonscale Boots
+    [20872] = { { t = "i", i = 17049, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Fiery Chain Girdle
+    [20873] = { { t = "i", i = 17053, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Fiery Chain Shoulders
+    [20874] = { { t = "i", i = 17051, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Bracers
+    [20876] = { { t = "i", i = 17052, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Leggings
+    [20890] = { { t = "i", i = 17059, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Reaver
+    [20897] = { { t = "i", i = 17060, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Destroyer
     [20916] = { { t = "i", i = 17062, v = { "Lindea Rabonne|Hillsbrad Foothills|A", "Kelsey Yance|Stranglethorn Vale|AH", "Stuart Fleming|Wetlands|A", "Shankys|Orgrimmar|H", "Heldan Galesong|Darkshore|A", "Lizbeth Cromwell|Undercity|H" } } }, -- Mithril Headed Trout
     [21143] = { { t = "i", i = 17200, v = { "Penney Copperpinch|Orgrimmar|AH", "Nardstrum Copperpinch|Undercity|AH", "Seersa Copperpinch|Thunder Bluff|AH", "Wulmort Jinglepocket|Ironforge|AH", "Khole Jinglepocket|Stormwind City|AH" } } }, -- Gingerbread Cookie
     [21144] = { { t = "i", i = 17201, v = { "Penney Copperpinch|Orgrimmar|AH", "Nardstrum Copperpinch|Undercity|AH", "Seersa Copperpinch|Thunder Bluff|AH", "Wulmort Jinglepocket|Ironforge|AH", "Khole Jinglepocket|Stormwind City|AH" } } }, -- Egg Nog
@@ -1101,13 +1101,13 @@ ns.RecipeSources = {
     [23070] = { { t = "t" } }, -- Dense Dynamite
     [23071] = { { t = "i", i = 18651, v = { "Mazk Snipeshot|Stranglethorn Vale|AH" } } }, -- Truesilver Transformer
     [23077] = { { t = "i", i = 18652, v = { "Xizzer Fizzbolt|Winterspring|AH" } } }, -- Gyrofreeze Ice Reflector
-    [23078] = { { t = "i", i = 18653, d = { "Plugger Spazzring|zone 1585|55" }, dn = 1 } }, -- Goblin Jumper Cables XL
+    [23078] = { { t = "i", i = 18653, d = { "Plugger Spazzring|Blackrock Depths|55" }, dn = 1 } }, -- Goblin Jumper Cables XL
     [23079] = { { t = "i", i = 18655 } }, -- Major Recombobulator
     [23080] = { { t = "i", i = 18656, v = { "Xizzer Fizzbolt|Winterspring|AH" } } }, -- Powerful Seaforium Charge
     [23081] = { { t = "i", i = 18657, d = { "Solakar Flamewreath||60" }, dn = 1 } }, -- Hyper-Radiant Flame Reflector
     [23082] = { { t = "i", i = 18658, d = { "Crimson Inquisitor|Stratholme|59-60" }, dn = 1 } }, -- Ultra-Flash Shadow Reflector
-    [23096] = { { t = "i", i = 18654, d = { "Weapon Technician|zone 1585|55-56" }, dn = 1 } }, -- Alarm-O-Bot
-    [23129] = { { t = "i", i = 18661, d = { "Weapon Technician|zone 1585|55-56" }, dn = 1 } }, -- World Enlarger
+    [23096] = { { t = "i", i = 18654, d = { "Weapon Technician|Blackrock Depths|55-56" }, dn = 1 } }, -- Alarm-O-Bot
+    [23129] = { { t = "i", i = 18661, d = { "Weapon Technician|Blackrock Depths|55-56" }, dn = 1 } }, -- World Enlarger
     [23190] = { { t = "i", i = 18731, v = { "Tamar|Orgrimmar|H", "Bombus Finespindle|Ironforge|A" } } }, -- Heavy Leather Ball
     [23399] = { { t = "i", i = 18949, v = { "Saenorion|Darnassus|A", "Joseph Moore|Undercity|H" } } }, -- Barbaric Bracers
     [23486] = { { t = "t" } }, -- Dimensional Ripper - Everlook
@@ -1117,34 +1117,34 @@ ns.RecipeSources = {
     [23629] = { { t = "i", i = 19204, v = { "Meilosh|Felwood|" } } }, -- Heavy Timbermaw Boots
     [23632] = { { t = "i", i = 19203, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227893 } }, -- Girdle of the Dawn
     [23633] = { { t = "i", i = 19205, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227892 } }, -- Gloves of the Dawn
-    [23636] = { { t = "i", i = 19206, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Helm
-    [23637] = { { t = "i", i = 19207, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Gauntlets
-    [23638] = { { t = "i", i = 19208, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Black Amnesty
-    [23639] = { { t = "i", i = 19209, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Blackfury
-    [23650] = { { t = "i", i = 19210, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Ebon Hand
-    [23652] = { { t = "i", i = 19211, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Blackguard
-    [23653] = { { t = "i", i = 19212, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Nightfall
+    [23636] = { { t = "i", i = 19206, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Helm
+    [23637] = { { t = "i", i = 19207, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Gauntlets
+    [23638] = { { t = "i", i = 19208, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Black Amnesty
+    [23639] = { { t = "i", i = 19209, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Blackfury
+    [23650] = { { t = "i", i = 19210, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Ebon Hand
+    [23652] = { { t = "i", i = 19211, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Blackguard
+    [23653] = { { t = "i", i = 19212, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Nightfall
     [23662] = { { t = "i", i = 19215, v = { "Meilosh|Felwood|" } } }, -- Wisdom of the Timbermaw
     [23663] = { { t = "i", i = 19218, v = { "Meilosh|Felwood|" } } }, -- Mantle of the Timbermaw
     [23664] = { { t = "i", i = 19216, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227896 } }, -- Argent Boots
     [23665] = { { t = "i", i = 19217, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227897 } }, -- Argent Shoulders
-    [23666] = { { t = "i", i = 19219, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Flarecore Robe
-    [23667] = { { t = "i", i = 19220, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Flarecore Leggings
+    [23666] = { { t = "i", i = 19219, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Flarecore Robe
+    [23667] = { { t = "i", i = 19220, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Flarecore Leggings
     [23703] = { { t = "i", i = 19326, v = { "Meilosh|Felwood|" } } }, -- Might of the Timbermaw
     [23704] = { { t = "i", i = 19327, v = { "Meilosh|Felwood|" } } }, -- Timbermaw Brawlers
     [23705] = { { t = "i", i = 19328, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227894 } }, -- Dawn Treaders
     [23706] = { { t = "i", i = 19329, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } }, { t = "i", i = 227895 } }, -- Golden Mantle of the Dawn
-    [23707] = { { t = "i", i = 19330, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Lava Belt
-    [23708] = { { t = "i", i = 19331, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Chromatic Gauntlets
-    [23709] = { { t = "i", i = 19332, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Corehound Belt
-    [23710] = { { t = "i", i = 19333, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Molten Belt
+    [23707] = { { t = "i", i = 19330, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Lava Belt
+    [23708] = { { t = "i", i = 19331, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Chromatic Gauntlets
+    [23709] = { { t = "i", i = 19332, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Corehound Belt
+    [23710] = { { t = "i", i = 19333, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Molten Belt
     [23787] = { { t = "i", i = 19442, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } } }, -- Powerful Anti-Venom
-    [23799] = { { t = "i", i = 19444, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Enchant Weapon - Strength
+    [23799] = { { t = "i", i = 19444, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Enchant Weapon - Strength
     [23800] = { { t = "i", i = 19445, v = { "Meilosh|Felwood|" } } }, -- Enchant Weapon - Agility
     [23801] = { { t = "i", i = 19446, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } } }, -- Enchant Bracer - Mana Regeneration
     [23802] = { { t = "i", i = 19447, v = { "Argent Quartermaster Hasana|Tirisfal Glades|AH", "Argent Quartermaster Lightspark|Western Plaguelands|AH", "Quartermaster Miranda Breechlock|Eastern Plaguelands|AH" } } }, -- Enchant Bracer - Healing Power
-    [23803] = { { t = "i", i = 19448, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Enchant Weapon - Mighty Spirit
-    [23804] = { { t = "i", i = 19449, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Enchant Weapon - Mighty Intellect
+    [23803] = { { t = "i", i = 19448, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Enchant Weapon - Mighty Spirit
+    [23804] = { { t = "i", i = 19449, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Enchant Weapon - Mighty Intellect
     [24091] = { { t = "i", i = 19764, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Bloodvine Vest
     [24092] = { { t = "i", i = 19765, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Bloodvine Leggings
     [24093] = { { t = "i", i = 19766, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Bloodvine Boots
@@ -1166,7 +1166,7 @@ ns.RecipeSources = {
     [24366] = { { t = "i", i = 20012, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Greater Dreamless Sleep Potion
     [24367] = { { t = "i", i = 20013, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Living Action Potion
     [24368] = { { t = "i", i = 20014, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Major Troll's Blood Elixir
-    [24399] = { { t = "i", i = 20040, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Dark Iron Boots
+    [24399] = { { t = "i", i = 20040, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Dark Iron Boots
     [24418] = { { t = "i", i = 20075, v = { "Ogg'marr|Dustwallow Marsh|H" } } }, -- Heavy Crocolisk Stew
     [24654] = { { t = "t" } }, -- Blue Dragonscale Leggings
     [24655] = { { t = "t" } }, -- Green Dragonscale Gauntlets
@@ -1203,7 +1203,7 @@ ns.RecipeSources = {
     [25128] = { { t = "i", i = 20755, v = { "Kania|Silithus|AH" } } }, -- Wizard Oil
     [25129] = { { t = "i", i = 20756, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Brilliant Wizard Oil
     [25130] = { { t = "i", i = 20757, v = { "Rin'wosho the Trader|Stranglethorn Vale|AH" } } }, -- Brilliant Mana Oil
-    [25146] = { { t = "i", i = 20761, v = { "Lokhtos Darkbargainer|zone 1585|AH" } } }, -- Transmute: Elemental Fire
+    [25146] = { { t = "i", i = 20761, v = { "Lokhtos Darkbargainer|Blackrock Depths|AH" } } }, -- Transmute: Elemental Fire
     [25659] = { { t = "i", i = 21025, q = { 8586 } } }, -- Dirge's Kickin' Chimaerok Chops
     [25704] = { { t = "i", i = 21099, v = { "Micha Yance|Hillsbrad Foothills|A", "Derak Nightfall|Hillsbrad Foothills|H", "Kelsey Yance|Stranglethorn Vale|AH", "Naal Mistrunner|Thunder Bluff|H", "Gloria Femmel|Redridge Mountains|A", "Xen'to|Orgrimmar|H" } } }, -- Smoked Sagefish
     [25954] = { { t = "i", i = 21219, v = { "Micha Yance|Hillsbrad Foothills|A", "Derak Nightfall|Hillsbrad Foothills|H", "Kelsey Yance|Stranglethorn Vale|AH", "Naal Mistrunner|Thunder Bluff|H", "Gloria Femmel|Redridge Mountains|A", "Xen'to|Orgrimmar|H" } } }, -- Sagefish Delight
@@ -1240,7 +1240,7 @@ ns.RecipeSources = {
     [27660] = { { t = "i", i = 22309, d = { "Magister Kalendris|Dire Maul|60" }, dn = 1 } }, -- Big Bag of Enchantment
     [27724] = { { t = "i", i = 22310, v = { "Mishta|Silithus|AH" } } }, -- Cenarion Herb Bag
     [27725] = { { t = "i", i = 22312, v = { "Mishta|Silithus|AH" } } }, -- Satchel of Cenarius
-    [27829] = { { t = "i", i = 22388, d = { "Weapon Technician|zone 1585|55-56", "Risen Guard|Scholomance|57-59", "Spectral Researcher|Scholomance|58-60", "Plagued Hatchling|Scholomance|57-59" }, dn = 8, o = { "Arena Treasure Chest|" } } }, -- Titanic Leggings
+    [27829] = { { t = "i", i = 22388, d = { "Weapon Technician|Blackrock Depths|55-56", "Risen Guard|Scholomance|57-59", "Spectral Researcher|Scholomance|58-60", "Plagued Hatchling|Scholomance|57-59" }, dn = 8, o = { "Arena Treasure Chest|" } } }, -- Titanic Leggings
     [27830] = { { t = "i", i = 22390, d = { "Gurubashi Berserker|Alterac Valley|62", "Ancient Core Hound|Molten Core|62", "Mad Servant|Zul'Gurub|61", "Vekniss Guardian|Ahn'Qiraj|61" }, dn = 8 } }, -- Persuader
     [27832] = { { t = "i", i = 22389, d = { "Razzashi Broodwidow|Zul'Gurub|61", "Firelord|Molten Core|61-62", "Ancient Core Hound|Molten Core|62", "Lava Elemental|Molten Core|61-62" }, dn = 8 } }, -- Sageblade
     [27837] = { { t = "i", i = 22392, v = { "Meilosh|Felwood|" } } }, -- Enchant 2H Weapon - Agility
