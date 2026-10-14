@@ -313,8 +313,45 @@ function SP.Frames()
     ns.Print("Social frames probe: saved; /reload.")
 end
 
+-- What's under the mouse, and every shown frame named like a social one:
+-- for windows that aren't the ones probed before (Forever's own friends
+-- window). Hover the window, then run it.
+function SP.Mouse()
+    SuuUIProbe = SuuUIProbe or {}
+    local store = { at = date("%Y-%m-%d %H:%M:%S"), chain = {}, named = {}, tree = {} }
+    SuuUIProbe.socialMouse = store
+    local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
+    local top
+    local f = foci and foci[1]
+    local guard = 0
+    while f and guard < 20 do
+        local name = f.GetName and f:GetName() or "?"
+        store.chain[#store.chain + 1] = ("%s [%s] prot=%s %dx%d"):format(tostring(name), f.GetObjectType and f:GetObjectType() or "?",
+            show(f.IsProtected and f:IsProtected()), math.floor((f.GetWidth and f:GetWidth()) or 0), math.floor((f.GetHeight and f:GetHeight()) or 0))
+        if f.GetName and f:GetName() then top = f end
+        f = f.GetParent and f:GetParent()
+        if f == UIParent then break end
+        guard = guard + 1
+    end
+    for k, v in pairs(_G) do
+        if type(k) == "string" and type(v) == "table" and v.IsShown and v.GetObjectType
+            and (k:find("Friend") or k:find("Social") or k:find("Contact")) then
+            local ok, shown = pcall(v.IsShown, v)
+            if ok and shown then store.named[#store.named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
+        end
+    end
+    table.sort(store.named)
+    -- the topmost named frame under the mouse: what it's made of
+    if top then
+        store.top = top:GetName()
+        children(top, 1, store.tree, "")
+    end
+    ns.Print(("Mouse probe: %s under the mouse; /reload."):format(tostring(store.top)))
+end
+
 function SP.Command(rest)
     if rest == "names" then SP.Names() return end
+    if rest == "mouse" then SP.Mouse() return end
     if rest == "frames" then SP.Frames() return end
     -- the roster asked for first: it's often empty until then
     if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) elseif GuildRoster then pcall(GuildRoster) end
