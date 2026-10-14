@@ -665,12 +665,10 @@ function M:Recipe(id)
         r.why = "Not learned yet"
     elseif r.cooldown then
         r.why = "On cooldown"
-    elseif not toolsMet then
-        r.why = "Requires " .. (r.tools[1] and r.tools[1].name or "a tool")
-    elseif can <= 0 then
-        r.why = "Missing reagents"
     end
-    r.ready = r.why == nil
+    -- a missing tool or reagents: Create is off, said in red above already
+    -- (the line by the foot repeated "Requires Anvil": found in game)
+    r.ready = r.why == nil and toolsMet and can > 0
     return r
 end
 
