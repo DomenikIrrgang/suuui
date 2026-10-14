@@ -335,14 +335,27 @@ function M:ShowDetails(m)
     p.officerEdit:SetShown(canView and true or false)
     p.officer:SetValue((m.officerNote and m.officerNote ~= "") and m.officerNote or "|cff" .. T.color["ink-faint"].hex .. "No officer note|r")
     p.officerEdit:SetEnabledState(C_GuildInfo and call(C_GuildInfo.CanEditOfficerNote) and true or false)
-    local last = canView and p.officer or p.note
+    -- the rows placed from the body's top by the texts' heights, never
+    -- anchored to a text: the secure buttons hang off them, and a secure
+    -- frame can't be anchored to a text ("Cannot anchor protected frames to
+    -- regions", found in game)
     local S = T.space
+    p.note:SetWidth(p.body:GetWidth())
+    p.officer:SetWidth(p.body:GetWidth())
+    local cap, lbl = T.type.caption.lineHeight, T.type.label.lineHeight
+    local y = lbl + 2 + cap
+    y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(p.note:GetStringHeight()))
+    if canView then
+        y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(p.officer:GetStringHeight()))
+    end
+    y = y + S["space-5"]
     p.row1:ClearAllPoints()
-    p.row1:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, -S["space-5"])
+    p.row1:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
     p.row1:SetPoint("RIGHT", p.body, "RIGHT")
     p.row2:ClearAllPoints()
-    p.row2:SetPoint("TOPLEFT", p.row1, "BOTTOMLEFT", 0, -S["space-3"])
+    p.row2:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -(y + 26 + S["space-3"]))
     p.row2:SetPoint("RIGHT", p.body, "RIGHT")
+    p.body:SetHeight(y + 26 + S["space-3"] + 26)
     local a = self:Actions(m)
     p.whisper:SetEnabledState(a.whisper.enabled and true or false)
     p.invite:SetEnabledState(a.invite.enabled and true or false)
@@ -362,12 +375,8 @@ function M:ShowDetails(m)
             r.over:SetShown(on and true or false)
         end
     end
-    -- the body's height: down to the last row
+    p:Fit()
     p:Show()
-    C_Timer.After(0, function()
-        local t, b = p.body:GetTop(), p.row2:GetBottom()
-        if t and b then p.body:SetHeight(math.max(1, t - b)); p:Fit() end
-    end)
 end
 
 --------------------------------------------------------------------------------
