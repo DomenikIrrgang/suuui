@@ -318,6 +318,9 @@ function M:SkinCommunities()
     for _, t in ipairs({ { f.ChatTab, "Chat" }, { f.RosterTab, "Roster" }, { f.GuildInfoTab, "Info" } }) do
         local b = t[1]
         if b then
+            -- check buttons: the restyle pass made them checkboxes (found in
+            -- game); they're tabs, drawn by SetTabs
+            b.suuOwn = true
             tabs[#tabs + 1] = { button = b, label = t[2], short = t[2],
                                 selected = function() return b.GetChecked and b:GetChecked() or false end }
             b:HookScript("OnClick", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
@@ -327,6 +330,7 @@ function M:SkinCommunities()
     -- the play-style and benefits tabs out of sight
     for _, b in ipairs({ f.GuildPreferredPlaySettingsTab, f.GuildBenefitsTab }) do
         if b then
+            b.suuOwn = true
             b:SetAlpha(0)
             b:EnableMouse(false)
         end
