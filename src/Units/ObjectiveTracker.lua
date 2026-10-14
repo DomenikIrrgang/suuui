@@ -19,6 +19,13 @@
 -- hide, out of the boss frames' way. The head's toggle is secure too.
 -- Left click a quest: its details on the map; right click: focus, share,
 -- stop tracking.
+-- Tracked recipes (asked for in game: Blizzard's tracker showed them, this
+-- one didn't; their own category, not among the quests): a second block
+-- under the quests, "Recipes" with its own toggle: each recipe's product
+-- icon and name (quality colour), "×3" when you can make it, its reagents
+-- as objectives ("Iron Bar 3/6", checked once you have them), or "Ready to
+-- craft". Left click opens it in Professions; right click: open, stop
+-- tracking.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -37,6 +44,8 @@ local M = SuuUI.RegisterModule({
         collapsed = false,            -- the head's toggle
         collapseInBossFights = true,
         items = true,                 -- quest items beside their quests
+        recipes = true,               -- tracked recipes, their own block under the quests
+        recipesCollapsed = false,     -- that block's head toggle
     },
 })
 
@@ -348,6 +357,7 @@ end
 function M:ApplyCollapse()
     local collapsed = self:Get("collapsed") or self:InBossFight()
     self.tracker:SetCollapsed(collapsed and true or false)
+    self:ApplyRecipesCollapse()
 end
 
 -- The saved collapse and the boss setting, into the secure side (out of combat).
@@ -396,6 +406,96 @@ function M:QuestClick(questID, button, row)
 end
 
 --------------------------------------------------------------------------------
+-- Tracked recipes
+--------------------------------------------------------------------------------
+
+local QUALITY = { [0] = "quality-poor", "ink", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary" }
+
+local function call(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
+    if ok then return a, b, c, d, e, f, g, h, i, j end
+end
+
+-- The tracked recipes as tracker entries.
+function M:TrackedRecipes()
+    local out = {}
+    if not self:Get("recipes") or not C_TradeSkillUI then return out end
+    for _, id in ipairs(call(C_TradeSkillUI.GetRecipesTracked, false) or {}) do
+        local sch = call(C_TradeSkillUI.GetRecipeSchematic, id, false)
+        if sch then
+            local entry = { questID = id, objectives = {} }
+            local out_ = sch.outputItemID
+            local name, quality, icon
+            if out_ then
+                local n, _, q, _, _, _, _, _, _, ic = call(C_Item.GetItemInfo, out_)
+                name, quality, icon = n, q, ic
+                if not n then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, out_) end
+            end
+            entry.title = name or sch.name or ("Recipe " .. id)
+            entry.color = QUALITY[quality or 1] or "ink"
+            entry.icon = icon or call(C_Spell.GetSpellTexture, id) or 134400
+            local can = math.huge
+            for _, slot in ipairs(sch.reagentSlotSchematics or {}) do
+                local reagent = slot.reagents and slot.reagents[1]
+                if reagent and reagent.itemID and slot.required ~= false then
+                    local need = slot.quantityRequired or 1
+                    local have = call(C_Item.GetItemCount, reagent.itemID) or 0
+                    local rName = call(C_Item.GetItemNameByID, reagent.itemID)
+                    if not rName then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, reagent.itemID) end
+                    entry.objectives[#entry.objectives + 1] = { text = rName or "…", progress = math.min(have, need) .. "/" .. need,
+                                                                done = have >= need }
+                    can = math.min(can, math.floor(have / math.max(1, need)))
+                end
+            end
+            if can == math.huge then can = 0 end
+            entry.complete = can > 0
+            entry.turnIn = "Ready to craft"
+            entry.count = can > 0 and ("×" .. can) or nil
+            out[#out + 1] = entry
+        end
+    end
+    return out
+end
+
+function M:RecipeClick(recipeID, button, row)
+    if button == "LeftButton" then
+        SuuUI.OpenRecipe(recipeID)
+        return
+    end
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
+    MenuUtil.CreateContextMenu(row, function(_, root)
+        if row.quest and row.quest.title then root:CreateTitle(row.quest.title) end
+        root:CreateButton("Open recipe", function() SuuUI.OpenRecipe(recipeID) end)
+        root:CreateButton("Stop tracking", function()
+            pcall(C_TradeSkillUI.SetRecipeTracked, recipeID, false, false)
+        end)
+    end)
+end
+
+-- The Recipes block under the quests (at the top when no quest is tracked).
+function M:RefreshRecipes(questsShown)
+    local r = self.recipesTracker
+    if not r then return end
+    local list = self:TrackedRecipes()
+    r:SetQuests(list)
+    r:SetMeta(#list == 1 and "1 recipe" or (#list .. " recipes"))
+    r:ClearAllPoints()
+    if questsShown then
+        r:SetPoint("TOPLEFT", self.tracker, "BOTTOMLEFT", 0, -S["space-6"])
+    else
+        r:SetPoint("TOPLEFT", self.frame, "TOPLEFT")
+    end
+    r:SetShown(#list > 0)
+end
+
+function M:ApplyRecipesCollapse()
+    if not self.recipesTracker then return end
+    local collapsed = self:Get("recipesCollapsed") or self:InBossFight()
+    self.recipesTracker:SetCollapsed(collapsed and true or false)
+end
+
+--------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
 
@@ -421,6 +521,7 @@ function M:Refresh()
     -- secure buttons, and its visibility is the Shows setting's)
     self.tracker:SetAlpha(n == 0 and 0 or 1)
     self.toggle:SetAlpha(n == 0 and 0 or 1)
+    self:RefreshRecipes(n > 0)
 end
 
 -- Many quest events come at once: one refresh on the next frame.
@@ -482,6 +583,8 @@ local SECTION = {
               description = "A quest's usable item left of its title: click it to use, in combat too." },
             { key = "collapseInBossFights", label = "Collapse in boss fights", control = "toggle", combat = true,
               description = "Only the head while a boss is up (its quest items hide too); back after the fight." },
+            { key = "recipes", label = "Tracked recipes", control = "toggle", combat = true,
+              description = "Recipes you track in Professions, under the quests: their reagents and whether you can craft them." },
         } },
     },
 }
@@ -507,6 +610,16 @@ function M:OnEnable()
             if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
         end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
+        -- the tracked recipes: their own block, a plain toggle (no secure
+        -- parts in it)
+        self.recipesTracker = UI.ObjectiveTracker(self.frame, { width = WIDTH, maxHeight = 260 })
+        self.recipesTracker:SetTitle("Recipes")
+        self.recipesTracker.onQuestClick = function(id, button, row) self:RecipeClick(id, button, row) end
+        self.recipesTracker.onToggle = function()
+            self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
+            self:ApplyRecipesCollapse()
+        end
+        self.recipesTracker:Hide()
         local wait, resort = 0, 10
         self.frame:SetScript("OnUpdate", function(_, elapsed)
             -- as you move, the nearest quests come up (not in combat: the
@@ -538,17 +651,25 @@ function M:OnEnable()
     self:Watch("position", function() self:ApplyShows() end)
     self:Watch("maxHeight", function() self:ApplySize() end)
     self:Watch("items", function() self:Refresh() end)
+    self:Watch("recipes", function() self:Refresh() end)
+    self:ApplyRecipesCollapse()
     self:Watch("collapseInBossFights", function() self:ApplySecure() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",
                          "QUEST_REMOVED", "QUEST_TURNED_IN", "QUEST_ITEM_UPDATE", "PLAYER_LEVEL_UP",
-                         "PLAYER_ENTERING_WORLD", "BAG_UPDATE_COOLDOWN" }) do
+                         "PLAYER_ENTERING_WORLD", "BAG_UPDATE_COOLDOWN",
+                         -- tracked recipes: tracking changes, reagents come and go
+                         "TRACKED_RECIPE_UPDATE", "BAG_UPDATE_DELAYED" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
     end
     -- a new zone: sorted again (the zone you're in goes first)
     for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_POI_UPDATE" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
     end
+    -- item names the game hadn't loaded yet (tracked recipes' reagents)
+    self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
+        if self.waitingItems then self.waitingItems = false; self:QueueRefresh() end
+    end)
     -- a boss fight without a boss unit: the tracker (not its items) collapses
     for _, e in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END" }) do
         if not valid or valid(e) then

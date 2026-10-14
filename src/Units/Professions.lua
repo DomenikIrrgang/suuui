@@ -433,8 +433,20 @@ function M:Recipes()
         saved.recipes = saved.recipes or {}
         saved.recipes[data.skillLine] = data.recipes
     end
-    -- the one chosen in this profession, else the first
+    -- the one chosen in this profession, else the first; a recipe asked for
+    -- (SuuUI.OpenRecipe) when it's in the list
     local key = data.skillLine or 0
+    if self.pendingRecipe then
+        for _, cat in ipairs(cats) do
+            for _, r in ipairs(cat.recipes) do
+                if r.id == self.pendingRecipe then
+                    self.chosen[key] = r.id
+                    if cat.name then self.view.folded[cat.name] = nil end
+                end
+            end
+        end
+        if self.chosen[key] == self.pendingRecipe then self.pendingRecipe = nil end
+    end
     local chosen = self.chosen[key]
     local found = false
     for _, cat in ipairs(cats) do for _, r in ipairs(cat.recipes) do if r.id == chosen then found = true end end end
@@ -724,6 +736,17 @@ function M:ToChat(link)
     if insert and insert(link) then return end
     local open = (util and util.OpenChat) or ChatFrame_OpenChat
     if open then open(link) end
+end
+
+-- A recipe opened (the tracker's click): its profession's window, and the
+-- recipe chosen once its list is there.
+function M:OpenRecipe(recipeID)
+    if not recipeID then return end
+    if InCombatLockdown() then self:Print("Professions open out of combat.") return end
+    self.pendingRecipe = recipeID
+    pcall(C_TradeSkillUI.OpenRecipe, recipeID)
+    self.mode = "crafting"
+    self:QueueRender()
 end
 
 function M:Craft(count)

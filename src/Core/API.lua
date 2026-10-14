@@ -241,6 +241,13 @@ function API.ToggleTalents()
     if m and m:IsEnabled() and m.Toggle then m:Toggle(); return true end
     return false
 end
+-- 0.13: a recipe opened: in SuuUI's Professions window (the professions
+-- module, which then selects it), else the game's own window.
+function API.OpenRecipe(recipeID)
+    local m = Modules.Get("professions")
+    if m and m:IsEnabled() and m.OpenRecipe then return m:OpenRecipe(recipeID) end
+    if C_TradeSkillUI and C_TradeSkillUI.OpenRecipe then pcall(C_TradeSkillUI.OpenRecipe, recipeID) end
+end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false

@@ -10,7 +10,10 @@
 --   local t = UI.ObjectiveTracker(parent, { width = 260, maxHeight = 440 })
 --   t:SetQuests(quests, freeze)   -- { questID, zone, title, difficulty, complete,
 --                                 --   failed, turnIn, objectives = { { text,
---                                 --   progress, done } }, item }
+--                                 --   progress, done } }, item }; 0.13: color (a
+--                                 --   token for the title), icon (16px before
+--                                 --   it), count ("×3", arcane, after it): the
+--                                 --   Recipes tracker draws recipes this way
 --   t:SetCollapsed(on)            -- only the head
 --   t:QuestTop(questID)           -- where a quest's title starts (px down
 --                                 -- from the tracker's top), for its item;
@@ -40,6 +43,7 @@ local HEAD_H = 18
 local TITLE_H = T.type.label.lineHeight
 local LINE_H = T.type.caption.lineHeight
 local INDENT = S["space-4"]
+local ICON = 16
 
 local DIFFICULTY = {
     impossible = "quest-impossible", ["very-difficult"] = "quest-very-difficult",
@@ -78,8 +82,14 @@ local function questRow(t)
     r.title = UI.Text(r, "label", "quest-standard")
     r.title:SetShadowed(true)
     r.title:SetJustifyH("LEFT")
-    r.title:SetPoint("TOPLEFT")
-    r.title:SetPoint("TOPRIGHT")
+    -- 0.13: an entry's own icon before the title (a tracked recipe's
+    -- product) and a count after it ("×3")
+    r.icon = UI.Icon(r, ICON)
+    r.icon:SetPoint("TOPLEFT", 0, -(TITLE_H - ICON) / 2)
+    r.icon:Hide()
+    r.count = UI.Text(r, "numeric", "arcane")
+    r.count:SetShadowed(true)
+    r.count:SetPoint("TOPRIGHT", 0, 0)
     r.lines = {}
     r.done = CreateFrame("Frame", nil, r)
     r.done.check = UI.Check(r.done, 12, "arcane")
@@ -106,7 +116,17 @@ end
 function Tracker:DrawQuest(r, q)
     r.quest = q
     r.title:SetValue(q.title or "")
-    r.title:SetColor(DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
+    r.title:SetColor(q.color or DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
+    r.icon:SetShown(q.icon ~= nil)
+    if q.icon then r.icon:SetArt(q.icon) end
+    r.count:SetValue(q.count or "")
+    r.title:ClearAllPoints()
+    r.title:SetPoint("TOPLEFT", q.icon and (ICON + S["space-3"]) or 0, 0)
+    if q.count and q.count ~= "" then
+        r.title:SetPoint("TOPRIGHT", r.count, "TOPLEFT", -S["space-3"], 0)
+    else
+        r.title:SetPoint("TOPRIGHT")
+    end
     local w = self.contentWidth or self.width
     local y = TITLE_H + S["space-1"]
     for _, l in ipairs(r.lines) do l:Hide() end
