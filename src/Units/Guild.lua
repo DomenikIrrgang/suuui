@@ -550,7 +550,7 @@ function M:FoldList()
     self:LayChat()
 end
 
-local HIDDEN_BUTTONS = { ["View Log"] = true, ["Invite Member"] = true }
+local HIDDEN_BUTTONS = { ["View Log"] = true }
 
 function M:HideButtons(frame, depth)
     if depth > 4 or not frame or not frame.GetChildren then return end
@@ -561,6 +561,9 @@ function M:HideButtons(frame, depth)
             if type(text) == "string" and (HIDDEN_BUTTONS[text] or text == _G.GUILD_VIEW_LOG) then
                 c:SetAlpha(0)
                 c:EnableMouse(false)
+            elseif text == "Invite Member" then
+                -- kept, at the top right (asked for in game)
+                self.inviteButton = c
             end
         end
         if not c.suuOwn then self:HideButtons(c, depth + 1) end
@@ -580,9 +583,28 @@ function M:LayChat()
         f.StreamDropdown:ClearAllPoints()
         f.StreamDropdown:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     end
+    -- the chat's visible edge (its inset frame stands out past it) at the
+    -- pages' 20px, like the menu over it (they sat 8px apart, found in game)
+    local inset = f.Chat.InsetFrame
+    local dl, dr = 0, 0
+    if inset and inset:GetLeft() and f.Chat:GetLeft() then
+        local a, b, c, d = inset:GetLeft(), f.Chat:GetLeft(), inset:GetRight(), f.Chat:GetRight()
+        local plain = function(v) return v and not (issecretvalue and issecretvalue(v)) end
+        if plain(a) and plain(b) and plain(c) and plain(d) then dl, dr = b - a, c - d end
+    end
+    self.chatInset = (dl > 0 or dr > 0) and { dl, dr } or self.chatInset
+    local inL, inR = (self.chatInset or { 0, 0 })[1], (self.chatInset or { 0, 0 })[2]
     f.Chat:ClearAllPoints()
-    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -(44 + 24 + S["space-4"]))
-    f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + 30 + S["space-3"])
+    f.Chat:SetPoint("TOPLEFT", f, "TOPLEFT", 20 + inL, -(44 + 24 + S["space-4"]))
+    f.Chat:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(20 + inR), 16 + 30 + S["space-3"])
+    -- Invite Member at the top right, on the menu's row
+    local invite = self.inviteButton
+    if invite then
+        invite:ClearAllPoints()
+        invite:SetPoint("TOPRIGHT", f, "TOPRIGHT", -20, -44)
+    end
+    -- the voice chat headset over the chat: out of sight
+    if f.VoiceChatHeadset then f.VoiceChatHeadset:SetAlpha(0); f.VoiceChatHeadset:EnableMouse(false) end
     -- the member list beside the chat (in the chat's mode; the roster mode's
     -- is under SuuUI's roster page anyway)
     local modes = COMMUNITIES_FRAME_DISPLAY_MODES or {}
@@ -594,6 +616,7 @@ function M:LayChat()
         local function again() if not self.layingChat then C_Timer.After(0, function() self:LayChat() end) end end
         hooksecurefunc(f.Chat, "SetPoint", again)
         if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
+        if self.inviteButton then hooksecurefunc(self.inviteButton, "SetPoint", again) end
         -- the hidden member list takes no clicks in the chat's mode
         if f.MemberList then
             f.MemberList:HookScript("OnShow", again)
