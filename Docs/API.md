@@ -369,7 +369,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.LFG.Refresh(category)` | Searches the tool. Only from a click or key press (the game blocks it otherwise); 2 Dungeons, 116 Quests & Zones, 120 Custom |
 | `SuuUI.LFG.Listing()` / `Delist()` | Your listing (activities, roles, comment, play style, time left); delisting from a click. Making or changing a listing is blocked for addon code: use the game's own listing panel |
 | `SuuUI.LFG.Whisper(entry)` / `CanInvite(entry)` / `Invite(entry)` | An empty whisper to the leader; inviting a single player looking (the tool's rule; there's no sign-up on Forever) |
-| `SuuUI.LFG.Interest()` / `Watch(key, on)` / `MatchReasons(entry)` | What you're after (listing, roles, quests, level, zone, watches); an activity to hear about; why an entry concerns you: "role", "activity", "player", "quest", "zone", "boss", "friend" |
+| `SuuUI.LFG.Interest()` / `Watch(key, on)` / `Watches()` / `MatchReasons(entry)` | What you're after (listing, roles, quests, level, zone, watches); an activity to hear about; why an entry concerns you: "role", "activity", "player", "quest", "zone", "boss", "friend" |
 | `SuuUI.LFG.Catalogue` | `Get(key)`, `All(kind)`, `Expand(key)`, `ForTool(activityID)`: the activities ("dungeon:rfk", "zone:westfall", "raid:mc", "boss:azuregos", "tool:<id>") |
 | `SuuUI.LFG.Parser.Parse(text, { languages })` / `SuuUI.LFG.Lang.Register(code, def)` / `SuuUI.LFG.Languages()` | The chat parser on its own; a language module (see `Lang/enUS.lua`); the languages in use |
 | `SuuUI.LFG.IsHiddenChannel(name)` | Channels it reads but keeps off the chat windows (LookingForGroup) |
