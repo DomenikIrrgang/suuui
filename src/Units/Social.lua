@@ -232,7 +232,7 @@ function M:Wire(view)
                     local send = BNSendFriendInvite or (C_BattleNet and C_BattleNet.SendFriendInvite)
                     if send then pcall(send, text) else self:Print("Battle.net friend requests aren't available here.") end
                 else
-                    pcall(C_FriendList.AddFriend, text)
+                    self:AddFriend(text)
                 end
                 self:QueueRender()
             end })
@@ -318,7 +318,7 @@ function M:Allies()
             if online then actions[#actions + 1] = { label = "Whisper", onClick = function(r) self:Whisper(r.name) end } end
             if not row.friend then
                 actions[#actions + 1] = { label = row.sent and "Requested" or "Add friend", disabled = row.sent,
-                    onClick = function(r) pcall(C_FriendList.AddFriend, r.name); self:QueueRender() end }
+                    onClick = function(r) self:AddFriend(r.name); C_Timer.After(0.5, function() self:RenderLists() end) end }
             end
             row.actions = actions
             out[#out + 1] = row
@@ -347,6 +347,22 @@ function M:Requests()
         end
     end
     return out
+end
+
+-- A friend request by a character's whole name. Forever's classic friends
+-- list is off (IsLegacyFriendSystemEnabled false: C_FriendList.AddFriend did
+-- nothing, found in game); its own window sends a title friend invite
+-- (C_BattleNet.SendTitleFriendInviteByName, watched with /suu probe social
+-- friends, 2026-10-14).
+function M:AddFriend(name)
+    if not name or name == "" then return end
+    local fl, bn = C_FriendList, C_BattleNet
+    local legacy = fl and fl.IsLegacyFriendSystemEnabled and call(fl.IsLegacyFriendSystemEnabled)
+    if not legacy and bn and bn.SendTitleFriendInviteByName then
+        local ok = pcall(bn.SendTitleFriendInviteByName, name)
+        if ok then self:Print("Friend request sent to " .. name .. ".") return end
+    end
+    pcall(fl.AddFriend, name)
 end
 
 function M:Whisper(name)
