@@ -3,7 +3,8 @@
 -- search, Show offline (off by default), "7 online · 26 members"; columns
 -- Name, Level, Zone, Rank, Note (click a heading to sort; rank order by
 -- default); names in class colour with the class diamond, Away and Busy as
--- neutral badges, offline members in ink-faint with how long ago in place
+-- neutral badges, offline members' names in class colour too and the rest of
+-- their row in ink-faint, with how long ago in place
 -- of the zone. The selected member's actions along the foot: Whisper and
 -- Invite; Promote, Demote and Remove only when your rank may and only for
 -- members below you (Remove in ember); anything your rank can't do stays
@@ -128,7 +129,9 @@ function G:Draw()
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", child, "RIGHT")
-        local color = m.online and (m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or "ink") or "ink-faint"
+        -- the name in its class colour, online or not (asked for in game);
+        -- an offline member's other columns stay ink-faint
+        local color = m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or (m.online and "ink" or "ink-faint")
         r.diamond:SetVertexColor(UI.RGBA(color))
         r.diamond:ClearAllPoints()
         r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
