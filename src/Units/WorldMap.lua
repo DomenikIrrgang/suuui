@@ -1055,6 +1055,12 @@ function M:Layout()
     -- a mark's open card follows its pin
     local marks = SuuUI.GetModule and SuuUI.GetModule("marks")
     if marks and marks.cardMark then marks:AnchorCard(self:PinForMark(marks.cardMark)) end
+    -- the game's quest markers sized again for the zoom (it scales its own)
+    if self.map.EnumeratePinsByTemplate then
+        for pin in self.map:EnumeratePinsByTemplate("QuestPinTemplate") do
+            if pin.suuQuest then self:FitQuestPin(pin) end
+        end
+    end
 end
 
 -- The pin showing a mark (the marks module's card sits under it).
@@ -1069,6 +1075,180 @@ function M:QueueLayout()
     if self.layoutQueued then return end
     self.layoutQueued = true
     C_Timer.After(0, function() self:Layout() end)
+end
+
+--------------------------------------------------------------------------------
+-- The game's quest markers and objective areas in SuuUI's look (design:
+-- MapPin types objective / turn-in / waypoint, states tracked and
+-- highlighted). The markers are restyled in place: the game's pins keep
+-- their clicks, tooltips and super-tracking; a SuuUI pin without the mouse
+-- sits in each, the game's art hidden, kept up to date after each of the
+-- game's style, selection and highlight changes, and sized like SuuUI's pins
+-- at every zoom. The areas: the engine's fill and border textures swapped
+-- for SuuUI's (a surface hatch, a gilt line between surface).
+--------------------------------------------------------------------------------
+
+local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+local SOFT = TEXTURES .. "CircleSoft.tga"
+
+local function questStyle(pin)
+    local S = POIButtonUtil and POIButtonUtil.Style
+    local style = pin.GetStyle and pin:GetStyle()
+    if not S then return nil end
+    if style == S.QuestComplete then return "complete" end
+    if style == S.QuestInProgress then return "progress" end
+    if style == S.Waypoint then return "waypoint" end
+    if style == S.QuestDisabled then return "disabled" end
+end
+
+-- The game's look back (the module off).
+local function unstyle(pin)
+    local o = pin.suuQuest
+    if o then o:Hide() end
+    for _, key in ipairs({ "NormalTexture", "PushedTexture", "HighlightTexture", "Glow", "Display",
+                           "UnderlayAtlas", "UnderlayBannerAtlas", "UnderlayBannerAtlasHighlight" }) do
+        local r = pin[key]
+        if r and r.SetAlpha then r:SetAlpha(1) end
+    end
+    if pin.UpdateButtonAlpha then pin:UpdateButtonAlpha() end
+end
+
+function M:UnstyleQuest()
+    local f = self.map
+    if not f or not f.EnumeratePinsByTemplate then return end
+    for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do unstyle(pin) end
+    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
+        if pin.SetFillTexture then
+            pin:SetFillTexture("Interface\\WorldMap\\UI-QuestBlob-Inside")
+            pin:SetBorderTexture("Interface\\WorldMap\\UI-QuestBlob-Outside")
+            pin:SetFillAlpha(128)
+            pin:SetBorderAlpha(192)
+        end
+    end
+end
+
+function M:StyleQuestPin(pin)
+    if not self:IsEnabled() then unstyle(pin) return end
+    local kind = questStyle(pin)
+    local o = pin.suuQuest
+    if not kind then
+        if o then o:Hide() end
+        return
+    end
+    if not o then
+        o = CreateFrame("Frame", nil, pin)
+        o:SetPoint("CENTER")
+        o:SetSize(1, 1)
+        o.glow = o:CreateTexture(nil, "BACKGROUND", nil, -1)
+        o.glow:SetTexture(SOFT)
+        o.glow:SetPoint("CENTER")
+        o.pin = UI.MapPin(o)
+        o.pin:EnableMouse(false)
+        o.pin:SetPoint("CENTER")
+        pin.suuQuest = o
+        -- the game's look away; ours follows its changes
+        local function hideArt()
+            for _, key in ipairs({ "NormalTexture", "PushedTexture", "HighlightTexture", "Glow", "Display" }) do
+                local r = pin[key]
+                if r and r.SetAlpha then r:SetAlpha(0) end
+            end
+            for _, key in ipairs({ "UnderlayAtlas", "UnderlayBannerAtlas", "UnderlayBannerAtlasHighlight" }) do
+                local r = pin[key]
+                if r and r.SetAlpha then r:SetAlpha(0) end
+            end
+        end
+        o.hideArt = hideArt
+        local function restyle() self:StyleQuestPin(pin) end
+        for _, fn in ipairs({ "UpdateButtonStyle", "SetSelected", "EvaluateManagedHighlight", "SetStyle" }) do
+            if pin[fn] then hooksecurefunc(pin, fn, restyle) end
+        end
+        pin:HookScript("OnEnter", function() o.hovered = true; restyle() end)
+        pin:HookScript("OnLeave", function() o.hovered = false; restyle() end)
+    end
+    o.hideArt()
+    if kind == "disabled" then o:Hide() return end
+    o:Show()
+    local tracked = pin.IsSelected and pin:IsSelected()
+    local lit = pin.HighlightTexture and pin.HighlightTexture:IsShown()
+    local data
+    if kind == "complete" then
+        data = { char = "?", color = "arcane", edge = "arcane" }
+    elseif kind == "waypoint" then
+        data = { glyph = "dash", color = "ink", edge = "ink-muted" }
+    else
+        data = { glyph = "questDots", color = "ink", edge = "ink-muted" }
+    end
+    o.pin:SetData(data)
+    -- the next step on another map: a dashed edge
+    o.pin.edge:SetTexture(kind == "waypoint" and (TEXTURES .. "CircleDash.tga") or (TEXTURES .. "CircleFill.tga"))
+    o.pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100)
+    o.pin:SetHighlight((tracked or lit) and true or nil)
+    -- glow: arcane under a turn-in, ink at 40% while super-tracked
+    local size = o.pin:PinSize()
+    if tracked then
+        o.glow:SetVertexColor(UI.RGBA("ink", 0.4))
+        o.glow:SetSize(size + 24, size + 24)
+        o.glow:Show()
+    elseif kind == "complete" then
+        o.glow:SetVertexColor(UI.RGBA("arcane-glow"))
+        o.glow:SetSize(size + 16, size + 16)
+        o.glow:Show()
+    else
+        o.glow:Hide()
+    end
+    -- SuuUI's pin size at every zoom (the game scales its own), a tenth
+    -- larger while tracked or hovered
+    self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
+end
+
+function M:FitQuestPin(pin, grow)
+    local o = pin.suuQuest
+    local f = self.map
+    if not (o and f and self.layer) then return end
+    o.grow = grow or o.grow or 1
+    local cs = f:GetCanvasScale()
+    local pe = pin:GetEffectiveScale()
+    if not (cs and cs > 0 and pe and pe > 0) then return end
+    local closest = f:IsAtMaxZoom() and not f:IsAtMinZoom() and CLOSEST_GROW or 1
+    -- (SuuUI's pins: the layer's scale × grow / canvas scale; this sits in
+    -- the game's pin, whose own scale it takes out)
+    o:SetScale(self.layer:GetEffectiveScale() * closest * o.grow / cs / pe)
+end
+
+function M:StyleQuestPins()
+    local f = self.map
+    if not f or not f.EnumeratePinsByTemplate then return end
+    for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do self:StyleQuestPin(pin) end
+end
+
+local BLOB_FILL, BLOB_BORDER = TEXTURES .. "QuestBlobInside.tga", TEXTURES .. "QuestBlobOutside.tga"
+function M:StyleQuestBlobs()
+    local f = self.map
+    if not f or not f.EnumeratePinsByTemplate then return end
+    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
+        if pin.SetFillTexture then
+            pin:SetFillTexture(BLOB_FILL)
+            pin:SetBorderTexture(BLOB_BORDER)
+            pin:SetFillAlpha(90)
+            pin:SetBorderAlpha(230)
+            pin:SetBorderScalar(1.0)
+        end
+    end
+end
+
+-- The game's quest providers: after each of their refreshes, the look.
+function M:HookQuestProviders()
+    local f = self.map
+    if not f or self.questHooked then return end
+    self.questHooked = true
+    local quest, blob = _G.QuestDataProviderMixin, _G.QuestBlobDataProviderMixin
+    for provider in pairs(f.dataProviders or {}) do
+        if quest and provider.RefreshAllData == quest.RefreshAllData then
+            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestPins() end end)
+        elseif blob and provider.RefreshAllData == blob.RefreshAllData then
+            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestBlobs() end end)
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -1279,6 +1459,9 @@ function M:OnEnable()
     end
     -- (here, past the wait for the map: this runs once)
     self:RegisterSettings(SECTION)
+    self:HookQuestProviders()
+    self:StyleQuestPins()
+    self:StyleQuestBlobs()
     self:Watch("pinAlpha", function()
         if self.map and self.map:IsShown() then self:Layout() end
         if self.preview then for _, pin in ipairs(self.preview.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end end
@@ -1309,6 +1492,7 @@ end
 function M:OnDisable()
     local f = self.map
     if not f then return end
+    self:UnstyleQuest()
     f:RemoveDataProvider(self.provider)
     self.items = nil
     self:ClearPins()

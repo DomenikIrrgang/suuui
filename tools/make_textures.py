@@ -379,6 +379,9 @@ GLYPHS = {
     "markSquare": "M5 5h14v14H5z",
     "markCross": "M7 3.5l5 5 5-5 3.5 3.5-5 5 5 5-3.5 3.5-5-5-5 5-3.5-3.5 5-5-5-5z",
     "markArrow": "M12 4l7 14H5z",  # a mark's direction on the minimap's edge
+    # the game's quest markers restyled (3.5): in progress, and its next step on another map
+    "questDots": "M5.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M10.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M15.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0",
+    "dash": "M3 12h11M10 6l6 6-6 6M20 5v14",
     "markSkull": "M12 3a6.5 6.5 0 0 0-6.5 6.5c0 2.3 1.1 3.7 2.5 4.6V16.5h8v-2.4c1.4-.9 2.5-2.3 2.5-4.6A6.5 6.5 0 0 0 12 3zM9.5 10h.01M14.5 10h.01M11 13.5h2M4 18l16 3.5M20 18L4 21.5",
 }
 
@@ -537,6 +540,56 @@ def player_arrow(size=64, ss=4):
     return lambda x, y: cache[(x, y)]
 
 
+# --- The game's quest objective areas in SuuUI's look (3.5): the engine draws
+# them from a fill texture it tiles and a border texture it stretches across
+# the border's width. QuestBlobInside.tga (64, colour baked in: surface): a
+# 45° hatch, 2px anti-aliased lines every 8px, opaque on the lines.
+# QuestBlobOutside.tga (64): across its width surface 25%, gilt 50%, surface
+# 25% (the design's 1-2-1 px as fractions), the same all along.
+
+SURFACE, GILT = (0x13, 0x11, 0x16), (0xC9, 0xA7, 0x5A)
+
+
+def blob_inside(size=64, period=8, width=2.0, ss=4):
+    def pixel(x, y):
+        hits = 0
+        for sy in range(ss):
+            for sx in range(ss):
+                u = (x + (sx + 0.5) / ss + y + (sy + 0.5) / ss) % period
+                # distance across the stripe (45°: the sum steps sqrt(2) per px)
+                d = min(u, period - u) / math.sqrt(2)
+                if d <= width / 2:
+                    hits += 1
+        return SURFACE + (round(255 * hits / (ss * ss)),)
+    return pixel
+
+
+def blob_outside(size=64):
+    def pixel(x, y):
+        f = (x + 0.5) / size
+        return (GILT if 0.25 <= f < 0.75 else SURFACE) + (255,)
+    return pixel
+
+
+def dashed_ring(size, inner, outer, dashes=16, ss=4):
+    """Alpha of a ring inner..outer (fractions of the radius) in `dashes` dashes, half on."""
+    r = size / 2
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss - r
+                    y = py + (sy + 0.5) / ss - r
+                    d = math.hypot(x, y) / r
+                    a = (math.atan2(y, x) / (2 * math.pi)) % 1
+                    if inner <= d <= outer and (a * dashes) % 1 < 0.5:
+                        hits += 1
+            cache[(px, py)] = round(255 * hits / (ss * ss))
+    return lambda x, y: (255, 255, 255, cache[(x, y)])
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "Glyphs"), exist_ok=True)
@@ -555,6 +608,10 @@ def main():
     jobs.append(("CircleEdge.tga", 256, circle(256, 1 - 2 / 176, 1)))
     jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))
     jobs.append(("CircleSoft.tga", 128, soft_circle(128)))
+    jobs.append(("QuestBlobInside.tga", 64, blob_inside()))
+    jobs.append(("QuestBlobOutside.tga", 64, blob_outside()))
+    # a pin's dashed edge (a quest's next step on another map): 1 px at 26 px
+    jobs.append(("CircleDash.tga", 104, dashed_ring(104, 1 - 2 / 26, 1)))
     jobs.append(("PlayerArrow.tga", 64, player_arrow()))
     jobs.append(("ChatDiamond.tga", 32, diamond(32, 0.5)))
     only = set(os.sys.argv[1:])
