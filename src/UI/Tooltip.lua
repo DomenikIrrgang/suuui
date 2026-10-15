@@ -79,7 +79,26 @@ function Tip:SetContent(d)
         self.status:SetValue(d.meta)
         stack:Add(self.status, { gapBefore = S["space-2"] + S["space-1"] })
     end
-    for _, r in ipairs(self.rows) do r:SetWidth(inner) end
+    for i, r in ipairs(self.rows) do
+        r:SetWidth(inner)
+        -- a line without a right side wraps inside the width (a map pin's
+        -- "Varg Windwhisper  Leather Armor Merchant" ran past the edge)
+        local l = d.lines and d.lines[i]
+        if l and r:IsShown() then
+            r.left:ClearAllPoints()
+            if l[2] then
+                r.left:SetWordWrap(false)
+                r.left:SetWidth(0)
+                r.left:SetPoint("LEFT")
+            else
+                r.left:SetWordWrap(true)
+                r.left:SetJustifyH("LEFT")
+                r.left:SetWidth(inner)
+                r.left:SetPoint("TOPLEFT")
+                r:SetHeight(math.max(T.type.body.lineHeight, math.ceil(r.left:GetStringHeight())))
+            end
+        end
+    end
     self:SetWidth(width)
     stack:ApplyNow()
     self:SetHeight(self.stackFrame:GetHeight() + pad * 2)

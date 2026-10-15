@@ -306,7 +306,7 @@ function M:Collect(mapID)
     if on.quests.available or on.quests.repeatable then
         local done = completedSet()
         for _, row in ipairs(starts.maps and starts.maps[mapID] or {}) do
-            local best, list = nil, {}
+            local best, list, ids = nil, {}, {}
             for i = 3, #row do
                 local id = row[i]
                 local q = starts.quests[id]
@@ -314,6 +314,7 @@ function M:Collect(mapID)
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
                     list[#list + 1] = { name = q[1], level = level, difficulty = difficulty, state = state }
+                    ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty, state = state } end
                 end
@@ -328,7 +329,7 @@ function M:Collect(mapID)
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
                     pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
                     name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level,
-                    more = lines, difficulty = best.difficulty, repeatable = repeatable,
+                    more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "q" .. table.concat(ids, ","),
                 }
             end
         end
@@ -404,7 +405,7 @@ function M:Collect(mapID)
                 end
                 if item == false then break end
                 if item then
-                    item.x, item.y, item.small = svc[i] / 100, svc[i + 1] / 100, true
+                    item.x, item.y, item.small, item.uid = svc[i] / 100, svc[i + 1] / 100, true, "n" .. id
                     item.name, item.detail = n[1], n[2]
                     items[#items + 1] = item
                     break
@@ -432,7 +433,7 @@ function M:Collect(mapID)
                     pin = elite and { glyph = "skull", color = "gilt-text", edge = "gilt", ring = "gilt" }
                         or { glyph = "skull", color = "ink", edge = "coin-silver" },
                     name = n[1], detail = (elite and "Rare elite" or "Rare") .. (level and (" · level " .. level) or ""),
-                    kindName = elite and "Rare elite" or "Rare", npc = rares[i + 2] }
+                    kindName = elite and "Rare elite" or "Rare", uid = "n" .. rares[i + 2] }
             end
         end
     end
@@ -472,8 +473,12 @@ local function merge(items, w, h)
             into.y = (into.y * n + py) / (n + 1)
             into.items[n + 1] = it
             into.fixed = into.fixed and it.fixed
+            -- one NPC's (or quest giver's) spawn points count once
+            if not (it.uid and into.uids[it.uid]) then into.distinct = into.distinct + 1 end
+            if it.uid then into.uids[it.uid] = true end
         else
-            groups[#groups + 1] = { x = px, y = py, items = { it }, key = it.key, fixed = it.fixed, small = it.small }
+            groups[#groups + 1] = { x = px, y = py, items = { it }, key = it.key, fixed = it.fixed, small = it.small,
+                                    distinct = 1, uids = it.uid and { [it.uid] = true } or {} }
         end
     end
     return groups
@@ -520,7 +525,7 @@ end
 
 local function tipFor(g)
     local first = g.items[1]
-    if #g.items == 1 then
+    if g.distinct == 1 then
         local lines = {}
         if first.more and #first.more > 0 then
             for _, l in ipairs(first.more) do lines[#lines + 1] = l end
@@ -541,10 +546,13 @@ local function tipFor(g)
     for _, it in ipairs(g.items) do
         local key = (it.name or "?") .. "\0" .. (it.detail or "")
         if not seen[key] then
-            seen[key] = { name = it.name or "?", detail = it.detail or "", n = 0 }
+            seen[key] = { name = it.name or "?", detail = it.detail or "", n = 0, uids = {} }
             order[#order + 1] = seen[key]
         end
-        seen[key].n = seen[key].n + 1
+        -- (one NPC's spawn points once: "Mailbox ×2" is two mailboxes)
+        local e = seen[key]
+        if not (it.uid and e.uids[it.uid]) then e.n = e.n + 1 end
+        if it.uid then e.uids[it.uid] = true end
     end
     -- one line each, the title after the name in muted ink (two columns
     -- overlapped once titles ran long; found in game)
@@ -559,7 +567,7 @@ local function tipFor(g)
     if #order == 1 and order[1].detail == "" then lines = nil end
     local kind = first.kindName or (first.repeatable and "Repeatable quests") or (first.key == "available" and "Quests to pick up")
         or first.detail or ""
-    return { title = kind .. " · " .. #g.items, lines = lines, meta = "Click to zoom in" }
+    return { title = kind .. " · " .. g.distinct, lines = lines, meta = "Click to zoom in" }
 end
 
 function M:Pin()
@@ -572,7 +580,7 @@ function M:Pin()
         pin:SetScript("OnLeave", function() UI.HideTooltip() end)
         pin:SetScript("OnClick", function(p)
             local g = p.group
-            if not (g and #g.items > 1) then return end
+            if not (g and g.distinct > 1) then return end
             local f = self.map
             local cx, cy = 0, 0
             for _, it in ipairs(g.items) do cx, cy = cx + it.x, cy + it.y end
@@ -618,7 +626,7 @@ function M:Layout()
     for i, g in ipairs(groups) do
         local pin = self:Pin()
         local data = g.items[1].pin
-        if #g.items > 1 then
+        if g.distinct > 1 then
             -- a merged quest pin takes its most useful quest's colour
             if g.key == "available" then
                 local best = g.items[1]
@@ -626,7 +634,7 @@ function M:Layout()
                 data = best.pin
             end
             data = { glyph = data.glyph, char = data.char, color = data.color, edge = data.edge, small = data.small,
-                     ring = data.ring, count = #g.items }
+                     ring = data.ring, count = g.distinct }
         end
         pin:SetData(data)
         pin.group = g
