@@ -10,6 +10,10 @@
 --   Chat: the channels you're in.
 -- "/suu probe lfg click": a button; its click searches and saves your
 -- listing again unchanged (is a click enough for both?).
+-- "/suu probe lfg who": a button; its click sends a Who search the way
+-- SuuUI's Who page would (C_FriendList.SendWho, restricted, with the
+-- game's own filters) and records whether the game allowed it, the result
+-- count, the first rows' fields (secret or not) and what the page uses.
 -- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
 -- window. "/suu probe lfg delist": a button whose click delists you.
 -- "/suu probe lfg live": starts ForeverLFG and reports its events;
@@ -220,6 +224,62 @@ function LP.ClickTest()
     end)
     b:Show()
     ns.Print("LFG probe: click the button at the top of the screen once.")
+end
+
+-- The Who search from a click (stage 5).
+function LP.WhoTest()
+    local s = store()
+    local fl = C_FriendList
+    local t = { blocked = {}, at = date("%H:%M:%S") }
+    s.who = t
+    t.api = {}
+    for _, n in ipairs({ "SendWho", "GetNumWhoResults", "GetWhoInfo", "SetWhoToUi", "SortWho", "GetWhoRaceFilters", "AddFriend" }) do
+        t.api[n] = fl and type(fl[n]) == "function" or false
+    end
+    for _, n in ipairs({ "LFGWhoListFrame", "LFGWhoListFilterUtil", "FriendsFrame_ShowDropdown", "UnitPopupSharedUtil" }) do
+        t.api[n] = _G[n] ~= nil
+    end
+    local filters = _G.LFGWhoListFilterUtil and _G.LFGWhoListFilterUtil.GetWhoFilters and _G.LFGWhoListFilterUtil.GetWhoFilters()
+    t.filters = filters and { classIDs = #(filters.classIDs or {}), raceIDs = #(filters.raceIDs or {}), uiMapIDs = #(filters.uiMapIDs or {}) } or "none"
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "WHO_LIST_UPDATE", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHAT_MSG_SYSTEM" }) do f:RegisterEvent(e) end
+    f:SetScript("OnEvent", function(_, event, a1, a2)
+        if event == "WHO_LIST_UPDATE" then
+            local okN, num, total = pcall(fl.GetNumWhoResults)
+            t.count = okN and (show(num) .. " of " .. show(total)) or "error"
+            t.rows = {}
+            for i = 1, math.min(3, (okN and type(num) == "number" and not isSecret(num)) and num or 0) do
+                local ok, info = pcall(fl.GetWhoInfo, i)
+                t.rows[i] = ok and show(info) or ("error: " .. tostring(info))
+            end
+        elseif event == "CHAT_MSG_SYSTEM" then
+            t.system = t.system or {}
+            if #t.system < 5 then t.system[#t.system + 1] = show(a1) end
+        else
+            t.blocked[#t.blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+        end
+    end)
+    local b = LP.whoButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    LP.whoButton = b
+    b:SetSize(320, 30)
+    b:ClearAllPoints()
+    b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+    b:SetFrameStrata("DIALOG")
+    b:SetText("Who probe: click to search (levels 1-60)")
+    b:SetScript("OnClick", function(self)
+        -- the results to the UI (as the game's Who page asks), not to chat
+        pcall(fl.SetWhoToUi, true)
+        local origin = Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social
+        local ok, err = pcall(fl.SendWho, "1-60", origin, filters)
+        t.send = ok and "called" or ("error: " .. tostring(err))
+        self:Hide()
+        C_Timer.After(6, function()
+            f:UnregisterAllEvents()
+            ns.Print("Who probe: done; /reload.")
+        end)
+    end)
+    b:Show()
+    ns.Print("Who probe: click the button at the top of the screen once.")
 end
 
 -- Watch for the game's verdict on what follows.
@@ -502,6 +562,7 @@ function LP.Command(rest)
     if rest == "record" then LP.Record(true) return end
     if rest == "stop" then LP.Record(false) return end
     if rest == "click" then LP.ClickTest() return end
+    if rest == "who" then LP.WhoTest() return end
     if rest == "join" then LP.Join() return end
     if rest == "timerjoin" then LP.TimerJoin() return end
     if rest == "lang" then LP.Lang() return end
