@@ -57,10 +57,13 @@ function Button:SetEnabledState(enabled)
 end
 
 local function onEnter(self)
-    if self.variant == "primary" then
-        self.glow:SetShown(true)
-    else
-        self.border:SetColor("gilt")
+    -- (a disabled one shows only its tooltip: why it's off)
+    if self:IsEnabled() then
+        if self.variant == "primary" then
+            self.glow:SetShown(true)
+        else
+            self.border:SetColor("gilt")
+        end
     end
     if self.tooltip then UI.ShowTooltip(self, self.tooltip) end
 end
@@ -97,6 +100,9 @@ function UI.Button(parent, opts)
     b:SetLabel(opts.text or "")
     b.tooltip = opts.tooltip
 
+    -- hovered while disabled too, so its tooltip can say why (the game
+    -- sends a disabled button no hover otherwise; found in game)
+    b:SetMotionScriptsWhileDisabled(true)
     b:SetScript("OnEnter", onEnter)
     b:SetScript("OnLeave", onLeave)
     b:HookScript("OnShow", b.Remeasure)
