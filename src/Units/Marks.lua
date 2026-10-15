@@ -336,7 +336,16 @@ function M:PlaceMinimapPins()
         end
         pin:SetMark(p.mark, p.edge, p.angle)
         pin:ClearAllPoints()
-        pin:SetPoint("CENTER", layer, "CENTER", p.x, p.y)
+        -- (its middle on the screen's pixel grid, wherever the minimap's
+        -- own middle falls: see MiniPin:Fit)
+        local px = pin.px or 1
+        local cx, cy = layer:GetCenter()
+        local x, y = p.x, p.y
+        if cx and cy then
+            x = math.floor((cx + p.x) / px + 0.5) * px - cx
+            y = math.floor((cy + p.y) / px + 0.5) * px - cy
+        end
+        pin:SetPoint("CENTER", layer, "CENTER", x, y)
         pin:Show()
     end
     for i = #places + 1, #layer.pins do layer.pins[i]:Hide() end
@@ -375,7 +384,27 @@ end
 -- radius, MinimapPlaces) with a 6 px arrow in its colour just outside,
 -- pointing at the mark.
 local MiniPin = {}
+
+-- One screen pixel in the pin's units: at 16 px a disc's 1.5 px edge fell on
+-- one or two pixels as it moved, and its thicker side jumped about while
+-- you ran (found in game). The disc and its edge sized in whole pixels,
+-- and its place snapped to them (PlaceMinimapPins).
+local function screenPixel(region)
+    local factor = PixelUtil and PixelUtil.GetPixelToUIUnitFactor and PixelUtil.GetPixelToUIUnitFactor() or 1
+    return factor / region:GetEffectiveScale()
+end
+function MiniPin:Fit()
+    local px = screenPixel(self)
+    if self.px == px then return end
+    self.px = px
+    -- (an even count of pixels: its middle falls between two)
+    local size = 2 * math.floor(16 / px / 2 + 0.5) * px
+    self:SetSize(size, size)
+    self.fill:SetSize(size - 4 * px, size - 4 * px)
+end
+
 function MiniPin:SetMark(mark, edge, angle)
+    self:Fit()
     local c = colorOf(mark.symbol)
     self.edge:SetVertexColor(UI.RGBA(c))
     self.glyph:SetTexture(GLYPHS .. glyphOf(mark.symbol) .. ".tga")
