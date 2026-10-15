@@ -114,15 +114,35 @@ end
 -- Showing the way: the game's waypoint and its navigation arrow
 --------------------------------------------------------------------------------
 
+-- The game draws its navigation indicator only with showInGameNavigation
+-- on, and Forever has it off (/suu probe marks nav: the indicator shown at
+-- opacity 0). On while a mark shows the way, your own value back after
+-- (kept in the saved data, so a /reload on the way still puts it back).
+local NAV_CVAR = "showInGameNavigation"
+local function navigation(self, on)
+    local data = store(self)
+    if on then
+        if data.navWas == nil then data.navWas = GetCVar(NAV_CVAR) or "0" end
+        if GetCVar(NAV_CVAR) ~= "1" then pcall(SetCVar, NAV_CVAR, "1") end
+    elseif data.navWas ~= nil then
+        pcall(SetCVar, NAV_CVAR, data.navWas)
+        data.navWas = nil
+    end
+end
+
 function M:Follow(id)
     local mark = id and self:Get(id)
     if mark and UiMapPoint and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(mark.map) then
         C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(mark.map, mark.x, mark.y))
         if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then C_SuperTrack.SetSuperTrackedUserWaypoint(true) end
         self.following = id
+        store(self).following = id
+        navigation(self, true)
     else
         if self.following and C_Map.ClearUserWaypoint then C_Map.ClearUserWaypoint() end
         self.following = nil
+        store(self).following = nil
+        navigation(self, false)
     end
     changed(self)
 end
@@ -661,6 +681,18 @@ function M:OnEnable()
     self:On("SUUUI_MARKS_CHANGED", function() self:UpdateMinimap() end)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
     self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
+    -- after a /reload: still following while the game kept its waypoint and
+    -- the mark is there; else the setting back as it was
+    local data = store(self)
+    local kept = data.following and self:Get(data.following) and C_Map.HasUserWaypoint and C_Map.HasUserWaypoint()
+        and C_SuperTrack and C_SuperTrack.IsSuperTrackingUserWaypoint and C_SuperTrack.IsSuperTrackingUserWaypoint()
+    if kept then
+        self.following = data.following
+        navigation(self, true)
+    else
+        data.following = nil
+        navigation(self, false)
+    end
     if self.hint then self.hint:Show() end
     if _G.WorldMapFrame then
         self:Hook()
@@ -671,6 +703,8 @@ function M:OnEnable()
     self:OnGameEvent("USER_WAYPOINT_UPDATED", function()
         if self.following and not (C_Map.HasUserWaypoint and C_Map.HasUserWaypoint()) then
             self.following = nil
+            store(self).following = nil
+            navigation(self, false)
             changed(self)
         end
     end)
