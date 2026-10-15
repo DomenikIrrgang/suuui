@@ -253,7 +253,8 @@ function M:Collect(mapID)
             for i = 3, #row do
                 local id = row[i]
                 local q = starts.quests[id]
-                local state, difficulty, level = q and questState(q, id, me, done)
+                local state, difficulty, level
+                if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
                     list[#list + 1] = { name = q[1], level = level, difficulty = difficulty, state = state }
                     local rank = QUEST_RANK[difficulty] or 9
