@@ -2,7 +2,7 @@
 
 ## Building with wowlua
 
-SuuUI is built with [wowlua](https://github.com/DomenikIrrgang/wowlua) (`wowlua --version` ≥ 0.8.2).
+SuuUI is built with [wowlua](https://github.com/DomenikIrrgang/wowlua) (`wowlua --version` ≥ 0.9.0).
 
 - The addon's Lua and XML files live in `src/`. `wowlua.json` describes the addon (title, notes, saved variables, flavor `camelot` for WoW Forever) and **generates** `SuuUI.toc`; there is no TOC file in the repository. Change TOC fields in `wowlua.json`.
 - **Load order** is worked out by wowlua (0.8.2): it orders files by the table fields they define and read, so there is no list to keep. `wowlua toc` shows the order it chose. It can only follow tables it can trace: create a shared table plainly (`ns.X = {}`), or a write through it warns W1033 and its order is lost.
