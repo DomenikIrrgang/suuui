@@ -270,23 +270,19 @@ local function drawRow(b, r, d, y, width)
     r.age:SetValue(d.age or "")
     r.age:ClearAllPoints()
     r.age:SetPoint("RIGHT", r.whisper, "LEFT", -S["space-4"], 0)
+    -- right to left: the age, then the role slots and "3/5" (always the
+    -- same distance from the age, so they line up from row to row: after
+    -- the badges, whose width varies, they didn't; asked for in game), then
+    -- the source badges, then the text
     local anchor = r.age
-    for i = #(d.sources or {}), 1, -1 do
-        local bd = r.badges[i] or badge(r)
-        r.badges[i] = bd
-        bd:SetLabel(d.sources[i])
-        bd:ClearAllPoints()
-        bd:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)
-        bd:Show()
-        anchor = bd
-    end
-    for i = #(d.sources or {}) + 1, #r.badges do r.badges[i]:Hide() end
-    -- a group's size ("3/5"), after its slots
+    -- a group's size ("3/5"), after its slots, in a column of its own
     local members = not d.isPlayer and d.members
     local counted = members and members[1] and members[2] and true or false
     r.count:SetShown(counted)
     if counted then
         r.count:SetValue(members[1] .. "/" .. members[2])
+        r.count:SetWidth(34)
+        r.count:SetJustifyH("RIGHT")
         r.count:ClearAllPoints()
         r.count:SetPoint("RIGHT", anchor, "LEFT", -S["space-5"], 0)
         anchor = r.count
@@ -294,14 +290,14 @@ local function drawRow(b, r, d, y, width)
     -- roles: a group's slots, or what a player offers
     local slots = d.slots or {}
     for i = #slots, 1, -1 do
-        local s = r.slots[i] or roleIcon(r)
-        r.slots[i] = s
-        s:Set(slots[i], d.mine and d.mine[slots[i]:match("^need:(.+)$") or ""])
-        s:ClearAllPoints()
+        local sl = r.slots[i] or roleIcon(r)
+        r.slots[i] = sl
+        sl:Set(slots[i], d.mine and d.mine[slots[i]:match("^need:(.+)$") or ""])
+        sl:ClearAllPoints()
         local gap = i < #slots and -3 or (counted and -(S["space-2"] + 3) or -S["space-5"])
-        s:SetPoint("RIGHT", anchor, "LEFT", gap, 0)
-        s:Show()
-        anchor = s
+        sl:SetPoint("RIGHT", anchor, "LEFT", gap, 0)
+        sl:Show()
+        anchor = sl
     end
     for i = #slots + 1, #r.slots do r.slots[i]:Hide() end
     -- hovering the slots: all the group has and needs
@@ -317,9 +313,20 @@ local function drawRow(b, r, d, y, width)
     r.rolesLabel:SetValue(d.isPlayer and #slots > 0 and "Roles:" or "")
     r.rolesLabel:ClearAllPoints()
     r.rolesLabel:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)
+    if r.rolesLabel:GetText() ~= "" then anchor = r.rolesLabel end
+    -- where it was seen
+    for i = #(d.sources or {}), 1, -1 do
+        local bd = r.badges[i] or badge(r)
+        r.badges[i] = bd
+        bd:SetLabel(d.sources[i])
+        bd:ClearAllPoints()
+        bd:SetPoint("RIGHT", anchor, "LEFT", i == #d.sources and -S["space-5"] or -S["space-3"], 0)
+        bd:Show()
+        anchor = bd
+    end
+    for i = #(d.sources or {}) + 1, #r.badges do r.badges[i]:Hide() end
     -- the text stops before the right side
-    local right = (r.rolesLabel:GetText() ~= "" and r.rolesLabel or anchor)
-    r.post:SetPoint("RIGHT", right, "LEFT", -S["space-4"], 0)
+    r.post:SetPoint("RIGHT", anchor, "LEFT", -S["space-4"], 0)
     r.post:SetWordWrap(false)
     r:Show()
 end
