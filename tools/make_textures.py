@@ -338,7 +338,9 @@ GLYPHS = {
     "chest": "M4 10h16v9H4zM4 10a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4M11 12h2v3h-2z",
     "inn": "M3 11l9-7 9 7M5.5 9v11h13V9M10 20v-5h4v5",
     "mug": "M5 6h10v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6zM15 9h2.5a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5H15M8.5 10v6M11.5 10v6",
-    "anvil": "M3 7h15l3-2v3c0 2-2 3.5-4.5 3.5H15v3.5l2.5 5h-11l2.5-5V11.5H7C5 11.5 3.5 9.5 3 7z",
+    # the game's repair icon in line: a block seen from above at three quarters, the horn
+    # to the left, a tapered waist, a wide foot (a flat side view didn't read as repair)
+    "anvil": "M6.5 7.5L10.5 3.5H21.5L17.5 7.5ZM6.5 7.5V12H17.5V7.5M17.5 12L21.5 8V3.5M6.5 7.5L1.5 9.5L6.5 11M9 12L10 16.5M15 12L14 16.5M6 16.5H18L19.5 21H4.5Z",
     "bank": "M3 9l9-5 9 5H3zM5 9v9M9.7 9v9M14.3 9v9M19 9v9M3 20.5h18",
     "gavel": "M13 3l6 6-3 3-6-6 3-3zM13 9l-8.5 8.5M3 21h9",
     "tabard": "M8 3h8l3 3-2 2v13l-5-2.5L7 21V8L5 6l3-3zM10 10.5h4",

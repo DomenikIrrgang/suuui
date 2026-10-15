@@ -188,7 +188,7 @@ local SERVICE = {
     guild = { "guild", "scroll" },
     tabard = { "tabard", "tabard" },
     stable = { "stable", "paw" },
-    repair = { "repair", "hammer" },
+    repair = { "repair", "anvil" },
     food = { "food", "mug" },
     goods = { "goods", "bag" },
     vendor = { "vendor", "coin" },
@@ -199,7 +199,7 @@ local SERVICE_NAMES = {
     goods = "General goods", vendor = "Vendor", mail = "Mailbox", classTrainer = "Class trainer", trainer = "Trainer",
 }
 local PROFESSION_GLYPH = {
-    alchemy = "flask", blacksmithing = "anvil", enchanting = "star", engineering = "gear", herbalism = "leaf",
+    alchemy = "flask", blacksmithing = "hammer", enchanting = "star", engineering = "gear", herbalism = "leaf",
     leatherworking = "hide", mining = "pick", skinning = "knife", tailoring = "needle", cooking = "pot",
     firstAid = "bandage", fishing = "fish", weapon = "sword", riding = "book", pet = "book", other = "book",
 }
