@@ -8,10 +8,12 @@
 --   Places     dungeon and raid entrances, battleground entrances, flight
 --              masters (the game's taxi nodes), campfires you found (the
 --              Campfire module remembers them)
---   Services   innkeepers, repair, mailboxes, your class trainer (on);
---              profession trainers, bankers, auctioneers, vendors, stable
---              masters, battlemasters, guild masters, tabard designers,
---              spirit healers (off)
+--   Services   innkeepers, repair (on); vendors, stable masters,
+--              battlemasters, guild masters, tabard designers, spirit
+--              healers (off)
+--   Trading    mailboxes (on); auctioneers, bankers (off)
+--   Trainers   your class trainer (on); profession trainers, weapon
+--              masters, riding and pet trainers (off)
 --   Rares and treasures
 -- Quests to pick up, entrances, services, rares and chests come from
 -- SuuUI's generated data (SuuUI.QuestStarts, SuuUI.MapPlaces).
@@ -25,7 +27,9 @@
 local DEFAULT_FILTERS = {
     quests = { "objectives", "available", "repeatable" },
     places = { "dungeons", "battlegrounds", "flight", "campfires" },
-    services = { "inn", "repair", "mail", "classTrainer" },
+    services = { "inn", "repair" },
+    trading = { "mail" },
+    trainers = { "class" },
     rares = { "rares" },
 }
 
@@ -66,11 +70,6 @@ local GROUPS = {
     { key = "services", label = "Services", kind = "toggles", column = true, options = {
         { value = "inn", label = "Innkeepers" },
         { value = "repair", label = "Repair" },
-        { value = "mail", label = "Mailboxes" },
-        { value = "classTrainer", label = "Your class trainer" },
-        { value = "trainers", label = "Profession trainers" },
-        { value = "bank", label = "Bankers" },
-        { value = "auction", label = "Auctioneers" },
         { value = "goods", label = "General goods" },
         { value = "food", label = "Food and drink" },
         { value = "vendor", label = "Other vendors" },
@@ -80,15 +79,51 @@ local GROUPS = {
         { value = "tabard", label = "Tabard designers" },
         { value = "spirit", label = "Spirit healers" },
     } },
-    { key = "rares", label = "Rares and treasures", kind = "toggles", column = true, options = {
+    { key = "trading", label = "Trading", kind = "toggles", options = {
+        { value = "auction", label = "Auctioneers" },
+        { value = "mail", label = "Mailboxes" },
+        { value = "bank", label = "Bankers" },
+    } },
+    { key = "trainers", label = "Trainers", kind = "toggles", column = true, options = {
+        { value = "class", label = "Your class trainer" },
+        { value = "professions", label = "Profession trainers" },
+        { value = "weapon", label = "Weapon masters" },
+        { value = "riding", label = "Riding and pet trainers" },
+    } },
+    { key = "rares", label = "Rares and treasures", kind = "toggles", options = {
         { value = "rares", label = "Rares" },
         { value = "treasures", label = "Treasure chests" },
     } },
 }
 
+-- The saved filters in the current groups: each saved choice goes to the
+-- group that has it now (mailboxes, bankers and auctioneers moved from
+-- Services to Trading, the trainers to Trainers), so an earlier layout's
+-- choices carry over; new options start off.
+local LEGACY = { classTrainer = { "trainers", "class" }, trainers = { "trainers", "professions" } }
+function M:Saved()
+    local saved = self:Get("filters") or DEFAULT_FILTERS
+    local owner = {}
+    for _, g in ipairs(GROUPS) do for _, o in ipairs(g.options) do owner[o.value] = g.key end end
+    local out = {}
+    for _, g in ipairs(GROUPS) do out[g.key] = {} end
+    for key, list in pairs(saved) do
+        for _, v in ipairs(type(list) == "table" and list or {}) do
+            local legacy = key == "services" and LEGACY[v]
+            local group, value = legacy and legacy[1] or owner[v], legacy and legacy[2] or v
+            if group then
+                local has = false
+                for _, x in ipairs(out[group]) do if x == value then has = true end end
+                if not has then table.insert(out[group], value) end
+            end
+        end
+    end
+    return out
+end
+
 -- on[group][value] from the saved filters
 function M:Layers()
-    local saved = self:Get("filters") or {}
+    local saved = self:Saved()
     local on = {}
     for _, g in ipairs(GROUPS) do
         local set = {}
@@ -105,7 +140,7 @@ local function objectivesShown()
 end
 
 function M:MenuValue()
-    local saved = self:Get("filters") or {}
+    local saved = self:Saved()
     local value = {}
     for _, g in ipairs(GROUPS) do
         local list = {}
@@ -155,13 +190,14 @@ local SERVICE_NAMES = {
 local PROFESSION_GLYPH = {
     alchemy = "flask", blacksmithing = "hammer", enchanting = "star", engineering = "gear", herbalism = "leaf",
     leatherworking = "hide", mining = "pick", skinning = "knife", tailoring = "needle", cooking = "pot",
-    firstAid = "bandage", fishing = "fish", other = "book",
+    firstAid = "bandage", fishing = "fish", weapon = "sword", riding = "book", pet = "book", other = "book",
 }
 local PROFESSION_NAMES = {
     alchemy = "Alchemy trainer", blacksmithing = "Blacksmithing trainer", enchanting = "Enchanting trainer",
     engineering = "Engineering trainer", herbalism = "Herbalism trainer", leatherworking = "Leatherworking trainer",
     mining = "Mining trainer", skinning = "Skinning trainer", tailoring = "Tailoring trainer", cooking = "Cooking trainer",
-    firstAid = "First aid trainer", fishing = "Fishing trainer", other = "Trainer",
+    firstAid = "First aid trainer", fishing = "Fishing trainer", weapon = "Weapon master",
+    riding = "Riding instructor", pet = "Pet trainer", other = "Trainer",
 }
 local QUEST_RANK = { difficult = 1, standard = 2, ["very-difficult"] = 3, impossible = 4, trivial = 5 }
 
@@ -387,7 +423,7 @@ function M:Collect(mapID)
                 local class = kind:match("^class:(.+)$")
                 local prof = kind:match("^trainer:(.+)$")
                 if class then
-                    if class == me.class and on.services.classTrainer then
+                    if class == me.class and on.trainers.class then
                         local token = "class-" .. class:lower()
                         item = { key = "classTrainer", pin = { glyph = "book", color = token, edge = token, small = true },
                                  kindName = SERVICE_NAMES.classTrainer }
@@ -395,13 +431,15 @@ function M:Collect(mapID)
                         item = false -- another class's trainer: never
                     end
                 elseif prof then
-                    if on.services.trainers then
+                    local layer = (prof == "weapon" and "weapon") or ((prof == "riding" or prof == "pet") and "riding") or "professions"
+                    if on.trainers[layer] then
                         item = { key = "trainer:" .. prof, pin = { glyph = PROFESSION_GLYPH[prof] or "book", small = true },
                                  kindName = PROFESSION_NAMES[prof] or "Trainer" }
                     end
                 else
                     local s = SERVICE[kind]
-                    if s and on.services[s[1]] then
+                    local group = (kind == "bank" or kind == "auction") and on.trading or on.services
+                    if s and group[s[1]] then
                         item = { key = kind, pin = { glyph = s[2], color = s[3], small = true }, kindName = SERVICE_NAMES[kind] }
                     end
                 end
@@ -415,7 +453,7 @@ function M:Collect(mapID)
             end
         end
     end
-    if on.services.mail then
+    if on.trading.mail then
         local mail = places.mailboxes and places.mailboxes[mapID] or {}
         for i = 1, #mail, 2 do
             items[#items + 1] = { x = mail[i] / 100, y = mail[i + 1] / 100, key = "mail", small = true,

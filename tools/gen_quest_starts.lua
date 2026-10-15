@@ -334,16 +334,18 @@ local PROFESSIONS = {
     { "enchant", "enchanting" }, { "engineer", "engineering" }, { "herbalis", "herbalism" },
     { "leather", "leatherworking" }, { "mining", "mining" }, { "miner", "mining" }, { "skinn", "skinning" },
     { "tailor", "tailoring" }, { "cook", "cooking" }, { "chef", "cooking" }, { "butcher", "cooking" },
-    { "first aid", "firstAid" }, { "physician", "firstAid" }, { "trauma surgeon", "firstAid" }, { "fish", "fishing" },
+    { "first aid", "firstAid" }, { "physician", "firstAid" }, { "medic", "firstAid" }, { "trauma surgeon", "firstAid" }, { "fish", "fishing" },
 }
 local FOOD = { "baker", "butcher", "meat", "fruit", "mushroom", "beverage", "bread", "cheese", "wine", "barkeep" }
 local function trainerKind(title)
     local t = (title or ""):lower()
     for _, p in ipairs(PROFESSIONS) do if t:find(p[1], 1, true) then return "trainer:" .. p[2] end end
-    if t:find("pet trainer", 1, true) then return "trainer:other" end
+    if t:find("pet trainer", 1, true) then return "trainer:pet" end
+    if t:find("weapon master", 1, true) then return "trainer:weapon" end
+    if t:find("riding", 1, true) or t:find("pilot", 1, true) then return "trainer:riding" end
     if t:find("portal trainer", 1, true) then return "class:MAGE" end
     for _, c in ipairs(CLASSES) do if t:find(c, 1, true) then return "class:" .. c:upper() end end
-    return "trainer:other" -- weapon masters, riding instructors, pet trainers
+    return "trainer:other"
 end
 local function vendorKind(title)
     local t = (title or ""):lower()
@@ -532,7 +534,8 @@ w("--   QuestieDB Forever data with its corrections, commit " .. (sources.questi
 w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_quest_starts.sh")
 w("--   npcs[id] = { name, title, friendly (\"A\", \"H\", \"AH\" or nil), services (\"inn,repair,...\" in the")
 w("--               order the map picks the one it shows), rank (\"rare\" or \"rareElite\"), minLevel, maxLevel }")
-w("--     services: spirit, inn, bank, auction, class:WARRIOR, trainer:alchemy (or :other), battlemaster,")
+w("--     services: spirit, inn, bank, auction, class:WARRIOR, trainer:alchemy (a profession, or :weapon,")
+w("--               :riding, :pet, :other), battlemaster,")
 w("--               guild, tabard, stable, repair, food, goods, vendor")
 w("--   services[uiMapID], rares[uiMapID] = { x, y, npcID, x, y, npcID, ... }   (x, y in percent)")
 w("--   mailboxes[uiMapID] = { x, y, x, y, ... }; treasures[uiMapID] = { x, y, name, ... }")
