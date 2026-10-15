@@ -553,19 +553,19 @@ function M:SkinWorldMap()
     EventRegistry:RegisterCallback("MapCanvas.MapSet", function(_, mapID)
         if f:IsShown() then chrome:SetTitle(mapTitle(mapID)) end
     end, self)
-    -- (off screen, not only see-through: its buttons would still take clicks
-    -- over the map's top)
-    local function hideNav()
-        if not f.NavBar then return end
-        f.NavBar:SetAlpha(0)
-        f.NavBar:ClearAllPoints()
-        f.NavBar:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -2000, 2000)
-        -- with a real width: the bar fits its buttons to it (0 wide, it
-        -- looked up a button that wasn't there and errored on opening)
-        f.NavBar:SetSize(900, 34)
+    -- (left where the game puts it, which it measures itself against:
+    -- see-through, and its buttons, made again on every map change, without
+    -- the mouse so they don't take clicks over the map's top)
+    local function quietNav()
+        local nb = f.NavBar
+        if not nb then return end
+        nb:SetAlpha(0)
+        nb:EnableMouse(false)
+        for _, btn in ipairs(nb.navList or {}) do btn:EnableMouse(false) end
+        for _, key in ipairs({ "home", "overflowButton" }) do if nb[key] then nb[key]:EnableMouse(false) end end
     end
-    hideNav()
-    hooksecurefunc(f, "OnMapChanged", hideNav)
+    quietNav()
+    hooksecurefunc(f, "OnMapChanged", quietNav)
     if f.TitleCanvasSpacerFrame then f.TitleCanvasSpacerFrame:SetHeight(26) end
     -- the game's own coordinates (SuuUI's status line shows them)
     for _, o in ipairs(f.overlayFrames or {}) do
@@ -657,6 +657,20 @@ function M:SkinWorldMap()
         end
     end)
     chrome.status = status
+    -- fullscreen: the game puts the map at the screen's top, which left the
+    -- header (and minimize) above the screen; the map moves down by the
+    -- header's height and shrinks by as much
+    local function fitMaximized()
+        if not (f.IsMaximized and f:IsMaximized()) then return end
+        local rise = (chrome.riseH or 0) + S["space-3"]
+        f:ClearAllPoints()
+        f:SetPoint("TOP", UIParent, "TOP", 0, -rise)
+        local w, h = f:GetSize()
+        local scale = (h - rise) / h
+        if scale > 0 then f:SetSize(w * scale, h - rise) end
+    end
+    EventRegistry:RegisterCallback("WorldMapMaximized", function() C_Timer.After(0, fitMaximized) end, self)
+    f:HookScript("OnShow", function() C_Timer.After(0, fitMaximized) end)
     self.worldMap = chrome
 end
 
