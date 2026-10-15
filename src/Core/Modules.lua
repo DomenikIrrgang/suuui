@@ -34,7 +34,7 @@ ns.Modules = Modules
 
 local Events, Settings, Fault, Combat, Util = ns.Events, ns.Settings, ns.Fault, ns.Combat, ns.Util
 
-ns.API_VERSION = "0.14.0"
+ns.API_VERSION = "0.15.0"
 
 local RESERVED = { core = true, ui = true, layout = true }
 

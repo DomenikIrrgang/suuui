@@ -13,6 +13,7 @@
 --       char = "!",               -- a character ("!", "?", "3")
 --       color = "ink",            -- the glyph's (or character's) token
 --       edge = "gilt-line",       -- the edge's token
+--       edgeWidth = 1,            -- px (a mark's is 2)
 --       small = false,            -- the service size
 --       ring = nil,               -- a token: a second ring outside the edge
 --       count = nil,              -- a merged pin's count (2 and up)
@@ -67,7 +68,7 @@ function Pin:SetData(d)
     end
     fit(self.edge, size)
     self.edge:SetVertexColor(UI.RGBA(d.edge or "gilt-line"))
-    fit(self.fill, size - 2)
+    fit(self.fill, size - 2 * (d.edgeWidth or 1))
     self.fill:SetVertexColor(UI.RGBA("surface"))
     local inner = d.small and 14 or 17
     if d.glyph then

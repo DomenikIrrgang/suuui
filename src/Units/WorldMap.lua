@@ -31,6 +31,7 @@ local DEFAULT_FILTERS = {
     trading = { "mail" },
     trainers = { "class" },
     rares = { "rares" },
+    marks = { "yours", "shared" },
 }
 
 local M = SuuUI.RegisterModule({
@@ -99,6 +100,10 @@ local GROUPS = {
         { value = "rares", label = "Rares" },
         { value = "treasures", label = "Treasure chests" },
     } },
+    { key = "marks", label = "Marks", kind = "toggles", options = {
+        { value = "yours", label = "Your marks" },
+        { value = "shared", label = "Shared marks" },
+    } },
 }
 
 -- The saved filters in the current groups: each saved choice goes to the
@@ -106,7 +111,7 @@ local GROUPS = {
 -- Services to Trading, the trainers to Trainers), so an earlier layout's
 -- choices carry over; new options start off.
 local LEGACY = { classTrainer = { "trainers", "class" }, trainers = { "trainers", "professions" } }
-local FILTERS_VERSION = 3 -- 2: quests from items, 3: unexplored areas (each on for everyone once)
+local FILTERS_VERSION = 4 -- 2: quests from items, 3: unexplored areas, 4: marks (each on for everyone once)
 function M:Saved()
     local saved = self:Get("filters") or DEFAULT_FILTERS
     local owner = {}
@@ -124,7 +129,7 @@ function M:Saved()
             end
         end
     end
-    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" } }) do
+    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" }, { 4, "marks", "yours" }, { 4, "marks", "shared" } }) do
         if (saved.v or 1) < new[1] then
             local has = false
             for _, v in ipairs(out[new[2]]) do if v == new[3] then has = true end end
@@ -144,6 +149,11 @@ function M:Layers()
         on[g.key] = set
     end
     return on
+end
+
+-- The Marks filters, for the marks module's minimap too: { yours, shared }.
+function M:MarksShown()
+    return self:Layers().marks or {}
 end
 
 -- the game's quest objectives follow its own setting
@@ -656,6 +666,24 @@ function M:Collect(mapID)
                 kindName = "Treasure chest" }
         end
     end
+    -- your marks and shared ones (the marks module's), on their map and the
+    -- maps above it; they keep their spot, and a click opens their card
+    local marks = SuuUI.GetModule and SuuUI.GetModule("marks")
+    if marks and marks:IsEnabled() and (on.marks.yours or on.marks.shared) then
+        local muted = "|cff" .. T.color["ink-muted"].hex
+        for _, mark in ipairs(marks:Marks()) do
+            if (mark.from and on.marks.shared) or (not mark.from and on.marks.yours) then
+                local x, y = marks:PlaceOn(mark, mapID)
+                if x then
+                    local where = ("%s %.1f, %.1f"):format(marks:MapName(mark.map) or "", mark.x * 100, mark.y * 100)
+                    items[#items + 1] = { x = x, y = y, fixed = true, uid = "m" .. mark.id, mark = mark.id,
+                        pin = marks:PinLook(mark), name = mark.name ~= "" and mark.name or "Mark", detail = where,
+                        kindName = "Marks",
+                        more = mark.from and { { muted .. "Shared by " .. mark.from .. "|r" } } or nil }
+                end
+            end
+        end
+    end
     return items
 end
 
@@ -831,6 +859,12 @@ function M:Pin()
         pin:SetScript("OnLeave", function() UI.HideTooltip(); self:HighlightQuests(nil); self:ShowRoutes(nil) end)
         pin:SetScript("OnClick", function(p)
             local g = p.group
+            -- a mark: its card
+            if g and g.distinct == 1 and g.items[1].mark then
+                local marks = SuuUI.GetModule("marks")
+                if marks then marks:OpenCard(g.items[1].mark, p) end
+                return
+            end
             if not (g and g.distinct > 1) then return end
             local f = self.map
             local cx, cy = 0, 0
@@ -995,7 +1029,7 @@ function M:Layout()
                 data = best.pin
             end
             data = { glyph = data.glyph, char = data.char, color = data.color, edge = data.edge, small = data.small,
-                     ring = data.ring, spin = data.spin, count = g.distinct }
+                     ring = data.ring, spin = data.spin, edgeWidth = data.edgeWidth, count = g.distinct }
         end
         pin:SetData(data)
         pin.group = g
@@ -1006,6 +1040,17 @@ function M:Layout()
         pin:ClearAllPoints()
         pin:SetPoint("CENTER", self.layer, "TOPLEFT", g.x / grow, -g.y / grow)
         self.pins[#self.pins + 1] = pin
+    end
+    -- a mark's open card follows its pin
+    local marks = SuuUI.GetModule and SuuUI.GetModule("marks")
+    if marks and marks.cardMark then marks:AnchorCard(self:PinForMark(marks.cardMark)) end
+end
+
+-- The pin showing a mark (the marks module's card sits under it).
+function M:PinForMark(id)
+    for _, pin in ipairs(self.pins or {}) do
+        local g = pin.group
+        if g and g.distinct == 1 and g.items[1].mark == id then return pin end
     end
 end
 
@@ -1188,6 +1233,8 @@ function M:OnEnable()
     -- the holidays on today: the calendar loads its events after
     -- OpenCalendar (it tells with CALENDAR_UPDATE_EVENT_LIST); read again
     -- when the map opens, so a holiday that starts while you play shows
+    -- marks made, renamed, shared or removed
+    self:On("SUUUI_MARKS_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     self:OnGameEvent("CALENDAR_UPDATE_EVENT_LIST", function()
         if readCalendar() and self.map:IsShown() then self:Refresh() end
     end)

@@ -94,9 +94,17 @@ T.color = {
     ["rep-friendly"] = { 0, 0.6, 0.102, 1, hex = "00991a" },
     ["coin-gold"] = { 1, 0.8431, 0, 1, hex = "ffd700" },
     ["coin-silver"] = { 0.7804, 0.7804, 0.8118, 1, hex = "c7c7cf" },
+    ["mark-star"] = { 1.0000, 0.9490, 0.4784, 1, hex = "fff27a" },
+    ["mark-circle"] = { 1.0000, 0.5490, 0.0000, 1, hex = "ff8c00" },
+    ["mark-diamond"] = { 0.8863, 0.3608, 0.9608, 1, hex = "e25cf5" },
+    ["mark-triangle"] = { 0.1804, 0.8000, 0.4431, 1, hex = "2ecc71" },
+    ["mark-moon"] = { 0.7098, 0.7882, 0.9412, 1, hex = "b5c9f0" },
+    ["mark-square"] = { 0.1176, 0.3569, 1.0000, 1, hex = "1e5bff" },
+    ["mark-cross"] = { 0.9412, 0.2118, 0.3529, 1, hex = "f0365a" },
+    ["mark-skull"] = { 1.0000, 1.0000, 1.0000, 1, hex = "ffffff" },
     ["coin-copper"] = { 0.9294, 0.6471, 0.3725, 1, hex = "eda55f" },
 }
-T.order.color = { "surface", "surface-glass", "surface-sunk", "surface-raised", "track", "world", "gilt", "gilt-text", "gilt-line", "gilt-hairline", "gilt-faint", "ink", "ink-muted", "ink-faint", "unit-fill", "unit-fill-deep", "unit-fill-low", "unit-fill-low-deep", "ghost", "arcane", "arcane-soft", "arcane-glow", "ember", "ember-text", "ember-soft", "amber", "fel", "fel-incoming", "ward", "ward-absorb", "dispel-magic", "dispel-curse", "dispel-poison", "dispel-disease", "on-signal", "mana", "rage", "energy", "focus", "progress-fill", "progress-rested", "class-warrior", "class-paladin", "class-hunter", "class-rogue", "class-priest", "class-shaman", "class-mage", "class-warlock", "class-druid", "quality-poor", "quality-common", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary", "reaction-hostile", "reaction-neutral", "reaction-friendly", "chat-say", "chat-yell", "chat-emote", "chat-party", "chat-raid", "chat-raid-warning", "chat-guild", "chat-officer", "chat-whisper", "chat-channel", "chat-system", "chat-loot", "quest-impossible", "quest-very-difficult", "quest-difficult", "quest-standard", "quest-trivial", "rep-hostile", "rep-unfriendly", "rep-neutral", "rep-friendly", "coin-gold", "coin-silver", "coin-copper" }
+T.order.color = { "surface", "surface-glass", "surface-sunk", "surface-raised", "track", "world", "gilt", "gilt-text", "gilt-line", "gilt-hairline", "gilt-faint", "ink", "ink-muted", "ink-faint", "unit-fill", "unit-fill-deep", "unit-fill-low", "unit-fill-low-deep", "ghost", "arcane", "arcane-soft", "arcane-glow", "ember", "ember-text", "ember-soft", "amber", "fel", "fel-incoming", "ward", "ward-absorb", "dispel-magic", "dispel-curse", "dispel-poison", "dispel-disease", "on-signal", "mana", "rage", "energy", "focus", "progress-fill", "progress-rested", "class-warrior", "class-paladin", "class-hunter", "class-rogue", "class-priest", "class-shaman", "class-mage", "class-warlock", "class-druid", "quality-poor", "quality-common", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary", "reaction-hostile", "reaction-neutral", "reaction-friendly", "chat-say", "chat-yell", "chat-emote", "chat-party", "chat-raid", "chat-raid-warning", "chat-guild", "chat-officer", "chat-whisper", "chat-channel", "chat-system", "chat-loot", "quest-impossible", "quest-very-difficult", "quest-difficult", "quest-standard", "quest-trivial", "rep-hostile", "rep-unfriendly", "rep-neutral", "rep-friendly", "coin-gold", "coin-silver", "coin-copper", "mark-star", "mark-circle", "mark-diamond", "mark-triangle", "mark-moon", "mark-square", "mark-cross", "mark-skull" }
 
 T.space = {
     ["space-1"] = 2,
@@ -288,6 +296,14 @@ T.usage["rep-neutral"] = "The standing word for Neutral (9.7:1)."
 T.usage["rep-friendly"] = "The standing word for Friendly, Honored, Revered and Exalted (5.0:1). The bar itself stays progress-fill."
 T.usage["coin-gold"] = "GAME COLOUR, text only: the 'g' after a gold amount (13.4:1 on surface). Digits stay ink."
 T.usage["coin-silver"] = "The 's' after a silver amount (11.3:1)."
+T.usage["mark-star"] = "A map mark's star symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-circle"] = "A map mark's circle symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-diamond"] = "A map mark's diamond symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-triangle"] = "A map mark's triangle symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-moon"] = "A map mark's moon symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-square"] = "A map mark's square symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-cross"] = "A map mark's cross symbol and edge, after the game's raid marker. Identity only, never a state."
+T.usage["mark-skull"] = "A map mark's skull symbol and edge, after the game's raid marker. Identity only, never a state."
 T.usage["coin-copper"] = "The 'c' after a copper amount (9.1:1)."
 T.usage["space-1"] = "Power line height and its gap; stacked digits; the gap between a bar and its cast bar."
 T.usage["space-2"] = "Between icons in an aura or cooldown slot; between a unit bar and its slots; between raid units; between item slots."

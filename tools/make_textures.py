@@ -370,6 +370,16 @@ GLYPHS = {
     "profCooking": "M8 16c0-4.5 3.5-8 8-8 3.5 0 6 2.5 6 6s-3 6.5-7 6.5h-4c-2 0-3-2-3-4.5zM11 10.5c-1.5-1.5-2.5-3-3-5M14 8.5c-1-1.5-2-3-2.5-4.5M8 5.5L6 3.5M11.5 4L10 1.5M4.5 4.5a1.4 1.4 0 1 0 2-2M8.5 2.5a1.4 1.4 0 1 0 2.5-.5",  # a roast bird, its leg up to the left
     "profFirstAid": "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 6.5l3.5 7a3.5 3.5 0 1 1-7 0z",  # a drop in a ring
     "profFishing": "M12 2.5a1.5 1.5 0 1 0 .01 0M12 4v12a3.5 3.5 0 0 1-7 0V13l2 2M17 9c2 1 2.5 4 1 6s-1 4.5 1 5.5M8 7c-2 1-2 3.5 0 4.5",  # a hook with worms
+    # map marks (3.5 stage 3): the eight symbols, after the game's raid markers
+    "markStar": "M12.0 3.4L14.3 9.4L20.7 9.8L15.7 13.8L17.4 20.0L12.0 16.5L6.6 20.0L8.3 13.8L3.3 9.8L9.7 9.4Z",
+    "markCircle": "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z",
+    "markDiamond": "M12 2.5l7 9.5-7 9.5-7-9.5z",
+    "markTriangle": "M12 3.5l9 16H3z",
+    "markMoon": "M14.5 3.5a8.5 8.5 0 1 0 6 13.5 7 7 0 0 1-6-13.5z",
+    "markSquare": "M5 5h14v14H5z",
+    "markCross": "M7 3.5l5 5 5-5 3.5 3.5-5 5 5 5-3.5 3.5-5-5-5 5-3.5-3.5 5-5-5-5z",
+    "markArrow": "M12 4l7 14H5z",  # a mark's direction on the minimap's edge
+    "markSkull": "M12 3a6.5 6.5 0 0 0-6.5 6.5c0 2.3 1.1 3.7 2.5 4.6V16.5h8v-2.4c1.4-.9 2.5-2.3 2.5-4.6A6.5 6.5 0 0 0 12 3zM9.5 10h.01M14.5 10h.01M11 13.5h2M4 18l16 3.5M20 18L4 21.5",
 }
 
 
