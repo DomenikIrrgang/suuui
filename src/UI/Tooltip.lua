@@ -68,6 +68,15 @@ function Tip:SetContent(d)
     local width = math.min(MAX_W, math.max(natural, 120) + pad * 2)
     local inner = width - pad * 2
 
+    -- the title and subtitle wrap too when longer than the width
+    -- ("Brackenwall Village, Dustwallow Marsh" ran past the edge)
+    for _, t in ipairs({ self.heading, self.sub }) do
+        local long = t:GetUnboundedStringWidth() > inner
+        t:SetWordWrap(long)
+        t:SetJustifyH("LEFT")
+        t:SetFixedWidth(long and inner or 0)
+    end
+
     self.desc:SetShown(d.description ~= nil)
     if d.description then
         self.desc:SetFixedWidth(inner)
