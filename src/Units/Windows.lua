@@ -431,6 +431,27 @@ function M:SkinGroupFinder()
     end
     self:OnGameEvent("LFG_LIST_ACTIVE_ENTRY_UPDATE", relabel)
     relabel()
+    -- the tab row's right: a gear that opens Settings › Group Finder
+    local gear = CreateFrame("Button", nil, chrome.head)
+    gear:SetSize(22, 22)
+    gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"])
+    gear:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+    local glyph = gear:CreateTexture(nil, "ARTWORK")
+    glyph:SetTexture(GLYPHS .. "gear.tga")
+    glyph:SetSize(14, 14)
+    glyph:SetPoint("CENTER")
+    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    local edge = UI.Border(gear, "gilt-line")
+    edge:SetShown(false)
+    gear:SetScript("OnEnter", function(b)
+        edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink"))
+        UI.ShowTooltip(b, { title = "Group Finder settings", description = "Channels, languages, your ad and the notifications" })
+    end)
+    gear:SetScript("OnLeave", function()
+        edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")); UI.HideTooltip()
+    end)
+    gear:SetScript("OnClick", function() SuuUI.OpenSettings("groupfinder") end)
+    chrome.gear = gear
 end
 
 function M:SkinAll()
