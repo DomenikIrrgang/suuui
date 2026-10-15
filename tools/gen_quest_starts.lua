@@ -63,7 +63,7 @@ end
 -- the enums (constants.lua first: raceMaskById)
 -- (constants.lua puts its own table in lib.Enum; the others fill it)
 local lib = {}
-for _, f in ipairs({ "constants", "zones", "expansions", "factions", "professions", "quests" }) do
+for _, f in ipairs({ "constants", "zones", "expansions", "factions", "professions", "quests", "items" }) do
     run("src/corrections/enum/" .. f .. ".lua", "QuestieDB", lib)
 end
 local constants = lib.Enum
@@ -84,6 +84,7 @@ QuestieDB.sortKeys = constants.sortKeys or {}
 QuestieDB.specialFlags = constants.specialFlags or {}
 QuestieDB.questFlags = constants.questFlags or {}
 QuestieDB.factionIDs = constants.factionIDs or {}
+QuestieDB.itemClasses = constants.itemClasses or {}
 local ZoneDB = module("ZoneDB")
 ZoneDB.zoneIDs = constants.zoneIDs or {}
 local Professions = module("QuestieProfessions")
@@ -102,6 +103,7 @@ end
 local quests = data("data/Forever/foreverQuestDB.lua", "questData")
 local npcs = data("data/Forever/foreverNpcDB.lua", "npcData")
 local objects = data("data/Forever/foreverObjectDB.lua", "objectData")
+local items = data("data/Forever/foreverItemDB.lua", "itemData")
 
 -- Correction keys also come as "<field>_add" (+1000) and "<field>_remove"
 -- (-1000): table operations (QuestieDB docs/adr/0016). Lists add missing
@@ -184,10 +186,11 @@ local function correct(db, files)
         end
     end
 end
-local QK, NK, OK = QuestieDB.questKeys, QuestieDB.npcKeys, QuestieDB.objectKeys
+local QK, NK, OK, IK = QuestieDB.questKeys, QuestieDB.npcKeys, QuestieDB.objectKeys, QuestieDB.itemKeys
 aliases(QuestieDB.questKeys)
 aliases(QuestieDB.npcKeys)
 aliases(QuestieDB.objectKeys)
+aliases(QuestieDB.itemKeys)
 GROUPED[quests] = { [QuestieDB.questKeys.startedBy] = true, [QuestieDB.questKeys.finishedBy] = true }
 GROUPED[npcs] = { [QuestieDB.npcKeys.spawns] = true, [QuestieDB.npcKeys.waypoints] = true }
 GROUPED[objects] = { [QuestieDB.objectKeys.spawns] = true, [QuestieDB.objectKeys.waypoints] = true }
@@ -195,6 +198,7 @@ local C = "src/corrections/Forever/"
 correct(quests, { C .. "legacy/classicQuestFixes.lua", C .. "generated/foreverBaseQuest.lua", C .. "foreverQuestFixes.lua" })
 correct(npcs, { C .. "legacy/classicNPCFixes.lua", C .. "generated/foreverBaseNpc.lua", C .. "foreverNPCFixes.lua" })
 correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/foreverBaseObject.lua", C .. "foreverObjectFixes.lua" })
+correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "foreverItemFixes.lua" })
 
 -- area IDs to the game's map IDs (the override first)
 run("support/Forever/Zones/areaIdToUiMapId.lua")
@@ -203,7 +207,8 @@ local areaToMap = mapTable(ZoneDB.private.areaIdToUiMapId)
 for k, v in pairs(mapTable(ZoneDB.private.areaIdToUiMapIdOverride)) do areaToMap[k] = v end
 
 -- each giver's spawn points as { map = { {x, y}, ... } } (at most 3 per map)
-local function spawnsOf(row, key)
+local function spawnsOf(row, key, cap)
+    cap = cap or 3
     local out = {}
     for area, coords in pairs(row and row[key] or {}) do
         local map = areaToMap[area]
@@ -211,7 +216,7 @@ local function spawnsOf(row, key)
             local list = out[map] or {}
             out[map] = list
             for _, c in ipairs(coords) do
-                if #list < 3 and type(c) == "table" and c[1] and c[1] >= 0 then list[#list + 1] = { c[1], c[2] } end
+                if #list < cap and type(c) == "table" and c[1] and c[1] >= 0 then list[#list + 1] = { c[1], c[2] } end
             end
         end
     end
@@ -269,6 +274,69 @@ for _, qid in ipairs(ids) do
         for _, obj in ipairs(starts[2]) do
             for map, list in pairs(spawnsOf(objects[obj], OK.spawns)) do
                 for _, c in ipairs(list) do pin(map, c[1], c[2], qid, -obj, objects[obj][OK.name]) end
+            end
+        end
+    end
+end
+
+-- quests started by an item: a pin where each mob (or object) that drops
+-- it lives, at most 8 of its spawn points per map. An item that drops from
+-- more than 10 kinds (the Pendant of Myzrael: 246, the OOX beacons: 50 to
+-- 80) is a random world drop: pins everywhere would say nothing, so none.
+local MAX_DROP_SOURCES = 10
+local itemStarts = {} -- quest -> { item, ... }
+for qid, q in pairs(quests) do
+    local starts = q[QK.startedBy]
+    for _, item in ipairs(type(starts) == "table" and type(starts[3]) == "table" and starts[3] or {}) do
+        itemStarts[qid] = itemStarts[qid] or {}
+        table.insert(itemStarts[qid], item)
+    end
+end
+for id, it in pairs(items) do
+    local qid = it[IK.startQuest]
+    if type(qid) == "number" and quests[qid] then
+        itemStarts[qid] = itemStarts[qid] or {}
+        local has = false
+        for _, x in ipairs(itemStarts[qid]) do if x == id then has = true end end
+        if not has then table.insert(itemStarts[qid], id) end
+    end
+end
+local drops = {}      -- map -> "x,y,source,item" -> { x, y, source, item, quests }
+local itemNames = {}  -- item -> name
+local nDrops = 0
+local function dropPin(map, x, y, source, item, qid)
+    local m = drops[map] or {}
+    drops[map] = m
+    local key = string.format("%.1f,%.1f,%d,%d", x, y, source, item)
+    local p = m[key]
+    if not p then p = { x = x, y = y, source = source, item = item, quests = {} }; m[key] = p; nDrops = nDrops + 1 end
+    for _, q in ipairs(p.quests) do if q == qid then return end end
+    p.quests[#p.quests + 1] = qid
+    used[qid] = true
+end
+local dropIDs = {}
+for qid in pairs(itemStarts) do dropIDs[#dropIDs + 1] = qid end
+table.sort(dropIDs)
+for _, qid in ipairs(dropIDs) do
+    for _, item in ipairs(itemStarts[qid]) do
+        local it = items[item]
+        local sources = it and (#(type(it[IK.npcDrops]) == "table" and it[IK.npcDrops] or {})
+            + #(type(it[IK.objectDrops]) == "table" and it[IK.objectDrops] or {})) or 0
+        if it and sources <= MAX_DROP_SOURCES then
+            itemNames[item] = it[IK.name]
+            for _, npc in ipairs(type(it[IK.npcDrops]) == "table" and it[IK.npcDrops] or {}) do
+                local n = npcs[npc]
+                for map, list in pairs(spawnsOf(n, NK.spawns, 8)) do
+                    for _, c in ipairs(list) do dropPin(map, c[1], c[2], npc, item, qid) end
+                    if type(n[NK.name]) == "string" then giverNames[npc] = n[NK.name] end
+                end
+            end
+            for _, obj in ipairs(type(it[IK.objectDrops]) == "table" and it[IK.objectDrops] or {}) do
+                local o = objects[obj]
+                for map, list in pairs(spawnsOf(o, OK.spawns, 8)) do
+                    for _, c in ipairs(list) do dropPin(map, c[1], c[2], -obj, item, qid) end
+                    if type(o[OK.name]) == "string" then giverNames[-obj] = o[OK.name] end
+                end
             end
         end
     end
@@ -468,7 +536,9 @@ w("--   quests[id] = { name, minLevel, level, races (mask), classes (mask), preG
 w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 needs an event), parentQuest,")
 w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value} }")
 w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
-w("--   givers[giver] = name")
+w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
+w("--                    (source: an NPC's ID, an object's negative) that drops it lives)")
+w("--   items[itemID] = name; givers[giver or source] = name")
 w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil) }, ... }")
 w("")
 w("local _, ns = ...")
@@ -501,6 +571,26 @@ for _, map in ipairs(maps) do
     end
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
 end
+w("}, drops = {")
+local dmaps = {}
+for map in pairs(drops) do dmaps[#dmaps + 1] = map end
+table.sort(dmaps)
+for _, map in ipairs(dmaps) do
+    local keys = {}
+    for k in pairs(drops[map]) do keys[#keys + 1] = k end
+    table.sort(keys)
+    local rows = {}
+    for _, k in ipairs(keys) do
+        local p = drops[map][k]
+        rows[#rows + 1] = string.format("{%.1f,%.1f,%d,%d,%s}", p.x, p.y, p.source, p.item, table.concat(p.quests, ","))
+    end
+    w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
+end
+w("}, items = {")
+local itemIDs = {}
+for i in pairs(itemNames) do itemIDs[#itemIDs + 1] = i end
+table.sort(itemIDs)
+for _, i in ipairs(itemIDs) do if type(itemNames[i]) == "string" then w(string.format("    [%d] = %q,", i, itemNames[i])) end end
 w("}, givers = {")
 local giverIDs = {}
 for g in pairs(giverNames) do giverIDs[#giverIDs + 1] = g end
@@ -575,5 +665,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances -> %s", nq, total, #maps, nEntrances, out))
+print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins -> %s", nq, total, #maps, nEntrances, nDrops, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns -> %s", nServices, nRares, nMail, nChests, placesOut))

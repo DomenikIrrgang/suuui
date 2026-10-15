@@ -25,7 +25,7 @@
 -- size at every zoom. A built-in module written against the public API only.
 
 local DEFAULT_FILTERS = {
-    quests = { "objectives", "available", "repeatable" },
+    quests = { "objectives", "available", "repeatable", "items" },
     places = { "dungeons", "battlegrounds", "flight", "campfires" },
     services = { "inn", "repair" },
     trading = { "mail" },
@@ -59,6 +59,7 @@ local GROUPS = {
         { value = "objectives", label = "Quest objectives" },
         { value = "available", label = "Quests to pick up" },
         { value = "repeatable", label = "Repeatable and daily" },
+        { value = "items", label = "Quests from items" },
         { value = "trivial", label = "Trivial quests" },
     } },
     { key = "places", label = "Places", kind = "toggles", options = {
@@ -101,6 +102,7 @@ local GROUPS = {
 -- Services to Trading, the trainers to Trainers), so an earlier layout's
 -- choices carry over; new options start off.
 local LEGACY = { classTrainer = { "trainers", "class" }, trainers = { "trainers", "professions" } }
+local FILTERS_VERSION = 2 -- 2: quests from items (on for everyone once)
 function M:Saved()
     local saved = self:Get("filters") or DEFAULT_FILTERS
     local owner = {}
@@ -117,6 +119,11 @@ function M:Saved()
                 if not has then table.insert(out[group], value) end
             end
         end
+    end
+    if (saved.v or 1) < 2 then
+        local has = false
+        for _, v in ipairs(out.quests) do if v == "items" then has = true end end
+        if not has then table.insert(out.quests, "items") end
     end
     return out
 end
@@ -159,6 +166,7 @@ function M:OnFilters(value)
     if wantObjectives ~= objectivesShown() and not InCombatLockdown() then
         pcall(SetCVar, "questPOI", wantObjectives and "1" or "0")
     end
+    value.v = FILTERS_VERSION
     self:Set("filters", value)
     self:Refresh()
 end
@@ -368,6 +376,39 @@ function M:Collect(mapID)
                     pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
                     name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
                     more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3],
+                }
+            end
+        end
+    end
+
+    -- quests started by an item: where the mobs that drop it live
+    if on.quests.items then
+        local done = completedSet()
+        local muted = "|cff" .. T.color["ink-muted"].hex
+        for _, row in ipairs(starts.drops and starts.drops[mapID] or {}) do
+            local source = starts.givers and starts.givers[row[3]] or "?"
+            local item = starts.items and starts.items[row[4]] or "an item"
+            local best, list = nil, {}
+            for i = 5, #row do
+                local id = row[i]
+                local q = starts.quests[id]
+                local state, difficulty, level
+                if q then state, difficulty, level = questState(q, id, me, done) end
+                if state and (difficulty ~= "trivial" or on.quests.trivial) then
+                    list[#list + 1] = { name = q[1], level = level }
+                    local rank = QUEST_RANK[difficulty] or 9
+                    if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty } end
+                end
+            end
+            if best then
+                local lines = { { "Starts from " .. item }, { muted .. (row[3] < 0 and "Found in " or "Dropped by ") .. source .. "|r" } }
+                for i = 2, #list do lines[#lines + 1] = { list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r" } end
+                items[#items + 1] = {
+                    x = row[1] / 100, y = row[2] / 100, key = "itemQuest", rank = best.rank,
+                    pin = { char = "!", color = "quest-" .. best.difficulty, edge = "gilt" },
+                    name = list[1].name, detail = "Level " .. list[1].level,
+                    listDetail = "Level " .. list[1].level .. " · " .. item .. " · " .. source,
+                    more = lines, difficulty = best.difficulty, uid = "d" .. row[3] .. ":" .. row[4], kindName = "Quests from items",
                 }
             end
         end
@@ -586,7 +627,7 @@ local function tipFor(g)
     for _, it in ipairs(g.items) do
         local key = (it.name or "?") .. "\0" .. (it.detail or "")
         if not seen[key] then
-            seen[key] = { name = it.name or "?", detail = it.detail or "", n = 0, uids = {} }
+            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {} }
             order[#order + 1] = seen[key]
         end
         -- (one NPC's spawn points once: "Mailbox ×2" is two mailboxes)
@@ -668,7 +709,7 @@ function M:Layout()
         local data = g.items[1].pin
         if g.distinct > 1 then
             -- a merged quest pin takes its most useful quest's colour
-            if g.key == "available" then
+            if g.key == "available" or g.key == "itemQuest" or g.key == "repeatable" then
                 local best = g.items[1]
                 for _, it in ipairs(g.items) do if (it.rank or 9) < (best.rank or 9) then best = it end end
                 data = best.pin
