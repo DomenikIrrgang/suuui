@@ -437,7 +437,11 @@ function M:Collect(mapID)
             end
             local raid = kind == "dungeon" and levels.raid and levels.raid[e[3]]
             if raid then lines[#lines + 1] = { "Raid  " .. muted .. range(raid[1], raid[2]) .. "|r" } end
-            items[#items + 1] = { x = e[1] / 100, y = e[2] / 100, fixed = true,
+            -- entrances on one spot merge (Blackrock Mountain's four stacked,
+            -- only the top one's card to read); one place's doors count once
+            items[#items + 1] = { x = e[1] / 100, y = e[2] / 100, fixed = true, uid = "e" .. e[3],
+                key = kind == "battleground" and "battleground" or "entrance",
+                kindName = kind == "battleground" and "Battlegrounds" or "Entrances",
                 pin = kind == "battleground" and { glyph = "swords" }
                     or { glyph = "swirl", spin = true, ring = kind == "raid" and "gilt" or nil },
                 name = e[3], detail = detail, more = #lines > 0 and lines or nil }
