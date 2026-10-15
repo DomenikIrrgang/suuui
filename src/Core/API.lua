@@ -443,6 +443,11 @@ function API.MapPlaces() return ns.MapPlaces or {} end
 -- from the client tables: tools/update_map_overlays.sh), for drawing the
 -- areas you haven't explored: { [uiMapArtID] = { { w, h, x, y, fileDataID, ... } } }
 function API.MapOverlays() return ns.MapOverlays or {} end
+-- 0.14: the recommended levels of dungeons, raids and battlegrounds by
+-- their entrances' names (Data/InstanceLevels.lua, the group finder's, from
+-- the client tables: tools/update_instance_levels.sh):
+-- { [kind] = { [name] = { min, max, { wing, min, max }, ... } } }
+function API.InstanceLevels() return ns.InstanceLevels or {} end
 
 function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]

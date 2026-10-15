@@ -419,15 +419,28 @@ function M:Collect(mapID)
         end
     end
 
-    -- entrances
+    -- entrances, with their recommended levels (the group finder's): the
+    -- wings' own, and a dungeon's raid version's
+    local levels = SuuUI.InstanceLevels()
+    local function range(lo, hi) return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi) end
+    local muted = "|cff" .. T.color["ink-muted"].hex
     for _, e in ipairs(starts.entrances and starts.entrances[mapID] or {}) do
         local kind, faction = e[4], e[5]
         local show = (kind == "battleground" and on.places.battlegrounds) or (kind ~= "battleground" and on.places.dungeons)
         if show and (not faction or faction == me.faction) then
+            local detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon"
+            local lv = levels[kind] and levels[kind][e[3]]
+            local lines = {}
+            if lv then
+                detail = detail .. " · " .. range(lv[1], lv[2])
+                for i = 3, #lv do lines[#lines + 1] = { lv[i][1] .. "  " .. muted .. range(lv[i][2], lv[i][3]) .. "|r" } end
+            end
+            local raid = kind == "dungeon" and levels.raid and levels.raid[e[3]]
+            if raid then lines[#lines + 1] = { "Raid  " .. muted .. range(raid[1], raid[2]) .. "|r" } end
             items[#items + 1] = { x = e[1] / 100, y = e[2] / 100, fixed = true,
                 pin = kind == "battleground" and { glyph = "swords" }
                     or { glyph = "swirl", spin = true, ring = kind == "raid" and "gilt" or nil },
-                name = e[3], detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon" }
+                name = e[3], detail = detail, more = #lines > 0 and lines or nil }
         end
     end
 
