@@ -454,6 +454,134 @@ function M:SkinGroupFinder()
     chrome.gear = gear
 end
 
+--------------------------------------------------------------------------------
+-- The world map (3.5, stage 1; source read 2026-10-15: WorldMapFrame isn't
+-- protected, its quest log is QuestMapFrame docked as a 333px side panel):
+-- SuuUI's header with "Continent › Zone", the game's border, portrait and
+-- title away, the quest log and its details restyled in place (their
+-- clicks stay the game's), the game's own filter menu, side-panel toggle
+-- and maximize in SuuUI's look, and a status line: the coordinates under
+-- the cursor (yours when it's off the map) and zoom. Left where the game
+-- places it (it has a maximized mode of its own).
+--------------------------------------------------------------------------------
+
+-- "Kalimdor › Durotar": the map's continent before its name.
+local function mapTitle(mapID)
+    local info = mapID and C_Map.GetMapInfo(mapID)
+    if not info then return "World map" end
+    local continent
+    local parent = info.parentMapID
+    local guard = 0
+    while parent and parent > 0 and guard < 6 do
+        local p = C_Map.GetMapInfo(parent)
+        if not p then break end
+        if p.mapType == (Enum.UIMapType and Enum.UIMapType.Continent or 2) then continent = p.name break end
+        parent, guard = p.parentMapID, guard + 1
+    end
+    return continent and (continent .. " › " .. info.name) or info.name
+end
+
+function M:RestyleQuestLog()
+    local q = _G.QuestMapFrame
+    if not q then return end
+    UI.Reskin(q)
+    local d = q.DetailsFrame
+    if d then
+        for _, key in ipairs({ "Bg", "SealMaterialBG" }) do if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end end
+        if d.BorderFrame then d.BorderFrame:SetAlpha(0) end
+    end
+end
+
+function M:SkinWorldMap()
+    local f = _G.WorldMapFrame
+    if not f or f.suuChrome then return end
+    local b = f.BorderFrame
+    local chrome = UI.SkinWindow(f, {
+        title = mapTitle(f:GetMapID()), icon = "map", binding = "TOGGLEWORLDMAP",
+        close = (b and b.CloseButton) or _G.WorldMapFrameCloseButton, topInset = 24,
+        hide = { b and b.NineSlice, b and b.PortraitContainer, b and b.TitleContainer, b and b.Bg, f.BorderFrame and f.BorderFrame.Bg,
+                 b and b.TopTileStreaks, b and b.InsetBorderTop },
+    })
+    -- the help-plate button: away
+    if b and b.Tutorial then b.Tutorial:SetAlpha(0); b.Tutorial:EnableMouse(false) end
+    if b and b.MaximizeMinimizeFrame then skinMaxMin(chrome, b.MaximizeMinimizeFrame) end
+    -- the title follows the map
+    EventRegistry:RegisterCallback("MapCanvas.MapSet", function(_, mapID)
+        if f:IsShown() then chrome:SetTitle(mapTitle(mapID)) end
+    end, self)
+    -- the game's filter menu and the side-panel toggle in SuuUI's look
+    if f.WorldMapTrackingOptionsButton then UI.ReskinDropdown(f.WorldMapTrackingOptionsButton) end
+    local toggle = f.SidePanelToggle
+    if toggle then
+        for _, key in ipairs({ "OpenButton", "CloseButton" }) do
+            local btn = toggle[key]
+            if btn then
+                for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture" }) do
+                    local t = btn[get] and btn[get](btn)
+                    if t then t:SetAlpha(0) end
+                end
+                UI.Fill(btn, "surface-raised", "BACKGROUND", 7):SetAllPoints()
+                UI.Border(btn, "gilt-line")
+                local g = btn:CreateTexture(nil, "OVERLAY")
+                g:SetTexture(GLYPHS .. (key == "OpenButton" and "chevronLeft" or "chevronRight") .. ".tga")
+                g:SetSize(12, 12)
+                g:SetPoint("CENTER")
+                g:SetVertexColor(UI.RGBA("ink-muted"))
+            end
+        end
+    end
+    -- the quest log: restyled now and whenever the game lays it out again
+    self:RestyleQuestLog()
+    if _G.QuestLogQuests_Update then hooksecurefunc("QuestLogQuests_Update", function() self:RestyleQuestLog() end) end
+    if _G.QuestMapFrame_ShowQuestDetails then
+        hooksecurefunc("QuestMapFrame_ShowQuestDetails", function() C_Timer.After(0, function() self:RestyleQuestLog() end) end)
+    end
+    -- the status line: coordinates and zoom, over the map's bottom left
+    local status = CreateFrame("Frame", nil, f)
+    status:SetFrameLevel(f:GetFrameLevel() + 450)
+    status:SetSize(220, 26)
+    status:SetPoint("BOTTOMLEFT", f.ScrollContainer or f, "BOTTOMLEFT", S["space-3"], S["space-3"])
+    UI.Fill(status, "surface-glass"):SetAllPoints()
+    UI.Border(status, "gilt-line")
+    local coord = UI.Text(status, "numeric", "ink")
+    coord:SetPoint("LEFT", S["space-4"], 0)
+    local zoomIn = UI.Button(status, { text = "", width = 22, onClick = function() f:ZoomIn() end,
+        tooltip = { title = "Zoom in" } })
+    zoomIn:SetHeight(22)
+    zoomIn:SetPoint("RIGHT", -2, 0)
+    local zoomOut = UI.Button(status, { text = "", width = 22, onClick = function() f:ZoomOut() end,
+        tooltip = { title = "Zoom out" } })
+    zoomOut:SetHeight(22)
+    zoomOut:SetPoint("RIGHT", zoomIn, "LEFT", -S["space-2"], 0)
+    for btn, glyph in pairs({ [zoomIn] = "plus", [zoomOut] = "minus" }) do
+        local g = btn:CreateTexture(nil, "OVERLAY")
+        g:SetTexture(GLYPHS .. glyph .. ".tga")
+        g:SetSize(12, 12)
+        g:SetPoint("CENTER")
+        g:SetVertexColor(UI.RGBA("ink"))
+    end
+    local wait = 0
+    status:SetScript("OnUpdate", function(_, elapsed)
+        wait = wait - elapsed
+        if wait > 0 then return end
+        wait = 0.05
+        local x, y, you
+        if f.IsCanvasMouseFocus and f:IsCanvasMouseFocus() then
+            x, y = f:GetNormalizedCursorPosition()
+        else
+            local pos = C_Map.GetPlayerMapPosition(f:GetMapID(), "player")
+            if pos then x, y = pos:GetXY(); you = true end
+        end
+        if x and y and (x > 0 or y > 0) then
+            coord:SetValue(("%.1f, %.1f"):format(x * 100, y * 100) .. (you and "  |cff" .. T.color["ink-muted"].hex .. "you|r" or ""))
+        else
+            coord:SetValue("")
+        end
+    end)
+    chrome.status = status
+    self.worldMap = chrome
+end
+
 function M:SkinAll()
     self:SkinSpells()
     self:SkinLegacy()
@@ -462,6 +590,7 @@ function M:SkinAll()
     self:SkinSocial()
     self:SkinCommunities()
     self:SkinGroupFinder()
+    self:SkinWorldMap()
 end
 
 function M:OnEnable()
