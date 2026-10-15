@@ -49,6 +49,7 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 
 local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
 local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
+local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 --------------------------------------------------------------------------------
 -- The filter menu
@@ -347,6 +348,8 @@ function M:Collect(mapID)
     local on = self:Layers()
     local me = self:Player()
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
+    local info = C_Map.GetMapInfo(mapID)
+    local mapName = info and info.name
     local places = SuuUI.MapPlaces and SuuUI.MapPlaces() or {}
 
     -- quests to pick up: a pin per giver's place
@@ -375,11 +378,18 @@ function M:Collect(mapID)
                 end
                 -- who gives it, after its level ("Level 15 · Gorrik")
                 local from = giver and (" · " .. giver) or ""
+                -- one who walks: his route, drawn while you hover the pin
+                local route = starts.routes and starts.routes[row[3]] and starts.routes[row[3]][mapID]
+                if route then
+                    table.insert(lines, 1, { "|cff" .. T.color["ink-muted"].hex .. "Walks a route" .. (mapName and (" through " .. mapName) or "")
+                        .. ", shown on the map|r" })
+                end
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
                     pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
                     name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
                     more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3], quests = ids,
+                    route = route,
                 }
             end
         end
@@ -718,8 +728,9 @@ function M:Pin()
             if not p.group then return end
             UI.ShowTooltip(p, tipFor(p.group))
             self:HighlightQuests(p.group)
+            self:ShowRoutes(p.group)
         end)
-        pin:SetScript("OnLeave", function() UI.HideTooltip(); self:HighlightQuests(nil) end)
+        pin:SetScript("OnLeave", function() UI.HideTooltip(); self:HighlightQuests(nil); self:ShowRoutes(nil) end)
         pin:SetScript("OnClick", function(p)
             local g = p.group
             if not (g and g.distinct > 1) then return end
@@ -760,7 +771,70 @@ function M:HighlightQuests(group)
     end
 end
 
+-- A walking giver's route while you hover his pin: a dotted line in his
+-- pin's colour, a dot every 9 px on a surface rim, under the pins.
+local ROUTE_STEP, ROUTE_DOT = 9, 4
+function M:ShowRoutes(group)
+    local r = self.routes
+    if not r then
+        r = CreateFrame("Frame", nil, self.layer)
+        r:SetFrameLevel(self.layer:GetFrameLevel())
+        r.dots = {}
+        self.routes = r
+    end
+    for _, d in ipairs(r.dots) do d.rim:Hide(); d.fill:Hide() end
+    r:Hide()
+    local w, h, cs = self.lw, self.lh, self.lcs
+    if not (group and w and cs) then return end
+    local n = 0
+    local function dot(x, y, color)
+        n = n + 1
+        local d = r.dots[n]
+        if not d then
+            d = { rim = r:CreateTexture(nil, "ARTWORK", nil, 1), fill = r:CreateTexture(nil, "ARTWORK", nil, 2) }
+            d.rim:SetTexture(DISC)
+            d.rim:SetSize(ROUTE_DOT + 2, ROUTE_DOT + 2)
+            d.rim:SetVertexColor(UI.RGBA("surface"))
+            d.fill:SetTexture(DISC)
+            d.fill:SetSize(ROUTE_DOT, ROUTE_DOT)
+            r.dots[n] = d
+        end
+        d.fill:SetVertexColor(UI.RGBA(color))
+        for _, t in ipairs({ d.rim, d.fill }) do
+            t:ClearAllPoints()
+            t:SetPoint("CENTER", r, "TOPLEFT", x, -y)
+            t:Show()
+        end
+    end
+    for _, it in ipairs(group.items) do
+        local color = it.pin and it.pin.color or "ink"
+        for _, path in ipairs(it.route or {}) do
+            -- walk the path, a dot each ROUTE_STEP px of it
+            local left = 0
+            for i = 1, #path - 3, 2 do
+                local ax, ay = path[i] / 100 * w, path[i + 1] / 100 * h
+                local bx, by = path[i + 2] / 100 * w, path[i + 3] / 100 * h
+                local len = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+                local t = left
+                while t <= len do
+                    local k = len > 0 and t / len or 0
+                    dot(ax + (bx - ax) * k, ay + (by - ay) * k, color)
+                    t = t + ROUTE_STEP
+                end
+                left = t - len
+            end
+        end
+    end
+    if n == 0 then return end
+    r:SetScale(1 / cs)
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", self.layer, "TOPLEFT")
+    r:SetSize(w, h)
+    r:Show()
+end
+
 function M:ClearPins()
+    self:ShowRoutes(nil)
     for _, pin in ipairs(self.pins or {}) do
         pin:Hide()
         pin:ClearAllPoints()
@@ -781,6 +855,7 @@ function M:Layout()
     if not (cs and cs > 0) then return end
     local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
     if w <= 0 or h <= 0 then return end
+    self.lw, self.lh, self.lcs = w, h, cs
     local groups = merge(self.items, w, h)
     mergeGroups(groups)
     spread(groups)

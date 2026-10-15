@@ -279,6 +279,49 @@ for _, qid in ipairs(ids) do
     end
 end
 
+-- the routes of quest givers who walk (Warcaller Gorlach round Orgrimmar:
+-- his pin is where it starts, he's rarely there; found in game), per map,
+-- thinned to a point every 0.6% of the map (the dotted line the map draws
+-- while you hover his pin needs no more)
+local routes = {} -- npc -> map -> { { x, y, x, y, ... }, ... }
+local nRoutes = 0
+local function thin(path)
+    local out, lx, ly = {}, nil, nil
+    for i, c in ipairs(path) do
+        if type(c) == "table" and c[1] and c[1] >= 0 then
+            local far = not lx or (c[1] - lx) ^ 2 + (c[2] - ly) ^ 2 >= 0.36
+            if far or i == #path then
+                out[#out + 1] = c[1]; out[#out + 1] = c[2]
+                lx, ly = c[1], c[2]
+            end
+        end
+    end
+    return out
+end
+for npc in pairs(giverNames) do
+    local n = npc > 0 and npcs[npc]
+    for area, paths in pairs(n and type(n[NK.waypoints]) == "table" and n[NK.waypoints] or {}) do
+        local map = areaToMap[area]
+        if map and map > 0 and type(paths) == "table" then
+            for _, path in ipairs(paths) do
+                local flat = type(path) == "table" and thin(path) or {}
+                -- one who only shuffles about (a box under 3% of the map) stays a pin
+                local x0, x1, y0, y1 = 100, 0, 100, 0
+                for i = 1, #flat, 2 do
+                    x0, x1 = math.min(x0, flat[i]), math.max(x1, flat[i])
+                    y0, y1 = math.min(y0, flat[i + 1]), math.max(y1, flat[i + 1])
+                end
+                if #flat >= 4 and math.max(x1 - x0, y1 - y0) >= 3 then
+                    routes[npc] = routes[npc] or {}
+                    routes[npc][map] = routes[npc][map] or {}
+                    table.insert(routes[npc][map], flat)
+                    nRoutes = nRoutes + 1
+                end
+            end
+        end
+    end
+end
+
 -- quests started by an item: a pin where each mob (or object) that drops
 -- it lives, at most 8 of its spawn points per map. An item that drops from
 -- more than 10 kinds (the Pendant of Myzrael: 246, the OOX beacons: 50 to
@@ -555,6 +598,7 @@ w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (ques
 w("--                    (source: an NPC's ID, an object's negative) that drops it lives)")
 w("--   items[itemID] = name; givers[giver or source] = name")
 w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil), approx (true: the spot isn't known, only its area) }, ... }")
+w("--   routes[npcID] = { [uiMapID] = { { x, y, x, y, ... }, ... } }   (a quest giver who walks: his paths)")
 w("")
 w("local _, ns = ...")
 w("")
@@ -627,6 +671,26 @@ for _, map in ipairs(emaps) do
     end
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
 end
+w("}, routes = {")
+local rnpcs = {}
+for npc in pairs(routes) do rnpcs[#rnpcs + 1] = npc end
+table.sort(rnpcs)
+for _, npc in ipairs(rnpcs) do
+    local rmaps = {}
+    for map in pairs(routes[npc]) do rmaps[#rmaps + 1] = map end
+    table.sort(rmaps)
+    local parts = {}
+    for _, map in ipairs(rmaps) do
+        local paths = {}
+        for _, flat in ipairs(routes[npc][map]) do
+            local nums = {}
+            for i, v in ipairs(flat) do nums[i] = string.format("%.1f", v) end
+            paths[#paths + 1] = "{" .. table.concat(nums, ",") .. "}"
+        end
+        parts[#parts + 1] = string.format("[%d]={%s}", map, table.concat(paths, ","))
+    end
+    w(string.format("    [%d] = {%s},", npc, table.concat(parts, ",")))
+end
 w("} }")
 w("")
 local f = assert(io.open(out, "wb"))
@@ -682,5 +746,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins -> %s", nq, total, #maps, nEntrances, nDrops, out))
+print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, #rnpcs, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns -> %s", nServices, nRares, nMail, nChests, placesOut))
