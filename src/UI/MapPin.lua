@@ -16,6 +16,8 @@
 --       small = false,            -- the service size
 --       ring = nil,               -- a token: a second ring outside the edge
 --       count = nil,              -- a merged pin's count (2 and up)
+--       spin = nil,               -- true: the glyph turns, once in 6 s (a
+--                                 -- dungeon's portal); the disc stays still
 --   })
 --   pin:PinSize() -> its size in px
 --   pin:SetHighlight(state)  -- true: an ink ring around it (one of the
@@ -74,7 +76,13 @@ function Pin:SetData(d)
         self.glyph:SetVertexColor(UI.RGBA(d.color or "ink"))
         self.glyph:Show()
         self.char:Hide()
+        if d.spin then
+            if not self.spin:IsPlaying() then self.spin:Play() end
+        else
+            self.spin:Stop()
+        end
     else
+        self.spin:Stop()
         self.glyph:Hide()
         self.char:SetValue(d.char or "")
         self.char:SetColor(d.color or "ink")
@@ -106,6 +114,13 @@ function UI.MapPin(parent)
     b.fill = disc(b, "BORDER", 2)
     b.glyph = b:CreateTexture(nil, "ARTWORK")
     b.glyph:SetPoint("CENTER")
+    -- the turn, against the swirl's arms (they wind out clockwise)
+    b.spin = b.glyph:CreateAnimationGroup()
+    b.spin:SetLooping("REPEAT")
+    local turn = b.spin:CreateAnimation("Rotation")
+    turn:SetDegrees(360)
+    turn:SetDuration(6)
+    turn:SetOrigin("CENTER", 0, 0)
     b.char = UI.Text(b, "label", "ink")
     b.char:SetPoint("CENTER", 0, 0)
     -- "!" and "?" at 16 px, with the glyphs

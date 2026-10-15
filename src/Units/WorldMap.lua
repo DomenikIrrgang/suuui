@@ -425,7 +425,8 @@ function M:Collect(mapID)
         local show = (kind == "battleground" and on.places.battlegrounds) or (kind ~= "battleground" and on.places.dungeons)
         if show and (not faction or faction == me.faction) then
             items[#items + 1] = { x = e[1] / 100, y = e[2] / 100, fixed = true,
-                pin = { glyph = kind == "raid" and "gate" or kind == "battleground" and "swords" or "door" },
+                pin = kind == "battleground" and { glyph = "swords" }
+                    or { glyph = "swirl", spin = true, ring = kind == "raid" and "gilt" or nil },
                 name = e[3], detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon" }
         end
     end
@@ -789,7 +790,7 @@ function M:Layout()
                 data = best.pin
             end
             data = { glyph = data.glyph, char = data.char, color = data.color, edge = data.edge, small = data.small,
-                     ring = data.ring, count = g.distinct }
+                     ring = data.ring, spin = data.spin, count = g.distinct }
         end
         pin:SetData(data)
         pin.group = g

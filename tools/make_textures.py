@@ -341,6 +341,9 @@ GLYPHS = {
     # the game's repair icon in line: a block seen from above at three quarters, the horn
     # to the left, a tapered waist, a wide foot (a flat side view didn't read as repair)
     "anvil": "M6.5 7.5L10.5 3.5H21.5L17.5 7.5ZM6.5 7.5V12H17.5V7.5M17.5 12L21.5 8V3.5M6.5 7.5L1.5 9.5L6.5 11M9 12L10 16.5M15 12L14 16.5M6 16.5H18L19.5 21H4.5Z",
+    # a dungeon's portal: three arms turning out from the middle (Archimedean, r 1.5 to 9
+    # over 200°), balanced so it can spin on the map
+    "swirl": "M13.5 12.0L14.1 12.8L14.3 13.9L13.9 15.2L12.8 16.4L11.1 17.2L9.0 17.2L6.8 16.3L5.0 14.6L3.8 12.0L3.5 8.9M11.2 13.3L10.3 13.4L9.2 13.0L8.2 12.0L7.8 10.5L8.0 8.6L9.0 6.8L10.8 5.4L13.3 4.6L16.1 4.9L18.9 6.2M11.2 10.7L11.6 9.8L12.5 9.0L13.9 8.8L15.4 9.1L16.9 10.2L18.0 12.0L18.3 14.3L17.7 16.8L16.1 19.1L13.6 20.9",
     "bank": "M3 9l9-5 9 5H3zM5 9v9M9.7 9v9M14.3 9v9M19 9v9M3 20.5h18",
     "gavel": "M13 3l6 6-3 3-6-6 3-3zM13 9l-8.5 8.5M3 21h9",
     "tabard": "M8 3h8l3 3-2 2v13l-5-2.5L7 21V8L5 6l3-3zM10 10.5h4",
