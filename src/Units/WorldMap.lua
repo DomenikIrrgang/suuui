@@ -591,16 +591,28 @@ function M:Collect(mapID)
     -- rares and treasures
     if on.rares.rares then
         local rares = places.rares and places.rares[mapID] or {}
+        -- how many spots each spawns at here (hovering one rings them all)
+        local spots = {}
+        for i = 3, #rares, 3 do spots[rares[i]] = (spots[rares[i]] or 0) + 1 end
+        local muted = "|cff" .. T.color["ink-muted"].hex
         for i = 1, #rares, 3 do
-            local n = npcs[rares[i + 2]]
+            local id = rares[i + 2]
+            local n = npcs[id]
             if n and (not n[8] or eventOn(n[8], mapID)) then
                 local elite = n[5] == "rareElite"
                 local level = n[6] and (n[7] and n[7] ~= n[6] and (n[6] .. "-" .. n[7]) or tostring(n[6])) or nil
+                local route = places.routes and places.routes[id] and places.routes[id][mapID]
+                local lines = {}
+                if spots[id] > 1 then lines[#lines + 1] = { muted .. "Spawns at one of " .. spots[id] .. " spots, ringed on the map|r" } end
+                if route then
+                    lines[#lines + 1] = { muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r" }
+                end
                 items[#items + 1] = { x = rares[i] / 100, y = rares[i + 1] / 100, key = elite and "rareElite" or "rare",
                     pin = elite and { glyph = "skull", color = "gilt-text", edge = "gilt", ring = "gilt" }
                         or { glyph = "skull", color = "ink", edge = "coin-silver" },
                     name = n[1], detail = (elite and "Rare elite" or "Rare") .. (level and (" · level " .. level) or ""),
-                    kindName = elite and "Rare elite" or "Rare", uid = "n" .. rares[i + 2] }
+                    kindName = elite and "Rare elite" or "Rare", uid = "n" .. id, rare = id, route = route,
+                    more = #lines > 0 and lines or nil }
             end
         end
     end
@@ -801,23 +813,26 @@ function M:Pin()
 end
 
 -- Hovering a quest's pin rings every pin of the same quest (its giver, all
--- the places its item drops) and fades the rest, so they show at a glance.
-local function questsOf(g)
-    local set, any = {}, false
+-- the places its item drops), a rare's every spot it spawns at, and fades
+-- the rest, so they show at a glance.
+local function relatedOf(g)
+    local quests, rares, any = {}, {}, false
     for _, it in ipairs(g.items) do
-        for _, id in ipairs(it.quests or {}) do set[id] = true; any = true end
+        for _, id in ipairs(it.quests or {}) do quests[id] = true; any = true end
+        if it.rare then rares[it.rare] = true; any = true end
     end
-    return any and set or nil
+    return any and { quests = quests, rares = rares } or nil
 end
 function M:HighlightQuests(group)
-    local set = group and questsOf(group)
+    local set = group and relatedOf(group)
     for _, pin in ipairs(self.pins or {}) do
         if not set then
             pin:SetHighlight(nil)
         else
             local related = false
             for _, it in ipairs(pin.group and pin.group.items or {}) do
-                for _, id in ipairs(it.quests or {}) do if set[id] then related = true break end end
+                if it.rare and set.rares[it.rare] then related = true break end
+                for _, id in ipairs(it.quests or {}) do if set.quests[id] then related = true break end end
                 if related then break end
             end
             pin:SetHighlight(related and true or "dim")
@@ -860,9 +875,10 @@ function M:ShowRoutes(group)
             t:Show()
         end
     end
+    local drawn = {}
     for _, it in ipairs(group.items) do
         local color = it.pin and it.pin.color or "ink"
-        for _, path in ipairs(it.route or {}) do
+        for _, path in ipairs(it.route and not drawn[it.route] and it.route or {}) do
             -- walk the path, a dot each ROUTE_STEP px of it
             local left = 0
             for i = 1, #path - 3, 2 do
@@ -878,6 +894,7 @@ function M:ShowRoutes(group)
                 left = t - len
             end
         end
+        if it.route then drawn[it.route] = true end
     end
     if n == 0 then return end
     r:SetScale(1 / cs)

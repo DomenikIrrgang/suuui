@@ -351,8 +351,9 @@ local function thin(path)
     end
     return out
 end
-for npc in pairs(giverNames) do
-    local n = npc > 0 and npcs[npc]
+-- an NPC's routes: map -> { flat path, ... }, or nil
+local function npcRoutes(n)
+    local out
     for area, paths in pairs(n and type(n[NK.waypoints]) == "table" and n[NK.waypoints] or {}) do
         local map = areaToMap[area]
         if map and map > 0 and type(paths) == "table" then
@@ -365,14 +366,45 @@ for npc in pairs(giverNames) do
                     y0, y1 = math.min(y0, flat[i + 1]), math.max(y1, flat[i + 1])
                 end
                 if #flat >= 4 and math.max(x1 - x0, y1 - y0) >= 3 then
-                    routes[npc] = routes[npc] or {}
-                    routes[npc][map] = routes[npc][map] or {}
-                    table.insert(routes[npc][map], flat)
-                    nRoutes = nRoutes + 1
+                    out = out or {}
+                    out[map] = out[map] or {}
+                    table.insert(out[map], flat)
                 end
             end
         end
     end
+    return out
+end
+for npc in pairs(giverNames) do
+    local r = npc > 0 and npcRoutes(npcs[npc])
+    if r then
+        routes[npc] = r
+        for _, paths in pairs(r) do nRoutes = nRoutes + #paths end
+    end
+end
+
+-- routes written as { [npcID] = { [map] = { { x, y, ... }, ... } } }
+local function writeRoutes(w, all)
+    local ids = {}
+    for npc in pairs(all) do ids[#ids + 1] = npc end
+    table.sort(ids)
+    for _, npc in ipairs(ids) do
+        local rmaps = {}
+        for map in pairs(all[npc]) do rmaps[#rmaps + 1] = map end
+        table.sort(rmaps)
+        local parts = {}
+        for _, map in ipairs(rmaps) do
+            local paths = {}
+            for _, flat in ipairs(all[npc][map]) do
+                local nums = {}
+                for i, v in ipairs(flat) do nums[i] = string.format("%.1f", v) end
+                paths[#paths + 1] = "{" .. table.concat(nums, ",") .. "}"
+            end
+            parts[#parts + 1] = string.format("[%d]={%s}", map, table.concat(paths, ","))
+        end
+        w(string.format("    [%d] = {%s},", npc, table.concat(parts, ",")))
+    end
+    return #ids
 end
 
 -- quests started by an item: a pin where each mob (or object) that drops
@@ -615,13 +647,15 @@ end
 local nEventNpcs = 0
 
 local nServices, nRares = 0, 0
+local rareRoutes = {} -- a rare who walks: npc -> map -> paths
 for _, id in ipairs(npcIDs) do
     local n = npcs[id]
     local kinds = servicesOf(n)
     local rank = n[NK.rank]
     local rare = (rank == 4 and "rare") or (rank == 2 and "rareElite") or nil
     if #kinds > 0 or rare then
-        local spawns = spawnsAll(n, NK.spawns, rare and 6 or 2)
+        -- (a rare: every spot it spawns at, up to 20 a map; a service NPC 2)
+        local spawns = spawnsAll(n, NK.spawns, rare and 20 or 2)
         if next(spawns) then
             local event = npcEvent(n)
             if event then nEventNpcs = nEventNpcs + 1 end
@@ -632,6 +666,10 @@ for _, id in ipairs(npcIDs) do
                     if #kinds > 0 then add(services, map, c[1], c[2], id); nServices = nServices + 1 end
                     if rare then add(rares, map, c[1], c[2], id); nRares = nRares + 1 end
                 end
+            end
+            if rare then
+                local r = npcRoutes(n)
+                if r then rareRoutes[id] = r end
             end
         end
     end
@@ -765,25 +803,7 @@ for _, map in ipairs(emaps) do
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
 end
 w("}, routes = {")
-local rnpcs = {}
-for npc in pairs(routes) do rnpcs[#rnpcs + 1] = npc end
-table.sort(rnpcs)
-for _, npc in ipairs(rnpcs) do
-    local rmaps = {}
-    for map in pairs(routes[npc]) do rmaps[#rmaps + 1] = map end
-    table.sort(rmaps)
-    local parts = {}
-    for _, map in ipairs(rmaps) do
-        local paths = {}
-        for _, flat in ipairs(routes[npc][map]) do
-            local nums = {}
-            for i, v in ipairs(flat) do nums[i] = string.format("%.1f", v) end
-            paths[#paths + 1] = "{" .. table.concat(nums, ",") .. "}"
-        end
-        parts[#parts + 1] = string.format("[%d]={%s}", map, table.concat(paths, ","))
-    end
-    w(string.format("    [%d] = {%s},", npc, table.concat(parts, ",")))
-end
+local nRouteGivers = writeRoutes(w, routes)
 w("} }")
 w("")
 local f = assert(io.open(out, "wb"))
@@ -804,6 +824,7 @@ w("--               :riding, :pet, :other), battlemaster,")
 w("--               guild, tabard, stable, repair, food, goods, vendor")
 w("--   services[uiMapID], rares[uiMapID] = { x, y, npcID, x, y, npcID, ... }   (x, y in percent)")
 w("--   mailboxes[uiMapID] = { x, y, x, y, ... }; treasures[uiMapID] = { x, y, name, ... }")
+w("--   routes[npcID] = { [uiMapID] = { { x, y, x, y, ... }, ... } }   (a rare who walks: his paths)")
 w("")
 w("local _, ns = ...")
 w("")
@@ -834,6 +855,8 @@ flat("services", services, 3)
 flat("rares", rares, 3)
 flat("mailboxes", mailboxes, 2)
 flat("treasures", treasures, 3)
+w("}, routes = {")
+local nRareRoutes = writeRoutes(w, rareRoutes)
 w("} }")
 w("")
 f = assert(io.open(placesOut, "wb"))
@@ -841,5 +864,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, #rnpcs, out))
-print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, placesOut))
+print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
+print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
