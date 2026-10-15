@@ -9,7 +9,7 @@
 --
 --   local pin = UI.MapPin(parent)
 --   pin:SetData({
---       glyph = "anvil",          -- a glyph's name, or
+--       glyph = "hammer",         -- a glyph's name, or
 --       char = "!",               -- a character ("!", "?", "3")
 --       color = "ink",            -- the glyph's (or character's) token
 --       edge = "gilt-line",       -- the edge's token
