@@ -815,6 +815,10 @@ function ns.Probe.Command(arg)
         ns.LfgProbe.Command(rest)
         return
     end
+    if sub == "map" then
+        ns.MapProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
