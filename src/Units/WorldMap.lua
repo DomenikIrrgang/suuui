@@ -44,6 +44,7 @@ local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 
 local MERGE_RADIUS = 32 -- px on screen
+local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
 
 --------------------------------------------------------------------------------
 -- The filter menu
@@ -437,7 +438,7 @@ local function spread(groups)
                 local aMoves = not a.fixed and (a.small or #a.items > 1)
                 local bMoves = not b.fixed and (b.small or #b.items > 1)
                 if aMoves or bMoves then
-                    local need = ((a.small and 17 or 22) + (b.small and 17 or 22)) / 2
+                    local need = ((a.small and PIN_SMALL or PIN) + (b.small and PIN_SMALL or PIN)) / 2
                     local dx, dy = b.x - a.x, b.y - a.y
                     local d = math.sqrt(dx * dx + dy * dy)
                     if d < need then

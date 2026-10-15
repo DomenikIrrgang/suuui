@@ -525,7 +525,13 @@ function M:RestyleQuestLog()
         -- the zone headers in label ink, hovered or not (the game switches a
         -- header's font on hover, so a header first seen hovered read as a
         -- title; found in game)
-        local label = SuuUI.Fonts.Get("label")
+        -- (their own font in ink: the button takes its font's colour on hover)
+        local label = _G.SuuUIQuestHeaderFont
+        if not label then
+            label = CreateFont("SuuUIQuestHeaderFont")
+            label:CopyFontObject(SuuUI.Fonts.Get("label"))
+            label:SetTextColor(UI.RGBA("ink"))
+        end
         for _, pool in ipairs({ list.headerFramePool, list.campaignHeaderMinimalFramePool }) do
             if pool and pool.EnumerateActive then
                 for row in pool:EnumerateActive() do

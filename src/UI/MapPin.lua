@@ -1,8 +1,9 @@
 -- UI/MapPin.lua
 -- One mark on the world map (design component MapPin): a diamond on surface
 -- with an edge, so it reads on any terrain, and a glyph or a character in
--- it. Quests, places, rares and treasures are map-pin size (22 px, an 11 px
--- glyph); services are small (17 px, a 9 px glyph). A merged pin carries a
+-- it. Quests, places, rares and treasures are 26 px with a 13 px glyph;
+-- services are small, 21 px with an 11 px glyph (the design's 22 and 17 px
+-- read too small on the map; found in game). A merged pin carries a
 -- count in micro on a surface-raised tab at its lower right; a rare elite a
 -- second ring.
 --
@@ -21,11 +22,11 @@
 
 local _, ns = ...
 
-local UI, T = ns.UI, ns.Tokens
+local UI = ns.UI
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local SIZE, SMALL = T.size["map-pin"], 17
+local SIZE, SMALL = 26, 21
 local ROOT2 = math.sqrt(2)
 
 -- A square turned 45° whose corners touch a box `box` px wide.
@@ -59,7 +60,7 @@ function Pin:SetData(d)
     self.edge:SetVertexColor(UI.RGBA(d.edge or "gilt-line"))
     fit(self.fill, size - 3)
     self.fill:SetVertexColor(UI.RGBA("surface"))
-    local inner = d.small and 9 or 11
+    local inner = d.small and 11 or 13
     if d.glyph then
         self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
         self.glyph:SetSize(inner, inner)
