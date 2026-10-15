@@ -31,7 +31,8 @@
   - promote, demote and remove;
   - the guild information and the guild log;
   - guild settings: ranks, permissions, bank tabs and the Discord link.
-- **Group Finder** (first version): one list of groups and players looking for groups, from the game's group finder and from public chat (LookingForGroup, General, Trade, Say and Yell). Filters and an "Only what fits me" switch. Whatever concerns you is highlighted at the top, for example a group for what you're listed for that needs your role, or one for a quest in your log. Whisper or Invite right from the list. SuuUI joins LookingForGroup for this and keeps it out of your chat windows.
+- **Group Finder** (first version): one list of groups and players looking for groups, from the game's group finder and from public chat (LookingForGroup, General, Trade, Say and Yell). Filters and an "Only what fits me" switch. Whatever concerns you is highlighted at the top, for example a group for what you're listed for that needs your role, or one for a quest in your log. Whisper or Invite right from the list. Each group shows what it has (its members' roles) and what it still needs, your role highlighted. SuuUI joins LookingForGroup for this and keeps it out of your chat windows. Listing yourself happens in the game's own panel, now in SuuUI's look.
+- **Group invites that ask for your role** come as a notification card with the role choices on it.
 - **Right-click menus** in SuuUI's look. The game's dropdown menus and popups are restyled while they show.
 
 ### Changed
