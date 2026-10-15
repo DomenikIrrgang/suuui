@@ -461,7 +461,7 @@ end
 -- title away, the quest log and its details restyled in place (their
 -- clicks stay the game's), the game's own filter menu, side-panel toggle
 -- and maximize in SuuUI's look, and a status line: the coordinates under
--- the cursor (yours when it's off the map) and zoom. Left where the game
+-- the cursor (yours when it's off the map). Left where the game
 -- places it (it has a maximized mode of its own).
 --------------------------------------------------------------------------------
 
@@ -794,30 +794,16 @@ function M:SkinWorldMap()
     if _G.QuestMapFrame_ShowQuestDetails then
         hooksecurefunc("QuestMapFrame_ShowQuestDetails", function() C_Timer.After(0, function() self:RestyleQuestLog() end) end)
     end
-    -- the status line: coordinates and zoom, over the map's bottom left
+    -- the status line: the coordinates, over the map's bottom left (no zoom
+    -- buttons: the mouse wheel zooms, asked in game)
     local status = CreateFrame("Frame", nil, f)
     status:SetFrameLevel(f:GetFrameLevel() + 450)
-    status:SetSize(220, 26)
+    status:SetSize(140, 26)
     status:SetPoint("BOTTOMLEFT", f.ScrollContainer or f, "BOTTOMLEFT", S["space-3"], S["space-3"])
     UI.Fill(status, "surface-glass"):SetAllPoints()
     UI.Border(status, "gilt-line")
     local coord = UI.Text(status, "numeric", "ink")
     coord:SetPoint("LEFT", S["space-4"], 0)
-    local zoomIn = UI.Button(status, { text = "", width = 22, onClick = function() f:ZoomIn() end,
-        tooltip = { title = "Zoom in" } })
-    zoomIn:SetHeight(22)
-    zoomIn:SetPoint("RIGHT", -2, 0)
-    local zoomOut = UI.Button(status, { text = "", width = 22, onClick = function() f:ZoomOut() end,
-        tooltip = { title = "Zoom out" } })
-    zoomOut:SetHeight(22)
-    zoomOut:SetPoint("RIGHT", zoomIn, "LEFT", -S["space-2"], 0)
-    for btn, glyph in pairs({ [zoomIn] = "plus", [zoomOut] = "minus" }) do
-        local g = btn:CreateTexture(nil, "OVERLAY")
-        g:SetTexture(GLYPHS .. glyph .. ".tga")
-        g:SetSize(12, 12)
-        g:SetPoint("CENTER")
-        g:SetVertexColor(UI.RGBA("ink"))
-    end
     local wait = 0
     status:SetScript("OnUpdate", function(_, elapsed)
         wait = wait - elapsed
