@@ -306,15 +306,15 @@ function M:Collect(mapID)
     if on.quests.available or on.quests.repeatable then
         local done = completedSet()
         for _, row in ipairs(starts.maps and starts.maps[mapID] or {}) do
-            local best, list, ids = nil, {}, {}
-            for i = 3, #row do
+            local best, list = nil, {}
+            local giver = starts.givers and starts.givers[row[3]]
+            for i = 4, #row do
                 local id = row[i]
                 local q = starts.quests[id]
                 local state, difficulty, level
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
                     list[#list + 1] = { name = q[1], level = level, difficulty = difficulty, state = state }
-                    ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty, state = state } end
                 end
@@ -325,11 +325,13 @@ function M:Collect(mapID)
                 for i, q in ipairs(list) do
                     if i > 1 then lines[#lines + 1] = { q.name .. "  |cff" .. T.color["ink-muted"].hex .. "Level " .. q.level .. "|r" } end
                 end
+                -- who gives it, after its level ("Level 15 · Gorrik")
+                local from = giver and (" · " .. giver) or ""
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
                     pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
-                    name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level,
-                    more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "q" .. table.concat(ids, ","),
+                    name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
+                    more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3],
                 }
             end
         end

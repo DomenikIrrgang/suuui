@@ -218,16 +218,18 @@ local function spawnsOf(row, key)
     return out
 end
 
-local pins = {}      -- map -> "x,y" -> { x, y, quests }
+local pins = {}      -- map -> "x,y,giver" -> { x, y, giver, quests }
 local used = {}      -- quest IDs with a pin
-local function pin(map, x, y, qid)
+local giverNames = {} -- giver (an NPC's ID, an object's as a negative) -> name
+local function pin(map, x, y, qid, giver, name)
     local m = pins[map] or {}
     pins[map] = m
-    local key = string.format("%.1f,%.1f", x, y)
-    local p = m[key] or { x = x, y = y, quests = {} }
+    local key = string.format("%.1f,%.1f,%d", x, y, giver)
+    local p = m[key] or { x = x, y = y, giver = giver, quests = {} }
     m[key] = p
     p.quests[#p.quests + 1] = qid
     used[qid] = true
+    if type(name) == "string" then giverNames[giver] = name end
 end
 
 -- who starts each quest: the quest's own givers, and every NPC or object
@@ -261,12 +263,12 @@ for _, qid in ipairs(ids) do
     if starts then
         for _, npc in ipairs(starts[1]) do
             for map, list in pairs(spawnsOf(npcs[npc], NK.spawns)) do
-                for _, c in ipairs(list) do pin(map, c[1], c[2], qid) end
+                for _, c in ipairs(list) do pin(map, c[1], c[2], qid, npc, npcs[npc][NK.name]) end
             end
         end
         for _, obj in ipairs(starts[2]) do
             for map, list in pairs(spawnsOf(objects[obj], OK.spawns)) do
-                for _, c in ipairs(list) do pin(map, c[1], c[2], qid) end
+                for _, c in ipairs(list) do pin(map, c[1], c[2], qid, -obj, objects[obj][OK.name]) end
             end
         end
     end
@@ -463,7 +465,8 @@ w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_que
 w("--   quests[id] = { name, minLevel, level, races (mask), classes (mask), preGroup (all), preSingle (any),")
 w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 needs an event), parentQuest,")
 w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value} }")
-w("--   maps[uiMapID] = { { x, y, questID, ... }, ... }   (x, y in percent)")
+w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
+w("--   givers[giver] = name")
 w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil) }, ... }")
 w("")
 w("local _, ns = ...")
@@ -491,11 +494,16 @@ for _, map in ipairs(maps) do
     local rows = {}
     for _, k in ipairs(keys) do
         local p = pins[map][k]
-        rows[#rows + 1] = string.format("{%.1f,%.1f,%s}", p.x, p.y, table.concat(p.quests, ","))
+        rows[#rows + 1] = string.format("{%.1f,%.1f,%d,%s}", p.x, p.y, p.giver, table.concat(p.quests, ","))
         total = total + 1
     end
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
 end
+w("}, givers = {")
+local giverIDs = {}
+for g in pairs(giverNames) do giverIDs[#giverIDs + 1] = g end
+table.sort(giverIDs)
+for _, g in ipairs(giverIDs) do w(string.format("    [%d] = %q,", g, giverNames[g])) end
 w("}, entrances = {")
 local emaps = {}
 for map in pairs(entrances) do emaps[#emaps + 1] = map end
