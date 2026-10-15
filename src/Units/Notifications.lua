@@ -536,6 +536,12 @@ function M:Remember(h, f)
     for _, r in ipairs({ f:GetRegions() }) do
         if r:GetObjectType() == "Texture" then s.alphas[r] = r:GetAlpha() end
     end
+    -- a button's state textures (not always among its regions)
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture",
+                           "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
+        local t = f[get] and f[get](f)
+        if t and s.alphas[t] == nil then s.alphas[t] = t:GetAlpha() end
+    end
     local fs = f.GetFontString and f:GetFontString()
     if fs then s.font, s.fs, s.color = fs:GetFontObject(), fs, { fs:GetTextColor() } end
     if f.GetFontObject and f:GetObjectType() == "EditBox" then s.font = f:GetFontObject() end
@@ -646,8 +652,10 @@ function M:CardData(h)
     local d = {
         id = h.id, kind = "action", tone = kind.tone, category = kind.category,
         title = plain(text) and text or (kind.title or ""), icon = { glyph = kind.glyph },
-        host = { buttons = #h.buttons() },
+        host = { buttons = #h.buttons(), roles = h.roles and #h.roles() or nil },
     }
+    local warning = h.warning and h.warning()
+    if plain(warning) and warning and warning ~= "" then d.warning = warning end
     local duration, remaining = h.time()
     if duration then d.duration, d.remaining = duration, remaining end
     if kind.item then
@@ -702,6 +710,105 @@ function M:Attach(h)
         eb:SetFrameLevel(card:GetFrameLevel() + 10)
         self:StyleEditBox(h, eb, card.confirmBox)
     end
+    if h.roles and card.rolesRow then
+        for i, b in ipairs(h.roles()) do self:HostRole(h, card, b, i) end
+    end
+end
+
+-- A group invite's role buttons (the game's, with their checkboxes, clicks
+-- and tooltips) as SuuUI's round role toggles on the card: the icon in a
+-- circle, the role's name under it, a 14px box on its corner. On: arcane;
+-- one the game has disabled (your class can't, or the group has no room;
+-- its tooltip says which) at opacity-disabled.
+local ROLE_TEX = { TANK = "RoleTank.tga", HEALER = "RoleHealer.tga", DAMAGER = "RoleDamage.tga" }
+local ROLE_WORD = { TANK = TANK or "Tank", HEALER = HEALER or "Healer", DAMAGER = DAMAGER or "Damage" }
+local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+
+function M:RoleArt(b)
+    local art = self.arts[b]
+    if art then return art end
+    art = CreateFrame("Frame", nil, self.stack)
+    art:EnableMouse(false)
+    local function circle(file, layer)
+        local t = art:CreateTexture(nil, layer)
+        t:SetTexture(TEXTURES .. file)
+        t:SetAllPoints()
+        return t
+    end
+    art.fill = circle("CircleFill.tga", "BACKGROUND")
+    art.edge = circle("CircleEdge.tga", "BORDER")
+    art.glyph = art:CreateTexture(nil, "ARTWORK")
+    art.glyph:SetSize(18, 18)
+    art.glyph:SetPoint("CENTER")
+    art.word = UI.Text(art, "caption", "ink-muted")
+    art.word:SetPoint("TOP", art, "BOTTOM", 0, -S["space-2"])
+    art.box = CreateFrame("Frame", nil, art)
+    art.box:SetSize(14, 14)
+    art.box:EnableMouse(false)
+    art.boxFill = UI.Fill(art.box, "surface-sunk")
+    art.boxFill:SetAllPoints()
+    art.boxEdge = UI.Border(art.box, "gilt-line")
+    art.tick = art.box:CreateTexture(nil, "OVERLAY")
+    art.tick:SetTexture(TEXTURES .. "Glyphs\\check.tga")
+    art.tick:SetSize(10, 10)
+    art.tick:SetPoint("CENTER")
+    art.tick:SetVertexColor(UI.RGBA("on-signal"))
+    local cb = b.checkButton
+    function art.draw()
+        if not art:IsShown() then return end
+        local on = cb and cb:GetChecked() and true or false
+        art.edge:SetVertexColor(UI.RGBA(on and "arcane" or (art.hover and "gilt" or "gilt-line")))
+        art.fill:SetVertexColor(UI.RGBA(on and "surface-raised" or "surface-sunk"))
+        art.glyph:SetVertexColor(UI.RGBA(on and "ink" or "ink-faint"))
+        art.word:SetColor(on and "ink" or "ink-muted")
+        art.box:SetShown(cb and cb:IsShown() and true or false)
+        art.boxFill:SetColorTexture(UI.RGBA(on and "arcane" or "surface-sunk"))
+        art.boxEdge:SetColor(on and "arcane" or "gilt-line")
+        art.tick:SetShown(on)
+        art:SetAlpha(b:IsEnabled() and 1 or T.opacity["opacity-disabled"])
+    end
+    for _, m in ipairs({ "Enable", "Disable", "SetEnabled" }) do hooksecurefunc(b, m, art.draw) end
+    if cb then
+        for _, m in ipairs({ "SetChecked", "Show", "Hide" }) do hooksecurefunc(cb, m, art.draw) end
+        cb:HookScript("OnClick", art.draw)
+    end
+    b:HookScript("OnEnter", function() art.hover = true; art.draw() end)
+    b:HookScript("OnLeave", function() art.hover = false; art.draw() end)
+    self.arts[b] = art
+    return art
+end
+
+function M:HostRole(h, card, b, i)
+    local cb = b.checkButton
+    local s = self:Remember(h, b)
+    for r in pairs(s.alphas) do r:SetAlpha(0) end
+    b:SetFrameStrata(card:GetFrameStrata())
+    b:SetFrameLevel(card:GetFrameLevel() + 10)
+    b:SetSize(36, 36)
+    b:ClearAllPoints()
+    b:SetPoint("TOP", card.rolesRow, "TOPLEFT", 30 + (i - 1) * 60, 0)
+    if cb then
+        local cs = self:Remember(h, cb)
+        for r in pairs(cs.alphas) do r:SetAlpha(0) end
+        -- 14px on screen (the game draws it at 0.7)
+        local scale = cb:GetScale() > 0 and cb:GetScale() or 1
+        cb:SetSize(14 / scale, 14 / scale)
+        cb:ClearAllPoints()
+        cb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 3 / scale, -3 / scale)
+    end
+    local art = self:RoleArt(b)
+    art:SetFrameStrata(card:GetFrameStrata())
+    art:SetFrameLevel(card:GetFrameLevel() + 9)
+    art:ClearAllPoints()
+    art:SetAllPoints(b)
+    art.glyph:SetTexture(TEXTURES .. (ROLE_TEX[b.role] or "RoleDamage.tga"))
+    art.word:SetValue(ROLE_WORD[b.role] or "")
+    if cb then
+        art.box:ClearAllPoints()
+        art.box:SetPoint("BOTTOMRIGHT", art, "BOTTOMRIGHT", 3, -3)
+    end
+    art:Show()
+    art.draw()
 end
 
 -- A Blizzard popup: its buttons, text, time left and edit box.
@@ -738,6 +845,7 @@ function M:HostFrame(dialog, which, kind, parts)
     end
     h.which, h.kind = which, kind
     h.buttons, h.text, h.time, h.editBox = parts.buttons, parts.text, parts.time or function() end, parts.editBox
+    h.roles, h.warning = parts.roles, parts.warning
     h.id = "popup:" .. (dialog:GetName() or tostring(dialog))
     -- the popup itself out of sight (its parts come onto the card); kept on
     -- screen by its clamp otherwise
@@ -780,6 +888,29 @@ local function battlefieldReady()
 end
 
 local WINDOWS = {
+    -- a group invite that asks for your role (the group finder's; not a
+    -- shared popup): its role buttons come onto the card too
+    {
+        name = "LFGInvitePopup",
+        kind = { category = "Party invite", glyph = "people", primary = 1 },
+        parts = function(f)
+            return {
+                buttons = function() return shownButtons(_G.LFGInvitePopupAcceptButton, _G.LFGInvitePopupDeclineButton) end,
+                text = function() return _G.LFGInvitePopupText and _G.LFGInvitePopupText:GetText() end,
+                time = function()
+                    local total, left = StaticPopupTimeoutSec, f.timeOut
+                    if plain(total) and plain(left) and type(total) == "number" and type(left) == "number" and total > 0 then
+                        return total, math.max(0, left)
+                    end
+                end,
+                roles = function() return f.RoleButtons or {} end,
+                warning = function()
+                    local w = f.QueueWarningText
+                    if w and w:IsShown() then return w:GetText() end
+                end,
+            }
+        end,
+    },
     {
         name = "PVPReadyDialog",
         kind = { category = "Battleground", glyph = "flag", primary = 1, title = "Your battleground is ready" },
@@ -1028,6 +1159,8 @@ function M:OnEnable()
         end)
     end
     self:HookWindows()
+    -- request windows whose addon loads later
+    self:OnGameEvent("ADDON_LOADED", function() self:HookWindows() end)
     -- notes about the game
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "PLAYER_ENTERING_WORLD" }) do

@@ -15,7 +15,12 @@
 --               label, quality }, confirmText, actions = { { label,
 --               variant = "primary"|"quiet"|"danger", onClick,
 --               count, pressed, disabled, tooltip } },
---               host = { buttons = n, confirm = true }, closable, onClose })
+--               host = { buttons = n, confirm = true, roles = n }, warning,
+--               closable, onClose })
+--   0.13: host.roles = n: a row for the game's role buttons (a group invite
+--     that asks for your role; the owner places them in n.rolesRow);
+--     warning = "…": an amber caption under it (the invite takes you out
+--     of your queue).
 --   0.13: presence = { online, source ("Battle.net", "Friend", the guild's
 --     name), people = { { name, color (a class token), tag (a BattleTag's
 --     #1234), detail ("Kaelith · World of Warcraft Forever"), whisper = fn,
@@ -29,6 +34,7 @@
 --   n:SetRemaining(seconds)   -- the drain and the time, without a layout
 --   n:SetTitle(text)          -- a title that counts (logging out in 12 s)
 --   n.actionsRow, n.confirmBox  -- where hosted buttons and an edit box go
+--   n.rolesRow                  -- where hosted role buttons go (0.13)
 --
 -- `host`: the actions (and the confirm box) belong to someone else, Blizzard's
 -- own popup buttons placed by the owner into n.actionsRow (right-aligned,
@@ -52,6 +58,8 @@ local PAD = S["space-4"]
 local ICON = 24
 local ACTION_H = 26
 local FIELD_H = 30
+-- a row of round role toggles: the 36px icon and its word under it
+local ROLES_H = 36 + S["space-2"] + T.type.caption.lineHeight
 
 local TONE_EDGE = { warning = "amber", danger = "ember" }
 
@@ -298,6 +306,8 @@ function Note:SetData(d)
     self.status:Hide()
     self.source:Hide()
     self.namesRow:Hide()
+    self.rolesRow:Hide()
+    self.warningRow:Hide()
     self.onCardClick = nil
     if d.presence then return self:SetPresence(d) end
     self.icon:Show()
@@ -364,6 +374,15 @@ function Note:SetData(d)
         place(self.itemRow, 28)
     else
         self.itemRow:Hide()
+    end
+    -- the role choices (hosted), and a warning under them
+    if d.host and d.host.roles and d.host.roles > 0 then
+        place(self.rolesRow, ROLES_H)
+    end
+    if d.warning and d.warning ~= "" then
+        self.warningText:SetWidth(WIDTH - PAD * 2)
+        self.warningText:SetValue(d.warning)
+        place(self.warningRow, math.ceil(self.warningText:GetStringHeight()))
     end
     -- the confirm field
     if d.confirmText then
@@ -504,6 +523,15 @@ function UI.Notification(parent)
     n.untilGlyph:SetPoint("LEFT")
     n.untilText = UI.Text(n.untilRow, "caption", "ink-muted")
     n.untilText:SetPoint("LEFT", n.untilGlyph, "RIGHT", S["space-2"], 0)
+
+    n.rolesRow = CreateFrame("Frame", nil, n)
+    n.rolesRow:Hide()
+    n.warningRow = CreateFrame("Frame", nil, n)
+    n.warningRow:Hide()
+    n.warningText = UI.Text(n.warningRow, "caption", "amber")
+    n.warningText:SetPoint("TOPLEFT")
+    n.warningText:SetJustifyH("LEFT")
+    n.warningText:SetWordWrap(true)
 
     n.actionsRow = CreateFrame("Frame", nil, n)
 
