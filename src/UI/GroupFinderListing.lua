@@ -430,7 +430,9 @@ function L:LayoutActivities()
         lr.Checkbox:SetPoint("RIGHT", lr.Text, "LEFT", -S["space-2"], 0)
         lr:SetShown(not custom)
     end
-    local treeTop = 14 + S["space-1"] + 30 + S["space-4"]
+    -- under the Playstyle / Voice Chat row and room for the details' label
+    -- (it overlapped Voice Chat), so the tree and the field start level
+    local treeTop = 14 + S["space-1"] + 30 + S["space-4"] + 14 + S["space-1"]
     self.tree:ClearAllPoints()
     self.tree:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -treeTop)
     self.tree:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", 0, 0)
