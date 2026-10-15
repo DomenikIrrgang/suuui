@@ -517,6 +517,37 @@ function M:RestyleQuestLog()
     if d then
         for _, key in ipairs({ "Bg", "SealMaterialBG" }) do if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end end
         if d.BorderFrame then d.BorderFrame:SetAlpha(0) end
+        if not d.suuStyled then
+            d.suuStyled = true
+            -- the game sizes the details for its taller window (502 px, its
+            -- text 430): as much shorter as the window, or the rewards and
+            -- Abandon / Share / Track hang below it (found in game)
+            d:SetHeight(d:GetHeight() - CUT)
+            if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - CUT) end
+            -- the strip with Back: its art away, a hairline under it
+            local back = d.BackFrame
+            if back then
+                for _, r in ipairs({ back:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
+                local line = UI.Hairline(back, "gilt-line")
+                line:SetPoint("BOTTOMLEFT", 6, 8)
+                line:SetPoint("BOTTOMRIGHT", -6, 8)
+            end
+            -- the rewards: surface instead of the brown art (still opaque:
+            -- the text scrolls under it), a hairline on top, the label in ink
+            local rewards = d.RewardsFrameContainer and d.RewardsFrameContainer.RewardsFrame
+            if rewards then
+                for _, key in ipairs({ "Top", "Bottom", "Background" }) do if rewards[key] then rewards[key]:SetAlpha(0) end end
+                local fill = UI.Fill(rewards, "surface", "BACKGROUND")
+                fill:SetAllPoints()
+                local line = UI.Hairline(rewards, "gilt-line")
+                line:SetPoint("TOPLEFT", 6, 0)
+                line:SetPoint("TOPRIGHT", -6, 0)
+                if rewards.Label then
+                    rewards.Label:SetFontObject(SuuUI.Fonts.Get("label"))
+                    rewards.Label:SetTextColor(UI.RGBA("ink"))
+                end
+            end
+        end
     end
     -- the list's ornate frame and parchment away
     local list = _G.QuestScrollFrame
