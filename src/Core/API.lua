@@ -439,6 +439,10 @@ end
 -- their files' headers.
 function API.QuestStarts() return ns.QuestStarts or {} end
 function API.MapPlaces() return ns.MapPlaces or {} end
+-- 0.14: every area overlay of Forever's maps by map art (Data/MapOverlays.lua,
+-- from the client tables: tools/update_map_overlays.sh), for drawing the
+-- areas you haven't explored: { [uiMapArtID] = { { w, h, x, y, fileDataID, ... } } }
+function API.MapOverlays() return ns.MapOverlays or {} end
 
 function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]

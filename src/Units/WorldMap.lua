@@ -26,7 +26,7 @@
 
 local DEFAULT_FILTERS = {
     quests = { "objectives", "available", "repeatable", "items" },
-    places = { "dungeons", "battlegrounds", "flight", "campfires" },
+    places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
     services = { "inn", "repair" },
     trading = { "mail" },
     trainers = { "class" },
@@ -63,6 +63,7 @@ local GROUPS = {
         { value = "trivial", label = "Trivial quests" },
     } },
     { key = "places", label = "Places", kind = "toggles", options = {
+        { value = "unexplored", label = "Unexplored areas" },
         { value = "dungeons", label = "Dungeon and raid entrances" },
         { value = "battlegrounds", label = "Battleground entrances" },
         { value = "flight", label = "Flight masters" },
@@ -102,7 +103,7 @@ local GROUPS = {
 -- Services to Trading, the trainers to Trainers), so an earlier layout's
 -- choices carry over; new options start off.
 local LEGACY = { classTrainer = { "trainers", "class" }, trainers = { "trainers", "professions" } }
-local FILTERS_VERSION = 2 -- 2: quests from items (on for everyone once)
+local FILTERS_VERSION = 3 -- 2: quests from items, 3: unexplored areas (each on for everyone once)
 function M:Saved()
     local saved = self:Get("filters") or DEFAULT_FILTERS
     local owner = {}
@@ -120,10 +121,12 @@ function M:Saved()
             end
         end
     end
-    if (saved.v or 1) < 2 then
-        local has = false
-        for _, v in ipairs(out.quests) do if v == "items" then has = true end end
-        if not has then table.insert(out.quests, "items") end
+    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" } }) do
+        if (saved.v or 1) < new[1] then
+            local has = false
+            for _, v in ipairs(out[new[2]]) do if v == new[3] then has = true end end
+            if not has then table.insert(out[new[2]], new[3]) end
+        end
     end
     return out
 end
@@ -806,11 +809,81 @@ function M:QueueLayout()
     C_Timer.After(0, function() self:Layout() end)
 end
 
+--------------------------------------------------------------------------------
+-- Unexplored areas: the map's overlays you haven't explored, drawn as the
+-- game draws the explored ones (Blizzard_SharedMapDataProviders, read
+-- 2026-10-15), tinted a little darker and bluer so the map still says where
+-- you haven't been. From SuuUI.MapOverlays (Forever's client tables).
+--------------------------------------------------------------------------------
+
+local TINT = { 0.62, 0.7, 0.92 }
+
+function M:Reveal(mapID)
+    for _, t in ipairs(self.revealUsed or {}) do t:Hide(); table.insert(self.revealFree, t) end
+    self.revealUsed = {}
+    local f = self.map
+    local on = self:Layers()
+    if not (mapID and on.places.unexplored and SuuUI.MapOverlays) then return end
+    -- the overlays are the base layer's: drawn only on it
+    local container = f:GetCanvasContainer()
+    local layerIndex = container.GetCurrentLayerIndex and container:GetCurrentLayerIndex() or 1
+    self.revealLayer = layerIndex
+    if layerIndex ~= 1 then return end
+    local art = C_Map.GetMapArtID and C_Map.GetMapArtID(mapID)
+    local overlays = art and SuuUI.MapOverlays()[art]
+    local layers = C_Map.GetMapArtLayers and C_Map.GetMapArtLayers(mapID)
+    local layer = layers and layers[1]
+    if not (overlays and layer) then return end
+    local explored = {}
+    local ok, list = pcall(C_MapExplorationInfo.GetExploredMapTextures, mapID)
+    for _, e in ipairs(ok and list or {}) do
+        explored[e.textureWidth .. "," .. e.textureHeight .. "," .. e.offsetX .. "," .. e.offsetY] = true
+    end
+    local tileW, tileH = layer.tileWidth, layer.tileHeight
+    for _, o in ipairs(overlays) do
+        local w, h, ox, oy = o[1], o[2], o[3], o[4]
+        if not explored[w .. "," .. h .. "," .. ox .. "," .. oy] then
+            local wide, tall = math.ceil(w / tileW), math.ceil(h / tileH)
+            for j = 1, tall do
+                local pixH, fileH = tileH, tileH
+                if j == tall then
+                    pixH = h % tileH
+                    if pixH == 0 then pixH = tileH end
+                    fileH = 16
+                    while fileH < pixH do fileH = fileH * 2 end
+                end
+                for k = 1, wide do
+                    local file = o[4 + (j - 1) * wide + k]
+                    if file then
+                        local pixW, fileW = tileW, tileW
+                        if k == wide then
+                            pixW = w % tileW
+                            if pixW == 0 then pixW = tileW end
+                            fileW = 16
+                            while fileW < pixW do fileW = fileW * 2 end
+                        end
+                        local t = table.remove(self.revealFree) or self.reveal:CreateTexture(nil, "ARTWORK")
+                        t:SetTexture(file, nil, nil, "TRILINEAR")
+                        t:SetSize(pixW, pixH)
+                        t:SetTexCoord(0, pixW / fileW, 0, pixH / fileH)
+                        t:ClearAllPoints()
+                        t:SetPoint("TOPLEFT", self.reveal, "TOPLEFT", ox + tileW * (k - 1), -(oy + tileH * (j - 1)))
+                        t:SetVertexColor(TINT[1], TINT[2], TINT[3])
+                        t:Show()
+                        self.revealUsed[#self.revealUsed + 1] = t
+                    end
+                end
+            end
+        end
+    end
+end
+
 function M:Refresh()
     local f = self.map
     if not (f and self:IsEnabled()) then return end
     if not f:IsShown() then self.items = nil; self:ClearPins(); return end
     local mapID = f:GetMapID()
+    self:Reveal(mapID)
     self.items = mapID and self:Collect(mapID) or {}
     self:Layout()
 end
@@ -848,14 +921,25 @@ function M:Attach()
     local f = _G.WorldMapFrame
     if not f or self.map then return end
     self.map = f
+    -- the unexplored areas, then the pins above them
+    self.reveal = CreateFrame("Frame", nil, f:GetCanvas())
+    self.reveal:SetAllPoints(f:GetCanvas())
+    self.reveal:SetFrameLevel(f:GetCanvas():GetFrameLevel() + 1)
+    self.revealFree, self.revealUsed = {}, {}
     self.layer = CreateFrame("Frame", nil, f:GetCanvas())
     self.layer:SetAllPoints(f:GetCanvas())
-    self.layer:SetFrameLevel(f:GetCanvas():GetFrameLevel() + 1)
+    self.layer:SetFrameLevel(f:GetCanvas():GetFrameLevel() + 2)
     self.pins = {}
     local provider = CreateFromMixins(MapCanvasDataProviderMixin)
     provider.RefreshAllData = function() self:Refresh() end
-    provider.RemoveAllData = function() self.items = nil; self:ClearPins() end
-    provider.OnCanvasScaleChanged = function() self:QueueLayout() end
+    provider.RemoveAllData = function() self.items = nil; self:ClearPins(); self:Reveal(nil) end
+    provider.OnCanvasScaleChanged = function()
+        self:QueueLayout()
+        -- a map with zoom layers: the overlays only on the base one
+        local c = f:GetCanvasContainer()
+        local index = c.GetCurrentLayerIndex and c:GetCurrentLayerIndex() or 1
+        if index ~= self.revealLayer then self:Reveal(f:GetMapID()) end
+    end
     provider.OnCanvasSizeChanged = function() self:QueueLayout() end
     self.provider = provider
     self.menu = UI.FilterMenu(f, {
@@ -885,11 +969,13 @@ function M:OnEnable()
     end
     self.map:AddDataProvider(self.provider)
     self.layer:Show()
+    self.reveal:Show()
     self.menu:Show()
     self.menu:SetValue(self:MenuValue())
     self:PlaceFilters()
     -- what you can pick up changes as you level and turn quests in
-    for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION" }) do
+    for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION",
+                            "MAP_EXPLORATION_UPDATED" }) do
         self:OnGameEvent(event, function() if self.map:IsShown() then C_Timer.After(0.2, function() self:Refresh() end) end end)
     end
 end
@@ -901,6 +987,8 @@ function M:OnDisable()
     self.items = nil
     self:ClearPins()
     self.layer:Hide()
+    self:Reveal(nil)
+    self.reveal:Hide()
     self.menu:Hide()
     local track = f.WorldMapTrackingOptionsButton
     if track then track:SetAlpha(1); track:EnableMouse(true) end
