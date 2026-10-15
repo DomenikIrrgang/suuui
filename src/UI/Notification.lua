@@ -699,8 +699,9 @@ function Stack:SetItems(items, inCombat)
     self.foot:SetShown(footShown)
     if footShown then
         self.foot:ClearAllPoints()
-        self.foot:SetPoint("TOPLEFT", S["space-2"], -y)
-        self.foot:SetPoint("TOPRIGHT", -S["space-2"], -y)
+        -- flush with the cards' edges: Dismiss all ends at their right edge
+        self.foot:SetPoint("TOPLEFT", 0, -y)
+        self.foot:SetPoint("TOPRIGHT", 0, -y)
         local x = 0
         for _, f in ipairs({ self.moreLink, self.heldText }) do
             if f:IsShown() then
@@ -723,7 +724,11 @@ local function link(parent, text, onClick)
     b:SetScript("OnClick", onClick)
     b:SetScript("OnEnter", function(self) self.label:SetColor("ink") end)
     b:SetScript("OnLeave", function(self) self.label:SetColor("gilt-text") end)
-    hooksecurefunc(b.label, "SetValue", function() b:SetWidth(b.label:GetUnboundedStringWidth() + 2) end)
+    -- as wide as its words (the first text too: it was 80 wide, its words at
+    -- the left, so a right-aligned link stood in from the edge)
+    local function fit() b:SetWidth(math.ceil(b.label:GetUnboundedStringWidth())) end
+    hooksecurefunc(b.label, "SetValue", fit)
+    fit()
     return b
 end
 
