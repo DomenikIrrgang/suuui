@@ -293,7 +293,8 @@ function M:Collect(mapID)
         local ok, nodes = pcall(C_TaxiMap.GetTaxiNodesForMap, mapID)
         local mine = me.faction == "H" and 1 or me.faction == "A" and 2 or -1
         for _, n in ipairs(ok and type(nodes) == "table" and nodes or {}) do
-            local x, y = n.position and n.position.GetXY and n.position:GetXY()
+            local x, y
+            if n.position and n.position.GetXY then x, y = n.position:GetXY() end
             if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (n.faction == 0 or n.faction == mine) then
                 items[#items + 1] = { x = x, y = y, fixed = true,
                     pin = { glyph = "wing", color = n.isUndiscovered and "ink-muted" or "gilt-text" },
