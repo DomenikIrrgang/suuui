@@ -560,6 +560,9 @@ function M:SkinWorldMap()
         f.NavBar:SetAlpha(0)
         f.NavBar:ClearAllPoints()
         f.NavBar:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -2000, 2000)
+        -- with a real width: the bar fits its buttons to it (0 wide, it
+        -- looked up a button that wasn't there and errored on opening)
+        f.NavBar:SetSize(900, 34)
     end
     hideNav()
     hooksecurefunc(f, "OnMapChanged", hideNav)
