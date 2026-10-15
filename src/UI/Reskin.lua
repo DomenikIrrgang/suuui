@@ -362,12 +362,12 @@ local function openRoot()
     return manager and manager.GetOpenMenu and manager:GetOpenMenu()
 end
 if EventRegistry and EventRegistry.RegisterCallback then
+    -- (the event hands over the menu's frame, which has no GetLevel: any
+    -- menu other than the open root, while the root is restyled)
     EventRegistry:RegisterCallback("MenuProxy.OnShow", function(_, menu)
-        if not (menu and menu.GetLevel) then return end
-        local okL, level = pcall(menu.GetLevel, menu)
-        if not okL or not level or level <= 1 then return end
+        if not (menu and menu.GetRegions) then return end
         local root = openRoot()
-        local st = root and menus[root]
+        local st = root and root ~= menu and menus[root]
         if st and st.active then
             UI.ReskinMenu(menu)
             C_Timer.After(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
