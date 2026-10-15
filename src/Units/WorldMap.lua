@@ -200,10 +200,12 @@ local SERVICE_NAMES = {
     guild = "Guild master", tabard = "Tabard designer", stable = "Stable master", repair = "Repair", food = "Food and drink",
     goods = "General goods", vendor = "Vendor", mail = "Mailbox", classTrainer = "Class trainer", trainer = "Trainer",
 }
+-- (drawn after the game's own profession icons, which players know)
 local PROFESSION_GLYPH = {
-    alchemy = "flask", blacksmithing = "hammer", enchanting = "star", engineering = "gear", herbalism = "leaf",
-    leatherworking = "hide", mining = "pick", skinning = "knife", tailoring = "needle", cooking = "pot",
-    firstAid = "bandage", fishing = "fish", weapon = "sword", riding = "book", pet = "book", other = "book",
+    alchemy = "profAlchemy", blacksmithing = "profBlacksmithing", enchanting = "profEnchanting", engineering = "gear",
+    herbalism = "profHerbalism", leatherworking = "profLeatherworking", mining = "profMining", skinning = "hide",
+    tailoring = "profTailoring", cooking = "profCooking", firstAid = "profFirstAid", fishing = "profFishing",
+    weapon = "sword", riding = "book", pet = "book", other = "book",
 }
 local PROFESSION_NAMES = {
     alchemy = "Alchemy trainer", blacksmithing = "Blacksmithing trainer", enchanting = "Enchanting trainer",

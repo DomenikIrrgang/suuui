@@ -358,6 +358,18 @@ GLYPHS = {
     "needle": "M20 4L7 17M18.5 3.8l1.7 1.7M7 17l-2.5 2.5M7 17c-4-1-4.5 3-2 4 2.5 1 5-1 7-3",
     "knife": "M4 20l5-5M9 15l2 2M9 15l9.5-9.5c1.5 3.5.5 7.5-3 10l-2.5 1.5",
     "hide": "M6 4c2 1 4 1 6 0 2 1 4 1 6 0-.5 3 1 5 2 6-1 2-1.5 5-1 8-2-.5-4 0-5 2-1-2-3-2.5-5-2s-4-.5-5 0c.5-3 0-6-1-8 1-1 2.5-3 2-6z",
+    # the map's profession trainers, drawn after the game's own icons (players know
+    # those; ours didn't read as them, found in game; /suu probe proficons):
+    "profAlchemy": "M2.8 6.8L6.8 2.8M4.2 8.2L8.2 4.2L18.2 14.2A2.9 2.9 0 0 1 14.2 18.2ZM8.4 12.4l4-4",  # a vial lying from its stopper (top left) to its round bottom
+    "profBlacksmithing": "M7 6L10.5 3H20L16.5 6ZM7 6V9.5H16.5V6M16.5 9.5L20 6.5V3M7 6L3 7.8L7 9M9.5 9.5L10.3 13M14 9.5L13.2 13M5 21V16.5H19V21M8 13H16L17 16.5H7Z",  # the anvil on its block
+    "profEnchanting": "M3.5 19L16 6.5M5.5 21L18 8.5M16 6.5l2 2M13.5 15l2.5-1 .5 2.5 2.5-1 .5 2.5M19.5 2v4M17.5 4h4",  # a rod with runes and a spark
+    "profHerbalism": "M3 21L21 3M8 16C4.5 14.5 2 16 1.5 19 4.5 20 7 18.5 8 16zM12.5 11.5c-1-3.5.5-6.5 4-7.5 1 3.5-.5 6.5-4 7.5zM15 9c3.5-1 6.5.5 7.5 4-3.5 1-6.5-.5-7.5-4zM12 16a1.8 1.8 0 1 0 0 .01",  # a branch with three leaves and a berry
+    "profLeatherworking": "M8.5 9.5C5.5 12 5 17 7.5 19.5h9c2.5-2.5 2-7.5-1-10zM8.5 9.5L7 5h10l-1.5 4.5M12 9.5l-2.5 4.5M12 9.5l2.5 4.5M9 17h.01M12 17.5h.01M15 17h.01",  # a tied leather pouch, stitched
+    "profMining": "M15 7L12 21.5M15 6L3 12.5l2.5 4.5 11.5-8.5zM16 5.5L21.5 2",  # a pick with its wide blade down to the left
+    "profTailoring": "M5 4.5h10M5 19.5h10M6.5 4.5v15M13.5 4.5v15M6.5 9h7M6.5 12h7M6.5 15h7M21 2.5L9 21.5M20 4.5l-1 1.5",  # a spool of thread and a needle
+    "profCooking": "M8 16c0-4.5 3.5-8 8-8 3.5 0 6 2.5 6 6s-3 6.5-7 6.5h-4c-2 0-3-2-3-4.5zM11 10.5c-1.5-1.5-2.5-3-3-5M14 8.5c-1-1.5-2-3-2.5-4.5M8 5.5L6 3.5M11.5 4L10 1.5M4.5 4.5a1.4 1.4 0 1 0 2-2M8.5 2.5a1.4 1.4 0 1 0 2.5-.5",  # a roast bird, its leg up to the left
+    "profFirstAid": "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 6.5l3.5 7a3.5 3.5 0 1 1-7 0z",  # a drop in a ring
+    "profFishing": "M12 2.5a1.5 1.5 0 1 0 .01 0M12 4v12a3.5 3.5 0 0 1-7 0V13l2 2M17 9c2 1 2.5 4 1 6s-1 4.5 1 5.5M8 7c-2 1-2 3.5 0 4.5",  # a hook with worms
 }
 
 
