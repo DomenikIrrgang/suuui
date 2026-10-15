@@ -151,7 +151,7 @@ All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or p
 | `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only |
 | `SectionHeader(parent, label, meta, width)` | A label on the world with a fading gilt rule; `:SetLabel(label, meta)` |
 | `WindowFrame(parent, { name, title, meta, keybind, width, height, footer, onClose })` | The shell of every full window: draggable, Escape closes it (with a `name`), content in `window.content` (scrolls), optional `window.footer` |
-| `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip, icon })` | `:SetLabel(text)`, `:SetEnabledState(enabled)`; `icon` (0.13): a glyph name (`"reset"`, `"close"`), 12px left of the label |
+| `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip, icon })` | `:SetLabel(text)`, `:SetEnabledState(enabled)`; `icon` (0.13): a glyph name (`"reset"`, `"close"`), 12px left of the label; `:SetIcon(name)` changes it (nil: none) |
 | `CloseButton(parent, onClick)`, `KeyChip(parent, key)` | Header pieces |
 | `StateBadge(parent, tone, text)` | Tones: `danger`, `warning`, `magic`, `curse`, `poison`, `disease`, `ward`, `info`, `neutral`; `:SetState(tone, text)` |
 | `Icon(parent, size)` | `:SetArt(texture)`, `:SetState("rest"/"ready"/"dim"/"active")`, `:SetBorder(token)`, `:SetGlow(shadowToken)`, `:SetCount(n)`, `:Pop()` |
