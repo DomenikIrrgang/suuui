@@ -357,16 +357,19 @@ local function readDungeons(faction)
     return ZoneDB.private.dungeons or {}
 end
 local horde, alliance = readDungeons("Horde"), readDungeons("Alliance")
--- the list also holds later expansions' instances and places that aren't
--- instances (brawlers' pubs, the tram, the PvP halls): left out
+-- the list also holds later expansions' instances, Season of Discovery's
+-- (not in Forever) and places that aren't instances (brawlers' pubs, the
+-- tram, the PvP halls): left out. Its "Hyjal Summit" is the Caverns of
+-- Time's; Forever's is in FOREVER below.
 local LATER = { ["Blackrock Caverns"] = true, ["Blackwing Descent"] = true, ["Dragon Soul"] = true, ["End Time"] = true,
                 ["Firelands"] = true, ["Hour of Twilight"] = true, ["Well of Eternity"] = true, ["Molten Front"] = true,
                 ["Hyjal Summit"] = true, ["Old Hillsbrad Foothills"] = true, ["The Black Morass"] = true,
                 ["The Culling of Stratholme"] = true, ["Scarlet Halls"] = true, ["Scarlet Enclave"] = true,
                 ["Bizmo's Brawlpub"] = true, ["Brawl'gar Arena"] = true, ["Darkmoon Faire Island"] = true,
-                ["Karazhan"] = true, ["Deeprun Tram"] = true, ["Champions' Hall"] = true, ["Hall of Legends"] = true }
+                ["Karazhan"] = true, ["Deeprun Tram"] = true, ["Champions' Hall"] = true, ["Hall of Legends"] = true,
+                ["The Tainted Scar"] = true, ["Demon Fall Canyon"] = true, ["Karazhan Crypts"] = true }
 local RAIDS = { ["Molten Core"] = true, ["Onyxia's Lair"] = true, ["Blackwing Lair"] = true, ["Zul'Gurub"] = true,
-                ["Ruins of Ahn'Qiraj"] = true, ["Temple of Ahn'Qiraj"] = true, ["Naxxramas"] = true, ["The Tainted Scar"] = true }
+                ["Ruins of Ahn'Qiraj"] = true, ["Temple of Ahn'Qiraj"] = true, ["Naxxramas"] = true }
 local BATTLEGROUNDS = { ["Alterac Valley"] = true, ["Arathi Basin"] = true, ["Warsong Gulch"] = true }
 local seen = {}
 for _, side in ipairs({ { horde, "H" }, { alliance, "A" } }) do
@@ -388,6 +391,18 @@ for _, side in ipairs({ { horde, "H" }, { alliance, "A" } }) do
             end
         end
     end
+end
+
+-- Forever's own entrances QuestieDB doesn't have. Hyjal Summit: its door
+-- isn't known yet (no one has stood at it); the middle of the Summit of
+-- Eternity, the area it's in (WorldMapOverlay 4995 on Mount Hyjal's art),
+-- marked approximate
+local FOREVER = {
+    { map = 2482, x = 80.5, y = 39.8, name = "Hyjal Summit", kind = "raid", approx = true },
+}
+for _, e in ipairs(FOREVER) do
+    entrances[e.map] = entrances[e.map] or {}
+    table.insert(entrances[e.map], e)
 end
 
 -- the map's other pins: services, mailboxes, rares, treasure chests
@@ -539,7 +554,7 @@ w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percen
 w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
 w("--                    (source: an NPC's ID, an object's negative) that drops it lives)")
 w("--   items[itemID] = name; givers[giver or source] = name")
-w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil) }, ... }")
+w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil), approx (true: the spot isn't known, only its area) }, ... }")
 w("")
 w("local _, ns = ...")
 w("")
@@ -605,7 +620,9 @@ for _, map in ipairs(emaps) do
     table.sort(entrances[map], function(a, b) return a.name < b.name end)
     local rows = {}
     for _, e in ipairs(entrances[map]) do
-        rows[#rows + 1] = string.format("{%.1f,%.1f,%q,%q%s}", e.x, e.y, e.name, e.kind, e.faction and (",%q"):format(e.faction) or "")
+        rows[#rows + 1] = string.format("{%.1f,%.1f,%q,%q%s%s}", e.x, e.y, e.name, e.kind,
+            (e.faction or e.approx) and (",%s"):format(e.faction and ("%q"):format(e.faction) or "nil") or "",
+            e.approx and ",true" or "")
         nEntrances = nEntrances + 1
     end
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))

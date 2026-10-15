@@ -11,6 +11,12 @@ DIR, BUILD, OUT = sys.argv[1:4]
 
 # the group finder's categories, as the entrances' kinds
 KIND = {'2': 'dungeon', '114': 'raid', '118': 'battleground'}
+# Season of Discovery's activities, still in the client but not in Forever:
+# its raid versions of dungeons (Blackfathom Deeps, Gnomeregan, Sunken
+# Temple), its own places (Demon Fall Canyon, Storm Cliffs, The Tainted
+# Scar, Nightmare Grove, The Crystal Vale, Karazhan Crypts, Scarlet Enclave)
+# and its versions of the old raids (Onyxia's Lair, Molten Core, Ahn'Qiraj)
+SOD = set(range(1604, 1616)) | {1693, 1710}
 # group finder names that aren't the entrance's
 RENAME = {
     'Deadmines': 'The Deadmines',
@@ -32,11 +38,11 @@ places = collections.OrderedDict()   # (kind, name) -> {wing or None: [min, max]
 for r in csv.DictReader(open(os.path.join(DIR, 'GroupFinderActivity.csv'), encoding='utf-8')):
     kind = KIND.get(r['GroupFinderCategoryID'])
     lo, hi = int(r['MinLevel']), int(r['MaxLevelSuggestion'])
-    if not kind or lo <= 0: continue
+    if not kind or lo <= 0 or int(r['ID']) in SOD: continue
     name, wing = split(r['FullName_lang'])
     name = RENAME.get(name, name)
     ranges = places.setdefault((kind, name), {})
-    # a battleground's brackets (and a raid listed twice) make one range
+    # a battleground's brackets make one range
     old = ranges.get(wing)
     ranges[wing] = [min(old[0], lo), max(old[1], hi)] if old else [lo, hi]
 

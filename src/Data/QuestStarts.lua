@@ -9,7 +9,7 @@
 --   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob
 --                    (source: an NPC's ID, an object's negative) that drops it lives)
 --   items[itemID] = name; givers[giver or source] = name
---   entrances[uiMapID] = { { x, y, name, kind ("dungeon", "raid", "battleground"), faction ("H", "A" or nil) }, ... }
+--   entrances[uiMapID] = { { x, y, name, kind ("dungeon", "raid", "battleground"), faction ("H", "A" or nil), approx (true: the spot isn't known, only its area) }, ... }
 
 local _, ns = ...
 
@@ -6960,7 +6960,6 @@ ns.QuestStarts = { quests = {
     [1416] = {{39.5,80.2,"Alterac Valley","battleground","H"},{63.6,58.8,"Alterac Valley","battleground","A"},{8.5,59.2,"City of Dalaran","dungeon"}},
     [1417] = {{73.5,29.0,"Arathi Basin","battleground","H"},{45.4,44.4,"Arathi Basin","battleground","A"}},
     [1418] = {{44.6,12.1,"Uldaman","dungeon"},{65.2,43.5,"Uldaman","dungeon"}},
-    [1419] = {{45.3,55.0,"The Tainted Scar","raid"}},
     [1420] = {{82.6,33.8,"Scarlet Monastery","dungeon"}},
     [1421] = {{44.8,67.8,"Shadowfang Keep","dungeon"}},
     [1422] = {{69.7,73.2,"Scholomance","dungeon"},{69.6,79.6,"The Burning of Andorhal","dungeon"}},
@@ -6968,12 +6967,11 @@ ns.QuestStarts = { quests = {
     [1426] = {{24.3,39.8,"Gnomeregan","dungeon"}},
     [1427] = {{34.8,85.3,"Blackrock Depths","dungeon"},{34.8,85.3,"Blackrock Spire","dungeon"},{34.8,85.3,"Blackwing Lair","raid"},{34.8,85.3,"Molten Core","raid"}},
     [1428] = {{29.4,38.3,"Blackrock Depths","dungeon"},{29.4,38.3,"Blackrock Spire","dungeon"},{29.4,38.3,"Blackwing Lair","raid"},{29.4,38.3,"Molten Core","raid"}},
-    [1430] = {{40.0,74.2,"Karazhan Crypts","dungeon"}},
     [1434] = {{53.9,17.6,"Zul'Gurub","raid"}},
     [1435] = {{69.9,53.5,"The Temple of Atal'Hakkar","dungeon"}},
     [1436] = {{42.5,71.7,"The Deadmines","dungeon"}},
     [1437] = {{47.8,56.2,"Excavation Site: Wetlands","dungeon"}},
-    [1440] = {{14.5,14.2,"Blackfathom Deeps","dungeon"},{84.7,74.4,"Demon Fall Canyon","dungeon"},{61.7,84.5,"Warsong Gulch","battleground","A"}},
+    [1440] = {{14.5,14.2,"Blackfathom Deeps","dungeon"},{61.7,84.5,"Warsong Gulch","battleground","A"}},
     [1443] = {{29.1,62.5,"Maraudon","dungeon"}},
     [1444] = {{59.2,45.1,"Dire Maul","dungeon"},{60.3,30.2,"Dire Maul","dungeon"},{62.5,24.9,"Dire Maul","dungeon"},{64.8,30.2,"Dire Maul","dungeon"}},
     [1445] = {{52.6,76.8,"Onyxia's Lair","raid"}},
@@ -6983,4 +6981,5 @@ ns.QuestStarts = { quests = {
     [1454] = {{52.6,49.0,"Ragefire Chasm","dungeon"}},
     [1455] = {{27.6,47.8,"The Hall of Thanes","dungeon"}},
     [1458] = {{72.5,11.3,"Ruins of Lordaeron","dungeon"}},
+    [2482] = {{80.5,39.8,"Hyjal Summit","raid",nil,true}},
 } }

@@ -419,8 +419,8 @@ function M:Collect(mapID)
         end
     end
 
-    -- entrances, with their recommended levels (the group finder's): the
-    -- wings' own, and a dungeon's raid version's
+    -- entrances, with their recommended levels (the group finder's) and
+    -- the wings' own; one whose door isn't known yet is in its area's middle
     local levels = SuuUI.InstanceLevels()
     local function range(lo, hi) return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi) end
     local muted = "|cff" .. T.color["ink-muted"].hex
@@ -435,8 +435,7 @@ function M:Collect(mapID)
                 detail = detail .. " · " .. range(lv[1], lv[2])
                 for i = 3, #lv do lines[#lines + 1] = { lv[i][1] .. "  " .. muted .. range(lv[i][2], lv[i][3]) .. "|r" } end
             end
-            local raid = kind == "dungeon" and levels.raid and levels.raid[e[3]]
-            if raid then lines[#lines + 1] = { "Raid  " .. muted .. range(raid[1], raid[2]) .. "|r" } end
+            if e[6] then lines[#lines + 1] = { muted .. "Approximate: its door isn't known yet|r" } end
             -- entrances on one spot merge (Blackrock Mountain's four stacked,
             -- only the top one's card to read); one place's doors count once
             items[#items + 1] = { x = e[1] / 100, y = e[2] / 100, fixed = true, uid = "e" .. e[3],
