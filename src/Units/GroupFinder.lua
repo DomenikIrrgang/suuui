@@ -9,6 +9,8 @@
 --           controls stay the game's: addons can't list you)
 --   My listing  while you're listed: your listing (Delist, Update opens the
 --           game's panel) and an ad for chat, posted only on your click
+--   Who     who is online, with the game's own Filter menu (class, race,
+--           zone, sort); Add friend, Whisper and Invite for the chosen one
 --   Notes   ForeverLFG's eleven kinds as SuuUI notifications (design board
 --           "Notifications · Group Finder"), each on or off with its
 --           options (defaults from "Settings · Group Finder ·
@@ -327,6 +329,16 @@ function M:Follow()
     self.browse:SetShown(on and true or false)
     if browse then browse:SetAlpha(on and 0 or 1) end
     if on then self:Render() end
+    -- Who over the game's page
+    local whoPage = _G.LFGWhoListFrame
+    local whoOn = f:IsShown() and whoPage and whoPage:IsShown()
+    self.who:SetShown(whoOn and true or false)
+    if whoPage then
+        whoPage:SetAlpha(whoOn and 0 or 1)
+        -- its search box is on the HIGH layer: no clicks through our page
+        if whoPage.EditBox then whoPage.EditBox:EnableMouse(not whoOn) end
+    end
+    if whoOn then self:RenderWho() end
     -- My listing over the game's panel while you're listed (Update shows the panel)
     local panel = _G.LFGListingFrame
     local listed = f:IsShown() and panel and panel:IsShown() and LFG.Listing() ~= nil and not self.editing
@@ -335,7 +347,7 @@ function M:Follow()
     -- back for Update
     if panel then panel:SetAlpha(listed and 0 or 1) end
     if listed then self:RenderListed() end
-    self.cover:SetShown((on or listed) and true or false)
+    self.cover:SetShown((on or listed or whoOn) and true or false)
 end
 
 --------------------------------------------------------------------------------
@@ -462,6 +474,75 @@ function M:RenderListed()
     })
 end
 
+--------------------------------------------------------------------------------
+-- Who (stage 5; probed 2026-10-15: SendWho works from a click)
+--------------------------------------------------------------------------------
+
+function M:ReadWho()
+    local fl = C_FriendList
+    local ok, num, total = pcall(fl.GetNumWhoResults)
+    if not ok or type(num) ~= "number" then return end
+    local results = {}
+    for i = 1, num do
+        local okI, info = pcall(fl.GetWhoInfo, i)
+        if okI and type(info) == "table" and not (issecretvalue and issecretvalue(info.fullName)) then
+            results[#results + 1] = { name = info.fullName, level = info.level, race = info.raceStr,
+                class = info.filename, className = info.classStr, guild = info.fullGuildName, zone = info.area }
+        end
+    end
+    self.whoData = { state = #results > 0 and "results" or "none", query = self.whoQuery or "",
+                     total = total or #results, capped = (total or 0) > num, results = results }
+end
+
+function M:RenderWho()
+    if not (self.who and self.who:IsShown()) then return end
+    self.who:SetData(self.whoData or { state = "idle" })
+end
+
+function M:WireWho(w)
+    -- the search goes out from the click or Enter (the game allows nothing else)
+    w.onSearch = function(text)
+        local fl = C_FriendList
+        self.whoQuery = text
+        pcall(fl.SetWhoToUi, true)
+        local filters = _G.LFGWhoListFilterUtil and _G.LFGWhoListFilterUtil.GetWhoFilters and _G.LFGWhoListFilterUtil.GetWhoFilters()
+        local origin = Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social
+        fl.SendWho(text or "", origin, filters)
+    end
+    -- the game's own filter menu (class, race, zone, sort), opened under our button
+    w.onFilter = function(button)
+        local page = _G.LFGWhoListFrame
+        local dd = page and page.FilterDropdown
+        if not dd then return end
+        if not self.whoDropdownSkinned then
+            self.whoDropdownSkinned = true
+            UI.ReskinDropdown(dd)
+        end
+        dd:ClearAllPoints()
+        dd:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+        dd:SetSize(button:GetWidth(), button:GetHeight())
+        if dd.OpenMenu then dd:OpenMenu() elseif dd.Click then dd:Click() end
+    end
+    w.onMenu = function(row)
+        if FriendsFrame_ShowDropdown then FriendsFrame_ShowDropdown(row.name, 1) end
+    end
+    w.onWhisper = function(row)
+        local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
+        if tell then tell(row.name) end
+    end
+    w.onInvite = function(row)
+        local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+        if invite then pcall(invite, row.name) end
+    end
+    w.onAddFriend = function(row)
+        if C_FriendList.AddFriend then pcall(C_FriendList.AddFriend, row.name) end
+    end
+    self:OnGameEvent("WHO_LIST_UPDATE", function()
+        self:ReadWho()
+        self:RenderWho()
+    end)
+end
+
 function M:WireListed(p)
     p.onDelist = function() LFG.Delist() end
     p.onUpdate = function()
@@ -511,6 +592,16 @@ function M:Build()
     self:Wire(b)
     -- List yourself: the game's own panel, restyled (stage 3)
     if _G.LFGListingFrame then UI.SkinGroupFinderListing(_G.LFGListingFrame) end
+    -- Who
+    local wp = UI.GroupFinderWho(f)
+    wp:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    wp:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    wp:SetFrameLevel(f:GetFrameLevel() + 100)
+    wp:EnableMouse(true)
+    wp.suuOwn = true
+    wp:Hide()
+    self.who = wp
+    self:WireWho(wp)
     -- My listing, over it while you're listed
     local l = UI.GroupFinderListed(f)
     l:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
