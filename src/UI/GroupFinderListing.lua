@@ -41,7 +41,6 @@ local FOOT_H = 26
 local FOOT_RULE = BOTTOM + FOOT_H + S["space-4"]  -- the rule over the foot
 local BODY_TOP = RULE_Y + S["space-4"]
 local BODY_BOTTOM = FOOT_RULE + S["space-4"]
-local FIELD_LINE = 18
 
 -- the categories' cards (the game's category IDs on Forever)
 local CARDS = {
@@ -438,19 +437,30 @@ function L:LayoutActivities()
     self.tree:SetWidth(left)
     self.tree:SetShown(not custom)
     self:PlaceScrollBox()
-    -- the details: a sunk field, its count under it; Voice Chat below. The
-    -- field's top level with the activity tree's (asked for in game), its
-    -- label over it; in Custom (no tree) under the Playstyle row
+    -- Voice Chat in the Playstyle row (asked for in game): at the right
+    -- column's start, or at the page's right in Custom
+    local vlabel, vdd = av.VoiceChatLabel, av.VoiceChatDropdown
+    if vlabel and vdd then
+        local vx = custom and (width - 200) or rightX
+        vlabel:ClearAllPoints()
+        vlabel:SetPoint("TOPLEFT", av, "TOPLEFT", vx, 0)
+        vlabel:SetJustifyH("LEFT")
+        vdd:ClearAllPoints()
+        vdd:SetSize(200, 30)
+        vdd:SetPoint("TOPLEFT", av, "TOPLEFT", vx, -(14 + S["space-1"]))
+    end
+    -- the details: a sunk field from the activity tree's top to its foot
+    -- (asked for in game), its label over it with the count at the right;
+    -- in Custom (no tree) across the page from the same top
     local detailsTop = treeTop - (14 + S["space-1"])
-    if custom then detailsTop = treeTop end
     self.detailsLabel:ClearAllPoints()
     self.detailsLabel:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -detailsTop)
     self.detailsLabel:SetValue("More details about your group" .. (custom and "" or
         (" |cff" .. T.color["ink-faint"].hex .. "· optional|r")))
-    local fieldH = (custom and 8 or 5) * FIELD_LINE + S["space-3"] * 2
     self.field:ClearAllPoints()
-    self.field:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -(detailsTop + 14 + S["space-1"]))
-    self.field:SetSize(rightW, fieldH)
+    self.field:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -treeTop)
+    self.field:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", rightX, 0)
+    self.field:SetWidth(rightW)
     local c = av.Comment
     -- the placeholder: the label says what the field is (the game's
     -- authenticator note stays as it is)
@@ -466,16 +476,7 @@ function L:LayoutActivities()
         if c.EditBox then c.EditBox:SetWidth(rightW - S["space-4"] * 2 - 16) end
     end
     self.count:ClearAllPoints()
-    self.count:SetPoint("TOPRIGHT", self.field, "BOTTOMRIGHT", 0, -S["space-1"])
-    local vlabel, vdd = av.VoiceChatLabel, av.VoiceChatDropdown
-    if vlabel and vdd then
-        vlabel:ClearAllPoints()
-        vlabel:SetPoint("TOPLEFT", self.field, "BOTTOMLEFT", 0, -(S["space-5"] + 14))
-        vlabel:SetJustifyH("LEFT")
-        vdd:ClearAllPoints()
-        vdd:SetSize(200, 30)
-        vdd:SetPoint("TOPLEFT", vlabel, "BOTTOMLEFT", 0, -S["space-1"])
-    end
+    self.count:SetPoint("BOTTOMRIGHT", self.field, "TOPRIGHT", 0, S["space-1"])
     self:UpdateCount()
 end
 
