@@ -117,16 +117,19 @@ function P:SetData(d)
             y = y + h + GAP
         end
     end
-    -- the buttons, under a rule
+    -- the buttons under a rule, at the foot; both cards as tall as the
+    -- taller one (asked for in game), their feet level
+    self.listingH = y + GAP + BTN_H + PAD
     c.rule:ClearAllPoints()
-    c.rule:SetPoint("TOPLEFT", c, "TOPLEFT", PAD, -y)
-    c.rule:SetPoint("TOPRIGHT", c, "TOPRIGHT", -PAD, -y)
-    y = y + GAP
+    c.rule:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", PAD, PAD + BTN_H + GAP)
+    c.rule:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -PAD, PAD + BTN_H + GAP)
     c.update:ClearAllPoints()
-    c.update:SetPoint("TOPRIGHT", c, "TOPRIGHT", -PAD, -y)
+    c.update:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -PAD, PAD)
     c.delist:ClearAllPoints()
     c.delist:SetPoint("RIGHT", c.update, "LEFT", -S["space-3"], 0)
-    c:SetHeight(y + BTN_H + PAD)
+    local h = math.max(self.listingH, self.adH or 0)
+    c:SetHeight(h)
+    self.ad:SetHeight(h)
 
     -- the ad
     local A = d.ad or {}
@@ -258,20 +261,22 @@ function UI.GroupFinderListed(parent)
     a.count = UI.Text(a, "caption", "ink-faint")
     a.count:SetPoint("RIGHT", a, "TOPRIGHT", -PAD, -(y + 11))
     y = y + 22 + GAP
+    -- the foot, at the card's foot
     a.rule = rule(a)
-    a.rule:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
-    a.rule:SetPoint("TOPRIGHT", a, "TOPRIGHT", -PAD, -y)
+    a.rule:SetPoint("BOTTOMLEFT", a, "BOTTOMLEFT", PAD, PAD + BTN_H + GAP)
+    a.rule:SetPoint("BOTTOMRIGHT", a, "BOTTOMRIGHT", -PAD, PAD + BTN_H + GAP)
     y = y + GAP
     a.last = UI.Text(a, "caption", "ink-muted")
-    a.last:SetPoint("LEFT", a, "TOPLEFT", PAD, -(y + BTN_H / 2))
+    a.last:SetPoint("LEFT", a, "BOTTOMLEFT", PAD, PAD + BTN_H / 2)
     a.post = UI.Button(a, { text = "Post", variant = "primary", icon = "chat",
         onClick = function()
             local d = p.data and p.data.ad
             if p.onPost and d then p.onPost(d.channel, e:GetText()) end
         end })
     a.post:SetHeight(BTN_H)
-    a.post:SetPoint("TOPRIGHT", a, "TOPRIGHT", -PAD, -y)
-    a:SetHeight(y + BTN_H + PAD)
+    a.post:SetPoint("BOTTOMRIGHT", a, "BOTTOMRIGHT", -PAD, PAD)
+    p.adH = y + BTN_H + PAD
+    a:SetHeight(p.adH)
     p.ad = a
     p:HookScript("OnSizeChanged", function() if p.data then p:SetData(p.data) end end)
     return p
