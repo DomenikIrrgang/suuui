@@ -308,12 +308,21 @@ end
 -- chain, its parent quest in your log, a breadcrumb only while the quest it
 -- leads to isn't taken, the profession skill and reputation it asks, and
 -- no event quests (whether an event runs can't be read).
+-- Is an event on? (A quest of an event shows only while it is.) Not yet:
+-- holidays will come from the game's calendar once /suu probe calendar has
+-- shown what Forever's holds; one-off server events (the War Effort, the
+-- Scourge Invasion) aren't running, and nothing in the game would say.
+local function eventOn(key)
+    return false
+end
+
 local function questState(q, id, me, done)
     if onQuest(id) then return nil end
     local flags = q[10] or 0
     local repeatable = flags % 2 == 1
     if done[id] and not repeatable then return nil end
     if flags % 4 >= 2 then return nil end
+    if q[16] and not eventOn(q[16]) then return nil end
     if q[9] and (done[q[9]] or onQuest(q[9])) then return nil end
     if q[11] and not onQuest(q[11]) then return nil end
     if q[12] and (done[q[12]] or onQuest(q[12])) then return nil end

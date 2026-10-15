@@ -200,25 +200,33 @@ correct(npcs, { C .. "legacy/classicNPCFixes.lua", C .. "generated/foreverBaseNp
 correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/foreverBaseObject.lua", C .. "foreverObjectFixes.lua" })
 correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "foreverItemFixes.lua" })
 
--- quests of one-off server events Forever doesn't run (their NPCs aren't
--- there; the game's calendar doesn't hold them, so a list): the Ahn'Qiraj
--- War Effort and the Scourge Invasion, by their quest sorts (-365, -368),
--- and the War Effort's hand-ins filed elsewhere by name ("The Horde Needs
--- Copper Bars!", "… Needs Your Help!"), commendation signets and signets
--- for war supplies (Warlord Gorchuk's quest had no Gorchuk; found in game)
-local NOT_RUN = { [-365] = true, [-368] = true }
-local function notInForever(id, q)
-    local name = q[QK.name]
-    if NOT_RUN[q[QK.zoneOrSort]] then return true end
-    if type(name) ~= "string" then return false end
-    return (id >= 8490 and id <= 8800 and name:find("^The %a+ Needs ") ~= nil)
-        or name:find("Commendation Signets?$") ~= nil or name:find("Signets for War Supplies$") ~= nil
-end
-local dropped = 0
+-- quests of events: the map shows them only while their event is on.
+-- Holidays by their quest sorts (the calendar says when they're on); the
+-- one-off server events Forever isn't running now (the Ahn'Qiraj War
+-- Effort, the Scourge Invasion: their NPCs aren't there, and nothing in the
+-- game says when they are) by their sorts, and the War Effort's hand-ins
+-- filed elsewhere by name ("The Horde Needs Copper Bars!", "… Needs Your
+-- Help!", commendation signets, signets for war supplies: Warlord
+-- Gorchuk's quest had no Gorchuk; found in game)
+local EVENT_SORT = {
+    [-365] = "warEffort", [-368] = "invasion",
+    [-366] = "lunarFestival", [-364] = "darkmoonFaire", [-369] = "midsummer", [-404] = "winterVeil",
+    [-402] = "harvestFestival", [-378] = "childrensWeek", [-376] = "loveIsInTheAir", [-375] = "pilgrimsBounty",
+    [-374] = "noblegarden", [-370] = "brewfest", [-41] = "dayOfTheDead", [-21] = "hallowsEnd",
+    [-22] = "seasonal", -- a holiday's, which one the sort doesn't say
+}
+local eventOf = {} -- quest -> event key
+local nEvent = 0
 for id, q in pairs(quests) do
-    if notInForever(id, q) then quests[id] = nil; dropped = dropped + 1 end
+    local name = q[QK.name]
+    local e = EVENT_SORT[q[QK.zoneOrSort]]
+    if not e and type(name) == "string" and ((id >= 8490 and id <= 8800 and name:find("^The %a+ Needs ") ~= nil)
+        or name:find("Commendation Signets?$") ~= nil or name:find("Signets for War Supplies$") ~= nil) then
+        e = "warEffort"
+    end
+    if e then eventOf[id] = e; nEvent = nEvent + 1 end
 end
-print(string.format("gen_quest_starts: left out %d quests of events Forever doesn't run", dropped))
+print(string.format("gen_quest_starts: %d quests of events", nEvent))
 
 -- area IDs to the game's map IDs (the override first)
 run("support/Forever/Zones/areaIdToUiMapId.lua")
@@ -612,7 +620,9 @@ w("--   QuestieDB Forever data with its corrections, commit " .. (sources.questi
 w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_quest_starts.sh")
 w("--   quests[id] = { name, minLevel, level, races (mask), classes (mask), preGroup (all), preSingle (any),")
 w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 needs an event), parentQuest,")
-w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value} }")
+w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value},")
+w("--                  event (shown only while it's on: \"darkmoonFaire\", \"lunarFestival\", … a holiday; \"warEffort\",")
+w("--                  \"invasion\" one-off server events; \"seasonal\" some holiday) }")
 w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
 w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
 w("--                    (source: an NPC's ID, an object's negative) that drops it lives)")
@@ -626,11 +636,12 @@ w("ns.QuestStarts = { quests = {")
 for _, qid in ipairs(ids) do
     if used[qid] then
         local q = quests[qid]
-        w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s },", qid,
+        w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s%s },", qid,
             str(q[QK.name]), num(q[QK.requiredLevel]), num(q[QK.questLevel]), num(q[QK.requiredRaces]), num(q[QK.requiredClasses]),
             list(q[QK.preQuestGroup]), list(q[QK.preQuestSingle]), list(q[QK.exclusiveTo]), num(q[QK.nextQuestInChain]),
             num(q[QK.specialFlags]), num(q[QK.parentQuest]), num(q[QK.breadcrumbForQuestId]),
-            list(q[QK.requiredSkill]), list(q[QK.requiredMinRep]), list(q[QK.requiredMaxRep])))
+            list(q[QK.requiredSkill]), list(q[QK.requiredMinRep]), list(q[QK.requiredMaxRep]),
+            eventOf[qid] and (", %q"):format(eventOf[qid]) or ""))
     end
 end
 w("}, maps = {")
