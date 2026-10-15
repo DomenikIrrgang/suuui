@@ -540,37 +540,6 @@ def player_arrow(size=64, ss=4):
     return lambda x, y: cache[(x, y)]
 
 
-# --- The game's quest objective areas in SuuUI's look (3.5): the engine draws
-# them from a fill texture it tiles and a border texture it stretches across
-# the border's width. QuestBlobInside.tga (64, colour baked in: surface): a
-# 45° hatch, 2px anti-aliased lines every 8px, opaque on the lines.
-# QuestBlobOutside.tga (64): across its width surface 25%, gilt 50%, surface
-# 25% (the design's 1-2-1 px as fractions), the same all along.
-
-SURFACE, GILT = (0x13, 0x11, 0x16), (0xC9, 0xA7, 0x5A)
-
-
-def blob_inside(size=64, period=8, width=2.0, ss=4):
-    def pixel(x, y):
-        hits = 0
-        for sy in range(ss):
-            for sx in range(ss):
-                u = (x + (sx + 0.5) / ss + y + (sy + 0.5) / ss) % period
-                # distance across the stripe (45°: the sum steps sqrt(2) per px)
-                d = min(u, period - u) / math.sqrt(2)
-                if d <= width / 2:
-                    hits += 1
-        return SURFACE + (round(255 * hits / (ss * ss)),)
-    return pixel
-
-
-def blob_outside(size=64):
-    def pixel(x, y):
-        f = (x + 0.5) / size
-        return (GILT if 0.25 <= f < 0.75 else SURFACE) + (255,)
-    return pixel
-
-
 def dashed_ring(size, inner, outer, dashes=16, ss=4):
     """Alpha of a ring inner..outer (fractions of the radius) in `dashes` dashes, half on."""
     r = size / 2
@@ -608,8 +577,6 @@ def main():
     jobs.append(("CircleEdge.tga", 256, circle(256, 1 - 2 / 176, 1)))
     jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))
     jobs.append(("CircleSoft.tga", 128, soft_circle(128)))
-    jobs.append(("QuestBlobInside.tga", 64, blob_inside()))
-    jobs.append(("QuestBlobOutside.tga", 64, blob_outside()))
     # a pin's dashed edge (a quest's next step on another map): 1 px at 26 px
     jobs.append(("CircleDash.tga", 104, dashed_ring(104, 1 - 2 / 26, 1)))
     jobs.append(("PlayerArrow.tga", 64, player_arrow()))

@@ -1078,14 +1078,16 @@ function M:QueueLayout()
 end
 
 --------------------------------------------------------------------------------
--- The game's quest markers and objective areas in SuuUI's look (design:
--- MapPin types objective / turn-in / waypoint, states tracked and
--- highlighted). The markers are restyled in place: the game's pins keep
+-- The game's quest markers in SuuUI's look (design: MapPin types objective
+-- / turn-in / waypoint, states tracked and highlighted), restyled in
+-- place: the game's pins keep
 -- their clicks, tooltips and super-tracking; a SuuUI pin without the mouse
 -- sits in each, the game's art hidden, kept up to date after each of the
 -- game's style, selection and highlight changes, and sized like SuuUI's pins
--- at every zoom. The areas: the engine's fill and border textures swapped
--- for SuuUI's (a surface hatch, a gilt line between surface).
+-- at every zoom. The objective areas stay the game's: its area drawing
+-- takes no addon texture (SuuUI's hatch and edge showed its missing-texture
+-- green, with or without the extension; found in game), and their shapes
+-- aren't given to addons to draw otherwise.
 --------------------------------------------------------------------------------
 
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -1117,14 +1119,6 @@ function M:UnstyleQuest()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do unstyle(pin) end
-    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
-        if pin.SetFillTexture then
-            pin:SetFillTexture("Interface\\WorldMap\\UI-QuestBlob-Inside")
-            pin:SetBorderTexture("Interface\\WorldMap\\UI-QuestBlob-Outside")
-            pin:SetFillAlpha(128)
-            pin:SetBorderAlpha(192)
-        end
-    end
 end
 
 function M:StyleQuestPin(pin)
@@ -1221,34 +1215,15 @@ function M:StyleQuestPins()
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do self:StyleQuestPin(pin) end
 end
 
--- (without the extension, as the game passes its own: with ".tga" the
--- engine's area drawing showed its missing-texture green; found in game)
-local BLOB_FILL, BLOB_BORDER = TEXTURES .. "QuestBlobInside", TEXTURES .. "QuestBlobOutside"
-function M:StyleQuestBlobs()
-    local f = self.map
-    if not f or not f.EnumeratePinsByTemplate then return end
-    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
-        if pin.SetFillTexture then
-            pin:SetFillTexture(BLOB_FILL)
-            pin:SetBorderTexture(BLOB_BORDER)
-            pin:SetFillAlpha(90)
-            pin:SetBorderAlpha(230)
-            pin:SetBorderScalar(1.0)
-        end
-    end
-end
-
--- The game's quest providers: after each of their refreshes, the look.
+-- The game's quest pins' provider: after each of its refreshes, the look.
 function M:HookQuestProviders()
     local f = self.map
     if not f or self.questHooked then return end
     self.questHooked = true
-    local quest, blob = _G.QuestDataProviderMixin, _G.QuestBlobDataProviderMixin
+    local quest = _G.QuestDataProviderMixin
     for provider in pairs(f.dataProviders or {}) do
         if quest and provider.RefreshAllData == quest.RefreshAllData then
             hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestPins() end end)
-        elseif blob and provider.RefreshAllData == blob.RefreshAllData then
-            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestBlobs() end end)
         end
     end
 end
@@ -1463,7 +1438,6 @@ function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:HookQuestProviders()
     self:StyleQuestPins()
-    self:StyleQuestBlobs()
     self:Watch("pinAlpha", function()
         if self.map and self.map:IsShown() then self:Layout() end
         if self.preview then for _, pin in ipairs(self.preview.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end end
