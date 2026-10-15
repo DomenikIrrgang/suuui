@@ -18,6 +18,9 @@
 --       count = nil,              -- a merged pin's count (2 and up)
 --   })
 --   pin:PinSize() -> its size in px
+--   pin:SetHighlight(state)  -- true: an ink ring around it (one of the
+--                            -- hovered quest's pins); "dim": faded back;
+--                            -- nil: as it was
 -- The pin is a Button; its owner sets its clicks and hover.
 
 local _, ns = ...
@@ -42,6 +45,12 @@ local function fit(t, box) local side = box / ROOT2; t:SetSize(side, side) end
 local Pin = {}
 
 function Pin:PinSize() return self.size end
+
+function Pin:SetHighlight(state)
+    self.hl:SetShown(state == true)
+    if state == true then fit(self.hl, self.size + 8) end
+    self:SetAlpha(state == "dim" and 0.3 or 1)
+end
 
 function Pin:SetData(d)
     local size = d.small and SMALL or SIZE
@@ -86,6 +95,9 @@ end
 function UI.MapPin(parent)
     local b = CreateFrame("Button", nil, parent)
     Mixin(b, Pin)
+    b.hl = diamond(b, "BACKGROUND", 0)
+    b.hl:SetVertexColor(UI.RGBA("ink"))
+    b.hl:Hide()
     b.ringOuter = diamond(b, "BACKGROUND", 1)
     b.ringGap = diamond(b, "BACKGROUND", 2)
     b.edge = diamond(b, "BORDER", 1)

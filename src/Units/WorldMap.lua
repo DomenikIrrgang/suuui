@@ -350,7 +350,7 @@ function M:Collect(mapID)
     if on.quests.available or on.quests.repeatable then
         local done = completedSet()
         for _, row in ipairs(starts.maps and starts.maps[mapID] or {}) do
-            local best, list = nil, {}
+            local best, list, ids = nil, {}, {}
             local giver = starts.givers and starts.givers[row[3]]
             for i = 4, #row do
                 local id = row[i]
@@ -359,6 +359,7 @@ function M:Collect(mapID)
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
                     list[#list + 1] = { name = q[1], level = level, difficulty = difficulty, state = state }
+                    ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty, state = state } end
                 end
@@ -375,7 +376,7 @@ function M:Collect(mapID)
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
                     pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
                     name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
-                    more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3],
+                    more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3], quests = ids,
                 }
             end
         end
@@ -388,7 +389,7 @@ function M:Collect(mapID)
         for _, row in ipairs(starts.drops and starts.drops[mapID] or {}) do
             local source = starts.givers and starts.givers[row[3]] or "?"
             local item = starts.items and starts.items[row[4]] or "an item"
-            local best, list = nil, {}
+            local best, list, ids = nil, {}, {}
             for i = 5, #row do
                 local id = row[i]
                 local q = starts.quests[id]
@@ -396,6 +397,7 @@ function M:Collect(mapID)
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (difficulty ~= "trivial" or on.quests.trivial) then
                     list[#list + 1] = { name = q[1], level = level }
+                    ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty } end
                 end
@@ -408,7 +410,7 @@ function M:Collect(mapID)
                     pin = { char = "!", color = "quest-" .. best.difficulty, edge = "gilt" },
                     name = list[1].name, detail = "Level " .. list[1].level,
                     listDetail = "Level " .. list[1].level .. " · " .. item .. " · " .. source,
-                    more = lines, difficulty = best.difficulty, uid = "d" .. row[3] .. ":" .. row[4], kindName = "Quests from items",
+                    more = lines, difficulty = best.difficulty, uid = "d" .. row[3] .. ":" .. row[4], kindName = "Quests from items", quests = ids,
                 }
             end
         end
@@ -657,8 +659,12 @@ function M:Pin()
     if not pin then
         pin = UI.MapPin(self.layer)
         pin:RegisterForClicks("LeftButtonUp")
-        pin:SetScript("OnEnter", function(p) if p.group then UI.ShowTooltip(p, tipFor(p.group)) end end)
-        pin:SetScript("OnLeave", function() UI.HideTooltip() end)
+        pin:SetScript("OnEnter", function(p)
+            if not p.group then return end
+            UI.ShowTooltip(p, tipFor(p.group))
+            self:HighlightQuests(p.group)
+        end)
+        pin:SetScript("OnLeave", function() UI.HideTooltip(); self:HighlightQuests(nil) end)
         pin:SetScript("OnClick", function(p)
             local g = p.group
             if not (g and g.distinct > 1) then return end
@@ -674,10 +680,36 @@ function M:Pin()
     return pin
 end
 
+-- Hovering a quest's pin rings every pin of the same quest (its giver, all
+-- the places its item drops) and fades the rest, so they show at a glance.
+local function questsOf(g)
+    local set, any = {}, false
+    for _, it in ipairs(g.items) do
+        for _, id in ipairs(it.quests or {}) do set[id] = true; any = true end
+    end
+    return any and set or nil
+end
+function M:HighlightQuests(group)
+    local set = group and questsOf(group)
+    for _, pin in ipairs(self.pins or {}) do
+        if not set then
+            pin:SetHighlight(nil)
+        else
+            local related = false
+            for _, it in ipairs(pin.group and pin.group.items or {}) do
+                for _, id in ipairs(it.quests or {}) do if set[id] then related = true break end end
+                if related then break end
+            end
+            pin:SetHighlight(related and true or "dim")
+        end
+    end
+end
+
 function M:ClearPins()
     for _, pin in ipairs(self.pins or {}) do
         pin:Hide()
         pin:ClearAllPoints()
+        pin:SetHighlight(nil)
         pin.group = nil
         table.insert(self.free, pin)
     end
