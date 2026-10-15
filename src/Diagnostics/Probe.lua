@@ -819,6 +819,10 @@ function ns.Probe.Command(arg)
         ns.MapProbe.Command(rest)
         return
     end
+    if sub == "calendar" then
+        ns.CalendarProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return

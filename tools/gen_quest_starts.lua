@@ -201,18 +201,22 @@ correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/forever
 correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "foreverItemFixes.lua" })
 
 -- quests of one-off server events Forever doesn't run (their NPCs aren't
--- there; nothing in the game says so, so a list): the Ahn'Qiraj War
--- Effort's hand-ins ("The Horde Needs Copper Bars!", "… Needs Your
--- Help!"), commendation signets and signets for war supplies (Warlord
--- Gorchuk's quest had no Gorchuk; found in game)
-local function notInForever(id, name)
+-- there; the game's calendar doesn't hold them, so a list): the Ahn'Qiraj
+-- War Effort and the Scourge Invasion, by their quest sorts (-365, -368),
+-- and the War Effort's hand-ins filed elsewhere by name ("The Horde Needs
+-- Copper Bars!", "… Needs Your Help!"), commendation signets and signets
+-- for war supplies (Warlord Gorchuk's quest had no Gorchuk; found in game)
+local NOT_RUN = { [-365] = true, [-368] = true }
+local function notInForever(id, q)
+    local name = q[QK.name]
+    if NOT_RUN[q[QK.zoneOrSort]] then return true end
     if type(name) ~= "string" then return false end
     return (id >= 8490 and id <= 8800 and name:find("^The %a+ Needs ") ~= nil)
         or name:find("Commendation Signets?$") ~= nil or name:find("Signets for War Supplies$") ~= nil
 end
 local dropped = 0
 for id, q in pairs(quests) do
-    if notInForever(id, q[QK.name]) then quests[id] = nil; dropped = dropped + 1 end
+    if notInForever(id, q) then quests[id] = nil; dropped = dropped + 1 end
 end
 print(string.format("gen_quest_starts: left out %d quests of events Forever doesn't run", dropped))
 
