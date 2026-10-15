@@ -616,6 +616,14 @@ function M:Collect(mapID)
                 if item then
                     item.x, item.y, item.small, item.uid = svc[i] / 100, svc[i + 1] / 100, true, "n" .. id
                     item.name, item.detail = n[1], n[2]
+                    -- one who walks his round (Zixil, Kira Songshine): his
+                    -- route while you hover, like a walking rare's
+                    local route = places.routes and places.routes[id] and places.routes[id][mapID]
+                    if route then
+                        item.route = route
+                        item.more = { { "|cff" .. T.color["ink-muted"].hex .. "Walks a route" .. (mapName and (" through " .. mapName) or "")
+                            .. ", shown on the map|r" } }
+                    end
                     items[#items + 1] = item
                     break
                 end

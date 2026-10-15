@@ -161,10 +161,10 @@ function M:CheckDurability()
     self.durabilityState = state
     if worst and worst <= 0 then
         self:Notify({ id = "suu:durability", kind = "until", tone = "danger", category = "Durability",
-            title = "Some of your gear is broken", icon = { glyph = "hammer" }, ["until"] = "Goes when you repair" })
+            title = "Some of your gear is broken", icon = { glyph = "anvil" }, ["until"] = "Goes when you repair" })
     elseif worst and worst <= 0.2 then
         self:Notify({ id = "suu:durability", kind = "until", tone = "warning", category = "Durability",
-            title = "Your gear is badly damaged", icon = { glyph = "hammer" }, ["until"] = "Goes when you repair" })
+            title = "Your gear is badly damaged", icon = { glyph = "anvil" }, ["until"] = "Goes when you repair" })
     elseif self.notes["suu:durability"] then
         self:Dismiss("suu:durability")
     end
@@ -1115,7 +1115,7 @@ local PREVIEW = {
     { id = "p2", kind = "action", tone = "danger", category = "Delete item", title = "Do you want to destroy Ember Pelt?",
       icon = { glyph = "trash" }, item = { icon = 134075, label = "Ember Pelt", quality = "uncommon" }, confirmText = "DELETE",
       actions = { { label = "Yes", variant = "danger" }, { label = "No" } } },
-    { id = "p3", kind = "until", category = "Durability", title = "Your gear is badly damaged", icon = { glyph = "hammer" },
+    { id = "p3", kind = "until", category = "Durability", title = "Your gear is badly damaged", icon = { glyph = "anvil" },
       tone = "warning", ["until"] = "Goes when you repair" },
     { id = "p4", kind = "timed", presence = { online = true, source = "Battle.net", people = {
         { name = "Kaelith", tag = "#1137", color = "class-priest", detail = "Kaelith · Eastern Plaguelands",

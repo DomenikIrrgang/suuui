@@ -647,7 +647,7 @@ end
 local nEventNpcs = 0
 
 local nServices, nRares = 0, 0
-local rareRoutes = {} -- a rare who walks: npc -> map -> paths
+local placeRoutes = {} -- a rare or a service NPC who walks: npc -> map -> paths
 for _, id in ipairs(npcIDs) do
     local n = npcs[id]
     local kinds = servicesOf(n)
@@ -667,10 +667,9 @@ for _, id in ipairs(npcIDs) do
                     if rare then add(rares, map, c[1], c[2], id); nRares = nRares + 1 end
                 end
             end
-            if rare then
-                local r = npcRoutes(n)
-                if r then rareRoutes[id] = r end
-            end
+            -- (a rare who roams, a vendor who walks his round)
+            local r = npcRoutes(n)
+            if r then placeRoutes[id] = r end
         end
     end
 end
@@ -824,7 +823,7 @@ w("--               :riding, :pet, :other), battlemaster,")
 w("--               guild, tabard, stable, repair, food, goods, vendor")
 w("--   services[uiMapID], rares[uiMapID] = { x, y, npcID, x, y, npcID, ... }   (x, y in percent)")
 w("--   mailboxes[uiMapID] = { x, y, x, y, ... }; treasures[uiMapID] = { x, y, name, ... }")
-w("--   routes[npcID] = { [uiMapID] = { { x, y, x, y, ... }, ... } }   (a rare who walks: his paths)")
+w("--   routes[npcID] = { [uiMapID] = { { x, y, x, y, ... }, ... } }   (a rare or a service NPC who walks: his paths)")
 w("")
 w("local _, ns = ...")
 w("")
@@ -856,7 +855,7 @@ flat("rares", rares, 3)
 flat("mailboxes", mailboxes, 2)
 flat("treasures", treasures, 3)
 w("}, routes = {")
-local nRareRoutes = writeRoutes(w, rareRoutes)
+local nRareRoutes = writeRoutes(w, placeRoutes)
 w("} }")
 w("")
 f = assert(io.open(placesOut, "wb"))
@@ -865,4 +864,4 @@ f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
 print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
-print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
+print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares and service NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
