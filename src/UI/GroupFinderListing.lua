@@ -128,7 +128,8 @@ local function roundIcon(b, texture, word, glyphSize)
     b:SetSize(TOGGLE, TOGGLE)
     local p = {}
     p.fill = circle(b, "CircleFill.tga", "surface-sunk", "BACKGROUND", 7)
-    p.edge = circle(b, "CircleEdge.tga", "gilt-line", "BORDER", 7)
+    -- the band: the thin edge texture broke into dots at 36px (found in game)
+    p.edge = circle(b, "CircleBand.tga", "gilt-line", "BORDER", 7)
     p.glyph = b:CreateTexture(nil, "ARTWORK", nil, 7)
     p.glyph:SetTexture(texture)
     p.glyph:SetSize(glyphSize or 18, glyphSize or 18)
@@ -448,6 +449,13 @@ function L:LayoutActivities()
     self.field:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -(detailsTop + 14 + S["space-1"]))
     self.field:SetSize(rightW, fieldH)
     local c = av.Comment
+    -- the placeholder: the label says what the field is (the game's
+    -- authenticator note stays as it is)
+    local instr = c and c.EditBox and c.EditBox.Instructions
+    local said = instr and instr:GetText()
+    if said and (said == _G.DESCRIPTION_OF_YOUR_GROUP or said == _G.DESCRIPTION_OF_YOUR_GROUP_MANDATORY) then
+        instr:SetText(custom and "What you’re after, for a Custom listing" or "Route, quests, gear check: anything people should know")
+    end
     if c then
         c:ClearAllPoints()
         c:SetPoint("TOPLEFT", self.field, "TOPLEFT", S["space-4"], -S["space-3"])

@@ -736,7 +736,7 @@ function M:RoleArt(b)
         return t
     end
     art.fill = circle("CircleFill.tga", "BACKGROUND")
-    art.edge = circle("CircleEdge.tga", "BORDER")
+    art.edge = circle("CircleBand.tga", "BORDER")
     art.glyph = art:CreateTexture(nil, "ARTWORK")
     art.glyph:SetSize(18, 18)
     art.glyph:SetPoint("CENTER")
