@@ -234,6 +234,12 @@ local function rowParts(row)
         p.lock = glyph(row.InstanceLockWarningIcon, "lock", 12, "amber", "OVERLAY")
         p.lock:SetPoint("CENTER")
     end
+    -- after a click, the row's own box: the game redraws only the group's
+    -- heading and relies on the check button's own tick, which is hidden
+    -- (found in game). PostClick, since the game sets OnClick on each setup.
+    check:HookScript("PostClick", function()
+        if p.redraw then p.redraw() end
+    end)
     parts[row] = p
     return p
 end
@@ -248,6 +254,7 @@ end
 local function skinGroupRow(row, data, collapsed)
     if not (row and data and row.CheckButton) then return end
     local p = rowParts(row)
+    p.redraw = nil -- the game sets the heading up again after its clicks
     local f = _G.LFGListingFrame
     local all = f and ask(f, "AreAllActivitiesForActivityGroupSelected", data.activityGroupID)
     local any = f and ask(f, "IsAnyActivityForActivityGroupSelected", data.activityGroupID)
@@ -273,7 +280,8 @@ local function skinActivityRow(row, data)
     if not (row and data and row.CheckButton) then return end
     local p = rowParts(row)
     local f = _G.LFGListingFrame
-    drawBox(p, f and ask(f, "IsActivitySelected", data.activityID) and "all" or nil)
+    p.redraw = function() drawBox(p, f and ask(f, "IsActivitySelected", data.activityID) and "all" or nil) end
+    p.redraw()
     p.count:Hide()
     -- the game's difficulty colours, in SuuUI's quest colours
     local lvl = UnitLevel("player")
