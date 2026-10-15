@@ -47,7 +47,7 @@ local S = T.space
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 
-local MERGE_RADIUS = 32 -- px on screen
+local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
 local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
 
 --------------------------------------------------------------------------------
@@ -564,9 +564,15 @@ local function merge(items, w, h)
                                     distinct = 1, uids = it.uid and { [it.uid] = true } or {} }
         end
     end
-    -- again until no two groups of a kind are within the radius: a group's
-    -- middle moves as pins join it, so one pass can leave neighbours apart
-    -- (two quest pins beside each other at Camp Taurajo; found in game)
+    return groups
+end
+
+-- Groups of a kind within the radius join, until none are: a group's
+-- middle moves as pins join it, and spreading moves groups too, so one pass
+-- can leave neighbours apart (two quest pins beside each other at Camp
+-- Taurajo; found in game).
+local function mergeGroups(groups)
+    local r2 = MERGE_RADIUS * MERGE_RADIUS
     local merged = true
     while merged do
         merged = false
@@ -756,6 +762,10 @@ function M:Layout()
     local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
     if w <= 0 or h <= 0 then return end
     local groups = merge(self.items, w, h)
+    mergeGroups(groups)
+    spread(groups)
+    -- spreading can push two of a kind together: join them, spread again
+    mergeGroups(groups)
     spread(groups)
     -- small ones under the rest, places on top
     table.sort(groups, function(a, b)
