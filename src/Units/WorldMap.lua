@@ -564,6 +564,35 @@ local function merge(items, w, h)
                                     distinct = 1, uids = it.uid and { [it.uid] = true } or {} }
         end
     end
+    -- again until no two groups of a kind are within the radius: a group's
+    -- middle moves as pins join it, so one pass can leave neighbours apart
+    -- (two quest pins beside each other at Camp Taurajo; found in game)
+    local merged = true
+    while merged do
+        merged = false
+        for i = 1, #groups do
+            local a = groups[i]
+            for j = #groups, i + 1, -1 do
+                local b = groups[j]
+                if a.key and a.key == b.key then
+                    local dx, dy = a.x - b.x, a.y - b.y
+                    if dx * dx + dy * dy < r2 then
+                        local na, nb = #a.items, #b.items
+                        a.x = (a.x * na + b.x * nb) / (na + nb)
+                        a.y = (a.y * na + b.y * nb) / (na + nb)
+                        for _, it in ipairs(b.items) do
+                            a.items[#a.items + 1] = it
+                            if not (it.uid and a.uids[it.uid]) then a.distinct = a.distinct + 1 end
+                            if it.uid then a.uids[it.uid] = true end
+                        end
+                        a.fixed = a.fixed and b.fixed
+                        table.remove(groups, j)
+                        merged = true
+                    end
+                end
+            end
+        end
+    end
     return groups
 end
 
@@ -752,7 +781,9 @@ function M:Layout()
         pin:SetData(data)
         pin.group = g
         pin:SetScale(1 / cs)
-        pin:SetFrameLevel(base + i)
+        -- (three levels each: its count tab just above it, under the next)
+        pin:SetFrameLevel(base + i * 3)
+        pin.countTab:SetFrameLevel(base + i * 3 + 1)
         pin:ClearAllPoints()
         pin:SetPoint("CENTER", self.layer, "TOPLEFT", g.x, -g.y)
         self.pins[#self.pins + 1] = pin
