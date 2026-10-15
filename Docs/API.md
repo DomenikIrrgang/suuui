@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.13.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.14.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.13.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window |
+| `SuuUI.API_VERSION` | `"0.14.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -357,7 +357,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.ReskinCheckButton(button)` (0.12) | A 16px surface-sunk box in a gilt-line edge; checked, an arcane check and edge. It follows `SetChecked` and clicks |
 | `SuuUI.UI.ReskinButton(button)` (0.12) | Blizzard's panel button (Left/Middle/Right art, or a button atlas) as SuuUI's quiet button: surface-raised in a gilt-line edge (gilt on hover), its label in `label` ink, dimmed while disabled |
 | `SuuUI.UI.ReskinEditBox(editBox)` (0.12) | An input box: Blizzard's art away, surface-sunk in a gilt-line edge (arcane while typing), `body` ink |
-| `SuuUI.UI.ReskinDropdown(dropdown)` (0.12) | Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge (gilt on hover), its text in `label` ink, SuuUI's chevron on the right. 0.13: the menu it opens too, in the context menu's look (`ReskinMenu`) |
+| `SuuUI.UI.ReskinDropdown(dropdown[, opts])` (0.12) | Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge (gilt on hover), its text in `label` ink, SuuUI's chevron on the right. 0.13: the menu it opens too, in the context menu's look (`ReskinMenu`). 0.14: `opts.glyph` (a glyph's name, "filter") makes it an icon-only dropdown: the glyph in muted ink, its gilt-line edge on hover |
 | `SuuUI.UI.ReskinIconButton(button)` (0.12) | An icon button (a grid of icons to pick from, the icon picked): Blizzard's art away, the icon cropped on a surface-sunk well in a gilt-hairline edge, gilt on hover, arcane while the button's `SelectedTexture` shows |
 | `SuuUI.UI.ReskinCollapseButton(button)` (0.12) | A small collapse/expand button: SuuUI's minus or plus in gilt-text, following the state Blizzard sets |
 | `SuuUI.UI.Spellbook(parent, { rows })` (0.12) | The Spellbook page: schools down the left (`book:SetSchools({ { label, icon, trainable, active } })`, `book.onSchool(i)`), the head (`book:SetHead(title, toTrain)`, the Unlearned spells / All ranks switches: `book:SetSwitches(a, b)`, `book.onSwitch(key, on)`), two columns of spells (`book:SetSpells({ { label, rank, sub, icon, status = "learned"\|"passive"\|"trainable"\|"future" } })`), the pager (`book:SetPage(page, pages)`, `book.onPage(delta)`). `book.cells[i].button` is a SecureActionButton: set what it casts out of combat; `book.onEnter`, `onLeave`, `onDragStart(i, cell)` |

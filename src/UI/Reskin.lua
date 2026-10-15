@@ -195,7 +195,7 @@ end
 
 -- Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge, its text
 -- in label ink, a chevron on the right.
-function UI.ReskinDropdown(d)
+function UI.ReskinDropdown(d, opts)
     if not d or d.suuDropdown then return end
     for _, r in ipairs({ d:GetRegions() }) do
         if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
@@ -203,20 +203,37 @@ function UI.ReskinDropdown(d)
     for _, key in ipairs({ "Arrow", "Background" }) do
         if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end
     end
-    local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA("surface-sunk"))
-    bg:SetAllPoints()
-    bg.suuArt = true
-    local edge = UI.Border(d, "gilt-line")
-    local chev = d:CreateTexture(nil, "OVERLAY", nil, 7)
-    chev:SetTexture(GLYPHS .. "chevronDown.tga")
-    chev:SetSize(12, 12)
-    chev:SetPoint("RIGHT", -S["space-3"], 0)
-    chev:SetVertexColor(UI.RGBA("ink-muted"))
-    chev.suuArt = true
-    d:HookScript("OnEnter", function() edge:SetColor("gilt") end)
-    d:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
     local text = d.Text or d.text
+    if opts and opts.glyph then
+        -- an icon-only dropdown (the map's filter): a glyph, its edge on hover
+        if d.Icon and d.Icon.SetAlpha then d.Icon:SetAlpha(0) end
+        local edge = UI.Border(d, "gilt-line")
+        edge:SetShown(false)
+        local glyph = d:CreateTexture(nil, "OVERLAY", nil, 7)
+        glyph:SetTexture(GLYPHS .. opts.glyph .. ".tga")
+        glyph:SetSize(14, 14)
+        glyph:SetPoint("CENTER")
+        glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        glyph.suuArt = true
+        d:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
+        d:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+        if text then text:SetAlpha(0) end
+        text = nil
+    else
+        local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
+        bg:SetColorTexture(UI.RGBA("surface-sunk"))
+        bg:SetAllPoints()
+        bg.suuArt = true
+        local edge = UI.Border(d, "gilt-line")
+        local chev = d:CreateTexture(nil, "OVERLAY", nil, 7)
+        chev:SetTexture(GLYPHS .. "chevronDown.tga")
+        chev:SetSize(12, 12)
+        chev:SetPoint("RIGHT", -S["space-3"], 0)
+        chev:SetVertexColor(UI.RGBA("ink-muted"))
+        chev.suuArt = true
+        d:HookScript("OnEnter", function() edge:SetColor("gilt") end)
+        d:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
+    end
     if text then
         ns.Fonts.Apply(text, "label")
         text:SetTextColor(UI.RGBA("ink"))

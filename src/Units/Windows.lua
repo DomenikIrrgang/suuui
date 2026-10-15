@@ -483,6 +483,32 @@ end
 
 local trackEyes = setmetatable({}, { __mode = "k" })
 
+-- The map's top: the game keeps 67px over it for its breadcrumb bar
+-- (TITLE_CANVAS_SPACER_FRAME_HEIGHT); SuuUI's starts it right under the
+-- header, level with the quest log's top (QuestMapFrame at -25). The window
+-- is as much shorter, so the map keeps its shape.
+local GAME_MAP_TOP, MAP_TOP = 67, 25
+local CUT = GAME_MAP_TOP - MAP_TOP
+
+-- A button in the header's second row: a glyph, its edge on hover.
+local function glyphButton(b, glyphName)
+    for _, r in ipairs({ b:GetRegions() }) do r:SetAlpha(0) end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        local t = b[get] and b[get](b)
+        if t then t:SetAlpha(0) end
+    end
+    local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    glyph:SetTexture(GLYPHS .. glyphName .. ".tga")
+    glyph:SetSize(14, 14)
+    glyph:SetPoint("CENTER")
+    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    local edge = UI.Border(b, "gilt-line")
+    edge:SetShown(false)
+    b:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
+    b:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+    b:SetSize(22, 22)
+end
+
 function M:RestyleQuestLog()
     local q = _G.QuestMapFrame
     if not q then return end
@@ -566,28 +592,79 @@ function M:SkinWorldMap()
     end
     quietNav()
     hooksecurefunc(f, "OnMapChanged", quietNav)
-    if f.TitleCanvasSpacerFrame then f.TitleCanvasSpacerFrame:SetHeight(26) end
+    -- the map right under the header (the game sets its top whenever the
+    -- quest log opens or closes)
+    local spacer = f.TitleCanvasSpacerFrame
+    local function placeSpacer()
+        local log = f.QuestLog and f.QuestLog:IsShown() and (f.questLogWidth or 0) or 0
+        spacer:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", -3 - log, -MAP_TOP)
+        f:OnFrameSizeChanged()
+    end
+    if spacer and f.UpdateSpacerFrameAnchoring then
+        hooksecurefunc(f, "UpdateSpacerFrameAnchoring", placeSpacer)
+        placeSpacer()
+        -- the breadcrumb bar measures itself between the spacer's top and
+        -- bottom (25px under its top): kept as tall as it was
+        local nb = f.NavBar
+        if nb then
+            local x = WorldMapConstants and WorldMapConstants.NAVBAR_X_OFFSET or 0
+            nb:SetPoint("BOTTOMRIGHT", spacer, "BOTTOMRIGHT", x, 9 - CUT)
+        end
+    end
     -- the game's own coordinates (SuuUI's status line shows them)
     for _, o in ipairs(f.overlayFrames or {}) do
         if o.PlayerCoords and o.CursorCoords then o:SetAlpha(0) end
     end
-    -- the game's filter menu into the header, left of maximize; its reset ×
-    -- away
-    local track = f.WorldMapTrackingOptionsButton
-    local function placeTrack()
-        if not track then return end
-        track:ClearAllPoints()
-        local mm = b and b.MaximizeMinimizeFrame
-        track:SetPoint("RIGHT", mm or chrome.key or chrome.close, "LEFT", -S["space-3"], 0)
-        track:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+    -- the header's second row: the game's filter menu (its reset × away)
+    -- and waypoint pin on the left, the quest log's search, count and
+    -- settings on the right
+    local track, pin = f.WorldMapTrackingOptionsButton, f.WorldMapTrackingPinButton
+    local function placeRow()
+        if track then
+            track:ClearAllPoints()
+            track:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], S["space-1"])
+            track:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+        end
+        if pin then
+            pin:ClearAllPoints()
+            if track then pin:SetPoint("LEFT", track, "RIGHT", S["space-2"], 0)
+            else pin:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], S["space-1"]) end
+            pin:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+        end
     end
     if track then
-        UI.ReskinDropdown(track)
-        track:SetSize(32, 22)
+        UI.ReskinDropdown(track, { glyph = "filter" })
+        track:SetSize(22, 22)
         if track.ResetButton then track.ResetButton:SetAlpha(0); track.ResetButton:EnableMouse(false) end
-        placeTrack()
-        -- the game anchors it to its breadcrumb bar again on every map change
-        hooksecurefunc(f, "OnMapChanged", placeTrack)
+    end
+    if pin then glyphButton(pin, "pushpin") end
+    placeRow()
+    -- the game anchors them over the map again on every map change
+    hooksecurefunc(f, "OnMapChanged", placeRow)
+    if f.AdjustOverlayFrames then hooksecurefunc(f, "AdjustOverlayFrames", placeRow) end
+    local list = _G.QuestScrollFrame
+    if list then
+        -- the list starts level with the map (the search row was over it)
+        list:SetPoint("TOPLEFT", 0, 0)
+        local gear, count, search = list.SettingsDropdown, _G.QuestLogCount, list.SearchBox
+        local right = chrome.head
+        if gear then
+            UI.ReskinDropdown(gear, { glyph = "gear" })
+            gear:SetSize(22, 22)
+            gear:ClearAllPoints()
+            gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"])
+            right = gear
+        end
+        if count then
+            count:ClearAllPoints()
+            if gear then count:SetPoint("RIGHT", gear, "LEFT", -S["space-3"], 0)
+            else count:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"]) end
+            right = count
+        end
+        if search and right ~= chrome.head then
+            search:ClearAllPoints()
+            search:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+        end
     end
     local toggle = f.SidePanelToggle
     if toggle then
@@ -657,20 +734,37 @@ function M:SkinWorldMap()
         end
     end)
     chrome.status = status
+    -- the window's size around the map's new top: windowed, shorter by the
+    -- room the game kept over the map
+    local function fitWindowed()
+        if f.IsMaximized and f:IsMaximized() then return end
+        if f.minimizedHeight then f:SetHeight(f.minimizedHeight - CUT) end
+        f:OnFrameSizeChanged()
+    end
+    hooksecurefunc(f, "Minimize", fitWindowed)
+    fitWindowed()
     -- fullscreen: the game puts the map at the screen's top, which left the
-    -- header (and minimize) above the screen; the map moves down by the
-    -- header's height and shrinks by as much
-    local function fitMaximized()
+    -- header (and minimize) above the screen; the window moves down by the
+    -- header's height and the map shrinks (keeping its shape) to fit under it
+    local rise = (chrome.riseH or 0) + S["space-3"]
+    local function placeMaximized()
         if not (f.IsMaximized and f:IsMaximized()) then return end
-        local rise = (chrome.riseH or 0) + S["space-3"]
         f:ClearAllPoints()
         f:SetPoint("TOP", UIParent, "TOP", 0, -rise)
-        local w, h = f:GetSize()
-        local scale = (h - rise) / h
-        if scale > 0 then f:SetSize(w * scale, h - rise) end
     end
-    EventRegistry:RegisterCallback("WorldMapMaximized", function() C_Timer.After(0, fitMaximized) end, self)
-    f:HookScript("OnShow", function() C_Timer.After(0, fitMaximized) end)
+    local function fitMaximized()
+        if not (f.IsMaximized and f:IsMaximized()) then return end
+        local w, h = f:GetSize()
+        local log = f.QuestLog and f.QuestLog:IsShown() and (f.questLogWidth or 0) or 0
+        local mapW, mapH = w - 5 - log, h - GAME_MAP_TOP - 2
+        local room = UIParent:GetHeight() - rise - S["space-3"] - MAP_TOP - 2
+        local scale = math.min(1, room / mapH)
+        if scale > 0 then f:SetSize(math.floor(mapW * scale + 5 + log), math.floor(mapH * scale + MAP_TOP + 2)) end
+        placeMaximized()
+    end
+    if f.UpdateMaximizedSize then hooksecurefunc(f, "UpdateMaximizedSize", fitMaximized) end
+    fitMaximized()
+    f:HookScript("OnShow", function() C_Timer.After(0, placeMaximized) end)
     self.worldMap = chrome
 end
 
