@@ -69,12 +69,13 @@ function Tip:SetContent(d)
     local inner = width - pad * 2
 
     -- the title and subtitle wrap too when longer than the width
-    -- ("Brackenwall Village, Dustwallow Marsh" ran past the edge)
+    -- ("Brackenwall Village, Dustwallow Marsh" ran past the edge); always
+    -- the inner width (a width of 0 for a short one measured as 0 and
+    -- emptied the tooltip; found in game)
     for _, t in ipairs({ self.heading, self.sub }) do
-        local long = t:GetUnboundedStringWidth() > inner
-        t:SetWordWrap(long)
+        t:SetWordWrap(true)
         t:SetJustifyH("LEFT")
-        t:SetFixedWidth(long and inner or 0)
+        t:SetFixedWidth(inner)
     end
 
     self.desc:SetShown(d.description ~= nil)
