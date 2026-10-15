@@ -481,6 +481,8 @@ local function mapTitle(mapID)
     return continent and (continent .. " › " .. info.name) or info.name
 end
 
+local trackEyes = setmetatable({}, { __mode = "k" })
+
 function M:RestyleQuestLog()
     local q = _G.QuestMapFrame
     if not q then return end
@@ -489,6 +491,31 @@ function M:RestyleQuestLog()
     if d then
         for _, key in ipairs({ "Bg", "SealMaterialBG" }) do if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end end
         if d.BorderFrame then d.BorderFrame:SetAlpha(0) end
+    end
+    -- the list's ornate frame and parchment away
+    local list = _G.QuestScrollFrame
+    if list then
+        for _, key in ipairs({ "BorderFrame", "Background" }) do if list[key] and list[key].SetAlpha then list[key]:SetAlpha(0) end end
+        -- a tracked quest: the drawing's eye, not the game's yellow tick
+        local pool = list.titleFramePool
+        if pool and pool.EnumerateActive then
+            for row in pool:EnumerateActive() do
+                local cb = row.Checkbox
+                if cb then
+                    local eye = trackEyes[cb]
+                    if not eye then
+                        for _, r in ipairs({ cb:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
+                        eye = cb:CreateTexture(nil, "OVERLAY", nil, 7)
+                        eye:SetTexture(GLYPHS .. "eye.tga")
+                        eye:SetSize(14, 14)
+                        eye:SetPoint("CENTER")
+                        eye:SetVertexColor(UI.RGBA("ink-muted"))
+                        trackEyes[cb] = eye
+                    end
+                    eye:SetShown(cb.CheckMark and cb.CheckMark:IsShown() or false)
+                end
+            end
+        end
     end
 end
 
@@ -505,12 +532,60 @@ function M:SkinWorldMap()
     -- the help-plate button: away
     if b and b.Tutorial then b.Tutorial:SetAlpha(0); b.Tutorial:EnableMouse(false) end
     if b and b.MaximizeMinimizeFrame then skinMaxMin(chrome, b.MaximizeMinimizeFrame) end
-    -- the title follows the map
+    -- the title follows the map; a click on it goes up a level (as a
+    -- right-click on the map does): the header names the place, so the
+    -- game's breadcrumb bar goes, and its strip with it
+    local up = CreateFrame("Button", nil, chrome.head)
+    up:SetPoint("TOPLEFT", chrome.title, "TOPLEFT", -2, 2)
+    up:SetPoint("BOTTOMRIGHT", chrome.title, "BOTTOMRIGHT", 2, -2)
+    up:SetFrameLevel(chrome.head:GetFrameLevel() + 2)
+    up:SetScript("OnClick", function()
+        local info = C_Map.GetMapInfo(f:GetMapID())
+        if info and info.parentMapID and info.parentMapID > 0 then f:SetMapID(info.parentMapID) end
+    end)
+    up:SetScript("OnEnter", function(self)
+        local info = C_Map.GetMapInfo(f:GetMapID())
+        local parent = info and info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
+        if parent then UI.ShowTooltip(self, { title = "Up to " .. parent.name, description = "Or right-click the map" }) end
+        chrome.title:SetColor("ink")
+    end)
+    up:SetScript("OnLeave", function() UI.HideTooltip(); chrome.title:SetColor("gilt-text") end)
     EventRegistry:RegisterCallback("MapCanvas.MapSet", function(_, mapID)
         if f:IsShown() then chrome:SetTitle(mapTitle(mapID)) end
     end, self)
-    -- the game's filter menu and the side-panel toggle in SuuUI's look
-    if f.WorldMapTrackingOptionsButton then UI.ReskinDropdown(f.WorldMapTrackingOptionsButton) end
+    -- (off screen, not only see-through: its buttons would still take clicks
+    -- over the map's top)
+    local function hideNav()
+        if not f.NavBar then return end
+        f.NavBar:SetAlpha(0)
+        f.NavBar:ClearAllPoints()
+        f.NavBar:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -2000, 2000)
+    end
+    hideNav()
+    hooksecurefunc(f, "OnMapChanged", hideNav)
+    if f.TitleCanvasSpacerFrame then f.TitleCanvasSpacerFrame:SetHeight(26) end
+    -- the game's own coordinates (SuuUI's status line shows them)
+    for _, o in ipairs(f.overlayFrames or {}) do
+        if o.PlayerCoords and o.CursorCoords then o:SetAlpha(0) end
+    end
+    -- the game's filter menu into the header, left of maximize; its reset ×
+    -- away
+    local track = f.WorldMapTrackingOptionsButton
+    local function placeTrack()
+        if not track then return end
+        track:ClearAllPoints()
+        local mm = b and b.MaximizeMinimizeFrame
+        track:SetPoint("RIGHT", mm or chrome.key or chrome.close, "LEFT", -S["space-3"], 0)
+        track:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+    end
+    if track then
+        UI.ReskinDropdown(track)
+        track:SetSize(32, 22)
+        if track.ResetButton then track.ResetButton:SetAlpha(0); track.ResetButton:EnableMouse(false) end
+        placeTrack()
+        -- the game anchors it to its breadcrumb bar again on every map change
+        hooksecurefunc(f, "OnMapChanged", placeTrack)
+    end
     local toggle = f.SidePanelToggle
     if toggle then
         for _, key in ipairs({ "OpenButton", "CloseButton" }) do
