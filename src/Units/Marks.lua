@@ -679,8 +679,11 @@ function M:Hook()
     -- the game draws its own waypoint pin where its waypoint is: while that
     -- is a mark showing the way, the mark is drawn already (found in game:
     -- the two on top of each other); a waypoint of your own stays
+    -- (found by its mixin: asking every provider its pin template errors on
+    -- some, the vignettes', which turned this module off; found in game)
+    local mixin = _G.WaypointLocationDataProviderMixin
     for provider in pairs(f.dataProviders or {}) do
-        if provider.GetPinTemplate and provider:GetPinTemplate() == "WaypointLocationPinTemplate" then
+        if mixin and provider.RefreshAllData == mixin.RefreshAllData and provider.HandleClick == mixin.HandleClick then
             self.waypointProvider = provider
             hooksecurefunc(provider, "RefreshAllData", function(p) self:HideGamePin(p) end)
         end
