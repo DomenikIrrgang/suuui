@@ -542,7 +542,8 @@ function M:Collect(mapID)
     for i = 1, #svc, 3 do
         local id = svc[i + 2]
         local n = npcs[id]
-        if n and n[4] and (n[3] and me.faction and n[3]:find(me.faction, 1, true)) then
+        -- (a holiday's NPC only while it's on)
+        if n and n[4] and (n[3] and me.faction and n[3]:find(me.faction, 1, true)) and (not n[8] or eventOn(n[8], mapID)) then
             for kind in n[4]:gmatch("[^,]+") do
                 local item
                 local class = kind:match("^class:(.+)$")
@@ -591,7 +592,7 @@ function M:Collect(mapID)
         local rares = places.rares and places.rares[mapID] or {}
         for i = 1, #rares, 3 do
             local n = npcs[rares[i + 2]]
-            if n then
+            if n and (not n[8] or eventOn(n[8], mapID)) then
                 local elite = n[5] == "rareElite"
                 local level = n[6] and (n[7] and n[7] ~= n[6] and (n[6] .. "-" .. n[7]) or tostring(n[6])) or nil
                 items[#items + 1] = { x = rares[i] / 100, y = rares[i + 1] / 100, key = elite and "rareElite" or "rare",

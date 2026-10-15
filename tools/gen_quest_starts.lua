@@ -567,6 +567,41 @@ end
 local npcIDs = {}
 for id in pairs(npcs) do npcIDs[#npcIDs + 1] = id end
 table.sort(npcIDs)
+-- a holiday's NPC (its pins show only while the holiday is on): the
+-- Darkmoon Faire's by its faction (1555, at both sites), others by their
+-- title or name ("Smokywood Pastures", "Hallow's End Treats", "Lunar
+-- Festival Vendor"), or by their quests when all of them are one event's
+local NPC_EVENT_TEXT = {
+    { "Darkmoon Faire", "darkmoonFaire" }, { "Smokywood Pastures", "winterVeil" }, { "Winter Veil", "winterVeil" },
+    { "Hallow's End", "hallowsEnd" }, { "Lunar Festival", "lunarFestival" }, { "Midsummer", "midsummer" },
+    { "Fire Festival", "midsummer" }, { "Love is in the Air", "loveIsInTheAir" }, { "Noblegarden", "noblegarden" },
+    { "Children's Week", "childrensWeek" }, { "Harvest Festival", "harvestFestival" },
+}
+local function npcEvent(n)
+    if n[NK.factionID] == 1555 then return "darkmoonFaire" end
+    for _, field in pairs({ n[NK.subName] or false, n[NK.name] or false }) do
+        if type(field) == "string" then
+            for _, t in ipairs(NPC_EVENT_TEXT) do
+                if field:find(t[1], 1, true) then return t[2] end
+            end
+        end
+    end
+    local key, any = nil, false
+    for _, list in ipairs({ n[NK.questStarts], n[NK.questEnds] }) do
+        for _, qid in ipairs(type(list) == "table" and list or {}) do
+            if quests[qid] then
+                any = true
+                local e = eventOf[qid]
+                if not e or (key and key ~= e) then return nil end
+                key = e
+            end
+        end
+    end
+    -- (a holiday the quests don't name doesn't hide a town's vendor)
+    return any and key ~= "seasonal" and key or nil
+end
+local nEventNpcs = 0
+
 local nServices, nRares = 0, 0
 for _, id in ipairs(npcIDs) do
     local n = npcs[id]
@@ -576,8 +611,10 @@ for _, id in ipairs(npcIDs) do
     if #kinds > 0 or rare then
         local spawns = spawnsAll(n, NK.spawns, rare and 6 or 2)
         if next(spawns) then
+            local event = npcEvent(n)
+            if event then nEventNpcs = nEventNpcs + 1 end
             placeNpcs[id] = { n[NK.name], n[NK.subName], n[NK.friendlyToFaction], #kinds > 0 and table.concat(kinds, ",") or nil,
-                              rare, n[NK.minLevel], n[NK.maxLevel] }
+                              rare, n[NK.minLevel], n[NK.maxLevel], event }
             for map, list in pairs(spawns) do
                 for _, c in ipairs(list) do
                     if #kinds > 0 then add(services, map, c[1], c[2], id); nServices = nServices + 1 end
@@ -748,7 +785,8 @@ w("-- The world map's other pins: town services, mailboxes, rares, treasure ches
 w("--   QuestieDB Forever data with its corrections, commit " .. (sources.questiedb or "?") .. " (github.com/Questie/QuestieDB, no license stated)")
 w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_quest_starts.sh")
 w("--   npcs[id] = { name, title, friendly (\"A\", \"H\", \"AH\" or nil), services (\"inn,repair,...\" in the")
-w("--               order the map picks the one it shows), rank (\"rare\" or \"rareElite\"), minLevel, maxLevel }")
+w("--               order the map picks the one it shows), rank (\"rare\" or \"rareElite\"), minLevel, maxLevel,")
+w("--               event (a holiday's NPC, shown only while it's on: \"darkmoonFaire\", \"winterVeil\", …) }")
 w("--     services: spirit, inn, bank, auction, class:WARRIOR, trainer:alchemy (a profession, or :weapon,")
 w("--               :riding, :pet, :other), battlemaster,")
 w("--               guild, tabard, stable, repair, food, goods, vendor")
@@ -760,7 +798,8 @@ w("")
 w("ns.MapPlaces = { npcs = {")
 for _, id in ipairs(npcIDs) do
     local r = placeNpcs[id]
-    if r then w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s },", id, str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]), num(r[6]), num(r[7]))) end
+    if r then w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s%s },", id, str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]), num(r[6]), num(r[7]),
+        r[8] and (", %q"):format(r[8]) or "")) end
 end
 local function flat(name, t, perRow)
     w("}, " .. name .. " = {")
@@ -791,4 +830,4 @@ f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
 print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, #rnpcs, out))
-print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns -> %s", nServices, nRares, nMail, nChests, placesOut))
+print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, placesOut))
