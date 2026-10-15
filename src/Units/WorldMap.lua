@@ -483,11 +483,24 @@ local function tipFor(g)
         return { title = first.name, titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
                  subtitle = detail, lines = #lines > 0 and lines or nil }
     end
-    local lines = {}
-    for i, it in ipairs(g.items) do
-        if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#g.items - 12) } break end
-        lines[#lines + 1] = { it.name or "?", it.detail or "" }
+    -- one line per name: the same NPC's spawn points, mailboxes, a chest
+    -- kind read once with how many ("Mailbox ×2"; found in game)
+    local seen, order = {}, {}
+    for _, it in ipairs(g.items) do
+        local key = (it.name or "?") .. "\0" .. (it.detail or "")
+        if not seen[key] then
+            seen[key] = { name = it.name or "?", detail = it.detail or "", n = 0 }
+            order[#order + 1] = seen[key]
+        end
+        seen[key].n = seen[key].n + 1
     end
+    local lines = {}
+    for i, e in ipairs(order) do
+        if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#order - 12) } break end
+        lines[#lines + 1] = { e.name .. (e.n > 1 and (" ×" .. e.n) or ""), e.detail }
+    end
+    -- all one name: the title says it all
+    if #order == 1 and order[1].detail == "" then lines = nil end
     local kind = first.kindName or (first.repeatable and "Repeatable quests") or (first.key == "available" and "Quests to pick up")
         or first.detail or ""
     return { title = kind .. " · " .. #g.items, lines = lines, meta = "Click to zoom in" }
