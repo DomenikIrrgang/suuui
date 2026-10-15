@@ -250,6 +250,7 @@ function M:Follow()
     local browse = _G.LFGBrowseFrame
     local on = f:IsShown() and browse and browse:IsShown()
     self.browse:SetShown(on and true or false)
+    self.cover:SetShown(on and true or false)
     if browse then browse:SetAlpha(on and 0 or 1) end
     if on then self:Render() end
 end
@@ -266,6 +267,17 @@ function M:Build()
     b.suuOwn = true
     b:Hide()
     self.browse = b
+    -- Blizzard's own Browse page stays shown (out of sight) under ours: a
+    -- cover over all of it below the tab row, so none of its rows, buttons
+    -- or tooltips can be reached around our page's edges (its tooltip for
+    -- a listing that was gone errored, found in game)
+    local cover = CreateFrame("Frame", nil, f)
+    cover:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -24)
+    cover:SetPoint("BOTTOMRIGHT")
+    cover:SetFrameLevel(f:GetFrameLevel() + 99)
+    cover:EnableMouse(true)
+    cover:Hide()
+    self.cover = cover
     self:Wire(b)
     -- List yourself: the game's own panel, restyled (stage 3)
     if _G.LFGListingFrame then UI.SkinGroupFinderListing(_G.LFGListingFrame) end
