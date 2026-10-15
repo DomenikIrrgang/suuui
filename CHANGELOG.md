@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **World map** in SuuUI's look: a header with Continent › Zone, the map right under it, the quest log restyled beside it.
+- **Map pins**: what's around you, on the map.
+  - **Quests to pick up:** a "!" where each quest you can take now is given, in its difficulty colour by the original game's rule. A quest shows only when you can really take it: your level, race and class, the quests before it, its profession skill and reputation. Its card names the giver and their other quests. Repeatable quests are blue.
+  - **Quests from items:** a "!" where the mobs or objects live that drop an item starting a quest.
+  - **Hover a quest** and every pin of it is ringed while the rest fade. A quest giver who walks a route has the route drawn on the map ("Warcaller Gorlach walks round Orgrimmar").
+  - **Dungeons and raids:** a slowly turning swirl at each entrance (raids with a second ring), with the recommended levels on its card, each wing's too (Scarlet Monastery's Graveyard 30–38 …). Battlegrounds with crossed swords.
+  - **Places:** flight masters, campfires you found, innkeepers, repair, mailboxes, vendors, trainers (your class's, professions' drawn after the game's icons, weapon masters, riding), bankers, auctioneers and more.
+  - **Rares** at every spot they spawn at: hover one and all its spots are ringed; a rare who walks has its route drawn. Treasure chests too.
+  - **Unexplored areas** drawn tinted where the game would show them once explored.
+  - **Holidays:** a holiday's quests and vendors show only while it's on, by the game's calendar; the Darkmoon Faire only at the site it's at.
+  - **Map filters** in the header choose what shows, in groups (Quests, Places, Services, Trading, Trainers, Rares and treasures).
+  - Pins of a kind close together merge with a count (a click zooms in). Zoomed all the way in, every pin sits on its exact spot, a little larger.
+- `/suu probe calendar` and `/suu probe proficons` for checking what the game reports.
+
 ## 0.3.0-beta.1 (2026-10-15)
 
 ### New
