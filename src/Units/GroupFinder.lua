@@ -17,7 +17,7 @@
 -- it out of chat); turning it off stops it.
 -- A built-in module written against the public API only.
 
-local UI = SuuUI.UI
+local UI, T = SuuUI.UI, SuuUI.Tokens
 local LFG = SuuUI.LFG
 
 local M = SuuUI.RegisterModule({
