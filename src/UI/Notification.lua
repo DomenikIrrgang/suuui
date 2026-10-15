@@ -728,6 +728,7 @@ local function link(parent, text, onClick)
     -- the left, so a right-aligned link stood in from the edge)
     local function fit() b:SetWidth(math.ceil(b.label:GetUnboundedStringWidth())) end
     hooksecurefunc(b.label, "SetValue", fit)
+    b:HookScript("OnShow", fit) -- the font may not measure before it's shown
     fit()
     return b
 end
