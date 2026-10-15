@@ -181,6 +181,16 @@ local function difficultyOf(level)
     return "standard"
 end
 
+-- The level at and below which a quest is grey for you, as the original
+-- game had it (Forever's own colour keeps a level 3 quest green for a level
+-- 15 character; found in game, Mulgore).
+local function grayLevel(p)
+    if p <= 5 then return 0 end
+    if p <= 39 then return p - 5 - math.floor(p / 10) end
+    if p <= 59 then return p - 1 - math.floor(p / 5) end
+    return p - 9
+end
+
 -- who you are, for what you can pick up and who serves you
 function M:Player()
     local level = UnitLevel("player")
@@ -234,6 +244,7 @@ local function questState(q, id, me, done)
     for _, other in ipairs(q[8] or {}) do if done[other] or onQuest(other) then return nil end end
     local level = (q[3] and q[3] > 0) and q[3] or me.level
     local difficulty = difficultyOf(level)
+    if difficulty == "standard" and level <= grayLevel(me.level) then difficulty = "trivial" end
     -- far above you (the data often lacks the level a quest asks): the
     -- game wouldn't offer it yet
     if difficulty == "impossible" then return nil end
@@ -270,7 +281,7 @@ function M:Collect(mapID)
                 local repeatable = best.state == "repeatable"
                 local lines = {}
                 for i, q in ipairs(list) do
-                    if i > 1 then lines[#lines + 1] = { q.name, "Level " .. q.level } end
+                    if i > 1 then lines[#lines + 1] = { q.name .. "  |cff" .. T.color["ink-muted"].hex .. "Level " .. q.level .. "|r" } end
                 end
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
@@ -494,10 +505,14 @@ local function tipFor(g)
         end
         seen[key].n = seen[key].n + 1
     end
+    -- one line each, the title after the name in muted ink (two columns
+    -- overlapped once titles ran long; found in game)
+    local muted = "|cff" .. T.color["ink-muted"].hex
     local lines = {}
     for i, e in ipairs(order) do
         if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#order - 12) } break end
-        lines[#lines + 1] = { e.name .. (e.n > 1 and (" ×" .. e.n) or ""), e.detail }
+        local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
+        lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name }
     end
     -- all one name: the title says it all
     if #order == 1 and order[1].detail == "" then lines = nil end

@@ -94,6 +94,14 @@ function UI.MapPin(parent)
     b.glyph:SetPoint("CENTER")
     b.char = UI.Text(b, "label", "ink")
     b.char:SetPoint("CENTER", 0, 0)
+    -- "!" and "?" at 14 px, with the larger pins
+    local charFont = _G.SuuUIMapPinChar
+    if not charFont then
+        charFont = CreateFont("SuuUIMapPinChar")
+        local file, _, flags = ns.Fonts.Get("label"):GetFont()
+        charFont:SetFont(file, 14, flags or "")
+    end
+    b.char:SetFontObject(charFont)
     b.countTab = CreateFrame("Frame", nil, b)
     b.countTab:SetPoint("CENTER", b, "BOTTOMRIGHT", -1, 2)
     b.countTab:SetFrameLevel(b:GetFrameLevel() + 2)
