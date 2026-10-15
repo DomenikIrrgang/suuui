@@ -19,7 +19,7 @@ Points still open are marked **Open** and listed at the end.
 | Categories | **Dungeons** (29 activities, including Forever's own: Excavation Site: Wetlands, Ruins of Lordaeron, City of Dalaran, Hall of Thanes), **Quests & Zones** (40 activities, one per zone, in the groups Kalimdor and Eastern Kingdoms), **Custom** (1). There's no raid category at level 22. Raids will appear at higher levels, so the library reads categories and activities at run time and never hard-codes them. |
 | Activities | `GetAvailableActivityGroups(category)`, then `GetAvailableActivities(category, group)`. Each has a name, a suggested maximum level and a size (5 for dungeons, 10 for Upper Blackrock Spire, 0 for zones). |
 | Search | Works from a click or a key press (a typed command counts). **Blocked from a timer** (`ADDON_ACTION_BLOCKED`), so the library can't refresh the tool by itself. |
-| Results | `GetSearchResultInfo`: activity IDs, leader name (sometimes missing), number of members, age, comment, name, delisted, new player friendly, play style. `GetSearchResultMemberCounts`: tanks, healers and damage still needed. Results include single players looking for a group (1 member). They are secret during "chat messaging lockdown" (game docs). **Open:** when that lockdown applies. |
+| Results | `GetSearchResultInfo`: activity IDs, leader name (sometimes missing), number of members, age, comment, name, delisted, new player friendly, play style. `GetSearchResultMemberCounts`: tanks, healers and damage still needed, and the members by the role each chose (TANK, HEALER, DAMAGER, NOROLE). The ones still needed are a 1 tank / 1 healer / 3 damage template less the members who chose them, never capped by the free spots; the game doesn't enforce roles (a group of four damage dealers still needs a tank and a healer). Results include single players looking for a group (1 member). They are secret during "chat messaging lockdown" (game docs). **Open:** when that lockdown applies. |
 | Your listing | `GetActiveEntryInfo` (activities, comment, new player friendly, play style, voice) and `GetLFGRoles` (leader, tank, healer, damage) can be read. |
 | Create or update a listing | **Blocked** from addon code, even from a click. Listing yourself goes through the game's own listing panel, which SuuUI restyles and lays out (your clicks on its controls save, like the guild Settings tab). |
 | Delist | `RemoveListing` works from a click. |
@@ -98,6 +98,7 @@ Entry {
   roles = {
     needed      -- { tank = n | true, healer = ..., damage = ... }  (groups)
     offered     -- { tank = true, ... }                             (players)
+    has         -- { tank = n, healer, damage, none = n }           (a group's members by the role each chose; tool only)
   }
   classes       -- { WARRIOR = true, ... } asked for by class
   need          -- how many more players, when known

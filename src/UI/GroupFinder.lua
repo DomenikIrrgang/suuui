@@ -26,7 +26,8 @@
 --   })
 --     row = { key, activity, level ("29+"), newPlayerFriendly, reason, match,
 --             leader, class (file), who ("Lvl 31 Mage"), playstyle, post,
---             slots = { "tank" | "healer" | "damage" | "member" | "need:tank" | "open" },
+--             slots = { "tank" | "healer" | "damage" (offered) | "has:tank" | "has:none"
+--                       (a member, greyed) | "need:tank" | "open" }, rolesTip (hover text),
 --             offered = { tank, healer, damage }, members = { have, max },
 --             sources = { "Tool", "LookingForGroup", ... }, age ("2m"), canInvite }
 --   b.onRefresh(), b.onFilter(changes), b.onWhisper(row), b.onInvite(row),
@@ -50,8 +51,9 @@ local ICON = 18
 -- Small parts: a role icon, a source badge
 --------------------------------------------------------------------------------
 
--- A role icon (design component RoleIcon): filled, needed (dashed: a dim
--- edge), your role (arcane), a member of unknown role (a dot), open (hollow).
+-- A role icon (design component RoleIcon): filled (offered), has (a member
+-- with it: greyed, ink-faint in gilt-faint, no fill), needed (a dim edge),
+-- your role (arcane), a member with no role (a greyed diamond), open (hollow).
 local function roleIcon(parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(ICON, ICON)
@@ -65,12 +67,26 @@ local function roleIcon(parent)
     f.dot:SetPoint("CENTER")
     function f:Set(kind, mine)
         local need = kind:match("^need:(.+)$")
-        local role = need or kind
+        local has = kind:match("^has:(.+)$")
+        if kind == "member" then has = "none" end
+        local role = need or has or kind
         self.dot:Hide()
         self.glyph:Show()
         self.bg:Show()
         self.edge:SetShown(true)
-        if ROLE_TEX[role] then
+        if has then
+            -- what the group has: greyed
+            self.bg:Hide()
+            if ROLE_TEX[has] then
+                self.glyph:SetTexture(ROLE_TEX[has])
+                self.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+                self.edge:SetColor("gilt-faint")
+            else
+                self.glyph:Hide(); self.edge:SetShown(false)
+                self.dot:SetVertexColor(UI.RGBA("ink-faint"))
+                self.dot:Show()
+            end
+        elseif ROLE_TEX[role] then
             self.glyph:SetTexture(ROLE_TEX[role])
             if need then
                 self.bg:Hide()
@@ -80,10 +96,6 @@ local function roleIcon(parent)
                 self.edge:SetColor("gilt-line")
                 self.glyph:SetVertexColor(UI.RGBA("ink"))
             end
-        elseif kind == "member" then
-            self.glyph:Hide(); self.bg:Hide(); self.edge:SetShown(false)
-            self.dot:SetVertexColor(UI.RGBA("ink-muted"))
-            self.dot:Show()
         else
             -- an open spot
             self.glyph:Hide(); self.bg:Hide()
@@ -165,6 +177,14 @@ local function makeRow(b)
     r.badges, r.slots = {}, {}
     r.count = UI.Text(r, "numeric", "ink-muted")
     r.rolesLabel = UI.Text(r, "caption", "ink-muted")
+    r.slotsHit = CreateFrame("Frame", nil, r)
+    r.slotsHit:SetFrameLevel(r:GetFrameLevel() + 5)
+    r.slotsHit:SetScript("OnEnter", function(self)
+        r.hover:Show()
+        UI.ShowTooltip(self, { title = "Roles", description = self.tip })
+    end)
+    r.slotsHit:SetScript("OnLeave", function() r.hover:Hide(); UI.HideTooltip() end)
+    r.slotsHit:Hide()
     r:SetScript("OnEnter", function(self)
         self.hover:Show()
         local d = self.data
@@ -269,6 +289,16 @@ local function drawRow(b, r, d, y, width)
         anchor = s
     end
     for i = #slots + 1, #r.slots do r.slots[i]:Hide() end
+    -- hovering the slots: all the group has and needs
+    r.slotsHit:ClearAllPoints()
+    if #slots > 0 and d.rolesTip then
+        r.slotsHit:SetPoint("TOPLEFT", r.slots[1], "TOPLEFT", -2, 2)
+        r.slotsHit:SetPoint("BOTTOMRIGHT", r.slots[#slots], "BOTTOMRIGHT", 2, -2)
+        r.slotsHit.tip = d.rolesTip
+        r.slotsHit:Show()
+    else
+        r.slotsHit:Hide()
+    end
     r.rolesLabel:SetValue(d.isPlayer and #slots > 0 and "Roles:" or "")
     r.rolesLabel:ClearAllPoints()
     r.rolesLabel:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)

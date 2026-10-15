@@ -60,6 +60,64 @@ local function ago(seconds)
     return math.floor(seconds / 3600) .. "h"
 end
 
+local ROLE_WORD = { tank = "Tank", healer = "Healer", damage = "Damage" }
+
+-- A group's spots (design: RoleSlots, capped with your role first): what it
+-- has, greyed (its members by the role each chose, then members with no
+-- role; chat gives only a count), what it needs (tank, healer, damage, your
+-- roles first, no more than its free spots: the game's needed roles aren't
+-- capped and roles aren't enforced), then open spots. Groups above 10: no
+-- member slots ("12/40" says it). Also the hover text: all it has and needs.
+local function groupSlots(e, mine)
+    local slots = {}
+    local have = e.members and e.members[1] or 0
+    local max = e.members and e.members[2]
+    local small = not max or max <= 10
+    local has = e.roles.has
+    local shown = 0
+    if small then
+        for _, role in ipairs({ "tank", "healer", "damage", "none" }) do
+            for _ = 1, has and has[role] or 0 do slots[#slots + 1] = "has:" .. role; shown = shown + 1 end
+        end
+        for _ = shown + 1, have do slots[#slots + 1] = "has:none" end
+    end
+    local needed = {}
+    local function add(role)
+        local n = e.roles.needed[role]
+        n = (type(n) == "number" and n) or (n and 1) or 0
+        for _ = 1, n do needed[#needed + 1] = role end
+    end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do if mine[role] then add(role) end end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do if not mine[role] then add(role) end end
+    local free = max and math.max(0, max - have)
+    local fit = free and math.min(#needed, free) or #needed
+    for i = 1, fit do slots[#slots + 1] = "need:" .. needed[i] end
+    if max and small then
+        for _ = 1, free - fit do slots[#slots + 1] = "open" end
+    end
+    -- the hover text
+    local function list(counts)
+        local out = {}
+        for _, role in ipairs({ "tank", "healer", "damage" }) do
+            local n = counts[role] or 0
+            if n > 0 then out[#out + 1] = n .. " " .. ROLE_WORD[role] end
+        end
+        if (counts.none or 0) > 0 then out[#out + 1] = counts.none .. " without a role" end
+        return table.concat(out, ", ")
+    end
+    local hasCounts = {}
+    if has then for k, v in pairs(has) do hasCounts[k] = v end else hasCounts.none = have end
+    local needCounts = {}
+    for _, role in ipairs(needed) do needCounts[role] = (needCounts[role] or 0) + 1 end
+    local tip = {}
+    if have > 0 then tip[#tip + 1] = "Has: " .. list(hasCounts) end
+    if #needed > 0 then tip[#tip + 1] = "Needs: " .. list(needCounts) end
+    if free and #needed > free then
+        tip[#tip + 1] = ("%d free %s: any of these"):format(free, free == 1 and "spot" or "spots")
+    end
+    return slots, table.concat(tip, "\n")
+end
+
 local function className(file)
     return file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file] or nil
 end
@@ -86,20 +144,9 @@ function M:Row(e, interest)
     if tool then sources[#sources + 1] = "Tool" end
     if chat then sources[#sources + 1] = chat.channel == "SAY" and "Say" or (chat.channel == "YELL" and "Yell" or chat.channel) end
     -- roles: a group's spots, or what a player offers
-    local slots = {}
+    local slots, rolesTip = {}, nil
     if e.intent == "group" then
-        local have = e.members and e.members[1] or 0
-        for _ = 1, have do slots[#slots + 1] = "member" end
-        local needed = 0
-        for _, role in ipairs({ "tank", "healer", "damage" }) do
-            local n = e.roles.needed[role]
-            n = (type(n) == "number" and n) or (n and 1) or 0
-            for _ = 1, n do slots[#slots + 1] = "need:" .. role; needed = needed + 1 end
-        end
-        local max = e.members and e.members[2]
-        if max and max <= 10 then
-            for _ = 1, math.max(0, max - have - needed) do slots[#slots + 1] = "open" end
-        end
+        slots, rolesTip = groupSlots(e, interest.roles or {})
     else
         for _, role in ipairs({ "tank", "healer", "damage" }) do
             if e.roles.offered[role] then slots[#slots + 1] = role end
@@ -123,7 +170,7 @@ function M:Row(e, interest)
         newPlayerFriendly = tool and tool.newPlayerFriendly, reason = reason, match = reason ~= nil,
         leader = e.leader and e.leader.name or e.key, class = e.leader and e.leader.class, who = who,
         playstyle = playstyle, post = post,
-        slots = slots, mine = interest.roles, members = e.members, sources = sources, age = ago(age),
+        slots = slots, rolesTip = rolesTip ~= "" and rolesTip or nil, mine = interest.roles, members = e.members, sources = sources, age = ago(age),
         canInvite = LFG.CanInvite(e),
     }
 end

@@ -10,7 +10,8 @@
 --
 -- entry = {
 --   key, intent ("group" | "player"), activities = { key }, quests = { id },
---   roles = { needed = { tank = n|true, healer, damage }, offered = { ... } },
+--   roles = { needed = { tank = n|true, healer, damage }, offered = { ... },
+--             has = { tank = n, healer, damage, none } (a group's members by role, from the tool) },
 --   classes = { WARRIOR = true, ... }, need, members = { have, max },
 --   level = { min, max }, leader = { name, class, level, guid },
 --   text, confidence, firstSeen, lastSeen, you,
@@ -38,6 +39,7 @@ local function signature(e)
     for _, side in ipairs({ "needed", "offered" }) do
         for _, role in ipairs({ "tank", "healer", "damage" }) do parts[#parts + 1] = tostring(e.roles[side][role]) end
     end
+    for _, role in ipairs({ "tank", "healer", "damage", "none" }) do parts[#parts + 1] = tostring(e.roles.has and e.roles.has[role]) end
     return table.concat(parts, "|")
 end
 
@@ -54,6 +56,10 @@ local function rebuild(e)
     e.intent = (tool and tool.intent) or (chat and chat.intent)
     e.roles = { needed = {}, offered = {} }
     if tool then
+        if tool.has then
+            e.roles.has = {}
+            for k, v in pairs(tool.has) do e.roles.has[k] = v end
+        end
         for k, v in pairs(tool.needed or {}) do e.roles.needed[k] = v end
         for k, v in pairs(tool.offered or {}) do e.roles.offered[k] = v end
     elseif chat then

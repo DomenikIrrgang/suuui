@@ -61,6 +61,16 @@ local function readResult(id, category)
             if type(n) == "number" and n > 0 then data.needed[role] = n; need = need + n end
         end
         if data.intent == "group" then data.need = need end
+        -- what it has: its members by the role each chose (the game doesn't
+        -- enforce roles, so the remaining ones above can add up to more than
+        -- the free spots: a group of four damage dealers still needs a tank
+        -- and a healer, found in game)
+        local has = {}
+        for role, field in pairs({ tank = "TANK", healer = "HEALER", damage = "DAMAGER", none = "NOROLE" }) do
+            local n = counts[field]
+            if type(n) == "number" and n > 0 then has[role] = n end
+        end
+        data.has = has
     end
     local okL, leader = pcall(L.GetSearchResultLeaderInfo, id)
     if okL and tableOK(leader) then
