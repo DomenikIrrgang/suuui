@@ -5,6 +5,8 @@
 --   Browse  one list of groups and players looking, from the tool and from
 --           chat, in Groups and Players; filters; the tool's age and
 --           Refresh (the tool searches only on a click)
+--   List yourself  the game's own listing panel in SuuUI's look (its
+--           controls stay the game's: addons can't list you)
 -- Starting the module starts the library (it joins LookingForGroup and keeps
 -- it out of chat); turning it off stops it.
 -- A built-in module written against the public API only.
@@ -265,6 +267,8 @@ function M:Build()
     b:Hide()
     self.browse = b
     self:Wire(b)
+    -- List yourself: the game's own panel, restyled (stage 3)
+    if _G.LFGListingFrame then UI.SkinGroupFinderListing(_G.LFGListingFrame) end
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide() end)
     for _, c in ipairs({ _G.LFGBrowseFrame, _G.LFGListingFrame, _G.LFGWhoListFrame }) do
