@@ -205,6 +205,7 @@ correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBase
 -- another (preSingle: any of them done)
 local FIXES = {
     [97249] = { preSingle = { 97246 } }, -- Favorite Food after Meal Appeal (Borstan had nothing to give)
+    [97275] = { preSingle = { 97242 } }, -- Whuut's the Rush after Yelmak's Medley (Yelmak had nothing to give)
 }
 for id, fix in pairs(FIXES) do
     local q = quests[id]

@@ -4287,7 +4287,7 @@ ns.QuestStarts = { quests = {
     [97253] = { "Parts and Pieces", 9, 14, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
     [97257] = { "Call of Fire", 10, 10, 8589934592, 64, nil, {97245}, nil, nil, nil, nil, nil, nil, nil, nil },
     [97263] = { "Your Package Has Arrived", 1, 2, 4294967373, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
-    [97275] = { "Whuut's the Rush", 9, 15, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
+    [97275] = { "Whuut's the Rush", 9, 15, 8589934770, nil, nil, {97242}, nil, nil, nil, nil, nil, nil, nil, nil },
     [97277] = { "Grund and Gozwin", 4, 6, 4294967373, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
     [97279] = { "Wayward Weapons", 1, 2, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
     [97281] = { "A Simmering Storm", 7, 11, 8589934770, nil, nil, nil, nil, 97282, nil, nil, nil, nil, nil, nil },
