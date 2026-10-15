@@ -514,8 +514,6 @@ function M:Card()
     card.post = UI.Button(card, { text = "Post to party", onClick = function()
         if card.id then self:Post(card.id) end
     end })
-    card.postNote = UI.Text(card, "caption", "ink-faint")
-    card.postNote:SetValue("Join a group to post it.")
     card:Hide()
     self.card = card
     return card
@@ -593,13 +591,8 @@ function M:OpenCard(id, anchor)
         local label = channel == "RAID" and "Post to raid" or channel == "INSTANCE_CHAT" and "Post to instance" or "Post to party"
         card.post:SetLabel(label)
         card.post:SetEnabledState(channel ~= nil)
+        -- (why it's off, on hover: asked in game, instead of a line under it)
         card.post.tooltip = channel == nil and { title = "Join a group to post it." } or nil
-        card.postNote:SetShown(channel == nil)
-        if channel == nil then
-            card.postNote:ClearAllPoints()
-            card.postNote:SetPoint("TOPRIGHT", card.post, "BOTTOMRIGHT", 0, -4)
-            y = y - 18
-        end
     end
     card.where:SetValue(("%s · %.1f, %.1f"):format(self:MapName(mark.map) or "", mark.x * 100, mark.y * 100))
     card.way:SetValue(self.following == id)
