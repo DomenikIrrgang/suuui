@@ -49,6 +49,7 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 
 local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
 local MERGE_RADIUS_CLOSEST = 6 -- zoomed all the way in: only pins on one spot (Blackrock Mountain's doors)
+local CLOSEST_GROW = 1.2 -- zoomed all the way in, pins are this much larger
 local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
@@ -932,9 +933,10 @@ function M:Layout()
     -- zoomed all the way in (on a map that zooms), every pin stays on its
     -- exact spot, so you find it there: none move, and only those on one
     -- spot merge (they'd hide each other)
-    local items, radius = self.items, MERGE_RADIUS
+    local items, radius, grow = self.items, MERGE_RADIUS, 1
     if f:IsAtMaxZoom() and not f:IsAtMinZoom() then
-        items, radius = {}, MERGE_RADIUS_CLOSEST
+        -- (and a little larger: there's room)
+        items, radius, grow = {}, MERGE_RADIUS_CLOSEST, CLOSEST_GROW
         for i, it in ipairs(self.items) do
             items[i] = setmetatable({ fixed = true }, { __index = it })
         end
@@ -968,12 +970,12 @@ function M:Layout()
         end
         pin:SetData(data)
         pin.group = g
-        pin:SetScale(1 / cs)
+        pin:SetScale(grow / cs)
         -- (three levels each: its count tab just above it, under the next)
         pin:SetFrameLevel(base + i * 3)
         pin.countTab:SetFrameLevel(base + i * 3 + 1)
         pin:ClearAllPoints()
-        pin:SetPoint("CENTER", self.layer, "TOPLEFT", g.x, -g.y)
+        pin:SetPoint("CENTER", self.layer, "TOPLEFT", g.x / grow, -g.y / grow)
         self.pins[#self.pins + 1] = pin
     end
 end
