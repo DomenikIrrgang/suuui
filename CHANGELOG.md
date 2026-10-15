@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0-beta.1 (2026-10-15)
 
 ### New
 
+- **Group Finder** (I): Forever's group finder rebuilt in SuuUI's look.
+  - **Browse:** one list of groups and players looking for groups, from the game's group finder and from public chat (LookingForGroup, General, Trade, Say), with where each was seen and how long ago. Each group shows what it has (its members' roles, greyed) and what it still needs, your role highlighted, and its size ("3/5"). Filter by category, activity or text, or show only what fits your level and roles. Whatever concerns you comes first and is highlighted, for example a group for what you're listed for that needs your role, or one for a quest in your log. Whisper or invite right from the list. Opening the window searches the game's group finder; Refresh searches again.
+  - **Chat in three languages:** English, Korean and Chinese posts are read, so groups posted in any of them join the list. SuuUI joins LookingForGroup for this and keeps it out of your chat windows.
+  - **List yourself:** the game's own listing panel, in SuuUI's look.
+  - **My listing:** while you're listed, your listing with Delist and Update, and an ad for chat written from your listing that you can edit and post with a click (LookingForGroup, General, Trade, Say or Yell).
+  - **Who:** search who's online with the game's class, race and zone filters and its sort order; add a friend, whisper or invite.
+  - **Notes:** a group for what you're listed for that needs your role, a new group for it, a player for your group, a group for a quest in your log or in your zone, friends and guild members looking, groups you whispered (posted again, full or gone), stale results (Refresh, Delist), your listing running out (Delist, Open listing) and ending. They wait while you fight or are in a dungeon. `/suu lfgnotes` shows one of each.
+  - **Settings › Group Finder** (also the gear in the window's header): the chat channels read, joining LookingForGroup, how long chat posts stay, the languages read, your ad's channel, and each kind of note on or off with its options (sound, tool or chat, how sure, in combat, in instances).
+- **Group invites that ask for your role** come as a notification card with the role choices on it.
 - **Talents window:** your talents in a window of their own (N, or the micro menu), the three trees side by side with the game's own talent tooltips. Points are planned until you press Apply. A note tells you when you have talent points to spend.
 - **Legacy window** in SuuUI's look:
   - your points, the three trees, and challenges by category, each with its full list;
@@ -31,10 +40,7 @@
   - promote, demote and remove;
   - the guild information and the guild log;
   - guild settings: ranks, permissions, bank tabs and the Discord link.
-- **Group Finder** (first version): one list of groups and players looking for groups, from the game's group finder and from public chat (LookingForGroup, General, Trade, Say and Yell). Filters and an "Only what fits me" switch. Whatever concerns you is highlighted at the top, for example a group for what you're listed for that needs your role, or one for a quest in your log. Whisper or Invite right from the list. Each group shows what it has (its members' roles) and what it still needs, your role highlighted. SuuUI joins LookingForGroup for this and keeps it out of your chat windows. Listing yourself happens in the game's own panel, now in SuuUI's look. While you're listed, My listing shows your listing and an ad for chat you can edit and post with a click.
-- **Group invites that ask for your role** come as a notification card with the role choices on it.
-- **Group Finder notes:** a group for what you're listed for that needs your role, a new group for it, a player for your group, a group for a quest in your log or in your zone, friends and guild members looking, groups you whispered (posted again, full, gone), stale results (Refresh, Delist), your listing running out (Delist, Open listing) and ending. They wait while you fight or are in a dungeon. `/suu lfgnotes` shows each. Korean and Chinese posts in LookingForGroup now join the list too. Opening the window searches the game's group finder. **Who**: search who's online with the game's class, race and zone filters; add a friend, whisper or invite. **Settings › Group Finder** turns each kind on or off with its options, and picks the chat channels read, the ad's channel and how long chat posts stay.
-- **Right-click menus** in SuuUI's look. The game's dropdown menus and popups are restyled while they show.
+- **Right-click menus** in SuuUI's look. The game's dropdown menus, their submenus and popups are restyled while they show.
 
 ### Changed
 
@@ -51,6 +57,7 @@
 - The Character window no longer causes errors in combat.
 - The spellbook no longer lists a stance twice (from a flyout).
 - Popups hosted in the notification stack (the death popup) keep their buttons side by side.
+- Add friend in a chat name's right-click menu sends a friend request; it did nothing, since Forever's classic friends list is switched off.
 
 ## 0.2.0-beta.2 (2026-10-13)
 
