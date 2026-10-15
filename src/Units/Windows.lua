@@ -524,37 +524,22 @@ function M:RestyleQuestLog()
             -- Abandon / Share / Track hang below it (found in game)
             d:SetHeight(d:GetHeight() - CUT)
             if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - CUT) end
-            -- Abandon / Share / Track centred in the column the details sit
-            -- in, which runs on past them over the text's scroll bar
-            -- (GUTTER): three alike with a gap, the same margin either side
-            -- (the game starts them 3 px out and runs them past both edges;
-            -- lined up with the details alone they sat left; found in game).
-            -- The game's dividers between them away.
-            local ab, sh, tr = d.AbandonButton, d.ShareButton, d.TrackButton
-            local GUTTER = 14
-            if ab and sh and tr then
-                local INSET, GAP = 6, 4
-                local w = math.floor((d:GetWidth() + GUTTER - 2 * INSET - 2 * GAP) / 3)
-                ab:ClearAllPoints()
-                ab:SetPoint("BOTTOMLEFT", INSET, 0)
-                sh:ClearAllPoints()
-                sh:SetPoint("LEFT", ab, "RIGHT", GAP, 0)
-                tr:ClearAllPoints()
-                tr:SetPoint("LEFT", sh, "RIGHT", GAP, 0)
-                for _, btn in ipairs({ ab, sh, tr }) do
-                    btn:SetWidth(w)
-                    for _, r in ipairs({ btn:GetRegions() }) do
-                        local atlas = r:GetObjectType() == "Texture" and r.GetAtlas and r:GetAtlas()
-                        if atlas and atlas:find("BtnDiv") then r:SetAlpha(0) end
-                    end
+            -- Abandon / Share / Track and the rewards centred in the column
+            -- the details sit in, between the map and the window's edge,
+            -- measured as they show (lined up with the details alone they
+            -- sat left: the column runs on past them over the text's scroll
+            -- bar; found in game). The game's dividers between them away.
+            for _, btn in ipairs({ d.AbandonButton, d.ShareButton, d.TrackButton }) do
+                for _, r in ipairs(btn and { btn:GetRegions() } or {}) do
+                    local atlas = r:GetObjectType() == "Texture" and r.GetAtlas and r:GetAtlas()
+                    if atlas and atlas:find("BtnDiv") then r:SetAlpha(0) end
                 end
             end
-            -- the rewards as wide, so their label centres over the column too
-            local box = d.RewardsFrameContainer
-            if box then
-                box:SetWidth(box:GetWidth() + GUTTER)
-                if box.RewardsFrame then box.RewardsFrame:SetWidth(box.RewardsFrame:GetWidth() + GUTTER) end
-            end
+            -- (a frame after showing, when the positions are there; again when
+            -- the window changes size: fullscreen)
+            local function place() C_Timer.After(0, function() M:PlaceQuestDetails() end) end
+            d:HookScript("OnShow", place)
+            if _G.WorldMapFrame then _G.WorldMapFrame:HookScript("OnSizeChanged", place) end
             -- the strip with Back: its art away, a hairline under it
             local back = d.BackFrame
             if back then
@@ -630,6 +615,36 @@ function M:RestyleQuestLog()
                 end
             end
         end
+    end
+end
+
+-- The quest details' buttons and rewards, centred between the map and the
+-- window's edge with the same margin either side.
+function M:PlaceQuestDetails()
+    local f, q = _G.WorldMapFrame, _G.QuestMapFrame
+    local d = q and q.DetailsFrame
+    if not (f and d and d:IsVisible() and f.ScrollContainer) then return end
+    local mapRight, edge, left = f.ScrollContainer:GetRight(), f:GetRight(), d:GetLeft()
+    if not (mapRight and edge and left) then return end
+    local MARGIN, GAP = 11, 4
+    local x0, x1 = mapRight + MARGIN - left, edge - MARGIN - left
+    local ab, sh, tr = d.AbandonButton, d.ShareButton, d.TrackButton
+    if ab and sh and tr then
+        local w = math.floor((x1 - x0 - 2 * GAP) / 3)
+        ab:ClearAllPoints()
+        ab:SetPoint("BOTTOMLEFT", x0, 0)
+        sh:ClearAllPoints()
+        sh:SetPoint("LEFT", ab, "RIGHT", GAP, 0)
+        tr:ClearAllPoints()
+        tr:SetPoint("LEFT", sh, "RIGHT", GAP, 0)
+        for _, btn in ipairs({ ab, sh, tr }) do btn:SetWidth(w) end
+    end
+    -- (the rewards start at the details' left: as wide as puts their middle
+    -- in the column's)
+    local box = d.RewardsFrameContainer
+    if box then
+        box:SetWidth(x0 + x1)
+        if box.RewardsFrame then box.RewardsFrame:SetWidth(x0 + x1) end
     end
 end
 
