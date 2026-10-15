@@ -7,6 +7,8 @@
 --           Refresh (the tool searches only on a click)
 --   List yourself  the game's own listing panel in SuuUI's look (its
 --           controls stay the game's: addons can't list you)
+--   My listing  while you're listed: your listing (Delist, Update opens the
+--           game's panel) and an ad for chat, posted only on your click
 --   Notes   ForeverLFG's eleven kinds as SuuUI notifications (design board
 --           "Notifications · Group Finder"), each on or off with its
 --           options (defaults from "Settings · Group Finder ·
@@ -27,6 +29,7 @@ local M = SuuUI.RegisterModule({
     defaults = {
         category = "all", activities = {}, fits = false, show = "both",
         collapsed = { groups = false, players = false },
+        adChannel = "LookingForGroup",
         chatExpiry = 300, staleAfter = 300,
         -- each kind: on, sound, from the tool, from chat, the least chat
         -- confidence (%), shown in combat, shown in instances (off holds
@@ -317,9 +320,151 @@ function M:Follow()
     local browse = _G.LFGBrowseFrame
     local on = f:IsShown() and browse and browse:IsShown()
     self.browse:SetShown(on and true or false)
-    self.cover:SetShown(on and true or false)
     if browse then browse:SetAlpha(on and 0 or 1) end
     if on then self:Render() end
+    -- My listing over the game's panel while you're listed (Update shows the panel)
+    local panel = _G.LFGListingFrame
+    local listed = f:IsShown() and panel and panel:IsShown() and LFG.Listing() ~= nil and not self.editing
+    self.listed:SetShown(listed and true or false)
+    if listed then self:RenderListed() end
+    self.cover:SetShown((on or listed) and true or false)
+end
+
+--------------------------------------------------------------------------------
+-- My listing and the ad
+--------------------------------------------------------------------------------
+
+local function joinWith(list, last)
+    if #list <= 1 then return list[1] or "" end
+    return table.concat(list, ", ", 1, #list - 1) .. " " .. last .. " " .. list[#list]
+end
+
+local function minutesText(seconds)
+    if not seconds then return nil end
+    local m = math.floor(seconds / 60)
+    if m < 1 then return "a moment" end
+    if m < 60 then return m .. "m" end
+    return math.floor(m / 60) .. "h " .. (m % 60) .. "m"
+end
+
+-- Your listing as one chat line, in English: what you're after, for what,
+-- and your details. A group asks for the roles a 1 / 1 / 3 group still
+-- lacks by its members' roles; alone, the roles you offer and who you are.
+function M:AdFromListing(listing)
+    if not listing then return "" end
+    local names = {}
+    for _, key in ipairs(listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    local acts = joinWith(names, "or")
+    local text
+    if IsInGroup() then
+        local have = { TANK = 0, HEALER = 0, DAMAGER = 0 }
+        local units = { "player" }
+        for i = 1, (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0) do units[#units + 1] = "party" .. i end
+        for _, u in ipairs(units) do
+            local r = UnitGroupRolesAssigned(u)
+            if have[r] then have[r] = have[r] + 1 end
+        end
+        local need = {}
+        if have.TANK < 1 then need[#need + 1] = "Tank" end
+        if have.HEALER < 1 then need[#need + 1] = "Healer" end
+        local dps = math.max(0, 3 - have.DAMAGER)
+        if dps > 0 then need[#need + 1] = dps .. " DPS" end
+        text = ("LFM %sfor %s (%d/5)."):format(#need > 0 and (joinWith(need, "and") .. " ") or "", acts, #units)
+    else
+        local roles = {}
+        local r = listing.roles or {}
+        if r.tank then roles[#roles + 1] = "Tank" end
+        if r.healer then roles[#roles + 1] = "Healer" end
+        if r.damage then roles[#roles + 1] = "DPS" end
+        local _, class = UnitClass("player")
+        local cname = class and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]
+        text = ("LFG %s(%d %s) for %s."):format(#roles > 0 and (joinWith(roles, "or") .. " ") or "", UnitLevel("player"),
+            (cname or ""):lower(), acts)
+    end
+    local comment = listing.comment
+    if type(comment) == "string" and comment ~= "" and not (issecretvalue and issecretvalue(comment)) then
+        text = text .. " " .. comment
+    end
+    return text
+end
+
+local AD_CHANNELS = { "LookingForGroup", "General", "Trade", "Say" }
+
+-- A channel's number by its name ("General" is "General - Orgrimmar").
+local function channelId(name)
+    local list = { GetChannelList() }
+    for i = 1, #list, 3 do
+        local id, n = list[i], list[i + 1]
+        if type(n) == "string" and (n == name or n:find("^" .. name .. " %-")) then return id end
+    end
+    local id = GetChannelName(name)
+    return (type(id) == "number" and id > 0) and id or nil
+end
+
+-- The ad goes out from the Post click (the game sends public chat only
+-- from a click).
+function M:PostAd(channel, text)
+    if not (text and text:match("%S")) then return end
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    if channel == "Say" then
+        send(text, "SAY")
+    else
+        local id = channelId(channel)
+        if not id then
+            self:Print(("You're not in %s; join it to post there."):format(channel))
+            return
+        end
+        send(text, "CHANNEL", nil, id)
+    end
+    self.lastPost = GetTime()
+    self:RenderListed()
+end
+
+function M:RenderListed()
+    if not (self.listed and self.listed:IsShown()) then return end
+    local listing = LFG.Listing()
+    if not listing then return end
+    local names = {}
+    for _, key in ipairs(listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    local roles = {}
+    for _, r in ipairs({ "tank", "healer", "damage" }) do if listing.roles and listing.roles[r] then roles[#roles + 1] = r end end
+    local playstyle
+    if listing.playstyle and GetGeneralPlaystyleString then
+        local ok, ps = pcall(GetGeneralPlaystyleString, listing.playstyle)
+        if ok and type(ps) == "string" then playstyle = ps end
+    end
+    local category
+    if listing.category and C_LFGList and C_LFGList.GetLfgCategoryInfo then
+        local ok, info = pcall(C_LFGList.GetLfgCategoryInfo, listing.category)
+        if ok and type(info) == "table" then category = info.name end
+    end
+    local voice = listing.voiceMode and _G.LFGVoiceChat and _G.LFGVoiceChat.VoiceModeLabels
+        and _G.LFGVoiceChat.VoiceModeLabels[listing.voiceMode]
+    local comment = listing.comment
+    if issecretvalue and issecretvalue(comment) then comment = nil end
+    if not self.adEdited then self.adText = self:AdFromListing(listing) end
+    local channels = {}
+    for _, c in ipairs(AD_CHANNELS) do channels[#channels + 1] = { value = c, label = c } end
+    self.listed:SetData({
+        listing = { listedFor = minutesText(self.listedAt and (LFG.Now() - self.listedAt)),
+                    left = minutesText(listing.duration), category = category, activities = names, roles = roles,
+                    playstyle = playstyle, comment = comment, voice = voice or "None" },
+        ad = { text = self.adText or "", channel = self:Get("adChannel"), channels = channels,
+               lastPost = self.lastPost and minutesText(GetTime() - self.lastPost) or nil, max = 255 },
+    })
+end
+
+function M:WireListed(p)
+    p.onDelist = function() LFG.Delist() end
+    p.onUpdate = function()
+        -- the game's own panel, to change the listing; back here once it's saved
+        self.editing = true
+        self:Follow()
+    end
+    p.onChannel = function(v) self:Set("adChannel", v); self:RenderListed() end
+    p.onText = function(t) self.adText, self.adEdited = t, true end
+    p.onRewrite = function() self.adEdited = false; self:RenderListed() end
+    p.onPost = function(channel, text) self:PostAd(channel, text) end
 end
 
 function M:Build()
@@ -348,6 +493,20 @@ function M:Build()
     self:Wire(b)
     -- List yourself: the game's own panel, restyled (stage 3)
     if _G.LFGListingFrame then UI.SkinGroupFinderListing(_G.LFGListingFrame) end
+    -- My listing, over it while you're listed
+    local l = UI.GroupFinderListed(f)
+    l:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    l:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    l:SetFrameLevel(f:GetFrameLevel() + 100)
+    l:EnableMouse(true)
+    l.suuOwn = true
+    l:Hide()
+    self.listed = l
+    self:WireListed(l)
+    if _G.LFGListingFrame then
+        -- leaving the panel ends an Update
+        _G.LFGListingFrame:HookScript("OnHide", function() self.editing = nil end)
+    end
     f:HookScript("OnShow", function() self:Follow() end)
     f:HookScript("OnHide", function() GameTooltip:Hide() end)
     for _, c in ipairs({ _G.LFGBrowseFrame, _G.LFGListingFrame, _G.LFGWhoListFrame }) do
@@ -369,7 +528,15 @@ function M:OnEnable()
     LFG.On("ToolSearched", function() self.searching = nil; self:QueueRender() end)
     LFG.On("ToolSearchFailed", function() self.searching = nil; self:QueueRender() end)
     -- the tool's age moves on
-    C_Timer.NewTicker(15, function() if self.browse and self.browse:IsVisible() then self:Render() end end)
+    C_Timer.NewTicker(15, function()
+        if self.browse and self.browse:IsVisible() then self:Render() end
+        if self.listed and self.listed:IsVisible() then self:RenderListed() end
+    end)
+    -- your listing made, changed or gone: My listing follows
+    LFG.On("ListingChanged", function()
+        self.editing = nil
+        self:Follow()
+    end)
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     self:StartNotes()

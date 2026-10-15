@@ -419,6 +419,18 @@ function M:SkinGroupFinder()
     end
     chrome:SetTabs(tabs)
     self.groupFinder = chrome
+    -- the second tab says My listing while you're listed
+    local listingTab
+    for _, t in ipairs(tabs) do if t.button == f.ListingTab then listingTab = t end end
+    local function relabel()
+        if not listingTab then return end
+        local listed = C_LFGList and C_LFGList.HasActiveEntryInfo and C_LFGList.HasActiveEntryInfo()
+        listingTab.label = listed and "My listing" or "List yourself"
+        listingTab.short = listed and "Listing" or "List"
+        chrome:LayoutTabs()
+    end
+    self:OnGameEvent("LFG_LIST_ACTIVE_ENTRY_UPDATE", relabel)
+    relabel()
 end
 
 function M:SkinAll()

@@ -341,6 +341,7 @@ API.UI.GuildLog = UI.GuildLog -- GuildLog(parent) -> SetData({ lines = { { text,
 API.UI.GuildControl = UI.GuildControl -- GuildControl(host, GuildControlUI) -> Layout(): the game's guild control laid out in host
 API.UI.GuildMotdBanner = UI.GuildMotdBanner -- GuildMotdBanner(parent) -> SetData({ text, canEdit }), Height(); onEdit
 API.UI.SkinGroupFinderListing = UI.SkinGroupFinderListing -- SkinGroupFinderListing(LFGListingFrame): the game's List yourself panel in SuuUI's look, in place
+API.UI.GroupFinderListed = UI.GroupFinderListed -- GroupFinderListed(parent) -> SetData({ listing, ad }); onDelist, onUpdate, onChannel, onText, onRewrite, onPost
 API.UI.GroupFinderBrowse = UI.GroupFinderBrowse -- GroupFinderBrowse(parent) -> SetData({ groups, players, tool, ... }); onRefresh, onFilter, onWhisper, onInvite, onToggle
 -- ForeverLFG: the game's group finder and public chat as one list of groups
 -- and players looking (Docs/ForeverLFG.md); idle until SuuUI.LFG.Start()

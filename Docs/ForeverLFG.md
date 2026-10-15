@@ -254,7 +254,8 @@ SuuUI.LFG.ContactedAt(key)     -- when you whispered that leader (SuuUI.LFG.Now(
 SuuUI.LFG.Social(name)         -- "friend", "guild" or nil
 SuuUI.LFG.Refresh(category)    -- only from a click or key press (the game's rule); 2, 116, 120
 SuuUI.LFG.ToolAge(category)    -- seconds since that category's last search
-SuuUI.LFG.Listing() / Delist() -- your listing; delisting only from a click
+SuuUI.LFG.Listing() / Delist() -- your listing ({ activities, comment, playstyle, duration (seconds left), voiceMode,
+                               --   newPlayerFriendly, category, roles }); delisting only from a click
 SuuUI.LFG.Whisper(entry)       -- opens an empty whisper to the leader
 SuuUI.LFG.CanInvite(entry)     -- single players looking (the tool's rule)
 SuuUI.LFG.Invite(entry)

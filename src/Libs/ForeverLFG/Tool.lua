@@ -175,8 +175,14 @@ function LFG.Listing()
     local acts = {}
     for _, a in ipairs(info.activityIDs or {}) do acts[#acts + 1] = LFG.Catalogue.ForTool(a) or ("tool:" .. a) end
     local okR, leader, tank, healer, dps = pcall(GetLFGRoles)
+    -- the category: the first activity's
+    local category
+    local first = info.activityIDs and info.activityIDs[1]
+    local okA, a = pcall(L.GetActivityInfoTable, first)
+    if okA and type(a) == "table" then category = a.categoryID end
     return {
         activities = acts, comment = info.comment, playstyle = info.generalPlaystyle, duration = info.duration,
+        voiceMode = info.voiceMode, newPlayerFriendly = info.newPlayerFriendly, category = category,
         roles = okR and { leader = leader or nil, tank = tank or nil, healer = healer or nil, damage = dps or nil } or {},
     }
 end
