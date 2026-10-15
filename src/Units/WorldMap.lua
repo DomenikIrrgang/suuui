@@ -232,7 +232,11 @@ local function questState(q, id, me, done)
     end
     for _, other in ipairs(q[8] or {}) do if done[other] or onQuest(other) then return nil end end
     local level = (q[3] and q[3] > 0) and q[3] or me.level
-    return repeatable and "repeatable" or "available", difficultyOf(level), level
+    local difficulty = difficultyOf(level)
+    -- far above you (the data often lacks the level a quest asks): the
+    -- game wouldn't offer it yet
+    if difficulty == "impossible" then return nil end
+    return repeatable and "repeatable" or "available", difficulty, level
 end
 
 -- every pin the map would show, before merging: { x, y (0-1), key (what
