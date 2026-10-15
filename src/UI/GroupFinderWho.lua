@@ -37,16 +37,21 @@ local LABEL = { name = "Name", level = "Level", race = "Race", class = "Class", 
 local W = {}
 
 -- Each column's x and width in a row this wide.
+-- the left: room for the class diamond before the name (the diamond sat on
+-- the box's edge, found in game)
+local LEFT = S["space-4"] + 6 + S["space-4"]
+
 local function columns(width)
     local gap = S["space-4"]
-    local inner = width - S["space-5"] - S["space-4"] - gap * 5 - LEVEL_W
+    local inner = width - LEFT - S["space-4"] - gap * 5 - S["space-4"] - LEVEL_W
     local total = 0
     for _, v in pairs(SHARES) do total = total + v end
-    local out, x = {}, S["space-5"]
+    local out, x = {}, LEFT
     for _, key in ipairs(ORDER) do
         local w = key == "level" and LEVEL_W or math.floor(inner * SHARES[key] / total)
         out[key] = { x = x, w = w }
-        x = x + w + gap
+        -- a little more after the right-aligned level, before Race
+        x = x + w + gap + (key == "level" and S["space-4"] or 0)
     end
     return out
 end
@@ -132,7 +137,7 @@ function W:Draw()
         local token = row.class and T.color["class-" .. row.class:lower()] and ("class-" .. row.class:lower()) or "ink"
         r.dia:SetVertexColor(UI.RGBA(token))
         r.dia:ClearAllPoints()
-        r.dia:SetPoint("CENTER", r, "LEFT", cols.name.x - 8, 0)
+        r.dia:SetPoint("CENTER", r, "LEFT", S["space-4"] + 3, 0)
         local function place(fs, key, text)
             fs:ClearAllPoints()
             fs:SetPoint("LEFT", r, "LEFT", cols[key].x, 0)
@@ -185,14 +190,28 @@ function UI.GroupFinderWho(parent)
     w.search = UI.Button(w, { text = "Search", variant = "primary", icon = "search", onClick = search })
     w.search:SetHeight(BAR_H)
     w.search:SetPoint("LEFT", w.query, "RIGHT", S["space-4"], 0)
-    w.filter = UI.Button(w, { text = "Filter", icon = "filter",
+    -- Filter: the glyph, the word, a chevron, laid out left to right (the
+    -- word centred between them overlapped the chevron, found in game)
+    w.filter = UI.Button(w, { text = "Filter", width = 1,
         onClick = function(self) if w.onFilter then w.onFilter(self) end end })
     w.filter:SetHeight(BAR_H)
     w.filter:SetPoint("LEFT", w.search, "RIGHT", S["space-4"], 0)
+    local fg = w.filter:CreateTexture(nil, "ARTWORK")
+    fg:SetTexture(GLYPHS .. "filter.tga")
+    fg:SetSize(12, 12)
+    fg:SetVertexColor(UI.RGBA("ink-muted"))
+    fg:SetPoint("LEFT", S["space-5"], 0)
+    w.filter.label:ClearAllPoints()
+    w.filter.label:SetPoint("LEFT", fg, "RIGHT", S["space-3"], 0)
     w.filter.chev = UI.Chevron(w.filter, "ink-muted")
-    w.filter.chev:SetPoint("RIGHT", -S["space-4"], 0)
-    w.filter:SetWidth(w.filter:GetWidth() + 12 + S["space-1"])
-    w.filter.label:SetPoint("CENTER", w.filter.shift - 7, 0)
+    w.filter.chev:SetPoint("LEFT", w.filter.label, "RIGHT", S["space-3"], 0)
+    local function fitFilter()
+        w.filter:SetWidth(S["space-5"] * 2 + 12 + S["space-3"] + math.ceil(w.filter.label:GetUnboundedStringWidth()) + S["space-3"] + 12)
+    end
+    fitFilter()
+    w.filter:HookScript("OnShow", fitFilter) -- measured again once its font is in
+    w.filter:SetScript("OnMouseDown", nil)
+    w.filter:SetScript("OnMouseUp", nil)
     w.count = UI.Text(w, "caption", "ink-muted")
     w.count:SetPoint("RIGHT", w, "TOPRIGHT", 0, -BAR_H / 2)
     -- the list

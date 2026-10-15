@@ -252,8 +252,9 @@ local function restoreMenu(st)
     st.undo = {}
     st.panel:Hide()
     for _, t in pairs(st.marks) do t:Hide() end
+    for _, t in pairs(st.chevrons or {}) do t:Hide() end
     st.hover:Hide()
-    st.nMarks = 0
+    st.nMarks, st.nChevrons = 0, 0
     st.active = false
 end
 
@@ -303,6 +304,23 @@ local function menuRow(st, row)
         end
     end
     for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
+    -- a submenu's arrow (a plain texture, the game's yellow): SuuUI's chevron
+    local arrow = row.arrow
+    if arrow and arrow.GetObjectType and arrow:IsShown() then
+        hideRegion(st, arrow)
+        st.nChevrons = (st.nChevrons or 0) + 1
+        local chev = st.chevrons[st.nChevrons]
+        if not chev then
+            chev = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            chev:SetTexture(GLYPHS .. "chevronRight.tga")
+            chev:SetSize(12, 12)
+            chev:SetVertexColor(UI.RGBA("ink-muted"))
+            st.chevrons[st.nChevrons] = chev
+        end
+        chev:ClearAllPoints()
+        chev:SetPoint("CENTER", arrow, "CENTER", 0, 0)
+        chev:Show()
+    end
     -- SuuUI's hover and mark: on its own panel behind the rows (the game
     -- forbids new textures on its menu rows)
     rowMenu[row] = st
@@ -337,11 +355,31 @@ local function menuRow(st, row)
     end
 end
 
+-- A submenu opened from a menu SuuUI restyled (the Who filter's Class,
+-- Race, Zone, Sort): restyled too. Every menu frame announces itself.
+local function openRoot()
+    local manager = Menu and Menu.GetManager and Menu.GetManager()
+    return manager and manager.GetOpenMenu and manager:GetOpenMenu()
+end
+if EventRegistry and EventRegistry.RegisterCallback then
+    EventRegistry:RegisterCallback("MenuProxy.OnShow", function(_, menu)
+        if not (menu and menu.GetLevel) then return end
+        local okL, level = pcall(menu.GetLevel, menu)
+        if not okL or not level or level <= 1 then return end
+        local root = openRoot()
+        local st = root and menus[root]
+        if st and st.active then
+            UI.ReskinMenu(menu)
+            C_Timer.After(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
+        end
+    end, "SuuUI.Reskin")
+end
+
 function UI.ReskinMenu(menu)
     if not menu or ask(menu, "IsForbidden") then return end
     local st = menus[menu]
     if not st then
-        st = { undo = {}, marks = {}, nMarks = 0 }
+        st = { undo = {}, marks = {}, nMarks = 0, chevrons = {}, nChevrons = 0 }
         local panel = CreateFrame("Frame", nil, menu)
         panel:SetAllPoints()
         panel:SetFrameLevel(menu:GetFrameLevel())
@@ -356,6 +394,13 @@ function UI.ReskinMenu(menu)
         st.panel = panel
         menus[menu] = st
         menu:HookScript("OnHide", function() if st.active then restoreMenu(st) end end)
+        -- a choice that refreshes the menu (a sort order) sets its rows up
+        -- again: marked again
+        if menu.ReinitializeAll then
+            hooksecurefunc(menu, "ReinitializeAll", function()
+                if st.active then C_Timer.After(0, function() if st.active and menu:IsShown() then UI.ReskinMenu(menu) end end) end
+            end)
+        end
     end
     -- a second pass (the rows came later) starts from the game's look again
     if st.active then restoreMenu(st) end
