@@ -143,7 +143,49 @@ function MP.Snapshot()
         tostring(type(s.taxi) == "table" and s.taxi.count or s.taxi)))
 end
 
-function MP.Command()
+-- "/suu probe map areas": why the game draws no quest objective area (it
+-- draws the followed quest's and the one hovered in the log).
+function MP.Areas()
+    SuuUIProbe = SuuUIProbe or {}
+    local s = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.mapAreas = s
+    local f = _G.WorldMapFrame
+    s.mapID = f and show((call(f, "GetMapID", f)))
+    s.questPOI = show((call(_G, "GetCVar", "questPOI")))
+    s.superTracked = show((call(C_SuperTrack, "GetSuperTrackedQuestID")))
+    s.superTrackingWaypoint = show((call(C_SuperTrack, "IsSuperTrackingUserWaypoint")))
+    s.highestType = show((call(C_SuperTrack, "GetHighestPrioritySuperTrackingType")))
+    s.pins = {}
+    if f and f.EnumeratePinsByTemplate then
+        for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
+            s.pins[#s.pins + 1] = {
+                shown = pin:IsShown(), visible = pin:IsVisible(), alpha = pin:GetAlpha(), level = pin:GetFrameLevel(),
+                size = math.floor(pin:GetWidth()) .. "x" .. math.floor(pin:GetHeight()),
+                questID = show(pin.questID), focused = show(pin.focusedQuestID), highlighted = show(pin.highlightedQuestID),
+                mapAllowsBlobs = show(pin.mapAllowsBlobs), map = show((call(pin, "GetMapID", pin))),
+            }
+        end
+    end
+    -- the quests on this map: do they have an area here?
+    local map = f and f:GetMapID()
+    local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
+    s.questsOnMap = {}
+    for _, q in ipairs(type(on) == "table" and on or {}) do
+        s.questsOnMap[#s.questsOnMap + 1] = show(q)
+        if #s.questsOnMap >= 8 then break end
+    end
+    s.ourLayer = SuuUI.GetModule and SuuUI.GetModule("worldmap") and SuuUI.GetModule("worldmap").layer
+        and SuuUI.GetModule("worldmap").layer:GetFrameLevel() or "none"
+    ns.Print(("Areas: questPOI %s, followed quest %s, %d area pins (%s); /reload saves it."):format(
+        s.questPOI, s.superTracked, #s.pins, s.pins[1] and ((s.pins[1].visible and "visible" or "hidden") .. ", allowed " .. s.pins[1].mapAllowsBlobs) or "none"))
+end
+
+function MP.Command(rest)
+    if rest == "areas" then
+        if not _G.WorldMapFrame then ns.Print("Map probe: open the map once (M), then run it again.") return end
+        MP.Areas()
+        return
+    end
     if not _G.WorldMapFrame then
         ns.Print("Map probe: open the map once (M), then run it again.")
         return
