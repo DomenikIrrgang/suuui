@@ -39,7 +39,7 @@ local M = SuuUI.RegisterModule({
     name = "World map pins",
     description = "Pins on the world map: quests to pick up, entrances, flight masters, services, rares and treasures.",
     api = "0.14",
-    defaults = { filters = DEFAULT_FILTERS },
+    defaults = { filters = DEFAULT_FILTERS, pinAlpha = 100 },
 })
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -1032,6 +1032,7 @@ function M:Layout()
                      ring = data.ring, spin = data.spin, edgeWidth = data.edgeWidth, count = g.distinct }
         end
         pin:SetData(data)
+        pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100)
         pin.group = g
         pin:SetScale(grow / cs)
         -- (three levels each: its count tab just above it, under the next)
@@ -1211,6 +1212,46 @@ function M:Attach()
     end)
 end
 
+-- Settings › World map: how solid the pins are.
+function M:PreviewView(parent)
+    local v = self.preview
+    if not v then
+        v = CreateFrame("Frame", nil, parent)
+        v:SetSize(200, 60)
+        UI.Fill(v, "surface-sunk"):SetAllPoints()
+        UI.Border(v, "gilt-line")
+        v.pins = {}
+        local samples = {
+            { char = "!", color = "quest-standard" },
+            { glyph = "swirl" },
+            { glyph = "mail", small = true },
+            { glyph = "markStar", color = "mark-star", edge = "mark-star", edgeWidth = 2 },
+        }
+        for i, d in ipairs(samples) do
+            local pin = UI.MapPin(v)
+            pin:SetData(d)
+            pin:EnableMouse(false)
+            pin:SetPoint("CENTER", v, "LEFT", 32 + (i - 1) * 45, 0)
+            v.pins[i] = pin
+        end
+        self.preview = v
+    end
+    v:SetParent(parent)
+    for _, pin in ipairs(v.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end
+    return v
+end
+
+local SECTION = {
+    id = "worldmap", label = "World map", category = "World", order = 12,
+    preview = function(parent) return M:PreviewView(parent) end,
+    groups = {
+        { title = "Map pins", description = "What shows is in the map's own Map filters.", rows = {
+            { key = "pinAlpha", label = "Pin opacity", control = "slider", min = 20, max = 100, step = 5, unit = "%",
+              description = "How solid SuuUI's pins on the world map are. Hovering one shows the pins that belong with it at full opacity." },
+        } },
+    },
+}
+
 function M:OnEnable()
     self:Attach()
     if not self.map then
@@ -1219,6 +1260,12 @@ function M:OnEnable()
         end)
         return
     end
+    -- (here, past the wait for the map: this runs once)
+    self:RegisterSettings(SECTION)
+    self:Watch("pinAlpha", function()
+        if self.map and self.map:IsShown() then self:Layout() end
+        if self.preview then for _, pin in ipairs(self.preview.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end end
+    end)
     self.map:AddDataProvider(self.provider)
     self.layer:Show()
     self.reveal:Show()

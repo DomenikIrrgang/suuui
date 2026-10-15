@@ -22,8 +22,9 @@
 --   })
 --   pin:PinSize() -> its size in px
 --   pin:SetHighlight(state)  -- true: an ink ring around it (one of the
---                            -- hovered quest's pins); "dim": faded back;
---                            -- nil: as it was
+--                            -- hovered quest's pins), fully opaque; "dim":
+--                            -- faded back; nil: as it was
+--   pin:SetBaseAlpha(a)      -- its usual opacity (0.15; the map's setting)
 -- The pin is a Button; its owner sets its clicks and hover.
 
 local _, ns = ...
@@ -50,7 +51,14 @@ function Pin:PinSize() return self.size end
 function Pin:SetHighlight(state)
     self.hl:SetShown(state == true)
     if state == true then fit(self.hl, self.size + 6) end
-    self:SetAlpha(state == "dim" and 0.3 or 1)
+    -- (a ringed pin full, a dimmed one fainter than its usual opacity)
+    local base = self.baseAlpha or 1
+    self:SetAlpha(state == true and 1 or state == "dim" and 0.3 * base or base)
+end
+
+function Pin:SetBaseAlpha(a)
+    self.baseAlpha = a
+    self:SetAlpha(a)
 end
 
 function Pin:SetData(d)
