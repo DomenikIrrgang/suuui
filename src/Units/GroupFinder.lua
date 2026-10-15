@@ -7,6 +7,10 @@
 --           Refresh (the tool searches only on a click)
 --   List yourself  the game's own listing panel in SuuUI's look (its
 --           controls stay the game's: addons can't list you)
+--   Notes   ForeverLFG's eleven kinds as SuuUI notifications (design board
+--           "Notifications · Group Finder"), each on or off with its
+--           options (defaults from "Settings · Group Finder ·
+--           Notifications"; the settings page comes in stage 4)
 -- Starting the module starts the library (it joins LookingForGroup and keeps
 -- it out of chat); turning it off stops it.
 -- A built-in module written against the public API only.
@@ -24,6 +28,22 @@ local M = SuuUI.RegisterModule({
         category = "all", activities = {}, fits = false, show = "both",
         collapsed = { groups = false, players = false },
         chatExpiry = 300, staleAfter = 300,
+        -- each kind: on, sound, from the tool, from chat, the least chat
+        -- confidence (%), shown in combat, shown in instances (off holds
+        -- the note until you're out)
+        notify = {
+            role = { on = true, sound = true, tool = true, chat = true, conf = 70, combat = false, inst = false },
+            fresh = { on = true, sound = false, tool = true, chat = true, conf = 70, combat = false, inst = false },
+            player = { on = true, sound = true, tool = true, chat = true, conf = 70, combat = false, inst = false },
+            quest = { on = true, sound = false, tool = true, chat = true, conf = 70, combat = false, inst = false },
+            zone = { on = true, sound = false, tool = true, chat = true, conf = 50, combat = false, inst = false },
+            boss = { on = false, sound = false, tool = true, chat = true, conf = 70, combat = false, inst = false },
+            friends = { on = true, sound = false, tool = true, chat = true, conf = 50, combat = false, inst = false },
+            stale = { on = true, sound = false, combat = false, inst = false },
+            runout = { on = true, sound = true, combat = false, inst = true },
+            delisted = { on = true, sound = false, combat = false, inst = true },
+            contacted = { on = true, sound = false, tool = true, chat = true, conf = 70, combat = false, inst = false },
+        },
     },
 })
 
@@ -352,8 +372,393 @@ function M:OnEnable()
     C_Timer.NewTicker(15, function() if self.browse and self.browse:IsVisible() then self:Render() end end)
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+    self:StartNotes()
 end
 
 function M:OnDisable()
     LFG.Stop()
+end
+
+--------------------------------------------------------------------------------
+-- Notes (stage 2; design board "Notifications · Group Finder")
+--------------------------------------------------------------------------------
+
+local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+local ROLE_TEX = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
+local A_ROLE = { tank = "a tank", healer = "a healer", damage = "a damage dealer" }
+-- a match's reasons, most telling first, and the kind of note each makes
+local NOTE_ORDER = { "role", "player", "quest", "friend", "activity", "zone", "boss" }
+local NOTE_KIND = { role = "role", player = "player", quest = "quest", friend = "friends", activity = "fresh", zone = "zone", boss = "boss" }
+local AGAIN = 300 -- the same group never notifies twice within this
+
+local function joinAnd(list)
+    if #list <= 1 then return list[1] or "" end
+    return table.concat(list, ", ", 1, #list - 1) .. " and " .. list[#list]
+end
+
+local function activityText(e)
+    local names = {}
+    for i, key in ipairs(e.activities) do
+        if i > 2 then names[#names + 1] = "+" .. (#e.activities - 2) break end
+        names[#names + 1] = LFG.Catalogue.Name(key)
+    end
+    return table.concat(names, ", ")
+end
+
+local function questTitle(e)
+    local id = e.quests[1]
+    local t = id and C_QuestLog and C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(id)
+    return t or (id and ("Quest " .. id)) or nil
+end
+
+-- "needs a healer and 2 damage"
+local function needsText(e)
+    local out = {}
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        local n = e.roles.needed[role]
+        n = (type(n) == "number" and n) or (n and 1) or 0
+        if n == 1 then out[#out + 1] = A_ROLE[role]
+        elseif n > 1 then out[#out + 1] = n .. (role == "damage" and " damage" or (" " .. role .. "s")) end
+    end
+    return #out > 0 and ("needs " .. joinAnd(out)) or nil
+end
+
+local function offersText(e)
+    local out = {}
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        if e.roles.offered[role] then out[#out + 1] = role end
+    end
+    return #out > 0 and ("offers " .. table.concat(out, " or ")) or nil
+end
+
+local function lines(...)
+    local out = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if v and v ~= "" then out[#out + 1] = v end
+    end
+    return table.concat(out, " · ")
+end
+
+-- Where it came from: the tool and/or the channel, the post as written.
+local function sourceOf(e)
+    local tool, chat = e.sources.tool, e.sources.chat
+    local channel = chat and (chat.channel == "SAY" and "Say" or (chat.channel == "YELL" and "Yell" or chat.channel))
+    local text = chat and chat.text
+    if text and issecretvalue and issecretvalue(text) then text = nil end
+    return { tool = tool and true or nil, channel = channel, text = text }
+end
+
+local function classIcon(class)
+    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+    if not coords then return nil end
+    return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = coords }
+end
+
+-- May this kind show for this entry (its sources, the parser's confidence)?
+function M:Allowed(e, cfg)
+    if e.sources.tool and cfg.tool then return true end
+    if e.sources.chat and cfg.chat then
+        local c = (e.sources.chat.confidence or e.confidence or 0) * 100
+        return c >= (cfg.conf or 0)
+    end
+    return false
+end
+
+-- Show a note now, or hold it while you fight or are in an instance (each
+-- kind's choice); held notes are checked again when you're out.
+function M:Note(kind, build)
+    local cfg = (self:Get("notify") or {})[kind]
+    if not (cfg and cfg.on) then return end
+    local inInstance = IsInInstance and select(1, IsInInstance())
+    if (InCombatLockdown() and not cfg.combat) or (inInstance and not cfg.inst) then
+        -- the latest few only: a dungeon's worth of chat shouldn't arrive at once
+        self.held = self.held or {}
+        self.held[#self.held + 1] = { kind = kind, build = build }
+        if #self.held > 5 then table.remove(self.held, 1) end
+        return
+    end
+    local def = build()
+    if not def then return end
+    if cfg.sound and UI.TrackerSound then UI.TrackerSound("chime") end
+    return SuuUI.Notify(def)
+end
+
+function M:FlushHeld()
+    local held = self.held
+    self.held = nil
+    for _, h in ipairs(held or {}) do self:Note(h.kind, h.build) end
+end
+
+-- A group or player that concerns you: one note, for its most telling reason.
+function M:OnMatch(e, reasons)
+    if e.you then return end
+    local now = LFG.Now()
+    self.noted = self.noted or {}
+    if self.noted[e.key] and now - self.noted[e.key] < AGAIN then return end
+    local has = {}
+    for _, r in ipairs(reasons) do has[r] = true end
+    local notify = self:Get("notify") or {}
+    for _, reason in ipairs(NOTE_ORDER) do
+        local kind = NOTE_KIND[reason]
+        local cfg = notify[kind]
+        if has[reason] and cfg and cfg.on and self:Allowed(e, cfg) then
+            self.noted[e.key] = now
+            self:Note(kind, function()
+                -- still there?
+                local cur = LFG.Entry(e.key)
+                if not cur then return nil end
+                return self:MatchNote(kind, cur)
+            end)
+            return
+        end
+    end
+end
+
+function M:MatchNote(kind, e)
+    local leader = e.leader and e.leader.name or e.key
+    local cls = e.leader and e.leader.class
+    local who
+    local lvl = e.leader and e.leader.level
+    local cname = cls and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[cls]
+    if lvl or cname then who = ((lvl and ("Lvl " .. lvl .. " ")) or "") .. (cname or "") end
+    local tool = e.sources.tool
+    local playstyle
+    if tool and tool.playstyle and GetGeneralPlaystyleString then
+        local ok, ps = pcall(GetGeneralPlaystyleString, tool.playstyle)
+        if ok and type(ps) == "string" and ps ~= "" then playstyle = ps end
+    end
+    local size = e.members and e.members[2] and (e.members[1] .. "/" .. e.members[2]) or nil
+    local level = e.level and e.level[1] and (e.level[1] .. "+") or nil
+    local act = activityText(e)
+    local whisper = { label = "Whisper", icon = "chat", onClick = function() LFG.Whisper(e) end }
+    local d = { id = "lfg:" .. e.key, kind = "timed", duration = 8, source = sourceOf(e),
+                icon = classIcon(cls) or { glyph = "people" } }
+    if kind == "role" then
+        local mine = (LFG.Interest().roles) or {}
+        local role
+        for _, r in ipairs({ "tank", "healer", "damage" }) do if mine[r] and e.roles.needed[r] then role = r break end end
+        d.duration, d.category = 12, "Your role is needed"
+        d.icon = role and { texture = ROLE_TEX[role], coords = { 0, 1, 0, 1 } } or d.icon
+        d.title = ("%s needs %s for %s"):format(leader, A_ROLE[role] or "your role", act ~= "" and act or "a group")
+        d.body = lines(size, who, playstyle, level)
+        whisper.variant = "primary"
+        d.actions = { whisper }
+    elseif kind == "fresh" then
+        d.category, d.icon = "New group for your activity", { glyph = "door" }
+        d.title = "A group for " .. (act ~= "" and act or "your activity")
+        d.body = lines(leader, size, needsText(e), playstyle)
+    elseif kind == "quest" then
+        local q = questTitle(e)
+        d.category, d.icon = "Quest group", { glyph = "scroll" }
+        d.title = e.intent == "player" and (leader .. " is looking for " .. (q or "a quest")) or ("A group for " .. (q or "a quest in your log"))
+        d.body = lines(act, leader, size, "a quest in your log")
+        d.actions = { whisper }
+    elseif kind == "zone" then
+        local zone = GetRealZoneText and GetRealZoneText()
+        d.category, d.icon = "In your zone", { glyph = "map" }
+        d.title = e.intent == "player" and (leader .. " is looking for a group here") or ("A group in " .. (type(zone) == "string" and zone or "your zone"))
+        d.body = lines(leader, who, size)
+        d.actions = { whisper }
+    elseif kind == "boss" then
+        d.category, d.icon = "World boss or event", { glyph = "skull" }
+        d.title = "A raid forming for " .. (act ~= "" and act or "a world boss")
+        d.body = lines(leader, e.members and e.members[2] and (e.members[1] .. " of " .. e.members[2]) or nil)
+        d.actions = { whisper }
+    elseif kind == "friends" then
+        local social = LFG.Social and LFG.Social(leader)
+        d.category = "Friends and guild"
+        d.title = e.intent == "player" and (leader .. " is looking for " .. (act ~= "" and act or "a group"))
+            or (leader .. "’s group for " .. (act ~= "" and act or "an activity"))
+        d.body = lines(social == "guild" and "Guild" or (social == "friend" and "Friend" or nil), who,
+            e.intent == "player" and offersText(e) or needsText(e), playstyle)
+        d.actions = { whisper }
+    elseif kind == "player" then
+        d.kind, d.duration, d.category = "sticky", nil, "A player for your group"
+        d.title = leader .. " wants " .. (act ~= "" and act or "your activity")
+        d.body = lines(who, offersText(e))
+        d.actions = { whisper }
+        if LFG.CanInvite(e) then
+            d.actions[2] = { label = "Invite", variant = "primary", icon = "plus", onClick = function(card) LFG.Invite(e); SuuUI.DismissNotification(d.id) end }
+        end
+    end
+    return d
+end
+
+-- A group you whispered: posted again, full, or gone.
+function M:OnContacted(e, what)
+    local cfg = (self:Get("notify") or {}).contacted
+    if not (cfg and cfg.on and self:Allowed(e, cfg)) then return end
+    self:Note("contacted", function()
+        local leader = e.leader and e.leader.name or e.key
+        local act = activityText(e)
+        local at = LFG.ContactedAt and LFG.ContactedAt(e.key)
+        local ago = at and math.max(1, math.floor((LFG.Now() - at) / 60)) .. "m ago"
+        local d = { id = "lfg:contacted:" .. e.key, kind = "timed", category = "A group you contacted",
+                    icon = classIcon(e.leader and e.leader.class) or { glyph = "people" }, source = sourceOf(e) }
+        if what == "reposted" then
+            local need = needsText(e)
+            d.duration = 10
+            d.title = leader .. " posted again" .. (need and (", still " .. (need:gsub("^needs", "needing"))) or "")
+            d.body = lines(act, e.members and e.members[2] and (e.members[1] .. "/" .. e.members[2]) or nil, ago and ("you whispered " .. ago))
+            d.actions = { { label = "Whisper", icon = "chat", variant = "primary", onClick = function() LFG.Whisper(e) end } }
+        elseif what == "full" then
+            d.duration = 6
+            d.title = leader .. "’s group for " .. (act ~= "" and act or "its activity") .. " is full"
+            d.body = ago and ("You whispered " .. leader .. " " .. ago .. ".") or nil
+        else
+            d.duration = 6
+            d.title = e.sources.tool and (leader .. " delisted " .. (act ~= "" and act or "the group"))
+                or (leader .. " stopped posting for " .. (act ~= "" and act or "the group"))
+            d.body = ago and ("You whispered " .. leader .. " " .. ago .. ".") or nil
+            d.source = nil
+        end
+        return d
+    end)
+end
+
+-- What you're listed for, in words ("Shadowfang Keep and 2 more").
+local function listedText(listing, all)
+    local names = {}
+    for _, key in ipairs(listing and listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    if all then return joinAnd(names) end
+    if #names > 1 then return names[1] .. " and " .. (#names - 1) .. " more" end
+    return names[1] or "your activity"
+end
+
+function M:OnStale(category, age)
+    self:Note("stale", function()
+        local listing = LFG.Listing()
+        if not listing and not next(LFG.Watches()) then return nil end
+        local minutes = age and math.floor(age / 60) or nil
+        local actions = {}
+        if listing then
+            actions[#actions + 1] = { label = "Delist", icon = "close", onClick = function()
+                LFG.Delist(); SuuUI.DismissNotification("lfg:stale") end }
+        end
+        actions[#actions + 1] = { label = "Refresh", variant = "primary", icon = "reset", onClick = function()
+            if LFG.Refresh(category) then self.searching = true end
+            SuuUI.DismissNotification("lfg:stale")
+        end }
+        return { id = "lfg:stale", kind = "until", tone = "warning", category = "Results are stale",
+                 icon = { glyph = "hourglass" },
+                 title = minutes and ("Tool results are " .. minutes .. " minutes old") or "The tool hasn’t searched yet",
+                 body = (listing and ("You’re listed for " .. listedText(listing) .. ". ") or "")
+                     .. "Chat stays live; the tool only searches on your click.",
+                 ["until"] = "Goes when you refresh", actions = actions }
+    end)
+end
+
+-- Opening the game's Group Finder at its listing panel is a secure click
+-- (opened from addon code, the panel's listing would be refused): the
+-- micro menu's button when it's closed, then the listing tab.
+local function openListingMacro()
+    local f = _G.LFGParentFrame
+    if f and f:IsShown() then return "/click LFGParentFrameTab1" end
+    return "/click LFDMicroButton\n/click LFGParentFrameTab1"
+end
+
+function M:OnExpiring(seconds)
+    self:Note("runout", function()
+        local listing = LFG.Listing()
+        if not listing then return nil end
+        local minutes = math.max(1, math.ceil(seconds / 60))
+        return { id = "lfg:runout", kind = "action", duration = seconds, remaining = seconds,
+                 category = "Your listing runs out soon", icon = { glyph = "hourglass" },
+                 title = ("Your listing runs out in %d %s"):format(minutes, minutes == 1 and "minute" or "minutes"),
+                 body = lines(table.concat((function()
+                     local t = {}
+                     for _, key in ipairs(listing.activities or {}) do t[#t + 1] = LFG.Catalogue.Name(key) end
+                     return t
+                 end)(), " · ")),
+                 actions = {
+                     { label = "Delist", icon = "close", onClick = function() LFG.Delist(); SuuUI.DismissNotification("lfg:runout") end },
+                     { label = "Open listing", variant = "primary", icon = "scroll", macro = openListingMacro, onClick = function()
+                         if InCombatLockdown() then
+                             self:Print("The listing opens out of combat.")
+                         else
+                             SuuUI.DismissNotification("lfg:runout")
+                         end
+                     end },
+                 } }
+    end)
+end
+
+function M:OnListingChanged(listing)
+    if listing then
+        self.listedAt = self.listedAt or LFG.Now()
+        self.lastListing = listing
+    end
+end
+
+function M:OnDelisted()
+    SuuUI.DismissNotification("lfg:runout")
+    if not next(LFG.Watches()) then SuuUI.DismissNotification("lfg:stale") end
+    local listing, since = self.lastListing, self.listedAt
+    self.lastListing, self.listedAt = nil, nil
+    -- you took it down yourself: nothing to tell
+    if self.delistedByYou and GetTime() - self.delistedByYou < 5 then return end
+    self:Note("delisted", function()
+        local minutes = since and math.max(1, math.floor((LFG.Now() - since) / 60))
+        return { id = "lfg:delisted", kind = "sticky", category = "You were delisted", icon = { glyph = "close" },
+                 title = "Your listing has ended",
+                 body = listing and (("Listed %s for %s."):format(minutes and (minutes .. " minutes") or "a while",
+                     listedText(listing, true))) or nil }
+    end)
+end
+
+function M:StartNotes()
+    if self.notesOn then return end
+    self.notesOn = true
+    LFG.On("Match", function(e, reasons) self:OnMatch(e, reasons) end)
+    LFG.On("Contacted", function(e, what) self:OnContacted(e, what) end)
+    LFG.On("ToolStale", function(category, age) self:OnStale(category, age) end)
+    LFG.On("ToolSearched", function() SuuUI.DismissNotification("lfg:stale") end)
+    LFG.On("ListingExpiring", function(seconds) self:OnExpiring(seconds) end)
+    LFG.On("ListingChanged", function(listing) self:OnListingChanged(listing) end)
+    LFG.On("Delisted", function() self:OnDelisted() end)
+    -- your own delisting (the game's Unlist, a note's Delist)
+    if C_LFGList and C_LFGList.RemoveListing then
+        hooksecurefunc(C_LFGList, "RemoveListing", function() self.delistedByYou = GetTime() end)
+    end
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:FlushHeld() end)
+    self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:FlushHeld() end)
+    self:OnListingChanged(LFG.Listing())
+    self:RegisterCommand("lfgnotes", "test: shows one Group Finder note of each kind, from made-up groups", function()
+        self:TestNotes()
+    end)
+end
+
+-- Made-up groups and players for /suu lfgnotes.
+function M:TestNotes()
+    local function entry(t)
+        t.quests = t.quests or {}
+        t.roles = t.roles or { needed = {}, offered = {} }
+        t.roles.needed, t.roles.offered = t.roles.needed or {}, t.roles.offered or {}
+        t.sources = t.sources or {}
+        t.text = t.text or ""
+        return t
+    end
+    local kessra = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 3, 5 }, level = { 29, 29 },
+        leader = { name = "Kessra", class = "MAGE", level = 31 }, roles = { needed = { healer = 1, tank = 1 } },
+        sources = { tool = {}, chat = { channel = "LookingForGroup", text = "LFM Heal / Tank (drood) or Pala for RFK", confidence = 0.9 } } })
+    local brannoc = entry({ key = "Brannoc", intent = "group", activities = { "dungeon:sfk" }, members = { 2, 5 },
+        leader = { name = "Brannoc", class = "WARRIOR", level = 22 }, roles = { needed = { healer = 1, damage = 2 } }, sources = { tool = {} } })
+    local morrow = entry({ key = "Morrow", intent = "player", activities = { "dungeon:wc" }, leader = { name = "Morrow", class = "ROGUE", level = 20 },
+        roles = { offered = { damage = true } }, sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } } })
+    local dorran = entry({ key = "Dorran", intent = "group", activities = { "zone:wetlands" }, members = { 3, 5 },
+        leader = { name = "Dorran", class = "PALADIN", level = 26 }, sources = { chat = { channel = "SAY", text = "LF2M Wetlands elites", confidence = 0.6 } } })
+    for _, n in ipairs({ { "role", kessra }, { "fresh", brannoc }, { "zone", dorran }, { "friends", morrow }, { "player", morrow } }) do
+        local d = self:MatchNote(n[1], n[2])
+        d.id = d.id .. ":" .. n[1]
+        -- a test never whispers or invites anyone
+        for _, a in ipairs(d.actions or {}) do a.onClick = function() SuuUI.DismissNotification(d.id) end end
+        SuuUI.Notify(d)
+    end
+    SuuUI.Notify({ id = "lfg:test:stale", kind = "until", tone = "warning", category = "Results are stale", icon = { glyph = "hourglass" },
+        title = "Tool results are 9 minutes old", body = "You’re listed for Shadowfang Keep and 2 more. Chat stays live; the tool only searches on your click.",
+        ["until"] = "Goes when you refresh", actions = { { label = "Delist", icon = "close", onClick = function() SuuUI.DismissNotification("lfg:test:stale") end },
+            { label = "Refresh", variant = "primary", icon = "reset", onClick = function() SuuUI.DismissNotification("lfg:test:stale") end } } })
+    SuuUI.Notify({ id = "lfg:test:delisted", kind = "sticky", category = "You were delisted", icon = { glyph = "close" },
+        title = "Your listing has ended", body = "Listed 30 minutes for Shadowfang Keep, Deadmines and Wailing Caverns." })
 end

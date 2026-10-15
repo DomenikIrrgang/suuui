@@ -17,6 +17,11 @@
 --               count, pressed, disabled, tooltip } },
 --               host = { buttons = n, confirm = true, roles = n }, warning,
 --               closable, onClose })
+--   0.13: source = { tool = true, channel = "LookingForGroup", text = "…" }:
+--     where a Group Finder note came from (source badges: "Tool", the
+--     channel) and the post as written in quotes, caption ink-muted, two
+--     lines at most, the whole of it on hover; actions[i].icon = a glyph
+--     left of a button's label.
 --   0.13: host.roles = n: a row for the game's role buttons (a group invite
 --     that asks for your role; the owner places them in n.rolesRow);
 --     warning = "…": an amber caption under it (the invite takes you out
@@ -308,6 +313,7 @@ function Note:SetData(d)
     self.namesRow:Hide()
     self.rolesRow:Hide()
     self.warningRow:Hide()
+    self.sourceRow:Hide()
     self.onCardClick = nil
     if d.presence then return self:SetPresence(d) end
     self.icon:Show()
@@ -365,6 +371,48 @@ function Note:SetData(d)
     else
         self.bodyRow:Hide()
     end
+    -- where it came from (a Group Finder note): badges, then the post
+    if d.source then
+        local x = 0
+        local function badge(i, word)
+            local b = self.badges[i]
+            if not b then
+                b = CreateFrame("Frame", nil, self.sourceRow)
+                b:SetHeight(16)
+                UI.Fill(b, "surface-raised"):SetAllPoints()
+                UI.Border(b, "gilt-line")
+                b.text = UI.Text(b, "micro", "ink-muted")
+                b.text:SetPoint("CENTER")
+                self.badges[i] = b
+            end
+            b.text:SetValue(word)
+            b:SetWidth(math.ceil(b.text:GetUnboundedStringWidth()) + 10)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", x, 0)
+            b:Show()
+            x = x + b:GetWidth() + S["space-2"]
+        end
+        local n = 0
+        if d.source.tool then n = n + 1; badge(n, "Tool") end
+        if d.source.channel then n = n + 1; badge(n, d.source.channel) end
+        for i = n + 1, #self.badges do self.badges[i]:Hide() end
+        local h = n > 0 and 16 or 0
+        local post = d.source.text
+        if post and post ~= "" then
+            self.quote:SetWidth(WIDTH - PAD * 2)
+            self.quote:SetValue("“" .. post .. "”")
+            self.quote:ClearAllPoints()
+            self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h > 0 and h + 2 or 0))
+            self.quote:Show()
+            h = h + (h > 0 and 2 or 0) + math.ceil(self.quote:GetStringHeight())
+            self.sourceRow.post = post
+        else
+            self.quote:Hide()
+            self.sourceRow.post = nil
+        end
+        self.sourceRow:EnableMouse(self.sourceRow.post ~= nil)
+        if h > 0 then place(self.sourceRow, h) end
+    end
     -- the item
     if d.item then
         self.item:SetArt(d.item.icon)
@@ -417,6 +465,7 @@ function Note:SetData(d)
                 text = text .. "  |cff" .. T.color[a.count > 0 and "ink-muted" or "ink-faint"].hex .. a.count .. "|r"
             end
             b:SetLabel(text)
+            b:SetIcon(a.icon)
             b.pressed = a.pressed and true or false
             b.pressedBg:SetShown(b.pressed)
             if b.variant ~= "primary" then b.border:SetColor(b.pressed and "arcane" or (a.variant == "danger" and "ember" or "gilt-line")) end
@@ -523,6 +572,19 @@ function UI.Notification(parent)
     n.untilGlyph:SetPoint("LEFT")
     n.untilText = UI.Text(n.untilRow, "caption", "ink-muted")
     n.untilText:SetPoint("LEFT", n.untilGlyph, "RIGHT", S["space-2"], 0)
+
+    -- where a Group Finder note came from
+    n.sourceRow = CreateFrame("Frame", nil, n)
+    n.sourceRow:Hide()
+    n.badges = {}
+    n.quote = UI.Text(n.sourceRow, "caption", "ink-muted")
+    n.quote:SetJustifyH("LEFT")
+    n.quote:SetWordWrap(true)
+    n.quote:SetMaxLines(2)
+    n.sourceRow:SetScript("OnEnter", function(self)
+        if self.post and n.quote:IsTruncated() then UI.ShowTooltip(self, { description = self.post }) end
+    end)
+    n.sourceRow:SetScript("OnLeave", function() UI.HideTooltip() end)
 
     n.rolesRow = CreateFrame("Frame", nil, n)
     n.rolesRow:Hide()

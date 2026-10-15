@@ -192,7 +192,7 @@ The Group Finder offers to post your listing as an ad to LookingForGroup (or ano
 
 ## Notifications
 
-**Not built yet** (stage 2). Every kind can be switched on or off, and each has its own options (sound, only from the tool or also from chat, the least parser confidence for chat, not in combat, not in instances). The same entry never notifies twice within a few minutes.
+Built in the Group Finder module (stage 2, 2026-10-15; to confirm in game). Every kind can be switched on or off, and each has its own options (sound, only from the tool or also from chat, the least parser confidence for chat, in combat, in instances); until the settings page (stage 4) they run on the defaults drawn on "Settings · Group Finder · Notifications" (all on but World boss or event). A kind that isn't shown in combat or in instances waits until you're out (the latest five). The same entry never notifies twice within 5 minutes; an entry with several reasons makes one note, for the most telling (role, player, quest, friends, activity, zone, boss). `/suu lfgnotes` shows one of each from made-up groups.
 
 | Notification | When |
 |---|---|
@@ -204,8 +204,8 @@ The Group Finder offers to post your listing as an ad to LookingForGroup (or ano
 | **World boss or event** | A group forming for a world boss or world event. |
 | **Friends and guild** | A friend or guild member lists themselves or advertises. |
 | **Results are stale** | You're listed or watching and the tool's results are older than a set time: **Refresh** and **Delist** buttons. |
-| **Your listing runs out soon** | Your listing is close to its end (the tool gives its time left): **Open listing** and **Delist**. |
-| **You were delisted** | Your listing ended or was removed. |
+| **Your listing runs out soon** | Your listing is close to its end (the tool gives its time left): **Open listing** and **Delist**. Open listing is a secure click on the game's Group Finder button and its listing tab (the listing panel opened from addon code would refuse to list), so out of combat only. |
+| **You were delisted** | Your listing ended or was removed, but not when you took it down yourself. |
 | **A group you contacted** | A group whose leader you whispered fills up, is delisted, or posts again still needing your role. |
 
 Whispering a leader opens an empty whisper (no ready-made text).
@@ -250,6 +250,8 @@ SuuUI.LFG.Catalogue            -- .Get(key), .Name(key), .All(kind), .Expand(key
 SuuUI.LFG.Interest()           -- what the library thinks you're after
 SuuUI.LFG.Watch(key, on) / Watches()
 SuuUI.LFG.MatchReasons(entry)  -- "role", "activity", "player", "quest", "zone", "boss", "friend"
+SuuUI.LFG.ContactedAt(key)     -- when you whispered that leader (SuuUI.LFG.Now()), or nil
+SuuUI.LFG.Social(name)         -- "friend", "guild" or nil
 SuuUI.LFG.Refresh(category)    -- only from a click or key press (the game's rule); 2, 116, 120
 SuuUI.LFG.ToolAge(category)    -- seconds since that category's last search
 SuuUI.LFG.Listing() / Delist() -- your listing; delisting only from a click

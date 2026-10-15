@@ -980,6 +980,57 @@ function M:Rebuild()
     if not self.stack then return end
     self.stack:SetItems(self:Items(), InCombatLockdown())
     for _, h in pairs(self.hosts) do self:Attach(h) end
+    self:SecureActions()
+end
+
+-- A note's action with `macro` (0.13): a secure button over its button
+-- that runs the macro, for what only a secure click may do (opening the
+-- game's Group Finder at its listing panel: opened from addon code, the
+-- panel's listing would be refused). Placed by screen position, never
+-- anchored to the card (a secure frame anchored to it would make the
+-- stack protected); out of combat only: hidden as a fight starts, the
+-- plain button then says why it can't.
+function M:SecureActions()
+    if InCombatLockdown() or not self.stack then return end
+    self.secure = self.secure or {}
+    local used = {}
+    local ui = UIParent:GetEffectiveScale()
+    for id, d in pairs(self.notes) do
+        for i, a in ipairs(d.actions or {}) do
+            local card = a.macro and self.stack:CardFor(id)
+            local pool = card and card.buttons and card.buttons[a.variant or "quiet"]
+            local b = pool and pool[i]
+            if b and b:IsVisible() and b:GetLeft() then
+                local key = id .. "#" .. i
+                local s = self.secure[key]
+                if not s then
+                    s = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+                    s:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+                    s:SetFrameStrata("DIALOG")
+                    s:SetScript("OnEnter", function(self) local fn = self.button and self.button:GetScript("OnEnter"); if fn then fn(self.button) end end)
+                    s:SetScript("OnLeave", function(self) local fn = self.button and self.button:GetScript("OnLeave"); if fn then fn(self.button) end end)
+                    s:SetScript("PostClick", function(self) if self.after then self.after() end end)
+                    self.secure[key] = s
+                end
+                local scale = b:GetEffectiveScale() / ui
+                s:ClearAllPoints()
+                s:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", b:GetLeft() * scale, b:GetBottom() * scale)
+                s:SetSize(b:GetWidth() * scale, b:GetHeight() * scale)
+                s:SetAttribute("type1", "macro")
+                s:SetAttribute("macrotext1", type(a.macro) == "function" and a.macro() or a.macro)
+                s.button, s.after = b, a.onClick and function() a.onClick(card) end or nil
+                s:Show()
+                used[key] = true
+            end
+        end
+    end
+    for key, s in pairs(self.secure) do
+        if not used[key] then s:Hide(); s:ClearAllPoints(); s.button, s.after = nil, nil end
+    end
+end
+
+function M:HideSecureActions()
+    for _, s in pairs(self.secure or {}) do s:Hide(); s:ClearAllPoints(); s.button, s.after = nil, nil end
 end
 
 -- A few times a second: counting titles (logging out in 12 s), time left,
@@ -1010,7 +1061,7 @@ function M:Tick()
             end
         end
     end
-    if changed then self:Rebuild() end
+    if changed then self:Rebuild() else self:SecureActions() end
     for dialog, h in pairs(self.hosts) do
         local card = h.card
         if card then
@@ -1191,7 +1242,7 @@ function M:OnEnable()
     end)
     self:OnGameEvent("READY_CHECK_FINISHED", function() self.readyEndsAt = nil end)
     -- in combat notes wait; out of it they come back
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Rebuild() end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:HideSecureActions(); self:Rebuild() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         self:Rebuild()
         -- online/offline held in the fight

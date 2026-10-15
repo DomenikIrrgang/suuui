@@ -10,6 +10,8 @@
 --   LFG.Watches()             -- { key = true } of those
 --   LFG.Languages()           -- the language modules to read with
 --   LFG.MatchReasons(entry)   -- { "role", "activity", ... } for one entry
+--   LFG.ContactedAt(key)      -- when you whispered that leader (LFG.Now()), or nil
+--   LFG.Social(name)          -- "friend", "guild" or nil
 --   events: Match(entry, newReasons), Contacted(entry, what)
 --     reasons: "role" (a group for your activity needs your role),
 --     "activity" (a group for your activity), "player" (a player for your
@@ -87,6 +89,11 @@ local function readSocial()
             if game and type(game.characterName) == "string" then social[game.characterName] = "friend" end
         end
     end
+end
+
+function LFG.Social(name)
+    if type(name) ~= "string" then return nil end
+    return social[name] or social[Ambiguate and Ambiguate(name, "short") or name]
 end
 
 local function zoneKey()
@@ -179,6 +186,8 @@ end
 -- The groups you whispered: what happens to them.
 local contacted = {}
 
+function LFG.ContactedAt(key) return key and contacted[key] or nil end
+
 local function contactedUpdate(e, removed)
     if not contacted[e.key] then return end
     if removed then
@@ -209,7 +218,7 @@ LFG.AddPart({
             elseif event == "PREFERRED_PLAY_SETTINGS_UPDATED" then readPreferred()
             elseif event == "CHAT_MSG_WHISPER_INFORM" then
                 -- you whispered someone: a leader you contacted
-                if type(a2) == "string" and LFG.Entry(a2) then contacted[a2] = true end
+                if type(a2) == "string" and LFG.Entry(a2) then contacted[a2] = LFG.Now() end
             else readSocial() end
         end)
         I.onAdded = I.onAdded or function(e) check(e) end
