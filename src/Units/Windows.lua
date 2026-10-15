@@ -810,9 +810,15 @@ function M:SkinWorldMap()
         if wait > 0 then return end
         wait = 0.05
         local x, y, you
-        if f.IsCanvasMouseFocus and f:IsCanvasMouseFocus() then
+        -- the cursor's spot while it's over the map, over a pin too (the
+        -- canvas loses the mouse focus to the pin: it read your position;
+        -- found in game); yours off the map
+        local over = f.ScrollContainer and f.ScrollContainer:IsMouseOver()
+        if over then
             x, y = f:GetNormalizedCursorPosition()
-        else
+            if not (x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1) then x, y = nil, nil end
+        end
+        if not x then
             local pos = C_Map.GetPlayerMapPosition(f:GetMapID(), "player")
             if pos then x, y = pos:GetXY(); you = true end
         end
