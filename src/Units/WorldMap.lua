@@ -49,6 +49,7 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 
 local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
 local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
+local QUEST_KEYS = { available = true, repeatable = true, itemQuest = true }
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 --------------------------------------------------------------------------------
@@ -909,7 +910,20 @@ function M:Layout()
     local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
     if w <= 0 or h <= 0 then return end
     self.lw, self.lh, self.lcs = w, h, cs
-    local groups = merge(self.items, w, h)
+    -- zoomed all the way in (on a map that zooms), quest pins stay on their
+    -- exact spots: none merge, none move; the rest move out of their way
+    local items = self.items
+    if f:IsAtMaxZoom() and not f:IsAtMinZoom() then
+        items = {}
+        for i, it in ipairs(self.items) do
+            if QUEST_KEYS[it.key] then
+                items[i] = setmetatable({ key = false, fixed = true }, { __index = it })
+            else
+                items[i] = it
+            end
+        end
+    end
+    local groups = merge(items, w, h)
     mergeGroups(groups)
     spread(groups)
     -- spreading can push two of a kind together: join them, spread again
