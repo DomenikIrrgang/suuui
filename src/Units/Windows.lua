@@ -524,6 +524,21 @@ function M:RestyleQuestLog()
             -- Abandon / Share / Track hang below it (found in game)
             d:SetHeight(d:GetHeight() - CUT)
             if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - CUT) end
+            -- Abandon / Share / Track inside the details, as wide as the
+            -- text, three alike with a gap (the game starts them 3 px out
+            -- and runs them past both edges, over its frame; found in game)
+            local ab, sh, tr = d.AbandonButton, d.ShareButton, d.TrackButton
+            if ab and sh and tr then
+                local INSET, GAP = 6, 4
+                local w = math.floor((d:GetWidth() - 2 * INSET - 2 * GAP) / 3)
+                ab:ClearAllPoints()
+                ab:SetPoint("BOTTOMLEFT", INSET, 0)
+                sh:ClearAllPoints()
+                sh:SetPoint("LEFT", ab, "RIGHT", GAP, 0)
+                tr:ClearAllPoints()
+                tr:SetPoint("LEFT", sh, "RIGHT", GAP, 0)
+                for _, btn in ipairs({ ab, sh, tr }) do btn:SetWidth(w) end
+            end
             -- the strip with Back: its art away, a hairline under it
             local back = d.BackFrame
             if back then
