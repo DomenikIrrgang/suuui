@@ -475,6 +475,16 @@ function M:WireListed(p)
     p.onPost = function(channel, text) self:PostAd(channel, text) end
 end
 
+-- Opening the window searches the tool for the chosen category (the key
+-- press or click that opened it allows that: probed 2026-10-15), unless it
+-- searched in the last minute.
+function M:SearchOnOpen()
+    local cat = BY_VALUE[self:Get("category")] or BY_VALUE.all
+    local age = LFG.ToolAge(cat.tool)
+    if age and age < 60 then return end
+    self.searching = LFG.Refresh(cat.tool) and true or nil
+end
+
 function M:Build()
     local f = _G.LFGParentFrame
     if not f or self.browse then return end
@@ -515,7 +525,10 @@ function M:Build()
         -- leaving the panel ends an Update
         _G.LFGListingFrame:HookScript("OnHide", function() self.editing = nil end)
     end
-    f:HookScript("OnShow", function() self:Follow() end)
+    f:HookScript("OnShow", function()
+        self:SearchOnOpen()
+        self:Follow()
+    end)
     f:HookScript("OnHide", function() GameTooltip:Hide() end)
     for _, c in ipairs({ _G.LFGBrowseFrame, _G.LFGListingFrame, _G.LFGWhoListFrame }) do
         if c then
@@ -611,7 +624,7 @@ function M:SettingsSection()
         id = "groupfinder", label = "Group Finder", category = "World", order = 30,
         preview = function(parent) return self:SettingsPreview(parent) end,
         groups = {
-            { title = "Group Finder", description = "One list from the game’s group finder and the public chat channels. The tool searches when you press Refresh; chat is read as it’s written.", rows = {
+            { title = "Group Finder", description = "One list from the game’s group finder and the public chat channels. The tool searches when you open the window or press Refresh; chat is read as it’s written.", rows = {
                 { key = "channels", label = "Channels to read", description = "Posts in these channels join the list. Tool listings always do.",
                   control = "custom", build = function(parent, onChange)
                       local opts = {}

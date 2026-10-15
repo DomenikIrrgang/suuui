@@ -216,7 +216,7 @@ The tool can only be searched from your click or key press, so:
 
 - **When it searches:**
   - the Refresh button searches (built);
-  - opening the Group Finder searches, since that's your click (**not built yet**).
+  - opening the Group Finder searches, since that's your click or key press (built 2026-10-15; probed: `/suu probe lfg open`), unless it searched in the last minute.
 - **When it's stale:** while you're listed or watching something, the results go stale after a few minutes. The library then fires **`ToolStale`**, and the notification offers **Refresh** and **Delist** (both work from that click).
 - **Chat is live:** chat entries keep arriving and matching without any refresh.
 
