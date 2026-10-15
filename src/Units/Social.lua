@@ -361,14 +361,7 @@ end
 -- (C_BattleNet.SendTitleFriendInviteByName, watched with /suu probe social
 -- friends, 2026-10-14).
 function M:AddFriend(name)
-    if not name or name == "" then return end
-    local fl, bn = C_FriendList, C_BattleNet
-    local legacy = fl and fl.IsLegacyFriendSystemEnabled and call(fl.IsLegacyFriendSystemEnabled)
-    if not legacy and bn and bn.SendTitleFriendInviteByName then
-        local ok = pcall(bn.SendTitleFriendInviteByName, name)
-        if ok then self:Print("Friend request sent to " .. name .. ".") return end
-    end
-    pcall(fl.AddFriend, name)
+    if SuuUI.AddFriend(name) then self:Print("Friend request sent to " .. name .. ".") end
 end
 
 -- Ignore a player by their whole name (a confirmation first).

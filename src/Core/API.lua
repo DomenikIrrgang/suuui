@@ -369,6 +369,20 @@ API.UI.ReskinDialog = UI.ReskinDialog -- ReskinDialog(frame): one of Blizzard's 
 API.UI.ReskinMenu = UI.ReskinMenu -- ReskinMenu(menu): an open Blizzard menu in the context menu's look until it closes
 API.UI.ReskinPopup = UI.ReskinPopup -- ReskinPopup(dialog): one of the game's shared popups in SuuUI's look until it hides
 API.UI.ReskinCollapseButton = UI.ReskinCollapseButton
+-- 0.13: a friend request by a character's whole name. Forever's classic
+-- friends list is off (IsLegacyFriendSystemEnabled false: C_FriendList.AddFriend
+-- does nothing, found in game); its own window sends a title friend invite
+-- (C_BattleNet.SendTitleFriendInviteByName). Only from a click. -> true when sent.
+function API.AddFriend(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local fl, bn = C_FriendList, C_BattleNet
+    local okL, legacy = pcall(function() return fl and fl.IsLegacyFriendSystemEnabled and fl.IsLegacyFriendSystemEnabled() end)
+    if not (okL and legacy) and bn and bn.SendTitleFriendInviteByName then
+        if pcall(bn.SendTitleFriendInviteByName, name) then return true end
+    end
+    return fl and fl.AddFriend and pcall(fl.AddFriend, name) or false
+end
+
 -- A note in the notification stack (the Notifications module; nothing while
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id

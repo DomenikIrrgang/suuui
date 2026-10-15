@@ -535,7 +535,8 @@ function M:WireWho(w)
         if invite then pcall(invite, row.name) end
     end
     w.onAddFriend = function(row)
-        if C_FriendList.AddFriend then pcall(C_FriendList.AddFriend, row.name) end
+        -- a friend request (Forever's classic friends list is off: AddFriend did nothing)
+        if SuuUI.AddFriend(row.name) then self:Print("Friend request sent to " .. row.name .. ".") end
     end
     self:OnGameEvent("WHO_LIST_UPDATE", function()
         self:ReadWho()

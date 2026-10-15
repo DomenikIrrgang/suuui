@@ -364,7 +364,8 @@ local function playerMenu(owner, name)
         end)
         root:CreateButton("Copy name", function() copyName(name) end)
         root:CreateButton("Add friend", function()
-            if C_FriendList and C_FriendList.AddFriend then pcall(C_FriendList.AddFriend, name) end
+            -- a friend request (Forever's classic friends list is off)
+            if SuuUI.AddFriend(name) then M:Print("Friend request sent to " .. name .. ".") end
         end)
         root:CreateButton("Ignore", function()
             if C_FriendList and C_FriendList.AddIgnore then pcall(C_FriendList.AddIgnore, name) end
