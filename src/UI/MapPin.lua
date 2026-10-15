@@ -1,0 +1,105 @@
+-- UI/MapPin.lua
+-- One mark on the world map (design component MapPin): a diamond on surface
+-- with an edge, so it reads on any terrain, and a glyph or a character in
+-- it. Quests, places, rares and treasures are map-pin size (22 px, an 11 px
+-- glyph); services are small (17 px, a 9 px glyph). A merged pin carries a
+-- count in micro on a surface-raised tab at its lower right; a rare elite a
+-- second ring.
+--
+--   local pin = UI.MapPin(parent)
+--   pin:SetData({
+--       glyph = "anvil",          -- a glyph's name, or
+--       char = "!",               -- a character ("!", "?", "3")
+--       color = "ink",            -- the glyph's (or character's) token
+--       edge = "gilt-line",       -- the edge's token
+--       small = false,            -- the service size
+--       ring = nil,               -- a token: a second ring outside the edge
+--       count = nil,              -- a merged pin's count (2 and up)
+--   })
+--   pin:PinSize() -> its size in px
+-- The pin is a Button; its owner sets its clicks and hover.
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local SIZE, SMALL = T.size["map-pin"], 17
+local ROOT2 = math.sqrt(2)
+
+-- A square turned 45° whose corners touch a box `box` px wide.
+local function diamond(parent, layer, sub)
+    local t = parent:CreateTexture(nil, layer, nil, sub)
+    t:SetTexture(WHITE)
+    t:SetRotation(math.rad(45))
+    t:SetPoint("CENTER")
+    return t
+end
+local function fit(t, box) local side = box / ROOT2; t:SetSize(side, side) end
+
+local Pin = {}
+
+function Pin:PinSize() return self.size end
+
+function Pin:SetData(d)
+    local size = d.small and SMALL or SIZE
+    self.size = size
+    self:SetSize(size, size)
+    -- the second ring: the ring's colour, a gap of surface, then the pin
+    self.ringOuter:SetShown(d.ring ~= nil)
+    self.ringGap:SetShown(d.ring ~= nil)
+    if d.ring then
+        fit(self.ringOuter, size + 8)
+        self.ringOuter:SetVertexColor(UI.RGBA(d.ring))
+        fit(self.ringGap, size + 5)
+        self.ringGap:SetVertexColor(UI.RGBA("surface"))
+    end
+    fit(self.edge, size)
+    self.edge:SetVertexColor(UI.RGBA(d.edge or "gilt-line"))
+    fit(self.fill, size - 3)
+    self.fill:SetVertexColor(UI.RGBA("surface"))
+    local inner = d.small and 9 or 11
+    if d.glyph then
+        self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
+        self.glyph:SetSize(inner, inner)
+        self.glyph:SetVertexColor(UI.RGBA(d.color or "ink"))
+        self.glyph:Show()
+        self.char:Hide()
+    else
+        self.glyph:Hide()
+        self.char:SetValue(d.char or "")
+        self.char:SetColor(d.color or "ink")
+        self.char:Show()
+    end
+    local n = d.count
+    if n and n > 1 then
+        self.countText:SetValue(n > 99 and "99+" or tostring(n))
+        self.countTab:SetSize(math.ceil(self.countText:GetUnboundedStringWidth()) + 4, 11)
+        self.countTab:Show()
+    else
+        self.countTab:Hide()
+    end
+end
+
+function UI.MapPin(parent)
+    local b = CreateFrame("Button", nil, parent)
+    Mixin(b, Pin)
+    b.ringOuter = diamond(b, "BACKGROUND", 1)
+    b.ringGap = diamond(b, "BACKGROUND", 2)
+    b.edge = diamond(b, "BORDER", 1)
+    b.fill = diamond(b, "BORDER", 2)
+    b.glyph = b:CreateTexture(nil, "ARTWORK")
+    b.glyph:SetPoint("CENTER")
+    b.char = UI.Text(b, "label", "ink")
+    b.char:SetPoint("CENTER", 0, 0)
+    b.countTab = CreateFrame("Frame", nil, b)
+    b.countTab:SetPoint("CENTER", b, "BOTTOMRIGHT", -1, 2)
+    b.countTab:SetFrameLevel(b:GetFrameLevel() + 2)
+    UI.Fill(b.countTab, "surface-raised"):SetAllPoints()
+    UI.Border(b.countTab, "gilt-line")
+    b.countText = UI.Text(b.countTab, "micro", "ink")
+    b.countText:SetPoint("CENTER", 0, 0)
+    b:SetData({})
+    return b
+end

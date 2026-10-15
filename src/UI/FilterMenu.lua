@@ -12,6 +12,11 @@
 --   toggles  independent checkboxes ("Have materials")
 -- and a foot over a gilt-faint rule: "3 filters on" (or "Defaults") and
 -- Reset. Choices apply at once; a click outside or Esc closes the panel.
+-- 0.14: a group with `column = true` starts a new column (space-6 apart,
+-- each at least 180 px; the foot spans them), `style = "button"` makes the
+-- field a quiet button (the filter glyph, the placeholder, an ink diamond
+-- after it while the filters differ from their defaults; the world map's
+-- "Map filters"), and `done = true` adds Done to the foot.
 --
 --   local menu = UI.FilterMenu(parent, {
 --       groups = { { key, label, kind = "one" | "many" | "toggles",
@@ -29,6 +34,7 @@ local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local PANEL_W = 292
+local COLUMN_W = 180
 local CHIP_H = 24
 
 -- One panel open at a time, and a screen-wide catcher under it that closes it.
@@ -94,8 +100,13 @@ end
 -- The field and, when built, the panel's controls, from the value.
 function Menu:Draw()
     local n = self:Count()
-    self.text:SetValue((self.placeholder or "Filters") .. (n > 0 and (" · " .. n) or ""))
-    self.glyph:SetVertexColor(UI.RGBA(n > 0 and "arcane" or "ink-muted"))
+    if self.style == "button" then
+        self.text:SetValue(self.placeholder or "Filters")
+        self.changed:SetShown(n > 0)
+    else
+        self.text:SetValue((self.placeholder or "Filters") .. (n > 0 and (" · " .. n) or ""))
+        self.glyph:SetVertexColor(UI.RGBA(n > 0 and "arcane" or "ink-muted"))
+    end
     local p = self.panel
     if not p then return end
     for _, row in ipairs(p.rows) do
@@ -157,20 +168,37 @@ function Menu:Build()
     self.panel = p
     p:SetFrameStrata("FULLSCREEN_DIALOG")
     p:SetFrameLevel(catcher:GetFrameLevel() + 10)
-    p:SetWidth(PANEL_W)
     p:EnableMouse(true)
     p:SetClampedToScreen(true)
     UI.Fill(p, "surface"):SetAllPoints()
     UI.Border(p, "gilt-line")
     UI.Shadow(p, "shadow-panel")
     p.rows = {}
-    local pad, inner = S["space-5"], PANEL_W - S["space-5"] * 2
-    local y = pad
+    local pad = S["space-5"]
+    -- the columns: a group with `column` starts the next one
+    local multi = false
+    for gi, g in ipairs(self.groups) do if gi > 1 and g.column then multi = true end end
+    local inner = multi and COLUMN_W or PANEL_W - pad * 2
+    local columns, col = {}, nil
+    local function newColumn()
+        col = CreateFrame("Frame", nil, p)
+        col:SetSize(1, 1)
+        col.width, col.y = inner, 0
+        columns[#columns + 1] = col
+    end
+    newColumn()
+    local y = 0
     for gi, g in ipairs(self.groups) do
-        if gi > 1 then y = y + S["space-4"] end
+        if gi > 1 and g.column then
+            col.y = y
+            newColumn()
+            y = 0
+        elseif gi > 1 then
+            y = y + S["space-4"]
+        end
         local row = { group = g }
         local label = UI.Text(p, "caption", "ink-muted")
-        label:SetPoint("TOPLEFT", pad, -y)
+        label:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
         label:SetValue(g.label)
         y = y + T.type.caption.lineHeight + S["space-2"]
         if g.kind == "one" then
@@ -178,7 +206,8 @@ function Menu:Build()
                 menu.value[g.key] = v
                 menu:Changed()
             end })
-            row.control:SetPoint("TOPLEFT", pad, -y)
+            row.control:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
+            col.width = math.max(col.width, row.control:GetWidth())
             y = y + row.control:GetHeight()
         elseif g.kind == "many" then
             -- chips, wrapping onto the next line
@@ -190,7 +219,7 @@ function Menu:Build()
                     x = 0
                     y = y + CHIP_H + S["space-2"]
                 end
-                chip:SetPoint("TOPLEFT", pad + x, -y)
+                chip:SetPoint("TOPLEFT", col, "TOPLEFT", x, -y)
                 x = x + chip:GetWidth() + S["space-2"]
                 row.chips[#row.chips + 1] = chip
             end
@@ -211,14 +240,26 @@ function Menu:Build()
                     menu:Changed()
                 end })
                 box.option = o
-                box:SetPoint("TOPLEFT", pad, -y)
+                box:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
+                col.width = math.max(col.width, box:GetWidth())
                 y = y + box:GetHeight()
                 row.boxes[#row.boxes + 1] = box
             end
         end
         p.rows[#p.rows + 1] = row
     end
-    -- the foot: how many are on, and Reset
+    -- the columns side by side, the panel around them
+    col.y = y
+    local x, tallest = pad, 0
+    for i, c in ipairs(columns) do
+        if i > 1 then x = x + S["space-6"] end
+        c:SetPoint("TOPLEFT", p, "TOPLEFT", x, -pad)
+        x = x + c.width
+        tallest = math.max(tallest, c.y)
+    end
+    p:SetWidth(multi and (x + pad) or PANEL_W)
+    y = pad + tallest
+    -- the foot: how many are on, Reset (and Done)
     y = y + S["space-5"]
     local rule = UI.Fill(p, "gilt-faint", "ARTWORK")
     rule:SetHeight(1)
@@ -229,7 +270,13 @@ function Menu:Build()
         menu.value = menu:Full(nil)
         menu:Changed()
     end })
-    p.reset:SetPoint("TOPRIGHT", -pad, -y)
+    if self.done then
+        p.done = UI.Button(p, { text = "Done", onClick = function() menu:Close() end })
+        p.done:SetPoint("TOPRIGHT", -pad, -y)
+        p.reset:SetPoint("RIGHT", p.done, "LEFT", -S["space-3"], 0)
+    else
+        p.reset:SetPoint("TOPRIGHT", -pad, -y)
+    end
     p.count = UI.Text(p, "caption", "ink-muted")
     p.count:SetPoint("LEFT", p, "TOPLEFT", pad, -(y + p.reset:GetHeight() / 2))
     y = y + p.reset:GetHeight() + pad
@@ -258,7 +305,6 @@ function Menu:Open()
     openMenu = self
     catcher:Show()
     p:Show()
-    self.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
     self.edge:SetColor("arcane")
 end
 
@@ -275,23 +321,39 @@ function UI.FilterMenu(parent, opts)
     local f = CreateFrame("Button", nil, parent)
     Mixin(f, Menu)
     f.groups, f.onChange, f.placeholder = opts.groups or {}, opts.onChange, opts.placeholder
-    f.defaults = opts.defaults or {}
-    f:SetSize(opts.width or 140, 30)
-    UI.Fill(f, "surface-sunk"):SetAllPoints()
-    f.edge = UI.Border(f, "gilt-line")
+    f.defaults, f.style, f.done = opts.defaults or {}, opts.style, opts.done
     f.glyph = f:CreateTexture(nil, "ARTWORK")
     f.glyph:SetTexture(GLYPHS .. "filter.tga")
     f.glyph:SetSize(14, 14)
     f.glyph:SetPoint("LEFT", S["space-4"], 0)
-    f.chevron = f:CreateTexture(nil, "ARTWORK")
-    f.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
-    f.chevron:SetSize(12, 12)
-    f.chevron:SetPoint("RIGHT", -S["space-4"], 0)
-    f.chevron:SetVertexColor(UI.RGBA("ink-muted"))
-    f.text = UI.Text(f, "body", "ink")
-    f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
-    f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
-    f.text:SetJustifyH("LEFT")
+    if f.style == "button" then
+        -- a quiet button: the glyph, the placeholder, a diamond while changed
+        UI.Fill(f, "surface-raised"):SetAllPoints()
+        f.edge = UI.Border(f, "gilt-line")
+        f.glyph:SetSize(12, 12)
+        f.glyph:SetPoint("LEFT", S["space-4"], 0)
+        f.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        f.text = UI.Text(f, "label", "ink")
+        f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
+        f.text:SetValue(opts.placeholder or "Filters")
+        f.changed = UI.Diamond(f, 5, "ink")
+        f.changed:SetPoint("LEFT", f.text, "RIGHT", S["space-3"], 0)
+        f:SetSize(opts.width or math.ceil(S["space-4"] + 12 + S["space-3"] + f.text:GetUnboundedStringWidth()
+            + S["space-3"] + 5 + S["space-4"]), opts.height or 30)
+    else
+        f:SetSize(opts.width or 140, opts.height or 30)
+        UI.Fill(f, "surface-sunk"):SetAllPoints()
+        f.edge = UI.Border(f, "gilt-line")
+        f.chevron = f:CreateTexture(nil, "ARTWORK")
+        f.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
+        f.chevron:SetSize(12, 12)
+        f.chevron:SetPoint("RIGHT", -S["space-4"], 0)
+        f.chevron:SetVertexColor(UI.RGBA("ink-muted"))
+        f.text = UI.Text(f, "body", "ink")
+        f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
+        f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
+        f.text:SetJustifyH("LEFT")
+    end
     f:SetScript("OnClick", function(self)
         if openMenu == self then self:Close() else self:Open() end
     end)

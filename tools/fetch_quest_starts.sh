@@ -6,7 +6,7 @@
 # entrances (github.com/Questie/QuestieDB, no license stated), and SOURCES
 # (the QuestieDB commit) for the data file's header.
 #   sh tools/fetch_quest_starts.sh <dir>
-# Then: lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua
+# Then: lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua src/Data/MapPlaces.lua
 # Or both at once: sh tools/update_quest_starts.sh
 set -e
 DIR=${1:?usage: fetch_quest_starts.sh <dir>}

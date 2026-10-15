@@ -348,7 +348,8 @@ API.UI.GroupFinderBrowse = UI.GroupFinderBrowse -- GroupFinderBrowse(parent) -> 
 -- ForeverLFG: the game's group finder and public chat as one list of groups
 -- and players looking (Docs/ForeverLFG.md); idle until SuuUI.LFG.Start()
 API.LFG = ns.LFG
-API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", options = { { value, label, color } } } }, defaults, value, placeholder, width, onChange }) -> SetValue, GetValue, Count, Close
+API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", column, options = { { value, label, color } } } }, defaults, value, placeholder, width, height, style = "button", done, onChange }) -> SetValue, GetValue, Count, Close
+API.UI.MapPin = UI.MapPin -- 0.14: MapPin(parent) -> SetData({ glyph or char, color, edge, small, ring, count }), PinSize()
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H
 API.UI.LegacyTrack = UI.LegacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip
@@ -431,6 +432,14 @@ end
 -- (automatic) or { t = "i", i = itemID, v, d, dn, o, q, c } (a recipe item:
 -- sold by, dropped by and how many, found in, quest rewards, inside), or nil
 -- when it isn't known.
+-- 0.14: where Forever's quests are picked up and the dungeon entrances
+-- (Data/QuestStarts.lua), and the map's other places: town services,
+-- mailboxes, rares, treasure chests (Data/MapPlaces.lua); both generated
+-- from QuestieDB by tools/update_quest_starts.sh. Their layouts are in
+-- their files' headers.
+function API.QuestStarts() return ns.QuestStarts or {} end
+function API.MapPlaces() return ns.MapPlaces or {} end
+
 function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]
 end

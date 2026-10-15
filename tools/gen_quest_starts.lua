@@ -6,11 +6,13 @@
 -- Reads QuestieDB's Forever data with its corrections applied in
 -- QuestieDB's order (inherited classic fixes, the generated Forever base,
 -- the Forever fixes), from the folder tools/fetch_quest_starts.sh fills.
+-- Also writes src/Data/MapPlaces.lua: the town services (from NPC flags
+-- and titles), mailboxes, rares and treasure chests, for the map's pins.
 -- Every downloaded file runs in a sandbox without io, os or require.
---   lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua
+--   lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua src/Data/MapPlaces.lua
 
-local dir, out = arg[1], arg[2]
-assert(dir and out, "usage: lua tools/gen_quest_starts.lua <dir> <out.lua>")
+local dir, out, placesOut = arg[1], arg[2], arg[3]
+assert(dir and out and placesOut, "usage: lua tools/gen_quest_starts.lua <dir> <quests.lua> <places.lua>")
 
 local function read(path)
     local f = assert(io.open(dir .. "/" .. path, "rb"), "missing " .. path .. " (run tools/fetch_quest_starts.sh)")
@@ -285,23 +287,156 @@ local function readDungeons(faction)
     return ZoneDB.private.dungeons or {}
 end
 local horde, alliance = readDungeons("Horde"), readDungeons("Alliance")
+-- the list also holds later expansions' instances and places that aren't
+-- instances (brawlers' pubs, the tram, the PvP halls): left out
+local LATER = { ["Blackrock Caverns"] = true, ["Blackwing Descent"] = true, ["Dragon Soul"] = true, ["End Time"] = true,
+                ["Firelands"] = true, ["Hour of Twilight"] = true, ["Well of Eternity"] = true, ["Molten Front"] = true,
+                ["Hyjal Summit"] = true, ["Old Hillsbrad Foothills"] = true, ["The Black Morass"] = true,
+                ["The Culling of Stratholme"] = true, ["Scarlet Halls"] = true, ["Scarlet Enclave"] = true,
+                ["Bizmo's Brawlpub"] = true, ["Brawl'gar Arena"] = true, ["Darkmoon Faire Island"] = true,
+                ["Karazhan"] = true, ["Deeprun Tram"] = true, ["Champions' Hall"] = true, ["Hall of Legends"] = true }
+local RAIDS = { ["Molten Core"] = true, ["Onyxia's Lair"] = true, ["Blackwing Lair"] = true, ["Zul'Gurub"] = true,
+                ["Ruins of Ahn'Qiraj"] = true, ["Temple of Ahn'Qiraj"] = true, ["Naxxramas"] = true, ["The Tainted Scar"] = true }
+local BATTLEGROUNDS = { ["Alterac Valley"] = true, ["Arathi Basin"] = true, ["Warsong Gulch"] = true }
 local seen = {}
 for _, side in ipairs({ { horde, "H" }, { alliance, "A" } }) do
     for area, d in pairs(side[1]) do
-        if type(d) == "table" and type(d[1]) == "string" and type(d[4]) == "table" then
+        if type(d) == "table" and type(d[1]) == "string" and type(d[4]) == "table" and not LATER[d[1]] then
             for _, loc in ipairs(d[4]) do
                 local map = type(loc) == "table" and areaToMap[loc[1]]
                 if map and map > 0 and type(loc[2]) == "number" then
                     local key = string.format("%d,%.1f,%.1f,%s", map, loc[2], loc[3], d[1])
                     if seen[key] then seen[key].faction = nil
                     else
-                        local e = { x = loc[2], y = loc[3], name = d[1], area = area, faction = side[2] }
+                        local kind = RAIDS[d[1]] and "raid" or BATTLEGROUNDS[d[1]] and "battleground" or "dungeon"
+                        local e = { x = loc[2], y = loc[3], name = d[1], area = area, faction = side[2], kind = kind }
                         seen[key] = e
                         entrances[map] = entrances[map] or {}
                         table.insert(entrances[map], e)
                     end
                 end
             end
+        end
+    end
+end
+
+-- the map's other pins: services, mailboxes, rares, treasure chests
+local NPC_FLAG = { VENDOR = 4, TRAINER = 16, SPIRIT = 32, INN = 128, BANK = 256, GUILD = 512, TABARD = 1024,
+                   BATTLEMASTER = 2048, AUCTION = 4096, STABLE = 8192, REPAIR = 16384 }
+local function has(flags, bit) return flags // bit % 2 == 1 end
+local CLASSES = { "warrior", "paladin", "hunter", "rogue", "priest", "shaman", "mage", "warlock", "druid" }
+-- a profession trainer's profession from its title ("Expert Leatherworker")
+local PROFESSIONS = {
+    { "alchem", "alchemy" }, { "blacksmith", "blacksmithing" }, { "armorsmith", "blacksmithing" },
+    { "weaponsmith", "blacksmithing" }, { "armor crafter", "blacksmithing" }, { "weapon crafter", "blacksmithing" },
+    { "enchant", "enchanting" }, { "engineer", "engineering" }, { "herbalis", "herbalism" },
+    { "leather", "leatherworking" }, { "mining", "mining" }, { "miner", "mining" }, { "skinn", "skinning" },
+    { "tailor", "tailoring" }, { "cook", "cooking" }, { "chef", "cooking" }, { "butcher", "cooking" },
+    { "first aid", "firstAid" }, { "physician", "firstAid" }, { "trauma surgeon", "firstAid" }, { "fish", "fishing" },
+}
+local FOOD = { "baker", "butcher", "meat", "fruit", "mushroom", "beverage", "bread", "cheese", "wine", "barkeep" }
+local function trainerKind(title)
+    local t = (title or ""):lower()
+    for _, p in ipairs(PROFESSIONS) do if t:find(p[1], 1, true) then return "trainer:" .. p[2] end end
+    if t:find("pet trainer", 1, true) then return "trainer:other" end
+    if t:find("portal trainer", 1, true) then return "class:MAGE" end
+    for _, c in ipairs(CLASSES) do if t:find(c, 1, true) then return "class:" .. c:upper() end end
+    return "trainer:other" -- weapon masters, riding instructors, pet trainers
+end
+local function vendorKind(title)
+    local t = (title or ""):lower()
+    for _, w in ipairs(FOOD) do if t:find(w, 1, true) then return "food" end end
+    if t:find("general goods", 1, true) or t:find("general supplies", 1, true) then return "goods" end
+    return "vendor"
+end
+-- an NPC's services, in the order the map picks the one it shows
+local function servicesOf(n)
+    local flags, title = n[NK.npcFlags] or 0, n[NK.subName]
+    local k = {}
+    if n[NK.name] == "Spirit Healer" or has(flags, NPC_FLAG.SPIRIT) then k[#k + 1] = "spirit" end
+    -- the innkeeper flag also sits on mount vendors and a kennel master
+    if has(flags, NPC_FLAG.INN) and (title == nil or title == "Innkeeper") then k[#k + 1] = "inn" end
+    if has(flags, NPC_FLAG.BANK) then k[#k + 1] = "bank" end
+    if has(flags, NPC_FLAG.AUCTION) then k[#k + 1] = "auction" end
+    if has(flags, NPC_FLAG.TRAINER) then k[#k + 1] = trainerKind(title) end
+    if has(flags, NPC_FLAG.BATTLEMASTER) then k[#k + 1] = "battlemaster" end
+    if has(flags, NPC_FLAG.GUILD) then k[#k + 1] = "guild" end
+    if has(flags, NPC_FLAG.TABARD) then k[#k + 1] = "tabard" end
+    if has(flags, NPC_FLAG.STABLE) then k[#k + 1] = "stable" end
+    if has(flags, NPC_FLAG.REPAIR) then k[#k + 1] = "repair" end
+    if has(flags, NPC_FLAG.VENDOR) then k[#k + 1] = vendorKind(title) end
+    return k
+end
+-- the random world chests (quest and dungeon chests are left out)
+local TREASURES = { ["Battered Chest"] = true, ["Large Battered Chest"] = true, ["Tattered Chest"] = true,
+                    ["Solid Chest"] = true, ["Large Solid Chest"] = true, ["Large Iron Bound Chest"] = true,
+                    ["Large Mithril Bound Chest"] = true, ["Large Darkwood Chest"] = true }
+
+local placeNpcs, placeObjects = {}, {} -- id -> row; name -> index
+local services, rares, mailboxes, treasures = {}, {}, {}, {}
+local function add(t, map, ...)
+    t[map] = t[map] or {}
+    local row = t[map]
+    for _, v in ipairs({ ... }) do row[#row + 1] = v end
+end
+local function spawnsAll(row, key, cap)
+    local out = {}
+    for area, coords in pairs(row and row[key] or {}) do
+        local map = areaToMap[area]
+        if map and map > 0 and type(coords) == "table" then
+            local list = out[map] or {}
+            out[map] = list
+            for _, c in ipairs(coords) do
+                if #list < cap and type(c) == "table" and c[1] and c[1] >= 0 then list[#list + 1] = { c[1], c[2] } end
+            end
+        end
+    end
+    return out
+end
+local npcIDs = {}
+for id in pairs(npcs) do npcIDs[#npcIDs + 1] = id end
+table.sort(npcIDs)
+local nServices, nRares = 0, 0
+for _, id in ipairs(npcIDs) do
+    local n = npcs[id]
+    local kinds = servicesOf(n)
+    local rank = n[NK.rank]
+    local rare = (rank == 4 and "rare") or (rank == 2 and "rareElite") or nil
+    if #kinds > 0 or rare then
+        local spawns = spawnsAll(n, NK.spawns, rare and 6 or 2)
+        if next(spawns) then
+            placeNpcs[id] = { n[NK.name], n[NK.subName], n[NK.friendlyToFaction], #kinds > 0 and table.concat(kinds, ",") or nil,
+                              rare, n[NK.minLevel], n[NK.maxLevel] }
+            for map, list in pairs(spawns) do
+                for _, c in ipairs(list) do
+                    if #kinds > 0 then add(services, map, c[1], c[2], id); nServices = nServices + 1 end
+                    if rare then add(rares, map, c[1], c[2], id); nRares = nRares + 1 end
+                end
+            end
+        end
+    end
+end
+local objIDs = {}
+for id in pairs(objects) do objIDs[#objIDs + 1] = id end
+table.sort(objIDs)
+local nMail, nChests = 0, 0
+for _, id in ipairs(objIDs) do
+    local o = objects[id]
+    local name = o[OK.name]
+    if name == "Mailbox" then
+        for map, list in pairs(spawnsAll(o, OK.spawns, 50)) do
+            for _, c in ipairs(list) do
+                -- one per place: the data repeats a mailbox a step apart
+                local row, near = mailboxes[map] or {}, false
+                for i = 1, #row, 2 do
+                    if math.abs(row[i] - c[1]) < 1.5 and math.abs(row[i + 1] - c[2]) < 1.5 then near = true break end
+                end
+                if not near then add(mailboxes, map, c[1], c[2]); nMail = nMail + 1 end
+            end
+        end
+    elseif TREASURES[name] then
+        for map, list in pairs(spawnsAll(o, OK.spawns, 200)) do
+            for _, c in ipairs(list) do add(treasures, map, c[1], c[2], name); nChests = nChests + 1 end
         end
     end
 end
@@ -328,7 +463,7 @@ w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_que
 w("--   quests[id] = { name, minLevel, level, races (mask), classes (mask), preGroup (all), preSingle (any),")
 w("--                  exclusiveTo, nextInChain, specialFlags, parentQuest, breadcrumbFor }")
 w("--   maps[uiMapID] = { { x, y, questID, ... }, ... }   (x, y in percent)")
-w("--   entrances[uiMapID] = { { x, y, name, faction (\"H\", \"A\" or nil) }, ... }   (dungeons and raids)")
+w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil) }, ... }")
 w("")
 w("local _, ns = ...")
 w("")
@@ -368,7 +503,7 @@ for _, map in ipairs(emaps) do
     table.sort(entrances[map], function(a, b) return a.name < b.name end)
     local rows = {}
     for _, e in ipairs(entrances[map]) do
-        rows[#rows + 1] = string.format("{%.1f,%.1f,%q%s}", e.x, e.y, e.name, e.faction and (",%q"):format(e.faction) or "")
+        rows[#rows + 1] = string.format("{%.1f,%.1f,%q,%q%s}", e.x, e.y, e.name, e.kind, e.faction and (",%q"):format(e.faction) or "")
         nEntrances = nEntrances + 1
     end
     w(string.format("    [%d] = {%s},", map, table.concat(rows, ",")))
@@ -378,6 +513,54 @@ w("")
 local f = assert(io.open(out, "wb"))
 f:write(table.concat(o, "\n"))
 f:close()
+
+-- MapPlaces.lua
+o = {}
+w("-- Data/MapPlaces.lua (generated by tools/gen_quest_starts.lua: do not edit)")
+w("-- The world map's other pins: town services, mailboxes, rares, treasure chests.")
+w("--   QuestieDB Forever data with its corrections, commit " .. (sources.questiedb or "?") .. " (github.com/Questie/QuestieDB, no license stated)")
+w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_quest_starts.sh")
+w("--   npcs[id] = { name, title, friendly (\"A\", \"H\", \"AH\" or nil), services (\"inn,repair,...\" in the")
+w("--               order the map picks the one it shows), rank (\"rare\" or \"rareElite\"), minLevel, maxLevel }")
+w("--     services: spirit, inn, bank, auction, class:WARRIOR, trainer:alchemy (or :other), battlemaster,")
+w("--               guild, tabard, stable, repair, food, goods, vendor")
+w("--   services[uiMapID], rares[uiMapID] = { x, y, npcID, x, y, npcID, ... }   (x, y in percent)")
+w("--   mailboxes[uiMapID] = { x, y, x, y, ... }; treasures[uiMapID] = { x, y, name, ... }")
+w("")
+w("local _, ns = ...")
+w("")
+w("ns.MapPlaces = { npcs = {")
+for _, id in ipairs(npcIDs) do
+    local r = placeNpcs[id]
+    if r then w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s },", id, str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]), num(r[6]), num(r[7]))) end
+end
+local function flat(name, t, perRow)
+    w("}, " .. name .. " = {")
+    local ms = {}
+    for map in pairs(t) do ms[#ms + 1] = map end
+    table.sort(ms)
+    for _, map in ipairs(ms) do
+        local cells = {}
+        local row = t[map]
+        for i = 1, #row, perRow do
+            for j = 0, perRow - 1 do
+                local v = row[i + j]
+                cells[#cells + 1] = j < 2 and string.format("%.1f", v) or (type(v) == "string" and string.format("%q", v) or tostring(v))
+            end
+        end
+        w(string.format("    [%d] = {%s},", map, table.concat(cells, ",")))
+    end
+end
+flat("services", services, 3)
+flat("rares", rares, 3)
+flat("mailboxes", mailboxes, 2)
+flat("treasures", treasures, 3)
+w("} }")
+w("")
+f = assert(io.open(placesOut, "wb"))
+f:write(table.concat(o, "\n"))
+f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
 print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances -> %s", nq, total, #maps, nEntrances, out))
+print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns -> %s", nServices, nRares, nMail, nChests, placesOut))
