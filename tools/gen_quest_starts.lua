@@ -461,7 +461,8 @@ w("-- Where each of Forever's quests is picked up, for the world map.")
 w("--   QuestieDB Forever data with its corrections, commit " .. (sources.questiedb or "?") .. " (github.com/Questie/QuestieDB, no license stated)")
 w("--   fetched " .. (sources.fetched or "?") .. "; rebuild: sh tools/update_quest_starts.sh")
 w("--   quests[id] = { name, minLevel, level, races (mask), classes (mask), preGroup (all), preSingle (any),")
-w("--                  exclusiveTo, nextInChain, specialFlags, parentQuest, breadcrumbFor }")
+w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 needs an event), parentQuest,")
+w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value} }")
 w("--   maps[uiMapID] = { { x, y, questID, ... }, ... }   (x, y in percent)")
 w("--   entrances[uiMapID] = { { x, y, name, kind (\"dungeon\", \"raid\", \"battleground\"), faction (\"H\", \"A\" or nil) }, ... }")
 w("")
@@ -471,10 +472,11 @@ w("ns.QuestStarts = { quests = {")
 for _, qid in ipairs(ids) do
     if used[qid] then
         local q = quests[qid]
-        w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s },", qid,
+        w(string.format("    [%d] = { %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s },", qid,
             str(q[QK.name]), num(q[QK.requiredLevel]), num(q[QK.questLevel]), num(q[QK.requiredRaces]), num(q[QK.requiredClasses]),
             list(q[QK.preQuestGroup]), list(q[QK.preQuestSingle]), list(q[QK.exclusiveTo]), num(q[QK.nextQuestInChain]),
-            num(q[QK.specialFlags]), num(q[QK.parentQuest]), num(q[QK.breadcrumbForQuestId])))
+            num(q[QK.specialFlags]), num(q[QK.parentQuest]), num(q[QK.breadcrumbForQuestId]),
+            list(q[QK.requiredSkill]), list(q[QK.requiredMinRep]), list(q[QK.requiredMaxRep])))
     end
 end
 w("}, maps = {")

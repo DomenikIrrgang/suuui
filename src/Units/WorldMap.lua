@@ -165,22 +165,6 @@ local PROFESSION_NAMES = {
 }
 local QUEST_RANK = { difficult = 1, standard = 2, ["very-difficult"] = 3, impossible = 4, trivial = 5 }
 
--- The game's difficulty colour for a level, as the design's token suffix.
-local DIFFICULTY_FONTS = {
-    { "VeryDifficult", "very-difficult" }, { "Impossible", "impossible" }, { "Difficult", "difficult" },
-    { "Standard", "standard" }, { "Trivial", "trivial" },
-}
-local function difficultyOf(level)
-    if not (plain(level) and GetQuestDifficultyColor) then return "standard" end
-    local ok, c = pcall(GetQuestDifficultyColor, level)
-    local font = ok and type(c) == "table" and c.font
-    if type(font) ~= "string" then return "standard" end
-    for _, d in ipairs(DIFFICULTY_FONTS) do
-        if font:find(d[1], 1, true) then return d[2] end
-    end
-    return "standard"
-end
-
 -- The level at and below which a quest is grey for you, as the original
 -- game had it (Forever's own colour keeps a level 3 quest green for a level
 -- 15 character; found in game, Mulgore).
@@ -189,6 +173,19 @@ local function grayLevel(p)
     if p <= 39 then return p - 5 - math.floor(p / 10) end
     if p <= 59 then return p - 1 - math.floor(p / 5) end
     return p - 9
+end
+
+-- A quest's difficulty for you by the original game's rule: red 5 levels
+-- above, orange 3, yellow within 2, green above the grey level, then grey.
+-- (Forever's own colour treats its quests as scaling and calls a level 3
+-- quest yellow for a level 15 character; found in game, Mulgore.)
+local function questDifficulty(level, mine)
+    local diff = level - mine
+    if diff >= 5 then return "impossible" end
+    if diff >= 3 then return "very-difficult" end
+    if diff >= -2 then return "difficult" end
+    if level > grayLevel(mine) then return "standard" end
+    return "trivial"
 end
 
 -- who you are, for what you can pick up and who serves you
@@ -227,12 +224,57 @@ local function onQuest(id)
     return ok and i ~= nil
 end
 
+-- Your profession skills by skill line (cooking 185, skinning 393, ...).
+local function skillLines()
+    local out = {}
+    if not (GetProfessions and GetProfessionInfo) then return out end
+    local ok, a, b, c, d, e, f = pcall(GetProfessions)
+    if not ok then return out end
+    for _, index in pairs({ a, b, c, d, e, f }) do
+        local okInfo, _, _, rank, _, _, _, line = pcall(GetProfessionInfo, index)
+        if okInfo and plain(line) and line and plain(rank) then out[line] = rank end
+    end
+    return out
+end
+
+-- Your standing with a faction (0 is the start of Neutral, 3000 Friendly,
+-- as the quest data counts it); 0 for one you haven't met.
+local function standing(me, faction)
+    me.reps = me.reps or {}
+    if me.reps[faction] then return me.reps[faction] end
+    local value = 0
+    if C_Reputation and C_Reputation.GetFactionDataByID then
+        local ok, data = pcall(C_Reputation.GetFactionDataByID, faction)
+        if ok and type(data) == "table" and plain(data.currentStanding) then value = data.currentStanding end
+    elseif GetFactionInfoByID then
+        local ok, _, _, _, _, _, bar = pcall(GetFactionInfoByID, faction)
+        if ok and plain(bar) and bar then value = bar end
+    end
+    me.reps[faction] = value
+    return value
+end
+
 -- Whether you can pick a quest up now: "available", "repeatable" or nil,
--- and its difficulty.
+-- and its difficulty. Besides level, race and class: the quests before it
+-- (all of a group, one of a choice), none it excludes, not past it in its
+-- chain, its parent quest in your log, a breadcrumb only while the quest it
+-- leads to isn't taken, the profession skill and reputation it asks, and
+-- no event quests (whether an event runs can't be read).
 local function questState(q, id, me, done)
     if onQuest(id) then return nil end
-    local repeatable = q[10] and q[10] % 2 == 1
+    local flags = q[10] or 0
+    local repeatable = flags % 2 == 1
     if done[id] and not repeatable then return nil end
+    if flags % 4 >= 2 then return nil end
+    if q[9] and (done[q[9]] or onQuest(q[9])) then return nil end
+    if q[11] and not onQuest(q[11]) then return nil end
+    if q[12] and (done[q[12]] or onQuest(q[12])) then return nil end
+    if q[13] then
+        me.skills = me.skills or skillLines()
+        if (me.skills[q[13][1]] or 0) < (q[13][2] or 1) then return nil end
+    end
+    if q[14] and standing(me, q[14][1]) < q[14][2] then return nil end
+    if q[15] and standing(me, q[15][1]) >= q[15][2] then return nil end
     if q[2] and q[2] > me.level then return nil end
     if not maskHas(q[4], me.raceBit) or not maskHas(q[5], me.classBit) then return nil end
     for _, pre in ipairs(q[6] or {}) do if not done[pre] then return nil end end
@@ -243,8 +285,7 @@ local function questState(q, id, me, done)
     end
     for _, other in ipairs(q[8] or {}) do if done[other] or onQuest(other) then return nil end end
     local level = (q[3] and q[3] > 0) and q[3] or me.level
-    local difficulty = difficultyOf(level)
-    if difficulty == "standard" and level <= grayLevel(me.level) then difficulty = "trivial" end
+    local difficulty = questDifficulty(level, me.level)
     -- far above you (the data often lacks the level a quest asks): the
     -- game wouldn't offer it yet
     if difficulty == "impossible" then return nil end
@@ -686,7 +727,7 @@ function M:OnEnable()
     self.menu:SetValue(self:MenuValue())
     self:PlaceFilters()
     -- what you can pick up changes as you level and turn quests in
-    for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP" }) do
+    for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION" }) do
         self:OnGameEvent(event, function() if self.map:IsShown() then C_Timer.After(0.2, function() self:Refresh() end) end end)
     end
 end
