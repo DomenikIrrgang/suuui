@@ -398,6 +398,35 @@ end
 -- every pin the map would show, before merging: { x, y (0-1), key (what
 -- merges with what, nil: never), small, pin (MapPin data), tip (tooltip
 -- lines), rank (a merged quest pin takes the best) }
+-- What an NPC should offer you now, by the map's own checks (for /suu probe
+-- givers, which compares it with what the NPC does offer): every quest the
+-- data has it giving, with the state the map would show it in (nil: the
+-- map wouldn't), whether you're on it or have done it.
+function M:QuestsFor(npcID)
+    local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
+    local me, done = self:Player(), completedSet()
+    local out, seen = {}, {}
+    for mapID, rows in pairs(starts.maps or {}) do
+        for _, row in ipairs(rows) do
+            if row[3] == npcID then
+                me.mapID = mapID
+                for i = 4, #row do
+                    local id = row[i]
+                    if not seen[id] then
+                        seen[id] = true
+                        local q = starts.quests and starts.quests[id]
+                        local state, difficulty
+                        if q then state, difficulty = questState(q, id, me, done) end
+                        out[#out + 1] = { id = id, name = q and q[1], state = state, difficulty = difficulty,
+                                          onQuest = onQuest(id) and true or false, done = done[id] or false }
+                    end
+                end
+            end
+        end
+    end
+    return out, done
+end
+
 function M:Collect(mapID)
     local items = {}
     local on = self:Layers()

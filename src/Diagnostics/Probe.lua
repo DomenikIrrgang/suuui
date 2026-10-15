@@ -827,6 +827,10 @@ function ns.Probe.Command(arg)
         ns.ProfIconProbe.Command(rest)
         return
     end
+    if sub == "givers" then
+        ns.GiverProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
