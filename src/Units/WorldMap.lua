@@ -1221,7 +1221,9 @@ function M:StyleQuestPins()
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do self:StyleQuestPin(pin) end
 end
 
-local BLOB_FILL, BLOB_BORDER = TEXTURES .. "QuestBlobInside.tga", TEXTURES .. "QuestBlobOutside.tga"
+-- (without the extension, as the game passes its own: with ".tga" the
+-- engine's area drawing showed its missing-texture green; found in game)
+local BLOB_FILL, BLOB_BORDER = TEXTURES .. "QuestBlobInside", TEXTURES .. "QuestBlobOutside"
 function M:StyleQuestBlobs()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
