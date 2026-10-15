@@ -522,6 +522,26 @@ function M:RestyleQuestLog()
     local list = _G.QuestScrollFrame
     if list then
         for _, key in ipairs({ "BorderFrame", "Background" }) do if list[key] and list[key].SetAlpha then list[key]:SetAlpha(0) end end
+        -- the zone headers in label ink, hovered or not (the game switches a
+        -- header's font on hover, so a header first seen hovered read as a
+        -- title; found in game)
+        local label = SuuUI.Fonts.Get("label")
+        for _, pool in ipairs({ list.headerFramePool, list.campaignHeaderMinimalFramePool }) do
+            if pool and pool.EnumerateActive then
+                for row in pool:EnumerateActive() do
+                    if row.SetNormalFontObject then
+                        row:SetNormalFontObject(label)
+                        row:SetHighlightFontObject(label)
+                        row:SetDisabledFontObject(label)
+                    end
+                    for _, r in ipairs({ row:GetRegions() }) do
+                        if r:GetObjectType() == "FontString" then r:SetFontObject(label); r:SetTextColor(UI.RGBA("ink")) end
+                    end
+                    local fs = row.ButtonText or (row.GetFontString and row:GetFontString())
+                    if fs then fs:SetFontObject(label); fs:SetTextColor(UI.RGBA("ink")) end
+                end
+            end
+        end
         -- a tracked quest: the drawing's eye, not the game's yellow tick
         local pool = list.titleFramePool
         if pool and pool.EnumerateActive then
