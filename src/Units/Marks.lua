@@ -138,6 +138,7 @@ function M:Follow(id)
         self.following = id
         store(self).following = id
         navigation(self, true)
+        if self.waypointProvider and self.waypointProvider:GetMap():IsShown() then self.waypointProvider:RefreshAllData() end
     else
         if self.following and C_Map.ClearUserWaypoint then C_Map.ClearUserWaypoint() end
         self.following = nil
@@ -148,6 +149,14 @@ function M:Follow(id)
 end
 
 function M:Following() return self.following end
+
+function M:HideGamePin(provider)
+    local pin = provider and provider.pin
+    if not pin then return end
+    local hide = self:IsEnabled() and self.following ~= nil
+    pin:SetAlpha(hide and 0 or 1)
+    pin:EnableMouse(not hide)
+end
 
 --------------------------------------------------------------------------------
 -- Posting: a chat line anyone can use, and the mark to SuuUI players
@@ -667,6 +676,15 @@ function M:Hook()
     f:AddCanvasClickHandler(self.clickHandler, CLICK_PRIORITY)
     -- the card goes with the map
     f:HookScript("OnHide", function() self:CloseCard() end)
+    -- the game draws its own waypoint pin where its waypoint is: while that
+    -- is a mark showing the way, the mark is drawn already (found in game:
+    -- the two on top of each other); a waypoint of your own stays
+    for provider in pairs(f.dataProviders or {}) do
+        if provider.GetPinTemplate and provider:GetPinTemplate() == "WaypointLocationPinTemplate" then
+            self.waypointProvider = provider
+            hooksecurefunc(provider, "RefreshAllData", function(p) self:HideGamePin(p) end)
+        end
+    end
     -- a quiet hint after the header's waypoint pin: how to place one
     local pin = f.WorldMapTrackingPinButton
     if pin then
@@ -701,7 +719,12 @@ function M:OnEnable()
     end
     -- the game's waypoint cleared or replaced: you're no longer following
     self:OnGameEvent("USER_WAYPOINT_UPDATED", function()
-        if self.following and not (C_Map.HasUserWaypoint and C_Map.HasUserWaypoint()) then
+        -- (still on the followed mark? a waypoint of your own in its place ends it)
+        local mark = self.following and self:Get(self.following)
+        local wp = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
+        local onMark = mark and wp and wp.uiMapID == mark.map and wp.position
+            and math.abs(wp.position.x - mark.x) < 0.001 and math.abs(wp.position.y - mark.y) < 0.001
+        if self.following and not onMark then
             self.following = nil
             store(self).following = nil
             navigation(self, false)
