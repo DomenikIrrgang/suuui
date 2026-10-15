@@ -524,20 +524,36 @@ function M:RestyleQuestLog()
             -- Abandon / Share / Track hang below it (found in game)
             d:SetHeight(d:GetHeight() - CUT)
             if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - CUT) end
-            -- Abandon / Share / Track inside the details, as wide as the
-            -- text, three alike with a gap (the game starts them 3 px out
-            -- and runs them past both edges, over its frame; found in game)
+            -- Abandon / Share / Track centred in the column the details sit
+            -- in, which runs on past them over the text's scroll bar
+            -- (GUTTER): three alike with a gap, the same margin either side
+            -- (the game starts them 3 px out and runs them past both edges;
+            -- lined up with the details alone they sat left; found in game).
+            -- The game's dividers between them away.
             local ab, sh, tr = d.AbandonButton, d.ShareButton, d.TrackButton
+            local GUTTER = 14
             if ab and sh and tr then
                 local INSET, GAP = 6, 4
-                local w = math.floor((d:GetWidth() - 2 * INSET - 2 * GAP) / 3)
+                local w = math.floor((d:GetWidth() + GUTTER - 2 * INSET - 2 * GAP) / 3)
                 ab:ClearAllPoints()
                 ab:SetPoint("BOTTOMLEFT", INSET, 0)
                 sh:ClearAllPoints()
                 sh:SetPoint("LEFT", ab, "RIGHT", GAP, 0)
                 tr:ClearAllPoints()
                 tr:SetPoint("LEFT", sh, "RIGHT", GAP, 0)
-                for _, btn in ipairs({ ab, sh, tr }) do btn:SetWidth(w) end
+                for _, btn in ipairs({ ab, sh, tr }) do
+                    btn:SetWidth(w)
+                    for _, r in ipairs({ btn:GetRegions() }) do
+                        local atlas = r:GetObjectType() == "Texture" and r.GetAtlas and r:GetAtlas()
+                        if atlas and atlas:find("BtnDiv") then r:SetAlpha(0) end
+                    end
+                end
+            end
+            -- the rewards as wide, so their label centres over the column too
+            local box = d.RewardsFrameContainer
+            if box then
+                box:SetWidth(box:GetWidth() + GUTTER)
+                if box.RewardsFrame then box.RewardsFrame:SetWidth(box.RewardsFrame:GetWidth() + GUTTER) end
             end
             -- the strip with Back: its art away, a hairline under it
             local back = d.BackFrame
