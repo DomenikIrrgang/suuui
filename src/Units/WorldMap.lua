@@ -1035,9 +1035,11 @@ function M:Layout()
         pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100)
         pin.group = g
         pin:SetScale(grow / cs)
-        -- (three levels each: its count tab just above it, under the next)
-        pin:SetFrameLevel(base + i * 3)
-        pin.countTab:SetFrameLevel(base + i * 3 + 1)
+        -- (three tiers in a few levels, under the game's own pins: small ones,
+        -- then the rest, then places and marks; a count tab just above its pin)
+        local tier = g.small and 1 or (g.fixed and 5 or 3)
+        pin:SetFrameLevel(base + tier)
+        pin.countTab:SetFrameLevel(base + tier + 1)
         pin:ClearAllPoints()
         pin:SetPoint("CENTER", self.layer, "TOPLEFT", g.x / grow, -g.y / grow)
         self.pins[#self.pins + 1] = pin
@@ -1181,7 +1183,14 @@ function M:Attach()
     self.revealFree, self.revealUsed = {}, {}
     self.layer = CreateFrame("Frame", nil, f:GetCanvas())
     self.layer:SetAllPoints(f:GetCanvas())
-    self.layer:SetFrameLevel(f:GetCanvas():GetFrameLevel() + 2)
+    -- above the game's map art (its explored areas, fog, quest areas and the
+    -- map highlight, frame levels from 2000 up), under its own pins (quests,
+    -- group members, you): just over the canvas the explored areas covered
+    -- pins where the game draws them (a mark in lower Mulgore hovered but
+    -- unseen; found in game)
+    local levels = f.GetPinFrameLevelsManager and f:GetPinFrameLevelsManager()
+    local above = levels and levels.GetFrameLevelStart and levels:GetFrameLevelStart("PIN_FRAME_LEVEL_MAP_HIGHLIGHT")
+    self.layer:SetFrameLevel(above and (above + 1) or (f:GetCanvas():GetFrameLevel() + 2))
     self.pins = {}
     local provider = CreateFromMixins(MapCanvasDataProviderMixin)
     provider.RefreshAllData = function() self:Refresh() end
