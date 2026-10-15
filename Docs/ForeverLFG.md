@@ -176,7 +176,7 @@ The parser itself knows no language: every word it looks for comes from a **lang
   - number words;
   - activity aliases (abbreviations and nicknames).
   Activity, zone and quest **names** come from the game itself in the client's language, so modules only add what players type besides them.
-- **Built so far:** English (`Lang/enUS.lua`) and Korean (`Lang/koKR.lua`, 2026-10-15, from 67 recorded lines: the recruiting and player words, roles with their counts written on ("탱1", "딜2"), classes, a player's level before their class, the dungeons' Korean names and nicknames). Chinese posts are dropped until its module exists.
+- **Built so far:** English (`Lang/enUS.lua`) and Korean (`Lang/koKR.lua`, 2026-10-15, from 67 recorded lines: the recruiting and player words, roles with their counts written on ("탱1", "딜2"), classes, a player's level before their class, the dungeons' Korean names and nicknames). Chinese (`Lang/zhCN.lua`, Simplified and Traditional in one, 2026-10-15, from 25 recorded lines: 缺 / 来个 / -1, roles with counts ("缺1補 1坦 2DPS", "DPS-1", "来个N"), the dungeons' Chinese names). Russian waits for recorded lines (2 so far).
 - **Which modules are used:**
   - your Forever language preference (`C_AccountServices`, above) and the client's own language: always;
   - **by script:** a message written in another script (Hangul, Chinese characters, Cyrillic) is read with that language's module when SuuUI has one, whatever your preference (an English shard carries Korean and Chinese posts);
