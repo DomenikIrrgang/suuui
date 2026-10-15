@@ -124,6 +124,19 @@ end
 -- A row
 --------------------------------------------------------------------------------
 
+-- A quiet 24px button with a glyph (Whisper, Invite); its word in a tooltip.
+local function iconButton(parent, glyph, title, description, onClick)
+    local btn = UI.Button(parent, { text = "", width = 24, onClick = onClick,
+        tooltip = { title = title, description = description } })
+    btn:SetHeight(24)
+    btn.glyph = btn:CreateTexture(nil, "ARTWORK")
+    btn.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+    btn.glyph:SetSize(12, 12)
+    btn.glyph:SetPoint("CENTER")
+    btn.glyph:SetVertexColor(UI.RGBA("ink"))
+    return btn
+end
+
 local function makeRow(b)
     local r = CreateFrame("Button", nil, b.list.child)
     r:SetHeight(ROW_H)
@@ -166,11 +179,15 @@ local function makeRow(b)
     r.post = UI.Text(r, "caption", "ink-muted")
     r.post:SetPoint("LEFT", r.who, "RIGHT", S["space-4"], 0)
     -- the right: Invite, Whisper, age, sources, roles
-    r.invite = UI.Button(r, { text = "Invite", variant = "quiet", onClick = function() if b.onInvite and r.data then b.onInvite(r.data) end end })
-    r.invite:SetHeight(24)
+    -- Whisper and Invite as 24px glyph buttons (asked for in game: words
+    -- took too much room), the word on hover
+    r.invite = iconButton(r, "plus", "Invite", "Invite this player to your group",
+        function() if b.onInvite and r.data then b.onInvite(r.data) end end)
     r.invite:SetPoint("RIGHT", -S["space-4"], 0)
-    r.whisper = UI.Button(r, { text = "Whisper", variant = "quiet", onClick = function() if b.onWhisper and r.data then b.onWhisper(r.data) end end })
-    r.whisper:SetHeight(24)
+    r.whisper = iconButton(r, "chat", "Whisper", "An empty whisper to them",
+        function() if b.onWhisper and r.data then b.onWhisper(r.data) end end)
+    -- always where it is on a player's row, so the column lines up
+    r.whisper:SetPoint("RIGHT", r.invite, "LEFT", -S["space-3"], 0)
     r.age = UI.Text(r, "caption", "ink-faint")
     r.age:SetJustifyH("RIGHT")
     r.age:SetWidth(30)
@@ -250,8 +267,6 @@ local function drawRow(b, r, d, y, width)
     r.post:SetValue(post)
     -- the right side, from the right edge leftwards
     r.invite:SetShown(d.canInvite and true or false)
-    r.whisper:ClearAllPoints()
-    r.whisper:SetPoint("RIGHT", d.canInvite and r.invite or r, d.canInvite and "LEFT" or "RIGHT", d.canInvite and -S["space-3"] or -S["space-4"], 0)
     r.age:SetValue(d.age or "")
     r.age:ClearAllPoints()
     r.age:SetPoint("RIGHT", r.whisper, "LEFT", -S["space-4"], 0)
