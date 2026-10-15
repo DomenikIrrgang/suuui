@@ -4,18 +4,22 @@
 -- chat (ForeverLFG), in two collapsible sections, Groups and Players.
 --   The bar: category, filter by activity, search, "Only what fits me",
 --   Show (groups / players / both); the tool's age and Refresh (the tool
---   only searches on a click).
+--   only searches on a click; primary once the results are stale). Too
+--   narrow, the search field gives way first, then the selects.
 --   A row (44px): a crown for a group or the player's class icon; the
---   activity, a level chip, the reason it concerns you (arcane, with the
---   row in arcane-soft and a 2px arcane edge); the leader in class colour,
---   "Lvl 31 Mage", the play style or the chat post in quotes (the whole
---   post on hover); role slots (or the roles offered), source badges, age;
---   Whisper, and Invite for a player looking.
+--   activity, a level chip, a sprout (new player friendly), the reason it
+--   concerns you (arcane, with the row in arcane-soft and a 2px arcane
+--   edge); the leader in class colour, "Lvl 31 Mage", the play style and
+--   the post or the listing's comment in quotes (the whole of it on
+--   hover); role slots and "3/5" (or the roles offered), source badges,
+--   age; Whisper, and Invite for a player looking.
+--   Searching the tool for the first time: skeleton rows under what chat
+--   has so far. Nothing to show: Clear filters and Refresh.
 --
 --   local b = UI.GroupFinderBrowse(parent)
 --   b:SetData({
 --       groups = { row }, players = { row }, collapsed = { groups, players },
---       tool = { age = seconds | nil, stale = bool, searching = bool },
+--       tool = { age = seconds | nil, stale = bool, searching = bool, loading = bool },
 --       category = value, categories = { { value, label } },
 --       activities = { value, ... }, activityOptions = { { value, label } },
 --       search = "", fits = bool, show = "both" | "group" | "player",
@@ -26,7 +30,7 @@
 --             offered = { tank, healer, damage }, members = { have, max },
 --             sources = { "Tool", "LookingForGroup", ... }, age ("2m"), canInvite }
 --   b.onRefresh(), b.onFilter(changes), b.onWhisper(row), b.onInvite(row),
---   b.onToggle("groups" | "players")
+--   b.onToggle("groups" | "players"), b.onClear()
 
 local _, ns = ...
 
@@ -124,18 +128,23 @@ local function makeRow(b)
     r.rule:SetHeight(1)
     r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
     r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+    -- the lead: centred in a 20px column (drawRow sizes it)
     r.lead = r:CreateTexture(nil, "ARTWORK")
     r.lead:SetSize(20, 20)
-    r.lead:SetPoint("LEFT", S["space-4"], 0)
+    r.lead:SetPoint("CENTER", r, "LEFT", S["space-4"] + 10, 0)
     -- line 1
     r.activity = UI.Text(r, "label", "ink")
-    r.activity:SetPoint("TOPLEFT", r.lead, "TOPRIGHT", S["space-4"], 8)
+    r.activity:SetPoint("TOPLEFT", r, "LEFT", S["space-4"] + 20 + S["space-4"], 18)
     r.levelChip = CreateFrame("Frame", nil, r)
     r.levelChip:SetHeight(14)
     UI.Fill(r.levelChip, "surface-sunk"):SetAllPoints()
     UI.Border(r.levelChip, "gilt-faint")
     r.levelChip.text = UI.Text(r.levelChip, "micro", "ink-muted")
     r.levelChip.text:SetPoint("CENTER")
+    r.sprout = r:CreateTexture(nil, "ARTWORK")
+    r.sprout:SetTexture(GLYPHS .. "leaf.tga")
+    r.sprout:SetSize(11, 11)
+    r.sprout:SetVertexColor(UI.RGBA("ink-muted"))
     r.reason = UI.Text(r, "caption", "arcane")
     -- line 2
     r.leader = UI.Text(r, "caption", "ink")
@@ -154,6 +163,7 @@ local function makeRow(b)
     r.age:SetJustifyH("RIGHT")
     r.age:SetWidth(30)
     r.badges, r.slots = {}, {}
+    r.count = UI.Text(r, "numeric", "ink-muted")
     r.rolesLabel = UI.Text(r, "caption", "ink-muted")
     r:SetScript("OnEnter", function(self)
         self.hover:Show()
@@ -176,15 +186,21 @@ local function drawRow(b, r, d, y, width)
     r:SetWidth(width)
     r.match:SetShown(d.match and true or false)
     r.edge:SetShown(d.match and true or false)
-    -- the leading icon: the player's class, or a group's crown
+    -- the leading icon: a group's crown, or the player's class (people
+    -- when it isn't known)
     local atlas = d.class and GetClassAtlas and GetClassAtlas(d.class)
+    r.lead:ClearAllPoints()
     if d.isPlayer and atlas then
         r.lead:SetAtlas(atlas)
         r.lead:SetVertexColor(1, 1, 1, 1)
+        r.lead:SetSize(20, 20)
     else
-        r.lead:SetTexture(GLYPHS .. "people.tga")
+        r.lead:SetTexture(GLYPHS .. (d.isPlayer and "people.tga" or "crown.tga"))
         r.lead:SetVertexColor(UI.RGBA("gilt-text"))
+        local size = d.isPlayer and 20 or 16
+        r.lead:SetSize(size, size)
     end
+    r.lead:SetPoint("CENTER", r, "LEFT", S["space-4"] + 10, 0)
     r.activity:SetValue(d.activity or "")
     if d.level then
         r.levelChip.text:SetValue(d.level)
@@ -195,9 +211,16 @@ local function drawRow(b, r, d, y, width)
     else
         r.levelChip:Hide()
     end
+    local last = d.level and r.levelChip or r.activity
+    r.sprout:SetShown(d.newPlayerFriendly and true or false)
+    if d.newPlayerFriendly then
+        r.sprout:ClearAllPoints()
+        r.sprout:SetPoint("LEFT", last, "RIGHT", S["space-3"], 0)
+        last = r.sprout
+    end
     r.reason:SetValue(d.reason or "")
     r.reason:ClearAllPoints()
-    r.reason:SetPoint("LEFT", d.level and r.levelChip or r.activity, "RIGHT", S["space-4"], 0)
+    r.reason:SetPoint("LEFT", last, "RIGHT", S["space-4"], 0)
     local color = d.class and T.color["class-" .. d.class:lower()] and ("class-" .. d.class:lower()) or "ink"
     r.leader:SetValue(d.leader or "")
     r.leader:SetColor(color)
@@ -223,6 +246,16 @@ local function drawRow(b, r, d, y, width)
         anchor = bd
     end
     for i = #(d.sources or {}) + 1, #r.badges do r.badges[i]:Hide() end
+    -- a group's size ("3/5"), after its slots
+    local members = not d.isPlayer and d.members
+    local counted = members and members[1] and members[2] and true or false
+    r.count:SetShown(counted)
+    if counted then
+        r.count:SetValue(members[1] .. "/" .. members[2])
+        r.count:ClearAllPoints()
+        r.count:SetPoint("RIGHT", anchor, "LEFT", -S["space-5"], 0)
+        anchor = r.count
+    end
     -- roles: a group's slots, or what a player offers
     local slots = d.slots or {}
     for i = #slots, 1, -1 do
@@ -230,7 +263,8 @@ local function drawRow(b, r, d, y, width)
         r.slots[i] = s
         s:Set(slots[i], d.mine and d.mine[slots[i]:match("^need:(.+)$") or ""])
         s:ClearAllPoints()
-        s:SetPoint("RIGHT", anchor, "LEFT", i == #slots and -S["space-5"] or -3, 0)
+        local gap = i < #slots and -3 or (counted and -(S["space-2"] + 3) or -S["space-5"])
+        s:SetPoint("RIGHT", anchor, "LEFT", gap, 0)
         s:Show()
         anchor = s
     end
@@ -262,12 +296,39 @@ local function sectionHead(b, key, label)
     h.glyph:SetSize(12, 12)
     h.glyph:SetPoint("RIGHT", -S["space-4"], 0)
     h.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    -- a note before the chevron ("from chat so far" while the tool searches)
+    h.note = UI.Text(h, "caption", "ink-faint")
+    h.note:SetPoint("RIGHT", h.glyph, "LEFT", -S["space-3"], 0)
     h.rule = UI.Hairline(h, "gilt-line", "out")
     h.rule:SetPoint("LEFT", h.count, "RIGHT", S["space-4"], 0)
-    h.rule:SetPoint("RIGHT", h.glyph, "LEFT", -S["space-4"], 0)
+    h.rule:SetPoint("RIGHT", h.note, "LEFT", -S["space-4"], 0)
     h.label = label
     h:SetScript("OnClick", function() if b.onToggle then b.onToggle(key) end end)
     return h
+end
+
+-- Skeleton rows stand in for the tool's while it searches the first time:
+-- a square, two lines, a block at the right, in surface-raised.
+local function makeSkeleton(b)
+    local r = CreateFrame("Frame", nil, b.list.child)
+    r:SetHeight(ROW_H)
+    r.a = UI.Fill(r, "surface-raised")
+    r.a:SetSize(14, 14)
+    r.a:SetPoint("CENTER", r, "LEFT", S["space-4"] + 10, 0)
+    r.b = UI.Fill(r, "surface-raised")
+    r.b:SetHeight(10)
+    r.b:SetPoint("LEFT", S["space-4"] * 2 + 20, 5)
+    r.b2 = UI.Fill(r, "surface-raised")
+    r.b2:SetHeight(6)
+    r.b2:SetPoint("TOPLEFT", r.b, "BOTTOMLEFT", 0, -4)
+    r.c = UI.Fill(r, "surface-raised")
+    r.c:SetSize(92, 14)
+    r.c:SetPoint("RIGHT", -S["space-4"], 0)
+    r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
+    r.rule:SetHeight(1)
+    r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
+    r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+    return r
 end
 
 function B:SetData(d)
@@ -291,7 +352,55 @@ function B:SetData(d)
     end
     self.staleText:SetValue(text)
     self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
+    self.hourglass:SetVertexColor(UI.RGBA(tool.stale and "amber" or "ink-muted"))
+    -- stale: Refresh is the suggested action
+    local stale = tool.stale and not tool.searching
+    self.refreshQuiet:SetShown(not stale)
+    self.refreshPrimary:SetShown(stale and true or false)
+    self.refresh = stale and self.refreshPrimary or self.refreshQuiet
+    self:LayoutBar()
     self:Draw()
+end
+
+-- The bar's widths (design: 150, 190, 170, the checkbox, 120; the tool's age
+-- and Refresh at the right). Too narrow: Search gives way first (down to
+-- 56), then the three selects by their widths; the age is cut short last.
+-- Refresh never shrinks.
+local BAR_BASIS = { category = 150, activity = 190, search = 170, show = 120 }
+local BAR_MIN = { category = 80, activity = 90, search = 56, show = 80 }
+
+function B:LayoutBar()
+    local width = self:GetWidth()
+    if not width or width <= 1 then return end
+    local g = S["space-3"]
+    local textW = math.ceil(UI.MeasureText("caption", self.staleText:GetText() or ""))
+    local fresh = 12 + g + textW
+    local fixed = self.refresh:GetWidth() + self.fits:GetWidth() + g * 8
+    local w = {}
+    for k, v in pairs(BAR_BASIS) do w[k] = v end
+    local over = fixed + fresh + w.category + w.activity + w.search + w.show - width
+    if over > 0 then
+        local cut = math.min(over, w.search - BAR_MIN.search)
+        w.search, over = w.search - cut, over - cut
+    end
+    if over > 0 then
+        local room = 0
+        for _, k in ipairs({ "category", "activity", "show" }) do room = room + (w[k] - BAR_MIN[k]) end
+        local share = math.min(1, over / math.max(1, room))
+        for _, k in ipairs({ "category", "activity", "show" }) do
+            local cut = math.floor((w[k] - BAR_MIN[k]) * share + 0.5)
+            w[k], over = w[k] - cut, over - cut
+        end
+    end
+    if over > 0 then fresh = math.max(12, fresh - over) end
+    self.category:SetWidth(w.category)
+    self.activity:SetWidth(w.activity)
+    self.search:SetWidth(w.search)
+    self.show:SetWidth(w.show)
+    self.staleText:ClearAllPoints()
+    self.staleText:SetPoint("RIGHT", self.refresh, "LEFT", -g, 0)
+    self.staleText:SetWidth(math.max(1, fresh - 12 - g))
+    self.staleText:SetShown(fresh > 12)
 end
 
 function B:Draw()
@@ -299,73 +408,108 @@ function B:Draw()
     if not d then return end
     local width = math.max(1, self.list:GetWidth())
     self.list.child:SetWidth(width)
+    local loading = d.tool and d.tool.loading
+    local none = #(d.groups or {}) + #(d.players or {}) == 0 and not loading
     local y = 0
-    local used, heads = 0, 0
+    local used, skels = 0, 0
     for _, key in ipairs({ "groups", "players" }) do
         local rows = d[key] or {}
-        heads = heads + 1
         local h = self.heads[key]
-        h:ClearAllPoints()
-        h:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
-        h:SetWidth(width)
-        h.text:SetValue(h.label)
-        h.count:SetValue(tostring(#rows))
-        local closed = d.collapsed and d.collapsed[key]
-        h.glyph:SetTexture(GLYPHS .. (closed and "chevronRight.tga" or "chevronDown.tga"))
-        h:Show()
-        y = y + HEAD_H
-        if not closed then
-            for _, row in ipairs(rows) do
-                used = used + 1
-                local r = self.rows[used] or makeRow(self)
-                self.rows[used] = r
-                drawRow(self, r, row, y, width)
-                y = y + ROW_H
+        h:SetShown(not none)
+        if not none then
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
+            h:SetWidth(width)
+            h.text:SetValue(h.label)
+            h.count:SetValue(tostring(#rows))
+            h.note:SetValue(loading and "from chat so far" or "")
+            local closed = d.collapsed and d.collapsed[key]
+            h.glyph:SetTexture(GLYPHS .. (closed and "chevronRight.tga" or "chevronDown.tga"))
+            y = y + HEAD_H
+            if not closed then
+                for _, row in ipairs(rows) do
+                    used = used + 1
+                    local r = self.rows[used] or makeRow(self)
+                    self.rows[used] = r
+                    drawRow(self, r, row, y, width)
+                    y = y + ROW_H
+                end
+                -- the tool's rows still to come
+                for _ = 1, loading and (key == "groups" and 3 or 2) or 0 do
+                    skels = skels + 1
+                    local r = self.skeletons[skels] or makeSkeleton(self)
+                    self.skeletons[skels] = r
+                    r:ClearAllPoints()
+                    r:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
+                    r:SetWidth(width)
+                    r.b:SetWidth(math.max(40, (width - 20 - S["space-4"] * 4 - 132) * 0.62))
+                    r.b2:SetWidth(math.max(36, r.b:GetWidth() - 4))
+                    r:Show()
+                    y = y + ROW_H
+                end
             end
+            y = y + S["space-3"]
         end
-        y = y + S["space-3"]
     end
     for i = used + 1, #self.rows do self.rows[i]:Hide() end
+    for i = skels + 1, #self.skeletons do self.skeletons[i]:Hide() end
+    self.loadNote:SetShown(loading and true or false)
+    if loading then
+        self.loadNote:ClearAllPoints()
+        self.loadNote:SetPoint("TOP", self.list.child, "TOP", 0, -(y + S["space-5"]))
+        y = y + S["space-5"] * 2 + 16
+    end
     self.list.child:SetHeight(math.max(1, y))
-    local none = #(d.groups or {}) + #(d.players or {}) == 0
     self.empty:SetShown(none)
 end
 
 function UI.GroupFinderBrowse(parent)
     local b = CreateFrame("Frame", nil, parent)
     Mixin(b, B)
-    b.rows, b.heads = {}, {}
+    b.rows, b.heads, b.skeletons = {}, {}, {}
     -- the bar
     local function changed(t) if b.onFilter then b.onFilter(t) end end
+    local g = S["space-3"]
     b.category = UI.Select(b, { width = 150, placeholder = "Category",
         onChange = function(v) changed({ category = v }) end })
     b.category:SetPoint("TOPLEFT")
     b.category:SetHeight(BAR_H)
     b.activity = UI.Select(b, { width = 190, multiple = true, maxShown = 1, placeholder = "Filter by activity", maxRows = 12,
         onChange = function(v) changed({ activities = v }) end })
-    b.activity:SetPoint("LEFT", b.category, "RIGHT", S["space-3"], 0)
+    b.activity:SetPoint("LEFT", b.category, "RIGHT", g, 0)
     b.activity:SetHeight(BAR_H)
     b.search = UI.TextField(b, { width = 170, placeholder = "Search",
         onTextChanged = function(text) changed({ search = text }) end })
-    b.search:SetPoint("LEFT", b.activity, "RIGHT", S["space-3"], 0)
+    b.search:SetPoint("LEFT", b.activity, "RIGHT", g, 0)
     b.fits = UI.Checkbox(b, { label = "Only what fits me", onChange = function(on) changed({ fits = on }) end })
-    b.fits:SetPoint("LEFT", b.search, "RIGHT", S["space-5"], 0)
+    b.fits:SetPoint("LEFT", b.search, "RIGHT", g * 2, 0)
     b.show = UI.Select(b, { width = 120, options = {
         { value = "both", label = "Both" }, { value = "group", label = "Groups" }, { value = "player", label = "Players looking" } },
         onChange = function(v) changed({ show = v }) end })
-    b.show:SetPoint("LEFT", b.fits, "RIGHT", S["space-5"], 0)
+    b.show:SetPoint("LEFT", b.fits, "RIGHT", g * 2, 0)
     b.show:SetHeight(BAR_H)
-    -- the tool's age and Refresh, at the right
-    b.refresh = UI.Button(b, { text = "Refresh", variant = "quiet", onClick = function() if b.onRefresh then b.onRefresh() end end })
-    b.refresh:SetHeight(BAR_H)
-    b.refresh:SetPoint("TOPRIGHT")
+    -- the tool's age and Refresh, at the right (primary once stale)
+    local function refresh() if b.onRefresh then b.onRefresh() end end
+    b.refreshQuiet = UI.Button(b, { text = "Refresh", variant = "quiet", onClick = refresh,
+        tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
+    b.refreshPrimary = UI.Button(b, { text = "Refresh", variant = "primary", onClick = refresh,
+        tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
+    for _, r in ipairs({ b.refreshQuiet, b.refreshPrimary }) do
+        r:SetHeight(BAR_H)
+        r:SetPoint("TOPRIGHT")
+    end
+    b.refreshPrimary:Hide()
+    b.refresh = b.refreshQuiet
     b.staleText = UI.Text(b, "caption", "ink-muted")
-    b.staleText:SetPoint("RIGHT", b.refresh, "LEFT", -S["space-4"], 0)
+    b.staleText:SetWordWrap(false)
+    b.staleText:SetJustifyH("RIGHT")
+    b.staleText:SetPoint("RIGHT", b.refresh, "LEFT", -g, 0)
     b.hourglass = b:CreateTexture(nil, "ARTWORK")
     b.hourglass:SetTexture(GLYPHS .. "hourglass.tga")
     b.hourglass:SetSize(12, 12)
     b.hourglass:SetVertexColor(UI.RGBA("ink-muted"))
-    b.hourglass:SetPoint("RIGHT", b.staleText, "LEFT", -S["space-3"], 0)
+    b.hourglass:SetPoint("RIGHT", b.staleText, "LEFT", -g, 0)
+    b:HookScript("OnSizeChanged", function() b:LayoutBar() end)
     -- the list
     b.box = CreateFrame("Frame", nil, b)
     b.box:SetPoint("TOPLEFT", 0, -(BAR_H + S["space-4"]))
@@ -378,8 +522,31 @@ function UI.GroupFinderBrowse(parent)
     b.list:HookScript("OnSizeChanged", function() b:Draw() end)
     b.heads.groups = sectionHead(b, "groups", "Groups")
     b.heads.players = sectionHead(b, "players", "Players")
-    b.empty = UI.Text(b.box, "caption", "ink-muted")
-    b.empty:SetPoint("CENTER")
-    b.empty:SetValue("Nothing matches your filters. Refresh to search the tool.")
+    b.loadNote = UI.Text(b.list.child, "caption", "ink-muted")
+    b.loadNote:SetValue("Searching the tool… Chat posts show up as they’re written.")
+    -- nothing to show: a faint search glyph, what happened, Clear filters and Refresh
+    local e = CreateFrame("Frame", nil, b.box)
+    e:SetSize(360, 140)
+    e:SetPoint("CENTER")
+    e.glyph = e:CreateTexture(nil, "ARTWORK")
+    e.glyph:SetTexture(GLYPHS .. "search.tga")
+    e.glyph:SetSize(24, 24)
+    e.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+    e.glyph:SetPoint("TOP")
+    e.title = UI.Text(e, "label", "ink")
+    e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -g)
+    e.title:SetValue("Nothing matches your filters")
+    e.text = UI.Text(e, "caption", "ink-muted")
+    e.text:SetWidth(360)
+    e.text:SetJustifyH("CENTER")
+    e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -g)
+    e.text:SetValue("Chat posts show up here as they’re written. Clear a filter, or refresh the tool for new listings.")
+    e.clear = UI.Button(e, { text = "Clear filters", icon = "close", onClick = function() if b.onClear then b.onClear() end end })
+    e.refresh = UI.Button(e, { text = "Refresh", icon = "reset", onClick = refresh })
+    for _, btn in ipairs({ e.clear, e.refresh }) do btn:SetHeight(26) end
+    e.clear:SetPoint("TOPRIGHT", e.text, "BOTTOM", -g / 2, -g * 2)
+    e.refresh:SetPoint("TOPLEFT", e.text, "BOTTOM", g / 2, -g * 2)
+    e:Hide()
+    b.empty = e
     return b
 end

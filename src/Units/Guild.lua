@@ -560,6 +560,7 @@ function M:BuildDetails()
                 end
             end
         end })
+        edit:SetHeight(22)
         -- placed from the body's top in ShowDetails, never anchored to a
         -- text: the notes' secure buttons hang off it
         local text = UI.Text(b, "body", "ink")
@@ -575,8 +576,10 @@ function M:BuildDetails()
     p.row1 = CreateFrame("Frame", nil, b)
     p.row1:SetHeight(26)
     p.whisper = UI.Button(p.row1, { text = "Whisper", variant = "quiet", onClick = function() if p.member then self:Act("whisper", p.member) end end })
+    p.whisper:SetHeight(26)
     p.whisper:SetPoint("LEFT")
     p.invite = UI.Button(p.row1, { text = "Invite", variant = "quiet", onClick = function() if p.member then self:Act("invite", p.member) end end })
+    p.invite:SetHeight(26)
     p.invite:SetPoint("LEFT", p.whisper, "RIGHT", S["space-3"], 0)
     p:HookScript("OnHide", function() self:HideNoteOverlays() end)
     self.details = p

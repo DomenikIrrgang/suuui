@@ -10,7 +10,8 @@ local S = T.space
 -- Button
 --
 --   UI.Button(parent, { text = "Ready check", variant = "primary", onClick = fn,
---       width = nil, disabled = false, tooltip = { title = …, description = … } })
+--       width = nil, disabled = false, tooltip = { title = …, description = … },
+--       icon = "reset" })   -- 0.13: a 12px glyph left of the label
 --
 -- quiet (default): surface-raised, gilt-line border, ink label; hover turns the
 -- border gilt. primary: arcane fill, on-signal label, arcane glow on hover;
@@ -29,7 +30,7 @@ end
 -- measurable while it was hidden).
 function Button:Remeasure()
     if not self.fixedWidth then
-        self:SetWidth(self.label:GetUnboundedStringWidth() + S["space-5"] * 2)
+        self:SetWidth(self.label:GetUnboundedStringWidth() + S["space-5"] * 2 + (self.icon and 12 + S["space-3"] or 0))
     end
 end
 
@@ -71,7 +72,16 @@ function UI.Button(parent, opts)
         b.glow:SetShown(false)
     end
     b.label = UI.Text(b, "label", primary and "on-signal" or "ink")
-    b.label:SetPoint("CENTER", 0, 0)
+    local shift = 0
+    if opts.icon then
+        shift = (12 + S["space-3"]) / 2
+        b.icon = b:CreateTexture(nil, "ARTWORK")
+        b.icon:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. opts.icon .. ".tga")
+        b.icon:SetSize(12, 12)
+        b.icon:SetPoint("RIGHT", b.label, "LEFT", -S["space-3"], 0)
+        b.icon:SetVertexColor(UI.RGBA(primary and "on-signal" or "ink-muted"))
+    end
+    b.label:SetPoint("CENTER", shift, 0)
     b.fixedWidth = opts.width
     if opts.width then b:SetWidth(opts.width) end
     b:SetLabel(opts.text or "")
@@ -80,8 +90,8 @@ function UI.Button(parent, opts)
     b:SetScript("OnEnter", onEnter)
     b:SetScript("OnLeave", onLeave)
     b:HookScript("OnShow", b.Remeasure)
-    b:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self.label:SetPoint("CENTER", 0, -1) end end)
-    b:SetScript("OnMouseUp", function(self) self.label:SetPoint("CENTER", 0, 0) end)
+    b:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self.label:SetPoint("CENTER", shift, -1) end end)
+    b:SetScript("OnMouseUp", function(self) self.label:SetPoint("CENTER", shift, 0) end)
     b:SetScript("OnClick", function(self) if opts.onClick then opts.onClick(self) end end)
     b:SetEnabledState(not opts.disabled)
     return b

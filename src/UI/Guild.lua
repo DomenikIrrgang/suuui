@@ -215,6 +215,7 @@ end
 
 local function footButton(parent, text, variant, onClick)
     local b = UI.Button(parent, { text = text, variant = variant, onClick = onClick })
+    b:SetHeight(FOOT_H)
     b:HookScript("OnEnter", function(self)
         if self.reason and not self:IsEnabled() then UI.ShowTooltip(self, { title = text, description = self.reason }) end
     end)
@@ -247,6 +248,8 @@ function UI.GuildRoster(parent)
         if def[3] == "danger" then
             b.border:SetColor("ember")
             b.label:SetColor("ember-text")
+            -- back to ember after a hover (the button's own OnLeave sets gilt-line)
+            b:HookScript("OnLeave", function(self) self.border:SetColor("ember") end)
         end
         if prev then b:SetPoint("RIGHT", prev, "LEFT", -S["space-3"], 0) else b:SetPoint("BOTTOMRIGHT") end
         g.buttons[key] = b
@@ -357,7 +360,9 @@ local function infoBlock(i, title, key)
     b.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     b.head:SetValue(title)
     b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if i.onEdit then i.onEdit(key) end end })
-    b.edit:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+    b.edit:SetHeight(22)
+    -- level with the heading
+    b.edit:SetPoint("RIGHT", b, "TOPRIGHT", -S["space-4"], -(S["space-5"] + T.type.header.lineHeight / 2))
     b.text = UI.Text(b, "body", "ink")
     b.text:SetPoint("TOPLEFT", b.head, "BOTTOMLEFT", 0, -S["space-3"])
     b.text:SetJustifyH("LEFT")

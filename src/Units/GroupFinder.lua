@@ -107,6 +107,9 @@ function M:Row(e, interest)
     local lvl = e.leader and e.leader.level
     local cls = className(e.leader and e.leader.class)
     if lvl or cls then who = (lvl and ("Lvl " .. lvl .. " ") or "") .. (cls or "") end
+    -- the chat post, else the listing's comment
+    local post = chat and chat.text or e.text
+    if post == "" or (issecretvalue and issecretvalue(post)) then post = nil end
     local playstyle
     if tool and tool.playstyle and GetGeneralPlaystyleString then
         local ok, s = pcall(GetGeneralPlaystyleString, tool.playstyle)
@@ -117,7 +120,7 @@ function M:Row(e, interest)
         activity = table.concat(names, ", "), level = e.level and e.level[1] and (e.level[1] .. "+") or nil,
         newPlayerFriendly = tool and tool.newPlayerFriendly, reason = reason, match = reason ~= nil,
         leader = e.leader and e.leader.name or e.key, class = e.leader and e.leader.class, who = who,
-        playstyle = playstyle, post = chat and chat.text or ((e.text ~= "" and not tool) and e.text or nil),
+        playstyle = playstyle, post = post,
         slots = slots, mine = interest.roles, members = e.members, sources = sources, age = ago(age),
         canInvite = LFG.CanInvite(e),
     }
@@ -183,7 +186,9 @@ function M:Data()
     for _, c in ipairs(CATEGORIES) do categories[#categories + 1] = { value = c.value, label = c.label } end
     return {
         groups = groups, players = players, collapsed = self:Get("collapsed"),
-        tool = { age = age, stale = age and age > (self:Get("staleAfter") or 300), searching = self.searching },
+        -- loading: the tool's first search for this category (chat shows meanwhile)
+        tool = { age = age, stale = age and age > (self:Get("staleAfter") or 300), searching = self.searching,
+                 loading = self.searching and not age },
         category = cat.value, categories = categories, activities = self:Get("activities") or {},
         activityOptions = options, search = self.search or "", fits = self:Get("fits"), show = show,
     }
@@ -220,6 +225,11 @@ function M:Wire(b)
     b.onRefresh = function()
         local cat = BY_VALUE[self:Get("category")] or BY_VALUE.all
         self.searching = LFG.Refresh(cat.tool) and true or nil
+        self:Render()
+    end
+    b.onClear = function()
+        self:Set("category", "all"); self:Set("activities", {}); self:Set("fits", false); self:Set("show", "both")
+        self.search = nil
         self:Render()
     end
     b.onWhisper = function(row) LFG.Whisper(row.entry) end

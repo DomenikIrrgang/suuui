@@ -151,7 +151,7 @@ All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or p
 | `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only |
 | `SectionHeader(parent, label, meta, width)` | A label on the world with a fading gilt rule; `:SetLabel(label, meta)` |
 | `WindowFrame(parent, { name, title, meta, keybind, width, height, footer, onClose })` | The shell of every full window: draggable, Escape closes it (with a `name`), content in `window.content` (scrolls), optional `window.footer` |
-| `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip })` | `:SetLabel(text)`, `:SetEnabledState(enabled)` |
+| `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip, icon })` | `:SetLabel(text)`, `:SetEnabledState(enabled)`; `icon` (0.13): a glyph name (`"reset"`, `"close"`), 12px left of the label |
 | `CloseButton(parent, onClick)`, `KeyChip(parent, key)` | Header pieces |
 | `StateBadge(parent, tone, text)` | Tones: `danger`, `warning`, `magic`, `curse`, `poison`, `disease`, `ward`, `info`, `neutral`; `:SetState(tone, text)` |
 | `Icon(parent, size)` | `:SetArt(texture)`, `:SetState("rest"/"ready"/"dim"/"active")`, `:SetBorder(token)`, `:SetGlow(shadowToken)`, `:SetCount(n)`, `:Pop()` |
@@ -214,7 +214,7 @@ Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDi
 | `Toggle(parent, { value, onChange })` | On or off |
 | `Checkbox(parent, { label, value, onChange })` | Several things that can all be on |
 | `Segmented(parent, { options, value, onChange })` | One of two to five named options |
-| `Select(parent, { options, value, onChange, multiple, width, placeholder, maxShown })` | One (or several) of a longer list; `:SetOptions(options)` |
+| `Select(parent, { options, value, onChange, multiple, width, placeholder, maxShown })` | One (or several) of a longer list; `:SetOptions(options)`. Nothing chosen shows the placeholder in ink-muted (0.13; a multiple select without one reads "None") |
 | `Slider(parent, { min, max, step, value, unit, format, width, onChange })` | A size or amount you judge by eye |
 | `Stepper(parent, { min, max, step, value, unit, onChange })` | An exact number, in whole steps from `min` |
 | `TextField(parent, { width, placeholder, value, onChange, onTextChanged })` | Text; `onChange` on Enter or when it loses focus |
@@ -415,5 +415,5 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.LFG.Catalogue` | `Get(key)`, `All(kind)`, `Expand(key)`, `ForTool(activityID)`: the activities ("dungeon:rfk", "zone:westfall", "raid:mc", "boss:azuregos", "tool:<id>") |
 | `SuuUI.LFG.Parser.Parse(text, { languages })` / `SuuUI.LFG.Lang.Register(code, def)` / `SuuUI.LFG.Languages()` | The chat parser on its own; a language module (see `Lang/enUS.lua`); the languages in use |
 | `SuuUI.LFG.IsHiddenChannel(name)` | Channels it reads but keeps off the chat windows (LookingForGroup) |
-| `SuuUI.UI.GroupFinderBrowse(parent)` | The Group Finder's Browse page: `b:SetData({ groups, players, collapsed, tool = { age, stale, searching }, category, categories, activities, activityOptions, search, fits, show })` (see UI/GroupFinder.lua for a row); `onRefresh`, `onFilter(changes)`, `onWhisper(row)`, `onInvite(row)`, `onToggle(section)` |
+| `SuuUI.UI.GroupFinderBrowse(parent)` | The Group Finder's Browse page: `b:SetData({ groups, players, collapsed, tool = { age, stale, searching, loading }, category, categories, activities, activityOptions, search, fits, show })` (see UI/GroupFinder.lua for a row); `onRefresh`, `onFilter(changes)`, `onWhisper(row)`, `onInvite(row)`, `onToggle(section)`, `onClear()` (the empty state's Clear filters) |
 

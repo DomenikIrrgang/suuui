@@ -9,6 +9,7 @@
 --                   { heading = "Group title" }, … },
 --       value = "a", onChange = fn(value), width = 190, placeholder = "Choose",
 --       multiple = false,   -- the value is then a list; Select all / Clear at the top
+--                           -- (none chosen: the placeholder, else "None")
 --       maxShown = 2,       -- multiple: past this many, the field reads "3 of 6"
 --       maxRows = 10,       -- rows the open list shows; longer lists scroll
 --                           -- (mouse wheel, a thin scrollbar on the right)
@@ -72,7 +73,7 @@ function Select:Summary()
             if contains(self.value, o.value) then chosen[#chosen + 1] = o.label end
         end
     end
-    if #chosen == 0 then return "None" end
+    if #chosen == 0 then return self.placeholder or "None" end
     if #chosen == total then return "All" end
     if #chosen > (self.maxShown or 2) then return ("%d of %d"):format(#chosen, total) end
     return table.concat(chosen, ", ")
@@ -82,6 +83,9 @@ function Select:SetValue(v)
     self.value = self.multiple and { unpack(v or {}) } or v
     local summary = self:Summary()
     self.text:SetValue(summary)
+    -- the placeholder in ink-muted (nothing chosen)
+    local empty = self.multiple and #self.value == 0 or (not self.multiple and self.value == nil)
+    if not self.bare then self.text:SetColor(empty and self.placeholder and "ink-muted" or "ink") end
     -- bare: as wide as its label, chevron included
     if self.bare then
         local w = UI.MeasureText(self.textStyle, summary) + S["space-2"] * 2 + S["space-1"] + 12
@@ -422,6 +426,7 @@ function UI.Select(parent, opts)
     f.text = UI.Text(f, "body", "ink")
     f.text:SetPoint("LEFT", S["space-4"], 0)
     f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
+    f.text:SetWordWrap(false) -- one line, cut short in a narrow field
     f.multiple, f.maxShown, f.placeholder = opts.multiple, opts.maxShown, opts.placeholder
     f.minListWidth = opts.minListWidth
     f.maxRows, f.search, f.lookup = opts.maxRows, opts.search, opts.lookup
