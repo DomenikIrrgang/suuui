@@ -30,6 +30,11 @@ local M = SuuUI.RegisterModule({
         category = "all", activities = {}, fits = false, show = "both",
         collapsed = { groups = false, players = false },
         adChannel = "LookingForGroup",
+        -- the chat channels read (tool listings always are), LookingForGroup
+        -- joined and kept out of the chat windows, Latin-script languages besides yours
+        channels = { "LookingForGroup", "General", "Trade", "Say" },
+        joinLFG = true,
+        extraLanguages = {},
         chatExpiry = 300, staleAfter = 300,
         -- each kind: on, sound, from the tool, from chat, the least chat
         -- confidence (%), shown in combat, shown in instances (off holds
@@ -391,7 +396,7 @@ function M:AdFromListing(listing)
     return text
 end
 
-local AD_CHANNELS = { "LookingForGroup", "General", "Trade", "Say" }
+local AD_CHANNELS = { "LookingForGroup", "General", "Trade", "Say", "Yell" }
 
 -- A channel's number by its name ("General" is "General - Orgrimmar").
 local function channelId(name)
@@ -521,8 +526,23 @@ function M:Build()
     self:Follow()
 end
 
+-- The library by your settings.
+function M:Configure()
+    local channels = {}
+    for _, c in ipairs(self:Get("channels") or {}) do channels[c == "Say" and "SAY" or (c == "Yell" and "YELL" or c)] = true end
+    local extra = {}
+    for _, code in ipairs(self:Get("extraLanguages") or {}) do extra[code] = true end
+    LFG.Configure({ chatExpiry = self:Get("chatExpiry"), staleAfter = self:Get("staleAfter"), channels = channels,
+                    joinLookingForGroup = self:Get("joinLFG"), hideLookingForGroup = self:Get("joinLFG"),
+                    extraLanguages = extra })
+end
+
 function M:OnEnable()
-    LFG.Configure({ chatExpiry = self:Get("chatExpiry"), staleAfter = self:Get("staleAfter") })
+    self:Configure()
+    for _, key in ipairs({ "channels", "joinLFG", "chatExpiry", "extraLanguages" }) do
+        self:Watch(key, function() self:Configure() end)
+    end
+    self:RegisterSettings(self:SettingsSection())
     LFG.Start()
     -- the list follows the library
     for _, ev in ipairs({ "EntryAdded", "EntryUpdated", "EntryRemoved", "ListingChanged" }) do
@@ -547,6 +567,150 @@ end
 
 function M:OnDisable()
     LFG.Stop()
+end
+
+--------------------------------------------------------------------------------
+-- Settings › Group Finder (stage 4; design boards "Settings · Group Finder",
+-- "Settings · Group Finder · Notifications")
+--------------------------------------------------------------------------------
+
+local CHAT_CHANNELS = { "LookingForGroup", "General", "Trade", "Services", "Say", "Yell" }
+local LANGUAGE_NAMES = { enUS = "English", enGB = "English", deDE = "German", frFR = "French", esES = "Spanish",
+    esMX = "Spanish", ptBR = "Portuguese", itIT = "Italian", koKR = "Korean", zhCN = "Chinese", zhTW = "Chinese",
+    ruRU = "Russian" }
+local LATIN = { "deDE", "frFR", "esES", "ptBR", "itIT" }
+local SCRIPTS = { { "koKR", "Korean" }, { "zhCN", "Chinese" }, { "ruRU", "Russian" } }
+
+local NOTIFY_ROWS = {
+    { key = "role", label = "Your role is needed" },
+    { key = "fresh", label = "New group for your activity" },
+    { key = "player", label = "A player for your group" },
+    { key = "quest", label = "Quest group" },
+    { key = "zone", label = "In your zone" },
+    { key = "boss", label = "World boss or event" },
+    { key = "friends", label = "Friends and guild" },
+    { key = "stale", label = "Results are stale" },
+    { key = "runout", label = "Your listing runs out soon" },
+    { key = "delisted", label = "You were delisted" },
+    { key = "contacted", label = "A group you contacted" },
+}
+
+local function plainText(parent, text, color)
+    local f = CreateFrame("Frame", nil, parent)
+    f.text = UI.Text(f, "body", color or "ink")
+    f.text:SetPoint("TOPLEFT")
+    f.text:SetJustifyH("LEFT")
+    f.text:SetValue(text)
+    f:SetSize(math.max(1, math.ceil(f.text:GetUnboundedStringWidth())), math.ceil(f.text:GetStringHeight()))
+    return f
+end
+
+function M:SettingsSection()
+    local modules = (LFG.Lang and LFG.Lang.modules) or {}
+    return {
+        id = "groupfinder", label = "Group Finder", category = "World", order = 30,
+        preview = function(parent) return self:SettingsPreview(parent) end,
+        groups = {
+            { title = "Group Finder", description = "One list from the game’s group finder and the public chat channels. The tool searches when you press Refresh; chat is read as it’s written.", rows = {
+                { key = "channels", label = "Channels to read", description = "Posts in these channels join the list. Tool listings always do.",
+                  control = "custom", build = function(parent, onChange)
+                      local opts = {}
+                      for _, c in ipairs(CHAT_CHANNELS) do opts[#opts + 1] = { value = c, label = c } end
+                      return UI.ToggleChips(parent, { options = opts, onChange = onChange })
+                  end, stacked = true },
+                { key = "joinLFG", label = "Join LookingForGroup", control = "toggle",
+                  description = "Joins the channel when you log in and keeps it out of your chat windows: its posts show here instead." },
+                { label = "Chat posts expire after", control = "slider", min = 1, max = 15, step = 1, unit = " min",
+                  description = "A post leaves the list this long after its last repost. Posting again brings it back.",
+                  get = function() return math.floor((self:Get("chatExpiry") or 300) / 60 + 0.5) end,
+                  set = function(v) self:Set("chatExpiry", v * 60) end,
+                  isDefault = function() return (self:Get("chatExpiry") or 300) == 300 end,
+                  reset = function() self:Set("chatExpiry", 300) end },
+            } },
+            { title = "Languages", description = "What the chat parser understands. Activity, zone and quest names come from the game in your client’s language; a language module adds the words players type around them.", rows = {
+                { label = "Always read", description = "Your Forever language preference and your client’s language.",
+                  control = "custom", build = function(parent)
+                      local names, seen = {}, {}
+                      for _, code in ipairs(LFG.Languages()) do
+                          local n = LANGUAGE_NAMES[code] or code
+                          if not seen[n] then seen[n] = true; names[#names + 1] = n end
+                      end
+                      return plainText(parent, table.concat(names, ", "))
+                  end },
+                { label = "Other scripts", description = "Posts in Hangul, Chinese characters or Cyrillic are read with that language’s module whenever SuuUI has one.",
+                  control = "custom", build = function(parent)
+                      local lines = {}
+                      for _, sc in ipairs(SCRIPTS) do
+                          local ready = modules[sc[1]] ~= nil
+                          lines[#lines + 1] = "|cff" .. T.color[ready and "ink" or "ink-faint"].hex .. sc[2] .. "|r |cff"
+                              .. T.color[ready and "ink-muted" or "ink-faint"].hex .. (ready and "· module ready" or "· no module yet") .. "|r"
+                      end
+                      return plainText(parent, table.concat(lines, "\n"))
+                  end },
+                { key = "extraLanguages", label = "Also read", description = "Other Latin-script languages. Off by default: their words overlap with English, so each one adds false matches.",
+                  control = "custom", stacked = true, build = function(parent, onChange)
+                      local opts = {}
+                      for _, code in ipairs(LATIN) do
+                          if modules[code] then opts[#opts + 1] = { value = code, label = LANGUAGE_NAMES[code] } end
+                      end
+                      if #opts == 0 then
+                          local f = plainText(parent, "No other language modules yet.", "ink-faint")
+                          f.SetValue = function() end
+                          return f
+                      end
+                      return UI.ToggleChips(parent, { options = opts, onChange = onChange })
+                  end },
+            } },
+            { title = "Your ad", rows = {
+                { key = "adChannel", label = "Channel for your ad", control = "select", width = 180,
+                  description = "Where the ad on My listing posts by default. You can pick another each time; it’s only ever sent on your click.",
+                  options = (function()
+                      local o = {}
+                      for _, c in ipairs(AD_CHANNELS) do o[#o + 1] = { value = c, label = c } end
+                      return o
+                  end)() },
+            } },
+            { title = "Notifications", description = "Each kind on or off, with its options. Tool and Chat: where it may come from. Confidence: how sure the chat parser must be. In combat and In instances: off holds the note until you’re out. The same group never notifies twice within a few minutes. /suu lfgnotes shows each.", rows = {
+                { key = "notify", label = "Group Finder notifications", control = "custom", stacked = true,
+                  build = function(parent, onChange)
+                      local conf = { { value = 0, label = "Any" }, { value = 50, label = "50%" }, { value = 70, label = "70%" }, { value = 90, label = "90%" } }
+                      return UI.SettingsMatrix(parent, { width = 540, onChange = onChange, rows = NOTIFY_ROWS, columns = {
+                          { key = "on", label = "On", width = 28, master = true },
+                          { key = "sound", label = "Sound", width = 38 },
+                          { key = "tool", label = "Tool", width = 30 },
+                          { key = "chat", label = "Chat", width = 30 },
+                          { key = "conf", label = "Confidence", width = 62, kind = "select", options = conf,
+                            title = "The least the chat parser must be sure of a post" },
+                          { key = "combat", label = "In combat", width = 50 },
+                          { key = "inst", label = "In instances", width = 58 },
+                      } })
+                  end },
+            } },
+        },
+    }
+end
+
+-- The live preview: a note of each Group Finder kind most people meet.
+function M:SettingsPreview(parent)
+    if not self.preview then
+        self.preview = UI.NotificationStack(parent, { max = 3 })
+        local kessra = { key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, quests = {}, members = { 3, 5 }, level = { 29, 29 },
+            leader = { name = "Kessra", class = "MAGE", level = 31 }, roles = { needed = { healer = 1, tank = 1 }, offered = {} },
+            sources = { tool = {}, chat = { channel = "LookingForGroup", text = "LFM Heal / Tank (drood) or Pala for RFK", confidence = 0.9 } }, text = "" }
+        local morrow = { key = "Morrow", intent = "player", activities = { "dungeon:wc" }, quests = {}, leader = { name = "Morrow", class = "ROGUE", level = 20 },
+            roles = { needed = {}, offered = { damage = true } }, sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } }, text = "" }
+        local items = {}
+        for _, n in ipairs({ { "role", kessra }, { "player", morrow } }) do
+            local d = self:MatchNote(n[1], n[2])
+            d.id = "preview:" .. n[1]
+            d.remaining = d.duration
+            for _, a in ipairs(d.actions or {}) do a.onClick = function() end end
+            items[#items + 1] = d
+        end
+        self.preview:SetItems(items, false)
+    end
+    self.preview:SetParent(parent)
+    return self.preview
 end
 
 --------------------------------------------------------------------------------

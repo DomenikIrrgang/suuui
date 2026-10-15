@@ -155,6 +155,7 @@ API.UI.UnitFrame = UI.UnitFrame
 API.UI.AnchorPicker = UI.AnchorPicker -- 0.9: the 3×3 point grid (no offsets)
 API.UI.SwatchRow = UI.SwatchRow       -- 0.9: token colour swatches
 API.UI.ToggleChips = UI.ToggleChips   -- 0.9: on/off chips for choices that combine
+API.UI.SettingsMatrix = UI.SettingsMatrix -- 0.13: SettingsMatrix(parent, { width, columns, rows, onChange }): settings repeated per row as a grid
 API.UI.INDICATOR_POINTS = UI.INDICATOR_POINTS -- 0.9: where an indicator can sit on a unit frame
 API.UI.GroupIndicators = UI.GroupIndicators   -- 0.9: the buff indicators group frames show, and a version
 API.UI.GROUP_TIERS = UI.GROUP_TIERS           -- 0.9: "5", "10", "20", "40"

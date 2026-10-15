@@ -271,7 +271,7 @@ Listing yourself isn't in the library's API, because addon code can't do it. The
 
 ## Settings (in the settings window)
 
-**Not built yet** (stage 4). Until then, the library runs on its defaults (`SuuUI.LFG.config`).
+Built (stage 4, 2026-10-15): Settings › Group Finder, from the boards "Settings · Group Finder" and "Settings · Group Finder · Notifications". Channels to read (LookingForGroup, General, Trade and Say by default; Services and Yell off), Join LookingForGroup (also keeps it out of the chat windows), chat posts expire after (1–15 minutes), the languages read (what's always read; Korean, Chinese and Russian modules: none yet; Latin-script modules besides yours: none yet), the ad's channel, and the notifications grid (`UI.SettingsMatrix`). The live preview shows a Your role is needed and a A player for your group note. The module passes them to the library through `LFG.Configure`.
 
 - Channels to read: LookingForGroup, General, Trade, Services, Say, Yell.
 - Join LookingForGroup, and keep it out of chat (on by default).
