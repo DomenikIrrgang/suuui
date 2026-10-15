@@ -326,6 +326,9 @@ function M:Follow()
     local panel = _G.LFGListingFrame
     local listed = f:IsShown() and panel and panel:IsShown() and LFG.Listing() ~= nil and not self.editing
     self.listed:SetShown(listed and true or false)
+    -- the game's panel out of sight under it (its own buttons showed through);
+    -- back for Update
+    if panel then panel:SetAlpha(listed and 0 or 1) end
     if listed then self:RenderListed() end
     self.cover:SetShown((on or listed) and true or false)
 end

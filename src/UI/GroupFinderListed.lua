@@ -133,7 +133,10 @@ function P:SetData(d)
     local a = self.ad
     a.channel:SetOptions(A.channels or {})
     a.channel:SetValue(A.channel)
-    if not a.edit:HasFocus() and a.edit:GetText() ~= (A.text or "") then a.edit:SetText(A.text or "") end
+    if not a.edit:HasFocus() and a.edit:GetText() ~= (A.text or "") then
+        a.edit:SetText(A.text or "")
+        a.edit:SetCursorPosition(0)
+    end
     a.post:SetLabel("Post to " .. (A.channel or "chat"))
     a.last:SetValue(A.lastPost and ("Last posted " .. A.lastPost .. " ago") or "Not posted yet")
     self:Count()
@@ -229,7 +232,9 @@ function UI.GroupFinderListed(parent)
     local e = CreateFrame("EditBox", nil, a.field)
     e:SetMultiLine(true)
     e:SetAutoFocus(false)
-    e:SetMaxLetters(0)
+    -- room past the 255 a post may have (the count turns ember there);
+    -- 0 cut every text to nothing (found in game)
+    e:SetMaxLetters(1000)
     e:SetFontObject(ns.Fonts.Get("body"))
     e:SetTextColor(UI.RGBA("ink"))
     e:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
