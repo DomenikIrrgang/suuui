@@ -438,8 +438,11 @@ function L:LayoutActivities()
     self.tree:SetWidth(left)
     self.tree:SetShown(not custom)
     self:PlaceScrollBox()
-    -- the details: a sunk field, its count under it; Voice Chat below
-    local detailsTop = custom and treeTop or 0
+    -- the details: a sunk field, its count under it; Voice Chat below. The
+    -- field's top level with the activity tree's (asked for in game), its
+    -- label over it; in Custom (no tree) under the Playstyle row
+    local detailsTop = treeTop - (14 + S["space-1"])
+    if custom then detailsTop = treeTop end
     self.detailsLabel:ClearAllPoints()
     self.detailsLabel:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -detailsTop)
     self.detailsLabel:SetValue("More details about your group" .. (custom and "" or
