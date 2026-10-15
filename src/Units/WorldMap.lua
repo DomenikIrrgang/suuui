@@ -308,12 +308,50 @@ end
 -- chain, its parent quest in your log, a breadcrumb only while the quest it
 -- leads to isn't taken, the profession skill and reputation it asks, and
 -- no event quests (whether an event runs can't be read).
--- Is an event on? (A quest of an event shows only while it is.) Not yet:
--- holidays will come from the game's calendar once /suu probe calendar has
--- shown what Forever's holds; one-off server events (the War Effort, the
--- Scourge Invasion) aren't running, and nothing in the game would say.
-local function eventOn(key)
-    return false
+-- Is an event on? A quest of an event shows only while it is. Holidays
+-- from the game's calendar, by Forever's holiday IDs (its Holidays table;
+-- the calendar's eventIDs are those): read at login and whenever the
+-- calendar updates. The Darkmoon Faire is two holidays, one per site: its
+-- quests show on that site's map only. One-off server events (the War
+-- Effort, the Scourge Invasion) aren't running, and nothing in the game
+-- would say when they are: never on.
+local HOLIDAYS = {
+    [141] = "winterVeil", [1879] = "winterVeil", [324] = "hallowsEnd", [327] = "lunarFestival", [341] = "midsummer",
+    [335] = "loveIsInTheAir", [321] = "harvestFestival", [201] = "childrensWeek", [181] = "noblegarden",
+    [263] = "darkmoonFaire", [264] = "darkmoonFaire",
+}
+local DARKMOON_SITE = { [263] = 1429, [264] = 1412 } -- Elwynn Forest, Mulgore
+local events = { on = {} }
+
+local function stamp(t)
+    return t and (((t.year * 100 + t.month) * 100 + t.monthDay) * 100 + t.hour) * 100 + t.minute or 0
+end
+-- today's holidays; false while the calendar shows another month (you're
+-- looking through it): what was read stays
+local function readCalendar()
+    local cal = C_Calendar
+    local now = C_DateAndTime and C_DateAndTime.GetCurrentCalendarTime and C_DateAndTime.GetCurrentCalendarTime()
+    if not (cal and cal.GetMonthInfo and cal.GetNumDayEvents and cal.GetDayEvent and now) then return false end
+    local month = cal.GetMonthInfo(0)
+    if not (month and month.month == now.month and month.year == now.year) then return false end
+    local on, site = {}, nil
+    local t = stamp(now)
+    for i = 1, cal.GetNumDayEvents(0, now.monthDay) or 0 do
+        local e = cal.GetDayEvent(0, now.monthDay, i)
+        local key = e and e.calendarType == "HOLIDAY" and HOLIDAYS[e.eventID]
+        if key and stamp(e.startTime) <= t and t < stamp(e.endTime) then
+            on[key] = true
+            site = DARKMOON_SITE[e.eventID] or site
+        end
+    end
+    events.on, events.darkmoon = on, site
+    return true
+end
+
+local function eventOn(key, mapID)
+    if not events.on[key] then return false end
+    if key == "darkmoonFaire" then return mapID == events.darkmoon end
+    return true
 end
 
 local function questState(q, id, me, done)
@@ -321,8 +359,12 @@ local function questState(q, id, me, done)
     local flags = q[10] or 0
     local repeatable = flags % 2 == 1
     if done[id] and not repeatable then return nil end
-    if flags % 4 >= 2 then return nil end
-    if q[16] and not eventOn(q[16]) then return nil end
+    -- an event's quest by its event; one needing an event we can't tell: never
+    if q[16] then
+        if not eventOn(q[16], me.mapID) then return nil end
+    elseif flags % 4 >= 2 then
+        return nil
+    end
     if q[9] and (done[q[9]] or onQuest(q[9])) then return nil end
     if q[11] and not onQuest(q[11]) then return nil end
     if q[12] and (done[q[12]] or onQuest(q[12])) then return nil end
@@ -356,6 +398,7 @@ function M:Collect(mapID)
     local items = {}
     local on = self:Layers()
     local me = self:Player()
+    me.mapID = mapID
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local info = C_Map.GetMapInfo(mapID)
     local mapName = info and info.name
@@ -984,6 +1027,7 @@ function M:Refresh()
     if not (f and self:IsEnabled()) then return end
     if not f:IsShown() then self.items = nil; self:ClearPins(); return end
     local mapID = f:GetMapID()
+    readCalendar()
     self:Reveal(mapID)
     self.items = mapID and self:Collect(mapID) or {}
     self:Layout()
@@ -1079,6 +1123,14 @@ function M:OnEnable()
                             "MAP_EXPLORATION_UPDATED" }) do
         self:OnGameEvent(event, function() if self.map:IsShown() then C_Timer.After(0.2, function() self:Refresh() end) end end)
     end
+    -- the holidays on today: the calendar loads its events after
+    -- OpenCalendar (it tells with CALENDAR_UPDATE_EVENT_LIST); read again
+    -- when the map opens, so a holiday that starts while you play shows
+    self:OnGameEvent("CALENDAR_UPDATE_EVENT_LIST", function()
+        if readCalendar() and self.map:IsShown() then self:Refresh() end
+    end)
+    if C_Calendar and C_Calendar.OpenCalendar then pcall(C_Calendar.OpenCalendar) end
+    readCalendar()
 end
 
 function M:OnDisable()

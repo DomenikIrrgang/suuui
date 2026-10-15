@@ -213,8 +213,20 @@ local EVENT_SORT = {
     [-366] = "lunarFestival", [-364] = "darkmoonFaire", [-369] = "midsummer", [-404] = "winterVeil",
     [-402] = "harvestFestival", [-378] = "childrensWeek", [-376] = "loveIsInTheAir", [-375] = "pilgrimsBounty",
     [-374] = "noblegarden", [-370] = "brewfest", [-41] = "dayOfTheDead", [-21] = "hallowsEnd",
-    [-22] = "seasonal", -- a holiday's, which one the sort doesn't say
+    [-22] = "seasonal", -- a holiday's, which one the sort doesn't say: below
 }
+-- the seasonal sort's quests by their holiday (by quest ID); the rest stay
+-- "seasonal", shown during no holiday ("Honoring a Hero", "Ruined Kegs":
+-- which one isn't clear)
+local SEASONAL = {
+    { 1657, 1658, "hallowsEnd" }, { 8311, 8373, "hallowsEnd" },
+    { 6961, 7063, "winterVeil" }, { 8744, 8803, "winterVeil" }, { 8827, 8828, "winterVeil" }, { 8860, 8861, "winterVeil" },
+    { 8897, 9029, "loveIsInTheAir" },
+}
+local function seasonal(id)
+    for _, r in ipairs(SEASONAL) do if id >= r[1] and id <= r[2] then return r[3] end end
+    return "seasonal"
+end
 local eventOf = {} -- quest -> event key
 local nEvent = 0
 for id, q in pairs(quests) do
@@ -224,6 +236,7 @@ for id, q in pairs(quests) do
         or name:find("Commendation Signets?$") ~= nil or name:find("Signets for War Supplies$") ~= nil) then
         e = "warEffort"
     end
+    if e == "seasonal" then e = seasonal(id) end
     if e then eventOf[id] = e; nEvent = nEvent + 1 end
 end
 print(string.format("gen_quest_starts: %d quests of events", nEvent))
