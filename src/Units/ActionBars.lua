@@ -176,12 +176,28 @@ local function fadeMainBar(bar)
     hooksecurefunc(bar, "Show", silence)
 end
 
-local TRACKING = { "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer", "MainMenuExpBar", "ReputationWatchBar" }
+-- Blizzard's XP and reputation bars, replaced by SuuUI's XP bar. Their
+-- containers are Edit Mode systems: opening Edit Mode asks each container's
+-- parent, StatusTrackingBarManager, for the layout (CheckForLayoutChange),
+-- so they stay under it and only stop their events; the manager goes under
+-- the hidden parent, which hides them with it.
+local TRACKING_CONTAINERS = { "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer" }
+-- The bars of clients without Edit Mode.
+local TRACKING_LEGACY = { "MainMenuExpBar", "ReputationWatchBar" }
+
+local function suppressTracking()
+    if StatusTrackingBarManager then
+        for _, name in ipairs(TRACKING_CONTAINERS) do
+            SuuUI.SuppressBlizzard(name, { keepParent = true, noHide = true })
+        end
+        SuuUI.SuppressBlizzard(StatusTrackingBarManager)
+    end
+    for _, name in ipairs(TRACKING_LEGACY) do SuuUI.SuppressBlizzard(name) end
+end
 
 local function standDownBlizzard()
     if M:Get("showXP") then
-        if StatusTrackingBarManager then StatusTrackingBarManager:UnregisterAllEvents() end
-        for _, name in ipairs(TRACKING) do SuuUI.SuppressBlizzard(name) end
+        suppressTracking()
     end
     for _, extra in ipairs({ { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }) do
         if _G[extra[1]] then
@@ -633,8 +649,6 @@ function M:OnEnable()
         end
     end)
     if self:Get("showXP") then
-        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
-            for _, name in ipairs(TRACKING) do SuuUI.SuppressBlizzard(name) end
-        end)
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", suppressTracking)
     end
 end

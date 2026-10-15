@@ -386,7 +386,7 @@ function Note:SetData(d)
                 self.badges[i] = b
             end
             b.text:SetValue(word)
-            b:SetWidth(math.ceil(b.text:GetUnboundedStringWidth()) + 10)
+            b:SetWidth(math.ceil(b.text:GetUnboundedStringWidth()) + S["space-4"] * 2)
             b:ClearAllPoints()
             b:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", x, 0)
             b:Show()
@@ -402,9 +402,11 @@ function Note:SetData(d)
             self.quote:SetWidth(WIDTH - PAD * 2)
             self.quote:SetValue("“" .. post .. "”")
             self.quote:ClearAllPoints()
-            self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h > 0 and h + 2 or 0))
+            -- the post space-3 under its badges (2px sat it on them, found in game)
+            local gap = h > 0 and S["space-3"] or 0
+            self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h + gap))
             self.quote:Show()
-            h = h + (h > 0 and 2 or 0) + math.ceil(self.quote:GetStringHeight())
+            h = h + gap + math.ceil(self.quote:GetStringHeight())
             self.sourceRow.post = post
         else
             self.quote:Hide()

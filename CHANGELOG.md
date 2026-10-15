@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Opening Edit Mode with SuuUI's XP bar on no longer raises a Lua error (`StatusTrackingManager.lua:228`).
 - After a `/reload` in combat, buffs, the Cooldown Manager and other modules that don't need secure frames now start at once, instead of waiting for the fight to end.
 - The spellbook opened in combat shows SuuUI's page.
 - Stance and pet buttons no longer cause an error when a cooldown sweep ends.
