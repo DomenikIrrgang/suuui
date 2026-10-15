@@ -48,8 +48,8 @@ local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 
 local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
+local MERGE_RADIUS_CLOSEST = 6 -- zoomed all the way in: only pins on one spot (Blackrock Mountain's doors)
 local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
-local QUEST_KEYS = { available = true, repeatable = true, itemQuest = true }
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 --------------------------------------------------------------------------------
@@ -620,9 +620,9 @@ end
 --------------------------------------------------------------------------------
 
 -- items → groups { x, y (px), items, key, fixed, small }
-local function merge(items, w, h)
+local function merge(items, w, h, radius)
     local groups = {}
-    local r2 = MERGE_RADIUS * MERGE_RADIUS
+    local r2 = radius * radius
     for _, it in ipairs(items) do
         local px, py = it.x * w, it.y * h
         local into
@@ -655,8 +655,8 @@ end
 -- middle moves as pins join it, and spreading moves groups too, so one pass
 -- can leave neighbours apart (two quest pins beside each other at Camp
 -- Taurajo; found in game).
-local function mergeGroups(groups)
-    local r2 = MERGE_RADIUS * MERGE_RADIUS
+local function mergeGroups(groups, radius)
+    local r2 = radius * radius
     local merged = true
     while merged do
         merged = false
@@ -910,24 +910,21 @@ function M:Layout()
     local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
     if w <= 0 or h <= 0 then return end
     self.lw, self.lh, self.lcs = w, h, cs
-    -- zoomed all the way in (on a map that zooms), quest pins stay on their
-    -- exact spots: none merge, none move; the rest move out of their way
-    local items = self.items
+    -- zoomed all the way in (on a map that zooms), every pin stays on its
+    -- exact spot, so you find it there: none move, and only those on one
+    -- spot merge (they'd hide each other)
+    local items, radius = self.items, MERGE_RADIUS
     if f:IsAtMaxZoom() and not f:IsAtMinZoom() then
-        items = {}
+        items, radius = {}, MERGE_RADIUS_CLOSEST
         for i, it in ipairs(self.items) do
-            if QUEST_KEYS[it.key] then
-                items[i] = setmetatable({ key = false, fixed = true }, { __index = it })
-            else
-                items[i] = it
-            end
+            items[i] = setmetatable({ fixed = true }, { __index = it })
         end
     end
-    local groups = merge(items, w, h)
-    mergeGroups(groups)
+    local groups = merge(items, w, h, radius)
+    mergeGroups(groups, radius)
     spread(groups)
     -- spreading can push two of a kind together: join them, spread again
-    mergeGroups(groups)
+    mergeGroups(groups, radius)
     spread(groups)
     -- small ones under the rest, places on top
     table.sort(groups, function(a, b)
