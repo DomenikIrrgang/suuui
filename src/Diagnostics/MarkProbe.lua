@@ -136,7 +136,36 @@ function KP.Snapshot()
         s.set, type(s.link) == "string" and s.link ~= "nil" and "yes" or "no", s.worldFromMap and "yes" or "no"))
 end
 
-function KP.Command()
+-- "/suu probe marks nav": with a mark's Show the way on, what the game's
+-- navigation does (its setting, its frame, the on-screen indicator).
+function KP.Nav()
+    SuuUIProbe = SuuUIProbe or {}
+    local s = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.marksNav = s
+    s.cvar = show((call(_G, "GetCVar", "showInGameNavigation")))
+    s.cvarDefault = show((call(_G, "GetCVarDefault", "showInGameNavigation")))
+    s.hasWaypoint = show((call(C_Map, "HasUserWaypoint")))
+    s.superTrackingWaypoint = show((call(C_SuperTrack, "IsSuperTrackingUserWaypoint")))
+    s.superTrackingAnything = show((call(C_SuperTrack, "IsSuperTrackingAnything")))
+    s.highestType = show((call(C_SuperTrack, "GetHighestPrioritySuperTrackingType")))
+    local nav = C_Navigation
+    s.navExists = nav ~= nil
+    s.navFrame = show((call(nav, "GetFrame")))
+    s.distance = show((call(nav, "GetDistance")))
+    s.targetState = show((call(nav, "GetTargetState")))
+    s.validScreen = show((call(nav, "HasValidScreenPosition")))
+    s.wasClamped = show((call(nav, "WasClampedToScreen")))
+    local f = _G.SuperTrackedFrame
+    s.frame = f and { shown = f:IsShown(), visible = f:IsVisible(), alpha = f:GetAlpha(),
+        parent = f:GetParent() and (f:GetParent():GetName() or "?") or "none",
+        effAlpha = f:GetEffectiveAlpha() } or "no SuperTrackedFrame"
+    s.loaded = show((call(C_AddOns, "IsAddOnLoaded", "Blizzard_QuestNavigation")))
+    ns.Print(("Navigation: setting %s, frame %s, distance %s, indicator %s; /reload saves it."):format(
+        s.cvar, s.navFrame, s.distance, type(s.frame) == "table" and (s.frame.visible and "visible" or "hidden") or "none"))
+end
+
+function KP.Command(rest)
+    if rest == "nav" then KP.Nav() return end
     if InCombatLockdown() then
         ns.Print("Mark probe: out of combat, please.")
         return
