@@ -14,6 +14,9 @@
 -- SuuUI's Who page would (C_FriendList.SendWho, restricted, with the
 -- game's own filters) and records whether the game allowed it, the result
 -- count, the first rows' fields (secret or not) and what the page uses.
+-- "/suu probe lfg open": the next time the Group Finder opens (press I or
+-- the micro menu), its opening searches the tool; records whether the game
+-- allowed that (is opening the window a click enough?).
 -- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
 -- window. "/suu probe lfg delist": a button whose click delists you.
 -- "/suu probe lfg live": starts ForeverLFG and reports its events;
@@ -224,6 +227,43 @@ function LP.ClickTest()
     end)
     b:Show()
     ns.Print("LFG probe: click the button at the top of the screen once.")
+end
+
+-- Searching the tool as the Group Finder opens.
+function LP.OpenTest()
+    local s = store()
+    local lfg = C_LFGList
+    local t = { armed = date("%H:%M:%S"), events = {} }
+    s.openTest = t
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "ADDON_ACTION_BLOCKED",
+                         "ADDON_ACTION_FORBIDDEN" }) do f:RegisterEvent(e) end
+    f:SetScript("OnEvent", function(_, event, a1, a2)
+        if not t.opened then return end
+        t.events[#t.events + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+    end)
+    local parent = _G.LFGParentFrame
+    if not parent then
+        t.result = "no LFGParentFrame (open the Group Finder once, then run this again)"
+        ns.Print("LFG probe: open the Group Finder once first, then run it again.")
+        return
+    end
+    LP.openArmed = true
+    if not LP.openHooked then
+        LP.openHooked = true
+        parent:HookScript("OnShow", function()
+            if not LP.openArmed then return end
+            LP.openArmed = false
+            local tt = store().openTest
+            tt.opened = date("%H:%M:%S")
+            local okCats, cats = pcall(lfg.GetAvailableCategories)
+            local cat = okCats and cats and cats[1]
+            local ok, err = pcall(lfg.Search, cat, 0, 0, nil, false, nil, nil)
+            tt.search = ok and "called" or ("error: " .. tostring(err))
+            C_Timer.After(4, function() ns.Print("LFG probe: open test done; /reload.") end)
+        end)
+    end
+    ns.Print("LFG probe: now open the Group Finder (press I or use the micro menu).")
 end
 
 -- The Who search from a click (stage 5).
@@ -563,6 +603,7 @@ function LP.Command(rest)
     if rest == "stop" then LP.Record(false) return end
     if rest == "click" then LP.ClickTest() return end
     if rest == "who" then LP.WhoTest() return end
+    if rest == "open" then LP.OpenTest() return end
     if rest == "join" then LP.Join() return end
     if rest == "timerjoin" then LP.TimerJoin() return end
     if rest == "lang" then LP.Lang() return end
