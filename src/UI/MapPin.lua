@@ -1,11 +1,11 @@
 -- UI/MapPin.lua
--- One mark on the world map (design component MapPin): a diamond on surface
+-- One mark on the world map (design component MapPin): a disc on surface
 -- with an edge, so it reads on any terrain, and a glyph or a character in
--- it. Quests, places, rares and treasures are 26 px with a 13 px glyph;
--- services are small, 21 px with an 11 px glyph (the design's 22 and 17 px
--- read too small on the map; found in game). A merged pin carries a
--- count in micro on a surface-raised tab at its lower right; a rare elite a
--- second ring.
+-- it. Quests, places, rares and treasures are 26 px with a 17 px glyph;
+-- services are small, 21 px with a 14 px glyph. A disc, not the diamond it
+-- was: a diamond only holds a glyph half its width, too small to tell
+-- apart on the map (found in game). A merged pin carries a count in micro
+-- on a surface-raised tab at its lower right; a rare elite a second ring.
 --
 --   local pin = UI.MapPin(parent)
 --   pin:SetData({
@@ -28,19 +28,17 @@ local _, ns = ...
 local UI = ns.UI
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
-local WHITE = "Interface\\Buttons\\WHITE8X8"
+local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 local SIZE, SMALL = 26, 21
-local ROOT2 = math.sqrt(2)
 
--- A square turned 45° whose corners touch a box `box` px wide.
-local function diamond(parent, layer, sub)
+-- A disc, centred; its size set with fit.
+local function disc(parent, layer, sub)
     local t = parent:CreateTexture(nil, layer, nil, sub)
-    t:SetTexture(WHITE)
-    t:SetRotation(math.rad(45))
+    t:SetTexture(DISC)
     t:SetPoint("CENTER")
     return t
 end
-local function fit(t, box) local side = box / ROOT2; t:SetSize(side, side) end
+local function fit(t, box) t:SetSize(box, box) end
 
 local Pin = {}
 
@@ -48,7 +46,7 @@ function Pin:PinSize() return self.size end
 
 function Pin:SetHighlight(state)
     self.hl:SetShown(state == true)
-    if state == true then fit(self.hl, self.size + 8) end
+    if state == true then fit(self.hl, self.size + 6) end
     self:SetAlpha(state == "dim" and 0.3 or 1)
 end
 
@@ -60,16 +58,16 @@ function Pin:SetData(d)
     self.ringOuter:SetShown(d.ring ~= nil)
     self.ringGap:SetShown(d.ring ~= nil)
     if d.ring then
-        fit(self.ringOuter, size + 8)
+        fit(self.ringOuter, size + 6)
         self.ringOuter:SetVertexColor(UI.RGBA(d.ring))
-        fit(self.ringGap, size + 5)
+        fit(self.ringGap, size + 3)
         self.ringGap:SetVertexColor(UI.RGBA("surface"))
     end
     fit(self.edge, size)
     self.edge:SetVertexColor(UI.RGBA(d.edge or "gilt-line"))
-    fit(self.fill, size - 3)
+    fit(self.fill, size - 2)
     self.fill:SetVertexColor(UI.RGBA("surface"))
-    local inner = d.small and 11 or 13
+    local inner = d.small and 14 or 17
     if d.glyph then
         self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
         self.glyph:SetSize(inner, inner)
@@ -86,6 +84,10 @@ function Pin:SetData(d)
     if n and n > 1 then
         self.countText:SetValue(n > 99 and "99+" or tostring(n))
         self.countTab:SetSize(math.ceil(self.countText:GetUnboundedStringWidth()) + 4, 11)
+        -- on the disc's edge at its lower right
+        local off = math.floor(size * 0.36 + 0.5)
+        self.countTab:ClearAllPoints()
+        self.countTab:SetPoint("CENTER", self, "CENTER", off, -off)
         self.countTab:Show()
     else
         self.countTab:Hide()
@@ -95,27 +97,26 @@ end
 function UI.MapPin(parent)
     local b = CreateFrame("Button", nil, parent)
     Mixin(b, Pin)
-    b.hl = diamond(b, "BACKGROUND", 0)
+    b.hl = disc(b, "BACKGROUND", 0)
     b.hl:SetVertexColor(UI.RGBA("ink"))
     b.hl:Hide()
-    b.ringOuter = diamond(b, "BACKGROUND", 1)
-    b.ringGap = diamond(b, "BACKGROUND", 2)
-    b.edge = diamond(b, "BORDER", 1)
-    b.fill = diamond(b, "BORDER", 2)
+    b.ringOuter = disc(b, "BACKGROUND", 1)
+    b.ringGap = disc(b, "BACKGROUND", 2)
+    b.edge = disc(b, "BORDER", 1)
+    b.fill = disc(b, "BORDER", 2)
     b.glyph = b:CreateTexture(nil, "ARTWORK")
     b.glyph:SetPoint("CENTER")
     b.char = UI.Text(b, "label", "ink")
     b.char:SetPoint("CENTER", 0, 0)
-    -- "!" and "?" at 14 px, with the larger pins
+    -- "!" and "?" at 16 px, with the glyphs
     local charFont = _G.SuuUIMapPinChar
     if not charFont then
         charFont = CreateFont("SuuUIMapPinChar")
         local file, _, flags = ns.Fonts.Get("label"):GetFont()
-        charFont:SetFont(file, 14, flags or "")
+        charFont:SetFont(file, 16, flags or "")
     end
     b.char:SetFontObject(charFont)
     b.countTab = CreateFrame("Frame", nil, b)
-    b.countTab:SetPoint("CENTER", b, "BOTTOMRIGHT", -1, 2)
     b.countTab:SetFrameLevel(b:GetFrameLevel() + 2)
     UI.Fill(b.countTab, "surface-raised"):SetAllPoints()
     UI.Border(b.countTab, "gilt-line")
