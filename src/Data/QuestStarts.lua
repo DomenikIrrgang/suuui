@@ -4282,7 +4282,7 @@ ns.QuestStarts = { quests = {
     [97244] = { "Call of Fire", 10, 10, 8589934592, 64, nil, {97243}, nil, 97245, nil, nil, nil, nil, nil, nil },
     [97245] = { "Call of Fire", 10, 10, 8589934592, 64, nil, {97244}, nil, 97257, nil, nil, nil, nil, nil, nil },
     [97246] = { "Meal Appeal", 5, 15, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
-    [97249] = { "Favorite Food", 5, 15, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
+    [97249] = { "Favorite Food", 5, 15, 8589934770, nil, nil, {97246}, nil, nil, nil, nil, nil, nil, nil, nil },
     [97250] = { "Wrongly Blamed, Justly Corrected", 18, 23, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
     [97253] = { "Parts and Pieces", 9, 14, 8589934770, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil },
     [97257] = { "Call of Fire", 10, 10, 8589934592, 64, nil, {97245}, nil, nil, nil, nil, nil, nil, nil, nil },

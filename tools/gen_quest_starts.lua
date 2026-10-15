@@ -200,6 +200,17 @@ correct(npcs, { C .. "legacy/classicNPCFixes.lua", C .. "generated/foreverBaseNp
 correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/foreverBaseObject.lua", C .. "foreverObjectFixes.lua" })
 correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "foreverItemFixes.lua" })
 
+-- SuuUI's own corrections, found in game, where QuestieDB's data misses
+-- something (worth reporting there too): a quest offered only after
+-- another (preSingle: any of them done)
+local FIXES = {
+    [97249] = { preSingle = { 97246 } }, -- Favorite Food after Meal Appeal (Borstan had nothing to give)
+}
+for id, fix in pairs(FIXES) do
+    local q = quests[id]
+    if q and fix.preSingle then q[QK.preQuestSingle] = fix.preSingle end
+end
+
 -- quests of events: the map shows them only while their event is on.
 -- Holidays by their quest sorts (the calendar says when they're on); the
 -- one-off server events Forever isn't running now (the Ahn'Qiraj War
