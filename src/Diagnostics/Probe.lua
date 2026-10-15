@@ -823,6 +823,10 @@ function ns.Probe.Command(arg)
         ns.CalendarProbe.Command(rest)
         return
     end
+    if sub == "proficons" then
+        ns.ProfIconProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
