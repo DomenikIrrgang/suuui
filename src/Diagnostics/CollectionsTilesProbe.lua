@@ -5,6 +5,9 @@
 --              hides the ones you lack: shown for a moment, then put back)
 --   flags      what the game marks: new appearances, mounts needing their
 --              fanfare, favourites (mounts, toys, appearances)
+--   sources    where to get what you lack: a mount's source text (ten of
+--              them), a toy's tooltip lines, an appearance's source type and
+--              drops (bosses, instances) for ones you don't have
 --   cameras    the camera the game frames an appearance with
 --              (GetAppearanceCameraID) and a mount with (its display's)
 --   scene      a mount in a ModelScene framed by the mount's own scene ID
@@ -83,6 +86,59 @@ local function toys()
     pcall(TB.ForceToyRefilter)
     line("toys", "filters after " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
         unusable = raw(TB.GetUnusableShown) }))
+end
+
+local function sources()
+    local MJ, TC = C_MountJournal, C_TransmogCollection
+    local ids = raw(MJ and MJ.GetMountIDs) or {}
+    local shown = 0
+    for _, id in ipairs(ids) do
+        local _, description, source = raw(MJ.GetMountInfoExtraByID, id)
+        local name, _, _, _, _, sourceType = raw(MJ.GetMountInfoByID, id)
+        if shown < 10 and source and source ~= "" then
+            shown = shown + 1
+            line("sources", ("mount %s (type %s): %s"):format(tostring(name), tostring(sourceType), tostring(source):gsub("|n", " / ")))
+        end
+    end
+    local withText = 0
+    for _, id in ipairs(ids) do
+        local _, _, source = raw(MJ.GetMountInfoExtraByID, id)
+        if source and source ~= "" then withText = withText + 1 end
+    end
+    line("sources", ("%d of %d mounts have a source text"):format(withText, #ids))
+    -- a toy's tooltip (the first three toys, owned or not)
+    local TB = C_ToyBox
+    if TB and C_TooltipInfo and C_TooltipInfo.GetToyByItemID then
+        local was = raw(TB.GetUncollectedShown)
+        pcall(TB.SetUncollectedShown, true)
+        pcall(TB.ForceToyRefilter)
+        for i = 1, math.min(3, raw(TB.GetNumFilteredToys) or 0) do
+            local itemID = raw(TB.GetToyFromIndex, i)
+            local data = itemID and raw(C_TooltipInfo.GetToyByItemID, itemID)
+            local texts = {}
+            for _, l in ipairs(data and data.lines or {}) do
+                if l.leftText and not isSecret(l.leftText) then texts[#texts + 1] = l.leftText end
+            end
+            line("sources", ("toy %s: %s"):format(tostring(itemID), table.concat(texts, " / "):sub(1, 300)))
+        end
+        if was ~= nil then pcall(TB.SetUncollectedShown, was) end
+        pcall(TB.ForceToyRefilter)
+    end
+    -- an appearance you lack: its source type and drops
+    local found = 0
+    for _, cat in ipairs({ 4, 10, 14 }) do
+        for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
+            if not a.isCollected and found < 4 then
+                local srcs = raw(TC.GetAppearanceSources, a.visualID) or {}
+                local s1 = srcs[1]
+                if s1 and s1.sourceID then
+                    found = found + 1
+                    line("sources", ("appearance %s item %s %s, source type %s, drops %s"):format(tostring(a.visualID), tostring(s1.itemID),
+                        tostring(s1.name), tostring(s1.sourceType), call(TC.GetAppearanceSourceDrops, s1.sourceID)))
+                end
+            end
+        end
+    end
 end
 
 local function flags()
@@ -198,7 +254,7 @@ function CP.Command()
     out = { at = date("%Y-%m-%d %H:%M:%S") }
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.collectionsTiles = out
-    for _, step in ipairs({ toys, flags, tiles }) do
+    for _, step in ipairs({ toys, sources, flags, tiles }) do
         local ok, err = pcall(step)
         if not ok then line("errors", tostring(err)) end
     end
