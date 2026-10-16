@@ -177,6 +177,9 @@ function UI.SkinWindow(frame, opts)
     local headH = HEAD_H + (opts.headExtra or 0)
     local rise = headH - inset -- the header's height above the window's top
     chrome.riseH = rise
+    -- the line the second row's 22px controls sit centred on, up from the
+    -- header's bottom (in the middle of headExtra)
+    chrome.rowMid = S["space-1"] + 11 + (opts.headExtra or 0) / 2
 
     -- the art, on the window itself (behind every pane)
     local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -8)

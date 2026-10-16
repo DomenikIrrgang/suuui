@@ -1320,7 +1320,8 @@ function M:PlaceFilters()
     local chrome = f.suuChrome
     if chrome and chrome.head then
         menu:SetParent(chrome.head)
-        menu:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], S["space-1"])
+        -- (by its middle, on the line the row's controls share)
+        menu:SetPoint("LEFT", chrome.head, "BOTTOMLEFT", S["space-5"], chrome.rowMid or (S["space-1"] + 11))
         menu:SetFrameLevel(chrome.head:GetFrameLevel() + 4)
     else
         menu:SetParent(f)

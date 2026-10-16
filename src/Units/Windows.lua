@@ -496,10 +496,10 @@ local ROW_EXTRA = 8
 local GAME_MAP_TOP, MAP_TOP = 67, 25 + ROW_EXTRA
 local CUT = GAME_MAP_TOP - MAP_TOP
 local LOG_CUT = GAME_MAP_TOP - 25
--- the second row's controls, their middles on one line in it (anchored by
--- their bottoms, controls of different heights sat at different heights:
--- the filter menu lower than the search box; found in game)
-local ROW_MID = S["space-1"] + ROW_EXTRA / 2 + 11
+-- the second row's controls, their middles on one line in it, the
+-- chrome's rowMid (anchored by their bottoms, controls of different heights
+-- sat at different heights: found in game)
+local ROW_MID = S["space-1"] + 11 + ROW_EXTRA / 2
 local SEARCH_H = 26
 
 -- A button in the header's second row: a glyph, its edge on hover.
