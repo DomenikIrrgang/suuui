@@ -467,11 +467,52 @@ function M:HostSettings(on)
     end
 end
 
+-- Inviting to the guild is protected: the game takes it only from a click
+-- on a secure button. The confirm dialog asks for the name; a secure button
+-- over its Invite runs /ginvite with what's typed (out of combat; anchored
+-- only while the dialog shows, so the dialog itself never turns protected).
+function M:InviteOverlay(p)
+    local over = self.inviteOver
+    if not over then
+        over = secureOver(p.ok)
+        over:SetAttribute("type1", "macro")
+        over:HookScript("PostClick", function()
+            C_Timer.After(0, function() if p:IsShown() then p:Hide() end end)
+            C_Timer.After(1, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
+        end)
+        p:HookScript("OnHide", function()
+            if over:IsShown() and not InCombatLockdown() then
+                over:Hide()
+                over:ClearAllPoints()
+            end
+        end)
+        p.field.edit:HookScript("OnTextChanged", function(box)
+            if over:IsShown() and not InCombatLockdown() then
+                over:SetAttribute("macrotext1", "/ginvite " .. strtrim(box:GetText() or ""))
+            end
+        end)
+        self.inviteOver = over
+    end
+    over:SetAttribute("macrotext1", "/ginvite ")
+    over:SetFrameStrata("FULLSCREEN_DIALOG")
+    over:ClearAllPoints()
+    over:SetAllPoints(p.ok)
+    over:Show()
+end
+
 function M:Act(action, m)
     if action == "guildInvite" then
-        UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
+        if InCombatLockdown() then
+            self:Print("Inviting to the guild works out of combat.")
+            return
+        end
+        local p = UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
             input = { label = "Name", placeholder = "Name" }, confirm = "Invite",
-            onConfirm = function(text) pcall(C_GuildInfo.Invite, text) end })
+            -- Enter can't invite (only a click can): say so
+            onConfirm = function(text)
+                self:Print(("Click Invite to invite %s: the game takes a guild invite only from a click."):format(text or ""))
+            end })
+        self:InviteOverlay(p)
         return
     end
     if not m then return end
