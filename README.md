@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW%20Forever-interface%2016001-C9A75A?style=for-the-badge&labelColor=131116" alt="WoW Forever, interface 16001">
-  <img src="https://img.shields.io/badge/version-0.3.0--beta.1-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.3.0-beta.1">
+  <img src="https://img.shields.io/badge/version-0.4.0--beta.1-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.4.0-beta.1">
   <img src="https://img.shields.io/badge/status-beta-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: beta">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
@@ -95,6 +95,8 @@ It is built for the realities of the modern client: values the game hides from a
 | **Professions** | SuuUI's own professions window: your professions at a glance, recipe lists with filters, where each recipe is learned, and tracking. |
 | **Social** | Friends, recent allies and friend requests. Raid groups where you drag members between groups. |
 | **Guild** | Guild chat with the message of the day. A roster with class, notes and member details. Guild information and the guild log. Guild settings: ranks, permissions, bank tabs. |
+| **World map** | Opens enlarged in the middle of the screen with your quest log beside it, or small under the micro menu. Pins for what's around you: quests you can pick up (and quests started by dropped items), dungeon and raid entrances with their levels, flight masters, services, trainers, rares and treasures, holiday quests while the holiday is on, and unexplored areas. Your quests' markers in SuuUI's look. Map filters in its header. |
+| **Map marks** | Your own marks on the map and minimap (Ctrl+click): a name, one of eight symbols, the game's navigation arrow to them, and posting them to your group. |
 | **Group Finder** | One list of groups and players looking for groups, from the game's group finder and from public chat in English, Korean and Chinese; what each group has and still needs. List yourself in SuuUI's look, My listing with a chat ad, Who, notes for groups that need you, and its own settings. |
 
 ---
@@ -152,8 +154,8 @@ SuuUI is built in small increments, each one confirmed in game before the next b
 | **2 · World & everyday play** | Minimap, chat, objective tracker, notifications, bags and bank, loot, tooltips, campsite | ✅ Done |
 | **3 · Blizzard windows** | Character, spellbook, talents and Legacy, professions, social and guild | ✅ Done |
 | | Group finder | ✅ Done |
-| | World map and map pins | 🔷 Next |
-| | Quest log, mail, merchant, trainer, auction house, collections | ◇ Planned |
+| | World map, quest log and map pins | ✅ Done |
+| | Mail, merchant, trainer, auction house, collections | 🔷 Next |
 | **4 · Depth & release** | Density and accessibility presets, performance and taint pass, plugin developer kit, release | ◇ Planned |
 
 ---

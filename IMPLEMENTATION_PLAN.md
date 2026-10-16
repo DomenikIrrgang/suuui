@@ -649,14 +649,13 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
   - The header's second row 8px taller on the map (`SkinWindow` `headExtra`, `chrome.rowMid`, API 0.15): the search box 26px with SuuUI's glyphs (Forever resets it to 20px on each count update: set again), every control in the row centred on one line, the settings menu under the rule.
   - The quest list centred beside the map (11px right, the scroll bar in the margin), the search box under the headers' left (`/suu probe map log`).
   - The coordinates box as wide as its text; the entrances' swirl turning clockwise like the game's portals.
+  - Quest levels and Difficulty colours in Map filters; the quest log's markers in the same look, centred on their quest, space-4 left of the title; the details down to the window's bottom; the list's rows measured again after the reskin's fonts (long objectives had run into the next quest). Clicking a quest highlights its pins; the Map filters menu opens under the header's rule (confirmed 2026-10-16).
 - **Still to see:** posting a mark in a group and a shared mark arriving; holiday quests and vendors when Hallow's End starts (2026-10-18 04:00 server time); Hyjal Summit's door (its pin is approximate).
-- **Confirm:**
-  - Clicking a quest highlights its pins.
-  - Adding, naming, deleting and posting a mark works.
-  - Marks also show on the minimap.
+- **Confirm:** posting a mark (in a group).
 
 ### 3.6 Remaining windows
-- **Build:** the quest log, mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
+- **Design first (asked 2026-10-16):** boards for mail, merchant, trainer, auction house and collections before any build. (The quest log was done with the map in 3.5.)
+- **Build:** mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
 - **Confirm:** you can buy, sell, buy back, mail an item, and post and buy an auction.
 
 ---
