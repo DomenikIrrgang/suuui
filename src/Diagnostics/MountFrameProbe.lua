@@ -14,6 +14,11 @@
 -- camera route zoomed in and misplaced them) by what its camera says:
 -- Next and Previous step through the mounts, each line says the numbers.
 -- Screenshots show whether the feet meet the line.
+-- "Wider" cycles three frames (2026-10-17: the stage's 440-wide frame cuts
+-- long mounts turned sideways, and a 760-wide one with SetModelScale drew
+-- them much bigger): 440 by 470 as now; 760 wide with the camera moved back
+-- (SetCamDistanceScale 760/470); 760 wide with SetModelScale 470/760. The
+-- mount turned side on; the line says which.
 
 local _, ns = ...
 
@@ -55,7 +60,7 @@ local function norm(x, y, z)
     if l == 0 then return nil end
     return { x / l, y / l, z / l }
 end
-local function feetBelow(P, T, lift)
+local function feetBelow(P, T, lift, size)
     local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
     if not f then return nil end
     local right = norm(f[2], -f[1], 0)
@@ -65,7 +70,7 @@ local function feetBelow(P, T, lift)
     local r = { -P[1], -P[2], lift - P[3] }
     local depth = dot(r, f)
     if depth <= 0 then return nil end
-    return -FEET_K * W * dot(r, u) / depth
+    return -FEET_K * W / 470 * (size or 470) * dot(r, u) / depth
 end
 
 function MP.Place()
@@ -79,7 +84,7 @@ function MP.Place()
     local out = { at = date("%Y-%m-%d %H:%M:%S"), lines = {} }
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.mountPlace = out
-    local p = MP.placePanel or UI.Panel(UIParent, { title = "Mount placement probe", width = 480, height = 600, solid = true })
+    local p = MP.placePanel or UI.Panel(UIParent, { title = "Mount placement probe", width = 800, height = 600, solid = true })
     MP.placePanel = p
     p:SetFrameStrata("DIALOG")
     p:SetPoint("CENTER")
@@ -96,41 +101,56 @@ function MP.Place()
     p.label = label
     label:SetPoint("TOP", m, "BOTTOM", 0, -6)
     label:SetWidth(440)
+    local MODES = { { w = 440, label = "440 as now" }, { w = 760, cam = 760 / 470, label = "760, camera back" },
+                    { w = 760, scale = 470 / 760, label = "760, model scaled" } }
+    p.mode = p.mode or 1
     local i = 0
     local function show(step)
         i = (i + step - 1) % #list + 1
         local e = list[i]
+        local mode = MODES[p.mode]
+        m:SetSize(mode.w, 470)
         pcall(m.SetPosition, m, 0, 0, 0)
+        pcall(m.SetModelScale, m, 1)
+        pcall(m.SetCamDistanceScale, m, 1)
         m:SetScript("OnModelLoaded", function()
+            if mode.cam then pcall(m.SetCamDistanceScale, m, mode.cam) end
+            if mode.scale then pcall(m.SetModelScale, m, mode.scale) end
             C_Timer.After(0.1, function()
                 local px, py, pz = m:GetCameraPosition()
                 local tx, ty, tz = m:GetCameraTarget()
                 local P, T = { px, py, pz }, { tx, ty, tz }
-                local before = feetBelow(P, T, 0)
+                local size = math.max(mode.w, 470)
+                local before = feetBelow(P, T, 0, size)
                 -- the lift that brings the feet to the line (bisection)
                 local lo, hi = -3, 3
                 for _ = 1, 40 do
                     local mid = (lo + hi) / 2
-                    local b = feetBelow(P, T, mid)
+                    local b = feetBelow(P, T, mid, size)
                     if not b then break end
                     if b > WANT then lo = mid else hi = mid end
                 end
                 local lift = (lo + hi) / 2
                 pcall(m.SetPosition, m, 0, 0, lift)
-                local text = ("%s: feet %.0f below the middle, lifted %.3f -> %.0f; position now %s"):format(e.name, before or -1,
-                    lift, feetBelow(P, T, lift) or -1, tostring(select(3, m:GetPosition())))
+                local text = ("[%s] %s: feet %.0f below the middle, lifted %.3f -> %.0f; position now %s"):format(mode.label, e.name, before or -1,
+                    lift, feetBelow(P, T, lift, size) or -1, tostring(select(3, m:GetPosition())))
                 label:SetValue(text)
                 out.lines[#out.lines + 1] = text
             end)
         end)
         pcall(m.SetDisplayInfo, m, e.display)
-        pcall(m.SetFacing, m, 0.5)
+        pcall(m.SetFacing, m, p.mode == 1 and 0.5 or 1.4)
     end
     if not p.next then
         p.prev = UI.Button(p.body, { text = "Previous", width = 110, onClick = function() show(-1) end })
         p.prev:SetPoint("BOTTOMLEFT")
         p.next = UI.Button(p.body, { text = "Next", width = 110, onClick = function() show(1) end })
         p.next:SetPoint("BOTTOMRIGHT")
+        p.wider = UI.Button(p.body, { text = "Wider", width = 110, onClick = function()
+            p.mode = p.mode % #MODES + 1
+            show(0)
+        end })
+        p.wider:SetPoint("BOTTOM")
     end
     p:Show()
     show(1)
