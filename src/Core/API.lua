@@ -462,6 +462,11 @@ function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]
 end
 
+-- 0.17: where Forever's mounts, toys and appearance items come from
+-- (Data/CollectionSources.lua, made by tools/gen_collection_sources.py; its
+-- layout is in its header): { npc, obj, mount, toy, toys, item }.
+function API.CollectionSources() return ns.CollectionSources or {} end
+
 function API.TrainerSpellIDs()
     return ns.TrainerSpellIDs or {}
 end
