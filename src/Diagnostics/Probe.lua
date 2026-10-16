@@ -835,6 +835,10 @@ function ns.Probe.Command(arg)
         ns.MarkProbe.Command(rest)
         return
     end
+    if sub == "windows" then
+        ns.WindowsProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
