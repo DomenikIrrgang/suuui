@@ -839,6 +839,10 @@ function ns.Probe.Command(arg)
         ns.WindowsProbe.Command(rest)
         return
     end
+    if sub == "toymodels" then
+        ns.ToyModelProbe.Command(rest)
+        return
+    end
     if sub == "mountfeet" then
         ns.MountFeetProbe.Command(rest)
         return

@@ -1,0 +1,67 @@
+-- Diagnostics/ToyModelProbe.lua
+-- "/suu probe toymodels": which of Forever's toys have a 3D model the
+-- collections stage could show instead of their icon (asked 2026-10-17:
+-- toys only showed an icon). Each toy goes into a model frame the stage's
+-- size by its item (SetItem), one after another, Next and Previous to look
+-- at them; for each it records whether a model loaded and its file.
+-- Saved in SuuUIProbe.toyModels on /reload.
+
+local _, ns = ...
+
+local TP = {}
+ns.ToyModelProbe = TP
+
+local UI = ns.UI
+
+function TP.Command()
+    local list = {}
+    for _, itemID in ipairs(SuuUI.CollectionSources().toys or {}) do list[#list + 1] = itemID end
+    local out = { at = date("%Y-%m-%d %H:%M:%S"), toys = {} }
+    SuuUIProbe = SuuUIProbe or {}
+    SuuUIProbe.toyModels = out
+    local p = TP.panel or UI.Panel(UIParent, { title = "Toy models", width = 800, height = 600, solid = true })
+    TP.panel = p
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("CENTER")
+    local m = p.model or CreateFrame("PlayerModel", nil, p.body)
+    p.model = m
+    m:SetSize(760, 470)
+    m:SetPoint("TOP")
+    local label = p.label or UI.Text(p.body, "label", "ink")
+    p.label = label
+    label:SetPoint("BOTTOM", 0, 44)
+    local i = 0
+    local function show(step)
+        i = (i + step - 1) % #list + 1
+        local itemID = list[i]
+        local name = C_Item.GetItemNameByID(itemID) or ("item " .. itemID)
+        local loaded = false
+        m:SetScript("OnModelLoaded", function() loaded = true end)
+        pcall(m.ClearModel, m)
+        local ok, err = pcall(m.SetItem, m, itemID)
+        C_Timer.After(1, function()
+            local file = m:GetModelFileID()
+            local text = ("%d/%d %s (%d): SetItem %s, loaded %s, model file %s"):format(i, #list, name, itemID,
+                ok and "ok" or ("error " .. tostring(err)), tostring(loaded), tostring(file))
+            label:SetValue(text)
+            out.toys[itemID] = text
+        end)
+    end
+    if not p.next then
+        p.prev = UI.Button(p.body, { text = "Previous", width = 110, onClick = function() show(-1) end })
+        p.prev:SetPoint("BOTTOMLEFT")
+        p.next = UI.Button(p.body, { text = "Next", width = 110, onClick = function() show(1) end })
+        p.next:SetPoint("BOTTOMRIGHT")
+    end
+    p:Show()
+    show(1)
+    -- every toy once on its own, for the record
+    local n = 0
+    local ticker
+    ticker = C_Timer.NewTicker(1.3, function()
+        n = n + 1
+        if n >= #list then ticker:Cancel() ns.Print("Toy models: all " .. #list .. " recorded; /reload to save.") return end
+        show(1)
+    end)
+    ns.Print("Toy models: showing all " .. #list .. " toys in turn (about 25 s); screenshots of any that look good or wrong.")
+end
