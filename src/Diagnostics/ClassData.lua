@@ -147,7 +147,7 @@ function CD.ReadTrainer()
             local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i) or nil
             local desc = GetTrainerServiceDescription and call(GetTrainerServiceDescription, i) or nil
             local cost = GetTrainerServiceCost and call(GetTrainerServiceCost, i) or nil
-            spells[#spells + 1] = { name = name, rank = rank ~= "" and rank or nil, kind = kind, icon = icon, level = level, link = link,
+            spells[#spells + 1] = { index = i, name = name, rank = rank ~= "" and rank or nil, kind = kind, icon = icon, level = level, link = link,
                 skill = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i) or nil,
                 description = type(desc) == "string" and not isSecret(desc) and desc ~= "" and desc or nil,
                 cost = type(cost) == "number" and not isSecret(cost) and cost or nil }
@@ -158,6 +158,16 @@ function CD.ReadTrainer()
     for k in pairs(C_Trainer or {}) do api[#api + 1] = k end
     table.sort(api)
     d.trainer, d.trainerAt, d.trainerMaxLevel, d.trainerAPI, d.trainerError = spells, date("%Y-%m-%d %H:%M"), maxLevel, api, nil
+    -- the game loads a description on demand: the ones still missing once
+    -- more, a moment later (a spell new today came back without one)
+    C_Timer.After(1.5, function()
+        for i, sp in ipairs(spells) do
+            if not sp.description and sp.index and GetTrainerServiceDescription then
+                local desc = call(GetTrainerServiceDescription, sp.index)
+                if type(desc) == "string" and not isSecret(desc) and desc ~= "" then sp.description = desc end
+            end
+        end
+    end)
     d.trainerNPC = UnitName("npc")
     return #spells, maxLevel
 end

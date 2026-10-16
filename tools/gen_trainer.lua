@@ -10,7 +10,12 @@
 -- scan's rows), as
 -- ns.TrainerSpellIDs[name]: the Spellbook picks a rank's own ID in game by
 -- the level the game says it is learned at, for the game's spell tooltip.
---   lua tools/gen_trainer.lua "<WTF>/SavedVariables/SuuUI.lua"   (from the addon folder)
+-- A class whose data file exists is merged with it: a spell you already
+-- know comes back from the trainer with level 0 (and maybe no cost or text),
+-- so its levels, rank by rank from the lowest, come from the file; prices
+-- stay the file's base ones (a trainer gives a character a reputation
+-- discount), and a new spell's price is taken back up by that discount.
+--   lua tools/gen_trainer.lua "<WTF>/SavedVariables/SuuUI.lua" [CLASS]   (from src/)
 
 local env = {}
 assert(loadfile(arg[1], "t", env))()
@@ -33,8 +38,69 @@ local function q(s)
 end
 
 local classes = {}
-for class, d in pairs(all) do classes[#classes + 1] = class end
+for class, d in pairs(all) do
+    if not arg[2] or arg[2]:upper() == class then classes[#classes + 1] = class end
+end
 table.sort(classes)
+
+-- The class's data file as it is: { name, level, cost, school, icon, text } list.
+local function existing(class)
+    local chunk = loadfile(("Data/Trainer/%s.lua"):format(class), "t", {
+        UnitClass = function() return class, class end,
+    })
+    if not chunk then return {} end
+    local ns = {}
+    chunk(nil, ns)
+    return ns.TrainerSpells or {}
+end
+
+-- The fresh list merged with the file (see the head of this file).
+local function merge(class, list)
+    local old = existing(class)
+    if #old == 0 then return list end
+    local byName, cost = {}, {}
+    for _, t in ipairs(old) do
+        byName[t.name] = byName[t.name] or {}
+        table.insert(byName[t.name], t)
+        cost[t.name .. "@" .. t.level] = t
+    end
+    for _, ranks in pairs(byName) do table.sort(ranks, function(a, b) return a.level < b.level end) end
+    -- known ranks: their levels from the file, lowest first
+    local used = {}
+    for _, t in ipairs(list) do
+        if t.level == 0 then
+            local i = (used[t.name] or 0) + 1
+            used[t.name] = i
+            local o = byName[t.name] and byName[t.name][i]
+            if o then
+                t.level = o.level
+                if (t.cost or 0) == 0 then t.cost = o.cost end
+                t.text = t.text or o.text
+            else
+                print(class, "known spell not in the file, level unknown: " .. t.name)
+            end
+        end
+    end
+    -- the trainer's discount: the fresh price over the file's, where both have one
+    local ratios = {}
+    for _, t in ipairs(list) do
+        local o = cost[t.name .. "@" .. t.level]
+        if o and o.cost > 0 and (t.cost or 0) > 0 then ratios[#ratios + 1] = t.cost / o.cost end
+    end
+    table.sort(ratios)
+    local ratio = ratios[math.ceil(#ratios / 2)] or 1
+    for _, t in ipairs(list) do
+        local o = cost[t.name .. "@" .. t.level]
+        if o then
+            t.cost = o.cost
+            t.text = t.text or o.text
+        elseif ratio < 0.995 and (t.cost or 0) > 0 then
+            t.cost = math.floor(t.cost / ratio + 0.5)
+        end
+    end
+    if ratio < 0.995 then print(class, ("prices at %d%%: new spells' taken back to base"):format(math.floor(ratio * 100 + 0.5))) end
+    return list
+end
 
 for _, class in ipairs(classes) do
     local d = all[class]
@@ -48,6 +114,7 @@ for _, class in ipairs(classes) do
                 text = t.description }
         end
     end
+    list = merge(class, list)
     table.sort(list, function(a, b)
         if a.school ~= b.school then return a.school < b.school end
         if a.name ~= b.name then return a.name < b.name end
