@@ -839,6 +839,10 @@ function ns.Probe.Command(arg)
         ns.WindowsProbe.Command(rest)
         return
     end
+    if sub == "ahscan" then
+        ns.AhScanProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
