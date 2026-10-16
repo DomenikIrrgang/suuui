@@ -1256,29 +1256,44 @@ local function emptyTab(def)
     return ok and type(n) == "number" and n == 0
 end
 
--- One of the game's side tabs in SuuUI's look: its art away, a surface
--- square with a gilt-line edge open to the window, the glyph in the middle.
-local function skinSideTab(tab, def)
-    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledTexture" }) do
-        local t = tab[get] and tab[get](tab)
-        if t then t:SetAlpha(0) end
-    end
-    for _, r in ipairs({ tab:GetRegions() }) do r:SetAlpha(0) end
+-- A side tab's art (the game's tab, or SuuUI's stand-in for a tab the game
+-- hides): a surface square with a gilt-line edge open to the window, the
+-- glyph in the middle, the gilt bar when chosen.
+local function sideTabArt(frame, def)
     local skin = {}
-    skin.fill = tab:CreateTexture(nil, "BACKGROUND", nil, 7)
+    skin.fill = frame:CreateTexture(nil, "BACKGROUND", nil, 7)
     skin.fill:SetAllPoints()
-    skin.edge = UI.Border(tab, "gilt-line", { layer = "BORDER", sublevel = 7 })
+    skin.edge = UI.Border(frame, "gilt-line", { layer = "BORDER", sublevel = 7 })
     skin.edge.left:Hide()
-    skin.bar = tab:CreateTexture(nil, "ARTWORK", nil, 7)
+    skin.bar = frame:CreateTexture(nil, "ARTWORK", nil, 7)
     skin.bar:SetColorTexture(UI.RGBA("gilt"))
     skin.bar:SetPoint("TOPRIGHT", -1, -1)
     skin.bar:SetPoint("BOTTOMRIGHT", -1, 1)
     skin.bar:SetWidth(2)
-    skin.glyph = tab:CreateTexture(nil, "OVERLAY", nil, 7)
+    skin.glyph = frame:CreateTexture(nil, "OVERLAY", nil, 7)
     skin.glyph:SetTexture(GLYPHS .. def.glyph .. ".tga")
     skin.glyph:SetSize(16, 16)
     skin.glyph:SetPoint("CENTER")
-    -- an empty tab: a cover of SuuUI's takes the click and says why
+    return skin
+end
+
+-- on, empty, hover -> the art's look
+local function drawSideTab(skin, on, empty, hover)
+    skin.fill:SetColorTexture(UI.RGBA(on and "surface-raised" or "surface"))
+    skin.edge:SetColor(empty and "gilt-faint" or "gilt-line")
+    skin.edge.left:Hide()
+    skin.bar:SetShown(on)
+    skin.glyph:SetVertexColor(UI.RGBA(empty and "ink-faint" or on and "gilt-text" or hover and "ink" or "ink-muted"))
+    local a = empty and T.opacity["opacity-disabled"] or 1
+    for _, part in ipairs({ skin.fill, skin.bar, skin.glyph }) do part:SetAlpha(a) end
+    for _, part in ipairs(skin.edge.parts) do part:SetAlpha(a) end
+end
+
+-- One of the game's side tabs in SuuUI's look: its art away, SuuUI's on it;
+-- a cover of SuuUI's over it while it is empty takes the click and says why.
+local function skinSideTab(tab, def)
+    for _, r in ipairs({ tab:GetRegions() }) do r:SetAlpha(0) end
+    local skin = sideTabArt(tab, def)
     skin.cover = CreateFrame("Frame", nil, tab)
     skin.cover:SetAllPoints()
     skin.cover:SetFrameLevel(tab:GetFrameLevel() + 5)
@@ -1291,44 +1306,94 @@ local function skinSideTab(tab, def)
     tab:HookScript("OnLeave", function(b) b.suuHover = false; M:DrawCollectionTabs() end)
 end
 
+-- SuuUI's stand-in for a tab the game hides (nothing of it collected on
+-- this character): greyed, not clickable, the reason as its tooltip.
+local function standInTab(parent, def)
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(SIDE_TAB, SIDE_TAB)
+    f.skin = sideTabArt(f, def)
+    drawSideTab(f.skin, false, true, false)
+    f:EnableMouse(true)
+    f:SetScript("OnEnter", function(c) UI.ShowTooltip(c, { title = def.label, description = def.empty or "Nothing here yet" }) end)
+    f:SetScript("OnLeave", function() UI.HideTooltip() end)
+    f:Hide()
+    return f
+end
+
+-- The game's tab for a collection (by its ID), if there is one.
+local function gameTab(f, id)
+    for _, t in ipairs(f.TabContainer and f.TabContainer.Tabs or {}) do
+        if t:GetID() == id then return t end
+    end
+end
+
 -- Each tab's state: chosen (raised, gilt-text glyph, the gilt bar), empty
 -- (faint, dimmed, covered) or at rest (ink-muted glyph, ink on hover).
 function M:DrawCollectionTabs()
     local f = _G.CollectionsJournal
-    local tabs = f and f.TabContainer and f.TabContainer.Tabs
-    if not tabs then return end
-    for _, tab in ipairs(tabs) do
+    if not (f and f.TabContainer) then return end
+    local chosen = f.TabContainer.selectedTab
+    for _, tab in ipairs(f.TabContainer.Tabs or {}) do
         local skin, def = tab.suuSkin, tab.suuDef
         if skin then
             local empty = emptyTab(def)
-            local on = not empty and tab.GetChecked and tab:GetChecked() or false
-            skin.fill:SetColorTexture(UI.RGBA(on and "surface-raised" or "surface"))
-            skin.edge:SetColor(empty and "gilt-faint" or "gilt-line")
-            skin.bar:SetShown(on)
-            skin.glyph:SetVertexColor(UI.RGBA(empty and "ink-faint" or on and "gilt-text" or tab.suuHover and "ink" or "ink-muted"))
+            drawSideTab(skin, not empty and chosen == tab:GetID(), empty, tab.suuHover)
             skin.cover:SetShown(empty)
-            for _, part in ipairs({ skin.fill, skin.bar, skin.glyph }) do part:SetAlpha(empty and T.opacity["opacity-disabled"] or 1) end
-            for _, part in ipairs(skin.edge.parts) do part:SetAlpha(empty and T.opacity["opacity-disabled"] or 1) end
-            skin.edge.left:Hide()
         end
     end
 end
 
--- The tabs' place: down the right edge, space-2 apart (the game sets them
--- again each time the window opens; the window is protected, so out of combat).
+-- The tabs down the right edge, space-2 apart, in their order: the game's
+-- where it shows one, SuuUI's stand-in where it hides one. The game lays its
+-- tabs out again each time the window opens; the window is protected, so
+-- this waits for the end of combat.
 function M:PlaceCollectionTabs()
     local f = _G.CollectionsJournal
-    if not (f and f.TabContainer and f.TabContainer.Tabs) or InCombatLockdown() then return end
+    if not (f and f.TabContainer) or InCombatLockdown() then return end
+    self.standIns = self.standIns or {}
     local prev
-    for _, tab in ipairs(f.TabContainer.Tabs) do
-        if tab:IsShown() then
-            tab:SetSize(SIDE_TAB, SIDE_TAB)
-            tab:ClearAllPoints()
-            if prev then tab:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -S["space-2"])
-            else tab:SetPoint("TOPLEFT", f.TabContainer, "TOPLEFT", 0, -64) end
-            prev = tab
+    for id, def in ipairs(COLLECTION_TABS) do
+        local tab = gameTab(f, id)
+        local slot
+        if tab and tab:IsShown() then
+            slot = tab
+            if self.standIns[id] then self.standIns[id]:Hide() end
+        else
+            self.standIns[id] = self.standIns[id] or standInTab(f.TabContainer, def)
+            slot = self.standIns[id]
+            slot:Show()
+        end
+        slot:SetSize(SIDE_TAB, SIDE_TAB)
+        slot:ClearAllPoints()
+        if prev then slot:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -S["space-2"])
+        else slot:SetPoint("TOPLEFT", f.TabContainer, "TOPLEFT", 0, -64) end
+        prev = slot
+    end
+end
+
+-- The game's pane art away: the stone tile and its backdrop, the bronze
+-- corners, the shadows, the inner frame edge, the old-style tabs (found
+-- with /suu probe collart). SuuUI's glass shows through.
+local PANE_ART = { "^collections%-background", "UI%-Frame%-Inner", "^uiframe%-activetab", "^_uiframe%-activetab",
+                   "^uiframe%-tab", "^_uiframe%-tab" }
+local PANE_FILES = { [374154] = true }
+
+local function clearPaneArt(frame, depth)
+    if depth > 8 then return end
+    for _, r in ipairs({ frame:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then
+            local atlas = r.GetAtlas and r:GetAtlas()
+            local file = r:GetTexture()
+            local hide = type(file) == "number" and PANE_FILES[file]
+            if type(atlas) == "string" and not hide then
+                for _, pat in ipairs(PANE_ART) do
+                    if atlas:find(pat) then hide = true break end
+                end
+            end
+            if hide then r:SetAlpha(0) end
         end
     end
+    for _, c in ipairs({ frame:GetChildren() }) do clearPaneArt(c, depth + 1) end
 end
 
 function M:SkinCollections()
@@ -1346,6 +1411,11 @@ function M:SkinCollections()
     -- the game's parts in SuuUI's look, again whenever another pane shows
     local function refresh()
         UI.Reskin(f)
+        for _, name in ipairs({ "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }) do
+            local pane = _G[name]
+            if pane and pane:IsShown() then clearPaneArt(pane, 0) end
+        end
+        self:PlaceCollectionTabs()
         self:DrawCollectionTabs()
     end
     if _G.CollectionsJournal_CheckAndDisplayTabs then
