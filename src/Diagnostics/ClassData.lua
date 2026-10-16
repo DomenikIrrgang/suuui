@@ -168,6 +168,15 @@ function CD.ReadTrainer()
                 local data = call(C_TooltipInfo.GetTrainerService, sp.index)
                 local id = data and data.id
                 if type(id) == "number" and not isSecret(id) then sp.spellID = id end
+                -- a spell you know comes with no level from the trainer: the
+                -- game knows it from the spell
+                if sp.spellID and (sp.level or 0) == 0 and C_Spell and C_Spell.GetSpellLevelLearned then
+                    local lvl = call(C_Spell.GetSpellLevelLearned, sp.spellID)
+                    if type(lvl) == "number" and not isSecret(lvl) and lvl > 0 then
+                        sp.level = lvl
+                        sp.levelFrom = "spell"
+                    end
+                end
             end
             if not sp.description and sp.index and GetTrainerServiceDescription then
                 local desc = call(GetTrainerServiceDescription, sp.index)
@@ -188,9 +197,12 @@ function CD.ReadTrainer()
                 end
             end
         end
-        local ids = 0
-        for _, sp in ipairs(spells) do if sp.spellID then ids = ids + 1 end end
-        ns.Print(("Class data: done, %d of %d with their spell ID. /reload to save."):format(ids, #spells))
+        local ids, noLevel = 0, 0
+        for _, sp in ipairs(spells) do
+            if sp.spellID then ids = ids + 1 end
+            if (sp.level or 0) == 0 then noLevel = noLevel + 1 end
+        end
+        ns.Print(("Class data: done, %d of %d with their spell ID, %d without a level. /reload to save."):format(ids, #spells, noLevel))
     end)
     d.trainerNPC = UnitName("npc")
     return #spells, maxLevel

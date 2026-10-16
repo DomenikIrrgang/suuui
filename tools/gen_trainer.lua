@@ -11,8 +11,10 @@
 -- ns.TrainerSpellIDs[name]: the Spellbook picks a rank's own ID in game by
 -- the level the game says it is learned at, for the game's spell tooltip.
 -- A class whose data file exists is merged with it: a spell you already
--- know comes back from the trainer with level 0 (and maybe no cost or text),
--- so its levels, rank by rank from the lowest, come from the file; prices
+-- know comes back from the trainer with level 0 (the probe asks the game
+-- for its level from its spell ID; only where that failed), so its levels,
+-- rank by rank from the lowest, come from the file (right only when the file
+-- has every rank: it says so when it doesn't); prices
 -- stay the file's base ones (a trainer gives a character a reputation
 -- discount), and a new spell's price is taken back up by that discount.
 --   lua tools/gen_trainer.lua "<WTF>/SavedVariables/SuuUI.lua" [CLASS]   (from src/)
@@ -66,12 +68,16 @@ local function merge(class, list)
     end
     for _, ranks in pairs(byName) do table.sort(ranks, function(a, b) return a.level < b.level end) end
     -- known ranks: their levels from the file, lowest first
-    local used = {}
+    local used, counts = {}, {}
+    for _, t in ipairs(list) do counts[t.name] = (counts[t.name] or 0) + 1 end
     for _, t in ipairs(list) do
         if t.level == 0 then
             local i = (used[t.name] or 0) + 1
             used[t.name] = i
             local o = byName[t.name] and byName[t.name][i]
+            if o and #(byName[t.name]) < (counts[t.name] or 0) then
+                print(class, "file lacks ranks of " .. t.name .. ": its level is a guess, check it")
+            end
             if o then
                 t.level = o.level
                 if (t.cost or 0) == 0 then t.cost = o.cost end
