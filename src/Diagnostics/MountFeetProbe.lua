@@ -1,0 +1,132 @@
+-- Diagnostics/MountFeetProbe.lua
+-- "/suu probe mountfeet": stand every mount model on the collections
+-- stage's floor by hand (2026-10-17: the stage lifts each mount so the
+-- ground under its body is in the floor shadow, then down by FEET_DROP
+-- for the feet it shows above that point; that gap differs per model, so
+-- kodos stand right and others a little off). It does what the stage does,
+-- in the same frame, with a red line where the stage's floor shadow has
+-- its middle, and steps through the mounts one model at a time (mounts
+-- sharing a model are skipped once it is done): Up and Down move the
+-- mount 2px until its feet touch the line, Next keeps it and goes on,
+-- Skip leaves the model on the default. Saved per model file in
+-- SuuUIProbe.mountFeet on /reload, for the stage's data.
+
+local _, ns = ...
+
+local FP = {}
+ns.MountFeetProbe = FP
+
+local UI = ns.UI
+
+-- as Units/Collections.lua
+local MODEL_W, MODEL_H, SIZE_REF = 760, 470, 470
+local FEET_K, FEET_BELOW, FEET_DROP = 2.739 * 440 / SIZE_REF, 165, 40
+local CAM_SCALE = math.max(MODEL_W, MODEL_H) / SIZE_REF
+
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function norm(x, y, z)
+    local l = math.sqrt(x * x + y * y + z * z)
+    if l == 0 then return nil end
+    return { x / l, y / l, z / l }
+end
+local function groundBelow(P, T, lift)
+    local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
+    if not f then return nil end
+    local right = norm(f[2], -f[1], 0)
+    if not right then return nil end
+    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
+    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    local r = { -P[1], -P[2], lift - P[3] }
+    local depth = dot(r, f)
+    if depth <= 0 then return nil end
+    return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
+end
+
+function FP.Command()
+    local MJ = C_MountJournal
+    local list = {}
+    for _, id in ipairs(MJ.GetMountIDs() or {}) do
+        local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
+        if name and not hidden then list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) } end
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    SuuUIProbe = SuuUIProbe or {}
+    SuuUIProbe.mountFeet = SuuUIProbe.mountFeet or {}
+    local saved = SuuUIProbe.mountFeet
+    local p = FP.panel or UI.Panel(UIParent, { title = "Mount feet", width = 800, height = 640, solid = true })
+    FP.panel = p
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("CENTER")
+    p.body:SetClipsChildren(true)
+    local m = p.model or CreateFrame("PlayerModel", nil, p.body)
+    p.model = m
+    m:SetSize(MODEL_W, MODEL_H)
+    -- the line: where the stage's floor shadow has its middle (FEET_DROP
+    -- above where the ground under the body shows)
+    local line = p.line or UI.Fill(p.body, "ember", "OVERLAY")
+    p.line = line
+    line:SetHeight(1)
+    line:ClearAllPoints()
+    line:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -(MODEL_H / 2 + FEET_BELOW - FEET_DROP))
+    line:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -(MODEL_H / 2 + FEET_BELOW - FEET_DROP))
+    local label = p.label or UI.Text(p.body, "label", "ink")
+    p.label = label
+    label:SetPoint("BOTTOM", 0, 44)
+    local i, nudge, current = 0, 0, nil
+    local function place()
+        m:ClearAllPoints()
+        -- the frame where the stage has it relative to the line, moved by the nudge
+        m:SetPoint("TOP", p.body, "TOP", 0, nudge)
+        label:SetValue(("%s  (model %s)  drop %d px   %d of %d mounts"):format(current and current.name or "?",
+            tostring(current and current.file or "?"), FEET_DROP - nudge, i, #list))
+    end
+    local function nextMount()
+        i = i + 1
+        local e = list[i]
+        if not e then
+            label:SetValue("Done: every model has its drop. /reload to save.")
+            return
+        end
+        current, nudge = { name = e.name }, 0
+        pcall(m.SetPosition, m, 0, 0, 0)
+        pcall(m.SetCamDistanceScale, m, CAM_SCALE)
+        m:SetScript("OnModelLoaded", function()
+            pcall(m.SetCamDistanceScale, m, CAM_SCALE)
+            C_Timer.After(0.1, function()
+                local file = m:GetModelFileID()
+                current.file = file
+                if file and saved[file] then return nextMount() end
+                local px, py, pz = m:GetCameraPosition()
+                local tx, ty, tz = m:GetCameraTarget()
+                local P, T = { px, py, pz }, { tx, ty, tz }
+                local lo, hi = -3, 3
+                for _ = 1, 40 do
+                    local mid = (lo + hi) / 2
+                    local b = groundBelow(P, T, mid)
+                    if not b then break end
+                    if b > FEET_BELOW then lo = mid else hi = mid end
+                end
+                pcall(m.SetPosition, m, 0, 0, (lo + hi) / 2)
+                place()
+            end)
+        end)
+        pcall(m.SetDisplayInfo, m, e.display)
+        pcall(m.SetFacing, m, 0.6)
+    end
+    if not p.up then
+        p.up = UI.Button(p.body, { text = "Up", width = 90, onClick = function() nudge = nudge + 2; place() end })
+        p.up:SetPoint("BOTTOMLEFT")
+        p.down = UI.Button(p.body, { text = "Down", width = 90, onClick = function() nudge = nudge - 2; place() end })
+        p.down:SetPoint("LEFT", p.up, "RIGHT", 8, 0)
+        p.skip = UI.Button(p.body, { text = "Skip", width = 90, onClick = function() nextMount() end })
+        p.skip:SetPoint("BOTTOM")
+        p.next = UI.Button(p.body, { text = "Next", variant = "primary", width = 120, onClick = function()
+            if current and current.file then saved[current.file] = { drop = FEET_DROP - nudge, name = current.name } end
+            nextMount()
+        end })
+        p.next:SetPoint("BOTTOMRIGHT")
+    end
+    p:Show()
+    nextMount()
+    ns.Print("Mount feet: move each mount with Up and Down until its feet touch the red line, then Next.")
+end
