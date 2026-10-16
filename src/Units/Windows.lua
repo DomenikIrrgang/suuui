@@ -1373,6 +1373,28 @@ local function skinPaneTab(tab)
     draw()
 end
 
+-- The appearances' slot strip: round icons, so the chosen one gets a round
+-- arcane glow behind it (SuuUI's soft disc) instead of a square fill.
+local SOFT_DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
+
+local function skinSlotButtons(frame, depth)
+    if not frame or depth > 4 then return end
+    for _, b in ipairs({ frame:GetChildren() }) do
+        local sel = b.SelectedTexture
+        if sel and not sel.suuGlow then
+            sel.suuGlow = true
+            sel:SetTexture(SOFT_DISC)
+            sel:SetVertexColor(UI.RGBA("arcane"))
+            sel:SetAlpha(0.55)
+            sel:SetDrawLayer("BACKGROUND", 2)
+            sel:ClearAllPoints()
+            sel:SetPoint("CENTER")
+            sel:SetSize(48, 48)
+        end
+        skinSlotButtons(b, depth + 1)
+    end
+end
+
 -- The Items and Sets row: from the class dropdown's left edge, its bottom
 -- level with the search box's, space-5 between the tabs. Read from where
 -- the game put those two (skipped while their places can't be read);
@@ -1427,7 +1449,11 @@ function M:SkinCollections()
                 sizeControls(pane)
             end
         end
-        if wardrobe and wardrobe:IsShown() then placePaneTabs(wardrobe) end
+        if wardrobe and wardrobe:IsShown() then
+            placePaneTabs(wardrobe)
+            local items = wardrobe.ItemsCollectionFrame or wardrobe.activeFrame
+            skinSlotButtons(items and items.SlotsFrame, 0)
+        end
         self:SetCollectionTabs()
     end
     if _G.CollectionsJournal_UpdateSelectedTab then
