@@ -839,6 +839,10 @@ function ns.Probe.Command(arg)
         ns.WindowsProbe.Command(rest)
         return
     end
+    if sub == "npcportrait" then
+        ns.NpcPortraitProbe.Command(rest)
+        return
+    end
     if sub == "support" then
         ns.SupportProbe.Command(rest)
         return
