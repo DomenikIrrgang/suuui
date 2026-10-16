@@ -20,7 +20,10 @@
 --                            -- goes back there when Blizzard places it
 --   })
 --   chrome:SetTabs({ { button = tab, label = "Character", short = "Char",
---                      selected = function() … end }, … })   -- in order
+--                      selected = function() … end,
+--                      disabled = function() … end, reason = "…" }, … })   -- in order
+--   (a disabled tab: ink-faint at opacity-disabled, a cover takes its click
+--   and its tooltip says the reason; 0.17)
 --   chrome:UpdateTabs()   -- after the window switched tab
 
 local _, ns = ...
@@ -56,6 +59,14 @@ local function skinTab(chrome, def)
     t.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
     b:HookScript("OnEnter", function() t.hover = true; chrome:UpdateTabs() end)
     b:HookScript("OnLeave", function() t.hover = false; chrome:UpdateTabs() end)
+    -- while disabled: a cover of SuuUI's takes the click and says why
+    t.cover = CreateFrame("Frame", nil, b)
+    t.cover:SetAllPoints()
+    t.cover:SetFrameLevel(b:GetFrameLevel() + 5)
+    t.cover:EnableMouse(true)
+    t.cover:SetScript("OnEnter", function(c) UI.ShowTooltip(c, { title = t.def and t.def.label, description = t.def and t.def.reason }) end)
+    t.cover:SetScript("OnLeave", function() UI.HideTooltip() end)
+    t.cover:Hide()
     -- Blizzard lays its tabs out again now and then: back in the row
     hooksecurefunc(b, "SetPoint", function()
         if chrome.placing then return end
@@ -75,7 +86,10 @@ end
 
 function Chrome:SetTabs(list)
     self.tabs = list
-    for _, def in ipairs(list) do def.skin = skinTab(self, def) end
+    for _, def in ipairs(list) do
+        def.skin = skinTab(self, def)
+        def.skin.def = def
+    end
     self:LayoutTabs()
 end
 
@@ -126,10 +140,13 @@ end
 function Chrome:UpdateTabs()
     for _, def in ipairs(self.tabs or {}) do
         local t = def.skin
-        local on = def.selected and def.selected() or false
-        t.label:SetColor(on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
+        local off = def.disabled and def.disabled() or false
+        local on = not off and def.selected and def.selected() or false
+        t.label:SetColor(off and "ink-faint" or on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
+        t.label:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
         t.rule:SetShown(on)
         t.jewel:SetShown(on)
+        t.cover:SetShown(off)
     end
 end
 
