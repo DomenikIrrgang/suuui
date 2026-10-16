@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Party and raid frames show a defensive buff once (one the game counts as both an external and a big defensive, like Rock Skin, showed twice).
+- The target frame shows a friendly target's buffs once (another player's buffs showed twice: the game hides who cast them). With Target's buffs on Everyone's they're one list; Only yours is as before.
 
 ## 0.4.0-beta.4 (2026-10-16)
 

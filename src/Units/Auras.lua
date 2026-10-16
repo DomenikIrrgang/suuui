@@ -66,7 +66,11 @@ local ATTACHED = {
             { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
             { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
             { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true },
-            { key = "theirBuffs", filter = { "HELPFUL", "!PLAYER" }, max = 8 },
+            -- everyone's buffs, yours among them, in one list: the game hides
+            -- who cast another player's buffs, and those passed both
+            -- "yours" and "not yours" (each showed twice; /suu probe
+            -- partyauras). "Only yours" shows myBuffs instead.
+            { key = "theirBuffs", filter = { "HELPFUL" }, max = 8 },
         },
     } },
     focus = { key = "showFocus", at = { "LEFT", "RIGHT", S["space-2"], 0 }, opts = {
@@ -111,7 +115,9 @@ function M:ApplyOptions()
     local target = self.attached and self.attached.target
     if target then
         target:SetGroupMax("theirs", self:Get("targetDebuffs") == "all" and 8 or 0)
-        target:SetGroupMax("theirBuffs", self:Get("targetBuffs") == "all" and 8 or 0)
+        local allBuffs = self:Get("targetBuffs") == "all"
+        target:SetGroupMax("myBuffs", allBuffs and 0 or 6)
+        target:SetGroupMax("theirBuffs", allBuffs and 8 or 0)
     end
     self:UpdateOffline()
     if self.buffs then
@@ -187,7 +193,7 @@ local SECTION = {
         } },
         { title = "On other frames", description = "Your focus and bosses: only the auras you cast. None on a player who is offline.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
-              description = "Above the target frame: your debuffs and buffs first (HoTs, shields), then everyone else's." },
+              description = "Above the target frame: your debuffs first, then everyone else's; then the buffs (only yours: your HoTs and shields)." },
             { key = "targetDebuffs", label = "Target's debuffs", control = "segmented",
               options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
               disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },

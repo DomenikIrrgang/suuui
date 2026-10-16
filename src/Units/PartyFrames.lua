@@ -84,7 +84,7 @@ end
 -- fills its groups in order, and what doesn't fit is cut off.
 local AURA_GROUPS = {
     { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
-    -- (external leaves out what defensive shows: one the game marks both
+    -- (external leaves out what defensive shows: one the game marked both
     -- would show twice, once in each)
     { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" }, max = 2 },
     { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" }, max = 2 },
