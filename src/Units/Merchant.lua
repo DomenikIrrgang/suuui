@@ -343,11 +343,23 @@ function M:Build()
     self.filter:SetPoint("TOPRIGHT")
     self.hasFilter = #options > 0
     self.rows = {}
-    self.lastRow = buildRow(c)
-    self.lastRow:Hide()
-    self.lastLabel = UI.Text(c, "caption", "ink-muted")
+    -- the item you sold last, with Undo: fixed under the list
+    local last = CreateFrame("Frame", nil, w.body)
+    last:SetPoint("BOTTOMLEFT")
+    last:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    last:SetHeight(S["space-4"] + T.type.caption.lineHeight + S["space-2"] + ROW_H)
+    self.last = last
+    self.lastRule = UI.Hairline(last, "gilt-faint")
+    self.lastRule:SetPoint("TOPLEFT")
+    self.lastRule:SetPoint("TOPRIGHT")
+    self.lastLabel = UI.Text(last, "caption", "ink-muted")
     self.lastLabel:SetValue("Last sold")
-    self.lastRule = UI.Hairline(c, "gilt-faint")
+    self.lastLabel:SetPoint("TOPLEFT", 0, -S["space-4"])
+    self.lastRow = buildRow(last)
+    self.lastRow:SetPoint("BOTTOMLEFT")
+    self.lastRow:SetPoint("BOTTOMRIGHT")
+    self.lastRow.rule:Hide()
+    last:Hide()
     self.empty = UI.Text(c, "body", "ink-muted")
     -- the foot: repair, guild repair, sell junk; your money at the right
     local f = w.footer
@@ -396,13 +408,19 @@ function M:Refresh()
     self.tools:SetShown(buy)
     self.filter:SetShown(self.hasFilter)
     if buy then self.filter:SetValue(call(GetMerchantFilter)) end
+    -- the last sold item under the list (Merchant tab, once you sold one)
+    local lastN = call(GetNumBuybackItems) or 0
+    local showLast = buy and lastN > 0
+    self.last:SetShown(showLast)
+    if showLast then self:DrawBuybackRow(self.lastRow, lastN, true) end
     self.list:ClearAllPoints()
     self.list:SetPoint("TOPLEFT", 0, buy and -(30 + S["space-4"]) or 0)
-    self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    if showLast then
+        self.list:SetPoint("BOTTOMRIGHT", self.last, "TOPRIGHT", 0, S["space-2"])
+    else
+        self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    end
     local y = 0
-    self.lastLabel:Hide()
-    self.lastRule:Hide()
-    self.lastRow:Hide()
     self.empty:Hide()
     local used = 0
     if buy then
@@ -423,27 +441,6 @@ function M:Refresh()
             self.empty:SetValue(query ~= "" and "Nothing here matches." or "This merchant has nothing to sell.")
             self.empty:Show()
             y = y + 40
-        end
-        -- the item you sold last, with Undo
-        local n = call(GetNumBuybackItems) or 0
-        if n > 0 then
-            y = y + S["space-5"]
-            self.lastRule:ClearAllPoints()
-            self.lastRule:SetPoint("TOPLEFT", 0, -y)
-            self.lastRule:SetPoint("TOPRIGHT", 0, -y)
-            self.lastRule:Show()
-            self.lastLabel:ClearAllPoints()
-            self.lastLabel:SetPoint("TOPLEFT", 0, -(y + S["space-2"]))
-            self.lastLabel:Show()
-            y = y + S["space-2"] + T.type.caption.lineHeight
-            local r = self.lastRow
-            r:Show()
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT", c, "RIGHT")
-            r.rule:Hide()
-            self:DrawBuybackRow(r, n, true)
-            y = y + ROW_H
         end
     else
         local n = call(GetNumBuybackItems) or 0
