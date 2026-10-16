@@ -113,7 +113,10 @@ API.UI.Select = UI.Select
 API.UI.Slider = UI.Slider
 API.UI.Stepper = UI.Stepper
 API.UI.TextField = UI.TextField
-API.UI.MoneyInput = UI.MoneyInput -- 0.16: MoneyInput(parent, { value, onChange }) -> GetCopper, SetCopper, Clear, SetDisabled
+API.UI.MoneyInput = UI.MoneyInput -- 0.17: MoneyInput(parent, { value, onChange }) -> GetCopper, SetCopper, Clear, SetDisabled
+API.UI.LoadingMark = UI.LoadingMark -- 0.17: LoadingMark(parent, { size, wings }) -> Start, Stop
+API.UI.IsTooltipSkinned = UI.IsTooltipSkinned -- 0.17: whether SkinTooltip already dressed this tooltip
+API.UI.WINDOW_HEAD_H = UI.WINDOW_HEAD_H -- 0.17: the height of a skinned window's header
 API.UI.SettingRow = UI.SettingRow
 API.UI.SettingsGroup = UI.SettingsGroup
 
