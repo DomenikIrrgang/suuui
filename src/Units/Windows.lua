@@ -1088,11 +1088,26 @@ local function styleTrainerRow(b)
         if b.money then b.money:SetAlpha(0) end
         b.suuMoney = UI.Money(b)
         b.suuMoney:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+        -- the row's texts are styled here, once: the general pass leaves them
+        -- (it chose a font by each text's length, so rows differed)
         SuuUI.Fonts.Apply(b.name, "label")
         SuuUI.Fonts.Apply(b.nameSubText, "caption")
         SuuUI.Fonts.Apply(b.subText, "caption")
+        b.name:SetTextColor(UI.RGBA("ink"))
         b.nameSubText:SetTextColor(UI.RGBA("ink-muted"))
+        b.subText:SetTextColor(UI.RGBA("ink-muted"))
+        for _, fs in ipairs({ b.name, b.nameSubText, b.subText, b.alternateCost }) do
+            fs.suuSkip = true
+            fs:SetShadowOffset(0, 0)
+        end
         if b.alternateCost then SuuUI.Fonts.Apply(b.alternateCost, "caption") end
+        -- the requirements: one line under the name, to the row's right edge
+        b.subText:ClearAllPoints()
+        b.subText:SetPoint("TOPLEFT", b.name, "BOTTOMLEFT", 0, -4)
+        b.subText:SetPoint("RIGHT", b, "RIGHT", -S["space-4"], 0)
+        b.subText:SetHeight(14)
+        b.subText:SetWordWrap(false)
+        b.subText:SetJustifyV("TOP")
     end
     -- the price (the game's frame stays, see-through: it still reports its state)
     local cost = b.money and b.money:IsShown() and GetTrainerServiceCost and GetTrainerServiceCost(b:GetID())
