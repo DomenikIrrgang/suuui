@@ -23,7 +23,7 @@ local M = SuuUI.RegisterModule({
     api = "0.12",
     reloadToToggle = true,
     -- (the world map enlarged: its maximize button)
-    defaults = { mapEnlarged = false },
+    defaults = { mapEnlarged = true },
 })
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"

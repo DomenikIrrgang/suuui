@@ -180,7 +180,77 @@ function MP.Areas()
         s.questPOI, s.superTracked, #s.pins, s.pins[1] and ((s.pins[1].visible and "visible" or "hidden") .. ", allowed " .. s.pins[1].mapAllowsBlobs) or "none"))
 end
 
+-- "/suu probe map log": where the quest log's parts sit, to line them up
+-- (the list centred, the search box with it): each part's left and right
+-- from the panel's left (the map's right edge), its width, whether it
+-- shows, and its anchors.
+local function where(obj, x0)
+    if not (obj and obj.GetLeft) then return nil end
+    local ok, l, r = pcall(function() return obj:GetLeft(), obj:GetRight() end)
+    local out = { shown = obj.IsShown and obj:IsShown() or false, kind = obj.GetObjectType and obj:GetObjectType() or "?" }
+    if ok and l and r then
+        out.left, out.right, out.width = math.floor(l - x0 + 0.5), math.floor(r - x0 + 0.5), math.floor(r - l + 0.5)
+    end
+    local points = {}
+    for i = 1, (obj.GetNumPoints and obj:GetNumPoints() or 0) do
+        local pt, rel, relPt, x, y = obj:GetPoint(i)
+        local name = rel and (rel.GetName and rel:GetName()) or nil
+        if not name and rel and rel.GetParent and rel:GetParent() then
+            for k, v in pairs(rel:GetParent()) do if v == rel then name = "$parent." .. tostring(k) end end
+        end
+        points[#points + 1] = ("%s>%s %s %s,%s"):format(pt, tostring(relPt), tostring(name or rel), tostring(x and math.floor(x + 0.5)), tostring(y and math.floor(y + 0.5)))
+    end
+    out.points = table.concat(points, "; ")
+    return out
+end
+
+function MP.Log()
+    SuuUIProbe = SuuUIProbe or {}
+    local f, q = _G.WorldMapFrame, _G.QuestMapFrame
+    local s = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.mapLog = s
+    local x0 = f.ScrollContainer and f.ScrollContainer:GetRight() or 0
+    s.window = where(f, x0)
+    s.mapArea = where(f.ScrollContainer, x0)
+    s.enlarged = SuuUI.GetModule("windows") and SuuUI.GetModule("windows"):Get("mapEnlarged")
+    if not q then ns.Print("Map log: no quest log.") return end
+    s.questMapFrame = where(q, x0)
+    -- each part one level down, by its key, in the log, its quests frame and its list
+    local function walk(label, t)
+        if not t then return end
+        s[label] = {}
+        for k, v in pairs(t) do
+            if type(v) == "table" and type(k) == "string" and v.GetLeft and k ~= "GetParent" then
+                s[label][k] = where(v, x0)
+            end
+        end
+    end
+    walk("log", q)
+    walk("quests", q.QuestsFrame)
+    walk("list", q.QuestsFrame and q.QuestsFrame.ScrollFrame or _G.QuestScrollFrame)
+    local list = _G.QuestScrollFrame
+    walk("contents", list and list.Contents)
+    -- the first rows of each kind
+    s.rows = {}
+    for _, key in ipairs({ "headerFramePool", "campaignHeaderMinimalFramePool", "titleFramePool", "objectiveFramePool" }) do
+        local pool = list and list[key]
+        if pool and pool.EnumerateActive then
+            for row in pool:EnumerateActive() do s.rows[key] = where(row, x0) break end
+        end
+    end
+    local sb = list and list.SearchBox
+    ns.Print(("Map log: panel %s px wide; list %s..%s; search box %s..%s; /reload saves it."):format(
+        tostring(s.window and s.window.right), tostring(s.rows.headerFramePool and s.rows.headerFramePool.left),
+        tostring(s.rows.headerFramePool and s.rows.headerFramePool.right),
+        tostring(sb and where(sb, x0).left), tostring(sb and where(sb, x0).right)))
+end
+
 function MP.Command(rest)
+    if rest == "log" then
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then ns.Print("Map probe: open the map with its quest log, then run it again.") return end
+        MP.Log()
+        return
+    end
     if rest == "areas" then
         if not _G.WorldMapFrame then ns.Print("Map probe: open the map once (M), then run it again.") return end
         MP.Areas()
