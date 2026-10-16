@@ -433,7 +433,8 @@ function M:Draw()
     self.dressButton:SetEnabledState(not self.loading)
     local talents = not self.loading and call(C_Traits.HasValidInspectData)
     self.talentsButton:SetEnabledState(talents and true or false)
-    self.talentsButton.tooltip = not talents and (self.loading and "Waiting for their gear" or "Their talents aren't available") or nil
+    self.talentsButton.tooltip = not talents and { title = "View Talents",
+        description = self.loading and "Waiting for their gear." or "Their talents aren't available." } or nil
     if w:IsShown() then self:PlaceTalentsOver(true) end
 end
 
