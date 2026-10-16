@@ -843,6 +843,10 @@ function ns.Probe.Command(arg)
         ns.AhScanProbe.Command(rest)
         return
     end
+    if sub == "ahpost" then
+        ns.AhPostProbe.Command(rest)
+        return
+    end
     if sub == "legacy" then
         ns.LegacyProbe.Command(rest)
         return
