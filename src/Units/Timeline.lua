@@ -10,10 +10,10 @@
 -- setting: the whole countdown, the last ten seconds or none) and says
 -- "Pull!" at zero. Combat cancels it.
 -- It is Blizzard's own countdown (C_PartyInfo.DoCountdown, the /countdown
--- one), which DBM and BigWigs use too: a countdown anyone starts (SuuUI, DBM,
--- BigWigs, /countdown) shows here, and SuuUI's shows in theirs and, without
+-- one), which boss mods use too: a countdown anyone starts (SuuUI, a boss
+-- mod, /countdown) shows here, and SuuUI's shows in theirs and, without
 -- any addon, as Blizzard's numbers. While SuuUI's alert shows the countdown,
--- Blizzard's own numbers (TimerTracker) stay away, as BigWigs does it. On a
+-- Blizzard's own numbers (TimerTracker) stay away. On a
 -- client without it, SuuUI sends its own message to everyone with SuuUI.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens

@@ -944,8 +944,8 @@ function M:SkinWorldMap()
     -- the window's size around the map's new top: windowed, shorter by the
     -- room the game kept over the map. Enlarged (the maximize button): the
     -- same window larger, in the screen's middle, the quest log beside it as
-    -- you left it, the world around it seen and clickable (asked: like
-    -- ElvUI's). The game's own fullscreen isn't used: its black backdrop
+    -- you left it, the world around it seen and clickable (asked in game).
+    -- The game's own fullscreen isn't used: its black backdrop
     -- blocks the world and it shows the map alone.
     local mm = b and b.MaximizeMinimizeFrame
     local rise = chrome.riseH or 0
