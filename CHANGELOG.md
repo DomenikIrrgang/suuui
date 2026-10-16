@@ -6,6 +6,10 @@
 
 - `/suu probe ahscan` (at the auction house) checks whether the full scan works on Forever.
 
+### Changed
+
+- Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
+
 ## 0.4.0-beta.5 (2026-10-16)
 
 ### New

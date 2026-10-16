@@ -19,6 +19,8 @@
 --             include = { 6673, 5242 },    -- only these spell IDs (the engine
 --                                          -- matches them, so it works in combat)
 --             exclude = { 871 },           -- 0.16: never these spell IDs
+--             index = 2, gap = 4,          -- 0.16: its place among the groups and the
+--                                          -- space before it (when icons precede it)
 --             harmfulEdge = true,          -- 0.16: the ember edge on debuffs (a
 --                                          -- typed one's dispel border covers it)
 --             -- per-group looks (the Cooldown Manager's per-entry behaviour):
@@ -32,6 +34,7 @@
 --       },
 --   })
 --   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids, exclude),
+--   c:SetGroupPlace(key, index, gap)   -- 0.16: a group's order and the space before it
 --   c:SetFlow(anchor, growth), c:SetLineWidth(px)   -- 0.9: both after creation too
 --   c:Release()                  -- 0.9: parked for reuse (no unit, hidden,
 --                                -- deaf) until the next SetUnit
@@ -341,18 +344,36 @@ end
 
 -- A group's icon size, live: the engine's layout, then the buttons it
 -- already made (theirs is ours to set). New buttons take it when made.
+-- A group's whole layout as the engine takes it: its icon size, the
+-- spacing, and its place (SetGroupPlace).
+local function groupLayout(self, key, px)
+    local place = self.places[key] or {}
+    return { elementWidth = px, elementHeight = px, elementSpacing = self.spacing, lineSpacing = self.spacing,
+        layoutIndex = place.index, groupSpacing = place.gap }
+end
+
 function AC:SetGroupSize(key, size)
     local px = UI.Size(size)
     if self.sizes[key] == px then return end
     self.sizes[key] = px
-    pcall(self.container.SetAuraGroupLayout, self.container, key,
-        { elementWidth = px, elementHeight = px, elementSpacing = self.spacing, lineSpacing = self.spacing })
+    pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, px))
     for _, b in ipairs(self.buttons) do
         if b.key == key then
             pcall(b.button.SetSize, b.button, px, px)
             pcall(b.scrim.SetHeight, b.scrim, math.floor(px * 0.6))
         end
     end
+    self:Refresh()
+end
+
+-- 0.16: where a group sits among the container's groups (index: lower
+-- first; nil: in the order they were added) and the extra space before it
+-- (gap px, only when something is already placed and it has icons), live.
+function AC:SetGroupPlace(key, index, gap)
+    local place = self.places[key]
+    if place and place.index == index and place.gap == gap then return end
+    self.places[key] = { index = index, gap = gap }
+    pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, self.sizes[key]))
     self:Refresh()
 end
 
@@ -399,7 +420,7 @@ function UI.AuraContainer(parent, unit, opts)
         ns.Fault.Report("Auras", "the client has no aura containers: " .. tostring(container))
         return nil
     end
-    local self = setmetatable({ container = container, opts = opts, sizes = {}, buttons = {} }, { __index = AC })
+    local self = setmetatable({ container = container, opts = opts, sizes = {}, buttons = {}, places = {} }, { __index = AC })
     -- a renderable rect from the start: the engine lays out from an OnUpdate
     container:SetSize(1, 1)
 
@@ -416,11 +437,13 @@ function UI.AuraContainer(parent, unit, opts)
     for _, group in ipairs(opts.groups) do
         local gsize = group.size and UI.Size(group.size) or size
         self.sizes[group.key] = gsize
+        self.places[group.key] = { index = group.index, gap = group.gap }
         local added = pcall(container.AddAuraGroup, container, group.key, filterString(group.filter), {
             maxFrameCount = group.max or 16,
             candidateFilters = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include, group.exclude),
             initializeFrame = group.initialize or makeInitializer(group, gsize, self),
-            layout = { elementWidth = gsize, elementHeight = gsize, elementSpacing = spacing, lineSpacing = spacing },
+            layout = { elementWidth = gsize, elementHeight = gsize, elementSpacing = spacing, lineSpacing = spacing,
+                layoutIndex = group.index, groupSpacing = group.gap },
         })
         if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. group.key) end
     end

@@ -88,42 +88,46 @@ end
 
 -- Auras after the bar, clipped to the number the settings allow: the engine
 -- fills its groups in order, and what doesn't fit is cut off.
--- Two sets beside the bar, each in its own clip: defensives (the Defensives
+-- Beside the bar, one row the engine lays out: defensives (the Defensives
 -- list's spells, Frames › Defensives: the game hides who cast another
 -- player's buffs, and its own defensive filters then let every buff
--- through), then debuffs, the ones you can remove first. Defensives always
--- sit left of debuffs, `space-4` apart; Aura side picks the bar's side.
--- No other buffs: those come through buff indicators.
+-- through), then debuffs, the ones you can remove first, right after
+-- however many defensives show, `space-4` apart. Defensives are always left
+-- of debuffs: on the left side the debuffs come first from the bar. No
+-- other buffs: those come through buff indicators.
 local GAP_SETS = S["space-4"]
-local AURA_SETS = {
-    { key = "buffs", setting = "buffIcons", groups = {
-        { key = "external", filter = { "HELPFUL" }, list = "external", border = "ward", glow = "glow-ward", drain = "ward" },
-        { key = "defensive", filter = { "HELPFUL" }, list = "defensive", border = "ward", glow = "glow-ward", drain = "ward" },
-    } },
-    { key = "debuffs", setting = "debuffIcons", groups = {
-        { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-        -- the game's "raid" debuffs: the ones worth seeing
-        { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-    } },
+local AURA_GROUPS = {
+    { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", glow = "glow-ward", drain = "ward" },
+    { key = "dispel", set = "debuffIcons", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    -- the game's "raid" debuffs: the ones worth seeing
+    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
 }
-local MAX_SET = 4
+-- each group's place from the bar: defensives first on the right, last on the left
+local ORDER = {
+    right = { defensives = 1, dispel = 2, debuffs = 3 },
+    left = { dispel = 1, debuffs = 2, defensives = 3 },
+}
 
 local function buildAuras(f)
     local defensives = UI.GroupDefensives()
-    f.auraSets = {}
-    for _, set in ipairs(AURA_SETS) do
-        local clip = CreateFrame("Frame", nil, f)
-        clip:SetClipsChildren(true)
-        local groups = {}
-        for i, g in ipairs(set.groups) do
-            groups[i] = { key = g.key, filter = g.filter, max = MAX_SET, dispel = g.dispel, drain = g.drain,
-                harmfulEdge = g.harmfulEdge, border = g.border, glow = g.glow,
-                include = g.list and defensives[g.list] }
-        end
-        local ac = UI.AuraContainer(clip, f.unit, { size = M:Get("height"), anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, groups = groups })
-        if ac then ac.container:SetPoint("TOPLEFT", clip, "TOPLEFT") end
-        f.auraSets[set.key] = { clip = clip, auras = ac, def = set }
+    local clip = CreateFrame("Frame", nil, f)
+    clip:SetClipsChildren(true)
+    local groups = {}
+    for i, g in ipairs(AURA_GROUPS) do
+        groups[i] = { key = g.key, filter = g.filter, max = M:Get(g.set), dispel = g.dispel, drain = g.drain,
+            harmfulEdge = g.harmfulEdge, border = g.border, glow = g.glow,
+            include = g.list and defensives[g.list] }
     end
+    f.auraClip = clip
+    f.auras = UI.AuraContainer(clip, f.unit, { size = M:Get("height"), anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, groups = groups })
+    if f.auras then f.auras.container:SetPoint("TOPLEFT", clip, "TOPLEFT") end
+end
+
+-- The row's width: both sets' icons, and the gap when both have room.
+local function rowWidth(self, h, buffs, debuffs)
+    local n = buffs + debuffs
+    if n == 0 then return 0 end
+    return n * h + (n - 1) * S["space-2"] + ((buffs > 0 and debuffs > 0) and (GAP_SETS - S["space-2"]) or 0)
 end
 
 -- The selected border (your target): its own frame, so a secret "is it the
@@ -190,17 +194,13 @@ function M:PreviewView(parent)
         f:SetScript("OnEnter", nil)
         f:SetScript("OnLeave", nil)
         f:EnableMouse(false)
-        -- the sets as the live frames have them, icons drawn instead of the engine's
-        f.auraSets = {}
-        for _, set in ipairs(AURA_SETS) do
-            local clip = CreateFrame("Frame", nil, f)
-            clip:SetClipsChildren(true)
-            local icons = {}
-            for k = 1, MAX_SET do
-                icons[k] = UI.Icon(clip, 24)
-                icons[k]:Hide()
-            end
-            f.auraSets[set.key] = { clip = clip, icons = icons, def = set }
+        -- the row as the live frames have it, icons drawn instead of the engine's
+        f.auraClip = CreateFrame("Frame", nil, f)
+        f.auraClip:SetClipsChildren(true)
+        f.icons = {}
+        for k = 1, 8 do
+            f.icons[k] = UI.Icon(f.auraClip, 24)
+            f.icons[k]:Hide()
         end
         buildSelected(f)
         f.dispelDecos = {}
@@ -216,21 +216,6 @@ function M:PreviewView(parent)
     view:HookScript("OnShow", function() self:DrawPreview() end)
     self:DrawPreview(true)
     return view
-end
-
--- How wide the aura sets beside a bar are: each set's icons, the gap
--- between the two. shown(key) is how many icons a set shows.
-local function setsWidth(self, h, shown)
-    local w, sets = 0, 0
-    for _, set in ipairs(AURA_SETS) do
-        local n = shown(set)
-        if n > 0 then
-            w = w + n * h + (n - 1) * S["space-2"]
-            sets = sets + 1
-        end
-    end
-    if sets == 0 then return 0 end
-    return S["space-2"] + w + (sets - 1) * GAP_SETS
 end
 
 -- Draws the made-up party with the current settings.
@@ -255,14 +240,12 @@ function M:DrawPreview(force)
     end
     -- the view: the holder, with room on its side for the auras the made-up
     -- people actually show (not the empty slots), so it centres on what's seen
-    local most = {}
+    local auraW = 0
     for _, d in ipairs(PEOPLE) do
         local parts = split(d)
-        for _, set in ipairs(AURA_SETS) do
-            most[set.key] = math.max(most[set.key] or 0, math.min(#parts[set.key], self:Get(set.setting)))
-        end
+        local w = rowWidth(self, h, math.min(#parts.buffs, self:Get("buffIcons")), math.min(#parts.debuffs, self:Get("debuffIcons")))
+        auraW = math.max(auraW, w > 0 and (S["space-2"] + w) or 0)
     end
-    local auraW = setsWidth(self, h, function(set) return most[set.key] end)
     local hw, hh = self.previewHolder:GetSize()
     local right = self:Get("auraSide") == "right"
     self.previewHolder:ClearAllPoints()
@@ -291,26 +274,35 @@ function M:DrawPreview(force)
             f.indicatorVersion = version
             f:SetPreviewIndicators((i >= 2 and i <= 4) and UI.IndicatorsFor(list, "5") or nil)
         end
+        -- the row from the bar outward, as the engine lays it out
         local parts = split(d)
-        for _, set in ipairs(AURA_SETS) do
-            local ps = f.auraSets[set.key]
-            for k, icon in ipairs(ps.icons) do
-                local a = parts[set.key][k]
-                if a then
-                    icon:SetSize(h, h)
-                    icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-                    icon:SetBorder(a[2] or "ward")
-                    icon:SetGlow(a[2] == nil and "glow-ward" or nil)
-                    icon:ClearAllPoints()
-                    if right then
-                        icon:SetPoint("TOPLEFT", ps.clip, "TOPLEFT", (k - 1) * (h + S["space-2"]), 0)
-                    else
-                        icon:SetPoint("TOPRIGHT", ps.clip, "TOPRIGHT", -(k - 1) * (h + S["space-2"]), 0)
-                    end
-                    icon:Show()
+        local row = {}
+        local sets = right and { "buffs", "debuffs" } or { "debuffs", "buffs" }
+        for si, key in ipairs(sets) do
+            local limit = self:Get(key == "buffs" and "buffIcons" or "debuffIcons")
+            for k = 1, math.min(#parts[key], limit) do
+                row[#row + 1] = { aura = parts[key][k], gap = k == 1 and si == 2 and #row > 0 }
+            end
+        end
+        local x = 0
+        for k, icon in ipairs(f.icons) do
+            local e = row[k]
+            if e then
+                if e.gap then x = x + GAP_SETS - S["space-2"] end
+                icon:SetSize(h, h)
+                icon:SetArt(C_Spell.GetSpellTexture(e.aura[1]))
+                icon:SetBorder(e.aura[2] or "ward")
+                icon:SetGlow(e.aura[2] == nil and "glow-ward" or nil)
+                icon:ClearAllPoints()
+                if right then
+                    icon:SetPoint("TOPLEFT", f.auraClip, "TOPLEFT", x, 0)
                 else
-                    icon:Hide()
+                    icon:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT", -x, 0)
                 end
+                x = x + h + S["space-2"]
+                icon:Show()
+            else
+                icon:Hide()
             end
         end
     end
@@ -366,35 +358,34 @@ function M:LayoutFrames(frames, holder)
             f:SetPoint("TOPLEFT", holder, "TOPLEFT")
         end
         if holder ~= self.holder then f:SetShown(slot >= 0) end
-        -- the aura sets beside the bar, space-2 away, growing away from it:
-        -- on the right defensives first, on the left debuffs first, so
-        -- defensives are always left of debuffs
-        local prev
-        for _, key in ipairs(auraRight and { "buffs", "debuffs" } or { "debuffs", "buffs" }) do
-            local set = f.auraSets[key]
-            local count = self:Get(set.def.setting)
-            set.clip:ClearAllPoints()
-            set.clip:SetSize(math.max(1, count * h + math.max(0, count - 1) * S["space-2"]), h)
-            if auraRight then
-                set.clip:SetPoint("LEFT", prev or f, "RIGHT", prev and GAP_SETS or S["space-2"], 0)
-            else
-                set.clip:SetPoint("RIGHT", prev or f, "LEFT", -(prev and GAP_SETS or S["space-2"]), 0)
+        -- the row beside the bar, space-2 away, growing away from it
+        local buffs, debuffs = self:Get("buffIcons"), self:Get("debuffIcons")
+        f.auraClip:ClearAllPoints()
+        f.auraClip:SetSize(math.max(1, rowWidth(self, h, buffs, debuffs)), h)
+        if auraRight then
+            f.auraClip:SetPoint("LEFT", f, "RIGHT", S["space-2"], 0)
+        else
+            f.auraClip:SetPoint("RIGHT", f, "LEFT", -S["space-2"], 0)
+        end
+        f.auraClip:SetShown(buffs + debuffs > 0)
+        if f.auras then
+            -- the icons are as tall as the bar (Layout runs out of combat,
+            -- where the engine's buttons take a resize); each group's count,
+            -- and its place: the space before a set's first group
+            local order = ORDER[auraRight and "right" or "left"]
+            for _, g in ipairs(AURA_GROUPS) do
+                f.auras:SetGroupSize(g.key, h)
+                f.auras:SetGroupMax(g.key, self:Get(g.set))
+                f.auras:SetGroupPlace(g.key, order[g.key], order[g.key] > 1 and (GAP_SETS - S["space-2"]) or nil)
             end
-            set.clip:SetShown(count > 0)
-            if count > 0 then prev = set.clip end
-            if set.auras then
-                -- the icons are as tall as the bar (Layout runs out of combat,
-                -- where the engine's buttons take a resize)
-                for _, g in ipairs(set.def.groups) do set.auras:SetGroupSize(g.key, h) end
-                local c = set.auras.container
-                c:ClearAllPoints()
-                if auraRight then
-                    c:SetPoint("TOPLEFT", set.clip, "TOPLEFT")
-                    set.auras:SetFlow("TOPLEFT", { "RIGHT", "DOWN" })
-                else
-                    c:SetPoint("TOPRIGHT", set.clip, "TOPRIGHT")
-                    set.auras:SetFlow("TOPRIGHT", { "LEFT", "DOWN" })
-                end
+            local c = f.auras.container
+            c:ClearAllPoints()
+            if auraRight then
+                c:SetPoint("TOPLEFT", f.auraClip, "TOPLEFT")
+                f.auras:SetFlow("TOPLEFT", { "RIGHT", "DOWN" })
+            else
+                c:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT")
+                f.auras:SetFlow("TOPRIGHT", { "LEFT", "DOWN" })
             end
         end
     end
@@ -428,9 +419,7 @@ function M:UpdateOffline()
             local c = UnitIsConnected(f.unit)
             if c ~= nil and not isSecret(c) then online = c and true or false end
         end
-        for _, set in pairs(f.auraSets) do
-            if set.auras then set.auras.container:SetAlpha(online and 1 or 0) end
-        end
+        if f.auras then f.auras.container:SetAlpha(online and 1 or 0) end
     end
 end
 
@@ -480,10 +469,9 @@ end
 function M:ApplyDefensives()
     local d = UI.GroupDefensives()
     for _, f in ipairs(self.frames) do
-        local set = f.auraSets.buffs
-        if set.auras then
-            for _, g in ipairs(set.def.groups) do
-                if g.list then set.auras:SetGroupSpells(g.key, d[g.list]) end
+        if f.auras then
+            for _, g in ipairs(AURA_GROUPS) do
+                if g.list then f.auras:SetGroupSpells(g.key, d[g.list]) end
             end
         end
         f:SetWardSpells(d.warded)
