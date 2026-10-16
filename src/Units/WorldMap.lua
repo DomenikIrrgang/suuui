@@ -282,6 +282,11 @@ local function questDifficulty(level, mine)
     return "trivial"
 end
 
+-- A race's bit in the quests' race masks: the race's ID - 1, but Forever's
+-- Skyborne (IDs 95 and 96) on bits 32 and 33 (QuestieDB's raceMaskById;
+-- by its ID a Skyborne character matched no quest that names races)
+local RACE_BIT = { [95] = 2 ^ 32, [96] = 2 ^ 33 }
+
 -- who you are, for what you can pick up and who serves you
 function M:Player()
     local level = UnitLevel("player")
@@ -290,7 +295,7 @@ function M:Player()
     local faction = UnitFactionGroup("player")
     return {
         level = plain(level) and level or 1,
-        raceBit = plain(race) and race and 2 ^ (race - 1) or 0,
+        raceBit = plain(race) and race and (RACE_BIT[race] or 2 ^ (race - 1)) or 0,
         classBit = plain(classID) and classID and 2 ^ (classID - 1) or 0,
         class = plain(class) and class or nil,
         faction = faction == "Horde" and "H" or faction == "Alliance" and "A" or nil,
