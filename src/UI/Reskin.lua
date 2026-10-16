@@ -454,7 +454,9 @@ function UI.ReskinMenu(menu)
         end
     end
     st.panel:ClearAllPoints()
-    if top and first and last then
+    -- (a scrolling menu's last row can sit below what shows: then all of it)
+    local bottom = menu:GetBottom()
+    if top and first and last and bottom and last:GetBottom() >= bottom then
         local pad = math.max(0, top - first:GetTop())
         st.panel:SetPoint("TOPLEFT", menu, "TOPLEFT")
         st.panel:SetPoint("RIGHT", menu, "RIGHT")
