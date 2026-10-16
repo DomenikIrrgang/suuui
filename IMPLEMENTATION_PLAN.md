@@ -84,7 +84,7 @@ Every feature can be switched off entirely, and other addons can extend SuuUI.
 1. **The game stays playable.** Each feature is a module with an Enabled toggle. Until a module exists, or while it's off, Blizzard's own frame is left untouched. Suppress Blizzard frames by reparenting them to a hidden frame, never with an `OnShow → Hide` hook.
 2. **It goes through the public API.** A module uses only the public API, and it reaches other modules only through their published anchors, messages and extension points. Anything new a module needs from the core is added to the public API and documented there, so plugins can use it too.
 3. **It loads cleanly.** No Lua errors with `/console scriptErrors 1`. Every changed file passes a quick `luac -p` syntax check (no automated tests until the separate harness is brought in).
-4. **It's combat-safe.** Nothing protected moves in lockdown: route those changes through the core combat queue. Run a `/console taintLog 1` session on anything secure.
+4. **It's combat-safe.** Nothing protected moves in lockdown: route those changes through the core combat queue. Check anything secure with `/suu probe taint` (not `/console taintLog`: on Forever it writes nothing and breaks Blizzard frames).
 5. **It respects secret values.** Never compare or do maths on a value that might be secret. Use curve objects, `SetAlphaFromBoolean` and duration objects. Where the client hides data, hide the slot.
 6. **It's performant by construction.** Show and Hide are idempotent. Events use `RegisterUnitEvent`. Each widget caches the last value it painted. Views that are hidden are marked stale and refresh on Show. Lists are reconciled by key, never rebuilt.
 7. **It's configurable.** Each module adds its own section to the settings window. Changes apply live and the module has an edit-mode handle.
@@ -660,7 +660,16 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Probe (`/suu probe windows`, 2026-10-16):** MerchantFrame, MailFrame and ClassTrainerFrame aren't protected; the Collections journal (Mounts, Pets, Toys) is. Merchant data comes from `C_MerchantFrame.GetItemInfo` (the old `GetMerchantItemInfo` is gone); `BuyMerchantItem`, `BuybackItem`, `RepairAllItems`, `TakeInboxItem`, `TakeInboxMoney`, `AutoLootMailItem` and `SendMail` exist without restriction flags (only `C_SecureTransfer.SendMail` has them). Trainer: 120 services with full info. Auction house: the modern one; Bid, Post and commodity purchase are restricted, `ReplicateItems` exists. Collections: 139 mounts, 21 toys, 0 pets, 0 heirlooms, Appearances.
 - **Decided after the probe (2026-10-16):** Merchant and Mail are SuuUI's own windows; the first in-game test confirms a purchase and a mail with money, and a window whose action turns out blocked falls back to restyled. The auction house's full scan works (`/suu probe ahscan`: 48,183 auctions in 22 s, every field but the seller). Trainer became SuuUI's own window to match the design (asked in game); the auction house too (asked 2026-10-16: "ready for new features"), if `/suu probe ahpost` shows SuuUI's own buttons may post and cancel (restricted functions). Collections' empty tabs (Heirlooms, Pets: 0 on Forever) stay, greyed out and not clickable, with the reason on hover, until their count is above 0.
 - **Build:** mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
+- **Collections became SuuUI's own window (2026-10-17):** the restyle stays as the fallback while the module is off. Mounts on a stage (a PlayerModel placed per model file), Toys as a shelf of cards (no toy has a 3D model on Forever), Appearances as a doll between slot columns with tiles; what you lack and where to get it from `CollectionSources` (generated from client data and QuestieDB); favourites and recent.
 - **Confirm:** you can buy, sell, buy back, mail an item, and post and buy an auction.
+- **Still to see:** a Collections summon and toy use from SuuUI's secure buttons; an auction purchase; a mail with money or COD.
+
+### 3.7 NPC talk, dressing room, inspect and the game menu
+- **Asked 2026-10-17:** gossip, the quest dialog, the dressing room, inspect, inspect talents and the game menu get proper designs and become SuuUI's own windows where the game allows.
+- **Probe (`/suu probe windows`, 2026-10-17):** GossipFrame, QuestFrame, DressUpFrame, InspectFrame (Blizzard_InspectUI, LoD) and GameMenuFrame aren't protected. `C_GossipInfo.SelectOption`/`SelectAvailableQuest`/`SelectActiveQuest` only carry `SecretArguments=AllowedWhenUntainted`; `AcceptQuest`, `CompleteQuest`, `GetQuestReward`, `Logout`, `Quit`, `C_UI.Reload` have no restriction flags. Inspect's tabs are Character, PvP and Guild; View Talents opens the talents window in inspect mode.
+- **Done:** inspect talents show the inspected player's tree read-only in SuuUI's Talents page (the inspect trait config).
+- **Next:** design boards for all six, then build. Before the game menu: probe whether Options and Edit Mode open cleanly from SuuUI's code or need a secure click.
+- **Confirm:** talk to an NPC, accept and turn in a quest with a reward choice, ctrl-click an item into the dressing room and save a set, inspect a player, open every game menu entry.
 
 ---
 
@@ -678,7 +687,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Build:**
   - Frame-count and SetPoint budgets, checked with `/suu perf`.
   - An in-game `/suu perf` command showing CPU and memory per module.
-  - A full `taintLog` raid session.
+  - A full raid session checked with `/suu probe taint` and `SuuUIDB.blocked`.
   - A check that SavedVariables stay bounded.
 - **Confirm:** a 40-player raid fight shows no blocked actions and stays within budget.
 
@@ -704,7 +713,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 | 1.8–1.10 | Party, raid and nameplates | 1.1, 1.4 |
 | 1.11–1.13 | Alerts, meters, timeline and readiness | 1.1 |
 | 2.1–2.8 | Minimap, chat, tracker, notifications, bags, loot, tooltips and campsite | 0.x (2.6 uses 2.4) |
-| 3.1–3.6 | The Blizzard windows | 0.5 (shell) |
+| 3.1–3.7 | The Blizzard windows | 0.5 (shell) |
 | 4.x | Presets, performance and release | everything |
 
 Phases 2 and 3 don't depend on Phase 1. If a different part of the UI should come first, they can be reordered.
