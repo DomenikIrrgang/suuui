@@ -1,8 +1,8 @@
 -- Diagnostics/WindowsProbe.lua
 -- "/suu probe windows": what the remaining windows (3.6: mail, merchant,
 -- trainer, auction house, collections; 3.7, asked 2026-10-17: gossip, the
--- quest dialog, the dressing room, inspect and the inspected player's
--- talents) are on Forever, for their designs. "/suu probe windows now"
+-- quest dialog, the dressing room, inspect, the inspected player's
+-- talents and the game menu) are on Forever, for their designs. "/suu probe windows now"
 -- saves whatever is open (a window it doesn't know by name).
 -- Saved in SuuUIProbe.windows on /reload; kept across runs, one entry per
 -- window, so visit them one by one.
@@ -187,7 +187,13 @@ WINDOWS.inspect = {
              "GetInventoryItemLink", "C_Traits.GetConfigInfo", "C_ClassTalents", "GetTalentInfo", "GetNumTalentTabs",
              "GetTalentTabInfo", "C_SpecializationInfo" },
 }
-local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect" }
+WINDOWS.gamemenu = {
+    frames = { "GameMenuFrame", "SettingsPanel", "KeyBindingFrame", "HelpFrame", "AddonList", "MacroFrame" },
+    apis = { "Logout", "Quit", "ForceQuit", "CancelLogout", "ToggleGameMenu", "ShowUIPanel", "HideUIPanel",
+             "Settings.OpenToCategory", "ToggleHelpFrame", "ShowMacroFrame", "StoreFrame_SetShown", "C_StorePublic.IsEnabled",
+             "C_SplashScreen.RequestLatestSplashScreen", "ReloadUI", "C_UI.Reload" },
+}
+local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect", "gamemenu" }
 
 -- Every large window open now (named or by its parent's key), to find the
 -- ones the probe doesn't know by name (the inspected player's talents).
@@ -342,6 +348,18 @@ local SAMPLES = {
         s.portrait = call(GetQuestPortraitGiver)
     end,
     dressup = function(s) end,
+    gamemenu = function(s)
+        -- its buttons: each one's text and what it is
+        local f = _G.GameMenuFrame
+        local buttons = {}
+        for _, c in ipairs({ f and f:GetChildren() or nil }) do
+            if c.GetText and c:IsShown() then
+                local okP, protected = pcall(c.IsProtected, c)
+                buttons[#buttons + 1] = ("%s \"%s\"%s"):format(c:GetName() or "?", show(c:GetText()), (okP and protected) and " PROTECTED" or "")
+            end
+        end
+        s.buttons = buttons
+    end,
     inspect = function(s)
         s.canInspect = call(CanInspect, "target")
         s.itemLevel = call(C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel, "target")
@@ -467,6 +485,13 @@ function WP.Arm()
         WP.dressHooked = true
         d:HookScript("OnShow", function()
             if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot("dressup") end) end
+        end)
+    end
+    local g = _G.GameMenuFrame
+    if g and not WP.menuHooked then
+        WP.menuHooked = true
+        g:HookScript("OnShow", function()
+            if GetTime() <= untilT then C_Timer.After(0.3, function() WP.Snapshot("gamemenu") end) end
         end)
     end
     if not WP.journalHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
