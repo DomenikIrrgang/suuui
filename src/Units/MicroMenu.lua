@@ -14,7 +14,7 @@ local M = SuuUI.RegisterModule({
     id = "micromenu",
     name = "Micro menu",
     description = "SuuUI's own micro menu: character, spellbook, talents, quests and the rest, top left.",
-    api = "0.10",
+    api = "0.17",
     reloadToToggle = true,
     defaults = {
         position = { point = "TOPLEFT", x = 28, y = -28 },
@@ -30,6 +30,11 @@ local M = SuuUI.RegisterModule({
 local TALENTS_OWN = { key = "talents", glyph = "tree", label = "Talents", bind = "TOGGLETALENTS",
     onClick = function() SuuUI.ToggleTalents() end,
     open = function() return SuuUI.TalentsShown() end }
+
+-- SuuUI's own Collections window, while the collections module is on (0.17)
+local COLLECTIONS_OWN = { key = "collections", glyph = "gem", label = "Collections", bind = "TOGGLECOLLECTIONS",
+    onClick = function() SuuUI.ToggleCollections() end,
+    open = function() return SuuUI.CollectionsShown() end }
 
 local ITEMS = {
     { key = "character", glyph = "person", label = "Character", click = "CharacterMicroButton" },
@@ -71,6 +76,9 @@ function M:Items()
             -- SuuUI's own Talents window (the talents module; its setting is
             -- known before it is enabled, which is after this module)
             item = TALENTS_OWN
+        end
+        if item.key == "collections" and SuuUI.GetModule("collections") and SuuUI.GetModule("collections"):Get("enabled") then
+            item = COLLECTIONS_OWN
         end
         if chosen[item.key] and (not item.click or _G[item.click]) then out[#out + 1] = item end
     end

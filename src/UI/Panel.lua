@@ -473,6 +473,9 @@ end
 --       tabs = { { key = "buy", label = "Merchant" }, … }, onTab = fn(key) })  -- 0.16
 --   window.content  the scrolling content frame; window.footer when asked for
 --   window:SetTab(key) (0.16): shows that tab as chosen and calls onTab
+--   a tab's `disabled` (true or a function) and `reason` (0.17): ink-faint
+--   at opacity-disabled, a cover takes its click, its tooltip says why;
+--   window:DrawTabs() after what it depends on changed
 --
 -- Tabs sit under the title as text tabs: header type in ink-muted, the
 -- chosen one gilt-text over a gilt hairline with its jewel.
@@ -518,19 +521,39 @@ function UI.WindowFrame(parent, opts)
             b.rule:SetPoint("BOTTOMRIGHT")
             b.jewel = UI.Diamond(b, 5, "gilt")
             b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
+            b.def = t
+            -- while disabled: a cover takes the click and says why
+            b.cover = CreateFrame("Frame", nil, b)
+            b.cover:SetAllPoints()
+            b.cover:SetFrameLevel(b:GetFrameLevel() + 5)
+            b.cover:EnableMouse(true)
+            b.cover:SetScript("OnEnter", function(c) UI.ShowTooltip(c, { title = t.label, description = t.reason }) end)
+            b.cover:SetScript("OnLeave", function() UI.HideTooltip() end)
+            b.cover:Hide()
             b:SetScript("OnEnter", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink")) end end)
             b:SetScript("OnLeave", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink-muted")) end end)
             b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
             f.tabButtons[#f.tabButtons + 1] = b
         end
-        function f:SetTab(key)
-            self.tab = key
+        local function off(b)
+            local d = b.def.disabled
+            if type(d) == "function" then return d() and true or false end
+            return d and true or false
+        end
+        function f:DrawTabs()
             for _, b in ipairs(self.tabButtons) do
-                local on = b.key == key
-                b.label:SetTextColor(UI.RGBA(on and "gilt-text" or "ink-muted"))
+                local dis = off(b)
+                local on = not dis and b.key == self.tab
+                b.label:SetTextColor(UI.RGBA(dis and "ink-faint" or on and "gilt-text" or "ink-muted"))
+                b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
                 b.rule:SetShown(on)
                 b.jewel:SetShown(on)
+                b.cover:SetShown(dis)
             end
+        end
+        function f:SetTab(key)
+            self.tab = key
+            self:DrawTabs()
             if opts.onTab then opts.onTab(key) end
         end
         top = top + TAB_H + S["space-4"]

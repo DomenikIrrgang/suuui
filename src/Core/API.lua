@@ -308,6 +308,18 @@ function API.FullName(unit)
 end
 -- A diagnostic asked the Social window's SuuUI pages to step aside.
 function API.ProbeShowsBlizzardSocial() return ns.SocialBlizzard and true or false end
+-- 0.17: SuuUI's Collections window (the collections module): open or
+-- close it (on a tab: "mounts", "toys", "wardrobe"), and whether it is
+-- open. False when that module is off.
+function API.ToggleCollections(tab)
+    local m = Modules.Get("collections")
+    if m and m:IsEnabled() and m.Toggle then m:Toggle(tab); return true end
+    return false
+end
+function API.CollectionsShown()
+    local m = Modules.Get("collections")
+    return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
+end
 function API.TalentsShown()
     local m = Modules.Get("talents")
     return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
