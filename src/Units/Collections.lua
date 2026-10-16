@@ -194,12 +194,14 @@ function M:Toys()
         local has = call(PlayerHasToy, itemID) and true or false
         out[#out + 1] = {
             kind = "toy", id = itemID, itemID = itemID, name = name, icon = icon or (C_Item and call(C_Item.GetItemIconByID, itemID)),
-            favourite = favourite, collected = has, source = data().toy and data().toy[itemID],
-            learned = self:Learned("toy", itemID, has),
+            favourite = favourite, collected = has, usable = has and call(TB and TB.IsToyUsable, itemID) ~= false,
+            source = data().toy and data().toy[itemID], learned = self:Learned("toy", itemID, has),
         }
+        if not plain(name) or name:find("^Toy %d") then self.namesPending = true end
     end
     table.sort(out, function(a, b)
         if a.collected ~= b.collected then return a.collected end
+        if (a.favourite and true or false) ~= (b.favourite and true or false) then return a.favourite and true or false end
         return a.name < b.name
     end)
     return out
@@ -298,6 +300,23 @@ function M:Learned(kind, id, collected)
         list[id] = (time() - list.first < 5) and 0 or time()
     end
     return list[id]
+end
+
+-- A toy's cooldown: when it started and how long (0 when ready).
+local function toyCooldown(itemID)
+    local start, duration = call(C_Container and C_Container.GetItemCooldown, itemID)
+    if not (plain(start) and plain(duration)) then return 0, 0 end
+    if duration and duration > 1.5 and start and start > 0 then return start, duration end
+    return 0, 0
+end
+M.toyCooldown = toyCooldown
+
+-- "Ready in 41 min", "Ready in 1 h 5 min", "Ready in 30 s"
+local function readyIn(start, duration)
+    local left = math.max(0, start + duration - GetTime())
+    if left >= 3600 then return ("Ready in %d h %d min"):format(math.floor(left / 3600), math.floor(left % 3600 / 60)) end
+    if left >= 60 then return ("Ready in %d min"):format(math.ceil(left / 60)) end
+    return ("Ready in %d s"):format(math.ceil(left))
 end
 
 -- what you collected last (any kind), for the foot
@@ -594,6 +613,24 @@ local function buildCell(parent, owner)
     return b
 end
 
+function M:DrawCellCooldown(b)
+    local e = b.entry
+    local cooling = e and e.kind == "toy" and e.collected
+    local start, duration = 0, 0
+    if cooling then start, duration = toyCooldown(e.itemID) end
+    if duration > 0 then
+        if not b.cd then
+            b.cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
+            b.cd:SetAllPoints(b.icon)
+        end
+        b.cd:SetCooldown(start, duration)
+        b.cd:Show()
+    elseif b.cd then
+        b.cd:Clear()
+        b.cd:Hide()
+    end
+end
+
 function M:DrawCell(b)
     local e = b.entry
     if not e then b:Hide() return end
@@ -620,11 +657,17 @@ function M:Build()
         tabs = {
             { key = "mounts", label = "Mounts" },
             { key = "pets", label = "Pets", disabled = true, reason = "No pets on Forever yet" },
-            { key = "toys", label = "Toys", disabled = true, reason = "Comes in the next step of SuuUI's collections." },
+            { key = "toys", label = "Toys" },
             { key = "heirlooms", label = "Heirlooms", disabled = true, reason = "No heirlooms on Forever yet" },
             { key = "wardrobe", label = "Appearances", disabled = true, reason = "Comes in the next step of SuuUI's collections." },
         },
-        onTab = function(key) self.tab = key; self:Refresh() end })
+        onTab = function(key)
+            if key ~= self.tab then self.chosen, self.page = nil, 1 end
+            self.tab = key
+            local first = self.tools and self.tools.list.buttons[1]
+            if first then first.label:SetValue(key == "toys" and "Toys" or "Mounts") end
+            self:Refresh()
+        end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
     w:Hide()
     w.scroll:Hide()
@@ -706,6 +749,29 @@ function M:Build()
     model:SetScript("OnMouseWheel", function(_, delta) self:Zoom(-delta) end)
     model:SetScript("OnModelLoaded", function() self:ModelLoaded() end)
     self.model = model
+    -- a toy: its icon in a faint halo, the cooldown sweeping it
+    local show = CreateFrame("Frame", nil, stage)
+    show:SetSize(240, 220)
+    show:SetPoint("CENTER", stage, "CENTER", 0, 10)
+    show:SetFrameLevel(stage:GetFrameLevel() + 2)
+    show.halo = show:CreateTexture(nil, "BACKGROUND")
+    show.halo:SetTexture(SOFT)
+    show.halo:SetBlendMode("ADD")
+    show.halo:SetSize(240, 220)
+    show.halo:SetPoint("CENTER")
+    show.slot = CreateFrame("Frame", nil, show)
+    show.slot:SetSize(96, 96)
+    show.slot:SetPoint("CENTER")
+    UI.Fill(show.slot, "surface-sunk", "BACKGROUND"):SetAllPoints()
+    show.icon = show.slot:CreateTexture(nil, "ARTWORK")
+    show.icon:SetPoint("TOPLEFT", 1, -1)
+    show.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+    show.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    show.edge = UI.Border(show.slot, "gilt-line", { layer = "OVERLAY" })
+    show.cd = CreateFrame("Cooldown", nil, show.slot, "CooldownFrameTemplate")
+    show.cd:SetAllPoints(show.icon)
+    show:Hide()
+    stage.show = show
     -- loading: the icon first
     stage.loading = CreateFrame("Frame", nil, stage)
     stage.loading:SetSize(200, 120)
@@ -785,7 +851,7 @@ end
 --------------------------------------------------------------------------------
 
 function M:Entries()
-    local all = self:Mounts()
+    local all = self.tab == "toys" and self:Toys() or self:Mounts()
     local tools = self.tools
     local search = (tools.search.edit:GetText() or ""):lower()
     local have, list = tools.have.value or "all", tools.list.value or "all"
@@ -846,7 +912,7 @@ function M:DrawStrip()
     strip.next:SetEnabledState(self.page < self.pages)
     strip.pageText:SetValue(self.page .. " / " .. self.pages)
     strip.empty:SetShown(#list == 0)
-    strip.empty:SetValue("No mounts match.")
+    strip.empty:SetValue(self.tab == "toys" and "No toys match." or "No mounts match.")
 end
 
 function M:Refresh()
@@ -889,19 +955,66 @@ function M:DrawStage()
     stage.hint:SetShown(not none)
     tintStage(stage, "gilt")
     if none then
-        stage.empty.title:SetValue("No mounts yet")
-        stage.empty.text:SetValue("Every mount is in the strip below, with where it comes from. Pick one to see it here.")
+        -- only when a search or filter leaves nothing (the first entry is
+        -- chosen otherwise, also with none of your own)
+        stage.empty.title:SetValue(self.tab == "toys" and "No toys match" or "No mounts match")
+        stage.empty.text:SetValue("Clear the search or show All.")
+        stage.show:Hide()
         if self.model then self.model:Hide() end
         self.showing, self.waiting = nil, nil
         stage.loading:Hide()
         self:DrawAction()
         return
     end
-    self:DrawCard(self.card, e)
     stage.star.on = e.favourite and true or false
     stage.star:Draw(false)
-    self:ShowMount(e)
+    local toy = e.kind == "toy"
+    stage.ctl:SetShown(not toy)
+    stage.hint:SetShown(not toy)
+    stage.show:SetShown(toy)
+    if toy then
+        if self.model then self.model:Hide() end
+        self.showing, self.waiting = nil, nil
+        stage.loading:Hide()
+        local r, g, b = UI.RGBA("gilt")
+        stage.show.halo:SetVertexColor(r * 0.1, g * 0.1, b * 0.1)
+        stage.show.icon:SetTexture(e.icon)
+        stage.show.icon:SetDesaturated(not e.collected)
+        local v = e.collected and 1 or 0.55
+        stage.show.icon:SetVertexColor(v, v, v)
+        stage.show.edge:SetColor(e.collected and "gilt-line" or "gilt-faint")
+    else
+        self:ShowMount(e)
+    end
+    self:DrawCooldowns()
+end
+
+-- A toy's cooldown on the stage, the card and Use; the strip's sweeps.
+-- Again every second while a toy's tab shows (the time counts down).
+function M:DrawCooldowns()
+    local e = self.chosen
+    local stage = self.stage
+    if not (stage and e) then return end
+    local extra
+    if e.kind == "toy" then
+        local start, duration = toyCooldown(e.itemID)
+        if e.collected then
+            if duration > 0 then
+                stage.show.cd:SetCooldown(start, duration)
+                extra = readyIn(start, duration)
+            else
+                stage.show.cd:Clear()
+                extra = "Ready"
+            end
+        else
+            stage.show.cd:Clear()
+        end
+    end
+    self:DrawCard(self.card, e, extra)
     self:DrawAction()
+    if self.tab == "toys" then
+        for _, b in ipairs(self.strip.cells) do self:DrawCellCooldown(b) end
+    end
 end
 
 -- The mount fitted to the stage; its icon until the model has loaded, then
@@ -1012,6 +1125,11 @@ end
 -- list, so the place is looked up first.
 function M:ToggleFavourite()
     local e = self.chosen
+    if e and e.kind == "toy" then
+        call(C_ToyBox.SetIsFavorite, e.itemID, not e.favourite)
+        C_Timer.After(0.1, function() self:Refresh() end)
+        return
+    end
     if not (e and e.kind == "mount") then return end
     local MJ = C_MountJournal
     for i = 1, (call(MJ.GetNumDisplayedMounts) or 0) do
@@ -1028,6 +1146,7 @@ end
 function M:DrawAction()
     local act, e = self.act, self.chosen
     if not act then return end
+    if e and e.kind == "toy" then return self:DrawToyAction(e) end
     local mounted = IsMounted and IsMounted() or false
     local label, why = "Summon", nil
     if mounted then label = "Dismiss"
@@ -1053,11 +1172,40 @@ function M:DrawAction()
     end
 end
 
+-- Use: the secure button set to the toy (out of combat); its look says
+-- "Ready in …" while the toy cools down.
+function M:DrawToyAction(e)
+    local act = self.act
+    local start, duration = toyCooldown(e.itemID)
+    local label, why = "Use", nil
+    if not e.collected then why = "You don't have this toy yet."
+    elseif duration > 0 then label = readyIn(start, duration); why = "It is cooling down."
+    elseif not e.usable then why = "You can't use this toy here." end
+    act.look.label:SetValue(label)
+    act.look:SetEnabledState(why == nil)
+    act.why = why
+    if InCombatLockdown() then
+        self.actionAfterCombat = true
+        return
+    end
+    act:Show()
+    if e.collected then
+        act:SetAttribute("type", "toy")
+        act:SetAttribute("toy", e.itemID)
+    else
+        act:SetAttribute("type", nil)
+    end
+end
+
 function M:DrawFoot()
-    local mounts, have = self.all or {}, 0
-    for _, e in ipairs(mounts) do if e.collected then have = have + 1 end end
-    local muted = "|cff" .. T.color["ink-muted"].hex
-    self.foot:SetValue(("Mounts |cff%s%d|r%s of %d|r"):format(T.color["ink"].hex, have, muted, #mounts))
+    local muted, ink = "|cff" .. T.color["ink-muted"].hex, T.color["ink"].hex
+    local parts = {}
+    for _, kind in ipairs({ { "Mounts", self:Mounts() }, { "Toys", self:Toys() } }) do
+        local have = 0
+        for _, e in ipairs(kind[2]) do if e.collected then have = have + 1 end end
+        parts[#parts + 1] = ("%s |cff%s%d|r%s of %d|r"):format(kind[1], ink, have, muted, #kind[2])
+    end
+    self.foot:SetValue(table.concat(parts, "  ·  "))
     local last = self:CharData().last
     self.last:SetValue(last and ("Last collected: |cff%s%s|r, %s"):format(T.color["ink"].hex, last.name, day(last.at)) or "Nothing collected yet")
 end
@@ -1119,6 +1267,27 @@ function M:OnEnable()
         self:Refresh()
     end)
     self:OnGameEvent("MOUNT_JOURNAL_USABILITY_CHANGED", function() self:DrawAction() end)
+    -- toys: new ones, their cooldowns, their names as the game sends them
+    self:OnGameEvent("NEW_TOY_ADDED", function(_, itemID)
+        local _, name = call(C_ToyBox.GetToyInfo, itemID)
+        self:NoteLast(plain(name) and name or nil, time())
+        self:Refresh()
+    end)
+    self:OnGameEvent("TOYS_UPDATED", function() if self.window and self.window:IsShown() then self:Refresh() end end)
+    for _, e in ipairs({ "SPELL_UPDATE_COOLDOWN", "BAG_UPDATE_COOLDOWN" }) do
+        self:OnGameEvent(e, function() if self.window and self.window:IsShown() then self:DrawCooldowns() end end)
+    end
+    self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
+        if not (self.namesPending and self.window and self.window:IsShown()) then return end
+        self.namesPending = nil
+        if self.namesTimer then return end
+        self.namesTimer = C_Timer.NewTimer(0.3, function() self.namesTimer = nil; self:Refresh() end)
+    end)
+    if not self.ticker then
+        self.ticker = C_Timer.NewTicker(1, function()
+            if self.tab == "toys" and self.window and self.window:IsShown() then self:DrawCooldowns() end
+        end)
+    end
     self:HookJournal()
     self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_Collections" then self:HookJournal() end end)
 end
