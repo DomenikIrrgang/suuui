@@ -1269,9 +1269,28 @@ function M:StyleQuestPins()
 end
 
 function M:StyleLogQuestPins()
+    -- each quest's objective lines: its entry's bottom
+    local bottoms = {}
+    local lines = _G.QuestScrollFrame and _G.QuestScrollFrame.objectiveFramePool
+    if lines and lines.EnumerateActive then
+        for line in lines:EnumerateActive() do
+            local b = line.questID and line:GetBottom()
+            if b and (not bottoms[line.questID] or b < bottoms[line.questID]) then bottoms[line.questID] = b end
+        end
+    end
     for pin in logButtons() do
         pin.suuLog = true
         self:StyleQuestPin(pin)
+        -- the marker in the middle of its quest's entry, title and
+        -- objectives (the game puts it at the title's top left), the
+        -- button with it so the click goes where it shows
+        local row = pin.parent
+        local top = row and row:GetTop()
+        local bottom = top and math.min(row:GetBottom() or top, bottoms[pin.questID] or top)
+        if top and bottom then
+            pin:ClearAllPoints()
+            pin:SetPoint("LEFT", row, "TOPLEFT", 6, -math.floor((top - bottom) / 2 + 0.5))
+        end
     end
 end
 
