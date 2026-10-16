@@ -326,7 +326,8 @@ local CARD_W, SHADE_W = 270, 340
 -- from the stage's top, is MODEL_H high so the middle of a mount that high
 -- sits half its height above the floor glow: its feet stand there. Centred
 -- on the stage, the card over its left.
-local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
+-- RAISE: measured in game, feet stood 35px below the floor shadow.
+local FLOOR, MODEL_W, MODEL_H, RAISE = 40, 440, 470, 35
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -630,7 +631,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("TOP")
+    model:SetPoint("TOP", 0, RAISE)
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
