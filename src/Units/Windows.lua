@@ -901,7 +901,10 @@ function M:SkinWorldMap()
     local status = CreateFrame("Frame", nil, f)
     -- (over the map's pins, the game's and SuuUI's: frame levels 2000 up)
     status:SetFrameLevel(4000)
-    status:SetSize(140, 26)
+    -- (as wide as its text, at least as "00.0, 00.0": the zoom buttons it
+    -- once held are gone)
+    local minW = math.ceil(UI.MeasureText("numeric", "00.0, 00.0"))
+    status:SetSize(minW + 2 * S["space-4"], 26)
     status:SetPoint("BOTTOMLEFT", f.ScrollContainer or f, "BOTTOMLEFT", S["space-3"], S["space-3"])
     UI.Fill(status, "surface-glass"):SetAllPoints()
     UI.Border(status, "gilt-line")
@@ -926,9 +929,14 @@ function M:SkinWorldMap()
             if pos then x, y = pos:GetXY(); you = true end
         end
         if x and y and (x > 0 or y > 0) then
-            coord:SetValue(("%.1f, %.1f"):format(x * 100, y * 100) .. (you and "  |cff" .. T.color["ink-muted"].hex .. "you|r" or ""))
+            local text = ("%.1f, %.1f"):format(x * 100, y * 100)
+            local w = math.ceil(UI.MeasureText("numeric", text .. (you and "  you" or "")))
+            coord:SetValue(text .. (you and "  |cff" .. T.color["ink-muted"].hex .. "you|r" or ""))
+            status:SetWidth(math.max(minW, w) + 2 * S["space-4"])
+            status:SetAlpha(1)
         else
             coord:SetValue("")
+            status:SetAlpha(0)
         end
     end)
     chrome.status = status
