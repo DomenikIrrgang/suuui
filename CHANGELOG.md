@@ -15,6 +15,8 @@
 
 ### Changed
 
+- Quest and recipe data refreshed from QuestieDB's latest Forever data (2026-10-17): 43 new quests on the world map, the library's book turn-ins in Stormwind and the Undercity among them (128 new quest-giver spots); 12 recipes gain dungeon-boss drops (Deadmines, Shadowfang Keep, Ragefire Chasm, Blackfathom Deeps, Wailing Caverns, Razorfen Kraul…); 56 blacksmithing recipes name Karn Stonehoof in Thunder Bluff as their trainer, with the skill they really need there (recorded in game). Map places are unchanged.
+
 - Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
 - Party and raid frames show every debuff after the ones you can remove (Forbearance on you didn't show), not only the ones the game marks for raids.
 
@@ -22,6 +24,7 @@
 
 ### Fixed
 
+- The world map no longer errors on a quest giver offering quests QuestieDB has no name for yet: the game's own title is shown, else the quest's number.
 - Tooltips SuuUI doesn't know by name (an addon's own, the aura buttons') now get SuuUI's look: the check whether one already had it wasn't reachable by the Tooltips module, so the step quietly did nothing.
 - Text fields react to typing at once (the merchant's quantity note, money amounts, the auction house): some only did after Enter.
 - The game's dropdown menus in SuuUI's look no longer leave a gap under their last row.

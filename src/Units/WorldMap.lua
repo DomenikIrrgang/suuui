@@ -405,6 +405,16 @@ local function eventOn(key, mapID)
     return true
 end
 
+-- A quest's name: QuestieDB's, else the game's title, else its ID (some of
+-- Forever's newer quests have no name in QuestieDB yet: 2026-10-17, the
+-- library's book quests).
+local function questName(q, id)
+    if q and q[1] then return q[1] end
+    local t = C_QuestLog and C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(id)
+    if type(t) == "string" and t ~= "" and not (issecretvalue and issecretvalue(t)) then return t end
+    return "Quest " .. tostring(id)
+end
+
 local function questState(q, id, me, done)
     if onQuest(id) then return nil end
     local flags = q[10] or 0
@@ -464,7 +474,7 @@ function M:QuestsFor(npcID)
                         local q = starts.quests and starts.quests[id]
                         local state, difficulty
                         if q then state, difficulty = questState(q, id, me, done) end
-                        out[#out + 1] = { id = id, name = q and q[1], state = state, difficulty = difficulty,
+                        out[#out + 1] = { id = id, name = q and questName(q, id), state = state, difficulty = difficulty,
                                           onQuest = onQuest(id) and true or false, done = done[id] or false }
                     end
                 end
@@ -496,7 +506,7 @@ function M:Collect(mapID)
                 local state, difficulty, level
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
-                    list[#list + 1] = { name = q[1], level = level, difficulty = difficulty, state = state }
+                    list[#list + 1] = { name = questName(q, id), level = level, difficulty = difficulty, state = state }
                     ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty, state = state } end
@@ -541,7 +551,7 @@ function M:Collect(mapID)
                 local state, difficulty, level
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (difficulty ~= "trivial" or on.quests.trivial) then
-                    list[#list + 1] = { name = q[1], level = level }
+                    list[#list + 1] = { name = questName(q, id), level = level }
                     ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty } end
