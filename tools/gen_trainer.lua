@@ -99,6 +99,9 @@ local function merge(class, list)
         local o = cost[t.name .. "@" .. t.level]
         if o then
             t.cost = o.cost
+            -- the game's own text unfilled ("$w1" for Thorns' damage):
+            -- the file's, which had the numbers
+            if t.text and t.text:find("%$%a+%d") and o.text and not o.text:find("%$%a+%d") then t.text = o.text end
             t.text = t.text or o.text
         elseif ratio < 0.995 and (t.cost or 0) > 0 then
             t.cost = math.floor(t.cost / ratio + 0.5)
