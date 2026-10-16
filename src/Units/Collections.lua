@@ -326,8 +326,10 @@ local CARD_W, SHADE_W = 270, 340
 -- from the stage's top, is MODEL_H high so the middle of a mount that high
 -- sits half its height above the floor glow: its feet stand there. Centred
 -- on the stage, the card over its left.
--- RAISE: measured in game, feet stood 35px below the floor shadow.
-local FLOOR, MODEL_W, MODEL_H, RAISE = 40, 440, 470, 35
+-- RAISE: measured in game, a Battlestrider's feet 35px below the floor
+-- shadow and a horse's 20px above it at 35 (the game centres each mount by
+-- its whole size): 25 splits the two.
+local FLOOR, MODEL_W, MODEL_H, RAISE = 40, 440, 470, 25
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -401,8 +403,10 @@ local function stageArt(stage)
     stage.pool = pool
     local shadow = stage:CreateTexture(nil, "BACKGROUND", nil, -4)
     shadow:SetTexture(SOFT)
-    shadow:SetVertexColor(0, 0, 0, 0.7)
-    shadow:SetSize(260, 36)
+    -- soft and wide: mounts stand a little higher or lower on it (each
+    -- is centred by its whole size), a hard edge showed the gap as floating
+    shadow:SetVertexColor(0, 0, 0, 0.4)
+    shadow:SetSize(340, 56)
     shadow:SetPoint("BOTTOM", stage, "BOTTOM", 0, FLOOR + 4)
     -- the vignette: four edges darkening inward
     local function edge(point, horizontal, size, fromA, toA)
