@@ -1,7 +1,8 @@
 -- Diagnostics/PartyAuraProbe.lua
 -- "/suu probe partyauras": which of a party member's (and your target's)
 -- auras each of the party frames' and the target frame's aura groups lets
--- through (the engine's own filter test), and
+-- through (the engine's own filter test, and the lists the containers
+-- take), and
 -- how many icons each frame's aura container shows. Prints in chat and saves
 -- to SuuUIProbe.partyAuras. Out of combat.
 
@@ -27,6 +28,46 @@ local FILTERS = {
     notCancel = "HELPFUL|!CANCELABLE",
     cancel = "HELPFUL|CANCELABLE",
 }
+
+-- The containers don't ask per aura: they take the list a filter gives
+-- (GetUnitAuraInstanceIDs). The same filters, asked that way, plus the
+-- plain and single-token ones to see which token lets what through.
+local LISTS = {
+    { "helpful", "HELPFUL" },
+    { "harmful", "HARMFUL" },
+    { "external", "HELPFUL|EXTERNAL_DEFENSIVE" },
+    { "externalNotBig", "HELPFUL|EXTERNAL_DEFENSIVE|!BIG_DEFENSIVE" },
+    { "big", "HELPFUL|BIG_DEFENSIVE" },
+    { "notExternal", "HELPFUL|!EXTERNAL_DEFENSIVE" },
+    { "partyBuffs", "HELPFUL|!EXTERNAL_DEFENSIVE|!BIG_DEFENSIVE" },
+    { "raidBuffs", "HELPFUL|RAID" },
+    { "dispel", "HARMFUL|RAID_PLAYER_DISPELLABLE" },
+    { "debuffs", "HARMFUL|!RAID_PLAYER_DISPELLABLE|RAID" },
+    { "tMine", "HARMFUL|PLAYER" },
+    { "tMyBuffs", "HELPFUL|PLAYER" },
+    { "tTheirs", "HARMFUL|!PLAYER" },
+    { "tTheirBuffs", "HELPFUL|!PLAYER" },
+}
+
+local function auraName(unit, id)
+    local ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, id)
+    if not ok or not a then return "#" .. show(id) end
+    return ("%s (%s%s)"):format(show(a.name), show(a.spellId), a.isHarmful == true and ", harmful" or "")
+end
+
+local function lists(unit)
+    local out = {}
+    for _, l in ipairs(LISTS) do
+        local ok, ids = pcall(C_UnitAuras.GetUnitAuraInstanceIDs, unit, l[2])
+        local names = {}
+        if ok and type(ids) == "table" then
+            for _, id in ipairs(ids) do names[#names + 1] = auraName(unit, id) end
+        end
+        local text = l[1] .. ": " .. (ok and (#names > 0 and table.concat(names, ", ") or "none") or ("error " .. tostring(ids)))
+        out[#out + 1] = text
+    end
+    return out
+end
 
 local function shownChildren(frame)
     -- the engine's buttons answer IsShown with a secret: those count as "?"
@@ -64,6 +105,8 @@ function PA.Command()
                     ns.Print(unit .. " " .. show(name) .. " · " .. text)
                 end
             end
+            line.lists = lists(unit)
+            -- (saved only: 14 lines a unit would flood the chat)
             -- the frame's container: how many icons it shows
             if m and m.frames then
                 for _, f in ipairs(m.frames) do
