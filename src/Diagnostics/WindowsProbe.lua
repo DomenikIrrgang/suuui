@@ -193,7 +193,33 @@ WINDOWS.gamemenu = {
              "Settings.OpenToCategory", "ToggleHelpFrame", "ShowMacroFrame", "StoreFrame_SetShown", "C_StorePublic.IsEnabled",
              "C_SplashScreen.RequestLatestSplashScreen", "ReloadUI", "C_UI.Reload" },
 }
-local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect", "gamemenu" }
+-- the game menu's windows (asked 2026-10-17: Macros, AddOns and Support
+-- aren't styled yet)
+WINDOWS.macros = {
+    frames = { "MacroFrame", "MacroPopupFrame", "MacroFrameText", "MacroSaveButton", "MacroNewButton", "MacroDeleteButton" },
+    addons = { "Blizzard_MacroUI" },
+    apis = { "GetNumMacros", "GetMacroInfo", "GetMacroBody", "GetMacroIndexByName", "CreateMacro", "EditMacro", "DeleteMacro",
+             "PickupMacro", "GetMacroIcons", "GetMacroItemIcons", "GetLooseMacroIcons", "GetLooseMacroItemIcons",
+             "ShowMacroFrame", "C_Macro", "C_Macro.GetMacroName", "C_Macro.SetMacroExecuteLineCallback" },
+}
+WINDOWS.addons = {
+    frames = { "AddonList", "AddonListEnableAllButton", "AddonListDisableAllButton", "AddonListOkayButton", "AddonListCancelButton",
+               "AddonCharacterDropdown", "AddonList.SearchBox", "AddonList.Performance" },
+    apis = { "C_AddOns.GetNumAddOns", "C_AddOns.GetAddOnInfo", "C_AddOns.EnableAddOn", "C_AddOns.DisableAddOn",
+             "C_AddOns.EnableAllAddOns", "C_AddOns.DisableAllAddOns", "C_AddOns.SaveAddOns", "C_AddOns.ResetAddOns",
+             "C_AddOns.GetAddOnDependencies", "C_AddOns.GetAddOnOptionalDependencies", "C_AddOns.GetAddOnEnableState",
+             "C_AddOns.GetAddOnMetadata", "C_AddOns.IsAddOnLoadOnDemand", "C_AddOns.IsAddOnLoaded", "C_AddOns.IsAddOnLoadable",
+             "C_AddOns.GetScriptsDisallowedForBeta", "C_AddOns.IsAddonVersionCheckEnabled", "C_AddOns.SetAddonVersionCheck",
+             "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage", "C_AddOnProfiler", "C_AddOnProfiler.GetAddOnMetric",
+             "C_AddOnProfiler.GetOverallMetric", "C_AddOnProfiler.IsEnabled" },
+}
+WINDOWS.help = {
+    frames = { "HelpFrame", "HelpBrowser", "HelpFrame.Browser", "BrowserSettingsTooltip", "TicketStatusFrame" },
+    apis = { "ToggleHelpFrame", "HelpFrame_ShowFrame", "C_UserFeedback", "C_ReportSystem", "GetGMTicket", "C_Support",
+             "C_SupportTicket", "LoadURLIndex", "C_ExternalEventURL" },
+}
+local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect", "gamemenu",
+                "macros", "addons", "help" }
 
 -- Every large window open now (named or by its parent's key), to find the
 -- ones the probe doesn't know by name (the inspected player's talents).
@@ -216,7 +242,9 @@ end
 WP.OpenWindows = openWindows
 
 local function frameInfo(name)
-    local f = _G[name]
+    -- "Parent.Key" for a child kept by key
+    local f = _G[name:match("^[^.]+")]
+    for key in name:gmatch("%.([^.]+)") do f = type(f) == "table" and f[key] or nil end
     if not f then return "missing" end
     if type(f) ~= "table" or not f.GetObjectType then return "not a frame: " .. type(f) end
     local okP, protected = pcall(f.IsProtected, f)
@@ -348,6 +376,31 @@ local SAMPLES = {
         s.portrait = call(GetQuestPortraitGiver)
     end,
     dressup = function(s) end,
+    macros = function(s)
+        s.counts = call(GetNumMacros)
+        s.first = call(GetMacroInfo, 1)
+        s.icons = #(GetMacroIcons and GetMacroIcons() or {})
+    end,
+    addons = function(s)
+        s.count = call(C_AddOns.GetNumAddOns)
+        local list = {}
+        for i = 1, math.min(C_AddOns.GetNumAddOns(), 20) do
+            list[i] = call(C_AddOns.GetAddOnInfo, i) .. " | state " .. call(C_AddOns.GetAddOnEnableState, i, UnitName("player"))
+                .. " | deps " .. call(C_AddOns.GetAddOnDependencies, i)
+        end
+        s.list = list
+        s.disallowed = call(C_AddOns.GetScriptsDisallowedForBeta)
+    end,
+    help = function(s)
+        local f = _G.HelpFrame
+        local kinds = {}
+        if f then
+            for _, c in ipairs({ f:GetChildren() }) do
+                kinds[#kinds + 1] = ("%s %s shown=%s"):format(c:GetObjectType(), c:GetName() or c:GetDebugName() or "?", show(c:IsShown()))
+            end
+        end
+        s.children = kinds
+    end,
     gamemenu = function(s)
         -- its buttons: each one's text and what it is
         local f = _G.GameMenuFrame
@@ -507,6 +560,23 @@ function WP.Arm()
         g:HookScript("OnShow", function()
             if GetTime() <= untilT then C_Timer.After(0.3, function() WP.Snapshot("gamemenu") end) end
         end)
+    end
+    -- the game menu's windows, each when it shows
+    local function hookShow(key, name)
+        local w = _G[name]
+        WP.shownHooked = WP.shownHooked or {}
+        if w and not WP.shownHooked[key] then
+            WP.shownHooked[key] = true
+            w:HookScript("OnShow", function()
+                if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot(key) end) end
+            end)
+        end
+    end
+    hookShow("addons", "AddonList")
+    hookShow("help", "HelpFrame")
+    hookShow("macros", "MacroFrame")
+    if not (WP.shownHooked and WP.shownHooked.macros) and EventUtil and EventUtil.ContinueOnAddOnLoaded then
+        EventUtil.ContinueOnAddOnLoaded("Blizzard_MacroUI", function() hookShow("macros", "MacroFrame") end)
     end
     if not WP.journalHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
         EventUtil.ContinueOnAddOnLoaded("Blizzard_Collections", hookJournal)

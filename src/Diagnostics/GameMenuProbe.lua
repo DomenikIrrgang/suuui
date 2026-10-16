@@ -18,8 +18,6 @@ ns.GameMenuProbe = GP
 
 local UI = ns.UI
 
-local function count(t) return type(t) == "table" and #t or 0 end
-
 local function taintedFields(fname)
     local f, list = _G[fname], {}
     if type(f) ~= "table" then return "missing" end
@@ -44,7 +42,6 @@ local ENTRIES = {
 function GP.Command()
     SuuUIProbe = SuuUIProbe or {}
     local out = { at = date("%Y-%m-%d %H:%M:%S"), calls = {}, start = {
-        errors = count(SuuUIDB and SuuUIDB.errors), blocked = count(SuuUIDB and SuuUIDB.blocked),
         settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame"),
     } }
     SuuUIProbe.gameMenu = out
@@ -59,8 +56,14 @@ function GP.Command()
         for _, e in ipairs(ENTRIES) do
             local b = UI.Button(p.body, { text = e.text, width = 200, onClick = function()
                 local ok, err = pcall(e.call)
-                out.calls[#out.calls + 1] = ("%s %s: %s, combat %s"):format(date("%H:%M:%S"), e.key,
+                local line = #out.calls + 1
+                out.calls[line] = ("%s %s: %s, combat %s"):format(date("%H:%M:%S"), e.key,
                     ok and "ok" or ("error " .. tostring(err)), tostring(InCombatLockdown()))
+                -- what addon code wrote by opening it, a moment after
+                C_Timer.After(1, function()
+                    out.calls[line] = out.calls[line] .. "; written by addon code: SettingsPanel " .. taintedFields("SettingsPanel")
+                        .. "; EditModeManagerFrame " .. taintedFields("EditModeManagerFrame")
+                end)
             end })
             b:SetPoint("TOP", prev or p.body, prev and "BOTTOM" or "TOP", 0, prev and -8 or 0)
             prev = b
@@ -69,16 +72,20 @@ function GP.Command()
             local errors, blocked = SuuUIDB and SuuUIDB.errors or {}, SuuUIDB and SuuUIDB.blocked or {}
             local result = { at = date("%H:%M:%S"), errors = {}, blocked = {},
                 settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame") }
-            for i = out.start.errors + 1, #errors do
-                local e = errors[i]
-                result.errors[#result.errors + 1] = type(e) == "table" and (tostring(e.source) .. ": " .. tostring(e.message)) or tostring(e)
+            -- both lists keep their last 30, so new entries are told by their time
+            for _, e in ipairs(errors) do
+                if type(e) == "table" and tostring(e.time) >= out.at then
+                    result.errors[#result.errors + 1] = tostring(e.source) .. ": " .. tostring(e.message)
+                end
             end
-            for i = out.start.blocked + 1, #blocked do
-                local e = blocked[i]
-                result.blocked[#result.blocked + 1] = ("%s %s %s"):format(tostring(e.event), tostring(e.addon), tostring(e.func))
+            for _, e in ipairs(blocked) do
+                if type(e) == "table" and tostring(e.time) >= out.at then
+                    result.blocked[#result.blocked + 1] = ("%s %s %s"):format(tostring(e.event), tostring(e.addon), tostring(e.func))
+                end
             end
             out.check = result
-            ns.Print(("Game menu probe: %d errors, %d blocked since the start. /reload to save."):format(#result.errors, #result.blocked))
+            ns.Print(("Game menu probe: %d errors, %d blocked since the start; written by addon code: SettingsPanel %s, EditModeManagerFrame %s. /reload to save.")
+                :format(#result.errors, #result.blocked, result.settings, result.editMode))
         end })
         check:SetPoint("BOTTOM", p.body, "BOTTOM", 0, 0)
     end
