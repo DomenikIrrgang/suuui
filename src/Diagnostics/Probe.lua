@@ -843,6 +843,10 @@ function ns.Probe.Command(arg)
         ns.CollectionsOwnProbe.Command(rest)
         return
     end
+    if sub == "colltiles" then
+        ns.CollectionsTilesProbe.Command(rest)
+        return
+    end
     if sub == "collart" then
         ns.CollectionsArtProbe.Command(rest)
         return
