@@ -590,7 +590,8 @@ end
 --------------------------------------------------------------------------------
 
 local SUGGEST_ROW, SUGGEST_HEAD = 26, 20
-local GUILD_MAX = 8
+local SUGGEST_MAX_H = 360 -- then the list scrolls
+local GUILD_MAX = 30 -- guild members shown: online first, filtered by what's typed
 
 local function classToken(file)
     return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or "ink"
@@ -648,8 +649,8 @@ function M:Suggestions(typed)
         end
     end
     add("Recent", recent)
-    -- the guild, only for something typed
-    if typed ~= "" and IsInGuild() then
+    -- the guild: with nothing typed up to 30, online first; else the matches
+    if IsInGuild() then
         local first, rest = {}, {}
         local myName = Ambiguate(SuuUI.FullName("player") or "", "short")
         for i = 1, (call(GetNumGuildMembers) or 0) do
@@ -659,16 +660,20 @@ function M:Suggestions(typed)
                 local m = matches(name)
                 if m and Ambiguate(full, "short") ~= myName then
                     local row = { name = name, color = classToken(file), note = plain(rank) and rank or nil,
-                                  right = online and tint("fel", "● ") .. "Online" or lastOnline(i), diamond = true }
-                    if m == 1 then first[#first + 1] = row else rest[#rest + 1] = row end
+                                  right = online and tint("fel", "● ") .. "Online" or lastOnline(i), diamond = true,
+                                  online = online and true or false }
+                    if typed == "" then
+                        if online then first[#first + 1] = row else rest[#rest + 1] = row end
+                    elseif m == 1 then first[#first + 1] = row else rest[#rest + 1] = row end
                 end
             end
         end
         table.sort(first, function(a, b) return a.name < b.name end)
         table.sort(rest, function(a, b) return a.name < b.name end)
         local guild = {}
+        local most = GUILD_MAX
         for _, list in ipairs({ first, rest }) do
-            for _, r in ipairs(list) do if #guild < GUILD_MAX then guild[#guild + 1] = r end end
+            for _, r in ipairs(list) do if #guild < most then guild[#guild + 1] = r end end
         end
         add("Guild", guild)
     end
@@ -685,6 +690,11 @@ function M:BuildSuggest(field)
     UI.Shadow(d, "shadow-panel")
     d:Hide()
     d.heads, d.rows = {}, {}
+    -- a long list (the whole guild) scrolls: wheel, bar, or the arrow keys
+    d.scroll = UI.ScrollArea(d, -(S["space-3"] + 1))
+    d.scroll:SetPoint("TOPLEFT", 1, -1)
+    d.scroll:SetPoint("BOTTOMRIGHT", -1, 1)
+    d.scroll:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
     self.suggest = d
     local edit = field.edit
     edit:SetAltArrowKeyMode(false)
@@ -704,11 +714,22 @@ function M:BuildSuggest(field)
         d.pick = 1
         self:DrawSuggest()
     end))
-    edit:HookScript("OnEditFocusLost", function() C_Timer.After(0.15, function() d:Hide() end) end)
+    -- leaving the field closes the list, unless the mouse is on it (its bar)
+    edit:HookScript("OnEditFocusLost", function()
+        C_Timer.After(0.15, function() if not d:IsMouseOver() then d:Hide() end end)
+    end)
+    d:SetScript("OnLeave", function() if not edit:HasFocus() and not d:IsMouseOver() then d:Hide() end end)
     edit:SetScript("OnArrowPressed", function(_, key)
         if not d:IsShown() or #d.flat == 0 then return end
         d.pick = ((d.pick or 1) + (key == "DOWN" and 1 or (key == "UP" and -1 or 0)) - 1) % #d.flat + 1
         self:DrawSuggest(true)
+        -- keep the highlighted row in view
+        local r = d.rows[d.pick]
+        if r and r.y then
+            local top, viewH = d.scroll:GetVerticalScroll(), d.scroll:GetHeight()
+            if r.y < top then d.scroll:SetVerticalScroll(r.y)
+            elseif r.y + SUGGEST_ROW > top + viewH then d.scroll:SetVerticalScroll(r.y + SUGGEST_ROW - viewH) end
+        end
     end)
     edit:HookScript("OnEnterPressed", function()
         if d:IsShown() and d.flat and d.flat[d.pick or 1] then self:PickSuggest(d.flat[d.pick or 1]) end
@@ -739,7 +760,7 @@ function M:DrawSuggest(keep)
         nh = nh + 1
         local h = d.heads[nh]
         if not h then
-            h = UI.Text(d, "caption", "ink-muted")
+            h = UI.Text(d.scroll.child, "caption", "ink-muted")
             d.heads[nh] = h
         end
         h:ClearAllPoints()
@@ -752,7 +773,7 @@ function M:DrawSuggest(keep)
             d.flat[#d.flat + 1] = row
             local r = d.rows[nr]
             if not r then
-                r = CreateFrame("Button", nil, d)
+                r = CreateFrame("Button", nil, d.scroll.child)
                 r:SetHeight(SUGGEST_ROW)
                 r.hl = UI.Fill(r, "arcane-soft", "BACKGROUND")
                 r.hl:SetAllPoints()
@@ -768,9 +789,9 @@ function M:DrawSuggest(keep)
             end
             r.row, r.flatIndex = row, #d.flat
             r:ClearAllPoints()
-            -- inside the border: the highlight leaves its edge showing
-            r:SetPoint("TOPLEFT", 1, -y)
-            r:SetPoint("RIGHT", d, "RIGHT", -1, 0)
+            r.y = y
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:SetPoint("RIGHT", d.scroll.child, "RIGHT")
             r.dot:SetShown(row.diamond and true or false)
             if row.diamond then r.dot:SetVertexColor(UI.RGBA(row.color or "ink")) end
             r.name:ClearAllPoints()
@@ -788,7 +809,9 @@ function M:DrawSuggest(keep)
     end
     for i = nh + 1, #d.heads do d.heads[i]:Hide() end
     for i = nr + 1, #d.rows do d.rows[i]:Hide() end
-    d:SetHeight(y + S["space-2"])
+    d.scroll.child:SetHeight(y + S["space-2"])
+    d:SetHeight(math.min(SUGGEST_MAX_H, y + S["space-2"]) + 2)
+    if not keep then d.scroll:SetVerticalScroll(0) end
     d:SetShown(nr > 0)
 end
 
