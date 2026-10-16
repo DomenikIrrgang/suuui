@@ -1135,6 +1135,15 @@ local function questStyle(pin)
     if style == S.QuestDisabled then return "disabled" end
 end
 
+-- The quest log's markers (one before each quest's title, the game's
+-- buttons from its list's pool) in the same look
+-- (see StyleLogQuestPins).
+local function logButtons()
+    local contents = _G.QuestScrollFrame and _G.QuestScrollFrame.Contents
+    local pool = contents and contents.buttonPool
+    return pool and pool.EnumerateActive and pool:EnumerateActive() or function() end
+end
+
 -- The game's look back (the module off).
 local function unstyle(pin)
     local o = pin.suuQuest
@@ -1151,6 +1160,7 @@ function M:UnstyleQuest()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do unstyle(pin) end
+    for pin in logButtons() do unstyle(pin) end
 end
 
 function M:StyleQuestPin(pin)
@@ -1207,11 +1217,15 @@ function M:StyleQuestPin(pin)
     o.pin:SetData(data)
     -- the next step on another map: a dashed edge
     o.pin.edge:SetTexture(kind == "waypoint" and (TEXTURES .. "CircleDash.tga") or (TEXTURES .. "CircleFill.tga"))
-    o.pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100)
+    -- (Pin opacity is the map's: the log's stay solid)
+    o.pin:SetBaseAlpha(pin.suuLog and 1 or (self:Get("pinAlpha") or 100) / 100)
     o.pin:SetHighlight((tracked or lit) and true or nil)
-    -- glow: arcane under a turn-in, ink at 40% while super-tracked
+    -- glow: arcane under a turn-in, ink at 40% while super-tracked (not in
+    -- the quest log: it would spill over the titles)
     local size = o.pin:PinSize()
-    if tracked then
+    if pin.suuLog then
+        o.glow:Hide()
+    elseif tracked then
         o.glow:SetVertexColor(UI.RGBA("ink", 0.4))
         o.glow:SetSize(size + 24, size + 24)
         o.glow:Show()
@@ -1230,8 +1244,15 @@ end
 function M:FitQuestPin(pin, grow)
     local o = pin.suuQuest
     local f = self.map
-    if not (o and f and self.layer) then return end
+    if not o then return end
     o.grow = grow or o.grow or 1
+    -- in the quest log: as large as the game's button, whatever the zoom
+    if pin.suuLog then
+        local h = pin:GetHeight()
+        o:SetScale(o.grow * ((h and h > 0) and h or 20) / o.pin:PinSize())
+        return
+    end
+    if not (f and self.layer) then return end
     local cs = f:GetCanvasScale()
     local pe = pin:GetEffectiveScale()
     if not (cs and cs > 0 and pe and pe > 0) then return end
@@ -1245,6 +1266,13 @@ function M:StyleQuestPins()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do self:StyleQuestPin(pin) end
+end
+
+function M:StyleLogQuestPins()
+    for pin in logButtons() do
+        pin.suuLog = true
+        self:StyleQuestPin(pin)
+    end
 end
 
 -- The game's quest pins' provider: after each of its refreshes, the look.
@@ -1475,6 +1503,11 @@ function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:HookQuestProviders()
     self:StyleQuestPins()
+    -- (the log lays its quests out again on every change)
+    if _G.QuestLogQuests_Update then
+        hooksecurefunc("QuestLogQuests_Update", function() if self:IsEnabled() then self:StyleLogQuestPins() end end)
+    end
+    self:StyleLogQuestPins()
     self:Watch("pinAlpha", function()
         if self.map and self.map:IsShown() then self:Layout() end
         if self.preview then for _, pin in ipairs(self.preview.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end end
