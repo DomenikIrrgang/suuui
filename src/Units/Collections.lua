@@ -316,10 +316,12 @@ end
 local WIDTH, HEIGHT = 960, 700
 local CELL, COLS, ROWS = 40, 18, 2
 local CARD_W, SHADE_W = 270, 340
--- the model stands centred on the whole stage, its feet above the turn and
--- zoom buttons (seen in game: right of the card it sat off centre, legs cut)
+-- the model stands centred on the whole stage (seen in game: right of the
+-- card it sat off centre). The scene fills the stage, its camera further
+-- out than the game's framing, so the feet stay in (seen in game: the
+-- scene's own edge cut them); FLOOR is where the floor glow sits.
 local FLOOR = 40
-local ZOOM_OUT = 1.2
+local ZOOM_OUT = 1.45
 local TOOLS_H = 30
 local STRIP_H = CELL * ROWS + S["space-5"] + 8
 local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -372,6 +374,7 @@ local function stageArt(stage)
     base:SetGradient("VERTICAL", CreateColor(0.051, 0.043, 0.035, 1), CreateColor(0.09, 0.078, 0.059, 1))
     local light = stage:CreateTexture(nil, "BACKGROUND", nil, -7)
     light:SetTexture(SOFT)
+    light:SetBlendMode("ADD")
     light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120, 120)
     light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120, -260)
     stage.light = light
@@ -383,6 +386,7 @@ local function stageArt(stage)
     floor:SetHeight(130)
     local pool = stage:CreateTexture(nil, "BACKGROUND", nil, -5)
     pool:SetTexture(SOFT)
+    pool:SetBlendMode("ADD")
     pool:SetSize(420, 90)
     pool:SetPoint("BOTTOM", stage, "BOTTOM", 0, FLOOR - 12)
     stage.pool = pool
@@ -414,16 +418,16 @@ local function stageArt(stage)
     UI.Border(stage, "gilt-faint")
 end
 
--- The stage's tint: a faint key light and floor glow (the soft disc is
--- solid over most of its middle, so at the design's 30% the light read as
--- a yellow lamp: seen in game).
+-- The stage's tint: a faint key light and floor glow, added to what is
+-- under them (blend ADD) in the token's colour at 9% and 8%: they can only
+-- ever warm the stage a little. (As plain alpha they showed in game as a
+-- yellow lamp: the soft disc is solid over most of its middle, and its
+-- alpha didn't hold.)
 local LIGHT_A, POOL_A = 0.09, 0.08
 local function tintStage(stage, token)
     local r, g, b = UI.RGBA(token)
-    stage.light:SetVertexColor(r, g, b)
-    stage.light:SetAlpha(LIGHT_A)
-    stage.pool:SetVertexColor(r, g, b)
-    stage.pool:SetAlpha(POOL_A)
+    stage.light:SetVertexColor(r * LIGHT_A, g * LIGHT_A, b * LIGHT_A)
+    stage.pool:SetVertexColor(r * POOL_A, g * POOL_A, b * POOL_A)
 end
 
 --------------------------------------------------------------------------------
@@ -618,8 +622,7 @@ function M:Build()
     -- the mount: its own scene, framed by its scene ID
     local ok, scene = pcall(CreateFrame, "ModelScene", nil, stage, "ModelSceneMixinTemplate")
     if ok and scene then
-        scene:SetPoint("TOPLEFT")
-        scene:SetPoint("BOTTOMRIGHT", 0, FLOOR)
+        scene:SetAllPoints()
         scene:SetFrameLevel(stage:GetFrameLevel() + 2)
         self.scene = scene
     end
