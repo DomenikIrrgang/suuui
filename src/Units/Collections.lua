@@ -841,6 +841,8 @@ function M:ShowMount(e)
     local actor = call(scene.GetActorByTag, scene, "unwrapped")
     self.actor = actor
     if not actor then return end
+    -- framed at once (from the scene's original camera), again once loaded
+    self:FrameMount(e.scene)
     call(actor.SetModelByCreatureDisplayID, actor, e.display or 0)
     if e.isSelf then call(actor.SetAnimation, actor, 618) else call(actor.SetAnimation, actor, 0) end
     local id, tries = e.id, 0
@@ -849,7 +851,7 @@ function M:ShowMount(e)
         tries = tries + 1
         local loaded = call(actor.IsLoaded, actor)
         if loaded or tries > 40 then
-            self:FrameMount()
+            self:FrameMount(e.scene)
             stage.loading:Hide()
             scene:SetAlpha(1)
             SuuUI.Motion.FadeIn(scene, T.duration["dur-base"])
@@ -862,15 +864,36 @@ end
 
 -- Further out than the game's framing (its scene starts at the farthest
 -- zoom it allows, so that limit goes out too), aimed lower, snapped there.
-function M:FrameMount()
+-- Always from the scene's own camera as SuuUI first saw it, and the
+-- model's own facing: changes made to the camera and the model stay with
+-- them from mount to mount (seen in game: going back to a mount framed it
+-- differently).
+local framing = {}
+
+local function original(cam, actor, sceneID)
+    local o = framing[sceneID]
+    if not o then
+        local x, y, z = call(cam.GetTarget, cam)
+        o = {
+            far = call(cam.GetMaxZoomDistance, cam), zoom = call(cam.GetZoomDistance, cam), x = x, y = y, z = z,
+            yaw = call(cam.GetYaw, cam), pitch = call(cam.GetPitch, cam), facing = actor and call(actor.GetYaw, actor),
+        }
+        framing[sceneID] = o
+    end
+    return o
+end
+
+function M:FrameMount(sceneID)
     local cam = self.scene and call(self.scene.GetActiveCamera, self.scene)
     if not cam then return end
-    local d, far = call(cam.GetZoomDistance, cam), call(cam.GetMaxZoomDistance, cam)
-    if not (d and far) then return end
-    call(cam.SetMaxZoomDistance, cam, far * ZOOM_OUT)
-    call(cam.SetZoomDistance, cam, d * ZOOM_OUT)
-    local x, y, z = call(cam.GetTarget, cam)
-    if x and y and z then call(cam.SetTarget, cam, x, y, z - d * LIFT) end
+    local o = original(cam, self.actor, sceneID or 4)
+    if not (o.far and o.zoom) then return end
+    call(cam.SetMaxZoomDistance, cam, o.far * ZOOM_OUT)
+    call(cam.SetZoomDistance, cam, o.zoom * ZOOM_OUT)
+    if o.x and o.y and o.z then call(cam.SetTarget, cam, o.x, o.y, o.z - o.zoom * LIFT) end
+    if o.yaw then call(cam.SetYaw, cam, o.yaw) end
+    if o.pitch then call(cam.SetPitch, cam, o.pitch) end
+    if self.actor and o.facing then call(self.actor.SetYaw, self.actor, o.facing) end
     call(cam.SnapAllInterpolatedValues, cam)
 end
 
