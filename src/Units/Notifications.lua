@@ -1255,14 +1255,17 @@ function M:OnEnable()
         -- online/offline held in the fight
         for key, q in pairs(self.presence or {}) do if q.held then self:FlushPresence(key) end end
     end)
-    -- friends and guild members coming and going
+    -- friends and guild members coming and going (handlers take the event
+    -- first, then its values: these read one value too far, the companion
+    -- app flag and the sender, and no note ever came; found with /suu probe
+    -- social)
     self:HookPresence()
-    self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, _, msg) self:SystemLine(msg) end)
+    self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, msg) self:SystemLine(msg) end)
     if not valid or valid("BN_FRIEND_ACCOUNT_ONLINE") then
-        self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, _, id)
+        self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, id)
             if plain(id) and id then self:Presence("bnet", true, self:BnetPerson(id)) end
         end)
-        self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, _, id)
+        self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, id)
             if plain(id) and id then self:Presence("bnet", false, self:BnetPerson(id)) end
         end)
     end

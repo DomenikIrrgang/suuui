@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Notes for friends, Battle.net friends and guild members coming online and going offline appear (none did; the game's own lines were hidden all the same).
 - Inviting a Battle.net friend from the Social window or their online note works (it said the player couldn't be found).
 - The spellbook no longer shows Elemental twice for shamans (and Shadow twice for priests), once empty with a question mark.
 
