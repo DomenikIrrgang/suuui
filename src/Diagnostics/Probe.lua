@@ -839,6 +839,10 @@ function ns.Probe.Command(arg)
         ns.WindowsProbe.Command(rest)
         return
     end
+    if sub == "gamemenu" then
+        ns.GameMenuProbe.Command(rest)
+        return
+    end
     if sub == "toymodels" then
         ns.ToyModelProbe.Command(rest)
         return
