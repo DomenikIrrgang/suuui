@@ -470,6 +470,7 @@ local TextField = {}
 
 function TextField:SetValue(text)
     self.value = text or ""
+    self.lastTyped = self.value -- set from code: not typing
     showText(self.edit, self.value)
     self.placeholder:SetShown(self.value == "" and not self.edit:HasFocus())
 end
@@ -521,8 +522,14 @@ function UI.TextField(parent, opts)
     end)
     e:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
     e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    e:SetScript("OnTextChanged", function(self, userInput)
-        if userInput and f.onTextChanged then f.onTextChanged(self:GetText()) end
+    -- what's typed, live: any change while the field has focus (the game
+    -- doesn't always flag typing as user input on Forever)
+    e:SetScript("OnTextChanged", function(self)
+        local text = self:GetText()
+        if self:HasFocus() and text ~= f.lastTyped then
+            f.lastTyped = text
+            if f.onTextChanged then f.onTextChanged(text) end
+        end
         if self:HasFocus() then f.placeholder:Hide() end
     end)
     f:SetValue(opts.value or "")

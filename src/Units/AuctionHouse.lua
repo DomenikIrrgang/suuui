@@ -815,7 +815,10 @@ function M:BuildSell(page)
     sell.bid:SetPoint("LEFT")
     local ph
     ph, sell.priceLabel = field("Buyout")
-    sell.price = UI.MoneyInput(ph, { onChange = function() self:DrawSell() end })
+    sell.price = UI.MoneyInput(ph, { onChange = function()
+        sell.priceTyped = true -- yours from now on: no undercut over it
+        self:DrawSell()
+    end })
     sell.price:SetPoint("LEFT")
     local dh = field("Duration")
     sell.duration = UI.Segmented(dh, { options = DURATIONS, value = 2, onChange = function() self:DrawSell() end })
@@ -859,7 +862,10 @@ function M:SetSellItem(loc)
         local status = call(AH.GetItemCommodityStatus, loc)
         sell.commodity = Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity or false
         -- the price you last posted at, else the lowest seen
+        -- the price you last posted at, else the lowest seen, until the
+        -- house says what it goes for now (then 1c under that: SellLowest)
         local last, low = self:LastPosted(sell.itemID), self:LowestSeen(sell.itemID)
+        sell.priceTyped = false
         sell.price:SetCopper((last and last.price) or (low and low.price) or 0)
         sell.bid:Clear()
         sell.qty:SetValue(tostring(sell.commodity and (call(AH.GetAvailablePostCount, loc) or 1) or 1))
@@ -993,6 +999,15 @@ function M:Post()
         self:Note("Couldn't post: " .. tostring(needs), "error")
     end
     self:DrawSell()
+end
+
+-- What the item goes for now: the price 1c under it (your own cheapest
+-- offer: the same price, not under yourself), unless you typed one.
+function M:SellLowest(low, mine)
+    local sell = self.sell
+    if not (sell and sell.loc and low and low > 0) or sell.priceTyped then return end
+    sell.price:SetCopper(mine and low or math.max(1, low - 1))
+    if not sell.commodity then sell.bid:Clear() end
 end
 
 -- The game confirmed a post: remember its price, say so.
@@ -1180,15 +1195,22 @@ function M:OnEnable()
         self:OnGameEvent(e, function()
             local key = self.sellKey
             if not key or self.tab ~= "sell" then return end
-            local low
+            local low, mine
             if self.sell.commodity then
                 local o = call(AH.GetCommoditySearchResultInfo, key.itemID, 1)
-                low = o and o.unitPrice
+                low, mine = o and o.unitPrice, o and o.containsOwnerItem
             else
-                local a = call(AH.GetItemSearchResultInfo, key, 1)
-                low = a and a.buyoutAmount and math.floor(a.buyoutAmount / (a.quantity or 1))
+                -- the cheapest buyout per item among the auctions
+                for i = 1, (call(AH.GetNumItemSearchResults, key) or 0) do
+                    local a = call(AH.GetItemSearchResultInfo, key, i)
+                    if a and a.buyoutAmount and a.buyoutAmount > 0 then
+                        local each = math.floor(a.buyoutAmount / (a.quantity or 1))
+                        if not low or each < low then low, mine = each, a.containsOwnerItem end
+                    end
+                end
             end
             self:Seen(key.itemID, low)
+            self:SellLowest(low, mine)
             self:QueueRefresh()
         end)
     end
