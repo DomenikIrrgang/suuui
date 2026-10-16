@@ -691,7 +691,12 @@ function M:BuildSuggest(field)
     edit:HookScript("OnTextChanged", function(_, userInput)
         if userInput then d.pick = 1; self:DrawSuggest() end
     end)
-    edit:HookScript("OnEditFocusGained", function() d.pick = 1; self:DrawSuggest() end)
+    edit:HookScript("OnEditFocusGained", function()
+        -- the roster comes a moment after it's asked for; an open list redraws then
+        if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then call(C_GuildInfo.GuildRoster) end
+        d.pick = 1
+        self:DrawSuggest()
+    end)
     edit:HookScript("OnEditFocusLost", function() C_Timer.After(0.15, function() d:Hide() end) end)
     edit:SetScript("OnArrowPressed", function(_, key)
         if not d:IsShown() or #d.flat == 0 then return end
@@ -961,6 +966,9 @@ function M:OnEnable()
     for _, e in ipairs({ "MAIL_INBOX_UPDATE", "MAIL_SEND_INFO_UPDATE", "CLOSE_INBOX_ITEM", "PLAYER_MONEY", "BAG_UPDATE_DELAYED" }) do
         self:OnGameEvent(e, function() self:QueueRefresh() end)
     end
+    self:OnGameEvent("GUILD_ROSTER_UPDATE", function()
+        if self.suggest and self.suggest:IsShown() or (self.send and self.send.to.edit:HasFocus()) then self:DrawSuggest() end
+    end)
     self:OnGameEvent("MAIL_SEND_SUCCESS", function() self:SendDone(true) end)
     self:OnGameEvent("MAIL_FAILED", function() if self.sending then self:SendDone(false) end end)
 end
