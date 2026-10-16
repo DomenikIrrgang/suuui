@@ -319,11 +319,13 @@ local CARD_W, SHADE_W = 270, 340
 -- The mount: a model frame the game fits each model into, whatever its
 -- size (seen in game: the mount scene's camera, tuned by hand, fit some
 -- mounts and left others too big, too low or cut off; the first probe's
--- PlayerModel framed them whole). Its frame ends FLOOR above the stage's
--- bottom, on the floor glow, so the feet stand there; CAM_SCALE leaves room
--- above. Centred on the whole stage, the card over its left.
-local FLOOR = 40
-local CAM_SCALE = 1.25
+-- PlayerModel framed them whole). It fits the model to its frame's height,
+-- so the frame sets the size: it ends FLOOR above the stage's bottom, on
+-- the floor glow, so the feet stand there, and starts TOP below the stage's
+-- top (seen in game: from the top the mount filled the whole stage).
+-- Centred on the whole stage, the card over its left.
+local FLOOR, TOP = 40, 100
+local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
 local TOOLS_H = 30
@@ -625,7 +627,7 @@ function M:Build()
     self.stage = stage
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
-    model:SetPoint("TOPLEFT")
+    model:SetPoint("TOPLEFT", 0, -TOP)
     model:SetPoint("BOTTOMRIGHT", 0, FLOOR)
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
