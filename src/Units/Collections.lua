@@ -315,7 +315,11 @@ end
 
 local WIDTH, HEIGHT = 960, 700
 local CELL, COLS, ROWS = 40, 18, 2
-local CARD_W, SHADE_W, MODEL_LEFT = 270, 340, 240
+local CARD_W, SHADE_W = 270, 340
+-- the model stands centred on the whole stage, its feet above the turn and
+-- zoom buttons (seen in game: right of the card it sat off centre, legs cut)
+local FLOOR = 40
+local ZOOM_OUT = 1.2
 local TOOLS_H = 30
 local STRIP_H = CELL * ROWS + S["space-5"] + 8
 local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -368,8 +372,8 @@ local function stageArt(stage)
     base:SetGradient("VERTICAL", CreateColor(0.051, 0.043, 0.035, 1), CreateColor(0.09, 0.078, 0.059, 1))
     local light = stage:CreateTexture(nil, "BACKGROUND", nil, -7)
     light:SetTexture(SOFT)
-    light:SetPoint("TOPLEFT", stage, "TOPLEFT", MODEL_LEFT, 120)
-    light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", 0, -260)
+    light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120, 120)
+    light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120, -260)
     stage.light = light
     local floor = stage:CreateTexture(nil, "BACKGROUND", nil, -6)
     floor:SetColorTexture(1, 1, 1, 1)
@@ -380,13 +384,13 @@ local function stageArt(stage)
     local pool = stage:CreateTexture(nil, "BACKGROUND", nil, -5)
     pool:SetTexture(SOFT)
     pool:SetSize(420, 90)
-    pool:SetPoint("BOTTOM", stage, "BOTTOM", MODEL_LEFT / 2, 30)
+    pool:SetPoint("BOTTOM", stage, "BOTTOM", 0, FLOOR - 12)
     stage.pool = pool
     local shadow = stage:CreateTexture(nil, "BACKGROUND", nil, -4)
     shadow:SetTexture(SOFT)
     shadow:SetVertexColor(0, 0, 0, 0.7)
     shadow:SetSize(260, 36)
-    shadow:SetPoint("BOTTOM", stage, "BOTTOM", MODEL_LEFT / 2, 48)
+    shadow:SetPoint("BOTTOM", stage, "BOTTOM", 0, FLOOR + 4)
     -- the vignette: four edges darkening inward
     local function edge(point, horizontal, size, fromA, toA)
         local t = stage:CreateTexture(nil, "BORDER", nil, 1)
@@ -614,15 +618,15 @@ function M:Build()
     -- the mount: its own scene, framed by its scene ID
     local ok, scene = pcall(CreateFrame, "ModelScene", nil, stage, "ModelSceneMixinTemplate")
     if ok and scene then
-        scene:SetPoint("TOPLEFT", MODEL_LEFT, 0)
-        scene:SetPoint("BOTTOMRIGHT")
+        scene:SetPoint("TOPLEFT")
+        scene:SetPoint("BOTTOMRIGHT", 0, FLOOR)
         scene:SetFrameLevel(stage:GetFrameLevel() + 2)
         self.scene = scene
     end
     -- loading: the icon first
     stage.loading = CreateFrame("Frame", nil, stage)
     stage.loading:SetSize(200, 120)
-    stage.loading:SetPoint("CENTER", stage, "CENTER", MODEL_LEFT / 2, 0)
+    stage.loading:SetPoint("CENTER", stage, "CENTER", 0, FLOOR / 2)
     stage.loading:SetFrameLevel(stage:GetFrameLevel() + 3)
     stage.loading.icon = stage.loading:CreateTexture(nil, "ARTWORK")
     stage.loading.icon:SetSize(80, 80)
@@ -665,7 +669,7 @@ function M:Build()
     -- bottom centre of the model's area: turn left, zoom out, zoom in, turn right
     local ctl = CreateFrame("Frame", nil, stage)
     ctl:SetSize(4 * 26 + 3 * S["space-3"], 26)
-    ctl:SetPoint("BOTTOM", stage, "BOTTOM", MODEL_LEFT / 2, S["space-4"])
+    ctl:SetPoint("BOTTOM", stage, "BOTTOM", 0, S["space-4"])
     ctl:SetFrameLevel(stage:GetFrameLevel() + 12)
     local x = 0
     for _, def in ipairs({ { "turnLeft", "Turn left", function() self:Turn(-1) end }, { "minus", "Zoom out", function() self:Zoom(1) end },
@@ -838,6 +842,10 @@ function M:ShowMount(e)
         tries = tries + 1
         local loaded = call(actor.IsLoaded, actor)
         if loaded or tries > 40 then
+            -- a little further out than the game's framing: the whole mount
+            local cam = call(scene.GetActiveCamera, scene)
+            local d = cam and call(cam.GetZoomDistance, cam)
+            if d then call(cam.SetZoomDistance, cam, d * ZOOM_OUT) end
             stage.loading:Hide()
             scene:SetAlpha(1)
             SuuUI.Motion.FadeIn(scene, T.duration["dur-base"])
