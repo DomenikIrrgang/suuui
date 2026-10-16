@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.4.0-beta.2 (2026-10-16)
+
+### New
+
+- `/suu probe windows` for checking what the mail, merchant, trainer, auction house and collections windows report.
 
 ### Changed
 

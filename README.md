@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW%20Forever-interface%2016001-C9A75A?style=for-the-badge&labelColor=131116" alt="WoW Forever, interface 16001">
-  <img src="https://img.shields.io/badge/version-0.4.0--beta.1-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.4.0-beta.1">
+  <img src="https://img.shields.io/badge/version-0.4.0--beta.2-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.4.0-beta.2">
   <img src="https://img.shields.io/badge/status-beta-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: beta">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
