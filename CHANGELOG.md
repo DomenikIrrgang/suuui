@@ -9,6 +9,11 @@
 ### Changed
 
 - Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
+- Party and raid frames show every debuff after the ones you can remove (Forbearance on you didn't show), not only the ones the game marks for raids.
+
+### Fixed
+
+- The target frame shows another player's debuffs once (they showed twice, as their buffs did). With Target's debuffs on Everyone's they're one list.
 
 ## 0.4.0-beta.5 (2026-10-16)
 

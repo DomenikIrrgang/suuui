@@ -74,13 +74,14 @@ local ATTACHED = {
             { key = "theirBuffs", filter = { "HELPFUL" }, max = 8 },
         },
     } },
-    -- its debuffs from the right edge, yours first ("mine" in targetDebuffs
-    -- sets theirs to 0)
+    -- its debuffs from the right edge: only yours, or everyone's as one
+    -- list (as with buffs: another player's debuffs passed both "yours" and
+    -- "not yours", so each showed twice)
     targetDebuffs = { anchor = "target", key = "showTarget", half = true, at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
         size = "icon-md", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 150,
         groups = {
             { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false, harmfulEdge = true },
-            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true, harmfulEdge = true },
+            { key = "all", filter = { "HARMFUL" }, max = 12, dispel = true, harmfulEdge = true },
         },
     } },
     -- the focus as the target: its buffs (anyone's), your debuffs
@@ -157,7 +158,11 @@ function M:ApplyOptions()
     for name, def in pairs(ATTACHED) do self:Attach(name, SuuUI.GetAnchor(def.anchor or name)) end
     -- the target's: everyone's, or only yours
     local debuffs, buffs = self.attached and self.attached.targetDebuffs, self.attached and self.attached.targetBuffs
-    if debuffs then debuffs:SetGroupMax("theirs", self:Get("targetDebuffs") == "all" and 8 or 0) end
+    if debuffs then
+        local allDebuffs = self:Get("targetDebuffs") == "all"
+        debuffs:SetGroupMax("mine", allDebuffs and 0 or 12)
+        debuffs:SetGroupMax("all", allDebuffs and 12 or 0)
+    end
     if buffs then
         local allBuffs = self:Get("targetBuffs") == "all"
         buffs:SetGroupMax("myBuffs", allBuffs and 0 or 6)
@@ -238,7 +243,7 @@ local SECTION = {
         } },
         { title = "On other frames", description = "Your focus: its buffs and your debuffs; bosses: only your debuffs. None on a player who is offline.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
-              description = "Above the target frame: its buffs from the left edge, its debuffs from the right edge, yours first on each side. A side wraps upward when it fills half the frame." },
+              description = "Above the target frame: its buffs from the left edge, its debuffs from the right edge. A side wraps upward when it fills half the frame." },
             { key = "targetDebuffs", label = "Target's debuffs", control = "segmented",
               options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
               disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },

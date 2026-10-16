@@ -93,9 +93,9 @@ local function iconSize(h) return math.max(8, h - 6) end
 local GAP_SETS = S["space-2"]
 local AURA_GROUPS = {
     { key = "dispel", set = "debuffIcons", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-    -- buffs come only through buff indicators (you pick them); the game's
-    -- "raid" debuffs are the ones worth seeing
-    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
+    -- every other debuff (Forbearance, Weakened Soul…); buffs come only
+    -- through buff indicators (you pick them)
+    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
       gap = GAP_SETS - S["space-1"] },
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", drain = "ward",
       gap = GAP_SETS - S["space-1"] },
@@ -677,7 +677,7 @@ local SECTION = {
             { key = "buffIcons", label = "Defensive icons", control = "stepper", min = 0, max = 2, step = 1, combat = true,
               description = "Inside the bar's right end: their externals, then their own defensives, from Frames › Defensives. Your heals over time and shields go in Buff indicators." },
             { key = "debuffIcons", label = "Debuff icons", control = "stepper", min = 0, max = 2, step = 1, combat = true,
-              description = "At the bar's very end, after the defensives: debuffs you can remove first, then other important ones." },
+              description = "At the bar's very end, after the defensives: debuffs you can remove first, then the rest." },
         } },
         { title = "States", rows = {
             { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,

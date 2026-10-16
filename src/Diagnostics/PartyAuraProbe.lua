@@ -18,7 +18,7 @@ local FILTERS = {
     dispel = "HARMFUL|RAID_PLAYER_DISPELLABLE",
     external = "HELPFUL|EXTERNAL_DEFENSIVE|!BIG_DEFENSIVE",
     defensive = "HELPFUL|BIG_DEFENSIVE",
-    debuffs = "HARMFUL|!RAID_PLAYER_DISPELLABLE|RAID",
+    debuffs = "HARMFUL|!RAID_PLAYER_DISPELLABLE",
     -- the target frame's (Auras module): yours, then everyone else's
     tMine = "HARMFUL|PLAYER",
     tMyBuffs = "HELPFUL|PLAYER",

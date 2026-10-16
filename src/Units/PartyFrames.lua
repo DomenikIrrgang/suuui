@@ -99,8 +99,8 @@ local GAP_SETS = S["space-4"]
 local AURA_GROUPS = {
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", glow = "glow-ward", drain = "ward" },
     { key = "dispel", set = "debuffIcons", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-    -- the game's "raid" debuffs: the ones worth seeing
-    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    -- every other debuff (Forbearance, Weakened Soul…)
+    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
 }
 -- each group's place from the bar: defensives first on the right, last on the left
 local ORDER = {
@@ -573,7 +573,7 @@ local SECTION = {
             { key = "buffIcons", label = "Defensive icons", control = "stepper", min = 0, max = 4, step = 1, combat = true,
               description = "Beside each bar: their externals, then their own defensives, from Frames › Defensives (Blessing of Protection, Shield Wall…). Other buffs show through Buff indicators. None while someone is offline." },
             { key = "debuffIcons", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1, combat = true,
-              description = "After the defensives: debuffs you can remove first, then other important ones." },
+              description = "After the defensives: debuffs you can remove first, then the rest." },
             { key = "auraSide", label = "Aura side", control = "segmented", combat = true,
               options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } },
               description = "Which side of the bar the icons sit on. Defensives are always left of debuffs.",
