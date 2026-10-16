@@ -397,7 +397,7 @@ function M:OnEnable()
         self.window:Hide()
     end)
     for _, e in ipairs({ "TRAINER_UPDATE", "TRAINER_SERVICE_INFO_NAME_UPDATE", "PLAYER_MONEY", "UNIT_PET_TRAINING_POINTS",
-                         "SKILL_LINES_CHANGED", "LEARNED_SPELL_IN_TAB" }) do
+                         "SKILL_LINES_CHANGED" }) do
         self:OnGameEvent(e, function() self:QueueRefresh() end)
     end
 end
