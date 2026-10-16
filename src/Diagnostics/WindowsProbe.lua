@@ -182,7 +182,7 @@ WINDOWS.inspect = {
     frames = { "InspectFrame", "InspectPaperDollFrame", "InspectPVPFrame", "InspectTalentFrame", "InspectGuildFrame",
                "InspectFrameTab1", "InspectFrameTab2", "InspectFrameTab3", "InspectFrameTab4", "InspectModelFrame" },
     addons = { "Blizzard_InspectUI" },
-    events = { "INSPECT_READY" },
+    events = {},
     apis = { "NotifyInspect", "CanInspect", "ClearInspectPlayer", "GetInspectSpecialization", "C_PaperDollInfo.GetInspectItemLevel",
              "GetInventoryItemLink", "C_Traits.GetConfigInfo", "C_ClassTalents", "GetTalentInfo", "GetNumTalentTabs",
              "GetTalentTabInfo", "C_SpecializationInfo" },
@@ -486,6 +486,20 @@ function WP.Arm()
         d:HookScript("OnShow", function()
             if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot("dressup") end) end
         end)
+    end
+    -- inspect: saved when its window shows (INSPECT_READY came before it did)
+    local function hookInspect()
+        local i = _G.InspectFrame
+        if i and not WP.inspectHooked then
+            WP.inspectHooked = true
+            i:HookScript("OnShow", function()
+                if GetTime() <= untilT then C_Timer.After(0.8, function() WP.Snapshot("inspect") end) end
+            end)
+        end
+    end
+    hookInspect()
+    if not WP.inspectHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
+        EventUtil.ContinueOnAddOnLoaded("Blizzard_InspectUI", hookInspect)
     end
     local g = _G.GameMenuFrame
     if g and not WP.menuHooked then
