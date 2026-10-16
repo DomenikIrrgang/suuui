@@ -169,9 +169,11 @@ end
 --                onConfirm = fn, onCancel = fn,
 --                input = { label, placeholder, value }, -- 0.13: a text to
 --                -- enter, given to onConfirm(text); OK once there is some
---                typeToConfirm = "UNLEARN" })  -- 0.13: a field under the text;
+--                typeToConfirm = "UNLEARN",  -- 0.13: a field under the text;
 --                -- the confirm button only works once it says this word
 --                -- (any case), Enter then confirms
+--                enterConfirms = false })  -- 0.16: Enter in the field doesn't
+--                -- confirm (the dialog stays; only the button does)
 --------------------------------------------------------------------------------
 
 -- One shade for every modal, made up front: full screen, on the DIALOG layer
@@ -390,7 +392,10 @@ function UI.Confirm(opts)
             if p.input then p.ok:SetEnabledState(strtrim(text or "") ~= "") end
         end })
         p.field:SetPoint("BOTTOM")
-        p.field.edit:HookScript("OnEnterPressed", function() confirm() end)
+        p.field.edit:HookScript("OnEnterPressed", function(box)
+            if p.enterConfirms == false then box:SetFocus() return end
+            confirm()
+        end)
         p.cancel = UI.Button(p, { text = "Cancel", width = 100, onClick = function() p:Hide() end })
         p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -8, 0)
         p:HookScript("OnHide", function(self)
@@ -409,6 +414,7 @@ function UI.Confirm(opts)
     p.cancel:SetLabel(opts.cancel or "Cancel")
     p:Hide() -- an older question still open is cancelled first
     p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
+    p.enterConfirms = opts.enterConfirms
     -- a word to type first, or something to enter (0.13: input = { label,
     -- placeholder }: onConfirm gets the text; OK once there is some)
     p.word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil

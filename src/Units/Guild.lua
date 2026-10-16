@@ -506,12 +506,9 @@ function M:Act(action, m)
             self:Print("Inviting to the guild works out of combat.")
             return
         end
+        -- Enter can't invite (only a click can), so it leaves the dialog open
         local p = UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
-            input = { label = "Name", placeholder = "Name" }, confirm = "Invite",
-            -- Enter can't invite (only a click can): say so
-            onConfirm = function(text)
-                self:Print(("Click Invite to invite %s: the game takes a guild invite only from a click."):format(text or ""))
-            end })
+            input = { label = "Name", placeholder = "Name" }, confirm = "Invite", enterConfirms = false })
         self:InviteOverlay(p)
         return
     end
