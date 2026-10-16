@@ -668,8 +668,10 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Asked 2026-10-17:** gossip, the quest dialog, the dressing room, inspect, inspect talents and the game menu get proper designs and become SuuUI's own windows where the game allows.
 - **Probe (`/suu probe windows`, 2026-10-17):** GossipFrame, QuestFrame, DressUpFrame, InspectFrame (Blizzard_InspectUI, LoD) and GameMenuFrame aren't protected. `C_GossipInfo.SelectOption`/`SelectAvailableQuest`/`SelectActiveQuest` only carry `SecretArguments=AllowedWhenUntainted`; `AcceptQuest`, `CompleteQuest`, `GetQuestReward`, `Logout`, `Quit`, `C_UI.Reload` have no restriction flags. Inspect's tabs are Character, PvP and Guild; View Talents opens the talents window in inspect mode.
 - **Done:** inspect talents show the inspected player's tree read-only in SuuUI's Talents page (the inspect trait config).
-- **Next:** design boards for all six, then build. Before the game menu: probe whether Options and Edit Mode open cleanly from SuuUI's code or need a secure click.
-- **Confirm:** talk to an NPC, accept and turn in a quest with a reward choice, ctrl-click an item into the dressing room and save a set, inspect a player, open every game menu entry.
+- **Added 2026-10-17:** Macros, AddOns and Support (the game menu's windows), as SuuUI's own windows too. Probes: MacroFrame and AddonList aren't protected, and macro and `C_AddOns` calls are free. Support is a web page in a Browser frame; SuuUI can create its own Browser and send it home (`/suu probe support`). Options, Macros, AddOns, Support and Edit Mode open from SuuUI's code with nothing tainted or blocked (`/suu probe gamemenu`).
+- **Not redone (decided 2026-10-17):** Blizzard's Options (SettingsPanel) and Edit Mode stay the game's; SuuUI's game menu opens them.
+- **Next:** design boards for all nine, then build. Before the game menu: probe whether Options and Edit Mode open cleanly from SuuUI's code or need a secure click.
+- **Confirm:** talk to an NPC, accept and turn in a quest with a reward choice, ctrl-click an item into the dressing room and save a set, inspect a player, open every game menu entry, edit a macro, toggle an addon, load the Support page.
 
 ---
 
