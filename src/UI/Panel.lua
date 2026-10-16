@@ -546,7 +546,8 @@ function UI.WindowFrame(parent, opts)
         local rule = UI.Hairline(f, "gilt-faint")
         rule:SetPoint("BOTTOMLEFT", 0, footH)
         rule:SetPoint("BOTTOMRIGHT", 0, footH)
-        bottom = footH - S["space-5"]
+        -- the content ends space-4 above the footer's rule
+        bottom = footH - S["space-5"] + S["space-4"]
     end
 
     -- The body becomes a scroll frame; content goes into window.content.
