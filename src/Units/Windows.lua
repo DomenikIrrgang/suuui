@@ -1331,32 +1331,35 @@ local function sizeControls(pane)
     end
 end
 
--- The appearances' Items and Sets as SuuUI's text tabs: header type,
--- ink-muted, gilt-text over a gilt hairline with its jewel when chosen (the
--- game shows its LeftActive art on the chosen one).
+-- The appearances' Items and Sets as SuuUI's text tabs, as the window's own
+-- row: SuuUI's label (header, ink-muted, ink on hover, gilt-text over a gilt
+-- hairline with its jewel when chosen; the game shows its LeftActive art on
+-- the chosen one), the tab as wide as its label. The game's own label keeps
+-- getting the game's font, so it stays out of sight.
+local isSecret = issecretvalue or function() return false end
+
 local function skinPaneTab(tab)
     if not tab or tab.suuPaneTab then return end
     tab.suuNoButton = true
-    for _, r in ipairs({ tab:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-    end
-    local label = tab.Text or (tab.GetFontString and tab:GetFontString())
+    for _, r in ipairs({ tab:GetRegions() }) do r:SetAlpha(0) end
+    local own = tab.Text or (tab.GetFontString and tab:GetFontString())
+    local label = UI.Text(tab, "header", "ink-muted")
+    label:SetPoint("BOTTOM", 0, S["space-3"])
+    label:SetValue(own and own:GetText() or "")
     local rule = UI.Hairline(tab, "gilt-line", "both")
-    rule:SetPoint("BOTTOMLEFT", S["space-2"], 0)
-    rule:SetPoint("BOTTOMRIGHT", -S["space-2"], 0)
+    rule:SetPoint("BOTTOMLEFT")
+    rule:SetPoint("BOTTOMRIGHT")
     local jewel = UI.Diamond(tab, 5, "gilt")
     jewel:SetPoint("CENTER", tab, "BOTTOM", 0, 0)
     local hover = false
     local function draw()
         local on = tab.LeftActive and tab.LeftActive:IsShown() or false
-        if label then
-            label:ClearAllPoints()
-            label:SetPoint("CENTER", 0, 2)
-            SuuUI.Fonts.Apply(label, "header")
-            label:SetTextColor(UI.RGBA(on and "gilt-text" or hover and "ink" or "ink-muted"))
-            label:SetShadowOffset(0, 0)
-            label.suuSkip = true
+        if own then
+            own:SetAlpha(0)
+            local text = own:GetText()
+            if type(text) == "string" and not isSecret(text) then label:SetValue(text) end
         end
+        label:SetColor(on and "gilt-text" or hover and "ink" or "ink-muted")
         rule:SetShown(on)
         jewel:SetShown(on)
     end
@@ -1365,8 +1368,37 @@ local function skinPaneTab(tab)
     end
     tab:HookScript("OnEnter", function() hover = true; draw() end)
     tab:HookScript("OnLeave", function() hover = false; draw() end)
+    tab.suuLabel = label
     tab.suuPaneTab = draw
     draw()
+end
+
+-- The Items and Sets row: from the class dropdown's left edge, its bottom
+-- level with the search box's, space-5 between the tabs. Read from where
+-- the game put those two (skipped while their places can't be read);
+-- out of combat, the window being protected.
+local function placePaneTabs(w)
+    if InCombatLockdown() or not w then return end
+    local items, sets = w.ItemsTab or _G.WardrobeCollectionFrameTab1, w.SetsTab or _G.WardrobeCollectionFrameTab2
+    local class, search = w.ClassDropdown, w.searchBox
+    if not (items and items.suuLabel and class and search) then return end
+    local ok, x, y = pcall(function()
+        local x = class:GetLeft() - w:GetLeft()
+        local y = search:GetBottom() - w:GetTop()
+        if isSecret(x) or isSecret(y) then error("secret") end
+        return x, y
+    end)
+    if not ok then return end
+    local prev
+    for _, tab in ipairs({ items, sets }) do
+        if tab and tab.suuLabel then
+            tab:SetSize(math.ceil(UI.MeasureText("header", tab.suuLabel:GetText() or "")), 30)
+            tab:ClearAllPoints()
+            if prev then tab:SetPoint("BOTTOMLEFT", prev, "BOTTOMRIGHT", S["space-5"], 0)
+            else tab:SetPoint("BOTTOMLEFT", w, "TOPLEFT", x, y) end
+            if tab:IsShown() then prev = tab end
+        end
+    end
 end
 
 function M:SkinCollections()
@@ -1395,6 +1427,7 @@ function M:SkinCollections()
                 sizeControls(pane)
             end
         end
+        if wardrobe and wardrobe:IsShown() then placePaneTabs(wardrobe) end
         self:SetCollectionTabs()
     end
     if _G.CollectionsJournal_UpdateSelectedTab then
