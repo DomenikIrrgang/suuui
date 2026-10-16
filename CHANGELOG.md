@@ -5,6 +5,7 @@
 ### New
 
 - **Merchant window** in SuuUI's look: the goods as one scrolling list (with a scrollbar) under a search and the game's filter that stay on top; a quantity to buy for each item (in items, bought in the merchant's stack sizes, capped at what's left and what you can afford; it starts at one purchase at every vendor); "You have N"; what you already know greyed with "✓ Known"; the item you sold last with Undo; Buy back; Repair all, repair one item, guild repair and Sell junk with what it brings; the merchant's currencies.
+- **Mail window** in SuuUI's look (first version, to test): the whole inbox as one list with the open mail beside it (an auction invoice's lines, the attachments to take, money, cash on delivery to pay after a question), Collect all and Collect money (cash-on-delivery mails stay for you), Reply, Return, Delete; Send with attachments, money or cash on delivery and the postage; Sent: the last 50 mails this character sent.
 - `/suu probe ahscan` (at the auction house) checks whether the full scan works on Forever.
 
 ### Changed
