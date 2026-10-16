@@ -188,6 +188,9 @@ function CD.ReadTrainer()
                 end
             end
         end
+        local ids = 0
+        for _, sp in ipairs(spells) do if sp.spellID then ids = ids + 1 end end
+        ns.Print(("Class data: done, %d of %d with their spell ID. /reload to save."):format(ids, #spells))
     end)
     d.trainerNPC = UnitName("npc")
     return #spells, maxLevel
@@ -214,7 +217,7 @@ local function onTrainer()
         if waited then return end
         waited = true
         local count, maxLevel = CD.ReadTrainer()
-        ns.Print(("Class data: the trainer lists %d spells, up to level %d. /reload to save."):format(count, maxLevel))
+        ns.Print(("Class data: the trainer lists %d spells, up to level %d. Reading their IDs and descriptions…"):format(count, maxLevel))
         if count > 0 and maxLevel < 50 then
             ns.Print("Class data: this trainer stops early; a city trainer may list the rest.")
         end
