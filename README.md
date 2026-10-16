@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW%20Forever-interface%2016001-C9A75A?style=for-the-badge&labelColor=131116" alt="WoW Forever, interface 16001">
-  <img src="https://img.shields.io/badge/version-0.4.0--beta.4-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.4.0-beta.4">
+  <img src="https://img.shields.io/badge/version-0.4.0--beta.5-3FD0FF?style=for-the-badge&labelColor=131116" alt="Version 0.4.0-beta.5">
   <img src="https://img.shields.io/badge/status-beta-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: beta">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
@@ -58,7 +58,8 @@ It is built for the realities of the modern client: values the game hides from a
 | | |
 |---|---|
 | **Unit frames** | Player, target, target of target, focus, pet and boss frames. Health text as percent, value, both or none; a gradual low-health tint; incoming heals and absorbs; debuff-type borders and badges; raid target markers; offline state; adjustable size. |
-| **Party & raid frames** | Secure group frames for 5, 10, 20 and 40 players, with real-size previews right in the settings. Debuffs you can remove shown by type even in combat, aggro, range fading, class-coloured names and sorting by role. |
+| **Party & raid frames** | Secure group frames for 5, 10, 20 and 40 players, with real-size previews right in the settings. Debuffs you can remove shown by type even in combat, aggro, range fading, class-coloured names and sorting by role. Defensives and debuffs as separate groups beside each bar. |
+| **Defensives** | A list you control of the buffs that count as defensives (Blessing of Protection, Shield Wall, Ice Block…), every rank: they show beside party and raid frames, and the big ones mark the frame **Warded** with a badge and border, in combat too. |
 | **Buff indicators** | Healer indicators per class and spec: icons, squares, borders or fills in any corner, shown while up or while missing, scoped to your own group or the whole raid, per raid size. |
 | **Nameplates** | Enemy plates with your debuffs, threat badges (solo and in groups), casts with spell icon, target and interrupt state, quest objective marks and raid markers. Styled friendly plates in the open world. |
 | **Cast & swing bars** | Your cast bar with its target, target / focus / boss casts that show whether you can interrupt them, and a swing timer that follows your cast bar. |
