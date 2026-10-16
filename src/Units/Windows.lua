@@ -570,6 +570,10 @@ function M:RestyleQuestLog()
     local list = _G.QuestScrollFrame
     if list then
         for _, key in ipairs({ "BorderFrame", "Background" }) do if list[key] and list[key].SetAlpha then list[key]:SetAlpha(0) end end
+        if not list.suuPlaced then
+            list.suuPlaced = true
+            self:PlaceQuestList(q, list)
+        end
         -- the zone headers in label ink, hovered or not (the game switches a
         -- header's font on hover, so a header first seen hovered read as a
         -- title; found in game)
@@ -616,6 +620,47 @@ function M:RestyleQuestLog()
                 end
             end
         end
+    end
+end
+
+-- The quest list centred in the panel beside the map: the game keeps 22px
+-- right of it for its scroll bar, which left its headers 12px from the
+-- map and 35px from the window's edge (measured in game: /suu probe map
+-- log). The list moves right by half the difference, the scroll bar into
+-- the margin it leaves; the search box (fixed at 200px from the quest
+-- count leftwards, it ran 10px over the map) starts where the headers do.
+local LIST_SHIFT = 11
+local HEADER_X = 9 -- the game's zone headers, from the list's left
+function M:PlaceQuestList(q, list)
+    local quests = q.QuestsFrame
+    if quests then
+        list:ClearAllPoints()
+        list:SetPoint("TOPLEFT", quests, "TOPLEFT", LIST_SHIFT, 0)
+        list:SetPoint("BOTTOMRIGHT", quests, "BOTTOMRIGHT", LIST_SHIFT, 0)
+    end
+    -- (its 8px in the middle of the 24px between the headers and the edge)
+    local bar = list.ScrollBar
+    if bar then
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", list, "TOPRIGHT", -2, 2)
+        bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", -2, -4)
+    end
+    -- the search box: its left (SuuUI's edge 4px outside it) under the
+    -- headers' left, its right still by the count; once it's laid out
+    local sb, count = list.SearchBox, _G.QuestLogCount
+    if not (sb and count) then return end
+    local function place()
+        local top, mid = list:GetTop(), select(2, sb:GetCenter())
+        if not (top and mid) then return false end
+        sb:ClearAllPoints()
+        sb:SetPoint("RIGHT", count, "LEFT", -6, 0)
+        sb:SetPoint("LEFT", list, "TOPLEFT", HEADER_X + 4, mid - top)
+        return true
+    end
+    if not place() then
+        q:HookScript("OnShow", function()
+            if not sb.suuPlaced then C_Timer.After(0, function() sb.suuPlaced = place() end) end
+        end)
     end
 end
 
