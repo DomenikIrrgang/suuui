@@ -21,7 +21,6 @@
 ### Fixed
 
 - Tooltips SuuUI doesn't know by name (an addon's own, the aura buttons') now get SuuUI's look: the check whether one already had it wasn't reachable by the Tooltips module, so the step quietly did nothing.
-
 - Text fields react to typing at once (the merchant's quantity note, money amounts, the auction house): some only did after Enter.
 - The game's dropdown menus in SuuUI's look no longer leave a gap under their last row.
 - Restyled progress bars (a profession trainer's rank) have their fill and track the same height.
