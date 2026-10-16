@@ -89,14 +89,19 @@ local function iconSize(h) return math.max(8, h - 6) end
 -- debuffs at the very end (the ones you can remove first), then right before
 -- them however many defensives show (the Defensives list's spells, Frames ›
 -- Defensives: the game hides who cast another player's buffs, and its own
--- defensive filters then let every buff through), `space-2` apart.
+-- defensive filters then let every buff through), `space-2` apart. On your
+-- own frame the debuffs you can remove come first; on everyone else's
+-- they're one list (the game hides who cast another player's auras, and
+-- those then pass both "removable" and "not removable": each showed twice).
 local GAP_SETS = S["space-2"]
 local AURA_GROUPS = {
-    { key = "dispel", set = "debuffIcons", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    { key = "dispel", set = "debuffIcons", who = "me", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
     -- every other debuff (Forbearance, Weakened Soul…); buffs come only
     -- through buff indicators (you pick them)
-    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
+    { key = "debuffs", set = "debuffIcons", who = "me", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
       gap = GAP_SETS - S["space-1"] },
+    -- everyone else's frames: all their debuffs, once
+    { key = "all", set = "debuffIcons", who = "others", filter = { "HARMFUL" }, dispel = true, harmfulEdge = true },
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", drain = "ward",
       gap = GAP_SETS - S["space-1"] },
 }
@@ -123,11 +128,26 @@ end
 -- The row: a clip as wide as the settings' icons (the engine fills its
 -- groups to their counts; the clip cuts off the rest) and one engine
 -- container growing left from the bar's right end.
+-- A group's count on a button: its setting, on the frames it is for (you:
+-- read when the unit changes; unknown counts as someone else).
+local function groupMax(f, g)
+    if g.who and g.who ~= (f.isMe and "me" or "others") then return 0 end
+    return M:Get(g.set)
+end
+
+-- Which debuff groups a button uses, for whoever it shows now.
+local function applyWho(f)
+    if not f.auras then return end
+    for _, g in ipairs(AURA_GROUPS) do
+        if g.who then f.auras:SetGroupMax(g.key, groupMax(f, g)) end
+    end
+end
+
 local function buildAuras(f, h)
     local defensives = UI.GroupDefensives()
     local groups = {}
     for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = M:Get(g.set), dispel = g.dispel, drain = g.drain, digits = false,
+        groups[i] = { key = g.key, filter = g.filter, max = groupMax(f, g), dispel = g.dispel, drain = g.drain, digits = false,
             harmfulEdge = g.harmfulEdge, border = g.border, gap = g.gap, include = g.list and defensives[g.list] }
     end
     f.auraClip = CreateFrame("Frame", nil, f)
@@ -180,6 +200,7 @@ function M:StyleButton(button)
         if name ~= "unit" then return end
         btn:SetUnit(value, true)
         updateIsMe(btn)
+        applyWho(btn)
         if btn.auras then btn.auras:SetUnit(value or "none") end
         M:UpdateOffline()
         if value then
@@ -192,6 +213,7 @@ function M:StyleButton(button)
     if unit then
         f:SetUnit(unit, true)
         updateIsMe(f)
+        applyWho(f)
         if f.auras then f.auras:SetUnit(unit) end
         f:Activate()
     end
@@ -203,7 +225,7 @@ function M:ApplyAuraCount(f)
     local h = f:GetHeight()
     local size = iconSize(h)
     for _, g in ipairs(AURA_GROUPS) do
-        f.auras:SetGroupMax(g.key, self:Get(g.set))
+        f.auras:SetGroupMax(g.key, groupMax(f, g))
         -- the icons follow the bar's height (from 21 players too); the height
         -- only changes out of combat, where the engine's buttons take a resize
         if not InCombatLockdown() then f.auras:SetGroupSize(g.key, size) end
@@ -753,6 +775,7 @@ function M:OnEnable()
         for _, f in ipairs(self.buttons) do
             if f.unit then
                 updateIsMe(f)
+                applyWho(f)
                 if f.auras then f.auras:Refresh() end
                 for _, list in pairs(f.dispelSets or {}) do for _, c in ipairs(list) do c:Refresh() end end
                 for _, c in ipairs(f.indicatorContainers or {}) do c:Refresh() end
@@ -783,7 +806,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() C_Timer.After(0, function() presence() end) end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         presence()
-        for _, f in ipairs(self.buttons) do updateIsMe(f) end
+        for _, f in ipairs(self.buttons) do updateIsMe(f); applyWho(f) end
     end)
     self.rangeTicker = C_Timer.NewTicker(0.3, function()
         if self.holder:IsVisible() then self:UpdateRange() end

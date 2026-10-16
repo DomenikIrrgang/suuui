@@ -14,6 +14,7 @@
 ### Fixed
 
 - The target frame shows another player's debuffs once (they showed twice, as their buffs did). With Target's debuffs on Everyone's they're one list.
+- Party and raid frames show another player's debuffs once (they showed twice: the game hides who cast them). Your own frame keeps the ones you can remove first.
 
 ## 0.4.0-beta.5 (2026-10-16)
 

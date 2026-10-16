@@ -92,21 +92,32 @@ end
 -- list's spells, Frames › Defensives: the game hides who cast another
 -- player's buffs, and its own defensive filters then let every buff
 -- through), then debuffs, the ones you can remove first, right after
--- however many defensives show, `space-4` apart. Defensives are always left
+-- however many defensives show, `space-4` apart. On your own frame the
+-- debuffs you can remove come first; on everyone else's they're one list
+-- (the game hides who cast another player's auras, and those then pass both
+-- "removable" and "not removable", so each showed twice). Defensives are always left
 -- of debuffs: on the left side the debuffs come first from the bar. No
 -- other buffs: those come through buff indicators.
 local GAP_SETS = S["space-4"]
 local AURA_GROUPS = {
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", glow = "glow-ward", drain = "ward" },
-    { key = "dispel", set = "debuffIcons", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    { key = "dispel", set = "debuffIcons", who = "me", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
     -- every other debuff (Forbearance, Weakened Soul…)
-    { key = "debuffs", set = "debuffIcons", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    { key = "debuffs", set = "debuffIcons", who = "me", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    -- everyone else's frames: all their debuffs, once
+    { key = "all", set = "debuffIcons", who = "others", filter = { "HARMFUL" }, dispel = true, harmfulEdge = true },
 }
 -- each group's place from the bar: defensives first on the right, last on the left
 local ORDER = {
-    right = { defensives = 1, dispel = 2, debuffs = 3 },
-    left = { dispel = 1, debuffs = 2, defensives = 3 },
+    right = { defensives = 1, dispel = 2, debuffs = 3, all = 4 },
+    left = { dispel = 1, debuffs = 2, all = 3, defensives = 4 },
 }
+
+-- A group's count on a frame: its setting, on the frames it is for.
+local function groupMax(f, g)
+    if g.who and g.who ~= (f.unit == "player" and "me" or "others") then return 0 end
+    return M:Get(g.set)
+end
 
 local function buildAuras(f)
     local defensives = UI.GroupDefensives()
@@ -114,7 +125,7 @@ local function buildAuras(f)
     clip:SetClipsChildren(true)
     local groups = {}
     for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = M:Get(g.set), dispel = g.dispel, drain = g.drain,
+        groups[i] = { key = g.key, filter = g.filter, max = groupMax(f, g), dispel = g.dispel, drain = g.drain,
             harmfulEdge = g.harmfulEdge, border = g.border, glow = g.glow,
             include = g.list and defensives[g.list] }
     end
@@ -375,7 +386,7 @@ function M:LayoutFrames(frames, holder)
             local order = ORDER[auraRight and "right" or "left"]
             for _, g in ipairs(AURA_GROUPS) do
                 f.auras:SetGroupSize(g.key, h)
-                f.auras:SetGroupMax(g.key, self:Get(g.set))
+                f.auras:SetGroupMax(g.key, groupMax(f, g))
                 f.auras:SetGroupPlace(g.key, order[g.key], order[g.key] > 1 and (GAP_SETS - S["space-2"]) or nil)
             end
             local c = f.auras.container
