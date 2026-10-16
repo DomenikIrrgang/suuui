@@ -641,24 +641,6 @@ local function buildCell(parent, owner)
     return b
 end
 
-function M:DrawCellCooldown(b)
-    local e = b.entry
-    local cooling = e and e.kind == "toy" and e.collected
-    local start, duration = 0, 0
-    if cooling then start, duration = toyCooldown(e.itemID) end
-    if duration > 0 then
-        if not b.cd then
-            b.cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
-            b.cd:SetAllPoints(b.icon)
-        end
-        b.cd:SetCooldown(start, duration)
-        b.cd:Show()
-    elseif b.cd then
-        b.cd:Clear()
-        b.cd:Hide()
-    end
-end
-
 function M:DrawCell(b)
     local e = b.entry
     if not e then b:Hide() return end
@@ -786,29 +768,6 @@ function M:Build()
     model:SetScript("OnMouseWheel", function(_, delta) self:Zoom(-delta) end)
     model:SetScript("OnModelLoaded", function() self:ModelLoaded() end)
     self.model = model
-    -- a toy: its icon in a faint halo, the cooldown sweeping it
-    local show = CreateFrame("Frame", nil, stage)
-    show:SetSize(240, 220)
-    show:SetPoint("CENTER", stage, "CENTER", 0, 10)
-    show:SetFrameLevel(stage:GetFrameLevel() + 2)
-    show.halo = show:CreateTexture(nil, "BACKGROUND")
-    show.halo:SetTexture(SOFT)
-    show.halo:SetBlendMode("ADD")
-    show.halo:SetSize(240, 220)
-    show.halo:SetPoint("CENTER")
-    show.slot = CreateFrame("Frame", nil, show)
-    show.slot:SetSize(96, 96)
-    show.slot:SetPoint("CENTER")
-    UI.Fill(show.slot, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    show.icon = show.slot:CreateTexture(nil, "ARTWORK")
-    show.icon:SetPoint("TOPLEFT", 1, -1)
-    show.icon:SetPoint("BOTTOMRIGHT", -1, 1)
-    show.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    show.edge = UI.Border(show.slot, "gilt-line", { layer = "OVERLAY" })
-    show.cd = CreateFrame("Cooldown", nil, show.slot, "CooldownFrameTemplate")
-    show.cd:SetAllPoints(show.icon)
-    show:Hide()
-    stage.show = show
     -- loading: the icon first
     stage.loading = CreateFrame("Frame", nil, stage)
     stage.loading:SetSize(200, 120)
@@ -877,6 +836,7 @@ function M:Build()
     stage.hint:SetValue("Drag to turn · Wheel to zoom")
 
     self:BuildWardrobe()
+    self:BuildShelf()
 
     -- the foot: the overview
     self.foot = UI.Text(w.footer, "caption", "ink-muted")
@@ -981,6 +941,12 @@ function M:Refresh()
     tools.search:SetPoint("LEFT", titled and (tools.title:GetUnboundedStringWidth() + S["space-5"]) or 0, 0)
     tools.count:SetValue(("%d |cff%sof %d|r"):format(have, T.color["ink-muted"].hex, #all))
     tools.fill:SetWidth(math.max(1, 60 * (#all > 0 and have / #all or 0)))
+    self:LayoutTab()
+    if self.tab == "toys" then
+        self:DrawShelf()
+        self:DrawFoot()
+        return
+    end
     -- the chosen one stays while it is listed; else the first (also with
     -- none of your own: asked in game, the stage is never empty then)
     local still = false
@@ -1010,7 +976,6 @@ function M:DrawStage()
         if self.model then self.model:Hide() end
         self.showing, self.waiting = nil, nil
         stage.loading:Hide()
-        stage.show:Hide()
         stage.star:Hide()
         stage.empty:Hide()
         stage.ctl:Show()
@@ -1030,9 +995,8 @@ function M:DrawStage()
     if none then
         -- only when a search or filter leaves nothing (the first entry is
         -- chosen otherwise, also with none of your own)
-        stage.empty.title:SetValue(self.tab == "toys" and "No toys match" or "No mounts match")
+        stage.empty.title:SetValue("No mounts match")
         stage.empty.text:SetValue("Clear the search or show All.")
-        stage.show:Hide()
         if self.model then self.model:Hide() end
         self.showing, self.waiting = nil, nil
         stage.loading:Hide()
@@ -1041,53 +1005,15 @@ function M:DrawStage()
     end
     stage.star.on = e.favourite and true or false
     stage.star:Draw(false)
-    local toy = e.kind == "toy"
-    stage.ctl:SetShown(not toy)
-    stage.hint:SetShown(not toy)
-    stage.show:SetShown(toy)
-    if toy then
-        if self.model then self.model:Hide() end
-        self.showing, self.waiting = nil, nil
-        stage.loading:Hide()
-        local r, g, b = UI.RGBA("gilt")
-        stage.show.halo:SetVertexColor(r * 0.1, g * 0.1, b * 0.1)
-        stage.show.icon:SetTexture(e.icon)
-        stage.show.icon:SetDesaturated(not e.collected)
-        local v = e.collected and 1 or 0.55
-        stage.show.icon:SetVertexColor(v, v, v)
-        stage.show.edge:SetColor(e.collected and "gilt-line" or "gilt-faint")
-    else
-        self:ShowMount(e)
-    end
-    self:DrawCooldowns()
+    self:ShowMount(e)
+    self:DrawCard(self.card, e)
+    self:DrawAction()
 end
 
--- A toy's cooldown on the stage, the card and Use; the strip's sweeps.
--- Again every second while a toy's tab shows (the time counts down).
+-- The toys' cooldowns on the shelf: again every second while it shows
+-- (the time counts down) and when the game says a cooldown changed.
 function M:DrawCooldowns()
-    local e = self.chosen
-    local stage = self.stage
-    if not (stage and e) then return end
-    local extra
-    if e.kind == "toy" then
-        local start, duration = toyCooldown(e.itemID)
-        if e.collected then
-            if duration > 0 then
-                stage.show.cd:SetCooldown(start, duration)
-                extra = readyIn(start, duration)
-            else
-                stage.show.cd:Clear()
-                extra = "Ready"
-            end
-        else
-            stage.show.cd:Clear()
-        end
-    end
-    self:DrawCard(self.card, e, extra)
-    self:DrawAction()
-    if self.tab == "toys" then
-        for _, b in ipairs(self.strip.cells) do self:DrawCellCooldown(b) end
-    end
+    if self.tab == "toys" then self:DrawShelfCooldowns() end
 end
 
 -- The mount fitted to the stage; its icon until the model has loaded, then
@@ -1234,7 +1160,6 @@ function M:DrawAction()
         if not InCombatLockdown() then act:Hide() end
         return
     end
-    if e and e.kind == "toy" then return self:DrawToyAction(e) end
     local mounted = IsMounted and IsMounted() or false
     local label, why = "Summon", nil
     if mounted then label = "Dismiss"
@@ -1257,31 +1182,6 @@ function M:DrawAction()
     else
         act:SetAttribute("type", "spell")
         act:SetAttribute("spell", e.spellID)
-    end
-end
-
--- Use: the secure button set to the toy (out of combat); its look says
--- "Ready in …" while the toy cools down.
-function M:DrawToyAction(e)
-    local act = self.act
-    local start, duration = toyCooldown(e.itemID)
-    local label, why = "Use", nil
-    if not e.collected then why = "You don't have this toy yet."
-    elseif duration > 0 then label = readyIn(start, duration); why = "It is cooling down."
-    elseif not e.usable then why = "You can't use this toy here." end
-    act.look.label:SetValue(label)
-    act.look:SetEnabledState(why == nil)
-    act.why = why
-    if InCombatLockdown() then
-        self.actionAfterCombat = true
-        return
-    end
-    act:Show()
-    if e.collected then
-        act:SetAttribute("type", "toy")
-        act:SetAttribute("toy", e.itemID)
-    else
-        act:SetAttribute("type", nil)
     end
 end
 
@@ -1345,6 +1245,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.bindAfterCombat then self.bindAfterCombat = nil; self:BindKeys() end
         if self.actionAfterCombat then self.actionAfterCombat = nil; self:DrawAction() end
+        if self.shelfAfterCombat then self.shelfAfterCombat = nil; if self.tab == "toys" then self:Refresh() end end
     end)
     for _, e in ipairs({ "PLAYER_MOUNT_DISPLAY_CHANGED", "COMPANION_UPDATE" }) do
         self:OnGameEvent(e, function() self:DrawAction() end)
@@ -1729,4 +1630,233 @@ function M:DrawWardrobe()
             call(w.doll.TryOn, w.doll, e.sourceID)
         end
     end
+end
+
+--------------------------------------------------------------------------------
+-- Toys (design: A, the toy shelf; asked in game: no toy has a 3D model, so
+-- no stage): every toy as a card in four columns under the tools, what it
+-- does, where it comes from or when it is ready, the star and Use (each
+-- card's own secure button). Hovering a card: all of it.
+--------------------------------------------------------------------------------
+
+local CARD_H, SHELF_COLS = 88, 4
+
+-- What a toy does: the "Use:" line of its tooltip (kept once known).
+local useText = {}
+local function toyUse(itemID)
+    if useText[itemID] then return useText[itemID] end
+    local data = C_TooltipInfo and C_TooltipInfo.GetToyByItemID and call(C_TooltipInfo.GetToyByItemID, itemID)
+    for _, l in ipairs(data and data.lines or {}) do
+        local t = l.leftText
+        if plain(t) and t and t:find("^Use:") then
+            useText[itemID] = t:gsub("^Use:%s*", "")
+            return useText[itemID]
+        end
+    end
+    return nil
+end
+
+local function buildToyCard(parent, owner, i)
+    local c = CreateFrame("Frame", nil, parent)
+    c:SetHeight(CARD_H)
+    c:EnableMouse(true)
+    c.bg = UI.Fill(c, "surface-sunk", "BACKGROUND")
+    c.bg:SetAllPoints()
+    c.edge = UI.Border(c, "gilt-faint")
+    c.plate = CreateFrame("Frame", nil, c)
+    c.plate:SetSize(40, 40)
+    c.plate:SetPoint("TOPLEFT", S["space-4"], -S["space-4"])
+    UI.Fill(c.plate, "surface-sunk", "BACKGROUND"):SetAllPoints()
+    c.icon = c.plate:CreateTexture(nil, "ARTWORK")
+    c.icon:SetPoint("TOPLEFT", 1, -1)
+    c.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+    c.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    c.plateEdge = UI.Border(c.plate, "gilt-hairline", { layer = "OVERLAY" })
+    c.cd = CreateFrame("Cooldown", nil, c.plate, "CooldownFrameTemplate")
+    c.cd:SetAllPoints(c.icon)
+    c.star = roundButton(c, "star", function(b) return b.on and "Remove from favourites" or "Add to favourites" end,
+        function(b) owner:ToggleToyFavourite(b:GetParent().entry) end)
+    c.star:SetSize(20, 20)
+    c.star.disc:Hide()
+    c.star:SetPoint("TOPRIGHT", -S["space-3"], -S["space-3"])
+    c.name = UI.Text(c, "label", "ink")
+    c.name:SetPoint("TOPLEFT", c.plate, "TOPRIGHT", S["space-4"], 0)
+    c.name:SetPoint("RIGHT", c.star, "LEFT", -18, 0)
+    c.name:SetWordWrap(false)
+    c.check = c:CreateTexture(nil, "OVERLAY")
+    c.check:SetTexture(GLYPHS .. "check.tga")
+    c.check:SetSize(11, 11)
+    c.check:SetVertexColor(UI.RGBA("gilt-text"))
+    c.use = UI.Text(c, "caption", "ink-muted")
+    c.use:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -1)
+    c.use:SetPoint("RIGHT", -S["space-4"], 0)
+    c.use:SetJustifyH("LEFT")
+    c.use:SetWordWrap(true)
+    c.use:SetMaxLines(2)
+    c.src = UI.Text(c, "caption", "ink-muted")
+    c.src:SetPoint("BOTTOMLEFT", S["space-4"], S["space-3"] + 4)
+    c.src:SetPoint("RIGHT", -(S["space-4"] + 64), 0)
+    c.src:SetJustifyH("LEFT")
+    c.src:SetWordWrap(false)
+    -- Use: the card's own secure button, the look a small SuuUI button under it
+    local act = CreateFrame("Button", "SuuUIToyUse" .. i, c, "SecureActionButtonTemplate")
+    act:SetSize(56, 22)
+    act:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-3"])
+    act:RegisterForClicks("AnyUp", "AnyDown")
+    act.look = UI.Button(act, { text = "Use", width = 56 })
+    act.look:SetAllPoints()
+    act.look:EnableMouse(false)
+    act:HookScript("OnEnter", function(b) if b.why then UI.ShowTooltip(b, { title = "Use", description = b.why }) end end)
+    act:HookScript("OnLeave", function() UI.HideTooltip() end)
+    c.act = act
+    c:SetScript("OnEnter", function(self)
+        self.hover = true
+        owner:DrawCardState(self)
+        local e = self.entry
+        if not e then return end
+        local lines = {}
+        for _, sec in ipairs(owner:SourceCard(e.source, "toy", nil)) do
+            lines[#lines + 1] = { sec.title }
+            for _, l in ipairs(sec.lines) do lines[#lines + 1] = { "   " .. l } end
+        end
+        UI.ShowTooltip(self, { title = e.name, subtitle = e.collected and "Collected" or "Not collected",
+            description = toyUse(e.itemID), lines = lines[1] and lines or { { "Source unknown" } } })
+    end)
+    c:SetScript("OnLeave", function(self) self.hover = false; owner:DrawCardState(self); UI.HideTooltip() end)
+    return c
+end
+
+function M:DrawCardState(c)
+    local e = c.entry
+    if not e then return end
+    c.edge:SetColor(c.hover and "gilt" or "gilt-faint")
+    c.bg:SetColorTexture(UI.RGBA(c.hover and "surface-raised" or "surface-sunk"))
+end
+
+-- A card's cooldown, its foot line and its Use.
+function M:DrawCardCooldown(c)
+    local e = c.entry
+    if not e then return end
+    local start, duration = 0, 0
+    if e.collected then start, duration = toyCooldown(e.itemID) end
+    if duration > 0 then
+        c.cd:SetCooldown(start, duration)
+        c.src:SetValue(readyIn(start, duration))
+        c.src:SetColor("arcane")
+    else
+        c.cd:Clear()
+        c.src:SetValue(self:SourceLine(e.source, "toy", nil))
+        c.src:SetColor(e.collected and "ink-muted" or "ink")
+    end
+    local why
+    if not e.collected then why = "You don't have this toy yet."
+    elseif duration > 0 then why = readyIn(start, duration) .. "."
+    elseif e.usable == false then why = "You can't use this toy here." end
+    c.act.look:SetEnabledState(why == nil)
+    c.act.why = why
+end
+
+function M:DrawCard_Toy(c)
+    local e = c.entry
+    if not e then c:Hide() return end
+    c:Show()
+    c.icon:SetTexture(e.icon)
+    c.icon:SetDesaturated(not e.collected)
+    local v = e.collected and 1 or 0.55
+    c.icon:SetVertexColor(v, v, v)
+    c.plateEdge:SetColor(e.collected and "gilt-hairline" or "gilt-faint")
+    c.name:SetValue(e.name)
+    c.name:SetColor(e.collected and "ink" or "ink-muted")
+    c.check:ClearAllPoints()
+    c.check:SetPoint("LEFT", c.name, "LEFT", math.min(c.name:GetUnboundedStringWidth(), c.name:GetWidth() or 0) + 4, 0)
+    c.check:SetShown(e.collected)
+    c.use:SetValue(toyUse(e.itemID) or "")
+    c.use:SetColor(e.collected and "ink-muted" or "ink-faint")
+    c.star.on = e.favourite and true or false
+    c.star:Draw(false)
+    self:DrawCardState(c)
+    self:DrawCardCooldown(c)
+    -- the secure part: out of combat only
+    if InCombatLockdown() then
+        self.shelfAfterCombat = true
+    elseif e.collected then
+        c.act:SetAttribute("type", "toy")
+        c.act:SetAttribute("toy", e.itemID)
+    else
+        c.act:SetAttribute("type", nil)
+    end
+end
+
+function M:BuildShelf()
+    local body = self.window.body
+    local shelf = CreateFrame("Frame", nil, body)
+    shelf:SetAllPoints()
+    shelf:Hide()
+    self.shelf = shelf
+    local BAR = S["space-3"]
+    shelf.list = UI.ScrollArea(shelf, BAR)
+    shelf.list:SetPoint("TOPLEFT", 0, -(TOOLS_H + S["space-5"]))
+    shelf.list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
+    shelf.list:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w); self:LayoutShelf() end)
+    shelf.cards = {}
+    shelf.empty = UI.Text(shelf.list.child, "body", "ink-muted")
+    shelf.empty:SetPoint("TOP", 0, -S["space-7"])
+    shelf.empty:SetValue("No toys match.")
+end
+
+function M:LayoutShelf()
+    local shelf = self.shelf
+    local w = shelf.list.child:GetWidth()
+    if not w or w <= 0 or isSecret(w) then return end
+    local gap = S["space-4"]
+    local cw = (w - (SHELF_COLS - 1) * gap) / SHELF_COLS
+    for i, c in ipairs(shelf.cards) do
+        local col, row = (i - 1) % SHELF_COLS, math.floor((i - 1) / SHELF_COLS)
+        c:ClearAllPoints()
+        c:SetWidth(cw)
+        c:SetPoint("TOPLEFT", col * (cw + gap), -row * (CARD_H + gap))
+    end
+end
+
+function M:DrawShelf()
+    local shelf, list = self.shelf, self.entries or {}
+    for i = #shelf.cards + 1, #list do shelf.cards[i] = buildToyCard(shelf.list.child, self, i) end
+    for i, c in ipairs(shelf.cards) do
+        c.entry = list[i]
+        self:DrawCard_Toy(c)
+    end
+    self:LayoutShelf()
+    local rows = math.ceil(#list / SHELF_COLS)
+    shelf.list.child:SetHeight(math.max(1, rows * CARD_H + math.max(0, rows - 1) * S["space-4"]))
+    shelf.empty:SetShown(#list == 0)
+end
+
+function M:DrawShelfCooldowns()
+    if not (self.shelf and self.shelf:IsShown()) then return end
+    for _, c in ipairs(self.shelf.cards) do if c:IsShown() then self:DrawCardCooldown(c) end end
+end
+
+function M:ToggleToyFavourite(e)
+    if not (e and e.collected) then return end
+    call(C_ToyBox.SetIsFavorite, e.itemID, not e.favourite)
+    C_Timer.After(0.1, function() self:Refresh() end)
+end
+
+-- The tab's layout: Toys the shelf with the tools on top; the others the
+-- stage, the tools above the strip.
+function M:LayoutTab()
+    local toys = self.tab == "toys"
+    local tools = self.tools
+    self.shelf:SetShown(toys)
+    self.stage:SetShown(not toys)
+    self.strip:SetShown(not toys)
+    tools:ClearAllPoints()
+    if toys then
+        tools:SetPoint("TOPLEFT", self.window.body, "TOPLEFT")
+        tools:SetPoint("TOPRIGHT", self.window.body, "TOPRIGHT")
+    else
+        tools:SetPoint("BOTTOMLEFT", self.strip, "TOPLEFT", 0, S["space-5"])
+        tools:SetPoint("BOTTOMRIGHT", self.strip, "TOPRIGHT", 0, S["space-5"])
+    end
+    if toys and not InCombatLockdown() then self.act:Hide() end
 end
