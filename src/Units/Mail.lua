@@ -691,9 +691,10 @@ function M:BuildSuggest(field)
     d:Hide()
     d.heads, d.rows = {}, {}
     -- a long list (the whole guild) scrolls: wheel, bar, or the arrow keys
-    d.scroll = UI.ScrollArea(d, -(S["space-3"] + 1))
+    -- the rows end before the bar's own lane inside the border
+    d.scroll = UI.ScrollArea(d, S["space-2"])
     d.scroll:SetPoint("TOPLEFT", 1, -1)
-    d.scroll:SetPoint("BOTTOMRIGHT", -1, 1)
+    d.scroll:SetPoint("BOTTOMRIGHT", -(S["space-2"] * 2 + 3), 1)
     d.scroll:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
     self.suggest = d
     local edit = field.edit
