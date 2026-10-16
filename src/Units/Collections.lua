@@ -347,7 +347,42 @@ local CARD_W, SHADE_W = 270, 340
 -- 40px above the ground point; scaling the model instead misplaced it).
 -- The projection follows the larger side too.
 local FLOOR, MODEL_W, MODEL_H, SIZE_REF = 40, 760, 470, 470
-local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739 * 440 / SIZE_REF, 72, 165, 40
+local FEET_K, FEET_Y, FEET_BELOW = 2.739 * 440 / SIZE_REF, 72, 165
+-- How far each mount model's feet show above the ground under its body, by
+-- model file (stood on the floor by hand with /suu probe mountfeet,
+-- 2026-10-17, at the stage's facing); a model not here: FEET_DROP.
+local FEET_DROP = 64
+local FEET_DROPS = {
+    [123410] = 56, -- Black War Wolf
+    [123418] = 56, -- Brown Wolf
+    [124038] = 94, -- Black War Tiger
+    [124052] = 90, -- Golden Sabercat
+    [124696] = 46, -- Black War Kodo
+    [124711] = 46, -- Brown Kodo
+    [124872] = 74, -- Blue Mechanostrider
+    [124880] = 72, -- Black Battlestrider
+    [125009] = 64, -- Green Skeletal Warhorse
+    [125223] = 70, -- Summon Dreadsteed
+    [125227] = 70, -- Summon Felsteed
+    [125522] = 70, -- Black War Ram
+    [125546] = 54, -- White Ram
+    [125614] = 74, -- Black Stallion
+    [125620] = 56, -- Black War Steed
+    [125649] = 76, -- Black War Raptor
+    [125680] = 76, -- Emerald Raptor
+    [125687] = 80, -- Summon Blue Qiraji Battle Tank
+    [126304] = 66, -- Black Skeletal Horse
+    [126306] = 62, -- Dark Skeletal Horse
+    [126403] = 62, -- Summon Charger
+    [126407] = 66, -- Summon Warhorse
+    [7704354] = 64, -- Empyrean Galestrider
+    [7704356] = 64, -- Swift Empyrean Galestrider
+    [7704362] = 52, -- Spectral Bear
+    [7780798] = 94, -- Summon Forsaken Charger
+    [7935081] = 48, -- Pack Kodo
+    [7958137] = 94, -- Summon Warhorse
+}
+local FACING = 0.6
 local CAM_SCALE = math.max(MODEL_W, MODEL_H) / SIZE_REF
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -887,7 +922,7 @@ function M:ShowMount(e)
     self.camScale = CAM_SCALE
     call(model.SetCamDistanceScale, model, self.camScale)
     call(model.SetPosition, model, 0, 0, 0)
-    call(model.SetFacing, model, 0)
+    call(model.SetFacing, model, FACING)
     -- no answer from the game in two seconds: shown anyway
     local id = e.id
     C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
@@ -934,6 +969,11 @@ function M:PlaceModel()
         if b > FEET_BELOW then lo = mid else hi = mid end
     end
     call(m.SetPosition, m, 0, 0, (lo + hi) / 2)
+    -- down by this model's own gap between its feet and the ground point
+    local file = call(m.GetModelFileID, m)
+    local drop = (type(file) == "number" and not isSecret(file) and FEET_DROPS[file]) or FEET_DROP
+    m:ClearAllPoints()
+    m:SetPoint("BOTTOM", self.stage, "BOTTOM", 0, FEET_Y - drop + FEET_BELOW - MODEL_H / 2)
 end
 
 -- Loaded: the camera back (CAM_SCALE), then placed on the floor once the
