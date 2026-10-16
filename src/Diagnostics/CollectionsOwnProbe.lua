@@ -148,6 +148,23 @@ local function appearances()
             end
         end
     end
+    -- every category ID, asked plainly and with a slot (the game's wardrobe
+    -- asks for armor with the slot's transmog location)
+    local function location(slot)
+        if not (TransmogUtil and TransmogUtil.GetTransmogLocation and Enum.TransmogType) then return nil end
+        local ok, loc = pcall(TransmogUtil.GetTransmogLocation, slot, Enum.TransmogType.Appearance, false)
+        return ok and loc and loc.GetData and loc:GetData() or nil
+    end
+    for cat = 1, 30 do
+        local plain = raw(TC.GetCategoryAppearances, cat) or {}
+        local slotName = CollectionWardrobeUtil and CollectionWardrobeUtil.GetSlotFromCategoryID
+            and raw(CollectionWardrobeUtil.GetSlotFromCategoryID, cat)
+        local withSlot = slotName and raw(TC.GetCategoryAppearances, cat, location(slotName)) or {}
+        local yours = 0
+        for _, a in ipairs(withSlot) do if a.isCollected then yours = yours + 1 end end
+        line("categories", ("%d info %s | slot %s | plain %d | with slot %d (yours %d)"):format(cat, call(TC.GetCategoryInfo, cat),
+            tostring(slotName), #plain, #withSlot, yours))
+    end
     -- what you wear: each slot's item and its appearance
     for _, slot in ipairs(SLOTS) do
         local id = raw(GetInventorySlotInfo, slot)
