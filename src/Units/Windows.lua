@@ -496,8 +496,10 @@ local ROW_EXTRA = 8
 local GAME_MAP_TOP, MAP_TOP = 67, 25 + ROW_EXTRA
 local CUT = GAME_MAP_TOP - MAP_TOP
 local LOG_CUT = GAME_MAP_TOP - 25
--- the second row's buttons, centred in it
-local ROW_Y = S["space-1"] + ROW_EXTRA / 2
+-- the second row's controls, their middles on one line in it (anchored by
+-- their bottoms, controls of different heights sat at different heights:
+-- the filter menu lower than the search box; found in game)
+local ROW_MID = S["space-1"] + ROW_EXTRA / 2 + 11
 local SEARCH_H = 26
 
 -- A button in the header's second row: a glyph, its edge on hover.
@@ -700,22 +702,15 @@ function M:PlaceQuestList(q, list)
         bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", -2, -4)
     end
     -- the search box: its left (SuuUI's edge 4px outside it) under the
-    -- headers' left, its right still by the count; once it's laid out
+    -- headers' left (the log is questLogWidth wide at the window's right),
+    -- its right by the count, its middle on the row's
     local sb, count = list.SearchBox, _G.QuestLogCount
-    if not (sb and count) then return end
-    local function place()
-        local top, mid = list:GetTop(), select(2, sb:GetCenter())
-        if not (top and mid) then return false end
-        sb:ClearAllPoints()
-        sb:SetPoint("RIGHT", count, "LEFT", -S["space-3"], 0)
-        sb:SetPoint("LEFT", list, "TOPLEFT", HEADER_X + 4, mid - top)
-        return true
-    end
-    if not place() then
-        q:HookScript("OnShow", function()
-            if not sb.suuPlaced then C_Timer.After(0, function() sb.suuPlaced = place() end) end
-        end)
-    end
+    local head = _G.WorldMapFrame and _G.WorldMapFrame.suuChrome and _G.WorldMapFrame.suuChrome.head
+    if not (sb and count and head) then return end
+    local fromRight = (_G.WorldMapFrame.questLogWidth or 333) - LIST_SHIFT - HEADER_X - 4
+    sb:ClearAllPoints()
+    sb:SetPoint("LEFT", head, "BOTTOMRIGHT", -fromRight, ROW_MID)
+    sb:SetPoint("RIGHT", count, "LEFT", -S["space-3"], 0)
 end
 
 -- The quest details' buttons and rewards, centred between the map and the
@@ -825,13 +820,13 @@ function M:SkinWorldMap()
     local function placeRow()
         if track then
             track:ClearAllPoints()
-            track:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_Y)
+            track:SetPoint("LEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_MID)
             track:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
         end
         if pin then
             pin:ClearAllPoints()
             if track then pin:SetPoint("LEFT", track, "RIGHT", S["space-2"], 0)
-            else pin:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_Y) end
+            else pin:SetPoint("LEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_MID) end
             pin:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
         end
     end
@@ -858,13 +853,17 @@ function M:SkinWorldMap()
             UI.ReskinDropdown(gear, { glyph = "gear" })
             gear:SetSize(22, 22)
             gear:ClearAllPoints()
-            gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_Y)
+            gear:SetPoint("RIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_MID)
+            -- its menu under the header's rule, not over the row
+            if gear.SetMenuAnchor and _G.AnchorUtil then
+                gear:SetMenuAnchor(AnchorUtil.CreateAnchor("TOPRIGHT", gear, "BOTTOMRIGHT", 0, -(ROW_MID - 11 + S["space-2"])))
+            end
             right = gear
         end
         if count then
             count:ClearAllPoints()
             if gear then count:SetPoint("RIGHT", gear, "LEFT", -S["space-3"], 0)
-            else count:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_Y) end
+            else count:SetPoint("RIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_MID) end
             right = count
         end
         if search and right ~= chrome.head then
