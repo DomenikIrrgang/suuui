@@ -671,7 +671,16 @@ function M:Build()
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
     w:Hide()
     w.scroll:Hide()
-    w:HookScript("OnShow", function() self:Refresh() end)
+    -- on opening the frames aren't laid out yet when the first mount loads,
+    -- so its camera read wrong (seen in game: wrong on opening, right after
+    -- choosing another and back): shown once more a frame later
+    w:HookScript("OnShow", function()
+        self:Refresh()
+        C_Timer.After(0, function()
+            self.showing = nil
+            self:Refresh()
+        end)
+    end)
     self.window = w
     local body = w.body
 
