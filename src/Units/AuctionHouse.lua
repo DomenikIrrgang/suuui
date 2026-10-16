@@ -1191,10 +1191,14 @@ function M:OnEnable()
         self:Note("Couldn't post.", "error")
     end)
     -- the sell search: what the chosen item goes for now
-    for _, e in ipairs({ "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED" }) do
-        self:OnGameEvent(e, function()
+    for _, e in ipairs({ "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED" }) do
+        self:OnGameEvent(e, function(_, answered)
             local key = self.sellKey
             if not key or self.tab ~= "sell" then return end
+            -- an item's results come under the house's own key for it (its
+            -- item level and suffix as the house sees them), not always the
+            -- one made from the bag item
+            if type(answered) == "table" and answered.itemID == key.itemID then key = answered end
             local low, mine
             if self.sell.commodity then
                 local o = call(AH.GetCommoditySearchResultInfo, key.itemID, 1)
