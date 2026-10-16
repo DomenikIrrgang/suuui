@@ -78,9 +78,22 @@ local function talentOf(configID, info)
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
 end
 
--- Everything the page shows, for the config viewed.
-function M:Collect()
-    local configID = self:ConfigID()
+-- The game's spells window showing another player's talents ("View
+-- Talents" on inspect: the same window in inspect mode); their unit, else nil.
+-- Seen in game, 2026-10-17: the page over it showed your own talents there.
+local INSPECT_CONFIG = Constants and Constants.TraitConsts and Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID or -1
+function M:Inspecting()
+    local f = _G.PlayerSpellsFrame
+    if not (f and f.IsInspecting) then return nil end
+    local ok, on = pcall(f.IsInspecting, f)
+    if not (ok and on) then return nil end
+    local okU, unit = pcall(f.GetInspectUnit, f)
+    return okU and unit or "target"
+end
+
+-- Everything the page shows, for the config viewed (another's: configID given).
+function M:Collect(configID)
+    configID = configID or self:ConfigID()
     if not configID then return nil end
     local info = call(C_Traits.GetConfigInfo, configID)
     local treeID = info and info.treeIDs and info.treeIDs[1]
@@ -237,13 +250,23 @@ function M:Render()
     local data = self:Collect()
     self.data = data
     self:FitWindow()
-    for _, page in ipairs(pages) do self:Fill(page, data) end
+    local inspected = self:Inspecting()
+    for _, page in ipairs(pages) do
+        if page == self.page and inspected then
+            -- the page over the game's window shows whose talents it shows
+            page.data = self:Collect(INSPECT_CONFIG)
+            self:Fill(page, page.data, inspected)
+        else
+            page.data = data
+            self:Fill(page, data)
+        end
+    end
 end
 
-function M:Fill(page, data)
-    -- the specs: only with two talent groups
+function M:Fill(page, data, inspected)
+    -- the specs: only with two talent groups (yours)
     local groups, active = self:SpecGroups()
-    if groups > 1 then
+    if groups > 1 and not inspected then
         local list = {}
         for g = 1, groups do
             list[g] = { label = g == 1 and "Primary" or "Secondary", name = "", active = g == active }
@@ -253,10 +276,15 @@ function M:Fill(page, data)
         page:SetSpecs(nil)
     end
     if not data then
-        page:SetData({ hint = "No talents to show yet." })
+        page:SetData({ hint = inspected and "Their talents haven't arrived yet." or "No talents to show yet." })
         return
     end
     local editable, why = self:Editable()
+    local who
+    if inspected then
+        who = plain(UnitName(inspected)) and UnitName(inspected) or nil
+        editable, why = false, ("Viewing %s's talents."):format(who or "their")
+    end
     local trees = {}
     for i, t in ipairs(data.trees) do
         for _, n in ipairs(t.nodes) do
@@ -269,7 +297,7 @@ function M:Fill(page, data)
     local best
     for _, t in ipairs(trees) do if not best or t.points > best.points then best = t end end
     page:SetData({
-        name = (best and best.points > 0) and best.name or (UnitClass("player")),
+        name = (best and best.points > 0) and best.name or (UnitClass(inspected or "player")),
         trees = trees, available = data.available, pending = data.pending, editable = editable,
         hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
     })
@@ -287,8 +315,8 @@ end
 -- A node's tooltip: the game's own, built as Blizzard's talent buttons build
 -- it (the title, "Rank 2/5", the talent's text at this rank and the next,
 -- what a click does, what it still needs in red); asked for in game.
-function M:ShowTip(button, n)
-    local data = self.data
+function M:ShowTip(button, n, data)
+    data = data or self.data
     if not data then return end
     local needs = {}
     if not n.meetsEdges then
@@ -299,13 +327,14 @@ function M:ShowTip(button, n)
         end
     end
     local editable, why = self:Editable()
+    if data.configID == INSPECT_CONFIG then editable, why = false, nil end
     UI.TraitTooltip(button, data.configID, n.id, { name = n.name, treeName = n.tree.name, conditions = n.conditions,
         canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
 end
 
 function M:Purchase(n)
     local data = self.data
-    if not data or not n.canSpend then return end
+    if not data or not n.canSpend or data.configID == INSPECT_CONFIG then return end
     call(C_Traits.PurchaseRank, data.configID, n.id)
     self:Render()
 end
@@ -443,7 +472,7 @@ end
 function M:Wire(page)
     page.onClick = function(n) self:Purchase(n) end
     page.onRemove = function(n) self:Refund(n) end
-    page.onEnter = function(b, n) self:ShowTip(b, n) end
+    page.onEnter = function(b, n) self:ShowTip(b, n, page.data) end
     page.onLeave = function() GameTooltip:Hide() end
     page.onApply = function() self:Apply() end
     page.onUndo = function() self:Undo() end
@@ -504,6 +533,8 @@ function M:Build()
     local function again()
         if not self.sizing and tab:IsShown() then self:Size() end
     end
+    -- into and out of another player's talents
+    if f.SetInspecting then hooksecurefunc(f, "SetInspecting", function() self:QueueRender() end) end
     hooksecurefunc(f, "SetHeight", again)
     hooksecurefunc(f, "SetWidth", again)
     hooksecurefunc(f, "SetSize", again)
@@ -517,6 +548,8 @@ function M:OnEnable()
     self:Build()
     self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+    -- another player's talents: drawn when they arrive
+    self:OnGameEvent("INSPECT_READY", function() if self:Inspecting() then self:QueueRender() end end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
                          "TRAIT_CONFIG_LIST_UPDATED", "ACTIVE_COMBAT_CONFIG_CHANGED", "PLAYER_TALENT_UPDATE",

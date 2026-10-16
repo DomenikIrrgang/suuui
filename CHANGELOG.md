@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Talents: "View Talents" on an inspected player shows their talents, read only ("Viewing Name's talents"), not your own.
 - The world map no longer errors on a quest giver offering quests QuestieDB has no name for yet: the game's own title is shown, else the quest's number.
 - Tooltips SuuUI doesn't know by name (an addon's own, the aura buttons') now get SuuUI's look: the check whether one already had it wasn't reachable by the Tooltips module, so the step quietly did nothing.
 - Text fields react to typing at once (the merchant's quantity note, money amounts, the auction house): some only did after Enter.
