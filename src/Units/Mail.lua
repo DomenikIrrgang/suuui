@@ -755,8 +755,9 @@ function M:DrawSuggest(keep)
             end
             r.row, r.flatIndex = row, #d.flat
             r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT", d, "RIGHT")
+            -- inside the border: the highlight leaves its edge showing
+            r:SetPoint("TOPLEFT", 1, -y)
+            r:SetPoint("RIGHT", d, "RIGHT", -1, 0)
             r.dot:SetShown(row.diamond and true or false)
             if row.diamond then r.dot:SetVertexColor(UI.RGBA(row.color or "ink")) end
             r.name:ClearAllPoints()
