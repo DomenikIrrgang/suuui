@@ -1050,6 +1050,7 @@ end
 --------------------------------------------------------------------------------
 -- The trainer window (3.6): restyled in place, the game's list and Train
 -- (Blizzard_TrainerUI, loaded on demand); the trainer's name in the title.
+-- Only while the Trainer module (SuuUI's own window) is off.
 --------------------------------------------------------------------------------
 
 -- One service row after the game filled it: flat, a hairline under it, the
@@ -1159,6 +1160,9 @@ end
 function M:SkinTrainer()
     local f = _G.ClassTrainerFrame
     if not f or f.suuChrome then return end
+    -- SuuUI's own trainer window takes its place while that module is on
+    local own = SuuUI.GetModule("trainer")
+    if own and own:IsEnabled() then return end
     if _G.ClassTrainerFrame_InitServiceButton then
         hooksecurefunc("ClassTrainerFrame_InitServiceButton", function(b) styleTrainerRow(b) end)
     end
