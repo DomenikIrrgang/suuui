@@ -245,10 +245,88 @@ function MP.Log()
         tostring(sb and where(sb, x0).left), tostring(sb and where(sb, x0).right)))
 end
 
+-- "/suu probe map zones": for SuuUI's objective zones where the game shows
+-- no marker. Open the map on a zone with your quests first.
+--   * each quest in your log: what the game reports about its markers (the
+--     log's fields, the quests on this map, its marker in the log, its POI
+--     icon, its next waypoint)
+--   * can a texture be drawn as a triangle (SetVertexOffset)? Draws a
+--     test: a blue triangle and a skewed one in the map's middle, until
+--     /reload. A screenshot of the map shows how they came out.
+function MP.Zones()
+    SuuUIProbe = SuuUIProbe or {}
+    local s = { at = date("%Y-%m-%d %H:%M:%S") }
+    SuuUIProbe.mapZones = s
+    local f = _G.WorldMapFrame
+    local map = f:GetMapID()
+    s.mapID = show(map)
+    local onMap = {}
+    local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
+    for _, q in ipairs(type(on) == "table" and on or {}) do if q.questID then onMap[q.questID] = q end end
+    local logPins = {}
+    local contents = _G.QuestScrollFrame and _G.QuestScrollFrame.Contents
+    local pool = contents and contents.buttonPool
+    if pool and pool.EnumerateActive then
+        for pin in pool:EnumerateActive() do if pin.questID then logPins[pin.questID] = true end end
+    end
+    s.quests = {}
+    local n = call(C_QuestLog, "GetNumQuestLogEntries")
+    for i = 1, type(n) == "number" and n or 0 do
+        local info = call(C_QuestLog, "GetInfo", i)
+        if type(info) == "table" and not info.isHeader and info.questID then
+            local id = info.questID
+            s.quests[id] = {
+                title = show(info.title), hasLocalPOI = show(info.hasLocalPOI), isOnMap = show(info.isOnMap),
+                onThisMap = onMap[id] and show(onMap[id]) or "no", logMarker = logPins[id] and "yes" or "no",
+                poiIcon = show({ call(_G, "QuestPOIGetIconInfo", id) }),
+                waypoint = show({ call(C_QuestLog, "GetNextWaypoint", id) }),
+                waypointHere = show({ call(C_QuestLog, "GetNextWaypointForMap", id, map) }),
+                complete = show((call(C_QuestLog, "IsComplete", id))),
+            }
+        end
+    end
+    -- the triangle test, on the map's canvas
+    local canvas = f.ScrollContainer and f.ScrollContainer.Child
+    s.hasVertexOffset = canvas and type(canvas.CreateTexture) == "function"
+        and type(UIParent:CreateTexture().SetVertexOffset) == "function" or false
+    if canvas and s.hasVertexOffset then
+        local w, h = canvas:GetWidth(), canvas:GetHeight()
+        local function tri(key, x, y, size, skew, r, g, b)
+            local t = MP[key] or canvas:CreateTexture(nil, "OVERLAY", nil, 7)
+            MP[key] = t
+            t:SetColorTexture(r, g, b, 0.55)
+            t:ClearAllPoints()
+            t:SetPoint("TOPLEFT", canvas, "TOPLEFT", w * x, -h * y)
+            t:SetSize(w * size, w * size)
+            -- the lower right corner onto the upper right one: a triangle;
+            -- skewed, the upper right moved left too
+            local ok1, e1 = pcall(t.SetVertexOffset, t, 4, 0, w * size)
+            local ok2, e2 = true, nil
+            if skew then ok2, e2 = pcall(t.SetVertexOffset, t, 3, -w * size * 0.5, 0) end
+            t:Show()
+            return ok1 and ok2 and "ok" or ("error: " .. tostring(e1 or e2))
+        end
+        s.triangle = tri("tri1", 0.40, 0.40, 0.08, false, 0.25, 0.8, 1)
+        s.skewed = tri("tri2", 0.52, 0.40, 0.08, true, 0.9, 0.8, 0.5)
+    end
+    local none, total = 0, 0
+    for _, q in pairs(s.quests) do
+        total = total + 1
+        if q.logMarker == "no" then none = none + 1 end
+    end
+    ns.Print(("Map zones: %d quests in your log, %d without a marker in the log; triangles %s; take a screenshot of the map, then /reload."):format(
+        total, none, tostring(s.triangle or "not possible")))
+end
+
 function MP.Command(rest)
     if rest == "log" then
         if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then ns.Print("Map probe: open the map with its quest log, then run it again.") return end
         MP.Log()
+        return
+    end
+    if rest == "zones" then
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then ns.Print("Map probe: open the map with its quest log, then run it again.") return end
+        MP.Zones()
         return
     end
     if rest == "areas" then
