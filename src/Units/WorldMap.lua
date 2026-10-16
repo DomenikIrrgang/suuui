@@ -1512,7 +1512,19 @@ local SECTION = {
     },
 }
 
+-- The game's Quest objectives (questPOI) on once per character: off, the
+-- game draws no quest markers at all, on the map or in the log (Forever
+-- had it off on newer characters; found in game). After that it's the
+-- player's, in Map filters.
+function M:QuestObjectivesOnce()
+    local data = self:CharData()
+    if data.questPOIOnce or InCombatLockdown() then return end
+    if not settingOn("questPOI") then pcall(SetCVar, "questPOI", "1") end
+    data.questPOIOnce = true
+end
+
 function M:OnEnable()
+    self:QuestObjectivesOnce()
     self:Attach()
     if not self.map then
         self:OnGameEvent("ADDON_LOADED", function()

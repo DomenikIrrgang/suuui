@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Quest markers on the world map and in its quest log show on characters where the game's Quest objectives was off (newer characters had it off, so no quest showed where to go): SuuUI turns it on once per character; Map filters › Quests › Quest objectives switches it after that.
+
 ## 0.4.0-beta.2 (2026-10-16)
 
 ### New
