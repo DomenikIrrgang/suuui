@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Party and raid frames show a defensive buff once (one the game counts as both an external and a big defensive, like Rock Skin, showed twice).
+
 ## 0.4.0-beta.4 (2026-10-16)
 
 ### Changed

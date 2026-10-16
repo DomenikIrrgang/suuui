@@ -85,7 +85,9 @@ end
 local AURA_GROUPS = {
     { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
     { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE" }, max = 2 },
-    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" }, max = 2 },
+    -- (one the game marks external and big defensive at once showed twice,
+    -- once in each: Rock Skin; found in game)
+    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE", "!EXTERNAL_DEFENSIVE" }, max = 2 },
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
     { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },

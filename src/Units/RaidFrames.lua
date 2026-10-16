@@ -91,7 +91,8 @@ end
 local AURA_GROUPS = {
     { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true },
     { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE" } },
-    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" } },
+    -- (not again what's in external: one marked both showed twice)
+    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE", "!EXTERNAL_DEFENSIVE" } },
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
     { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true },
