@@ -340,9 +340,15 @@ local CARD_W, SHADE_W = 270, 340
 -- FEET_DROP: the feet a mount shows stand above the ground under its body
 -- (seen in game: a raptor's 60px, a kodo's 30px above the shadow's
 -- middle), so every mount goes down by about that much.
-local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
-local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739, 72, 165, 40
-local CAM_SCALE = 1
+-- The frame is wide so long mounts turned side on fit (seen in game: 440
+-- wide cut them); the game sizes the model by the frame's larger side, so
+-- the camera moves back by that side over the calibrated 470 (tested with
+-- the placement probe: a kodo the same size in 760 wide, its feet the same
+-- 40px above the ground point; scaling the model instead misplaced it).
+-- The projection follows the larger side too.
+local FLOOR, MODEL_W, MODEL_H, SIZE_REF = 40, 760, 470, 470
+local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739 * 440 / SIZE_REF, 72, 165, 40
+local CAM_SCALE = math.max(MODEL_W, MODEL_H) / SIZE_REF
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
 local TOOLS_H = 30
@@ -905,7 +911,7 @@ local function groundBelow(P, T, lift)
     local r = { -P[1], -P[2], lift - P[3] }
     local depth = dot(r, f)
     if depth <= 0 then return nil end
-    return -FEET_K * MODEL_W * dot(r, u) / depth
+    return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
 end
 
 -- The mount lifted so the ground under it shows FEET_BELOW under the
@@ -930,15 +936,21 @@ function M:PlaceModel()
     call(m.SetPosition, m, 0, 0, (lo + hi) / 2)
 end
 
+-- Loaded: the camera back (CAM_SCALE), then placed on the floor once the
+-- camera has moved (read a moment later), then shown.
 function M:ModelLoaded()
     local model = self.model
     if not (model and self.waiting) then return end
+    local id = self.waiting
     self.waiting = nil
     call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
-    self:PlaceModel()
-    self.stage.loading:Hide()
-    model:SetAlpha(1)
-    SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
+    C_Timer.After(0.1, function()
+        if self.showing ~= id then return end
+        self:PlaceModel()
+        self.stage.loading:Hide()
+        model:SetAlpha(1)
+        SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
+    end)
 end
 
 function M:Turn(dir)
@@ -950,8 +962,10 @@ end
 function M:Zoom(dir)
     local m = self.model
     if not m then return end
-    self.camScale = math.max(ZOOM_MIN, math.min(ZOOM_MAX, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
+    self.camScale = math.max(ZOOM_MIN * CAM_SCALE, math.min(ZOOM_MAX * CAM_SCALE, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
     call(m.SetCamDistanceScale, m, self.camScale)
+    -- on the floor again at the new distance
+    C_Timer.After(0.05, function() self:PlaceModel() end)
 end
 
 -- A mount's favourite: the game keeps it by the mount's place in its own
