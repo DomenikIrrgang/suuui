@@ -340,14 +340,8 @@ local CARD_W, SHADE_W = 270, 340
 -- FEET_DROP: the feet a mount shows stand above the ground under its body
 -- (seen in game: a raptor's 60px, a kodo's 30px above the shadow's
 -- middle), so every mount goes down by about that much.
--- The frame is wide (seen in game: 440 wide cut long mounts turned
--- sideways), and since the game sizes the model by the frame's larger
--- side, the model is scaled back to the size it had in the calibrated
--- 440 by 470 frame (SIZE_REF) by SetModelScale; the projection follows the
--- larger side too.
-local FLOOR, MODEL_W, MODEL_H, SIZE_REF = 40, 760, 470, 470
-local MODEL_SCALE = SIZE_REF / math.max(MODEL_W, MODEL_H)
-local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739 * 440 / SIZE_REF, 72, 165, 40
+local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
+local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739, 72, 165, 40
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -911,7 +905,7 @@ local function groundBelow(P, T, lift)
     local r = { -P[1], -P[2], lift - P[3] }
     local depth = dot(r, f)
     if depth <= 0 then return nil end
-    return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
+    return -FEET_K * MODEL_W * dot(r, u) / depth
 end
 
 -- The mount lifted so the ground under it shows FEET_BELOW under the
@@ -934,7 +928,6 @@ function M:PlaceModel()
         if b > FEET_BELOW then lo = mid else hi = mid end
     end
     call(m.SetPosition, m, 0, 0, (lo + hi) / 2)
-    call(m.SetModelScale, m, MODEL_SCALE)
 end
 
 function M:ModelLoaded()
