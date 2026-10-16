@@ -1052,9 +1052,104 @@ end
 -- (Blizzard_TrainerUI, loaded on demand); the trainer's name in the title.
 --------------------------------------------------------------------------------
 
+-- One service row after the game filled it: flat, a hairline under it, the
+-- hover and the choice in SuuUI's colours, a 32px icon in an edge, the price
+-- as SuuUI's money (ember digits while you can't afford it), and the name
+-- and rank fitted again for SuuUI's type.
+local function styleTrainerRow(b)
+    if not b or not b.icon then return end
+    if not b.suuRow then
+        b.suuRow = true
+        local n = b:GetNormalTexture()
+        if n then n:SetAlpha(0) end
+        if b.disabledBG then b.disabledBG:SetAlpha(0) end
+        local hl = b:GetHighlightTexture()
+        if hl then
+            hl:SetColorTexture(UI.RGBA("surface-raised"))
+            hl:SetBlendMode("BLEND")
+            hl:SetAlpha(0.6)
+        end
+        if b.selectedTex then
+            b.selectedTex:SetColorTexture(UI.RGBA("arcane-soft"))
+            b.selectedTex:SetBlendMode("BLEND")
+            b.selectedTex:ClearAllPoints()
+            b.selectedTex:SetAllPoints()
+        end
+        b.suuRule = b:CreateTexture(nil, "ARTWORK")
+        b.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+        b.suuRule:SetHeight(1)
+        b.suuRule:SetPoint("BOTTOMLEFT", S["space-2"], 0)
+        b.suuRule:SetPoint("BOTTOMRIGHT", -S["space-2"], 0)
+        b.icon:SetSize(32, 32)
+        b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        b.suuIconEdge = CreateFrame("Frame", nil, b)
+        b.suuIconEdge:SetAllPoints(b.icon)
+        UI.Border(b.suuIconEdge, "gilt-hairline")
+        if b.money then b.money:SetAlpha(0) end
+        b.suuMoney = UI.Money(b)
+        b.suuMoney:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+        SuuUI.Fonts.Apply(b.name, "label")
+        SuuUI.Fonts.Apply(b.nameSubText, "caption")
+        SuuUI.Fonts.Apply(b.subText, "caption")
+        b.nameSubText:SetTextColor(UI.RGBA("ink-muted"))
+        if b.alternateCost then SuuUI.Fonts.Apply(b.alternateCost, "caption") end
+    end
+    -- the price (the game's frame stays, see-through: it still reports its state)
+    local cost = b.money and b.money:IsShown() and GetTrainerServiceCost and GetTrainerServiceCost(b:GetID())
+    if cost and cost > 0 then
+        b.suuMoney:SetCopper(cost)
+        b.suuMoney.text:SetTextColor(UI.RGBA((GetMoney() or 0) >= cost and "ink" or "ember-text"))
+        b.suuMoney:Show()
+    else
+        b.suuMoney:Hide()
+    end
+    -- name and rank in the room the price leaves
+    local priceW = b.suuMoney:IsShown() and (b.suuMoney:GetWidth() + S["space-4"]) or 0
+    local room = b:GetWidth() - (6 + 32 + 6) - priceW - S["space-4"]
+    local nameW = math.max(1, math.min(b.name:GetUnboundedStringWidth(), room))
+    b.name:SetWidth(nameW)
+    local sub = b.nameSubText:GetText()
+    local subRoom = room - nameW - 5
+    if sub and sub ~= "" and subRoom > 8 then
+        b.nameSubText:SetWordWrap(false)
+        b.nameSubText:SetWidth(math.min(b.nameSubText:GetUnboundedStringWidth(), subRoom))
+        b.nameSubText:Show()
+    else
+        b.nameSubText:Hide()
+    end
+end
+
+-- A category row: its name as a SuuUI heading over a gilt-faint rule.
+local function styleTrainerCategory(c)
+    if not c or c.suuHead then return end
+    c.suuHead = true
+    for _, key in ipairs({ "LeftPiece", "RightPiece", "CenterPiece" }) do
+        if c[key] then c[key]:SetAlpha(0) end
+    end
+    if c.Label then
+        SuuUI.Fonts.Apply(c.Label, "header")
+        c.Label:SetTextColor(UI.RGBA("gilt-text"))
+    end
+    if c.CollapseIcon then c.CollapseIcon:SetVertexColor(UI.RGBA("gilt-text")) end
+    c.suuRule = c:CreateTexture(nil, "ARTWORK")
+    c.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+    c.suuRule:SetHeight(1)
+    c.suuRule:SetPoint("BOTTOMLEFT", S["space-2"], 1)
+    c.suuRule:SetPoint("BOTTOMRIGHT", -S["space-2"], 1)
+    -- the game sets its own fonts on hover: back to SuuUI's after
+    c:HookScript("OnEnter", function() SuuUI.Fonts.Apply(c.Label, "header"); c.Label:SetTextColor(UI.RGBA("ink")) end)
+    c:HookScript("OnLeave", function() SuuUI.Fonts.Apply(c.Label, "header"); c.Label:SetTextColor(UI.RGBA("gilt-text")) end)
+end
+
 function M:SkinTrainer()
     local f = _G.ClassTrainerFrame
     if not f or f.suuChrome then return end
+    if _G.ClassTrainerFrame_InitServiceButton then
+        hooksecurefunc("ClassTrainerFrame_InitServiceButton", function(b) styleTrainerRow(b) end)
+    end
+    if _G.ClassTrainerFrame_InitCategoryButton then
+        hooksecurefunc("ClassTrainerFrame_InitCategoryButton", function(c) styleTrainerCategory(c) end)
+    end
     local chrome = UI.SkinWindow(f, {
         title = "Trainer", icon = "book", close = _G.ClassTrainerFrameCloseButton, topInset = 20, under = "microMenu",
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks,
@@ -1070,11 +1165,18 @@ function M:SkinTrainer()
     if _G.ClassTrainerStatusBar then UI.ReskinStatusBar(_G.ClassTrainerStatusBar) end
     if f.FilterDropdown then UI.ReskinDropdown(f.FilterDropdown) end
     if _G.ClassTrainerTrainButton then UI.ReskinButton(_G.ClassTrainerTrainButton) end
+    -- your money in SuuUI's money at the foot, the game's away
+    local money = f.money or _G.ClassTrainerFrameMoney
+    if money then money:SetAlpha(0) end
+    local mine = UI.Money(f)
+    mine:SetPoint("BOTTOMLEFT", S["space-5"], 9)
     local function title()
         local name = UnitName("npc")
         if type(name) == "string" and name ~= "" then chrome:SetTitle(name) end
         UI.Reskin(f)
+        mine:SetCopper(GetMoney() or 0)
     end
+    f:HookScript("OnEvent", function(_, event) if event == "PLAYER_MONEY" or event == "TRAINER_UPDATE" then mine:SetCopper(GetMoney() or 0) end end)
     f:HookScript("OnShow", function() C_Timer.After(0, title) end)
     if f:IsShown() then title() end
     self.trainer = chrome
