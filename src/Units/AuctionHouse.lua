@@ -979,13 +979,12 @@ function M:SetSellItem(loc)
         return
     end
     sell.loc = loc
-    sell.offered = nil -- until the background search answers
+    sell.offered, sell.asking = nil, nil -- until the background search answers
     sell.itemID = loc and C_Item.GetItemID(loc)
     sell.commodity = false
     if loc then
         local status = call(AH.GetItemCommodityStatus, loc)
         sell.commodity = Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity or false
-        -- the price you last posted at, else the lowest seen
         -- the price you last posted at, else the lowest seen, until the
         -- house says what it goes for now (then 1c under that: SellLowest)
         local last, low = self:LastPosted(sell.itemID), self:LowestSeen(sell.itemID)
@@ -993,23 +992,46 @@ function M:SetSellItem(loc)
         sell.price:SetCopper((last and last.price) or (low and low.price) or 0)
         sell.bid:Clear()
         sell.qty:SetValue(tostring(sell.commodity and (call(AH.GetAvailablePostCount, loc) or 1) or 1))
-        -- what it goes for now: a commodity's offers through the sell
-        -- search; anything else by a search for its exact name (the sell
-        -- search brought nothing back for single items, found in game)
-        local key = call(AH.GetItemKeyFromItem, loc)
-        self.sellKey, self.sellBrowse = key, nil
-        if sell.commodity and key then
-            call(AH.SendSellSearchQuery, key, sorts(), true)
-        else
-            local name = C_Item.GetItemName(loc)
-            local F = Enum.AuctionHouseFilter or {}
-            if name then
-                self.sellBrowse = sell.itemID
-                call(AH.SendBrowseQuery, { searchString = name, sorts = sorts(), filters = { F.ExactMatch }, itemClassFilters = {} })
-            end
-        end
+        self:AskSellPrice()
     end
     self:DrawSell()
+end
+
+-- What the chosen item goes for now, asked the way the game's own sell form
+-- asks: gear by its item ID alone (item level and suffix zeroed, so every
+-- copy counts), anything else by its item key. The answer comes as the
+-- search results events (OnEnable). A query the house drops is sent again
+-- once it is ready; one with no answer in five seconds is sent once more.
+function M:AskSellPrice()
+    local sell = self.sell
+    local loc = sell and sell.loc
+    if not (loc and loc:IsValid()) then return end
+    local key = call(AH.GetItemKeyFromItem, loc)
+    if not key then return end
+    local info = call(AH.GetItemKeyInfo, key)
+    local gear
+    if info then gear = info.isEquipment
+    else
+        local classID = select(6, C_Item.GetItemInfoInstant(sell.itemID))
+        local C = Enum.ItemClass or {}
+        gear = classID ~= nil and (classID == C.Weapon or classID == C.Armor)
+    end
+    if gear then key.itemLevel, key.itemSuffix = 0, 0 end
+    self.sellKey = key
+    if not (sell.asking and sell.asking.itemID == sell.itemID) then sell.asking = { itemID = sell.itemID, tries = 0 } end
+    local asking = sell.asking
+    asking.tries = asking.tries + 1
+    local try = asking.tries
+    if gear then call(AH.SendSellSearchQuery, key, sorts(), false)
+    else call(AH.SendSearchQuery, key, sorts(), false) end
+    C_Timer.After(5, function()
+        if sell.asking ~= asking or asking.tries ~= try then return end
+        if try < 2 then self:AskSellPrice()
+        else
+            sell.asking = nil
+            self:QueueRefresh()
+        end
+    end)
 end
 
 function M:DrawSell()
@@ -1030,9 +1052,10 @@ function M:DrawSell()
     sell.last:SetValue(last and ("Last posted at " .. coins(last.price) .. " · " .. when(last.at)) or "")
     -- what the background search found: nobody selling it now is worth saying
     local lowText = low and ("Lowest buyout seen: " .. coins(low.price) .. " · " .. when(low.at)) or ""
-    if loc and sell.offered == false then
-        lowText = (lowText ~= "" and (lowText .. "  ·  ") or "") .. "Nobody sells it right now."
-    end
+    local now = loc and (sell.asking and "Asking the house…"
+        or sell.offered == false and "Nobody sells it right now."
+        or sell.offered == nil and "The house didn't answer.")
+    if now then lowText = (lowText ~= "" and (lowText .. "  ·  ") or "") .. now end
     sell.lowest:SetValue(lowText)
     -- a commodity: a unit price, no starting bid
     sell.bidHolder:SetShown(not sell.commodity)
@@ -1310,22 +1333,6 @@ function M:OnEnable()
             self:QueueRefresh()
         end)
     end
-    -- the sell view's search by name: the item's lowest price among the results
-    self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
-        local id = self.sellBrowse
-        if not id or self.tab ~= "sell" or not self.sell then return end
-        self.sellBrowse = nil
-        local low
-        for _, r in ipairs(call(AH.GetBrowseResults) or {}) do
-            if r.itemKey and r.itemKey.itemID == id and r.minPrice and r.minPrice > 0 then
-                if not low or r.minPrice < low then low = r.minPrice end
-            end
-        end
-        self:Seen(id, low)
-        self:SellLowest(low, false)
-        self.sell.offered = low and true or false
-        self:QueueRefresh()
-    end)
     self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function() self:Note("The search failed; try again in a moment.", "error") end)
     self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total) self:OnCommodityPrice(unit, total) end)
     self:OnGameEvent("COMMODITY_PRICE_UNAVAILABLE", function()
@@ -1354,10 +1361,13 @@ function M:OnEnable()
         self:OnGameEvent(e, function(_, answered)
             local key = self.sellKey
             if not key or self.tab ~= "sell" then return end
-            -- an item's results come under the house's own key for it (its
-            -- item level and suffix as the house sees them), not always the
-            -- one made from the bag item
-            if type(answered) == "table" and answered.itemID == key.itemID then key = answered end
+            -- only the answer about the chosen item (a commodity's comes as
+            -- its item ID); an item's results come under the house's own key
+            -- for it, not always the one made from the bag item
+            local id = type(answered) == "table" and answered.itemID or answered
+            if id ~= key.itemID then return end
+            if type(answered) == "table" then key = answered end
+            self.sell.asking = nil
             local low, mine
             if self.sell.commodity then
                 local o = call(AH.GetCommoditySearchResultInfo, key.itemID, 1)
@@ -1378,6 +1388,17 @@ function M:OnEnable()
             self:QueueRefresh()
         end)
     end
+    -- a query the house dropped (too many at once): the sell one again once
+    -- it is ready
+    self:OnGameEvent("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED", function()
+        if self.sell and self.sell.asking then self.sell.resend = true end
+    end)
+    self:OnGameEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function()
+        if self.sell and self.sell.resend then
+            self.sell.resend = nil
+            if self.sell.asking then self:AskSellPrice() end
+        end
+    end)
     self:OnGameEvent("AUCTION_HOUSE_SHOW_ERROR", function(_, err) self:Note("The auction house said no (" .. tostring(err) .. ").", "error") end)
 end
 
