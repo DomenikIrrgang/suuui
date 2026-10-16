@@ -33,6 +33,7 @@ local ROW_H = 44
 local ATTACH_IN = ATTACHMENTS_MAX_RECEIVE or 16
 local ATTACH_OUT = ATTACHMENTS_MAX_SEND or 12
 local SENT_MAX = 50
+local SUGGEST_W = 320 -- To and its suggestions
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 local ENVELOPE = "Interface\\Icons\\INV_Letter_15"
 
@@ -432,7 +433,8 @@ function M:BuildSend(page)
         return l
     end
     label("To", nil, -7)
-    send.to = UI.TextField(page, { width = 260, onTextChanged = function() self:DrawSendState() end })
+    -- as wide as its suggestions under it
+    send.to = UI.TextField(page, { width = SUGGEST_W, onTextChanged = function() self:DrawSendState() end })
     send.to:SetPoint("TOPLEFT", labelW, 0)
     label("Subject", nil, -(30 + S["space-4"] + 7))
     send.subject = UI.TextField(page, { width = WIDTH - 2 * S["space-5"] - labelW, onTextChanged = function() self:DrawSendState() end })
@@ -587,7 +589,7 @@ end
 -- guild members whose name matches what you typed
 --------------------------------------------------------------------------------
 
-local SUGGEST_W, SUGGEST_ROW, SUGGEST_HEAD = 320, 26, 20
+local SUGGEST_ROW, SUGGEST_HEAD = 26, 20
 local GUILD_MAX = 8
 
 local function classToken(file)
