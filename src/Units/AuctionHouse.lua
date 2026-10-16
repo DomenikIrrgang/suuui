@@ -19,8 +19,28 @@ local M = SuuUI.RegisterModule({
     description = "SuuUI's auction house window: search, the game's categories, an item's auctions and a commodity's offers, buying.",
     api = "0.16",
     reloadToToggle = true,
-    defaults = {},
+    defaults = { cheapCheck = true, cheapPercent = 25, cheapShare = 10 },
 })
+
+-- A cheap few (asked 2026-10-16): a few items offered far under the rest
+-- (together at most cheapShare % of everything offered, at least
+-- cheapPercent % under the next price) don't set the price; Post asks first
+-- when yours is that far under.
+local SECTION = {
+    id = "auctionhouse", label = "Auction house", category = "General", order = 28,
+    groups = {
+        { title = "A cheap few", description = "When a few items are offered far under the rest, the sell price is filled in under the rest instead, and Post asks first when your price is that far under.", rows = {
+            { key = "cheapCheck", label = "Look past a cheap few", control = "toggle",
+              description = "Off: the price is filled in 1c under the very cheapest offer, and Post never asks." },
+            { key = "cheapPercent", label = "Far under", control = "slider", min = 10, max = 60, step = 5, unit = "%",
+              description = "How far under the rest's price counts as too cheap.",
+              disabled = function() return not M:Get("cheapCheck"), "Look past a cheap few is off." end },
+            { key = "cheapShare", label = "A few", control = "slider", min = 5, max = 30, step = 5, unit = "%",
+              description = "The most the cheap offers may make up of everything offered, together.",
+              disabled = function() return not M:Get("cheapCheck"), "Look past a cheap few is off." end },
+        } },
+    },
+}
 
 local isSecret = issecretvalue or function() return false end
 local function call(fn, ...)
@@ -953,7 +973,7 @@ function M:BuildSell(page)
     local th2 = field("Total")
     sell.total = UI.Money(th2)
     sell.total:SetPoint("LEFT")
-    sell.post = UI.Button(form, { text = "Post", variant = "primary", width = 120, onClick = function() self:Post() end })
+    sell.post = UI.Button(form, { text = "Post", variant = "primary", width = 120, onClick = function() self:PostOrAsk() end })
     sell.post:SetPoint("TOPRIGHT", form, "TOPLEFT", FORM_W, -y - S["space-2"])
     -- your items
     local list = CreateFrame("Frame", nil, page)
@@ -979,7 +999,7 @@ function M:SetSellItem(loc)
         return
     end
     sell.loc = loc
-    sell.offered, sell.asking = nil, nil -- until the background search answers
+    sell.offered, sell.asking, sell.market = nil, nil, nil -- until the background search answers
     sell.itemID = loc and C_Item.GetItemID(loc)
     sell.commodity = false
     if loc then
@@ -1162,6 +1182,49 @@ function M:Post()
     self:DrawSell()
 end
 
+-- What the offers say (nil: none): the lowest price, and the offer the
+-- price goes under (ref): the cheapest, or with the cheap-few check on, the
+-- first after a cheap few: the most offers from the cheapest up that
+-- together are at most cheapShare % of all offered and at least
+-- cheapPercent % under the next price.
+function M:Market(offers)
+    if #offers == 0 then return nil end
+    table.sort(offers, function(a, b) return a.price < b.price end)
+    local total = 0
+    for _, o in ipairs(offers) do total = total + o.qty end
+    local m = { low = offers[1].price, ref = offers[1], cheap = 0, total = total }
+    if not self:Get("cheapCheck") then return m end
+    local under = 1 - self:Get("cheapPercent") / 100
+    local most = total * self:Get("cheapShare") / 100
+    local count = 0
+    for k = 1, #offers - 1 do
+        count = count + offers[k].qty
+        if count > most then break end
+        if offers[k].price <= offers[k + 1].price * under then m.ref, m.cheap = offers[k + 1], count end
+    end
+    return m
+end
+
+-- Post: with the cheap-few check on and a price that far under what the
+-- rest go for, ask first.
+function M:PostOrAsk()
+    local sell = self.sell
+    local m = sell.market
+    local price = sell.price:GetCopper()
+    if not (self:Get("cheapCheck") and m and price > 0) then return self:Post() end
+    local ref = m.ref.price
+    local under = math.floor((1 - price / ref) * 100 + 0.5)
+    if under < self:Get("cheapPercent") then return self:Post() end
+    local each = sell.commodity and " each" or ""
+    local text = ("Your price is %d%% under %s (%s%s)."):format(under,
+        m.cheap > 0 and "what most sell it for" or "the cheapest offer", coins(ref), each)
+    if m.cheap > 0 then
+        text = text .. (" Only %d of the %d offered are that cheap."):format(m.cheap, m.total)
+    end
+    UI.Confirm({ title = "Post this cheap?", text = text, confirm = "Post anyway", cancel = "Change price",
+        onConfirm = function() self:Post() end })
+end
+
 -- What the item goes for now: the price 1c under it (your own cheapest
 -- offer: the same price, not under yourself), unless you typed one.
 function M:SellLowest(low, mine)
@@ -1298,6 +1361,7 @@ function M:Away(frame)
 end
 
 function M:OnEnable()
+    self:RegisterSettings(SECTION)
     if not self.window then self:Build() end
     self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
         self.open, self.gameWindow = true, false
@@ -1368,23 +1432,29 @@ function M:OnEnable()
             if id ~= key.itemID then return end
             if type(answered) == "table" then key = answered end
             self.sell.asking = nil
-            local low, mine
+            -- every offer: its price per unit, how many, whether it's yours
+            local offers = {}
             if self.sell.commodity then
-                local o = call(AH.GetCommoditySearchResultInfo, key.itemID, 1)
-                low, mine = o and o.unitPrice, o and o.containsOwnerItem
+                for i = 1, (call(AH.GetNumCommoditySearchResults, key.itemID) or 0) do
+                    local o = call(AH.GetCommoditySearchResultInfo, key.itemID, i)
+                    if o and o.unitPrice and o.unitPrice > 0 then
+                        offers[#offers + 1] = { price = o.unitPrice, qty = o.quantity or 1, mine = o.containsOwnerItem }
+                    end
+                end
             else
-                -- the cheapest buyout per item among the auctions
                 for i = 1, (call(AH.GetNumItemSearchResults, key) or 0) do
                     local a = call(AH.GetItemSearchResultInfo, key, i)
                     if a and a.buyoutAmount and a.buyoutAmount > 0 then
-                        local each = math.floor(a.buyoutAmount / (a.quantity or 1))
-                        if not low or each < low then low, mine = each, a.containsOwnerItem end
+                        offers[#offers + 1] = { price = math.floor(a.buyoutAmount / (a.quantity or 1)), qty = a.quantity or 1,
+                            mine = a.containsOwnerItem }
                     end
                 end
             end
-            self:Seen(key.itemID, low)
-            self:SellLowest(low, mine)
-            self.sell.offered = low and true or false
+            local market = self:Market(offers)
+            self.sell.market = market
+            self:Seen(key.itemID, market and market.low)
+            if market then self:SellLowest(market.ref.price, market.ref.mine) end
+            self.sell.offered = market and true or false
             self:QueueRefresh()
         end)
     end
