@@ -918,6 +918,20 @@ end
 function M:OnEnable()
     if not self.window then self:Build() end
     self:RememberMe()
+    -- what To would suggest for a text, and what the guild roster gives
+    self:RegisterCommand("mailsuggest", "test: what Send's To suggests for a text, and what the guild roster gives: /suu mailsuggest <text>", function(arg)
+        local n, online = call(GetNumGuildMembers)
+        self:Print(("in a guild %s, roster %s members (%s online)"):format(tostring(IsInGuild()), tostring(n), tostring(online)))
+        for i = 1, math.min(3, n or 0) do
+            local full, rank, _, _, _, _, _, _, isOnline, _, file = call(GetGuildRosterInfo, i)
+            self:Print(("  %d: %s, %s, %s, online %s"):format(i, tostring(full), tostring(rank), tostring(file), tostring(isOnline)))
+        end
+        for _, g in ipairs(self:Suggestions(arg)) do
+            local names = {}
+            for _, r in ipairs(g.rows) do names[#names + 1] = r.name end
+            self:Print(g.title .. ": " .. table.concat(names, ", "))
+        end
+    end)
     self:OnGameEvent("PLAYER_LEVEL_UP", function() C_Timer.After(1, function() self:RememberMe() end) end)
     self:OnGameEvent("MAIL_SHOW", function()
         self.open = true
