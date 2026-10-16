@@ -19,7 +19,8 @@ local M = SuuUI.RegisterModule({
     description = "SuuUI's auction house window: search, the game's categories, an item's auctions and a commodity's offers, buying.",
     api = "0.16",
     reloadToToggle = true,
-    defaults = { cheapCheck = true, cheapPercent = 25, cheapShare = 10 },
+    defaults = { cheapCheck = true, cheapPercent = 25, cheapShare = 10,
+                 tipShow = true, tipMost = true, tipOffered = true, tipStack = true },
 })
 
 -- A cheap few (asked 2026-10-16): a few items offered far under the rest
@@ -38,6 +39,19 @@ local SECTION = {
             { key = "cheapShare", label = "A few", control = "slider", min = 5, max = 30, step = 5, unit = "%",
               description = "The most the cheap offers may make up of everything offered, together.",
               disabled = function() return not M:Get("cheapCheck"), "Look past a cheap few is off." end },
+        } },
+        { title = "Item tooltips", description = "What the auction house showed last for an item, from Scan all and your searches, under its tooltip everywhere.", rows = {
+            { key = "tipShow", label = "Auction prices", control = "toggle",
+              description = "The lowest buyout per item and when it was seen." },
+            { key = "tipMost", label = "What most sell it for", control = "toggle",
+              description = "When a cheap few sell under the rest (the rule above).",
+              disabled = function() return not M:Get("tipShow"), "Auction prices are off." end },
+            { key = "tipOffered", label = "How many are offered", control = "toggle",
+              description = "Items offered, and in how many auctions when Scan all or a search counted them.",
+              disabled = function() return not M:Get("tipShow"), "Auction prices are off." end },
+            { key = "tipStack", label = "Price for the stack", control = "toggle",
+              description = "On a stack in your bags: the lowest buyout times how many.",
+              disabled = function() return not M:Get("tipShow"), "Auction prices are off." end },
         } },
     },
 }
@@ -399,7 +413,7 @@ function M:DrawResults()
         row.ilvl:SetValue(info.isEquipment and r.itemKey.itemLevel and tostring(r.itemKey.itemLevel) or "")
         row.qty:SetValue(tostring(r.totalQuantity or ""))
         row.price:SetCopper(r.minPrice or 0)
-        self:Seen(r.itemKey.itemID, r.minPrice)
+        self:Seen(r.itemKey.itemID, r.minPrice, r.totalQuantity)
         -- the name cell: the slot, the name, Yours
         local places = t:Places(t.list:GetWidth())
         row.slot:ClearAllPoints()
@@ -532,7 +546,11 @@ function M:DrawItemView()
             local o = call(AH.GetCommoditySearchResultInfo, key.itemID, i)
             if o then self.offers[#self.offers + 1] = o end
         end
-        if self.offers[1] then self:Seen(key.itemID, self.offers[1].unitPrice) end
+        local list = {}
+        for _, o in ipairs(self.offers) do
+            if o.unitPrice and o.unitPrice > 0 then list[#list + 1] = { price = o.unitPrice, qty = o.quantity or 1 } end
+        end
+        self:Seen(key.itemID, self:Market(list))
         for _, o in ipairs(self.offers) do
             local who
             if o.containsOwnerItem then who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
@@ -546,15 +564,14 @@ function M:DrawItemView()
             local a = call(AH.GetItemSearchResultInfo, key, i)
             if a then self.auctions[#self.auctions + 1] = a end
         end
-        local withBid, low = false, nil
+        local withBid, list = false, {}
         for _, a in ipairs(self.auctions) do
             if a.bidAmount or a.minBid then withBid = true end
             if a.buyoutAmount and a.buyoutAmount > 0 and (a.quantity or 1) > 0 then
-                local each = math.floor(a.buyoutAmount / (a.quantity or 1))
-                if not low or each < low then low = each end
+                list[#list + 1] = { price = math.floor(a.buyoutAmount / (a.quantity or 1)), qty = a.quantity or 1 }
             end
         end
-        self:Seen(key.itemID, low)
+        self:Seen(key.itemID, self:Market(list))
         local cols = {}
         if withBid then cols[#cols + 1] = { label = "Bid", w = 120 } end
         cols[#cols + 1] = { label = "Buyout", w = 120 }
@@ -709,18 +726,21 @@ end
 
 --------------------------------------------------------------------------------
 -- What SuuUI remembers per item (by item ID), kept per character and read
--- across all of them: the lowest buyout seen (each search; Scan all fills it
--- too) and the price you last posted at
+-- across all of them: what the house showed last (each search; Scan all
+-- fills it too) and the price you last posted at. A seen entry: price (the
+-- lowest buyout per unit), at, and what is known of: most (what most sell
+-- it for, when a cheap few sell under them), qty (units offered), n
+-- (auctions). The newest look wins.
 --------------------------------------------------------------------------------
 
-function M:Seen(itemID, price)
-    if not (itemID and price and price > 0) then return end
+-- `m`: a price, or a Market() result (with qty and n when known).
+function M:Seen(itemID, m, qty)
+    if type(m) == "number" then m = { low = m, total = qty } end
+    if not (itemID and m and m.low and m.low > 0) then return end
     local d = self:CharData()
     d.seen = d.seen or {}
-    local now = time()
-    local e = d.seen[itemID]
-    -- a newer search replaces an old low; within a day the lower one stays
-    if not e or now - (e.at or 0) > 86400 or price < e.price then d.seen[itemID] = { price = price, at = now } end
+    d.seen[itemID] = { price = m.low, at = time(), qty = m.total, n = m.n,
+        most = (m.cheap or 0) > 0 and m.ref.price or nil }
 end
 
 -- The newest entry for an item across your characters.
@@ -811,7 +831,7 @@ function M:ReadScan()
     if not sc or sc.reading then return end
     sc.reading = true
     local n = call(AH.GetNumReplicateItems) or 0
-    local low, i = {}, 0
+    local offers, i = {}, 0
     local ticker
     ticker = C_Timer.NewTicker(0, function()
         local stop = math.min(n, i + 2500)
@@ -819,8 +839,10 @@ function M:ReadScan()
             -- (all 17 values: the helper `call` passes on only five)
             local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(AH.GetReplicateItemInfo, k)
             if ok and itemID and buyout and buyout > 0 then
-                local each = math.floor(buyout / math.max(1, count or 1))
-                if not low[itemID] or each < low[itemID] then low[itemID] = each end
+                local qty = math.max(1, count or 1)
+                local list = offers[itemID]
+                if not list then list = {}; offers[itemID] = list end
+                list[#list + 1] = { price = math.floor(buyout / qty), qty = qty }
             end
         end
         i = stop
@@ -828,14 +850,13 @@ function M:ReadScan()
         self:DrawScan()
         if i >= n then
             ticker:Cancel()
-            local d = self:CharData()
-            d.seen = d.seen or {}
-            local now, items = time(), 0
-            for itemID, price in pairs(low) do
-                d.seen[itemID] = { price = price, at = now }
+            local items = 0
+            for itemID, list in pairs(offers) do
+                self:Seen(itemID, self:Market(list))
                 items = items + 1
             end
-            d.scanAt = now
+            local d = self:CharData()
+            d.scanAt = time()
             self.scanning = nil
             self:Note(("Scan done: %d auctions, %d items, in %d s."):format(n, items, math.floor(GetTime() - sc.started + 0.5)))
             self:QueueRefresh()
@@ -843,19 +864,49 @@ function M:ReadScan()
     end)
 end
 
--- Item tooltips anywhere: the lowest buyout seen.
+-- Item tooltips anywhere: a small block of what the house showed last
+-- (Settings › Auction house › Item tooltips): the lowest buyout, what most
+-- sell it for, how many are offered, and on a stack in your bags its price.
+local function stackCount(tooltip)
+    local info = tooltip.GetProcessingTooltipInfo and tooltip:GetProcessingTooltipInfo()
+        or tooltip.GetPrimaryTooltipInfo and tooltip:GetPrimaryTooltipInfo()
+    if not (info and info.getterName == "GetBagItem" and info.getterArgs) then return nil end
+    local bag, slot = info.getterArgs[1], info.getterArgs[2]
+    if isSecret(bag) or isSecret(slot) then return nil end
+    local item = call(C_Container.GetContainerItemInfo, bag, slot)
+    local count = item and item.stackCount
+    if isSecret(count) then return nil end
+    return count
+end
+
+function M:AddTooltipPrices(tooltip, data)
+    if not self:Get("tipShow") or not data or isSecret(data.id) then return end
+    local itemID = data.id
+    if type(itemID) ~= "number" then return end
+    local e = self:LowestSeen(itemID)
+    if not e then return end
+    local stack = select(8, C_Item.GetItemInfo(itemID))
+    local each = (stack and stack > 1) and " each" or ""
+    local head, label, value = T.color["gilt-text"], T.color["ink-muted"], T.color["ink"]
+    local function row(l, v) tooltip:AddDoubleLine(l, v, label[1], label[2], label[3], value[1], value[2], value[3]) end
+    tooltip:AddLine(" ")
+    tooltip:AddLine("Auction house · " .. when(e.at), head[1], head[2], head[3])
+    row("Lowest buyout", coins(e.price) .. each)
+    if self:Get("tipMost") and e.most then row("Most sell it for", coins(e.most) .. each) end
+    if self:Get("tipOffered") and e.qty then
+        row("Offered", e.n and e.n ~= e.qty and ("%d in %d auctions"):format(e.qty, e.n) or tostring(e.qty))
+    end
+    if self:Get("tipStack") then
+        local count = stackCount(tooltip)
+        if count and count > 1 then row(("This stack (%d)"):format(count), coins(e.price * count)) end
+    end
+end
+
 function M:HookTooltips()
     if self.tooltipHooked or not (TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType) then return end
     self.tooltipHooked = true
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
-        if not self:IsEnabled() or not data or isSecret(data.id) then return end
-        local itemID = data.id
-        if type(itemID) ~= "number" then return end
-        local e = self:LowestSeen(itemID)
-        if not e then return end
-        local stack = select(8, C_Item.GetItemInfo(itemID))
-        local each = (stack and stack > 1) and " each" or ""
-        tooltip:AddLine(("Lowest buyout seen: %s%s · %s"):format(coins(e.price), each, when(e.at)), 0.75, 0.75, 0.75)
+        if self:IsEnabled() then self:Guard(self.AddTooltipPrices)(self, tooltip, data) end
     end)
 end
 
@@ -1192,7 +1243,7 @@ function M:Market(offers)
     table.sort(offers, function(a, b) return a.price < b.price end)
     local total = 0
     for _, o in ipairs(offers) do total = total + o.qty end
-    local m = { low = offers[1].price, ref = offers[1], cheap = 0, total = total }
+    local m = { low = offers[1].price, ref = offers[1], cheap = 0, total = total, n = #offers }
     if not self:Get("cheapCheck") then return m end
     local under = 1 - self:Get("cheapPercent") / 100
     local most = total * self:Get("cheapShare") / 100
@@ -1452,7 +1503,7 @@ function M:OnEnable()
             end
             local market = self:Market(offers)
             self.sell.market = market
-            self:Seen(key.itemID, market and market.low)
+            self:Seen(key.itemID, market)
             if market then self:SellLowest(market.ref.price, market.ref.mine) end
             self.sell.offered = market and true or false
             self:QueueRefresh()
