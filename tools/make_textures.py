@@ -26,6 +26,11 @@ ChatDiamond.tga (32, white): the class chip as an inline texture in chat
 lines (|T…|t, tinted by its colour arguments): a diamond half the height,
 centred, so at the line's height it's the design's 5px square turned 45°.
 
+LoadingMark.tga (128, colour): the SuuUI mark again at 128 for the design's
+LoadingMark (60 px and up). LoadingFacet1-4.tga (128, white): one quarter of
+the gem each (top-left, top-right, bottom-left, bottom-right), in the same
+box as the mark, flashed over it in turn while it waits.
+
 PlayerArrow.tga (64, colour): your arrow on the minimap, the design's
 (Minimap: "M8 1.5l5 12.5-5-3-5 3z" on 16 units) in arcane with a dark rim
 and a soft arcane glow; the engine draws it untinted.
@@ -441,6 +446,31 @@ def mark_pixel(size=64, ss=4):
     return lambda x, y: cache[(x, y)]
 
 
+# The gem's quarters (the mark's 100 units), for LoadingFacet1-4
+FACETS = [
+    [(50, 31), (50, 50), (31, 50)],
+    [(50, 31), (69, 50), (50, 50)],
+    [(31, 50), (50, 69), (50, 50)],
+    [(69, 50), (50, 69), (50, 50)],
+]
+
+
+def facet(i, size=128, ss=4):
+    pts = FACETS[i]
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = (px + (sx + 0.5) / ss) * 100 / size
+                    y = (py + (sy + 0.5) / ss) * 100 / size
+                    if inside_polygon(x, y, pts):
+                        hits += 1
+            cache[(px, py)] = round(255 * hits / (ss * ss))
+    return lambda x, y: (255, 255, 255, cache[(x, y)])
+
+
 # --- Circles: radial coverage with 4x4 supersampling
 
 def circle(size, inner, outer, ss=4):
@@ -573,6 +603,9 @@ def main():
     for name, d in GLYPHS.items():
         jobs.append((os.path.join("Glyphs", name + ".tga"), 64, stroke_alpha(path_polylines(d), 1.9)))
     jobs.append(("Mark.tga", 64, mark_pixel()))
+    jobs.append(("LoadingMark.tga", 128, mark_pixel(128)))
+    for i in range(4):
+        jobs.append(("LoadingFacet%d.tga" % (i + 1), 128, facet(i)))
     jobs.append(("CircleFill.tga", 64, circle(64, 0, 1)))
     jobs.append(("CircleEdge.tga", 256, circle(256, 1 - 2 / 176, 1)))
     jobs.append(("CircleBand.tga", 256, circle(256, 1 - 8 / 176, 1 - 2 / 176)))

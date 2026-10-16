@@ -17,7 +17,7 @@ local M = SuuUI.RegisterModule({
     id = "guild",
     name = "Guild",
     description = "SuuUI's Guild window: the roster with what your rank allows.",
-    api = "0.13",
+    api = "0.17",
     reloadToToggle = true,
     defaults = { showOffline = false },
 })

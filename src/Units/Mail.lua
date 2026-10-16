@@ -14,7 +14,7 @@ local M = SuuUI.RegisterModule({
     id = "mail",
     name = "Mail",
     description = "SuuUI's mail window: the whole inbox with Collect all, sending with suggestions, and the mails you sent.",
-    api = "0.16",
+    api = "0.17",
     reloadToToggle = true,
     defaults = {},
 })

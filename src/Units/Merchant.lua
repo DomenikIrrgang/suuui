@@ -14,7 +14,7 @@ local M = SuuUI.RegisterModule({
     id = "merchant",
     name = "Merchant",
     description = "SuuUI's merchant window: one list with a search, a quantity to buy, what you have and know, buy back, repair and sell junk.",
-    api = "0.16",
+    api = "0.17",
     reloadToToggle = true,
     defaults = {},
 })

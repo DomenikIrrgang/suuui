@@ -29,7 +29,7 @@ local M = SuuUI.RegisterModule({
     id = "party",
     name = "Party frames",
     description = "You and your party: health, power, auras you can remove, aggro and range.",
-    api = "0.9",
+    api = "0.17",
     reloadToToggle = true,
     defaults = {
         position = { point = "BOTTOMLEFT", x = 28, y = 300 },

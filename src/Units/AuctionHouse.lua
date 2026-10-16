@@ -17,7 +17,7 @@ local M = SuuUI.RegisterModule({
     id = "auctionhouse",
     name = "Auction house",
     description = "SuuUI's auction house window: search, the game's categories, an item's auctions and a commodity's offers, buying.",
-    api = "0.16",
+    api = "0.17",
     reloadToToggle = true,
     defaults = { cheapCheck = true, cheapPercent = 25, cheapShare = 10,
                  tipShow = true, tipMost = true, tipOffered = true, tipStack = true },
@@ -297,6 +297,7 @@ function M:BuildBuy(page)
     self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
     local go = UI.Button(bar, { text = "Search", variant = "primary", icon = "search", onClick = function() self:Search() end })
     go:SetPoint("LEFT", self.filter, "RIGHT", S["space-2"], 0)
+    self.searchButton = go
     -- Scan all: after a thin divider, the button and when it last ran
     local div = UI.Fill(bar, "gilt-faint", "ARTWORK")
     div:SetSize(1, 22)
@@ -326,6 +327,29 @@ function M:BuildBuy(page)
     self.more:SetPoint("BOTTOM", 0, S["space-2"])
     self.more:Hide()
     self:BuildItemView(main)
+    -- while Scan all runs: the mark, "Scanning auctions", the progress
+    local sv = CreateFrame("Frame", nil, main)
+    sv:SetAllPoints()
+    sv:SetFrameLevel(main:GetFrameLevel() + 20)
+    sv:EnableMouse(true)
+    sv:Hide()
+    self.scanView = sv
+    self.scanMark = UI.LoadingMark(sv, { size = 60 })
+    self.scanMark:SetPoint("CENTER", 0, 40)
+    local title = UI.Text(sv, "header", "gilt-text")
+    title:SetValue("Scanning auctions")
+    title:SetPoint("TOP", self.scanMark, "BOTTOM", 0, -S["space-4"])
+    self.scanCaption = UI.Text(sv, "caption", "ink-muted")
+    self.scanCaption:SetPoint("TOP", title, "BOTTOM", 0, -S["space-2"])
+    -- the categories wait too: dimmed, and a cover that says why
+    local block = CreateFrame("Frame", nil, page)
+    block:SetAllPoints(cats)
+    block:SetFrameLevel(cats:GetFrameLevel() + 20)
+    block:EnableMouse(true)
+    block:SetScript("OnEnter", function(b) UI.ShowTooltip(b, { title = "Categories", description = "Scanning: back when the scan is done." }) end)
+    block:SetScript("OnLeave", function() UI.HideTooltip() end)
+    block:Hide()
+    self.catBlock = block
 end
 
 -- The category tree: top categories, the chosen one's subcategories under it.
@@ -797,13 +821,28 @@ function M:LastScan()
     return last
 end
 
+-- 48183 -> "48,183"
+local function thousands(n)
+    local s = tostring(math.floor(n or 0))
+    return (s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+end
+
+-- How long the last scan took and how many it read (any character).
+function M:LastScanSize()
+    local best
+    for _, d in pairs(self:AllCharData()) do
+        if d.scanAt and d.scanSeconds and (not best or d.scanAt > best.scanAt) then best = d end
+    end
+    return best and best.scanSeconds, best and best.scanCount
+end
+
 function M:DrawScan()
     if not self.scanButton then return end
     local last = self:LastScan()
     local wait = last and (last + SCAN_WAIT - time()) or 0
     if self.scanning then
         self.scanButton:SetEnabledState(false)
-        self.scanWhen:SetValue(self.scanning.note or "Scanning…")
+        self.scanWhen:SetValue("Scanning…")
         self.scanWhen:SetColor("ink-muted")
     elseif wait > 0 then
         local text = ("Again in %d min"):format(math.ceil(wait / 60))
@@ -817,27 +856,68 @@ function M:DrawScan()
         self.scanWhen:SetValue(last and ("Last scan " .. when(last)) or "Not scanned yet")
         self.scanWhen:SetColor("ink-muted")
     end
+    -- while it runs: the mark and the progress in the results' place; the
+    -- categories and Search wait
+    local on = self.scanning ~= nil
+    self.scanView:SetShown(on)
+    self.catList:SetAlpha(on and T.opacity["opacity-disabled"] or 1)
+    self.catBlock:SetShown(on)
+    self.searchButton:SetEnabledState(not on)
+    self.searchButton.tooltip = on and { title = "Search", description = "Scanning: back when the scan is done." } or nil
+    if on then self.scanCaption:SetValue(self:ScanProgress()) end
+end
+
+-- The caption under the mark. Asking: the auctions received so far when the
+-- game counts them as they come, else the seconds against the last scan's;
+-- then reading them.
+function M:ScanProgress()
+    local sc = self.scanning
+    if sc.reading then return ("Reading %s of %s…"):format(thousands(sc.read), thousands(sc.total)) end
+    local seconds, count = self:LastScanSize()
+    local got = call(AH.GetNumReplicateItems) or 0
+    if got > 0 then
+        return count and ("Received %s of about %s auctions…"):format(thousands(got), thousands(count))
+            or ("Received %s auctions…"):format(thousands(got))
+    end
+    local took = math.floor(GetTime() - sc.started)
+    if seconds then
+        local left = math.ceil(seconds - (GetTime() - sc.started))
+        return "Asking the house for every auction… " .. (left > 0 and ("about %d s left"):format(left) or "any moment now")
+    end
+    return ("Asking the house for every auction… %d s"):format(took)
 end
 
 function M:Scan()
     if self.scanning then return end
-    self.scanning = { started = GetTime(), note = "Scanning… (about 20 s)" }
-    self:Note("Asking for every auction…")
+    self.scanning = { started = GetTime() }
+    self:Note("")
     local ok, err = pcall(AH.ReplicateItems)
     if not ok then
         self.scanning = nil
         self:Note("Couldn't scan: " .. tostring(err), "error")
-    else
-        -- no answer in a minute: the game didn't run it
-        C_Timer.After(60, function()
-            if self.scanning and not self.scanning.reading then
-                self.scanning = nil
-                self:Note("The scan didn't come back; try again later.", "error")
-                self:DrawScan()
-            end
-        end)
+        self:DrawScan()
+        return
     end
+    self.scanMark:Start()
+    -- the progress, four times a second
+    self.scanTicker = C_Timer.NewTicker(0.25, function() if self.scanning then self:DrawScan() end end)
+    -- no answer in a minute: the game didn't run it
+    local sc = self.scanning
+    C_Timer.After(60, function()
+        if self.scanning == sc and not sc.reading then
+            self:EndScan()
+            self:Note("The scan didn't come back; try again later.", "error")
+        end
+    end)
     self:DrawScan()
+end
+
+function M:EndScan()
+    self.scanning = nil
+    if self.scanTicker then self.scanTicker:Cancel() self.scanTicker = nil end
+    self.scanMark:Stop()
+    self:DrawScan()
+    self:QueueRefresh()
 end
 
 -- The list came: read it a slice a frame (tens of thousands of auctions),
@@ -847,6 +927,7 @@ function M:ReadScan()
     if not sc or sc.reading then return end
     sc.reading = true
     local n = call(AH.GetNumReplicateItems) or 0
+    sc.read, sc.total = 0, n
     local offers, i = {}, 0
     local ticker
     ticker = C_Timer.NewTicker(0, function()
@@ -862,7 +943,7 @@ function M:ReadScan()
             end
         end
         i = stop
-        sc.note = ("Reading %d of %d…"):format(i, n)
+        sc.read = i
         self:DrawScan()
         if i >= n then
             ticker:Cancel()
@@ -872,10 +953,10 @@ function M:ReadScan()
                 items = items + 1
             end
             local d = self:CharData()
-            d.scanAt = time()
-            self.scanning = nil
-            self:Note(("Scan done: %d auctions, %d items, in %d s."):format(n, items, math.floor(GetTime() - sc.started + 0.5)))
-            self:QueueRefresh()
+            local seconds = GetTime() - sc.started
+            d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
+            self:EndScan()
+            self:Note(("Scan done: %s auctions, %s items, in %d s."):format(thousands(n), thousands(items), math.floor(seconds + 0.5)))
         end
     end)
 end
@@ -1681,6 +1762,14 @@ function M:Refresh()
     if (self.tab or "buy") ~= "buy" then return end
     self:DrawCategories()
     self:DrawScan()
+    -- a scan holds the main column; what it showed comes back after
+    if self.scanning then
+        self.results_t:Hide()
+        self.itemView:Hide()
+        self.empty:Hide()
+        self.more:Hide()
+        return
+    end
     local browse = (self.view or "browse") == "browse"
     self.results_t:SetShown(browse)
     self.itemView:SetShown(not browse)
