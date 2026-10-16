@@ -469,10 +469,8 @@ function M:BuildSend(page)
     send.counter:SetPoint("TOPRIGHT", well, "BOTTOMRIGHT", 0, -S["space-2"])
     send.counter:SetValue("0 / " .. (MAX_MAIL_TEXT_LENGTH or 500))
     -- the attachments: drop or click an item from your bags, right click takes it back
-    local attachY = 2 * (30 + S["space-4"]) + 150 + S["space-5"] + 12
-    local hint = UI.Text(page, "caption", "ink-muted")
-    hint:SetPoint("TOPLEFT", 0, -attachY + 14)
-    hint:SetValue("Attachments: drag an item here, or right-click it in your bags. Right-click one here to take it back.")
+    -- (no hint line: everyone knows how to attach an item)
+    local attachY = 2 * (30 + S["space-4"]) + 150 + S["space-5"] + 4
     send.slots = {}
     for a = 1, ATTACH_OUT do
         local b = UI.ItemSlot(page)
