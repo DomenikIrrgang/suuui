@@ -948,6 +948,19 @@ function UI.SetGroupIndicators(list)
     Events.Emit("SUUUI_INDICATORS_CHANGED")
 end
 
+-- The Defensives list for group frames (set by the Defensives module; empty
+-- while it is off): spell IDs by what they drive, and a counter that changes
+-- with them. { external = { ids }, defensive = { ids }, warded = { ids },
+-- all = { ids } }
+local EMPTY_DEFENSIVES = { external = {}, defensive = {}, warded = {}, all = {} }
+local groupDefensives, defensivesVersion = EMPTY_DEFENSIVES, 0
+function UI.GroupDefensives() return groupDefensives, defensivesVersion end
+function UI.SetGroupDefensives(d)
+    groupDefensives = d or EMPTY_DEFENSIVES
+    defensivesVersion = defensivesVersion + 1
+    Events.Emit("SUUUI_DEFENSIVES_CHANGED")
+end
+
 -- keepAttribute: the unit attribute is already set (a group header did it)
 function UF:SetUnit(unit, keepAttribute)
     if unit == self.unit then return end
@@ -959,6 +972,7 @@ function UF:SetUnit(unit, keepAttribute)
         for _, c in ipairs(list) do c:SetUnit(unit or "none") end
     end
     for _, c in ipairs(self.indicatorContainers or {}) do c:SetUnit(unit or "none") end
+    if self.wardSlot then self.wardSlot:SetUnit(unit or "none") end
     self:UpdateIndicatorPresence()
     if wasActive and unit then self:Activate() end
 end
@@ -1029,10 +1043,11 @@ function UF:DispelDecoration(parent, kind)
     badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
     -- at least as wide as the Aggro badge it covers, so none of it peeks out
     badge:SetWidth(math.max(badge.knownWidth or 0, UI.MeasureText("badge", "Aggro") + 10))
-    -- over the frame's own border and text; Magic on top, then down the list
+    -- over the frame's own border and text and over Warded; Magic on top,
+    -- then down the list
     local rank = 1
     for i, k in ipairs(UI.DEBUFF_TYPES) do if k == kind then rank = i end end
-    deco:SetFrameLevel(self.over:GetFrameLevel() + 2 + (#UI.DEBUFF_TYPES - rank))
+    deco:SetFrameLevel(self.over:GetFrameLevel() + 3 + (#UI.DEBUFF_TYPES - rank))
     return deco
 end
 
@@ -1066,6 +1081,67 @@ function UF:SetDispelBadges(mode)
     end
     for set, list in pairs(self.dispelSets) do
         for _, c in ipairs(list) do c.container:SetShown(set == mode) end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Warded, in combat too: one engine aura container filtered to the
+-- Defensives list's spells with Warded on (max 1). Its button carries the
+-- ward border, the "Warded" badge and the ward glow, as the debuff-type
+-- slots carry theirs. The order: a debuff type covers Warded (its slots sit
+-- above), Warded covers Aggro (the state layer sits below), and Aggro's ember
+-- glow draws over the ward's.
+--------------------------------------------------------------------------------
+
+-- The ward border, badge and glow over this frame, on `parent` (the slot's
+-- button, or the frame itself in a preview).
+function UF:WardDecoration(parent)
+    local deco = CreateFrame("Frame", nil, parent)
+    deco:SetAllPoints(self)
+    deco:EnableMouse(false)
+    UI.Border(deco, "ward")
+    local badge = UI.StateBadge(deco, "ward", "Warded")
+    badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+    -- at least as wide as the Aggro badge it covers
+    badge:SetWidth(math.max(badge.knownWidth or 0, UI.MeasureText("badge", "Aggro") + 10))
+    deco:SetFrameLevel(self.over:GetFrameLevel() + 2)
+    -- the glow on its own layer under the frame's, so Aggro's ember glow wins
+    local glow = CreateFrame("Frame", nil, parent)
+    glow:SetAllPoints(self)
+    glow:EnableMouse(false)
+    glow:SetFrameLevel(math.max(0, self:GetFrameLevel() - 1))
+    UI.Shadow(glow, "glow-ward")
+    -- on a slot's button both follow the button; a preview shows and hides
+    -- them with deco:SetWarded(on)
+    deco.glow = glow
+    function deco.SetWarded(_, on)
+        deco:SetShown(on)
+        glow:SetShown(on)
+    end
+    return deco
+end
+
+-- The spells that ward this frame (nil or empty: none). Out of combat: the
+-- first call creates the slot.
+function UF:SetWardSpells(ids)
+    ids = ids or {}
+    if self.wardSlot then
+        self.wardSlot:SetGroupSpells("ward", ids)
+        return
+    end
+    if #ids == 0 then return end
+    local init = function(button)
+        pcall(button.SetSize, button, 1, 1)
+        pcall(button.SetMouseClickEnabled, button, false)
+        pcall(button.SetMouseMotionEnabled, button, false)
+        self:WardDecoration(button)
+    end
+    local c = UI.AuraContainer(self, self.unit or "none", { size = 1, anchor = "TOPLEFT",
+        groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } } })
+    if c then
+        c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
+        c.container:SetFrameLevel(self.over:GetFrameLevel() + 1)
+        self.wardSlot = c
     end
 end
 

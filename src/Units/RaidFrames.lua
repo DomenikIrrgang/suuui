@@ -88,22 +88,25 @@ end
 -- A header's button, styled once when the header makes it
 --------------------------------------------------------------------------------
 
+-- Externals and defensives are the Defensives list's spells (Frames ›
+-- Defensives): the game hides who cast another player's buffs, and its own
+-- defensive filters then let every buff through.
 local AURA_GROUPS = {
-    { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true },
-    -- (external leaves out what defensive shows: one marked both would
-    -- show twice)
-    { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" } },
-    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" } },
+    { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    { key = "external", filter = { "HELPFUL" }, list = "external", border = "ward", drain = "ward" },
+    { key = "defensive", filter = { "HELPFUL" }, list = "defensive", border = "ward", drain = "ward" },
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
-    { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true },
+    { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
 }
 
 -- Up to three icons inside the bar's right end, growing left.
 local function buildAuras(f, h)
     local groups = {}
+    local defensives = UI.GroupDefensives()
     for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = 3, dispel = g.dispel, drain = g.drain, digits = false }
+        groups[i] = { key = g.key, filter = g.filter, max = 3, dispel = g.dispel, drain = g.drain, digits = false,
+            harmfulEdge = g.harmfulEdge, border = g.border, include = g.list and defensives[g.list] }
     end
     -- the engine fills its groups in order; a clip frame as wide as the
     -- setting's icons cuts off the rest, so it is that many in total
@@ -150,6 +153,7 @@ function M:StyleButton(button)
     buildSelected(f)
     f:SetDispelBadges(self:Get("debuffBadges"))
     f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
+    f:SetWardSpells(UI.GroupDefensives().warded)
     self.buttons[#self.buttons + 1] = f
     -- the header sets the unit; the frame and its auras follow
     f:HookScript("OnAttributeChanged", function(btn, name, value)
@@ -346,6 +350,19 @@ function M:ApplyBadges()
     for _, f in ipairs(self.buttons) do f:SetDispelBadges(self:Get("debuffBadges")) end
 end
 
+-- The Defensives list: the inline icons' spells and Warded, out of combat.
+function M:ApplyDefensives()
+    local d = UI.GroupDefensives()
+    for _, f in ipairs(self.buttons) do
+        if f.auras then
+            for _, g in ipairs(AURA_GROUPS) do
+                if g.list then f.auras:SetGroupSpells(g.key, d[g.list]) end
+            end
+        end
+        f:SetWardSpells(d.warded)
+    end
+end
+
 function M:UpdateVisibility()
     self:RunOutOfCombat("visibility", function()
         RegisterStateDriver(self.holder, "visibility", "[group:raid] show; " .. (self:Get("showSolo") and "[nogroup] show; " or "") .. "hide")
@@ -473,6 +490,8 @@ function M:PreviewView(parent)
             deco:Hide()
             f.dispelDecos[kind] = deco
         end
+        f.wardDeco = f:WardDecoration(f)
+        f.wardDeco:SetWarded(false)
         self.previewFrames[i] = f
     end
     view:HookScript("OnShow", function() self:DrawPreview() end)
@@ -490,6 +509,10 @@ function M:DrawPreview(force)
     local groups = math.ceil(count / 5)
     local size, far = iconSize(h), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
+    local defensives = UI.GroupDefensives()
+    local listed, warding = {}, {}
+    for _, id in ipairs(defensives.all) do listed[id] = true end
+    for _, id in ipairs(defensives.warded) do warding[id] = true end
     -- each person's place in their group: raid order, or by role as the
     -- headers sort (tanks, healers, then damage; raid order within a role)
     local slotOf = {}
@@ -535,6 +558,9 @@ function M:DrawPreview(force)
             for kind, deco in pairs(f.dispelDecos) do
                 deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
             end
+            local warded = false
+            for _, a in ipairs(d.auras or {}) do warded = warded or warding[a[1]] == true end
+            f.wardDeco:SetWarded(warded)
             f:SetAlpha(d.far and far or 1)
             f.selected:SetAlpha(d.selected and 1 or 0)
             -- indicators on every third person, as if their auras were up
@@ -550,7 +576,7 @@ function M:DrawPreview(force)
                 if a and k <= self:Get("auras") then
                     icon:SetSize(size, size)
                     icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-                    icon:SetBorder(a[2])
+                    icon:SetBorder(listed[a[1]] and "ward" or a[2])
                     icon:ClearAllPoints()
                     icon:SetPoint("RIGHT", f, "RIGHT", -(S["space-1"] + 1) - (k - 1) * (size + S["space-1"]), 0)
                     icon:Show()
@@ -681,6 +707,10 @@ function M:OnEnable()
         self:RunOutOfCombat("sort", function() self:ApplySort() end)
     end)
     self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
+    self:On("SUUUI_DEFENSIVES_CHANGED", function()
+        self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
+        self:DrawPreview()
+    end)
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
     self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)

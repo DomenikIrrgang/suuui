@@ -2,9 +2,21 @@
 
 ## Unreleased
 
+### New
+
+- **Defensives** (Settings › Frames › Defensives): the buffs party and raid frames count as defensives, as a list you can change. The game doesn't tell which of another player's buffs are defensives (so any buff showed in those slots), so SuuUI goes by the list: Externals (Blessing of Protection, Power Word: Shield…) and Defensives (Shield Wall, Ice Block, Evasion…), each with every rank, Kind, Warded and on/off; add any spell by name or ID, or reset to SuuUI's list. It works in combat too.
+- **Warded** on party and raid frames: while a spell on the list with Warded on is up (Shield Wall, Divine Shield, Blessing of Protection…), the frame shows the Warded badge and a pale gold border. It covers Aggro (the red glow stays); a debuff you can remove covers it.
+- `/suu probe partyauras` lists what each aura filter gives, as the aura frames take it.
+- **Plugin API 0.16** (`Docs/API.md`): the Defensives list for group frames (`SuuUI.UI.GroupDefensives`, `SetGroupDefensives`), Warded on unit frames, and aura groups' `exclude` and `harmfulEdge`.
+
+### Changed
+
+- Every debuff has a red edge (its type's colour when it has one), so none looks like a buff: on the target frame (Forbearance among its buffs), your debuffs, focus, boss, party and raid frames and nameplates.
+
 ### Fixed
 
 - The target frame shows a friendly target's buffs once (another player's buffs showed twice: the game hides who cast them). With Target's buffs on Everyone's they're one list; Only yours is as before.
+- Party and raid frames show a buff once (another player's buffs showed in both the external and the defensive slot, whatever they were) and only real defensives in those slots, by the Defensives list.
 
 ## 0.4.0-beta.4 (2026-10-16)
 

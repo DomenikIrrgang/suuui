@@ -18,6 +18,9 @@
 --             drain = "fel",       -- the duration bar's colour (ink by default)
 --             include = { 6673, 5242 },    -- only these spell IDs (the engine
 --                                          -- matches them, so it works in combat)
+--             exclude = { 871 },           -- 0.16: never these spell IDs
+--             harmfulEdge = true,          -- 0.16: the ember edge on debuffs (a
+--                                          -- typed one's dispel border covers it)
 --             -- per-group looks (the Cooldown Manager's per-entry behaviour):
 --             border = "gilt",             -- edge token (gilt-hairline by default)
 --             glow = "glow-arcane",        -- a shadow token around the icon
@@ -28,7 +31,7 @@
 --             initialize = fn(button) },   -- 0.9: build the button yourself (default: the AuraIcon)
 --       },
 --   })
---   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids),
+--   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids, exclude),
 --   c:SetFlow(anchor, growth), c:SetLineWidth(px)   -- 0.9: both after creation too
 --   c:Release()                  -- 0.9: parked for reuse (no unit, hidden,
 --                                -- deaf) until the next SetUnit
@@ -159,7 +162,7 @@ local function makeInitializer(group, size, owner)
         over:SetAllPoints()
         over:EnableMouse(false)
         over:SetFrameLevel(button:GetFrameLevel() + 2)
-        UI.Border(over, group.border or "gilt-hairline")
+        UI.Border(over, group.border or (group.harmfulEdge and "ember" or "gilt-hairline"))
         if group.glow then UI.Shadow(button, group.glow) end
 
         -- The dispel border: white edges the engine shows and tints per
@@ -363,12 +366,16 @@ function AC:SetGroupMax(key, n)
     pcall(self.container.SetAuraGroupMaxFrameCount, self.container, key, n)
 end
 
--- A spell list as the engine takes it: { includeSpellIDs = { [id] = true } }.
-local function candidates(ids)
-    if not ids then return nil end
+-- Spell lists as the engine takes them: { includeSpellIDs = { [id] = true },
+-- excludeSpellIDs = { … } } (an empty include list lets nothing through).
+local function idSet(ids)
     local set = {}
     for _, id in ipairs(ids) do set[id] = true end
-    return { includeSpellIDs = set }
+    return set
+end
+local function candidates(ids, exclude)
+    if not ids and not exclude then return nil end
+    return { includeSpellIDs = ids and idSet(ids) or nil, excludeSpellIDs = exclude and idSet(exclude) or nil }
 end
 
 -- Only debuffs of these types: { includeDispelTypes = { Curse = true } }.
@@ -379,9 +386,10 @@ dispelCandidates = function(types)
     return { includeDispelTypes = set }
 end
 
--- Only these spell IDs in group `key` (nil: no spell list).
-function AC:SetGroupSpells(key, ids)
-    return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, candidates(ids) or {})
+-- Only these spell IDs in group `key` (nil: no spell list), and never those
+-- in `exclude` (0.16).
+function AC:SetGroupSpells(key, ids, exclude)
+    return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, candidates(ids, exclude) or {})
 end
 
 function UI.AuraContainer(parent, unit, opts)
@@ -410,7 +418,7 @@ function UI.AuraContainer(parent, unit, opts)
         self.sizes[group.key] = gsize
         local added = pcall(container.AddAuraGroup, container, group.key, filterString(group.filter), {
             maxFrameCount = group.max or 16,
-            candidateFilters = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include),
+            candidateFilters = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include, group.exclude),
             initializeFrame = group.initialize or makeInitializer(group, gsize, self),
             layout = { elementWidth = gsize, elementHeight = gsize, elementSpacing = spacing, lineSpacing = spacing },
         })

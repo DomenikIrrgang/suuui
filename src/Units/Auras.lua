@@ -57,15 +57,17 @@ end)
 local ATTACHED = {
     player = { key = "showDebuffs", at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
         size = "icon-lg", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 300,
-        groups = { { key = "debuffs", filter = { "HARMFUL" }, max = 16, dispel = true } },
+        groups = { { key = "debuffs", filter = { "HARMFUL" }, max = 16, dispel = true, harmfulEdge = true } },
     } },
     target = { key = "showTarget", at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
         size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
-        -- yours first; everyone else's after ("mine" in targetDebuffs / targetBuffs sets their max to 0)
+        -- yours first; everyone else's after ("mine" in targetDebuffs / targetBuffs sets their max to 0);
+        -- every debuff has an ember edge (a typed one its type's colour), so
+        -- none looks like a buff in the one row
         groups = {
-            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false },
+            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false, harmfulEdge = true },
             { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
-            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true },
+            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true, harmfulEdge = true },
             -- everyone's buffs, yours among them, in one list: the game hides
             -- who cast another player's buffs, and those passed both
             -- "yours" and "not yours" (each showed twice; /suu probe
@@ -75,13 +77,13 @@ local ATTACHED = {
     } },
     focus = { key = "showFocus", at = { "LEFT", "RIGHT", S["space-2"], 0 }, opts = {
         size = "icon-md", anchor = "LEFT", growth = { "RIGHT", "DOWN" },
-        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
+        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true } },
     } },
 }
 for i = 1, 5 do
     ATTACHED["boss" .. i] = { key = "showBoss", at = { "RIGHT", "LEFT", -S["space-2"], 0 }, opts = {
         size = "icon-md", anchor = "RIGHT", growth = { "LEFT", "DOWN" },
-        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 } },
+        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true } },
     } }
 end
 

@@ -82,25 +82,30 @@ end
 
 -- Auras after the bar, clipped to the number the settings allow: the engine
 -- fills its groups in order, and what doesn't fit is cut off.
+-- Externals and defensives are the Defensives list's spells (Frames ›
+-- Defensives): the game hides who cast another player's buffs, and its own
+-- defensive filters then let every buff through. `list` names the list's
+-- part a group shows, `without` the part it leaves out.
 local AURA_GROUPS = {
-    { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
-    -- (external leaves out what defensive shows: one the game marked both
-    -- would show twice, once in each)
-    { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" }, max = 2 },
-    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" }, max = 2 },
+    { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true, harmfulEdge = true },
+    { key = "external", filter = { "HELPFUL" }, max = 2, list = "external", border = "ward", glow = "glow-ward", drain = "ward" },
+    { key = "defensive", filter = { "HELPFUL" }, max = 2, list = "defensive", border = "ward", glow = "glow-ward", drain = "ward" },
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
-    { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
+    { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true, harmfulEdge = true },
     -- with showBuffs: the rest of their buffs (the defensives above aren't repeated)
-    { key = "buffs", filter = { "HELPFUL", "!EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" }, max = 6 },
+    { key = "buffs", filter = { "HELPFUL" }, max = 6, without = "all" },
 }
 
 local function buildAuras(f)
     local clip = CreateFrame("Frame", nil, f)
     clip:SetClipsChildren(true)
     local groups = {}
+    local defensives = UI.GroupDefensives()
     for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = g.max, dispel = g.dispel, drain = g.drain }
+        groups[i] = { key = g.key, filter = g.filter, max = g.max, dispel = g.dispel, drain = g.drain,
+            harmfulEdge = g.harmfulEdge, border = g.border, glow = g.glow,
+            include = g.list and defensives[g.list], exclude = g.without and defensives[g.without] }
     end
     f.auraClip = clip
     f.auras = UI.AuraContainer(clip, f.unit, { size = M:Get("height"), anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, groups = groups })
@@ -188,6 +193,8 @@ function M:PreviewView(parent)
             deco:Hide()
             f.dispelDecos[kind] = deco
         end
+        f.wardDeco = f:WardDecoration(f)
+        f.wardDeco:SetWarded(false)
         self.previewFrames[i] = f
     end
     view:HookScript("OnShow", function() self:DrawPreview() end)
@@ -210,6 +217,10 @@ function M:DrawPreview(force)
     self.previewView:SetSize(hw + auraW, hh)
     local h, far = self:Get("height"), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
+    local defensives = UI.GroupDefensives()
+    local listed, warding = {}, {}
+    for _, id in ipairs(defensives.all) do listed[id] = true end
+    for _, id in ipairs(defensives.warded) do warding[id] = true end
     for i, f in ipairs(self.previewFrames) do
         local d = person("preview" .. i)
         f.opts.healthText = self:Get("healthText")
@@ -223,6 +234,9 @@ function M:DrawPreview(force)
         for kind, deco in pairs(f.dispelDecos) do
             deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
         end
+        local warded = false
+        for _, a in ipairs(d.auras) do warded = warded or warding[a[1]] == true end
+        f.wardDeco:SetWarded(warded)
         f:SetAlpha(d.far and far or 1)
         f.selected:SetAlpha(d.selected and 1 or 0)
         local list, version = UI.GroupIndicators()
@@ -235,7 +249,8 @@ function M:DrawPreview(force)
             if a then
                 icon:SetSize(h, h)
                 icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-                icon:SetBorder(a[2])
+                icon:SetBorder(listed[a[1]] and "ward" or a[2])
+                icon:SetGlow(listed[a[1]] and "glow-ward" or nil)
                 icon:ClearAllPoints()
                 if self:Get("auraSide") == "left" then
                     icon:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT", -(k - 1) * (h + S["space-2"]), 0)
@@ -405,6 +420,21 @@ function M:ApplyBadges()
     for _, f in ipairs(self.frames) do f:SetDispelBadges(self:Get("debuffBadges")) end
 end
 
+-- The Defensives list: the slots' spells and Warded, out of combat.
+function M:ApplyDefensives()
+    local d = UI.GroupDefensives()
+    for _, f in ipairs(self.frames) do
+        if f.auras then
+            for _, g in ipairs(AURA_GROUPS) do
+                if g.list or g.without then
+                    f.auras:SetGroupSpells(g.key, g.list and d[g.list], g.without and d[g.without])
+                end
+            end
+        end
+        f:SetWardSpells(d.warded)
+    end
+end
+
 -- Buff indicators (the Buff indicators module's list), out of combat; a
 -- burst of edits applies once.
 function M:ApplyIndicators()
@@ -538,6 +568,11 @@ function M:OnEnable()
     self:RunOutOfCombat("badges", function() self:ApplyBadges() end)
     self:RunOutOfCombat("indicators", function() self:ApplyIndicators() end)
     self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
+    self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
+    self:On("SUUUI_DEFENSIVES_CHANGED", function()
+        self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
+        self:DrawPreview()
+    end)
     self:ApplyOptions()
     self:UpdateSelected()
 

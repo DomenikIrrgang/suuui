@@ -1,6 +1,6 @@
 # SuuUI public API
 
-Version **0.15.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
+Version **0.16.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
 A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
 
@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.15.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks |
+| `SuuUI.API_VERSION` | `"0.16.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -270,6 +270,7 @@ Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` 
 |---|---|
 | `SuuUI.UI.UnitFrame(parent, unit, opts)` | The unit frame; `:Activate()`, `:Deactivate()`, `:Refresh()`, `:SetState(tone, word)`; 0.9: `:SetUnit(unit)`, `:Resize(w, h)`, `:SetDispelBadges("all"|"removable"|"off")` (debuff-type border and badge, in combat too) (out of combat) and the opts `height`, `lowHealth`, `incoming`, `powerFor(unit)`. See `UI/UnitFrame.lua` for `opts`; 0.9 too: the opt `raidMarker = true` (the raid target icon over the top edge; `:UpdateRaidMarker()`), and a built-in offline state ("Offline" in the right-hand text, an empty bar, a faint name, no power line) |
 | Buff indicators (0.9) | `f:SetIndicators(list)` (live, out of combat) and `f:SetPreviewIndicators(list)` on a unit frame; `SuuUI.UI.GroupIndicators()` (list, version) and `SuuUI.UI.SetGroupIndicators(list)` (emits `SUUUI_INDICATORS_CHANGED`); an indicator is `{ name, ids, kind = "icon"|"square"|"border"|"fill", point, size, color, source = "mine"|"any" }`, `SuuUI.UI.INDICATOR_POINTS` lists the points |
+| Defensives and Warded (0.16) | `SuuUI.UI.GroupDefensives()` (`{ external, defensive, warded, all }`, each a list of spell IDs, and a version) and `SuuUI.UI.SetGroupDefensives(d)` (emits `SUUUI_DEFENSIVES_CHANGED`; the Defensives module sets them from Frames › Defensives, nil clears them): which buffs party and raid frames show in their external and defensive slots, leave out of their other buffs, and take as Warded. The game hides who cast another player's buffs and its own defensive filters then let every buff through, so the frames go by these lists. On a unit frame: `f:SetWardSpells(ids)` (out of combat; the first call makes an engine slot: while one of the spells is up the frame shows the Warded badge, the `ward` border and glow, in combat too; a debuff type's badge covers it, it covers Aggro's), `f:WardDecoration(parent)` (that look over the frame, on `parent`; `deco:SetWarded(on)` for previews). `SuuUI.Defensives()`: SuuUI's default list, `{ { name, kind = "external"|"defensive", ward, note, ids } }` (generated `Data/Defensives.lua`) |
 | `SuuUI.UI.GROUP_TIERS` (0.9) | `{ "5", "10", "20", "40" }`: the group sizes an indicator can be limited to, with `sizes = { ["10"] = true, … }` on the indicator (nil or empty: every size) |
 | `SuuUI.UI.GroupTier([count])` (0.9) | The current group's size tier: `"5"` in a party or with no group; in a raid the smallest of `"10"`, `"20"`, `"40"` it fits in. With `count`, the tier for that many players (5 or fewer is `"5"` only outside a raid) |
 | `SuuUI.UI.IndicatorsFor(list, tier)` (0.9) | The indicators of `list` active at `tier`: those without `sizes` (or with an empty one), and those whose `sizes` holds the tier |
@@ -291,6 +292,7 @@ Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` 
 |---|---|
 | `SuuUI.UI.AuraContainer(parent, unit, opts)` | An engine aura container styled as the design's AuraIcon. `opts`: `size` (token), `anchor`, `growth` (`{ "LEFT", "UP" }`), `lineWidth`, `groups` (`{ key, filter = { "HARMFUL", "PLAYER" }, max, dispel, cancel, drain }`). Returns `{ container, ... }` with `:SetUnit(unit)`, `:Refresh()`, `:SetGroupMax(key, n)`; 0.9: `:SetFlow(anchor, growth)`, `:SetLineWidth(px)`, `:SetGroupSize(key, size)` (live; out of combat, as the engine's buttons refuse it in combat), `:Release()` (containers can never be freed: a released one has no unit, is hidden and stops listening until the next `:SetUnit(unit)`, so whoever rebuilds can reuse it). Addon code can't read auras in combat, so the engine fills it |
 | Group options (0.9) | `include = { spellIDs }` (only those spells), `dispelTypes = { "Curse" }` (only debuffs of those types, matched by the engine in combat too), `initialize = fn(button)` (build the button yourself, once, when the engine creates it: decorations hung on it show and hide with it, which is how party frames draw a debuff type's border and badge in combat) |
+| Group options (0.16) | `exclude = { spellIDs }` (never those spells; with `include` too), `harmfulEdge = true` (the ember edge on a debuff, which a typed debuff's dispel border covers: every debuff row has it, so a debuff never looks like a buff). `c:SetGroupSpells(key, ids, exclude)` changes both after creation (out of combat) |
 
 ## Action bars (0.8)
 

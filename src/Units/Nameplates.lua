@@ -248,9 +248,9 @@ end
 local function buildAuras(f)
     f.auras = UI.AuraContainer(f, "none", { size = M:Get("auraSize"), spacing = S["space-1"], anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" },
         groups = {
-            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4 },
+            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true },
             -- on friendly plates: what you can remove, with its type's border
-            { key = "removable", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 0, dispel = true },
+            { key = "removable", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 0, dispel = true, harmfulEdge = true },
         } })
     if f.auras then
         f.auras.container:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, S["space-1"])

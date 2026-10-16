@@ -162,6 +162,8 @@ API.UI.GROUP_TIERS = UI.GROUP_TIERS           -- 0.9: "5", "10", "20", "40"
 API.UI.GroupTier = UI.GroupTier               -- 0.9: the current group's size tier (or for a count)
 API.UI.IndicatorsFor = UI.IndicatorsFor       -- 0.9: the indicators of a list active at a tier
 API.UI.SetGroupIndicators = UI.SetGroupIndicators -- 0.9: set them (the Buff indicators module); emits SUUUI_INDICATORS_CHANGED
+API.UI.GroupDefensives = UI.GroupDefensives       -- 0.16: the Defensives list's spell IDs group frames use ({ external, defensive, warded, all }), and a version
+API.UI.SetGroupDefensives = UI.SetGroupDefensives -- 0.16: set them (the Defensives module); emits SUUUI_DEFENSIVES_CHANGED
 API.UI.UnitStandIn = UI.UnitStandIn -- 0.9: Unit* stand-ins for previews: UnitStandIn(person) -> api for UnitFrame opts.api
 API.UI.RaidMarker = UI.RaidMarker -- 0.9: RaidMarker(parent, size[, layer]) -> a hidden raid target marker texture
 API.UI.ShowRaidMarker = UI.ShowRaidMarker -- 0.9: ShowRaidMarker(texture, unit[, api]): that unit's marker, or hidden
@@ -206,6 +208,9 @@ function API.ClassTalents(class) return ns.ClassTalents and ns.ClassTalents[clas
 -- 0.9: every aura any class's presets track: { [name] = { classes = "Priest",
 -- ids = { ... } } } (Data/AuraCatalog.lua, generated)
 function API.AuraCatalog() return ns.AuraCatalog or {} end
+-- 0.16: SuuUI's default defensives, { { name, kind = "external" | "defensive",
+-- ward, note, ids = { ... } } } (Data/Defensives.lua, generated)
+function API.Defensives() return ns.Defensives or {} end
 API.UI.SetActionTextSize = UI.SetActionTextSize -- px, never below micro (9.5)
 API.UI.SetVisibility = UI.SetVisibility -- "always" | "combat" | "mouseover" | "hidden"
 API.UI.VISIBILITY_OPTIONS = UI.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"
