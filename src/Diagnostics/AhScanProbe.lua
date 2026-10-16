@@ -3,8 +3,11 @@
 -- Forever? It asks the game for every auction once (ReplicateItems), waits
 -- for REPLICATE_ITEM_LIST_UPDATE (a minute at most), and records how long it
 -- took, how many auctions came back, how many had all their info, and five
--- of them. Saved in SuuUIProbe.ahScan on /reload. The game allows this only
--- now and then (on retail every 15 minutes), so run it once.
+-- of them. While it waits it samples, every quarter second, how many
+-- auctions the game already holds (GetNumReplicateItems) and counts the
+-- events that come (does the list fill as it arrives? asked 2026-10-16 for a
+-- progress under the scanning mark). Saved in SuuUIProbe.ahScan on /reload.
+-- The game allows this only now and then (every 15 minutes), so run it once.
 
 local _, ns = ...
 
@@ -59,9 +62,36 @@ function AP.Command()
     local f = AP.frame or CreateFrame("Frame")
     AP.frame = f
     f:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+    -- what fills while it waits: the count every quarter second (when it
+    -- changes), and every auction house event by name
+    out.while_waiting, out.events = {}, {}
+    local last
+    local ticker = C_Timer.NewTicker(0.25, function()
+        local okN, n = pcall(C_AuctionHouse.GetNumReplicateItems)
+        local v = okN and show(n) or "error"
+        if v ~= last then
+            last = v
+            table.insert(out.while_waiting, ("%.2fs: %s"):format(GetTime() - started, v))
+        end
+    end)
+    local watch = CreateFrame("Frame")
+    for _, e in ipairs({ "REPLICATE_ITEM_LIST_UPDATE", "AUCTION_HOUSE_THROTTLED_MESSAGE_SENT", "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
+                         "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
+                         "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
+        pcall(watch.RegisterEvent, watch, e)
+    end
+    watch:SetScript("OnEvent", function(_, e)
+        out.events[e] = out.events[e] or { count = 0 }
+        local ev = out.events[e]
+        ev.count = ev.count + 1
+        ev.first = ev.first or ("%.2fs"):format(GetTime() - started)
+        ev.last = ("%.2fs"):format(GetTime() - started)
+    end)
     local function finish(why)
         if not AP.waiting then return end
         AP.waiting = nil
+        ticker:Cancel()
+        C_Timer.After(2, function() watch:UnregisterAllEvents() end)
         f:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
         out.result = why
         out.seconds = ("%.1f"):format(GetTime() - started)
