@@ -340,12 +340,25 @@ function M:DrawCategories()
             b:SetHeight(24)
             b.sel = UI.Fill(b, "arcane-soft", "BACKGROUND")
             b.sel:SetAllPoints()
+            -- hover: the row lifts (as the trainer's rows), a subcategory's
+            -- text also goes from muted to ink
+            b.hover = UI.Fill(b, "surface-raised", "BACKGROUND", 1)
+            b.hover:SetAllPoints()
+            b.hover:SetAlpha(0.6)
+            b.hover:Hide()
             b.text = UI.Text(b, "body", "ink")
             b.text:SetPoint("LEFT", S["space-3"], 0)
             b.text:SetPoint("RIGHT", -S["space-2"], 0)
             b.text:SetWordWrap(false)
-            b:SetScript("OnEnter", function(self) if not self.chosen then self.text:SetColor("ink") end end)
-            b:SetScript("OnLeave", function(self) if not self.chosen then self.text:SetColor(self.depth > 0 and "ink-muted" or "ink") end end)
+            b:SetScript("OnEnter", function(self)
+                if self.chosen then return end
+                self.hover:Show()
+                self.text:SetColor("ink")
+            end)
+            b:SetScript("OnLeave", function(self)
+                self.hover:Hide()
+                if not self.chosen then self.text:SetColor(self.depth > 0 and "ink-muted" or "ink") end
+            end)
             self.catButtons[n] = b
         end
         b.depth, b.chosen = depth, chosen
@@ -356,6 +369,7 @@ function M:DrawCategories()
         b.text:SetValue(label)
         b.text:SetColor(chosen and "arcane" or (depth > 0 and "ink-muted" or "ink"))
         b.sel:SetShown(chosen)
+        b.hover:SetShown(not chosen and b:IsMouseOver() and b:IsVisible())
         b:SetScript("OnClick", onClick)
         b:Show()
         y = y + 24
