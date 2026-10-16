@@ -362,6 +362,7 @@ end
 local WIDTH, HEIGHT = 960, 700
 local CELL, COLS, ROWS = 40, 18, 2
 local TILES = 10 -- Appearances: framed 3D tiles a page
+local DOLL_L, DOLL_R = 320, 210 -- Appearances: the slot columns' insets
 local CARD_W, SHADE_W = 270, 340
 -- The mount: a model frame the game fits each model into, whatever its
 -- size (seen in game: the mount scene's camera, tuned by hand, fit some
@@ -489,6 +490,21 @@ local function stageArt(stage)
     light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120, 120)
     light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120, -260)
     stage.light = light
+    -- the light, the floor glow, the shadow and the turn and zoom buttons
+    -- under the model: the middle of the stage, or (Appearances) the doll
+    function stage:CentreOn(x)
+        light:ClearAllPoints()
+        light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120 + x, 120)
+        light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120 + x, -260)
+        stage.pool:ClearAllPoints()
+        stage.pool:SetPoint("BOTTOM", stage, "BOTTOM", x, FLOOR - 12)
+        stage.shadow:ClearAllPoints()
+        stage.shadow:SetPoint("BOTTOM", stage, "BOTTOM", x, FLOOR + 4)
+        if stage.ctl then
+            stage.ctl:ClearAllPoints()
+            stage.ctl:SetPoint("BOTTOM", stage, "BOTTOM", x, S["space-4"])
+        end
+    end
     local floor = stage:CreateTexture(nil, "BACKGROUND", nil, -6)
     floor:SetColorTexture(1, 1, 1, 1)
     floor:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.45), CreateColor(0, 0, 0, 0))
@@ -508,6 +524,7 @@ local function stageArt(stage)
     shadow:SetVertexColor(0, 0, 0, 0.4)
     shadow:SetSize(340, 56)
     shadow:SetPoint("BOTTOM", stage, "BOTTOM", 0, FLOOR + 4)
+    stage.shadow = shadow
     -- the vignette: four edges darkening inward
     local function edge(point, horizontal, size, fromA, toA)
         local t = stage:CreateTexture(nil, "BORDER", nil, 1)
@@ -979,12 +996,16 @@ function M:DrawStage()
         stage.star:Hide()
         stage.empty:Hide()
         stage.ctl:Show()
-        stage.hint:Show()
+        -- no hint here (the design: it would run under Undress)
+        stage.hint:Hide()
+        -- the doll stands between the columns, off the stage's middle
+        stage:CentreOn((DOLL_L - DOLL_R) / 2)
         if not InCombatLockdown() then self.act:Hide() end
         tintStage(stage, "gilt")
         self:DrawWardrobe()
         return
     end
+    stage:CentreOn(0)
     local none = e == nil
     stage.empty:SetShown(none)
     self.card:SetShown(not none)
@@ -1305,7 +1326,7 @@ end
 --------------------------------------------------------------------------------
 
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
-local DOLL_L, DOLL_R, SLOT = 320, 210, 30
+local SLOT = 30
 local SLOTS_L = { "HEADSLOT", "SHOULDERSLOT", "BACKSLOT", "CHESTSLOT", "SHIRTSLOT", "TABARDSLOT", "WRISTSLOT" }
 local SLOTS_R = { "HANDSSLOT", "WAISTSLOT", "LEGSSLOT", "FEETSLOT", "MAINHANDSLOT", "SECONDARYHANDSLOT", "RANGEDSLOT" }
 local SLOT_ATLAS = {
