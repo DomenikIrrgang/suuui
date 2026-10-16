@@ -263,6 +263,14 @@ function M:BuildBuy(page)
     self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
     local go = UI.Button(bar, { text = "Search", variant = "primary", icon = "search", onClick = function() self:Search() end })
     go:SetPoint("LEFT", self.filter, "RIGHT", S["space-2"], 0)
+    -- Scan all: after a thin divider, the button and when it last ran
+    local div = UI.Fill(bar, "gilt-faint", "ARTWORK")
+    div:SetSize(1, 22)
+    div:SetPoint("LEFT", go, "RIGHT", S["space-4"], 0)
+    self.scanButton = UI.Button(bar, { text = "Scan all", icon = "sort", onClick = function() self:Scan() end })
+    self.scanButton:SetPoint("LEFT", div, "RIGHT", S["space-4"], 0)
+    self.scanWhen = UI.Text(bar, "caption", "ink-muted")
+    self.scanWhen:SetPoint("LEFT", self.scanButton, "RIGHT", S["space-3"], 0)
     -- the categories down the left
     local cats = UI.ScrollArea(page, S["space-2"])
     cats:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
@@ -716,6 +724,121 @@ local function when(at)
     return days <= 1 and "yesterday" or (days .. " days ago")
 end
 
+
+--------------------------------------------------------------------------------
+-- Scan all: every auction once (the game allows it every 15 minutes); the
+-- lowest buyout per item into the memory the sell view and tooltips use
+--------------------------------------------------------------------------------
+
+local SCAN_WAIT = 15 * 60
+
+-- When any of your characters last scanned (the game's wait is per account).
+function M:LastScan()
+    local last
+    for _, d in pairs(self:AllCharData()) do
+        if d.scanAt and (not last or d.scanAt > last) then last = d.scanAt end
+    end
+    return last
+end
+
+function M:DrawScan()
+    if not self.scanButton then return end
+    local last = self:LastScan()
+    local wait = last and (last + SCAN_WAIT - time()) or 0
+    if self.scanning then
+        self.scanButton:SetEnabledState(false)
+        self.scanWhen:SetValue(self.scanning.note or "Scanning…")
+        self.scanWhen:SetColor("ink-muted")
+    elseif wait > 0 then
+        local text = ("Again in %d min"):format(math.ceil(wait / 60))
+        self.scanButton:SetEnabledState(false)
+        self.scanButton.tooltip = { title = "Scan all", description = "The game allows one full scan every 15 minutes. " .. text .. "." }
+        self.scanWhen:SetValue(text)
+        self.scanWhen:SetColor("amber")
+    else
+        self.scanButton:SetEnabledState(true)
+        self.scanButton.tooltip = { title = "Scan all", description = "Read every auction once, for the lowest buyouts in the sell view and tooltips." }
+        self.scanWhen:SetValue(last and ("Last scan " .. when(last)) or "Not scanned yet")
+        self.scanWhen:SetColor("ink-muted")
+    end
+end
+
+function M:Scan()
+    if self.scanning then return end
+    self.scanning = { started = GetTime(), note = "Scanning… (about 20 s)" }
+    self:Note("Asking for every auction…")
+    local ok, err = pcall(AH.ReplicateItems)
+    if not ok then
+        self.scanning = nil
+        self:Note("Couldn't scan: " .. tostring(err), "error")
+    else
+        -- no answer in a minute: the game didn't run it
+        C_Timer.After(60, function()
+            if self.scanning and not self.scanning.reading then
+                self.scanning = nil
+                self:Note("The scan didn't come back; try again later.", "error")
+                self:DrawScan()
+            end
+        end)
+    end
+    self:DrawScan()
+end
+
+-- The list came: read it a slice a frame (tens of thousands of auctions),
+-- the lowest buyout per item (per unit for stacks), then keep them.
+function M:ReadScan()
+    local sc = self.scanning
+    if not sc or sc.reading then return end
+    sc.reading = true
+    local n = call(AH.GetNumReplicateItems) or 0
+    local low, i = {}, 0
+    local ticker
+    ticker = C_Timer.NewTicker(0, function()
+        local stop = math.min(n, i + 2500)
+        for k = i, stop - 1 do
+            -- (all 17 values: the helper `call` passes on only five)
+            local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(AH.GetReplicateItemInfo, k)
+            if ok and itemID and buyout and buyout > 0 then
+                local each = math.floor(buyout / math.max(1, count or 1))
+                if not low[itemID] or each < low[itemID] then low[itemID] = each end
+            end
+        end
+        i = stop
+        sc.note = ("Reading %d of %d…"):format(i, n)
+        self:DrawScan()
+        if i >= n then
+            ticker:Cancel()
+            local d = self:CharData()
+            d.seen = d.seen or {}
+            local now, items = time(), 0
+            for itemID, price in pairs(low) do
+                d.seen[itemID] = { price = price, at = now }
+                items = items + 1
+            end
+            d.scanAt = now
+            self.scanning = nil
+            self:Note(("Scan done: %d auctions, %d items, in %d s."):format(n, items, math.floor(GetTime() - sc.started + 0.5)))
+            self:QueueRefresh()
+        end
+    end)
+end
+
+-- Item tooltips anywhere: the lowest buyout seen.
+function M:HookTooltips()
+    if self.tooltipHooked or not (TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType) then return end
+    self.tooltipHooked = true
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
+        if not self:IsEnabled() or not data or isSecret(data.id) then return end
+        local itemID = data.id
+        if type(itemID) ~= "number" then return end
+        local e = self:LowestSeen(itemID)
+        if not e then return end
+        local stack = select(8, C_Item.GetItemInfo(itemID))
+        local each = (stack and stack > 1) and " each" or ""
+        tooltip:AddLine(("Lowest buyout seen: %s%s · %s"):format(coins(e.price), each, when(e.at)), 0.75, 0.75, 0.75)
+    end)
+end
+
 --------------------------------------------------------------------------------
 -- Sell: the item, its prices, the duration, the deposit, Post; your items
 --------------------------------------------------------------------------------
@@ -856,6 +979,7 @@ function M:SetSellItem(loc)
         return
     end
     sell.loc = loc
+    sell.offered = nil -- until the background search answers
     sell.itemID = loc and C_Item.GetItemID(loc)
     sell.commodity = false
     if loc then
@@ -895,7 +1019,12 @@ function M:DrawSell()
     local last = loc and self:LastPosted(sell.itemID)
     local low = loc and self:LowestSeen(sell.itemID)
     sell.last:SetValue(last and ("Last posted at " .. coins(last.price) .. " · " .. when(last.at)) or "")
-    sell.lowest:SetValue(low and ("Lowest buyout seen: " .. coins(low.price) .. " · " .. when(low.at)) or "")
+    -- what the background search found: nobody selling it now is worth saying
+    local lowText = low and ("Lowest buyout seen: " .. coins(low.price) .. " · " .. when(low.at)) or ""
+    if loc and sell.offered == false then
+        lowText = (lowText ~= "" and (lowText .. "  ·  ") or "") .. "Nobody sells it right now."
+    end
+    sell.lowest:SetValue(lowText)
     -- a commodity: a unit price, no starting bid
     sell.bidHolder:SetShown(not sell.commodity)
     sell.bidLabel:SetShown(not sell.commodity)
@@ -1093,6 +1222,7 @@ function M:Refresh()
     if self.tab == "sell" then self:DrawSell() return end
     if (self.tab or "buy") ~= "buy" then return end
     self:DrawCategories()
+    self:DrawScan()
     local browse = (self.view or "browse") == "browse"
     self.results_t:SetShown(browse)
     self.itemView:SetShown(not browse)
@@ -1185,6 +1315,10 @@ function M:OnEnable()
         if self.itemKey then call(AH.SendSearchQuery, self.itemKey, sorts(), true) end
     end)
     self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function() self:Posted() end)
+    self:OnGameEvent("REPLICATE_ITEM_LIST_UPDATE", function() self:ReadScan() end)
+    self:HookTooltips()
+    -- the wait counts down while the window is open
+    C_Timer.NewTicker(30, function() if self.window and self.window:IsShown() then self:DrawScan() end end)
     self:OnGameEvent("BAG_UPDATE_DELAYED", function() if self.tab == "sell" then self:QueueRefresh() end end)
     self:OnGameEvent("AUCTION_HOUSE_POST_ERROR", function()
         self.posting = nil
@@ -1215,6 +1349,7 @@ function M:OnEnable()
             end
             self:Seen(key.itemID, low)
             self:SellLowest(low, mine)
+            self.sell.offered = low and true or false
             self:QueueRefresh()
         end)
     end
