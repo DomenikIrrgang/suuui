@@ -490,12 +490,10 @@ local trackEyes = setmetatable({}, { __mode = "k" })
 -- moved down with it). The header's second row (filters, the log's search)
 -- is ROW_EXTRA taller than other windows' (asked: a taller search box).
 -- The window is as much shorter, so the map keeps its shape; the quest
--- log keeps its height, the details sized for it (LOG_CUT shorter than the
--- game's).
+-- log and its details run down to its bottom.
 local ROW_EXTRA = 8
 local GAME_MAP_TOP, MAP_TOP = 67, 25 + ROW_EXTRA
 local CUT = GAME_MAP_TOP - MAP_TOP
-local LOG_CUT = GAME_MAP_TOP - 25
 -- the second row's controls, their middles on one line in it, the
 -- chrome's rowMid (anchored by their bottoms, controls of different heights
 -- sat at different heights: found in game)
@@ -562,6 +560,40 @@ local function styleQuestSearch(sb)
     sb.suuSearch = true
 end
 
+-- The quest list's rows measured again: the game sizes each quest's row
+-- for the fonts it had, the reskin gives SuuUI's after, and long
+-- objectives wrapped onto more lines than their row had (into the next
+-- quest; found in game). The game's sums (QuestLogQuests_AddQuestButton):
+-- 8 + the title, each objective 3 (the first) or 2 under the one before,
+-- 4 without objectives, 6 for the marker; then the list stacked again.
+local function fitQuestRows(list)
+    local titles, lines = list.titleFramePool, list.objectiveFramePool
+    if not (titles and titles.EnumerateActive and list.Contents and list.Contents.Layout) then return end
+    local below = {}
+    if lines and lines.EnumerateActive then
+        for line in lines:EnumerateActive() do
+            local id = line.questID
+            if id and line.Text then
+                local h = line.Text:GetStringHeight()
+                line:SetHeight(h)
+                below[id] = (below[id] or 0) + h + (below[id] and 2 or 3)
+            end
+        end
+    end
+    local objectives = GetCVarBool("showQuestObjectivesInLog")
+    local changed = false
+    for row in titles:EnumerateActive() do
+        if row.questID and row.Text then
+            local h = 8 + row.Text:GetStringHeight() + (objectives and (below[row.questID] or 0) or 4) + 6
+            if math.abs(row:GetHeight() - h) > 0.5 then
+                row:SetHeight(h)
+                changed = true
+            end
+        end
+    end
+    if changed then list.Contents:Layout() end
+end
+
 function M:RestyleQuestLog()
     local q = _G.QuestMapFrame
     if not q then return end
@@ -576,11 +608,14 @@ function M:RestyleQuestLog()
         if d.BorderFrame then d.BorderFrame:SetAlpha(0) end
         if not d.suuStyled then
             d.suuStyled = true
-            -- the game sizes the details for its taller window (502 px, its
-            -- text 430): as much shorter as the window, or the rewards and
-            -- Abandon / Share / Track hang below it (found in game)
-            d:SetHeight(d:GetHeight() - LOG_CUT)
-            if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - LOG_CUT) end
+            -- the game sizes the details for its own window (502 px, its
+            -- text 430, from the log's top 1 px down): to the log's bottom
+            -- instead, 3 px above it as the game's, so they fit the small
+            -- window and run all the way down the enlarged one (fixed, they
+            -- stopped two thirds down it, found in game); the text to the
+            -- game's 29 px above the details' bottom
+            d:SetPoint("BOTTOMRIGHT", 0, 3)
+            if d.ScrollFrame then d.ScrollFrame:SetPoint("BOTTOMLEFT", d, "BOTTOMLEFT", 5, 29) end
             -- Abandon / Share / Track and the rewards centred in the column
             -- the details sit in, between the map and the window's edge,
             -- measured as they show (lined up with the details alone they
@@ -676,6 +711,7 @@ function M:RestyleQuestLog()
                 end
             end
         end
+        fitQuestRows(list)
     end
 end
 
