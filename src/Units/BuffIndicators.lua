@@ -27,15 +27,34 @@ local _, CLASS = UnitClass("player")
 local isSecret = issecretvalue or function() return false end
 
 -- Each class's starting set, by name (every rank's IDs come from the
--- Cooldown Manager's presets). Classes without heals over time start empty.
+-- Cooldown Manager's presets): one list for every spec, or one per spec
+-- ("0"-"3"; a spec not named starts empty). Your own source unless said.
+-- Classes not here start empty.
 local DEFAULTS = {
     PRIEST = {
         { name = "Renew", kind = "icon", point = "TOPRIGHT", size = 14 },
         { name = "Power Word: Shield", kind = "square", point = "TOPLEFT", size = 8, color = "ward" },
     },
     DRUID = {
-        { name = "Rejuvenation", kind = "icon", point = "TOPRIGHT", size = 14 },
-        { name = "Regrowth", kind = "square", point = "TOPLEFT", size = 8, color = "fel" },
+        ["0"] = {
+            { name = "Rejuvenation", kind = "icon", point = "BOTTOMLEFT", size = 10 },
+            { name = "Regrowth", kind = "icon", point = "TOPLEFT", size = 10, color = "fel" },
+        },
+        ["1"] = {
+            { name = "Rejuvenation", kind = "icon", point = "BOTTOMLEFT", size = 10 },
+            { name = "Regrowth", kind = "icon", point = "TOPLEFT", size = 10, color = "fel" },
+        },
+        ["2"] = {
+            { name = "Regrowth", kind = "icon", point = "BOTTOMRIGHT", size = 12, color = "fel" },
+            { name = "Rejuvenation", kind = "icon", point = "TOPRIGHT", size = 12, color = "fel" },
+            { name = "Mark of the Wild", kind = "icon", point = "CENTER", size = 18, color = "fel", show = "missing" },
+        },
+    },
+    WARRIOR = {
+        ["3"] = {
+            { name = "Battle Shout", kind = "icon", point = "CENTER", size = 24, color = "fel", show = "missing",
+              on = "group", source = "any" },
+        },
     },
 }
 
@@ -103,10 +122,11 @@ function M:List(spec)
     if byClass and byClass[specKey(spec)] then return byClass[specKey(spec)] end
     -- first time for this spec: the class's defaults, with their spells
     local buffs, list = knownBuffs(), {}
-    for _, d in ipairs(DEFAULTS[CLASS] or {}) do
+    local class = DEFAULTS[CLASS] or {}
+    for _, d in ipairs(class[1] and class or class[specKey(spec)] or {}) do
         if buffs[d.name] then
             local e = copy(d)
-            e.ids, e.source = copy(buffs[d.name]), "mine"
+            e.ids, e.source = copy(buffs[d.name]), d.source or "mine"
             list[#list + 1] = e
         end
     end

@@ -34,20 +34,20 @@ local M = SuuUI.RegisterModule({
         sort = "group",            -- within each group: "group" (raid order) or "role"
         perBand = 4,               -- columns: groups side by side before the next band
         width = 108,
-        height = 20,
+        height = 19,
         heightLarge = 20,          -- raids of 21-40
-        gap = 4,
+        gap = 8,
         groupGap = 4,
         showSolo = false,          -- your own frame while not in a group (to try them)
         power = "roles",
         healthText = "none",
         nameColor = "game",        -- "game" (class colour) or "ink", as on the unit frames
         raidMarkers = true,
-        lowHealth = false,
+        lowHealth = true,
         incoming = true,
-        auras = 2,
+        auras = 1,
         debuffBadges = "all",      -- "all" debuff types, "removable" or "off"
-        rangeAlpha = T.opacity["opacity-oor"],
+        rangeAlpha = 0.25,
     },
 })
 

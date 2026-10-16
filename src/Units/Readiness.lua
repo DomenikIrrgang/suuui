@@ -20,7 +20,7 @@ local M = SuuUI.RegisterModule({
     combatSafe = true,
     defaults = {
         position = { point = "TOPRIGHT", x = -28, y = -300 },
-        shows = "instance", -- "instance" | "group" | "always" | "off"
+        shows = "off",      -- "instance" | "group" | "always" | "off"
     },
 })
 

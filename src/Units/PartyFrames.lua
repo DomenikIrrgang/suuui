@@ -43,13 +43,13 @@ local M = SuuUI.RegisterModule({
         healthText = "percent",
         nameColor = "game",     -- "game" (class colour) or "ink", as on the unit frames
         raidMarkers = true,
-        lowHealth = false,
+        lowHealth = true,
         incoming = true,
         auras = 4,
         auraSide = "right",
         showBuffs = false,      -- their buffs after debuffs and defensives
         debuffBadges = "all",   -- "all" debuff types, "removable" or "off"
-        rangeAlpha = T.opacity["opacity-oor"],
+        rangeAlpha = 0.25,
     },
 })
 

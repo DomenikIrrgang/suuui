@@ -28,10 +28,10 @@ local M = SuuUI.RegisterModule({
     combatSafe = true,
     defaults = {
         position = { point = "BOTTOMRIGHT", x = -292, y = 28 },
-        shows = "combat",  -- "off" | "combat" | "always"
+        shows = "always",  -- "off" | "combat" | "always"
         who = "group",     -- "group" | "tanks" | "self"
         marker = "role",   -- "role" | "class" | "none"
-        raw = false,
+        raw = true,
         warnPull = true,
         aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
     },

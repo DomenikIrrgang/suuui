@@ -34,7 +34,7 @@ local M = SuuUI.RegisterModule({
         groupAuras = true,
         ids = true,           -- spell IDs, and who cast a buff or debuff
         anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
-        position = { point = "BOTTOMRIGHT", x = -28, y = 96 },
+        position = { point = "BOTTOMRIGHT", x = -30, y = 260 },
     },
 })
 

@@ -43,7 +43,7 @@ local M = SuuUI.RegisterModule({
     api = "0.12",
     reloadToToggle = true,
     defaults = {
-        position = { point = "BOTTOMRIGHT", x = -28, y = 96 },
+        position = { point = "BOTTOMRIGHT", x = -28, y = 28 },
         columns = 10,
         reagentBag = true,
         keyring = false,

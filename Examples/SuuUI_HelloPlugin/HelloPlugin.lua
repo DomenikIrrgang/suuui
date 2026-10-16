@@ -2,6 +2,7 @@
 -- A minimal SuuUI plugin: one module with a setting, a chat command, a game
 -- event and a message. Copy this folder to Interface/AddOns to try it.
 --
+--   /suu enable hello        turns it on (it starts off)
 --   /suu                     its section is under Plugins in the settings window
 --   /suu modules             lists it next to SuuUI's own modules
 --   /suu hello               says the greeting
@@ -16,6 +17,8 @@ SuuUI.RegisterModule({
     name = "Hello",
     description = "An example plugin that says hello.",
     api = "0.4",
+    -- off until turned on (/suu enable hello, or its section)
+    enabledByDefault = false,
     defaults = {
         greeting = "Hello from a SuuUI plugin",
         failOnEnable = false,

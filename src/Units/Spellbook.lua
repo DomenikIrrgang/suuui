@@ -32,7 +32,7 @@ local M = SuuUI.RegisterModule({
         unlearned = true,
         allRanks = false,
         levelUp = true,     -- the level-up card
-        untrained = false,  -- it lists earlier levels' spells still to train too
+        untrained = true,   -- it lists earlier levels' spells still to train too
         trainingCost = true, -- what training it all costs: the page's head, the micro menu
         levelUpFor = 0,     -- seconds it stays; 0: 4 and 1 more for each spell shown
     },

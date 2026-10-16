@@ -27,13 +27,13 @@
 -- size at every zoom. A built-in module written against the public API only.
 
 local DEFAULT_FILTERS = {
-    -- (objectives, levels and colours: the game's own settings, on by default)
-    quests = { "objectives", "levels", "colours", "available", "repeatable", "items" },
+    -- (objectives, levels and colours: the game's own settings)
+    quests = { "objectives", "colours", "available", "repeatable", "items" },
     places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
-    services = { "inn", "repair" },
-    trading = { "mail" },
+    services = { "inn" },
+    trading = { "mail", "auction", "bank" },
     trainers = { "class" },
-    rares = { "rares" },
+    rares = {},
     marks = { "yours", "shared" },
 }
 

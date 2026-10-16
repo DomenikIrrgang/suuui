@@ -24,8 +24,8 @@ local M = SuuUI.RegisterModule({
         position = { point = "BOTTOMRIGHT", x = -28, y = 28 },
         shows = "always",      -- "always" | "group" | "combat" | "hidden"
         numbers = "compact",   -- "minimal" | "compact" | "complete"
-        rows = 8,
-        barColor = "neutral",  -- "neutral" | "class"
+        rows = 9,
+        barColor = "class",    -- "neutral" | "class"
         marker = "icon",       -- "icon" | "diamond" | "none"
         nameColor = "class",   -- "class" | "ink"
         pinYou = true,

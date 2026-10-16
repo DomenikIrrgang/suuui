@@ -21,8 +21,8 @@ local M = SuuUI.RegisterModule({
     reloadToToggle = true,
     defaults = {
         microPosition = { point = "TOPLEFT", x = 28, y = -28 },
-        bagsPosition = { point = "BOTTOMRIGHT", x = -28, y = 28 },
-        shows = "always",
+        bagsPosition = { point = "TOP", x = 20, y = -116 },
+        shows = "mouseover",
         scale = 1,
     },
 })

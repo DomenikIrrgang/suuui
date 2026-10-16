@@ -22,7 +22,7 @@ ns.Root = root
 Settings.Register("ui", {
     scale = 0,             -- 0: automatic; otherwise 0.5 to 2
     reducedMotion = false, -- drop decorative motion, keep every value change
-    hideIssueReporter = false, -- the beta's bug report button (Blizzard_PTRFeedback)
+    hideIssueReporter = true,  -- the beta's bug report button (Blizzard_PTRFeedback)
 })
 
 Settings.Veto("ui", "scale", function(v)

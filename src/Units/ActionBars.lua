@@ -54,12 +54,12 @@ local M = SuuUI.RegisterModule({
         -- ("1" to "8", "stance", "pet"), in KEY_BARS order.
         showKeys = true,
         keyBars = { "1", "2", "3", "4", "5", "6", "7", "8", "stance", "pet" },
-        showEmpty = false,
+        showEmpty = true,
         showXP = true,
         showStance = true,
         showPet = true,
-        dockSize = 20, dockVisibility = "always",
-        textSize = 9.5,
+        dockSize = 24, dockVisibility = "always",
+        textSize = 12.5,
         count5 = 12, count6 = 12, count7 = 12, count8 = 12,
         size5 = 20, size6 = 20, size7 = 20, size8 = 20,
         gap5 = 2, gap6 = 2, gap7 = 2, gap8 = 2,
@@ -68,7 +68,7 @@ local M = SuuUI.RegisterModule({
         -- nearest edge. Stance and pet start attached above its outer edges.
         attach5 = false, attach6 = false, attach7 = false, attach8 = false,
         attachStance = true, attachPet = true,
-        off5 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
+        off5 = { point = "CENTER", rel = "CENTER", x = 26, y = 146 },
         off6 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
         off7 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
         off8 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
@@ -80,7 +80,7 @@ local M = SuuUI.RegisterModule({
         seeded = false,
         show5 = false, show6 = false, show7 = false, show8 = false,
         cols5 = 1, cols6 = 1, cols7 = 1, cols8 = 1,
-        pos5 = { point = "RIGHT", x = -28, y = 0 },
+        pos5 = { point = "TOPLEFT", x = 624, y = -208 },
         pos6 = { point = "RIGHT", x = -52, y = 0 },
         pos7 = { point = "RIGHT", x = -76, y = 0 },
         pos8 = { point = "RIGHT", x = -100, y = 0 },
@@ -564,7 +564,7 @@ for id = 5, 8 do
     for _, n in ipairs(COLUMNS) do options[#options + 1] = { value = n, label = tostring(n) } end
     SECTION.groups[#SECTION.groups + 1] = { title = "Bar " .. id, rows = {
         { key = "show" .. id, label = "Show", control = "toggle", combat = true,
-          description = id == 5 and "At the right edge by default; move it in edit mode." or "Next to the bar before it by default; move it in edit mode." },
+          description = id == 5 and "Near the top left by default; move it in edit mode." or "Next to the bar before it by default; move it in edit mode." },
         { key = "vis" .. id, label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
           description = "Always, only in combat, or when the mouse is over it (or you drag a spell)." },
         { key = "count" .. id, label = "Buttons", control = "stepper", min = 1, max = 12, step = 1, combat = true,

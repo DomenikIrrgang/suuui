@@ -23,7 +23,7 @@ ns.EditMode = EditMode
 
 Settings.Register("layout", {
     snap = true,
-    gridSize = 16,
+    gridSize = 4,
 })
 
 -- The grid divides by its size: 0 or less would put frames nowhere.

@@ -20,7 +20,7 @@ local M = SuuUI.RegisterModule({
         position = { point = "TOPLEFT", x = 28, y = -28 },
         shows = "always",
         buttons = { "character", "professions", "spellbook", "talents", "legacy", "questlog", "guild",
-                    "groupfinder", "worldmap", "bags", "menu" },
+                    "groupfinder", "collections", "worldmap", "bags", "menu" },
     },
 })
 

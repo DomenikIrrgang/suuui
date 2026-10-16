@@ -31,7 +31,7 @@ local M = SuuUI.RegisterModule({
     defaults = {
         category = "all", activities = {}, fits = false, show = "both",
         collapsed = { groups = false, players = false },
-        adChannel = "LookingForGroup",
+        adChannel = "General",
         -- the chat channels read (tool listings always are), LookingForGroup
         -- joined and kept out of the chat windows, Latin-script languages besides yours
         channels = { "LookingForGroup", "General", "Trade", "Say" },
