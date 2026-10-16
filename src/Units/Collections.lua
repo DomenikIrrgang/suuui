@@ -239,6 +239,30 @@ local function location(slot)
     return loc and loc.GetData and loc:GetData() or nil
 end
 
+-- Each slot's yours and all (a weapon slot: over the kinds this class can
+-- use for it); a slot with no kind for this class: its reason.
+function M:SlotCounts(className)
+    local TC = C_TransmogCollection
+    local out = {}
+    for _, def in ipairs(self.SLOTS) do
+        local cats = {}
+        if def.category then cats[1] = def.category
+        else for _, k in ipairs(self:WeaponKinds(def.weapon)) do cats[#cats + 1] = k.category end end
+        local have, all = 0, 0
+        for _, cat in ipairs(cats) do
+            for _, a in ipairs(call(TC.GetCategoryAppearances, cat, location(def.slot)) or {}) do
+                if not a.isHideVisual then
+                    all = all + 1
+                    if a.isCollected then have = have + 1 end
+                end
+            end
+        end
+        out[def.slot] = { have = have, all = all,
+            reason = (not def.category and #cats == 0) and ("No " .. def.label:lower() .. " weapons for " .. (className or "this class")) or nil }
+    end
+    return out
+end
+
 -- What you wear in a slot: its appearance (visual) ID.
 function M:Worn(slot)
     local id = call(GetInventorySlotInfo, slot)
@@ -263,10 +287,13 @@ function M:Appearances(category, slot)
                 first = first or s
             end
             if first then
+                local name = plain(first.name) and first.name or itemName(first.itemID)
+                if not name then self.namesPending = true end
                 out[#out + 1] = {
                     kind = "appearance", id = a.visualID, visualID = a.visualID, sourceID = first.sourceID, itemID = first.itemID,
-                    name = plain(first.name) and first.name or nil, collected = a.isCollected, favourite = a.isFavorite,
+                    name = name or "…", quality = first.quality, collected = a.isCollected, favourite = a.isFavorite,
                     worn = worn == a.visualID, sourceType = first.sourceType,
+                    icon = C_Item and call(C_Item.GetItemIconByID, first.itemID),
                     source = data().item and data().item[first.itemID],
                     camera = call(TC.GetAppearanceCameraID, a.visualID),
                 }
@@ -334,6 +361,7 @@ end
 
 local WIDTH, HEIGHT = 960, 700
 local CELL, COLS, ROWS = 40, 18, 2
+local TILES = 10 -- Appearances: framed 3D tiles a page
 local CARD_W, SHADE_W = 270, 340
 -- The mount: a model frame the game fits each model into, whatever its
 -- size (seen in game: the mount scene's camera, tuned by hand, fit some
@@ -659,13 +687,13 @@ function M:Build()
             { key = "pets", label = "Pets", disabled = true, reason = "No pets on Forever yet" },
             { key = "toys", label = "Toys" },
             { key = "heirlooms", label = "Heirlooms", disabled = true, reason = "No heirlooms on Forever yet" },
-            { key = "wardrobe", label = "Appearances", disabled = true, reason = "Comes in the next step of SuuUI's collections." },
+            { key = "wardrobe", label = "Appearances" },
         },
         onTab = function(key)
             if key ~= self.tab then self.chosen, self.page = nil, 1 end
             self.tab = key
             local first = self.tools and self.tools.list.buttons[1]
-            if first then first.label:SetValue(key == "toys" and "Toys" or "Mounts") end
+            if first then first.label:SetValue(key == "toys" and "Toys" or key == "wardrobe" and "All" or "Mounts") end
             self:Refresh()
         end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
@@ -848,6 +876,8 @@ function M:Build()
     stage.hint:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"])
     stage.hint:SetValue("Drag to turn · Wheel to zoom")
 
+    self:BuildWardrobe()
+
     -- the foot: the overview
     self.foot = UI.Text(w.footer, "caption", "ink-muted")
     self.foot:SetPoint("LEFT")
@@ -860,7 +890,10 @@ end
 --------------------------------------------------------------------------------
 
 function M:Entries()
-    local all = self.tab == "toys" and self:Toys() or self:Mounts()
+    local all
+    if self.tab == "wardrobe" then all = self:WardrobeEntries()
+    elseif self.tab == "toys" then all = self:Toys()
+    else all = self:Mounts() end
     local tools = self.tools
     local search = (tools.search.edit:GetText() or ""):lower()
     local have, list = tools.have.value or "all", tools.list.value or "all"
@@ -905,13 +938,23 @@ end
 
 function M:DrawStrip()
     local strip, list = self.strip, self.entries or {}
-    local per = COLS * ROWS
+    local tiles = self.tab == "wardrobe"
+    strip.grid:SetShown(not tiles)
+    strip.tileGrid:SetShown(tiles)
+    local per = tiles and TILES or COLS * ROWS
     self.pages = math.max(1, math.ceil(#list / per))
     self.page = math.max(1, math.min(self.pages, self.page or 1))
     local first = (self.page - 1) * per
-    for i, b in ipairs(strip.cells) do
-        b.entry = list[first + i]
-        self:DrawCell(b)
+    if tiles then
+        for i, b in ipairs(strip.tiles) do
+            b.entry = list[first + i]
+            self:DrawTile(b)
+        end
+    else
+        for i, b in ipairs(strip.cells) do
+            b.entry = list[first + i]
+            self:DrawCell(b)
+        end
     end
     local paged = self.pages > 1
     strip.prev:SetShown(paged)
@@ -921,7 +964,7 @@ function M:DrawStrip()
     strip.next:SetEnabledState(self.page < self.pages)
     strip.pageText:SetValue(self.page .. " / " .. self.pages)
     strip.empty:SetShown(#list == 0)
-    strip.empty:SetValue(self.tab == "toys" and "No toys match." or "No mounts match.")
+    strip.empty:SetValue(self.tab == "toys" and "No toys match." or tiles and "No appearances match." or "No mounts match.")
 end
 
 function M:Refresh()
@@ -931,6 +974,11 @@ function M:Refresh()
     local have = 0
     for _, e in ipairs(all) do if e.collected then have = have + 1 end end
     local tools = self.tools
+    local titled = self.tab == "wardrobe"
+    tools.title:SetShown(titled)
+    tools.title:SetValue(titled and self.slotTitle or "")
+    tools.search:ClearAllPoints()
+    tools.search:SetPoint("LEFT", titled and (tools.title:GetUnboundedStringWidth() + S["space-5"]) or 0, 0)
     tools.count:SetValue(("%d |cff%sof %d|r"):format(have, T.color["ink-muted"].hex, #all))
     tools.fill:SetWidth(math.max(1, 60 * (#all > 0 and have / #all or 0)))
     -- the chosen one stays while it is listed; else the first (also with
@@ -956,6 +1004,22 @@ end
 
 function M:DrawStage()
     local stage, e = self.stage, self.chosen
+    local wardrobe = self.tab == "wardrobe"
+    self.wardrobe:SetShown(wardrobe)
+    if wardrobe then
+        if self.model then self.model:Hide() end
+        self.showing, self.waiting = nil, nil
+        stage.loading:Hide()
+        stage.show:Hide()
+        stage.star:Hide()
+        stage.empty:Hide()
+        stage.ctl:Show()
+        stage.hint:Show()
+        if not InCombatLockdown() then self.act:Hide() end
+        tintStage(stage, "gilt")
+        self:DrawWardrobe()
+        return
+    end
     local none = e == nil
     stage.empty:SetShown(none)
     self.card:SetShown(not none)
@@ -1116,12 +1180,18 @@ function M:ModelLoaded()
 end
 
 function M:Turn(dir)
-    local m = self.model
+    local m = self.tab == "wardrobe" and self.wardrobe.doll or self.model
     if not m then return end
     call(m.SetFacing, m, (call(m.GetFacing, m) or 0) + dir * 0.35)
 end
 
 function M:Zoom(dir)
+    if self.tab == "wardrobe" then
+        local d = self.wardrobe.doll
+        self.dollScale = math.max(0.6, math.min(2.5, (self.dollScale or 1) * (dir > 0 and 1.12 or 0.89)))
+        call(d.SetCamDistanceScale, d, self.dollScale)
+        return
+    end
     local m = self.model
     if not m then return end
     self.camScale = math.max(ZOOM_MIN * CAM_SCALE, math.min(ZOOM_MAX * CAM_SCALE, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
@@ -1134,6 +1204,11 @@ end
 -- list, so the place is looked up first.
 function M:ToggleFavourite()
     local e = self.chosen
+    if e and e.kind == "appearance" then
+        call(C_TransmogCollection.SetIsAppearanceFavorite, e.visualID, not e.favourite)
+        C_Timer.After(0.1, function() self:Refresh() end)
+        return
+    end
     if e and e.kind == "toy" then
         call(C_ToyBox.SetIsFavorite, e.itemID, not e.favourite)
         C_Timer.After(0.1, function() self:Refresh() end)
@@ -1155,6 +1230,10 @@ end
 function M:DrawAction()
     local act, e = self.act, self.chosen
     if not act then return end
+    if self.tab == "wardrobe" then
+        if not InCombatLockdown() then act:Hide() end
+        return
+    end
     if e and e.kind == "toy" then return self:DrawToyAction(e) end
     local mounted = IsMounted and IsMounted() or false
     local label, why = "Summon", nil
@@ -1255,6 +1334,7 @@ end
 function M:OnEnable()
     if not self.window then self:Build() end
     self.tab = self.tab or "mounts"
+    self.slot = self.slot or "CHESTSLOT"
     if not self.toggleButton then
         self.toggleButton = CreateFrame("Button", "SuuUICollectionsToggle", UIParent)
         self.toggleButton:SetScript("OnClick", function() self:Toggle() end)
@@ -1292,6 +1372,15 @@ function M:OnEnable()
         if self.namesTimer then return end
         self.namesTimer = C_Timer.NewTimer(0.3, function() self.namesTimer = nil; self:Refresh() end)
     end)
+    -- appearances: new ones, what you wear
+    self:OnGameEvent("TRANSMOG_COLLECTION_UPDATED", function()
+        self.slotCounts = nil
+        if self.tab == "wardrobe" and self.window and self.window:IsShown() then self:Refresh() end
+    end)
+    self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function()
+        if self.wardrobe then self.wardrobe.doll.dressed = false; self.tried = nil end
+        if self.tab == "wardrobe" and self.window and self.window:IsShown() then self:Refresh() end
+    end)
     if not self.ticker then
         self.ticker = C_Timer.NewTicker(1, function()
             if self.tab == "toys" and self.window and self.window:IsShown() then self:DrawCooldowns() end
@@ -1304,4 +1393,340 @@ end
 function M:OnDisable()
     if self.window then self.window:Hide() end
     if self.bindOwner and not InCombatLockdown() then ClearOverrideBindings(self.bindOwner) end
+end
+
+--------------------------------------------------------------------------------
+-- Appearances (design: the paper doll): you in the middle of the stage, the
+-- 14 slots in two columns around you with yours of all, the class and the
+-- weapon kind at the top right; the strip is 10 framed 3D tiles of the
+-- slot's appearances; the chosen one tried on you, its card at the left,
+-- the star and Undress at the bottom right.
+--------------------------------------------------------------------------------
+
+local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local DOLL_L, DOLL_R, SLOT = 320, 210, 30
+local SLOTS_L = { "HEADSLOT", "SHOULDERSLOT", "BACKSLOT", "CHESTSLOT", "SHIRTSLOT", "TABARDSLOT", "WRISTSLOT" }
+local SLOTS_R = { "HANDSSLOT", "WAISTSLOT", "LEGSSLOT", "FEETSLOT", "MAINHANDSLOT", "SECONDARYHANDSLOT", "RANGEDSLOT" }
+local SLOT_ATLAS = {
+    HEADSLOT = "transmog-nav-slot-head", SHOULDERSLOT = "transmog-nav-slot-shoulder", BACKSLOT = "transmog-nav-slot-back",
+    CHESTSLOT = "transmog-nav-slot-chest", SHIRTSLOT = "transmog-nav-slot-shirt", TABARDSLOT = "transmog-nav-slot-tabard",
+    WRISTSLOT = "transmog-nav-slot-wrist", HANDSSLOT = "transmog-nav-slot-hands", WAISTSLOT = "transmog-nav-slot-waist",
+    LEGSSLOT = "transmog-nav-slot-legs", FEETSLOT = "transmog-nav-slot-feet", MAINHANDSLOT = "transmog-nav-slot-mainhand",
+    SECONDARYHANDSLOT = "transmog-nav-slot-secondaryhand", RANGEDSLOT = "transmog-nav-slot-ranged",
+}
+
+local function slotDef(slot)
+    for _, d in ipairs(M.SLOTS) do if d.slot == slot then return d end end
+end
+
+-- The classes the game has, for the class choice.
+local function classes()
+    local out = {}
+    for id = 1, 13 do
+        local name = GetClassInfo and call(GetClassInfo, id)
+        if plain(name) and name then out[#out + 1] = { value = id, label = name } end
+    end
+    return out
+end
+
+-- One round slot: the game's slot art in a disc, the arcane glow under the
+-- chosen one, yours of all under it.
+local function buildSlot(parent, owner, slot)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(SLOT, SLOT)
+    b.glow = b:CreateTexture(nil, "BACKGROUND", nil, 1)
+    b.glow:SetTexture(SOFT)
+    b.glow:SetSize(50, 50)
+    b.glow:SetPoint("CENTER")
+    b.glow:SetVertexColor(UI.RGBA("arcane"))
+    b.glow:SetAlpha(0.55)
+    b.ring = b:CreateTexture(nil, "BACKGROUND", nil, 2)
+    b.ring:SetTexture(DISC)
+    b.ring:SetAllPoints()
+    b.disc = b:CreateTexture(nil, "BACKGROUND", nil, 3)
+    b.disc:SetTexture(DISC)
+    b.disc:SetPoint("TOPLEFT", 1, -1)
+    b.disc:SetPoint("BOTTOMRIGHT", -1, 1)
+    b.disc:SetVertexColor(UI.RGBA("surface-sunk"))
+    b.art = b:CreateTexture(nil, "ARTWORK")
+    b.art:SetPoint("TOPLEFT", 2, -2)
+    b.art:SetPoint("BOTTOMRIGHT", -2, 2)
+    if not pcall(b.art.SetAtlas, b.art, SLOT_ATLAS[slot]) then b.art:SetTexture(GLYPHS .. "shield.tga") end
+    local mask = b:CreateMaskTexture()
+    mask:SetTexture(DISC, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(b.art)
+    b.art:AddMaskTexture(mask)
+    b.n = UI.Text(b, "micro", "ink-muted")
+    b.n:SetPoint("TOP", b, "BOTTOM", 0, -1)
+    b.slot = slot
+    b:SetScript("OnEnter", function(self)
+        self.hover = true
+        owner:DrawSlot(self)
+        local def, c = slotDef(self.slot), owner.slotCounts and owner.slotCounts[self.slot] or {}
+        UI.ShowTooltip(self, { title = def.label, description = c.reason or ("%d of %d collected"):format(c.have or 0, c.all or 0) })
+    end)
+    b:SetScript("OnLeave", function(self) self.hover = false; owner:DrawSlot(self); UI.HideTooltip() end)
+    b:SetScript("OnClick", function(self)
+        local c = owner.slotCounts and owner.slotCounts[self.slot]
+        if c and c.reason then return end
+        owner.slot, owner.chosen, owner.page = self.slot, nil, 1
+        owner:Refresh()
+    end)
+    return b
+end
+
+function M:DrawSlot(b)
+    local c = self.slotCounts and self.slotCounts[b.slot] or {}
+    local on = self.slot == b.slot
+    local off = c.reason ~= nil
+    b.glow:SetShown(on)
+    b.ring:SetVertexColor(UI.RGBA(on and "arcane" or (b.hover and not off) and "gilt" or off and "gilt-faint" or "gilt-line"))
+    b:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
+    b.art:SetDesaturated(off)
+    b.n:SetValue(off and "—" or ((c.have or 0) .. "/" .. (c.all or 0)))
+end
+
+-- A tile: a framed preview of you wearing only that piece (the game's
+-- appearance camera), its icon until the model has loaded.
+local function buildTile(parent, owner)
+    local b = CreateFrame("Button", nil, parent)
+    b.bg = b:CreateTexture(nil, "BACKGROUND", nil, -8)
+    b.bg:SetAllPoints()
+    b.bg:SetColorTexture(1, 1, 1, 1)
+    b.bg:SetGradient("VERTICAL", CreateColor(0.051, 0.043, 0.035, 1), CreateColor(0.102, 0.09, 0.075, 1))
+    b.model = CreateFrame("DressUpModel", nil, b)
+    b.model:SetPoint("TOPLEFT", 1, -1)
+    b.model:SetPoint("BOTTOMRIGHT", -1, 1)
+    b.model:SetScript("OnModelLoaded", function(m)
+        if b.loading then
+            b.loading = false
+            b.icon:Hide()
+            m:SetAlpha(1)
+            SuuUI.Motion.FadeIn(m, T.duration["dur-base"])
+        end
+    end)
+    b.dim = b:CreateTexture(nil, "OVERLAY", nil, 1)
+    b.dim:SetAllPoints()
+    b.dim:SetColorTexture(0, 0, 0, 0.45)
+    b.icon = b:CreateTexture(nil, "OVERLAY", nil, 2)
+    b.icon:SetSize(32, 32)
+    b.icon:SetPoint("CENTER")
+    b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    b.edge = UI.Border(b, "gilt-faint", { layer = "OVERLAY", sublevel = 3 })
+    b.worn = UI.Text(b, "micro", "gilt-text")
+    b.worn:SetPoint("BOTTOM", 0, 2)
+    b.worn:SetValue("Worn")
+    b.star = b:CreateTexture(nil, "OVERLAY", nil, 4)
+    b.star:SetTexture(GLYPHS .. "star.tga")
+    b.star:SetSize(11, 11)
+    b.star:SetPoint("TOPRIGHT", -2, -2)
+    b.star:SetVertexColor(UI.RGBA("gilt-text"))
+    b.jewel = UI.Diamond(b, 5, "gilt", "OVERLAY", 5)
+    b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, -4)
+    b:SetScript("OnEnter", function(self)
+        self.hover = true
+        owner:DrawTileState(self)
+        local e = self.entry
+        if not e then return end
+        UI.ShowTooltip(self, { title = e.name, titleColor = e.quality and e.quality ~= 1 and ("quality-" .. (QUALITY[e.quality] or "common")) or nil,
+            subtitle = e.worn and "Worn" or (e.collected and "Collected" or "Not collected"),
+            description = owner:SourceLine(e.source, "appearance", e.sourceType) })
+    end)
+    b:SetScript("OnLeave", function(self) self.hover = false; owner:DrawTileState(self); UI.HideTooltip() end)
+    b:SetScript("OnClick", function(self) owner:Choose(self.entry) end)
+    b:EnableMouseWheel(true)
+    b:SetScript("OnMouseWheel", function(_, delta) owner:Page(-delta) end)
+    return b
+end
+
+function M:DrawTileState(b)
+    local e = b.entry
+    if not e then return end
+    local chosen = self.chosen and self.chosen.id == e.id
+    b.edge:SetColor((chosen or b.hover) and "gilt" or e.worn and "gilt" or e.collected and "gilt-line" or "gilt-faint")
+    b.dim:SetShown(not e.collected and not b.hover)
+    b.jewel:SetShown(chosen)
+end
+
+-- One tile with its entry (or hidden).
+function M:DrawTile(b)
+    local e = b.entry
+    if not e then b:Hide() return end
+    b:Show()
+    b.worn:SetShown(e.worn)
+    b.star:SetShown(e.favourite and true or false)
+    if b.shownID ~= e.id then
+        b.shownID = e.id
+        b.loading = true
+        b.icon:SetTexture(e.icon)
+        b.icon:Show()
+        local m = b.model
+        m:SetAlpha(0)
+        call(m.SetUnit, m, "player")
+        call(m.Undress, m)
+        if e.camera and _G.Model_ApplyUICamera then pcall(_G.Model_ApplyUICamera, m, e.camera) end
+        call(m.TryOn, m, e.sourceID)
+        -- no answer in two seconds: shown anyway
+        local id = e.id
+        C_Timer.After(2, function()
+            if b.shownID == id and b.loading then
+                b.loading = false
+                b.icon:Hide()
+                m:SetAlpha(1)
+            end
+        end)
+    end
+    self:DrawTileState(b)
+end
+
+function M:LayoutTiles()
+    local grid = self.strip.tileGrid
+    local w, h = grid:GetWidth(), grid:GetHeight()
+    if not (w and h) or w <= 0 or isSecret(w) or isSecret(h) then return end
+    local gap = S["space-4"]
+    local tw = (w - (TILES - 1) * gap) / TILES
+    for i, b in ipairs(self.strip.tiles) do
+        b:ClearAllPoints()
+        b:SetSize(tw, h - 6)
+        b:SetPoint("TOPLEFT", (i - 1) * (tw + gap), 0)
+    end
+end
+
+function M:BuildWardrobe()
+    local stage, strip = self.stage, self.strip
+    local w = CreateFrame("Frame", nil, stage)
+    w:SetAllPoints()
+    w:SetFrameLevel(stage:GetFrameLevel() + 2)
+    w:Hide()
+    self.wardrobe = w
+    -- you, between the two columns of slots
+    local doll = CreateFrame("DressUpModel", nil, w)
+    doll:SetPoint("TOPLEFT", DOLL_L + 40, -S["space-4"])
+    doll:SetPoint("BOTTOMRIGHT", -(DOLL_R + 40), S["space-4"])
+    doll:EnableMouse(true)
+    doll:EnableMouseWheel(true)
+    doll:SetScript("OnMouseDown", function(m, button) if button == "LeftButton" then m.dragX = GetCursorPosition() end end)
+    doll:SetScript("OnMouseUp", function(m) m.dragX = nil end)
+    doll:SetScript("OnUpdate", function(m)
+        if not m.dragX then return end
+        local x = GetCursorPosition()
+        local delta = (x - m.dragX) / (m:GetEffectiveScale() * 100)
+        m.dragX = x
+        if delta ~= 0 then call(m.SetFacing, m, (call(m.GetFacing, m) or 0) + delta) end
+    end)
+    doll:SetScript("OnMouseWheel", function(_, delta) self:Zoom(-delta) end)
+    w.doll = doll
+    -- the slots
+    w.slots = {}
+    local function column(list, x, fromRight)
+        local top, bottom = S["space-6"], S["space-6"] + 14
+        local span = stage:GetHeight() > 0 and stage:GetHeight() or 410
+        local step = (span - top - bottom - SLOT) / (#list - 1)
+        for i, slot in ipairs(list) do
+            local b = buildSlot(w, self, slot)
+            if fromRight then b:SetPoint("TOPRIGHT", w, "TOPRIGHT", -x, -(top + (i - 1) * step))
+            else b:SetPoint("TOPLEFT", w, "TOPLEFT", x, -(top + (i - 1) * step)) end
+            w.slots[#w.slots + 1] = b
+        end
+    end
+    column(SLOTS_L, DOLL_L, false)
+    column(SLOTS_R, DOLL_R, true)
+    -- the class and the weapon kind
+    w.class = UI.Select(w, { options = classes(), value = select(3, UnitClass("player")), width = 140,
+        onChange = function(id)
+            call(C_TransmogCollection.SetClassFilter, id)
+            self.weaponKind, self.chosen, self.page, self.slotCounts = {}, nil, 1, nil
+            self:Refresh()
+        end })
+    w.class:SetPoint("TOPRIGHT", -S["space-6"], -S["space-6"])
+    w.class:SetFrameLevel(w:GetFrameLevel() + 10)
+    w.kind = UI.Select(w, { options = {}, width = 180, onChange = function(cat)
+        local def = slotDef(self.slot)
+        self.weaponKind = self.weaponKind or {}
+        if def and def.weapon then self.weaponKind[def.weapon] = cat end
+        self.chosen, self.page = nil, 1
+        self:Refresh()
+    end })
+    w.kind:SetPoint("TOPRIGHT", w.class, "BOTTOMRIGHT", 0, -S["space-3"])
+    w.kind:SetFrameLevel(w:GetFrameLevel() + 10)
+    -- bottom right: the star and Undress
+    w.star = roundButton(w, "star", function(b) return b.on and "Remove from favourites" or "Add to favourites" end,
+        function() self:ToggleFavourite() end)
+    w.star:SetFrameLevel(w:GetFrameLevel() + 10)
+    w.undress = UI.Button(w, { text = "Undress", icon = "reset", width = 110, onClick = function()
+        call(doll.Dress, doll)
+        self.tried = nil
+    end })
+    w.undress.tooltip = { title = "Undress", description = "Back to what you wear." }
+    w.undress:SetPoint("BOTTOMRIGHT", -S["space-6"], S["space-6"])
+    w.undress:SetFrameLevel(w:GetFrameLevel() + 10)
+    w.star:SetPoint("RIGHT", w.undress, "LEFT", -S["space-4"], 0)
+    -- the strip's tiles, in the cells' place
+    local grid = CreateFrame("Frame", nil, strip)
+    grid:SetPoint("TOPLEFT", strip.grid, "TOPLEFT")
+    grid:SetPoint("BOTTOMRIGHT", strip.grid, "BOTTOMRIGHT")
+    grid:Hide()
+    strip.tileGrid = grid
+    strip.tiles = {}
+    for i = 1, TILES do strip.tiles[i] = buildTile(grid, self) end
+    grid:HookScript("OnSizeChanged", function() self:LayoutTiles() end)
+    -- the tools' title (the slot and kind)
+    self.tools.title = UI.Text(self.tools, "header", "gilt-text")
+    self.tools.title:SetPoint("LEFT")
+end
+
+-- The slot's appearances (the chosen weapon kind for a weapon slot).
+function M:WardrobeEntries()
+    local def = slotDef(self.slot) or slotDef("CHESTSLOT")
+    local cat, kindName = def.category, nil
+    if def.weapon then
+        local kinds = self:WeaponKinds(def.weapon)
+        self.weaponKind = self.weaponKind or {}
+        local chosen = self.weaponKind[def.weapon]
+        local found
+        for _, k in ipairs(kinds) do if k.category == chosen then found = k end end
+        found = found or kinds[1]
+        cat, kindName = found and found.category, found and found.name
+        self.kinds = kinds
+        if found then self.weaponKind[def.weapon] = found.category end
+    end
+    self.slotTitle = def.label .. (kindName and (" · " .. kindName) or "")
+    if not cat then return {} end
+    return self:Appearances(cat, def.slot)
+end
+
+-- The stage for Appearances: the doll, the slots, the picks, the card.
+function M:DrawWardrobe()
+    local w, e = self.wardrobe, self.chosen
+    if not self.slotCounts then
+        local _, file = UnitClass("player")
+        local className = w.class.value and GetClassInfo and call(GetClassInfo, w.class.value)
+        self.slotCounts = self:SlotCounts(className and (className .. "s"))
+    end
+    for _, b in ipairs(w.slots) do self:DrawSlot(b) end
+    local def = slotDef(self.slot)
+    local weapon = def and def.weapon
+    w.kind:SetShown(weapon and true or false)
+    if weapon then
+        local opts = {}
+        for _, k in ipairs(self.kinds or {}) do opts[#opts + 1] = { value = k.category, label = k.name } end
+        w.kind:SetOptions(opts)
+        w.kind:SetValue(self.weaponKind and self.weaponKind[weapon])
+    end
+    if not w.doll.dressed then
+        w.doll.dressed = true
+        call(w.doll.SetUnit, w.doll, "player")
+    end
+    self.card:SetShown(e ~= nil)
+    w.star:SetShown(e ~= nil)
+    if e then
+        self:DrawCard(self.card, e, e.worn and "Worn" or nil)
+        if e.quality and e.quality ~= 1 then self.card.name:SetColor("quality-" .. (QUALITY[e.quality] or "common")) end
+        w.star.on = e.favourite and true or false
+        w.star:Draw(false)
+        if self.tried ~= e.sourceID then
+            self.tried = e.sourceID
+            call(w.doll.TryOn, w.doll, e.sourceID)
+        end
+    end
 end
