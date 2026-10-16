@@ -127,6 +127,30 @@ function M:Build()
             self:Refresh()
         end })
     self.tabs:SetPoint("TOPLEFT")
+    -- the two tabs share the list's width (by their labels' widths; a long
+    -- name gets the short labels)
+    local function fit(labels)
+        local inner = LIST_W - 6 - 2
+        local text = 0
+        for i, b in ipairs(self.tabs.buttons) do
+            b.label:SetValue(labels[i])
+            text = text + UI.MeasureText("label", labels[i])
+        end
+        local pad = (inner - text) / #self.tabs.buttons
+        if pad < 2 * S["space-3"] then return false end
+        local x = 3
+        for i, b in ipairs(self.tabs.buttons) do
+            b:SetWidth(UI.MeasureText("label", labels[i]) + pad)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", x, -3)
+            x = x + b:GetWidth() + 2
+        end
+        return true
+    end
+    if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
+        fit({ "General", "Character" })
+    end
+    self.tabs:SetWidth(LIST_W)
     self.count = UI.Text(left, "caption", "ink-muted")
     self.count:SetPoint("TOPLEFT", self.tabs, "BOTTOMLEFT", 0, -S["space-3"])
     local BAR = S["space-3"]
@@ -183,9 +207,11 @@ function M:Build()
     self.nameCount = UI.Text(id, "numeric", "ink-muted")
     self.nameCount:SetPoint("TOPRIGHT", 0, 1)
     self.iconButton = UI.Button(id, { text = "Change icon", icon = "gem", onClick = function() self:TogglePicker() end })
-    self.iconButton:SetPoint("TOPRIGHT", 0, -(T.type.caption.lineHeight + S["space-2"]))
+    -- the field and Change icon on one line, under the label
+    local fieldY = -(T.type.caption.lineHeight + S["space-2"])
+    self.iconButton:SetPoint("TOPRIGHT", 0, fieldY)
     self.name = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
-    self.name:SetPoint("TOPLEFT", nameLabel, "BOTTOMLEFT", 0, -S["space-2"])
+    self.name:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], fieldY)
     self.name:SetPoint("RIGHT", self.iconButton, "LEFT", -S["space-4"], 0)
     self.name.edit:SetMaxLetters(NAME_MAX)
     -- the body
