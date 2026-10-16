@@ -84,10 +84,10 @@ end
 -- fills its groups in order, and what doesn't fit is cut off.
 local AURA_GROUPS = {
     { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
-    { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE" }, max = 2 },
-    -- (one the game marks external and big defensive at once showed twice,
-    -- once in each: Rock Skin; found in game)
-    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE", "!EXTERNAL_DEFENSIVE" }, max = 2 },
+    -- (external leaves out what defensive shows: one the game marks both
+    -- would show twice, once in each)
+    { key = "external", filter = { "HELPFUL", "EXTERNAL_DEFENSIVE", "!BIG_DEFENSIVE" }, max = 2 },
+    { key = "defensive", filter = { "HELPFUL", "BIG_DEFENSIVE" }, max = 2 },
     -- buffs come only through buff indicators (you pick them): the game's
     -- "raid" buffs include Mark of the Wild and the like
     { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, max = 4, dispel = true },
