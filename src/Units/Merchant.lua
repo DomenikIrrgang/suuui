@@ -251,11 +251,15 @@ function M:DrawGoodsRow(r, e)
         r.money:SetCopper(e.price)
     end
     r.qty:SetShown(not e.known)
-    if not r.qty.edit:HasFocus() then r.qty:SetValue(tostring(r.qtyFor == e.index and r.qtyValue or e.stack)) end
-    r.qtyFor = e.index
+    -- the quantity typed for this item at this vendor, else one purchase
+    local key = e.link or e.name
+    if r.qtyFor ~= key or not r.qty.edit:HasFocus() then
+        r.qty:SetValue(tostring(self.qty[key] or e.stack))
+    end
+    r.qtyFor = key
     local function refreshNote()
         local qty = tonumber(r.qty.edit:GetText()) or e.stack
-        r.qtyValue = qty
+        if qty ~= e.stack then self.qty[key] = qty else self.qty[key] = nil end
         local purchases, _, note = plan(e, qty)
         local parts = {}
         if e.stock >= 0 then parts[#parts + 1] = amber(e.stock .. " left") end
@@ -300,22 +304,39 @@ function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMerchantWindow", title = "Merchant", width = WIDTH, height = HEIGHT,
         footer = true, onClose = function(win) win:Hide() end,
         tabs = { { key = "buy", label = "Merchant" }, { key = "buyback", label = "Buy back" } },
-        onTab = function(key) self.tab = key; self:Refresh() end })
+        onTab = function(key)
+            self.tab = key
+            if self.list then self.list:SetVerticalScroll(0) end
+            self:Refresh()
+        end })
     w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
     w:Hide()
     w:HookScript("OnHide", function()
         if self.open then CloseMerchant() end
     end)
     self.window = w
-    local c = w.content
+    -- the tools stay on top; only the list under them scrolls (with a bar)
+    w.scroll:Hide()
+    local tools = CreateFrame("Frame", nil, w.body)
+    tools:SetPoint("TOPLEFT")
+    tools:SetPoint("TOPRIGHT")
+    tools:SetHeight(30)
+    self.tools = tools
+    local BAR = S["space-3"]
+    self.list = UI.ScrollArea(w.body, BAR)
+    self.list:SetPoint("BOTTOMLEFT")
+    self.list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
+    local c = self.list.child
+    self.list:HookScript("OnSizeChanged", function(scroll, width) c:SetWidth(width) end)
+    self.content = c
     -- the tools: a search over the goods, the game's filter
-    self.search = UI.TextField(c, { width = 240, placeholder = "Search", onTextChanged = function() self:Refresh() end })
+    self.search = UI.TextField(tools, { width = 240, placeholder = "Search", onTextChanged = function() self:Refresh() end })
     self.search:SetPoint("TOPLEFT")
     local options = {}
     if LE_LOOT_FILTER_ALL then options[#options + 1] = { value = LE_LOOT_FILTER_ALL, label = "All items" } end
     if LE_LOOT_FILTER_CLASS then options[#options + 1] = { value = LE_LOOT_FILTER_CLASS, label = "Your class" } end
     if LE_LOOT_FILTER_BOE then options[#options + 1] = { value = LE_LOOT_FILTER_BOE, label = "Bind on equip" } end
-    self.filter = UI.Select(c, { width = 160, options = options, onChange = function(v)
+    self.filter = UI.Select(tools, { width = 160, options = options, onChange = function(v)
         call(SetMerchantFilter, v)
         self:Refresh()
     end })
@@ -343,9 +364,9 @@ function M:Build()
     self.junk = UI.Button(f, { text = "Sell junk", onClick = function() self:SellJunk() end })
 end
 
--- Keeps n rows in the content, positioned from y; returns them.
+-- Keeps n rows in the list, positioned from y; returns them.
 function M:Rows(n, y)
-    local c = self.window.content
+    local c = self.content
     for i = 1, math.max(n, #self.rows) do
         local r = self.rows[i]
         if i <= n then
@@ -368,14 +389,17 @@ end
 function M:Refresh()
     local w = self.window
     if not (w and w:IsShown() and self.open) then return end
-    local c = w.content
+    local c = self.content
     local name = UnitName("npc")
     w:SetTitle(plain(name) and name or "Merchant")
     local buy = (self.tab or "buy") == "buy"
-    self.search:SetShown(buy)
-    self.filter:SetShown(buy and self.hasFilter)
+    self.tools:SetShown(buy)
+    self.filter:SetShown(self.hasFilter)
     if buy then self.filter:SetValue(call(GetMerchantFilter)) end
-    local y = buy and (30 + S["space-4"]) or 0
+    self.list:ClearAllPoints()
+    self.list:SetPoint("TOPLEFT", 0, buy and -(30 + S["space-4"]) or 0)
+    self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    local y = 0
     self.lastLabel:Hide()
     self.lastRule:Hide()
     self.lastRow:Hide()
@@ -541,9 +565,11 @@ function M:Away(frame)
 end
 
 function M:OnEnable()
+    self.qty = {}
     if not self.window then self:Build() end
     self:OnGameEvent("MERCHANT_SHOW", function()
         self.open = true
+        self.qty = {} -- quantities start over at every vendor
         self:Away(MerchantFrame)
         call(ResetSetMerchantFilter)
         self.search:SetValue("")
