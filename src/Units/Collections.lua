@@ -326,10 +326,19 @@ local CARD_W, SHADE_W = 270, 340
 -- from the stage's top, is MODEL_H high so the middle of a mount that high
 -- sits half its height above the floor glow: its feet stand there. Centred
 -- on the stage, the card over its left.
--- RAISE: measured in game, a Battlestrider's feet 35px below the floor
--- shadow and a horse's 20px above it at 35 (the game centres each mount by
--- its whole size): 25 splits the two.
-local FLOOR, MODEL_W, MODEL_H, RAISE = 40, 440, 470, 25
+-- The game centres each mount by its whole size, so where the feet show
+-- differs per mount (seen in game: some stood on the floor shadow, some
+-- floated). The frame's camera says where it stands and aims relative to
+-- the model, whose origin is the ground under it: how far below the
+-- frame's middle that shows follows from it, times FEET_K * the frame's
+-- width (calibrated with /suu probe mountframe in a 440 by 470 frame: a
+-- Swift Stormsaber's 165px). Each mount is lifted by the frame's own
+-- SetPosition until it shows FEET_BELOW under the middle (the camera and
+-- the model's size untouched: tested with /suu probe mountframe place, the
+-- feet of every mount within about 20px), and the frame sits so that point
+-- is FEET_Y above the stage's bottom, the floor shadow's middle.
+local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
+local FEET_K, FEET_Y, FEET_BELOW = 2.739, 72, 165
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -635,7 +644,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("TOP", 0, RAISE)
+    model:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y + FEET_BELOW - MODEL_H / 2)
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
@@ -875,11 +884,55 @@ function M:ShowMount(e)
     C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
 end
 
+-- how far below the frame's middle the ground under the model shows, with
+-- the camera at P aiming at T and the model lifted by `lift`
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function norm(x, y, z)
+    local l = math.sqrt(x * x + y * y + z * z)
+    if l == 0 then return nil end
+    return { x / l, y / l, z / l }
+end
+local function groundBelow(P, T, lift)
+    local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
+    if not f then return nil end
+    local right = norm(f[2], -f[1], 0)
+    if not right then return nil end
+    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
+    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    local r = { -P[1], -P[2], lift - P[3] }
+    local depth = dot(r, f)
+    if depth <= 0 then return nil end
+    return -FEET_K * MODEL_W * dot(r, u) / depth
+end
+
+-- The mount lifted so the ground under it shows FEET_BELOW under the
+-- frame's middle (on the floor shadow). Nothing when the camera can't be read.
+function M:PlaceModel()
+    local m = self.model
+    if not m then return end
+    local px, py, pz = call(m.GetCameraPosition, m)
+    local tx, ty, tz = call(m.GetCameraTarget, m)
+    for _, v in ipairs({ px, py, pz, tx, ty, tz }) do
+        if type(v) ~= "number" or isSecret(v) then return end
+    end
+    local P, T = { px, py, pz }, { tx, ty, tz }
+    if not groundBelow(P, T, 0) then return end
+    local lo, hi = -3, 3
+    for _ = 1, 40 do
+        local mid = (lo + hi) / 2
+        local b = groundBelow(P, T, mid)
+        if not b then return end
+        if b > FEET_BELOW then lo = mid else hi = mid end
+    end
+    call(m.SetPosition, m, 0, 0, (lo + hi) / 2)
+end
+
 function M:ModelLoaded()
     local model = self.model
     if not (model and self.waiting) then return end
     self.waiting = nil
     call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
+    self:PlaceModel()
     self.stage.loading:Hide()
     model:SetAlpha(1)
     SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
