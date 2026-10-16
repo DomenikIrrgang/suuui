@@ -322,6 +322,10 @@ local CARD_W, SHADE_W = 270, 340
 -- scene's own edge cut them); FLOOR is where the floor glow sits.
 local FLOOR = 40
 local ZOOM_OUT = 1.45
+-- the camera's aim lowered by this share of its distance, so the mount
+-- stands in the stage's middle (the game aims high on it: in a stage this
+-- wide it stood low, half under the edge; seen in game)
+local LIFT = 0.12
 local TOOLS_H = 30
 local STRIP_H = CELL * ROWS + S["space-5"] + 8
 local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -845,10 +849,7 @@ function M:ShowMount(e)
         tries = tries + 1
         local loaded = call(actor.IsLoaded, actor)
         if loaded or tries > 40 then
-            -- a little further out than the game's framing: the whole mount
-            local cam = call(scene.GetActiveCamera, scene)
-            local d = cam and call(cam.GetZoomDistance, cam)
-            if d then call(cam.SetZoomDistance, cam, d * ZOOM_OUT) end
+            self:FrameMount()
             stage.loading:Hide()
             scene:SetAlpha(1)
             SuuUI.Motion.FadeIn(scene, T.duration["dur-base"])
@@ -857,6 +858,20 @@ function M:ShowMount(e)
         end
     end
     check()
+end
+
+-- Further out than the game's framing (its scene starts at the farthest
+-- zoom it allows, so that limit goes out too), aimed lower, snapped there.
+function M:FrameMount()
+    local cam = self.scene and call(self.scene.GetActiveCamera, self.scene)
+    if not cam then return end
+    local d, far = call(cam.GetZoomDistance, cam), call(cam.GetMaxZoomDistance, cam)
+    if not (d and far) then return end
+    call(cam.SetMaxZoomDistance, cam, far * ZOOM_OUT)
+    call(cam.SetZoomDistance, cam, d * ZOOM_OUT)
+    local x, y, z = call(cam.GetTarget, cam)
+    if x and y and z then call(cam.SetTarget, cam, x, y, z - d * LIFT) end
+    call(cam.SnapAllInterpolatedValues, cam)
 end
 
 function M:Turn(dir)
