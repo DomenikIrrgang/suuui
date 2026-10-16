@@ -60,32 +60,45 @@ local function line(section, text)
     table.insert(out[section], text)
 end
 
--- Every toy: the filter shows the ones you lack too, for this read only.
+-- Every toy: the filter shows the ones you lack too, and the list is read
+-- once the game has refiltered (TOYS_UPDATED, or a second). The first run
+-- left "uncollected" off (the game applies filter changes a moment later,
+-- so the read-back saw the old value): it ends on, as it was before.
 local function toys()
     local TB = C_ToyBox
     if not TB then line("toys", "C_ToyBox missing") return end
-    local was = { collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown), unusable = raw(TB.GetUnusableShown) }
-    line("toys", "filters before " .. show(was) .. ", filtered " .. call(TB.GetNumFilteredToys))
+    line("toys", "filters now " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
+        unusable = raw(TB.GetUnusableShown) }) .. ", filtered " .. call(TB.GetNumFilteredToys))
     pcall(TB.SetCollectedShown, true)
     pcall(TB.SetUncollectedShown, true)
     pcall(TB.SetUnusableShown, true)
     pcall(TB.SetAllSourceTypeFilters, true)
     pcall(TB.SetFilterString, "")
     pcall(TB.ForceToyRefilter)
-    local n = raw(TB.GetNumFilteredToys) or 0
-    line("toys", "filtered with everything shown: " .. n)
-    for i = 1, math.min(n, 25) do
-        local itemID = raw(TB.GetToyFromIndex, i)
-        line("toys", ("%d: %s info %s has %s fav %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID),
-            call(TB.GetIsFavorite, itemID)))
+    local done = false
+    local f = CreateFrame("Frame")
+    local function read(why)
+        if done then return end
+        done = true
+        f:UnregisterAllEvents()
+        local n = raw(TB.GetNumFilteredToys) or 0
+        line("toys", ("(%s) filtered with everything shown: %d"):format(why, n))
+        for i = 1, math.min(n, 25) do
+            local itemID = raw(TB.GetToyFromIndex, i)
+            local data = itemID and C_TooltipInfo and raw(C_TooltipInfo.GetToyByItemID, itemID)
+            local texts = {}
+            for _, l in ipairs(data and data.lines or {}) do
+                if l.leftText and not isSecret(l.leftText) then texts[#texts + 1] = l.leftText end
+            end
+            line("toys", ("%d: %s info %s has %s | %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID),
+                table.concat(texts, " / "):sub(1, 240)))
+        end
+        line("toys", "filters left at " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
+            unusable = raw(TB.GetUnusableShown) }))
     end
-    -- put the game's filters back as they were
-    if was.collected ~= nil then pcall(TB.SetCollectedShown, was.collected) end
-    if was.uncollected ~= nil then pcall(TB.SetUncollectedShown, was.uncollected) end
-    if was.unusable ~= nil then pcall(TB.SetUnusableShown, was.unusable) end
-    pcall(TB.ForceToyRefilter)
-    line("toys", "filters after " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
-        unusable = raw(TB.GetUnusableShown) }))
+    pcall(f.RegisterEvent, f, "TOYS_UPDATED")
+    f:SetScript("OnEvent", function() C_Timer.After(0.2, function() read("event") end) end)
+    C_Timer.After(1.5, function() read("timeout") end)
 end
 
 local function sources()
@@ -106,24 +119,6 @@ local function sources()
         if source and source ~= "" then withText = withText + 1 end
     end
     line("sources", ("%d of %d mounts have a source text"):format(withText, #ids))
-    -- a toy's tooltip (the first three toys, owned or not)
-    local TB = C_ToyBox
-    if TB and C_TooltipInfo and C_TooltipInfo.GetToyByItemID then
-        local was = raw(TB.GetUncollectedShown)
-        pcall(TB.SetUncollectedShown, true)
-        pcall(TB.ForceToyRefilter)
-        for i = 1, math.min(3, raw(TB.GetNumFilteredToys) or 0) do
-            local itemID = raw(TB.GetToyFromIndex, i)
-            local data = itemID and raw(C_TooltipInfo.GetToyByItemID, itemID)
-            local texts = {}
-            for _, l in ipairs(data and data.lines or {}) do
-                if l.leftText and not isSecret(l.leftText) then texts[#texts + 1] = l.leftText end
-            end
-            line("sources", ("toy %s: %s"):format(tostring(itemID), table.concat(texts, " / "):sub(1, 300)))
-        end
-        if was ~= nil then pcall(TB.SetUncollectedShown, was) end
-        pcall(TB.ForceToyRefilter)
-    end
     -- an appearance you lack: its source type and drops
     local found = 0
     for _, cat in ipairs({ 4, 10, 14 }) do
@@ -206,18 +201,24 @@ local function tiles()
         end
         pcall(m.SetUnit, m, "player")
         pcall(m.Undress, m)
-        local camOK = a.camera and m.ApplyUICamera and pcall(m.ApplyUICamera, m, a.camera)
+        local apply = m.ApplyUICamera or _G.Model_ApplyUICamera
+        local camOK = a.camera and apply and pcall(apply, m, a.camera)
         a.camOK = camOK and true or false
         pcall(m.TryOn, m, a.source)
         m:Show()
     end
     local built = debugprofilestop() - t0
     line("tiles", ("built %d previews in %.1f ms; frame rate before %.0f"):format(#list, built, fpsBefore))
-    line("tiles", ("ApplyUICamera there: %s; cameras used %s"):format(tostring(p.tiles[1] and p.tiles[1].ApplyUICamera ~= nil),
-        tostring(list[1] and list[1].camOK)))
+    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(p.tiles[1] and p.tiles[1].ApplyUICamera ~= nil),
+        tostring(_G.Model_ApplyUICamera ~= nil), tostring(list[1] and list[1].camOK)))
     -- a mount in a ModelScene, framed by its own scene
     local ids = raw(C_MountJournal.GetMountIDs) or {}
-    local id = ids[1]
+    local id, hidden = nil, 0
+    for _, mid in ipairs(ids) do
+        local _, _, _, _, _, _, _, _, _, hide = raw(C_MountJournal.GetMountInfoByID, mid)
+        if hide then hidden = hidden + 1 elseif not id then id = mid end
+    end
+    line("scene", ("%d of %d mounts hidden for this character"):format(hidden, #ids))
     if id and not p.scene then
         local ok, scene = pcall(CreateFrame, "ModelScene", nil, p.body, "ModelSceneMixinTemplate")
         line("scene", "ModelScene with ModelSceneMixinTemplate: " .. (ok and "made" or ("error " .. tostring(scene))))
