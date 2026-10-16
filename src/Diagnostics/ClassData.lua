@@ -126,10 +126,8 @@ function CD.ReadTrainer()
         d.trainerError = "no trainer API"
         return 0, 0
     end
-    -- every service, not only what you can learn now
-    if SetTrainerServiceTypeFilter then
-        for _, kind in ipairs({ "available", "unavailable", "used" }) do pcall(SetTrainerServiceTypeFilter, kind, 1) end
-    end
+    -- every service, not only what you can learn now (onTrainer switched
+    -- the filters on and waited for the game to apply them)
     if ExpandTrainerSkillLine then pcall(ExpandTrainerSkillLine, 0) end
     local spells, maxLevel = {}, 0
     local n = call(GetNumTrainerServices) or 0
@@ -164,13 +162,38 @@ function CD.ReadTrainer()
     return #spells, maxLevel
 end
 
+-- Every service shows only once the game applied the filters: switch them
+-- all on, then read on its next TRAINER_UPDATE (or after two seconds). Read
+-- at once, the list lacked what you already know (Used was off a moment ago).
+local function allFilters()
+    local changed = false
+    if SetTrainerServiceTypeFilter then
+        for _, kind in ipairs({ "available", "unavailable", "used" }) do
+            if GetTrainerServiceTypeFilter and not GetTrainerServiceTypeFilter(kind) then changed = true end
+            pcall(SetTrainerServiceTypeFilter, kind, true)
+        end
+    end
+    return changed
+end
+
 local function onTrainer()
     if not listening then return end
-    C_Timer.After(0.2, function()
+    local waited = false
+    local function read()
+        if waited then return end
+        waited = true
         local count, maxLevel = CD.ReadTrainer()
         ns.Print(("Class data: the trainer lists %d spells, up to level %d. /reload to save."):format(count, maxLevel))
         if count > 0 and maxLevel < 50 then
             ns.Print("Class data: this trainer stops early; a city trainer may list the rest.")
+        end
+    end
+    C_Timer.After(0.2, function()
+        if allFilters() then
+            Events.OnGame("TRAINER_UPDATE", function() C_Timer.After(0.2, read) end, CD)
+            C_Timer.After(2, read)
+        else
+            read()
         end
     end)
 end
