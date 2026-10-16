@@ -11,6 +11,7 @@
 --         only out of combat). The Legacy window opens in the middle of the
 --         screen instead (asked for in game), like SuuUI's Talents window.
 --   3.3:  the professions window (ProfessionsFrame), in the middle too.
+--   3.6:  the trainer window (ClassTrainerFrame), under the micro menu.
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -1046,7 +1047,41 @@ function M:SkinWorldMap()
     self.worldMap = chrome
 end
 
+--------------------------------------------------------------------------------
+-- The trainer window (3.6): restyled in place, the game's list and Train
+-- (Blizzard_TrainerUI, loaded on demand); the trainer's name in the title.
+--------------------------------------------------------------------------------
+
+function M:SkinTrainer()
+    local f = _G.ClassTrainerFrame
+    if not f or f.suuChrome then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Trainer", icon = "book", close = _G.ClassTrainerFrameCloseButton, topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks,
+                 _G.ClassTrainerFrameInset and _G.ClassTrainerFrameInset.NineSlice, _G.ClassTrainerFrameInsetBg,
+                 _G.ClassTrainerFrameMoneyBg, _G.ClassTrainerFrameBottomInset },
+    })
+    -- the frame's own art away (SuuUI's glass stays)
+    for _, region in ipairs({ f:GetRegions() }) do
+        if region ~= chrome.bg and region.GetObjectType and region:GetObjectType() == "Texture" then region:SetAlpha(0) end
+    end
+    if f.ScrollBox then UI.ReskinScrollBox(f.ScrollBox) end
+    if f.ScrollBar then UI.ReskinScrollBar(f.ScrollBar) end
+    if _G.ClassTrainerStatusBar then UI.ReskinStatusBar(_G.ClassTrainerStatusBar) end
+    if f.FilterDropdown then UI.ReskinDropdown(f.FilterDropdown) end
+    if _G.ClassTrainerTrainButton then UI.ReskinButton(_G.ClassTrainerTrainButton) end
+    local function title()
+        local name = UnitName("npc")
+        if type(name) == "string" and name ~= "" then chrome:SetTitle(name) end
+        UI.Reskin(f)
+    end
+    f:HookScript("OnShow", function() C_Timer.After(0, title) end)
+    if f:IsShown() then title() end
+    self.trainer = chrome
+end
+
 function M:SkinAll()
+    self:SkinTrainer()
     self:SkinSpells()
     self:SkinLegacy()
     self:SkinProfessions()
