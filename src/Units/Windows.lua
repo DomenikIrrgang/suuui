@@ -524,6 +524,11 @@ end
 -- game's), its × a glyph (the reskin had made it a button: a bare square).
 local function styleQuestSearch(sb)
     sb:SetHeight(SEARCH_H)
+    -- (Forever sets it to 200 x 20 on every count update; its width is
+    -- SuuUI's anchors')
+    if _G.QuestLogQuests_ShowQuestCount then
+        hooksecurefunc("QuestLogQuests_ShowQuestCount", function() sb:SetHeight(SEARCH_H) end)
+    end
     local icon = sb.searchIcon or sb.SearchIcon
     if icon then
         icon:SetTexture(GLYPHS .. "search.tga")
