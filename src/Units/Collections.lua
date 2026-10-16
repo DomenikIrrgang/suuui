@@ -331,11 +331,15 @@ local CARD_W, SHADE_W = 270, 340
 -- floated). The frame's camera says where it stands and aims relative to
 -- the model, whose feet are its origin: how far below the frame's middle
 -- the feet show follows from that, times FEET_K * the frame's width
--- (measured with /suu probe mountframe: a Swift Stormsaber's feet 165px
--- below the middle of a 440-wide frame). The frame then moves so the feet
--- stand FEET_Y above the stage's bottom, in the floor shadow's middle.
+-- (measured with /suu probe mountframe in a 440 by 470 frame: a Swift
+-- Stormsaber's feet 165px below the middle). The game sizes the model by
+-- the frame's larger side (seen in game: a taller frame drew it bigger),
+-- so the frame keeps that size; the camera and its aim move down together
+-- until the feet show FEET_BELOW under the middle, the model's size
+-- unchanged, and the frame sits so that is FEET_Y above the stage's
+-- bottom, in the floor shadow's middle.
 local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
-local FEET_K, FEET_Y = 2.739, 72
+local FEET_K, FEET_Y, FEET_BELOW = 2.739, 72, 165
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -641,7 +645,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("TOP")
+    model:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y + FEET_BELOW - MODEL_H / 2)
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
@@ -871,7 +875,11 @@ function M:ShowMount(e)
     stage.loading.icon:SetTexture(e.icon)
     stage.loading:Show()
     call(model.ClearModel, model)
+    self.camera = nil
+    -- the game's own camera again (the last mount's was SuuUI's), fitted to this one
+    call(model.SetCamera, model, 0)
     call(model.SetDisplayInfo, model, e.display or 0)
+    call(model.RefreshCamera, model)
     self.camScale = CAM_SCALE
     call(model.SetCamDistanceScale, model, self.camScale)
     call(model.SetPosition, model, 0, 0, 0)
@@ -881,9 +889,9 @@ function M:ShowMount(e)
     C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
 end
 
--- The frame moved so the mount's feet stand in the floor shadow (see
--- FEET_K). Nothing when the camera can't be read.
-local function sub(a, b) return a[1] - b[1], a[2] - b[2], a[3] - b[3] end
+-- The mount's feet in the floor shadow (see FEET_K): the camera and its
+-- aim moved down together until the feet show FEET_BELOW under the frame's
+-- middle. Nothing when the camera can't be read.
 local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
 local function norm(x, y, z)
     local l = math.sqrt(x * x + y * y + z * z)
@@ -891,32 +899,43 @@ local function norm(x, y, z)
     return { x / l, y / l, z / l }
 end
 
+-- how far below the frame's middle the model's origin shows, camera at P aiming at T
+local function feetBelow(P, T)
+    local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
+    if not f then return nil end
+    local right = norm(f[2], -f[1], 0)
+    if not right then return nil end
+    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
+    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    local r = { -P[1], -P[2], -P[3] }
+    local depth = dot(r, f)
+    if depth <= 0 then return nil end
+    return -FEET_K * MODEL_W * dot(r, u) / depth
+end
+
 function M:PlaceModel()
-    local m, stage = self.model, self.stage
+    local m = self.model
     if not m then return end
     local px, py, pz = call(m.GetCameraPosition, m)
     local tx, ty, tz = call(m.GetCameraTarget, m)
     for _, v in ipairs({ px, py, pz, tx, ty, tz }) do
         if type(v) ~= "number" or isSecret(v) then return end
     end
-    local P, T = { px, py, pz }, { tx, ty, tz }
-    local f = norm(sub(T, P))
-    if not f then return end
-    -- up on the screen: the world's up, square to where the camera looks
-    local right = norm(f[2] * 1 - f[3] * 0, f[3] * 0 - f[1] * 1, 0)
-    if not right then return end
-    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
-    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
-    local r = { -px, -py, -pz }
-    local depth = dot(r, f)
-    if depth <= 0 then return end
-    local below = -FEET_K * MODEL_W * dot(r, u) / depth
-    -- tall enough that the feet stay inside the frame (it cuts the model at
-    -- its edges; its height doesn't change the model's size)
-    local h = math.max(MODEL_H, 2 * (below + 40))
-    m:SetHeight(h)
-    m:ClearAllPoints()
-    m:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y + below - h / 2)
+    local function at(dz) return feetBelow({ px, py, pz - dz }, { tx, ty, tz - dz }) end
+    if not at(0) then return end
+    -- moving both down raises the model in the frame: the feet come up
+    local lo, hi = -3, 3
+    for _ = 1, 40 do
+        local mid = (lo + hi) / 2
+        local b = at(mid)
+        if not b then return end
+        if b > FEET_BELOW then lo = mid else hi = mid end
+    end
+    local dz = (lo + hi) / 2
+    call(m.MakeCurrentCameraCustom, m)
+    call(m.SetCameraPosition, m, px, py, pz - dz)
+    call(m.SetCameraTarget, m, tx, ty, tz - dz)
+    self.camera = { px, py, pz - dz, tx, ty, tz - dz }
 end
 
 function M:ModelLoaded()
@@ -939,8 +958,16 @@ end
 function M:Zoom(dir)
     local m = self.model
     if not m then return end
-    self.camScale = math.max(ZOOM_MIN, math.min(ZOOM_MAX, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
-    call(m.SetCamDistanceScale, m, self.camScale)
+    local before = self.camScale or CAM_SCALE
+    self.camScale = math.max(ZOOM_MIN, math.min(ZOOM_MAX, before * (dir > 0 and 1.12 or 0.89)))
+    local c = self.camera
+    if c then
+        -- the camera moved along its line to the aim
+        local k = self.camScale
+        call(m.SetCameraPosition, m, c[4] + (c[1] - c[4]) * k, c[5] + (c[2] - c[5]) * k, c[6] + (c[3] - c[6]) * k)
+    else
+        call(m.SetCamDistanceScale, m, self.camScale)
+    end
 end
 
 -- A mount's favourite: the game keeps it by the mount's place in its own
