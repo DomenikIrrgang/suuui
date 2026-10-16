@@ -166,6 +166,20 @@ function CD.ReadTrainer()
                 local desc = call(GetTrainerServiceDescription, sp.index)
                 if type(desc) == "string" and not isSecret(desc) and desc ~= "" then sp.description = desc end
             end
+            -- some have none in the trainer's data (Salvation, new on
+            -- 2026-10-16) but show one in their tooltip: its last long line
+            if not sp.description and sp.index and C_TooltipInfo and C_TooltipInfo.GetTrainerService then
+                local data = call(C_TooltipInfo.GetTrainerService, sp.index)
+                local lines = data and data.lines or {}
+                for k = #lines, 2, -1 do
+                    local text = lines[k].leftText
+                    if type(text) == "string" and not isSecret(text) and #text > 30 and not text:find("^Requires") then
+                        sp.description = text
+                        sp.descriptionFrom = "tooltip"
+                        break
+                    end
+                end
+            end
         end
     end)
     d.trainerNPC = UnitName("npc")
