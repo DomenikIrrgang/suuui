@@ -326,10 +326,16 @@ local CARD_W, SHADE_W = 270, 340
 -- from the stage's top, is MODEL_H high so the middle of a mount that high
 -- sits half its height above the floor glow: its feet stand there. Centred
 -- on the stage, the card over its left.
--- RAISE: measured in game, a Battlestrider's feet 35px below the floor
--- shadow and a horse's 20px above it at 35 (the game centres each mount by
--- its whole size): 25 splits the two.
-local FLOOR, MODEL_W, MODEL_H, RAISE = 40, 440, 470, 25
+-- The game centres each mount by its whole size, so where the feet are
+-- differs per mount (seen in game: some stood on the floor shadow, some
+-- floated). The frame's camera says where it stands and aims relative to
+-- the model, whose feet are its origin: how far below the frame's middle
+-- the feet show follows from that, times FEET_K * the frame's width
+-- (measured with /suu probe mountframe: a Swift Stormsaber's feet 165px
+-- below the middle of a 440-wide frame). The frame then moves so the feet
+-- stand FEET_Y above the stage's bottom, in the floor shadow's middle.
+local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
+local FEET_K, FEET_Y = 2.739, 72
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -635,7 +641,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("TOP", 0, RAISE)
+    model:SetPoint("TOP")
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
@@ -875,11 +881,50 @@ function M:ShowMount(e)
     C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
 end
 
+-- The frame moved so the mount's feet stand in the floor shadow (see
+-- FEET_K). Nothing when the camera can't be read.
+local function sub(a, b) return a[1] - b[1], a[2] - b[2], a[3] - b[3] end
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function norm(x, y, z)
+    local l = math.sqrt(x * x + y * y + z * z)
+    if l == 0 then return nil end
+    return { x / l, y / l, z / l }
+end
+
+function M:PlaceModel()
+    local m, stage = self.model, self.stage
+    if not m then return end
+    local px, py, pz = call(m.GetCameraPosition, m)
+    local tx, ty, tz = call(m.GetCameraTarget, m)
+    for _, v in ipairs({ px, py, pz, tx, ty, tz }) do
+        if type(v) ~= "number" or isSecret(v) then return end
+    end
+    local P, T = { px, py, pz }, { tx, ty, tz }
+    local f = norm(sub(T, P))
+    if not f then return end
+    -- up on the screen: the world's up, square to where the camera looks
+    local right = norm(f[2] * 1 - f[3] * 0, f[3] * 0 - f[1] * 1, 0)
+    if not right then return end
+    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
+    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    local r = { -px, -py, -pz }
+    local depth = dot(r, f)
+    if depth <= 0 then return end
+    local below = -FEET_K * MODEL_W * dot(r, u) / depth
+    -- tall enough that the feet stay inside the frame (it cuts the model at
+    -- its edges; its height doesn't change the model's size)
+    local h = math.max(MODEL_H, 2 * (below + 40))
+    m:SetHeight(h)
+    m:ClearAllPoints()
+    m:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y + below - h / 2)
+end
+
 function M:ModelLoaded()
     local model = self.model
     if not (model and self.waiting) then return end
     self.waiting = nil
     call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
+    self:PlaceModel()
     self.stage.loading:Hide()
     model:SetAlpha(1)
     SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
