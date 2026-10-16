@@ -46,7 +46,7 @@ local function coins(copper)
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
     if g > 0 then parts[#parts + 1] = g .. "g" end
-    if s > 0 then parts[#parts + 1] = s .. "s" end
+    if s > 0 or (g > 0 and c > 0) then parts[#parts + 1] = s .. "s" end
     if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
     return table.concat(parts, " ")
 end

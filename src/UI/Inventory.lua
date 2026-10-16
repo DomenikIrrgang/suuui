@@ -137,7 +137,8 @@ function UI.ItemSlot(parent, size)
 end
 
 --------------------------------------------------------------------------------
--- Money: 1,204g 37s 9c (tabular figures, the units in coin colours)
+-- Money: 1,204g 37s 9c (tabular figures, the units in coin colours); zero
+-- coins at the end left out ("38g 50s", "1g"), "0c" for none
 --------------------------------------------------------------------------------
 
 local Money = {}
@@ -160,8 +161,8 @@ function Money:SetCopper(total)
         parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r"
     end
     if g > 0 then part(thousands(g), "g", "coin-gold") end
-    if g > 0 or s > 0 then part(s, "s", "coin-silver") end
-    part(c, "c", "coin-copper")
+    if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
+    if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
     self.text:SetText(table.concat(parts, "  "))
     self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), T.type.numeric.lineHeight)
 end

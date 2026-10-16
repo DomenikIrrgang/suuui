@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Money leaves out zero coins at the end: "38g 50s" instead of "38g 50s 0c".
+
 ### Fixed
 
 - Skyborne characters see the quests they can pick up on the world map (none showed that is limited by race or faction).

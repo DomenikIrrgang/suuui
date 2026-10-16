@@ -244,7 +244,7 @@ local function coinText(copper, short)
         parts[#parts + 1] = short and (v .. unit) or ("|cff" .. hex("ink") .. v .. "|r|cff" .. hex(token) .. unit .. "|r")
     end
     if g > 0 then part(g, "g", "coin-gold") end
-    if s > 0 then part(s, "s", "coin-silver") end
+    if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
     if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
     local text = table.concat(parts, " ")
     if short then text = "|cff" .. hex("ember-text") .. text .. "|r" end
