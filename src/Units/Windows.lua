@@ -1186,7 +1186,22 @@ function M:SkinTrainer()
     if f.ScrollBox then UI.ReskinScrollBox(f.ScrollBox) end
     if f.ScrollBar then UI.ReskinScrollBar(f.ScrollBar) end
     if _G.ClassTrainerStatusBar then UI.ReskinStatusBar(_G.ClassTrainerStatusBar) end
-    if f.FilterDropdown then UI.ReskinDropdown(f.FilterDropdown) end
+    if f.FilterDropdown then
+        local d = f.FilterDropdown
+        UI.ReskinDropdown(d)
+        -- the game's is 18px tall: room inside for SuuUI's field, centred on
+        -- the rank bar's line, clear of the list
+        d:SetSize(130, 26)
+        d:ClearAllPoints()
+        d:SetPoint("TOPRIGHT", f, "TOPRIGHT", -13, -31)
+        local text = d.Text or d.text
+        if text then
+            text:ClearAllPoints()
+            text:SetPoint("LEFT", S["space-4"], 0)
+            text:SetPoint("RIGHT", -(S["space-3"] + 12 + S["space-2"]), 0)
+            text:SetJustifyH("LEFT")
+        end
+    end
     if _G.ClassTrainerTrainButton then UI.ReskinButton(_G.ClassTrainerTrainButton) end
     -- your money in SuuUI's money at the foot, the game's away
     local money = f.money or _G.ClassTrainerFrameMoney
