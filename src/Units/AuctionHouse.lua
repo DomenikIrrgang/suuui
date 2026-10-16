@@ -371,6 +371,7 @@ function M:DrawResults()
         row.ilvl:SetValue(info.isEquipment and r.itemKey.itemLevel and tostring(r.itemKey.itemLevel) or "")
         row.qty:SetValue(tostring(r.totalQuantity or ""))
         row.price:SetCopper(r.minPrice or 0)
+        self:Seen(r.itemKey.itemID, r.minPrice)
         -- the name cell: the slot, the name, Yours
         local places = t:Places(t.list:GetWidth())
         row.slot:ClearAllPoints()
@@ -503,6 +504,7 @@ function M:DrawItemView()
             local o = call(AH.GetCommoditySearchResultInfo, key.itemID, i)
             if o then self.offers[#self.offers + 1] = o end
         end
+        if self.offers[1] then self:Seen(key.itemID, self.offers[1].unitPrice) end
         for _, o in ipairs(self.offers) do
             local who
             if o.containsOwnerItem then who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
@@ -516,8 +518,15 @@ function M:DrawItemView()
             local a = call(AH.GetItemSearchResultInfo, key, i)
             if a then self.auctions[#self.auctions + 1] = a end
         end
-        local withBid = false
-        for _, a in ipairs(self.auctions) do if a.bidAmount or a.minBid then withBid = true end end
+        local withBid, low = false, nil
+        for _, a in ipairs(self.auctions) do
+            if a.bidAmount or a.minBid then withBid = true end
+            if a.buyoutAmount and a.buyoutAmount > 0 and (a.quantity or 1) > 0 then
+                local each = math.floor(a.buyoutAmount / (a.quantity or 1))
+                if not low or each < low then low = each end
+            end
+        end
+        self:Seen(key.itemID, low)
         local cols = {}
         if withBid then cols[#cols + 1] = { label = "Bid", w = 120 } end
         cols[#cols + 1] = { label = "Buyout", w = 120 }
@@ -671,6 +680,336 @@ function M:OnCommodityPrice(unit, total)
 end
 
 --------------------------------------------------------------------------------
+-- What SuuUI remembers per item (by item ID), kept per character and read
+-- across all of them: the lowest buyout seen (each search; Scan all fills it
+-- too) and the price you last posted at
+--------------------------------------------------------------------------------
+
+function M:Seen(itemID, price)
+    if not (itemID and price and price > 0) then return end
+    local d = self:CharData()
+    d.seen = d.seen or {}
+    local now = time()
+    local e = d.seen[itemID]
+    -- a newer search replaces an old low; within a day the lower one stays
+    if not e or now - (e.at or 0) > 86400 or price < e.price then d.seen[itemID] = { price = price, at = now } end
+end
+
+-- The newest entry for an item across your characters.
+local function newest(self, key, itemID)
+    local best
+    for _, d in pairs(self:AllCharData()) do
+        local e = d[key] and d[key][itemID]
+        if e and (not best or (e.at or 0) > (best.at or 0)) then best = e end
+    end
+    return best
+end
+function M:LowestSeen(itemID) return newest(self, "seen", itemID) end
+function M:LastPosted(itemID) return newest(self, "posted", itemID) end
+
+local function when(at)
+    if not at then return "" end
+    local d = date("*t", at)
+    local today = date("*t")
+    if d.year == today.year and d.yday == today.yday then return ("today %02d:%02d"):format(d.hour, d.min) end
+    local days = math.floor((time() - at) / 86400)
+    return days <= 1 and "yesterday" or (days .. " days ago")
+end
+
+--------------------------------------------------------------------------------
+-- Sell: the item, its prices, the duration, the deposit, Post; your items
+--------------------------------------------------------------------------------
+
+local DURATIONS = { { value = 1, label = "12 hours" }, { value = 2, label = "24 hours" }, { value = 3, label = "48 hours" } }
+
+-- The items in your bags the auction house takes, one entry per item.
+local function sellable()
+    local out, byID = {}, {}
+    for bag = 0, 4 do
+        for slot = 1, (call(C_Container.GetContainerNumSlots, bag) or 0) do
+            local info = call(C_Container.GetContainerItemInfo, bag, slot)
+            if info and info.itemID and not (info.isBound) then
+                local loc = ItemLocation:CreateFromBagAndSlot(bag, slot)
+                if call(AH.IsSellItemValid, loc, false) then
+                    local e = byID[info.itemID]
+                    if not e then
+                        e = { itemID = info.itemID, loc = loc, icon = info.iconFileID, quality = info.quality,
+                              link = info.hyperlink, count = 0 }
+                        byID[info.itemID] = e
+                        out[#out + 1] = e
+                    end
+                    e.count = e.count + (info.stackCount or 1)
+                end
+            end
+        end
+    end
+    table.sort(out, function(a, b) return (a.link or "") < (b.link or "") end)
+    return out
+end
+
+function M:BuildSell(page)
+    local sell = {}
+    self.sell = sell
+    local FORM_W = 430
+    local form = CreateFrame("Frame", nil, page)
+    form:SetPoint("TOPLEFT")
+    form:SetPoint("BOTTOMLEFT")
+    form:SetWidth(FORM_W)
+    -- the item: drop it here, or pick it from your items
+    sell.slot = UI.ItemSlot(form)
+    sell.slot:SetPoint("TOPLEFT")
+    sell.slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    local function fromCursor()
+        local loc = C_Cursor and C_Cursor.GetCursorItem and C_Cursor.GetCursorItem()
+        if loc then
+            ClearCursor()
+            self:SetSellItem(loc)
+        end
+    end
+    sell.slot:SetScript("OnReceiveDrag", fromCursor)
+    sell.slot:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then self:SetSellItem(nil) else fromCursor() end
+    end)
+    sell.slot:SetScript("OnEnter", function(b)
+        if not sell.loc then return end
+        GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+        local bag, slot = sell.loc:GetBagAndSlot()
+        if bag then GameTooltip:SetBagItem(bag, slot) end
+        GameTooltip:Show()
+    end)
+    sell.slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    sell.name = UI.Text(form, "unit-name-lg", "ink")
+    sell.name:SetPoint("TOPLEFT", sell.slot, "TOPRIGHT", S["space-4"], 0)
+    sell.name:SetPoint("RIGHT", form, "RIGHT")
+    sell.name:SetWordWrap(false)
+    sell.last = UI.Text(form, "caption", "ink-muted")
+    sell.last:SetPoint("TOPLEFT", sell.name, "BOTTOMLEFT", 0, -3)
+    sell.lowest = UI.Text(form, "caption", "ink-muted")
+    sell.lowest:SetPoint("TOPLEFT", sell.last, "BOTTOMLEFT", 0, -2)
+    -- the fields, each a caption over its control
+    local y = 36 + S["space-6"] + 14
+    local function field(label)
+        local l = UI.Text(form, "caption", "ink-muted")
+        l:SetValue(label)
+        l:SetPoint("TOPLEFT", 0, -y - 8)
+        local holder = CreateFrame("Frame", nil, form)
+        holder:SetPoint("TOPLEFT", 110, -y)
+        holder:SetSize(FORM_W - 110, 30)
+        y = y + 30 + S["space-4"]
+        return holder, l
+    end
+    local qh = field("Quantity")
+    sell.qty = UI.TextField(qh, { width = 80, onTextChanged = function() self:DrawSell() end })
+    sell.qty.edit:SetNumeric(true)
+    sell.qty.edit:SetMaxLetters(6)
+    sell.qty:SetPoint("LEFT")
+    sell.max = UI.Button(qh, { text = "Max", onClick = function()
+        sell.qty:SetValue(tostring(sell.loc and call(AH.GetAvailablePostCount, sell.loc) or 1))
+        self:DrawSell()
+    end })
+    sell.max:SetPoint("LEFT", sell.qty, "RIGHT", S["space-2"], 0)
+    local bh
+    bh, sell.bidLabel = field("Starting bid")
+    sell.bidHolder = bh
+    sell.bid = UI.MoneyInput(bh, { onChange = function() self:DrawSell() end })
+    sell.bid:SetPoint("LEFT")
+    local ph
+    ph, sell.priceLabel = field("Buyout")
+    sell.price = UI.MoneyInput(ph, { onChange = function() self:DrawSell() end })
+    sell.price:SetPoint("LEFT")
+    local dh = field("Duration")
+    sell.duration = UI.Segmented(dh, { options = DURATIONS, value = 2, onChange = function() self:DrawSell() end })
+    sell.duration:SetPoint("LEFT")
+    -- deposit and total
+    local th = field("Deposit")
+    sell.deposit = UI.Money(th)
+    sell.deposit:SetPoint("LEFT")
+    local th2 = field("Total")
+    sell.total = UI.Money(th2)
+    sell.total:SetPoint("LEFT")
+    sell.post = UI.Button(form, { text = "Post", variant = "primary", width = 120, onClick = function() self:Post() end })
+    sell.post:SetPoint("TOPRIGHT", form, "TOPLEFT", FORM_W, -y - S["space-2"])
+    -- your items
+    local list = CreateFrame("Frame", nil, page)
+    list:SetPoint("TOPLEFT", FORM_W + S["space-6"], 0)
+    list:SetPoint("BOTTOMRIGHT")
+    local head = UI.Text(list, "header", "gilt-text")
+    head:SetValue("Your items")
+    head:SetPoint("TOPLEFT")
+    sell.list = UI.ScrollArea(list, S["space-3"])
+    sell.list:SetPoint("TOPLEFT", 0, -28)
+    sell.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    sell.list:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
+    sell.rows = {}
+    sell.none = UI.Text(sell.list.child, "body", "ink-muted")
+    sell.none:SetPoint("TOPLEFT", 0, -S["space-4"])
+    sell.none:SetValue("Nothing in your bags to sell here.")
+end
+
+function M:SetSellItem(loc)
+    local sell = self.sell
+    if loc and not call(AH.IsSellItemValid, loc, true) then
+        self:Note("The auction house doesn't take that.", "error")
+        return
+    end
+    sell.loc = loc
+    sell.itemID = loc and C_Item.GetItemID(loc)
+    sell.commodity = false
+    if loc then
+        local status = call(AH.GetItemCommodityStatus, loc)
+        sell.commodity = Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity or false
+        -- the price you last posted at, else the lowest seen
+        local last, low = self:LastPosted(sell.itemID), self:LowestSeen(sell.itemID)
+        sell.price:SetCopper((last and last.price) or (low and low.price) or 0)
+        sell.bid:Clear()
+        sell.qty:SetValue(tostring(sell.commodity and (call(AH.GetAvailablePostCount, loc) or 1) or 1))
+        -- what it goes for now, for the lowest seen
+        local key = call(AH.GetItemKeyFromItem, loc)
+        if key then
+            self.sellKey = key
+            call(AH.SendSellSearchQuery, key, sorts(), true)
+        end
+    end
+    self:DrawSell()
+end
+
+function M:DrawSell()
+    local sell = self.sell
+    if not sell then return end
+    local loc = sell.loc
+    local valid = loc and loc:IsValid()
+    if loc and not valid then sell.loc, loc = nil, nil end
+    local link = loc and C_Item.GetItemLink(loc)
+    sell.slot.skin:SetItem(loc and { icon = C_Item.GetItemIcon(loc), quality = QUALITY[C_Item.GetItemQuality(loc) or 1] or "common",
+        count = call(AH.GetAvailablePostCount, loc) } or nil)
+    sell.name:SetValue(loc and (C_Item.GetItemName(loc) or "?") or "Drop an item here, or choose one from your items")
+    sell.name:SetStyle(loc and "unit-name-lg" or "caption")
+    local q = loc and C_Item.GetItemQuality(loc)
+    sell.name:SetColor(loc and ((q and q ~= 1) and ("quality-" .. (QUALITY[q] or "common")) or "ink") or "ink-muted")
+    local last = loc and self:LastPosted(sell.itemID)
+    local low = loc and self:LowestSeen(sell.itemID)
+    sell.last:SetValue(last and ("Last posted at " .. coins(last.price) .. " · " .. when(last.at)) or "")
+    sell.lowest:SetValue(low and ("Lowest buyout seen: " .. coins(low.price) .. " · " .. when(low.at)) or "")
+    -- a commodity: a unit price, no starting bid
+    sell.bidHolder:SetShown(not sell.commodity)
+    sell.bidLabel:SetShown(not sell.commodity)
+    sell.priceLabel:SetValue(sell.commodity and "Unit price" or "Buyout")
+    local qty = tonumber(sell.qty.edit:GetText()) or 0
+    local dur = sell.duration.value or 2
+    local deposit = 0
+    if loc then
+        if sell.commodity then deposit = call(AH.CalculateCommodityDeposit, sell.itemID, dur, qty) or 0
+        else deposit = call(AH.CalculateItemDeposit, loc, dur, qty) or 0 end
+    end
+    sell.deposit:SetCopper(deposit)
+    local price, bid = sell.price:GetCopper(), sell.bid:GetCopper()
+    sell.total:SetCopper(sell.commodity and price * qty or price)
+    -- Post, or why not
+    local why
+    if not loc then why = "Choose an item."
+    elseif qty <= 0 then why = "How many?"
+    elseif qty > (call(AH.GetAvailablePostCount, loc) or 0) then why = "You don't have that many."
+    elseif sell.commodity and price <= 0 then why = "Give it a unit price."
+    elseif not sell.commodity and price <= 0 and bid <= 0 then why = "Give it a buyout or a starting bid."
+    elseif not sell.commodity and price > 0 and bid > price then why = "The starting bid is above the buyout."
+    elseif deposit > (GetMoney() or 0) then why = "Not enough money for the deposit (" .. coins(deposit) .. ")." end
+    sell.post:SetEnabledState(why == nil and not self.posting)
+    sell.post.tooltip = why and { title = "Post", description = why } or nil
+    self:DrawSellList()
+end
+
+function M:DrawSellList()
+    local sell = self.sell
+    local items = sellable()
+    local c = sell.list.child
+    for i, e in ipairs(items) do
+        local r = sell.rows[i]
+        if not r then
+            r = CreateFrame("Button", nil, c)
+            r:SetHeight(ROW_H)
+            r.sel = UI.Fill(r, "arcane-soft", "BACKGROUND")
+            r.sel:SetAllPoints()
+            r.hover = UI.Fill(r, "surface-raised", "BACKGROUND", 1)
+            r.hover:SetAllPoints()
+            r.hover:SetAlpha(0.6)
+            r.hover:Hide()
+            r.slot = UI.ItemSlot(r, 24)
+            r.slot:EnableMouse(false)
+            r.slot:SetPoint("LEFT", S["space-2"], 0)
+            r.seen = UI.Money(r)
+            r.seen:SetPoint("RIGHT", -S["space-2"], 0)
+            r.name = UI.Text(r, "label", "ink")
+            r.name:SetPoint("LEFT", r.slot, "RIGHT", S["space-3"], 0)
+            r.name:SetPoint("RIGHT", r.seen, "LEFT", -S["space-3"], 0)
+            r.name:SetWordWrap(false)
+            r:SetScript("OnEnter", function(b)
+                b.hover:Show()
+                GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+                local bag, slot = b.loc:GetBagAndSlot()
+                if bag then GameTooltip:SetBagItem(bag, slot) end
+                GameTooltip:Show()
+            end)
+            r:SetScript("OnLeave", function(b) b.hover:Hide(); GameTooltip:Hide() end)
+            r:SetScript("OnClick", function(b) self:SetSellItem(b.loc) end)
+            sell.rows[i] = r
+        end
+        r.loc = e.loc
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
+        r:SetPoint("RIGHT", c, "RIGHT")
+        r.slot.skin:SetItem({ icon = e.icon, count = e.count, quality = QUALITY[e.quality or 1] or "common" })
+        local name = e.link and e.link:match("%[(.-)%]") or "?"
+        r.name:SetValue(name)
+        r.name:SetColor((e.quality and e.quality ~= 1) and ("quality-" .. (QUALITY[e.quality] or "common")) or "ink")
+        local low = self:LowestSeen(e.itemID)
+        r.seen:SetShown(low ~= nil)
+        if low then r.seen:SetCopper(low.price) end
+        r.sel:SetShown(sell.itemID == e.itemID)
+        r:Show()
+    end
+    for i = #items + 1, #sell.rows do sell.rows[i]:Hide() end
+    c:SetHeight(math.max(1, #items * ROW_H))
+    sell.none:SetShown(#items == 0)
+end
+
+function M:Post()
+    local sell = self.sell
+    local loc = sell.loc
+    if not (loc and loc:IsValid()) then return end
+    local qty = tonumber(sell.qty.edit:GetText()) or 0
+    local dur = sell.duration.value or 2
+    local price, bid = sell.price:GetCopper(), sell.bid:GetCopper()
+    self.posting = { itemID = sell.itemID, price = price, qty = qty, name = C_Item.GetItemName(loc) }
+    local ok, needs
+    if sell.commodity then
+        ok, needs = pcall(AH.PostCommodity, loc, dur, qty, price)
+        if ok and needs then ok = pcall(AH.ConfirmPostCommodity, loc, dur, qty, price) end
+    else
+        ok, needs = pcall(AH.PostItem, loc, dur, qty, bid > 0 and bid or nil, price > 0 and price or nil)
+        if ok and needs then ok = pcall(AH.ConfirmPostItem, loc, dur, qty, bid > 0 and bid or nil, price > 0 and price or nil) end
+    end
+    if not ok then
+        self.posting = nil
+        self:Note("Couldn't post: " .. tostring(needs), "error")
+    end
+    self:DrawSell()
+end
+
+-- The game confirmed a post: remember its price, say so.
+function M:Posted()
+    local p = self.posting
+    self.posting = nil
+    if not p then return end
+    if p.price and p.price > 0 then
+        local d = self:CharData()
+        d.posted = d.posted or {}
+        d.posted[p.itemID] = { price = p.price, at = time() }
+    end
+    self:Note(("Posted: %s ×%d."):format(p.name or "?", p.qty or 1), "ok")
+    self:SetSellItem(nil)
+end
+
+--------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
@@ -698,8 +1037,9 @@ function M:Build()
         self.pages[key] = page
     end
     self:BuildBuy(self.pages.buy)
-    -- Sell and Auctions come next: meanwhile the game's own window
-    for _, key in ipairs({ "sell", "auctions" }) do
+    self:BuildSell(self.pages.sell)
+    -- Auctions comes next: meanwhile the game's own window
+    for _, key in ipairs({ "auctions" }) do
         local page = self.pages[key]
         local text = UI.Text(page, "body", "ink-muted")
         text:SetPoint("TOP", 0, -80)
@@ -735,6 +1075,7 @@ end
 function M:Refresh()
     if not (self.window and self.window:IsShown() and self.open) then return end
     self.money:SetCopper(GetMoney() or 0)
+    if self.tab == "sell" then self:DrawSell() return end
     if (self.tab or "buy") ~= "buy" then return end
     self:DrawCategories()
     local browse = (self.view or "browse") == "browse"
@@ -784,7 +1125,20 @@ function M:OnEnable()
     self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
         self.open, self.gameWindow = true, false
         self.view, self.searched, self.category, self.subcategory, self.catFilters = "browse", false, nil, nil, nil
-        C_Timer.After(0, function() self:Away(_G.AuctionHouseFrame) end)
+        C_Timer.After(0, function()
+            local f = _G.AuctionHouseFrame
+            self:Away(f)
+            -- a bag item right-clicked here goes to the game's sell form:
+            -- to SuuUI's Sell instead
+            if f and f.SetPostItem and not self.postHooked then
+                self.postHooked = true
+                hooksecurefunc(f, "SetPostItem", function(_, loc)
+                    if not self:IsEnabled() or self.gameWindow or not loc then return end
+                    self.window:SetTab("sell")
+                    self:SetSellItem(loc)
+                end)
+            end
+        end)
         self.window:Show()
         self.window:SetTab("buy")
         self:Note("")
@@ -815,6 +1169,29 @@ function M:OnEnable()
         self.chosen = nil
         if self.itemKey then call(AH.SendSearchQuery, self.itemKey, sorts(), true) end
     end)
+    self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function() self:Posted() end)
+    self:OnGameEvent("BAG_UPDATE_DELAYED", function() if self.tab == "sell" then self:QueueRefresh() end end)
+    self:OnGameEvent("AUCTION_HOUSE_POST_ERROR", function()
+        self.posting = nil
+        self:Note("Couldn't post.", "error")
+    end)
+    -- the sell search: what the chosen item goes for now
+    for _, e in ipairs({ "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED" }) do
+        self:OnGameEvent(e, function()
+            local key = self.sellKey
+            if not key or self.tab ~= "sell" then return end
+            local low
+            if self.sell.commodity then
+                local o = call(AH.GetCommoditySearchResultInfo, key.itemID, 1)
+                low = o and o.unitPrice
+            else
+                local a = call(AH.GetItemSearchResultInfo, key, 1)
+                low = a and a.buyoutAmount and math.floor(a.buyoutAmount / (a.quantity or 1))
+            end
+            self:Seen(key.itemID, low)
+            self:QueueRefresh()
+        end)
+    end
     self:OnGameEvent("AUCTION_HOUSE_SHOW_ERROR", function(_, err) self:Note("The auction house said no (" .. tostring(err) .. ").", "error") end)
 end
 
