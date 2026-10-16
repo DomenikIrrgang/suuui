@@ -689,8 +689,14 @@ function M:BuildSuggest(field)
     local edit = field.edit
     edit:SetAltArrowKeyMode(false)
     -- (guarded: an error here is recorded under the module's name)
-    edit:HookScript("OnTextChanged", self:Guard(function(_, userInput)
-        if userInput then d.pick = 1; self:DrawSuggest() end
+    -- any change of the text while you're in the field (not only the ones
+    -- the game flags as typed)
+    edit:HookScript("OnTextChanged", self:Guard(function(box)
+        local text = box:GetText() or ""
+        if text == d.lastText or not box:HasFocus() then return end
+        d.lastText = text
+        d.pick = 1
+        self:DrawSuggest()
     end))
     edit:HookScript("OnEditFocusGained", self:Guard(function()
         -- the roster comes a moment after it's asked for; an open list redraws then
@@ -714,6 +720,7 @@ function M:BuildSuggest(field)
 end
 
 function M:PickSuggest(row)
+    self.suggest.lastText = row.name
     self.send.to:SetValue(row.name)
     self.suggest:Hide()
     self:DrawSendState()
