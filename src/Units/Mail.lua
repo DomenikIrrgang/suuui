@@ -438,6 +438,7 @@ function M:BuildSend(page)
     send.subject = UI.TextField(page, { width = WIDTH - 2 * S["space-5"] - labelW, onTextChanged = function() self:DrawSendState() end })
     send.subject:SetPoint("TOPLEFT", labelW, -(30 + S["space-4"]))
     send.subject.edit:SetMaxLetters(64)
+    self:BuildSuggest(send.to)
     -- the message: a multi-line field in a sunk well, 500 characters
     local well = CreateFrame("Frame", nil, page)
     well:SetPoint("TOPLEFT", 0, -2 * (30 + S["space-4"]))
@@ -582,6 +583,211 @@ function M:SendDone(ok)
 end
 
 --------------------------------------------------------------------------------
+-- To's suggestions: your characters, the people you sent to lately, and the
+-- guild members whose name matches what you typed
+--------------------------------------------------------------------------------
+
+local SUGGEST_W, SUGGEST_ROW, SUGGEST_HEAD = 320, 26, 20
+local GUILD_MAX = 8
+
+local function classToken(file)
+    return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or "ink"
+end
+
+-- "Online", or "last online 3 d" from the roster.
+local function lastOnline(i)
+    local y, mo, d, h = call(GetGuildRosterLastOnline, i)
+    if not (y or mo or d or h) then return "Offline" end
+    y, mo, d, h = y or 0, mo or 0, d or 0, h or 0
+    if y > 0 then return "last online " .. y .. " y" end
+    if mo > 0 then return "last online " .. mo .. " mo" end
+    if d > 0 then return "last online " .. d .. " d" end
+    if h > 0 then return "last online " .. h .. " h" end
+    return "last online < 1 h"
+end
+
+-- The groups for what's typed: { { title, rows = { { name, color, note, right } } } }.
+function M:Suggestions(typed)
+    typed = strtrim(typed or ""):lower()
+    local seen, groups = {}, {}
+    local function matches(name)
+        if typed == "" then return 1 end
+        local low = name:lower()
+        if low:sub(1, #typed) == typed then return 1 end
+        if low:find(typed, 1, true) then return 2 end
+    end
+    local function add(title, rows)
+        local out = {}
+        for _, r in ipairs(rows) do
+            local key = r.name:lower()
+            if not seen[key] then
+                seen[key] = true
+                out[#out + 1] = r
+            end
+        end
+        if #out > 0 then groups[#groups + 1] = { title = title, rows = out } end
+    end
+    -- your characters on this realm and side
+    local me = self:CharData()
+    local mine = {}
+    for key, d in pairs(self:AllCharData()) do
+        if key ~= self:CharKey() and d.name and d.realm == me.realm and d.faction == me.faction and matches(d.name) then
+            mine[#mine + 1] = { name = d.name, color = classToken(d.class), right = d.level and ("level " .. d.level) or nil }
+        end
+    end
+    table.sort(mine, function(a, b) return a.name < b.name end)
+    add("Your characters", mine)
+    -- the people you sent to lately
+    local recent, had = {}, {}
+    for _, e in ipairs(me.sent or {}) do
+        if e.to and not had[e.to:lower()] and matches(e.to) then
+            had[e.to:lower()] = true
+            recent[#recent + 1] = { name = e.to, color = "ink", right = ago(e.at) }
+        end
+    end
+    add("Recent", recent)
+    -- the guild, only for something typed
+    if typed ~= "" and IsInGuild() then
+        local first, rest = {}, {}
+        local myName = Ambiguate(SuuUI.FullName("player") or "", "short")
+        for i = 1, (call(GetNumGuildMembers) or 0) do
+            local full, rank, _, _, _, _, _, _, online, _, file = call(GetGuildRosterInfo, i)
+            if plain(full) and full then
+                local name = Ambiguate(full, "mail")
+                local m = matches(name)
+                if m and Ambiguate(full, "short") ~= myName then
+                    local row = { name = name, color = classToken(file), note = plain(rank) and rank or nil,
+                                  right = online and tint("fel", "● ") .. "Online" or lastOnline(i), diamond = true }
+                    if m == 1 then first[#first + 1] = row else rest[#rest + 1] = row end
+                end
+            end
+        end
+        table.sort(first, function(a, b) return a.name < b.name end)
+        table.sort(rest, function(a, b) return a.name < b.name end)
+        local guild = {}
+        for _, list in ipairs({ first, rest }) do
+            for _, r in ipairs(list) do if #guild < GUILD_MAX then guild[#guild + 1] = r end end
+        end
+        add("Guild", guild)
+    end
+    return groups
+end
+
+function M:BuildSuggest(field)
+    local d = CreateFrame("Frame", nil, self.window)
+    d:SetFrameStrata("FULLSCREEN_DIALOG")
+    d:SetWidth(SUGGEST_W)
+    d:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
+    UI.Fill(d, "surface"):SetAllPoints()
+    UI.Border(d, "gilt-line")
+    UI.Shadow(d, "shadow-panel")
+    d:Hide()
+    d.heads, d.rows = {}, {}
+    self.suggest = d
+    local edit = field.edit
+    edit:SetAltArrowKeyMode(false)
+    edit:HookScript("OnTextChanged", function(_, userInput)
+        if userInput then d.pick = 1; self:DrawSuggest() end
+    end)
+    edit:HookScript("OnEditFocusGained", function() d.pick = 1; self:DrawSuggest() end)
+    edit:HookScript("OnEditFocusLost", function() C_Timer.After(0.15, function() d:Hide() end) end)
+    edit:SetScript("OnArrowPressed", function(_, key)
+        if not d:IsShown() or #d.flat == 0 then return end
+        d.pick = ((d.pick or 1) + (key == "DOWN" and 1 or (key == "UP" and -1 or 0)) - 1) % #d.flat + 1
+        self:DrawSuggest(true)
+    end)
+    edit:HookScript("OnEnterPressed", function()
+        if d:IsShown() and d.flat and d.flat[d.pick or 1] then self:PickSuggest(d.flat[d.pick or 1]) end
+    end)
+    edit:HookScript("OnTabPressed", function()
+        if d:IsShown() and d.flat and d.flat[d.pick or 1] then self:PickSuggest(d.flat[d.pick or 1]) end
+        self.send.subject.edit:SetFocus()
+    end)
+end
+
+function M:PickSuggest(row)
+    self.send.to:SetValue(row.name)
+    self.suggest:Hide()
+    self:DrawSendState()
+end
+
+-- The dropdown for what To says now (keep: only the highlight moved).
+function M:DrawSuggest(keep)
+    local d = self.suggest
+    local edit = self.send.to.edit
+    if not edit:HasFocus() then d:Hide() return end
+    if not keep then d.groups = self:Suggestions(edit:GetText()) end
+    local groups = d.groups or {}
+    d.flat = {}
+    local y, nh, nr = S["space-2"], 0, 0
+    for _, g in ipairs(groups) do
+        nh = nh + 1
+        local h = d.heads[nh]
+        if not h then
+            h = UI.Text(d, "caption", "ink-muted")
+            d.heads[nh] = h
+        end
+        h:ClearAllPoints()
+        h:SetPoint("TOPLEFT", S["space-4"], -(y + 4))
+        h:SetValue(g.title)
+        h:Show()
+        y = y + SUGGEST_HEAD
+        for _, row in ipairs(g.rows) do
+            nr = nr + 1
+            d.flat[#d.flat + 1] = row
+            local r = d.rows[nr]
+            if not r then
+                r = CreateFrame("Button", nil, d)
+                r:SetHeight(SUGGEST_ROW)
+                r.hl = UI.Fill(r, "arcane-soft", "BACKGROUND")
+                r.hl:SetAllPoints()
+                r.dot = UI.Diamond(r, 5, "ink")
+                r.dot:SetPoint("LEFT", S["space-4"], 0)
+                r.name = UI.Text(r, "label", "ink")
+                r.note = UI.Text(r, "caption", "ink-muted")
+                r.right = UI.Text(r, "caption", "ink-muted")
+                r.right:SetPoint("RIGHT", -S["space-4"], 0)
+                r:SetScript("OnEnter", function(btn) d.pick = btn.flatIndex; self:DrawSuggest(true) end)
+                r:SetScript("OnClick", function(btn) self:PickSuggest(btn.row) end)
+                d.rows[nr] = r
+            end
+            r.row, r.flatIndex = row, #d.flat
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:SetPoint("RIGHT", d, "RIGHT")
+            r.dot:SetShown(row.diamond and true or false)
+            if row.diamond then r.dot:SetVertexColor(UI.RGBA(row.color or "ink")) end
+            r.name:ClearAllPoints()
+            r.name:SetPoint("LEFT", row.diamond and (S["space-4"] + 10) or S["space-4"], 0)
+            r.name:SetValue(row.name)
+            r.name:SetColor(row.color or "ink")
+            r.note:ClearAllPoints()
+            r.note:SetPoint("LEFT", r.name, "RIGHT", S["space-3"], 0)
+            r.note:SetValue(row.note or "")
+            r.right:SetValue(row.right or "")
+            r.hl:SetShown(r.flatIndex == (d.pick or 1))
+            r:Show()
+            y = y + SUGGEST_ROW
+        end
+    end
+    for i = nh + 1, #d.heads do d.heads[i]:Hide() end
+    for i = nr + 1, #d.rows do d.rows[i]:Hide() end
+    d:SetHeight(y + S["space-2"])
+    d:SetShown(nr > 0)
+end
+
+-- This character, for the other characters' suggestions.
+function M:RememberMe()
+    local d = self:CharData()
+    d.name = UnitName("player")
+    d.realm = GetRealmName()
+    d.level = UnitLevel("player")
+    local _, file = UnitClass("player")
+    d.class = file
+    d.faction = UnitFactionGroup("player")
+end
+
+--------------------------------------------------------------------------------
 -- Sent: the last mails this character sent
 --------------------------------------------------------------------------------
 
@@ -708,6 +914,8 @@ end
 
 function M:OnEnable()
     if not self.window then self:Build() end
+    self:RememberMe()
+    self:OnGameEvent("PLAYER_LEVEL_UP", function() C_Timer.After(1, function() self:RememberMe() end) end)
     self:OnGameEvent("MAIL_SHOW", function()
         self.open = true
         self.openIndex = nil
@@ -716,6 +924,8 @@ function M:OnEnable()
         self.window:Show()
         self.window:SetTab("inbox")
         call(CheckInbox)
+        -- the guild roster for To's suggestions
+        if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then call(C_GuildInfo.GuildRoster) end
     end)
     self:OnGameEvent("MAIL_CLOSED", function()
         self.open = false
