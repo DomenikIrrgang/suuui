@@ -320,11 +320,13 @@ local CARD_W, SHADE_W = 270, 340
 -- size (seen in game: the mount scene's camera, tuned by hand, fit some
 -- mounts and left others too big, too low or cut off; the first probe's
 -- PlayerModel framed them whole). It sizes the model by its frame's width
--- (seen in game: a shorter frame only cut the mount off), centred in the
--- frame: MODEL_W sets the size, MODEL_H is a little more than that makes
--- it tall, and the frame ends FLOOR above the stage's bottom, on the floor
--- glow, so the feet stand there. Centred on the stage, the card over its left.
-local FLOOR, MODEL_W, MODEL_H = 40, 560, 300
+-- and centres it in the frame, and cuts it at the frame's edges (seen in
+-- game: 560 wide drew the mount about 300 high, a 300-high frame cut it).
+-- So MODEL_W sets the size (a mount about 0.53 of it high), and the frame,
+-- from the stage's top, is MODEL_H high so the middle of a mount that high
+-- sits half its height above the floor glow: its feet stand there. Centred
+-- on the stage, the card over its left.
+local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -628,7 +630,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("BOTTOM", 0, FLOOR)
+    model:SetPoint("TOP")
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
@@ -832,6 +834,7 @@ function M:DrawStage()
         stage.empty.title:SetValue("No mounts yet")
         stage.empty.text:SetValue("Every mount is in the strip below, with where it comes from. Pick one to see it here.")
         if self.model then self.model:Hide() end
+        self.showing, self.waiting = nil, nil
         stage.loading:Hide()
         self:DrawAction()
         return
@@ -844,11 +847,14 @@ function M:DrawStage()
 end
 
 -- The mount fitted to the stage; its icon until the model has loaded, then
--- the model fades in.
+-- the model fades in. The same mount again is left as it is (seen in game:
+-- shown twice on opening, the second load sent no signal and the icon
+-- stayed).
 function M:ShowMount(e)
     local model, stage = self.model, self.stage
     if not model then return end
-    self.showing = e.id
+    if self.showing == e.id and model:IsShown() then return end
+    self.showing, self.waiting = e.id, e.id
     model:SetAlpha(0)
     model:Show()
     stage.loading.icon:SetTexture(e.icon)
@@ -861,12 +867,13 @@ function M:ShowMount(e)
     call(model.SetFacing, model, 0)
     -- no answer from the game in two seconds: shown anyway
     local id = e.id
-    C_Timer.After(2, function() if self.showing == id and model:GetAlpha() == 0 then self:ModelLoaded() end end)
+    C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
 end
 
 function M:ModelLoaded()
     local model = self.model
-    if not model or model:GetAlpha() > 0 then return end
+    if not (model and self.waiting) then return end
+    self.waiting = nil
     call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
     self.stage.loading:Hide()
     model:SetAlpha(1)
