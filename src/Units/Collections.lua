@@ -1477,6 +1477,8 @@ function M:DrawTile(b)
     b:Show()
     b.worn:SetShown(e.worn)
     b.star:SetShown(e.favourite and true or false)
+    local w = b:GetWidth()
+    if not w or w < 2 then return end
     if b.shownID ~= e.id then
         b.shownID = e.id
         b.loading = true
@@ -1511,6 +1513,13 @@ function M:LayoutTiles()
         b:ClearAllPoints()
         b:SetSize(tw, h - 6)
         b:SetPoint("TOPLEFT", (i - 1) * (tw + gap), 0)
+        -- a tile drawn before it had its size showed nothing (seen in game:
+        -- empty on opening the tab): loaded again at its size
+        if b.entry and b.sizedW ~= tw then
+            b.sizedW = tw
+            b.shownID = nil
+            self:DrawTile(b)
+        end
     end
 end
 
