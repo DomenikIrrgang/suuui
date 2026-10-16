@@ -1291,6 +1291,13 @@ function M:StyleLogQuestPins()
             pin:ClearAllPoints()
             pin:SetPoint("LEFT", row, "TOPLEFT", 6, -math.floor((top - bottom) / 2 + 0.5))
         end
+        -- the title space-4 right of the marker (the game's 5 px had them
+        -- touching; found in game); its objectives hang under it and follow
+        local text = row and row.Text
+        local w = pin:GetWidth()
+        if text and w and w > 0 then
+            text:SetPoint("TOPLEFT", row, "TOPLEFT", math.floor(6 + w + S["space-4"] + 0.5), -8)
+        end
     end
 end
 
