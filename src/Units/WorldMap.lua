@@ -3,8 +3,10 @@
 -- WorldMap): what the game doesn't draw on Forever's map (probed
 -- 2026-10-15: no flight masters, no dungeon entrances, no quests to pick
 -- up), and one filter menu for them, "Map filters" in the map's header:
---   Quests     quest objectives (the game's own, its questPOI setting),
---              quests to pick up, repeatable and daily, trivial quests
+--   Quests     quest objectives, quest levels and difficulty colours in the
+--              quest log (the game's own settings: questPOI,
+--              showQuestLevel, showQuestDifficultyColor), quests to pick
+--              up, repeatable and daily, trivial quests
 --   Places     dungeon and raid entrances, battleground entrances, flight
 --              masters (the game's taxi nodes), campfires you found (the
 --              Campfire module remembers them)
@@ -25,7 +27,8 @@
 -- size at every zoom. A built-in module written against the public API only.
 
 local DEFAULT_FILTERS = {
-    quests = { "objectives", "available", "repeatable", "items" },
+    -- (objectives, levels and colours: the game's own settings, on by default)
+    quests = { "objectives", "levels", "colours", "available", "repeatable", "items" },
     places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
     services = { "inn", "repair" },
     trading = { "mail" },
@@ -61,6 +64,8 @@ local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 local GROUPS = {
     { key = "quests", label = "Quests", kind = "toggles", options = {
         { value = "objectives", label = "Quest objectives" },
+        { value = "levels", label = "Quest levels" },
+        { value = "colours", label = "Difficulty colours" },
         { value = "available", label = "Quests to pick up" },
         { value = "repeatable", label = "Repeatable and daily" },
         { value = "items", label = "Quests from items" },
@@ -156,9 +161,20 @@ function M:MarksShown()
     return self:Layers().marks or {}
 end
 
--- the game's quest objectives follow its own setting
-local function objectivesShown()
-    local ok, v = pcall(GetCVarBool, "questPOI")
+-- Quests' options that are the game's own settings, not saved by SuuUI:
+-- its quest objectives on the map, and the quest log's levels ("[15]"
+-- before a title) and difficulty colours (its filter menu had them; SuuUI's
+-- Map filters takes its place)
+local GAME_SETTINGS = {
+    { value = "objectives", cvar = "questPOI" },
+    { value = "levels", cvar = "showQuestLevel" },
+    { value = "colours", cvar = "showQuestDifficultyColor" },
+}
+local gameSetting = {}
+for _, o in ipairs(GAME_SETTINGS) do gameSetting[o.value] = o.cvar end
+
+local function settingOn(cvar)
+    local ok, v = pcall(GetCVarBool, cvar)
     return not ok or v
 end
 
@@ -167,20 +183,36 @@ function M:MenuValue()
     local value = {}
     for _, g in ipairs(GROUPS) do
         local list = {}
-        for _, v in ipairs(saved[g.key] or {}) do
-            if not (g.key == "quests" and v == "objectives") then list[#list + 1] = v end
+        if g.key == "quests" then
+            for _, o in ipairs(GAME_SETTINGS) do
+                if settingOn(o.cvar) then list[#list + 1] = o.value end
+            end
         end
-        if g.key == "quests" and objectivesShown() then table.insert(list, 1, "objectives") end
+        for _, v in ipairs(saved[g.key] or {}) do
+            if not (g.key == "quests" and gameSetting[v]) then list[#list + 1] = v end
+        end
         value[g.key] = list
     end
     return value
 end
 
 function M:OnFilters(value)
-    local wantObjectives = false
-    for _, v in ipairs(value.quests or {}) do if v == "objectives" then wantObjectives = true end end
-    if wantObjectives ~= objectivesShown() and not InCombatLockdown() then
-        pcall(SetCVar, "questPOI", wantObjectives and "1" or "0")
+    local want = {}
+    for _, v in ipairs(value.quests or {}) do want[v] = true end
+    local changed = false
+    if not InCombatLockdown() then
+        for _, o in ipairs(GAME_SETTINGS) do
+            if (want[o.value] or false) ~= settingOn(o.cvar) then
+                pcall(SetCVar, o.cvar, want[o.value] and "1" or "0")
+                changed = true
+            end
+        end
+    end
+    -- the quest log and the map drawn again with them (the log redraws
+    -- itself only for some of them)
+    if changed then
+        if _G.QuestMapFrame_UpdateAll then pcall(QuestMapFrame_UpdateAll) end
+        if self.map and self.map.RefreshAllDataProviders then self.map:RefreshAllDataProviders() end
     end
     value.v = FILTERS_VERSION
     self:Set("filters", value)

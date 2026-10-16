@@ -15,7 +15,7 @@
   - **Unexplored areas** drawn tinted where the game would show them once explored.
   - **Your quests' markers** in SuuUI's look: in progress (three dots), ready to hand in ("?" in arcane, glowing), the next step on another map (a pointer, dashed edge); the one you follow larger and ringed. Clicks, tooltips and following stay the game's.
   - **Holidays:** a holiday's quests and vendors show only while it's on, by the game's calendar; the Darkmoon Faire only at the site it's at.
-  - **Map filters** in the header choose what shows, in groups (Quests, Places, Services, Trading, Trainers, Rares and treasures).
+  - **Map filters** in the header choose what shows, in groups (Quests, Places, Services, Trading, Trainers, Rares and treasures). Quests also has the game's quest log options: Quest levels ("[15]" before a title) and Difficulty colours.
   - Pins of a kind close together merge with a count (a click zooms in). Zoomed all the way in, every pin sits on its exact spot, a little larger.
   - Settings › World map › Pin opacity makes the pins more see-through (100% by default).
 - **Enlarged map:** the map opens enlarged in the middle of the screen (the maximize button, instead of the game's fullscreen; − makes it small, remembered), the quest log beside it as you left it and the world around it still seen and clickable. Settings › World map › Enlarged map sets its size (80% of the screen's height by default).
