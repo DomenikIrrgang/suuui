@@ -337,8 +337,11 @@ local CARD_W, SHADE_W = 270, 340
 -- the model's size untouched: tested with /suu probe mountframe place, the
 -- feet of every mount within about 20px), and the frame sits so that point
 -- is FEET_Y above the stage's bottom, the floor shadow's middle.
+-- FEET_DROP: the feet a mount shows stand above the ground under its body
+-- (seen in game: a raptor's 60px, a kodo's 30px above the shadow's
+-- middle), so every mount goes down by about that much.
 local FLOOR, MODEL_W, MODEL_H = 40, 440, 470
-local FEET_K, FEET_Y, FEET_BELOW = 2.739, 72, 165
+local FEET_K, FEET_Y, FEET_BELOW, FEET_DROP = 2.739, 72, 165, 40
 local CAM_SCALE = 1
 local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
@@ -644,7 +647,7 @@ function M:Build()
     -- the mount: fitted by the game, turned by drag, zoomed by the wheel
     local model = CreateFrame("PlayerModel", nil, stage)
     model:SetSize(MODEL_W, MODEL_H)
-    model:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y + FEET_BELOW - MODEL_H / 2)
+    model:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y - FEET_DROP + FEET_BELOW - MODEL_H / 2)
     model:SetFrameLevel(stage:GetFrameLevel() + 2)
     model:EnableMouse(true)
     model:EnableMouseWheel(true)
