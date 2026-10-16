@@ -11,7 +11,9 @@
 --         only out of combat). The Legacy window opens in the middle of the
 --         screen instead (asked for in game), like SuuUI's Talents window.
 --   3.3:  the professions window (ProfessionsFrame), in the middle too.
---   3.6:  the trainer window (ClassTrainerFrame), under the micro menu.
+--   3.6:  the trainer window (ClassTrainerFrame), under the micro menu, and
+--         the collections window (CollectionsJournal), its tabs as icon
+--         tabs down the right edge, the empty ones greyed.
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -20,7 +22,7 @@ local S = T.space
 local M = SuuUI.RegisterModule({
     id = "windows",
     name = "Blizzard windows",
-    description = "The spells and Legacy windows in SuuUI's look.",
+    description = "Blizzard's other windows in SuuUI's look: spells, Legacy, professions, friends, guild, group finder, the world map, the trainer and collections.",
     api = "0.12",
     reloadToToggle = true,
     -- (the world map enlarged: its maximize button)
@@ -1224,8 +1226,143 @@ function M:SkinTrainer()
     self.trainer = chrome
 end
 
+--------------------------------------------------------------------------------
+-- The collections window (3.6, design board "Collections"): restyled in
+-- place (the journal is protected; Summon and the toy buttons stay the
+-- game's own). Its five tabs stay the game's buttons along the right edge,
+-- drawn as SuuUI's icon tabs: 36px, a glyph, the label as tooltip. A tab
+-- with nothing in it on Forever (today Pets and Heirlooms) stays visible but
+-- greyed under a cover of SuuUI's that takes the click and says why; it
+-- turns into a normal tab once its count is above 0.
+--------------------------------------------------------------------------------
+
+local COLLECTION_TABS = {
+    { label = "Mounts", glyph = "wing", empty = "No mounts yet",
+      count = function() return C_MountJournal and C_MountJournal.GetNumMounts and C_MountJournal.GetNumMounts() end },
+    { label = "Pets", glyph = "paw", empty = "No pets yet",
+      count = function() return C_PetJournal and C_PetJournal.GetNumPets and C_PetJournal.GetNumPets() end },
+    { label = "Toys", glyph = "gem", empty = "No toys yet",
+      count = function() return C_ToyBox and C_ToyBox.GetNumToys and C_ToyBox.GetNumToys() end },
+    { label = "Heirlooms", glyph = "crown", empty = "No heirlooms on Forever yet",
+      count = function() return C_Heirloom and C_Heirloom.GetNumHeirlooms and C_Heirloom.GetNumHeirlooms() end },
+    { label = "Appearances", glyph = "tabard" },
+}
+local SIDE_TAB = 36
+
+-- Whether a tab has nothing in it (an unreadable count isn't empty).
+local function emptyTab(def)
+    if not def.count then return false end
+    local ok, n = pcall(def.count)
+    return ok and type(n) == "number" and n == 0
+end
+
+-- One of the game's side tabs in SuuUI's look: its art away, a surface
+-- square with a gilt-line edge open to the window, the glyph in the middle.
+local function skinSideTab(tab, def)
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledTexture" }) do
+        local t = tab[get] and tab[get](tab)
+        if t then t:SetAlpha(0) end
+    end
+    for _, r in ipairs({ tab:GetRegions() }) do r:SetAlpha(0) end
+    local skin = {}
+    skin.fill = tab:CreateTexture(nil, "BACKGROUND", nil, 7)
+    skin.fill:SetAllPoints()
+    skin.edge = UI.Border(tab, "gilt-line", { layer = "BORDER", sublevel = 7 })
+    skin.edge.left:Hide()
+    skin.bar = tab:CreateTexture(nil, "ARTWORK", nil, 7)
+    skin.bar:SetColorTexture(UI.RGBA("gilt"))
+    skin.bar:SetPoint("TOPRIGHT", -1, -1)
+    skin.bar:SetPoint("BOTTOMRIGHT", -1, 1)
+    skin.bar:SetWidth(2)
+    skin.glyph = tab:CreateTexture(nil, "OVERLAY", nil, 7)
+    skin.glyph:SetTexture(GLYPHS .. def.glyph .. ".tga")
+    skin.glyph:SetSize(16, 16)
+    skin.glyph:SetPoint("CENTER")
+    -- an empty tab: a cover of SuuUI's takes the click and says why
+    skin.cover = CreateFrame("Frame", nil, tab)
+    skin.cover:SetAllPoints()
+    skin.cover:SetFrameLevel(tab:GetFrameLevel() + 5)
+    skin.cover:EnableMouse(true)
+    skin.cover:SetScript("OnEnter", function(c) UI.ShowTooltip(c, { title = def.label, description = def.empty }) end)
+    skin.cover:SetScript("OnLeave", function() UI.HideTooltip() end)
+    skin.cover:Hide()
+    tab.suuSkin, tab.suuDef = skin, def
+    tab:HookScript("OnEnter", function(b) b.suuHover = true; M:DrawCollectionTabs() end)
+    tab:HookScript("OnLeave", function(b) b.suuHover = false; M:DrawCollectionTabs() end)
+end
+
+-- Each tab's state: chosen (raised, gilt-text glyph, the gilt bar), empty
+-- (faint, dimmed, covered) or at rest (ink-muted glyph, ink on hover).
+function M:DrawCollectionTabs()
+    local f = _G.CollectionsJournal
+    local tabs = f and f.TabContainer and f.TabContainer.Tabs
+    if not tabs then return end
+    for _, tab in ipairs(tabs) do
+        local skin, def = tab.suuSkin, tab.suuDef
+        if skin then
+            local empty = emptyTab(def)
+            local on = not empty and tab.GetChecked and tab:GetChecked() or false
+            skin.fill:SetColorTexture(UI.RGBA(on and "surface-raised" or "surface"))
+            skin.edge:SetColor(empty and "gilt-faint" or "gilt-line")
+            skin.bar:SetShown(on)
+            skin.glyph:SetVertexColor(UI.RGBA(empty and "ink-faint" or on and "gilt-text" or tab.suuHover and "ink" or "ink-muted"))
+            skin.cover:SetShown(empty)
+            for _, part in ipairs({ skin.fill, skin.bar, skin.glyph }) do part:SetAlpha(empty and T.opacity["opacity-disabled"] or 1) end
+            for _, part in ipairs(skin.edge.parts) do part:SetAlpha(empty and T.opacity["opacity-disabled"] or 1) end
+            skin.edge.left:Hide()
+        end
+    end
+end
+
+-- The tabs' place: down the right edge, space-2 apart (the game sets them
+-- again each time the window opens; the window is protected, so out of combat).
+function M:PlaceCollectionTabs()
+    local f = _G.CollectionsJournal
+    if not (f and f.TabContainer and f.TabContainer.Tabs) or InCombatLockdown() then return end
+    local prev
+    for _, tab in ipairs(f.TabContainer.Tabs) do
+        if tab:IsShown() then
+            tab:SetSize(SIDE_TAB, SIDE_TAB)
+            tab:ClearAllPoints()
+            if prev then tab:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -S["space-2"])
+            else tab:SetPoint("TOPLEFT", f.TabContainer, "TOPLEFT", 0, -64) end
+            prev = tab
+        end
+    end
+end
+
+function M:SkinCollections()
+    local f = _G.CollectionsJournal
+    if not f or f.suuChrome or InCombatLockdown() then return end
+    local chrome = UI.SkinWindow(f, {
+        title = "Collections", icon = "gem", binding = "TOGGLECOLLECTIONS",
+        close = f.CloseButton, topInset = 20, under = "microMenu",
+        hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks },
+    })
+    for i, tab in ipairs(f.TabContainer and f.TabContainer.Tabs or {}) do
+        local def = COLLECTION_TABS[tab:GetID()] or COLLECTION_TABS[i]
+        if def then skinSideTab(tab, def) end
+    end
+    -- the game's parts in SuuUI's look, again whenever another pane shows
+    local function refresh()
+        UI.Reskin(f)
+        self:DrawCollectionTabs()
+    end
+    if _G.CollectionsJournal_CheckAndDisplayTabs then
+        hooksecurefunc("CollectionsJournal_CheckAndDisplayTabs", function() self:PlaceCollectionTabs() end)
+    end
+    if _G.CollectionsJournal_UpdateSelectedTab then
+        hooksecurefunc("CollectionsJournal_UpdateSelectedTab", function() C_Timer.After(0, refresh) end)
+    end
+    f:HookScript("OnShow", function() C_Timer.After(0, refresh) end)
+    self:PlaceCollectionTabs()
+    if f:IsShown() then refresh() end
+    self.collections = chrome
+end
+
 function M:SkinAll()
     self:SkinTrainer()
+    self:SkinCollections()
     self:SkinSpells()
     self:SkinLegacy()
     self:SkinProfessions()
