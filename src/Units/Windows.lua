@@ -486,10 +486,19 @@ local trackEyes = setmetatable({}, { __mode = "k" })
 
 -- The map's top: the game keeps 67px over it for its breadcrumb bar
 -- (TITLE_CANVAS_SPACER_FRAME_HEIGHT); SuuUI's starts it right under the
--- header, level with the quest log's top (QuestMapFrame at -25). The window
--- is as much shorter, so the map keeps its shape.
-local GAME_MAP_TOP, MAP_TOP = 67, 25
+-- header, level with the quest log's top (the game's QuestMapFrame at -25,
+-- moved down with it). The header's second row (filters, the log's search)
+-- is ROW_EXTRA taller than other windows' (asked: a taller search box).
+-- The window is as much shorter, so the map keeps its shape; the quest
+-- log keeps its height, the details sized for it (LOG_CUT shorter than the
+-- game's).
+local ROW_EXTRA = 8
+local GAME_MAP_TOP, MAP_TOP = 67, 25 + ROW_EXTRA
 local CUT = GAME_MAP_TOP - MAP_TOP
+local LOG_CUT = GAME_MAP_TOP - 25
+-- the second row's buttons, centred in it
+local ROW_Y = S["space-1"] + ROW_EXTRA / 2
+local SEARCH_H = 26
 
 -- A button in the header's second row: a glyph, its edge on hover.
 local function glyphButton(b, glyphName)
@@ -510,10 +519,50 @@ local function glyphButton(b, glyphName)
     b:SetSize(22, 22)
 end
 
+-- The quest log's search box in the header's second row: as tall as the
+-- row's controls allow, SuuUI's search glyph in front (the reskin hid the
+-- game's), its × a glyph (the reskin had made it a button: a bare square).
+local function styleQuestSearch(sb)
+    sb:SetHeight(SEARCH_H)
+    local icon = sb.searchIcon or sb.SearchIcon
+    if icon then
+        icon:SetTexture(GLYPHS .. "search.tga")
+        icon:SetTexCoord(0, 1, 0, 1)
+        icon:SetSize(12, 12)
+        icon:ClearAllPoints()
+        icon:SetPoint("LEFT", sb, "LEFT", S["space-1"], 0)
+        icon:SetAlpha(1)
+        icon:SetVertexColor(UI.RGBA("ink-muted"))
+        -- (the game tints it on focus)
+        sb:HookScript("OnEditFocusGained", function() icon:SetVertexColor(UI.RGBA("ink")) end)
+        sb:HookScript("OnEditFocusLost", function() icon:SetVertexColor(UI.RGBA("ink-muted")) end)
+    end
+    if sb.Instructions then
+        sb.Instructions:SetFontObject(SuuUI.Fonts.Get("body"))
+        sb.Instructions:SetTextColor(UI.RGBA("ink-muted"))
+    end
+    local x = sb.clearButton
+    if x then
+        for _, r in ipairs({ x:GetRegions() }) do if r:GetObjectType() == "Texture" then r:SetAlpha(0) end end
+        local glyph = x:CreateTexture(nil, "OVERLAY", nil, 7)
+        glyph:SetTexture(GLYPHS .. "close.tga")
+        glyph:SetSize(10, 10)
+        glyph:SetPoint("CENTER")
+        glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        x:HookScript("OnEnter", function() glyph:SetVertexColor(UI.RGBA("ink")) end)
+        x:HookScript("OnLeave", function() glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+    end
+    sb.suuSearch = true
+end
+
 function M:RestyleQuestLog()
     local q = _G.QuestMapFrame
     if not q then return end
+    local sb = _G.QuestScrollFrame and _G.QuestScrollFrame.SearchBox
+    -- (its × not made a button by the reskin)
+    if sb and sb.clearButton then sb.clearButton.suuNoButton = true end
     UI.Reskin(q)
+    if sb and not sb.suuSearch then styleQuestSearch(sb) end
     local d = q.DetailsFrame
     if d then
         for _, key in ipairs({ "Bg", "SealMaterialBG" }) do if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end end
@@ -523,8 +572,8 @@ function M:RestyleQuestLog()
             -- the game sizes the details for its taller window (502 px, its
             -- text 430): as much shorter as the window, or the rewards and
             -- Abandon / Share / Track hang below it (found in game)
-            d:SetHeight(d:GetHeight() - CUT)
-            if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - CUT) end
+            d:SetHeight(d:GetHeight() - LOG_CUT)
+            if d.ScrollFrame then d.ScrollFrame:SetHeight(d.ScrollFrame:GetHeight() - LOG_CUT) end
             -- Abandon / Share / Track and the rewards centred in the column
             -- the details sit in, between the map and the window's edge,
             -- measured as they show (lined up with the details alone they
@@ -653,7 +702,7 @@ function M:PlaceQuestList(q, list)
         local top, mid = list:GetTop(), select(2, sb:GetCenter())
         if not (top and mid) then return false end
         sb:ClearAllPoints()
-        sb:SetPoint("RIGHT", count, "LEFT", -6, 0)
+        sb:SetPoint("RIGHT", count, "LEFT", -S["space-3"], 0)
         sb:SetPoint("LEFT", list, "TOPLEFT", HEADER_X + 4, mid - top)
         return true
     end
@@ -700,7 +749,7 @@ function M:SkinWorldMap()
     local b = f.BorderFrame
     local chrome = UI.SkinWindow(f, {
         title = mapTitle(f:GetMapID()), icon = "map", binding = "TOGGLEWORLDMAP",
-        close = (b and b.CloseButton) or _G.WorldMapFrameCloseButton, topInset = 24,
+        close = (b and b.CloseButton) or _G.WorldMapFrameCloseButton, topInset = 24 + ROW_EXTRA, headExtra = ROW_EXTRA,
         hide = { b and b.NineSlice, b and b.PortraitContainer, b and b.TitleContainer, b and b.Bg, f.BorderFrame and f.BorderFrame.Bg,
                  b and b.TopTileStreaks, b and b.InsetBorderTop },
     })
@@ -771,13 +820,13 @@ function M:SkinWorldMap()
     local function placeRow()
         if track then
             track:ClearAllPoints()
-            track:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], S["space-1"])
+            track:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_Y)
             track:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
         end
         if pin then
             pin:ClearAllPoints()
             if track then pin:SetPoint("LEFT", track, "RIGHT", S["space-2"], 0)
-            else pin:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], S["space-1"]) end
+            else pin:SetPoint("BOTTOMLEFT", chrome.head, "BOTTOMLEFT", S["space-5"], ROW_Y) end
             pin:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
         end
     end
@@ -793,6 +842,9 @@ function M:SkinWorldMap()
     if f.AdjustOverlayFrames then hooksecurefunc(f, "AdjustOverlayFrames", placeRow) end
     local list = _G.QuestScrollFrame
     if list then
+        -- the log's top level with the map's (the game's -25)
+        local q = _G.QuestMapFrame
+        if q and q:GetParent() == f then q:SetPoint("TOPRIGHT", f, "TOPRIGHT", -3, -MAP_TOP) end
         -- the list starts level with the map (the search row was over it)
         list:SetPoint("TOPLEFT", 0, 0)
         local gear, count, search = list.SettingsDropdown, _G.QuestLogCount, list.SearchBox
@@ -801,13 +853,13 @@ function M:SkinWorldMap()
             UI.ReskinDropdown(gear, { glyph = "gear" })
             gear:SetSize(22, 22)
             gear:ClearAllPoints()
-            gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"])
+            gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_Y)
             right = gear
         end
         if count then
             count:ClearAllPoints()
             if gear then count:SetPoint("RIGHT", gear, "LEFT", -S["space-3"], 0)
-            else count:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"]) end
+            else count:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], ROW_Y) end
             right = count
         end
         if search and right ~= chrome.head then

@@ -13,6 +13,8 @@
 --       close = CharacterFrameCloseButton,
 --       hide = { frame.NineSlice, frame.PortraitContainer, … },  -- alpha 0
 --       topInset = 20,   -- the window's own strip above its content, kept
+--       headExtra = 0,   -- px more for the header's second row (the world
+--                        -- map's search row); the header grows down
 --       under = "microMenu", -- an anchor name: the window opens lined up
 --                            -- under it (its left edge, space-5 below), and
 --                            -- goes back there when Blizzard places it
@@ -172,7 +174,8 @@ function UI.SkinWindow(frame, opts)
     end
     for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
     local inset = opts.topInset or 0
-    local rise = HEAD_H - inset -- the header's height above the window's top
+    local headH = HEAD_H + (opts.headExtra or 0)
+    local rise = headH - inset -- the header's height above the window's top
     chrome.riseH = rise
 
     -- the art, on the window itself (behind every pane)
@@ -193,7 +196,7 @@ function UI.SkinWindow(frame, opts)
     local head = CreateFrame("Frame", nil, frame)
     head:SetPoint("TOPLEFT", 0, rise)
     head:SetPoint("TOPRIGHT", 0, rise)
-    head:SetHeight(HEAD_H)
+    head:SetHeight(headH)
     head:SetFrameLevel(frame:GetFrameLevel() + 500)
     head.suuOwn = true
     chrome.head = head
