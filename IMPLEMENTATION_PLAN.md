@@ -655,6 +655,8 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 
 ### 3.6 Remaining windows
 - **Design first (asked 2026-10-16):** boards for mail, merchant, trainer, auction house and collections before any build. (The quest log was done with the map in 3.5.)
+- **Source (Forever loads the Mainline windows, Camelot overrides):** Merchant 10 a page, Buyback, repair, sell junk; Mail Blizzard_MailFrame, inbox 7 a page, 12 send / 16 receive attachments; Trainer Blizzard_TrainerUI (LoD) with categories on (`Blizzard_TrainerUI_Camelot.lua`), no Train all; the modern AuctionHouseFrame (800×538; `C_AuctionHouse` Post/Bid/Cancel/commodity purchase `HasRestrictions`); Collections with side tabs Mounts, Pets (classic journal), Toys, Heirlooms, Wardrobe. The old globals (SendMail, BuyMerchantItem, BuyTrainerService) aren't in the API docs: `/suu probe windows`.
+- **Decided (2026-10-16):** SuuUI's own windows for Merchant and Mail (if the probe shows their actions run from addon code; else restyled); restyled in place for Trainer, Auction house and Collections. Extras: Merchant a quantity field, "You have N", known greyed, search; Mail Collect all, Collect money, recipients (your characters, recent), a send log; Auction house your last price pre-filled, the lowest buyout seen while browsing (sell view, tooltip), a full scan if Forever allows it.
 - **Build:** mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
 - **Confirm:** you can buy, sell, buy back, mail an item, and post and buy an auction.
 
