@@ -34,6 +34,7 @@ local M = SuuUI.RegisterModule({
         raw = true,
         warnPull = true,
         aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
+        openWorld = true,  -- the alerts outside instances too
     },
 })
 
@@ -185,16 +186,39 @@ function M.Unalert(key)
     SuuUI.HideAlert(key)
 end
 
--- Whether the aggro alert applies: in a group, or with your pet on the mob.
-function M:AggroApplies(rows)
-    local mode = self:Get("aggroAlert")
-    if mode == "off" then return false end
-    if UI.Flag(IsInGroup()) then return true end
-    if mode ~= "pet" then return false end
+-- Someone in your group meant to hold the mobs: a tank (by role) or a pet,
+-- yours or a group member's. Without one (two damage dealers questing
+-- together) the alerts fired at every pull (asked in game).
+local function groupHasHolder()
+    if UnitExists("pet") then return true end
+    local raid = UI.Flag(IsInRaid())
+    local n = raid and 40 or 4
+    for i = 1, n do
+        local unit = (raid and "raid" or "party") .. i
+        if UnitExists(unit) then
+            if roleOf(unit) == "TANK" then return true end
+            if UnitExists(raid and ("raidpet" .. i) or ("partypet" .. i)) then return true end
+        end
+    end
+    return false
+end
+
+-- Whether the alerts apply here: in an instance, or anywhere with Open
+-- world on; in a group with someone to hold the mobs; solo (the aggro
+-- alert's With my pet) with your pet on the mob.
+function M:AlertsApply(rows, aggro)
+    if not self:Get("openWorld") and not UI.Flag(IsInInstance()) then return false end
+    if UI.Flag(IsInGroup()) then return groupHasHolder() end
+    if aggro and self:Get("aggroAlert") ~= "pet" then return false end
     for _, r in ipairs(rows) do
         if r.unit == "pet" then return true end
     end
     return false
+end
+
+function M:AggroApplies(rows)
+    if self:Get("aggroAlert") == "off" then return false end
+    return self:AlertsApply(rows, true)
 end
 
 function M:Warn(rows)
@@ -209,7 +233,7 @@ function M:Warn(rows)
     end
     local drop = readyDrop()
     local dropText = drop and (" · " .. drop .. " ready") or ""
-    if status == 1 and self:Get("warnPull") then
+    if status == 1 and self:Get("warnPull") and self:AlertsApply(rows) then
         M.Unalert("threat-aggro")
         -- whoever holds the mob: the first other row at 2-3
         local holder
@@ -324,10 +348,12 @@ local SECTION = {
             { key = "raw", label = "Raw threat", control = "toggle", disabled = meterOff,
               description = "The threat number before the percent (not on bosses: the client hides it there)." },
             { key = "warnPull", label = "Warn me before I pull", control = "toggle",
-              description = "An alert as soon as you pass the tank's (or your pet's) threat. Works on bosses: it needs only the threat state. Needs the Alerts module." },
+              description = "An alert as soon as you pass the tank's (or a pet's) threat, in a group with a tank or a pet. Works on bosses: it needs only the threat state. Needs the Alerts module." },
             { key = "aggroAlert", label = "When I draw aggro", control = "segmented", stacked = true,
               options = { { value = "off", label = "Off" }, { value = "group", label = "In a group" }, { value = "pet", label = "In a group or with my pet" } },
-              description = "An ember alert once a mob turns to you and you aren't the tank. With my pet: also solo, while your pet is on the mob (not when you open on it before your pet arrives)." },
+              description = "An ember alert once a mob turns to you and you aren't the tank. In a group: one with a tank or a pet out (not two damage dealers questing together). With my pet: also solo, while your pet is on the mob (not when you open on it before your pet arrives)." },
+            { key = "openWorld", label = "In the open world", control = "toggle",
+              description = "Both alerts outside dungeons, raids and battlegrounds too. Off: only in instances." },
         } },
     },
 }
@@ -355,7 +381,7 @@ function M:OnEnable()
     for _, key in ipairs({ "who", "marker", "raw" }) do
         self:Watch(key, function() self:RefreshPreview(); if self.driver:IsShown() then self:Update() end end)
     end
-    for _, key in ipairs({ "warnPull", "aggroAlert", "position" }) do
+    for _, key in ipairs({ "warnPull", "aggroAlert", "openWorld", "position" }) do
         self:Watch(key, function() if self.driver:IsShown() then self:Update() end end)
     end
     -- as tall as the damage meter

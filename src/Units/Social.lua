@@ -85,8 +85,11 @@ function M:Friends()
                 local zone = plain(game.areaName) and game.areaName or nil
                 local detail = table.concat(where, " ")
                 row.detail = zone and zone ~= "" and (detail .. " · " .. zone) or detail
-                if game.wowProjectID == WOW_PROJECT_ID and game.realmName and game.realmName ~= "" then
-                    row.invite, row.inviteName = true, game.characterName .. "-" .. game.realmName
+                if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
+                    -- by their game account, as the game's friends list does
+                    -- (by name and realm the game didn't find them: the realm
+                    -- is the server's own name; found in game)
+                    row.invite, row.gameAccountID = true, game.gameAccountID
                 else
                     row.why = "They're playing another version of World of Warcraft."
                     row.detail = "Playing World of Warcraft"
@@ -184,6 +187,11 @@ local function whisper(row)
 end
 
 local function invite(row)
+    if row.gameAccountID then
+        local fn = (C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend
+        if fn then pcall(fn, row.gameAccountID) end
+        return
+    end
     local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
     if fn and row.inviteName then pcall(fn, row.inviteName) end
 end

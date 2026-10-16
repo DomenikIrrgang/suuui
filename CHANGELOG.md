@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- The aggro alerts ("You have drawn aggro", "You're about to pull") show in a group only when someone there holds the mobs: a tank or a pet. Two damage dealers questing together get none. Settings › Threat meter › In the open world turns them off outside dungeons, raids and battlegrounds.
+
 ### Fixed
 
+- Inviting a Battle.net friend from the Social window or their online note works (it said the player couldn't be found).
 - The spellbook no longer shows Elemental twice for shamans (and Shadow twice for priests), once empty with a question mark.
 
 ## 0.4.0-beta.3 (2026-10-16)

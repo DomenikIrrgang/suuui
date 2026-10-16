@@ -364,8 +364,14 @@ function M:BnetPerson(accountID)
         local where = plain(game.richPresence) and game.richPresence ~= "" and game.richPresence
             or (plain(game.areaName) and game.areaName) or "World of Warcraft"
         person.detail = game.characterName .. " · " .. where
-        if game.wowProjectID == WOW_PROJECT_ID and game.realmName and game.realmName ~= "" then
-            person.inviteName = game.characterName .. "-" .. game.realmName
+        -- invited by their game account, as the game's friends list does (by
+        -- name and realm the game didn't find them; found in game)
+        if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
+            local id = game.gameAccountID
+            person.invite = function()
+                local fn = (C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend
+                if fn then pcall(fn, id) end
+            end
         end
     else
         person.detail = GAMES[game.clientProgram or ""] or "Battle.net"
@@ -409,7 +415,8 @@ function M:FlushPresence(key)
     self.presenceCount = (self.presenceCount or 0) + 1
     self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = q.online and 6 or 4,
         presence = { online = q.online, source = source, people = q.people, plural = k.plural, glyph = k.glyph,
-                     invite = q.online and single and single.inviteName and function() invite(single.inviteName) end or nil } })
+                     invite = q.online and single and (single.invite
+                         or single.inviteName and function() invite(single.inviteName) end) or nil } })
 end
 
 -- The game's system line: who, and whether it's theirs to show.
