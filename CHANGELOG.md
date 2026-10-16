@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The spellbook no longer shows Elemental twice for shamans (and Shadow twice for priests), once empty with a question mark.
+
 ## 0.4.0-beta.3 (2026-10-16)
 
 ### Fixed

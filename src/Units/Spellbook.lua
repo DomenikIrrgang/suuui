@@ -101,12 +101,27 @@ function M:Schools()
         end
         return best and best.icon
     end
+    -- a tree's school by the spellbook's (or the trainer's) name for it: the
+    -- shaman's Elemental tree is the spellbook's Elemental Combat, the
+    -- priest's Shadow its Shadow Magic (by the tree's name the school showed
+    -- twice, once empty; found in game)
+    local function schoolName(name)
+        if byName[name] then return name end
+        local prefix = name .. " "
+        for _, s in ipairs(book) do
+            if s.name:sub(1, #prefix) == prefix then return s.name end
+        end
+        for _, t in ipairs(SuuUI.TrainerSpells() or {}) do
+            if type(t.school) == "string" and t.school:sub(1, #prefix) == prefix then return t.school end
+        end
+        return name
+    end
     local out, used = {}, {}
     if book[1] then out[1] = book[1]; used[book[1]] = true end
     for tree = 1, 3 do
-        local name = trees[tree]
+        local name = trees[tree] and schoolName(trees[tree])
         if name then
-            local s = byName[name] or { name = name, icon = treeIcon(name, tree) or 134400, first = 1, count = 0 }
+            local s = byName[name] or { name = name, icon = treeIcon(name, tree) or treeIcon(trees[tree], tree) or 134400, first = 1, count = 0 }
             out[#out + 1] = s
             used[s] = true
         end
