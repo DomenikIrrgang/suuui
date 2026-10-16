@@ -110,10 +110,11 @@ function PA.Command()
             -- the frame's container: how many icons it shows
             if m and m.frames then
                 for _, f in ipairs(m.frames) do
-                    if f.unit == unit and f.auras then
-                        local n, unknown = shownChildren(f.auras.container)
+                    local ac = f.unit == unit and f.auraSets and f.auraSets.debuffs and f.auraSets.debuffs.auras
+                    if ac then
+                        local n, unknown = shownChildren(ac.container)
                         line.icons, line.unknown = n, unknown
-                        line.containerUnit = show(f.auras.unit)
+                        line.containerUnit = show(ac.unit)
                         ns.Print(("%s frame: %d icons shown (%d secret), container unit %s"):format(unit, n, unknown, line.containerUnit))
                     end
                 end

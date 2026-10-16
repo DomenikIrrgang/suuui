@@ -45,13 +45,18 @@ local M = SuuUI.RegisterModule({
         raidMarkers = true,
         lowHealth = true,
         incoming = true,
-        auras = 1,
+        buffIcons = 1,             -- defensives (the Defensives list), inside the bar's right end
+        debuffIcons = 2,           -- debuffs at the very end, the ones you can remove first
         debuffBadges = "all",      -- "all" debuff types, "removable" or "off"
         rangeAlpha = 0.25,
     },
 })
 
 -- "badges" is "debuffBadges" now, as on the unit frames
+-- one aura count became defensives and debuffs, each with its own; they
+-- start at the new defaults
+M:Migrate("auraSplit", function(values) values.auras = nil end)
+
 M:Migrate("debuffBadges", function(values)
     if values.badges ~= nil and values.debuffBadges == nil then values.debuffBadges = values.badges end
     values.badges = nil
@@ -79,44 +84,74 @@ local function barHeight()
 end
 
 local function iconSize(h) return math.max(8, h - 6) end
+
+-- Inside the bar's right end: defensives (the Defensives list's spells,
+-- Frames › Defensives: the game hides who cast another player's buffs, and
+-- its own defensive filters then let every buff through), a small gap, then
+-- debuffs at the very end, the ones you can remove first.
+local GAP_SETS = S["space-2"]
+local AURA_SETS = {
+    { key = "debuffs", setting = "debuffIcons", groups = {
+        { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+        -- buffs come only through buff indicators (you pick them); the
+        -- game's "raid" debuffs are the ones worth seeing
+        { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
+    } },
+    { key = "buffs", setting = "buffIcons", groups = {
+        { key = "external", filter = { "HELPFUL" }, list = "external", border = "ward", drain = "ward" },
+        { key = "defensive", filter = { "HELPFUL" }, list = "defensive", border = "ward", drain = "ward" },
+    } },
+}
+
+-- Each set's distance from the bar's right edge, in AURA_SETS order (debuffs
+-- at the end, defensives before them), and the room they take in all.
+local function setPlaces(h)
+    local size = iconSize(h)
+    local x, places = S["space-1"] + 1, {}
+    for _, set in ipairs(AURA_SETS) do
+        local n = M:Get(set.setting)
+        local w = n > 0 and (n * size + (n - 1) * S["space-1"]) or 0
+        places[set.key] = { right = x, width = w, count = n }
+        if n > 0 then x = x + w + GAP_SETS end
+    end
+    return places, x
+end
+
 local function auraReserve(h)
-    local n = M:Get("auras")
-    return n > 0 and (n * (iconSize(h) + S["space-1"]) + S["space-1"]) or 0
+    local _, x = setPlaces(h)
+    return x > S["space-1"] + 1 and (x - GAP_SETS + S["space-1"]) or 0
 end
 
 --------------------------------------------------------------------------------
 -- A header's button, styled once when the header makes it
 --------------------------------------------------------------------------------
 
--- Externals and defensives are the Defensives list's spells (Frames ›
--- Defensives): the game hides who cast another player's buffs, and its own
--- defensive filters then let every buff through.
-local AURA_GROUPS = {
-    { key = "dispel", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-    { key = "external", filter = { "HELPFUL" }, list = "external", border = "ward", drain = "ward" },
-    { key = "defensive", filter = { "HELPFUL" }, list = "defensive", border = "ward", drain = "ward" },
-    -- buffs come only through buff indicators (you pick them): the game's
-    -- "raid" buffs include Mark of the Wild and the like
-    { key = "debuffs", filter = { "HARMFUL", "RAID", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-}
-
--- Up to three icons inside the bar's right end, growing left.
+-- Each set its own clip and engine container, growing left from its place.
 local function buildAuras(f, h)
-    local groups = {}
     local defensives = UI.GroupDefensives()
-    for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = 3, dispel = g.dispel, drain = g.drain, digits = false,
-            harmfulEdge = g.harmfulEdge, border = g.border, include = g.list and defensives[g.list] }
+    f.auraSets = {}
+    for _, set in ipairs(AURA_SETS) do
+        local groups = {}
+        for i, g in ipairs(set.groups) do
+            groups[i] = { key = g.key, filter = g.filter, max = 2, dispel = g.dispel, drain = g.drain, digits = false,
+                harmfulEdge = g.harmfulEdge, border = g.border, include = g.list and defensives[g.list] }
+        end
+        -- the engine fills its groups in order; a clip as wide as the
+        -- setting's icons cuts off the rest, so it is that many in total
+        local clip = CreateFrame("Frame", nil, f)
+        clip:SetClipsChildren(true)
+        clip:SetFrameLevel(f.over:GetFrameLevel() + 1)
+        local ac = UI.AuraContainer(clip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT", growth = { "LEFT", "DOWN" }, groups = groups })
+        if ac then ac.container:SetPoint("TOPRIGHT", clip, "TOPRIGHT") end
+        f.auraSets[set.key] = { clip = clip, auras = ac, def = set }
     end
-    -- the engine fills its groups in order; a clip frame as wide as the
-    -- setting's icons cuts off the rest, so it is that many in total
-    f.auraClip = CreateFrame("Frame", nil, f)
-    f.auraClip:SetClipsChildren(true)
-    f.auraClip:SetFrameLevel(f.over:GetFrameLevel() + 1)
-    f.auras = UI.AuraContainer(f.auraClip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT", growth = { "LEFT", "DOWN" }, groups = groups })
-    if f.auras then
-        f.auras.container:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT")
-        M:ApplyAuraCount(f)
+    M:ApplyAuraCount(f)
+end
+
+-- Every engine container of a button's aura sets.
+local function eachAuras(f, fn)
+    for _, set in pairs(f.auraSets or {}) do
+        if set.auras then fn(set.auras, set) end
     end
 end
 
@@ -160,7 +195,7 @@ function M:StyleButton(button)
         if name ~= "unit" then return end
         btn:SetUnit(value, true)
         updateIsMe(btn)
-        if btn.auras then btn.auras:SetUnit(value or "none") end
+        eachAuras(btn, function(ac) ac:SetUnit(value or "none") end)
         M:UpdateOffline()
         if value then
             if not btn.active then btn:Activate() end
@@ -172,26 +207,32 @@ function M:StyleButton(button)
     if unit then
         f:SetUnit(unit, true)
         updateIsMe(f)
-        if f.auras then f.auras:SetUnit(unit) end
+        eachAuras(f, function(ac) ac:SetUnit(unit) end)
         f:Activate()
     end
 end
 
 function M:ApplyAuraCount(f)
-    local n = self:Get("auras")
-    for _, g in ipairs(AURA_GROUPS) do f.auras:SetGroupMax(g.key, n) end
-    -- the clip: n icons at the bar's right end, centred on its height
+    -- the clips: each set's icons at its place in the bar's right end,
+    -- centred on its height
     local h = f:GetHeight()
     local size = iconSize(h)
-    -- the icons follow the bar's height (from 21 players too); the height
-    -- only changes out of combat, where the engine's buttons take a resize
-    if not InCombatLockdown() then
-        for _, g in ipairs(AURA_GROUPS) do f.auras:SetGroupSize(g.key, size) end
+    local places = setPlaces(h)
+    for _, set in pairs(f.auraSets) do
+        local place = places[set.def.key]
+        if set.auras then
+            for _, g in ipairs(set.def.groups) do set.auras:SetGroupMax(g.key, place.count) end
+            -- the icons follow the bar's height (from 21 players too); the height
+            -- only changes out of combat, where the engine's buttons take a resize
+            if not InCombatLockdown() then
+                for _, g in ipairs(set.def.groups) do set.auras:SetGroupSize(g.key, size) end
+            end
+        end
+        set.clip:ClearAllPoints()
+        set.clip:SetPoint("RIGHT", f, "RIGHT", -place.right, 0)
+        set.clip:SetSize(math.max(1, place.width), size)
+        set.clip:SetShown(place.count > 0)
     end
-    f.auraClip:ClearAllPoints()
-    f.auraClip:SetPoint("RIGHT", f, "RIGHT", -S["space-1"] - 1, 0)
-    f.auraClip:SetSize(math.max(1, n * size + math.max(0, n - 1) * S["space-1"]), size)
-    f.auraClip:SetShown(n > 0)
 end
 
 --------------------------------------------------------------------------------
@@ -309,7 +350,7 @@ function M:ApplyOptions()
         f.opts.lowTint = self:Get("lowHealth")
         f.opts.incoming = self:Get("incoming")
         f.opts.reserveRight = auraReserve(f:GetHeight())
-        if f.auras then self:ApplyAuraCount(f) end
+        if f.auraSets then self:ApplyAuraCount(f) end
         if f.active then f:Refresh() end
     end
     self:UpdateStates()
@@ -320,15 +361,13 @@ end
 -- An offline player's auras are stale: their icons go see-through.
 function M:UpdateOffline()
     for _, f in ipairs(self.buttons or {}) do
-        if f.auras then
-            local online = true
-            local unit = f.unit
-            if unit and UI.Flag(UnitExists(unit)) then
-                local c = UnitIsConnected(unit)
-                if c ~= nil and not isSecret(c) then online = c and true or false end
-            end
-            f.auras.container:SetAlpha(online and 1 or 0)
+        local online = true
+        local unit = f.unit
+        if unit and UI.Flag(UnitExists(unit)) then
+            local c = UnitIsConnected(unit)
+            if c ~= nil and not isSecret(c) then online = c and true or false end
         end
+        eachAuras(f, function(ac) ac.container:SetAlpha(online and 1 or 0) end)
     end
 end
 
@@ -354,11 +393,11 @@ end
 function M:ApplyDefensives()
     local d = UI.GroupDefensives()
     for _, f in ipairs(self.buttons) do
-        if f.auras then
-            for _, g in ipairs(AURA_GROUPS) do
-                if g.list then f.auras:SetGroupSpells(g.key, d[g.list]) end
+        eachAuras(f, function(ac, set)
+            for _, g in ipairs(set.def.groups) do
+                if g.list then ac:SetGroupSpells(g.key, d[g.list]) end
             end
-        end
+        end)
         f:SetWardSpells(d.warded)
     end
 end
@@ -479,7 +518,7 @@ function M:PreviewView(parent)
         f:EnableMouse(false)
         buildSelected(f)
         f.icons = {}
-        for k = 1, 3 do
+        for k = 1, 4 do
             local icon = UI.Icon(f.over, 12)
             icon:Hide()
             f.icons[k] = icon
@@ -508,6 +547,7 @@ function M:DrawPreview(force)
     local perBand = math.max(1, self:Get("perBand"))
     local groups = math.ceil(count / 5)
     local size, far = iconSize(h), self:Get("rangeAlpha")
+    local places = setPlaces(h)
     local badges = self:Get("debuffBadges")
     local defensives = UI.GroupDefensives()
     local listed, warding = {}, {}
@@ -570,20 +610,31 @@ function M:DrawPreview(force)
                 f.indicatorVersion = version .. tier
                 f:SetPreviewIndicators((i % 3 == 1) and UI.IndicatorsFor(list, tier) or nil)
             end
-            local auras = d.auras or {}
-            for k, icon in ipairs(f.icons) do
-                local a = auras[k]
-                if a and k <= self:Get("auras") then
-                    icon:SetSize(size, size)
-                    icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-                    icon:SetBorder(listed[a[1]] and "ward" or a[2])
-                    icon:ClearAllPoints()
-                    icon:SetPoint("RIGHT", f, "RIGHT", -(S["space-1"] + 1) - (k - 1) * (size + S["space-1"]), 0)
-                    icon:Show()
-                else
-                    icon:Hide()
+            -- debuffs (a dispel edge) at the end, listed defensives before
+            -- them; other buffs don't show
+            local bySet = { debuffs = {}, buffs = {} }
+            for _, a in ipairs(d.auras or {}) do
+                if a[2] then bySet.debuffs[#bySet.debuffs + 1] = a
+                elseif listed[a[1]] then bySet.buffs[#bySet.buffs + 1] = a end
+            end
+            local used = 0
+            for _, set in ipairs(AURA_SETS) do
+                local place = places[set.key]
+                for k = 1, place.count do
+                    local a = bySet[set.key][k]
+                    if a then
+                        used = used + 1
+                        local icon = f.icons[used]
+                        icon:SetSize(size, size)
+                        icon:SetArt(C_Spell.GetSpellTexture(a[1]))
+                        icon:SetBorder(a[2] or "ward")
+                        icon:ClearAllPoints()
+                        icon:SetPoint("RIGHT", f, "RIGHT", -place.right - (k - 1) * (size + S["space-1"]), 0)
+                        icon:Show()
+                    end
                 end
             end
+            for k = used + 1, #f.icons do f.icons[k]:Hide() end
             f:Show()
         end
     end
@@ -643,8 +694,10 @@ local SECTION = {
               description = "The empty part of the bar warms to ember from 70% down, strongest at 10%, so the lowest stand out in a full grid. Healers want it." },
             { key = "incoming", label = "Incoming heals and absorbs", control = "toggle",
               description = "Heals on their way, past the health, then shields, hatched." },
-            { key = "auras", label = "Aura icons", control = "stepper", min = 0, max = 3, step = 1, combat = true,
-              description = "Inside the bar's right end, in order: debuffs you can remove, defensives on them, other important debuffs. Your heals over time and shields go in Buff indicators." },
+            { key = "buffIcons", label = "Defensive icons", control = "stepper", min = 0, max = 2, step = 1, combat = true,
+              description = "Inside the bar's right end: their externals, then their own defensives, from Frames › Defensives. Your heals over time and shields go in Buff indicators." },
+            { key = "debuffIcons", label = "Debuff icons", control = "stepper", min = 0, max = 2, step = 1, combat = true,
+              description = "At the bar's very end, after the defensives: debuffs you can remove first, then other important ones." },
         } },
         { title = "States", rows = {
             { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
@@ -688,7 +741,7 @@ function M:OnEnable()
         self:ApplyOptions()
     end)
 
-    for _, key in ipairs({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "auras" }) do
+    for _, key in ipairs({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "buffIcons", "debuffIcons" }) do
         self:Watch(key, function()
             self:DrawPreview()
             self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
@@ -720,7 +773,7 @@ function M:OnEnable()
         for _, f in ipairs(self.buttons) do
             if f.unit then
                 updateIsMe(f)
-                if f.auras then f.auras:Refresh() end
+                eachAuras(f, function(ac) ac:Refresh() end)
                 for _, list in pairs(f.dispelSets or {}) do for _, c in ipairs(list) do c:Refresh() end end
                 for _, c in ipairs(f.indicatorContainers or {}) do c:Refresh() end
             end

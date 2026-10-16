@@ -11,12 +11,17 @@
 
 ### Changed
 
-- Every debuff has a red edge (its type's colour when it has one), so none looks like a buff: on the target frame (Forbearance among its buffs), your debuffs, focus, boss, party and raid frames and nameplates.
+- **Buffs and debuffs apart:**
+  - **Target:** one line above the frame, its buffs from the left edge and its debuffs from the right edge, yours first on each side. A side wraps upward once it fills half the frame.
+  - **Focus:** the same, with its buffs (up to 4, anyone's) and your debuffs (up to 8).
+  - **Party frames:** beside each bar, defensives, a gap, then debuffs (the ones you can remove first). Aura icons and Show buffs became Defensive icons (2) and Debuff icons (3); other buffs show through Buff indicators.
+  - **Raid frames:** inside the bar's right end, defensives, a small gap, then debuffs at the very end. Aura icons became Defensive icons (1) and Debuff icons (2).
+- Every debuff has a red edge (its type's colour when it has one): on the target and focus, your debuffs, bosses, party and raid frames and nameplates.
 
 ### Fixed
 
 - The target frame shows a friendly target's buffs once (another player's buffs showed twice: the game hides who cast them). With Target's buffs on Everyone's they're one list; Only yours is as before.
-- Party and raid frames show a buff once (another player's buffs showed in both the external and the defensive slot, whatever they were) and only real defensives in those slots, by the Defensives list.
+- Party and raid frames show a buff once (another player's buffs showed in both the external and the defensive slot, whatever they were) and only real defensives there, by the Defensives list.
 
 ## 0.4.0-beta.4 (2026-10-16)
 

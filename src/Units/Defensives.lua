@@ -4,9 +4,9 @@
 -- then let almost every buff through, so SuuUI goes by this list: the
 -- engine matches its spell IDs, in combat too. One list per profile (not
 -- per class: you watch everyone's defensives), handed to the group frames
--- through SuuUI.UI.SetGroupDefensives. It drives the party frames' external
--- and defensive slots, the raid frames' icons inside the bar, and the Warded
--- badge and border (the entries with Warded on). Turned off, the frames show
+-- through SuuUI.UI.SetGroupDefensives. It drives the defensive icons on
+-- party and raid frames (externals first) and the Warded badge and border
+-- (the entries with Warded on). Turned off, the frames show
 -- none of them.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -74,8 +74,8 @@ end
 local WIDTH = 560
 local ROW_H = 32
 local GROUPS = {
-    { kind = "external", title = "Externals", note = "Someone else puts it on them: the external slot, first." },
-    { kind = "defensive", title = "Defensives", note = "Their own: the defensive slot, after the externals." },
+    { kind = "external", title = "Externals", note = "Someone else puts it on them; shown first." },
+    { kind = "defensive", title = "Defensives", note = "Their own; after the externals." },
 }
 local KIND_OPTIONS = { { value = "external", label = "External" }, { value = "defensive", label = "Defensive" } }
 
@@ -332,33 +332,45 @@ function M:PreviewView(parent)
     return self.previewView
 end
 
--- One frame: its state, Warded, and its auras in the list's looks.
-local function drawPerson(f, d, listed, warding)
+-- One frame: its state, Warded, and its icons as the group frames show
+-- them: listed defensives (externals first) and debuffs, each a set; other
+-- buffs don't show. place(icon, set, k) positions an icon.
+local function drawPerson(f, d, listed, warding, place)
     f:Refresh()
     f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
     for kind, deco in pairs(f.dispelDecos) do deco:SetShown(d.debuff == kind) end
     local warded = false
     for _, a in ipairs(d.auras) do warded = warded or warding[a[1]] == true end
     f.wardDeco:SetWarded(warded)
-    for k, icon in ipairs(f.icons) do
-        local a = d.auras[k]
-        if a then
-            local listedAura = listed[a[1]]
+    local sets = { buffs = {}, debuffs = {} }
+    for _, a in ipairs(d.auras) do
+        if a[2] then sets.debuffs[#sets.debuffs + 1] = a
+        elseif listed[a[1]] then sets.buffs[#sets.buffs + 1] = a end
+    end
+    table.sort(sets.buffs, function(a, b) return (listed[a[1]] == "external" and 0 or 1) < (listed[b[1]] == "external" and 0 or 1) end)
+    local used = 0
+    for _, key in ipairs({ "buffs", "debuffs" }) do
+        for k, a in ipairs(sets[key]) do
+            used = used + 1
+            local icon = f.icons[used]
+            if not icon then break end
             icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-            icon:SetBorder(a[2] and ("dispel-" .. a[2]:lower()) or (listedAura and "ward") or nil)
-            icon:SetGlow(listedAura and "glow-ward" or nil)
-            icon:Show()
-        else
-            icon:Hide()
+            icon:SetBorder(a[2] and ("dispel-" .. a[2]:lower()) or "ward")
+            icon:SetGlow(a[2] == nil and "glow-ward" or nil)
+            icon:ClearAllPoints()
+            -- place returns false for an icon the frame has no room for
+            icon:SetShown(place(icon, key, k, #sets.buffs) ~= false)
         end
     end
+    for k = used + 1, #f.icons do f.icons[k]:Hide() end
 end
 
 function M:DrawPreview()
     if not self.previewView then return end
     local d = UI.GroupDefensives()
     local listed, warding = {}, {}
-    for _, id in ipairs(d.all) do listed[id] = true end
+    for _, id in ipairs(d.defensive) do listed[id] = "defensive" end
+    for _, id in ipairs(d.external) do listed[id] = "external" end
     for _, id in ipairs(d.warded) do warding[id] = true end
     local w, h = partySize()
     local y, maxW = 0, 0
@@ -366,24 +378,30 @@ function M:DrawPreview()
         f:Resize(w, h)
         f:ClearAllPoints()
         f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", 0, -y)
-        drawPerson(f, PEOPLE[i], listed, warding)
-        for k, icon in ipairs(f.icons) do
+        -- beside the bar: defensives, space-4, then debuffs
+        drawPerson(f, PEOPLE[i], listed, warding, function(icon, set, k, nBuffs)
             icon:SetSize(h, h)
-            icon:ClearAllPoints()
-            icon:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-2"] + (k - 1) * (h + S["space-2"]), 0)
-        end
-        maxW = math.max(maxW, w + 2 * (S["space-2"] + h))
+            local x = S["space-2"] + (k - 1) * (h + S["space-2"])
+            if set == "debuffs" and nBuffs > 0 then x = x + nBuffs * (h + S["space-2"]) - S["space-2"] + S["space-4"] end
+            icon:SetPoint("TOPLEFT", f, "TOPRIGHT", x, 0)
+        end)
+        maxW = math.max(maxW, w + S["space-2"] + 3 * h + S["space-2"] + S["space-4"])
         y = y + h + S["space-2"]
     end
     y = y + S["space-6"]
     for i, f in ipairs(self.previewRaid) do
         f:ClearAllPoints()
         f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", 0, -y)
-        drawPerson(f, PEOPLE[i], listed, warding)
-        for k, icon in ipairs(f.icons) do
-            icon:ClearAllPoints()
-            icon:SetPoint("RIGHT", f, "RIGHT", -(S["space-1"] + 1) - (k - 1) * (14 + S["space-1"]), 0)
-        end
+        -- inside the right end: debuffs at the very end, defensives before
+        -- them (one of each, as the raid defaults)
+        drawPerson(f, PEOPLE[i], listed, warding, function(icon, set, k)
+            if k > 1 then return false end
+            icon:SetSize(14, 14)
+            local hasDebuff = #PEOPLE[i].auras > 0 and PEOPLE[i].debuff ~= nil
+            local x = S["space-1"] + 1
+            if set == "buffs" and hasDebuff then x = x + 14 + S["space-2"] end
+            icon:SetPoint("RIGHT", f, "RIGHT", -x, 0)
+        end)
         y = y + 20 + S["space-1"]
     end
     self.previewView:SetSize(math.max(maxW, 108), y)
@@ -397,7 +415,7 @@ local SECTION = {
     id = "defensives", label = "Defensives", category = "Frames", order = 19,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
-        { title = "Defensives", description = "Which buffs count as defensives on your party and raid frames. The game doesn't tell which of another player's buffs are defensives, so SuuUI goes by this list: one list for this profile, for everyone's frames, yours included, in combat too. It drives the party frames' external and defensive slots (Show buffs leaves these spells out, so nothing shows twice), the raid frames' icons inside the bar, and the Warded badge and border (the spells with Warded on). Every rank counts.", rows = {
+        { title = "Defensives", description = "Which buffs count as defensives on your party and raid frames. The game doesn't tell which of another player's buffs are defensives, so SuuUI goes by this list: one list for this profile, for everyone's frames, yours included, in combat too. It drives the defensive icons on party and raid frames (externals first, then their own defensives) and the Warded badge and border (the spells with Warded on). Every rank counts.", rows = {
             { label = "Defensives", control = "custom", build = buildEditor, stacked = true },
         } },
     },

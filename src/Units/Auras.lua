@@ -52,32 +52,45 @@ M:Migrate("targetSplit", function(values)
     values.targetAuras = nil
 end)
 
--- The containers that hang off a unit frame: their unit, where (point on
--- the container, point on the frame, x, y), and which setting.
+-- The containers that hang off a unit frame: the anchor they follow (their
+-- own name by default), where (point on the container, point on the frame,
+-- x, y), and which setting. `half`: as wide as half the frame, so buffs (from
+-- the left edge) and debuffs (from the right) each keep their side and wrap
+-- upward on it. Every debuff has an ember edge (a typed one its type's
+-- colour).
 local ATTACHED = {
     player = { key = "showDebuffs", at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
         size = "icon-lg", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 300,
         groups = { { key = "debuffs", filter = { "HARMFUL" }, max = 16, dispel = true, harmfulEdge = true } },
     } },
-    target = { key = "showTarget", at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
-        size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 220,
-        -- yours first; everyone else's after ("mine" in targetDebuffs / targetBuffs sets their max to 0);
-        -- every debuff has an ember edge (a typed one its type's colour), so
-        -- none looks like a buff in the one row
+    -- the target's buffs, yours first ("mine" in targetBuffs: only yours).
+    -- Everyone's is one list: the game hides who cast another player's
+    -- buffs, and those passed both "yours" and "not yours" (each showed
+    -- twice; /suu probe partyauras).
+    targetBuffs = { anchor = "target", key = "showTarget", half = true, at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
+        size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 150,
         groups = {
-            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false, harmfulEdge = true },
             { key = "myBuffs", filter = { "HELPFUL", "PLAYER" }, max = 6, drain = "fel" },
-            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true, harmfulEdge = true },
-            -- everyone's buffs, yours among them, in one list: the game hides
-            -- who cast another player's buffs, and those passed both
-            -- "yours" and "not yours" (each showed twice; /suu probe
-            -- partyauras). "Only yours" shows myBuffs instead.
             { key = "theirBuffs", filter = { "HELPFUL" }, max = 8 },
         },
     } },
-    focus = { key = "showFocus", at = { "LEFT", "RIGHT", S["space-2"], 0 }, opts = {
-        size = "icon-md", anchor = "LEFT", growth = { "RIGHT", "DOWN" },
-        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true } },
+    -- its debuffs from the right edge, yours first ("mine" in targetDebuffs
+    -- sets theirs to 0)
+    targetDebuffs = { anchor = "target", key = "showTarget", half = true, at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
+        size = "icon-md", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 150,
+        groups = {
+            { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 12, dispel = false, harmfulEdge = true },
+            { key = "theirs", filter = { "HARMFUL", "!PLAYER" }, max = 8, dispel = true, harmfulEdge = true },
+        },
+    } },
+    -- the focus as the target: its buffs (anyone's), your debuffs
+    focusBuffs = { anchor = "focus", key = "showFocus", half = true, at = { "BOTTOMLEFT", "TOPLEFT", 0, S["space-4"] }, opts = {
+        size = "icon-md", anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" }, lineWidth = 100,
+        groups = { { key = "buffs", filter = { "HELPFUL" }, max = 4 } },
+    } },
+    focusDebuffs = { anchor = "focus", key = "showFocus", half = true, at = { "BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"] }, opts = {
+        size = "icon-md", anchor = "BOTTOMRIGHT", growth = { "LEFT", "UP" }, lineWidth = 100,
+        groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 8, harmfulEdge = true } },
     } },
 }
 for i = 1, 5 do
@@ -85,6 +98,13 @@ for i = 1, 5 do
         size = "icon-md", anchor = "RIGHT", growth = { "LEFT", "DOWN" },
         groups = { { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true } },
     } }
+end
+
+-- A half-width container's line: half the frame, less half the gap between
+-- the two sides.
+local function halfWidth(frame)
+    local w = frame and frame:GetWidth() or 0
+    return math.max(UI.Size("icon-md"), math.floor((w - S["space-4"]) / 2))
 end
 
 -- The container is made once (the engine never frees one) and follows the
@@ -97,7 +117,8 @@ function M:Attach(name, frame)
     if frame and not c then
         -- your debuffs are made at the setting's size (ApplyLayout resizes them after)
         if name == "player" then def.opts.size = self:Get("debuffSize") end
-        c = UI.AuraContainer(frame, name, def.opts)
+        if def.half then def.opts.lineWidth = halfWidth(frame) end
+        c = UI.AuraContainer(frame, def.anchor or name, def.opts)
         self.attached[name] = c
     end
     if not c then return end
@@ -107,19 +128,40 @@ function M:Attach(name, frame)
         c.container:SetParent(frame)
         c.container:ClearAllPoints()
         c.container:SetPoint(at[1], frame, at[2], at[3], at[4])
+        if def.half then
+            c:SetLineWidth(halfWidth(frame))
+            -- the frame's width is a setting: the sides follow it
+            if not frame.suuHalfHooked then
+                frame.suuHalfHooked = true
+                frame:HookScript("OnSizeChanged", function(f)
+                    for key, d in pairs(ATTACHED) do
+                        if d.half and self.attachedTo[key] == f and self.attached[key] then
+                            self.attached[key]:SetLineWidth(halfWidth(f))
+                        end
+                    end
+                end)
+            end
+        end
     end
     c.container:SetShown(frame ~= nil and self:Get(def.key))
 end
 
+-- Every container that follows an anchor.
+function M:AttachAnchor(anchor, frame)
+    for name, def in pairs(ATTACHED) do
+        if (def.anchor or name) == anchor then self:Attach(name, frame) end
+    end
+end
+
 function M:ApplyOptions()
-    for name in pairs(ATTACHED) do self:Attach(name, SuuUI.GetAnchor(name)) end
+    for name, def in pairs(ATTACHED) do self:Attach(name, SuuUI.GetAnchor(def.anchor or name)) end
     -- the target's: everyone's, or only yours
-    local target = self.attached and self.attached.target
-    if target then
-        target:SetGroupMax("theirs", self:Get("targetDebuffs") == "all" and 8 or 0)
+    local debuffs, buffs = self.attached and self.attached.targetDebuffs, self.attached and self.attached.targetBuffs
+    if debuffs then debuffs:SetGroupMax("theirs", self:Get("targetDebuffs") == "all" and 8 or 0) end
+    if buffs then
         local allBuffs = self:Get("targetBuffs") == "all"
-        target:SetGroupMax("myBuffs", allBuffs and 0 or 6)
-        target:SetGroupMax("theirBuffs", allBuffs and 8 or 0)
+        buffs:SetGroupMax("myBuffs", allBuffs and 0 or 6)
+        buffs:SetGroupMax("theirBuffs", allBuffs and 8 or 0)
     end
     self:UpdateOffline()
     if self.buffs then
@@ -131,16 +173,17 @@ function M:ApplyOptions()
     end
 end
 
--- An offline player's auras are stale: the target's container goes see-through.
+-- An offline player's auras are stale: the target's containers go see-through.
 function M:UpdateOffline()
-    local target = self.attached and self.attached.target
-    if not target then return end
+    if not self.attached then return end
     local online = true
     if UI.Flag(UnitExists("target")) and UI.Flag(UnitIsPlayer("target")) then
         local c = UnitIsConnected("target")
         if c ~= nil and not (issecretvalue and issecretvalue(c)) then online = c and true or false end
     end
-    target.container:SetAlpha(online and 1 or 0)
+    for _, key in ipairs({ "targetBuffs", "targetDebuffs" }) do
+        if self.attached[key] then self.attached[key].container:SetAlpha(online and 1 or 0) end
+    end
 end
 
 -- Sizes, row length and growth, out of combat: the engine's buttons refuse a
@@ -193,16 +236,16 @@ local SECTION = {
               live = false, combat = true,
               disabled = function() if not M:Get("showDebuffs") then return true, "Your debuffs are off." end end },
         } },
-        { title = "On other frames", description = "Your focus and bosses: only the auras you cast. None on a player who is offline.", rows = {
+        { title = "On other frames", description = "Your focus: its buffs and your debuffs; bosses: only your debuffs. None on a player who is offline.", rows = {
             { key = "showTarget", label = "On your target", control = "toggle",
-              description = "Above the target frame: your debuffs first, then everyone else's; then the buffs (only yours: your HoTs and shields)." },
+              description = "Above the target frame: its buffs from the left edge, its debuffs from the right edge, yours first on each side. A side wraps upward when it fills half the frame." },
             { key = "targetDebuffs", label = "Target's debuffs", control = "segmented",
               options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
               disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },
             { key = "targetBuffs", label = "Target's buffs", control = "segmented",
               options = { { value = "all", label = "Everyone's" }, { value = "mine", label = "Only yours" } },
               disabled = function() if not M:Get("showTarget") then return true, "Auras on your target are off." end end },
-            { key = "showFocus", label = "On your focus", control = "toggle", description = "Your debuffs, after the focus bar." },
+            { key = "showFocus", label = "On your focus", control = "toggle", description = "Above the focus frame: its buffs on the left, your debuffs on the right." },
             { key = "showBoss", label = "On bosses", control = "toggle", description = "Your debuffs, left of each boss bar." },
         } },
     },
@@ -233,7 +276,7 @@ function M:OnEnable()
     self:ApplyLayout()
 
     self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame)
-        self:Attach(name, frame)
+        self:AttachAnchor(name, frame)
         if name == "target" then self:ApplyOptions() end
     end)
     for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
