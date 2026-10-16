@@ -18,6 +18,12 @@ local function show(v)
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
+-- a size or offset, rounded; geometry can be secret on Forever
+local function num(v)
+    if isSecret(v) then return "secret" end
+    if type(v) ~= "number" then return tostring(v) end
+    return tostring(math.floor(v + 0.5))
+end
 
 local function out()
     SuuUIProbe = SuuUIProbe or {}
@@ -39,20 +45,24 @@ local function pointOf(r)
     local ok, p, rel, rp, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not p then return "-" end
     local relName = rel and (rel.GetName and rel:GetName() or "?") or "nil"
-    return ("%s>%s.%s %s,%s"):format(p, tostring(relName), tostring(rp), show(x and math.floor(x + 0.5)), show(y and math.floor(y + 0.5)))
+    return ("%s>%s.%s %s,%s"):format(show(p), show(relName), show(rp), num(x), num(y))
 end
 
 local function textures(frame, path, lines, depth)
     if depth > 7 or #lines > 600 then return end
     for _, r in ipairs({ frame:GetRegions() }) do
         if r:GetObjectType() == "Texture" then
-            local atlas = r.GetAtlas and r:GetAtlas()
-            local file = r:GetTexture()
-            local w, h = r:GetSize()
-            local layer, sub = r:GetDrawLayer()
-            lines[#lines + 1] = ("%s.%s [%s %s] %s %sx%s a=%.2f %s %s"):format(path, keyOf(frame, r), tostring(layer), tostring(sub),
-                atlas and ("atlas " .. atlas) or ("file " .. show(file)), show(w and math.floor(w)), show(h and math.floor(h)),
-                r:GetAlpha() or 0, r:IsShown() and "shown" or "hidden", pointOf(r))
+            -- each on its own: one that can't be read is a line saying why
+            local ok, line = pcall(function()
+                local atlas = r.GetAtlas and r:GetAtlas()
+                local file = r:GetTexture()
+                local w, h = r:GetSize()
+                local layer, sub = r:GetDrawLayer()
+                return ("%s.%s [%s %s] %s %sx%s a=%s %s %s"):format(path, keyOf(frame, r), show(layer), show(sub),
+                    atlas and ("atlas " .. show(atlas)) or ("file " .. show(file)), num(w), num(h),
+                    show(r:GetAlpha()), r:IsShown() and "shown" or "hidden", pointOf(r))
+            end)
+            lines[#lines + 1] = ok and line or (path .. ".? error " .. tostring(line))
         end
     end
     for _, c in ipairs({ frame:GetChildren() }) do
@@ -69,15 +79,19 @@ function CP.Record()
     o.at = date("%Y-%m-%d %H:%M:%S")
     local tabs = {}
     for i, t in ipairs(f.TabContainer and f.TabContainer.Tabs or {}) do
-        local w, h = t:GetSize()
-        tabs[#tabs + 1] = ("%d id=%s %s %sx%s %s checked=%s enabled=%s skinned=%s"):format(i, show(t:GetID()), t:IsShown() and "shown" or "hidden",
-            show(math.floor(w)), show(math.floor(h)), pointOf(t), show(t.GetChecked and t:GetChecked()), show(t:IsEnabled()), show(t.suuSkin ~= nil))
+        local ok, line = pcall(function()
+            local w, h = t:GetSize()
+            return ("%d id=%s %s %sx%s %s checked=%s enabled=%s skinned=%s type=%s"):format(i, show(t:GetID()), t:IsShown() and "shown" or "hidden",
+                num(w), num(h), pointOf(t), show(t.GetChecked and t:GetChecked()), show(t.IsEnabled and t:IsEnabled()), show(t.suuSkin ~= nil), t:GetObjectType())
+        end)
+        tabs[#tabs + 1] = ok and line or (i .. " error " .. tostring(line))
     end
     o.tabs = tabs
     local own = {}
     for _, r in ipairs({ f:GetRegions() }) do
         if r:GetObjectType() == "Texture" and r:IsShown() and (r:GetAlpha() or 0) > 0 then
-            own[#own + 1] = ("%s %s %s"):format(keyOf(f, r), tostring(r:GetAtlas() or r:GetTexture()), pointOf(r))
+            local ok, line = pcall(function() return ("%s %s %s"):format(keyOf(f, r), show(r:GetAtlas() or r:GetTexture()), pointOf(r)) end)
+            own[#own + 1] = ok and line or ("error " .. tostring(line))
         end
     end
     o.window = own
@@ -85,7 +99,8 @@ function CP.Record()
         local p = _G[name]
         if p and p:IsShown() then
             local lines = {}
-            textures(p, name, lines, 0)
+            local ok, err = pcall(textures, p, name, lines, 0)
+            if not ok then lines[#lines + 1] = "stopped: " .. tostring(err) end
             o[name] = lines
             ns.Print(("Collections art probe: %s, %d textures."):format(name, #lines))
         end
