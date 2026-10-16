@@ -442,7 +442,8 @@ function M:BuildSend(page)
     self:BuildSuggest(send.to)
     -- the message: a multi-line field in a sunk well, 500 characters
     local well = CreateFrame("Frame", nil, page)
-    well:SetPoint("TOPLEFT", 0, -2 * (30 + S["space-4"]))
+    -- the message, attachments and money start where To and Subject do
+    well:SetPoint("TOPLEFT", labelW, -2 * (30 + S["space-4"]))
     well:SetPoint("RIGHT")
     well:SetHeight(150)
     UI.Fill(well, "surface-sunk"):SetAllPoints()
@@ -474,7 +475,7 @@ function M:BuildSend(page)
     send.slots = {}
     for a = 1, ATTACH_OUT do
         local b = UI.ItemSlot(page)
-        b:SetPoint("TOPLEFT", (a - 1) * (36 + S["space-2"]), -attachY - 4)
+        b:SetPoint("TOPLEFT", labelW + (a - 1) * (36 + S["space-2"]), -attachY - 4)
         b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         b:RegisterForDrag("LeftButton")
         b:SetScript("OnClick", function(_, button) call(ClickSendMailItemButton, a, button == "RightButton") end)
@@ -492,7 +493,7 @@ function M:BuildSend(page)
     local moneyY = attachY + 36 + S["space-5"] + 4
     send.mode = UI.Segmented(page, { options = { { value = "send", label = "Send money" }, { value = "cod", label = "Cash on delivery" } },
         value = "send", onChange = function() self:DrawSendState() end })
-    send.mode:SetPoint("TOPLEFT", 0, -moneyY)
+    send.mode:SetPoint("TOPLEFT", labelW, -moneyY)
     send.money = moneyInput(page, function() self:DrawSendState() end)
     send.money:SetPoint("LEFT", send.mode, "RIGHT", S["space-5"], 0)
     -- the foot: postage and Send
