@@ -1084,10 +1084,10 @@ end
 -- their clicks, tooltips and super-tracking; a SuuUI pin without the mouse
 -- sits in each, the game's art hidden, kept up to date after each of the
 -- game's style, selection and highlight changes, and sized like SuuUI's pins
--- at every zoom. The objective areas: a dark fill from one of the game's
--- own textures (its area drawing takes no addon texture: SuuUI's showed its
--- missing-texture green, with or without the extension; found in game), the
--- game's edge kept.
+-- at every zoom. The objective areas stay the game's: its area drawing
+-- takes no addon texture (SuuUI's hatch and edge showed its missing-texture
+-- green, with or without the extension; found in game), and their shapes
+-- aren't given to addons to draw otherwise.
 --------------------------------------------------------------------------------
 
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -1119,12 +1119,6 @@ function M:UnstyleQuest()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do unstyle(pin) end
-    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
-        if pin.SetFillTexture then
-            pin:SetFillTexture("Interface\\WorldMap\\UI-QuestBlob-Inside")
-            pin:SetFillAlpha(128)
-        end
-    end
 end
 
 function M:StyleQuestPin(pin)
@@ -1219,20 +1213,6 @@ function M:StyleQuestPins()
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("QuestPinTemplate") do self:StyleQuestPin(pin) end
-end
-
--- (the game's dialog background: black, opaque; the alpha 0-255. The area
--- is one permanent pin, its textures set once when it's made.)
-local BLOB_FILL, BLOB_FILL_ALPHA = "Interface\\DialogFrame\\UI-DialogBox-Background", 110
-function M:StyleQuestBlobs()
-    local f = self.map
-    if not f or not f.EnumeratePinsByTemplate then return end
-    for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
-        if pin.SetFillTexture then
-            pin:SetFillTexture(BLOB_FILL)
-            pin:SetFillAlpha(BLOB_FILL_ALPHA)
-        end
-    end
 end
 
 -- The game's quest pins' provider: after each of its refreshes, the look.
@@ -1458,7 +1438,6 @@ function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:HookQuestProviders()
     self:StyleQuestPins()
-    self:StyleQuestBlobs()
     self:Watch("pinAlpha", function()
         if self.map and self.map:IsShown() then self:Layout() end
         if self.preview then for _, pin in ipairs(self.preview.pins) do pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100) end end
