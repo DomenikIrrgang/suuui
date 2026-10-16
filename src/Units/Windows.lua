@@ -1165,6 +1165,14 @@ function M:SkinTrainer()
     if _G.ClassTrainerFrame_InitCategoryButton then
         hooksecurefunc("ClassTrainerFrame_InitCategoryButton", function(c) styleTrainerCategory(c) end)
     end
+    -- a profession's next rank (Journeyman Blacksmith) sits over the list as
+    -- a row of its own, filled by the list's update
+    if _G.ClassTrainerFrame_Update then
+        hooksecurefunc("ClassTrainerFrame_Update", function()
+            local step = _G.ClassTrainerFrameSkillStepButton
+            if step and step:IsShown() then styleTrainerRow(step) end
+        end)
+    end
     local chrome = UI.SkinWindow(f, {
         title = "Trainer", icon = "book", close = _G.ClassTrainerFrameCloseButton, topInset = 20, under = "microMenu",
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks,
