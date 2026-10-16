@@ -251,6 +251,8 @@ local function build()
 end
 
 function CP.Command()
+    -- the game's slot helpers live with its collections window
+    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_Collections") end
     out = { at = date("%Y-%m-%d %H:%M:%S") }
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.collectionsOwn = out
