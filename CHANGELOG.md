@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Skyborne characters see the quests they can pick up on the world map (none showed that is limited by race or faction).
+
 ## 0.4.0-beta.1 (2026-10-16)
 
 ### New
