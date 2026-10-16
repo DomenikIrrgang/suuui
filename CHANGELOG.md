@@ -4,6 +4,7 @@
 
 ### New
 
+- **Merchant window** in SuuUI's look (first version, to test): the goods as one list with a search and the game's filter; a quantity to buy (in items, bought in the merchant's stack sizes, capped at what's left and what you can afford); "You have N"; what you already know greyed with "✓ Known"; the item you sold last with Undo; Buy back; Repair all, repair one item, guild repair and Sell junk with what it brings; the merchant's currencies.
 - `/suu probe ahscan` (at the auction house) checks whether the full scan works on Forever.
 
 ### Changed

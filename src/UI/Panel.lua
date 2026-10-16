@@ -463,8 +463,13 @@ end
 -- row above a gilt-faint rule. Escape closes it (it needs a `name` for that).
 --
 --   UI.WindowFrame(parent, { name = "SuuUIGallery", title = "Gallery", meta = "…",
---       keybind = "P", width = 780, height = 560, footer = true })
+--       keybind = "P", width = 780, height = 560, footer = true,
+--       tabs = { { key = "buy", label = "Merchant" }, … }, onTab = fn(key) })  -- 0.16
 --   window.content  the scrolling content frame; window.footer when asked for
+--   window:SetTab(key) (0.16): shows that tab as chosen and calls onTab
+--
+-- Tabs sit under the title as text tabs: header type in ink-muted, the
+-- chosen one gilt-text over a gilt hairline with its jewel.
 --------------------------------------------------------------------------------
 
 function UI.WindowFrame(parent, opts)
@@ -483,6 +488,48 @@ function UI.WindowFrame(parent, opts)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetScript("OnShow", function(self) Motion.Enter(self, T.duration["dur-fast"]) end)
 
+    local top = f:BodyTop()
+    if opts.tabs then
+        local TAB_H = 28
+        f.tabRow = CreateFrame("Frame", nil, f)
+        f.tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
+        f.tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
+        f.tabRow:SetHeight(TAB_H)
+        f.tabButtons = {}
+        local x = 0
+        for _, t in ipairs(opts.tabs) do
+            local b = CreateFrame("Button", nil, f.tabRow)
+            b.key = t.key
+            b.label = UI.Text(b, "header", "ink-muted")
+            b.label:SetPoint("CENTER", 0, 2)
+            b.label:SetValue(t.label)
+            local w = UI.MeasureText("header", t.label) + 2 * S["space-4"]
+            b:SetSize(w, TAB_H)
+            b:SetPoint("LEFT", x, 0)
+            x = x + w + S["space-2"]
+            b.rule = UI.Hairline(b, "gilt-line", "both")
+            b.rule:SetPoint("BOTTOMLEFT")
+            b.rule:SetPoint("BOTTOMRIGHT")
+            b.jewel = UI.Diamond(b, 5, "gilt")
+            b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
+            b:SetScript("OnEnter", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink")) end end)
+            b:SetScript("OnLeave", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink-muted")) end end)
+            b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
+            f.tabButtons[#f.tabButtons + 1] = b
+        end
+        function f:SetTab(key)
+            self.tab = key
+            for _, b in ipairs(self.tabButtons) do
+                local on = b.key == key
+                b.label:SetTextColor(UI.RGBA(on and "gilt-text" or "ink-muted"))
+                b.rule:SetShown(on)
+                b.jewel:SetShown(on)
+            end
+            if opts.onTab then opts.onTab(key) end
+        end
+        top = top + TAB_H + S["space-4"]
+    end
+
     local bottom = 0
     if opts.footer then
         local footH = 30 + S["space-4"] * 2
@@ -498,7 +545,7 @@ function UI.WindowFrame(parent, opts)
 
     -- The body becomes a scroll frame; content goes into window.content.
     f.body:ClearAllPoints()
-    f.body:SetPoint("TOPLEFT", S["space-5"], -f:BodyTop())
+    f.body:SetPoint("TOPLEFT", S["space-5"], -top)
     f.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
     f.body:SetScript("OnSizeChanged", nil)
     local scroll = CreateFrame("ScrollFrame", nil, f.body)

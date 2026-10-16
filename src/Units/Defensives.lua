@@ -195,7 +195,7 @@ local function buildEditor(parent)
                 mutate(function(l) table.insert(l, e) end)
             end
         end })
-    f.reset = UI.Button(f, { text = "Reset to SuuUI's list", icon = "reset", tooltip = "It is SuuUI's list.",
+    f.reset = UI.Button(f, { text = "Reset to SuuUI's list", icon = "reset", tooltip = { title = "Reset to SuuUI's list", description = "Your changes go; SuuUI's list comes back (new spells SuuUI adds later come with it)." },
         onClick = function() M:Set("list", false) end })
 
     function f:Refresh()
