@@ -1,6 +1,7 @@
 -- Diagnostics/PartyAuraProbe.lua
--- "/suu probe partyauras": which of a party member's auras each of the
--- party frames' aura groups lets through (the engine's own filter test), and
+-- "/suu probe partyauras": which of a party member's (and your target's)
+-- auras each of the party frames' and the target frame's aura groups lets
+-- through (the engine's own filter test), and
 -- how many icons each frame's aura container shows. Prints in chat and saves
 -- to SuuUIProbe.partyAuras. Out of combat.
 
@@ -14,9 +15,17 @@ local function show(v) if isSecret(v) then return "secret" end return tostring(v
 
 local FILTERS = {
     dispel = "HARMFUL|RAID_PLAYER_DISPELLABLE",
-    external = "HELPFUL|EXTERNAL_DEFENSIVE",
+    external = "HELPFUL|EXTERNAL_DEFENSIVE|!BIG_DEFENSIVE",
     defensive = "HELPFUL|BIG_DEFENSIVE",
     debuffs = "HARMFUL|!RAID_PLAYER_DISPELLABLE|RAID",
+    -- the target frame's (Auras module): yours, then everyone else's
+    tMine = "HARMFUL|PLAYER",
+    tMyBuffs = "HELPFUL|PLAYER",
+    tTheirs = "HARMFUL|!PLAYER",
+    tTheirBuffs = "HELPFUL|!PLAYER",
+    -- does "!" work at all: a filter no aura can pass, negated
+    notCancel = "HELPFUL|!CANCELABLE",
+    cancel = "HELPFUL|CANCELABLE",
 }
 
 local function shownChildren(frame)
@@ -35,7 +44,7 @@ function PA.Command()
     local out = { at = date("%H:%M:%S") }
     SuuUIProbe.partyAuras = out
     local m = SuuUI.GetModule("party")
-    for _, unit in ipairs({ "player", "party1", "party2", "party3", "party4" }) do
+    for _, unit in ipairs({ "player", "party1", "party2", "party3", "party4", "target" }) do
         if UnitExists(unit) then
             local name = UnitName(unit)
             local line = { unit = unit, name = show(name), auras = {} }
@@ -49,7 +58,8 @@ function PA.Command()
                         parts[#parts + 1] = key .. "=" .. (ok2 and (out2 and "out" or "IN") or "err")
                     end
                     table.sort(parts)
-                    local text = ("%s (%s) from %s: %s"):format(show(a.name), show(a.spellId), show(a.sourceUnit), table.concat(parts, " "))
+                    local text = ("%s (%s) from %s, mine %s: %s"):format(show(a.name), show(a.spellId), show(a.sourceUnit),
+                        show(a.isFromPlayerOrPlayerPet), table.concat(parts, " "))
                     line.auras[#line.auras + 1] = text
                     ns.Print(unit .. " " .. show(name) .. " · " .. text)
                 end
