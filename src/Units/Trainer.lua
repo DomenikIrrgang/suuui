@@ -289,12 +289,21 @@ function M:Refresh()
         local total, used = call(C_PetInfo.GetPetTrainingPoints)
         self.points:SetValue("Training points: " .. ((total or 0) - (used or 0)))
     end
-    -- the services: the profession's next rank first, then by category
+    -- the services: the profession's next rank first, then by category. The
+    -- game gives a class trainer's spells none: their spellbook line instead
+    -- (SuuUI's trainer data, as the spellbook groups them)
+    local schoolOf = {}
+    if not pet and not (IsTradeskillTrainer and IsTradeskillTrainer()) then
+        for _, sp in ipairs(SuuUI.TrainerSpells and SuuUI.TrainerSpells() or {}) do
+            if sp.name and sp.school then schoolOf[sp.name] = sp.school end
+        end
+    end
     local list, groups, byName = {}, {}, {}
     local step = call(GetTrainerServiceStepIndex)
     for i = 1, (call(GetNumTrainerServices) or 0) do
         local e = service(i)
         if e then
+            e.category = e.category or schoolOf[e.name]
             if i == step then
                 table.insert(list, 1, e)
             elseif categorize and e.category then
