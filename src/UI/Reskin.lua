@@ -442,6 +442,26 @@ function UI.ReskinMenu(menu)
         end
     end
     for _, row in ipairs(rows) do menuRow(st, row) end
+    -- the game's frame keeps room under its rows for its own drop shadow: the
+    -- panel ends under the last row instead, as far below it as the first
+    -- row is below the top
+    local top, first, last = menu:GetTop(), nil, nil
+    for _, row in ipairs(rows) do
+        local t, b = row:GetTop(), row:GetBottom()
+        if row:IsShown() and t and b then
+            if not first or t > first:GetTop() then first = row end
+            if not last or b < last:GetBottom() then last = row end
+        end
+    end
+    st.panel:ClearAllPoints()
+    if top and first and last then
+        local pad = math.max(0, top - first:GetTop())
+        st.panel:SetPoint("TOPLEFT", menu, "TOPLEFT")
+        st.panel:SetPoint("RIGHT", menu, "RIGHT")
+        st.panel:SetPoint("BOTTOM", last, "BOTTOM", 0, -pad)
+    else
+        st.panel:SetAllPoints(menu)
+    end
 end
 
 -- An icon button (the set popup's grid and its chosen icon): every bit of
