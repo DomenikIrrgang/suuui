@@ -347,11 +347,20 @@ end
 
 -- A Battle.net friend's card person (their account name is protected text
 -- the game draws; SuuUI never reads it).
+-- Can you invite them: in Forever, on your realm and in your faction (the
+-- game's own friends list asks the same).
+local function canCooperate(game)
+    if not (game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID) then return false end
+    local realm = GetRealmID and GetRealmID()
+    if not (plain(game.realmID) and game.realmID and realm and game.realmID == realm) then return false end
+    return plain(game.factionName) and game.factionName == UnitFactionGroup("player")
+end
+
 function M:BnetPerson(accountID)
     local info = C_BattleNet and C_BattleNet.GetAccountInfoByID and C_BattleNet.GetAccountInfoByID(accountID)
     if not info then return nil end
     local game = info.gameAccountInfo or {}
-    local person = { name = info.accountName or info.battleTag or "?" }
+    local person = { name = info.accountName or info.battleTag or "?", bnetID = accountID }
     if plain(info.battleTag) and info.battleTag then person.tag = info.battleTag:match("(#%d+)$") end
     person.whisper = function()
         local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or ChatFrame_SendBNetTell
@@ -366,7 +375,7 @@ function M:BnetPerson(accountID)
         person.detail = game.characterName .. " · " .. where
         -- invited by their game account, as the game's friends list does (by
         -- name and realm the game didn't find them; found in game)
-        if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
+        if canCooperate(game) then
             local id = game.gameAccountID
             person.invite = function()
                 local fn = (C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend
@@ -411,12 +420,41 @@ function M:FlushPresence(key)
     if not self:IsEnabled() or #q.people == 0 then return end
     local k = KINDS_OF[q.kind]
     local source = k.source or (GetGuildInfo("player")) or "Guild"
+    -- Battle.net friends as they are now: by the event their character
+    -- often wasn't there yet
+    if q.kind == "bnet" then
+        for i, p in ipairs(q.people) do q.people[i] = p.bnetID and self:BnetPerson(p.bnetID) or p end
+    end
     local single = #q.people == 1 and q.people[1]
     self.presenceCount = (self.presenceCount or 0) + 1
-    self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = q.online and 6 or 4,
-        presence = { online = q.online, source = source, people = q.people, plural = k.plural, glyph = k.glyph,
-                     invite = q.online and single and (single.invite
-                         or single.inviteName and function() invite(single.inviteName) end) or nil } })
+    local id = "suu:presence:" .. self.presenceCount
+    local function show()
+        self:Notify({ id = id, kind = "timed", duration = q.online and 6 or 4,
+            presence = { online = q.online, source = source, people = q.people, plural = k.plural, glyph = k.glyph,
+                         invite = q.online and single and (single.invite
+                             or single.inviteName and function() invite(single.inviteName) end) or nil } })
+    end
+    show()
+    -- one Battle.net friend still loading in: the card gains Invite when
+    -- their character arrives on your realm and side, while it shows
+    if q.online and single and single.bnetID and not single.invite then
+        self.awaitInvite = { id = id, bnetID = single.bnetID, refresh = function(person)
+            q.people[1], single = person, person
+            show()
+        end }
+    end
+end
+
+-- A Battle.net friend's info changed: the card waiting for their character.
+function M:BnetInfoChanged()
+    local w = self.awaitInvite
+    if not w then return end
+    if not self.notes[w.id] then self.awaitInvite = nil return end
+    local person = self:BnetPerson(w.bnetID)
+    if person and person.invite then
+        self.awaitInvite = nil
+        w.refresh(person)
+    end
 end
 
 -- The game's system line: who, and whether it's theirs to show.
@@ -1265,6 +1303,7 @@ function M:OnEnable()
         self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, id)
             if plain(id) and id then self:Presence("bnet", true, self:BnetPerson(id)) end
         end)
+        self:OnGameEvent("BN_FRIEND_INFO_CHANGED", function() self:BnetInfoChanged() end)
         self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, id)
             if plain(id) and id then self:Presence("bnet", false, self:BnetPerson(id)) end
         end)

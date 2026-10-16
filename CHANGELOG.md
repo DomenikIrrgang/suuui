@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A Battle.net friend coming online on your realm and in your faction gets an Invite button on their note (also when their character arrives a moment after the note). The Social window invites them only then too, and says why not otherwise.
 - The aggro alerts ("You have drawn aggro", "You're about to pull") show in a group only when someone there holds the mobs: a tank or a pet. Two damage dealers questing together get none. Settings › Threat meter › In the open world turns them off outside dungeons, raids and battlegrounds.
 
 ### Fixed

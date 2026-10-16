@@ -88,8 +88,16 @@ function M:Friends()
                 if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
                     -- by their game account, as the game's friends list does
                     -- (by name and realm the game didn't find them: the realm
-                    -- is the server's own name; found in game)
-                    row.invite, row.gameAccountID = true, game.gameAccountID
+                    -- is the server's own name; found in game); only on your
+                    -- realm and side
+                    local realm = GetRealmID and GetRealmID()
+                    if not (plain(game.realmID) and realm and game.realmID == realm) then
+                        row.why = "They're on another realm."
+                    elseif not (plain(game.factionName) and game.factionName == UnitFactionGroup("player")) then
+                        row.why = "They're in the other faction."
+                    else
+                        row.invite, row.gameAccountID = true, game.gameAccountID
+                    end
                 else
                     row.why = "They're playing another version of World of Warcraft."
                     row.detail = "Playing World of Warcraft"
