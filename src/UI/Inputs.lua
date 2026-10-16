@@ -528,3 +528,52 @@ function UI.TextField(parent, opts)
     f:SetValue(opts.value or "")
     return f
 end
+
+--------------------------------------------------------------------------------
+-- MoneyInput (0.16): an amount as three fields, gold, silver and copper, each
+-- followed by its coin letter in the coin colour.
+--
+--   local m = UI.MoneyInput(parent, { value = copper, onChange = fn(copper) })
+--   m:GetCopper(), m:SetCopper(copper), m:Clear(), m:SetDisabled(disabled)
+--------------------------------------------------------------------------------
+
+function UI.MoneyInput(parent, opts)
+    opts = opts or {}
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(200, 30)
+    local fields = {}
+    local x = 0
+    local function changed()
+        if opts.onChange then opts.onChange(f:GetCopper()) end
+    end
+    for _, d in ipairs({ { "g", "coin-gold", 70, 6 }, { "s", "coin-silver", 44, 2 }, { "c", "coin-copper", 44, 2 } }) do
+        local t = UI.TextField(f, { width = d[3], onTextChanged = changed })
+        t.edit:SetNumeric(true)
+        t.edit:SetMaxLetters(d[4])
+        t:SetPoint("LEFT", x, 0)
+        local unit = UI.Text(f, "label", d[2])
+        unit:SetValue(d[1])
+        unit:SetPoint("LEFT", t, "RIGHT", 3, 0)
+        x = x + d[3] + 14
+        fields[#fields + 1] = t
+    end
+    f:SetWidth(x)
+    f.fields = fields
+    function f:GetCopper()
+        local g = tonumber(fields[1].edit:GetText()) or 0
+        local s = tonumber(fields[2].edit:GetText()) or 0
+        local c = tonumber(fields[3].edit:GetText()) or 0
+        return g * 10000 + math.min(99, s) * 100 + math.min(99, c)
+    end
+    function f:SetCopper(copper)
+        copper = math.max(0, math.floor(copper or 0))
+        local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+        fields[1]:SetValue(g > 0 and tostring(g) or "")
+        fields[2]:SetValue((s > 0 or g > 0) and tostring(s) or "")
+        fields[3]:SetValue(tostring(c))
+    end
+    function f:Clear() for _, t in ipairs(fields) do t:SetValue("") end end
+    function f:SetDisabled(disabled) for _, t in ipairs(fields) do t:SetDisabled(disabled) end end
+    if opts.value then f:SetCopper(opts.value) end
+    return f
+end

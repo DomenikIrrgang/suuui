@@ -150,6 +150,7 @@ All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or p
 |---|---|
 | `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only |
 | `SectionHeader(parent, label, meta, width)` | A label on the world with a fading gilt rule; `:SetLabel(label, meta)` |
+| `MoneyInput(parent, { value, onChange })` (0.16) | An amount as gold, silver and copper fields with their coin letters: `:GetCopper()`, `:SetCopper(copper)`, `:Clear()`, `:SetDisabled(disabled)`; `onChange(copper)` as it's typed |
 | `WindowFrame(parent, { name, title, meta, keybind, width, height, footer, onClose, tabs, onTab })` | The shell of every full window: draggable, Escape closes it (with a `name`), content in `window.content` (scrolls), optional `window.footer`; 0.16: `tabs = { { key, label } }` puts text tabs under the title, `window:SetTab(key)` chooses one and calls `onTab(key)` |
 | `Button(parent, { text, variant = "quiet" or "primary", onClick, width, disabled, tooltip, icon })` | `:SetLabel(text)`, `:SetEnabledState(enabled)` (0.15: a disabled button still shows its `tooltip` on hover, the place to say why it's off); `icon` (0.13): a glyph name (`"reset"`, `"close"`), 12px left of the label; `:SetIcon(name)` changes it (nil: none) |
 | `CloseButton(parent, onClick)`, `KeyChip(parent, key)` | Header pieces |

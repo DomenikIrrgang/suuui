@@ -395,32 +395,6 @@ end
 -- Send
 --------------------------------------------------------------------------------
 
-local function moneyInput(parent, onChange)
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(200, 30)
-    local fields = {}
-    local x = 0
-    for _, d in ipairs({ { "g", "coin-gold", 70, 6 }, { "s", "coin-silver", 44, 2 }, { "c", "coin-copper", 44, 2 } }) do
-        local t = UI.TextField(f, { width = d[3], onTextChanged = onChange })
-        t.edit:SetNumeric(true)
-        t.edit:SetMaxLetters(d[4])
-        t:SetPoint("LEFT", x, 0)
-        local unit = UI.Text(f, "label", d[2])
-        unit:SetValue(d[1])
-        unit:SetPoint("LEFT", t, "RIGHT", 3, 0)
-        x = x + d[3] + 14
-        fields[#fields + 1] = t
-    end
-    f:SetWidth(x)
-    function f:GetCopper()
-        local g, s, c = tonumber(fields[1].edit:GetText()) or 0, tonumber(fields[2].edit:GetText()) or 0, tonumber(fields[3].edit:GetText()) or 0
-        return g * 10000 + math.min(99, s) * 100 + math.min(99, c)
-    end
-    function f:Clear() for _, t in ipairs(fields) do t:SetValue("") end end
-    f.fields = fields
-    return f
-end
-
 function M:BuildSend(page)
     local send = {}
     self.send = send
@@ -494,7 +468,7 @@ function M:BuildSend(page)
     send.mode = UI.Segmented(page, { options = { { value = "send", label = "Send money" }, { value = "cod", label = "Cash on delivery" } },
         value = "send", onChange = function() self:DrawSendState() end })
     send.mode:SetPoint("TOPLEFT", labelW, -moneyY)
-    send.money = moneyInput(page, function() self:DrawSendState() end)
+    send.money = UI.MoneyInput(page, { onChange = function() self:DrawSendState() end })
     send.money:SetPoint("LEFT", send.mode, "RIGHT", S["space-5"], 0)
     -- the foot: postage and Send
     send.postage = UI.Text(page, "label", "ink-muted")
