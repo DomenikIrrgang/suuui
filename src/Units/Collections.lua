@@ -775,11 +775,11 @@ function M:Refresh()
     local tools = self.tools
     tools.count:SetValue(("%d |cff%sof %d|r"):format(have, T.color["ink-muted"].hex, #all))
     tools.fill:SetWidth(math.max(1, 60 * (#all > 0 and have / #all or 0)))
-    -- the chosen one stays while it is listed; else the first
+    -- the chosen one stays while it is listed; else the first (also with
+    -- none of your own: asked in game, the stage is never empty then)
     local still = false
     for _, e in ipairs(entries) do if self.chosen and e.id == self.chosen.id then self.chosen = e; still = true end end
-    if not still then self.chosen = (have > 0 or #entries > 0) and entries[1] or nil end
-    if have == 0 and not self.picked then self.chosen = nil end
+    if not still then self.chosen = entries[1] end
     self:DrawStrip()
     self:DrawStage()
     self:DrawFoot()
@@ -787,7 +787,7 @@ end
 
 function M:Choose(e)
     if not e then return end
-    self.chosen, self.picked = e, true
+    self.chosen = e
     self:DrawStrip()
     self:DrawStage()
 end
