@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0-beta.1 (2026-10-16)
 
 ### New
 
@@ -21,6 +21,24 @@
 - **Enlarged map:** the map opens enlarged in the middle of the screen (the maximize button, instead of the game's fullscreen; − makes it small, remembered), the quest log beside it as you left it and the world around it still seen and clickable. Settings › World map › Enlarged map sets its size (80% of the screen's height by default).
 - **Map marks:** your own marks on the map. Ctrl+click the world map to place one, name it and give it one of eight symbols like the raid markers. A mark can show you the way (the game's navigation arrow) and be posted to your group: a chat line with the game's map pin link anyone can click, and SuuUI players get the mark itself on their map and minimap. Marks show on the minimap too, those further away on its edge pointing their way. Map filters › Marks.
 - `/suu probe calendar`, `/suu probe proficons`, `/suu probe marks` and `/suu probe givers` (quest givers checked against the map) for checking what the game reports.
+- **Plugin API 0.15** (`Docs/API.md`): map pins (`SuuUI.UI.MapPin`), the map's data (`SuuUI.QuestStarts`, `MapPlaces`, `MapOverlays`, `InstanceLevels`), your map marks (`SuuUI.GetModule("marks")`), `SkinWindow`'s `headExtra` and `rowMid`, and a disabled `UI.Button` showing its tooltip.
+
+### Changed
+
+- **New defaults** (settings you changed keep your values; those you never changed take the new ones):
+  - action bar buttons 24px with larger key text, empty slots shown;
+  - nameplates a little larger;
+  - party and raid frames mark low health and fade to 25% out of range; raid frames 19px tall, 8px apart, with one aura;
+  - the damage meter in class colours with 9 rows; threat in raw values, always shown; readiness off;
+  - the spellbook lists spells still to train; Collections in the micro menu; the bag bar shows on mouseover;
+  - edit mode snaps to a 4px grid; the beta's issue reporter is hidden; your group finder ad posts in General;
+  - new places for the bags, tooltips, bag bar and action bar 5;
+  - buff indicators per druid spec, and a missing Battle Shout for Protection warriors.
+- The damaged-gear notes show an anvil instead of a hammer.
+
+### Fixed
+
+- Tooltip titles and subtitles longer than the tooltip wrap inside it instead of running past its edge.
 
 ## 0.3.0-beta.1 (2026-10-15)
 
