@@ -14,7 +14,7 @@
 - Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
 - Party and raid frames show every debuff after the ones you can remove (Forbearance on you didn't show), not only the ones the game marks for raids.
 
-- Mage trainer data from today's beta patch: Arcane Wrath and Frost Blast are new (the spellbook lists them to train, the trainer groups them), and the new values of Arcane Blast and Ice Lance.
+- Trainer data from today's beta patch: for mages Arcane Wrath and Frost Blast are new, Arcane Blast and Ice Lance changed; for paladins Salvation and Mass Salvation replace Blessing of Salvation and Greater Blessing of Salvation, Seal of Fury's last rank comes at 26, and many spells' values changed (the spellbook lists the new ones to train, the trainer groups them).
 
 ### Fixed
 
