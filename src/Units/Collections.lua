@@ -410,11 +410,16 @@ local function stageArt(stage)
     UI.Border(stage, "gilt-faint")
 end
 
--- The stage's tint: the light and the floor glow (30% and 20%).
+-- The stage's tint: a faint key light and floor glow (the soft disc is
+-- solid over most of its middle, so at the design's 30% the light read as
+-- a yellow lamp: seen in game).
+local LIGHT_A, POOL_A = 0.09, 0.08
 local function tintStage(stage, token)
     local r, g, b = UI.RGBA(token)
-    stage.light:SetVertexColor(r, g, b, 0.3)
-    stage.pool:SetVertexColor(r, g, b, 0.2)
+    stage.light:SetVertexColor(r, g, b)
+    stage.light:SetAlpha(LIGHT_A)
+    stage.pool:SetVertexColor(r, g, b)
+    stage.pool:SetAlpha(POOL_A)
 end
 
 --------------------------------------------------------------------------------
@@ -568,7 +573,7 @@ function M:Build()
     strip.pageText = UI.Text(strip, "micro", "ink-muted")
     strip.pageText:SetPoint("TOP", strip.next, "BOTTOM", 0, -S["space-2"])
     strip.grid = CreateFrame("Frame", nil, strip)
-    strip.grid:SetPoint("TOPLEFT", strip.prev, "TOPRIGHT", S["space-5"], 0)
+    strip.grid:SetPoint("TOPLEFT", strip, "TOPLEFT", 30 + S["space-5"], 0)
     strip.grid:SetPoint("BOTTOMRIGHT", strip, "BOTTOMRIGHT", -(30 + S["space-5"]), 0)
     strip.cells = {}
     for i = 1, COLS * ROWS do strip.cells[i] = buildCell(strip.grid, self) end
@@ -637,6 +642,7 @@ function M:Build()
     stage.empty.text:SetPoint("TOP", stage.empty.title, "BOTTOM", 0, -S["space-3"])
     stage.empty.text:SetWidth(420)
     stage.empty.text:SetWordWrap(true)
+    stage.empty.text:SetJustifyH("CENTER")
     stage.empty:Hide()
     self.card = buildCard(stage)
     -- top right: the favourite star and the primary action
