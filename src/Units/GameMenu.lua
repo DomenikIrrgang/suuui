@@ -182,20 +182,24 @@ end
 -- With the game's menu
 --------------------------------------------------------------------------------
 
+-- The game's menu out of sight: see-through and off screen, still shown.
+-- Again on every show and whenever the game places it (it sets both itself
+-- when it opens).
+function M:PutAway(frame)
+    if not self:IsEnabled() then return end
+    self.placing = true
+    frame:SetAlpha(0)
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+    self.placing = false
+end
+
 function M:Away(frame)
-    if self.away then return end
-    self.away = true
-    local placing = false
-    local function away()
-        if not self:IsEnabled() then return end
-        placing = true
-        frame:SetAlpha(0)
-        frame:ClearAllPoints()
-        frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-        placing = false
-    end
-    away()
-    hooksecurefunc(frame, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+    self:PutAway(frame)
+    if self.awayHooked then return end
+    self.awayHooked = true
+    hooksecurefunc(frame, "SetPoint", function() if not self.placing then C_Timer.After(0, function() self:PutAway(frame) end) end end)
+    hooksecurefunc(frame, "SetAlpha", function(_, a) if not self.placing and a ~= 0 then C_Timer.After(0, function() self:PutAway(frame) end) end end)
 end
 
 function M:OnEnable()
@@ -206,14 +210,21 @@ function M:OnEnable()
     g:HookScript("OnShow", function()
         if not self:IsEnabled() then return end
         self:Away(g)
+        C_Timer.After(0, function() self:PutAway(g) end)
         self:Draw()
         self.dim:Show()
+        -- while it shows: keep it away, whatever the game does to it
+        self.dim:SetScript("OnUpdate", function()
+            local _, rel = g:GetPoint(1)
+            if g:GetAlpha() > 0 or rel ~= UIParent or g:GetNumPoints() ~= 1 then self:PutAway(g) end
+        end)
         if not self.ticker then
             self.ticker = C_Timer.NewTicker(1, function() if self.dim:IsShown() then self:DrawPerf() end end)
         end
     end)
     g:HookScript("OnHide", function()
         self.dim:Hide()
+        self.dim:SetScript("OnUpdate", nil)
         if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     end)
     for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
