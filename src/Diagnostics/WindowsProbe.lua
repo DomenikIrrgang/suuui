@@ -1,6 +1,9 @@
 -- Diagnostics/WindowsProbe.lua
 -- "/suu probe windows": what the remaining windows (3.6: mail, merchant,
--- trainer, auction house, collections) are on Forever, for their designs.
+-- trainer, auction house, collections; 3.7, asked 2026-10-17: gossip, the
+-- quest dialog, the dressing room, inspect and the inspected player's
+-- talents) are on Forever, for their designs. "/suu probe windows now"
+-- saves whatever is open (a window it doesn't know by name).
 -- Saved in SuuUIProbe.windows on /reload; kept across runs, one entry per
 -- window, so visit them one by one.
 --   * now: which of their frames and APIs exist, and how the client's own
@@ -154,7 +157,57 @@ local WINDOWS = {
                  "C_AccountStore", "C_MountJournal", "C_PetJournal", "C_ToyBox", "C_Heirloom", "C_TransmogCollection" },
     },
 }
-local ORDER = { "mail", "merchant", "trainer", "auction", "collections" }
+WINDOWS.gossip = {
+    frames = { "GossipFrame", "GossipFrameGreetingPanel", "GossipGreetingText" },
+    events = { "GOSSIP_SHOW" },
+    apis = { "C_GossipInfo.GetText", "C_GossipInfo.GetOptions", "C_GossipInfo.GetAvailableQuests", "C_GossipInfo.GetActiveQuests",
+             "C_GossipInfo.SelectOption", "C_GossipInfo.SelectAvailableQuest", "C_GossipInfo.SelectActiveQuest",
+             "C_GossipInfo.CloseGossip", "C_GossipInfo.GetNumOptions", "C_GossipInfo.GetFriendshipReputation" },
+}
+WINDOWS.quest = {
+    frames = { "QuestFrame", "QuestFrameDetailPanel", "QuestFrameProgressPanel", "QuestFrameRewardPanel", "QuestFrameGreetingPanel",
+               "QuestModelScene", "QuestNPCModel" },
+    events = { "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE", "QUEST_GREETING" },
+    apis = { "GetTitleText", "GetQuestText", "GetObjectiveText", "GetProgressText", "GetRewardText", "GetGreetingText",
+             "AcceptQuest", "DeclineQuest", "CompleteQuest", "GetQuestReward", "IsQuestCompletable", "GetNumQuestChoices",
+             "GetNumQuestRewards", "GetQuestItemInfo", "GetQuestItemLink", "GetRewardMoney", "GetRewardXP", "GetNumQuestItems",
+             "GetNumAvailableQuests", "GetNumActiveQuests", "GetAvailableTitle", "GetActiveTitle", "SelectAvailableQuest",
+             "SelectActiveQuest", "GetQuestPortraitGiver", "C_QuestOffer.GetQuestRewardCurrencyInfo" },
+}
+WINDOWS.dressup = {
+    frames = { "DressUpFrame", "DressUpFrameResetButton", "DressUpFrameCancelButton", "SideDressUpFrame", "DressUpFrameOutfitDropdown" },
+    apis = { "DressUpItemLink", "DressUpVisual", "DressUpFrame_Show", "C_TransmogSets", "C_Transmog" },
+}
+WINDOWS.inspect = {
+    frames = { "InspectFrame", "InspectPaperDollFrame", "InspectPVPFrame", "InspectTalentFrame", "InspectGuildFrame",
+               "InspectFrameTab1", "InspectFrameTab2", "InspectFrameTab3", "InspectFrameTab4", "InspectModelFrame" },
+    addons = { "Blizzard_InspectUI" },
+    events = { "INSPECT_READY" },
+    apis = { "NotifyInspect", "CanInspect", "ClearInspectPlayer", "GetInspectSpecialization", "C_PaperDollInfo.GetInspectItemLevel",
+             "GetInventoryItemLink", "C_Traits.GetConfigInfo", "C_ClassTalents", "GetTalentInfo", "GetNumTalentTabs",
+             "GetTalentTabInfo", "C_SpecializationInfo" },
+}
+local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect" }
+
+-- Every large window open now (named or by its parent's key), to find the
+-- ones the probe doesn't know by name (the inspected player's talents).
+local function openWindows()
+    local out = {}
+    for _, f in ipairs({ UIParent:GetChildren() }) do
+        local okS, shown = pcall(f.IsShown, f)
+        if okS and shown and not f:IsForbidden() then
+            local w, h = f:GetWidth() or 0, f:GetHeight() or 0
+            if not (issecretvalue and (issecretvalue(w) or issecretvalue(h))) and w >= 250 and h >= 200 then
+                local okP, protected = pcall(f.IsProtected, f)
+                out[#out + 1] = ("%s [%s] %dx%d%s"):format(f:GetName() or "?", f:GetObjectType(), math.floor(w), math.floor(h),
+                    (okP and protected) and " PROTECTED" or "")
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+WP.OpenWindows = openWindows
 
 local function frameInfo(name)
     local f = _G[name]
@@ -267,6 +320,35 @@ local SAMPLES = {
             s.postCount = call(ah.GetAvailablePostCount)
         end
     end,
+    gossip = function(s)
+        s.text = call(C_GossipInfo.GetText)
+        s.options = call(C_GossipInfo.GetOptions)
+        s.available = call(C_GossipInfo.GetAvailableQuests)
+        s.active = call(C_GossipInfo.GetActiveQuests)
+    end,
+    quest = function(s)
+        s.title = call(GetTitleText)
+        s.text = call(GetQuestText)
+        s.objective = call(GetObjectiveText)
+        s.progress = call(GetProgressText)
+        s.reward = call(GetRewardText)
+        s.choices = call(GetNumQuestChoices)
+        s.rewards = call(GetNumQuestRewards)
+        s.firstChoice = call(GetQuestItemInfo, "choice", 1)
+        s.firstReward = call(GetQuestItemInfo, "reward", 1)
+        s.money = call(GetRewardMoney)
+        s.xp = call(GetRewardXP)
+        s.completable = call(IsQuestCompletable)
+        s.portrait = call(GetQuestPortraitGiver)
+    end,
+    dressup = function(s) end,
+    inspect = function(s)
+        s.canInspect = call(CanInspect, "target")
+        s.itemLevel = call(C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel, "target")
+        s.head = call(GetInventoryItemLink, "target", 1)
+        s.talentTabs = call(GetNumTalentTabs, true)
+        s.firstTab = call(GetTalentTabInfo, 1, true)
+    end,
     collections = function(s)
         s.mounts = C_MountJournal and call(C_MountJournal.GetNumMounts) or "missing"
         s.mountsShown = C_MountJournal and call(C_MountJournal.GetNumDisplayedMounts) or "missing"
@@ -300,6 +382,7 @@ function WP.Snapshot(key)
     for _, name in ipairs(def.frames) do s.frames[name] = frameInfo(name) end
     local ok, err = pcall(SAMPLES[key], s)
     if not ok then s.sampleError = tostring(err) end
+    s.openWindows = openWindows()
     -- the open window's tree: the first of its frames that shows
     for _, name in ipairs(def.frames) do
         local f = _G[name]
@@ -379,12 +462,37 @@ function WP.Arm()
         end
     end
     hookJournal()
+    local d = _G.DressUpFrame
+    if d and not WP.dressHooked then
+        WP.dressHooked = true
+        d:HookScript("OnShow", function()
+            if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot("dressup") end) end
+        end)
+    end
     if not WP.journalHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
         EventUtil.ContinueOnAddOnLoaded("Blizzard_Collections", hookJournal)
     end
 end
 
-function WP.Command()
+-- Whatever is open now: every large window and the tree of each.
+function WP.Now()
+    local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown(), openWindows = openWindows(), trees = {} }
+    for _, f in ipairs({ UIParent:GetChildren() }) do
+        local okS, shown = pcall(f.IsShown, f)
+        local w, h = f:GetWidth() or 0, f:GetHeight() or 0
+        if okS and shown and not f:IsForbidden() and not (issecretvalue and (issecretvalue(w) or issecretvalue(h)))
+            and w >= 250 and h >= 200 and f:GetName() and not f:GetName():find("^SuuUI") then
+            local out = {}
+            tree(f, 1, out, "")
+            s.trees[f:GetName()] = out
+        end
+    end
+    store().now = s
+    ns.Print(("Windows probe: %d open windows saved; /reload to save them."):format(#s.openWindows))
+end
+
+function WP.Command(rest)
+    if rest == "now" then return WP.Now() end
     WP.Static()
     WP.Arm()
     ns.Print("Windows probe: the frames and APIs saved. For 30 minutes, each window is saved as it opens: visit a vendor, a mailbox, a class trainer, the auction house and open Collections, then /reload.")
