@@ -292,10 +292,13 @@ function M:Refresh()
     -- the services: the profession's next rank first, then by category. The
     -- game gives a class trainer's spells none: their spellbook line instead
     -- (SuuUI's trainer data, as the spellbook groups them)
-    local schoolOf = {}
+    -- (a spell the data doesn't know by name, new or renamed on Forever:
+    -- by its icon, which a renamed spell keeps)
+    local schoolOf, schoolOfIcon = {}, {}
     if not pet and not (IsTradeskillTrainer and IsTradeskillTrainer()) then
         for _, sp in ipairs(SuuUI.TrainerSpells and SuuUI.TrainerSpells() or {}) do
             if sp.name and sp.school then schoolOf[sp.name] = sp.school end
+            if sp.icon and sp.school then schoolOfIcon[sp.icon] = schoolOfIcon[sp.icon] or sp.school end
         end
     end
     local list, groups, byName = {}, {}, {}
@@ -303,7 +306,7 @@ function M:Refresh()
     for i = 1, (call(GetNumTrainerServices) or 0) do
         local e = service(i)
         if e then
-            e.category = e.category or schoolOf[e.name]
+            e.category = e.category or schoolOf[e.name] or (e.texture and schoolOfIcon[e.texture])
             if i == step then
                 table.insert(list, 1, e)
             elseif categorize and e.category then
