@@ -4,7 +4,7 @@
 -- "Collections · own window"). The game's journal stays closed. Probed
 -- (/suu probe collown, colltiles): every mount, toy and appearance can be
 -- read, the ones you lack too; SuuUI draws the models itself (a ModelScene
--- framed by the mount's own scene, DressUpModels framed by the appearance
+-- fitted to the stage by the game (a PlayerModel), DressUpModels framed by the appearance
 -- cameras); summoning and toys go through SuuUI's own secure buttons.
 -- Where something comes from is SuuUI's generated data
 -- (SuuUI.CollectionSources(): the game gives no source for mounts, only the
@@ -316,18 +316,16 @@ end
 local WIDTH, HEIGHT = 960, 700
 local CELL, COLS, ROWS = 40, 18, 2
 local CARD_W, SHADE_W = 270, 340
--- the model stands centred on the whole stage (seen in game: right of the
--- card it sat off centre). The scene fills the stage, its camera further
--- out than the game's framing, so the feet stay in (seen in game: the
--- scene's own edge cut them); FLOOR is where the floor glow sits.
+-- The mount: a model frame the game fits each model into, whatever its
+-- size (seen in game: the mount scene's camera, tuned by hand, fit some
+-- mounts and left others too big, too low or cut off; the first probe's
+-- PlayerModel framed them whole). Its frame ends FLOOR above the stage's
+-- bottom, on the floor glow, so the feet stand there; CAM_SCALE leaves room
+-- above. Centred on the whole stage, the card over its left.
 local FLOOR = 40
--- Every mount framed from its own model (seen in game: one camera for all
--- mounts fits some and leaves others too big, too small, too high or too
--- low): the camera aims at the model's box and stands far enough back for
--- the box to fill FILL_H of the stage's height and FILL_W of its width,
--- the aim raised by DROP of the box's height so the model stands low, on
--- the floor glow.
-local FILL_H, FILL_W, DROP = 0.62, 0.62, 0.1
+local CAM_SCALE = 1.25
+local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
+
 local TOOLS_H = 30
 local STRIP_H = CELL * ROWS + S["space-5"] + 8
 local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -625,13 +623,27 @@ function M:Build()
     stage:SetClipsChildren(true)
     stageArt(stage)
     self.stage = stage
-    -- the mount: its own scene, framed by its scene ID
-    local ok, scene = pcall(CreateFrame, "ModelScene", nil, stage, "ModelSceneMixinTemplate")
-    if ok and scene then
-        scene:SetAllPoints()
-        scene:SetFrameLevel(stage:GetFrameLevel() + 2)
-        self.scene = scene
-    end
+    -- the mount: fitted by the game, turned by drag, zoomed by the wheel
+    local model = CreateFrame("PlayerModel", nil, stage)
+    model:SetPoint("TOPLEFT")
+    model:SetPoint("BOTTOMRIGHT", 0, FLOOR)
+    model:SetFrameLevel(stage:GetFrameLevel() + 2)
+    model:EnableMouse(true)
+    model:EnableMouseWheel(true)
+    model:SetScript("OnMouseDown", function(m, button)
+        if button == "LeftButton" then m.dragX = GetCursorPosition() end
+    end)
+    model:SetScript("OnMouseUp", function(m) m.dragX = nil end)
+    model:SetScript("OnUpdate", function(m)
+        if not m.dragX then return end
+        local x = GetCursorPosition()
+        local delta = (x - m.dragX) / (m:GetEffectiveScale() * 100)
+        m.dragX = x
+        if delta ~= 0 then call(m.SetFacing, m, (call(m.GetFacing, m) or 0) + delta) end
+    end)
+    model:SetScript("OnMouseWheel", function(_, delta) self:Zoom(-delta) end)
+    model:SetScript("OnModelLoaded", function() self:ModelLoaded() end)
+    self.model = model
     -- loading: the icon first
     stage.loading = CreateFrame("Frame", nil, stage)
     stage.loading:SetSize(200, 120)
@@ -817,7 +829,7 @@ function M:DrawStage()
     if none then
         stage.empty.title:SetValue("No mounts yet")
         stage.empty.text:SetValue("Every mount is in the strip below, with where it comes from. Pick one to see it here.")
-        if self.scene then self.scene:Hide() end
+        if self.model then self.model:Hide() end
         stage.loading:Hide()
         self:DrawAction()
         return
@@ -829,91 +841,47 @@ function M:DrawStage()
     self:DrawAction()
 end
 
--- The mount in its own scene; its icon until the model has loaded, then the
--- model fades in.
+-- The mount fitted to the stage; its icon until the model has loaded, then
+-- the model fades in.
 function M:ShowMount(e)
-    local scene, stage = self.scene, self.stage
-    if not scene then return end
+    local model, stage = self.model, self.stage
+    if not model then return end
     self.showing = e.id
-    scene:SetAlpha(0)
-    scene:Show()
+    model:SetAlpha(0)
+    model:Show()
     stage.loading.icon:SetTexture(e.icon)
     stage.loading:Show()
-    call(scene.TransitionToModelSceneID, scene, e.scene or 4, CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true)
-    local actor = call(scene.GetActorByTag, scene, "unwrapped")
-    self.actor = actor
-    if not actor then return end
-
-    call(actor.SetModelByCreatureDisplayID, actor, e.display or 0)
-    if e.isSelf then call(actor.SetAnimation, actor, 618) else call(actor.SetAnimation, actor, 0) end
-    local id, tries = e.id, 0
-    local function check()
-        if self.showing ~= id then return end
-        tries = tries + 1
-        local loaded = call(actor.IsLoaded, actor)
-        if loaded or tries > 40 then
-            if not self:FrameMount() then
-                SuuUIProbe = SuuUIProbe or {}
-                SuuUIProbe.collectionsFrame = SuuUIProbe.collectionsFrame or {}
-                SuuUIProbe.collectionsFrame[e.name] = "not framed: no box or camera"
-            end
-            stage.loading:Hide()
-            scene:SetAlpha(1)
-            SuuUI.Motion.FadeIn(scene, T.duration["dur-base"])
-        else
-            C_Timer.After(0.05, check)
-        end
-    end
-    check()
+    call(model.ClearModel, model)
+    call(model.SetDisplayInfo, model, e.display or 0)
+    self.camScale = CAM_SCALE
+    call(model.SetCamDistanceScale, model, self.camScale)
+    call(model.SetPosition, model, 0, 0, 0)
+    call(model.SetFacing, model, 0)
+    -- no answer from the game in two seconds: shown anyway
+    local id = e.id
+    C_Timer.After(2, function() if self.showing == id and model:GetAlpha() == 0 then self:ModelLoaded() end end)
 end
 
--- The camera from the model's box: aimed at its middle (a little above, so
--- it stands low), back far enough for it to fill FILL_H of the height and
--- FILL_W of the width, the zoom limits around that. Nothing when the box
--- or the camera can't be read yet.
-function M:FrameMount()
-    local scene, actor = self.scene, self.actor
-    local cam = scene and call(scene.GetActiveCamera, scene)
-    if not (cam and actor) then return false end
-    local x1, y1, z1, x2, y2, z2 = call(actor.GetActiveBoundingBox, actor)
-    if not (x1 and z2) then return false end
-    local scale = call(actor.GetScale, actor) or 1
-    local px, py, pz = call(actor.GetPosition, actor)
-    local fov = call(scene.GetCameraFieldOfView, scene) or 0.9
-    local w, h = scene:GetWidth(), scene:GetHeight()
-    if not (w and h and h > 0) or isSecret(w) or isSecret(h) then return false end
-    local tall = (z2 - z1) * scale
-    local wide = math.max(x2 - x1, y2 - y1) * scale
-    if tall <= 0 then return false end
-    local t = math.tan(fov / 2)
-    local d = math.max(tall / (2 * FILL_H * t), wide / (2 * FILL_W * t * (w / h)))
-    call(cam.SetMinZoomDistance, cam, d * 0.4)
-    call(cam.SetMaxZoomDistance, cam, d * 2.5)
-    call(cam.SetZoomDistance, cam, d)
-    local mid = (z1 + z2) / 2 * scale
-    call(cam.SetTarget, cam, px or 0, py or 0, (pz or 0) + mid + tall * DROP)
-    call(cam.SnapAllInterpolatedValues, cam)
-    -- what was measured, for a look after /reload (SuuUIProbe.collectionsFrame)
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.collectionsFrame = SuuUIProbe.collectionsFrame or {}
-    local name = self.chosen and self.chosen.name or "?"
-    SuuUIProbe.collectionsFrame[name] = ("box %.2f..%.2f x %.2f..%.2f y %.2f..%.2f, scale %.2f, pos %s,%s,%s, fov %.2f, frame %dx%d -> distance %.2f"):format(
-        z1, z2, x1, x2, y1, y2, scale, tostring(px), tostring(py), tostring(pz), fov, w, h, d)
-    return true
+function M:ModelLoaded()
+    local model = self.model
+    if not model or model:GetAlpha() > 0 then return end
+    call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
+    self.stage.loading:Hide()
+    model:SetAlpha(1)
+    SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
 end
 
 function M:Turn(dir)
-    local a = self.actor
-    if not a then return end
-    local yaw = call(a.GetYaw, a) or 0
-    call(a.SetYaw, a, yaw + dir * 0.35)
+    local m = self.model
+    if not m then return end
+    call(m.SetFacing, m, (call(m.GetFacing, m) or 0) + dir * 0.35)
 end
 
 function M:Zoom(dir)
-    local cam = self.scene and call(self.scene.GetActiveCamera, self.scene)
-    if not cam then return end
-    local d = call(cam.GetZoomDistance, cam)
-    if d then call(cam.SetZoomDistance, cam, d * (dir > 0 and 1.15 or 0.87)) end
+    local m = self.model
+    if not m then return end
+    self.camScale = math.max(ZOOM_MIN, math.min(ZOOM_MAX, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
+    call(m.SetCamDistanceScale, m, self.camScale)
 end
 
 -- A mount's favourite: the game keeps it by the mount's place in its own
