@@ -1317,6 +1317,58 @@ local function clearPaneArt(frame, depth)
     for _, c in ipairs({ frame:GetChildren() }) do clearPaneArt(c, depth + 1) end
 end
 
+-- The panes' search boxes and Filter buttons at the height of the class
+-- dropdown beside them (the game's are 18-20px; SuuUI's own 30 doesn't fit
+-- the game's layout). Out of combat: the window is protected.
+local CONTROL_H = 26
+local PANES = { "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }
+
+local function sizeControls(pane)
+    if InCombatLockdown() then return end
+    for _, key in ipairs({ "searchBox", "SearchBox", "FilterButton", "FilterDropdown", "filterButton" }) do
+        local c = pane[key]
+        if c and c.SetHeight then c:SetHeight(CONTROL_H) end
+    end
+end
+
+-- The appearances' Items and Sets as SuuUI's text tabs: header type,
+-- ink-muted, gilt-text over a gilt hairline with its jewel when chosen (the
+-- game shows its LeftActive art on the chosen one).
+local function skinPaneTab(tab)
+    if not tab or tab.suuPaneTab then return end
+    tab.suuNoButton = true
+    for _, r in ipairs({ tab:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+    end
+    local label = tab.Text or (tab.GetFontString and tab:GetFontString())
+    local rule = UI.Hairline(tab, "gilt-line", "both")
+    rule:SetPoint("BOTTOMLEFT", S["space-2"], 0)
+    rule:SetPoint("BOTTOMRIGHT", -S["space-2"], 0)
+    local jewel = UI.Diamond(tab, 5, "gilt")
+    jewel:SetPoint("CENTER", tab, "BOTTOM", 0, 0)
+    local hover = false
+    local function draw()
+        local on = tab.LeftActive and tab.LeftActive:IsShown() or false
+        if label then
+            label:ClearAllPoints()
+            label:SetPoint("CENTER", 0, 2)
+            SuuUI.Fonts.Apply(label, "header")
+            label:SetTextColor(UI.RGBA(on and "gilt-text" or hover and "ink" or "ink-muted"))
+            label:SetShadowOffset(0, 0)
+            label.suuSkip = true
+        end
+        rule:SetShown(on)
+        jewel:SetShown(on)
+    end
+    if tab.LeftActive then
+        for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hooksecurefunc(tab.LeftActive, m, draw) end
+    end
+    tab:HookScript("OnEnter", function() hover = true; draw() end)
+    tab:HookScript("OnLeave", function() hover = false; draw() end)
+    tab.suuPaneTab = draw
+    draw()
+end
+
 function M:SkinCollections()
     local f = _G.CollectionsJournal
     if not f or f.suuChrome or InCombatLockdown() then return end
@@ -1326,12 +1378,22 @@ function M:SkinCollections()
         hide = { f.NineSlice, f.PortraitContainer, f.TitleContainer, f.Bg, f.TopTileStreaks },
     })
     self.collections = chrome
+    -- the appearances' Items and Sets: SuuUI's text tabs (before the generic
+    -- restyle, which would make buttons of them)
+    local wardrobe = _G.WardrobeCollectionFrame
+    if wardrobe then
+        skinPaneTab(wardrobe.ItemsTab or _G.WardrobeCollectionFrameTab1)
+        skinPaneTab(wardrobe.SetsTab or _G.WardrobeCollectionFrameTab2)
+    end
     -- the game's parts in SuuUI's look, again whenever another pane shows
     local function refresh()
         UI.Reskin(f)
-        for _, name in ipairs({ "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }) do
+        for _, name in ipairs(PANES) do
             local pane = _G[name]
-            if pane and pane:IsShown() then clearPaneArt(pane, 0) end
+            if pane and pane:IsShown() then
+                clearPaneArt(pane, 0)
+                sizeControls(pane)
+            end
         end
         self:SetCollectionTabs()
     end

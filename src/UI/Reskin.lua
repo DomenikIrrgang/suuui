@@ -608,10 +608,28 @@ function UI.ReskinEditBox(e)
         end
     end
     if e.NineSlice then e.NineSlice:SetAlpha(0) end
+    -- a search box (its magnifier and "Search" placeholder): the field is the
+    -- box itself, the text and placeholder space-3 in from its left
+    local search = e.searchIcon or e.Instructions
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
     bg:SetColorTexture(UI.RGBA("surface-sunk"))
-    bg:SetPoint("TOPLEFT", -4, -1)
-    bg:SetPoint("BOTTOMRIGHT", 0, 1)
+    if search then
+        bg:SetAllPoints()
+        e:SetTextInsets(S["space-3"], S["space-5"], 0, 0)
+        local hint = e.Instructions
+        if hint and hint.ClearAllPoints then
+            hint:ClearAllPoints()
+            hint:SetPoint("LEFT", S["space-3"], 0)
+            hint:SetPoint("RIGHT", -S["space-3"], 0)
+            hint:SetJustifyH("LEFT")
+            ns.Fonts.Apply(hint, "body")
+            hint:SetTextColor(UI.RGBA("ink-muted"))
+            hint.suuSkip = true
+        end
+    else
+        bg:SetPoint("TOPLEFT", -4, -1)
+        bg:SetPoint("BOTTOMRIGHT", 0, 1)
+    end
     local holder = CreateFrame("Frame", nil, e)
     holder:SetPoint("TOPLEFT", bg)
     holder:SetPoint("BOTTOMRIGHT", bg)
@@ -730,7 +748,9 @@ local function reskinTexture(t, ctx)
         t:SetDesaturated(true)
         t:SetVertexColor(UI.RGBA("gilt-text"))
     elseif a:find("select") then
+        -- the chosen fill goes behind what it marks (an icon, a row's text)
         t:SetColorTexture(UI.RGBA("arcane-soft"))
+        t:SetDrawLayer("BACKGROUND", 2)
     elseif layer == "HIGHLIGHT" or a:find("highlight") or a:find("hover") then
         t:SetColorTexture(UI.RGBA("surface-raised"))
         t:SetAlpha(0.6)
