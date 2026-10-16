@@ -731,14 +731,7 @@ function M:DrawSuggest(keep)
     local d = self.suggest
     local edit = self.send.to.edit
     if not edit:HasFocus() then d:Hide() return end
-    if not keep then
-        d.groups = self:Suggestions(edit:GetText())
-        -- what the list last showed, for /suu mailsuggest (saved on /reload)
-        local counts = {}
-        for _, g in ipairs(d.groups) do counts[#counts + 1] = g.title .. " " .. #g.rows end
-        SuuUIProbe = SuuUIProbe or {}
-        SuuUIProbe.mailSuggestList = { at = date("%H:%M:%S"), typed = edit:GetText(), groups = table.concat(counts, ", ") }
-    end
+    if not keep then d.groups = self:Suggestions(edit:GetText()) end
     local groups = d.groups or {}
     d.flat = {}
     local y, nh, nr = S["space-2"], 0, 0
