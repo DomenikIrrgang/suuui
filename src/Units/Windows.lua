@@ -22,7 +22,8 @@ local M = SuuUI.RegisterModule({
     description = "The spells and Legacy windows in SuuUI's look.",
     api = "0.12",
     reloadToToggle = true,
-    defaults = {},
+    -- (the world map enlarged: its maximize button)
+    defaults = { mapEnlarged = false },
 })
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
@@ -461,8 +462,8 @@ end
 -- title away, the quest log and its details restyled in place (their
 -- clicks stay the game's), the game's own filter menu, side-panel toggle
 -- and maximize in SuuUI's look, and a status line: the coordinates under
--- the cursor (yours when it's off the map). Left where the game
--- places it (it has a maximized mode of its own).
+-- the cursor (yours when it's off the map). Left where the game places it;
+-- maximized, SuuUI's enlarged map in the screen's middle.
 --------------------------------------------------------------------------------
 
 -- "Kalimdor › Durotar": the map's continent before its name.
@@ -831,36 +832,81 @@ function M:SkinWorldMap()
     end)
     chrome.status = status
     -- the window's size around the map's new top: windowed, shorter by the
-    -- room the game kept over the map
-    local function fitWindowed()
-        if f.IsMaximized and f:IsMaximized() then return end
-        if f.minimizedHeight then f:SetHeight(f.minimizedHeight - CUT) end
-        f:OnFrameSizeChanged()
+    -- room the game kept over the map. Enlarged (the maximize button): the
+    -- same window larger, in the screen's middle, the quest log beside it as
+    -- you left it, the world around it seen and clickable (asked: like
+    -- ElvUI's). The game's own fullscreen isn't used: its black backdrop
+    -- blocks the world and it shows the map alone.
+    local mm = b and b.MaximizeMinimizeFrame
+    local rise = chrome.riseH or 0
+    local function enlarged() return M:Get("mapEnlarged") end
+    local function share()
+        local wm = SuuUI.GetModule("worldmap")
+        return ((wm and wm:Get("enlargedSize")) or 80) / 100
     end
-    hooksecurefunc(f, "Minimize", fitWindowed)
-    fitWindowed()
-    -- fullscreen: the game puts the map at the screen's top, which left the
-    -- header (and minimize) above the screen; the window moves down by the
-    -- header's height and the map shrinks (keeping its shape) to fit under it
-    local rise = (chrome.riseH or 0) + S["space-3"]
-    local function placeMaximized()
-        if not (f.IsMaximized and f:IsMaximized()) then return end
+    local placing
+    local function place()
+        if not enlarged() or placing then return end
+        placing = true
         f:ClearAllPoints()
-        f:SetPoint("TOP", UIParent, "TOP", 0, -rise)
+        -- (centred with the header, which rises over the window's top)
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, -math.floor(rise / 2))
+        placing = false
     end
-    local function fitMaximized()
-        if not (f.IsMaximized and f:IsMaximized()) then return end
-        local w, h = f:GetSize()
+    local function fit()
+        if f.IsMaximized and f:IsMaximized() then return end
         local log = f.QuestLog and f.QuestLog:IsShown() and (f.questLogWidth or 0) or 0
-        local mapW, mapH = w - 5 - log, h - GAME_MAP_TOP - 2
-        local room = UIParent:GetHeight() - rise - S["space-3"] - MAP_TOP - 2
-        local scale = math.min(1, room / mapH)
-        if scale > 0 then f:SetSize(math.floor(mapW * scale + 5 + log), math.floor(mapH * scale + MAP_TOP + 2)) end
-        placeMaximized()
+        if not enlarged() then
+            if f.minimizedWidth then f:SetWidth(f.minimizedWidth + log) end
+            if f.minimizedHeight then f:SetHeight(f.minimizedHeight - CUT) end
+            f:OnFrameSizeChanged()
+            return
+        end
+        -- the map keeps the windowed map's shape; the window, header
+        -- included, the setting's share of the screen's height, and narrower
+        -- than the screen
+        local w0, h0 = (f.minimizedWidth or 702) - 5, (f.minimizedHeight or 534) - GAME_MAP_TOP - 2
+        local margin = S["space-3"]
+        local mapH = UIParent:GetHeight() * share() - rise - MAP_TOP - 2
+        local mapW = mapH * w0 / h0
+        local roomW = UIParent:GetWidth() - 2 * margin - 5 - log
+        if mapW > roomW then mapW, mapH = roomW, roomW * h0 / w0 end
+        f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + MAP_TOP + 2))
+        f:OnFrameSizeChanged()
+        place()
     end
-    if f.UpdateMaximizedSize then hooksecurefunc(f, "UpdateMaximizedSize", fitMaximized) end
-    fitMaximized()
-    f:HookScript("OnShow", function() C_Timer.After(0, placeMaximized) end)
+    local function setEnlarged(on)
+        M:Set("mapEnlarged", on)
+        if mm then if on then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
+        fit()
+        -- back where the game puts its windows
+        if not on and _G.UpdateUIPanelPositions then UpdateUIPanelPositions(f) end
+    end
+    if mm then
+        -- the game minimizes on every open (to its own state): only the
+        -- buttons' clicks change the size
+        mm:SetOnMaximizedCallback(function() end)
+        mm:SetOnMinimizedCallback(function() end)
+        if mm.MaximizeButton then mm.MaximizeButton:HookScript("OnClick", function() setEnlarged(true) end) end
+        if mm.MinimizeButton then mm.MinimizeButton:HookScript("OnClick", function() setEnlarged(false) end) end
+    end
+    -- the game's fullscreen, chosen before (its setting): enlarged instead
+    if not GetCVarBool("miniWorldMap") then
+        SetCVar("miniWorldMap", 1)
+        M:Set("mapEnlarged", true)
+    end
+    hooksecurefunc(f, "Minimize", fit)
+    if f.SetQuestLogPanelShown then hooksecurefunc(f, "SetQuestLogPanelShown", fit) end
+    -- (the game places its windows again whenever one opens or closes)
+    hooksecurefunc(f, "SetPoint", place)
+    f:HookScript("OnShow", function()
+        if mm then if enlarged() then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
+        fit()
+    end)
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        if namespace == "worldmap" and key == "enlargedSize" and f:IsShown() then fit() end
+    end)
+    fit()
     self.worldMap = chrome
 end
 

@@ -39,7 +39,7 @@ local M = SuuUI.RegisterModule({
     name = "World map pins",
     description = "Pins on the world map: quests to pick up, entrances, flight masters, services, rares and treasures.",
     api = "0.14",
-    defaults = { filters = DEFAULT_FILTERS, pinAlpha = 100 },
+    defaults = { filters = DEFAULT_FILTERS, pinAlpha = 100, enlargedSize = 80 },
 })
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -1422,6 +1422,10 @@ local SECTION = {
         { title = "Map pins", description = "What shows is in the map's own Map filters.", rows = {
             { key = "pinAlpha", label = "Pin opacity", control = "slider", min = 20, max = 100, step = 5, unit = "%",
               description = "How solid SuuUI's pins on the world map are. Hovering one shows the pins that belong with it at full opacity." },
+        } },
+        { title = "Enlarged map", description = "The maximize button in the map's header enlarges the map in the middle of the screen.", rows = {
+            { key = "enlargedSize", label = "Size", control = "slider", min = 50, max = 100, step = 5, unit = "%",
+              description = "How tall the enlarged map is, its header included, as a share of the screen's height. It stays narrower than the screen." },
         } },
     },
 }
