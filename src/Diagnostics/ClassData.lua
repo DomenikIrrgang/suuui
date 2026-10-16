@@ -159,9 +159,16 @@ function CD.ReadTrainer()
     table.sort(api)
     d.trainer, d.trainerAt, d.trainerMaxLevel, d.trainerAPI, d.trainerError = spells, date("%Y-%m-%d %H:%M"), maxLevel, api, nil
     -- the game loads a description on demand: the ones still missing once
-    -- more, a moment later (a spell new today came back without one)
+    -- more, a moment later (a spell new today came back without one); and
+    -- each service's spell ID, from its tooltip (a new spell has none in
+    -- SuuUI's ID scans yet)
     C_Timer.After(1.5, function()
         for i, sp in ipairs(spells) do
+            if sp.index and C_TooltipInfo and C_TooltipInfo.GetTrainerService then
+                local data = call(C_TooltipInfo.GetTrainerService, sp.index)
+                local id = data and data.id
+                if type(id) == "number" and not isSecret(id) then sp.spellID = id end
+            end
             if not sp.description and sp.index and GetTrainerServiceDescription then
                 local desc = call(GetTrainerServiceDescription, sp.index)
                 if type(desc) == "string" and not isSecret(desc) and desc ~= "" then sp.description = desc end

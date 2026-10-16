@@ -148,11 +148,22 @@ for _, class in ipairs(classes) do
         end
         table.sort(names)
         local missing = 0
+        -- the IDs the trainer's tooltips gave (/suu probe class), too
+        local fromTrainer = {}
+        for _, t in ipairs(d.trainer or {}) do
+            if t.name and type(t.spellID) == "number" then
+                fromTrainer[t.name] = fromTrainer[t.name] or {}
+                fromTrainer[t.name][t.spellID] = true
+            end
+        end
         for _, name in ipairs(names) do
-            local ids = {}
+            local ids, have = {}, {}
             for _, row in pairs(byName[name] or {}) do
                 local id = type(row) == "table" and row[1] or row
-                if type(id) == "number" then ids[#ids + 1] = id end
+                if type(id) == "number" and not have[id] then ids[#ids + 1] = id; have[id] = true end
+            end
+            for id in pairs(fromTrainer[name] or {}) do
+                if not have[id] then ids[#ids + 1] = id; have[id] = true end
             end
             table.sort(ids)
             if #ids == 0 then missing = missing + 1 end
