@@ -993,11 +993,20 @@ function M:SetSellItem(loc)
         sell.price:SetCopper((last and last.price) or (low and low.price) or 0)
         sell.bid:Clear()
         sell.qty:SetValue(tostring(sell.commodity and (call(AH.GetAvailablePostCount, loc) or 1) or 1))
-        -- what it goes for now, for the lowest seen
+        -- what it goes for now: a commodity's offers through the sell
+        -- search; anything else by a search for its exact name (the sell
+        -- search brought nothing back for single items, found in game)
         local key = call(AH.GetItemKeyFromItem, loc)
-        if key then
-            self.sellKey = key
+        self.sellKey, self.sellBrowse = key, nil
+        if sell.commodity and key then
             call(AH.SendSellSearchQuery, key, sorts(), true)
+        else
+            local name = C_Item.GetItemName(loc)
+            local F = Enum.AuctionHouseFilter or {}
+            if name then
+                self.sellBrowse = sell.itemID
+                call(AH.SendBrowseQuery, { searchString = name, sorts = sorts(), filters = { F.ExactMatch }, itemClassFilters = {} })
+            end
         end
     end
     self:DrawSell()
@@ -1301,6 +1310,22 @@ function M:OnEnable()
             self:QueueRefresh()
         end)
     end
+    -- the sell view's search by name: the item's lowest price among the results
+    self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+        local id = self.sellBrowse
+        if not id or self.tab ~= "sell" or not self.sell then return end
+        self.sellBrowse = nil
+        local low
+        for _, r in ipairs(call(AH.GetBrowseResults) or {}) do
+            if r.itemKey and r.itemKey.itemID == id and r.minPrice and r.minPrice > 0 then
+                if not low or r.minPrice < low then low = r.minPrice end
+            end
+        end
+        self:Seen(id, low)
+        self:SellLowest(low, false)
+        self.sell.offered = low and true or false
+        self:QueueRefresh()
+    end)
     self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function() self:Note("The search failed; try again in a moment.", "error") end)
     self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total) self:OnCommodityPrice(unit, total) end)
     self:OnGameEvent("COMMODITY_PRICE_UNAVAILABLE", function()
