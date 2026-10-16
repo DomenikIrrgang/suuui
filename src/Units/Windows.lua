@@ -462,8 +462,8 @@ end
 -- title away, the quest log and its details restyled in place (their
 -- clicks stay the game's), the game's own filter menu, side-panel toggle
 -- and maximize in SuuUI's look, and a status line: the coordinates under
--- the cursor (yours when it's off the map). Left where the game places it;
--- maximized, SuuUI's enlarged map in the screen's middle.
+-- the cursor (yours when it's off the map). Small, in the window row under
+-- the micro menu; maximized, SuuUI's enlarged map in the screen's middle.
 --------------------------------------------------------------------------------
 
 -- "Kalimdor › Durotar": the map's continent before its name.
@@ -750,6 +750,7 @@ function M:SkinWorldMap()
     local chrome = UI.SkinWindow(f, {
         title = mapTitle(f:GetMapID()), icon = "map", binding = "TOGGLEWORLDMAP",
         close = (b and b.CloseButton) or _G.WorldMapFrameCloseButton, topInset = 24 + ROW_EXTRA, headExtra = ROW_EXTRA,
+        under = "microMenu",
         hide = { b and b.NineSlice, b and b.PortraitContainer, b and b.TitleContainer, b and b.Bg, f.BorderFrame and f.BorderFrame.Bg,
                  b and b.TopTileStreaks, b and b.InsetBorderTop },
     })
@@ -953,15 +954,6 @@ function M:SkinWorldMap()
         local wm = SuuUI.GetModule("worldmap")
         return ((wm and wm:Get("enlargedSize")) or 80) / 100
     end
-    local placing
-    local function place()
-        if not enlarged() or placing then return end
-        placing = true
-        f:ClearAllPoints()
-        -- (centred with the header, which rises over the window's top)
-        f:SetPoint("CENTER", UIParent, "CENTER", 0, -math.floor(rise / 2))
-        placing = false
-    end
     local function fit()
         if f.IsMaximized and f:IsMaximized() then return end
         local log = f.QuestLog and f.QuestLog:IsShown() and (f.questLogWidth or 0) or 0
@@ -982,14 +974,14 @@ function M:SkinWorldMap()
         if mapW > roomW then mapW, mapH = roomW, roomW * h0 / w0 end
         f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + MAP_TOP + 2))
         f:OnFrameSizeChanged()
-        place()
     end
     local function setEnlarged(on)
         M:Set("mapEnlarged", on)
         if mm then if on then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
         fit()
-        -- back where the game puts its windows
-        if not on and _G.UpdateUIPanelPositions then UpdateUIPanelPositions(f) end
+        -- enlarged in the middle of the screen, small in the window row
+        -- under the micro menu
+        UI.CenterWindow(f, on)
     end
     if mm then
         -- the game minimizes on every open (to its own state): only the
@@ -1006,8 +998,7 @@ function M:SkinWorldMap()
     end
     hooksecurefunc(f, "Minimize", fit)
     if f.SetQuestLogPanelShown then hooksecurefunc(f, "SetQuestLogPanelShown", fit) end
-    -- (the game places its windows again whenever one opens or closes)
-    hooksecurefunc(f, "SetPoint", place)
+    UI.CenterWindow(f, enlarged())
     f:HookScript("OnShow", function()
         if mm then if enlarged() then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
         fit()
