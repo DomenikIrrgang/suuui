@@ -96,12 +96,17 @@ function UI.ReskinStatusBar(bar)
             if t == "Texture" and r ~= fill then r:SetAlpha(0) end
             if t == "MaskTexture" and fill then pcall(fill.RemoveMaskTexture, fill, r) end
         end
-        local h = (fill and fill:GetHeight() or 12)
-        if h < 4 or h > bar:GetHeight() then h = math.min(14, bar:GetHeight()) end
+        -- the track as tall as the fill, whatever the fill's height comes to
+        -- be (a bar skinned while hidden reported none and got a guess)
         local track = CreateFrame("Frame", nil, bar)
         track:SetPoint("LEFT")
         track:SetPoint("RIGHT")
-        track:SetHeight(h)
+        if fill then
+            track:SetPoint("TOP", fill, "TOP")
+            track:SetPoint("BOTTOM", fill, "BOTTOM")
+        else
+            track:SetHeight(math.min(14, bar:GetHeight()))
+        end
         track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
         UI.Fill(track, "track"):SetAllPoints()
         UI.Border(track, "gilt-hairline")
