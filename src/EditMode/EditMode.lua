@@ -12,6 +12,10 @@
 -- frame's same point from it, in design pixels. A dropped frame takes the
 -- anchor of the screen third its centre is in, so layouts keep their shape
 -- on every resolution. position.hidden hides the frame.
+-- The panel's Group preview (0.17) fills the party or raid frames with
+-- made-up players at their real place and size while edit mode is open:
+-- EditMode.GroupPreview() is 0 (off), 5, 10, 20 or 40, and
+-- SUUUI_EDITMODE_GROUP_PREVIEW(size) tells the group frames when it changes.
 
 local _, ns = ...
 
@@ -35,6 +39,7 @@ local movers = {}   -- list of mover records
 local active = false
 local selected
 local overlay       -- the full-screen edit layer: grid, movers, panel
+local groupPreview = 0 -- the group preview chosen this session (0: off)
 
 --------------------------------------------------------------------------------
 -- Positions
@@ -299,6 +304,22 @@ local function buildPanel()
         onChange = function(v) Settings.Set("layout", "gridSize", v) end })
     stack:Add(size)
 
+    -- made-up players in the group frames, at their real place and size
+    local previewRow = CreateFrame("Frame", nil, p.body)
+    previewRow:SetSize(226, T.type.label.lineHeight + S["space-2"] + 28)
+    local previewLabel = UI.Text(previewRow, "label", "ink")
+    previewLabel:SetValue("Group preview (players)")
+    previewLabel:SetPoint("TOPLEFT")
+    local previewPick = UI.Segmented(previewRow, {
+        -- players in the group: 5 the party, more the raid (fits the 226 body)
+        options = { { value = 0, label = "Off" }, { value = 5, label = "5" }, { value = 10, label = "10" },
+                    { value = 20, label = "20" }, { value = 40, label = "40" } },
+        value = groupPreview,
+        onChange = function(v) EditMode.SetGroupPreview(v) end })
+    previewPick:SetPoint("TOPLEFT", previewLabel, "BOTTOMLEFT", 0, -S["space-2"])
+    p.previewPick = previewPick
+    stack:Add(previewRow)
+
     local buttons = CreateFrame("Frame", nil, p.body)
     local bs = Layout.Stack(buttons, { direction = "horizontal", gap = S["space-4"] })
     bs:Add(UI.Button(buttons, { text = "Reset all", onClick = function()
@@ -413,7 +434,19 @@ function EditMode.Enter()
     end
     select(nil)
     Events.Emit("SUUUI_EDITMODE_CHANGED", true)
+    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview) end
     return true
+end
+
+-- The group preview's size while edit mode is open: 0 (off), 5, 10, 20 or 40.
+function EditMode.GroupPreview()
+    return active and groupPreview or 0
+end
+
+function EditMode.SetGroupPreview(size)
+    groupPreview = size or 0
+    if overlay and overlay.panel and overlay.panel.previewPick then overlay.panel.previewPick:SetValue(groupPreview) end
+    if active then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview) end
 end
 
 function EditMode.Exit()
@@ -429,6 +462,7 @@ function EditMode.Exit()
         place(m)
     end
     Events.Emit("SUUUI_EDITMODE_CHANGED", false)
+    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0) end
 end
 
 function EditMode.Toggle()

@@ -190,16 +190,13 @@ local STAND_IN = UI.UnitStandIn(person)
 
 -- The view the settings window shows (built once, on its first showing):
 -- the frames' holder, and room beside it for the aura sets.
-function M:PreviewView(parent)
-    if self.previewView then
-        self.previewView:SetParent(parent)
-        self:DrawPreview(true)
-        return self.previewView
-    end
+-- A made-up party on a view: the settings window's, and edit mode's group
+-- preview (on the real frames' place).
+function M:BuildSet(parent)
     local view = CreateFrame("Frame", nil, parent)
     view:SetSize(1, 1)
     local holder = CreateFrame("Frame", nil, view)
-    self.previewView, self.previewHolder, self.previewFrames = view, holder, {}
+    local set = { view = view, holder = holder, frames = {} }
     for i = 1, #SLOTS do
         local f = UI.UnitFrame(holder, "preview" .. i, { size = "md", secure = false, api = STAND_IN, powerFor = powerFor })
         f:SetScript("OnEnter", nil)
@@ -222,17 +219,58 @@ function M:PreviewView(parent)
         end
         f.wardDeco = f:WardDecoration(f)
         f.wardDeco:SetWarded(false)
-        self.previewFrames[i] = f
+        set.frames[i] = f
     end
-    view:HookScript("OnShow", function() self:DrawPreview() end)
-    self:DrawPreview(true)
-    return view
+    return set
 end
 
--- Draws the made-up party with the current settings.
+function M:PreviewView(parent)
+    if self.previewView then
+        self.previewView:SetParent(parent)
+        self:DrawPreview(true)
+        return self.previewView
+    end
+    self.previewSet = self:BuildSet(parent)
+    self.previewView = self.previewSet.view
+    self.previewView:HookScript("OnShow", function() self:DrawPreview() end)
+    self:DrawPreview(true)
+    return self.previewView
+end
+
+-- Both previews: the settings window's (while it shows) and edit mode's.
 function M:DrawPreview(force)
-    if not self.previewView or not (force or self.previewView:IsVisible()) then return end
-    self:LayoutFrames(self.previewFrames, self.previewHolder)
+    local set = self.previewSet
+    if set and (force or set.view:IsVisible()) then self:DrawSet(set) end
+    if self.screenSet and self.screenSet.view:IsShown() then self:DrawSet(self.screenSet) end
+end
+
+-- Edit mode's group preview: a made-up party on the real frames' place, the
+-- real ones see-through meanwhile; any other size ends it.
+function M:ScreenPreview(size)
+    if not self.holder then return end
+    if size ~= 5 then
+        if self.screenSet then self.screenSet.view:Hide() end
+        self.holder:SetAlpha(1)
+        return
+    end
+    local set = self.screenSet
+    if not set then
+        set = self:BuildSet(SuuUI.Root)
+        set.screen = true
+        self.screenSet = set
+    end
+    set.view:SetFrameStrata(self.holder:GetFrameStrata())
+    set.view:SetFrameLevel(self.holder:GetFrameLevel() + 20)
+    set.view:ClearAllPoints()
+    set.view:SetAllPoints(self.holder)
+    set.view:Show()
+    self:DrawSet(set)
+    self.holder:SetAlpha(0)
+end
+
+-- Draws a made-up party with the current settings.
+function M:DrawSet(set)
+    self:LayoutFrames(set.frames, set.holder)
     local h, far = self:Get("height"), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
     local defensives = UI.GroupDefensives()
@@ -257,16 +295,21 @@ function M:DrawPreview(force)
         local w = rowWidth(self, h, math.min(#parts.buffs, self:Get("buffIcons")), math.min(#parts.debuffs, self:Get("debuffIcons")))
         auraW = math.max(auraW, w > 0 and (S["space-2"] + w) or 0)
     end
-    local hw, hh = self.previewHolder:GetSize()
+    local hw, hh = set.holder:GetSize()
     local right = self:Get("auraSide") == "right"
     -- inside the bar: no room beside it, icons a little shorter than it
     local inside = self:Get("auraSide") == "inside"
     if inside then auraW = 0 end
     local iconH = inside and math.max(8, h - 6) or h
-    self.previewHolder:ClearAllPoints()
-    self.previewHolder:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", right and 0 or auraW, 0)
-    self.previewView:SetSize(hw + auraW, hh)
-    for i, f in ipairs(self.previewFrames) do
+    set.holder:ClearAllPoints()
+    if set.screen then
+        -- on the real frames: exactly where their holder is
+        set.holder:SetPoint("TOPLEFT", self.holder, "TOPLEFT")
+    else
+        set.holder:SetPoint("TOPLEFT", set.view, "TOPLEFT", right and 0 or auraW, 0)
+        set.view:SetSize(hw + auraW, hh)
+    end
+    for i, f in ipairs(set.frames) do
         local d = person("preview" .. i)
         f.opts.healthText = self:Get("healthText")
         f.opts.nameColor = self:Get("nameColor")
@@ -641,6 +684,8 @@ function M:OnEnable()
         self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
         self:DrawPreview()
     end)
+    -- edit mode's group preview: a made-up party on the real frames' place
+    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size) self:ScreenPreview(size) end)
     self:ApplyOptions()
     self:UpdateSelected()
 

@@ -152,6 +152,8 @@ API.EditMode = {
     Refresh = ns.EditMode.Refresh, -- 0.8: re-reads each mover's `enabled`
     Rect = ns.EditMode.Rect,           -- 0.8: a frame's rectangle in root units
     AnchorFor = ns.EditMode.AnchorFor, -- 0.8: the screen anchor for a rectangle
+    GroupPreview = ns.EditMode.GroupPreview,       -- 0.17: 0, 5, 10, 20 or 40 while edit mode shows a group preview
+    SetGroupPreview = ns.EditMode.SetGroupPreview, -- 0.17
 }
 
 -- 0.5: unit frames

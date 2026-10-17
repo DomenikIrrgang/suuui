@@ -510,15 +510,12 @@ end
 
 local STAND_IN = UI.UnitStandIn(person)
 
-function M:PreviewView(parent)
-    if self.previewView then
-        self.previewView:SetParent(parent)
-        self:DrawPreview(true)
-        return self.previewView
-    end
+-- A set of 40 made-up frames on a view: the settings window's, and edit
+-- mode's group preview (on the real frames' place).
+function M:BuildSet(parent)
     local view = CreateFrame("Frame", nil, parent)
     view:SetSize(1, 1)
-    self.previewView, self.previewFrames = view, {}
+    local set = { view = view, frames = {} }
     for i = 1, 40 do
         local f = UI.UnitFrame(view, "raidpreview" .. i, { size = "sm", secure = false, api = STAND_IN, powerFor = powerFor, textOnSmall = true })
         f:SetScript("OnEnter", nil)
@@ -539,16 +536,57 @@ function M:PreviewView(parent)
         end
         f.wardDeco = f:WardDecoration(f)
         f.wardDeco:SetWarded(false)
-        self.previewFrames[i] = f
+        set.frames[i] = f
     end
-    view:HookScript("OnShow", function() self:DrawPreview() end)
-    self:DrawPreview(true)
-    return view
+    return set
 end
 
+function M:PreviewView(parent)
+    if self.previewView then
+        self.previewView:SetParent(parent)
+        self:DrawPreview(true)
+        return self.previewView
+    end
+    self.previewSet = self:BuildSet(parent)
+    self.previewView = self.previewSet.view
+    self.previewView:HookScript("OnShow", function() self:DrawPreview() end)
+    self:DrawPreview(true)
+    return self.previewView
+end
+
+-- Both previews: the settings window's (while it shows) and edit mode's.
 function M:DrawPreview(force)
-    if not self.previewView or not (force or self.previewView:IsVisible()) then return end
-    local count = self.previewSize or 20
+    local set = self.previewSet
+    if set and (force or set.view:IsVisible()) then self:DrawSet(set) end
+    if self.screenSet and self.screenSet.view:IsShown() then self:DrawSet(self.screenSet) end
+end
+
+-- Edit mode's group preview: a made-up raid of `count` on the real frames'
+-- place, the real ones see-through meanwhile; 0 or fewer than 6 ends it.
+function M:ScreenPreview(count)
+    if not self.holder then return end
+    if not count or count <= 5 then
+        if self.screenSet then self.screenSet.view:Hide() end
+        self.holder:SetAlpha(1)
+        return
+    end
+    local set = self.screenSet
+    if not set then
+        set = self:BuildSet(SuuUI.Root)
+        self.screenSet = set
+    end
+    set.count = count
+    set.view:SetFrameStrata(self.holder:GetFrameStrata())
+    set.view:SetFrameLevel(self.holder:GetFrameLevel() + 20)
+    set.view:ClearAllPoints()
+    set.view:SetPoint("TOPLEFT", self.holder, "TOPLEFT")
+    set.view:Show()
+    self:DrawSet(set)
+    self.holder:SetAlpha(0)
+end
+
+function M:DrawSet(set)
+    local count = set.count or self.previewSize or 20
     local w, gap, groupGap = self:Get("width"), self:Get("gap"), self:Get("groupGap")
     local h = count > 20 and self:Get("heightLarge") or self:Get("height")
     local rows = self:Get("arrangement") == "rows"
@@ -576,7 +614,7 @@ function M:DrawPreview(force)
         for slot, i in ipairs(members) do slotOf[i] = slot - 1 end
     end
     local maxX, maxY = 0, 0
-    for i, f in ipairs(self.previewFrames) do
+    for i, f in ipairs(set.frames) do
         if i > count then
             f:Hide()
         else
@@ -589,7 +627,7 @@ function M:DrawPreview(force)
                 x, y = col * (w + groupGap), band * (5 * h + 4 * gap + groupGap * 2) + slot * (h + gap)
             end
             f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", x, -y)
+            f:SetPoint("TOPLEFT", set.view, "TOPLEFT", x, -y)
             maxX, maxY = math.max(maxX, x + w), math.max(maxY, y + h)
             f.opts.healthText = self:Get("healthText")
             f.opts.nameColor = self:Get("nameColor")
@@ -646,8 +684,8 @@ function M:DrawPreview(force)
             f:Show()
         end
     end
-    self.previewView:SetSize(math.max(1, maxX), math.max(1, maxY))
-    if groups == 0 then self.previewView:SetSize(1, 1) end
+    set.view:SetSize(math.max(1, maxX), math.max(1, maxY))
+    if groups == 0 then set.view:SetSize(1, 1) end
 end
 
 --------------------------------------------------------------------------------
@@ -768,6 +806,8 @@ function M:OnEnable()
         self:RunOutOfCombat("sort", function() self:ApplySort() end)
     end)
     self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
+    -- edit mode's group preview: a made-up raid on the real frames' place
+    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size) self:ScreenPreview(size) end)
     self:On("SUUUI_DEFENSIVES_CHANGED", function()
         self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
         self:DrawPreview()
