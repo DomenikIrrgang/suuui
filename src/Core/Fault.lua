@@ -65,8 +65,47 @@ local function finish(source, ok, ...)
     return true, ...
 end
 
+-- Timing (/suu perf, Perf.lua): while on, each call's own time (its nested
+-- calls' taken out) is added to its source, a module's name.
+local timing, spent = false, {}
+local starts, childs, depth = {}, {}, 0
+local clock = debugprofilestop
+
+local function finishTimed(source, ok, ...)
+    -- timing was turned off (or on again) inside this call: nothing to add
+    if depth == 0 or not starts[depth] then return finish(source, ok, ...) end
+    local now = clock()
+    local total = now - starts[depth]
+    local own = total - childs[depth]
+    depth = depth - 1
+    if depth > 0 then childs[depth] = childs[depth] + total end
+    local rec = spent[source]
+    if not rec then
+        rec = { ms = 0, calls = 0, peak = 0 }
+        spent[source] = rec
+    end
+    rec.ms, rec.calls = rec.ms + own, rec.calls + 1
+    if own > rec.peak then rec.peak = own end
+    return finish(source, ok, ...)
+end
+
 function Fault.Call(source, fn, ...)
-    return finish(source, xpcall(fn, handler, ...))
+    if not timing then return finish(source, xpcall(fn, handler, ...)) end
+    depth = depth + 1
+    starts[depth], childs[depth] = clock(), 0
+    return finishTimed(source, xpcall(fn, handler, ...))
+end
+
+-- Timing on or off (on: from zero), and what it has counted:
+-- { [source] = { ms, calls, peak } }.
+function Fault.SetTiming(on)
+    timing = on and true or false
+    depth = 0
+    if on then wipe(spent) end
+end
+
+function Fault.Timing()
+    return timing, spent
 end
 
 function Fault.List()
