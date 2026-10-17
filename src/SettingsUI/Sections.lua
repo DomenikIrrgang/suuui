@@ -324,7 +324,16 @@ local function buildModules(page)
     page:Clear()
     local builtIn, plugins = {}, {}
     for _, m in ipairs(Modules.All()) do
-        table.insert(m.builtIn and builtIn or plugins, moduleRow(m))
+        if type(m.id) == "string" then
+            table.insert(m.builtIn and builtIn or plugins, moduleRow(m))
+        elseif not page.badModuleSaid then
+            -- found in game: one module's id wasn't a name, and the whole
+            -- page failed to build (the settings search with it); left out,
+            -- and said once so it can be traced
+            page.badModuleSaid = true
+            ns.Print(("Settings › Modules: left out a module without a proper id (%s, from %s)."):format(
+                tostring(m.name), tostring(m.source)))
+        end
     end
     page:AddGroup({ title = "Built in", description = "A module that is off is never loaded: no frames, no events, and Blizzard's own frame stays.", rows = builtIn })
     if #plugins > 0 then
