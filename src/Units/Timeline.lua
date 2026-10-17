@@ -606,6 +606,13 @@ function M:OnEnable()
     self.timeline.suuManagedShow = true
     self:RegisterMover(self.timeline, { key = "position", label = "Encounter timeline",
         enabled = function() return self:Get("variant") ~= "off" end })
+    -- "encounterTimeline": its place, for what shares the top edge with it
+    -- (your buffs stop short of it)
+    local function publish()
+        local on = self:Get("variant") ~= "off" and not self:Get("position").hidden
+        SuuUI.PublishAnchor("encounterTimeline", on and self.timeline or nil)
+    end
+    publish()
     self:RegisterSettings(SECTION)
     self:RegisterCommand("pull", "Start a pull countdown: /suu pull [seconds] (0 cancels).", function(arg) self:Pull(arg) end)
     SuuUI.AllowAlertOutOfCombat("pull")
@@ -627,6 +634,7 @@ function M:OnEnable()
     self:Watch("hideTheirs", function() self:ApplySuppression() end)
     for _, key in ipairs({ "variant", "position" }) do
         self:Watch(key, function()
+            publish()
             self:Refresh()
             SuuUI.EditMode.Refresh()
             if self.preview and self.preview:IsVisible() then self:PreviewView(self.preview:GetParent()) end

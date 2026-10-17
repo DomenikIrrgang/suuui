@@ -267,7 +267,7 @@ Modules find each other's frames through published anchors, never through each o
 | `SuuUI.PublishAnchor(name, frame)` | Publishes a frame under a name (`nil` unpublishes) |
 | `SuuUI.GetAnchor(name)` | The frame, or `nil`; listen to `SUUUI_ANCHOR_CHANGED` for changes |
 
-Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show).
+Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show), `encounterTimeline` (0.17: the encounter timeline while it is on).
 
 ## Unit frames and cast bars (0.5, 0.6)
 

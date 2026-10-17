@@ -191,6 +191,29 @@ function M:UpdateOffline()
     end
 end
 
+-- How many buffs a row holds: the setting, or fewer where the encounter
+-- timeline shares the top edge (asked for in game: at 1920 wide 16 ran into
+-- it; option A, fit and wrap). Measured from the side the row grows from to
+-- the timeline's near edge, space-5 short of it.
+function M:BuffsPerRow(size, sp)
+    local n = self:Get("buffsPerRow")
+    local tl = SuuUI.GetAnchor("encounterTimeline")
+    if not (tl and self.buffHolder) then return n end
+    local bl, bb, bw, bh = SuuUI.EditMode.Rect(self.buffHolder)
+    local tl_l, tl_b, tl_w, tl_h = SuuUI.EditMode.Rect(tl)
+    if not (bl and tl_l) then return n end
+    -- only when they share a band of the screen
+    if bb > tl_b + tl_h or bb + bh < tl_b then return n end
+    local room
+    if self:Get("buffGrowth") == "right" then
+        if tl_l < bl then return n end
+        room = tl_l - bl - S["space-5"]
+    else
+        if tl_l + tl_w > bl + bw then room = (bl + bw) - (tl_l + tl_w) - S["space-5"] else return n end
+    end
+    return math.max(4, math.min(n, math.floor((room + sp) / (size + sp))))
+end
+
 -- Sizes, row length and growth, out of combat: the engine's buttons refuse a
 -- resize in combat. The holder (the edit-mode outline) is a row of the
 -- setting's icons, two rows tall, and the icons start at the edge they grow from.
@@ -198,7 +221,8 @@ function M:ApplyLayout()
     self:RunOutOfCombat("layout", function()
         local sp = S["space-2"]
         if self.buffs then
-            local size, n = self:Get("buffSize"), self:Get("buffsPerRow")
+            local size = self:Get("buffSize")
+            local n = self:BuffsPerRow(size, sp)
             local w = n * (size + sp)
             self.buffHolder:SetSize(w, 2 * (size + sp))
             self.buffs:SetGroupSize("buffs", size)
@@ -283,7 +307,10 @@ function M:OnEnable()
     self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame)
         self:AttachAnchor(name, frame)
         if name == "target" then self:ApplyOptions() end
+        if name == "encounterTimeline" then self:ApplyLayout() end
     end)
+    -- the screen's width changed: the room beside the timeline with it
+    self:On("SUUUI_ROOT_SCALED", function() self:ApplyLayout() end)
     for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
         self:Watch(key, function() self:ApplyLayout() end)
     end
@@ -292,6 +319,7 @@ function M:OnEnable()
     for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "targetDebuffs", "targetBuffs", "showFocus", "showBoss", "buffPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
+    self:Watch("buffPosition", function() C_Timer.After(0, function() self:ApplyLayout() end) end)
 end
 
 function M:OnDisable()
