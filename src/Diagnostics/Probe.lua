@@ -851,6 +851,10 @@ function ns.Probe.Command(arg)
         ns.GameMenuProbe.Command(rest)
         return
     end
+    if sub == "unitmenu" then
+        ns.MenuProbe.Command(rest)
+        return
+    end
     if sub == "bankslots" then
         ns.BankSlotsProbe.Command(rest)
         return
