@@ -685,7 +685,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 ### 4.1 Density and accessibility presets
 - **Build:**
   - Role presets instead of density presets (asked 2026-10-17): SuuTank, SuuHeal and SuuDps profiles from the design's role boards, one layout per role for dungeons and raids, each in its role's place under Profiles › By role. Done; confirmed in game with edit mode's Group preview (5, 10, 20, 40 made-up players on the real frames).
-  - Colour-blind presets that swap the signal set.
+  - Colour-blind presets that swap the signal set: Normal, Red-green and Blue-yellow (board "Colour-blind presets", approved 2026-10-17), account-wide, applied after a reload (Settings › Appearance › Colour vision). Built; to see in game.
   - A reduced-motion toggle.
   - A UI-scale check at 1080p, 1440p and 4K, to confirm each cluster keeps its anchor.
 - **Confirm:** switching presets resizes the HUD together in one step, with no reload and no taint.
