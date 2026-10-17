@@ -8,8 +8,8 @@
 -- inspect (it asks the server, closes when the target changes) but stays
 -- out of sight; this window opens and closes with it. Nothing here is
 -- protected (/suu probe windows, 2026-10-17).
--- View Talents clicks the game's own talents button through a secure button
--- (opening the talents window from addon code would taint it).
+-- View Talents opens SuuUI's Talents window with their talents, read only
+-- (Forever's own inspect has no talents button: probed 2026-10-17).
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -143,12 +143,10 @@ function M:Build()
     w.scroll:Hide()
     self.window = w
     w:HookScript("OnHide", function()
-        self:PlaceTalentsOver(false)
         local f = _G.InspectFrame
         if f and f:IsShown() then HideUIPanel(f) end
         self.unit, self.loading = nil, nil
     end)
-    w:HookScript("OnShow", function() self:PlaceTalentsOver(true) end)
     local body = w.body
 
     -- the identity: class diamond, the name in its class colour, the line, the guild
@@ -183,7 +181,9 @@ function M:Build()
     cl:SetSize(UI.MeasureText("label", "Compare with mine"), TOOLS_H)
     cl:SetPoint("LEFT", self.compareToggle, "RIGHT", S["space-4"], 0)
     cl:SetScript("OnClick", function() self.compareToggle:Click() end)
-    self.talentsButton = UI.Button(tools, { text = "View Talents", icon = "tree" })
+    self.talentsButton = UI.Button(tools, { text = "View Talents", icon = "tree", onClick = function()
+        if self.unit then SuuUI.ShowTalentsOf(self.unit) end
+    end })
     self.talentsButton:SetHeight(TOOLS_H)
     self.talentsButton:SetPoint("RIGHT")
     self.dressButton = UI.Button(tools, { text = "View in Dressing Room", icon = "person", onClick = function()
@@ -298,41 +298,6 @@ function M:Build()
 end
 
 --------------------------------------------------------------------------------
--- View Talents: a secure button over SuuUI's that clicks the game's own
--- (placed only while the window shows and out of combat, so the window never
--- turns protected)
---------------------------------------------------------------------------------
-
-local function blizzTalents()
-    local items = _G.InspectPaperDollItemsFrame
-    return (items and items.InspectTalents) or (_G.InspectPaperDollFrame and _G.InspectPaperDollFrame.InspectTalents)
-end
-
-function M:PlaceTalentsOver(on)
-    if InCombatLockdown() then return end
-    local over = self.talentsOver
-    if not over then
-        if not on then return end
-        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-        over:SetAttribute("type1", "click")
-        over:SetScript("OnEnter", function() self.talentsButton:GetScript("OnEnter")(self.talentsButton) end)
-        over:SetScript("OnLeave", function() self.talentsButton:GetScript("OnLeave")(self.talentsButton) end)
-        self.talentsOver = over
-    end
-    local target = on and blizzTalents() or nil
-    over:SetAttribute("clickbutton1", target)
-    over:ClearAllPoints()
-    if target and self.talentsButton:IsEnabled() then
-        over:SetFrameStrata("DIALOG")
-        over:SetAllPoints(self.talentsButton)
-        over:Show()
-    else
-        over:Hide()
-    end
-end
-
---------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
 
@@ -408,7 +373,8 @@ function M:Draw()
     end
     -- item level
     local il = self.ilvl
-    local avg = not self.loading and call(C_PaperDollInfo.GetInspectItemLevel, unit)
+    local avg
+    if not self.loading then avg = call(C_PaperDollInfo.GetInspectItemLevel, unit) end
     il.big:SetValue((plain(avg) and avg > 0) and math.floor(avg + 0.5) or "—")
     local mine = call(GetAverageItemLevel)
     if self.compare and plain(mine) then
@@ -442,11 +408,13 @@ function M:Draw()
     g.none:SetShown(guildName == nil and not self.loading)
     -- the buttons wait for the gear
     self.dressButton:SetEnabledState(not self.loading)
-    local talents = not self.loading and call(C_Traits.HasValidInspectData)
-    self.talentsButton:SetEnabledState(talents and true or false)
-    self.talentsButton.tooltip = not talents and { title = "View Talents",
-        description = self.loading and "Waiting for their gear." or "Their talents aren't available." } or nil
-    if w:IsShown() then self:PlaceTalentsOver(true) end
+    local module = SuuUI.GetModule("talents")
+    local why
+    if self.loading then why = "Waiting for their gear."
+    elseif not (module and module:IsEnabled()) then why = "SuuUI's Talents module is off."
+    elseif not call(C_Traits.HasValidInspectData) then why = "Their talents aren't available." end
+    self.talentsButton:SetEnabledState(why == nil)
+    self.talentsButton.tooltip = why and { title = "View Talents", description = why } or nil
 end
 
 --------------------------------------------------------------------------------
@@ -536,12 +504,6 @@ function M:OnEnable()
     for _, e in ipairs({ "INSPECT_HONOR_UPDATE", "PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED" }) do
         self:OnGameEvent(e, function() if self.window:IsShown() then self:Draw() end end)
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.window:IsShown() then self:PlaceTalentsOver(true) end
-    end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-        if self.talentsOver then self.talentsOver:Hide() end
-    end)
 end
 
 function M:OnDisable()

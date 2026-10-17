@@ -251,6 +251,13 @@ function API.ToggleTalents()
     if m and m:IsEnabled() and m.Toggle then m:Toggle(); return true end
     return false
 end
+-- 0.17: SuuUI's Talents window showing another player's talents, read only
+-- (an inspected unit, after INSPECT_READY). False when that module is off.
+function API.ShowTalentsOf(unit)
+    local m = Modules.Get("talents")
+    if m and m:IsEnabled() and m.ShowInspect then m:ShowInspect(unit); return true end
+    return false
+end
 -- 0.13: a recipe opened: in SuuUI's Professions window (the professions
 -- module, which then selects it), else the game's own window.
 function API.OpenRecipe(recipeID)

@@ -1,7 +1,9 @@
 -- Units/Talents.lua
 -- SuuUI's Talents page (step 3.2c, design boards "Talents" and "Talent
 -- nodes") over Blizzard's Talents tab of the spells window: the class's
--- three trees side by side, points planned until you apply them.
+-- three trees side by side, points planned until you apply them. The same
+-- window shows an inspected player's talents, read only
+-- (SuuUI.ShowTalentsOf: Forever's own inspect has no View Talents).
 -- A built-in module written against the public API only.
 --
 -- Forever keeps a class's talents as one trait tree (C_Traits; probed
@@ -252,7 +254,14 @@ function M:Render()
     self:FitWindow()
     local inspected = self:Inspecting()
     for _, page in ipairs(pages) do
-        if page == self.page and inspected then
+        if page == self.windowPage and self.inspectUnit then
+            -- another player's talents (View Talents on inspect), read only;
+            -- what last arrived stays when the inspect ends
+            local theirs = self:Collect(INSPECT_CONFIG)
+            if theirs then self.inspectData = theirs end
+            page.data = self.inspectData
+            self:Fill(page, page.data, self.inspectUnit)
+        elseif page == self.page and inspected then
             -- the page over the game's window shows whose talents it shows
             page.data = self:Collect(INSPECT_CONFIG)
             self:Fill(page, page.data, inspected)
@@ -372,7 +381,7 @@ end
 local HEAD_RISE = 40 -- the header above the window's top (SkinWindow, topInset 20)
 
 function M:WindowHeight()
-    return 44 + PAGE_H + 16 + (self:SpecGroups() > 1 and SPECS_H or 0)
+    return 44 + PAGE_H + 16 + ((self:SpecGroups() > 1 and not self.inspectUnit) and SPECS_H or 0)
 end
 
 function M:FitWindow()
@@ -392,7 +401,7 @@ function M:BuildWindow()
     close:SetScript("OnClick", function() f:Hide() end)
     -- in the window row's middle group: beside the Legacy window when both
     -- are open (asked for in game)
-    UI.SkinWindow(f, { title = "Talents", icon = "tree", binding = "TOGGLETALENTS", close = close, topInset = 20, under = "microMenu" })
+    self.chrome = UI.SkinWindow(f, { title = "Talents", icon = "tree", binding = "TOGGLETALENTS", close = close, topInset = 20, under = "microMenu" })
     UI.CenterWindow(f, true)
     local page = UI.TalentTree(f)
     page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -410,6 +419,7 @@ function M:BuildWindow()
     end)
     f:HookScript("OnHide", function()
         PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_CLOSE or 840)
+        self:SetInspect(nil)
         GameTooltip:Hide()
         self:Emit("SUUUI_TALENTS_SHOWN", false)
     end)
@@ -424,7 +434,31 @@ end
 
 function M:Toggle()
     if not self.window then return end
+    -- showing someone else's: the key goes back to yours
+    if self.inspectUnit and self.window:IsShown() then
+        self:SetInspect(nil)
+        self:Render()
+        return
+    end
     self.window:SetShown(not self.window:IsShown())
+end
+
+-- Whose talents the window shows: an inspected player's (read only), or
+-- nil for yours.
+function M:SetInspect(unit)
+    if unit == nil and self.inspectUnit == nil then return end
+    self.inspectUnit, self.inspectData = unit, nil
+    local who = unit and UnitName(unit)
+    if self.chrome then
+        self.chrome:SetTitle((unit and plain(who)) and ("Talents · " .. who) or "Talents")
+    end
+end
+
+-- View Talents on inspect: the window with their talents.
+function M:ShowInspect(unit)
+    if not (self.window and unit) then return end
+    self:SetInspect(unit)
+    if self.window:IsShown() then self:Render() else self.window:Show() end
 end
 
 -- The talents key as an override binding onto SuuUI's button (out of combat:
@@ -549,7 +583,7 @@ function M:OnEnable()
     self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     -- another player's talents: drawn when they arrive
-    self:OnGameEvent("INSPECT_READY", function() if self:Inspecting() then self:QueueRender() end end)
+    self:OnGameEvent("INSPECT_READY", function() if self:Inspecting() or self.inspectUnit then self:QueueRender() end end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
                          "TRAIT_CONFIG_LIST_UPDATED", "ACTIVE_COMBAT_CONFIG_CHANGED", "PLAYER_TALENT_UPDATE",
