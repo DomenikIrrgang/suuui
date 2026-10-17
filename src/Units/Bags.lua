@@ -1097,6 +1097,9 @@ function M:BagCall(name, frame)
         if name == "CloseAllBags" and frame and frame.GetName then
             if frame:GetName() ~= self.openedBy then return end
         end
+        -- one bag closing (the game closes a bag taken off its slot) leaves
+        -- the window, which shows every bag, open (found in game)
+        if name == "CloseBag" and frame ~= 0 then return end
         self.openedBy = nil
         self.wantOpen = false
     else -- a toggle
