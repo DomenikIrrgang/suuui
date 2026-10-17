@@ -244,9 +244,22 @@ function M:DrawPreview(force)
     if self.screenSet and self.screenSet.view:IsShown() then self:DrawSet(self.screenSet) end
 end
 
+
+-- The group preview's "with buffs and debuffs": everyone carries a
+-- defensive or two from the Defensives list and a debuff of every type.
+local function fullAuras()
+    local out = {}
+    local list = UI.GroupDefensives().all or {}
+    for i = 1, math.min(4, #list) do out[#out + 1] = { list[i] } end
+    for _, a in ipairs({ { 122, "dispel-magic" }, { 980, "dispel-curse" }, { 2818, "dispel-poison" }, { 18278, "dispel-disease" } }) do
+        out[#out + 1] = a
+    end
+    return out
+end
+
 -- Edit mode's group preview: a made-up party on the real frames' place, the
 -- real ones see-through meanwhile; any other size ends it.
-function M:ScreenPreview(size)
+function M:ScreenPreview(size, auras)
     if not self.holder then return end
     if size ~= 5 then
         if self.screenSet then self.screenSet.view:Hide() end
@@ -259,6 +272,7 @@ function M:ScreenPreview(size)
         set.screen = true
         self.screenSet = set
     end
+    set.allAuras = auras and fullAuras() or nil
     set.view:SetFrameStrata(self.holder:GetFrameStrata())
     set.view:SetFrameLevel(self.holder:GetFrameLevel() + 20)
     set.view:ClearAllPoints()
@@ -279,9 +293,10 @@ function M:DrawSet(set)
     for _, id in ipairs(defensives.warded) do warding[id] = true end
     -- each person's auras by set: listed defensives, and debuffs (a dispel
     -- edge); other buffs don't show on party frames
+    local function aurasOf(d) return set.allAuras or d.auras end
     local function split(d)
         local out = { buffs = {}, debuffs = {} }
-        for _, a in ipairs(d.auras) do
+        for _, a in ipairs(aurasOf(d)) do
             if a[2] then out.debuffs[#out.debuffs + 1] = a
             elseif listed[a[1]] then out.buffs[#out.buffs + 1] = a end
         end
@@ -323,7 +338,7 @@ function M:DrawSet(set)
             deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
         end
         local warded = false
-        for _, a in ipairs(d.auras) do warded = warded or warding[a[1]] == true end
+        for _, a in ipairs(aurasOf(d)) do warded = warded or warding[a[1]] == true end
         f.wardDeco:SetWarded(warded)
         f:SetAlpha(d.far and far or 1)
         f.selected:SetAlpha(d.selected and 1 or 0)
@@ -685,7 +700,7 @@ function M:OnEnable()
         self:DrawPreview()
     end)
     -- edit mode's group preview: a made-up party on the real frames' place
-    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size) self:ScreenPreview(size) end)
+    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size, auras) self:ScreenPreview(size, auras) end)
     self:ApplyOptions()
     self:UpdateSelected()
 

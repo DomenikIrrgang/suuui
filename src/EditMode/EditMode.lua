@@ -40,6 +40,7 @@ local active = false
 local selected
 local overlay       -- the full-screen edit layer: grid, movers, panel
 local groupPreview = 0 -- the group preview chosen this session (0: off)
+local groupPreviewAuras = false -- every made-up player with buffs and debuffs
 
 --------------------------------------------------------------------------------
 -- Positions
@@ -319,6 +320,17 @@ local function buildPanel()
     previewPick:SetPoint("TOPLEFT", previewLabel, "BOTTOMLEFT", 0, -S["space-2"])
     p.previewPick = previewPick
     stack:Add(previewRow)
+    -- everyone with defensives and every dispel type, to see the icons fit
+    local aurasRow = CreateFrame("Frame", nil, p.body)
+    aurasRow:SetSize(226, 20)
+    local aurasToggle = UI.Toggle(aurasRow, { value = groupPreviewAuras,
+        onChange = function(v) EditMode.SetGroupPreview(groupPreview, v) end })
+    aurasToggle:SetPoint("LEFT")
+    local aurasLabel = UI.Text(aurasRow, "label", "ink")
+    aurasLabel:SetValue("With buffs and debuffs")
+    aurasLabel:SetPoint("LEFT", aurasToggle, "RIGHT", S["space-4"], 0)
+    p.previewAuras = aurasToggle
+    stack:Add(aurasRow)
 
     local buttons = CreateFrame("Frame", nil, p.body)
     local bs = Layout.Stack(buttons, { direction = "horizontal", gap = S["space-4"] })
@@ -434,19 +446,23 @@ function EditMode.Enter()
     end
     select(nil)
     Events.Emit("SUUUI_EDITMODE_CHANGED", true)
-    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview) end
+    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview, groupPreviewAuras) end
     return true
 end
 
--- The group preview's size while edit mode is open: 0 (off), 5, 10, 20 or 40.
+-- The group preview while edit mode is open: its size, 0 (off), 5, 10, 20
+-- or 40, and whether every made-up player carries buffs and debuffs.
 function EditMode.GroupPreview()
-    return active and groupPreview or 0
+    return active and groupPreview or 0, groupPreviewAuras
 end
 
-function EditMode.SetGroupPreview(size)
+function EditMode.SetGroupPreview(size, auras)
     groupPreview = size or 0
-    if overlay and overlay.panel and overlay.panel.previewPick then overlay.panel.previewPick:SetValue(groupPreview) end
-    if active then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview) end
+    if auras ~= nil then groupPreviewAuras = auras and true or false end
+    local panel = overlay and overlay.panel
+    if panel and panel.previewPick then panel.previewPick:SetValue(groupPreview) end
+    if panel and panel.previewAuras then panel.previewAuras:SetValue(groupPreviewAuras) end
+    if active then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview, groupPreviewAuras) end
 end
 
 function EditMode.Exit()

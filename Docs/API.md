@@ -254,7 +254,7 @@ end,
 | `SuuUI.EditMode.Rect(frame)`, `.AnchorFor(l, b, w, h)` (0.8) | A frame's rectangle in root units, and the screen anchor edit mode would save for a rectangle |
 | `opts.enabled` (0.8) | A function: while it returns false the frame is turned off and gets no mover in edit mode (a bar switched off in the settings). Hiding in edit mode is for frames that are on |
 | `SuuUI.EditMode.Refresh()` (0.8) | Re-reads every mover's `enabled`; call it when one changes |
-| `SuuUI.EditMode.GroupPreview()` / `.SetGroupPreview(size)` (0.17) | The edit mode panel's Group preview: made-up players fill the party frames (5) or the raid frames (10, 20, 40) at their real place and size while edit mode is open; 0 is off. `SUUUI_EDITMODE_GROUP_PREVIEW(size)` fires when it changes, and with 0 when edit mode closes |
+| `SuuUI.EditMode.GroupPreview()` / `.SetGroupPreview(size[, auras])` (0.17) | The edit mode panel's Group preview: made-up players fill the party frames (5) or the raid frames (10, 20, 40) at their real place and size while edit mode is open; 0 is off. `auras`: everyone carries defensives and a debuff of every type ("With buffs and debuffs"). `GroupPreview()` returns size, auras. `SUUUI_EDITMODE_GROUP_PREVIEW(size, auras)` fires when either changes, and with 0 when edit mode closes |
 
 Settings: `layout.snap`, `layout.gridSize` (4–32 px).
 
