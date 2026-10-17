@@ -3,8 +3,8 @@
 -- the character select (this character or all), a search, Enable all and
 -- Disable all; a performance strip (memory, the addons' share of the CPU,
 -- the busiest addon, how many are on); "Load out of date addons"; every
--- addon as a row (a toggle, SuuUI's emblem on SuuUI and its plugins, the
--- title with its own colours and icons, version, memory, a status chip,
+-- addon as a row (a toggle, its icon in a slot of its own or SuuUI's
+-- emblem on SuuUI and its plugins, the title, version, memory, a status chip,
 -- "Enables on reload" / "Disables on reload" on what changed), a suite's
 -- modules under it, folded or not; a row opens to its notes, author, memory
 -- and what it needs. The foot counts the changes: Cancel, and Reload to
