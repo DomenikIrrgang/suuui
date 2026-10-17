@@ -6,7 +6,7 @@
 -- live 3D portrait on their name plate in the bar's bottom corner, rising
 -- above it (a PlayerModel on the "npc" unit:
 -- /suu probe npcportrait, 2026-10-17, every NPC drawn, with its talk
--- animations), their name plate in the bar's corner; what they say types
+-- animations); what they say types
 -- in, with the talk animation while it does; your answers as numbered pills
 -- under it: the gossip options, their quests, Goodbye last. The quest flow
 -- speaks the same way: a quest's text as their line, what they ask on one
