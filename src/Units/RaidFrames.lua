@@ -94,14 +94,18 @@ local function iconSize(h) return math.max(8, h - 6) end
 -- they're one list (the game hides who cast another player's auras, and
 -- those then pass both "removable" and "not removable": each showed twice).
 local GAP_SETS = S["space-2"]
+-- The first group serves whoever the frame shows (its filter follows: the
+-- debuffs you can remove on yours, all of them on everyone else's), so a
+-- frame keeps two groups (the engine makes ten buttons for each, whatever
+-- its count) and the second, your other debuffs, comes only on a frame
+-- that has shown you.
 local AURA_GROUPS = {
-    { key = "dispel", set = "debuffIcons", who = "me", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
-    -- every other debuff (Forbearance, Weakened Soul…); buffs come only
-    -- through buff indicators (you pick them)
-    { key = "debuffs", set = "debuffIcons", who = "me", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
+    { key = "debuffs", set = "debuffIcons", filters = { me = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, others = { "HARMFUL" } },
+      dispel = true, harmfulEdge = true },
+    -- every other debuff on yours (Forbearance, Weakened Soul…); buffs come
+    -- only through buff indicators (you pick them)
+    { key = "rest", set = "debuffIcons", who = "me", filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true,
       gap = GAP_SETS - S["space-1"] },
-    -- everyone else's frames: all their debuffs, once
-    { key = "all", set = "debuffIcons", who = "others", filter = { "HARMFUL" }, dispel = true, harmfulEdge = true },
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", drain = "ward",
       gap = GAP_SETS - S["space-1"] },
 }
@@ -135,10 +139,17 @@ local function groupMax(f, g)
     return M:Get(g.set)
 end
 
--- Which debuff groups a button uses, for whoever it shows now.
+-- A group's filter on a button, for whoever it shows now.
+local function groupFilter(f, g)
+    return g.filters and g.filters[f.isMe and "me" or "others"] or g.filter
+end
+
+-- Which debuff groups a button uses, and their filters, for whoever it
+-- shows now.
 local function applyWho(f)
     if not f.auras then return end
     for _, g in ipairs(AURA_GROUPS) do
+        if g.filters then f.auras:SetGroupFilter(g.key, groupFilter(f, g)) end
         if g.who then f.auras:SetGroupMax(g.key, groupMax(f, g)) end
     end
 end
@@ -147,13 +158,13 @@ local function buildAuras(f, h)
     local defensives = UI.GroupDefensives()
     local groups = {}
     for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = g.filter, max = groupMax(f, g), dispel = g.dispel, drain = g.drain, digits = false,
+        groups[i] = { key = g.key, filter = groupFilter(f, g), max = groupMax(f, g), dispel = g.dispel, drain = g.drain, digits = false,
             harmfulEdge = g.harmfulEdge, border = g.border, gap = g.gap, include = g.list and defensives[g.list] }
     end
     f.auraClip = CreateFrame("Frame", nil, f)
     f.auraClip:SetClipsChildren(true)
     f.auraClip:SetFrameLevel(f.over:GetFrameLevel() + 1)
-    f.auras = UI.AuraContainer(f.auraClip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT", growth = { "LEFT", "DOWN" }, groups = groups })
+    f.auras = UI.AuraContainer(f.auraClip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT", growth = { "LEFT", "DOWN" }, groups = groups, lazy = true })
     if f.auras then
         f.auras.container:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT")
         M:ApplyAuraCount(f)

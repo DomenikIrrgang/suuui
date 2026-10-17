@@ -130,7 +130,7 @@ local function buildAuras(f)
             include = g.list and defensives[g.list] }
     end
     f.auraClip = clip
-    f.auras = UI.AuraContainer(clip, f.unit, { size = M:Get("height"), anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, groups = groups })
+    f.auras = UI.AuraContainer(clip, f.unit, { size = M:Get("height"), anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, groups = groups, lazy = true })
     if f.auras then f.auras.container:SetPoint("TOPLEFT", clip, "TOPLEFT") end
 end
 

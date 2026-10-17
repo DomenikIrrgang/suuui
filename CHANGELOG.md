@@ -26,7 +26,7 @@
 - Your buffs fit beside the encounter timeline: on narrower screens (1080p) a row holds as many as there is room for before the timeline and the rest wrap to the next row.
 - `/suu perf`: how much time each SuuUI module takes (its events, settings, timers), and SuuUI's memory; start it, play a while, run it again for the report.
 - **Unit menus** in SuuUI's look: the game's right-click menu on you, your target, group members and players in the world, and its submenus (Settings › Tooltips › Unit menus); its choices stay the game's.
-- **Plugin API 0.17** (`Docs/API.md`): `SuuUI.UI.MoneyInput`, `WindowFrame` tabs, `SkinWindow` tabs that can be disabled, `Confirm`'s `enterConfirms`, aura groups' `index`/`gap` and `SetGroupPlace`, and `SuuUI.UI.LoadingMark` (the SuuUI emblem for long waits), `IsTooltipSkinned`, `WINDOW_HEAD_H`, `SuuUI.CollectionSources()`, `SuuUI.ToggleCollections()` and `CollectionsShown()`, `SuuUI.ShowTalentsOf(unit)`, `SuuUI.UI.ModelStage`, `SuuUI.Motion.Reduced()`, `SuuUI.EditMode.GroupPreview()`, `Inventory:LayoutSlots` sections, and disabled tabs on `WindowFrame` too.
+- **Plugin API 0.17** (`Docs/API.md`): `SuuUI.UI.MoneyInput`, `WindowFrame` tabs, `SkinWindow` tabs that can be disabled, `Confirm`'s `enterConfirms`, aura groups' `index`/`gap` and `SetGroupPlace`, and `SuuUI.UI.LoadingMark` (the SuuUI emblem for long waits), `IsTooltipSkinned`, `WINDOW_HEAD_H`, `SuuUI.CollectionSources()`, `SuuUI.ToggleCollections()` and `CollectionsShown()`, `SuuUI.ShowTalentsOf(unit)`, `SuuUI.UI.ModelStage`, `SuuUI.Motion.Reduced()`, `SuuUI.EditMode.GroupPreview()`, `Inventory:LayoutSlots` sections, disabled tabs on `WindowFrame` too, and `SetGroupFilter` on aura containers.
 - `/suu probe ahscan`, `/suu probe ahpost` and `/suu probe ahdata` (at the auction house) check whether the full scan works on Forever, whether SuuUI's own buttons may post and cancel, and what searches return.
 
 ### Changed
@@ -35,6 +35,7 @@
 
 - Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
 - Party and raid frames show every debuff after the ones you can remove (Forbearance on you didn't show), not only the ones the game marks for raids.
+- Raid and party frames use far less memory: the game makes ten hidden aura icons for every icon group a frame has, whatever it shows, and a raid frame had four groups (1,600 hidden icons for a raid, made even when you're solo). A group is now made only once it can show something, and a raid frame's debuffs share one group for whoever it shows: two groups per frame.
 
 - Trainer data from today's beta patch: for mages Arcane Wrath and Frost Blast are new, Arcane Blast and Ice Lance changed; for paladins Salvation and Mass Salvation replace Blessing of Salvation and Greater Blessing of Salvation, Seal of Fury's last rank comes at 26, and many spells' values changed; for shamans Lava Burst comes at 40, Fire Nova hits for less and Mana Tide Totem is taught by the trainer; for druids Shred comes at 20; for warriors Victory Rush hits for less (and the druid's, warrior's and hunter's first ranks, missing so far, are in); for priests Holy Fire's rank at 42 changed (the spellbook lists the new ones to train, the trainer groups them, each rank with its own spell ID).
 

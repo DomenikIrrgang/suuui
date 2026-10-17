@@ -11,6 +11,7 @@
 --       anchor = "TOPRIGHT",       -- the corner the icons start from
 --       growth = { "LEFT", "DOWN" },
 --       lineWidth = 520,           -- px before wrapping to the next line (nil: never)
+--       lazy = true,               -- 0.17: a group with no count yet waits (see addGroup)
 --       groups = {
 --           { key = "debuffs", filter = { "HARMFUL", "PLAYER" }, max = 16,
 --             dispel = true,       -- the dispel-type border on typed debuffs
@@ -34,6 +35,7 @@
 --       },
 --   })
 --   c:SetUnit(unit), c:SetGroupMax(key, n), c:SetGroupSpells(key, ids, exclude),
+--   c:SetGroupFilter(key, filter)      -- 0.17: a group's filter, live
 --   c:SetGroupPlace(key, index, gap)   -- 0.16: a group's order and the space before it
 --   c:SetFlow(anchor, growth), c:SetLineWidth(px)   -- 0.9: both after creation too
 --   c:Release()                  -- 0.9: parked for reuse (no unit, hidden,
@@ -287,6 +289,7 @@ local function call(container, names, ...)
 end
 
 local listen -- below, with the re-scan events
+local addGroup -- below, with the container
 
 -- The unit goes last, after the groups (it decides which events the
 -- container listens to), followed by a full re-scan. A released container
@@ -364,6 +367,7 @@ function AC:SetGroupSize(key, size)
     local px = UI.Size(size)
     if self.sizes[key] == px then return end
     self.sizes[key] = px
+    if not (self.groups[key] and self.groups[key].added) then return end
     pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, px))
     for _, b in ipairs(self.buttons) do
         if b.key == key then
@@ -381,6 +385,7 @@ function AC:SetGroupPlace(key, index, gap)
     local place = self.places[key]
     if place and place.index == index and place.gap == gap then return end
     self.places[key] = { index = index, gap = gap }
+    if not (self.groups[key] and self.groups[key].added) then return end
     pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, self.sizes[key]))
     self:Refresh()
 end
@@ -393,7 +398,23 @@ function AC:SetLineWidth(px)
 end
 
 function AC:SetGroupMax(key, n)
-    pcall(self.container.SetAuraGroupMaxFrameCount, self.container, key, n)
+    local g = self.groups[key]
+    if not g then return end
+    g.max = n
+    if g.added then
+        pcall(self.container.SetAuraGroupMaxFrameCount, self.container, key, n)
+    else
+        addGroup(self, key)
+    end
+end
+
+-- 0.17: a group's filter, live ({ "HARMFUL", "RAID_PLAYER_DISPELLABLE" }):
+-- one group can serve whoever the unit is (you, or someone else).
+function AC:SetGroupFilter(key, filter)
+    local g = self.groups[key]
+    if not g then return end
+    g.filter = filterString(filter)
+    if g.added then pcall(self.container.SetAuraGroupFilterString, self.container, key, g.filter) end
 end
 
 -- Spell lists as the engine takes them: { includeSpellIDs = { [id] = true },
@@ -419,7 +440,11 @@ end
 -- Only these spell IDs in group `key` (nil: no spell list), and never those
 -- in `exclude` (0.16).
 function AC:SetGroupSpells(key, ids, exclude)
-    return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, candidates(ids, exclude) or {})
+    local g = self.groups[key]
+    if not g then return false end
+    g.candidates = candidates(ids, exclude) or {}
+    if not g.added then return true end
+    return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, g.candidates)
 end
 
 -- 0.17: made-up icons in the container's place, laid out as the engine lays
@@ -478,6 +503,27 @@ function AC:HidePreview()
     pcall(self.container.SetAlpha, self.container, 1)
 end
 
+-- The engine makes ten buttons for every group up front, whatever its count
+-- (seen 2026-10-18: forty per raid frame, ~10 MB for a raid). With `lazy`
+-- a group goes into the engine only once it may show something (its count
+-- above 0); its count, filter and spells wait in self.groups until then.
+-- In a fight too, at once: containers have always been made in fights (a
+-- nameplate when the pool is empty, the frames after a reload in combat).
+addGroup = function(self, key)
+    local g = self.groups[key]
+    if not g or g.added or (self.opts.lazy and g.max <= 0) then return end
+    local group, gsize = g.group, self.sizes[key]
+    local added = pcall(self.container.AddAuraGroup, self.container, key, g.filter, {
+        maxFrameCount = g.max,
+        candidateFilters = g.candidates,
+        initializeFrame = group.initialize or makeInitializer(group, gsize, self),
+        layout = groupLayout(self, key, gsize),
+    })
+    -- one that failed is tried again with its next count
+    g.added = added
+    if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. key) end
+end
+
 function UI.AuraContainer(parent, unit, opts)
     loadEngine()
     local ok, container = pcall(CreateFrame, "AuraContainer", nil, parent, "CustomAuraContainerTemplate")
@@ -485,7 +531,7 @@ function UI.AuraContainer(parent, unit, opts)
         ns.Fault.Report("Auras", "the client has no aura containers: " .. tostring(container))
         return nil
     end
-    local self = setmetatable({ container = container, opts = opts, sizes = {}, buttons = {}, places = {} }, { __index = AC })
+    local self = setmetatable({ container = container, opts = opts, sizes = {}, buttons = {}, places = {}, groups = {} }, { __index = AC })
     -- a renderable rect from the start: the engine lays out from an OnUpdate
     container:SetSize(1, 1)
 
@@ -497,20 +543,15 @@ function UI.AuraContainer(parent, unit, opts)
     if h and v then call(container, { "SetFlowLayoutGrowthDirection", "SetAuraLayoutGrowthDirection" }, h, v) end
     call(container, { "SetFlowLayoutMaximumLineSize", "SetAuraLayoutRowWidth" }, opts.lineWidth)
 
-    local spacing = opts.spacing or S["space-2"]
-    self.spacing = spacing
-    for _, group in ipairs(opts.groups) do
-        local gsize = group.size and UI.Size(group.size) or size
-        self.sizes[group.key] = gsize
-        self.places[group.key] = { index = group.index, gap = group.gap }
-        local added = pcall(container.AddAuraGroup, container, group.key, filterString(group.filter), {
-            maxFrameCount = group.max or 16,
-            candidateFilters = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include, group.exclude),
-            initializeFrame = group.initialize or makeInitializer(group, gsize, self),
-            layout = { elementWidth = gsize, elementHeight = gsize, elementSpacing = spacing, lineSpacing = spacing,
-                layoutIndex = group.index, groupSpacing = group.gap },
-        })
-        if not added then ns.Fault.Report("Auras", "couldn't add the aura group " .. group.key) end
+    self.spacing = opts.spacing or S["space-2"]
+    for i, group in ipairs(opts.groups) do
+        self.sizes[group.key] = group.size and UI.Size(group.size) or size
+        -- its place by its position when it has none: a group added later
+        -- (addGroup) keeps the place it has in the list
+        self.places[group.key] = { index = group.index or i, gap = group.gap }
+        self.groups[group.key] = { group = group, max = group.max or 16, filter = filterString(group.filter),
+            candidates = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include, group.exclude) }
+        addGroup(self, group.key)
     end
     self:SetUnit(unit)
     listen(self, unit)
