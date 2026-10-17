@@ -6,9 +6,9 @@
 -- foot. Options and Edit Mode stay the game's own windows (decided
 -- 2026-10-17); Macros and AddOns open what is open for them (SuuUI's own
 -- when those modules are on).
--- Reload UI is a secure button on top running /reload (the game blocks a
--- reload from addon code: found in game, 2026-10-17); placed while the menu
--- shows, out of combat.
+-- Reload UI, Log Out and Exit Game are secure buttons on top running
+-- /reload, /logout and /quit (the game blocks them from addon code: found in
+-- game, 2026-10-17); placed while the menu shows, out of combat.
 -- Esc stays the game's: its GameMenuFrame still opens and closes on Esc,
 -- out of sight, and this panel shows and hides with it. Opening each entry
 -- from SuuUI's code taints nothing (/suu probe gamemenu, 2026-10-17).
@@ -49,6 +49,11 @@ local function exitBlocked()
     if StaticPopup_Visible and (StaticPopup_Visible("CAMP") or StaticPopup_Visible("QUIT")) then
         return "Already on the way out"
     end
+    if InCombatLockdown() then return "Not in combat" end
+end
+
+local function notInCombat()
+    if InCombatLockdown() then return "Not in combat" end
 end
 
 local GROUPS = {
@@ -69,9 +74,9 @@ local GROUPS = {
         { "Support", "chat", closeThen(function() ToggleHelpFrame() end) },
     } },
     { "Session", {
-        { "Reload UI", "reset", nil, function() if InCombatLockdown() then return "Not in combat" end end, reload = true },
-        { "Log Out", "door", closeThen(Logout, SOUNDKIT.IG_MAINMENU_LOGOUT), exitBlocked },
-        { "Exit Game", "close", closeThen(Quit, SOUNDKIT.IG_MAINMENU_QUIT), exitBlocked },
+        { "Reload UI", "reset", nil, notInCombat, slash = "/reload", sound = SOUNDKIT.IG_MAINMENU_OPTION },
+        { "Log Out", "door", nil, exitBlocked, slash = "/logout", sound = SOUNDKIT.IG_MAINMENU_LOGOUT },
+        { "Exit Game", "close", nil, exitBlocked, slash = "/quit", sound = SOUNDKIT.IG_MAINMENU_QUIT },
     } },
 }
 
@@ -109,7 +114,11 @@ function M:BuildItem(parent, def)
         UI.HideTooltip()
         def[3]()
     end)
-    if def.reload then self.reloadItem = b end
+    if def.slash then
+        self.secureItems = self.secureItems or {}
+        self.secureItems[#self.secureItems + 1] = b
+        b.def = def
+    end
     return b
 end
 
@@ -176,31 +185,39 @@ function M:Draw()
     self:DrawPerf()
 end
 
--- The secure /reload button over Reload UI: there while the menu shows
--- (out of combat: a secure frame can't be placed in one).
-function M:PlaceReload(on)
+-- The secure buttons over Reload UI, Log Out and Exit Game: there while the
+-- menu shows (out of combat: a secure frame can't be placed in one).
+function M:PlaceSecure(on)
     if InCombatLockdown() then return end
-    local over, item = self.reloadOver, self.reloadItem
-    if not item then return end
-    if not over then
-        if not on then return end
-        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-        over:SetAttribute("type1", "macro")
-        over:SetAttribute("macrotext1", "/reload")
-        over:SetScript("OnEnter", function() item:GetScript("OnEnter")(item) end)
-        over:SetScript("OnLeave", function() item:GetScript("OnLeave")(item) end)
-        over:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_OPTION) end)
-        self.reloadOver = over
-    end
-    over:ClearAllPoints()
-    if on and not item.blocked then
-        over:SetFrameStrata("DIALOG")
-        over:SetFrameLevel(self.panel:GetFrameLevel() + 20)
-        over:SetAllPoints(item)
-        over:Show()
-    else
-        over:Hide()
+    self.overs = self.overs or {}
+    for i, item in ipairs(self.secureItems or {}) do
+        local over = self.overs[i]
+        if not over and on then
+            local def = item.def
+            over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+            over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+            over:SetAttribute("type1", "macro")
+            over:SetAttribute("macrotext1", def.slash)
+            over:SetScript("OnEnter", function() item:GetScript("OnEnter")(item) end)
+            over:SetScript("OnLeave", function() item:GetScript("OnLeave")(item) end)
+            over:SetScript("PreClick", function() PlaySound(def.sound or SOUNDKIT.IG_MAINMENU_OPTION) end)
+            -- the menu closes after (closing it first would hide this button mid-click)
+            over:SetScript("PostClick", function()
+                C_Timer.After(0, function() if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end end)
+            end)
+            self.overs[i] = over
+        end
+        if over then
+            over:ClearAllPoints()
+            if on and not item.blocked then
+                over:SetFrameStrata("DIALOG")
+                over:SetFrameLevel(self.panel:GetFrameLevel() + 20)
+                over:SetAllPoints(item)
+                over:Show()
+            else
+                over:Hide()
+            end
+        end
     end
 end
 
@@ -245,7 +262,7 @@ function M:OnEnable()
         C_Timer.After(0, function() self:PutAway(g) end)
         self:Draw()
         self.dim:Show()
-        self:PlaceReload(true)
+        self:PlaceSecure(true)
         -- while it shows: keep it away, whatever the game does to it
         self.dim:SetScript("OnUpdate", function()
             local _, rel = g:GetPoint(1)
@@ -256,7 +273,7 @@ function M:OnEnable()
         end
     end)
     g:HookScript("OnHide", function()
-        self:PlaceReload(false)
+        self:PlaceSecure(false)
         self.dim:Hide()
         self.dim:SetScript("OnUpdate", nil)
         if self.ticker then self.ticker:Cancel(); self.ticker = nil end
@@ -264,7 +281,7 @@ function M:OnEnable()
     for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
         self:OnGameEvent(e, function()
             if self.dim:IsShown() then self:Draw() end
-            self:PlaceReload(self.dim:IsShown())
+            self:PlaceSecure(self.dim:IsShown())
         end)
     end
 end
