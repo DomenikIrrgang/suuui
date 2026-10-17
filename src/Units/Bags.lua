@@ -469,15 +469,20 @@ function M:DrawBankRail()
     local max = call(C_Bank.FetchMaxNumBankTabs, BANK_TYPE) or 9
     local bought = {}
     for _, bag in ipairs(self:BankBags()) do bought[bag - BANK_FIRST + 1] = true end
-    local entries = {}
+    -- the slots you bought, one of them empty at most (as your bags' rail,
+    -- asked for in game); the buy cell stands for the rest
+    local entries, emptyShown = {}, false
     for n = 1, max do
         local bag = BANK_FIRST + n - 1
         local info = call(C_Container.GetContainerItemInfo, TAB_BAG, n)
         local icon = info and plain(info.iconFileID) and info.iconFileID or nil
-        local e = { kind = n == 1 and "bank" or "bankbag", tab = n, bag = bag, fixed = n == 1, locked = not bought[n] and n > 1,
-            has = icon ~= nil or n == 1, icon = icon or BACKPACK_ICON, size = numSlots(bag),
-            quality = info and plain(info.quality) and QUALITY[info.quality] or nil }
-        entries[#entries + 1] = e
+        local owned = n == 1 or bought[n]
+        if owned and (n == 1 or icon or not emptyShown) then
+            if n > 1 and not icon then emptyShown = true end
+            entries[#entries + 1] = { kind = n == 1 and "bank" or "bankbag", tab = n, bag = bag, fixed = n == 1,
+                has = icon ~= nil or n == 1, icon = icon or BACKPACK_ICON, size = numSlots(bag),
+                quality = info and plain(info.quality) and QUALITY[info.quality] or nil }
+        end
     end
     local buy = {}
     local next = call(C_Bank.FetchNextPurchasableBankTabData, BANK_TYPE)
