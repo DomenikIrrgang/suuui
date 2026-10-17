@@ -662,8 +662,8 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Build:** mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
 - **Collections became SuuUI's own window (2026-10-17):** the restyle stays as the fallback while the module is off. Mounts on a stage (a PlayerModel placed per model file), Toys as a shelf of cards (no toy has a 3D model on Forever), Appearances as a doll between slot columns with tiles; what you lack and where to get it from `CollectionSources` (generated from client data and QuestieDB); favourites and recent.
 - **Confirm:** you can buy, sell, buy back, mail an item, and post and buy an auction.
-- **Confirmed in game (2026-10-17):** the auction house's Scan all; a mail with money (Send waits for the game's confirmation, comes back if it is cancelled).
-- **Still to see:** a Collections summon and toy use from SuuUI's secure buttons; an auction purchase; a mail with COD.
+- **Confirmed in game (2026-10-17):** the auction house's Scan all and a purchase; a mail with money and one with COD (Send waits for the game's confirmation, comes back if it is cancelled).
+- **Still to see:** a Collections summon and toy use from SuuUI's secure buttons (no mount or toy on the test character yet).
 
 ### 3.7 NPC talk, dressing room, inspect and the game menu
 - **Asked 2026-10-17:** gossip, the quest dialog, the dressing room, inspect, inspect talents and the game menu get proper designs and become SuuUI's own windows where the game allows.
