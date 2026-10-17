@@ -1,16 +1,17 @@
 -- Units/NpcDialogue.lua
--- SuuUI's NPC dialogue (plan 3.7, design component NpcDialogue, direction
--- C1 "Cinematic bar", chosen 2026-10-17): talking to an NPC becomes a scene
--- docked at the bottom centre, over the action bars. The speaker as a live
--- 3D portrait breaking out above the bar (a PlayerModel on the "npc" unit:
+-- SuuUI's NPC dialogue (plan 3.7, design component NpcDialogue, the
+-- cinematic bar in its compact direction D3 "Answer pills", chosen
+-- 2026-10-17 over the first build's taller bar): talking to an NPC becomes a
+-- scene docked at the bottom centre, over the action bars. The speaker as a
+-- live 3D portrait standing on the bar (a PlayerModel on the "npc" unit:
 -- /suu probe npcportrait, 2026-10-17, every NPC drawn, with its talk
--- animations), a name plate with their role; what they say types in, with
--- the talk animation while it does; your answers numbered under it: the
--- gossip options, their quests, Goodbye last. The quest flow speaks the
--- same way: a quest's text as their line, what they ask and the rewards as
--- cards, then Accept or Decline; progress with your counts; the reward to
--- choose. 1-9 answer, Space shows the whole line, Enter accepts or
--- completes, Esc leaves.
+-- animations), their name plate in the bar's corner; what they say types
+-- in, with the talk animation while it does; your answers as numbered pills
+-- under it: the gossip options, their quests, Goodbye last. The quest flow
+-- speaks the same way: a quest's text as their line, what they ask on one
+-- line, the rewards as one-line cards, then Accept or Decline; progress with
+-- your counts; the reward to choose. 1-9 answer, Space shows the whole line,
+-- Enter accepts or completes, Esc leaves.
 -- The game's GossipFrame and QuestFrame keep running the conversation, shown
 -- but out of sight (closing either ends the interaction); their data
 -- functions are free and the quest buttons are the game's own, clicked
@@ -38,15 +39,16 @@ local function call(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
 end
 
+-- the bar (design D3): 1080 wide; padding 12, 20 at the right; the speaker's
+-- column 200 wide, 20 from the talk
 local BAR_W = 1080
-local PAD, PAD_R = S["space-6"], S["space-7"]
-local PORT_W, PORT_H, RISE = 236, 268, 110
-local PLATE_H = 52
-local YOU = 64
-local GAP = S["space-7"]
-local ANS_H = 34
+local PAD, PAD_R = S["space-5"], S["space-6"]
+local PORT_W, PORT_H = 200, 220
+local GAP = S["space-6"]
+local PILL_H = 28
 local SPEECH_LINES = 6 -- a long line scrolls past this many lines
-local CARD_W, CARD_H = 150, 104
+local TEXT_SIZE, TEXT_SPACING = 14, 3
+local CARD_W, NEED_W, CARD_H = 196, 240, 36
 local ZOOM = 0.75
 local CPS = 90 -- characters a second while a line types in
 local ANIM_TALK, ANIM_IDLE = 60, 0
@@ -110,45 +112,40 @@ end
 -- The bar
 --------------------------------------------------------------------------------
 
--- One answer: its key, a glyph or a quest mark, the text, a tag, why it's off.
-function M:BuildAnswer(parent)
+-- One answer, a pill: its key, a glyph or a quest mark, the text, a tag.
+-- Why one is off shows in its tooltip.
+function M:BuildPill(parent)
     local b = CreateFrame("Button", nil, parent)
-    b:SetHeight(ANS_H)
-    b.hover = b:CreateTexture(nil, "BACKGROUND")
+    b:SetHeight(PILL_H)
+    b.bg = UI.Fill(b, "surface-sunk", "BACKGROUND")
+    b.bg:SetAllPoints()
+    b.hover = b:CreateTexture(nil, "BACKGROUND", nil, 1)
     b.hover:SetAllPoints()
     b.hover:SetColorTexture(1, 1, 1, 1)
     local r, g, bl = UI.RGBA("arcane")
-    b.hover:SetGradient("HORIZONTAL", CreateColor(r, g, bl, 0.18), CreateColor(r, g, bl, 0.03))
+    b.hover:SetGradient("HORIZONTAL", CreateColor(r, g, bl, 0.18), CreateColor(r, g, bl, 0.06))
     b.hover:Hide()
-    b.edge = UI.Fill(b, "arcane", "ARTWORK")
-    b.edge:SetPoint("TOPLEFT")
-    b.edge:SetPoint("BOTTOMLEFT")
-    b.edge:SetWidth(3)
-    b.edge:Hide()
+    b.border = UI.Border(b, "gilt-faint")
     b.key = UI.KeyChip(b, "1")
-    b.key:SetPoint("LEFT", S["space-4"], 0)
+    b.key:SetPoint("LEFT", S["space-2"], 0)
     b.glyph = b:CreateTexture(nil, "ARTWORK")
-    b.glyph:SetSize(15, 15)
-    b.glyph:SetPoint("LEFT", S["space-4"] + 22 + S["space-4"] + 2, 0)
+    b.glyph:SetSize(13, 13)
     b.mark = UI.Text(b, "alert", "gilt-text")
-    b.mark:SetPoint("CENTER", b.glyph, "CENTER", 0, 0)
+    b.mark:SetFont(T.type.alert.file, 16, "")
     b.text = UI.Text(b, "body", "ink")
-    b.text:SetFont(T.type.body.file, 14, "")
-    b.text:SetPoint("LEFT", b.glyph, "RIGHT", S["space-4"] + 2, 0)
-    b.text:SetJustifyH("LEFT")
     b.text:SetWordWrap(false)
     b.tag = UI.Text(b, "micro", "gilt-text")
-    b.tag:SetPoint("LEFT", b.text, "RIGHT", S["space-4"], 0)
-    b.why = UI.Text(b, "caption", "ember-text")
-    b.why:SetPoint("RIGHT", -S["space-5"], 0)
     function b:Lit(on)
         on = on and not self.off
         self.hover:SetShown(on)
-        self.edge:SetShown(on)
+        self.border:SetColor(on and "arcane" or "gilt-faint")
         self.key.text:SetColor(on and "arcane" or "ink-muted")
     end
-    b:SetScript("OnEnter", function(self) self:Lit(true) end)
-    b:SetScript("OnLeave", function(self) self:Lit(false) end)
+    b:SetScript("OnEnter", function(self)
+        self:Lit(true)
+        if self.off then UI.ShowTooltip(self, { title = self.label, description = self.off }) end
+    end)
+    b:SetScript("OnLeave", function(self) self:Lit(false); UI.HideTooltip() end)
     b:SetScript("OnClick", function(self)
         if self.off or not self.act then return end
         PlaySound(SOUNDKIT.IG_QUEST_LIST_SELECT)
@@ -157,26 +154,23 @@ function M:BuildAnswer(parent)
     return b
 end
 
--- One card: an item to choose, receive or hand over.
+-- One card on one line: an item to choose, receive or hand over.
 function M:BuildCard(parent)
     local c = CreateFrame("Button", nil, parent)
-    c:SetSize(CARD_W, CARD_H)
+    c:SetHeight(CARD_H)
     c.bg = UI.Fill(c, "surface-sunk", "BACKGROUND")
     c.bg:SetAllPoints()
     c.border = UI.Border(c, "gilt-faint")
-    c.slot = UI.ItemSlot(c, 36)
-    c.slot:SetPoint("TOPLEFT", S["space-4"], -S["space-4"])
+    c.slot = UI.ItemSlot(c, 28)
+    c.slot:SetPoint("LEFT", S["space-2"] + 1, 0)
     c.slot:EnableMouse(false)
-    c.up = UI.Text(c, "micro", "arcane")
-    c.up:SetPoint("TOPRIGHT", -S["space-3"], -S["space-3"])
+    c.right = UI.Text(c, "micro", "arcane")
+    c.right:SetPoint("RIGHT", -S["space-3"], 0)
     c.name = UI.Text(c, "label", "ink")
-    c.name:SetPoint("TOPLEFT", c.slot, "BOTTOMLEFT", 0, -S["space-2"])
-    c.name:SetPoint("RIGHT", -S["space-4"], 0)
+    c.name:SetPoint("LEFT", c.slot, "RIGHT", S["space-3"], 0)
+    c.name:SetPoint("RIGHT", c.right, "LEFT", -S["space-3"], 0)
     c.name:SetJustifyH("LEFT")
-    c.name:SetWordWrap(true)
-    c.name:SetMaxLines(2)
-    c.note = UI.Text(c, "caption", "ink-muted")
-    c.note:SetPoint("BOTTOMLEFT", S["space-4"], S["space-3"])
+    c.name:SetWordWrap(false)
     c:SetScript("OnEnter", function(self)
         if not self.on then self.border:SetColor("gilt-line") end
         if self.kind then
@@ -215,8 +209,8 @@ function M:BuildPortrait(parent)
     local light = p:CreateTexture(nil, "BACKGROUND", nil, -7)
     light:SetTexture(SOFT)
     light:SetBlendMode("ADD")
-    light:SetPoint("TOPLEFT", -24, PORT_H * 0.35)
-    light:SetPoint("BOTTOMRIGHT", 24, PORT_H * 0.35 - PORT_H)
+    light:SetPoint("TOPLEFT", -20, PORT_H * 0.35)
+    light:SetPoint("BOTTOMRIGHT", 20, PORT_H * 0.35 - PORT_H)
     local r, g, b = UI.RGBA("gilt")
     light:SetVertexColor(r * 0.1, g * 0.1, b * 0.1)
     p.model = CreateFrame("PlayerModel", nil, p)
@@ -269,15 +263,14 @@ function M:Build()
     edge:SetPoint("TOPRIGHT", 0, 0)
     self.bar = bar
 
-    -- the speaker: the portrait breaking out above the bar, the plate under it
+    -- the speaker: the portrait standing on the bar, the plate in its corner
     local port = self:BuildPortrait(bar)
-    port:SetPoint("TOPLEFT", bar, "TOPLEFT", PAD, -PAD + RISE)
+    port:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", PAD, 0)
     port:SetFrameLevel(bar:GetFrameLevel() + 5)
     self.portrait = port
     local plate = CreateFrame("Frame", nil, bar)
     plate:SetPoint("TOPLEFT", port, "BOTTOMLEFT", 0, 1)
     plate:SetPoint("TOPRIGHT", port, "BOTTOMRIGHT", 0, 1)
-    plate:SetHeight(PLATE_H)
     plate:SetFrameLevel(port:GetFrameLevel() + 3)
     UI.Fill(plate, "surface", "BACKGROUND"):SetAllPoints()
     UI.Border(plate, "gilt-line")
@@ -286,9 +279,9 @@ function M:Build()
     plate.edge:SetPoint("BOTTOMLEFT")
     plate.edge:SetWidth(3)
     plate.name = UI.Text(plate, "alert", "ink")
-    plate.name:SetFont(T.type.alert.file, 20, "")
+    plate.name:SetFont(T.type.alert.file, 17, "")
     plate.name:SetShadowOffset(0, -1)
-    plate.name:SetPoint("TOPLEFT", S["space-5"], -S["space-3"])
+    plate.name:SetPoint("TOPLEFT", S["space-4"] + 3, -S["space-2"])
     plate.name:SetPoint("RIGHT", -S["space-4"], 0)
     plate.name:SetJustifyH("LEFT")
     plate.name:SetWordWrap(false)
@@ -296,37 +289,23 @@ function M:Build()
     plate.role:SetPoint("TOPLEFT", plate.name, "BOTTOMLEFT", 0, -1)
     self.plate = plate
 
-    -- you, at the right (the gossip and the greeting)
-    local you = CreateFrame("Frame", nil, bar)
-    you:SetSize(YOU, YOU + S["space-2"] + T.type.caption.lineHeight)
-    you:SetPoint("BOTTOMRIGHT", -PAD_R, PAD)
-    local youBox = CreateFrame("Frame", nil, you)
-    youBox:SetSize(YOU, YOU)
-    youBox:SetPoint("TOP")
-    youBox:SetClipsChildren(true)
-    UI.Fill(youBox, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    you.model = CreateFrame("PlayerModel", nil, youBox)
-    you.model:SetAllPoints()
-    UI.Border(youBox, "gilt-line")
-    you.name = UI.Text(you, "caption", "ink-muted")
-    you.name:SetPoint("BOTTOM")
-    self.you = you
-
     UI.CloseButton(bar, function() self:Leave() end):SetPoint("TOPRIGHT", -S["space-4"], -S["space-4"])
 
     -- what is said and answered
     local talk = CreateFrame("Frame", nil, bar)
     talk:SetPoint("TOPLEFT", PAD + PORT_W + GAP, -PAD)
+    talk:SetWidth(BAR_W - PAD - PORT_W - GAP - PAD_R)
     self.talk = talk
     -- a quest's head: its title and level
     local qhead = CreateFrame("Frame", nil, talk)
-    qhead:SetHeight(T.type["unit-name-lg"].lineHeight)
+    qhead:SetHeight(18)
     qhead.glyph = qhead:CreateTexture(nil, "ARTWORK")
-    qhead.glyph:SetSize(14, 14)
+    qhead.glyph:SetSize(13, 13)
     qhead.glyph:SetPoint("LEFT")
     qhead.glyph:SetTexture(GLYPHS .. "questDots")
     qhead.glyph:SetVertexColor(UI.RGBA("gilt-text"))
     qhead.title = UI.Text(qhead, "unit-name-lg", "gilt-text")
+    qhead.title:SetFont(T.type["unit-name-lg"].file, 15, "")
     qhead.title:SetPoint("LEFT", qhead.glyph, "RIGHT", S["space-3"], 0)
     qhead.level = UI.Text(qhead, "caption", "ink-muted")
     qhead.level:SetPoint("RIGHT", -28, 0)
@@ -335,15 +314,15 @@ function M:Build()
     local speech = CreateFrame("Button", nil, talk)
     speech:SetScript("OnClick", function() self:RevealAll() end)
     speech.quote = UI.Text(speech, "alert", "gilt")
-    speech.quote:SetFont(T.type.alert.file, 44, "")
+    speech.quote:SetFont(T.type.alert.file, 32, "")
     speech.quote:SetAlpha(0.8)
-    speech.quote:SetPoint("TOPLEFT", 0, 6)
+    speech.quote:SetPoint("TOPLEFT", 0, 4)
     speech.scroll = UI.ScrollArea(speech, S["space-3"])
-    speech.scroll:SetPoint("TOPLEFT", 28, 0)
+    speech.scroll:SetPoint("TOPLEFT", 22, 0)
     speech.scroll:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
     speech.text = UI.Text(speech.scroll.child, "body", "ink")
-    speech.text:SetFont(T.type.body.file, 15.5, "")
-    speech.text:SetSpacing(5)
+    speech.text:SetFont(T.type.body.file, TEXT_SIZE, "")
+    speech.text:SetSpacing(TEXT_SPACING)
     speech.text:SetJustifyH("LEFT")
     speech.text:SetWordWrap(true)
     speech.text:SetPoint("TOPLEFT")
@@ -360,13 +339,14 @@ function M:Build()
     speech.fade:SetGradient("VERTICAL", CreateColor(sr, sg, sb, 1), CreateColor(sr, sg, sb, 0))
     speech.fade:SetPoint("BOTTOMLEFT", speech.scroll, "BOTTOMLEFT")
     speech.fade:SetPoint("BOTTOMRIGHT", speech.scroll, "BOTTOMRIGHT")
-    speech.fade:SetHeight(28)
+    speech.fade:SetHeight(24)
     speech.scroll:HookScript("OnVerticalScroll", function() self:DrawFade() end)
     -- the hint, in the bar's foot at the right
     speech.skip = UI.Text(bar, "caption", "ink-faint")
+    speech.skip:SetPoint("BOTTOMRIGHT", -PAD_R, PAD)
     speech.skip:SetValue("Space  show it all")
     self.speech = speech
-    -- what they ask (a quest's objectives)
+    -- what they ask (a quest's objectives), on one line where it fits
     local ask = CreateFrame("Frame", nil, talk)
     UI.Fill(ask, "surface-sunk", "BACKGROUND"):SetAllPoints()
     local askEdge = UI.Fill(ask, "gilt-line", "ARTWORK")
@@ -374,10 +354,11 @@ function M:Build()
     askEdge:SetPoint("BOTTOMLEFT")
     askEdge:SetWidth(2)
     ask.head = UI.Text(ask, "header", "gilt-text")
-    ask.head:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
+    ask.head:SetFont(T.type.header.file, 12, "")
+    ask.head:SetPoint("TOPLEFT", S["space-4"], -S["space-3"] - 1)
     ask.head:SetValue("What they ask")
     ask.text = UI.Text(ask, "body", "ink")
-    ask.text:SetPoint("TOPLEFT", ask.head, "BOTTOMLEFT", 0, -S["space-2"])
+    ask.text:SetPoint("TOPLEFT", ask.head, "TOPRIGHT", S["space-4"], 1)
     ask.text:SetJustifyH("LEFT")
     ask.text:SetWordWrap(true)
     self.ask = ask
@@ -386,13 +367,11 @@ function M:Build()
     cards.caption = UI.Text(cards, "caption", "ink-muted")
     cards.caption:SetPoint("TOPLEFT")
     cards.list = {}
-    cards.gains = CreateFrame("Frame", nil, cards)
-    cards.gains:SetSize(140, CARD_H)
-    cards.money = UI.Money(cards.gains)
-    cards.xp = UI.Text(cards.gains, "caption", "ink-muted")
+    cards.money = UI.Money(cards)
+    cards.xp = UI.Text(cards, "caption", "ink-muted")
     self.cards = cards
     -- the answers
-    self.answers = {}
+    self.pills = {}
 
     -- keys: 1-9, Space, Enter; everything else goes on to the game
     bar:EnableKeyboard(true)
@@ -423,6 +402,7 @@ function M:DrawSpeaker()
     local text = line and line.leftText
     if plain(text) and text ~= "" and not text:find("^" .. (LEVEL or "Level")) then role = text end
     self.plate.role:SetValue(role or "")
+    self.plate:SetHeight(S["space-2"] * 2 + 20 + (role and (T.type.caption.lineHeight + 1) or 0))
     local hostile = unit and UnitCanAttack("player", unit)
     self.plate.edge:SetColorTexture(UI.RGBA(hostile and "reaction-hostile" or "reaction-friendly"))
     local m = self.portrait.model
@@ -439,25 +419,30 @@ function M:DrawSpeaker()
     m.canTalk = call(m.HasAnimation, m, ANIM_TALK) ~= false
 end
 
--- The answers: { label, glyph | mark = { "!", token }, tag, act, off = why }.
-function M:DrawAnswers(list, y, width)
+-- The answers as pills, wrapping: { label, glyph | mark = { "!", token },
+-- tag = { text, token }, act, off = why, leave, key }.
+function M:DrawPills(list, y, width)
+    local x, rowGap = 0, S["space-3"]
     for i, a in ipairs(list) do
-        local b = self.answers[i] or self:BuildAnswer(self.talk)
-        self.answers[i] = b
-        b:ClearAllPoints()
-        b:SetPoint("TOPLEFT", 0, -y)
-        b:SetWidth(width)
+        local b = self.pills[i] or self:BuildPill(self.talk)
+        self.pills[i] = b
         local key = a.key or (i <= 9 and tostring(i) or "")
         b.key:SetKey(key)
+        b.key:SetHeight(18)
         b.key:SetShown(key ~= "")
+        local left = S["space-2"] + (key ~= "" and (b.key:GetWidth() + S["space-3"]) or 0)
+        b.glyph:ClearAllPoints()
+        b.mark:ClearAllPoints()
         if a.mark then
             b.glyph:Hide()
             b.mark:Show()
+            b.mark:SetPoint("CENTER", b, "LEFT", left + 8, 0)
             b.mark:SetValue(a.mark[1])
             b.mark:SetColor(a.mark[2])
         else
             b.mark:Hide()
             b.glyph:Show()
+            b.glyph:SetPoint("CENTER", b, "LEFT", left + 8, 0)
             if type(a.glyph) == "number" then
                 b.glyph:SetTexture(a.glyph)
                 b.glyph:SetVertexColor(1, 1, 1)
@@ -466,82 +451,100 @@ function M:DrawAnswers(list, y, width)
                 b.glyph:SetVertexColor(UI.RGBA((a.leave or a.off) and "ink-muted" or "gilt-text"))
             end
         end
+        left = left + 16 + S["space-3"]
+        b.text:ClearAllPoints()
+        b.text:SetPoint("LEFT", left, 0)
         b.text:SetValue(a.label or "")
         b.text:SetColor((a.off and "ink-faint") or (a.leave and "ink-muted") or "ink")
-        b.text:SetWidth(math.min(UI.MeasureText("body", a.label or "") * 14 / 13 + 4, width - 200))
-        b.tag:SetValue(a.tag and a.tag[1] or "")
-        b.tag:SetColor(a.tag and a.tag[2] or "gilt-text")
-        b.why:SetValue(a.off or "")
-        b.off, b.act = a.off, a.act
+        local tw = math.min(UI.MeasureText("body", a.label or ""), width - left - S["space-5"] - 80)
+        b.text:SetWidth(tw)
+        local w = left + tw
+        b.tag:ClearAllPoints()
+        if a.tag then
+            b.tag:SetPoint("LEFT", b.text, "RIGHT", S["space-3"], 0)
+            b.tag:SetValue(a.tag[1])
+            b.tag:SetColor(a.tag[2])
+            b.tag:Show()
+            w = w + S["space-3"] + UI.MeasureText("micro", a.tag[1])
+        else
+            b.tag:Hide()
+        end
+        w = math.ceil(w + S["space-5"])
+        if x > 0 and x + w > width then
+            x, y = 0, y + PILL_H + rowGap
+        end
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", x, -y)
+        b:SetWidth(w)
+        b.label, b.off, b.act = a.label, a.off, a.act
+        b:SetAlpha(a.off and 0.7 or 1)
         b:Lit(b:IsMouseOver())
         b:Show()
-        y = y + ANS_H + 2
+        x = x + w + rowGap
     end
-    for i = #list + 1, #self.answers do self.answers[i]:Hide() end
+    for i = #list + 1, #self.pills do self.pills[i]:Hide() end
     self.answerList = list
-    return y
+    return #list > 0 and (y + PILL_H) or y
 end
 
--- The cards: items to choose or receive, or to hand over.
-function M:DrawCards(y, width, items, caption, gains)
+-- The cards, a line each: items to choose or receive, or to hand over;
+-- money and experience in the same row after them.
+function M:DrawCards(y, width, items, caption, gains, need)
     local cards = self.cards
     cards:ClearAllPoints()
     cards:SetPoint("TOPLEFT", 0, -y)
     cards:SetWidth(width)
     cards.caption:SetValue(caption or "")
-    local top = (caption and caption ~= "") and (T.type.caption.lineHeight + S["space-3"]) or 0
-    local perRow = math.max(1, math.floor((width - 140 + S["space-4"]) / (CARD_W + S["space-4"])))
+    local top = (caption and caption ~= "") and (T.type.caption.lineHeight + S["space-2"]) or 0
+    local cw = need and NEED_W or CARD_W
+    local x, row = 0, 0
     for i, it in ipairs(items) do
         local c = cards.list[i] or self:BuildCard(cards)
         cards.list[i] = c
-        local row, col = math.floor((i - 1) / perRow), (i - 1) % perRow
+        if x > 0 and x + cw > width then x, row = 0, row + 1 end
         c:ClearAllPoints()
-        c:SetPoint("TOPLEFT", col * (CARD_W + S["space-4"]), -(top + row * (CARD_H + S["space-4"])))
+        c:SetPoint("TOPLEFT", x, -(top + row * (CARD_H + S["space-3"])))
+        c:SetWidth(cw)
         c.slot.skin:SetItem({ icon = it.icon, count = it.count, quality = QUALITY[it.quality] })
         c.name:SetValue(it.name or "…")
         local q = QUALITY[it.quality]
         c.name:SetColor(q and ("quality-" .. q) or "ink")
-        c.note:SetValue(it.note or "")
-        c.note:SetColor(it.noteColor or "ink-muted")
-        c.up:SetValue(it.upgrade and "▲ Upgrade" or "")
+        c.right:SetValue(it.right or (it.upgrade and "▲ Upgrade") or "")
+        c.right:SetColor(it.rightColor or "arcane")
         c.kind, c.index, c.link = it.kind, it.index, it.link
         c.choosable, c.choose = it.choosable, it.choose
         c:SetOn(it.on)
         c:Show()
+        x = x + cw + S["space-3"]
     end
     for i = #items + 1, #cards.list do cards.list[i]:Hide() end
-    local rows = math.max(1, math.ceil(#items / perRow))
-    -- money and experience beside the first row
-    local g = cards.gains
-    g:ClearAllPoints()
-    g:SetPoint("TOPLEFT", math.min(#items, perRow) * (CARD_W + S["space-4"]), -top)
+    -- money and experience: after the cards on their row, or alone
+    local gx = #items > 0 and (x + S["space-3"]) or 0
+    if #items > 0 and gx + 160 > width then gx, row = 0, row + 1 end
+    local gyMid = top + row * (CARD_H + S["space-3"]) + (#items > 0 and CARD_H / 2 or 9)
     cards.money:ClearAllPoints()
     cards.xp:ClearAllPoints()
-    local gy = S["space-4"]
+    local any = false
     if gains and gains.money and gains.money > 0 then
-        cards.money:SetPoint("TOPLEFT", S["space-3"], -gy)
+        cards.money:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
         cards.money:SetCopper(gains.money)
         cards.money:Show()
-        gy = gy + 20
+        gx = gx + 90
+        any = true
     else
         cards.money:Hide()
     end
     if gains and gains.xp and gains.xp > 0 then
-        cards.xp:SetPoint("TOPLEFT", S["space-3"], -gy)
+        cards.xp:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
         cards.xp:SetValue(BreakUpLargeNumbers(gains.xp) .. " XP")
         cards.xp:Show()
+        any = true
     else
         cards.xp:Hide()
     end
-    -- no cards: money and experience alone, a line each
-    if #items == 0 then
-        g:ClearAllPoints()
-        g:SetPoint("TOPLEFT", -S["space-3"], -top + S["space-4"])
-    end
-    local gainsH = gy - S["space-4"] + ((gains and (gains.xp or 0) > 0) and T.type.caption.lineHeight or 0)
     local h
-    if #items > 0 then h = top + rows * CARD_H + (rows - 1) * S["space-4"]
-    elseif gainsH > 0 then h = top + gainsH
+    if #items > 0 then h = top + (row + 1) * CARD_H + row * S["space-3"]
+    elseif any then h = top + 18
     else h = 0 end
     cards:SetHeight(math.max(1, h))
     cards:SetShown(h > 0)
@@ -571,9 +574,7 @@ function M:Rewards(choosing)
         items[#items + 1] = it
     end
     for i = 1, GetNumQuestRewards() or 0 do
-        local it = questItem("reward", i)
-        it.note = "You receive this"
-        items[#items + 1] = it
+        items[#items + 1] = questItem("reward", i)
     end
     local caption
     if choices > 1 then caption = choosing and "Choose your reward" or "You may choose one" end
@@ -592,22 +593,10 @@ function M:Draw()
     if not view then self.root:Hide() return end
     self.root:Show()
     self:DrawSpeaker()
-    local gossipLike = view == "gossip" or view == "greeting"
-    local you = self.you
-    you:SetShown(gossipLike)
-    if gossipLike then
-        if not self.youSet then
-            you.model:SetUnit("player")
-            you.model:SetPortraitZoom(1)
-            self.youSet = true
-        end
-        you.name:SetValue(UnitName("player") or "")
-    end
-    local width = BAR_W - PAD - PORT_W - GAP - PAD_R - (gossipLike and (YOU + GAP) or 0)
-    self.talk:SetWidth(width)
+    local width = self.talk:GetWidth()
 
     local text, answers, ask = "", {}, nil
-    local items, caption, gains
+    local items, caption, gains, need
     local qtitle, qlevel
     if view == "gossip" then
         text = call(C_GossipInfo.GetText) or ""
@@ -659,36 +648,34 @@ function M:Draw()
     elseif view == "progress" then
         qtitle = GetTitleText()
         text = GetProgressText() or ""
-        items = {}
+        items, need = {}, true
         local short
         for i = 1, GetNumQuestItems() or 0 do
             local it = questItem("required", i)
-            local need = select(3, GetQuestItemInfo("required", i)) or 0
+            local want = select(3, GetQuestItemInfo("required", i)) or 0
             local have = it.itemID and C_Item.GetItemCount(it.itemID) or 0
             it.count = nil
-            it.note = have .. " / " .. need
-            it.noteColor = have < need and "ember-text" or "gilt-text"
-            if have < need and not short then short = ("You need %d more %s"):format(need - have, it.name or "") end
+            it.right = have .. " / " .. want
+            it.rightColor = have < want and "ember-text" or "gilt-text"
+            if have < want and not short then short = ("You need %d more %s"):format(want - have, it.name or "") end
             items[#items + 1] = it
         end
         local money = GetQuestMoneyToGet and GetQuestMoneyToGet() or 0
         if money > 0 and GetMoney() < money and not short then short = "You don't have enough money" end
-        local can = IsQuestCompletable()
-        local why = not can and (short or "Not done yet") or nil
+        local why = not IsQuestCompletable() and (short or "Not done yet") or nil
         answers = {
-            { label = "Hand them over", glyph = "check", off = why, act = function() QuestFrameCompleteButton:Click() end },
+            { label = #items > 0 and "Hand them over" or "Continue", glyph = "check", off = why, act = function() QuestFrameCompleteButton:Click() end },
             { label = "I'll be back", glyph = "chat", leave = true, act = function() QuestFrameGoodbyeButton:Click() end },
         }
-        if #items == 0 then answers[1].label = "Continue" end
         gains = { money = money }
     elseif view == "reward" then
         qtitle = GetTitleText()
         text = GetRewardText() or ""
         if (GetNumQuestChoices() or 0) == 1 then self.chosen = 1 end
         items, caption, gains = self:Rewards(true)
-        local need = (GetNumQuestChoices() or 0) > 1 and not self.chosen
+        local choose = (GetNumQuestChoices() or 0) > 1 and not self.chosen
         answers = {
-            { label = "Complete quest", glyph = "check", off = need and "Choose a reward first" or nil, act = function()
+            { label = "Complete quest", glyph = "check", off = choose and "Choose a reward first" or nil, act = function()
                 if QuestInfoFrame then QuestInfoFrame.itemChoice = self.chosen or 0 end
                 QuestFrameCompleteQuestButton:Click()
             end },
@@ -697,6 +684,7 @@ function M:Draw()
 
     -- lay it out, top to bottom
     local y = 0
+    local gap = S["space-4"]
     local qhead = self.qhead
     qhead:SetShown(qtitle ~= nil)
     if qtitle then
@@ -705,14 +693,14 @@ function M:Draw()
         qhead:SetWidth(width)
         qhead.title:SetValue(qtitle)
         qhead.level:SetValue((plain(qlevel) and qlevel > 0) and ("Level " .. qlevel) or "")
-        y = y + qhead:GetHeight() + S["space-5"]
+        y = y + qhead:GetHeight() + gap
     end
     -- the line
     local sp = self.speech
     sp:ClearAllPoints()
     sp:SetPoint("TOPLEFT", 0, -y)
     sp:SetWidth(width)
-    sp.text:SetWidth(width - 28 - S["space-3"] - 3)
+    sp.text:SetWidth(width - 22 - S["space-3"] - 3)
     sp.quote:SetValue("“")
     if text ~= self.fullText then
         self.fullText = text
@@ -726,11 +714,9 @@ function M:Draw()
     sp.scroll.child:SetHeight(th)
     local sh = math.max(sp.lineH, math.min(th, sp.maxH))
     sp:SetHeight(sh)
-    sp.skip:ClearAllPoints()
-    sp.skip:SetPoint("BOTTOMRIGHT", self.bar, "BOTTOMRIGHT", -(PAD_R + (gossipLike and (YOU + GAP) or 0)), PAD)
     self:ShowTyped()
     self:DrawFade()
-    y = y + sh + S["space-5"]
+    y = y + sh + gap
     -- what they ask
     local a = self.ask
     a:SetShown(ask ~= nil and ask ~= "")
@@ -738,21 +724,22 @@ function M:Draw()
         a:ClearAllPoints()
         a:SetPoint("TOPLEFT", 0, -y)
         a:SetWidth(width)
-        a.text:SetWidth(width - 2 * S["space-5"])
+        local textW = width - S["space-4"] * 2 - UI.MeasureText("header", "What they ask") - S["space-4"]
+        a.text:SetWidth(textW)
         a.text:SetValue(ask)
-        local h = S["space-4"] + T.type.header.lineHeight + S["space-2"] + a.text:GetStringHeight() + S["space-4"]
+        local h = S["space-3"] * 2 + math.max(T.type.body.lineHeight, a.text:GetStringHeight())
         a:SetHeight(h)
-        y = y + h + S["space-5"]
+        y = y + h + gap
     end
     -- the cards
-    local ch = self:DrawCards(y, width, items or {}, caption, gains)
-    if ch > 0 then y = y + ch + S["space-5"] end
+    local ch = self:DrawCards(y, width, items or {}, caption, gains, need)
+    if ch > 0 then y = y + ch + gap end
     -- the answers
-    y = self:DrawAnswers(answers, y, width)
+    y = self:DrawPills(answers, y, width)
     self.talk:SetHeight(math.max(1, y))
 
-    local speaker = PORT_H + PLATE_H - RISE
-    self.bar:SetHeight(math.max(speaker, y, gossipLike and (YOU + T.type.caption.lineHeight) or 0) + 2 * PAD)
+    -- the bar: as tall as what is said, or the plate
+    self.bar:SetHeight(math.max(self.plate:GetHeight() - 1, y) + 2 * PAD)
 end
 
 --------------------------------------------------------------------------------
