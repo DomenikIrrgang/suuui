@@ -855,6 +855,10 @@ function ns.Probe.Command(arg)
         ns.MenuProbe.Command(rest)
         return
     end
+    if sub == "memory" then
+        ns.MemoryProbe.Command(rest)
+        return
+    end
     if sub == "bankslots" then
         ns.BankSlotsProbe.Command(rest)
         return
