@@ -60,6 +60,7 @@ end
 local HEAD_H = S["space-5"] + T.type.header.lineHeight -- top padding + title line
 
 local Panel = {}
+ns.Mixins.Panel = Panel
 
 function Panel:SetTitle(title, meta)
     if self.title then self.title:SetValue(title or "") end
@@ -592,5 +593,6 @@ function UI.WindowFrame(parent, opts)
     f.scroll = scroll
 
     if opts.name then tinsert(UISpecialFrames, opts.name) end
+    ns.Extend.Add("window", f, { name = opts and opts.name })
     return f
 end

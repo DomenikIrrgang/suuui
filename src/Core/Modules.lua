@@ -67,7 +67,36 @@ end
 --------------------------------------------------------------------------------
 
 local Module = {}
-Module.__index = Module
+
+-- SuuUI's own fields on a module: read like any field, but set only here.
+-- A module (or anyone) writing one gets an error naming it (Inspect once set
+-- self.id to a frame, and the settings search broke far away, 2026-10-17).
+-- They live in a table of their own, so a write always reaches __newindex.
+local OWN = { id = true, name = true, description = true, api = true, source = true, builtIn = true,
+              state = true, error = true, pendingReload = true, enabledAtLoad = true, initialized = true,
+              reloadToToggle = true, combatSafe = true }
+local fields = setmetatable({}, { __mode = "k" })
+
+local ModuleMeta = {
+    __index = function(m, key)
+        local own = fields[m]
+        local v = own and own[key]
+        if v ~= nil then return v end
+        return Module[key]
+    end,
+    __newindex = function(m, key, value)
+        if OWN[key] then
+            error(("SuuUI: %q is the module's own field and can't be set (module %s); keep your value under another name")
+                :format(tostring(key), tostring(fields[m] and fields[m].id)), 2)
+        end
+        rawset(m, key, value)
+    end,
+}
+
+-- Sets one of SuuUI's own fields (this file only).
+local function own(m, key, value)
+    fields[m][key] = value
+end
 
 function Module:Get(key) return Settings.Get(self.id, key) end
 -- 0.17: the value itself, not a copy, to read only (large tables read often)
@@ -122,6 +151,14 @@ function Module:RegisterMover(frame, opts)
     return ns.EditMode.Register(frame, opts, self)
 end
 
+-- 0.17: SuuUI's own UI (Core/Extend.lua). fn(object, info) for every
+-- instance of a kind, now and later (undo(object, info) for each when the
+-- module turns off); fn(object, ...) after a method; fn(object, original,
+-- ...) instead of one. All removed when the module turns off.
+function Module:Each(kind, fn, undo) ns.Extend.Each(kind, fn, undo, self) end
+function Module:Hook(kind, method, fn) ns.Extend.Hook(kind, method, fn, self) end
+function Module:Override(kind, method, fn) ns.Extend.Override(kind, method, fn, self) end
+
 function Module:Print(...)
     ns.Print("|cffa39b8b" .. self.name .. ":|r", ...)
 end
@@ -140,11 +177,12 @@ local function cleanup(m)
     ns.UnregisterCommands(m)
     if ns.SettingsRegistry then ns.SettingsRegistry.Unregister(m) end
     if ns.EditMode then ns.EditMode.Unregister(m) end
+    if ns.Extend then ns.Extend.Unregister(m) end
 end
 
 local function fail(m, phase)
-    m.state = "errored"
-    m.error = phase .. " failed"
+    own(m, "state", "errored")
+    own(m, "error", phase .. " failed")
     -- Undo what a failed OnEnable got as far as building (frames shown,
     -- anchors published). Fault.Call reports an error here and carries on.
     if phase == "OnEnable" and m.OnDisable then Fault.Call(m.name, m.OnDisable, m) end
@@ -156,21 +194,22 @@ local function enable(m)
     if m.state == "enabled" or m.state == "incompatible" then return end
     if not m.initialized then
         if m.OnInitialize and not Fault.Call(m.name, m.OnInitialize, m) then return fail(m, "OnInitialize") end
-        m.initialized = true
+        own(m, "initialized", true)
     end
     if m.OnEnable and not Fault.Call(m.name, m.OnEnable, m) then return fail(m, "OnEnable") end
-    m.state, m.error = "enabled", nil
+    own(m, "state", "enabled")
+    own(m, "error", nil)
     Events.Emit("SUUUI_MODULE_ENABLED", m.id)
 end
 
 local function disable(m)
     if m.state ~= "enabled" then
-        if m.state ~= "incompatible" then m.state = "disabled" end
+        if m.state ~= "incompatible" then own(m, "state", "disabled") end
         return
     end
     if m.OnDisable then Fault.Call(m.name, m.OnDisable, m) end
     cleanup(m)
-    m.state = "disabled"
+    own(m, "state", "disabled")
     Events.Emit("SUUUI_MODULE_DISABLED", m.id)
 end
 
@@ -180,7 +219,7 @@ local function apply(m)
     local want = Settings.Get(m.id, "enabled")
     if m.reloadToToggle then
         -- an errored module that is still on retries at the next load
-        m.pendingReload = (want ~= m.enabledAtLoad or (want and m.state == "errored")) or nil
+        own(m, "pendingReload", (want ~= m.enabledAtLoad or (want and m.state == "errored")) or nil)
         return
     end
     Combat.Run("module:" .. m.id, function()
@@ -189,7 +228,7 @@ local function apply(m)
 end
 
 local function start(m)
-    m.enabledAtLoad = Settings.Get(m.id, "enabled")
+    own(m, "enabledAtLoad", Settings.Get(m.id, "enabled"))
     Settings.Watch(m.id, "enabled", function() apply(m) end, "Modules")
     if m.state == "incompatible" then return end
     if m.enabledAtLoad then
@@ -202,7 +241,7 @@ local function start(m)
             Combat.Run("module:" .. m.id, function() enable(m) end, m.name)
         end
     else
-        m.state = "disabled"
+        own(m, "state", "disabled")
     end
 end
 
@@ -240,24 +279,27 @@ function Modules.Register(def)
     defaults.enabled = def.enabledByDefault ~= false
 
     local m = setmetatable({
+        OnInitialize = def.OnInitialize,
+        OnEnable = def.OnEnable,
+        OnDisable = def.OnDisable,
+    }, ModuleMeta)
+    local source = def.addon or sourceAddon()
+    fields[m] = {
         id = id,
         name = def.name or id,
         description = def.description,
         api = def.api,
         reloadToToggle = def.reloadToToggle and true or false,
         combatSafe = def.combatSafe and true or false,
-        OnInitialize = def.OnInitialize,
-        OnEnable = def.OnEnable,
-        OnDisable = def.OnDisable,
-        source = def.addon or sourceAddon(),
+        source = source,
+        builtIn = source == ns.name,
         state = "registered",
-    }, Module)
-    m.builtIn = (m.source == ns.name)
+    }
 
     Settings.Register(id, defaults)
     if def.api and not Modules.APIAtLeast(def.api) then
-        m.state = "incompatible"
-        m.error = ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), ns.API_VERSION)
+        own(m, "state", "incompatible")
+        own(m, "error", ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), ns.API_VERSION))
         ns.Print(("%s (%s) can't load: it %s."):format(m.name, m.source, m.error))
     end
 
@@ -322,11 +364,11 @@ local function toggle(arg, on)
         -- protected frames can only retry from a fresh load.
         if m.reloadToToggle then
             Settings.Set(m.id, "enabled", true)
-            m.pendingReload = true
+            own(m, "pendingReload", true)
             ns.Print(("%s tries again after a /reload."):format(m.name))
             return print(describe(m))
         end
-        m.state = "disabled"
+        own(m, "state", "disabled")
         if Settings.Get(m.id, "enabled") then apply(m) end
     end
     Settings.Set(m.id, "enabled", on)

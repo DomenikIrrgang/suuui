@@ -37,6 +37,7 @@ local TAB_H = S["space-2"] + T.type.header.lineHeight + S["space-3"]
 local HEAD_H = TITLE_H + S["space-3"] + TAB_H
 
 local Chrome = {}
+ns.Mixins.WindowChrome = Chrome
 
 local function hideRegions(f)
     for _, r in ipairs({ f:GetRegions() }) do r:SetAlpha(0) end
@@ -283,6 +284,7 @@ function UI.SkinWindow(frame, opts)
         chrome.under, chrome.rise = opts.under, rise
         ns.WindowRow.Add(chrome)
     end
+    ns.Extend.Add("window", chrome, { name = frame:GetName(), skinned = frame })
     return chrome
 end
 

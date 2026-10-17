@@ -22,6 +22,7 @@ local S = T.space
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 
 local Menu = {}
+ns.Mixins.MicroMenu = Menu
 
 -- The tooltip: the item's label, and the key from Blizzard's own tooltip.
 local function keyOf(blizzard)
@@ -133,5 +134,6 @@ function UI.MicroMenu(parent, opts)
     UI.Border(m, "gilt-line")
     UI.Shadow(m, "shadow-panel")
     m:SetSize(1, 1)
+    ns.Extend.Add("micromenu", m, { name = opts and opts.name })
     return m
 end

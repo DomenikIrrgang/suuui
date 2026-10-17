@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter and M:Peek |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances) and SuuUI.Raw |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -96,7 +96,7 @@ end)
 | `M:RegisterMover(frame, { key = "position", label, enabled })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
-| `M.id`, `M.name`, `M.source`, `M.builtIn`, `M.state` | |
+| `M.id`, `M.name`, `M.description`, `M.api`, `M.source`, `M.builtIn`, `M.state`, `M.error` | SuuUI's own fields: read them, never set them. 0.17: setting one is an error naming the field and the module (keep your own values under other names) |
 
 ### SuuUI's messages
 
@@ -115,6 +115,50 @@ end)
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
 | `SUUUI_SPELLS_TO_TRAIN` | `count, cost` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school, and what that costs in copper; `cost` is nil while its Training cost setting is off) |
+
+## Extending SuuUI's own UI (0.17)
+
+Every unit frame, nameplate, cast bar, action button and the rest SuuUI builds is registered by its kind when it's made. A module can reach all of them, now and as each new one is made, and change how they draw. Everything a module adds here is removed when it turns off.
+
+| | |
+|---|---|
+| `SuuUI.KINDS` | The kinds: `unitframe`, `nameplate`, `castbar`, `auracontainer`, `actionbar`, `actionbutton`, `window` (SuuUI's windows, and Blizzard windows in SuuUI's look: `info.skinned` is the Blizzard frame), `inventory` (bags, bank), `tracker` (objectives), `cooldowns` (the Cooldown Manager), `meter` (`info.meter` is `"damage"` or `"threat"`), `micromenu`, `notification` |
+| `M:Each(kind, fn[, undo])` | `fn(object, info)` for every instance of the kind: at once for those that exist, and at the end of the frame each new one is made in (by then its module has placed and tagged it). `undo(object, info)` runs for each when your module turns off: take away what you added |
+| `M:Hook(kind, method, fn)` | `fn(object, ...)` after the method runs on any instance of the kind (with the method's arguments). Several hooks run in the order they were added |
+| `M:Override(kind, method, fn)` | `fn(object, original, ...)` instead of the method: call `original(object, ...)` to keep SuuUI's drawing. If `fn` errors, the original runs instead. Overrides chain: the last one added is called first |
+| `SuuUI.Instances(kind)` | The instances, in the order they were made |
+| `SuuUI.InstanceInfo(object)` | `{ kind, module, role, unit, name, preview }`: `module` is the id of the module that made it, `role` what it is there (unit frames: `player`, `target`, `targettarget`, `focus`, `pet`, `boss`, `party`, `raid`; cast bars: `player`, the unit frame's, `nameplate`), `preview` true for a settings preview's stand-in |
+| `SuuUI.AddInstance(kind, object, info)` / `SuuUI.TagInstance(object, fields)` | Registers a component of your own as a kind (a module that replaces one of SuuUI's), so other plugins reach it too; adds fields to an instance's info |
+
+Hooks and overrides patch each instance, so they reach frames whose methods were copied onto them. Errors in your functions are reported under your module's name and SuuUI's drawing carries on. In combat a frame's values may be secret: pass them on to the game's own setters, never compare them.
+
+Methods to hook (stable):
+
+| Kind | Methods |
+|---|---|
+| `unitframe` | `Refresh`, `UpdateHealth`, `UpdatePower`, `UpdateIdentity` (name, class, level), `UpdateRaidMarker`, `SetState(tone, word)` |
+| `nameplate` | `Refresh`, `UpdateHealth`, `UpdateName`, `UpdateThreat`, `UpdateBorder`, `UpdateTarget`, `UpdateQuest` |
+| `castbar` | `Start`, `Stop`, `Refresh`, `SetInterruptible` |
+| `actionbutton` | `Update`, `UpdateCooldown`, `UpdateUsable`, `UpdateActive`, `UpdateCount`, `UpdateArt` |
+| `actionbar` | `Layout`, `UpdatePage` |
+| `auracontainer` | `SetUnit`, `Refresh` |
+| `tracker` | `SetQuests`, `DrawQuest(row, quest)` |
+| `cooldowns` | `Build`, `Layout`, `UpdateCooldowns` |
+| `inventory` | `LayoutSlots` |
+| `meter` | `Refresh` (damage), `SetRows` (threat) |
+| `micromenu` | `SetItems`, `SetActive` |
+| `notification` | `SetData` |
+
+### Raw access (unstable)
+
+`SuuUI.Raw` is everything SuuUI is made of, for what the API above doesn't cover. **It may change in any version, without an API version bump**: a plugin using it should check what it finds.
+
+| | |
+|---|---|
+| `SuuUI.Raw.UI` | Every component, the ones not exported too |
+| `SuuUI.Raw.Mixins` | The components' method tables by name (`UnitFrame`, `ActionButton`, `CastBar`, `AuraContainer`, `ActionBar`, `Panel`, `WindowChrome`, `Inventory`, `ObjectiveTracker`, `CooldownTracker`, `DamageMeter`, `ThreatMeter`, `MicroMenu`, `Notification`). Most are copied onto each frame when it's made: a change made when your plugin loads reaches every frame SuuUI builds later (its modules build at login) |
+| `SuuUI.Raw.Module(id)` | A module with its internals |
+| `SuuUI.Raw.ns` | SuuUI's private namespace |
 
 ## Design tokens and text
 

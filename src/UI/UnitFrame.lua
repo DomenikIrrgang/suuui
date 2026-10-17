@@ -182,6 +182,7 @@ end
 --------------------------------------------------------------------------------
 
 local UF = {}
+ns.Mixins.UnitFrame = UF
 
 local function bar(f, level, color)
     local b = CreateFrame("StatusBar", nil, f.inner)
@@ -335,6 +336,7 @@ function UI.UnitFrame(parent, unit, opts)
     f.marker:SetPoint("TOP", f, "TOP", 0, size.rise)
     f:FitRow() -- the row ends where the health text (and reserved room) begins
     f.rightW = 0
+    ns.Extend.Add("unitframe", f, { unit = unit, name = f:GetName(), preview = opts.api ~= nil or nil })
     return f
 end
 

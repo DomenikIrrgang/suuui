@@ -392,6 +392,7 @@ local function build(self)
             youWhenPlayer = false, powerFor = powerFor,
         })
         f.suuManagedShow = true
+        SuuUI.TagInstance(f, { module = M.id, role = "party" })
         buildAuras(f)
         buildSelected(f)
         self.frames[i] = f

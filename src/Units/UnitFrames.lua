@@ -326,6 +326,7 @@ local function build(self)
     self.frames, self.allFrames = {}, {}
     for _, d in ipairs(FRAMES) do
         local f = UI.UnitFrame(SuuUI.Root, d.unit, d.opts)
+        SuuUI.TagInstance(f, { module = M.id, role = d.key })
         f.metaKind = d.opts.meta == true and "level" or nil
         if d.watch then f.suuManagedShow = true end
         self.frames[d.key] = f
@@ -341,6 +342,7 @@ local function build(self)
     for i = 1, BOSSES do
         local f = UI.UnitFrame(holder, "boss" .. i, { size = "md", meta = true, name = "SuuUIBoss" .. i .. "Frame" })
         f.metaKind = "level"
+        SuuUI.TagInstance(f, { module = M.id, role = "boss" })
         f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * pitch)
         self.bosses[i] = f
         self.allFrames["boss" .. i] = f

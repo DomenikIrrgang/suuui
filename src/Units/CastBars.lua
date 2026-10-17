@@ -63,6 +63,7 @@ function M:Attach(name, frame)
     if not bar then
         bar = UI.CastBar(frame, name, { size = "sm", width = width(name), name = "SuuUI" .. name .. "CastBar",
             target = self:Get("castTarget") })
+        SuuUI.TagInstance(bar, { module = M.id, role = name:lower() })
         self.attached[name] = bar
     end
     bar:SetParent(frame)
@@ -124,6 +125,7 @@ function M:OnEnable()
         self.player = UI.CastBar(SuuUI.Root, "player", { size = "md", width = self:Get("playerWidth"),
             name = "SuuUIPlayerCastBar", target = self:Get("castTarget") })
         self.player.suuManagedShow = true -- shown only while you cast
+        SuuUI.TagInstance(self.player, { module = M.id, role = "player" })
         self.attached = {}
     end
     self:RegisterMover(self.player, { key = "playerPosition", label = "Your cast bar",

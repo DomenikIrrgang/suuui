@@ -191,6 +191,7 @@ end
 --------------------------------------------------------------------------------
 
 local Meter = {}
+ns.Mixins.ThreatMeter = Meter
 
 function Meter:SetTarget(name)
     if name == nil then
@@ -320,5 +321,6 @@ function UI.ThreatMeter(parent, opts)
     f.empty:SetValue("No threat on your target yet.")
     f:SetTarget(nil)
     f:SetRows({}, {})
+    ns.Extend.Add("meter", f, { meter = "threat" })
     return f
 end

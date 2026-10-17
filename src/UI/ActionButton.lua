@@ -37,6 +37,7 @@ local function known(v, fallback)
 end
 
 local AB = {}
+ns.Mixins.ActionButton = AB
 
 --------------------------------------------------------------------------------
 -- Drawing
@@ -427,5 +428,6 @@ function UI.ActionButton(parent, name, size)
 
     b:SetTextSize(UI.actionTextSize)
     b:SetGrid(false)
+    ns.Extend.Add("actionbutton", b, { name = name })
     return b
 end

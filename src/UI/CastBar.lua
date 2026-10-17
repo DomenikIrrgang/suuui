@@ -148,6 +148,7 @@ Events.OnGame("SPELL_UPDATE_COOLDOWN", refreshKicks, "Interrupt")
 --------------------------------------------------------------------------------
 
 local CB = {}
+ns.Mixins.CastBar = CB
 
 local function fillBar(parent, level, deep, top, edge)
     local b = CreateFrame("StatusBar", nil, parent)
@@ -337,6 +338,7 @@ function UI.CastBar(parent, unit, opts)
     if not plate then f.targetShown = opts.target and true or false end
     f.iconShown = f.icon ~= nil
     f.kickShown = f.kick ~= nil
+    ns.Extend.Add("castbar", f, { unit = unit, name = f:GetName() })
     return f
 end
 

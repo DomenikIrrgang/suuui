@@ -32,6 +32,26 @@ function API.ListModules()
     return out
 end
 
+-- 0.17: SuuUI's own UI for plugins (Core/Extend.lua; a module's Each, Hook
+-- and Override are its methods). Instances of a kind, in the order made; one
+-- instance's info ({ kind, module, role, unit, preview… }); a component of
+-- your own added to a kind (a replacement module's frames), and more info on
+-- one.
+API.KINDS = ns.Extend.KINDS
+API.Instances = ns.Extend.Instances
+API.InstanceInfo = ns.Extend.Info
+API.AddInstance = ns.Extend.Add
+API.TagInstance = ns.Extend.Tag
+
+-- 0.17: raw access, unstable: everything SuuUI is made of, for what the
+-- documented API doesn't cover. May change in any version without notice.
+API.Raw = {
+    UI = ns.UI,
+    Mixins = ns.Mixins,
+    ns = ns,
+    Module = Modules.Get,
+}
+
 -- Design tokens (read only: never change them) and text styles
 API.Tokens = ns.Tokens
 API.Fonts = {

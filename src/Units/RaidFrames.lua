@@ -199,6 +199,7 @@ function M:StyleButton(button)
         lowHealth = false, lowTint = self:Get("lowHealth"), incoming = self:Get("incoming"),
         reserveRight = auraReserve(h),
     })
+    SuuUI.TagInstance(f, { module = M.id, role = "raid" })
     if not InCombatLockdown() then f:RegisterForClicks("AnyUp") end
     buildAuras(f, h)
     buildSelected(f)

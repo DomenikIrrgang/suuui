@@ -28,6 +28,7 @@ local BUTTONS = 12
 local isSecret = issecretvalue or function() return false end
 
 local Bar = {}
+ns.Mixins.ActionBar = Bar
 local bars = {}          -- every bar made
 local bySlot = {}        -- [slot] = { [button] = true }
 
@@ -265,6 +266,7 @@ function UI.ActionBar(parent, opts)
         bar.page = 1
         for i, b in ipairs(bar.buttons) do b:SetSlot(bar.slot + i - 1); rangeNow(b) end
     end
+    ns.Extend.Add("actionbar", bar, { name = opts and opts.name })
     return bar
 end
 

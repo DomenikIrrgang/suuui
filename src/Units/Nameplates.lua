@@ -241,6 +241,8 @@ local function buildPlate(parent, api)
     f.cast:SetTargetShown(M:Get("castTarget"))
     f.cast:SetKickShown(M:Get("castKick"))
     f.cast:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -S["space-1"])
+    SuuUI.TagInstance(f.cast, { module = M.id, role = "nameplate" })
+    SuuUI.AddInstance("nameplate", f, { module = M.id, preview = api ~= nil or nil })
     return f
 end
 

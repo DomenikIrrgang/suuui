@@ -277,6 +277,7 @@ end
 --------------------------------------------------------------------------------
 
 local AC = {}
+ns.Mixins.AuraContainer = AC
 
 local FLOW = AnchorUtil and AnchorUtil.FlowDirection or {}
 
@@ -555,5 +556,6 @@ function UI.AuraContainer(parent, unit, opts)
     end
     self:SetUnit(unit)
     listen(self, unit)
+    ns.Extend.Add("auracontainer", self, { unit = unit })
     return self
 end

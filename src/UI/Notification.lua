@@ -69,6 +69,7 @@ local ROLES_H = 36 + S["space-2"] + T.type.caption.lineHeight
 local TONE_EDGE = { warning = "amber", danger = "ember" }
 
 local Note = {}
+ns.Mixins.Notification = Note
 
 local function clock(s)
     s = math.max(0, math.floor(s + 0.5))
@@ -615,6 +616,7 @@ function UI.Notification(parent)
     n.drain:SetPoint("BOTTOMLEFT", 1, 1)
     n.drain:SetHeight(2)
     n.drain:Hide()
+    ns.Extend.Add("notification", n, {})
     return n
 end
 

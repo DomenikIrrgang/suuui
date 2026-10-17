@@ -700,11 +700,76 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Checked so far (2026-10-18):** a party session with fights: no SuuUI errors, no blocked or forbidden actions (`SuuUIDB.blocked` unchanged since 2026-10-16). The raid fight, with `/suu probe taint` in combat, is still to do.
 
 ### 4.3 Plugin developer kit
-- **Build:**
-  - A reference for the public API: every function, message, anchor name and extension point, with the version that introduced it.
-  - A plugin guide built around `Examples/SuuUI_HelloPlugin`, plus a second, fuller example that adds an element to every unit frame.
-  - Once the test harness is in the project: a test that fails when a public function changes signature without an `API_VERSION` bump.
-- **Confirm:** someone who hasn't seen the code can follow the guide and get a plugin with a settings section and a movable frame running.
+
+Asked 2026-10-18: plugins get as much access to SuuUI's UI as possible. Decided: two layers (stable extension points, plus raw access marked unstable), and plugins can add and restyle, change behaviour, replace modules, and extend menus and settings. Design agreed 2026-10-18 (themes apply after a reload).
+
+**Built so far:**
+- Step 1, the guard (confirmed in game 2026-10-18).
+- Step 2, the registry and the raw layer. A test hook on every unit frame's UpdateHealth ran on each target change (confirmed in game 2026-10-18).
+
+**What the code allows (inventory 2026-10-18):**
+- Most components copy their methods onto each frame (`Mixin(frame, UF)`). Patching the method table later misses frames that already exist, but a method replaced on an instance is used, because events call `self:UpdateX()`. ActionBar, AuraContainer and window chrome look methods up through a shared metatable instead.
+- Only action buttons and nameplates keep a list of their instances, and both lists are private.
+- Menus, micro menu items, game menu entries, notification kinds and role presets are file-private. Settings sections, movers and anchors are open.
+- Cross-module calls (`SuuUI.ToggleBags`, `ShowTalentsOf`…) look the module up by id and call its methods directly: no contract a replacement could fulfil.
+- Colours and fonts are mostly read when frames are built; nothing redraws on a token change. A theme applies at load, before frames draw, as colour vision does.
+- `SuuUI.GetModule` returns the live module, and nothing on it is protected. Inspect's `self.id` overwrite broke the settings search.
+
+**Layer 1: extension points (stable, versioned, in Docs/API.md).**
+1. **Instances:**
+   - `SuuUI.Each(kind, fn)` calls `fn(object, info)` for every instance of a kind, now and as each new one is made.
+   - `SuuUI.Instances(kind)` returns a snapshot.
+   - `info`: the owning module, the role (`player`, `party`, `raid`, `boss`…), and `preview` for stand-ins.
+   - Kinds: `unitframe`, `nameplate`, `castbar`, `auracontainer`, `actionbar`, `actionbutton`, `window`, `inventory`, `tracker` (objective), `cooldowns`, `meter` (damage and threat), `micromenu`, `notification`.
+   - Built on a central weak registry that each component's constructor adds to.
+2. **Behaviour:**
+   - `SuuUI.Hook(kind, method, fn)` runs `fn(object, ...)` after the method, on every instance of the kind, now and future.
+   - `SuuUI.Override(kind, method, fn)` replaces it: `fn(object, original, ...)`, where calling `original` keeps SuuUI's drawing.
+   - Both patch instances, so they work for both kinds of method binding. Several plugins chain in the order they hooked.
+   - Errors are caught and reported under the plugin module's name, and are removed when it turns off.
+   - Each kind documents its stable draw points (unit frame: UpdateHealth, UpdatePower, UpdateIdentity, SetState, Refresh…). Other methods count as raw.
+   - Secret values reach hooks as they are; the docs say how to handle them.
+3. **Themes:**
+   - `SuuUI.RegisterTheme({ id, name, colors = { [token] = { r, g, b, a } }, fonts = { [style] = { file, size } } })`.
+   - The theme is chosen in Settings › General › Appearance beside colour vision.
+   - It applies at load, after a reload, with colour vision on top of it.
+   - Tokens it leaves out keep SuuUI's values.
+4. **Replacing modules and services:**
+   - A module can declare `replaces = "unitframes"`. While it is on, the built-in module stays off and its row says "Replaced by X". Turning the plugin off brings the built-in back after a reload.
+   - Cross-module calls go through services: `SuuUI.Provide(service, impl)` and `SuuUI.Service(service)`.
+   - Built-in services: `bags`, `talents`, `collections`, `professions`, `notifications`, `alerts`. Each has a documented set of methods.
+   - The existing `SuuUI.ToggleBags`-style calls use the service, so a replacement stands in everywhere. Anchors, movers and settings work as they already do.
+5. **Menus and settings:**
+   - `SuuUI.ExtendMenu(menuId, fn(items, context))` adds entries to SuuUI's own right-click menus (quest, chat name, guild member, friend…; each documented with its context).
+   - `SuuUI.AddMicroItem(item)` adds a micro menu button; it appears in the micro menu's button choices.
+   - `SuuUI.AddGameMenuItem(item)` adds an entry to a game menu group.
+   - `SuuUI.RegisterNotificationKind(which, def)` hosts another StaticPopup as a notification card.
+   - `SuuUI.ExtendRolePresets(role, values)` places a plugin's own frames per role. SuuTank, SuuHeal and SuuDps then include them.
+   - Settings: `merge = "<section id>"` on a plugin's settings section (exists, documented now) adds its groups to a built-in page.
+   - The game's unit menus stay the game's (Blizzard's `Menu.ModifyMenu`).
+
+**Layer 2: raw access (unstable).**
+- `SuuUI.Raw` holds:
+  - `UI`: every component, including the ones not exported.
+  - `Mixins`: the method tables (`UnitFrame` = UF…). A plugin that patches them at file load changes every frame built after, because modules build theirs later, at login.
+  - `Module(id)`: the module with its internals.
+  - `ns`: the namespace itself.
+- Marked in the docs as "may change in any version, without an API_VERSION bump".
+
+**Guard:**
+- A module's reserved fields (`id`, `name`, `description`, `api`, `source`, `builtIn`, `state`, `error`…) live in a private table behind the module.
+- Writing one, from the module or anyone else, errors with a message naming the field and the module. Inspect's overwrite of `self.id` is the bug this prevents.
+
+**Order:**
+1. The guard.
+2. The registry with Each, Instances, Hook and Override, plus the raw layer.
+3. Services and `replaces`.
+4. Menus, micro and game menu items, notification kinds and role preset extensions.
+5. Themes.
+6. The full reference, a plugin guide, and a second example, `Examples/SuuUI_UnitFrameBadge`: a badge on every unit frame through Each and Hook, with its own settings merged into Unit frames.
+
+- **Also:** once the test harness is in the project, a test that fails when a public function changes signature without an `API_VERSION` bump.
+- **Confirm:** someone who hasn't seen the code can follow the guide and get a plugin running that has a settings section, a movable frame and a hook on every unit frame. A plugin that replaces a module keeps Toggle calls, anchors and edit mode working.
 
 ### 4.4 Release
 - **Build:** a first-run splash using the emblem, a default layout per role, the addon-list icon, the README, a CurseForge or Wago package, and a changelog.

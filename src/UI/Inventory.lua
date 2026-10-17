@@ -181,6 +181,7 @@ end
 --------------------------------------------------------------------------------
 
 local Inv = {}
+ns.Mixins.Inventory = Inv
 local ROW = 30 -- the tool rows: search and sort; Bags/Bank and All characters
 local MAX_RESULTS = 10
 
@@ -473,6 +474,7 @@ function UI.Inventory(parent, opts)
     inv.money = UI.Money(body)
     inv.money:Hide() -- until SetMoney: a bank holds no money
     inv:FitBody()
+    ns.Extend.Add("inventory", inv, { name = opts and opts.name })
     return inv
 end
 

@@ -59,6 +59,7 @@ local DIFFICULTY = {
 }
 
 local Tracker = {}
+ns.Mixins.ObjectiveTracker = Tracker
 UI.TRACKER_HEAD_H = HEAD_H
 
 -- A diamond bullet: 4px, turned 45°, 3px either side.
@@ -566,5 +567,6 @@ function UI.ObjectiveTracker(parent, opts)
     t:EnableMouseWheel(true)
     t:SetScript("OnMouseWheel", function(self, delta) self:ScrollBy(-delta * (TITLE_H + LINE_H * 2)) end)
     t:SetCollapsed(false)
+    ns.Extend.Add("tracker", t, {})
     return t
 end

@@ -437,6 +437,7 @@ end
 --------------------------------------------------------------------------------
 
 local Meter = {}
+ns.Mixins.DamageMeter = Meter
 
 local function sessionArg(session)
     local ST = Enum.DamageMeterSessionType
@@ -894,6 +895,7 @@ function UI.DamageMeter(parent, opts)
     w.empty:SetWordWrap(true)
     w.empty:SetVisible(false)
     w:SetScript("OnHide", function() w.menu:Hide() end)
+    ns.Extend.Add("meter", w, { meter = "damage" })
     return w
 end
 

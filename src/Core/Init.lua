@@ -12,6 +12,8 @@ SuuUI = {}
 ns.API = SuuUI
 ns.name = ADDON
 ns.version = C_AddOns.GetAddOnMetadata(ADDON, "Version") or "dev"
+-- components' method tables by name (UnitFrame = UF…), for SuuUI.Raw
+ns.Mixins = {}
 
 local PREFIX = "|cff9fd3c7SuuUI|r "
 

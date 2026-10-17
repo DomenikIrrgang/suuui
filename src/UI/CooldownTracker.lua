@@ -132,6 +132,7 @@ local REACTIVE = {
 }
 
 local TR = {}
+ns.Mixins.CooldownTracker = TR
 
 --------------------------------------------------------------------------------
 -- Cooldown cells
@@ -1601,5 +1602,6 @@ function UI.CooldownTracker(parent, opts)
         end
     end)
     t:Start()
+    ns.Extend.Add("cooldowns", t, { name = opts and opts.name })
     return t
 end
