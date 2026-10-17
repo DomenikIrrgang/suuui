@@ -32,9 +32,9 @@ local function call(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
 end
 
-local WIDTH, HEIGHT = 820, 600
 local SLOT = T.size["slot"]
 local SIDE_W = 230
+local MODEL_W = 300
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- the paper doll: the Character window's columns, weapons under the model
@@ -45,6 +45,15 @@ local LABEL = { Head = "Head", Neck = "Neck", Shoulder = "Shoulder", Back = "Bac
                 Tabard = "Tabard", Wrist = "Wrist", Hands = "Hands", Waist = "Waist", Legs = "Legs", Feet = "Feet",
                 Finger0 = "Finger", Finger1 = "Finger", Trinket0 = "Trinket", Trinket1 = "Trinket",
                 MainHand = "Main hand", SecondaryHand = "Off hand", Ranged = "Ranged" }
+
+-- The window fits what it holds: the identity line, the tools, the paper doll
+-- (eight slots high, the weapons under it) beside the side panel.
+local TOOLS_H = 26
+local COL_H = #LEFT * SLOT + (#LEFT - 1) * S["space-2"]
+local DOLL_W = 2 * (SLOT + S["space-4"]) + MODEL_W
+local BODY_H = T.type["unit-name-lg"].lineHeight + S["space-4"] + TOOLS_H + S["space-5"] + COL_H + S["space-4"] + SLOT
+local WIDTH = S["space-5"] + DOLL_W + S["space-6"] + SIDE_W + S["space-5"]
+local HEIGHT = S["space-5"] + T.type.header.lineHeight + S["space-4"] + 1 + S["space-4"] + BODY_H + S["space-5"]
 
 local function itemLevel(link)
     if not plain(link) then return nil end
@@ -161,7 +170,7 @@ function M:Build()
     local tools = CreateFrame("Frame", nil, body)
     tools:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
     tools:SetPoint("TOPRIGHT", id, "BOTTOMRIGHT", 0, -S["space-4"])
-    tools:SetHeight(26)
+    tools:SetHeight(TOOLS_H)
     self.compareToggle = UI.Toggle(tools, { value = self.compare, onChange = function(on)
         self.compare = on
         self:Draw()
@@ -171,17 +180,17 @@ function M:Build()
     cl.text = UI.Text(cl, "label", "ink")
     cl.text:SetPoint("LEFT")
     cl.text:SetValue("Compare with mine")
-    cl:SetSize(UI.MeasureText("label", "Compare with mine"), 26)
+    cl:SetSize(UI.MeasureText("label", "Compare with mine"), TOOLS_H)
     cl:SetPoint("LEFT", self.compareToggle, "RIGHT", S["space-4"], 0)
     cl:SetScript("OnClick", function() self.compareToggle:Click() end)
     self.talentsButton = UI.Button(tools, { text = "View Talents", icon = "tree" })
-    self.talentsButton:SetHeight(26)
+    self.talentsButton:SetHeight(TOOLS_H)
     self.talentsButton:SetPoint("RIGHT")
     self.dressButton = UI.Button(tools, { text = "View in Dressing Room", icon = "person", onClick = function()
         local list = call(C_TransmogCollection.GetInspectItemTransmogInfoList)
         if list then DressUpItemTransmogInfoList(list) end
     end })
-    self.dressButton:SetHeight(26)
+    self.dressButton:SetHeight(TOOLS_H)
     self.dressButton:SetPoint("RIGHT", self.talentsButton, "LEFT", -S["space-4"], 0)
 
     -- the side panel: item level, Player vs. Player, guild
@@ -234,7 +243,6 @@ function M:Build()
     local doll = CreateFrame("Frame", nil, body)
     doll:SetPoint("TOPLEFT", tools, "BOTTOMLEFT", 0, -S["space-5"])
     doll:SetPoint("BOTTOMRIGHT", side, "BOTTOMLEFT", -S["space-6"], 0)
-    local colH = #LEFT * SLOT + (#LEFT - 1) * S["space-2"]
     local prev
     for _, key in ipairs(LEFT) do
         local b = self:BuildSlot(doll, key)
@@ -250,7 +258,7 @@ function M:Build()
     local box = CreateFrame("Frame", nil, doll)
     box:SetPoint("TOPLEFT", SLOT + S["space-4"], 0)
     box:SetPoint("TOPRIGHT", -(SLOT + S["space-4"]), 0)
-    box:SetHeight(colH)
+    box:SetHeight(COL_H)
     UI.Fill(box, "surface-sunk"):SetAllPoints()
     UI.Border(box, "gilt-faint")
     box:SetClipsChildren(true)
@@ -391,9 +399,12 @@ function M:Draw()
     else
         self.box.loading:Stop()
         self.box.loading:Hide()
-        local drawn = self.model:SetUnit(unit)
-        self.model:SetShown(drawn and true or false)
-        self.box.note:SetValue(drawn and "" or "Too far away to show")
+        -- SetUnit says nothing on Forever: whether the game has them in sight does
+        local near = UnitIsVisible(unit)
+        near = not plain(near) or near
+        if near then self.model:SetUnit(unit) end
+        self.model:SetShown(near and true or false)
+        self.box.note:SetValue(near and "" or "Too far away to show")
     end
     -- item level
     local il = self.ilvl
