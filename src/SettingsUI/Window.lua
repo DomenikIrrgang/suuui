@@ -413,7 +413,11 @@ end
 function W.Search(text)
     query = strtrim(text or ""):lower()
     if query ~= "" then
-        for _, section in ipairs(Registry.List()) do getPage(section) end
+        -- every page, to search it; one that fails to build is reported and
+        -- left out instead of stopping the search
+        for _, section in ipairs(Registry.List()) do
+            if not pages[section.id] then ns.Fault.Call("Settings: " .. tostring(section.label), getPage, section) end
+        end
     end
     showPreview(Registry.Get(current or ""))
     applyView()
@@ -583,7 +587,9 @@ local function build()
             end
         end })
     f.profile:SetPoint("RIGHT", f.close, "LEFT", -S["space-5"], 0)
-    f.search = UI.TextField(f, { width = 280, placeholder = "Search settings", onTextChanged = W.Search })
+    -- through the error catcher: an error here was silent before
+    f.search = UI.TextField(f, { width = 280, placeholder = "Search settings",
+        onTextChanged = function(text) ns.Fault.Call("Settings search", W.Search, text) end })
     f.search:SetPoint("RIGHT", f.profile, "LEFT", -S["space-5"], 0)
 
     -- Body: nav | content | preview
