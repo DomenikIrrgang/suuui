@@ -191,6 +191,37 @@ function M:UpdateOffline()
     end
 end
 
+-- Edit mode's "With buffs and debuffs": made-up auras in every container
+-- (yours, the target's, the focus's, the bosses'), laid out as the real ones.
+-- spells, their icons read when shown: Fortitude, Mark of the Wild, Arcane
+-- Intellect, Might, Battle Shout, Thorns, Renew, Rejuvenation, Kings, Shadow
+-- Protection; Frost Nova (Magic), Curse of Agony, Deadly Poison, a disease,
+-- Weakened Soul and Hamstring (no type: the ember edge)
+local PREVIEW_BUFFS = { 1243, 1126, 1459, 19740, 6673, 467, 139, 774, 20217, 976 }
+local PREVIEW_DEBUFFS = {
+    { 122, "dispel-magic" }, { 980, "dispel-curse" }, { 2818, "dispel-poison" }, { 18278, "dispel-disease" },
+    { 6788, "ember" }, { 1715, "ember" },
+}
+local PREVIEW_FOR = {
+    player = "debuffs", targetDebuffs = "debuffs", focusDebuffs = "debuffs",
+    targetBuffs = "buffs", focusBuffs = "buffs",
+}
+
+function M:AuraPreview(on)
+    local buffs, debuffs = {}, {}
+    for _, id in ipairs(PREVIEW_BUFFS) do buffs[#buffs + 1] = { icon = C_Spell.GetSpellTexture(id) } end
+    for _, d in ipairs(PREVIEW_DEBUFFS) do debuffs[#debuffs + 1] = { icon = C_Spell.GetSpellTexture(d[1]), border = d[2] } end
+    local function show(c, kind)
+        if not c then return end
+        if not on then c:HidePreview() return end
+        c:ShowPreview(kind == "buffs" and buffs or debuffs)
+    end
+    show(self.buffs, "buffs")
+    for name, c in pairs(self.attached or {}) do
+        show(c, PREVIEW_FOR[name] or "debuffs")
+    end
+end
+
 -- How many buffs a row holds: the setting, or fewer where the encounter
 -- timeline shares the top edge (asked for in game: at 1920 wide 16 ran into
 -- it; option A, fit and wrap). Measured from the side the row grows from to
@@ -309,6 +340,8 @@ function M:OnEnable()
         if name == "target" then self:ApplyOptions() end
         if name == "encounterTimeline" then self:ApplyLayout() end
     end)
+    -- edit mode's "With buffs and debuffs"
+    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, _, auras) self:AuraPreview(auras and true or false) end)
     -- the screen's width changed: the room beside the timeline with it
     self:On("SUUUI_ROOT_SCALED", function() self:ApplyLayout() end)
     for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do

@@ -327,7 +327,7 @@ local function buildPanel()
         onChange = function(v) EditMode.SetGroupPreview(groupPreview, v) end })
     aurasToggle:SetPoint("LEFT")
     local aurasLabel = UI.Text(aurasRow, "label", "ink")
-    aurasLabel:SetValue("With buffs and debuffs")
+    aurasLabel:SetValue("Buffs and debuffs on every frame")
     aurasLabel:SetPoint("LEFT", aurasToggle, "RIGHT", S["space-4"], 0)
     p.previewAuras = aurasToggle
     stack:Add(aurasRow)
@@ -446,7 +446,7 @@ function EditMode.Enter()
     end
     select(nil)
     Events.Emit("SUUUI_EDITMODE_CHANGED", true)
-    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview, groupPreviewAuras) end
+    if groupPreview > 0 or groupPreviewAuras then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", groupPreview, groupPreviewAuras) end
     return true
 end
 
@@ -478,7 +478,7 @@ function EditMode.Exit()
         place(m)
     end
     Events.Emit("SUUUI_EDITMODE_CHANGED", false)
-    if groupPreview > 0 then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0) end
+    if groupPreview > 0 or groupPreviewAuras then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0, false) end
 end
 
 function EditMode.Toggle()

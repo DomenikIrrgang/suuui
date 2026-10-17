@@ -40,6 +40,10 @@
 --                                -- deaf) until the next SetUnit
 --   c:SetGroupSize(key, size)    -- 0.9: a group's icon size, live (out of combat:
 --                                -- in combat the engine's buttons refuse the resize)
+--   c:ShowPreview(items), c:HidePreview()   -- 0.17: made-up icons ({ { icon,
+--                                -- border = token } }) laid out as the engine
+--                                -- would, the engine's own out of sight (edit
+--                                -- mode's "With buffs and debuffs")
 --
 -- Every call into the engine is pcall-guarded: an error inside one aborts the
 -- engine's whole button batch, and these APIs were still moving in the beta.
@@ -333,6 +337,7 @@ end
 
 -- The corner the icons start from and the way they grow, after creation.
 function AC:SetFlow(anchor, growth)
+    self.flow = { anchor = anchor or "TOPLEFT", growth = growth or { "RIGHT", "DOWN" } }
     local c = self.container
     call(c, { "SetFlowLayoutAnchorPoint", "SetAuraLayoutAnchorPoint" }, anchor or "TOPLEFT")
     local g = growth or { "RIGHT", "DOWN" }
@@ -379,6 +384,7 @@ end
 
 -- 0.9: px before the icons wrap to the next line (nil: never), after creation.
 function AC:SetLineWidth(px)
+    self.lineWidth = px
     call(self.container, { "SetFlowLayoutMaximumLineSize", "SetAuraLayoutRowWidth" }, px)
     self:Refresh()
 end
@@ -411,6 +417,55 @@ end
 -- in `exclude` (0.16).
 function AC:SetGroupSpells(key, ids, exclude)
     return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, candidates(ids, exclude) or {})
+end
+
+-- 0.17: made-up icons in the container's place, laid out as the engine lays
+-- out its own (the corner, the growth, the line width, the first group's
+-- size); the engine's icons out of sight meanwhile.
+function AC:ShowPreview(items)
+    local c = self.container
+    local pv = self.preview
+    if not pv then
+        pv = CreateFrame("Frame", nil, c:GetParent())
+        pv:SetSize(1, 1)
+        pv.icons = {}
+        self.preview = pv
+    end
+    local flow = self.flow or { anchor = self.opts.anchor or "TOPLEFT", growth = self.opts.growth or { "RIGHT", "DOWN" } }
+    local anchor = flow.anchor
+    pv:SetParent(c:GetParent())
+    pv:SetFrameLevel(c:GetFrameLevel() + 2)
+    pv:ClearAllPoints()
+    pv:SetPoint(anchor, c, anchor)
+    local first = self.opts.groups[1]
+    local size = (first and self.sizes[first.key]) or UI.Size(self.opts.size or "icon-md")
+    local sp = self.spacing
+    local line = self.lineWidth or self.opts.lineWidth
+    local perLine = line and math.max(1, math.floor((line + sp) / (size + sp))) or #items
+    local hx = flow.growth[1] == "LEFT" and -1 or 1
+    local vy = flow.growth[2] == "UP" and 1 or -1
+    for i, it in ipairs(items) do
+        local icon = pv.icons[i]
+        if not icon then
+            icon = UI.Icon(pv, size)
+            pv.icons[i] = icon
+        end
+        local col, row = (i - 1) % perLine, math.floor((i - 1) / perLine)
+        icon:SetSize(size, size)
+        icon:SetArt(it.icon)
+        icon:SetBorder(it.border or "gilt-hairline")
+        icon:ClearAllPoints()
+        icon:SetPoint(anchor, pv, anchor, hx * col * (size + sp), vy * row * (size + sp))
+        icon:Show()
+    end
+    for i = #items + 1, #pv.icons do pv.icons[i]:Hide() end
+    pv:Show()
+    c:SetAlpha(0)
+end
+
+function AC:HidePreview()
+    if self.preview then self.preview:Hide() end
+    self.container:SetAlpha(1)
 end
 
 function UI.AuraContainer(parent, unit, opts)
