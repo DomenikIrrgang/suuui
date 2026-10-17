@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.1 (2026-10-18)
 
 ### New
 
@@ -27,18 +27,16 @@
 - `/suu perf`: how much time each SuuUI module takes (its events, settings, timers) and how much memory it allocates (what becomes garbage), SuuUI's allocations as a whole (frame scripts too) and its memory; start it, play a while, run it again for the report.
 - **Unit menus** in SuuUI's look: the game's right-click menu on you, your target, group members and players in the world, and its submenus (Settings › Tooltips › Unit menus); its choices stay the game's.
 - **Plugin API 0.17** (`Docs/API.md`): `SuuUI.UI.MoneyInput`, `WindowFrame` tabs, `SkinWindow` tabs that can be disabled, `Confirm`'s `enterConfirms`, aura groups' `index`/`gap` and `SetGroupPlace`, and `SuuUI.UI.LoadingMark` (the SuuUI emblem for long waits), `IsTooltipSkinned`, `WINDOW_HEAD_H`, `SuuUI.CollectionSources()`, `SuuUI.ToggleCollections()` and `CollectionsShown()`, `SuuUI.ShowTalentsOf(unit)`, `SuuUI.UI.ModelStage`, `SuuUI.Motion.Reduced()`, `SuuUI.EditMode.GroupPreview()`, `Inventory:LayoutSlots` sections, disabled tabs on `WindowFrame` too, `SetGroupFilter` on aura containers, `M:Peek(key)` (a setting read without a copy), and plugins reaching into SuuUI's own UI: `M:Each(kind, fn)` (every unit frame, nameplate, cast bar, action button, window… now and later), `M:Hook` and `M:Override` on their methods, `SuuUI.Instances`, services (`M:Provide`, `SuuUI.Service`) and modules that replace a built-in one (`replaces`), entries in SuuUI's right-click menus, micro menu buttons, game menu entries, notification cards for more of the game's popups and a plugin's settings in the role presets, themes (`SuuUI.RegisterTheme`: colours and type, picked under Settings › General › Appearance › Theme, after a reload), and `SuuUI.Raw` (everything else, unstable). A plugin guide (`Docs/PluginGuide.md`) and a second example, `Examples/SuuUI_LevelBadge` (a level badge on SuuUI's unit frames). A module's own fields (`id`, `name`, `state`…) can no longer be overwritten by mistake.
-- `/suu probe ahscan`, `/suu probe ahpost` and `/suu probe ahdata` (at the auction house) check whether the full scan works on Forever, whether SuuUI's own buttons may post and cancel, and what searches return.
 
 ### Changed
 
 - Quest and recipe data refreshed from QuestieDB's latest Forever data (2026-10-17): 43 new quests on the world map, the library's book turn-ins in Stormwind and the Undercity among them (128 new quest-giver spots); 12 recipes gain dungeon-boss drops (Deadmines, Shadowfang Keep, Ragefire Chasm, Blackfathom Deeps, Wailing Caverns, Razorfen Kraul…); 56 blacksmithing recipes name Karn Stonehoof in Thunder Bluff as their trainer, with the skill they really need there (recorded in game). Map places are unchanged.
-
 - Party and raid frames: debuffs follow right after the defensives that show (party: beside the bar; raid: at the bar's right end) instead of waiting behind empty defensive slots.
 - Party and raid frames show every debuff after the ones you can remove (Forbearance on you didn't show), not only the ones the game marks for raids.
+- Nameplates are smoother where many players gather: plates are made ahead, a few at a time, and quest marks are read only when your objectives change, never for players.
 - SuuUI makes far less garbage (memory thrown away and collected later): the objective tracker no longer redraws on every item cooldown (each potion or trinket), only its quest items' cooldowns change; the action buttons read their cooldowns, usability and state once a frame instead of once per game event; the Cooldown Manager no longer copies every class's lists to read its own.
 - Raid and party frames use far less memory: the game makes ten hidden aura icons for every icon group a frame has, whatever it shows, and a raid frame had four groups (1,600 hidden icons for a raid, made even when you're solo). A group is now made only once it can show something, and a raid frame's debuffs share one group for whoever it shows: two groups per frame.
-
-- Trainer data from today's beta patch: for mages Arcane Wrath and Frost Blast are new, Arcane Blast and Ice Lance changed; for paladins Salvation and Mass Salvation replace Blessing of Salvation and Greater Blessing of Salvation, Seal of Fury's last rank comes at 26, and many spells' values changed; for shamans Lava Burst comes at 40, Fire Nova hits for less and Mana Tide Totem is taught by the trainer; for druids Shred comes at 20; for warriors Victory Rush hits for less (and the druid's, warrior's and hunter's first ranks, missing so far, are in); for priests Holy Fire's rank at 42 changed (the spellbook lists the new ones to train, the trainer groups them, each rank with its own spell ID).
+- Trainer data from the 2026-10-16 beta patch: for mages Arcane Wrath and Frost Blast are new, Arcane Blast and Ice Lance changed; for paladins Salvation and Mass Salvation replace Blessing of Salvation and Greater Blessing of Salvation, Seal of Fury's last rank comes at 26, and many spells' values changed; for shamans Lava Burst comes at 40, Fire Nova hits for less and Mana Tide Totem is taught by the trainer; for druids Shred comes at 20; for warriors Victory Rush hits for less (and the druid's, warrior's and hunter's first ranks, missing so far, are in); for priests Holy Fire's rank at 42 changed (the spellbook lists the new ones to train, the trainer groups them, each rank with its own spell ID).
 
 ### Fixed
 
