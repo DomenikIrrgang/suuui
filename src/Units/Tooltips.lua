@@ -34,6 +34,7 @@ local M = SuuUI.RegisterModule({
         groupAuras = true,
         ids = true,           -- spell IDs, and who cast a buff or debuff
         anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
+        unitMenus = true, -- the game's right-click menus on units in SuuUI's look
         position = { point = "BOTTOMRIGHT", x = -30, y = 260 },
     },
 })
@@ -375,6 +376,8 @@ local SECTION = {
               description = "Hovering a party or raid member lists their debuffs and buffs with the time left. In combat the game lets SuuUI show them only as icons: a small panel under the tooltip." },
             { key = "ids", label = "Spell IDs and casters", control = "toggle",
               description = "A spell's or ability's ID at the foot of its tooltip; on a buff or debuff also who cast it, in their class colour." },
+            { key = "unitMenus", label = "Unit menus", control = "toggle",
+              description = "The game's right-click menu on a unit (you, your target, party and raid members, players in the world) in SuuUI's look; its choices stay the game's." },
             { key = "anchor", label = "Where they open", control = "segmented",
               options = { { value = "suuui", label = "SuuUI's place" }, { value = "blizzard", label = "Blizzard's" } },
               description = "For tooltips with no place of their own (the world, units). SuuUI's place: bottom right, above your bags while they're open; move it in edit mode." },
@@ -386,10 +389,31 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
+-- The game's unit menus (UnitPopupManager:OpenMenu, every "MENU_UNIT_…"
+-- menu: you, your target, party, raid, players in the world) in SuuUI's
+-- look: hooked after the game opened one, so its choices stay the game's.
+-- Its submenus follow (UI.ReskinMenu restyles the menus a restyled one opens).
+function M:HookUnitMenus()
+    local mgr = _G.UnitPopupManager
+    if self.unitMenusHooked or not (mgr and mgr.OpenMenu) then return end
+    self.unitMenusHooked = true
+    hooksecurefunc(mgr, "OpenMenu", function()
+        if not (self:IsEnabled() and self:Get("unitMenus")) then return end
+        local manager = Menu and Menu.GetManager and Menu.GetManager()
+        local menu = manager and manager.GetOpenMenu and manager:GetOpenMenu()
+        if not menu then return end
+        UI.ReskinMenu(menu)
+        -- its rows may come a frame later
+        C_Timer.After(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
+    end)
+end
+
 function M:OnEnable()
     for _, name in ipairs(TOOLTIPS) do
         if _G[name] then UI.SkinTooltip(_G[name]) end
     end
+    self:HookUnitMenus()
+    self:OnGameEvent("ADDON_LOADED", function() self:HookUnitMenus() end)
     self:ApplyFonts()
     self:ApplyScale()
     self:SkinStatusBar()
