@@ -257,6 +257,7 @@ function M:Build()
     w.scroll:Hide()
     -- closed without Reload to apply: nothing changes
     w:HookScript("OnHide", function()
+        self:PlaceReload()
         if self.saving then return end
         call(A.ResetAddOns)
         if self.startCheck ~= nil and call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then
@@ -355,11 +356,9 @@ function M:Build()
     self.changes:SetPoint("LEFT")
     self.close = UI.Button(foot, { text = "Close", width = 140, onClick = function() w:Hide() end })
     self.close:SetPoint("RIGHT")
-    self.apply = UI.Button(foot, { text = "Reload to apply", icon = "reset", variant = "primary", width = 160, onClick = function()
-        self.saving = true
-        call(A.SaveAddOns)
-        C_UI.Reload()
-    end })
+    -- the reload itself is a secure button on top (/reload: the game blocks
+    -- a reload from addon code, found in game); the click saves first
+    self.apply = UI.Button(foot, { text = "Reload to apply", icon = "reset", variant = "primary", width = 160 })
     self.apply:SetPoint("RIGHT")
     local cancel = UI.Button(foot, { text = "Cancel", onClick = function() w:Hide() end })
     cancel:SetPoint("RIGHT", self.apply, "LEFT", -S["space-4"], 0)
@@ -368,6 +367,37 @@ end
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
+
+-- The secure /reload button over Reload to apply: there while it shows
+-- (out of combat).
+function M:PlaceReload()
+    if InCombatLockdown() then return end
+    local over, apply = self.reloadOver, self.apply
+    local on = self.window:IsShown() and apply:IsShown()
+    if not over then
+        if not on then return end
+        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        over:SetAttribute("type1", "macro")
+        over:SetAttribute("macrotext1", "/reload")
+        over:SetScript("OnEnter", function() apply:GetScript("OnEnter")(apply) end)
+        over:SetScript("OnLeave", function() apply:GetScript("OnLeave")(apply) end)
+        over:SetScript("PreClick", function()
+            self.saving = true
+            call(A.SaveAddOns)
+        end)
+        self.reloadOver = over
+    end
+    over:ClearAllPoints()
+    if on then
+        over:SetFrameStrata(self.window:GetFrameStrata())
+        over:SetFrameLevel(self.window:GetFrameLevel() + 30)
+        over:SetAllPoints(apply)
+        over:Show()
+    else
+        over:Hide()
+    end
+end
 
 function M:SetEnabled(e, on)
     if not e then return end
@@ -440,6 +470,11 @@ function M:Draw()
     self.changes:SetColor(n > 0 and "arcane" or "ink-muted")
     self.apply:SetShown(n > 0)
     self.close:SetShown(n == 0)
+    self:PlaceReload()
+    -- no secure button on it (it showed in combat): wait for the fight's end
+    local ready = self.reloadOver and self.reloadOver:IsShown()
+    self.apply:SetEnabledState(ready and true or false)
+    self.apply.tooltip = not ready and { title = "Reload to apply", description = "After the fight." } or nil
 end
 
 function M:DrawRow(r, e)
@@ -544,6 +579,10 @@ function M:OnEnable()
             HideUIPanel(list)
             self:Open()
         end)
+    end
+    -- the secure reload button is placed out of combat only
+    for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+        self:OnGameEvent(e, function() if self.window:IsShown() then self:Draw() end end)
     end
     -- the memory and CPU while it shows, every 15 seconds (the memory count is dear)
     C_Timer.NewTicker(15, function()

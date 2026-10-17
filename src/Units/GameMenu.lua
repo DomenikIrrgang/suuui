@@ -6,6 +6,9 @@
 -- foot. Options and Edit Mode stay the game's own windows (decided
 -- 2026-10-17); Macros and AddOns open what is open for them (SuuUI's own
 -- when those modules are on).
+-- Reload UI is a secure button on top running /reload (the game blocks a
+-- reload from addon code: found in game, 2026-10-17); placed while the menu
+-- shows, out of combat.
 -- Esc stays the game's: its GameMenuFrame still opens and closes on Esc,
 -- out of sight, and this panel shows and hides with it. Opening each entry
 -- from SuuUI's code taints nothing (/suu probe gamemenu, 2026-10-17).
@@ -66,7 +69,7 @@ local GROUPS = {
         { "Support", "chat", closeThen(function() ToggleHelpFrame() end) },
     } },
     { "Session", {
-        { "Reload UI", "reset", closeThen(function() C_UI.Reload() end) },
+        { "Reload UI", "reset", nil, function() if InCombatLockdown() then return "Not in combat" end end, reload = true },
         { "Log Out", "door", closeThen(Logout, SOUNDKIT.IG_MAINMENU_LOGOUT), exitBlocked },
         { "Exit Game", "close", closeThen(Quit, SOUNDKIT.IG_MAINMENU_QUIT), exitBlocked },
     } },
@@ -102,10 +105,11 @@ function M:BuildItem(parent, def)
         UI.HideTooltip()
     end)
     b:SetScript("OnClick", function(self)
-        if self.blocked then return end
+        if self.blocked or not def[3] then return end
         UI.HideTooltip()
         def[3]()
     end)
+    if def.reload then self.reloadItem = b end
     return b
 end
 
@@ -172,6 +176,34 @@ function M:Draw()
     self:DrawPerf()
 end
 
+-- The secure /reload button over Reload UI: there while the menu shows
+-- (out of combat: a secure frame can't be placed in one).
+function M:PlaceReload(on)
+    if InCombatLockdown() then return end
+    local over, item = self.reloadOver, self.reloadItem
+    if not item then return end
+    if not over then
+        if not on then return end
+        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        over:SetAttribute("type1", "macro")
+        over:SetAttribute("macrotext1", "/reload")
+        over:SetScript("OnEnter", function() item:GetScript("OnEnter")(item) end)
+        over:SetScript("OnLeave", function() item:GetScript("OnLeave")(item) end)
+        over:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_OPTION) end)
+        self.reloadOver = over
+    end
+    over:ClearAllPoints()
+    if on and not item.blocked then
+        over:SetFrameStrata("DIALOG")
+        over:SetFrameLevel(self.panel:GetFrameLevel() + 20)
+        over:SetAllPoints(item)
+        over:Show()
+    else
+        over:Hide()
+    end
+end
+
 function M:DrawPerf()
     local fps = math.floor((GetFramerate() or 0) + 0.5)
     local _, _, home, world = GetNetStats()
@@ -213,6 +245,7 @@ function M:OnEnable()
         C_Timer.After(0, function() self:PutAway(g) end)
         self:Draw()
         self.dim:Show()
+        self:PlaceReload(true)
         -- while it shows: keep it away, whatever the game does to it
         self.dim:SetScript("OnUpdate", function()
             local _, rel = g:GetPoint(1)
@@ -223,12 +256,16 @@ function M:OnEnable()
         end
     end)
     g:HookScript("OnHide", function()
+        self:PlaceReload(false)
         self.dim:Hide()
         self.dim:SetScript("OnUpdate", nil)
         if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     end)
     for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
-        self:OnGameEvent(e, function() if self.dim:IsShown() then self:Draw() end end)
+        self:OnGameEvent(e, function()
+            if self.dim:IsShown() then self:Draw() end
+            self:PlaceReload(self.dim:IsShown())
+        end)
     end
 end
 
