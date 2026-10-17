@@ -211,14 +211,18 @@ function M:AuraPreview(on)
     local buffs, debuffs = {}, {}
     for _, id in ipairs(PREVIEW_BUFFS) do buffs[#buffs + 1] = { icon = C_Spell.GetSpellTexture(id) } end
     for _, d in ipairs(PREVIEW_DEBUFFS) do debuffs[#debuffs + 1] = { icon = C_Spell.GetSpellTexture(d[1]), border = d[2] } end
-    local function show(c, kind)
+    local function show(c, kind, place)
         if not c then return end
         if not on then c:HidePreview() return end
-        c:ShowPreview(kind == "buffs" and buffs or debuffs)
+        c:ShowPreview(kind == "buffs" and buffs or debuffs, place)
     end
-    show(self.buffs, "buffs")
+    -- each where this module put it (the game won't say where its containers are)
+    local corner = self:Get("buffGrowth") == "right" and "TOPLEFT" or "TOPRIGHT"
+    show(self.buffs, "buffs", { corner, self.buffHolder, corner, 0, 0 })
     for name, c in pairs(self.attached or {}) do
-        show(c, PREVIEW_FOR[name] or "debuffs")
+        local def, frame = ATTACHED[name], self.attachedTo and self.attachedTo[name]
+        local at = def and def.at
+        show(c, PREVIEW_FOR[name] or "debuffs", (at and frame) and { at[1], frame, at[2], at[3], at[4] } or nil)
     end
 end
 

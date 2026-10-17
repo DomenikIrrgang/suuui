@@ -40,10 +40,13 @@
 --                                -- deaf) until the next SetUnit
 --   c:SetGroupSize(key, size)    -- 0.9: a group's icon size, live (out of combat:
 --                                -- in combat the engine's buttons refuse the resize)
---   c:ShowPreview(items), c:HidePreview()   -- 0.17: made-up icons ({ { icon,
---                                -- border = token } }) laid out as the engine
+--   c:ShowPreview(items, place), c:HidePreview()   -- 0.17: made-up icons ({ {
+--                                -- icon, border = token } }) laid out as the engine
 --                                -- would, the engine's own out of sight (edit
---                                -- mode's "With buffs and debuffs")
+--                                -- mode's "Buffs and debuffs on every frame");
+--                                -- place = { point, relativeTo, relativePoint, x, y }:
+--                                -- where you put the container (the game won't
+--                                -- anchor to it or say where it is)
 --
 -- Every call into the engine is pcall-guarded: an error inside one aborts the
 -- engine's whole button batch, and these APIs were still moving in the beta.
@@ -422,7 +425,7 @@ end
 -- 0.17: made-up icons in the container's place, laid out as the engine lays
 -- out its own (the corner, the growth, the line width, the first group's
 -- size); the engine's icons out of sight meanwhile.
-function AC:ShowPreview(items)
+function AC:ShowPreview(items, place)
     local c = self.container
     local pv = self.preview
     if not pv then
@@ -436,12 +439,11 @@ function AC:ShowPreview(items)
     pv:SetParent(c:GetParent())
     pv:SetFrameLevel(c:GetFrameLevel() + 2)
     pv:ClearAllPoints()
-    -- where the container is (anchoring to the engine's container itself is
-    -- refused: "would inherit forbidden aspects", found in game): its own
-    -- point on what it hangs from, which is its flow's corner
-    local point, rel, relPoint, x, y = c:GetPoint(1)
-    if point then
-        pv:SetPoint(point, rel, relPoint, x, y)
+    -- where the container is: the caller's place for it (anchoring to the
+    -- engine's container is refused, "would inherit forbidden aspects", and
+    -- its GetPoint gives nothing usable: found in game)
+    if place and place[1] and place[2] then
+        pv:SetPoint(place[1], place[2], place[3] or place[1], place[4] or 0, place[5] or 0)
     else
         pv:SetPoint(anchor, c:GetParent(), anchor)
     end
