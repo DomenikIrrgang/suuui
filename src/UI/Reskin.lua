@@ -446,9 +446,28 @@ function UI.ReskinMenu(menu)
     -- panel ends under the last row instead, as far below it as the first
     -- row is below the top
     local top, first, last = menu:GetTop(), nil, nil
+    -- a row with words in it (the game ends some menus, the unit menus, with
+    -- an empty spacer: the panel stopped a row too low, found in game)
+    local function hasText(row)
+        for _, r in ipairs({ row:GetRegions() }) do
+            if r:GetObjectType() == "FontString" and r:IsShown() then
+                local t = r:GetText()
+                if t and t ~= "" then return true end
+            end
+        end
+        for _, c in ipairs({ row:GetChildren() }) do
+            for _, r in ipairs({ c:GetRegions() }) do
+                if r:GetObjectType() == "FontString" and r:IsShown() then
+                    local t = r:GetText()
+                    if t and t ~= "" then return true end
+                end
+            end
+        end
+        return false
+    end
     for _, row in ipairs(rows) do
         local t, b = row:GetTop(), row:GetBottom()
-        if row:IsShown() and t and b then
+        if row:IsShown() and t and b and hasText(row) then
             if not first or t > first:GetTop() then first = row end
             if not last or b < last:GetBottom() then last = row end
         end
