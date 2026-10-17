@@ -45,7 +45,7 @@ local PLATE_H = 52
 local YOU = 64
 local GAP = S["space-7"]
 local ANS_H = 34
-local SPEECH_MAX = 140
+local SPEECH_LINES = 6 -- a long line scrolls past this many lines
 local CARD_W, CARD_H = 150, 104
 local ZOOM = 0.75
 local CPS = 90 -- characters a second while a line types in
@@ -347,8 +347,23 @@ function M:Build()
     speech.text:SetJustifyH("LEFT")
     speech.text:SetWordWrap(true)
     speech.text:SetPoint("TOPLEFT")
-    speech.skip = UI.Text(speech, "caption", "ink-faint")
-    speech.skip:SetPoint("BOTTOMRIGHT", 0, -14)
+    -- whole lines only: the area is a number of lines high
+    speech.text:SetText("A")
+    local one = speech.text:GetStringHeight()
+    speech.text:SetText("A\nA")
+    speech.lineH, speech.maxH = one, one + (SPEECH_LINES - 1) * (speech.text:GetStringHeight() - one)
+    speech.text:SetText("")
+    -- more below: the last line fades into the bar
+    speech.fade = speech:CreateTexture(nil, "OVERLAY")
+    speech.fade:SetColorTexture(1, 1, 1, 1)
+    local sr, sg, sb = UI.RGBA("surface")
+    speech.fade:SetGradient("VERTICAL", CreateColor(sr, sg, sb, 1), CreateColor(sr, sg, sb, 0))
+    speech.fade:SetPoint("BOTTOMLEFT", speech.scroll, "BOTTOMLEFT")
+    speech.fade:SetPoint("BOTTOMRIGHT", speech.scroll, "BOTTOMRIGHT")
+    speech.fade:SetHeight(28)
+    speech.scroll:HookScript("OnVerticalScroll", function() self:DrawFade() end)
+    -- the hint, in the bar's foot at the right
+    speech.skip = UI.Text(bar, "caption", "ink-faint")
     speech.skip:SetValue("Space  show it all")
     self.speech = speech
     -- what they ask (a quest's objectives)
@@ -518,7 +533,16 @@ function M:DrawCards(y, width, items, caption, gains)
     else
         cards.xp:Hide()
     end
-    local h = (#items > 0 or (gains and (gains.money or 0) + (gains.xp or 0) > 0)) and (top + rows * CARD_H + (rows - 1) * S["space-4"]) or 0
+    -- no cards: money and experience alone, a line each
+    if #items == 0 then
+        g:ClearAllPoints()
+        g:SetPoint("TOPLEFT", -S["space-3"], -top + S["space-4"])
+    end
+    local gainsH = gy - S["space-4"] + ((gains and (gains.xp or 0) > 0) and T.type.caption.lineHeight or 0)
+    local h
+    if #items > 0 then h = top + rows * CARD_H + (rows - 1) * S["space-4"]
+    elseif gainsH > 0 then h = top + gainsH
+    else h = 0 end
     cards:SetHeight(math.max(1, h))
     cards:SetShown(h > 0)
     return h
@@ -700,9 +724,12 @@ function M:Draw()
     sp.text:SetValue(text)
     local th = sp.text:GetStringHeight()
     sp.scroll.child:SetHeight(th)
-    local sh = math.max(T.type.body.lineHeight, math.min(th, SPEECH_MAX))
+    local sh = math.max(sp.lineH, math.min(th, sp.maxH))
     sp:SetHeight(sh)
+    sp.skip:ClearAllPoints()
+    sp.skip:SetPoint("BOTTOMRIGHT", self.bar, "BOTTOMRIGHT", -(PAD_R + (gossipLike and (YOU + GAP) or 0)), PAD)
     self:ShowTyped()
+    self:DrawFade()
     y = y + sh + S["space-5"]
     -- what they ask
     local a = self.ask
@@ -731,6 +758,13 @@ end
 --------------------------------------------------------------------------------
 -- The line, typing in
 --------------------------------------------------------------------------------
+
+-- The fade at the line's foot while more of it is below.
+function M:DrawFade()
+    local sp = self.speech
+    local more = sp.scroll.child:GetHeight() - sp:GetHeight() - sp.scroll:GetVerticalScroll()
+    sp.fade:SetShown(more > 2)
+end
 
 function M:ShowTyped()
     local ends, n = self.ends or {}, self.shown or 0
