@@ -1,0 +1,108 @@
+-- UI/Stage.lua
+-- The model stage (design: the Collections stage, also the dressing room's):
+-- art under a 3D model on any frame. A gradient base, a soft key light, a
+-- floor band with a glow and a contact shadow, four vignette edges and a
+-- gilt-faint frame; optionally a shade strip at the left for a card.
+--
+--   UI.ModelStage(frame, { floor = 40, shade = 340 })
+--   frame:CentreOn(x)   the light, glow and shadow under a model x px off
+--                       the middle (and frame.ctl, a frame of controls, when
+--                       the caller set one)
+--   frame:Tint(token)   the light and glow in a token's colour
+--
+-- floor: the floor shadow's middle above the stage's bottom, minus 4 px
+-- (default 40); shade: the card strip's width, none without it.
+-- frame.light, frame.pool (the glow) and frame.shadow are the textures.
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+local S = T.space
+
+local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
+
+-- The tint: a faint key light and floor glow, added to what is under them
+-- (blend ADD) in the token's colour at 9% and 8%: they can only ever warm
+-- the stage a little. (As plain alpha they showed in game as a yellow lamp:
+-- the soft disc is solid over most of its middle, and its alpha didn't hold.)
+local LIGHT_A, POOL_A = 0.09, 0.08
+
+function UI.ModelStage(stage, opts)
+    opts = opts or {}
+    local floorY = opts.floor or 40
+    local base = stage:CreateTexture(nil, "BACKGROUND", nil, -8)
+    base:SetAllPoints()
+    base:SetColorTexture(1, 1, 1, 1)
+    base:SetGradient("VERTICAL", CreateColor(0.051, 0.043, 0.035, 1), CreateColor(0.09, 0.078, 0.059, 1))
+    local light = stage:CreateTexture(nil, "BACKGROUND", nil, -7)
+    light:SetTexture(SOFT)
+    light:SetBlendMode("ADD")
+    light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120, 120)
+    light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120, -260)
+    stage.light = light
+    local floor = stage:CreateTexture(nil, "BACKGROUND", nil, -6)
+    floor:SetColorTexture(1, 1, 1, 1)
+    floor:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.45), CreateColor(0, 0, 0, 0))
+    floor:SetPoint("BOTTOMLEFT")
+    floor:SetPoint("BOTTOMRIGHT")
+    floor:SetHeight(130)
+    local pool = stage:CreateTexture(nil, "BACKGROUND", nil, -5)
+    pool:SetTexture(SOFT)
+    pool:SetBlendMode("ADD")
+    pool:SetSize(420, 90)
+    pool:SetPoint("BOTTOM", stage, "BOTTOM", 0, floorY - 12)
+    stage.pool = pool
+    local shadow = stage:CreateTexture(nil, "BACKGROUND", nil, -4)
+    shadow:SetTexture(SOFT)
+    -- soft and wide: a model stands a little higher or lower on it, a hard
+    -- edge showed the gap as floating
+    shadow:SetVertexColor(0, 0, 0, 0.4)
+    shadow:SetSize(340, 56)
+    shadow:SetPoint("BOTTOM", stage, "BOTTOM", 0, floorY + 4)
+    stage.shadow = shadow
+    -- the vignette: four edges darkening inward
+    local function edge(point, horizontal, size, fromA, toA)
+        local t = stage:CreateTexture(nil, "BORDER", nil, 1)
+        t:SetColorTexture(1, 1, 1, 1)
+        t:SetGradient(horizontal and "HORIZONTAL" or "VERTICAL", CreateColor(0, 0, 0, fromA), CreateColor(0, 0, 0, toA))
+        t:SetPoint(point)
+        if horizontal then t:SetPoint(point == "LEFT" and "TOPLEFT" or "TOPRIGHT"); t:SetPoint(point == "LEFT" and "BOTTOMLEFT" or "BOTTOMRIGHT"); t:SetWidth(size)
+        else t:SetPoint(point == "TOP" and "TOPLEFT" or "BOTTOMLEFT"); t:SetPoint(point == "TOP" and "TOPRIGHT" or "BOTTOMRIGHT"); t:SetHeight(size) end
+    end
+    edge("LEFT", true, 60, 0.5, 0)
+    edge("RIGHT", true, 60, 0, 0.5)
+    edge("TOP", false, 50, 0, 0.45)
+    edge("BOTTOM", false, 50, 0.45, 0)
+    -- the card's shade strip
+    if opts.shade then
+        local shade = stage:CreateTexture(nil, "BORDER", nil, 2)
+        shade:SetColorTexture(1, 1, 1, 1)
+        shade:SetGradient("HORIZONTAL", CreateColor(0, 0, 0, 0.65), CreateColor(0, 0, 0, 0))
+        shade:SetPoint("TOPLEFT")
+        shade:SetPoint("BOTTOMLEFT")
+        shade:SetWidth(opts.shade)
+        stage.shade = shade
+    end
+    UI.Border(stage, "gilt-faint")
+
+    function stage:CentreOn(x)
+        light:ClearAllPoints()
+        light:SetPoint("TOPLEFT", stage, "TOPLEFT", 120 + x, 120)
+        light:SetPoint("BOTTOMRIGHT", stage, "TOPRIGHT", -120 + x, -260)
+        pool:ClearAllPoints()
+        pool:SetPoint("BOTTOM", stage, "BOTTOM", x, floorY - 12)
+        shadow:ClearAllPoints()
+        shadow:SetPoint("BOTTOM", stage, "BOTTOM", x, floorY + 4)
+        if stage.ctl then
+            stage.ctl:ClearAllPoints()
+            stage.ctl:SetPoint("BOTTOM", stage, "BOTTOM", x, S["space-4"])
+        end
+    end
+
+    function stage:Tint(token)
+        local r, g, b = UI.RGBA(token)
+        light:SetVertexColor(r * LIGHT_A, g * LIGHT_A, b * LIGHT_A)
+        pool:SetVertexColor(r * POOL_A, g * POOL_A, b * POOL_A)
+    end
+    return stage
+end
