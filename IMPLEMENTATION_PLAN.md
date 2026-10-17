@@ -697,6 +697,7 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
   - A full raid session checked with `/suu probe taint` and `SuuUIDB.blocked`.
   - A check that SavedVariables stay bounded.
 - **Confirm:** a 40-player raid fight shows no blocked actions and stays within budget.
+- **Checked so far (2026-10-18):** a party session with fights: no SuuUI errors, no blocked or forbidden actions (`SuuUIDB.blocked` unchanged since 2026-10-16). The raid fight, with `/suu probe taint` in combat, is still to do.
 
 ### 4.3 Plugin developer kit
 - **Build:**
