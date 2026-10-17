@@ -19,7 +19,7 @@ local Themes = {}
 ns.Themes = Themes
 
 Themes.DEFAULT = "suuui"
-local list = { { id = Themes.DEFAULT, name = "SuuUI", description = "SuuUI's own colours and type." } }
+local list = { { id = Themes.DEFAULT, name = "SuuUI", description = "SuuUI's own colours and type.", colors = {}, fonts = {} } }
 local byId = { [Themes.DEFAULT] = list[1] }
 local applied = Themes.DEFAULT
 

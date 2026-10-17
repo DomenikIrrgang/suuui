@@ -2,7 +2,7 @@
 
 Version **0.16.0** (`SuuUI.API_VERSION`). Everything below is on the global `SuuUI`. SuuUI's built-in modules use only this API, so a plugin can do anything they do. Anything not listed here is private and may change without notice.
 
-A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. `Examples/SuuUI_HelloPlugin` is a complete one.
+A plugin is an addon with `## Dependencies: SuuUI` that calls `SuuUI.RegisterModule`. [PluginGuide.md](PluginGuide.md) walks through writing one. `Examples/SuuUI_HelloPlugin` is a complete one, and `Examples/SuuUI_LevelBadge` adds to SuuUI's own unit frames.
 
 ## Versioning
 
@@ -116,6 +116,9 @@ end)
 | `SUUUI_ANCHOR_CHANGED` | `name, frame` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
+| `SUUUI_ROLE_PROFILES_CHANGED` (0.9) | — (which profile a role uses changed, General › Profiles › By role) |
+| `SUUUI_COOLDOWNS_SETUP` (0.8) | — (the Cooldown Manager switched to another spec's setup) |
+| `SUUUI_TALENTS_SHOWN` (0.12) | `shown` (SuuUI's Talents window opened, true, or closed, false) |
 | `SUUUI_ADDITIONS_CHANGED` (0.17) | `list` (what modules added to a menu or list changed) |
 | `SUUUI_SERVICE_CHANGED` (0.17) | `name` (a service came or went) |
 | `SUUUI_SPELLS_TO_TRAIN` | `count, cost` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school, and what that costs in copper; `cost` is nil while its Training cost setting is off) |
@@ -196,6 +199,8 @@ Settings: a module's settings section with `merge = "<section id>"` adds its gro
 | `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size } } }`. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change takes a reload. Colour vision applies on top of it. An unknown token or style is an error |
 
 ### Raw access (unstable)
+
+`SuuUI.ProbeShowsBlizzardSocial()` is internal: a diagnostic's switch, not for plugins.
 
 `SuuUI.Raw` is everything SuuUI is made of, for what the API above doesn't cover. **It may change in any version, without an API version bump**: a plugin using it should check what it finds.
 
@@ -358,7 +363,7 @@ Modules find each other's frames through published anchors, never through each o
 | `SuuUI.PublishAnchor(name, frame)` | Publishes a frame under a name (`nil` unpublishes) |
 | `SuuUI.GetAnchor(name)` | The frame, or `nil`; listen to `SUUUI_ANCHOR_CHANGED` for changes |
 
-Published by SuuUI: `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show), `encounterTimeline` (0.17: the encounter timeline while it is on).
+Published by SuuUI: `microMenu` (0.12: the micro menu; windows that join its row line up under it), `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show), `encounterTimeline` (0.17: the encounter timeline while it is on).
 
 ## Unit frames and cast bars (0.5, 0.6)
 
