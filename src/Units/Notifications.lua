@@ -86,7 +86,27 @@ local KINDS = {
     ABANDON_QUEST = { category = "Abandon quest", glyph = "scroll", tone = "danger", danger = 1 },
     QUEST_ACCEPT = { category = "Quest", glyph = "scroll", primary = 1 },
     CONFIRM_TALENT_WIPE = { category = "Talents", glyph = "tree", tone = "warning" },
+    -- the bags' buy cell (a secure click on the game's purchase button):
+    -- the game's own question, its cost on the card
+    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(data)
+        local bankType = type(data) == "table" and data.bankType or (Enum.BankType and Enum.BankType.Character)
+        local next = C_Bank and C_Bank.FetchNextPurchasableBankTabData and C_Bank.FetchNextPurchasableBankTabData(bankType)
+        return next and plain(next.tabCost) and next.tabCost or nil
+    end },
 }
+
+-- "1g 20s 5c", each in its coin's colour (zero coins left out).
+local function coinString(copper)
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local out = {}
+    local function add(n, unit, token)
+        out[#out + 1] = ("|cff%s%d%s|r"):format(T.color[token].hex, n, unit)
+    end
+    if g > 0 then add(g, "g", "coin-gold") end
+    if s > 0 then add(s, "s", "coin-silver") end
+    if c > 0 or #out == 0 then add(c, "c", "coin-copper") end
+    return table.concat(out, " ")
+end
 
 --------------------------------------------------------------------------------
 -- Notes (SuuUI.Notify)
@@ -694,9 +714,13 @@ end
 function M:CardData(h)
     local kind = h.kind
     local text = h.text()
+    local title = plain(text) and text or (kind.title or "")
+    -- a cost the game's popup shows in its money frame, after the question
+    local cost = kind.cost and kind.cost(h.dialog and h.dialog.data)
+    if cost then title = title .. " " .. coinString(cost) end
     local d = {
         id = h.id, kind = "action", tone = kind.tone, category = kind.category,
-        title = plain(text) and text or (kind.title or ""), icon = { glyph = kind.glyph },
+        title = title, icon = { glyph = kind.glyph },
         host = { buttons = #h.buttons(), roles = h.roles and #h.roles() or nil },
     }
     local warning = h.warning and h.warning()
