@@ -808,6 +808,9 @@ end
 --------------------------------------------------------------------------------
 
 function M:Key(key)
+    -- with a modifier held a key is the game's (shift-1, a screenshot's
+    -- Cmd+Shift arrive as the bare key)
+    if IsModifierKeyDown() then return false end
     local list = self.answerList or {}
     if key == "SPACE" then return self:RevealAll() end
     local n = tonumber(key)
