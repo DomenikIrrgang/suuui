@@ -34,6 +34,7 @@ end
 
 local WIDTH, HEIGHT = 820, 640
 local LINE_H, MODULE_H = 36, 30
+local ICON = 16
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local A = C_AddOns
 local STATUS = {
@@ -50,6 +51,14 @@ local function memory(kb)
     if not plain(kb) or kb <= 0 then return nil end
     if kb >= 1024 then return ("%.1f MB"):format(kb / 1024) end
     return ("%d KB"):format(math.floor(kb + 0.5))
+end
+
+-- A title's leading icon, taken out to show in the row's icon slot (inline,
+-- it sits on the text's baseline, not in the middle of the row).
+local function splitIcon(text)
+    local path, rest = text:match("^%s*|T([^:|]+)[^|]*|t%s*(.*)$")
+    if path then return rest, tonumber(path) or path end
+    return text
 end
 
 -- a title without its colour codes and icons, for the search
@@ -78,7 +87,14 @@ function M:Collect()
         local name, title, notes, _, reason = call(A.GetAddOnInfo, i)
         if plain(name) then
             local deps = { call(A.GetAddOnDependencies, i) }
-            local e = { index = i, name = name, title = plain(title) and title ~= "" and title or name, notes = plain(notes) and notes or nil,
+            local shownTitle, icon = splitIcon(plain(title) and title ~= "" and title or name)
+            if not icon then
+                local tex = call(A.GetAddOnMetadata, i, "IconTexture")
+                local atlas = call(A.GetAddOnMetadata, i, "IconAtlas")
+                if plain(tex) and tex ~= "" then icon = tonumber(tex) or tex
+                elseif plain(atlas) and atlas ~= "" then icon = { atlas = atlas } end
+            end
+            local e = { index = i, name = name, title = shownTitle, icon = icon, notes = plain(notes) and notes or nil,
                 reason = reason, deps = deps }
             byName[name] = e
             list[#list + 1] = e
@@ -179,10 +195,10 @@ function M:BuildRow(parent)
     r.indent:SetPoint("BOTTOMLEFT", S["space-3"] + 10, 0)
     r.indent:SetWidth(1)
     r.toggle = UI.Toggle(line, { onChange = function(on) self:SetEnabled(r.addon, on) end })
-    r.emblem = line:CreateTexture(nil, "ARTWORK")
-    r.emblem:SetSize(13, 13)
-    r.emblem:SetTexture(GLYPHS .. "markDiamond")
-    r.emblem:SetVertexColor(UI.RGBA("gilt-text"))
+    -- the icon slot, in the middle of the line: the addon's own icon, or
+    -- SuuUI's emblem on SuuUI and its plugins; empty keeps the titles in line
+    r.icon = line:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(ICON, ICON)
     r.fold = CreateFrame("Button", nil, line)
     r.fold:SetSize(18, 18)
     r.fold.glyph = r.fold:CreateTexture(nil, "ARTWORK")
@@ -207,6 +223,7 @@ function M:BuildRow(parent)
     r.mem:SetPoint("RIGHT", r.chip, "LEFT", -S["space-4"], 0)
     r.pending = UI.Text(line, "micro", "arcane")
     r.pending:SetPoint("RIGHT", r.mem, "LEFT", -S["space-4"], 0)
+    r.sub:SetPoint("RIGHT", r.pending, "LEFT", -S["space-4"], 0)
     -- the open row's details
     r.detail = CreateFrame("Frame", nil, r)
     r.detail:SetPoint("TOPLEFT", line, "BOTTOMLEFT")
@@ -215,7 +232,7 @@ function M:BuildRow(parent)
     r.notes = UI.Text(r.detail, "body", "ink")
     r.notes:SetWordWrap(true)
     r.notes:SetJustifyH("LEFT")
-    r.notes:SetPoint("TOPLEFT", 58, -S["space-3"])
+    r.notes:SetPoint("TOPLEFT", 90, -S["space-3"])
     r.notes:SetPoint("RIGHT", -S["space-5"], 0)
     r.facts = UI.Text(r.detail, "caption", "ink")
     r.deps = UI.Text(r.detail, "caption", "ink")
@@ -317,15 +334,16 @@ function M:Build()
     ol:SetPoint("LEFT", self.outdated, "RIGHT", S["space-4"], 0)
     ol:SetValue("Load out of date addons")
 
-    -- the list
-    local top = UI.Fill(body, "gilt-faint", "ARTWORK")
-    top:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -S["space-4"])
-    top:SetPoint("TOPRIGHT", sub, "BOTTOMRIGHT", 0, -S["space-4"])
-    top:SetHeight(1)
+    -- the list: its own sunk, framed well, apart from the controls above
+    local well = CreateFrame("Frame", nil, body)
+    well:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -S["space-5"])
+    well:SetPoint("BOTTOMRIGHT")
+    UI.Fill(well, "surface-sunk"):SetAllPoints()
+    UI.Border(well, "gilt-line")
     local BAR = S["space-3"]
-    self.list = UI.ScrollArea(body, BAR)
-    self.list:SetPoint("TOPLEFT", top, "BOTTOMLEFT")
-    self.list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
+    self.list = UI.ScrollArea(well, BAR)
+    self.list:SetPoint("TOPLEFT", 1, -1)
+    self.list:SetPoint("BOTTOMRIGHT", -(BAR + 4), 1)
     self.list:HookScript("OnSizeChanged", function(scroll, width) scroll.child:SetWidth(width) end)
     self.none = UI.Text(body, "body", "ink-muted")
     self.none:SetPoint("TOP", self.list, "TOP", 0, -S["space-6"])
@@ -435,30 +453,33 @@ function M:DrawRow(r, e)
     r.toggle:ClearAllPoints()
     r.toggle:SetPoint("LEFT", module and (S["space-3"] + 32) or S["space-3"], 0)
     r.toggle:SetValue(enabled)
-    local x = r.toggle
-    r.emblem:SetShown(e.suuui)
-    if e.suuui then
-        r.emblem:ClearAllPoints()
-        r.emblem:SetPoint("LEFT", x, "RIGHT", S["space-4"], 0)
-        x = r.emblem
-    end
     local suite = e.children and #e.children > 0
     r.fold:SetShown(suite and true or false)
-    if suite then
-        r.fold:ClearAllPoints()
-        r.fold:SetPoint("LEFT", x, "RIGHT", S["space-3"], 0)
-        r.fold.glyph:SetTexture(GLYPHS .. (self.folded[e.name] and "chevronRight" or "chevronDown"))
-        x = r.fold
+    r.fold:ClearAllPoints()
+    r.fold:SetPoint("LEFT", r.toggle, "RIGHT", S["space-2"], 0)
+    r.fold.glyph:SetTexture(GLYPHS .. (self.folded[e.name] and "chevronRight" or "chevronDown"))
+    r.icon:ClearAllPoints()
+    r.icon:SetPoint("LEFT", r.fold, "RIGHT", S["space-2"], 0)
+    r.icon:SetTexCoord(0, 1, 0, 1)
+    r.icon:SetVertexColor(1, 1, 1)
+    if type(e.icon) == "table" then
+        r.icon:SetAtlas(e.icon.atlas)
+    elseif e.icon then
+        r.icon:SetTexture(e.icon)
+        -- the game's item icons: without their border
+        if type(e.icon) == "string" and e.icon:lower():find("^interface\\icons\\") then r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+    elseif e.suuui then
+        r.icon:SetTexture(GLYPHS .. "markDiamond")
+        r.icon:SetVertexColor(UI.RGBA("gilt-text"))
     end
+    r.icon:SetShown(e.icon ~= nil or e.suuui)
     r.title:ClearAllPoints()
-    r.title:SetPoint("LEFT", x, "RIGHT", S["space-4"], 0)
+    r.title:SetPoint("LEFT", r.icon, "RIGHT", S["space-4"], 0)
     r.title:SetValue(e.title)
     local version = call(A.GetAddOnMetadata, e.index, "Version")
     local subText = {}
     if suite then subText[#subText + 1] = #e.children .. " modules" end
     if plain(version) and version ~= "" then subText[#subText + 1] = version end
-    r.sub:ClearAllPoints()
-    r.sub:SetPoint("LEFT", r.title, "RIGHT", S["space-4"], 0)
     r.sub:SetValue(table.concat(subText, " · "))
     local open = self.open == e.name
     r.more:SetTexture(GLYPHS .. (open and "chevronDown" or "chevronRight"))
@@ -467,7 +488,7 @@ function M:DrawRow(r, e)
     r.mem:SetValue(not open and memory(e.memory) or "")
     r.pending:SetValue(changed and (enabled and "Enables on reload" or "Disables on reload") or "")
     -- the title gives way to what's on the right
-    r.title:SetPoint("RIGHT", r.pending, "LEFT", -S["space-4"] - (r.sub:GetText() ~= "" and 120 or 0), 0)
+    r.title:SetPoint("RIGHT", r.sub, "LEFT", -S["space-5"], 0)
     r.bg:SetShown(open)
     -- details
     if open then
