@@ -436,7 +436,15 @@ function AC:ShowPreview(items)
     pv:SetParent(c:GetParent())
     pv:SetFrameLevel(c:GetFrameLevel() + 2)
     pv:ClearAllPoints()
-    pv:SetPoint(anchor, c, anchor)
+    -- where the container is (anchoring to the engine's container itself is
+    -- refused: "would inherit forbidden aspects", found in game): its own
+    -- point on what it hangs from, which is its flow's corner
+    local point, rel, relPoint, x, y = c:GetPoint(1)
+    if point then
+        pv:SetPoint(point, rel, relPoint, x, y)
+    else
+        pv:SetPoint(anchor, c:GetParent(), anchor)
+    end
     local first = self.opts.groups[1]
     local size = (first and self.sizes[first.key]) or UI.Size(self.opts.size or "icon-md")
     local sp = self.spacing
@@ -460,12 +468,12 @@ function AC:ShowPreview(items)
     end
     for i = #items + 1, #pv.icons do pv.icons[i]:Hide() end
     pv:Show()
-    c:SetAlpha(0)
+    pcall(c.SetAlpha, c, 0)
 end
 
 function AC:HidePreview()
     if self.preview then self.preview:Hide() end
-    self.container:SetAlpha(1)
+    pcall(self.container.SetAlpha, self.container, 1)
 end
 
 function UI.AuraContainer(parent, unit, opts)
