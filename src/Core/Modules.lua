@@ -163,6 +163,22 @@ function Module:Override(kind, method, fn) ns.Extend.Override(kind, method, fn, 
 -- when the module turns off.
 function Module:Provide(name, impl) ns.Services.Provide(name, impl, self) end
 
+-- 0.17: entries in SuuUI's own menus and lists (Core/Extend.lua): before one
+-- of SuuUI's right-click menus opens, fn(menu, context); a micro menu
+-- button; a game menu entry; a game popup shown as a notification card;
+-- this module's own settings in a role's preset. Gone when it turns off.
+function Module:ExtendMenu(id, fn) ns.Extend.ExtendMenu(id, fn, self) end
+function Module:AddMicroItem(item) ns.Extend.AddTo("micromenu", item, self) end
+function Module:AddGameMenuItem(item) ns.Extend.AddTo("gamemenu", item, self) end
+function Module:AddNotificationKind(which, def)
+    def = def or {}
+    def.which = which
+    ns.Extend.AddTo("notificationkinds", def, self)
+end
+function Module:AddToRolePreset(role, values)
+    ns.Extend.AddTo("rolepresets", { role = role, namespace = self.id, values = values }, self)
+end
+
 function Module:Print(...)
     ns.Print("|cffa39b8b" .. self.name .. ":|r", ...)
 end

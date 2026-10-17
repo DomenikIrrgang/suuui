@@ -218,3 +218,60 @@ function Extend.Unregister(owner)
         end
     end
 end
+
+--------------------------------------------------------------------------------
+-- Menus and additions
+--------------------------------------------------------------------------------
+
+-- SuuUI's own right-click menus by id: fn(menu, context) before one opens,
+-- menu = { title, items } (items: { label, onClick, disabled } or
+-- { separator = true }; add, insert or remove).
+local menus = {} -- id -> { { fn, owner } }
+
+function Extend.ExtendMenu(id, fn, owner)
+    assert(type(id) == "string" and type(fn) == "function", "SuuUI ExtendMenu: a menu id and a function")
+    menus[id] = menus[id] or {}
+    table.insert(menus[id], { fn = fn, owner = owner })
+end
+
+-- Called by the menu itself as it opens.
+function Extend.ApplyMenu(id, menu, context)
+    for _, e in ipairs(id and menus[id] or {}) do
+        Fault.Call(ownerName(e.owner), e.fn, menu, context or {})
+    end
+end
+
+-- Lists modules add to: "micromenu" (buttons), "gamemenu" (entries),
+-- "notificationkinds" (popups as cards), "rolepresets" (a module's own
+-- settings per role). SUUUI_ADDITIONS_CHANGED(list) when one changes.
+local additions = {} -- list -> { { item, owner } }
+
+function Extend.AddTo(list, item, owner)
+    additions[list] = additions[list] or {}
+    table.insert(additions[list], { item = item, owner = owner })
+    ns.Events.Emit("SUUUI_ADDITIONS_CHANGED", list)
+end
+
+function Extend.Additions(list)
+    local out = {}
+    for _, a in ipairs(additions[list] or {}) do out[#out + 1] = a.item end
+    return out
+end
+
+local unregisterUI = Extend.Unregister
+function Extend.Unregister(owner)
+    unregisterUI(owner)
+    for id, list in pairs(menus) do
+        local kept = {}
+        for _, e in ipairs(list) do if e.owner ~= owner then kept[#kept + 1] = e end end
+        menus[id] = kept
+    end
+    for name, list in pairs(additions) do
+        local kept = {}
+        for _, a in ipairs(list) do if a.owner ~= owner then kept[#kept + 1] = a end end
+        if #kept ~= #list then
+            additions[name] = kept
+            ns.Events.Emit("SUUUI_ADDITIONS_CHANGED", name)
+        end
+    end
+end

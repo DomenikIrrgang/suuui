@@ -885,8 +885,17 @@ function M:HostRole(h, card, b, i)
 end
 
 -- A Blizzard popup: its buttons, text, time left and edit box.
+-- A popup's kind: SuuUI's own, else one a plugin added (0.17,
+-- M:AddNotificationKind(which, def), def as above).
+local function kindOf(which)
+    if KINDS[which] then return KINDS[which] end
+    for _, def in ipairs(SuuUI.Additions("notificationkinds")) do
+        if def.which == which then return def end
+    end
+end
+
 function M:Host(dialog, which)
-    local kind = KINDS[which]
+    local kind = kindOf(which)
     if not kind then return end
     local info = StaticPopupDialogs and StaticPopupDialogs[which]
     self:HostFrame(dialog, which, kind, {

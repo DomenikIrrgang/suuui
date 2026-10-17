@@ -710,6 +710,12 @@ Asked 2026-10-18: plugins get as much access to SuuUI's UI as possible. Decided:
   - A test addon with `replaces = "bags"` kept Bags off, showed "Replaced by" in Settings and `/suu modules`, and its bags service answered `SuuUI.ToggleBags()`.
   - Without it, bags, talents (micro menu, View Talents) and notifications work through their services.
   - Still direct: a few calls between built-in modules (micro menu → talents and collections settings, Loot → notifications, Windows → several). These move to services when a replacement needs them.
+- Step 4, menus and lists (confirmed in game 2026-10-18 with a test module):
+  - A micro menu button showed before the game menu's and its click ran.
+  - A game menu entry showed under Game.
+  - The quest right-click menu took an entry with the quest's context.
+  - A test popup came as a notification card.
+  - Role preset values follow the same additions list. They aren't tried yet, since that needs a plugin with settings: the second example will.
 
 **What the code allows (inventory 2026-10-18):**
 - Most components copy their methods onto each frame (`Mixin(frame, UF)`). Patching the method table later misses frames that already exist, but a method replaced on an instance is used, because events call `self:UpdateX()`. ActionBar, AuraContainer and window chrome look methods up through a shared metatable instead.

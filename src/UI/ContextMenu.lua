@@ -10,6 +10,8 @@
 --       { label = "Focus", onClick = fn }, { separator = true },
 --       { label = "Stop tracking", onClick = fn, disabled = false } } })
 --   UI.CloseContextMenu()
+-- 0.17: opts.id names the menu and opts.context says what it's about;
+-- plugins' entries for that id join before it opens (M:ExtendMenu).
 
 local _, ns = ...
 
@@ -90,6 +92,8 @@ end
 function UI.ContextMenu(owner, opts)
     if not menu then build() end
     opts = opts or {}
+    opts.items = opts.items or {}
+    if opts.id then ns.Extend.ApplyMenu(opts.id, opts, opts.context) end
     local pad = S["space-5"]
     local y = pad
     menu.title:SetShown(opts.title ~= nil)
@@ -147,9 +151,9 @@ end
 -- The same menu described the way the game's are (MenuUtil's generator:
 -- root:CreateTitle(text), root:CreateButton(label, fn), root:CreateDivider()),
 -- so a menu moves over by its first line.
---   UI.ContextMenuFrom(owner, function(owner, root) ... end)
-function UI.ContextMenuFrom(owner, describe)
-    local opts = { items = {} }
+--   UI.ContextMenuFrom(owner, function(owner, root) ... end[, id, context])
+function UI.ContextMenuFrom(owner, describe, id, context)
+    local opts = { items = {}, id = id, context = context }
     local root = {}
     function root:CreateTitle(text) opts.title = opts.title or text end
     function root:CreateButton(label, onClick)

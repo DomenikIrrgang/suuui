@@ -89,6 +89,25 @@ function RolePresets.Apply(role)
         local values = layout[k[1]]
         entries[#entries + 1] = { k[1], k[2], values and values[k[2]] or nil }
     end
+    -- 0.17: plugins' own settings per role (M:AddToRolePreset): every key a
+    -- plugin set for any role, this role's value or its default
+    local added = {}
+    for _, a in ipairs(ns.Extend.Additions("rolepresets")) do
+        for key in pairs(a.values or {}) do
+            local id = a.namespace .. "." .. key
+            if not added[id] then
+                added[id] = true
+                entries[#entries + 1] = { a.namespace, key, nil }
+            end
+        end
+    end
+    for _, a in ipairs(ns.Extend.Additions("rolepresets")) do
+        if a.role == role then
+            for _, e in ipairs(entries) do
+                if e[1] == a.namespace and a.values[e[2]] ~= nil then e[3] = a.values[e[2]] end
+            end
+        end
+    end
     local ok, err = Profiles.SetValues(name, entries)
     if not ok then return false, err end
     Profiles.SetRoleProfile(role, err)

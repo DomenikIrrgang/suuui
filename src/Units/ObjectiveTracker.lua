@@ -405,7 +405,7 @@ function M:QuestClick(questID, button, row)
         root:CreateButton("Stop tracking", function()
             pcall(C_QuestLog.RemoveQuestWatch, questID)
         end)
-    end)
+    end, "quest", { questID = questID })
 end
 
 --------------------------------------------------------------------------------
@@ -532,7 +532,7 @@ function M:RecipeMenu(recipeID, row)
         root:CreateButton("Stop tracking", function()
             pcall(C_TradeSkillUI.SetRecipeTracked, recipeID, false, false)
         end)
-    end)
+    end, "trackedRecipe", { recipeID = recipeID })
 end
 
 -- The row's own clicks: in combat (no opener then), or the profession

@@ -273,7 +273,7 @@ function M:Wire(view)
             root:CreateDivider()
             if not row.bnet then root:CreateButton("Ignore", function() self:Ignore(row.name) end) end
             root:CreateButton("Remove friend", function() self:Remove(row) end)
-        end)
+        end, "friend", { row = row })
     end
 end
 
@@ -438,7 +438,7 @@ function M:AllyMenu(row, owner)
                     end })
             end)
         end
-    end)
+    end, "recentAlly", { row = row })
 end
 
 --------------------------------------------------------------------------------
@@ -620,7 +620,7 @@ function M:WireRaid(page)
                     if remove then pcall(remove, m.unit) end
                 end)
             end
-        end)
+        end, "groupMember", { member = m })
     end
 end
 

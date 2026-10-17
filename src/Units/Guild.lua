@@ -537,7 +537,7 @@ function M:Menu(m, owner)
         if a.invite.enabled then root:CreateButton("Invite", function() self:Act("invite", m) end) end
         -- notes: in the details panel (the game's own note box; the menu
         -- can't pick the member in the game's list)
-    end)
+    end, "guildMember", { member = m })
 end
 
 function M:Wire(page)

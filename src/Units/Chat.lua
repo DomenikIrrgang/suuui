@@ -370,7 +370,7 @@ local function playerMenu(owner, name)
         root:CreateButton("Ignore", function()
             if C_FriendList and C_FriendList.AddIgnore then pcall(C_FriendList.AddIgnore, name) end
         end)
-    end)
+    end, "chatPlayer", { name = name })
     return true
 end
 
@@ -956,7 +956,7 @@ function M:TabMenu(b)
     if not (cf and cf.isTemporary and FCF_Close) then return end
     UI.ContextMenuFrom(b, function(_, root)
         root:CreateButton("Close", function() self:CloseWindow(cf) end)
-    end)
+    end, "chatTab", { chatFrame = cf })
 end
 
 function M:CloseWindow(cf)

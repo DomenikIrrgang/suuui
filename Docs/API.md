@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, and SuuUI.Raw |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, menu entries, micro and game menu items, notification kinds, role preset values, and SuuUI.Raw |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -116,6 +116,7 @@ end)
 | `SUUUI_ANCHOR_CHANGED` | `name, frame` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
+| `SUUUI_ADDITIONS_CHANGED` (0.17) | `list` (what modules added to a menu or list changed) |
 | `SUUUI_SERVICE_CHANGED` (0.17) | `name` (a service came or went) |
 | `SUUUI_SPELLS_TO_TRAIN` | `count, cost` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school, and what that costs in copper; `cost` is nil while its Training cost setting is off) |
 
@@ -172,6 +173,21 @@ What one module does for others goes through a **service**, named, with a table 
 - publishes the same anchors (`SuuUI.PublishAnchor`);
 - registers its frames as the same kind (`SuuUI.AddInstance`) so other plugins' `Each` and hooks reach them;
 - registers movers and settings of its own.
+
+### Menus, buttons and presets (0.17)
+
+Entries a module adds here are its own, and they go away when it turns off.
+
+| | |
+|---|---|
+| `M:ExtendMenu(id, fn)` | `fn(menu, context)` before one of SuuUI's right-click menus opens: `menu.title`, `menu.items` (each `{ label, onClick, disabled }` or `{ separator = true }`; add, insert or remove). Menus and their context: `quest` (`questID`, the objective tracker), `trackedRecipe` (`recipeID`), `chatPlayer` (`name`, a name in chat), `chatTab` (`chatFrame`, a whisper tab), `guildMember` (`member`), `friend` (`row`), `recentAlly` (`row`), `groupMember` (`member`, Social › Group). `UI.ContextMenu(owner, { id, context, … })` and `UI.ContextMenuFrom(owner, fn, id, context)` give your own menus an id too |
+| `M:AddMicroItem(item)` | A micro menu button: `{ key, label, glyph, onClick, open = fn → shown, bind }` (`glyph`: one of SuuUI's glyphs; `open` lights the button while your window shows; `bind` the binding whose key its tooltip shows). It comes before the game menu's button; a new one starts shown, and the player can hide it under Micro menu › Buttons |
+| `M:AddGameMenuItem(item)` | An entry in SuuUI's game menu: `{ group = "Game"\|"Help"\|"Session"\|your own, label, glyph, onClick, blocked = fn → reason }` (the menu closes, then `onClick` runs; while `blocked` returns a reason the entry is dimmed and its tooltip says why). A group of your own comes before Session |
+| `M:AddNotificationKind(which, def)` | A game popup (`StaticPopupDialogs[which]`) shown as a notification card: `def = { category, glyph, tone, primary = button index, danger = button index, item = true (the item it's about), confirm = true (a typed confirmation) }` |
+| `M:AddToRolePreset(role, values)` | Your module's own settings in a role's preset (`"TANK"`, `"HEALER"`, `"DAMAGER"`): `values = { key = value }`. Applying a preset (Settings › Profiles › Role presets) sets them in SuuTank, SuuHeal or SuuDps; a key you set for one role goes back to its default in the others |
+| `SuuUI.Additions(list)` | What modules added to `"micromenu"`, `"gamemenu"`, `"notificationkinds"` or `"rolepresets"`, for a module that draws one of them itself. `SUUUI_ADDITIONS_CHANGED(list)` when one changes |
+
+Settings: a module's settings section with `merge = "<section id>"` adds its groups to that built-in page (e.g. `merge = "unitframes"`), instead of a page of its own.
 
 ### Raw access (unstable)
 

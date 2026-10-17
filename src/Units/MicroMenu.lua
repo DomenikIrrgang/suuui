@@ -21,6 +21,9 @@ local M = SuuUI.RegisterModule({
         shows = "always",
         buttons = { "character", "professions", "spellbook", "talents", "legacy", "questlog", "guild",
                     "groupfinder", "collections", "worldmap", "bags", "menu" },
+        -- plugins' buttons seen so far (0.17): a new one starts shown, and
+        -- one you hid stays hidden
+        seenPluginButtons = {},
     },
 })
 
@@ -80,9 +83,47 @@ function M:Items()
         if item.key == "collections" and SuuUI.GetModule("collections") and SuuUI.GetModule("collections"):Get("enabled") then
             item = COLLECTIONS_OWN
         end
+        -- plugins' buttons (0.17) before the game menu's, which stays last
+        if item.key == "menu" then
+            for _, extra in ipairs(self:PluginItems()) do
+                if chosen[extra.key] then out[#out + 1] = extra end
+            end
+        end
         if chosen[item.key] and (not item.click or _G[item.click]) then out[#out + 1] = item end
     end
     return out
+end
+
+-- Plugins' buttons (M:AddMicroItem): { key, label, glyph, onClick, open,
+-- bind }; one whose key a built-in button has is left out.
+local BUILT_IN = {}
+for _, item in ipairs(ITEMS) do BUILT_IN[item.key] = true end
+function M:PluginItems()
+    local out = {}
+    for _, item in ipairs(SuuUI.Additions("micromenu")) do
+        if type(item.key) == "string" and not BUILT_IN[item.key] then out[#out + 1] = item end
+    end
+    return out
+end
+
+-- A plugin's button the first time it comes: shown (added to the chosen).
+function M:AdoptPluginItems()
+    local seen, chosen = {}, self:Get("buttons")
+    for _, k in ipairs(self:Peek("seenPluginButtons")) do seen[k] = true end
+    local changed = false
+    local seenList = self:Get("seenPluginButtons")
+    for _, item in ipairs(self:PluginItems()) do
+        if not seen[item.key] then
+            seen[item.key] = true
+            seenList[#seenList + 1] = item.key
+            chosen[#chosen + 1] = item.key
+            changed = true
+        end
+    end
+    if changed then
+        self:Set("seenPluginButtons", seenList)
+        self:Set("buttons", chosen)
+    end
 end
 
 function M:Layout()
@@ -169,6 +210,9 @@ end
 local function buttonChips(parent, onChange)
     local opts = {}
     for _, item in ipairs(ITEMS) do
+        if item.key == "menu" then
+            for _, extra in ipairs(M:PluginItems()) do opts[#opts + 1] = { value = extra.key, label = extra.label or extra.key } end
+        end
         if not item.click or _G[item.click] then opts[#opts + 1] = { value = item.key, label = item.label } end
     end
     return UI.ToggleChips(parent, { options = opts, value = M:Get("buttons"), onChange = onChange })
@@ -232,6 +276,12 @@ function M:OnEnable()
     for _, key in ipairs({ "shows", "position" }) do
         self:Watch(key, function() self:ApplyShows() end)
     end
+    self:On("SUUUI_ADDITIONS_CHANGED", function(_, list)
+        if list ~= "micromenu" then return end
+        self:AdoptPluginItems()
+        self:Layout()
+    end)
+    self:AdoptPluginItems()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingLayout then self:Layout() end end)
     self:On("SUUUI_SPELLS_TO_TRAIN", function(_, n, cost)
         self.spellsToTrain = tonumber(n) or 0

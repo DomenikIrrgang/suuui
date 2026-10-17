@@ -122,6 +122,39 @@ function M:BuildItem(parent, def)
     return b
 end
 
+-- SuuUI's groups with plugins' entries (0.17, M:AddGameMenuItem: { group,
+-- label, glyph, onClick, blocked = fn -> reason }): in their group, or a
+-- group of their own before Session, which stays last.
+function M:Groups()
+    local out, byName = {}, {}
+    for i, g in ipairs(GROUPS) do
+        out[i] = { g[1], { unpack(g[2]) } }
+        byName[g[1]] = out[i]
+    end
+    for _, item in ipairs(SuuUI.Additions("gamemenu")) do
+        local name = item.group or "Game"
+        local g = byName[name]
+        if not g then
+            g = { name, {} }
+            byName[name] = g
+            table.insert(out, #out, g)
+        end
+        g[2][#g[2] + 1] = { item.label or "?", item.glyph or "markDiamond", closeThen(item.onClick), item.blocked }
+    end
+    return out
+end
+
+-- Built again for plugins' entries, the next time it opens out of combat.
+-- Its secure covers can't be freed: the old ones stay hidden.
+function M:Rebuild()
+    if InCombatLockdown() then return end
+    self.stale = nil
+    for _, over in pairs(self.overs or {}) do over:Hide() end
+    self.overs, self.secureItems = nil, nil
+    if self.dim then self.dim:Hide(); self.dim:SetScript("OnUpdate", nil) end
+    self:Build()
+end
+
 function M:Build()
     -- the dimmed screen under it
     local dim = CreateFrame("Frame", nil, SuuUI.Root)
@@ -146,7 +179,7 @@ function M:Build()
     back:SetPoint("TOPRIGHT")
     y = y + 34 + S["space-5"]
     self.items = {}
-    for _, g in ipairs(GROUPS) do
+    for _, g in ipairs(self:Groups()) do
         local label = UI.Text(body, "caption", "ink-faint")
         label:SetPoint("TOPLEFT", S["space-3"], -y)
         label:SetValue(g[1])
@@ -256,8 +289,11 @@ function M:OnEnable()
     if not g then return end
     if not self.panel then self:Build() end
     self:Away(g)
+    self:On("SUUUI_ADDITIONS_CHANGED", function(_, list) if list == "gamemenu" then self.stale = true end end)
+    if #SuuUI.Additions("gamemenu") > 0 then self.stale = true end
     g:HookScript("OnShow", function()
         if not self:IsEnabled() then return end
+        if self.stale then self:Rebuild() end
         self:Away(g)
         C_Timer.After(0, function() self:PutAway(g) end)
         self:Draw()

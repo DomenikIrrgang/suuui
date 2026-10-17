@@ -40,6 +40,9 @@ end
 -- your own added to a kind (a replacement module's frames), and more info on
 -- one.
 API.KINDS = ns.Extend.KINDS
+-- 0.17: what modules added to a list ("micromenu", "gamemenu",
+-- "notificationkinds", "rolepresets"), for whoever draws it
+API.Additions = ns.Extend.Additions
 -- 0.17: a service by name (Core/Services.lua; M:Provide offers one), or nil
 API.Service = Services.Get
 API.Instances = ns.Extend.Instances
