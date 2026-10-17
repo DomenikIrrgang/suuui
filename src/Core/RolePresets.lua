@@ -49,7 +49,9 @@ local HEALER = {
         playerPosition = at("BOTTOM", -474, 300),
         targetPosition = at("BOTTOM", 474, 300),
         totPosition = at("BOTTOM", 706, 304),
-        petPosition = at("BOTTOM", -424, 260),
+        -- above your frame, its right edge in line (under it, it reached
+        -- the chat's corner at 1920 wide: /suu layoutcheck)
+        petPosition = at("BOTTOM", -424, 336),
     },
     castbars = { playerPosition = at("BOTTOM", 0, 340) },
     cooldowns = { position = at("BOTTOM", 0, 370) },

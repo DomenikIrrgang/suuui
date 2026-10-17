@@ -22,7 +22,9 @@ local SCREENS = {
 }
 -- pairs that never show at once, and places that are only anchors
 local APART = { ["party.position"] = "raid.position", ["raid.position"] = "party.position" }
-local ANCHOR_ONLY = { ["tooltips.position"] = true }
+-- anchors and windows (they open over the HUD by design)
+local ANCHOR_ONLY = { ["tooltips.position"] = true, ["bags.position"] = true, ["bags.bankPosition"] = true,
+                      ["loot.position"] = true }
 local SLACK = 2 -- px of touching that doesn't count
 
 -- The root's size on a screen of pw × ph pixels with your scale setting.
