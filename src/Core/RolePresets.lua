@@ -61,8 +61,9 @@ local HEALER = {
         auraSide = "inside", buffIcons = 1, debuffIcons = 2, healthText = "none",
     },
     raid = {
-        -- the holder is as tall as eight rows at 26 (20 players): its top at 332
-        position = at("BOTTOM", 0, 332 - (8 * 26 + 7 * 4)),
+        -- the holder is as tall as eight rows of a full raid (20 each): its
+        -- top at 332, its bottom above the dock's stance and pet bars
+        position = at("BOTTOM", 0, 332 - (8 * 20 + 7 * 4)),
         arrangement = "rows", width = 120, height = 26, heightLarge = 20, gap = 2, groupGap = 4,
     },
 }

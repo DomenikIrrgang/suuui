@@ -36,7 +36,9 @@ local M = SuuUI.RegisterModule({
         playerPosition = { point = "BOTTOM", x = -350, y = 308 },
         targetPosition = { point = "BOTTOM", x = 350, y = 308 },
         totPosition = { point = "BOTTOM", x = 582, y = 312 },
-        focusPosition = { point = "BOTTOM", x = 612, y = 492 },
+        -- under the boss frames, their right edges in line (asked for in
+        -- game: from the bottom centre it ran under the tracker at 1920 wide)
+        focusPosition = { point = "TOPRIGHT", x = -300, y = -560 },
         petPosition = { point = "BOTTOM", x = -300, y = 268 },
         bossPosition = { point = "TOPRIGHT", x = -300, y = -260 },
         showToT = true,
