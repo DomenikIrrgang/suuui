@@ -41,6 +41,8 @@ function Util.OwnerName(owner)
     if type(owner) == "table" then
         if type(owner.name) == "string" then return owner.name end
         if type(owner.id) == "string" then return owner.id end
+        -- an edit mode mover (its frame's label)
+        if type(owner.label) == "string" then return "Mover: " .. owner.label end
         if owner.GetName and owner:GetName() then return owner:GetName() end
         return tostring(owner)
     end

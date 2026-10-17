@@ -315,6 +315,11 @@ local function questText(unit)
     local cached = questCache[unit]
     if cached ~= nil then return cached end
     local result = false
+    -- players are never quest objectives: no tooltip to read (/suu perf)
+    if UI.Flag(UnitIsPlayer(unit)) then
+        questCache[unit] = false
+        return false
+    end
     if C_TooltipInfo and C_TooltipInfo.GetUnit and Enum.TooltipDataLineType then
         local ok, r = pcall(questObjective, unit)
         result = ok and r or false
@@ -492,12 +497,32 @@ end
 
 local pool = {}
 
+-- Plates are made ahead (an aura container is dear: a plate built while
+-- they pour in took 6.8 ms, /suu perf): POOL ready out of combat, topped up
+-- one a frame while the pool runs low.
+local POOL, LOW = 24, 8
+local filling = false
+local function fill()
+    if filling then return end
+    filling = true
+    local function step()
+        if InCombatLockdown() or #pool >= POOL then filling = false return end
+        local f = buildPlate(UIParent)
+        buildAuras(f)
+        f:Hide()
+        pool[#pool + 1] = f
+        C_Timer.After(0, step)
+    end
+    C_Timer.After(0, step)
+end
+
 local function acquire()
     local f = table.remove(pool)
     if not f then
         f = buildPlate(UIParent)
         buildAuras(f)
     end
+    if #pool < LOW then fill() end
     return f
 end
 
@@ -910,7 +935,14 @@ function M:OnEnable()
             for _, f in pairs(byUnit) do f:UpdateQuest() end
         end)
     end
-    self:OnGameEvent("QUEST_LOG_UPDATE", questsChanged)
+    -- only when objectives change: QUEST_LOG_UPDATE fires all the time, and
+    -- every plate's tooltip read again each time was most of the module's
+    -- time (/suu perf)
+    for _, e in ipairs({ "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED", "QUEST_REMOVED", "QUEST_TURNED_IN" }) do
+        if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid(e) then
+            self:OnGameEvent(e, questsChanged)
+        end
+    end
     self:OnGameEvent("UNIT_QUEST_LOG_CHANGED", function(_, unit) if unit == "player" then questsChanged() end end)
     self:OnGameEvent("ZONE_CHANGED_NEW_AREA", function() self:ApplyFriendly() end)
     self:Watch("friendlyOpenWorld", function() self:ApplyFriendly(true) end)
@@ -922,14 +954,8 @@ function M:OnEnable()
         self:DrawPreview()
     end)
     -- plates (and their aura containers) made ahead, out of combat
-    self:RunOutOfCombat("pool", function()
-        while #pool < 12 do
-            local f = buildPlate(UIParent)
-            buildAuras(f)
-            f:Hide()
-            pool[#pool + 1] = f
-        end
-    end)
+    self:RunOutOfCombat("pool", function() fill() end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if #pool < POOL then fill() end end)
     -- plates already up (a reload next to mobs)
     for i = 1, 40 do
         local unit = "nameplate" .. i
