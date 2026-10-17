@@ -305,10 +305,21 @@ function M:Fill(page, data, inspected)
     -- the spec's name: the tree with the most points
     local best
     for _, t in ipairs(trees) do if not best or t.points > best.points then best = t end end
+    local head
+    if inspected then
+        -- someone else's, read only (design InspectTalents)
+        local className, class = UnitClass(inspected)
+        local level = UnitLevel(inspected)
+        head = { name = who, class = plain(class) and class or nil,
+            line = ("Level %s %s"):format((plain(level) and level > 0) and level or "??", plain(className) and className or "") }
+        why = ("Viewing %s's talents. Nothing here can be changed."):format(who or "their")
+    end
     page:SetData({
         name = (best and best.points > 0) and best.name or (UnitClass(inspected or "player")),
         trees = trees, available = data.available, pending = data.pending, editable = editable,
         hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
+        head = head, readOnly = inspected ~= nil,
+        back = (inspected and page == self.windowPage) and "Back to inspect" or nil,
     })
 end
 
@@ -511,6 +522,7 @@ function M:Wire(page)
     page.onApply = function() self:Apply() end
     page.onUndo = function() self:Undo() end
     page.onSpec = function(i) self.viewing = i; self:Render() end
+    page.onBack = function() if self.window then self.window:Hide() end end
     page.onActivate = function()
         if InCombatLockdown() or not self.viewing then return end
         call(C_SpecializationInfo.SetActiveSpecGroup, self.viewing)

@@ -11,6 +11,11 @@
 --   tt:SetData({ name, available, pending, editable, hint, rows (7),
 --       trees = { { name, points, more, nodes = { node }, links = { link } } } })
 --     more: a line under the tree ("2 more talents in a future update")
+--     0.17: head = { name, class, line }: someone else's talents read only:
+--       their class diamond, the name in its class colour, the line (Level 30
+--       Shaman), the points per tree by name and a "Read only" badge;
+--       readOnly = true: no points to spend, Undo or Apply; back = "label":
+--       a button at the foot's right (tt.onBack())
 --   tt.noSummary = true   -- no summary line (a page with its own head)
 --   tt.fillPanels = true  -- the trees' panels down to the foot (a taller page)
 --     node = { row, col, rank, pending, max, icon, locked, canSpend, ... }
@@ -241,8 +246,11 @@ function TT:Layout()
     end
     self.summary:ClearAllPoints()
     self.summary:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
+    self.summary:SetPoint("RIGHT", self, "RIGHT", 0, 0)
     self.summary:SetShown(not self.noSummary)
-    if not self.noSummary then top = top + T.type.label.lineHeight + S["space-5"] end
+    local sh = self.headShown and T.type["unit-name-lg"].lineHeight or T.type.label.lineHeight
+    self.summary:SetHeight(sh)
+    if not self.noSummary then top = top + sh + S["space-5"] end
     self.treesRow:ClearAllPoints()
     self.treesRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
     self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
@@ -255,8 +263,36 @@ function TT:SetData(d)
     -- the summary: the spec, the points per tree
     local per, total = {}, 0
     for i, t in ipairs(trees) do per[i] = tostring(t.points or 0); total = total + (t.points or 0) end
-    self.summaryName:SetValue(d.name or "")
-    self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. " spent") or "")
+    local head = d.head
+    if (head ~= nil) ~= (self.headShown or false) then
+        self.headShown = head ~= nil
+        self:Layout()
+    end
+    self.summaryDiamond:SetShown(head ~= nil)
+    self.summaryBadge:SetShown(head ~= nil)
+    self.summaryLine:SetShown(head ~= nil)
+    self.summaryName:ClearAllPoints()
+    if head then
+        -- someone else's: who, and the points per tree by name
+        local c = head.class and T.color["class-" .. head.class:lower()]
+        self.summaryDiamond:SetVertexColor(c and c[1] or 1, c and c[2] or 1, c and c[3] or 1, 1)
+        self.summaryName:SetStyle("unit-name-lg")
+        self.summaryName:SetPoint("LEFT", self.summaryDiamond, "RIGHT", S["space-4"], 0)
+        if c then self.summaryName:SetColor(c[1], c[2], c[3], 1) else self.summaryName:SetColor("ink") end
+        self.summaryName:SetValue(head.name or "")
+        self.summaryLine:SetValue(head.line or "")
+        local named = {}
+        for i, t in ipairs(trees) do named[i] = ("%s |cff%s%d|r"):format(t.name or "", hex("ink"), t.points or 0) end
+        self.summaryPoints:SetValue(table.concat(named, "   "))
+    else
+        self.summaryName:SetStyle("label")
+        self.summaryName:SetColor("ink")
+        self.summaryName:SetPoint("LEFT")
+        self.summaryName:SetValue(d.name or "")
+        self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. " spent") or "")
+    end
+    self.summaryPoints:ClearAllPoints()
+    self.summaryPoints:SetPoint("LEFT", head and self.summaryLine or self.summaryName, "RIGHT", S["space-5"], 0)
     -- the trees, side by side, as wide as the row allows
     local width = self.treesRow:GetWidth()
     if not width or width <= 0 then width = UI.TALENT_TREE_W end
@@ -283,6 +319,19 @@ function TT:SetData(d)
     for i = #trees + 1, #self.panels do self.panels[i]:Hide() end
     -- the foot
     local available = d.available or 0
+    local ro = d.readOnly
+    self.unspent:SetShown(not ro)
+    self.apply:SetShown(not ro)
+    self.undo:SetShown(not ro)
+    self.back:SetShown(d.back ~= nil)
+    if d.back then self.back:SetLabel(d.back) end
+    self.status:ClearAllPoints()
+    if ro then
+        self.status:SetPoint("LEFT", self.foot, "BOTTOMLEFT", 0, 15)
+    else
+        self.status:SetPoint("LEFT", self.unspent, "RIGHT", S["space-5"], 0)
+    end
+    self.status:SetPoint("RIGHT", d.back and self.back or (ro and self.foot or self.undo), d.back and "LEFT" or (ro and "RIGHT" or "LEFT"), -S["space-5"], 0)
     self.unspent:SetText(("|cff%s%d|r %s"):format(hex("ink"), available, available == 1 and "point to spend" or "points to spend"))
     local pending = d.pending or 0
     if pending > 0 then
@@ -316,6 +365,16 @@ function UI.TalentTree(parent)
     f.summaryName:SetPoint("LEFT")
     f.summaryPoints = UI.Text(f.summary, "caption", "ink-muted")
     f.summaryPoints:SetPoint("LEFT", f.summaryName, "RIGHT", S["space-5"], 0)
+    -- someone else's (0.17): the class diamond, the line, Read only
+    f.summaryDiamond = UI.Diamond(f.summary, 7, "ink", "OVERLAY")
+    f.summaryDiamond:SetPoint("CENTER", f.summary, "LEFT", 4, 0)
+    f.summaryDiamond:Hide()
+    f.summaryLine = UI.Text(f.summary, "caption", "ink-muted")
+    f.summaryLine:SetPoint("LEFT", f.summaryName, "RIGHT", S["space-4"], -1)
+    f.summaryLine:Hide()
+    f.summaryBadge = UI.StateBadge(f.summary, "neutral", "Read only")
+    f.summaryBadge:SetPoint("RIGHT")
+    f.summaryBadge:Hide()
     -- the trees
     f.treesRow = CreateFrame("Frame", nil, f)
     -- the foot: a faint rule, the points, the status, Undo and Apply
@@ -333,6 +392,10 @@ function UI.TalentTree(parent)
     f.undo = UI.Button(f.foot, { text = "Undo", variant = "quiet",
         onClick = function() if f.onUndo then f.onUndo() end end })
     f.undo:SetPoint("RIGHT", f.apply, "LEFT", -S["space-3"], 0)
+    f.back = UI.Button(f.foot, { text = "Back", icon = "chevronLeft",
+        onClick = function() if f.onBack then f.onBack() end end })
+    f.back:SetPoint("BOTTOMRIGHT", f.foot, "BOTTOMRIGHT", 0, 0)
+    f.back:Hide()
     f.unspent = UI.Text(f.foot, "caption", "ink-muted")
     f.unspent:SetPoint("LEFT", f.foot, "BOTTOMLEFT", 0, 15)
     f.status = UI.Text(f.foot, "caption", "ink-muted")
