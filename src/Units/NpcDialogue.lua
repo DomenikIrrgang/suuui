@@ -18,6 +18,10 @@
 -- functions are free and the quest buttons are the game's own, clicked
 -- (Accept keeps its PvP confirmation, Complete its money one). Nothing here
 -- is protected (/suu probe windows, 2026-10-17).
+-- While you talk the rest of the UI fades out (a setting): UIParent goes to
+-- alpha 0 while the conversation, tooltips and the game's confirmations
+-- ignore it; it comes back when the conversation ends, or at once when a
+-- fight starts.
 -- A built-in module written against the public API only.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -29,7 +33,9 @@ local M = SuuUI.RegisterModule({
     description = "Talking to an NPC as a scene: their live portrait, what they say, your answers numbered below; quests in the same voice.",
     api = "0.17",
     reloadToToggle = true,
-    defaults = {},
+    defaults = {
+        hideUI = true, -- the rest of the UI fades out while you talk
+    },
 })
 
 local isSecret = issecretvalue or function() return false end
@@ -244,6 +250,9 @@ function M:Build()
     local root = CreateFrame("Frame", "SuuUINpcDialogue", SuuUI.Root)
     root:SetAllPoints(UIParent)
     root:SetFrameStrata("DIALOG")
+    -- seen while the rest of the UI is faded out
+    root:SetIgnoreParentAlpha(true)
+    root:HookScript("OnHide", function() self:HideUI(false) end)
     root:Hide()
     local vig = root:CreateTexture(nil, "BACKGROUND")
     vig:SetColorTexture(1, 1, 1, 1)
@@ -594,6 +603,7 @@ function M:Draw()
     local view = self:View()
     if not view then self.root:Hide() return end
     self.root:Show()
+    self:HideUI(true)
     self:DrawSpeaker()
     local width = self.talk:GetWidth()
 
@@ -892,14 +902,30 @@ function M:Hook()
     end
 end
 
+local SECTION = {
+    id = "npcdialogue", label = "NPC dialogue", category = "General", order = 23,
+    groups = {
+        { title = "While you talk", description = "Talking to an NPC opens a scene at the bottom of the screen: their portrait, what they say, your answers.", rows = {
+            { key = "hideUI", label = "Hide the rest of the UI", control = "toggle",
+              description = "Everything but the conversation fades out, and comes back when it ends or the moment a fight starts." },
+        } },
+    },
+}
+
 function M:OnEnable()
     if not self.root then self:Build() end
     self:Hook()
+    self:RegisterSettings(SECTION)
+    self:Watch("hideUI", function(on) self:HideUI(on and self.root:IsShown()) end)
     for _, e in ipairs({ "QUEST_ITEM_UPDATE", "QUEST_LOG_UPDATE", "GET_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
         self:OnGameEvent(e, function() if self.root:IsShown() then self:QueueDraw() end end)
     end
     -- in combat the keys stay the game's (a frame's key handling can't change then)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.bar then self.bar:EnableKeyboard(false) end end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        if self.bar then self.bar:EnableKeyboard(false) end
+        -- a fight: the UI back at once
+        self:HideUI(false)
+    end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.bar then
             self.bar:EnableKeyboard(true)
@@ -910,4 +936,27 @@ end
 
 function M:OnDisable()
     if self.root then self.root:Hide() end
+    self:HideUI(false)
 end
+
+--------------------------------------------------------------------------------
+-- The rest of the UI, faded out while you talk
+--------------------------------------------------------------------------------
+
+-- What stays seen while UIParent is see-through: the game's tooltips and its
+-- confirmations (a PvP quest, a quest that costs money).
+local KEEP = { "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1", "ShoppingTooltip2",
+               "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4" }
+
+function M:HideUI(on)
+    on = on and self:IsEnabled() and self:Get("hideUI") and not InCombatLockdown() or false
+    if on == (self.uiHidden or false) then return end
+    self.uiHidden = on
+    for _, name in ipairs(KEEP) do
+        local f = _G[name]
+        if f and f.SetIgnoreParentAlpha then f:SetIgnoreParentAlpha(on) end
+    end
+    if on then self.uiAlpha = UIParent:GetAlpha() end
+    SuuUI.Motion.AlphaTo(UIParent, on and 0 or (self.uiAlpha or 1), T.duration["dur-base"] or 0.2)
+end
+

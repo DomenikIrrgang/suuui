@@ -151,6 +151,8 @@ function UI.ShowTooltip(owner, data)
         if not owner:IsVisible() then return end
         shared = shared or UI.TooltipFrame(ns.Root)
         shared:SetFrameStrata("TOOLTIP")
+        -- seen even while the UI is faded out (the NPC dialogue's scene)
+        shared:SetIgnoreParentAlpha(true)
         shared:SetClampedToScreen(true)
         shared:SetContent(type(data) == "function" and data(owner) or data)
         shared:ClearAllPoints()
