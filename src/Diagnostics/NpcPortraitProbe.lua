@@ -52,8 +52,21 @@ function NP.Command()
         if entry then entry["zoom " .. zoom] = "shown" end
     end
     local function talkTo(event)
-        if not UnitExists("npc") then return end
-        local e = { event = event, name = UnitName("npc"), at = date("%H:%M:%S") }
+        -- every dialogue event is kept, with whether the game names the NPC
+        -- (the first run saved none: no dialogue, or no "npc" unit?)
+        local unit = UnitExists("npc") and "npc" or (UnitExists("questnpc") and "questnpc") or nil
+        if event ~= "now" then
+            out.events = out.events or {}
+            out.events[#out.events + 1] = ("%s %s npc=%s questnpc=%s target=%s"):format(date("%H:%M:%S"), event,
+                tostring(UnitExists("npc")), tostring(UnitExists("questnpc")), tostring(UnitExists("target")))
+        end
+        if not unit then
+            label:SetValue(event == "now" and "Waiting: talk to an NPC (a vendor, a trainer, a quest giver)."
+                or ("%s came, but the game names no NPC."):format(event))
+            p:Show()
+            return
+        end
+        local e = { event = event, unit = unit, name = UnitName(unit), at = date("%H:%M:%S") }
         entry = e
         out.npcs[#out.npcs + 1] = e
         m:SetScript("OnModelLoaded", function()
@@ -63,16 +76,16 @@ function NP.Command()
             show(p.zoom or 1)
             call(m.SetAnimation, m, 60)
         end)
-        e.setUnit = call(m.SetUnit, m, "npc")
+        e.setUnit = call(m.SetUnit, m, unit)
         -- the title line under the name (Innkeeper, Warrior Trainer)
-        local info = C_TooltipInfo and C_TooltipInfo.GetUnit and C_TooltipInfo.GetUnit("npc")
+        local info = C_TooltipInfo and C_TooltipInfo.GetUnit and C_TooltipInfo.GetUnit(unit)
         local lines = {}
         for i, line in ipairs(info and info.lines or {}) do
             if i <= 4 then lines[#lines + 1] = tostring(line.leftText) end
         end
         e.tooltip = table.concat(lines, " / ")
-        e.reaction = call(UnitReaction, "npc", "player")
-        e.creature = call(UnitCreatureType, "npc")
+        e.reaction = call(UnitReaction, unit, "player")
+        e.creature = call(UnitCreatureType, unit)
         label:SetValue(("%s (%s): %s"):format(tostring(e.name), event, e.tooltip))
         p:Show()
     end
@@ -93,7 +106,8 @@ function NP.Command()
         local body = UI.Button(p.body, { text = "Body", width = 90, onClick = function() show(0) end })
         body:SetPoint("LEFT", half, "RIGHT", 4, 0)
         local ev = CreateFrame("Frame", nil, p)
-        for _, e in ipairs({ "GOSSIP_SHOW", "QUEST_GREETING", "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE" }) do
+        for _, e in ipairs({ "GOSSIP_SHOW", "QUEST_GREETING", "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE",
+                             "MERCHANT_SHOW", "TRAINER_SHOW" }) do
             ev:RegisterEvent(e)
         end
         ev:SetScript("OnEvent", function(_, event) talkTo(event) end)
