@@ -8,6 +8,7 @@ local _, ns = ...
 
 local API = ns.API
 local Modules = ns.Modules
+local Services = ns.Services
 
 API.API_VERSION = ns.API_VERSION
 API.version = ns.version
@@ -27,6 +28,7 @@ function API.ListModules()
         out[#out + 1] = {
             id = m.id, name = m.name, description = m.description, state = m.state,
             source = m.source, builtIn = m.builtIn, error = m.error, pendingReload = m.pendingReload,
+            replaces = m.replaces, replacedBy = m.replacedBy,
         }
     end
     return out
@@ -38,6 +40,8 @@ end
 -- your own added to a kind (a replacement module's frames), and more info on
 -- one.
 API.KINDS = ns.Extend.KINDS
+-- 0.17: a service by name (Core/Services.lua; M:Provide offers one), or nil
+API.Service = Services.Get
 API.Instances = ns.Extend.Instances
 API.InstanceInfo = ns.Extend.Info
 API.AddInstance = ns.Extend.Add
@@ -271,22 +275,22 @@ API.UI.NotificationStack = UI.NotificationStack -- NotificationStack(parent, { m
 -- 0.12: SuuUI's Talents window (the talents module): open or close it, and
 -- whether it is open. False when that module is off.
 function API.ToggleTalents()
-    local m = Modules.Get("talents")
-    if m and m:IsEnabled() and m.Toggle then m:Toggle(); return true end
+    local t = Services.Get("talents")
+    if t and t.Toggle then t.Toggle(); return true end
     return false
 end
 -- 0.17: SuuUI's Talents window showing another player's talents, read only
 -- (an inspected unit, after INSPECT_READY). False when that module is off.
 function API.ShowTalentsOf(unit)
-    local m = Modules.Get("talents")
-    if m and m:IsEnabled() and m.ShowInspect then m:ShowInspect(unit); return true end
+    local t = Services.Get("talents")
+    if t and t.ShowInspect then t.ShowInspect(unit); return true end
     return false
 end
 -- 0.13: a recipe opened: in SuuUI's Professions window (the professions
 -- module, which then selects it), else the game's own window.
 function API.OpenRecipe(recipeID)
-    local m = Modules.Get("professions")
-    if m and m:IsEnabled() and m.OpenRecipe then return m:OpenRecipe(recipeID) end
+    local p = Services.Get("professions")
+    if p and p.OpenRecipe then return p.OpenRecipe(recipeID) end
     -- C_TradeSkillUI.OpenRecipe is protected (blocked from an addon): the
     -- recipe's profession opened instead
     local line, _, parent = C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe
@@ -317,15 +321,13 @@ end
 -- 0.13: the recipe to choose once its profession's window opens (the
 -- professions module; opened by casting ProfessionOpener's spell).
 function API.ExpectRecipe(recipeID)
-    local m = Modules.Get("professions")
-    if m and m:IsEnabled() then m.pendingRecipe = recipeID end
+    local p = Services.Get("professions")
+    if p and p.ExpectRecipe then p.ExpectRecipe(recipeID) end
 end
 -- 0.13: the recipe SuuUI's Professions window shows right now, or nil.
 function API.ShownRecipe()
-    local m = Modules.Get("professions")
-    local view = m and m:IsEnabled() and m.view
-    if not (view and view:IsVisible() and m.mode == "crafting" and view.craftData) then return nil end
-    return view.craftData.selected
+    local p = Services.Get("professions")
+    return p and p.ShownRecipe and p.ShownRecipe() or nil
 end
 -- 0.13: a unit's whole name. Forever's characters have a surname, and
 -- its UnitName returns the two parts where other clients give name and
@@ -343,24 +345,24 @@ function API.ProbeShowsBlizzardSocial() return ns.SocialBlizzard and true or fal
 -- close it (on a tab: "mounts", "toys", "wardrobe"), and whether it is
 -- open. False when that module is off.
 function API.ToggleCollections(tab)
-    local m = Modules.Get("collections")
-    if m and m:IsEnabled() and m.Toggle then m:Toggle(tab); return true end
+    local c = Services.Get("collections")
+    if c and c.Toggle then c.Toggle(tab); return true end
     return false
 end
 function API.CollectionsShown()
-    local m = Modules.Get("collections")
-    return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
+    local c = Services.Get("collections")
+    return (c and c.IsShown and c.IsShown()) and true or false
 end
 function API.TalentsShown()
-    local m = Modules.Get("talents")
-    return (m and m:IsEnabled() and m.window and m.window:IsShown()) and true or false
+    local t = Services.Get("talents")
+    return (t and t.IsShown and t.IsShown()) and true or false
 end
 -- 0.12: open or close the bags without Blizzard's bag functions (called
 -- from an addon they taint Esc in combat): SuuUI's bags when that module is
 -- on; else Blizzard's (ToggleAllBags).
 function API.ToggleBags()
-    local m = Modules.Get("bags")
-    if m and m:IsEnabled() and m.Toggle then return m:Toggle() end
+    local b = Services.Get("bags")
+    if b and b.Toggle then return b.Toggle() end
     ToggleAllBags()
 end
 -- 0.11: bags
@@ -440,35 +442,44 @@ end
 -- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
 -- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
 function API.Notify(def)
-    local m = Modules.Get("notifications")
-    if m and m:IsEnabled() then return m:Notify(def) end
+    local n = Services.Get("notifications")
+    if n and n.Notify then return n.Notify(def) end
 end
 function API.DismissNotification(id)
-    local m = Modules.Get("notifications")
-    if m and m:IsEnabled() then m:Dismiss(id) end
+    local n = Services.Get("notifications")
+    if n and n.Dismiss then n.Dismiss(id) end
 end
 -- One alert at a time, centred, in combat only (the Alerts module; nothing
 -- while it's off). The same key updates its alert in place; HideAlert(key)
 -- takes it away. detail: text, or a format whose arguments may be secret.
 function API.ShowAlert(key, tone, title, detail, ...)
-    local m = Modules.Get("alerts")
-    if m and m:IsEnabled() then m:Show(key, tone, title, detail, ...) end
+    local a = Services.Get("alerts")
+    if a and a.Show then a.Show(key, tone, title, detail, ...) end
 end
--- A key whose alerts may also show out of combat (a pull countdown).
+-- A key whose alerts may also show out of combat (a pull countdown). Kept
+-- here too, for an alerts service that comes later (turned on, a plugin's).
+local anytime = {}
 function API.AllowAlertOutOfCombat(key)
-    local m = Modules.Get("alerts")
-    if m then m:AllowOutOfCombat(key) end
+    anytime[key] = true
+    local a = Services.Get("alerts")
+    if a and a.AllowOutOfCombat then a.AllowOutOfCombat(key) end
 end
+ns.Events.On("SUUUI_SERVICE_CHANGED", function(_, name)
+    local a = name == "alerts" and Services.Get("alerts")
+    if a and a.AllowOutOfCombat then
+        for key in pairs(anytime) do a.AllowOutOfCombat(key) end
+    end
+end, "API")
 -- 0.12: the level-up card (UI.LevelUp) in the alert's place, tone info:
 -- def = { title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more,
 -- cost (copper) }. HideAlert(key) takes it away.
 function API.ShowLevelUp(key, def)
-    local m = Modules.Get("alerts")
-    if m and m:IsEnabled() then m:ShowLevelUp(key, def) end
+    local a = Services.Get("alerts")
+    if a and a.ShowLevelUp then a.ShowLevelUp(key, def) end
 end
 function API.HideAlert(key)
-    local m = Modules.Get("alerts")
-    if m and m:IsEnabled() then m:Hide(key) end
+    local a = Services.Get("alerts")
+    if a and a.Hide then a.Hide(key) end
 end
 
 -- 0.12: what your class trainer teaches (Data/Trainer, from the class

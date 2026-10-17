@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances) and SuuUI.Raw |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, and SuuUI.Raw |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -26,6 +26,7 @@ local M = SuuUI.RegisterModule({
     enabledByDefault = true,      -- default true
     reloadToToggle = false,       -- true: turning it on or off takes effect after /reload
     combatSafe = false,           -- true: no secure frames; after a reload in combat it starts at once (0.12)
+    replaces = nil,               -- 0.17: a module's id this one stands in for (see Replacing a module)
     OnInitialize = function(self) end,  -- once, before the first enable
     OnEnable = function(self) end,
     OnDisable = function(self) end,
@@ -94,6 +95,7 @@ end)
 | `M:RegisterCommand(name, help, fn)` | Adds `/suu <name>`; `fn(rest of the line)` |
 | `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
 | `M:RegisterMover(frame, { key = "position", label, enabled })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
+| `M:Provide(name, functions)` (0.17) | Offers a service other modules reach by name; see *Services and replacing a module* |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
 | `M.id`, `M.name`, `M.description`, `M.api`, `M.source`, `M.builtIn`, `M.state`, `M.error` | SuuUI's own fields: read them, never set them. 0.17: setting one is an error naming the field and the module (keep your own values under other names) |
@@ -114,6 +116,7 @@ end)
 | `SUUUI_ANCHOR_CHANGED` | `name, frame` |
 | `SUUUI_PIXEL_CHANGED` | `screenHeight, uiParentScale` |
 | `SUUUI_ROOT_SCALED` | `effectiveScale` (after the root's scale changed) |
+| `SUUUI_SERVICE_CHANGED` (0.17) | `name` (a service came or went) |
 | `SUUUI_SPELLS_TO_TRAIN` | `count, cost` (0.12, the Spellbook module: spells you could train now at your class trainer, across every school, and what that costs in copper; `cost` is nil while its Training cost setting is off) |
 
 ## Extending SuuUI's own UI (0.17)
@@ -148,6 +151,27 @@ Methods to hook (stable):
 | `meter` | `Refresh` (damage), `SetRows` (threat) |
 | `micromenu` | `SetItems`, `SetActive` |
 | `notification` | `SetData` |
+
+### Services and replacing a module (0.17)
+
+What one module does for others goes through a **service**, named, with a table of functions. A module provides one with `M:Provide(name, functions)`, removed when it turns off. Callers use `SuuUI.Service(name)` (nil while nothing provides it) or the API functions built on it, never the module itself.
+
+| Service | Functions | Used by |
+|---|---|---|
+| `bags` | `Toggle()` | `SuuUI.ToggleBags()` |
+| `talents` | `Toggle()`, `ShowInspect(unit)`, `IsShown()` | `SuuUI.ToggleTalents()`, `ShowTalentsOf(unit)`, `TalentsShown()` |
+| `collections` | `Toggle(tab)`, `IsShown()` | `SuuUI.ToggleCollections(tab)`, `CollectionsShown()` |
+| `professions` | `OpenRecipe(recipeID)`, `ExpectRecipe(recipeID)`, `ShownRecipe()` | `SuuUI.OpenRecipe`, `ExpectRecipe`, `ShownRecipe` |
+| `notifications` | `Notify(def)` → id, `Dismiss(id)` | `SuuUI.Notify`, `DismissNotification` |
+| `alerts` | `Show(key, tone, title, detail, ...)`, `ShowLevelUp(key, def)`, `Hide(key)`, `AllowOutOfCombat(key)` | `SuuUI.ShowAlert`, `ShowLevelUp`, `HideAlert`, `AllowAlertOutOfCombat` |
+
+`SUUUI_SERVICE_CHANGED(name)` fires when a service comes or goes.
+
+**Replacing a module.** A module with `replaces = "bags"` stands in for SuuUI's Bags module. While it is on, the Bags module stays off ("Replaced by …" in Settings › Modules and `/suu modules`). Whether a module is replaced is decided at login, so turning the replacement on or off takes a `/reload`. To stand in fully, the replacement:
+- provides the replaced module's services, if it has any;
+- publishes the same anchors (`SuuUI.PublishAnchor`);
+- registers its frames as the same kind (`SuuUI.AddInstance`) so other plugins' `Each` and hooks reach them;
+- registers movers and settings of its own.
 
 ### Raw access (unstable)
 

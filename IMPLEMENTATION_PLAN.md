@@ -706,6 +706,10 @@ Asked 2026-10-18: plugins get as much access to SuuUI's UI as possible. Decided:
 **Built so far:**
 - Step 1, the guard (confirmed in game 2026-10-18).
 - Step 2, the registry and the raw layer. A test hook on every unit frame's UpdateHealth ran on each target change (confirmed in game 2026-10-18).
+- Step 3, services and `replaces` (confirmed in game 2026-10-18):
+  - A test addon with `replaces = "bags"` kept Bags off, showed "Replaced by" in Settings and `/suu modules`, and its bags service answered `SuuUI.ToggleBags()`.
+  - Without it, bags, talents (micro menu, View Talents) and notifications work through their services.
+  - Still direct: a few calls between built-in modules (micro menu → talents and collections settings, Loot → notifications, Windows → several). These move to services when a replacement needs them.
 
 **What the code allows (inventory 2026-10-18):**
 - Most components copy their methods onto each frame (`Mixin(frame, UF)`). Patching the method table later misses frames that already exist, but a method replaced on an instance is used, because events call `self:UpdateX()`. ActionBar, AuraContainer and window chrome look methods up through a shared metatable instead.

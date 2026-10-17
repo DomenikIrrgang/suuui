@@ -1170,6 +1170,10 @@ end
 
 function M:OnEnable()
     if not self.window then self:Build() end
+    self:Provide("collections", {
+        Toggle = function(tab) self:Toggle(tab) end,
+        IsShown = function() return self.window and self.window:IsShown() or false end,
+    })
     self.tab = self.tab or "mounts"
     self.slot = self.slot or "CHESTSLOT"
     if not self.toggleButton then

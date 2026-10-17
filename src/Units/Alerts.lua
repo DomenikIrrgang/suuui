@@ -184,6 +184,12 @@ local SECTION = {
 }
 
 function M:OnEnable()
+    self:Provide("alerts", {
+        Show = function(...) self:Show(...) end,
+        ShowLevelUp = function(key, def) self:ShowLevelUp(key, def) end,
+        Hide = function(key) self:Hide(key) end,
+        AllowOutOfCombat = function(key) self:AllowOutOfCombat(key) end,
+    })
     if not self.frame then
         local f = CreateFrame("Frame", "SuuUIAlerts", SuuUI.Root)
         f:SetSize(400, 64)

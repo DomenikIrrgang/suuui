@@ -74,7 +74,7 @@ local Module = {}
 -- They live in a table of their own, so a write always reaches __newindex.
 local OWN = { id = true, name = true, description = true, api = true, source = true, builtIn = true,
               state = true, error = true, pendingReload = true, enabledAtLoad = true, initialized = true,
-              reloadToToggle = true, combatSafe = true }
+              reloadToToggle = true, combatSafe = true, replaces = true, replacedBy = true }
 local fields = setmetatable({}, { __mode = "k" })
 
 local ModuleMeta = {
@@ -159,6 +159,10 @@ function Module:Each(kind, fn, undo) ns.Extend.Each(kind, fn, undo, self) end
 function Module:Hook(kind, method, fn) ns.Extend.Hook(kind, method, fn, self) end
 function Module:Override(kind, method, fn) ns.Extend.Override(kind, method, fn, self) end
 
+-- 0.17: a service other modules reach by name (Core/Services.lua); gone
+-- when the module turns off.
+function Module:Provide(name, impl) ns.Services.Provide(name, impl, self) end
+
 function Module:Print(...)
     ns.Print("|cffa39b8b" .. self.name .. ":|r", ...)
 end
@@ -178,6 +182,7 @@ local function cleanup(m)
     if ns.SettingsRegistry then ns.SettingsRegistry.Unregister(m) end
     if ns.EditMode then ns.EditMode.Unregister(m) end
     if ns.Extend then ns.Extend.Unregister(m) end
+    if ns.Services then ns.Services.Unregister(m) end
 end
 
 local function fail(m, phase)
@@ -215,7 +220,7 @@ end
 
 -- Brings the module in line with its "enabled" setting.
 local function apply(m)
-    if m.state == "incompatible" then return end
+    if m.state == "incompatible" or m.replacedBy then return end
     local want = Settings.Get(m.id, "enabled")
     if m.reloadToToggle then
         -- an errored module that is still on retries at the next load
@@ -227,7 +232,23 @@ local function apply(m)
     end, m.name)
 end
 
+-- The module standing in for `m` this session (0.17: `replaces`): one that
+-- is on and can load. Decided at login, so a change takes a reload.
+local function replacer(m)
+    for _, o in ipairs(list) do
+        if o.replaces == m.id and o ~= m and o.state ~= "incompatible" and Settings.Get(o.id, "enabled") then return o end
+    end
+end
+
 local function start(m)
+    local by = replacer(m)
+    if by then
+        own(m, "replacedBy", by.name)
+        own(m, "enabledAtLoad", false)
+        own(m, "state", "disabled")
+        Settings.Watch(m.id, "enabled", function() end, "Modules")
+        return
+    end
     own(m, "enabledAtLoad", Settings.Get(m.id, "enabled"))
     Settings.Watch(m.id, "enabled", function() apply(m) end, "Modules")
     if m.state == "incompatible" then return end
@@ -276,6 +297,8 @@ function Modules.Register(def)
     assert(not byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
     local defaults = Util.Copy(def.defaults or {})
     assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
+    assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
+        "SuuUI.RegisterModule: replaces names another module's id")
     defaults.enabled = def.enabledByDefault ~= false
 
     local m = setmetatable({
@@ -294,6 +317,7 @@ function Modules.Register(def)
         source = source,
         builtIn = source == ns.name,
         state = "registered",
+        replaces = def.replaces,
     }
 
     Settings.Register(id, defaults)
@@ -340,6 +364,7 @@ local STATE_TEXT = {
 
 local function describe(m)
     local state = STATE_TEXT[m.state] or m.state
+    if m.replacedBy then state = "|cffa39b8breplaced by " .. m.replacedBy .. "|r" end
     if m.pendingReload then
         local retry = m.state == "errored" and Settings.Get(m.id, "enabled")
         local after = (retry and "retries") or (m.enabledAtLoad and "off") or "on"

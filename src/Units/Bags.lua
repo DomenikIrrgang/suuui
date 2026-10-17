@@ -1300,6 +1300,7 @@ local SECTION = {
 
 function M:OnEnable()
     if not C_Container then return end
+    self:Provide("bags", { Toggle = function() return self:Toggle() end })
     self.bagFrames = self.bagFrames or {}
     self.buttons = self.buttons or {}
     self.skins = self.skins or {}

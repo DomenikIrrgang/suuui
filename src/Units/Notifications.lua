@@ -1246,6 +1246,10 @@ local SECTION = {
 --------------------------------------------------------------------------------
 
 function M:OnEnable()
+    self:Provide("notifications", {
+        Notify = function(def) return self:Notify(def) end,
+        Dismiss = function(id) self:Dismiss(id) end,
+    })
     self.notes = self.notes or {}
     self.noteOrder = self.noteOrder or {}
     self.hosts = self.hosts or {}

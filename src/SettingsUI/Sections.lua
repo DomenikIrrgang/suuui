@@ -301,6 +301,12 @@ local function moduleRow(m)
         description = function()
             local parts = { m.description, m.builtIn and "Built in" or ("From " .. m.source) }
             local state = STATE[m.state] or m.state
+            -- 0.17: a plugin stands in for it this session
+            if m.replacedBy then state = "Replaced by " .. m.replacedBy end
+            if m.replaces then
+                local other = Modules.Get(m.replaces)
+                parts[#parts + 1] = "Replaces " .. (other and other.name or m.replaces) .. " (after a reload)"
+            end
             local retry = m.state == "errored" and m.reloadToToggle and Settings.Get(m.id, "enabled")
             if m.pendingReload and not retry then state = state .. ", " .. (m.enabledAtLoad and "off" or "on") .. " after a reload" end
             if retry then
@@ -315,6 +321,7 @@ local function moduleRow(m)
         end,
         disabled = function()
             if m.state == "incompatible" then return true, m.name .. " " .. (m.error or "can't load") .. "." end
+            if m.replacedBy then return true, m.replacedBy .. " stands in for " .. m.name .. ": turn that off to use this again." end
             return false
         end,
     }

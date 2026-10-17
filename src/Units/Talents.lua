@@ -592,6 +592,11 @@ end
 function M:OnEnable()
     self:BuildWindow()
     self:Build()
+    self:Provide("talents", {
+        Toggle = function() self:Toggle() end,
+        ShowInspect = function(unit) self:ShowInspect(unit) end,
+        IsShown = function() return self.window and self.window:IsShown() or false end,
+    })
     self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     -- another player's talents: drawn when they arrive

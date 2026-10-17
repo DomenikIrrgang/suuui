@@ -960,6 +960,15 @@ end
 
 function M:OnEnable()
     self:Build()
+    self:Provide("professions", {
+        OpenRecipe = function(recipeID) return self:OpenRecipe(recipeID) end,
+        ExpectRecipe = function(recipeID) self.pendingRecipe = recipeID end,
+        ShownRecipe = function()
+            local view = self.view
+            if not (view and view:IsVisible() and self.mode == "crafting" and view.craftData) then return nil end
+            return view.craftData.selected
+        end,
+    })
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if not self.view then self:Build() end
