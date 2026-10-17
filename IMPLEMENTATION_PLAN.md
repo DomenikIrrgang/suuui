@@ -662,7 +662,8 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Build:** mail, merchant, trainer, auction house and collections, all in the shell, built from `ItemSlot` rows, `Money`, `TextField` and `Select`.
 - **Collections became SuuUI's own window (2026-10-17):** the restyle stays as the fallback while the module is off. Mounts on a stage (a PlayerModel placed per model file), Toys as a shelf of cards (no toy has a 3D model on Forever), Appearances as a doll between slot columns with tiles; what you lack and where to get it from `CollectionSources` (generated from client data and QuestieDB); favourites and recent.
 - **Confirm:** you can buy, sell, buy back, mail an item, and post and buy an auction.
-- **Still to see:** a Collections summon and toy use from SuuUI's secure buttons; an auction purchase; a mail with money or COD.
+- **Confirmed in game (2026-10-17):** the auction house's Scan all; a mail with money (Send waits for the game's confirmation, comes back if it is cancelled).
+- **Still to see:** a Collections summon and toy use from SuuUI's secure buttons; an auction purchase; a mail with COD.
 
 ### 3.7 NPC talk, dressing room, inspect and the game menu
 - **Asked 2026-10-17:** gossip, the quest dialog, the dressing room, inspect, inspect talents and the game menu get proper designs and become SuuUI's own windows where the game allows.
@@ -671,7 +672,8 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Added 2026-10-17:** Macros, AddOns and Support (the game menu's windows), as SuuUI's own windows too. Probes: MacroFrame and AddonList aren't protected, and macro and `C_AddOns` calls are free. Support is a web page in a Browser frame; SuuUI can create its own Browser and send it home (`/suu probe support`). Options, Macros, AddOns, Support and Edit Mode open from SuuUI's code with nothing tainted or blocked (`/suu probe gamemenu`).
 - **Not redone (decided 2026-10-17):** Blizzard's Options (SettingsPanel) and Edit Mode stay the game's; SuuUI's game menu opens them.
 - **Built (2026-10-17):** all nine as SuuUI's own windows: Inspect (B, side panel) with View Talents in SuuUI's Talents window read only; Macros (A, tabs); the game menu; AddOns; the Dressing room (the game's model scene on SuuUI's model stage); the NPC dialogue (C1, then the compact D3 "Answer pills", the rest of the UI faded out while you talk, a setting); Support (SuuUI's own browser; the beta's support site answers 403, in the game's own window too).
-- **Still to see:** a quest reward choice and plain gossip options in the NPC dialogue; an outfit with pieces you don't own saved from the dressing room; Support once the site answers.
+- **Confirmed in game (2026-10-17):** the NPC dialogue (gossip, quest detail, progress, reward), the dressing room, Support's window, the game menu's Reload UI and AddOns' Reload to apply (a secure /reload button: C_UI.Reload is blocked for addon code).
+- **Still to see:** Support's pages once the beta's site answers (403 today).
 - **Confirm:** talk to an NPC, accept and turn in a quest with a reward choice, ctrl-click an item into the dressing room and save a set, inspect a player, open every game menu entry, edit a macro, toggle an addon, load the Support page.
 
 ---
