@@ -188,17 +188,75 @@ function Inv:GridWidth()
     return self.columns * SLOT + (self.columns - 1) * GAP
 end
 
-function Inv:LayoutSlots(buttons)
+-- A section's head in the grid: a gilt-faint hairline, then its label in
+-- gilt-text with the meta after it (or a quiet note alone).
+local HEAD_H = S["space-4"] + 1 + S["space-3"] + T.type.caption.lineHeight + S["space-3"]
+
+local function sectionHead(inv, i)
+    inv.heads = inv.heads or {}
+    local h = inv.heads[i]
+    if h then return h end
+    h = CreateFrame("Frame", nil, inv.grid)
+    h:SetHeight(HEAD_H)
+    h.rule = h:CreateTexture(nil, "ARTWORK")
+    h.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    h.rule:SetHeight(1)
+    h.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
+    h.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
+    h.label = UI.Text(h, "caption", "gilt-text")
+    h.label:SetPoint("TOPLEFT", h.rule, "BOTTOMLEFT", 0, -S["space-3"])
+    h.meta = UI.Text(h, "caption", "ink-muted")
+    h.meta:SetPoint("LEFT", h.label, "RIGHT", S["space-3"], 0)
+    inv.heads[i] = h
+    return h
+end
+
+-- buttons laid out row by row; sections (0.17): { { at = index, label,
+-- meta, note } }, each starting a new row under its head before the button
+-- at `at` (#buttons + 1: after them all); `note` alone is a quiet line (an
+-- empty section).
+function Inv:LayoutSlots(buttons, sections)
     local cols = self.columns
-    for i, b in ipairs(buttons) do
-        local r, c = math.floor((i - 1) / cols), (i - 1) % cols
-        b:ClearAllPoints()
-        b:SetPoint("TOPLEFT", self.grid, "TOPLEFT", c * (SLOT + GAP), -r * (SLOT + GAP))
-        b:SetSize(SLOT, SLOT)
-        b:Show()
+    local starts = {}
+    for _, sct in ipairs(sections or {}) do
+        starts[sct.at] = starts[sct.at] or {}
+        table.insert(starts[sct.at], sct)
     end
-    local rows = math.max(1, math.ceil(#buttons / cols))
-    self.grid:SetHeight(rows * SLOT + (rows - 1) * GAP)
+    local w = self:GridWidth()
+    local y, col, used = 0, 0, 0
+    for i = 1, #buttons + 1 do
+        for _, sct in ipairs(starts[i] or {}) do
+            if col > 0 then y, col = y + SLOT + GAP, 0 end
+            used = used + 1
+            local h = sectionHead(self, used)
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", self.grid, "TOPLEFT", 0, -y)
+            h:SetWidth(w)
+            if sct.note and not sct.label then
+                h.label:SetValue(sct.note)
+                h.label:SetColor("ink-muted")
+                h.meta:SetValue("")
+            else
+                h.label:SetValue(sct.label or "")
+                h.label:SetColor("gilt-text")
+                h.meta:SetValue(sct.meta or sct.note or "")
+            end
+            h:Show()
+            y = y + HEAD_H
+        end
+        local b = buttons[i]
+        if b then
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (SLOT + GAP), -y)
+            b:SetSize(SLOT, SLOT)
+            b:Show()
+            col = col + 1
+            if col == cols then y, col = y + SLOT + GAP, 0 end
+        end
+    end
+    for i = used + 1, #(self.heads or {}) do self.heads[i]:Hide() end
+    local h = col > 0 and (y + SLOT) or (y - GAP)
+    self.grid:SetHeight(math.max(SLOT, h))
     self:FitBody()
 end
 

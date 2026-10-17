@@ -182,9 +182,24 @@ end
 function M:Fill(inv, bags)
     local list, shown = {}, {}
     local total, free = 0, 0
+    -- the reagent bag and the keyring each as a section of their own
+    -- (design "Bags · reagent bag", direction A, chosen 2026-10-17)
+    local sections
     for _, bag in ipairs(bags) do
         shown[bag] = true
         local n = numSlots(bag)
+        if inv == self.inv and (bag == REAGENT or bag == KEYRING) then
+            sections = sections or {}
+            if bag == REAGENT and n == 0 then
+                sections[#sections + 1] = { at = #list + 1, note = "No reagent bag · the reagent slot takes one" }
+            elseif bag == REAGENT then
+                local f = C_Container.GetContainerNumFreeSlots(bag)
+                sections[#sections + 1] = { at = #list + 1, label = "Reagents",
+                    meta = ("%d · %d free"):format(n, (plain(f) and f) or 0) }
+            elseif n > 0 then
+                sections[#sections + 1] = { at = #list + 1, label = "Keyring", meta = tostring(n) }
+            end
+        end
         for slot = 1, n do
             list[#list + 1] = self:SlotButton(bag, slot)
             self:UpdateSlot(bag, slot)
@@ -202,7 +217,7 @@ function M:Fill(inv, bags)
             for _, b in ipairs(slots) do b:Hide() end
         end
     end
-    inv:LayoutSlots(list)
+    inv:LayoutSlots(list, sections)
     inv:SetMeta(("%d free of %d"):format(free, total))
     return total, free
 end
