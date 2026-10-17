@@ -210,10 +210,10 @@ function M:Build()
     -- the field and Change icon on one line, under the label
     local fieldY = -(T.type.caption.lineHeight + S["space-2"])
     self.iconButton:SetPoint("TOPRIGHT", 0, fieldY)
-    self.name = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
-    self.name:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], fieldY)
-    self.name:SetPoint("RIGHT", self.iconButton, "LEFT", -S["space-4"], 0)
-    self.name.edit:SetMaxLetters(NAME_MAX)
+    self.nameField = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
+    self.nameField:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], fieldY)
+    self.nameField:SetPoint("RIGHT", self.iconButton, "LEFT", -S["space-4"], 0)
+    self.nameField.edit:SetMaxLetters(NAME_MAX)
     -- the body
     local bodyLabel = UI.Text(edit, "caption", "ink-muted")
     bodyLabel:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
@@ -231,7 +231,7 @@ function M:Build()
     local e = CreateFrame("EditBox", nil, scroll.child)
     e:SetMultiLine(true)
     e:SetAutoFocus(false)
-    e:SetFontObject(self.name.edit:GetFontObject())
+    e:SetFontObject(self.nameField.edit:GetFontObject())
     e:SetMaxLetters(BODY_MAX)
     e:SetPoint("TOPLEFT")
     e:SetScript("OnEscapePressed", e.ClearFocus)
@@ -331,7 +331,7 @@ end
 function M:Load(m)
     self.loaded = m
     self.icon = m and m.icon or QUESTION
-    self.name:SetValue(m and m.name or "")
+    self.nameField:SetValue(m and m.name or "")
     self.body:SetText(m and m.body or "")
     self.body.lastText = self.body:GetText()
     self:DrawState()
@@ -341,7 +341,7 @@ function M:Dirty()
     local m = self.loaded
     if not m then return false end
     if self.draft then return true end
-    return self.name:GetValue() ~= m.name or self.body:GetText() ~= m.body or self.icon ~= m.icon
+    return self.nameField:GetValue() ~= m.name or self.body:GetText() ~= m.body or self.icon ~= m.icon
 end
 
 -- What can be done now, and why not.
@@ -353,13 +353,13 @@ function M:DrawState()
     self.idRow:SetPoint("TOPLEFT", 0, combat and -(28 + S["space-4"]) or 0)
     self.idRow:SetPoint("RIGHT")
     self.big.skin:SetItem(m and { icon = self.icon } or nil)
-    local name = self.name:GetValue() or ""
+    local name = self.nameField:GetValue() or ""
     self.nameCount:SetValue(("%d / %d"):format(#name, NAME_MAX))
     local len = #(self.body:GetText() or "")
     self.bodyCount:SetValue(("%d / %d"):format(len, BODY_MAX))
     self.bodyCount:SetColor(len > BODY_MAX - 15 and "ember-text" or "ink-muted")
     local editable = m ~= nil and not combat
-    self.name:SetDisabled(not editable)
+    self.nameField:SetDisabled(not editable)
     self.body:EnableMouse(editable)
     if not editable then self.body:ClearFocus() end
     self.well:SetAlpha(editable and 1 or 0.5)
@@ -404,12 +404,12 @@ function M:New()
     self.draft = { name = "", icon = QUESTION, body = "" }
     self:ClosePicker()
     self:Refresh()
-    self.name.edit:SetFocus()
+    self.nameField.edit:SetFocus()
 end
 
 function M:Save()
     if InCombatLockdown() or not self.loaded then return end
-    local name = strtrim(self.name:GetValue() or "")
+    local name = strtrim(self.nameField:GetValue() or "")
     if name == "" then return end
     local body = self.body:GetText() or ""
     if self.draft then

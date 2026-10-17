@@ -162,7 +162,7 @@ function M:Build()
     id.line:SetPoint("LEFT", id.name, "RIGHT", S["space-4"], -1)
     id.guild = UI.Text(id, "caption", "gilt-text")
     id.guild:SetPoint("LEFT", id.line, "RIGHT", S["space-4"], 0)
-    self.id = id
+    self.idRow = id
 
     -- the tools: Compare with mine; View in Dressing Room and View Talents
     local tools = CreateFrame("Frame", nil, body)
@@ -338,10 +338,10 @@ function M:Draw()
     local _, class = UnitClass(unit)
     local c = class and T.color["class-" .. class:lower()]
     if c then
-        self.id.diamond:SetVertexColor(c[1], c[2], c[3], 1)
-        self.id.name:SetColor(c[1], c[2], c[3], 1)
+        self.idRow.diamond:SetVertexColor(c[1], c[2], c[3], 1)
+        self.idRow.name:SetColor(c[1], c[2], c[3], 1)
     end
-    self.id.name:SetValue(plain(name) and name or "")
+    self.idRow.name:SetValue(plain(name) and name or "")
     local parts = {}
     local level = UnitLevel(unit)
     parts[#parts + 1] = "Level " .. ((plain(level) and level > 0) and level or "??")
@@ -349,10 +349,10 @@ function M:Draw()
     if plain(race) then parts[#parts + 1] = race end
     local className = UnitClass(unit)
     if plain(className) then parts[#parts + 1] = className end
-    self.id.line:SetValue(table.concat(parts, " · "))
+    self.idRow.line:SetValue(table.concat(parts, " · "))
     local _, members, guildName = call(C_PaperDollInfo.GetInspectGuildInfo, unit)
     if self.loading or not plain(guildName) or guildName == "" then guildName = nil end
-    self.id.guild:SetValue(guildName and ("<" .. guildName .. ">") or "")
+    self.idRow.guild:SetValue(guildName and ("<" .. guildName .. ">") or "")
     -- gear
     for _, b in ipairs(self.slots) do self:DrawSlot(b) end
     -- the model, or why there's none
