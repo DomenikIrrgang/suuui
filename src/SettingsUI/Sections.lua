@@ -33,6 +33,35 @@ Registry.Register({
               reset = function() Settings.Reset("ui", "scale") end,
               disabled = function() return scaleIsAuto(), "Turn automatic scale off first." end },
         } },
+        { title = "Colour vision", description = "SuuUI's signal colours (danger, low health, healing, warnings, the dispel types, friend and foe) for your eyes. Shapes, badges and labels stay as they are. For every character; takes effect after a reload.",
+          rows = {
+            { label = "Colours", control = "select", width = 220,
+              options = function()
+                  local out = {}
+                  for _, mode in ipairs(ns.Vision.MODES) do
+                      if ns.Vision.Available(mode) then out[#out + 1] = { value = mode, label = ns.Vision.LABEL[mode] } end
+                  end
+                  return out
+              end,
+              description = function()
+                  local chosen = Settings.Account("colorVision") or "normal"
+                  local text = ns.Vision.HINT[chosen] or ""
+                  if chosen ~= ns.Vision.Applied() then text = text .. " Type /reload to apply it." end
+                  for _, mode in ipairs(ns.Vision.MODES) do
+                      if not ns.Vision.Available(mode) then
+                          text = text .. " " .. ns.Vision.LABEL[mode] .. " comes with the design's colours for it."
+                      end
+                  end
+                  return text
+              end,
+              get = function() return Settings.Account("colorVision") or "normal" end,
+              set = function(v)
+                  Settings.SetAccount("colorVision", v ~= "normal" and v or nil)
+                  return true
+              end,
+              isDefault = function() return (Settings.Account("colorVision") or "normal") == "normal" end,
+              reset = function() Settings.SetAccount("colorVision", nil) end },
+        } },
         { title = "Blizzard", rows = {
             { key = "hideIssueReporter", label = "Hide the issue reporter", control = "toggle",
               description = "The beta's bug report button. Off: it shows as the game places it." },

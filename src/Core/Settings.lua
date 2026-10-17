@@ -543,6 +543,18 @@ end
 
 function Settings.CharKey() return charKey end
 
+-- Account-wide values that aren't per profile (the colour vision preset):
+-- the same on every character and in every profile.
+function Settings.Account(key)
+    return db and db.account and db.account[key]
+end
+
+function Settings.SetAccount(key, value)
+    assert(db, "SuuUI Settings: saved settings have not loaded yet")
+    db.account = db.account or {}
+    db.account[key] = value
+end
+
 -- Drops a character's data for a module (the character's own stays put).
 function Settings.ForgetCharData(namespace, key)
     assert(db, "SuuUI Settings: saved settings have not loaded yet")
@@ -561,6 +573,8 @@ local function bind()
     db.profiles = db.profiles or {}
     db.chars = db.chars or {}
     db.charData = db.charData or {}
+    -- the colour vision preset, before anything draws (Vision.lua)
+    if ns.Vision then ns.Vision.Apply(db.account and db.account.colorVision) end
     charKey = UnitName("player") .. " - " .. GetRealmName()
     local name = db.chars[charKey]
     if not (name and db.profiles[name]) then name = charKey end
