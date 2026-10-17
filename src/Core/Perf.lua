@@ -88,6 +88,35 @@ function Perf.Report()
         out.share = ("%.2f ms a frame, %.1f%% of the frame"):format(ms, pct)
         ns.Print("The game's profiler: " .. out.share)
     end
+    -- a dev build (wowlua dev): its profiler's busiest functions and its
+    -- monitor's scripts and timers, where the frequent work (and so the
+    -- garbage) is
+    local wl = ns.__wowlua
+    if wl and wl.prof and wl.prof.stats then
+        local function top(stats, by, n, fmt)
+            local list = {}
+            for name, st in pairs(stats) do list[#list + 1] = { name = name, s = st } end
+            table.sort(list, function(a, b) return (a.s[by] or 0) > (b.s[by] or 0) end)
+            local lines = {}
+            for i = 1, math.min(n, #list) do lines[i] = fmt(list[i].name, list[i].s) end
+            return lines
+        end
+        local function fn(name, st)
+            return ("%s: %d calls, self %.1f ms, total %.1f ms%s"):format(name, st.calls or 0, st.self or 0, st.total or 0,
+                st.location and (" (" .. st.location .. ")") or "")
+        end
+        local function hit(name, st)
+            return ("%s: %d, %.1f ms%s"):format(name, st.count or 0, st.total or 0, st.detail and (" (" .. tostring(st.detail) .. ")") or "")
+        end
+        out.dev = {
+            byCalls = top(wl.prof.stats, "calls", 40, fn),
+            bySelf = top(wl.prof.stats, "self", 25, fn),
+            scripts = wl.mon and top(wl.mon.scripts or {}, "count", 25, hit),
+            timers = wl.mon and top(wl.mon.timers or {}, "count", 15, hit),
+            events = wl.mon and top(wl.mon.events or {}, "count", 25, hit),
+        }
+        ns.Print("Dev build: the profiler's and monitor's busiest are in SuuUIProbe.perf.dev.")
+    end
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.perf = out
     return out
@@ -107,6 +136,10 @@ ns.RegisterCommand("perf", "Time each SuuUI module: /suu perf starts, again show
     if not on then
         Fault.SetTiming(true)
         startedAt = GetTime()
+        -- a dev build's profiler and monitor count from now too
+        local wl = ns.__wowlua
+        if wl and wl.prof and wl.prof.reset then pcall(wl.prof.reset) end
+        if wl and wl.mon and wl.mon.reset then pcall(wl.mon.reset) end
         startKB = memory()
         lastKB, risenKB, collections = startKB, 0, 0
         if sampler then sampler:Cancel() end

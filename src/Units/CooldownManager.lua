@@ -212,15 +212,17 @@ function M:EditSpec() return self.editSpec or self.spec or 0 end
 local function setupKey(spec) return tostring(spec or 0) end
 
 function M:SaveSetup(spec, setup)
-    local all = deepCopy(self:Get("setups"))
+    local all = deepCopy(self:Peek("setups"))
     all[CLASS] = all[CLASS] or {}
     all[CLASS][setupKey(spec)] = setup
     self:Set("setups", all)
 end
 
 -- The setup for a spec; a spec seen the first time starts from its preset.
+-- The saved one itself, to read only (a copy of every class's setups was
+-- 414 KB of garbage a call): changes go through SetLists on a copy.
 function M:Setup(spec)
-    local all = self:Get("setups")
+    local all = self:Peek("setups")
     local s = all[CLASS] and all[CLASS][setupKey(spec)]
     if s then return s end
     local p = specPreset(spec) or presets()[1]
@@ -250,7 +252,7 @@ end
 function M:MigrateLists()
     local old, oldPreset = self:Get("lists"), self:Get("preset")
     if next(old) ~= nil then
-        local all = self:Get("setups")
+        local all = self:Peek("setups")
         local key = setupKey(self.spec)
         if findPreset(oldPreset) and not (all[CLASS] and all[CLASS][key]) then
             self:SaveSetup(self.spec, { preset = oldPreset, lists = deepCopy(old) })
@@ -279,7 +281,8 @@ function M:Apply()
         readyPop = self:Get("readyPop"),
         procHighlight = self:Get("procHighlight"),
     })
-    t:SetLists(self:Lists(self.spec))
+    -- the tracker keeps them: its own copy of this spec's
+    t:SetLists(deepCopy(self:Lists(self.spec)))
     self:ApplyVisibility()
 end
 

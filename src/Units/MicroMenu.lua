@@ -69,7 +69,7 @@ local ITEMS = {
 -- The chosen items this client has (a Blizzard button that's missing: left out).
 function M:Items()
     local chosen = {}
-    for _, k in ipairs(self:Get("buttons")) do chosen[k] = true end
+    for _, k in ipairs(self:Peek("buttons")) do chosen[k] = true end
     local out = {}
     for _, item in ipairs(ITEMS) do
         if item.key == "talents" and SuuUI.GetModule("talents") and SuuUI.GetModule("talents"):Get("enabled") then
@@ -184,7 +184,7 @@ function M:PreviewView(parent)
     end
     self.preview:SetParent(parent)
     local chosen = {}
-    for _, k in ipairs(self:Get("buttons")) do chosen[k] = true end
+    for _, k in ipairs(self:Peek("buttons")) do chosen[k] = true end
     local list = {}
     for _, item in ipairs(self.previewItems) do if chosen[item.key] then list[#list + 1] = item end end
     self.preview:SetItems(list)

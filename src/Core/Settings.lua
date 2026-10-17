@@ -83,6 +83,13 @@ function Settings.Get(namespace, key)
     return Copy(current(namespace, key))
 end
 
+-- The value itself, not a copy: to read only (a table changed in place
+-- changes the profile behind the watchers' backs). For large tables read
+-- often, where Get's copy is garbage each time.
+function Settings.Peek(namespace, key)
+    return current(namespace, key)
+end
+
 function Settings.IsDefault(namespace, key)
     local d = default(namespace, key)
     local v = stored(profile, namespace, key)

@@ -287,19 +287,48 @@ local function updatePages()
     for _, bar in ipairs(bars) do bar:UpdatePage() end
 end
 
+-- Cooldown, usable and active state: one pass over the buttons per frame at
+-- most. A cast fires SPELL_UPDATE_COOLDOWN and ACTIONBAR_UPDATE_COOLDOWN
+-- (often several of each in one frame), and each pass reads every button's
+-- cooldown as a new table from the game: 18 KB a pass, most of the action
+-- bars' garbage (/suu probe garbage, 2026-10-18).
+local PASSES = {
+    cooldown = function(b) b:UpdateCooldown() end,
+    usable = function(b) b:UpdateUsable() end,
+    active = function(b) b:UpdateActive() end,
+}
+local due = {}
+local flusher = CreateFrame("Frame")
+flusher:Hide()
+flusher:SetScript("OnUpdate", function(self)
+    self:Hide()
+    for kind, fn in pairs(PASSES) do
+        if due[kind] then
+            due[kind] = nil
+            ns.Fault.Call("Action bars", eachButton, fn)
+        end
+    end
+end)
+local function later(kind)
+    return function()
+        due[kind] = true
+        flusher:Show()
+    end
+end
+
 local HANDLERS = {
     ACTIONBAR_SLOT_CHANGED = function(slot)
         if not slot or slot == 0 then eachButton(function(b) b:Update(); rangeNow(b) end)
         else eachInSlot(slot, function(b) b:Update(); rangeNow(b) end) end
     end,
-    ACTIONBAR_UPDATE_COOLDOWN = function() eachButton(function(b) b:UpdateCooldown() end) end,
-    SPELL_UPDATE_COOLDOWN = function() eachButton(function(b) b:UpdateCooldown() end) end,
+    ACTIONBAR_UPDATE_COOLDOWN = later("cooldown"),
+    SPELL_UPDATE_COOLDOWN = later("cooldown"),
     SPELL_UPDATE_CHARGES = function() eachButton(function(b) b:UpdateCount() end) end,
     BAG_UPDATE_DELAYED = function() eachButton(function(b) b:UpdateCount() end) end,
-    ACTIONBAR_UPDATE_USABLE = function() eachButton(function(b) b:UpdateUsable() end) end,
-    SPELL_UPDATE_USABLE = function() eachButton(function(b) b:UpdateUsable() end) end,
-    ACTION_USABLE_CHANGED = function() eachButton(function(b) b:UpdateUsable() end) end,
-    ACTIONBAR_UPDATE_STATE = function() eachButton(function(b) b:UpdateActive() end) end,
+    ACTIONBAR_UPDATE_USABLE = later("usable"),
+    SPELL_UPDATE_USABLE = later("usable"),
+    ACTION_USABLE_CHANGED = later("usable"),
+    ACTIONBAR_UPDATE_STATE = later("active"),
     PLAYER_ENTER_COMBAT = function() eachButton(function(b) b:UpdateActive() end) end,
     PLAYER_LEAVE_COMBAT = function() eachButton(function(b) b:UpdateActive() end) end,
     START_AUTOREPEAT_SPELL = function() eachButton(function(b) b:UpdateActive() end) end,

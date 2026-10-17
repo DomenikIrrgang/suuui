@@ -70,6 +70,8 @@ local Module = {}
 Module.__index = Module
 
 function Module:Get(key) return Settings.Get(self.id, key) end
+-- 0.17: the value itself, not a copy, to read only (large tables read often)
+function Module:Peek(key) return Settings.Peek(self.id, key) end
 function Module:Set(key, value) return Settings.Set(self.id, key, value) end
 function Module:Reset(key) return Settings.Reset(self.id, key) end
 -- 0.11: the module's own data for this character (a table it fills;

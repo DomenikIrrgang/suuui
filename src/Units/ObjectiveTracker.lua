@@ -715,11 +715,17 @@ function M:OnEnable()
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",
                          "QUEST_REMOVED", "QUEST_TURNED_IN", "QUEST_ITEM_UPDATE", "PLAYER_LEVEL_UP",
-                         "PLAYER_ENTERING_WORLD", "BAG_UPDATE_COOLDOWN",
+                         "PLAYER_ENTERING_WORLD",
                          -- tracked recipes: tracking changes, reagents come and go
                          "TRACKED_RECIPE_UPDATE", "BAG_UPDATE_DELAYED" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
     end
+    -- an item's cooldown: only the quest items' own (it comes with every
+    -- potion and trinket; a whole redraw each time was most of SuuUI's
+    -- garbage, 175 KB a redraw: /suu probe garbage, 2026-10-18)
+    self:OnGameEvent("BAG_UPDATE_COOLDOWN", function()
+        for i = 1, self.itemsShown or 0 do itemCooldown(self.itemButtons[i]) end
+    end)
     -- a new zone: sorted again (the zone you're in goes first)
     for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_POI_UPDATE" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end

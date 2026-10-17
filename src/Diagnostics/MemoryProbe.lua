@@ -41,11 +41,15 @@ local function walker(seen)
         seen[v] = true
         -- a frame: its own fields only, never into the game's frames
         if type(rawget(v, 0)) == "userdata" and v.IsForbidden and v:IsForbidden() then return 0 end
-        local arr, hash, n = #v, 0, 56
-        for k, x in pairs(v) do
-            if not (type(k) == "number" and k >= 1 and k <= arr and k % 1 == 0) then hash = hash + 1 end
-            n = n + size(k) + size(x)
-        end
+        local arr, hash, n = 0, 0, 56
+        -- a table the game guards (secret keys) can't be walked: counted empty
+        pcall(function()
+            arr = #v
+            for k, x in pairs(v) do
+                if not (type(k) == "number" and k >= 1 and k <= arr and k % 1 == 0) then hash = hash + 1 end
+                n = n + size(k) + size(x)
+            end
+        end)
         local slots = 0
         if hash > 0 then slots = 1; while slots < hash do slots = slots * 2 end end
         return n + 16 * arr + 40 * slots
