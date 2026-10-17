@@ -19,6 +19,11 @@ local function reduced()
     return Settings.Ready() and Settings.Get("ui", "reducedMotion")
 end
 
+-- Whether ui.reducedMotion is on: for motion of a caller's own (0.17).
+function Motion.Reduced()
+    return reduced() and true or false
+end
+
 local function smoothing(easing)
     return T.easing[easing].smoothing
 end

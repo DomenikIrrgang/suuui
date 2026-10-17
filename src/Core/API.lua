@@ -177,6 +177,7 @@ API.UI.UnitFrameCurveValue = UI.UnitFrameCurveValue -- 0.9: what a unit frame cu
 API.UI.Flag = UI.Flag               -- a possibly secret boolean as a plain one (secret reads as false)
 API.UI.MeasureText = UI.MeasureText -- text width, safe where anchors make geometry secret
 API.Motion.AlphaTo = ns.Motion.AlphaTo
+API.Motion.Reduced = ns.Motion.Reduced -- 0.17: whether ui.reducedMotion is on
 
 -- 0.6: anchors and cast bars
 
