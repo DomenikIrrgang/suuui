@@ -390,8 +390,9 @@ function M:PlaceReload()
     end
     over:ClearAllPoints()
     if on then
-        over:SetFrameStrata(self.window:GetFrameStrata())
-        over:SetFrameLevel(self.window:GetFrameLevel() + 30)
+        -- a layer above the window: a click raises the window (it's
+        -- toplevel) over anything at its own layer
+        over:SetFrameStrata("DIALOG")
         over:SetAllPoints(apply)
         over:Show()
     else
