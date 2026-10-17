@@ -112,7 +112,7 @@ It is built for the realities of the modern client: values the game hides from a
 
 ### From source
 
-This repository is the source, not the addon itself. It is built with [wowlua](https://github.com/DomenikIrrgang/wowlua):
+This repository is the source, not the addon itself. It is built with [wowlua](https://wowlua.dev):
 
 ```sh
 git clone git@github.com:DomenikIrrgang/suuui.git
