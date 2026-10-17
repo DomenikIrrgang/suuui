@@ -65,26 +65,34 @@ local function finish(source, ok, ...)
     return true, ...
 end
 
--- Timing (/suu perf, Perf.lua): while on, each call's own time (its nested
--- calls' taken out) is added to its source, a module's name.
+-- Timing (/suu perf, Perf.lua): while on, each call's own time and the
+-- memory it allocated (its nested calls' taken out) are added to its source,
+-- a module's name. Allocation is Lua's memory count before and after: a
+-- garbage collection step inside the call takes some off, so it reads low
+-- rather than high (never below 0).
 local timing, spent = false, {}
-local starts, childs, depth = {}, {}, 0
+local starts, childs, kbStarts, kbChilds, depth = {}, {}, {}, {}, 0
 local clock = debugprofilestop
 
 local function finishTimed(source, ok, ...)
     -- timing was turned off (or on again) inside this call: nothing to add
     if depth == 0 or not starts[depth] then return finish(source, ok, ...) end
-    local now = clock()
+    local now, kbNow = clock(), collectgarbage("count")
     local total = now - starts[depth]
     local own = total - childs[depth]
+    local kbTotal = math.max(0, kbNow - kbStarts[depth])
+    local kbOwn = math.max(0, kbTotal - kbChilds[depth])
     depth = depth - 1
-    if depth > 0 then childs[depth] = childs[depth] + total end
+    if depth > 0 then
+        childs[depth] = childs[depth] + total
+        kbChilds[depth] = kbChilds[depth] + kbTotal
+    end
     local rec = spent[source]
     if not rec then
-        rec = { ms = 0, calls = 0, peak = 0 }
+        rec = { ms = 0, calls = 0, peak = 0, kb = 0 }
         spent[source] = rec
     end
-    rec.ms, rec.calls = rec.ms + own, rec.calls + 1
+    rec.ms, rec.calls, rec.kb = rec.ms + own, rec.calls + 1, rec.kb + kbOwn
     if own > rec.peak then rec.peak = own end
     return finish(source, ok, ...)
 end
@@ -93,11 +101,12 @@ function Fault.Call(source, fn, ...)
     if not timing then return finish(source, xpcall(fn, handler, ...)) end
     depth = depth + 1
     starts[depth], childs[depth] = clock(), 0
+    kbStarts[depth], kbChilds[depth] = collectgarbage("count"), 0
     return finishTimed(source, xpcall(fn, handler, ...))
 end
 
 -- Timing on or off (on: from zero), and what it has counted:
--- { [source] = { ms, calls, peak } }.
+-- { [source] = { ms, calls, peak, kb } }.
 function Fault.SetTiming(on)
     timing = on and true or false
     depth = 0
