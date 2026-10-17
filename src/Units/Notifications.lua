@@ -88,7 +88,11 @@ local KINDS = {
     CONFIRM_TALENT_WIPE = { category = "Talents", glyph = "tree", tone = "warning" },
     -- the bags' buy cell (a secure click on the game's purchase button):
     -- the game's own question, its cost on the card
-    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(data)
+    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(dialog)
+        -- what the popup's own money frame shows, else the next tab's price
+        local mf = dialog and dialog.MoneyFrame
+        if mf and plain(mf.staticMoney) and mf.staticMoney and mf.staticMoney > 0 then return mf.staticMoney end
+        local data = dialog and dialog.data
         local bankType = type(data) == "table" and data.bankType or (Enum.BankType and Enum.BankType.Character)
         local next = C_Bank and C_Bank.FetchNextPurchasableBankTabData and C_Bank.FetchNextPurchasableBankTabData(bankType)
         return next and plain(next.tabCost) and next.tabCost or nil
@@ -715,9 +719,6 @@ function M:CardData(h)
     local kind = h.kind
     local text = h.text()
     local title = plain(text) and text or (kind.title or "")
-    -- a cost the game's popup shows in its money frame, after the question
-    local cost = kind.cost and kind.cost(h.dialog and h.dialog.data)
-    if cost then title = title .. " " .. coinString(cost) end
     local d = {
         id = h.id, kind = "action", tone = kind.tone, category = kind.category,
         title = title, icon = { glyph = kind.glyph },
@@ -735,6 +736,9 @@ function M:CardData(h)
             d.item = { icon = icon, label = name or link, quality = qualities[quality or 1] or "common" }
         end
     end
+    -- a cost the game's popup shows in its money frame, on its own line
+    local cost = kind.cost and kind.cost(h.dialog)
+    if cost then d.body = "Costs " .. coinString(cost) end
     if kind.confirm and h.editBox and h.editBox:IsShown() then
         d.confirmText = (DELETE_ITEM_CONFIRM_STRING or "DELETE")
     end
