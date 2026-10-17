@@ -47,7 +47,7 @@ local M = SuuUI.RegisterModule({
         incoming = true,
         buffIcons = 2,          -- defensives on them (the Defensives list)
         debuffIcons = 3,        -- debuffs, the ones you can remove first
-        auraSide = "right",
+        auraSide = "right",     -- "right", "left" or "inside" (the bar's right end; for a row)
         debuffBadges = "all",   -- "all" debuff types, "removable" or "off"
         rangeAlpha = 0.25,
     },
@@ -259,6 +259,10 @@ function M:DrawPreview(force)
     end
     local hw, hh = self.previewHolder:GetSize()
     local right = self:Get("auraSide") == "right"
+    -- inside the bar: no room beside it, icons a little shorter than it
+    local inside = self:Get("auraSide") == "inside"
+    if inside then auraW = 0 end
+    local iconH = inside and math.max(8, h - 6) or h
     self.previewHolder:ClearAllPoints()
     self.previewHolder:SetPoint("TOPLEFT", self.previewView, "TOPLEFT", right and 0 or auraW, 0)
     self.previewView:SetSize(hw + auraW, hh)
@@ -300,7 +304,7 @@ function M:DrawPreview(force)
             local e = row[k]
             if e then
                 if e.gap then x = x + GAP_SETS - S["space-2"] end
-                icon:SetSize(h, h)
+                icon:SetSize(iconH, iconH)
                 icon:SetArt(C_Spell.GetSpellTexture(e.aura[1]))
                 icon:SetBorder(e.aura[2] or "ward")
                 icon:SetGlow(e.aura[2] == nil and "glow-ward" or nil)
@@ -310,7 +314,7 @@ function M:DrawPreview(force)
                 else
                     icon:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT", -x, 0)
                 end
-                x = x + h + S["space-2"]
+                x = x + iconH + S["space-2"]
                 icon:Show()
             else
                 icon:Hide()
@@ -345,7 +349,10 @@ function M:LayoutFrames(frames, holder)
     local w, h, gap = self:Get("width"), self:Get("height"), self:Get("gap")
     local dir = self:Get("direction")
     local n = #SLOTS
-    local auraRight = self:Get("auraSide") == "right"
+    local side = self:Get("auraSide")
+    local auraRight, inside = side == "right", side == "inside"
+    -- inside the bar: icons a little shorter than it, as on the raid frames
+    local size = inside and math.max(8, h - 6) or h
     local first = self:Get("showSelf") and 1 or 2
     local count = n - first + 1
     if dir == "right" then
@@ -369,11 +376,18 @@ function M:LayoutFrames(frames, holder)
             f:SetPoint("TOPLEFT", holder, "TOPLEFT")
         end
         if holder ~= self.holder then f:SetShown(slot >= 0) end
-        -- the row beside the bar, space-2 away, growing away from it
+        -- the row beside the bar, space-2 away, growing away from it; or
+        -- inside it at the right end, the name and health text making room
         local buffs, debuffs = self:Get("buffIcons"), self:Get("debuffIcons")
+        local rw = rowWidth(self, size, buffs, debuffs)
         f.auraClip:ClearAllPoints()
-        f.auraClip:SetSize(math.max(1, rowWidth(self, h, buffs, debuffs)), h)
-        if auraRight then
+        f.auraClip:SetSize(math.max(1, rw), size)
+        f.opts.reserveRight = (inside and rw > 0) and (rw + 2 * S["space-1"] + 1) or 0
+        if f.FitRow then f:FitRow() end
+        if inside then
+            f.auraClip:SetPoint("RIGHT", f, "RIGHT", -(S["space-1"] + 1), 0)
+            if f.over then f.auraClip:SetFrameLevel(f.over:GetFrameLevel() + 1) end
+        elseif auraRight then
             f.auraClip:SetPoint("LEFT", f, "RIGHT", S["space-2"], 0)
         else
             f.auraClip:SetPoint("RIGHT", f, "LEFT", -S["space-2"], 0)
@@ -385,7 +399,7 @@ function M:LayoutFrames(frames, holder)
             -- and its place: the space before a set's first group
             local order = ORDER[auraRight and "right" or "left"]
             for _, g in ipairs(AURA_GROUPS) do
-                f.auras:SetGroupSize(g.key, h)
+                f.auras:SetGroupSize(g.key, size)
                 f.auras:SetGroupMax(g.key, groupMax(f, g))
                 f.auras:SetGroupPlace(g.key, order[g.key], order[g.key] > 1 and (GAP_SETS - S["space-2"]) or nil)
             end
@@ -586,8 +600,8 @@ local SECTION = {
             { key = "debuffIcons", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1, combat = true,
               description = "After the defensives: debuffs you can remove first, then the rest." },
             { key = "auraSide", label = "Aura side", control = "segmented", combat = true,
-              options = { { value = "right", label = "Right" }, { value = "left", label = "Left" } },
-              description = "Which side of the bar the icons sit on. Defensives are always left of debuffs.",
+              options = { { value = "right", label = "Right" }, { value = "left", label = "Left" }, { value = "inside", label = "Inside" } },
+              description = "Which side of the bar the icons sit on, or inside it at its right end (for frames in a row). Defensives are always left of debuffs.",
               disabled = function() if M:Get("buffIcons") + M:Get("debuffIcons") == 0 then return true, "No aura icons." end end },
             { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
               options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },

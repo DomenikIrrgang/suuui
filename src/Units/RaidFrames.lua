@@ -330,7 +330,11 @@ function M:Layout()
         end
     end
     if rows then
-        self.holder:SetSize(5 * w + 4 * gap, GROUPS * h + (GROUPS - 1) * groupGap)
+        -- as tall as at 20 players whatever the raid's size: the rows hang
+        -- from its top, so the top edge stays put (the healer layout sits
+        -- between the player and target frames, tops level)
+        local tall = math.max(h, self:Get("height"))
+        self.holder:SetSize(5 * w + 4 * gap, GROUPS * tall + (GROUPS - 1) * groupGap)
     else
         local bands = math.ceil(GROUPS / perBand)
         self.holder:SetSize(perBand * w + (perBand - 1) * groupGap, bands * (5 * h + 4 * gap) + (bands - 1) * groupGap * 2)

@@ -158,6 +158,36 @@ local function roleRow(role, label)
         set = function(v) return Profiles.SetRoleProfile(role, v ~= "none" and v or nil) end }
 end
 
+-- A role preset's button: Create (none yet), or Reset its layout (a second
+-- click within three seconds), then the page shows the new state.
+local function presetButton(role)
+    return function(parent)
+        local name = ns.RolePresets.NAME[role]
+        local timer
+        local b
+        local function label()
+            return ns.RolePresets.Exists(role) and ("Reset " .. name .. "'s layout") or ("Create " .. name)
+        end
+        b = UI.Button(parent, { text = label(), onClick = function(self)
+            if ns.RolePresets.Exists(role) and not timer then
+                self:SetLabel("Click again to reset")
+                timer = C_Timer.NewTimer(3, function() timer = nil; self:SetLabel(label()) end)
+                return
+            end
+            if timer then timer:Cancel(); timer = nil end
+            local ok, err = ns.RolePresets.Apply(role)
+            if ok then
+                ns.Print(("%s is ready: the %s layout, used when you're a %s (Profiles › By role)."):format(name, ns.Roles.LABEL[role], ns.Roles.LABEL[role]))
+            else
+                ns.Print(name .. ": " .. tostring(err))
+            end
+            self:SetLabel(label())
+        end })
+        b:HookScript("OnShow", function(self) if not timer then self:SetLabel(label()) end end)
+        return b
+    end
+end
+
 local function resetAll(parent)
     local timer
     local b = UI.Button(parent, { text = "Reset everything", onClick = function(self)
@@ -191,6 +221,14 @@ Registry.Register({
             { label = "Delete a profile", control = "custom",
               build = function(p) return pickAndAct(p, "Delete", Profiles.Delete, true) end,
               description = "Characters using it go back to their own profile." },
+        } },
+        { title = "Role presets", description = "Ready-made layouts from SuuUI's designs, for dungeons and raids alike. Tank and DPS: your group above the chat, you and your target either side of the centre. Healer: your group in the middle between your frame and your target's, the party as one row and the raid's groups as rows. Each is its own profile, copied from the one you use now with the layout set, and takes its role's place below.", rows = {
+            { label = "Tank", control = "custom", build = presetButton("TANK"),
+              description = "SuuTank: the threat meter beside the damage meter, the swing timer under your cast bar." },
+            { label = "Healer", control = "custom", build = presetButton("HEALER"),
+              description = "SuuHeal: the group between you and your target, its icons inside the bars; no threat meter or swing timer." },
+            { label = "DPS", control = "custom", build = presetButton("DAMAGER"),
+              description = "SuuDps: the default layout." },
         } },
         { title = "By role", description = "SuuUI can switch profiles with your role: set up a profile for each, and everything follows when you change spec or get a role in a group, out of combat.", rows = {
             { label = "Your role", control = "select", width = 220,

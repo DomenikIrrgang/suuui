@@ -397,6 +397,43 @@ function Profiles.CopyFrom(text)
     return true
 end
 
+-- Sets values in a profile (by name), creating it from the current one when
+-- there is none: `entries` = { { namespace, key, value } }, a nil value is the
+-- default. In the profile you use, each goes through Settings.Set (vetoes,
+-- watchers); in another, it is stored for when that profile is used.
+function Profiles.SetValues(name, entries)
+    name = strtrim(name or "")
+    if name == "" then return false, "A profile needs a name." end
+    local existing = Profiles.Find(name)
+    if existing and existing:lower() == name:lower() then
+        name = existing
+    else
+        local ok, err = Profiles.Create(name)
+        if not ok then return false, err end
+    end
+    local target = db.profiles[name]
+    for _, e in ipairs(entries) do
+        local namespace, key, value = e[1], e[2], e[3]
+        if defaults[namespace] and defaults[namespace][key] ~= nil then
+            if value == nil then value = defaults[namespace][key] end
+            if target == profile then
+                Settings.Set(namespace, key, Copy(value))
+            elseif Equal(value, defaults[namespace][key]) then
+                local t = target[namespace]
+                if t then
+                    t[key] = nil
+                    if next(t) == nil then target[namespace] = nil end
+                end
+            else
+                target[namespace] = target[namespace] or {}
+                target[namespace][key] = Copy(value)
+            end
+        end
+    end
+    Events.Emit("SUUUI_PROFILES_CHANGED")
+    return true, name
+end
+
 -- Profiles by role (account-wide): the profile each role switches to, or
 -- nil to leave the profile alone. Roles: TANK, HEALER, DAMAGER.
 function Profiles.RoleProfile(role)
