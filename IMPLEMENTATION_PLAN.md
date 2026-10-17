@@ -716,6 +716,7 @@ Asked 2026-10-18: plugins get as much access to SuuUI's UI as possible. Decided:
   - The quest right-click menu took an entry with the quest's context.
   - A test popup came as a notification card.
   - Role preset values follow the same additions list. They aren't tried yet, since that needs a plugin with settings: the second example will.
+- Step 5, themes (confirmed in game 2026-10-18): a test addon's theme (green gilt, another title face) showed under Appearance › Theme and applied after a reload.
 
 **What the code allows (inventory 2026-10-18):**
 - Most components copy their methods onto each frame (`Mixin(frame, UF)`). Patching the method table later misses frames that already exist, but a method replaced on an instance is used, because events call `self:UpdateX()`. ActionBar, AuraContainer and window chrome look methods up through a shared metatable instead.

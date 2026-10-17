@@ -40,6 +40,9 @@ end
 -- your own added to a kind (a replacement module's frames), and more info on
 -- one.
 API.KINDS = ns.Extend.KINDS
+-- 0.17: a theme (Core/Themes.lua): { id, name, description, colors =
+-- { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size } } }
+API.RegisterTheme = function(def) ns.Themes.Register(def) end
 -- 0.17: what modules added to a list ("micromenu", "gamemenu",
 -- "notificationkinds", "rolepresets"), for whoever draws it
 API.Additions = ns.Extend.Additions

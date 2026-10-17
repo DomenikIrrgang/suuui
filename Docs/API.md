@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, menu entries, micro and game menu items, notification kinds, role preset values, and SuuUI.Raw |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, menu entries, micro and game menu items, notification kinds, role preset values, themes, and SuuUI.Raw |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -188,6 +188,12 @@ Entries a module adds here are its own, and they go away when it turns off.
 | `SuuUI.Additions(list)` | What modules added to `"micromenu"`, `"gamemenu"`, `"notificationkinds"` or `"rolepresets"`, for a module that draws one of them itself. `SUUUI_ADDITIONS_CHANGED(list)` when one changes |
 
 Settings: a module's settings section with `merge = "<section id>"` adds its groups to that built-in page (e.g. `merge = "unitframes"`), instead of a page of its own.
+
+### Themes (0.17)
+
+| | |
+|---|---|
+| `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size } } }`. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change takes a reload. Colour vision applies on top of it. An unknown token or style is an error |
 
 ### Raw access (unstable)
 

@@ -32,6 +32,16 @@ function Fonts.Get(name)
     return objects[name] or error("SuuUI: unknown text style " .. tostring(name), 2)
 end
 
+-- The styles' faces and sizes again (a theme changed them, Themes.lua):
+-- every FontString on a style follows.
+function Fonts.Refresh()
+    for name, font in pairs(objects) do
+        local style = T.type[name]
+        font:SetFont(style.file, style.size, "")
+        font:SetSpacing(style.lineHeight - style.size)
+    end
+end
+
 -- Sets a FontString to a text style.
 function Fonts.Apply(fontString, name)
     fontString:SetFontObject(Fonts.Get(name))

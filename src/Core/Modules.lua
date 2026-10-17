@@ -283,6 +283,9 @@ local function start(m)
 end
 
 Events.OnGame("PLAYER_LOGIN", function()
+    -- the chosen theme first: plugins' themes are registered by now, and no
+    -- module has built a frame yet
+    if ns.Themes then Fault.Call("Themes", ns.Themes.Apply) end
     started = true
     for _, m in ipairs(list) do start(m) end
 end, "Modules")

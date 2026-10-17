@@ -57,6 +57,12 @@ function Vision.Apply(mode)
             token.hex = c.hex or token.hex
         end
     end
+    Vision.SyncGlows()
+end
+
+-- The glows drawn in a signal colour take that colour's current value (after
+-- colour vision or a theme changed it).
+function Vision.SyncGlows()
     for glow, name in pairs(GLOWS) do
         local layers, c = T.shadow and T.shadow[glow], T.color[name]
         for _, layer in ipairs(layers or {}) do

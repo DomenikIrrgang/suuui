@@ -33,6 +33,29 @@ Registry.Register({
               reset = function() Settings.Reset("ui", "scale") end,
               disabled = function() return scaleIsAuto(), "Turn automatic scale off first." end },
         } },
+        { title = "Theme", description = "SuuUI's colours and type, or a theme a plugin brings. For every character; takes effect after a reload. Colour vision applies on top of it.",
+          rows = {
+            { label = "Theme", control = "select", width = 220,
+              options = function()
+                  local out = {}
+                  for _, t in ipairs(ns.Themes.List()) do out[#out + 1] = { value = t.id, label = t.name } end
+                  return out
+              end,
+              description = function()
+                  local chosen = Settings.Account("theme") or ns.Themes.DEFAULT
+                  local t = ns.Themes.Get(chosen)
+                  local text = t and t.description or "Its plugin isn't loaded: SuuUI's own applies."
+                  if chosen ~= ns.Themes.Applied() and t then text = text .. " Type /reload to apply it." end
+                  return text
+              end,
+              get = function() return Settings.Account("theme") or ns.Themes.DEFAULT end,
+              set = function(v)
+                  Settings.SetAccount("theme", v ~= ns.Themes.DEFAULT and v or nil)
+                  return true
+              end,
+              isDefault = function() return (Settings.Account("theme") or ns.Themes.DEFAULT) == ns.Themes.DEFAULT end,
+              reset = function() Settings.SetAccount("theme", nil) end },
+        } },
         { title = "Colour vision", description = "SuuUI's signal colours (danger, low health, healing, warnings, the dispel types, friend and foe) for your eyes. Shapes, badges and labels stay as they are. For every character; takes effect after a reload.",
           rows = {
             { label = "Colours", control = "select", width = 220,
