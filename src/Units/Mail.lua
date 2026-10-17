@@ -508,6 +508,8 @@ function M:DrawSendState()
     if ok and subject == "" then ok, why = false, "Give it a subject." end
     if ok and cod and (copper == 0 or not first) then ok, why = false, "Cash on delivery needs an amount and an attachment." end
     if ok and total > (GetMoney() or 0) then ok, why = false, "You don't have enough money." end
+    if self.sending then why = "Waiting for the game: the mail is on its way, or its confirmation is open." end
+    send.go:SetLabel(self.sending and "Sending…" or "Send")
     send.go:SetEnabledState(ok and not self.sending)
     send.go.tooltip = why and { title = "Send", description = why } or nil
 end
@@ -536,6 +538,10 @@ function M:Send()
     self.sending = true
     self:DrawSendState()
     SendMail(to, subject, body)
+    -- never stuck: if neither success nor failure comes, Send comes back
+    local mark = {}
+    self.sendMark = mark
+    C_Timer.After(30, function() if self.sending and self.sendMark == mark then self:SendDone(false) end end)
 end
 
 function M:SendDone(ok)
@@ -791,7 +797,8 @@ end
 -- This character, for the other characters' suggestions.
 function M:RememberMe()
     local d = self:CharData()
-    d.name = UnitName("player")
+    -- the whole name: Forever's characters have a surname, and mail needs it
+    d.name = SuuUI.FullName("player") or UnitName("player")
     d.realm = GetRealmName()
     d.level = UnitLevel("player")
     local _, file = UnitClass("player")
@@ -975,6 +982,8 @@ function M:OnEnable()
     end)
     self:OnGameEvent("MAIL_SEND_SUCCESS", function() self:SendDone(true) end)
     self:OnGameEvent("MAIL_FAILED", function() if self.sending then self:SendDone(false) end end)
+    -- money's confirmation (the game's secure dialog) cancelled
+    self:OnGameEvent("SECURE_TRANSFER_CANCEL", function() if self.sending then self:SendDone(false) end end)
 end
 
 function M:OnDisable()
