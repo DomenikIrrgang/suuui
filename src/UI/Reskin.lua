@@ -465,7 +465,17 @@ function UI.ReskinMenu(menu)
         end
         return false
     end
-    for _, row in ipairs(rows) do
+    -- every line with words counts for the edges: the buttons, and titles
+    -- and headings, which aren't buttons (a unit menu's name on top: the
+    -- panel's padding came out 28 instead of 8, found with /suu probe unitmenu)
+    local lines = {}
+    for _, c in ipairs({ menu:GetChildren() }) do
+        if c ~= st.panel then lines[#lines + 1] = c end
+    end
+    if target and menu.ScrollBox:IsShown() then
+        for _, c in ipairs({ target:GetChildren() }) do lines[#lines + 1] = c end
+    end
+    for _, row in ipairs(lines) do
         local t, b = row:GetTop(), row:GetBottom()
         if row:IsShown() and t and b and hasText(row) then
             if not first or t > first:GetTop() then first = row end
