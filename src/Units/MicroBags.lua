@@ -82,7 +82,7 @@ end
 local SECTION = {
     id = "microbags", label = "Micro menu & bags", category = "Frames", order = 28,
     groups = {
-        { title = "Bag bar", description = "Blizzard's bag bar, until SuuUI draws its own bags; Blizzard's micro menu too while SuuUI's micro menu is off. Move them in edit mode.", rows = {
+        { title = "Bag bar", description = "Blizzard's bag bar while SuuUI's Bags module is off (with it on, your bag slots sit beside the bags window); Blizzard's micro menu too while SuuUI's micro menu is off. Move them in edit mode.", rows = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "scale", label = "Scale", control = "slider", min = 0.6, max = 1.4, step = 0.05,
@@ -98,10 +98,35 @@ local function ownMicroMenu()
     return m and m:Get("enabled") and true or false
 end
 
+-- SuuUI's bags carry their own bag slots (a rail beside the window): then
+-- Blizzard's bag bar goes, and its mover with it.
+local function ownBagSlots()
+    local m = SuuUI.GetModule("bags")
+    return m and m:Get("enabled") and true or false
+end
+
+-- Blizzard's bag bar out of sight, under a hidden parent (kept there if the
+-- game parents it again).
+local away = CreateFrame("Frame")
+away:Hide()
+local function putAway(f)
+    if f:GetParent() ~= away then f:SetParent(away) end
+    if not f.suuAwayHooked then
+        f.suuAwayHooked = true
+        hooksecurefunc(f, "SetParent", function(frame, parent)
+            if parent ~= away and ownBagSlots() then C_Timer.After(0, function() frame:SetParent(away) end) end
+        end)
+    end
+end
+
 function M:OnEnable()
     for _, item in ipairs(ITEMS) do
         local f = _G[item.frame]
         if item.frame == "MicroMenu" and ownMicroMenu() then f = nil end
+        if item.frame == "BagsBar" and f and ownBagSlots() then
+            putAway(f)
+            f = nil
+        end
         if f then
             if not item.holderFrame then
                 item.holderFrame = CreateFrame("Frame", item.holder, SuuUI.Root)

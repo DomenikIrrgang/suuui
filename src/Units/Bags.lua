@@ -49,6 +49,7 @@ local M = SuuUI.RegisterModule({
         keyring = false,
         bank = true,
         itemCounts = true,
+        bagSlots = true,       -- the bag slot rails beside the windows
         bankPosition = { point = "TOP", x = -216, y = -240 },
     },
 })
@@ -211,6 +212,7 @@ function M:Rebuild()
     if not (self.inv and self:IsLive()) then return end
     self:Fill(self.inv, self:Bags())
     self:Foot()
+    self:DrawBagRail()
 end
 
 function M:RebuildBank()
@@ -218,6 +220,307 @@ function M:RebuildBank()
     local tabs = self:BankBags()
     local total = self:Fill(self.bank, tabs)
     self.bank:SetNote(("%s · %d slots"):format(#tabs > 1 and (#tabs .. " tabs") or "Bank", total))
+    self:DrawBankRail()
+end
+
+--------------------------------------------------------------------------------
+-- Bag slots (design "Bags · bag slots", direction B, chosen 2026-10-17): a
+-- slim rail along each window's left side, outside it, so the window keeps
+-- its height. Your bags: the backpack (fixed), four bags and the reagent bag
+-- after a hairline; at a banker the bank's own slots, its bag slots 2-9
+-- (bought with a bag, bought and empty, or locked) and a buy cell with the
+-- next slot's cost. Drag a bag onto a slot (or click with it) to put it in,
+-- drag a slot's bag away to take it off; hovering a slot lights its bag's
+-- slots in the window and fades the rest. Only on what is live: your own
+-- bags, and your bank at a banker.
+-- On Forever the bank's "tabs" are bank bag slots (Enum.BagIndex.
+-- Characterbanktab holds their bags); buying the next is restricted for
+-- addon code, so the buy cell is a secure click on the game's own purchase
+-- button and the game's confirmation asks (/suu probe bankslots, 2026-10-17).
+--------------------------------------------------------------------------------
+
+local RAIL_SLOT = T.size["slot"]
+local RAIL_PAD, RAIL_GAP = S["space-3"], S["space-2"]
+local RAIL_W = RAIL_SLOT + 2 * RAIL_PAD
+local RAIL_TOP, RAIL_OFF = 52, 6
+local TAB_BAG = Enum.BagIndex and Enum.BagIndex.Characterbanktab
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local BACKPACK_ICON = 133633
+
+local function call(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d = pcall(fn, ...)
+    if ok then return a, b, c, d end
+end
+
+local function coinText(copper)
+    copper = copper or 0
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local out = {}
+    if g > 0 then out[#out + 1] = g .. "g" end
+    if s > 0 then out[#out + 1] = s .. "s" end
+    if c > 0 or #out == 0 then out[#out + 1] = c .. "c" end
+    return table.concat(out, " ")
+end
+
+function M:BuildRail(window)
+    local rail = CreateFrame("Frame", nil, window)
+    rail:SetPoint("TOPRIGHT", window, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
+    rail:SetWidth(RAIL_W)
+    UI.Fill(rail, "surface", "BACKGROUND"):SetAllPoints()
+    UI.Border(rail, "gilt-faint")
+    rail:EnableMouse(true)
+    rail.cells = {}
+    rail.sep = UI.Fill(rail, "gilt-line", "ARTWORK")
+    rail.sep:SetSize(24, 1)
+    return rail
+end
+
+-- One cell: a plain slot with its size bottom right, a faint glyph when empty.
+function M:RailCell(rail, i)
+    local b = rail.cells[i]
+    if b then return b end
+    b = UI.ItemSlot(rail, RAIL_SLOT)
+    b.glyph = b:CreateTexture(nil, "OVERLAY")
+    b.glyph:SetSize(16, 16)
+    b.glyph:SetPoint("CENTER")
+    b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    b:RegisterForDrag("LeftButton")
+    b:SetScript("OnEnter", function(cell)
+        cell.skin.hover = true
+        cell.skin:Draw()
+        self:RailTip(cell)
+        if cell.entry and cell.entry.bag and not cell.entry.locked then self:LightBag(cell.entry.bag) end
+    end)
+    b:SetScript("OnLeave", function(cell)
+        cell.skin.hover = false
+        cell.skin:Draw()
+        GameTooltip:Hide()
+        UI.HideTooltip()
+        self:LightBag(nil)
+    end)
+    b:SetScript("OnClick", function(cell) self:RailPut(cell) end)
+    b:SetScript("OnReceiveDrag", function(cell) self:RailPut(cell) end)
+    b:SetScript("OnDragStart", function(cell) self:RailPick(cell) end)
+    rail.cells[i] = b
+    return b
+end
+
+-- Put what the cursor holds into the slot (or pick the slot's bag up).
+function M:RailPut(cell)
+    local e = cell.entry
+    if not e or e.fixed or e.locked then return end
+    if e.inv then
+        if CursorHasItem() then call(PutItemInBag, e.inv) else call(PickupBagFromSlot, e.inv) end
+    elseif e.tab then
+        call(C_Container.PickupContainerItem, TAB_BAG, e.tab)
+    end
+end
+
+function M:RailPick(cell)
+    local e = cell.entry
+    if not e or e.fixed or e.locked then return end
+    if e.inv then call(PickupBagFromSlot, e.inv)
+    elseif e.tab then call(C_Container.PickupContainerItem, TAB_BAG, e.tab) end
+end
+
+function M:RailTip(cell)
+    local e = cell.entry
+    if not e then return end
+    local free = e.bag and C_Container.GetContainerNumFreeSlots(e.bag)
+    local sizeLine = e.size and e.size > 0 and (e.size .. " slots" .. ((plain(free) and free) and (" · " .. free .. " free") or "")) or nil
+    if e.locked then
+        UI.ShowTooltip(cell, { title = "Bank slot " .. e.tab, subtitle = "Not bought yet",
+            description = "Buy bank slot buys the next one; the game asks first." })
+    elseif e.fixed then
+        UI.ShowTooltip(cell, { title = e.kind == "bank" and "Bank" or "Backpack", subtitle = sizeLine,
+            description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed." })
+    elseif not e.has then
+        UI.ShowTooltip(cell, { title = e.tab and ("Bank slot " .. e.tab) or (e.kind == "reagent" and "Reagent bag" or "Bag slot"),
+            subtitle = "Empty", description = e.kind == "reagent" and "Drag a reagent bag here. Only reagent bags fit." or "Drag a bag here." })
+    else
+        GameTooltip:SetOwner(cell, "ANCHOR_RIGHT", S["space-4"], 0)
+        local shown = e.inv and GameTooltip:SetInventoryItem("player", e.inv) or (e.tab and GameTooltip:SetBagItem(TAB_BAG, e.tab))
+        if not shown then GameTooltip:SetText(e.tab and ("Bank slot " .. e.tab) or "Bag") end
+        if sizeLine then GameTooltip:AddLine(sizeLine, UI.RGBA("ink-muted")) end
+        GameTooltip:AddLine("Pick it up to take it off, or drop another bag on it to swap.", UI.RGBA("ink-muted"))
+        GameTooltip:Show()
+    end
+end
+
+-- While a bag slot is hovered: its bag's slots stay, the rest fade.
+function M:LightBag(bag)
+    for b2, slots in pairs(self.buttons) do
+        local fade = bag ~= nil and b2 ~= bag
+        for _, b in ipairs(slots) do
+            if b:IsShown() then b:SetAlpha(fade and 0.35 or ((self.skins[b] and self.skins[b].item and self.skins[b].item.dim) and T.opacity["opacity-disabled"] or 1)) end
+        end
+    end
+end
+
+-- The cells top to bottom; `sepBefore` the reagent bag's hairline.
+function M:LayoutRail(rail, entries, buy)
+    local y = RAIL_PAD
+    rail.sep:Hide()
+    for i, e in ipairs(entries) do
+        if e.kind == "reagent" and i > 1 then
+            y = y + S["space-2"]
+            rail.sep:ClearAllPoints()
+            rail.sep:SetPoint("TOP", rail, "TOP", 0, -y)
+            rail.sep:Show()
+            y = y + 1 + S["space-2"]
+        end
+        local b = self:RailCell(rail, i)
+        b.entry = e
+        b:ClearAllPoints()
+        b:SetPoint("TOP", rail, "TOP", 0, -y)
+        if e.locked or not e.has then
+            b.skin:SetItem(nil)
+            b.glyph:SetTexture(GLYPHS .. (e.locked and "lock" or (e.kind == "reagent" and "leaf" or "bag")))
+            b.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+            b.glyph:Show()
+        else
+            b.glyph:Hide()
+            b.skin:SetItem({ icon = e.icon, count = e.size, quality = e.quality })
+        end
+        b:Show()
+        y = y + RAIL_SLOT + RAIL_GAP
+    end
+    for i = #entries + 1, #rail.cells do rail.cells[i]:Hide() end
+    -- the bank's buy cell last, its cost under it
+    if buy then
+        local c = rail.buy
+        if not c then
+            c = UI.ItemSlot(rail, RAIL_SLOT)
+            c.glyph = c:CreateTexture(nil, "OVERLAY")
+            c.glyph:SetSize(16, 16)
+            c.glyph:SetPoint("CENTER")
+            c.glyph:SetTexture(GLYPHS .. "plus")
+            c.cost = UI.Text(rail, "micro", "ink-muted")
+            c.cost:SetPoint("TOP", c, "BOTTOM", 0, -2)
+            c:SetScript("OnEnter", function(cell)
+                cell.skin.hover = not cell.off
+                cell.skin:Draw()
+                UI.ShowTooltip(cell, { title = "Buy bank slot", subtitle = cell.next and ("Bank slot " .. cell.next) or nil,
+                    description = cell.why or ("Costs " .. coinText(cell.price) .. ". The game asks first.") })
+            end)
+            c:SetScript("OnLeave", function(cell) cell.skin.hover = false; cell.skin:Draw(); UI.HideTooltip() end)
+            rail.buy = c
+        end
+        y = y + S["space-2"]
+        c:ClearAllPoints()
+        c:SetPoint("TOP", rail, "TOP", 0, -y)
+        c.off, c.why, c.price, c.next = buy.off, buy.why, buy.price, buy.next
+        c.glyph:SetVertexColor(UI.RGBA(buy.off and "ink-faint" or "gilt-text"))
+        c:SetAlpha(buy.off and T.opacity["opacity-disabled"] or 1)
+        c.cost:SetValue(buy.price and buy.price > 0 and not buy.done and coinText(buy.price) or "")
+        c:Show()
+        c.cost:Show()
+        y = y + RAIL_SLOT + 2 + T.type.micro.lineHeight
+    elseif rail.buy then
+        rail.buy:Hide()
+        rail.buy.cost:Hide()
+    end
+    rail:SetHeight(y - RAIL_GAP + RAIL_PAD)
+end
+
+-- Your bags' rail: only while the window shows your own, live bags.
+function M:DrawBagRail()
+    local rail = self.bagRail
+    if not rail then return end
+    if not (self.inv:IsShown() and self:IsLive() and self:Get("bagSlots")) then rail:Hide() return end
+    -- left of the window; at a banker on its right (the bank is on its left)
+    rail:ClearAllPoints()
+    if self.bank:IsShown() then
+        rail:SetPoint("TOPLEFT", self.inv, "TOPRIGHT", RAIL_OFF, -RAIL_TOP)
+    else
+        rail:SetPoint("TOPRIGHT", self.inv, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
+    end
+    local entries = { { kind = "backpack", bag = 0, fixed = true, has = true, icon = BACKPACK_ICON, size = numSlots(0) } }
+    local bags = { 1, 2, 3, 4 }
+    if self:Get("reagentBag") then bags[#bags + 1] = REAGENT end
+    for _, bag in ipairs(bags) do
+        local inv = C_Container.ContainerIDToInventoryID and call(C_Container.ContainerIDToInventoryID, bag)
+        local icon = inv and GetInventoryItemTexture("player", inv)
+        local q = inv and GetInventoryItemQuality("player", inv)
+        entries[#entries + 1] = { kind = bag == REAGENT and "reagent" or "bag", bag = bag, inv = inv, has = icon ~= nil,
+            icon = icon, size = numSlots(bag), quality = plain(q) and QUALITY[q] or nil }
+    end
+    self:LayoutRail(rail, entries)
+    rail:Show()
+end
+
+-- The bank's rail and the buy cell (at a banker).
+function M:DrawBankRail()
+    local rail = self.bankRail
+    if not rail then return end
+    if not (self.bank:IsShown() and TAB_BAG and BANK_TYPE and self:Get("bagSlots")) then
+        rail:Hide()
+        self:PlaceBuy(false)
+        return
+    end
+    local max = call(C_Bank.FetchMaxNumBankTabs, BANK_TYPE) or 9
+    local bought = {}
+    for _, bag in ipairs(self:BankBags()) do bought[bag - BANK_FIRST + 1] = true end
+    local entries = {}
+    for n = 1, max do
+        local bag = BANK_FIRST + n - 1
+        local info = call(C_Container.GetContainerItemInfo, TAB_BAG, n)
+        local icon = info and plain(info.iconFileID) and info.iconFileID or nil
+        local e = { kind = n == 1 and "bank" or "bankbag", tab = n, bag = bag, fixed = n == 1, locked = not bought[n] and n > 1,
+            has = icon ~= nil or n == 1, icon = icon or BACKPACK_ICON, size = numSlots(bag),
+            quality = info and plain(info.quality) and QUALITY[info.quality] or nil }
+        entries[#entries + 1] = e
+    end
+    local buy = {}
+    local next = call(C_Bank.FetchNextPurchasableBankTabData, BANK_TYPE)
+    if call(C_Bank.HasMaxBankTabs, BANK_TYPE) then
+        buy.off, buy.why, buy.done = true, "Every bank slot is bought.", true
+    elseif next and plain(next.tabCost) then
+        buy.price = next.tabCost
+        buy.next = (call(C_Bank.FetchNumPurchasedBankTabs, BANK_TYPE) or 0) + 1
+        if not next.canAfford then
+            buy.off, buy.why = true, ("You need %s. You have %s."):format(coinText(next.tabCost), coinText(GetMoney()))
+        end
+    else
+        buy.off, buy.why = true, "The bank doesn't offer another slot right now."
+    end
+    self:LayoutRail(rail, entries, buy)
+    rail:Show()
+    self:PlaceBuy(not buy.off)
+end
+
+-- The buy cell's secure button: a click on the game's own purchase button
+-- (its confirmation asks). Placed out of combat, while the cell can buy.
+function M:PlaceBuy(on)
+    if InCombatLockdown() then return end
+    local cell = self.bankRail and self.bankRail.buy
+    local target = _G.BankFrame and _G.BankFrame.BankPanel and _G.BankFrame.BankPanel.PurchaseButton
+    local over = self.buyOver
+    if not over then
+        if not (on and target and cell) then return end
+        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        over:SetAttribute("type1", "click")
+        over:SetScript("OnEnter", function() cell:GetScript("OnEnter")(cell) end)
+        over:SetScript("OnLeave", function() cell:GetScript("OnLeave")(cell) end)
+        self.buyOver = over
+    end
+    over:SetAttribute("clickbutton1", target)
+    over:ClearAllPoints()
+    if on and target and cell and cell:IsVisible() then
+        -- a layer above the windows: a click raises them (toplevel)
+        over:SetFrameStrata("DIALOG")
+        over:SetAllPoints(cell)
+        over:Show()
+    else
+        over:Hide()
+    end
+end
+
+function M:DrawRails()
+    self:DrawBagRail()
+    self:DrawBankRail()
 end
 
 --------------------------------------------------------------------------------
@@ -672,6 +975,7 @@ function M:Refresh()
     end
     self:Foot()
     self:UpdateJunk()
+    self:DrawBagRail()
 end
 
 --------------------------------------------------------------------------------
@@ -811,6 +1115,7 @@ function M:PlaceBags()
     local inv = self.inv
     inv:ClearAllPoints()
     if self.bank and self.bank:IsShown() then
+        -- the bags' rail moves to their right side here (asked for in game)
         inv:SetPoint("TOPLEFT", self.bank, "TOPRIGHT", S["space-5"], 0)
     else
         local pos = self:Get("position")
@@ -838,12 +1143,14 @@ function M:ShowBank()
     self.bank:Show()
     self:RebuildBank()
     self:PlaceBags()
+    self:DrawBagRail()
 end
 
 function M:HideBank()
     if not self.bank or not self.bank:IsShown() then return end
     self.bank:Hide()
     self:PlaceBags()
+    self:DrawBagRail()
 end
 
 local function closeBank()
@@ -942,6 +1249,8 @@ local SECTION = {
             { key = "columns", label = "Slots per row", control = "slider", min = 6, max = 16, step = 1 },
             { key = "reagentBag", label = "Reagent bag", control = "toggle", description = "Its slots after your bags'." },
             { key = "keyring", label = "Keyring", control = "toggle", description = "Your keys after everything else." },
+            { key = "bagSlots", label = "Bag slots", control = "toggle",
+              description = "Your bags in a rail beside the window (and the bank's slots at a banker): drag a bag on to change it, hover one to see its slots. Also the Bags toggle in the window's header." },
         } },
         { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
             { key = "itemCounts", label = "Counts in item tooltips", control = "toggle",
@@ -1016,6 +1325,21 @@ function M:OnEnable()
         end
         search(self.inv, self.bank)
         search(self.bank, self.inv)
+        -- the bag slot rails (design B), and the header's Bags toggle beside
+        -- All characters (asked for in game)
+        self.bagRail = self:BuildRail(self.inv)
+        self.bankRail = self:BuildRail(self.bank)
+        local inv = self.inv
+        if inv.allLabel then
+            inv.slotsToggle = UI.Toggle(inv.body, { value = self:Get("bagSlots"), onChange = self:Guard(function(on)
+                self:Set("bagSlots", on)
+            end) })
+            inv.slotsToggle:SetPoint("RIGHT", inv.allLabel, "LEFT", -S["space-6"], 0)
+            inv.slotsLabel = UI.Text(inv.body, "label", "ink-muted")
+            inv.slotsLabel:SetValue("Bags")
+            inv.slotsLabel:SetPoint("RIGHT", inv.slotsToggle, "LEFT", -S["space-4"], 0)
+        end
+        self.bank:HookScript("OnHide", function() self:PlaceBuy(false) end)
     end
     self:HideBlizzardBags()
     self:HideBlizzardBank()
@@ -1033,6 +1357,10 @@ function M:OnEnable()
         if not on then self:HideBank() end
     end)
     self:Watch("reagentBag", function() self:Refresh() end)
+    self:Watch("bagSlots", function(on)
+        if self.inv.slotsToggle then self.inv.slotsToggle:SetValue(on) end
+        self:DrawRails()
+    end)
     self:Watch("keyring", function() self:Refresh() end)
     -- Blizzard opening or closing bags, by any of its ways
     if not self.hooked then
@@ -1060,6 +1388,10 @@ function M:OnEnable()
     for _, e in ipairs({ "BANK_TABS_CHANGED", "PLAYERBANKSLOTS_CHANGED" }) do
         self:OnGameEvent(e, function() self:RebuildBank() end)
     end
+    -- the rails: bags put in or taken off, the next slot's price against your money
+    self:OnGameEvent("UNIT_INVENTORY_CHANGED", function(_, unit) if unit == "player" then self:DrawRails() end end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.bank:IsShown() then self:DrawBankRail() end end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.buyOver then self.buyOver:Hide() end end)
     self:OnGameEvent("BANKFRAME_OPENED", function()
         self.atBank = true
         self:ShowBank()
@@ -1094,6 +1426,7 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_MONEY", function()
         self:CharData().money = GetMoney()
         if self.inv:IsShown() then self:Foot() end
+        if self.bank:IsShown() then self:DrawBankRail() end
     end)
     self:Sync()
 end
