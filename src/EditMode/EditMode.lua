@@ -534,6 +534,17 @@ function EditMode.Register(frame, opts, owner)
     return m
 end
 
+-- Every registered mover, for the layout check (LayoutCheck.lua): its frame,
+-- namespace and key, label, enabled() and whether it places itself.
+function EditMode.Movers()
+    local out = {}
+    for _, m in ipairs(movers) do
+        out[#out + 1] = { frame = m.frame, namespace = m.namespace, key = m.key, label = m.label,
+            enabled = enabled(m), custom = m.customPlace ~= nil }
+    end
+    return out
+end
+
 -- For movers that place themselves: a frame's rectangle in root units, and
 -- the screen anchor edit mode would save for a rectangle.
 EditMode.Rect = rect
