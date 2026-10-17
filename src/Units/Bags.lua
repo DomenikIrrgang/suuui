@@ -439,12 +439,19 @@ function M:DrawBagRail()
     local entries = { { kind = "backpack", bag = 0, fixed = true, has = true, icon = BACKPACK_ICON, size = numSlots(0) } }
     local bags = { 1, 2, 3, 4 }
     if self:Get("reagentBag") then bags[#bags + 1] = REAGENT end
+    -- one empty bag slot is enough to drop a bag on: the others stay out
+    -- (asked for in game); the reagent slot always shows
+    local emptyShown = false
     for _, bag in ipairs(bags) do
         local inv = C_Container.ContainerIDToInventoryID and call(C_Container.ContainerIDToInventoryID, bag)
         local icon = inv and GetInventoryItemTexture("player", inv)
         local q = inv and GetInventoryItemQuality("player", inv)
-        entries[#entries + 1] = { kind = bag == REAGENT and "reagent" or "bag", bag = bag, inv = inv, has = icon ~= nil,
-            icon = icon, size = numSlots(bag), quality = plain(q) and QUALITY[q] or nil }
+        local reagent = bag == REAGENT
+        if icon or reagent or not emptyShown then
+            if not icon and not reagent then emptyShown = true end
+            entries[#entries + 1] = { kind = reagent and "reagent" or "bag", bag = bag, inv = inv, has = icon ~= nil,
+                icon = icon, size = numSlots(bag), quality = plain(q) and QUALITY[q] or nil }
+        end
     end
     self:LayoutRail(rail, entries)
     rail:Show()
