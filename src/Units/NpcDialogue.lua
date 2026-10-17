@@ -49,6 +49,8 @@ end
 -- the bar (design D3): 1080 wide; padding 12, 20 at the right; the speaker's
 -- column 200 wide, 20 from the talk
 local BAR_W = 1080
+local LOW_Y = 28        -- over the action bars, with the UI shown
+local HIGH_SHARE = 0.2  -- a fifth up the screen when the rest is faded out
 local PAD, PAD_R = S["space-5"], S["space-6"]
 local PORT_W, PORT_H = 200, 220
 local GAP = S["space-6"]
@@ -264,7 +266,6 @@ function M:Build()
 
     local bar = CreateFrame("Frame", nil, root)
     bar:SetWidth(BAR_W)
-    bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 28)
     bar:EnableMouse(true)
     UI.Fill(bar, "surface", "BACKGROUND"):SetAllPoints()
     UI.Border(bar, "gilt-faint")
@@ -272,6 +273,7 @@ function M:Build()
     edge:SetPoint("TOPLEFT", 0, 0)
     edge:SetPoint("TOPRIGHT", 0, 0)
     self.bar = bar
+    self:PlaceBar()
 
     -- the speaker: the plate in the bar's bottom corner, the portrait on it;
     -- both stay put however tall the bar grows (asked for in game)
@@ -602,6 +604,7 @@ end
 function M:Draw()
     local view = self:View()
     if not view then self.root:Hide() return end
+    if not self.root:IsShown() then self:PlaceBar() end
     self.root:Show()
     self:HideUI(true)
     self:DrawSpeaker()
@@ -916,7 +919,10 @@ function M:OnEnable()
     if not self.root then self:Build() end
     self:Hook()
     self:RegisterSettings(SECTION)
-    self:Watch("hideUI", function(on) self:HideUI(on and self.root:IsShown()) end)
+    self:Watch("hideUI", function(on)
+        self:PlaceBar()
+        self:HideUI(on and self.root:IsShown())
+    end)
     for _, e in ipairs({ "QUEST_ITEM_UPDATE", "QUEST_LOG_UPDATE", "GET_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
         self:OnGameEvent(e, function() if self.root:IsShown() then self:QueueDraw() end end)
     end
@@ -947,6 +953,16 @@ end
 -- confirmations (a PvP quest, a quest that costs money).
 local KEEP = { "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1", "ShoppingTooltip2",
                "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4" }
+
+-- Where the bar sits: a fifth up the screen while the rest of the UI is
+-- faded out (closer to the NPC: asked for in game), else over the action bars.
+function M:PlaceBar()
+    local bar = self.bar
+    if not bar then return end
+    local high = self:Get("hideUI")
+    bar:ClearAllPoints()
+    bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, high and math.floor(UIParent:GetHeight() * HIGH_SHARE) or LOW_Y)
+end
 
 function M:HideUI(on)
     on = on and self:IsEnabled() and self:Get("hideUI") and not InCombatLockdown() or false
