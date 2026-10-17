@@ -3,7 +3,8 @@
 -- cinematic bar in its compact direction D3 "Answer pills", chosen
 -- 2026-10-17 over the first build's taller bar): talking to an NPC becomes a
 -- scene docked at the bottom centre, over the action bars. The speaker as a
--- live 3D portrait standing on the bar (a PlayerModel on the "npc" unit:
+-- live 3D portrait on their name plate in the bar's bottom corner, rising
+-- above it (a PlayerModel on the "npc" unit:
 -- /suu probe npcportrait, 2026-10-17, every NPC drawn, with its talk
 -- animations), their name plate in the bar's corner; what they say types
 -- in, with the talk animation while it does; your answers as numbered pills
@@ -263,14 +264,15 @@ function M:Build()
     edge:SetPoint("TOPRIGHT", 0, 0)
     self.bar = bar
 
-    -- the speaker: the portrait standing on the bar, the plate in its corner
+    -- the speaker: the plate in the bar's bottom corner, the portrait on it;
+    -- both stay put however tall the bar grows (asked for in game)
+    local plate = CreateFrame("Frame", nil, bar)
+    plate:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", PAD, PAD)
+    plate:SetWidth(PORT_W)
     local port = self:BuildPortrait(bar)
-    port:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", PAD, 0)
+    port:SetPoint("BOTTOMLEFT", plate, "TOPLEFT", 0, -1)
     port:SetFrameLevel(bar:GetFrameLevel() + 5)
     self.portrait = port
-    local plate = CreateFrame("Frame", nil, bar)
-    plate:SetPoint("TOPLEFT", port, "BOTTOMLEFT", 0, 1)
-    plate:SetPoint("TOPRIGHT", port, "BOTTOMRIGHT", 0, 1)
     plate:SetFrameLevel(port:GetFrameLevel() + 3)
     UI.Fill(plate, "surface", "BACKGROUND"):SetAllPoints()
     UI.Border(plate, "gilt-line")
@@ -739,7 +741,7 @@ function M:Draw()
     self.talk:SetHeight(math.max(1, y))
 
     -- the bar: as tall as what is said, or the plate
-    self.bar:SetHeight(math.max(self.plate:GetHeight() - 1, y) + 2 * PAD)
+    self.bar:SetHeight(math.max(self.plate:GetHeight(), y) + 2 * PAD)
 end
 
 --------------------------------------------------------------------------------
