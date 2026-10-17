@@ -34,6 +34,21 @@ local function call(fn, ...)
     return table.concat(parts, ", ")
 end
 
+-- The game's purchase button, wherever this client makes it: the bank
+-- frame's own (declared virtual on Forever, so maybe never made), or the
+-- bank panel's purchase prompt.
+local function purchaseButton()
+    local candidates = {
+        { "BankFramePurchaseButton", _G.BankFramePurchaseButton },
+        { "BankFrame.BankPanel.PurchaseButton", _G.BankFrame and _G.BankFrame.BankPanel and _G.BankFrame.BankPanel.PurchaseButton },
+        { "BankPanel.PurchasePrompt.TabCostFrame.PurchaseButton", _G.BankPanel and _G.BankPanel.PurchasePrompt
+            and _G.BankPanel.PurchasePrompt.TabCostFrame and _G.BankPanel.PurchasePrompt.TabCostFrame.PurchaseButton },
+    }
+    for _, c in ipairs(candidates) do
+        if c[2] then return c[2], c[1] end
+    end
+end
+
 local function frameInfo(name)
     local f = _G[name]
     if not f then return "missing" end
@@ -65,6 +80,8 @@ local function record(out)
                             "CharacterBag1Slot", "CharacterBag2Slot", "CharacterBag3Slot", "CharacterReagentBag0Slot", "BagsBar" }) do
         out.frames[name] = frameInfo(name)
     end
+    local b, path = purchaseButton()
+    out.purchaseButton = b and (path .. " " .. b:GetObjectType() .. " shown=" .. tostring(b:IsShown()) .. " protected=" .. tostring(b:IsProtected())) or "none found"
     local dialog = StaticPopupDialogs and StaticPopupDialogs.CONFIRM_BUY_BANK_TAB
     out.dialog = dialog and "present" or "missing"
     out.money = GetMoney()
@@ -107,11 +124,12 @@ function BP.Command(rest)
         note:SetValue("1. Click the button: the game's own purchase popup should open. Answer No (or Yes to buy a slot). 2. /suu probe bankslots check. 3. /reload.")
         local b = UI.Button(p.body, { text = "Buy next bank slot (game's button)", width = 276 })
         b:SetPoint("BOTTOMLEFT")
+        p.status = UI.Text(p.body, "caption", "gilt-text")
+        p.status:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 0, 6)
         -- the secure button on top: clicks the game's own purchase button
         local over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
         over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
         over:SetAttribute("type1", "click")
-        over:SetAttribute("clickbutton1", _G.BankFramePurchaseButton)
         over:SetFrameStrata("FULLSCREEN_DIALOG")
         over:SetAllPoints(b)
         over:HookScript("PostClick", function()
@@ -120,6 +138,10 @@ function BP.Command(rest)
         end)
         p.over = over
     end
+    -- the game's button, found again each time (the bank may have loaded since)
+    local target, path = purchaseButton()
+    p.over:SetAttribute("clickbutton1", target)
+    p.status:SetValue(target and ("Clicks " .. path) or "No purchase button found: open the bank first")
     p:Show()
     ns.Print("Bank slots probe: at a banker, click the button, answer the popup, then /suu probe bankslots check and /reload.")
 end
