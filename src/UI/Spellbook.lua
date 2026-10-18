@@ -188,6 +188,9 @@ function Book:SetWidest(px)
 end
 
 function Book:SetSchools(list)
+    -- the chosen school's jewel, gliding down the column (UI.TabMarker)
+    self.schoolMarker = self.schoolMarker or UI.TabMarker(self.tabColumn, { vertical = true, side = "RIGHT", x = S["space-4"] + 2 })
+    local chosen
     for i, s in ipairs(list) do
         local t = self.tabs[i]
         if not t then
@@ -206,8 +209,6 @@ function Book:SetSchools(list)
             t.ring:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
             t.dot = UI.Diamond(over, 7, "arcane", "OVERLAY", 7)
             t.dot:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
-            t.jewel = UI.Diamond(t, 5, "gilt")
-            t.jewel:SetPoint("CENTER", t, "RIGHT", S["space-4"] + 2, 0)
             t:SetScript("OnClick", function() if self.onSchool then self.onSchool(t.index) end end)
             t:SetScript("OnEnter", function(btn)
                 btn:SetAlpha(1)
@@ -215,13 +216,14 @@ function Book:SetSchools(list)
                     and (btn.trainable .. (btn.trainable == 1 and " spell" or " spells") .. " to train") or nil })
             end)
             t:SetScript("OnLeave", function(btn) btn:SetAlpha(btn.active and 1 or 0.6); UI.HideTooltip() end)
+            self.schoolMarker:Track(t)
             self.tabs[i] = t
         end
         t.index, t.label, t.trainable, t.active = i, s.label, s.trainable, s.active
         t.icon:SetArt(s.icon)
         t.dot:SetShown((s.trainable or 0) > 0)
         t.ring:SetShown((s.trainable or 0) > 0)
-        t.jewel:SetShown(s.active and true or false)
+        if s.active then chosen = t end
         t:SetAlpha(s.active and 1 or 0.6)
         t:ClearAllPoints()
         -- centred between the window's edge (edgeInset to the left) and the divider
@@ -229,6 +231,7 @@ function Book:SetSchools(list)
         t:Show()
     end
     for i = #list + 1, #self.tabs do self.tabs[i]:Hide() end
+    self.schoolMarker:SetChosen(chosen)
 end
 
 local function hex(token) return T.color[token].hex end

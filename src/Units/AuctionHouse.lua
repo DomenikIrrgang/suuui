@@ -1429,6 +1429,7 @@ function M:BuildAuctions(page)
     -- the sub-tabs: header type, the chosen one gilt-text over a gilt hairline with its jewel
     local TAB_H = 28
     a.tabs = {}
+    a.marker = UI.TabMarker(page)
     local x = 0
     for _, t in ipairs({ { key = "auctions", label = "Auctions" }, { key = "bids", label = "Bids" } }) do
         local b = CreateFrame("Button", nil, page)
@@ -1439,14 +1440,10 @@ function M:BuildAuctions(page)
         b:SetSize(UI.MeasureText("header", t.label) + 2 * S["space-4"], TAB_H)
         b:SetPoint("TOPLEFT", x, 0)
         x = x + b:GetWidth() + S["space-2"]
-        b.rule = UI.Hairline(b, "gilt-line", "both")
-        b.rule:SetPoint("BOTTOMLEFT")
-        b.rule:SetPoint("BOTTOMRIGHT")
-        b.jewel = UI.Diamond(b, 5, "gilt")
-        b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
         b:SetScript("OnEnter", function(btn) if a.sub ~= btn.key then btn.label:SetColor("ink") end end)
         b:SetScript("OnLeave", function(btn) if a.sub ~= btn.key then btn.label:SetColor("ink-muted") end end)
         b:SetScript("OnClick", function(btn) self:SetAuctionsTab(btn.key) end)
+        a.marker:Track(b)
         a.tabs[#a.tabs + 1] = b
     end
     -- the foot: Cancel auction for yours; your bid, Bid, Buy out for bids
@@ -1494,8 +1491,7 @@ function M:SetAuctionsTab(key)
     for _, b in ipairs(a.tabs) do
         local on = b.key == key
         b.label:SetColor(on and "gilt-text" or "ink-muted")
-        b.rule:SetShown(on)
-        b.jewel:SetShown(on)
+        if on then a.marker:SetChosen(b) end
     end
     if key == "bids" then call(AH.QueryBids, {}, {}) else call(AH.QueryOwnedAuctions, {}) end
     self:DrawAuctions()

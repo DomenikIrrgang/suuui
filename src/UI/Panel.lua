@@ -545,6 +545,8 @@ function UI.WindowFrame(parent, opts)
         f.tabRow = CreateFrame("Frame", nil, f)
         f.tabRow:SetHeight(TAB_H)
         f.tabButtons = {}
+        -- the chosen tab's underline and jewel, gliding (UI.TabMarker)
+        f.tabMarker = UI.TabMarker(f.tabRow)
         for _, t in ipairs(opts.tabs) do
             local b = CreateFrame("Button", nil, f.tabRow)
             b.key = t.key
@@ -552,11 +554,6 @@ function UI.WindowFrame(parent, opts)
             b.label:SetPoint("CENTER", 0, 2)
             b.label:SetValue(t.label)
             b:SetHeight(TAB_H)
-            b.rule = UI.Hairline(b, "gilt-line", "both")
-            b.rule:SetPoint("BOTTOMLEFT")
-            b.rule:SetPoint("BOTTOMRIGHT")
-            b.jewel = UI.Diamond(b, 5, "gilt")
-            b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
             b.def = t
             -- while disabled: a cover takes the click and says why
             b.cover = CreateFrame("Frame", nil, b)
@@ -569,6 +566,7 @@ function UI.WindowFrame(parent, opts)
             b:SetScript("OnEnter", function(self) if f.tab ~= self.key then UI.Paint(self.label, "ink") end end)
             b:SetScript("OnLeave", function(self) if f.tab ~= self.key then UI.Paint(self.label, "ink-muted") end end)
             b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
+            f.tabMarker:Track(b)
             f.tabButtons[#f.tabButtons + 1] = b
         end
         local function off(b)
@@ -577,15 +575,16 @@ function UI.WindowFrame(parent, opts)
             return d and true or false
         end
         function f:DrawTabs()
+            local chosen
             for _, b in ipairs(self.tabButtons) do
                 local dis = off(b)
                 local on = not dis and b.key == self.tab
                 UI.Paint(b.label, dis and "ink-faint" or on and "gilt-text" or "ink-muted")
                 b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
-                b.rule:SetShown(on)
-                b.jewel:SetShown(on)
                 b.cover:SetShown(dis)
+                if on then chosen = b end
             end
+            self.tabMarker:SetChosen(chosen)
         end
         function f:SetTab(key)
             self.tab = key
@@ -620,8 +619,10 @@ function UI.WindowFrame(parent, opts)
                 local w = UI.MeasureText("header", b.def.label) + 2 * S["space-4"]
                 b:SetWidth(w)
                 b:SetPoint("LEFT", x, 0)
+                b.markLeft, b.markWidth = x, w
                 x = x + w + S["space-2"]
             end
+            self.tabMarker:Aim()
             top = top + TAB_H + S["space-4"]
         end
         self.body:SetPoint("TOPLEFT", S["space-5"], -top)

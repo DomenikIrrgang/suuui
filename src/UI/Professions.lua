@@ -106,6 +106,9 @@ end
 
 function P:SetTabs(list, selected)
     self.tabList = list or {}
+    -- the chosen one's jewel, gliding along the rail (UI.TabMarker)
+    self.tabMarker = self.tabMarker or UI.TabMarker(self.rail, { vertical = true, side = "LEFT", x = -6, jewel = 7 })
+    local chosen
     for i, t in ipairs(self.tabList) do
         local b = self.tabs[i]
         if not b then
@@ -116,8 +119,6 @@ function P:SetTabs(list, selected)
             b.glyph = b:CreateTexture(nil, "OVERLAY")
             b.glyph:SetSize(16, 16)
             b.glyph:SetPoint("CENTER")
-            b.jewel = UI.Diamond(b, 7, "gilt")
-            b.jewel:SetPoint("CENTER", b, "LEFT", -6, 0)
             b:SetScript("OnClick", function(self) if self.key and self.owner.onTab then self.owner.onTab(self.key) end end)
             b:SetScript("OnEnter", function(self)
                 GameTooltip:SetOwner(self, "ANCHOR_LEFT")
@@ -125,6 +126,7 @@ function P:SetTabs(list, selected)
                 GameTooltip:Show()
             end)
             b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            self.tabMarker:Track(b)
             self.tabs[i] = b
         end
         b.owner, b.key, b.label = self, t.key, t.label
@@ -145,10 +147,11 @@ function P:SetTabs(list, selected)
         end
         local on = t.key == selected
         b.icon:SetBorder(on and "gilt" or "gilt-hairline")
-        b.jewel:SetShown(on)
+        if on then chosen = b end
         b:Show()
     end
     for i = #self.tabList + 1, #self.tabs do self.tabs[i]:Hide() end
+    self.tabMarker:SetChosen(chosen)
 end
 
 --------------------------------------------------------------------------------

@@ -103,6 +103,7 @@ API.UI = {
     KeyChip = UI.KeyChip,
     StateBadge = UI.StateBadge,
     Crest = UI.Crest,
+    TabMarker = UI.TabMarker,
     DragonArt = UI.DragonArt,
     PlaceDragon = UI.PlaceDragon,
     Icon = UI.Icon,

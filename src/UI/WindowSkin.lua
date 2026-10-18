@@ -59,11 +59,6 @@ local function skinTab(chrome, def)
     t.label:SetPoint("CENTER", 0, (S["space-3"] - S["space-2"]) / 2)
     t.label:SetShadowColor(0, 0, 0, 0.9)
     t.label:SetShadowOffset(0, -1)
-    t.rule = UI.Hairline(b, "gilt-line", "both")
-    t.rule:SetPoint("BOTTOMLEFT", 0, 0)
-    t.rule:SetPoint("BOTTOMRIGHT", 0, 0)
-    t.jewel = UI.Diamond(b, 5, "gilt")
-    t.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 0)
     b:HookScript("OnEnter", function() t.hover = true; chrome:UpdateTabs() end)
     b:HookScript("OnLeave", function() t.hover = false; chrome:UpdateTabs() end)
     -- while disabled: a cover of SuuUI's takes the click and says why
@@ -93,9 +88,13 @@ end
 
 function Chrome:SetTabs(list)
     self.tabs = list
+    -- the chosen tab's underline and jewel, gliding (UI.TabMarker), on the
+    -- head: SuuUI's own frame, the tabs being Blizzard's
+    self.tabMarker = self.tabMarker or UI.TabMarker(self.head, { level = 3 })
     for _, def in ipairs(list) do
         def.skin = skinTab(self, def)
         def.skin.def = def
+        self.tabMarker:Track(def.button)
     end
     self:LayoutTabs()
 end
@@ -145,16 +144,17 @@ function Chrome:LayoutTabs()
 end
 
 function Chrome:UpdateTabs()
+    local chosen
     for _, def in ipairs(self.tabs or {}) do
         local t = def.skin
         local off = def.disabled and def.disabled() or false
         local on = not off and def.selected and def.selected() or false
         t.label:SetColor(off and "ink-faint" or on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
         t.label:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
-        t.rule:SetShown(on)
-        t.jewel:SetShown(on)
         t.cover:SetShown(off)
+        if on then chosen = def.button end
     end
+    if self.tabMarker then self.tabMarker:SetChosen(chosen) end
 end
 
 local allChromes = {}

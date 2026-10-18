@@ -232,13 +232,13 @@ end
 
 local function navButton(i)
     local nav = frame.nav.child
+    -- the chosen section's jewel, gliding up and down the list (UI.TabMarker)
+    frame.navMarker = frame.navMarker or UI.TabMarker(nav, { vertical = true, side = "LEFT", x = 7 })
     frame.navButtons[i] = frame.navButtons[i] or (function()
         local b = CreateFrame("Button", nil, nav)
         b:SetSize(NAV_W - S["space-4"] * 2, 30)
         b.bg = UI.Fill(b, "surface-raised")
         b.bg:SetAllPoints()
-        b.mark = UI.Diamond(b, 5, "gilt")
-        b.mark:SetPoint("CENTER", b, "LEFT", 7, 0)
         b.dot = UI.Diamond(b, 5, "ink")
         b.dot:SetPoint("CENTER", b, "RIGHT", -S["space-4"] - 2.5, 0)
         b.label = UI.Text(b, "label", "ink-muted")
@@ -250,6 +250,7 @@ local function navButton(i)
         end)
         b:SetScript("OnLeave", function() W.RefreshNav() end)
         b:SetScript("OnClick", function(self) if self.section then W.Show(self.section.id) end end)
+        frame.navMarker:Track(b)
         return b
     end)()
     return frame.navButtons[i]
@@ -257,16 +258,18 @@ end
 
 function W.RefreshNav()
     if not frame then return end
+    local chosen
     for _, b in ipairs(frame.navButtons) do
         if b.section then
             local on = b.section.id == current and query == ""
             b.bg:SetShown(on)
-            b.mark:SetShown(on)
             b.label:SetColor(on and "gilt-text" or "ink-muted")
             local page = pages[b.section.id]
             b.dot:SetShown(page ~= nil and (page.changed or 0) > 0)
+            if on and b:IsShown() then chosen = b end
         end
     end
+    if frame.navMarker then frame.navMarker:SetChosen(chosen) end
 end
 
 local function buildNav()
@@ -278,7 +281,7 @@ local function buildNav()
             local h = navButton(i)
             h.section = nil
             h:SetHeight(lastCategory and 38 or 22)
-            h.bg:Hide(); h.mark:Hide(); h.dot:Hide(); h.label:SetValue("")
+            h.bg:Hide(); h.dot:Hide(); h.label:SetValue("")
             h.heading:SetValue(section.category)
             h:EnableMouse(false)
             h:ClearAllPoints()

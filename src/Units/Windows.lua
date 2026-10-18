@@ -1356,11 +1356,11 @@ local function skinPaneTab(tab)
     local label = UI.Text(tab, "header", "ink-muted")
     label:SetPoint("BOTTOM", 0, S["space-3"])
     label:SetValue(own and own:GetText() or "")
-    local rule = UI.Hairline(tab, "gilt-line", "both")
-    rule:SetPoint("BOTTOMLEFT")
-    rule:SetPoint("BOTTOMRIGHT")
-    local jewel = UI.Diamond(tab, 5, "gilt")
-    jewel:SetPoint("CENTER", tab, "BOTTOM", 0, 0)
+    -- the chosen one's underline and jewel, gliding (one for both tabs)
+    local pane = tab:GetParent()
+    pane.suuPaneMarker = pane.suuPaneMarker or UI.TabMarker(pane, { level = 6 })
+    local marker = pane.suuPaneMarker
+    marker:Track(tab)
     local hover = false
     local function draw()
         local on = tab.LeftActive and tab.LeftActive:IsShown() or false
@@ -1370,8 +1370,7 @@ local function skinPaneTab(tab)
             if type(text) == "string" and not isSecret(text) then label:SetValue(text) end
         end
         label:SetColor(on and "gilt-text" or hover and "ink" or "ink-muted")
-        rule:SetShown(on)
-        jewel:SetShown(on)
+        if on then marker:SetChosen(tab) elseif marker.chosen == tab then marker:SetChosen(nil) end
     end
     if tab.LeftActive then
         for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hooksecurefunc(tab.LeftActive, m, draw) end
@@ -1431,6 +1430,7 @@ local function placePaneTabs(w)
             if tab:IsShown() then prev = tab end
         end
     end
+    if w.suuPaneMarker then w.suuPaneMarker:Aim() end
 end
 
 function M:SkinCollections()
