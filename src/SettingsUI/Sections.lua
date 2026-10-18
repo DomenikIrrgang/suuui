@@ -33,7 +33,7 @@ Registry.Register({
               reset = function() Settings.Reset("ui", "scale") end,
               disabled = function() return scaleIsAuto(), "Turn automatic scale off first." end },
         } },
-        { title = "Theme", description = "SuuUI's colours and type, or a theme a plugin brings. For every character; takes effect after a reload. Colour vision applies on top of it.",
+        { title = "Theme", description = "SuuUI's colours and type, one of its themes (High contrast, Class accent, Darker…), or a theme a plugin brings. For every character; takes effect after a reload. Colour vision applies on top of it.",
           rows = {
             { label = "Theme", control = "select", width = 220,
               options = function()

@@ -4,6 +4,7 @@
 
 ### New
 
+- **Themes** (Settings › General › Appearance › Theme, after a reload): High contrast (gilt edges, or ink edges), Class accent (your class colour in place of gilt, as it is or toned), Darker and OLED black. Ready, danger, quest and class colours stay the same in every theme.
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
 - Cast bars: the spell's target in its class colour, and the "you" badge in the target's place when the spell is aimed at you, in combat too (the game hides who it is; SuuUI hands it to the bar without reading it).
@@ -11,7 +12,7 @@
 ### Changed
 
 - World map: a tooltip for several things on one spot (two weapon masters, a giver's quests with Shift) leaves a gap under the title and before each entry, so it's clear which lines belong together; the map's tooltips can be a bit wider.
-- Plugin API 0.17: a tooltip line's `gap`.
+- Plugin API 0.17: a tooltip line's `gap`; a theme's `colors` can be a function of your class, and its fonts can set a line height.
 
 ## 0.5.0-beta.5 (2026-10-18)
 

@@ -196,7 +196,7 @@ Settings: a module's settings section with `merge = "<section id>"` adds its gro
 
 | | |
 |---|---|
-| `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size } } }`. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change takes a reload. Colour vision applies on top of it. An unknown token or style is an error |
+| `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size, lineHeight } } }`; `colors` can also be `function(class)` returning that table, worked out at login for the player's class (`"MAGE"`, …). SuuUI ships its own: High contrast, Class accent, Darker, OLED black. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change takes a reload. Colour vision applies on top of it. An unknown token or style is an error |
 
 ### Raw access (unstable)
 

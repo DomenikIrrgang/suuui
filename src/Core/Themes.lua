@@ -4,8 +4,11 @@
 -- General › Appearance (for every character, like colour vision), and it
 -- applies at login, just before SuuUI's modules build their frames:
 --   colors = { [token] = { r, g, b[, a] } }   a design token's colour (its
---                                             own alpha kept unless given)
---   fonts = { [style] = { file, size } }      a text style's face and size
+--                                             own alpha kept unless given);
+--            or function(class) → that table  (worked out at login for your
+--                                             class: "MAGE", "DRUID", …)
+--   fonts = { [style] = { file, size, lineHeight } }  a text style's face,
+--                                             size and line height
 -- Plugins load after SuuUI's saved settings, so a theme can't apply where
 -- colour vision does (Settings' bind); colour vision is applied again after
 -- it, so its signal colours always win. Changes take a reload: SuuUI reads
@@ -26,8 +29,10 @@ local applied = Themes.DEFAULT
 function Themes.Register(def)
     assert(type(def) == "table" and type(def.id) == "string" and def.id ~= "", "SuuUI.RegisterTheme: a theme needs an id")
     assert(not byId[def.id], "SuuUI.RegisterTheme: the theme " .. def.id .. " is taken")
-    for token in pairs(def.colors or {}) do
-        if not T.color[token] then error(("SuuUI.RegisterTheme: %s has no colour token %q"):format(def.id, tostring(token)), 2) end
+    if type(def.colors) == "table" then
+        for token in pairs(def.colors) do
+            if not T.color[token] then error(("SuuUI.RegisterTheme: %s has no colour token %q"):format(def.id, tostring(token)), 2) end
+        end
     end
     for style in pairs(def.fonts or {}) do
         if not T.type[style] then error(("SuuUI.RegisterTheme: %s has no text style %q"):format(def.id, tostring(style)), 2) end
@@ -61,17 +66,27 @@ function Themes.Apply()
     local id = ns.Settings.Account("theme") or Themes.DEFAULT
     local theme = byId[id] or byId[Themes.DEFAULT]
     applied = theme.id
-    for name, c in pairs(theme.colors) do
+    local colors = theme.colors
+    if type(colors) == "function" then
+        local _, class = UnitClass("player")
+        local ok, t = pcall(colors, class)
+        colors = ok and type(t) == "table" and t or {}
+    end
+    for name, c in pairs(colors) do
         local token = T.color[name]
-        token[1], token[2], token[3] = c[1], c[2], c[3]
-        if c[4] then token[4] = c[4] end
-        token.hex = hex(c[1], c[2], c[3])
+        -- (a worked-out table may name a token that isn't one: skipped)
+        if token then
+            token[1], token[2], token[3] = c[1], c[2], c[3]
+            if c[4] then token[4] = c[4] end
+            token.hex = hex(c[1], c[2], c[3])
+        end
     end
     local fonts = false
     for style, f in pairs(theme.fonts) do
         local s = T.type[style]
         if f.file then s.file = f.file end
         if f.size then s.size = f.size end
+        if f.lineHeight then s.lineHeight = f.lineHeight end
         fonts = true
     end
     if fonts then ns.Fonts.Refresh() end
