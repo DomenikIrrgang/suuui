@@ -112,9 +112,6 @@ function M:Build()
     self.line = line
 
     self.rows = {}
-    self.note = UI.Text(c, "caption", "ink-muted")
-    self.note:SetFixedWidth(inner)
-    self.note:SetWordWrap(true)
     self.empty = UI.Text(c, "body", "ink-muted")
     self.empty:SetPoint("TOPLEFT", 0, 0)
     self.empty:SetFixedWidth(inner)
@@ -193,10 +190,9 @@ function M:ShowRecap(id)
     if secret or not ok or type(events) ~= "table" or #events == 0 then
         self.head:Hide()
         self.line:Hide()
-        self.note:Hide()
         self.empty:SetValue(secret and "The recap is secret until combat ends." or "No recap for this death. The game recorded no hits for it.")
         self.empty:Show()
-        w.content:SetHeight(T.type.body.lineHeight * 2)
+        self:Fit(T.type.body.lineHeight * 2)
         w:Show()
         return
     end
@@ -247,7 +243,6 @@ function M:ShowRecap(id)
     -- until the next (the start: the health before the first)
     local line = self.line
     local lineW = line:GetWidth() - 2
-    local healed = 0
     if maxHP and span and span > 0 then
         local function x(t) return 1 + (1 - t / span) * lineW end
         local n = 0
@@ -268,12 +263,6 @@ function M:ShowRecap(id)
             local t = before(e) or 0
             local nextT = list[i + 1] and before(list[i + 1]) or 0
             step(t, nextT, after[i])
-            -- health that rose before the next hit: healing
-            local nxt = list[i + 1]
-            if nxt and after[i] and readable(nxt.currentHP) and nxt.currentHP ~= e.currentHP then
-                local rise = nxt.currentHP - after[i]
-                if rise > 0.5 then healed = healed + rise end
-            end
         end
         -- the time marks: every two seconds back from death
         for k = 0, math.floor(span / 2) do
@@ -325,15 +314,16 @@ function M:ShowRecap(id)
         y = y + ROW_H
     end
 
-    -- the note: hits only; how much was healed between them
-    local note = "Hits only: health that rises between hits was healing"
-    note = note .. (healed > 0 and (" (+" .. group3(healed) .. " here).") or ".")
-    self.note:SetValue(note)
-    self.note:ClearAllPoints()
-    self.note:SetPoint("TOPLEFT", w.content, "TOPLEFT", 0, -(y + S["space-4"]))
-    self.note:Show()
-    w.content:SetHeight(y + S["space-4"] + T.type.caption.lineHeight * 2)
+    self:Fit(y)
     w:Show()
+end
+
+-- The window as tall as what it shows (it scrolls only past the screen).
+function M:Fit(height)
+    local w = self.window
+    w.content:SetHeight(height)
+    local chrome = w:BodyTop() + S["space-5"]
+    w:SetHeight(math.min(height + chrome, UIParent:GetHeight() - 80))
 end
 
 function M:Toggle(id)
