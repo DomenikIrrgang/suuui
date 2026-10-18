@@ -50,6 +50,7 @@ local M = SuuUI.RegisterModule({
         healthText = "percent",
         nameColor = "game",
         showMeta = true,
+        eliteDragon = false,
         raidMarkers = true,
         comboPoints = true,
         -- the player and target frames' size (the others keep their tokens);
@@ -250,6 +251,7 @@ function M:ApplyOptions()
         f.opts.nameColor = self:Get("nameColor")
         f.opts.raidMarker = self:Get("raidMarkers")
         if f.metaKind == "level" then f.opts.meta = self:Get("showMeta") end
+        if f.opts.crest then f.opts.dragon = self:Get("eliteDragon") end
         if f.active then f:Refresh() end
     end
     self.combo:Update()
@@ -296,6 +298,8 @@ local SECTION = {
               description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
             { key = "showMeta", label = "Level and classification", control = "toggle",
               description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
+            { key = "eliteDragon", label = "Elite dragon", control = "toggle",
+              description = "The game's own dragon around the target and focus frames' right end for elites, rares and bosses, in place of the crest; friendly and neutral NPCs too." },
             { key = "raidMarkers", label = "Raid markers", control = "toggle",
               description = "A skull, cross or other raid marker over the top edge of the frame, in combat too." },
         } },
@@ -391,7 +395,7 @@ function M:OnEnable()
     self:OnUnitEvent("UNIT_DISPLAYPOWER", "player", function() self.combo:Update() end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self.combo:Update() end)
 
-    for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "raidMarkers", "comboPoints" }) do
+    for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "eliteDragon", "raidMarkers", "comboPoints" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
     for _, key in ipairs({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",

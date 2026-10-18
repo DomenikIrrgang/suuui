@@ -9,6 +9,7 @@
 --       you = false,        -- the "you" badge
 --       meta = false,       -- after the name: true for level and classification, "family" for a pet's family
 --       crest = false,      -- 0.17: the rare and elite crest (target, focus)
+--       dragon = false,     -- 0.17: with crest, the game's elite dragon in its place
 --       poll = nil,         -- seconds: redraw on a timer, for units with no events (targettarget)
 --       power = true,       -- the power line
 --       healthText = "percent", -- "value" (12.3k), "both" (12.3k · 64%) or "none"
@@ -245,6 +246,13 @@ function UI.UnitFrame(parent, unit, opts)
     if opts.crest then
         f.crest = UI.Crest(f, "frame")
         f.crest:SetPoint("CENTER", f, "TOPRIGHT", -64, -0.5)
+        -- opts.dragon (0.17): the game's own dragon instead, under the
+        -- frame, the bar's right end where its portrait sat
+        f.dragonHost = CreateFrame("Frame", nil, f)
+        f.dragonHost:SetAllPoints()
+        f.dragonHost:SetFrameLevel(math.max(0, f:GetFrameLevel() - 1))
+        f.dragon = f.dragonHost:CreateTexture(nil, "ARTWORK")
+        f.dragon:Hide()
     end
     gradient(f.health, "unit-fill-deep", "unit-fill")
     f.healthLow = bar(f, 3)
@@ -457,6 +465,7 @@ function UF:UpdatePower()
 end
 
 local CLASSIFICATION = { worldboss = "Boss", elite = "Elite", rareelite = "Rare Elite", rare = "Rare" }
+local dragonArt
 
 -- 0.17: a level's colour token by how hard it is for you (asked 2026-10-18:
 -- green, yellow, orange, red, grey as the game rates it): the game's own
@@ -486,6 +495,37 @@ local function metaText(A, u)
     if c == "worldboss" then return "?? Boss" end
     local word = CLASSIFICATION[c]
     return word and (lv .. " " .. word) or lv
+end
+
+-- The elite dragon (asked 2026-10-18, design "Elite dragon (with crest B)"
+-- A): the art Forever's own target frame wears (Camelot TargetFrameUtils'
+-- GetBossPortraitFrameData), its size from the client (probe dragon:
+-- 100 x 100, 110 x 90, 110 x 89), placed as on Blizzard's 232 x 100 frame
+-- around its 58 px portrait, scaled so the bar's right end stands in for
+-- the portrait: TOPRIGHT at ((x + 26) s, (y + 19) s), s = height / 58.
+local DRAGON = {
+    elite = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", 100, 100, 0, 1 },
+    boss = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", 110, 90, 11, -4 },
+    rare = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", 110, 89, 8, -7 },
+}
+function dragonArt(A, u, c)
+    if c == nil or isSecret(c) then return nil end
+    local isBoss = A.UnitIsBossMob and A.UnitIsBossMob(u)
+    if (not isSecret(isBoss) and isBoss) or c == "worldboss" then return DRAGON.boss end
+    if c == "rare" or c == "rareelite" then return DRAGON.rare end
+    if c == "elite" then return DRAGON.elite end
+end
+
+function UF:ShowDragon(art)
+    local t = self.dragon
+    if not t then return end
+    if not art then return t:Hide() end
+    local s = self:GetHeight() / 58
+    t:SetAtlas(art[1])
+    t:SetSize(art[2] * s, art[3] * s)
+    t:ClearAllPoints()
+    t:SetPoint("TOPRIGHT", self, "TOPRIGHT", (art[4] + 26) * s, (art[5] + 19) * s)
+    t:Show()
 end
 
 function UF:UpdateIdentity()
@@ -536,7 +576,9 @@ function UF:UpdateIdentity()
     end
     if self.crest then
         local c = not isPlayer and A.UnitClassification and A.UnitClassification(u) or nil
-        self.crest:SetClassification(c)
+        local dragon = self.opts.dragon and dragonArt(A, u, c)
+        self.crest:SetClassification(not dragon and c or nil)
+        self:ShowDragon(dragon)
     end
     local meta = self.opts.meta
     if meta == "family" then
