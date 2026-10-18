@@ -8,6 +8,8 @@
 - **Rare and elite crest** on the target and focus frames (on the top edge over the right end) and beside nameplates: a gilt diamond with fading wings for elites, silver for rares, silver with a gilt jewel for rare elites, longer wings and three jewels for world bosses.
 - **Themes** (Settings › General › Appearance › Theme, after a reload): High contrast (gilt edges, or ink edges), Class accent (your class colour in place of gilt, as it is or toned), Darker and OLED black, and five from Azeroth's raids: Black Temple, Molten Core, Naxxramas, Karazhan and Sunwell. Ready, danger, quest and class colours stay the same in every theme.
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
+- Chat keeps its history across logouts and reloads: each tab shows the lines it had (dimmed, above an "Earlier · logged out 2 h ago" divider), and whisper windows open with your earlier conversation. Settings › Chat › Kept chat turns it off or clears it.
+- Chat: a Search tab looks through everything kept (every tab and your whispers) for a name or a word, lists the matches by player, and opens a whisper window with any of them.
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
 - Cast bars: the spell's target in its class colour, and the "you" badge in the target's place when the spell is aimed at you, in combat too (the game hides who it is; SuuUI hands it to the bar without reading it).
 

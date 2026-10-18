@@ -41,6 +41,7 @@ local M = SuuUI.RegisterModule({
         classNames = true,    -- players' names in their class colour (asked 2026-10-18)
         shortChannels = true, -- "2. Trade", not "[2. Trade - City]"
         recall = true,        -- Up and Down bring back what you sent
+        keepHistory = true,   -- each tab's last lines and the whispers kept across logouts
     },
 })
 
@@ -300,6 +301,8 @@ end
 --------------------------------------------------------------------------------
 
 local MAX_LINES = 500
+-- the Search tab's stand-in for a window (Select, the tab row)
+local SEARCH = {}
 
 -- A name to copy: a small box with it selected, Ctrl+C, Esc or Enter closes.
 -- A small box with one line of text (copy a name, name a window): Enter
@@ -354,10 +357,7 @@ local function playerMenu(owner, name)
             if tell then tell(name, ChatFrame1) end
         end)
         if FCF_OpenTemporaryWindow then
-            root:CreateButton("Whisper window", function()
-                local ok, cf = pcall(FCF_OpenTemporaryWindow, "WHISPER", name)
-                M:OpenedWindow(ok and cf or nil, name)
-            end)
+            root:CreateButton("Whisper window", function() M:OpenWhisperWindow(name) end)
         end
         root:CreateButton("Invite", function()
             local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
@@ -527,8 +527,9 @@ local function stripBlizzardStamp(text)
     return text
 end
 
--- Blizzard's finished line → the design's (without the time).
-function M:FormatLine(text, id)
+-- Blizzard's finished line → the design's (without the time). `old`: a
+-- line kept from an earlier session (its line ids mean nothing now).
+function M:FormatLine(text, id, old)
     if not plain(text) or type(text) ~= "string" then return text end
     local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
     local colored = self:Get("classNames")
@@ -554,7 +555,7 @@ function M:FormatLine(text, id)
     -- colour (or the line's)
     text = text:gsub("|Hplayer:([^|]*)|h%[(.-)%]|h", function(data, shown)
         local name, lineID = data:match("^([^:]+):?(%d*)")
-        local class = (diamonds or colored) and classOf(name, lineID ~= "" and lineID or nil)
+        local class = (diamonds or colored) and classOf(name, (not old and lineID ~= "") and lineID or nil)
         local mark = diamonds and chip(class) or ""
         -- the diamond copies the line (asked 2026-10-18)
         if mark ~= "" and id then mark = "|Haddon:suuui:copy:" .. id .. "|h" .. mark .. "|h" end
@@ -589,24 +590,37 @@ function M:CopyLine(id)
     askText("Copy line", plainLine(self:Render(line, true)), "Ctrl+C to copy · Esc closes")
 end
 
--- One line into a mirror: kept (to show again with or without the time)
--- and shown as the chat is now.
-function M:Put(m, text, r, g, b)
+-- A line for a mirror: Blizzard's text (`src`, readable lines only) and
+-- the design's. `at` and `old` for a line kept from an earlier session.
+function M:NewLine(m, text, r, g, b, at, old)
     lineSeq = lineSeq + 1
-    local line = { r = r, g = g, b = b, at = time(), id = lineSeq }
+    local line = { r = r, g = g, b = b, at = at or time(), id = lineSeq, old = old }
     if m.raw or not plain(text) then
         line.text, line.raw = text, true
     else
-        line.text = self:FormatLine(text, lineSeq)
+        line.src = text
+        line.text = self:FormatLine(text, lineSeq, old)
         linesByID[lineSeq] = line
     end
+    return line
+end
+
+-- One line into a mirror: kept (to show again with or without the time)
+-- and shown as the chat is now.
+function M:Put(m, text, r, g, b, at, old)
+    local line = self:NewLine(m, text, r, g, b, at, old)
+    self:Append(m, line)
+    return line
+end
+
+function M:Append(m, line)
     local lines = m.lines
     lines[#lines + 1] = line
     if #lines > MAX_LINES then table.remove(lines, 1) end
     local withTime = self:ShowTimes()
     -- drawn otherwise than its earlier lines: all again when it's next shown
     if m.drawnWithTime ~= withTime then m.drawnWithTime = nil end
-    m:AddMessage(self:Render(line, withTime), r, g, b)
+    self:Draw(m, line, withTime)
 end
 
 function M:ShowTimes()
@@ -625,7 +639,7 @@ function M:Redraw(m)
     m.drawnWithTime = withTime
     local offset = m.GetScrollOffset and m:GetScrollOffset() or 0
     m:Clear()
-    for _, line in ipairs(m.lines) do m:AddMessage(self:Render(line, withTime), line.r, line.g, line.b) end
+    for _, line in ipairs(m.lines) do self:Draw(m, line, withTime) end
     if offset > 0 and m.SetScrollOffset then pcall(m.SetScrollOffset, m, offset) end
 end
 
@@ -652,7 +666,8 @@ function M:WatchClasses()
     end
 end
 
--- Whisper lines (to and from), kept for a whisper window opened later.
+-- Whisper lines (to and from), kept for a whisper window opened later (and,
+-- with Kept chat, across logouts).
 local WHISPER_KEEP = 300
 local WHISPER_TYPES = { "WHISPER", "WHISPER_INFORM", "BN_WHISPER", "BN_WHISPER_INFORM" }
 
@@ -678,9 +693,11 @@ function M:KeepWhisper(text, r, g, b, event)
     if not who then return end
     self.whispers = self.whispers or {}
     local list = self.whispers
-    -- the same line in a second window
-    if list[#list] and list[#list].text == text then return end
-    list[#list + 1] = { who = who:lower(), text = text, r = r, g = g, b = b }
+    -- the same line in a second window (General and the whisper window)
+    for i = #list, math.max(1, #list - 4), -1 do
+        if list[i].text == text then return end
+    end
+    list[#list + 1] = { who = who:lower(), text = text, r = r, g = g, b = b, at = time() }
     if #list > WHISPER_KEEP then table.remove(list, 1) end
 end
 
@@ -700,27 +717,36 @@ end
 -- what it already holds.
 function M:Mirror(cf)
     self.mirrors = self.mirrors or {}
-    if self.mirrors[cf] then return end
+    if self.mirrors[cf] then
+        -- a whisper window Blizzard reused for someone else
+        self:WhisperWindowLines(cf, self.mirrors[cf])
+        return
+    end
     local m = self:MirrorFrame(cf)
     self.mirrors[cf] = m
     m.lines = {}
     m.raw = cf == ChatFrame2
     self:ApplyMirrorFont(cf)
+    -- what the tab held at logout, above a divider
+    if not m.raw and not cf.isTemporary then self:RestoreKept(cf, m) end
     local n = cf.GetNumMessages and cf:GetNumMessages() or 0
     for i = 1, n do
         local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
         if ok and text ~= nil then
             self:Put(m, text, r, g, b)
-            if cf == ChatFrame1 then self:KeepWhisper(text, r, g, b) end
+            if cf == ChatFrame1 or cf.isTemporary then self:KeepWhisper(text, r, g, b) end
         end
     end
+    -- a whisper window: the kept whispers with that player before its own
+    self:WhisperWindowLines(cf, m)
     m.drawnWithTime = self:ShowTimes()
     -- the combat log clears and refills its window on a filter change
-    hooksecurefunc(cf, "Clear", function() m:Clear(); wipe(m.lines) end)
+    hooksecurefunc(cf, "Clear", function() m:Clear(); wipe(m.lines); m.target = nil end)
     hooksecurefunc(cf, "AddMessage", function(_, text, r, g, b, _, _, _, event)
         if text == nil then return end
         self:Put(m, text, r, g, b)
-        if not cf.isTemporary then self:KeepWhisper(text, r, g, b, event) end
+        -- whisper windows' too (Blizzard may show a whisper only there)
+        self:KeepWhisper(text, r, g, b, event)
         if m ~= self.activeMirror and cf ~= ChatFrame2 then
             self.unread = self.unread or {}
             self.unread[cf] = true
@@ -734,6 +760,9 @@ function M:ApplyMirrorFont(cf)
     m:SetFont(BODY_FONT, fontSize(cf), "")
     m:SetShadowOffset(1, -1)
     m:SetShadowColor(0, 0, 0, 0.8)
+    -- the divider's rules are measured for the font
+    m.drawnWithTime = nil
+    if m == self.activeMirror then self:Redraw(m) end
 end
 
 --------------------------------------------------------------------------------
@@ -996,6 +1025,7 @@ end
 -- name, new and closing are in SuuUI's settings, Chat › Windows.
 function M:TabMenu(b)
     local cf = b.cf
+    if cf == SEARCH then return end
     if cf and not cf.isTemporary then
         self:OpenChatSettings(cf)
         return
@@ -1048,28 +1078,45 @@ function M:NewWindow(name)
     end)
 end
 
--- A whisper window just opened from SuuUI's menu: skinned, the whispers
--- with that player so far put in (Blizzard's starts empty), and shown.
+-- A whisper window just opened from SuuUI (a name's menu, the Search
+-- tab): skinned, the whispers with that player so far put in (Blizzard's
+-- starts empty), and shown.
 function M:OpenedWindow(cf, name)
     C_Timer.After(0, function()
         if not self:IsEnabled() then return end
         self:SkinAll()
         local m = cf and self.mirrors and self.mirrors[cf]
         if not m then return end
-        if name and m:GetNumMessages() == 0 then
-            for _, line in ipairs(self:WhispersWith(name)) do self:Put(m, line.text, line.r, line.g, line.b) end
-        end
+        if name and m.target ~= name:lower() then self:FillWhispers(m, name) end
         self:Select(cf)
     end)
+end
+
+-- The whisper window with a player: the open one (its tab chosen), else a
+-- new one.
+function M:OpenWhisperWindow(name)
+    local want = name:lower():match("^([^%-]+)")
+    for _, cf in ipairs(self:Windows()) do
+        local target = cf.isTemporary and cf.chatType == "WHISPER" and cf.chatTarget
+        if plain(target) and type(target) == "string" and target:lower():match("^([^%-]+)") == want then
+            self:OpenedWindow(cf, name)
+            return
+        end
+    end
+    if not FCF_OpenTemporaryWindow then return end
+    local ok, cf = pcall(FCF_OpenTemporaryWindow, "WHISPER", name)
+    self:OpenedWindow(ok and cf or nil, name)
 end
 
 function M:Select(cf)
     self.selected = cf
     if self.unread then self.unread[cf] = nil end
+    self.activeMirror = nil
     for frame, mirror in pairs(self.mirrors or {}) do
         mirror:SetShown(frame == cf)
         if frame == cf then self.activeMirror = mirror end
     end
+    self:ShowSearch(cf == SEARCH)
     self:RedrawShown()
     self:CombatFilterBar(cf == ChatFrame2)
     self:UpdateTabs()
@@ -1078,7 +1125,7 @@ end
 function M:UpdateTabs()
     local p = self.panel
     local windows = self:Windows()
-    if not self.selected or not tContains(windows, self.selected) then
+    if not self.selected or (self.selected ~= SEARCH and not tContains(windows, self.selected)) then
         self.selected = nil
         self:Select(ChatFrame1)
         return
@@ -1086,12 +1133,20 @@ function M:UpdateTabs()
     -- its mirror may have come after the choice
     local mirror = self.mirrors and self.mirrors[self.selected]
     if mirror and not mirror:IsShown() then self:Select(self.selected) return end
+    -- the Search tab last, after the whispers
+    local tabs = { unpack(windows) }
+    tabs[#tabs + 1] = SEARCH
     local x = 0
-    for i, cf in ipairs(windows) do
+    for i, cf in ipairs(tabs) do
         local b = tabButton(self, i)
         b.cf = cf
-        local name = GetChatWindowInfo(cf:GetID())
-        if cf.isTemporary and cf.chatTarget then name = cf.chatTarget end
+        local name
+        if cf == SEARCH then
+            name = "Search"
+        else
+            name = GetChatWindowInfo(cf:GetID())
+            if cf.isTemporary and cf.chatTarget then name = cf.chatTarget end
+        end
         b.label:SetText(name or "")
         b.label.value = nil
         local w = 60
@@ -1112,7 +1167,708 @@ function M:UpdateTabs()
         b:Show()
         x = x + w + 8 + S["space-5"]
     end
-    for i = #windows + 1, #p.tabButtons do p.tabButtons[i]:Hide() end
+    for i = #tabs + 1, #p.tabButtons do p.tabButtons[i]:Hide() end
+end
+
+--------------------------------------------------------------------------------
+-- Kept chat: each tab's last lines and the whispers, saved for the character
+-- at logout (and on a reload) and shown again on login: dimmed (opacity-ooc)
+-- above a divider "Earlier · logged out 2 h ago" (design: Chat history and
+-- search, option B). Only readable lines are kept: never a secret one (an
+-- encounter's chat lockdown), never one with a Battle.net name (its |K
+-- code means nothing next session), never the Combat Log's.
+--------------------------------------------------------------------------------
+
+local KEEP_LINES, KEEP_WHISPERS = 100, 200
+local DIM = T.opacity["opacity-ooc"]
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+
+-- the lines' width (the panel's, less its padding)
+local function logWidth() return UI.Size("chat-w") - PAD_X * 2 end
+
+local function rgbHex(r, g, b)
+    if not (plain(r) and plain(g) and plain(b)) then return nil end
+    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return nil end
+    local function c(v) return math.max(0, math.min(255, math.floor(v * 255 + 0.5))) end
+    return ("%02x%02x%02x"):format(c(r), c(g), c(b))
+end
+
+local function hexRGB(hex)
+    if type(hex) ~= "string" or not hex:match("^%x%x%x%x%x%x$") then return nil end
+    return tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255
+end
+
+-- A line as saved, or nil for one that mustn't be.
+local function keptLine(text, r, g, b, at)
+    if not plain(text) or type(text) ~= "string" or text == "" or text:find("|K", 1, true) then return nil end
+    if not plain(at) or type(at) ~= "number" then return nil end
+    return { text = text, at = at, rgb = rgbHex(r, g, b) }
+end
+
+-- An earlier line dimmed: its colours (and the class diamond's) at
+-- opacity-ooc over the dark ground (a line can't have an alpha of its own).
+local DIAMOND_COLOURED = "(|T" .. DIAMOND:gsub("%p", "%%%0") .. "[^|]-):(%d+):(%d+):(%d+)|t"
+local function dimByte(v) return math.floor(tonumber(v) * DIM + 0.5) end
+local function dimmed(text)
+    text = text:gsub("|c(%x%x)(%x%x)(%x%x)(%x%x)", function(a, r, g, b)
+        return ("|c%s%02x%02x%02x"):format(a, dimByte(tonumber(r, 16)), dimByte(tonumber(g, 16)), dimByte(tonumber(b, 16)))
+    end)
+    return (text:gsub(DIAMOND_COLOURED, function(head, r, g, b)
+        return ("%s:%d:%d:%d|t"):format(head, dimByte(r), dimByte(g), dimByte(b))
+    end))
+end
+
+-- Widths in the lines' font (texture codes and all).
+local bodyMeasure
+local function measureBody(text, size)
+    if not bodyMeasure then
+        bodyMeasure = UIParent:CreateFontString(nil, "OVERLAY")
+        bodyMeasure:Hide()
+    end
+    bodyMeasure:SetFont(BODY_FONT, size, "")
+    bodyMeasure:SetText(text)
+    return bodyMeasure:GetUnboundedStringWidth()
+end
+
+local function ago(seconds)
+    if seconds < 90 then return "just now" end
+    if seconds < 3600 then return math.floor(seconds / 60 + 0.5) .. " min ago" end
+    if seconds < 48 * 3600 then return math.floor(seconds / 3600 + 0.5) .. " h ago" end
+    return math.floor(seconds / 86400 + 0.5) .. " days ago"
+end
+
+-- The divider's gilt-line rule, fading out towards its far end: in steps,
+-- each darker towards the glass (a texture in a line can't fade).
+local function rule(width, rising)
+    local c, steps, out = T.color["gilt-line"], 6, {}
+    local each = math.floor(width / steps)
+    for i = 1, steps do
+        local k = (rising and i or (steps + 1 - i)) / steps * c[4] * 255
+        local w = (i == steps) and (width - each * (steps - 1)) or each
+        if w > 0 then
+            out[#out + 1] = ("|T%s:1:%d:0:0:8:8:0:8:0:8:%d:%d:%d|t"):format(WHITE, w,
+                math.floor(c[1] * k + 0.5), math.floor(c[2] * k + 0.5), math.floor(c[3] * k + 0.5))
+        end
+    end
+    return table.concat(out)
+end
+
+-- "Earlier · logged out 2 h ago" between gilt jewels, the rules filling the
+-- line either side.
+function M:DividerText(m, at)
+    local size = select(2, m:GetFont()) or 13
+    local g = T.color.gilt
+    local jewel = ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(DIAMOND,
+        math.floor(g[1] * 255 + 0.5), math.floor(g[2] * 255 + 0.5), math.floor(g[3] * 255 + 0.5))
+    local label = "|cff" .. TIME_HEX .. "Earlier · logged out " .. ago(time() - (at or time())) .. "|r"
+    local middle = "  " .. jewel .. "  " .. label .. "  " .. jewel .. "  "
+    local side = math.floor((logWidth() - 6 - measureBody(middle, size)) / 2)
+    if side < 12 then return middle end
+    return rule(side, true) .. middle .. rule(side, false)
+end
+
+-- A line into its mirror: an earlier one dimmed, the divider measured.
+function M:Draw(m, line, withTime)
+    if line.divider then
+        m:AddMessage(self:DividerText(m, line.at), 1, 1, 1)
+        return
+    end
+    local text, r, g, b = self:Render(line, withTime), line.r, line.g, line.b
+    if line.old then
+        text = dimmed(text)
+        r, g, b = (r or 1) * DIM, (g or 1) * DIM, (b or 1) * DIM
+    end
+    m:AddMessage(text, r, g, b)
+end
+
+-- What was saved at logout, to put back as the windows' mirrors are made.
+function M:LoadHistory()
+    if self.historyLoaded then return end
+    self.historyLoaded = true
+    local kept = self:CharData().kept
+    if not self:Get("keepHistory") or type(kept) ~= "table" then return end
+    self.loggedOutAt = type(kept.at) == "number" and kept.at or time()
+    self.keptWindows = {}
+    if type(kept.windows) == "table" then
+        for id, w in pairs(kept.windows) do self.keptWindows[id] = w end
+    end
+    if type(kept.classes) == "table" then
+        for name, class in pairs(kept.classes) do
+            if type(name) == "string" and type(class) == "string" and not classByName[name] then classByName[name] = class end
+        end
+    end
+    local list = {}
+    for _, w in ipairs(type(kept.whispers) == "table" and kept.whispers or {}) do
+        if type(w) == "table" and type(w.who) == "string" and type(w.text) == "string" and type(w.at) == "number" then
+            local r, g, b = hexRGB(w.rgb)
+            list[#list + 1] = { who = w.who, text = w.text, r = r, g = g, b = b, at = w.at, old = true }
+        end
+    end
+    -- this session's after them
+    for _, w in ipairs(self.whispers or {}) do list[#list + 1] = w end
+    self.whispers = list
+end
+
+-- A tab's kept lines (if it's the window they came from: same id, same
+-- name), then the divider.
+function M:RestoreKept(cf, m)
+    local id = cf:GetID()
+    local saved = self.keptWindows and self.keptWindows[id]
+    if type(saved) ~= "table" then return end
+    self.keptWindows[id] = nil
+    local name = GetChatWindowInfo(id)
+    if not (plain(name) and name == saved.name) or type(saved.lines) ~= "table" then return end
+    local any = false
+    for _, s in ipairs(saved.lines) do
+        if type(s) == "table" and type(s.text) == "string" and type(s.at) == "number" then
+            local r, g, b = hexRGB(s.rgb)
+            self:Put(m, s.text, r, g, b, s.at, true)
+            any = true
+        end
+    end
+    if any then self:Append(m, { divider = true, at = self.loggedOutAt }) end
+end
+
+-- A whisper window's player: their kept whispers before what it holds.
+function M:WhisperWindowLines(cf, m)
+    if not cf.isTemporary or cf.chatType ~= "WHISPER" then return end
+    local target = cf.chatTarget
+    if not plain(target) or type(target) ~= "string" or target == "" then return end
+    if m.target == target:lower() then return end
+    self:FillWhispers(m, target)
+end
+
+-- The kept whispers with a player into their window, before its own lines
+-- (none twice): earlier sessions' dimmed, then the divider.
+function M:FillWhispers(m, name)
+    m.target = name:lower()
+    local have = {}
+    for _, line in ipairs(m.lines) do
+        if line.src then have[line.src] = true end
+    end
+    local list, lastOld = {}, nil
+    for _, w in ipairs(self:WhispersWith(name)) do
+        if not have[w.text] then
+            list[#list + 1] = self:NewLine(m, w.text, w.r, w.g, w.b, w.at, w.old)
+            if w.old then lastOld = #list end
+        end
+    end
+    if #list == 0 then return end
+    if lastOld then table.insert(list, lastOld + 1, { divider = true, at = self.loggedOutAt }) end
+    for _, line in ipairs(m.lines) do list[#list + 1] = line end
+    while #list > MAX_LINES do table.remove(list, 1) end
+    m.lines = list
+    m.drawnWithTime = nil
+    self:Redraw(m)
+end
+
+-- At logout (a reload too): each tab's last lines, the whispers, and the
+-- classes of the names in them (a line's own sender is gone with its id).
+function M:SaveHistory()
+    local data = self:CharData()
+    if not self:Get("keepHistory") then data.kept = nil return end
+    local kept = { at = time(), windows = {}, whispers = {}, classes = {} }
+    local function noteClasses(text)
+        for name in text:gmatch("|Hplayer:([^:|]+)") do
+            local key = name:lower()
+            local class = classByName[key] or classByName[key:match("^([^%-]+)")]
+            if class then kept.classes[key] = class end
+        end
+    end
+    -- the newest `keep` of a list, oldest first
+    local function last(list, keep, make)
+        local out = {}
+        for i = #list, 1, -1 do
+            local saved = make(list[i])
+            if saved then
+                out[#out + 1] = saved
+                noteClasses(saved.text)
+                if #out >= keep then break end
+            end
+        end
+        for i = 1, math.floor(#out / 2) do out[i], out[#out + 1 - i] = out[#out + 1 - i], out[i] end
+        return out
+    end
+    for _, cf in ipairs(self:Windows()) do
+        local m = self.mirrors and self.mirrors[cf]
+        local name = GetChatWindowInfo(cf:GetID())
+        if m and not m.raw and not cf.isTemporary and plain(name) and type(name) == "string" then
+            local lines = last(m.lines, KEEP_LINES, function(line)
+                return line.src and keptLine(line.src, line.r, line.g, line.b, line.at)
+            end)
+            if #lines > 0 then kept.windows[cf:GetID()] = { name = name, lines = lines } end
+        end
+    end
+    kept.whispers = last(self.whispers or {}, KEEP_WHISPERS, function(w)
+        local saved = keptLine(w.text, w.r, w.g, w.b, w.at)
+        if saved then saved.who = w.who end
+        return saved
+    end)
+    data.kept = kept
+end
+
+-- Settings › Chat › Clear kept chat: the saved lines, the whispers and the
+-- tabs' lines (or they'd be kept again at logout).
+function M:ClearHistory()
+    self:CharData().kept = nil
+    self.keptWindows = nil
+    self.whispers = {}
+    for _, m in pairs(self.mirrors or {}) do
+        if not m.raw then
+            m:Clear()
+            wipe(m.lines)
+            m.target = nil
+        end
+    end
+    self:RunSearch()
+end
+
+--------------------------------------------------------------------------------
+-- The Search tab (option B): the last tab. A field and chips for where to
+-- look, then the kept lines that match (every tab and the whispers), grouped
+-- by player, newest first: the name in its class colour, how many lines, and
+-- a Whisper button that opens the conversation in its whisper window. The
+-- match on a faint ink ground, underlined. In the lines' area: the panel
+-- keeps its size (the raid frames sit right above it).
+--------------------------------------------------------------------------------
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local FIELD_H, CHIP_H = 26, 20
+local SEARCH_HEAD_H = FIELD_H + S["space-3"] + CHIP_H + S["space-2"]
+local GROUP_H, MORE_H, ROW_GAP = 32, 16, 2
+local GROUP_SHOWN = 2 -- a player's lines shown before "N more"
+local MAX_ROWS = 200
+local CHIPS = {
+    { value = "all", label = "All tabs" }, { value = "whisper", label = "Whispers" },
+    { value = "party", label = "Party" }, { value = "guild", label = "Guild" }, { value = "trade", label = "Trade" },
+}
+local KIND_TYPES = {
+    whisper = { "WHISPER", "WHISPER_INFORM" }, party = { "PARTY", "PARTY_LEADER" }, guild = { "GUILD", "OFFICER" },
+}
+local KIND_LABEL = { whisper = "Whispers", party = "Party", guild = "Guild" }
+
+-- A line's numbered channel ("2. Trade"), if it's in one.
+local function channelOf(src)
+    local label = src:match("|Hchannel:[^|]*|h%[?([^%]|]*)")
+    return label and label:gsub("%s+%-%s+.*$", "") or nil
+end
+
+-- Whisper, party, guild or trade (Blizzard colours each chat type its own way).
+local function lineKind(src, r, g, b)
+    for kind, types in pairs(KIND_TYPES) do
+        for _, t in ipairs(types) do
+            if sameColor(ChatTypeInfo and ChatTypeInfo[t], r, g, b) then return kind end
+        end
+    end
+    local channel = channelOf(src)
+    if channel and channel:lower():find("trade", 1, true) then return "trade" end
+    return nil
+end
+
+-- The text as shown (escape codes out), with the byte in the line of each
+-- byte shown, and for one inside a link's label that link's start.
+local function visible(text)
+    local shown, at, links = {}, {}, {}
+    local i, n, link = 1, #text, nil
+    local function put(c, pos) shown[#shown + 1] = c; at[#at + 1] = pos; links[#links + 1] = link end
+    while i <= n do
+        local c = text:sub(i, i)
+        if c == "|" then
+            local k = text:sub(i + 1, i + 1)
+            if k == "c" then
+                if text:sub(i + 2, i + 2) == "n" then i = (text:find(":", i + 3, true) or n) + 1 else i = i + 10 end
+            elseif k == "r" then
+                i = i + 2
+            elseif k == "h" then
+                link = nil
+                i = i + 2
+            elseif k == "H" then
+                link = i
+                i = (text:find("|h", i + 2, true) or n) + 2
+            elseif k == "T" or k == "A" or k == "K" then
+                i = (text:find("|" .. k:lower(), i + 2, true) or n) + 2
+            elseif k == "|" then
+                put("|", i)
+                i = i + 2
+            else
+                put(c, i)
+                i = i + 1
+            end
+        else
+            put(c, i)
+            i = i + 1
+        end
+    end
+    return table.concat(shown), at, links
+end
+
+-- A line too long to show its match: the time, tag and name kept, the
+-- message from two words before the match (a link whole).
+local function snippet(text, shown, at, links, s)
+    local body = text:find("|h: ", 1, true)
+    if not body then return nil end
+    body = body + 4
+    local first
+    for k = 1, #at do
+        if at[k] >= body then first = k break end
+    end
+    if not first or s <= first then return nil end
+    local c, spaces = s, 0
+    for k = s - 1, first, -1 do
+        if shown:byte(k) == 32 then
+            spaces = spaces + 1
+            if spaces == 2 then break end
+        end
+        c = k
+    end
+    if c <= first then return nil end
+    local from = at[c]
+    if links[c] then
+        from = links[c]
+        if text:sub(from - 10, from - 1):match("^|c%x%x%x%x%x%x%x%x$") then from = from - 10 end
+    end
+    if from <= body then return nil end
+    return text:sub(1, body - 1) .. "… " .. text:sub(from)
+end
+
+-- Where the match sits in a line (x from its start, x to its end), or nil;
+-- past the time ("21:20  ": the search is in the line, not its time).
+local TIME_SHOWN = 8
+local function matchSpan(text, q, size)
+    local shown, at, links = visible(text)
+    local s, e = shown:lower():find(q, TIME_SHOWN, true)
+    if not s then return nil end
+    local function upto(byte, k)
+        local part = text:sub(1, byte)
+        if links[k] then part = part .. "|h" end
+        return measureBody(part, size)
+    end
+    return upto(at[s] - 1, s), upto(at[e], e), shown, at, links, s
+end
+
+function M:BuildSearch()
+    local page = CreateFrame("Frame", nil, self.panel.log)
+    page:SetAllPoints()
+    page:Hide()
+    local s = { page = page, scope = "all", open = {}, headers = {}, rows = {}, mores = {} }
+    self.search = s
+    s.head = CreateFrame("Frame", nil, page)
+    s.head:SetPoint("TOPLEFT")
+    s.head:SetPoint("TOPRIGHT")
+    s.head:SetHeight(SEARCH_HEAD_H)
+    -- the field: the search glyph, what's typed, how many lines match
+    local field = UI.TextField(s.head, { placeholder = "A name or a word",
+        onTextChanged = function() self:RunSearch() end, onChange = function() self:RunSearch() end })
+    field:SetPoint("TOPLEFT")
+    field:SetPoint("TOPRIGHT")
+    field:SetHeight(FIELD_H)
+    local glyph = field:CreateTexture(nil, "ARTWORK")
+    glyph:SetTexture(GLYPHS .. "search.tga")
+    glyph:SetSize(14, 14)
+    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    glyph:SetPoint("LEFT", S["space-4"], 0)
+    s.count = UI.Text(field, "caption", "ink-muted")
+    s.count:SetPoint("RIGHT", -S["space-4"], 0)
+    local textX = S["space-4"] + 14 + S["space-4"]
+    field.edit:ClearAllPoints()
+    field.edit:SetPoint("TOPLEFT", textX, 0)
+    field.edit:SetPoint("BOTTOMRIGHT", -(S["space-4"] + 60), 0)
+    field.placeholder:ClearAllPoints()
+    field.placeholder:SetPoint("LEFT", textX, 0)
+    s.field = field
+    -- where to look: one chip at a time
+    s.chips = {}
+    local x = 0
+    for _, c in ipairs(CHIPS) do
+        local b = CreateFrame("Button", nil, s.head)
+        b.value = c.value
+        b.bg = UI.Fill(b, "surface-raised")
+        b.bg:SetAllPoints()
+        b.edge = UI.Border(b, "gilt-line")
+        b.label = UI.Text(b, "caption", "ink-muted")
+        b.label:SetPoint("CENTER")
+        b.label:SetValue(c.label)
+        b:SetSize(math.ceil(UI.MeasureText("caption", c.label)) + S["space-4"] * 2, CHIP_H)
+        b:SetPoint("TOPLEFT", s.head, "TOPLEFT", x, -(FIELD_H + S["space-3"]))
+        b:SetScript("OnEnter", function() if s.scope ~= c.value then b.label:SetColor("ink") end end)
+        b:SetScript("OnLeave", function() if s.scope ~= c.value then b.label:SetColor("ink-muted") end end)
+        b:SetScript("OnClick", function()
+            s.scope = c.value
+            self:RunSearch()
+        end)
+        x = x + b:GetWidth() + S["space-2"]
+        s.chips[#s.chips + 1] = b
+    end
+    -- the matches
+    s.scroll = UI.ScrollArea(page, 5)
+    s.scroll:SetPoint("TOPLEFT", 0, -SEARCH_HEAD_H)
+    s.scroll:SetPoint("BOTTOMRIGHT", -8, 0)
+    s.list = s.scroll.child
+    s.list:SetWidth(logWidth() - 8)
+    s.note = UI.Text(s.list, "caption", "ink-muted")
+    s.note:SetPoint("TOPLEFT", 0, -S["space-2"])
+end
+
+function M:ShowSearch(show)
+    if show and not self.search then self:BuildSearch() end
+    local s = self.search
+    if not s then return end
+    s.page:SetShown(show)
+    if show then
+        s.head:SetAlpha(1)
+        self:RunSearch()
+        s.field.edit:SetFocus()
+    elseif s.field.edit:HasFocus() then
+        s.field.edit:ClearFocus()
+    end
+end
+
+-- Every kept line once (a whisper in General and in its window is one),
+-- newest first: { src, line (as shown), r, g, b, where, whisper }.
+function M:KeptLines()
+    local out, seen = {}, {}
+    local function add(src, line, r, g, b, where, whisper)
+        if seen[src] then return end
+        seen[src] = true
+        out[#out + 1] = { src = src, line = line, r = r, g = g, b = b, where = where, whisper = whisper, n = #out + 1 }
+    end
+    for _, w in ipairs(self.whispers or {}) do
+        w.shown = w.shown or { text = self:FormatLine(w.text, nil, w.old), at = w.at or 0 }
+        add(w.text, w.shown, w.r, w.g, w.b, KIND_LABEL.whisper, true)
+    end
+    for _, cf in ipairs(self:Windows()) do
+        local m = self.mirrors and self.mirrors[cf]
+        if m and not m.raw and not cf.isTemporary then
+            local where = GetChatWindowInfo(cf:GetID())
+            if not (plain(where) and type(where) == "string") then where = "Chat" end
+            for _, line in ipairs(m.lines) do
+                if line.src then add(line.src, line, line.r, line.g, line.b, where) end
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.line.at ~= b.line.at then return a.line.at > b.line.at end
+        return a.n > b.n
+    end)
+    return out
+end
+
+-- The lines with `q` (lower case) in them, in `scope`, by player: { key,
+-- who, lines }, the newest player first; and how many lines.
+function M:FindLines(q, scope)
+    local groups, byKey, total = {}, {}, 0
+    for _, e in ipairs(self:KeptLines()) do
+        local line = e.line
+        line.plainText = line.plainText or plainLine(line.text):lower()
+        if line.plainText:find(q, 1, true) then
+            e.kind = e.whisper and "whisper" or lineKind(e.src, e.r, e.g, e.b)
+            if scope == "all" or scope == e.kind then
+                local who = e.src:match("|Hplayer:([^:|]+)")
+                local key = who and who:lower():match("^([^%-]+)") or ""
+                local group = byKey[key]
+                if not group then
+                    group = { key = key, who = who, lines = {} }
+                    byKey[key] = group
+                    groups[#groups + 1] = group
+                end
+                group.lines[#group.lines + 1] = e
+                total = total + 1
+            end
+        end
+    end
+    return groups, total
+end
+
+-- Where a single line came from: "Whispers", "Party", "2. Trade" or its tab.
+local function whereOf(e)
+    return KIND_LABEL[e.kind] or channelOf(e.src) or e.where
+end
+
+local function isMe(key)
+    local me = SuuUI.FullName("player")
+    local name = UnitName("player")
+    return (plain(me) and type(me) == "string" and me:lower() == key)
+        or (plain(name) and type(name) == "string" and name:lower() == key)
+end
+
+local function searchHeader(s, i)
+    local h = s.headers[i]
+    if h then return h end
+    h = CreateFrame("Frame", nil, s.list)
+    h:SetHeight(GROUP_H)
+    h.rule = UI.Hairline(h, "gilt-faint")
+    h.rule:SetPoint("TOPLEFT")
+    h.rule:SetPoint("TOPRIGHT")
+    -- 6 above, 2 below the row's content (its middle 2 below the frame's)
+    h.jewel = UI.Diamond(h, 5, "ink-muted")
+    h.jewel:SetPoint("CENTER", h, "LEFT", 3, -2)
+    h.name = UI.Text(h, "unit-name", "ink")
+    h.count = UI.Text(h, "caption", "ink-muted")
+    h.count:SetPoint("LEFT", h.name, "RIGHT", S["space-4"], 0)
+    h.whisper = UI.Button(h, { text = "Whisper", icon = "chat", onClick = function()
+        if h.who then M:OpenWhisperWindow(h.who) end
+    end })
+    h.whisper:SetHeight(24)
+    h.whisper:SetPoint("RIGHT", 0, -2)
+    s.headers[i] = h
+    return h
+end
+
+local function searchRow(s, i)
+    local r = s.rows[i]
+    if r then return r end
+    r = CreateFrame("Frame", nil, s.list)
+    r.ground = UI.Fill(r, "ink", "BACKGROUND")
+    r.ground:SetAlpha(0.16)
+    r.under = r:CreateTexture(nil, "ARTWORK")
+    r.under:SetColorTexture(1, 1, 1, 1)
+    r.text = r:CreateFontString(nil, "OVERLAY")
+    r.text:SetPoint("LEFT")
+    r.text:SetPoint("RIGHT")
+    r.text:SetJustifyH("LEFT")
+    r.text:SetWordWrap(false)
+    r.text:SetShadowOffset(1, -1)
+    r.text:SetShadowColor(0, 0, 0, 0.8)
+    -- links in it work as in the chat
+    r:EnableMouse(true)
+    if r.SetHyperlinksEnabled then r:SetHyperlinksEnabled(true) end
+    r:SetScript("OnHyperlinkClick", linkClick)
+    r:SetScript("OnHyperlinkEnter", linkEnter)
+    r:SetScript("OnHyperlinkLeave", function() GameTooltip:Hide() end)
+    s.rows[i] = r
+    return r
+end
+
+local function searchMore(s, i)
+    local b = s.mores[i]
+    if b then return b end
+    b = CreateFrame("Button", nil, s.list)
+    b:SetHeight(MORE_H)
+    b.label = UI.Text(b, "caption", "ink-muted")
+    b.label:SetPoint("LEFT")
+    b:SetScript("OnEnter", function(self) self.label:SetColor("ink") end)
+    b:SetScript("OnLeave", function(self) self.label:SetColor("ink-muted") end)
+    b:SetScript("OnClick", function(self)
+        s.open[self.key] = true
+        M:RunSearch()
+    end)
+    s.mores[i] = b
+    return b
+end
+
+-- One matching line: its text (cut to show the match if it's long), the
+-- match on a faint ink ground, underlined in the line's colour.
+function M:ShowRow(r, e, q, size, width)
+    local text = self:Render(e.line, true)
+    r.text:SetFont(BODY_FONT, size, "")
+    r.text:SetTextColor(e.r or 1, e.g or 1, e.b or 1)
+    r.ground:Hide()
+    r.under:Hide()
+    local x1, x2, shown, at, links, s = matchSpan(text, q, size)
+    if x2 and x2 > width - 2 then
+        local cut = snippet(text, shown, at, links, s)
+        if cut then
+            text = cut
+            x1, x2 = matchSpan(text, q, size)
+        end
+    end
+    r.text:SetText(text)
+    if x1 and x2 and x2 <= width then
+        r.ground:ClearAllPoints()
+        r.ground:SetPoint("TOPLEFT", r, "TOPLEFT", x1 - 1, 0)
+        r.ground:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2 + 1, 0)
+        r.ground:Show()
+        r.under:ClearAllPoints()
+        r.under:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", x1, 2)
+        r.under:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2, 2)
+        r.under:SetHeight(1)
+        r.under:SetVertexColor(e.r or 1, e.g or 1, e.b or 1)
+        r.under:Show()
+    end
+end
+
+-- The search again: on typing, a chip, the tab chosen, a group opened.
+function M:RunSearch()
+    local s = self.search
+    if not (s and s.page:IsShown()) then return end
+    for _, b in ipairs(s.chips) do
+        local on = b.value == s.scope
+        b.bg:SetColorTexture(UI.RGBA(on and "arcane-soft" or "surface-raised"))
+        b.edge:SetColor(on and "arcane" or "gilt-line")
+        b.label:SetColor(on and "ink" or "ink-muted")
+    end
+    local query = strtrim(s.field.edit:GetText() or "")
+    local q = query:lower()
+    -- a new search starts at the top, its groups closed
+    if q ~= s.lastQuery or s.scope ~= s.lastScope then
+        s.lastQuery, s.lastScope = q, s.scope
+        wipe(s.open)
+        s.scroll:SetVerticalScroll(0)
+    end
+    for _, list in ipairs({ s.headers, s.rows, s.mores }) do
+        for _, f in ipairs(list) do f:Hide() end
+    end
+    local groups, total = {}, 0
+    if #q >= 2 then groups, total = self:FindLines(q, s.scope) end
+    s.count:SetValue(#q >= 2 and (total == 1 and "1 line" or (total .. " lines")) or "")
+    s.note:SetValue(#q < 2 and "A player's name or a word: every tab and whisper kept."
+        or (total == 0 and "Nothing kept matches." or ""))
+    local width = logWidth() - 8
+    local size = fontSize(ChatFrame1)
+    local rowH = math.ceil(size) + 5
+    local y = 0
+    local nh, nr, nm = 0, 0, 0
+    for gi, group in ipairs(groups) do
+        if nr >= MAX_ROWS then break end
+        if gi > 1 then y = y + S["space-2"] end
+        nh = nh + 1
+        local h = searchHeader(s, nh)
+        h.rule:SetShown(gi > 1)
+        local name = group.who and group.who:match("^([^%-]+)")
+        local class = group.who and classOf(group.who)
+        local token = class and T.color["class-" .. class:lower()] and ("class-" .. class:lower())
+        h.jewel:SetVertexColor(UI.RGBA(token or "ink-muted"))
+        h.jewel:SetShown(name ~= nil)
+        h.name:ClearAllPoints()
+        h.name:SetPoint("LEFT", h, "LEFT", name and (6 + S["space-3"]) or 0, -2)
+        h.name:SetValue(name or "Other lines")
+        h.name:SetColor(token or (name and "ink" or "gilt-text"))
+        local n = #group.lines
+        h.count:SetValue(n == 1 and ("1 line · " .. whereOf(group.lines[1]))
+            or (n .. " lines · last " .. date("%H:%M", group.lines[1].line.at)))
+        h.who = group.who
+        h.whisper:SetShown(group.who ~= nil and not isMe(group.key) and FCF_OpenTemporaryWindow ~= nil)
+        h:ClearAllPoints()
+        h:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+        h:SetWidth(width)
+        h:Show()
+        y = y + GROUP_H
+        local shownLines = s.open[group.key] and n or math.min(GROUP_SHOWN, n)
+        for li = 1, shownLines do
+            if nr >= MAX_ROWS then break end
+            nr = nr + 1
+            local r = searchRow(s, nr)
+            r:SetSize(width, rowH)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+            self:ShowRow(r, group.lines[li], q, size, width)
+            r:Show()
+            y = y + rowH + ROW_GAP
+        end
+        if n > shownLines then
+            nm = nm + 1
+            local b = searchMore(s, nm)
+            b.key = group.key
+            b.label:SetValue((n - shownLines) .. " more")
+            b:SetWidth(math.ceil(UI.MeasureText("caption", b.label.value)) + 4)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+            b:Show()
+            y = y + MORE_H
+        end
+    end
+    s.note:SetShown(nh == 0)
+    s.list:SetHeight(math.max(1, y))
 end
 
 --------------------------------------------------------------------------------
@@ -1159,7 +1915,7 @@ function M:Tick()
     local awake = true
     if self:Get("fadeIdle") then
         local hovered = p:IsMouseOver() and true or false
-        local focused = editBoxFocused()
+        local focused = editBoxFocused() or (self.search and self.search.field.edit:HasFocus() and true or false)
         if hovered or focused then self:Wake() end
         awake = (GetTime() - (self.lastActive or 0)) < self:Get("idleDelay")
     end
@@ -1169,6 +1925,8 @@ function M:Tick()
         local a = awake and 1 or 0
         SuuUI.Motion.AlphaTo(p.deco, a, awake and 0.2 or 1.2)
         SuuUI.Motion.AlphaTo(p.tabs, a, awake and 0.2 or 1.2)
+        -- the Search tab's field and chips go with the tabs; its lines stay
+        if self.search then SuuUI.Motion.AlphaTo(self.search.head, a, awake and 0.2 or 1.2) end
         -- Blizzard's edit boxes: hidden while idle and unfocused
         for _, eb in ipairs(editBoxes()) do
             local ok, f = pcall(eb.HasFocus, eb)
@@ -1366,6 +2124,17 @@ local SECTION = {
             { key = "shortChannels", label = "Short channel names", control = "toggle",
               description = "\"2. Trade\" rather than \"[2. Trade - City]\"; tags without brackets." },
         } },
+        { title = "Kept chat", description = "What the tabs held when you logged out comes back on login, dimmed above an \"Earlier\" divider; whispers are kept per player, so a whisper window opens with your earlier conversation. The Search tab looks through all of it.", rows = {
+            { key = "keepHistory", label = "Keep chat across logouts", control = "toggle",
+              description = "Saved for this character: the last 100 lines of each tab and the last 200 whispers, with their time. The Combat Log isn't kept, nor lines the game hides during a boss fight. Off: nothing is saved from now on." },
+            { label = "Kept chat", control = "button", text = "Clear kept chat",
+              description = "Forgets every kept line and whisper and empties the tabs (the Combat Log stays).",
+              onClick = function()
+                  UI.Confirm({ title = "Clear kept chat?", confirm = "Clear",
+                      text = "Every kept line and whisper is forgotten and the chat tabs are emptied. This can't be undone.",
+                      onConfirm = function() M:ClearHistory() end })
+              end },
+        } },
         { title = "Input", rows = {
             { key = "recall", label = "Up and Down recall", control = "toggle",
               description = "Up and Down bring back what you sent (messages and commands, per character). SuuUI types the line in, so the game then treats the input as SuuUI's until you /reload: commands it protects typed in chat (/camp, /logout, /target, /focus) may be refused, and so may chat in a boss fight. Turn it off for dungeons and raids if that bites." },
@@ -1390,6 +2159,8 @@ function M:OnEnable()
     if C_AddOns and not C_AddOns.IsAddOnLoaded("Blizzard_CombatLog") then pcall(C_AddOns.LoadAddOn, "Blizzard_CombatLog") end
     if not self.panel then self:BuildPanel() end
     self.panel.suuManagedShow = true
+    -- the kept chat, before the first window's mirror is made
+    self:LoadHistory()
     self:Layout()
     self:RegisterMover(self.panel, { key = "position", label = "Chat" })
     self:RegisterSettings(SECTION)
@@ -1448,6 +2219,11 @@ function M:OnEnable()
     end
     self:WatchSent()
     self:WatchClasses()
+    -- kept chat saved as the game logs out or reloads
+    self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveHistory() end)
+    self:Watch("keepHistory", function()
+        if not self:Get("keepHistory") then self:CharData().kept = nil end
+    end)
     self:Watch("timestamps", function() for _, m in pairs(self.mirrors or {}) do m.drawnWithTime = nil end; self:RedrawShown() end)
     self:Watch("globalTab", function() self:ApplyGlobalTab() end)
     self:Watch("position", function() C_Timer.After(0, function() self:PlaceChat() end) end)
