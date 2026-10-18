@@ -29,11 +29,22 @@ local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local ROW_H = 40
-local HEAD_H = T.type.caption.lineHeight + S["space-3"]
+-- read when used: a theme can change the text styles
+local function headH() return T.type.caption.lineHeight + S["space-3"] end
 local TOP_H = 30
 local FOOT_H = 26
 
 local C = {}
+
+-- the live pages, drawn again when the theme changes (colour codes in
+-- their text, sizes from the text styles)
+local contacts, peopleLists, raidGroups = {}, {}, {}
+for _, set in ipairs({ contacts, peopleLists, raidGroups }) do setmetatable(set, { __mode = "k" }) end
+
+-- the diamond at the name's middle
+local function placeDiamond(r)
+    r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
+end
 
 local function badge(parent)
     local b = CreateFrame("Frame", nil, parent)
@@ -60,7 +71,7 @@ local function makeRow(c)
     r.hover:Hide()
     -- the head: a diamond (character) or the Battle.net glyph
     r.diamond = UI.Diamond(r, 7, "ink")
-    r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
+    placeDiamond(r)
     r.glyph = r:CreateTexture(nil, "ARTWORK")
     r.glyph:SetTexture(GLYPHS .. "people.tga")
     r.glyph:SetSize(14, 14)
@@ -94,7 +105,7 @@ end
 
 local function makeHead(c)
     local h = CreateFrame("Frame", nil, c.list.child)
-    h:SetHeight(HEAD_H)
+    h:SetHeight(headH())
     h.text = UI.Text(h, "caption", "gilt-text")
     h.text:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
     h.rule = UI.Hairline(h, "gilt-line", "out")
@@ -114,11 +125,12 @@ function C:Draw()
         local h = self.heads[nHead] or makeHead(self)
         self.heads[nHead] = h
         h.text:SetValue(text)
+        h:SetHeight(headH())
         h:ClearAllPoints()
         h:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
         h:SetPoint("RIGHT", child, "RIGHT")
         h:Show()
-        y = y + HEAD_H + S["space-1"]
+        y = y + headH() + S["space-1"]
     end
     local function row()
         nRow = nRow + 1
@@ -127,6 +139,7 @@ function C:Draw()
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", child, "RIGHT")
+        placeDiamond(r)
         r:Show()
         y = y + ROW_H
         return r
@@ -147,8 +160,8 @@ function C:Draw()
                     r.unignore:Hide()
                     r.diamond:SetShown(not f.bnet)
                     r.glyph:SetShown(f.bnet and true or false)
-                    r.diamond:SetVertexColor(UI.RGBA(f.online and (f.color or "ink") or "ink-faint"))
-                    r.glyph:SetVertexColor(UI.RGBA(f.online and "arcane" or "ink-faint"))
+                    UI.Paint(r.diamond, f.online and (f.color or "ink") or "ink-faint")
+                    UI.Paint(r.glyph, f.online and "arcane" or "ink-faint")
                     -- Battle.net: their name, then the character in its class colour
                     local name = f.name or ""
                     if f.bnet and f.character and f.character ~= "" then
@@ -182,7 +195,7 @@ function C:Draw()
             local r = row()
             r.row, r.ignoredName = nil, name
             r.diamond:Show()
-            r.diamond:SetVertexColor(UI.RGBA("ink-faint"))
+            UI.Paint(r.diamond, "ink-faint")
             r.glyph:Hide()
             r.away:Hide()
             r.name:SetValue(name)
@@ -220,7 +233,7 @@ function C:SetData(d)
     local me = d.me or ""
     local name, number = me:match("^(.-)(#%d+)$")
     self.me:SetValue(name and (name .. "|cff" .. T.color["ink-faint"].hex .. number .. "|r") or me)
-    self.meDot:SetVertexColor(UI.RGBA(STATUS_COLOR[d.status or "available"] or "arcane"))
+    UI.Paint(self.meDot, STATUS_COLOR[d.status or "available"] or "arcane")
     self.views:SetValue(d.view or "friends")
     self.count:SetValue((d.online or 0) .. " of " .. (d.total or 0) .. " online")
     self.count:SetShown((d.view or "friends") == "friends")
@@ -282,6 +295,7 @@ function UI.Contacts(parent)
     c.list:HookScript("OnSizeChanged", function() if c.data then c:Draw() end end)
     c.empty = UI.Text(c.box, "caption", "ink-muted")
     c.empty:SetPoint("CENTER")
+    contacts[c] = true
     return c
 end
 
@@ -309,7 +323,7 @@ local ROLE_ICON = {
     DAMAGER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleDamage.tga",
 }
 local SLOT_H = 22
-local GROUP_LABEL_H = T.type.caption.lineHeight + S["space-2"]
+local function groupLabelH() return T.type.caption.lineHeight + S["space-2"] end
 
 local R = {}
 
@@ -468,7 +482,7 @@ function R:Draw()
                 b.role:SetShown(ROLE_ICON[m.role or ""] ~= nil)
                 if ROLE_ICON[m.role or ""] then
                     b.role:SetTexture(ROLE_ICON[m.role])
-                    b.role:SetVertexColor(UI.RGBA(m.role == "DAMAGER" and "ink-muted" or "ink"))
+                    UI.Paint(b.role, m.role == "DAMAGER" and "ink-muted" or "ink")
                 end
                 b.name:SetValue(m.name or "")
                 b.name:SetColor(m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or "ink")
@@ -494,6 +508,15 @@ function R:SetData(d)
     self:Draw()
 end
 
+-- Each group's slots under its label.
+function R:PlaceSlots()
+    for g = 1, 8 do
+        for i = 1, 5 do
+            self.slots[g][i]:SetPoint("TOPLEFT", self.groups[g], "TOPLEFT", S["space-2"], -(groupLabelH() + (i - 1) * (SLOT_H + S["space-1"])))
+        end
+    end
+end
+
 -- The groups laid out: two columns of four, filling the page's width.
 function R:Layout()
     local w = self:GetWidth()
@@ -501,7 +524,7 @@ function R:Layout()
     local gap = S["space-5"]
     local colW = math.floor((w - gap) / 2)
     local top = 30 + S["space-5"]
-    local groupH = GROUP_LABEL_H + 5 * SLOT_H + 4 * S["space-1"]
+    local groupH = groupLabelH() + 5 * SLOT_H + 4 * S["space-1"]
     for g = 1, 8 do
         local col, row = (g - 1) % 2, math.floor((g - 1) / 2)
         local f = self.groups[g]
@@ -542,11 +565,11 @@ function UI.RaidGroups(parent)
         r.slots[g] = {}
         for i = 1, 5 do
             local b = slot(r, g, i)
-            b:SetPoint("TOPLEFT", f, "TOPLEFT", S["space-2"], -(GROUP_LABEL_H + (i - 1) * (SLOT_H + S["space-1"])))
             b:SetPoint("RIGHT", f, "RIGHT", -S["space-2"], 0)
             r.slots[g][i] = b
         end
     end
+    r:PlaceSlots()
     -- not in a raid
     r.notIn = UI.Text(r, "body", "ink-muted")
     r.notIn:SetPoint("TOPLEFT", 0, -(30 + S["space-6"]))
@@ -558,6 +581,7 @@ function UI.RaidGroups(parent)
         onClick = function() if r.onConvert then r.onConvert() end end })
     r.convert:SetPoint("TOPLEFT", r.notIn, "BOTTOMLEFT", 0, -S["space-5"])
     r:SetScript("OnSizeChanged", function(self) self:Layout() end)
+    raidGroups[r] = true
     return r
 end
 
@@ -584,7 +608,7 @@ local function plRow(l)
     r.hover:SetAllPoints()
     r.hover:Hide()
     r.diamond = UI.Diamond(r, 7, "ink")
-    r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
+    placeDiamond(r)
     r.glyph = r:CreateTexture(nil, "ARTWORK")
     r.glyph:SetTexture(GLYPHS .. "people.tga")
     r.glyph:SetSize(14, 14)
@@ -592,7 +616,7 @@ local function plRow(l)
     r.pin = r:CreateTexture(nil, "ARTWORK")
     r.pin:SetTexture(GLYPHS .. "flag.tga")
     r.pin:SetSize(11, 11)
-    r.pin:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(r.pin, "gilt-text")
     r.name = UI.Text(r, "label", "ink")
     r.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
     r.name:SetJustifyH("LEFT")
@@ -624,7 +648,8 @@ function PL:Draw()
     local rows = d.rows or {}
     self.head.text:SetValue((d.title or "") .. " · " .. #rows)
     self.head:SetShown(#rows > 0)
-    local y = #rows > 0 and (HEAD_H + S["space-1"]) or 0
+    self.head:SetHeight(headH())
+    local y = #rows > 0 and (headH() + S["space-1"]) or 0
     for i, row in ipairs(rows) do
         local r = self.rows[i] or plRow(self)
         self.rows[i] = r
@@ -632,10 +657,11 @@ function PL:Draw()
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", child, "RIGHT")
+        placeDiamond(r)
         r.diamond:SetShown(not row.glyph)
         r.glyph:SetShown(row.glyph and true or false)
-        r.diamond:SetVertexColor(UI.RGBA(row.online and (row.color or "ink") or "ink-faint"))
-        r.glyph:SetVertexColor(UI.RGBA(row.online and "arcane" or "ink-muted"))
+        UI.Paint(r.diamond, row.online and (row.color or "ink") or "ink-faint")
+        UI.Paint(r.glyph, row.online and "arcane" or "ink-muted")
         r.name:SetValue(row.name or "")
         r.name:SetColor(row.online ~= false and (row.color or "ink") or "ink-muted")
         r.pin:SetShown(row.pinned and true or false)
@@ -692,5 +718,12 @@ function UI.PeopleList(parent)
     l.head:SetPoint("RIGHT", l.list.child, "RIGHT")
     l.empty = UI.Text(l, "caption", "ink-muted")
     l.empty:SetPoint("CENTER")
+    peopleLists[l] = true
     return l
 end
+
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for c in pairs(contacts) do if c.data then c:SetData(c.data) end end
+    for l in pairs(peopleLists) do if l.data then l:Draw() end end
+    for r in pairs(raidGroups) do r:PlaceSlots(); r:Layout() end
+end, "Social")

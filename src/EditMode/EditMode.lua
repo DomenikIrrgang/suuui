@@ -127,7 +127,7 @@ local function sync(m)
     o.size:SetValue(("%d × %d"):format(w + 0.5, h + 0.5))
     local hidden = Settings.Get(m.namespace, m.key).hidden
     o:SetAlpha(hidden and T.opacity["opacity-disabled"] or 1)
-    o.tagBg:SetColorTexture(UI.RGBA(hidden and "ink-faint" or "arcane"))
+    UI.PaintFill(o.tagBg, hidden and "ink-faint" or "arcane")
     o.tag:SetValue(m.label .. (hidden and " (hidden)" or ""))
     o.tagFrame:SetWidth(o.tag:GetUnboundedStringWidth() + 10)
     local on = selected == m
@@ -179,7 +179,7 @@ local function buildOverlay(m)
     o:RegisterForDrag("LeftButton")
     o.wash = o:CreateTexture(nil, "BACKGROUND")
     o.wash:SetAllPoints()
-    o.wash:SetColorTexture(UI.RGBA("arcane", 0.06))
+    UI.PaintFill(o.wash, "arcane", 0.06)
     o.edge = UI.Border(o, "arcane")
     o.glow = UI.Shadow(o, "glow-arcane")
     o.glow:SetShown(false)
@@ -262,7 +262,7 @@ local function drawGrid()
         i = i + 1
         local t = gridLines[i] or overlay:CreateTexture(nil, "BACKGROUND", nil, 1)
         gridLines[i] = t
-        t:SetColorTexture(UI.RGBA("arcane", alpha))
+        UI.PaintFill(t, "arcane", alpha)
         t:ClearAllPoints()
         local px = ns.Pixel.Size(overlay)
         if vertical then
@@ -308,6 +308,7 @@ local function buildPanel()
     -- made-up players in the group frames, at their real place and size
     local previewRow = CreateFrame("Frame", nil, p.body)
     previewRow:SetSize(226, T.type.label.lineHeight + S["space-2"] + 28)
+    p.previewRow, p.stack = previewRow, stack
     local previewLabel = UI.Text(previewRow, "label", "ink")
     previewLabel:SetValue("Group preview (players)")
     previewLabel:SetPoint("TOPLEFT")
@@ -517,6 +518,19 @@ end, "EditMode")
 
 Settings.Watch("layout", "gridSize", function() if active then drawGrid() end end, "EditMode")
 Events.On("SUUUI_ROOT_SCALED", function() if active then drawGrid() end end, "EditMode")
+-- a theme change: what is sized by a text style's line height (colours
+-- follow by themselves)
+Events.On("SUUUI_THEME_CHANGED", function()
+    for _, o in pairs(overlays) do o.tagFrame:SetHeight(T.type.caption.lineHeight + 2) end
+    local p = overlay and overlay.panel
+    if p then
+        p.previewRow:SetHeight(T.type.label.lineHeight + S["space-2"] + 28)
+        p.stack:Invalidate()
+    end
+    if active then
+        for _, m in ipairs(movers) do if m.overlay and m.overlay:IsShown() then sync(m) end end
+    end
+end, "EditMode")
 
 --------------------------------------------------------------------------------
 -- Registering movers

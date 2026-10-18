@@ -193,14 +193,12 @@ local function bar(f, level, color)
     b:SetFrameLevel(f:GetFrameLevel() + level)
     b:SetMinMaxValues(0, 1)
     b:SetValue(0)
-    if color then b:SetStatusBarColor(UI.RGBA(color)) end
+    if color then UI.Paint(b, color) end
     return b
 end
 
 local function gradient(b, deep, fill)
-    local r1, g1, b1, a1 = UI.RGBA(deep)
-    local r2, g2, b2, a2 = UI.RGBA(fill)
-    b:GetStatusBarTexture():SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    UI.PaintGradient(b:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
 
 function UI.UnitFrame(parent, unit, opts)
@@ -266,7 +264,7 @@ function UI.UnitFrame(parent, unit, opts)
     f.tint = f.health:CreateTexture(nil, "BACKGROUND")
     f.tint:SetPoint("TOPLEFT", f.health:GetStatusBarTexture(), "TOPRIGHT")
     f.tint:SetPoint("BOTTOMRIGHT", f.inner, "BOTTOMRIGHT")
-    f.tint:SetColorTexture(UI.RGBA("ember"))
+    UI.PaintFill(f.tint, "ember")
     f.tint:SetAlpha(0)
 
     -- Incoming heals, then absorbs, each starting where the one before ends.
@@ -279,7 +277,7 @@ function UI.UnitFrame(parent, unit, opts)
     local hatch = f.absorb:GetStatusBarTexture()
     hatch:SetHorizTile(true)
     hatch:SetVertTile(true)
-    f.absorb:SetStatusBarColor(UI.RGBA("ward-absorb"))
+    UI.Paint(f.absorb, "ward-absorb")
     f.absorb:SetPoint("TOPLEFT", f.incoming:GetStatusBarTexture(), "TOPRIGHT")
     f.absorb:SetPoint("BOTTOMLEFT", f.incoming:GetStatusBarTexture(), "BOTTOMRIGHT")
     f.absorb:SetWidth(w - 2)
@@ -455,7 +453,7 @@ function UF:UpdatePower()
     self.power:SetShown(shown)
     self.powerLow:SetShown(shown and token == "MANA")
     if not shown then return end
-    self.power:SetStatusBarColor(UI.RGBA(POWER_TOKEN[token] or "mana"))
+    UI.Paint(self.power, POWER_TOKEN[token] or "mana")
     self.power:SetMinMaxValues(0, amount(max))
     self.power:SetValue(amount(A.UnitPower(u, pType)))
     if token == "MANA" then
@@ -511,17 +509,18 @@ function UF:UpdateIdentity()
     local role = UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(u)
     local isPlayer = UI.Flag(A.UnitIsPlayer(u))
     local _, class = A.UnitClass(u)
-    local classColor = isPlayer and not isSecret(class) and class and T.color["class-" .. class:lower()]
+    local classColor = isPlayer and not isSecret(class) and class and "class-" .. class:lower()
+    if classColor and not T.color[classColor] then classColor = nil end
     self.role:Hide()
     self.classDot:Hide()
     local marker
     if not isSecret(role) and role and ROLE_ICON[role] then
         self.role:SetTexture(ROLE_ICON[role])
-        self.role:SetVertexColor(UI.RGBA(role == "DAMAGER" and "ink-muted" or "ink"))
+        UI.Paint(self.role, role == "DAMAGER" and "ink-muted" or "ink")
         self.role:Show()
         marker = self.role
     elseif classColor then
-        self.classDot:SetVertexColor(unpack(classColor))
+        UI.Paint(self.classDot, classColor)
         self.classDot:Show()
         marker = self.classDot
     end
@@ -534,7 +533,7 @@ function UF:UpdateIdentity()
     elseif self.opts.nameColor == "ink" then
         self.name:SetColor("ink")
     elseif classColor then
-        self.name:SetTextColor(unpack(classColor))
+        self.name:SetColor(classColor)
     else
         local r = A.UnitReaction(u, "player")
         if isSecret(r) or not r then
@@ -769,8 +768,10 @@ local function indicatorLook(f, parent, ind, previewArt, missing)
         look:SetAllPoints(f.health:GetStatusBarTexture())
         local tex = look:CreateTexture(nil, "ARTWORK")
         tex:SetAllPoints()
-        local r, g, b = UI.RGBA(color)
-        tex:SetColorTexture(r, g, b, 0.45)
+        UI.Bind(tex, function(t)
+            local r, g, b = UI.RGBA(color)
+            t:SetColorTexture(r, g, b, 0.45)
+        end)
         look:SetFrameLevel(f.health:GetFrameLevel() + 1)
     else
         local size = ind.size or 10

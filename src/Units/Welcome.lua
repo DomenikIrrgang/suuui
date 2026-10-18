@@ -8,10 +8,7 @@
 -- between steps, Skip on every one.
 -- Start playing applies both: the role's preset profile (SuuTank, SuuHeal,
 -- SuuDps), which this character switches to, and colour vision for the
--- account. Colour vision takes a reload, which addon code can't do on
--- Forever: then a secure /reload button lies over Start playing (as the game
--- menu's Reload UI does), placed out of combat. Skip changes nothing. Both
--- mark it seen for the account; Settings › General and /suu welcome open it
+-- account (it applies at once). Skip changes nothing. Both mark it seen for the account; Settings › General and /suu welcome open it
 -- again.
 -- A built-in module written against the public API only.
 
@@ -36,7 +33,8 @@ local PANEL_W, BODY_H = 440, 640
 local PAD_TOP, PAD_SIDE, PAD_BOTTOM = 10, 6, 2
 local GAP = 16
 local INNER_W = PANEL_W - 2 * S["space-5"] - 2 * PAD_SIDE -- 404
-local LINE = { caption = T.type.caption.lineHeight, label = T.type.label.lineHeight, body = T.type.body.lineHeight }
+-- a text style's line height, read when used (a theme may change it)
+local LINE = setmetatable({}, { __index = function(_, style) return T.type[style].lineHeight end })
 
 local ROLES = {
     { id = "TANK", glyph = "shield", label = "Tank",
@@ -63,7 +61,7 @@ local function glyph(parent, name, size, color, layer)
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
     t:SetTexture(GLYPHS .. name .. ".tga")
     t:SetSize(size, size)
-    t:SetVertexColor(UI.RGBA(color))
+    UI.Paint(t, color)
     return t
 end
 
@@ -71,9 +69,12 @@ local function circle(parent, size, color, sublevel)
     local t = parent:CreateTexture(nil, "ARTWORK", nil, sublevel)
     t:SetTexture(CIRCLE)
     t:SetSize(size, size)
-    t:SetVertexColor(UI.RGBA(color))
+    UI.Paint(t, color)
     return t
 end
+
+-- the wrapped texts and their styles, for a theme change
+local wraps = setmetatable({}, { __mode = "k" })
 
 -- Caption text that wraps at `width`, 14 px a line as in the design.
 local function wrapped(parent, style, color, width)
@@ -83,6 +84,7 @@ local function wrapped(parent, style, color, width)
     fs:SetJustifyV("TOP")
     fs:SetWidth(width)
     fs:SetSpacing(T.type[style].lineHeight - T.type[style].size)
+    wraps[fs] = style
     return fs
 end
 
@@ -106,13 +108,13 @@ local Tile = {}
 
 function Tile:SetSelected(on)
     self.selected = on
-    self.bg:SetColorTexture(UI.RGBA(on and "arcane-soft" or "surface-raised"))
+    UI.PaintFill(self.bg, on and "arcane-soft" or "surface-raised")
     self.border:SetColor(on and "arcane" or "gilt-line")
     self.inner:SetShown(on)
-    self.ring:SetVertexColor(UI.RGBA(on and "arcane" or "gilt-line"))
-    self.hole:SetVertexColor(UI.RGBA(on and "arcane-soft" or "surface-raised"))
+    UI.Paint(self.ring, on and "arcane" or "gilt-line")
+    UI.Paint(self.hole, on and "arcane-soft" or "surface-raised")
     self.dot:SetShown(on)
-    if self.icon then self.icon:SetVertexColor(UI.RGBA(on and "arcane" or "ink-muted")) end
+    if self.icon then UI.Paint(self.icon, on and "arcane" or "ink-muted") end
     if self.meta then self.meta:SetColor(on and "arcane" or "ink-faint") end
 end
 
@@ -146,49 +148,68 @@ function M:BuildHead(box)
     self.mark = UI.LoadingMark(box, { size = 30 })
     self.mark:SetPoint("TOP", 0, 0)
     self.mark:Show()
-    local y = self.mark:GetHeight() + S["space-3"] + 2
     -- the title: the display face at 21 px on a 26 px line
-    local title = UI.Text(box, "alert", "ink")
-    title:SetFont(T.type.alert.file, 21, "")
-    title:SetPoint("CENTER", box, "TOP", 0, -(y + 13))
-    title:SetValue("Welcome to SuuUI")
-    y = y + 26 + S["space-3"]
-    local sub = UI.Text(box, "caption", "ink-muted")
-    sub:SetPoint("CENTER", box, "TOP", 0, -(y + LINE.caption / 2))
-    sub:SetValue("Quiet until it matters. Three short steps.")
-    y = y + LINE.caption + GAP
+    self.headTitle = UI.Text(box, "alert", "ink")
+    self.headTitle:SetValue("Welcome to SuuUI")
+    self.headSub = UI.Text(box, "caption", "ink-muted")
+    self.headSub:SetValue("Quiet until it matters. Three short steps.")
 
     -- the step dots: done in gilt, this one arcane with its glow, the rest outlined
-    local row = CreateFrame("Frame", nil, box)
-    row:SetHeight(LINE.caption)
-    row:SetPoint("TOP", 0, -y)
+    self.dotRow = CreateFrame("Frame", nil, box)
+    local row = self.dotRow
     self.dots = {}
-    local x = 0
     for i, text in ipairs(STEPS) do
-        if i > 1 then
-            local line = UI.Fill(row, "gilt-line", "ARTWORK")
-            line:SetSize(20, 1)
-            line:SetPoint("LEFT", row, "LEFT", x, 0)
-            x = x + 20 + S["space-4"]
-        end
         local d = {}
+        if i > 1 then
+            d.line = UI.Fill(row, "gilt-line", "ARTWORK")
+            d.line:SetSize(20, 1)
+        end
         d.glow = row:CreateTexture(nil, "BACKGROUND")
         d.glow:SetTexture(SOFT)
         d.glow:SetSize(22, 22)
-        d.glow:SetVertexColor(UI.RGBA("arcane-glow"))
-        d.glow:SetPoint("CENTER", row, "LEFT", x + 4, 0)
+        UI.Paint(d.glow, "arcane-glow")
         d.edge = UI.Diamond(row, 8, "gilt-line", "ARTWORK", 1)
-        d.edge:SetPoint("CENTER", row, "LEFT", x + 4, 0)
         -- an outline: the panel's ground inside a 1 px edge
         d.hole = UI.Diamond(row, 6, "surface", "ARTWORK", 2)
         d.hole:SetPoint("CENTER", d.edge)
         d.fill = UI.Diamond(row, 8, "arcane", "ARTWORK", 3)
         d.fill:SetPoint("CENTER", d.edge)
         d.text = UI.Text(row, "caption", "ink-faint")
-        d.text:SetPoint("LEFT", row, "LEFT", x + 8 + 7, 0)
         d.text:SetValue(text)
-        x = x + 8 + 7 + UI.MeasureText("caption", text) + S["space-4"]
         self.dots[i] = d
+    end
+    return self:LayoutHead(box)
+end
+
+-- The head's lines from the text styles (again after a theme change);
+-- returns where the steps start.
+function M:LayoutHead(box)
+    local y = self.mark:GetHeight() + S["space-3"] + 2
+    self.headTitle:SetFont(T.type.alert.file, 21, "")
+    self.headTitle:ClearAllPoints()
+    self.headTitle:SetPoint("CENTER", box, "TOP", 0, -(y + 13))
+    y = y + 26 + S["space-3"]
+    self.headSub:ClearAllPoints()
+    self.headSub:SetPoint("CENTER", box, "TOP", 0, -(y + LINE.caption / 2))
+    y = y + LINE.caption + GAP
+    local row = self.dotRow
+    row:SetHeight(LINE.caption)
+    row:ClearAllPoints()
+    row:SetPoint("TOP", 0, -y)
+    local x = 0
+    for i, d in ipairs(self.dots) do
+        if d.line then
+            d.line:ClearAllPoints()
+            d.line:SetPoint("LEFT", row, "LEFT", x, 0)
+            x = x + 20 + S["space-4"]
+        end
+        d.glow:ClearAllPoints()
+        d.glow:SetPoint("CENTER", row, "LEFT", x + 4, 0)
+        d.edge:ClearAllPoints()
+        d.edge:SetPoint("CENTER", row, "LEFT", x + 4, 0)
+        d.text:ClearAllPoints()
+        d.text:SetPoint("LEFT", row, "LEFT", x + 8 + 7, 0)
+        x = x + 8 + 7 + UI.MeasureText("caption", STEPS[i]) + S["space-4"]
     end
     row:SetWidth(x - S["space-4"])
     return y + LINE.caption + GAP
@@ -199,7 +220,7 @@ function M:DrawDots()
         local now, done = i == self.step, i < self.step
         d.glow:SetShown(now)
         d.fill:SetShown(now or done)
-        d.fill:SetVertexColor(UI.RGBA(now and "arcane" or "gilt"))
+        UI.Paint(d.fill, now and "arcane" or "gilt")
         d.edge:SetShown(not (now or done))
         d.hole:SetShown(not (now or done))
         d.text:SetColor(now and "ink" or (done and "ink-muted" or "ink-faint"))
@@ -274,7 +295,7 @@ function M:BuildColours(page)
         page.tiles[#page.tiles + 1] = b
     end
     page.note = wrapped(page, "caption", "ink-muted", INNER_W)
-    page.note:SetValue("Only the signal colours change; shapes, badges and labels stay. Takes effect after a reload.")
+    page.note:SetValue("Only the signal colours change; shapes, badges and labels stay.")
 end
 
 function M:LayoutColours(page)
@@ -309,7 +330,7 @@ function M:LayoutColours(page)
     page.note:SetPoint("TOPLEFT", 0, -(y + (LINE.caption - T.type.caption.size) / 2))
 end
 
--- Step 3: where things are, the choices summed up, the reload said first.
+-- Step 3: where things are, the choices summed up.
 local PLACES = {
     { key = "/suu", label = "Settings", text = "or Esc › SuuUI settings" },
     { key = "/suu edit", label = "Move frames", text = "or Esc › Edit Mode" },
@@ -338,34 +359,20 @@ function M:BuildPlaces(page)
 
     -- your choices, on surface-sunk
     local box = CreateFrame("Frame", nil, page)
-    box:SetSize(INNER_W, 10 + LINE.caption + S["space-3"] + LINE.body + S["space-3"] + LINE.body + 10)
     UI.Fill(box, "surface-sunk"):SetAllPoints()
     UI.Border(box, "gilt-faint")
-    local head = UI.Text(box, "caption", "ink-faint")
-    placeLine(head, box, S["space-5"], 10, "caption")
-    head:SetValue("Your choices")
+    box.head = UI.Text(box, "caption", "ink-faint")
+    box.head:SetValue("Your choices")
     page.choices = {}
     for i = 1, 2 do
-        local top = 10 + LINE.caption + S["space-3"] + (i - 1) * (LINE.body + S["space-3"])
         local c = {}
         c.glyph = glyph(box, "plus", 14, "arcane")
-        c.glyph:SetPoint("LEFT", box, "TOPLEFT", S["space-5"], -(top + LINE.body / 2))
         c.text = UI.Text(box, "body", "ink")
-        placeLine(c.text, box, S["space-5"] + 14 + S["space-4"], top, "body")
         c.meta = UI.Text(box, "caption", "ink-muted")
         c.meta:SetPoint("LEFT", c.text, "RIGHT", S["space-4"], 0)
         page.choices[i] = c
     end
     page.box = box
-
-    -- the reload, said before the click
-    page.reload = CreateFrame("Frame", nil, page)
-    page.reload:SetSize(INNER_W, LINE.caption)
-    local icon = glyph(page.reload, "reset", 14, "amber")
-    icon:SetPoint("LEFT")
-    local text = UI.Text(page.reload, "caption", "ink")
-    text:SetPoint("LEFT", icon, "RIGHT", S["space-3"], 0)
-    text:SetValue("Start playing reloads the interface once, for the new colours.")
 end
 
 function M:LayoutPlaces(page)
@@ -386,11 +393,17 @@ function M:LayoutPlaces(page)
         y = y + LINE.label + 1 + linesHeight(r.text, "caption") + 10
     end
     y = y - 10 + S["space-5"]
+    local box = page.box
+    box:SetSize(INNER_W, 10 + LINE.caption + S["space-3"] + LINE.body + S["space-3"] + LINE.body + 10)
+    placeLine(box.head, box, S["space-5"], 10, "caption")
+    for i, c in ipairs(page.choices) do
+        local top = 10 + LINE.caption + S["space-3"] + (i - 1) * (LINE.body + S["space-3"])
+        c.glyph:ClearAllPoints()
+        c.glyph:SetPoint("LEFT", box, "TOPLEFT", S["space-5"], -(top + LINE.body / 2))
+        placeLine(c.text, box, S["space-5"] + 14 + S["space-4"], top, "body")
+    end
     page.box:ClearAllPoints()
     page.box:SetPoint("TOPLEFT", 0, -y)
-    y = y + page.box:GetHeight() + S["space-5"]
-    page.reload:ClearAllPoints()
-    page.reload:SetPoint("TOPLEFT", 0, -y)
 end
 
 function M:DrawSummary(page)
@@ -415,7 +428,6 @@ function M:DrawSummary(page)
     end
     vision.text:SetValue(label .. " colours")
     vision.meta:SetValue("every character")
-    page.reload:SetShown(self:NeedsReload())
 end
 
 function M:Build()
@@ -464,6 +476,7 @@ function M:Build()
     self.back = UI.Button(box, { text = "Back", icon = "chevronLeft", onClick = function() self:Go(self.step - 1) end })
     self.back:SetPoint("BOTTOMRIGHT", self.next, "BOTTOMLEFT", -S["space-4"], 0)
     local footTop = 30 + GAP
+    self.footTop = footTop
     local rule = UI.Hairline(box, "gilt-line", "both")
     rule:SetPoint("BOTTOMLEFT", 0, footTop)
     rule:SetPoint("BOTTOMRIGHT", 0, footTop)
@@ -487,11 +500,6 @@ end
 -- Showing and choosing
 --------------------------------------------------------------------------------
 
-function M:NeedsReload()
-    local _, applied = SuuUI.ColorVision()
-    return self.vision ~= applied
-end
-
 function M:DrawChoices()
     for _, b in ipairs(self.pages[1].tiles) do b:SetSelected(b.value == self.role) end
     for _, b in ipairs(self.pages[2].tiles) do b:SetSelected(b.value == self.vision) end
@@ -510,12 +518,8 @@ function M:Go(step)
     self.play:SetShown(self.step == 3)
     self.back:ClearAllPoints()
     self.back:SetPoint("BOTTOMRIGHT", self.step == 3 and self.play or self.next, "BOTTOMLEFT", -S["space-4"], 0)
-    if self.step == 3 then
-        self:DrawSummary(self.pages[3])
-        self.play:SetIcon(self:NeedsReload() and "reset" or nil)
-    end
+    if self.step == 3 then self:DrawSummary(self.pages[3]) end
     self:DrawStart()
-    self:PlaceSecure()
 end
 
 -- Start playing waits for the end of a fight: the layout moves secure frames.
@@ -530,7 +534,6 @@ function M:Show()
     -- nothing chosen: your layout stays, the colours you have
     self.role = "keep"
     self.vision = (SuuUI.ColorVision())
-    self.applying = nil
     self:DrawChoices()
     self.dim:Show()
     SuuUI.Motion.Enter(self.panel, T.duration["dur-base"])
@@ -545,7 +548,6 @@ function M:Close()
     if not (self.dim and self.dim:IsShown()) then return end
     self:MarkSeen()
     self.dim:Hide()
-    self:PlaceSecure()
 end
 
 -- The choices made real: the role's preset (this character switches to it)
@@ -563,44 +565,9 @@ function M:Apply()
     return true
 end
 
--- Without a reload; with one, the secure button over it runs instead.
 function M:Start()
     if InCombatLockdown() then return end
     if self:Apply() then self:Close() end
-end
-
--- The secure /reload button over Start playing: there on step 3 while the
--- colours change, out of combat (a secure frame can't be placed in one).
-function M:PlaceSecure()
-    if InCombatLockdown() then return end
-    local on = self.dim and self.dim:IsShown() and self.step == 3 and self:NeedsReload()
-    if not on then
-        if self.over then self.over:Hide() end
-        return
-    end
-    local over = self.over
-    if not over then
-        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-        over:SetAttribute("type1", "macro")
-        over:SetAttribute("macrotext1", "/reload")
-        over:SetScript("OnEnter", function() self.play:GetScript("OnEnter")(self.play) end)
-        over:SetScript("OnLeave", function() self.play:GetScript("OnLeave")(self.play) end)
-        -- the choices are saved before the reload (saved variables are
-        -- written as it happens); once, though the click comes down and up
-        over:SetScript("PreClick", function()
-            if self.applying then return end
-            self.applying = true
-            PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
-            self:Apply()
-        end)
-        self.over = over
-    end
-    over:ClearAllPoints()
-    over:SetFrameStrata("DIALOG")
-    over:SetFrameLevel(self.panel:GetFrameLevel() + 20)
-    over:SetAllPoints(self.play)
-    over:Show()
 end
 
 --------------------------------------------------------------------------------
@@ -611,17 +578,24 @@ function M:OnEnable()
     self:Provide("welcome", { Show = function() self:Show() end })
     self:RegisterCommand("welcome", "Show the first-run welcome again: role layout, colour vision, where things are.",
         function() self:Show() end)
-    -- before combat locks secure frames: the reload button goes, Start
-    -- playing waits; after it, both come back
+    -- Start playing waits for the end of a fight
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-        if self.over then self.over:Hide() end
         if self.dim and self.dim:IsShown() then self:DrawStart() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.dim and self.dim:IsShown() then
-            self:DrawStart()
-            self:PlaceSecure()
+        if self.dim and self.dim:IsShown() then self:DrawStart() end
+    end)
+    -- a theme change: the line heights and faces again, the open step laid out anew
+    self:On("SUUUI_THEME_CHANGED", function()
+        if not self.panel then return end
+        for fs, style in pairs(wraps) do fs:SetSpacing(T.type[style].lineHeight - T.type[style].size) end
+        local top = self:LayoutHead(self.headTitle:GetParent())
+        for _, page in ipairs(self.pages) do
+            page:ClearAllPoints()
+            page:SetPoint("TOPLEFT", 0, -top)
+            page:SetPoint("BOTTOMRIGHT", 0, self.footTop + 1 + GAP)
         end
+        if self.dim:IsShown() then self:Go(self.step) end
     end)
     -- once per account, at the first login with SuuUI: a moment after the
     -- world is in, and out of combat
@@ -637,5 +611,4 @@ end
 
 function M:OnDisable()
     if self.dim then self.dim:Hide() end
-    self:PlaceSecure()
 end

@@ -155,13 +155,11 @@ local function fillBar(parent, level, deep, top, edge)
     b:SetStatusBarTexture(WHITE)
     local tex = b:GetStatusBarTexture()
     tex:SetSnapToPixelGrid(false)
-    local r1, g1, b1, a1 = UI.RGBA(deep)
-    local r2, g2, b2, a2 = UI.RGBA(top)
-    tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    UI.PaintGradient(tex, "HORIZONTAL", deep, top)
     b:SetFrameLevel(level)
     -- the 2px edge at the fill's leading end
     local e = b:CreateTexture(nil, "OVERLAY")
-    e:SetColorTexture(UI.RGBA(edge))
+    UI.PaintFill(e, edge)
     e:SetPoint("TOPRIGHT", tex, "TOPRIGHT")
     e:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT")
     e:SetWidth(2)
@@ -214,8 +212,7 @@ function UI.CastBar(parent, unit, opts)
     else
         -- your own cast: transparent to ghost, an ink edge
         f.fill = fillBar(inner, level + 1, "ghost", "ghost", "ink")
-        local r, g, b = UI.RGBA("ghost")
-        f.fill:GetStatusBarTexture():SetGradient("HORIZONTAL", CreateColor(r, g, b, 0), CreateColor(r, g, b, 0.5))
+        UI.PaintGradient(f.fill:GetStatusBarTexture(), "HORIZONTAL", "ghost", "ghost", 0)
     end
     f.fill:SetAllPoints(inner)
     f.border = UI.Border(bar, "gilt-hairline", { layer = "OVERLAY" })
@@ -246,7 +243,7 @@ function UI.CastBar(parent, unit, opts)
         local lock = f.lockHost:CreateTexture(nil, "OVERLAY")
         lock:SetTexture(LOCK)
         lock:SetDesaturated(true)
-        lock:SetVertexColor(UI.RGBA("ink"))
+        UI.Paint(lock, "ink")
         local ls = opts.size == "md" and 12 or 10
         lock:SetSize(ls, ls)
         f.lockW = ls + S["space-2"]
@@ -498,7 +495,7 @@ function CB:UpdateKick()
     -- unknown (secret in combat): its seconds go too, or every frame of the
     -- cast asked for the cooldown again
     if ready == nil then k.secs:Hide() return end
-    k.glyph:SetVertexColor(UI.RGBA(ready and "arcane" or "ink-faint"))
+    UI.Paint(k.glyph, ready and "arcane" or "ink-faint")
     k.secs:SetShown(not ready)
 end
 

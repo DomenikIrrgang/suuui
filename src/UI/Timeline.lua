@@ -127,18 +127,18 @@ local function buildTrack(t)
     track:SetSize(UI.Size("timeline-w"), TRACK_H)
     t.track = track
     local line = track:CreateTexture(nil, "ARTWORK")
-    line:SetColorTexture(UI.RGBA("gilt-line"))
+    UI.PaintFill(line, "gilt-line")
     line:SetPoint("TOPLEFT", 0, -LINE_Y)
     line:SetPoint("TOPRIGHT", 0, -LINE_Y)
     line:SetHeight(2)
     local now = track:CreateTexture(nil, "OVERLAY")
-    now:SetColorTexture(UI.RGBA("ink"))
+    UI.PaintFill(now, "ink")
     now:SetSize(2, 18)
     now:SetPoint("TOPLEFT", -1, -3)
     t.ticks = {}
     for s = 5, t.window - 1, 5 do
         local tick = track:CreateTexture(nil, "ARTWORK")
-        tick:SetColorTexture(UI.RGBA("gilt-line"))
+        UI.PaintFill(tick, "gilt-line")
         tick:SetSize(1, 8)
         tick:SetPoint("TOPLEFT", math.floor(s / t.window * track:GetWidth() + 0.5), -8)
         t.ticks[#t.ticks + 1] = tick
@@ -173,7 +173,7 @@ local function listRow(t, i)
     r.badge = UI.StateBadge(r, "warning", "Tank")
     r.badge:SetPoint("RIGHT", r.time, "LEFT", -S["space-4"], 0)
     r.track = r:CreateTexture(nil, "BACKGROUND")
-    r.track:SetColorTexture(UI.RGBA("track"))
+    UI.PaintFill(r.track, "track")
     r.track:SetPoint("BOTTOMLEFT")
     r.track:SetPoint("BOTTOMRIGHT")
     r.track:SetHeight(2)
@@ -202,7 +202,7 @@ local function layoutList(t, now)
         local soon = x.r <= t.soonAt
         r.time:SetValue(fmtTime(x.r))
         r.time:SetColor(soon and "amber" or "ink")
-        r.drain:SetColorTexture(UI.RGBA(soon and "amber" or "ink-muted"))
+        UI.PaintFill(r.drain, soon and "amber" or "ink-muted")
         r.drain:SetWidth(math.max(1, math.min(1, x.r / t.window) * innerW))
         r:Show()
         y = y + ROW_H + S["space-3"]
@@ -211,6 +211,25 @@ local function layoutList(t, now)
     t.list:SetHeight(math.max(t.listTop + S["space-5"], y - S["space-3"] + S["space-5"]))
     t:SetHeight(t.list:GetHeight())
 end
+
+-- the rule under the title, and the rows under it, by the header's line
+-- height (again when a theme changes it)
+local lists = setmetatable({}, { __mode = "k" })
+local function placeRule(t)
+    local y = S["space-4"] * 2 + T.type.header.lineHeight
+    local rule = t.list.rule
+    rule:ClearAllPoints()
+    rule:SetPoint("TOPLEFT", 1, -y)
+    rule:SetPoint("TOPRIGHT", -1, -y)
+    t.listTop = y + 1 + S["space-4"]
+end
+
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for t in pairs(lists) do
+        placeRule(t)
+        if t.variant == "list" then t:Layout() end
+    end
+end, "Timeline")
 
 local function buildList(t)
     local p = CreateFrame("Frame", nil, t)
@@ -226,14 +245,13 @@ local function buildList(t)
     p.meta:SetPoint("LEFT", p.title, "RIGHT", S["space-3"], 0)
     p.meta:SetPoint("RIGHT", -S["space-5"], 0)
     p.meta:SetWordWrap(false)
-    local rule = p:CreateTexture(nil, "BORDER")
-    rule:SetColorTexture(UI.RGBA("gilt-faint"))
-    rule:SetPoint("TOPLEFT", 1, -(S["space-4"] * 2 + T.type.header.lineHeight))
-    rule:SetPoint("TOPRIGHT", -1, -(S["space-4"] * 2 + T.type.header.lineHeight))
-    rule:SetHeight(1)
-    t.listTop = S["space-4"] * 2 + T.type.header.lineHeight + 1 + S["space-4"]
+    p.rule = p:CreateTexture(nil, "BORDER")
+    UI.PaintFill(p.rule, "gilt-faint")
+    p.rule:SetHeight(1)
     t.list = p
     t.rows = {}
+    placeRule(t)
+    lists[t] = true
 end
 
 --------------------------------------------------------------------------------

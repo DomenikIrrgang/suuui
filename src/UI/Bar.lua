@@ -23,10 +23,7 @@ local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.
 local Bar = {}
 
 function Bar:SetFill(fill, deep)
-    local tex = self.bar:GetStatusBarTexture()
-    local r1, g1, b1, a1 = UI.RGBA(deep or fill)
-    local r2, g2, b2, a2 = UI.RGBA(fill)
-    tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    UI.PaintGradient(self.bar:GetStatusBarTexture(), "HORIZONTAL", deep or fill, fill)
 end
 
 function Bar:SetMinMax(min, max)
@@ -62,7 +59,7 @@ local function statusBar(parent, color)
     b:GetStatusBarTexture():SetSnapToPixelGrid(false)
     b:SetMinMaxValues(0, 1)
     b:SetValue(0)
-    if color then b:SetStatusBarColor(UI.RGBA(color)) end
+    if color then UI.Paint(b, color) end
     return b
 end
 

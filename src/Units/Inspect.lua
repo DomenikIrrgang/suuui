@@ -134,6 +134,14 @@ local function row(f, label)
     return v
 end
 
+-- The item level's big figure and the block's height: from the text styles,
+-- so again when a theme changes them.
+function M:SizeItemLevel()
+    local il = self.ilvl
+    il.big:SetFont(T.type.numeric.file, 28, "")
+    il:SetHeight(il.y + 34 + T.type.caption.lineHeight)
+end
+
 function M:Build()
     self.slots = {}
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIInspectWindow", title = "Inspect", width = WIDTH, height = HEIGHT,
@@ -203,13 +211,11 @@ function M:Build()
     il:SetPoint("TOPLEFT")
     il:SetPoint("TOPRIGHT")
     il.big = UI.Text(il, "numeric", "ink")
-    local numeric = T.type.numeric
-    il.big:SetFont(numeric.file, 28, "")
     il.big:SetPoint("TOPLEFT", 0, -il.y)
     il.note = UI.Text(il, "caption", "ink-muted")
     il.note:SetPoint("TOPLEFT", 0, -(il.y + 34))
-    il:SetHeight(il.y + 34 + T.type.caption.lineHeight)
     self.ilvl = il
+    self:SizeItemLevel()
     local pvp = block(side, "Player vs. Player")
     pvp:SetPoint("TOPLEFT", il, "BOTTOMLEFT", 0, -S["space-6"])
     pvp:SetPoint("TOPRIGHT", il, "BOTTOMRIGHT", 0, -S["space-6"])
@@ -336,10 +342,10 @@ function M:Draw()
     -- who
     local name = GetUnitName(unit, true)
     local _, class = UnitClass(unit)
-    local c = class and T.color["class-" .. class:lower()]
-    if c then
-        self.idRow.diamond:SetVertexColor(c[1], c[2], c[3], 1)
-        self.idRow.name:SetColor(c[1], c[2], c[3], 1)
+    local token = class and "class-" .. class:lower()
+    if token and T.color[token] then
+        UI.Paint(self.idRow.diamond, token)
+        self.idRow.name:SetColor(token)
     end
     self.idRow.name:SetValue(plain(name) and name or "")
     local parts = {}
@@ -504,6 +510,7 @@ function M:OnEnable()
     for _, e in ipairs({ "INSPECT_HONOR_UPDATE", "PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED" }) do
         self:OnGameEvent(e, function() if self.window:IsShown() then self:Draw() end end)
     end
+    self:On("SUUUI_THEME_CHANGED", function() self:SizeItemLevel() end)
 end
 
 function M:OnDisable()

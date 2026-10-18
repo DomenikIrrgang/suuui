@@ -65,15 +65,15 @@ function UI.ReskinScrollBar(bar)
         if thumb then
             for _, r in ipairs({ thumb:GetRegions() }) do r:SetAlpha(0) end
             local t = thumb:CreateTexture(nil, "OVERLAY")
-            t:SetColorTexture(UI.RGBA("gilt-line"))
+            UI.PaintFill(t, "gilt-line")
             t:SetPoint("TOP")
             t:SetPoint("BOTTOM")
             t:SetWidth(2)
             -- under the mouse: gilt and a little wider, so it reads as
             -- something to grab (it showed no hover, found in game)
             if thumb.HookScript then
-                thumb:HookScript("OnEnter", function() t:SetColorTexture(UI.RGBA("gilt")); t:SetWidth(4) end)
-                thumb:HookScript("OnLeave", function() t:SetColorTexture(UI.RGBA("gilt-line")); t:SetWidth(2) end)
+                thumb:HookScript("OnEnter", function() UI.PaintFill(t, "gilt"); t:SetWidth(4) end)
+                thumb:HookScript("OnLeave", function() UI.PaintFill(t, "gilt-line"); t:SetWidth(2) end)
             end
         end
     end
@@ -120,7 +120,7 @@ function UI.ReskinStatusBar(bar)
         bar.suuFlattening = true
         f:SetTexture(WHITE)
         local word = bar.suuAtlas and bar.suuAtlas:lower():match("stat%-bar%-(%a+)")
-        f:SetVertexColor(UI.RGBA(BAR_COLORS[word or ""] or "progress-fill"))
+        UI.Paint(f, BAR_COLORS[word or ""] or "progress-fill")
         bar.suuFlattening = false
     end
     if fill and not bar.suuFillHooked then
@@ -141,12 +141,17 @@ function UI.ReskinStatusBar(bar)
                 r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 1)
                 r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 1)
             end
-            r:SetTextColor(UI.RGBA("ink"))
+            UI.Paint(r, "ink")
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
         end
     end
 end
+
+local fillBars = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for bar in pairs(fillBars) do bar.suuTint() end
+end, "UI.ReskinFillBar")
 
 -- A bar Blizzard draws itself (a frame with a Fill texture it sizes and
 -- tints: the reputation's standing bars, the skills' bars): the fill flat in
@@ -175,6 +180,8 @@ function UI.ReskinFillBar(bar)
         -- the colour: Blizzard's tint on a white atlas (the reputation's
         -- standings); a coloured atlas (the skills' blue, tinted white on
         -- top) keeps its colour as a token
+        -- (set raw, not painted: the SetVertexColor hook below would tint
+        -- again inside a repaint; fillBars tints again on a theme change)
         local flattening = false
         local function tint()
             local token = BAR_COLORS[bar.suuAtlasWord or ""]
@@ -195,6 +202,8 @@ function UI.ReskinFillBar(bar)
         hooksecurefunc(fill, "SetAtlas", flat)
         hooksecurefunc(fill, "SetVertexColor", function() if not flattening then tint() end end)
         bar.suuFlat = flat
+        bar.suuTint = tint
+        fillBars[bar] = true
         -- Blizzard sizes the fill as a share of its FillArea's width once
         -- (SetFillPercent); a row filled in before it had a width got 0,
         -- which a texture draws at its own size (8 px of white: seen
@@ -230,7 +239,7 @@ function UI.ReskinFillBar(bar)
             r:ClearAllPoints()
             r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 0)
             r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 0)
-            r:SetTextColor(UI.RGBA("ink"))
+            UI.Paint(r, "ink")
             r:SetShadowColor(0, 0, 0, 1)
             r:SetShadowOffset(0, -1)
         end
@@ -257,15 +266,15 @@ function UI.ReskinDropdown(d, opts)
         glyph:SetTexture(GLYPHS .. opts.glyph .. ".tga")
         glyph:SetSize(14, 14)
         glyph:SetPoint("CENTER")
-        glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(glyph, "ink-muted")
         glyph.suuArt = true
-        d:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
-        d:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+        d:HookScript("OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
+        d:HookScript("OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
         if text then text:SetAlpha(0) end
         text = nil
     else
         local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
-        bg:SetColorTexture(UI.RGBA("surface-sunk"))
+        UI.PaintFill(bg, "surface-sunk")
         bg:SetAllPoints()
         bg.suuArt = true
         local edge = UI.Border(d, "gilt-line")
@@ -273,14 +282,14 @@ function UI.ReskinDropdown(d, opts)
         chev:SetTexture(GLYPHS .. "chevronDown.tga")
         chev:SetSize(12, 12)
         chev:SetPoint("RIGHT", -S["space-3"], 0)
-        chev:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(chev, "ink-muted")
         chev.suuArt = true
         d:HookScript("OnEnter", function() edge:SetColor("gilt") end)
         d:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
     end
     if text then
         ns.Fonts.Apply(text, "label")
-        text:SetTextColor(UI.RGBA("ink"))
+        UI.Paint(text, "ink")
         text:SetShadowOffset(0, 0)
     end
     -- the menu it opens: in SuuUI's look while it's this dropdown's
@@ -338,6 +347,8 @@ local function menuText(st, fs, color)
         fs:SetShadowOffset(sx, sy)
     end
     ns.Fonts.Apply(fs, "body")
+    -- (set raw: again on every open, and the game's shared menu rows get
+    -- no hooks of SuuUI's)
     fs:SetTextColor(UI.RGBA(color))
     fs:SetShadowOffset(0, 0)
 end
@@ -375,7 +386,7 @@ local function menuRow(st, row)
             chev = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
             chev:SetTexture(GLYPHS .. "chevronRight.tga")
             chev:SetSize(12, 12)
-            chev:SetVertexColor(UI.RGBA("ink-muted"))
+            UI.Paint(chev, "ink-muted")
             st.chevrons[st.nChevrons] = chev
         end
         chev:ClearAllPoints()
@@ -407,7 +418,7 @@ local function menuRow(st, row)
             mark = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
             mark:SetTexture(GLYPHS .. "check.tga")
             mark:SetSize(12, 12)
-            mark:SetVertexColor(UI.RGBA("arcane"))
+            UI.Paint(mark, "arcane")
             st.marks[st.nMarks] = mark
         end
         mark:ClearAllPoints()
@@ -450,7 +461,7 @@ function UI.ReskinMenu(menu)
         UI.Shadow(panel, "shadow-panel")
         UI.Diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
         st.hover = panel:CreateTexture(nil, "ARTWORK")
-        st.hover:SetColorTexture(UI.RGBA("arcane-soft"))
+        UI.PaintFill(st.hover, "arcane-soft")
         st.hover:Hide()
         st.panel = panel
         menus[menu] = st
@@ -543,7 +554,7 @@ function UI.ReskinIconButton(b)
     local icon = b.Icon or b.icon
     if not b.suuIcon then
         local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
-        well:SetColorTexture(UI.RGBA("surface-sunk"))
+        UI.PaintFill(well, "surface-sunk")
         well:SetAllPoints()
         well.suuArt = true
         local edgeHolder = CreateFrame("Frame", nil, b)
@@ -597,7 +608,7 @@ function UI.ReskinCheckButton(b)
     check:SetTexture(GLYPHS .. "check.tga")
     check:SetSize(14, 14)
     check:SetPoint("CENTER")
-    check:SetVertexColor(UI.RGBA("arcane"))
+    UI.Paint(check, "arcane")
     local function draw()
         local on = ask(b, "GetChecked")
         check:SetShown(on and true or false)
@@ -630,7 +641,7 @@ function UI.ReskinButton(b)
         if t then t:SetAlpha(0) end
     end
     local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA("surface-raised"))
+    UI.PaintFill(bg, "surface-raised")
     bg:SetAllPoints()
     local edge = UI.Border(b, "gilt-line")
     b:HookScript("OnEnter", function() edge:SetColor("gilt") end)
@@ -640,7 +651,7 @@ function UI.ReskinButton(b)
         local fs = ask(b, "GetFontString")
         if fs then
             ns.Fonts.Apply(fs, "label")
-            fs:SetTextColor(UI.RGBA("ink"))
+            UI.Paint(fs, "ink")
             fs:SetShadowOffset(0, 0)
         end
     end
@@ -680,7 +691,7 @@ function UI.ReskinEditBox(e)
     -- box itself, the text and placeholder space-3 in from its left
     local search = e.searchIcon or e.Instructions
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA("surface-sunk"))
+    UI.PaintFill(bg, "surface-sunk")
     if search then
         bg:SetAllPoints()
         e:SetTextInsets(S["space-3"], S["space-5"], 0, 0)
@@ -691,7 +702,7 @@ function UI.ReskinEditBox(e)
             hint:SetPoint("RIGHT", -S["space-3"], 0)
             hint:SetJustifyH("LEFT")
             ns.Fonts.Apply(hint, "body")
-            hint:SetTextColor(UI.RGBA("ink-muted"))
+            UI.Paint(hint, "ink-muted")
             hint.suuSkip = true
         end
     else
@@ -706,7 +717,7 @@ function UI.ReskinEditBox(e)
     e:HookScript("OnEditFocusGained", function() edge:SetColor("arcane") end)
     e:HookScript("OnEditFocusLost", function() edge:SetColor("gilt-line") end)
     e:SetFontObject(ns.Fonts.Get("body"))
-    e:SetTextColor(UI.RGBA("ink"))
+    UI.Paint(e, "ink")
     e.suuEdit = true
 end
 
@@ -717,7 +728,7 @@ function UI.ReskinCollapseButton(b)
     local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
     glyph:SetSize(12, 12)
     glyph:SetPoint("CENTER")
-    glyph:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(glyph, "gilt-text")
     local function draw()
         local t = ask(b, "GetNormalTexture")
         local name = ""
@@ -771,6 +782,11 @@ local function textColor(r, g, b)
     return nil -- another colour of Blizzard's (a quality, a standing): kept
 end
 
+local function sameColor(token, r, g, b)
+    local tr, tg, tb = UI.RGBA(token)
+    return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
+end
+
 local function reskinText(fs, isHead)
     if fs.suuSkip then return end
     local _, size = ask(fs, "GetFont")
@@ -781,15 +797,19 @@ local function reskinText(fs, isHead)
     local long = type(text) == "string" and not isSecret(text) and #text > 40
     if isHead then
         ns.Fonts.Apply(fs, "header")
-        fs:SetTextColor(UI.RGBA("gilt-text"))
+        UI.Paint(fs, "gilt-text")
     elseif not long and (size >= 14 or foName:find("Med") or foName:find("Large")) then
         ns.Fonts.Apply(fs, "header")
-        fs:SetTextColor(UI.RGBA("gilt-text"))
+        UI.Paint(fs, "gilt-text")
     else
         local r, g, b = ask(fs, "GetTextColor")
         local token = textColor(r, g, b)
+        -- a text an earlier pass coloured still has its token's colour: kept
+        -- (a theme's colours may read as none of Blizzard's)
+        if fs.suuToken and r and sameColor(fs.suuToken, r, g, b) then token = fs.suuToken end
+        fs.suuToken = token
         ns.Fonts.Apply(fs, foName:find("Number") and "numeric" or (size < 11 and "caption" or (long and "body" or "label")))
-        if token then fs:SetTextColor(UI.RGBA(token)) else fs:SetTextColor(r, g, b) end
+        if token then UI.Paint(fs, token) else fs:SetTextColor(r, g, b) end
     end
     fs:SetShadowOffset(0, 0)
 end
@@ -838,13 +858,13 @@ local function reskinTexture(t, ctx)
         t:SetSize(12, 12)
     elseif a:find("minus") or a:find("plus") then
         t:SetDesaturated(true)
-        t:SetVertexColor(UI.RGBA("gilt-text"))
+        UI.Paint(t, "gilt-text")
     elseif a:find("select") then
         -- the chosen fill goes behind what it marks (an icon, a row's text)
-        t:SetColorTexture(UI.RGBA("arcane-soft"))
+        UI.PaintFill(t, "arcane-soft")
         t:SetDrawLayer("BACKGROUND", 2)
     elseif layer == "HIGHLIGHT" or a:find("highlight") or a:find("hover") then
-        t:SetColorTexture(UI.RGBA("surface-raised"))
+        UI.PaintFill(t, "surface-raised")
         t:SetAlpha(0.6)
     end
 end
@@ -892,7 +912,7 @@ local function pass(f, depth, ctx)
         for _, fs in ipairs(texts) do reskinText(fs, true) end
         if not f.suuHeadRule then
             f.suuHeadRule = f:CreateTexture(nil, "ARTWORK")
-            f.suuHeadRule:SetColorTexture(UI.RGBA("gilt-faint"))
+            UI.PaintFill(f.suuHeadRule, "gilt-faint")
             f.suuHeadRule:SetHeight(1)
             f.suuHeadRule:SetPoint("BOTTOMLEFT", S["space-3"], 0)
             f.suuHeadRule:SetPoint("BOTTOMRIGHT", -S["space-3"], 0)
@@ -955,7 +975,7 @@ local function dialogBox(c)
         if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
     end
     local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA("surface-sunk"))
+    UI.PaintFill(bg, "surface-sunk")
     bg:SetAllPoints()
     bg.suuArt = true
     UI.Border(c, "gilt-line")
@@ -966,7 +986,7 @@ local function dialogBox(c)
             if k:GetObjectType() == "EditBox" then
                 k.suuEdit = true
                 k:SetFontObject(ns.Fonts.Get("body"))
-                k:SetTextColor(UI.RGBA("ink"))
+                UI.Paint(k, "ink")
             end
             walk(k, depth + 1)
         end
@@ -984,7 +1004,7 @@ function UI.ReskinDialog(f)
                 r:SetAlpha(0)
             elseif kind == "FontString" then
                 ns.Fonts.Apply(r, "header")
-                r:SetTextColor(UI.RGBA("gilt-text"))
+                UI.Paint(r, "gilt-text")
                 r:SetShadowOffset(0, 0)
                 r.suuSkip = true
             end

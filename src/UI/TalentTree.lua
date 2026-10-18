@@ -48,6 +48,7 @@ local PANEL_W = GRAPH_W + PAD * 2
 UI.TALENT_TREE_W = PANEL_W * 3 + GAP * 2
 
 local function hex(token) return T.color[token].hex end
+local live = setmetatable({}, { __mode = "k" }) -- built trees, drawn again on a theme change
 
 local TT = {}
 
@@ -76,11 +77,11 @@ local function drawNode(b)
     badge.text:SetValue(total .. "/" .. (d.max or 1))
     badge:SetWidth(math.ceil(badge.text:GetUnboundedStringWidth()) + 6)
     if (d.pending or 0) > 0 then
-        badge.bg:SetColorTexture(UI.RGBA("arcane"))
+        UI.PaintFill(badge.bg, "arcane")
         badge.edge:SetColor("arcane")
         badge.text:SetColor("on-signal")
     else
-        badge.bg:SetColorTexture(UI.RGBA("surface"))
+        UI.PaintFill(badge.bg, "surface")
         badge.edge:SetColor(canSpend and "arcane" or "gilt-line")
         badge.text:SetColor(canSpend and "arcane" or (some and "ink" or "ink-muted"))
     end
@@ -172,12 +173,12 @@ local function drawLink(p, i, l)
         glyph = "chevronDown"
     end
     local token = l.met and "ink-muted" or "gilt-line"
-    line:SetColorTexture(UI.RGBA(token))
+    UI.PaintFill(line, token)
     line:SetStartPoint("TOPLEFT", p.graph, x1, -y1)
     line:SetEndPoint("TOPLEFT", p.graph, x2, -y2)
     line:Show()
     head:SetTexture(GLYPHS .. glyph .. ".tga")
-    head:SetVertexColor(UI.RGBA(token))
+    UI.Paint(head, token)
     head:ClearAllPoints()
     head:SetPoint("CENTER", p.graph, "TOPLEFT", x2, -y2 + (glyph == "chevronDown" and 3 or 0))
     head:Show()
@@ -274,11 +275,12 @@ function TT:SetData(d)
     self.summaryName:ClearAllPoints()
     if head then
         -- someone else's: who, and the points per tree by name
-        local c = head.class and T.color["class-" .. head.class:lower()]
-        self.summaryDiamond:SetVertexColor(c and c[1] or 1, c and c[2] or 1, c and c[3] or 1, 1)
+        local token = head.class and "class-" .. head.class:lower()
+        if not (token and T.color[token]) then token = nil end
+        if token then UI.Paint(self.summaryDiamond, token) else self.summaryDiamond:SetVertexColor(1, 1, 1, 1) end
         self.summaryName:SetStyle("unit-name-lg")
         self.summaryName:SetPoint("LEFT", self.summaryDiamond, "RIGHT", S["space-4"], 0)
-        if c then self.summaryName:SetColor(c[1], c[2], c[3], 1) else self.summaryName:SetColor("ink") end
+        self.summaryName:SetColor(token or "ink")
         self.summaryName:SetValue(head.name or "")
         self.summaryLine:SetValue(head.line or "")
         local named = {}
@@ -404,8 +406,18 @@ function UI.TalentTree(parent)
     f.status:SetJustifyH("LEFT")
     f:Layout()
     f:SetData({})
+    live[f] = true
     return f
 end
+
+-- A theme can change the colours in the summary and the foot, and the
+-- caption style the panels are measured in.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for f in pairs(live) do
+        f:Layout()
+        f:SetData(f.data)
+    end
+end, "UI.TalentTree")
 
 --------------------------------------------------------------------------------
 -- A talent's tooltip: the game's own, as Blizzard's talent buttons build it

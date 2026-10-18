@@ -460,7 +460,8 @@ end
 local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
 local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
 local S = T.space
-local STRIP_H = UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 -- the track, a rule and room
+-- the track, a rule and room (a theme can change the track's height)
+local function stripH() return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 end
 -- between a page and the strip's rule (Apply touched it: found in game): as
 -- much as the tree's foot leaves above its buttons (38 - 30), so they sit
 -- evenly between the two rules (asked for)
@@ -471,7 +472,7 @@ function M:Page(f, kind)
     if not blizz then return nil end
     local view = CreateFrame("Frame", nil, f)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
-    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + STRIP_H + STRIP_GAP)
+    view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
     view:SetFrameLevel(blizz:GetFrameLevel() + 50)
     view:EnableMouse(true)
     view.points = UI.LegacyPoints(view, { account = false })
@@ -533,7 +534,7 @@ end
 -- the challenges' two rows of cards; the trees' panels reach down to their
 -- foot.
 function M:Size(f)
-    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + STRIP_H + 16)
+    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + stripH() + 16)
 end
 
 -- The reward track along the window's foot, on every tab; Blizzard's reward
@@ -542,7 +543,8 @@ function M:Strip(f)
     local strip = CreateFrame("Frame", nil, f)
     strip:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
     strip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
-    strip:SetHeight(STRIP_H)
+    strip:SetHeight(stripH())
+    self.strip = strip
     strip:SetFrameLevel(f:GetFrameLevel() + 150)
     strip:EnableMouse(true)
     local rule = UI.Fill(strip, "gilt-faint", "ARTWORK")
@@ -589,8 +591,21 @@ function M:Build()
     self:Render()
 end
 
+-- A theme changed the text styles the heights are worked out from.
+function M:Restyle()
+    local f = _G.LegacySystemFrame
+    if not (f and self.pages) then return end
+    for _, view in pairs(self.pages) do
+        view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
+    end
+    if self.strip then self.strip:SetHeight(stripH()) end
+    self:Size(f)
+    if f:IsVisible() then self:QueueRender() end
+end
+
 function M:OnEnable()
     self:Build()
+    self:On("SUUUI_THEME_CHANGED", function() self:Restyle() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",

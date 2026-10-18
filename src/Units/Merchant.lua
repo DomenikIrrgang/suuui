@@ -300,6 +300,11 @@ function M:DrawBuybackRow(r, i, undo)
     r.buy:SetScript("OnClick", function() BuybackItem(i) end)
 end
 
+-- The last sold item's strip: its caption and one row.
+function M:LastHeight()
+    return S["space-4"] + T.type.caption.lineHeight + S["space-2"] + ROW_H
+end
+
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMerchantWindow", title = "Merchant", width = WIDTH, height = HEIGHT,
         footer = true, onClose = function(win) win:Hide() end,
@@ -347,7 +352,7 @@ function M:Build()
     local last = CreateFrame("Frame", nil, w.body)
     last:SetPoint("BOTTOMLEFT")
     last:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
-    last:SetHeight(S["space-4"] + T.type.caption.lineHeight + S["space-2"] + ROW_H)
+    last:SetHeight(self:LastHeight())
     self.last = last
     self.lastRule = UI.Hairline(last, "gilt-faint")
     self.lastRule:SetPoint("TOPLEFT")
@@ -583,6 +588,11 @@ function M:OnEnable()
         self:OnGameEvent(e, function() self:QueueRefresh() end)
     end
     self:OnGameEvent("PLAYER_MONEY", function() self:QueueRefresh() end)
+    -- prices and notes carry colour codes; the strip's caption can change size
+    self:On("SUUUI_THEME_CHANGED", function()
+        if self.last then self.last:SetHeight(self:LastHeight()) end
+        self:Refresh()
+    end)
 end
 
 function M:OnDisable()

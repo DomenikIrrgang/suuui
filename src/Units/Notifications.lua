@@ -720,6 +720,7 @@ function M:StyleButton(h, b, variant)
     local fs = b:GetFontString()
     if fs then
         fs:SetFontObject(SuuUI.Fonts.Get("label"))
+        -- the game's own text: set plainly, again by Rebuild after a theme change
         fs:SetTextColor(UI.RGBA(variant == "primary" and "on-signal" or variant == "danger" and "ember-text" or "ink"))
     end
     local w = math.max(64, math.ceil((fs and fs:GetUnboundedStringWidth() or 40) + S["space-4"] * 2))
@@ -748,7 +749,7 @@ function M:StyleButton(h, b, variant)
     art:SetFrameLevel(math.max(0, b:GetFrameLevel() - 1))
     art:ClearAllPoints()
     art:SetAllPoints(b)
-    art.fill:SetColorTexture(UI.RGBA(variant == "primary" and "arcane" or "surface-raised"))
+    UI.PaintFill(art.fill, variant == "primary" and "arcane" or "surface-raised")
     art.edge:SetColor(variant == "primary" and "arcane" or variant == "danger" and "ember" or "gilt-line")
     art.glow:SetShown(false)
     art:Show()
@@ -788,6 +789,7 @@ function M:CardData(h)
     end
     -- a cost the game's popup shows in its money frame, on its own line
     local cost = kind.cost and kind.cost(h.dialog)
+    h.cost = cost
     if cost then d.body = "Costs " .. coinString(cost) end
     if kind.confirm and h.editBox and h.editBox:IsShown() then
         d.confirmText = (DELETE_ITEM_CONFIRM_STRING or "DELETE")
@@ -875,17 +877,17 @@ function M:RoleArt(b)
     art.tick:SetTexture(TEXTURES .. "Glyphs\\check.tga")
     art.tick:SetSize(10, 10)
     art.tick:SetPoint("CENTER")
-    art.tick:SetVertexColor(UI.RGBA("on-signal"))
+    UI.Paint(art.tick, "on-signal")
     local cb = b.checkButton
     function art.draw()
         if not art:IsShown() then return end
         local on = cb and cb:GetChecked() and true or false
-        art.edge:SetVertexColor(UI.RGBA(on and "arcane" or (art.hover and "gilt" or "gilt-line")))
-        art.fill:SetVertexColor(UI.RGBA(on and "surface-raised" or "surface-sunk"))
-        art.glyph:SetVertexColor(UI.RGBA(on and "ink" or "ink-faint"))
+        UI.Paint(art.edge, on and "arcane" or (art.hover and "gilt" or "gilt-line"))
+        UI.Paint(art.fill, on and "surface-raised" or "surface-sunk")
+        UI.Paint(art.glyph, on and "ink" or "ink-faint")
         art.word:SetColor(on and "ink" or "ink-muted")
         art.box:SetShown(cb and cb:IsShown() and true or false)
-        art.boxFill:SetColorTexture(UI.RGBA(on and "arcane" or "surface-sunk"))
+        UI.PaintFill(art.boxFill, on and "arcane" or "surface-sunk")
         art.boxEdge:SetColor(on and "arcane" or "gilt-line")
         art.tick:SetShown(on)
         art:SetAlpha(b:IsEnabled() and 1 or T.opacity["opacity-disabled"])
@@ -1377,6 +1379,14 @@ function M:OnEnable()
         end
     end)
     self:OnGameEvent("READY_CHECK_FINISHED", function() self.readyEndsAt = nil end)
+    -- a theme change: the coins' colours in a cost, and the game's button
+    -- text (StyleButton through Rebuild)
+    self:On("SUUUI_THEME_CHANGED", function()
+        for _, h in pairs(self.hosts) do
+            if h.cost and h.data then h.data.body = "Costs " .. coinString(h.cost) end
+        end
+        self:Rebuild()
+    end)
     -- in combat notes wait; out of it they come back
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:HideSecureActions(); self:Rebuild() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()

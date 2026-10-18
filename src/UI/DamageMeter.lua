@@ -116,7 +116,7 @@ local function dots(parent, color)
     f:SetSize(13, 13)
     for i = -1, 1 do
         local t = f:CreateTexture(nil, "ARTWORK")
-        t:SetColorTexture(UI.RGBA(color))
+        UI.PaintFill(t, color)
         t:SetSize(2, 2)
         t:SetPoint("CENTER", i * 4, 0)
     end
@@ -129,7 +129,7 @@ local function backArrow(parent, color)
     for _, a in ipairs({ 45, -45 }) do
         local t = f:CreateTexture(nil, "ARTWORK")
         t:SetTexture(WHITE)
-        t:SetVertexColor(UI.RGBA(color))
+        UI.Paint(t, color)
         t:SetSize(6, 1.5)
         t:SetRotation(math.rad(a))
         t:SetPoint("CENTER", -1, a > 0 and 2 or -2)
@@ -207,7 +207,7 @@ local function openMenu(w)
             it.label = UI.Text(it, "body", "ink")
             it.label:SetPoint("LEFT", S["space-4"], 0)
             it.line = it:CreateTexture(nil, "ARTWORK")
-            it.line:SetColorTexture(UI.RGBA("gilt-faint"))
+            UI.PaintFill(it.line, "gilt-faint")
             it.line:SetHeight(1)
             it.line:SetPoint("LEFT", S["space-2"], 0)
             it.line:SetPoint("RIGHT", -S["space-2"], 0)
@@ -250,16 +250,29 @@ local function mix(token, share)
     return r * share + sr * (1 - share), g * share + sg * (1 - share), b * share + sb * (1 - share)
 end
 
-local function setFill(row, deep, fill)
+-- The bar's fill, as the row last asked for it (tex.fill: a class token,
+-- "low", or nil for unit-fill), from the tokens each time (UI.Bind: again
+-- after a theme change).
+local function drawFill(tex)
     local r1, g1, b1, r2, g2, b2
-    if type(deep) == "table" then
-        r1, g1, b1 = unpack(deep)
-        r2, g2, b2 = unpack(fill)
+    local kind = tex.fill
+    if kind == "low" then
+        r1, g1, b1 = UI.RGBA("unit-fill-low-deep")
+        r2, g2, b2 = UI.RGBA("unit-fill-low")
+    elseif kind then
+        r2, g2, b2 = mix(kind, 0.55)
+        r1, g1, b1 = r2 * 0.75, g2 * 0.75, b2 * 0.75
     else
-        r1, g1, b1 = mix(deep, 0.7)
-        r2, g2, b2 = mix(fill, 0.7)
+        r1, g1, b1 = mix("unit-fill-deep", 0.7)
+        r2, g2, b2 = mix("unit-fill", 0.7)
     end
-    row.bar:GetStatusBarTexture():SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+    tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+end
+
+local function setFill(row, kind)
+    local tex = row.bar:GetStatusBarTexture()
+    tex.fill = kind
+    UI.Bind(tex, drawFill)
 end
 
 local function buildRow(w, i)
@@ -272,7 +285,7 @@ local function buildRow(w, i)
     r.bar:SetAllPoints()
     r.bar:SetStatusBarTexture(WHITE)
     r.bar:SetMinMaxValues(0, 1)
-    setFill(r, "unit-fill-deep", "unit-fill")
+    setFill(r, nil)
     r.edge = UI.Border(r.bar, "gilt-hairline", { layer = "OVERLAY" })
     r.glow = UI.Shadow(r, "glow-ember")
     r.glow:SetShown(false)
@@ -349,7 +362,7 @@ local function setRow(r, d)
         r.icon:Show()
         x = x + 14 + S["space-3"] - S["space-1"]
     elseif d.mark == "diamond" and d.class and T.color["class-" .. d.class:lower()] then
-        r.diamond:SetVertexColor(UI.RGBA("class-" .. d.class:lower()))
+        UI.Paint(r.diamond, "class-" .. d.class:lower())
         r.diamond:ClearAllPoints()
         r.diamond:SetPoint("CENTER", r, "LEFT", x + 3, 0)
         r.diamond:Show()
@@ -416,15 +429,7 @@ local function setRow(r, d)
         r.bar:SetMinMaxValues(0, 1)
         r.bar:SetValue(0)
     end
-    if d.fillClass then
-        local c = "class-" .. d.fillClass:lower()
-        local cr, cg, cb = mix(c, 0.55)
-        setFill(r, { cr * 0.75, cg * 0.75, cb * 0.75 }, { cr, cg, cb })
-    elseif d.fillLow then
-        setFill(r, { UI.RGBA("unit-fill-low-deep") }, { UI.RGBA("unit-fill-low") })
-    else
-        setFill(r, "unit-fill-deep", "unit-fill")
-    end
+    setFill(r, d.fillClass and ("class-" .. d.fillClass:lower()) or d.fillLow and "low" or nil)
     r.edgeColor = d.danger and "ember" or (d.you and "ink") or "gilt-hairline"
     r.edge:SetColor(r.edgeColor)
     r.glow:SetShown(d.danger and true or false)
@@ -869,7 +874,7 @@ function UI.DamageMeter(parent, opts)
     w.total:SetJustifyH("RIGHT")
     w.total:SetPoint("RIGHT", -S["space-3"], 0)
     local rule = w:CreateTexture(nil, "BORDER")
-    rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(rule, "gilt-faint")
     rule:SetPoint("TOPLEFT", 1, -HEAD)
     rule:SetPoint("TOPRIGHT", -1, -HEAD)
     rule:SetHeight(1)
@@ -879,7 +884,7 @@ function UI.DamageMeter(parent, opts)
     w.body:SetPoint("BOTTOMRIGHT")
     w.rows = {}
     w.pinLine = w.body:CreateTexture(nil, "ARTWORK")
-    w.pinLine:SetColorTexture(UI.RGBA("gilt-line"))
+    UI.PaintFill(w.pinLine, "gilt-line")
     w.pinLine:SetHeight(1)
     w.pinLine:Hide()
     w.note = UI.Text(w.body, "caption", "ink-muted")

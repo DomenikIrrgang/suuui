@@ -316,7 +316,6 @@ local function askText(title, text, hint, onAccept)
         p.field = field
         p.hint = UI.Text(p.body, "caption", "ink-muted")
         p.hint:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
-        p.body:SetHeight(field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
         field.edit:SetScript("OnEscapePressed", function() p:Hide() end)
         field.edit:SetScript("OnEnterPressed", function(edit)
             local accept = p.onAccept
@@ -327,6 +326,8 @@ local function askText(title, text, hint, onAccept)
         textBox = p
     end
     textBox.title:SetValue(title)
+    -- (the hint's line height read now: a theme can change it)
+    textBox.body:SetHeight(textBox.field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
     textBox.hint:SetValue(hint)
     textBox.onAccept = onAccept
     textBox:Show()
@@ -529,7 +530,10 @@ end
 
 -- Blizzard's finished line → the design's (without the time). `old`: a
 -- line kept from an earlier session (its line ids mean nothing now).
-function M:FormatLine(text, id, old)
+-- `classes`: the names' classes in the order they come, filled the first
+-- time and read when the line is formatted again (a theme's new colours),
+-- so a name keeps the class it was shown with.
+function M:FormatLine(text, id, old, classes)
     if not plain(text) or type(text) ~= "string" then return text end
     local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
     local colored = self:Get("classNames")
@@ -553,9 +557,17 @@ function M:FormatLine(text, id, old)
     end
     -- names: no brackets, the class diamond first, the name in its class
     -- colour (or the line's)
+    local k = 0
     text = text:gsub("|Hplayer:([^|]*)|h%[(.-)%]|h", function(data, shown)
         local name, lineID = data:match("^([^:]+):?(%d*)")
-        local class = (diamonds or colored) and classOf(name, (not old and lineID ~= "") and lineID or nil)
+        k = k + 1
+        local class
+        if classes and classes[k] ~= nil then
+            class = classes[k] or nil
+        else
+            class = (diamonds or colored) and classOf(name, (not old and lineID ~= "") and lineID or nil)
+            if classes and (diamonds or colored) then classes[k] = class or false end
+        end
         local mark = diamonds and chip(class) or ""
         -- the diamond copies the line (asked 2026-10-18)
         if mark ~= "" and id then mark = "|Haddon:suuui:copy:" .. id .. "|h" .. mark .. "|h" end
@@ -567,8 +579,6 @@ function M:FormatLine(text, id, old)
     text = text:gsub("(|HBNplayer:[^|]*|h)%[(.-)%](|h)", "%1%2%3")
     return text
 end
-
-local TIME_HEX = T.color["ink-muted"].hex
 
 -- Lines by their ID, for the diamond's copy (gone with their mirror's
 -- oldest lines)
@@ -599,7 +609,8 @@ function M:NewLine(m, text, r, g, b, at, old)
         line.text, line.raw = text, true
     else
         line.src = text
-        line.text = self:FormatLine(text, lineSeq, old)
+        line.classes = {}
+        line.text = self:FormatLine(text, lineSeq, old, line.classes)
         linesByID[lineSeq] = line
     end
     return line
@@ -629,7 +640,7 @@ end
 
 function M:Render(line, withTime)
     if line.raw or not withTime then return line.text end
-    return "|cff" .. TIME_HEX .. date("%H:%M", line.at) .. "|r  " .. line.text
+    return "|cff" .. T.color["ink-muted"].hex .. date("%H:%M", line.at) .. "|r  " .. line.text
 end
 
 -- The mirror's lines again (the time came or went), where it was scrolled.
@@ -963,6 +974,11 @@ function M:Windows()
     return out
 end
 
+-- a tab's name: 12 px in header's face (again when a theme changes it)
+local function tabFace(label)
+    label:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 12, "")
+end
+
 local function tabButton(m, i)
     local p = m.panel
     local b = p.tabButtons[i]
@@ -971,7 +987,7 @@ local function tabButton(m, i)
     b:SetHeight(TABS_H)
     b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     b.label = UI.Text(b, "header", "ink-muted")
-    b.label:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 12, "")
+    tabFace(b.label)
     b.label:SetShadowed(true)
     b.label:SetPoint("LEFT", 0, 1)
     b.label:SetWordWrap(false)
@@ -1260,7 +1276,7 @@ function M:DividerText(m, at)
     local g = T.color.gilt
     local jewel = ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(DIAMOND,
         math.floor(g[1] * 255 + 0.5), math.floor(g[2] * 255 + 0.5), math.floor(g[3] * 255 + 0.5))
-    local label = "|cff" .. TIME_HEX .. "Earlier · logged out " .. ago(time() - (at or time())) .. "|r"
+    local label = "|cff" .. T.color["ink-muted"].hex .. "Earlier · logged out " .. ago(time() - (at or time())) .. "|r"
     local middle = "  " .. jewel .. "  " .. label .. "  " .. jewel .. "  "
     -- the mirror's own width when it has one, with room to spare: a line
     -- even a pixel too long wraps its right rule onto a line of its own
@@ -1550,6 +1566,18 @@ local function matchSpan(text, q, size)
     return upto(at[s] - 1, s), upto(at[e], e), shown, at, links, s
 end
 
+-- The chips side by side, each as wide as its label (measured again when
+-- a theme changes the caption).
+local function placeChips(s)
+    local x = 0
+    for _, b in ipairs(s.chips) do
+        b:SetSize(math.ceil(UI.MeasureText("caption", b.label.value)) + S["space-4"] * 2, CHIP_H)
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", s.head, "TOPLEFT", x, -(FIELD_H + S["space-3"]))
+        x = x + b:GetWidth() + S["space-2"]
+    end
+end
+
 function M:BuildSearch()
     local page = CreateFrame("Frame", nil, self.panel.log)
     page:SetAllPoints()
@@ -1569,7 +1597,7 @@ function M:BuildSearch()
     local glyph = field:CreateTexture(nil, "ARTWORK")
     glyph:SetTexture(GLYPHS .. "search.tga")
     glyph:SetSize(14, 14)
-    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(glyph, "ink-muted")
     glyph:SetPoint("LEFT", S["space-4"], 0)
     s.count = UI.Text(field, "caption", "ink-muted")
     s.count:SetPoint("RIGHT", -S["space-4"], 0)
@@ -1582,7 +1610,6 @@ function M:BuildSearch()
     s.field = field
     -- where to look: one chip at a time
     s.chips = {}
-    local x = 0
     for _, c in ipairs(CHIPS) do
         local b = CreateFrame("Button", nil, s.head)
         b.value = c.value
@@ -1592,17 +1619,15 @@ function M:BuildSearch()
         b.label = UI.Text(b, "caption", "ink-muted")
         b.label:SetPoint("CENTER")
         b.label:SetValue(c.label)
-        b:SetSize(math.ceil(UI.MeasureText("caption", c.label)) + S["space-4"] * 2, CHIP_H)
-        b:SetPoint("TOPLEFT", s.head, "TOPLEFT", x, -(FIELD_H + S["space-3"]))
         b:SetScript("OnEnter", function() if s.scope ~= c.value then b.label:SetColor("ink") end end)
         b:SetScript("OnLeave", function() if s.scope ~= c.value then b.label:SetColor("ink-muted") end end)
         b:SetScript("OnClick", function()
             s.scope = c.value
             self:RunSearch()
         end)
-        x = x + b:GetWidth() + S["space-2"]
         s.chips[#s.chips + 1] = b
     end
+    placeChips(s)
     -- the matches
     s.scroll = UI.ScrollArea(page, 5)
     s.scroll:SetPoint("TOPLEFT", 0, -SEARCH_HEAD_H)
@@ -1637,7 +1662,10 @@ function M:KeptLines()
         out[#out + 1] = { src = src, line = line, r = r, g = g, b = b, where = where, whisper = whisper, n = #out + 1 }
     end
     for _, w in ipairs(self.whispers or {}) do
-        w.shown = w.shown or { text = self:FormatLine(w.text, nil, w.old), at = w.at or 0 }
+        if not w.shown then
+            local classes = {}
+            w.shown = { text = self:FormatLine(w.text, nil, w.old, classes), at = w.at or 0, classes = classes }
+        end
         add(w.text, w.shown, w.r, w.g, w.b, KIND_LABEL.whisper, true)
     end
     for _, cf in ipairs(self:Windows()) do
@@ -1797,7 +1825,7 @@ function M:RunSearch()
     if not (s and s.page:IsShown()) then return end
     for _, b in ipairs(s.chips) do
         local on = b.value == s.scope
-        b.bg:SetColorTexture(UI.RGBA(on and "arcane-soft" or "surface-raised"))
+        UI.PaintFill(b.bg, on and "arcane-soft" or "surface-raised")
         b.edge:SetColor(on and "arcane" or "gilt-line")
         b.label:SetColor(on and "ink" or "ink-muted")
     end
@@ -1831,7 +1859,7 @@ function M:RunSearch()
         local name = group.who and group.who:match("^([^%-]+)")
         local class = group.who and classOf(group.who)
         local token = class and T.color["class-" .. class:lower()] and ("class-" .. class:lower())
-        h.jewel:SetVertexColor(UI.RGBA(token or "ink-muted"))
+        UI.Paint(h.jewel, token or "ink-muted")
         h.jewel:SetShown(name ~= nil)
         h.name:ClearAllPoints()
         h.name:SetPoint("LEFT", h, "LEFT", name and (6 + S["space-3"]) or 0, -2)
@@ -2150,6 +2178,30 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
+-- A theme or colour vision changed. The lines carry its colours as codes
+-- (the time, names in class colour, class diamonds, the "Earlier" divider,
+-- earlier lines dimmed): each mirror's kept lines formatted again from
+-- Blizzard's text, with the classes they were shown with, and drawn again
+-- (the shown one now, the others when chosen); the same lines, in the
+-- same order. The tabs' names and the search's chips fitted to the faces.
+function M:ApplyTheme()
+    for _, m in pairs(self.mirrors or {}) do
+        if not m.raw then
+            for _, line in ipairs(m.lines) do
+                if line.src then line.text = self:FormatLine(line.src, line.id, line.old, line.classes) end
+            end
+            m.drawnWithTime = nil
+        end
+    end
+    for _, w in ipairs(self.whispers or {}) do
+        if w.shown then w.shown.text = self:FormatLine(w.text, nil, w.old, w.shown.classes) end
+    end
+    self:RedrawShown()
+    for _, b in ipairs(self.panel and self.panel.tabButtons or {}) do tabFace(b.label) end
+    if self.search then placeChips(self.search) end
+    self:RunSearch()
+end
+
 function M:Layout()
     local w, h = self:PanelSize()
     self.panel:SetSize(w, h)
@@ -2234,6 +2286,7 @@ function M:OnEnable()
     self:Watch("logHeight", function() self:Layout() end)
     self:Watch("fadeIdle", function() self:Wake() end)
     self:On("SUUUI_ROOT_SCALED", function() C_Timer.After(0, function() self:PlaceChat() end) end)
+    self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
     if not self.driver then
         self.driver = CreateFrame("Frame")
         local wait = 0

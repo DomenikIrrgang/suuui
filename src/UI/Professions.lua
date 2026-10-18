@@ -140,7 +140,7 @@ function P:SetTabs(list, selected)
             b.icon:SetArt(nil)
             b.icon:Show()
             b.glyph:SetTexture(GLYPHS .. (t.glyph or "book") .. ".tga")
-            b.glyph:SetVertexColor(UI.RGBA("gilt-text"))
+            UI.Paint(b.glyph, "gilt-text")
             b.glyph:Show()
         end
         local on = t.key == selected
@@ -217,12 +217,12 @@ local function makeCard(view)
     c.unlearn.glyph:SetTexture(GLYPHS .. "trash.tga")
     c.unlearn.glyph:SetSize(14, 14) -- even, like the button: whole pixels each side
     c.unlearn.glyph:SetPoint("CENTER")
-    c.unlearn.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+    UI.Paint(c.unlearn.glyph, "ink-faint")
     c.unlearn:SetFrameLevel(c:GetFrameLevel() + 5)
     c.unlearn:Hide()
     c.unlearn:SetScript("OnEnter", function(self)
         self.edge:SetShown(true)
-        self.glyph:SetVertexColor(UI.RGBA("ember-text"))
+        UI.Paint(self.glyph, "ember-text")
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip_SetTitle(GameTooltip, "Unlearn " .. (c.card and c.card.name or ""))
         GameTooltip_AddNormalLine(GameTooltip, "You lose your skill and the recipes you know.")
@@ -230,7 +230,7 @@ local function makeCard(view)
     end)
     c.unlearn:SetScript("OnLeave", function(self)
         self.edge:SetShown(false)
-        self.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+        UI.Paint(self.glyph, "ink-faint")
         GameTooltip:Hide()
     end)
     c.unlearn:SetScript("OnClick", function() if c.card and c.card.onUnlearn then c.card.onUnlearn() end end)
@@ -314,6 +314,7 @@ end
 function P:SetOverview(d)
     d = d or {}
     self.mode = "overview"
+    self.overviewData = d
     self.overview:Show()
     self.crafting:Hide()
     local w = self.overview:GetWidth()
@@ -384,12 +385,12 @@ local function makeListRow(view)
     r.chevron = r:CreateTexture(nil, "ARTWORK")
     r.chevron:SetSize(10, 10)
     r.chevron:SetPoint("LEFT", 2, 0)
-    r.chevron:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(r.chevron, "gilt-text")
     r.eye = r:CreateTexture(nil, "ARTWORK")
     r.eye:SetTexture(GLYPHS .. "eye.tga")
     r.eye:SetSize(12, 12)
     r.eye:SetPoint("RIGHT", -S["space-3"], 0)
-    r.eye:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(r.eye, "gilt-text")
     r.count = UI.Text(r, "caption", "ink-muted")
     r.count:SetPoint("RIGHT", r.eye, "LEFT", -S["space-3"], 0)
     r.label = UI.Text(r, "label", "ink")
@@ -531,7 +532,7 @@ function P:SetRecipe(r)
         line:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
         line:SetPoint("RIGHT", c, "RIGHT")
         line.glyph:SetTexture(GLYPHS .. (t.met and "check" or "close") .. ".tga")
-        line.glyph:SetVertexColor(UI.RGBA(t.met and "fel" or "ember-text"))
+        UI.Paint(line.glyph, t.met and "fel" or "ember-text")
         line.text:SetValue("Requires " .. (t.name or ""))
         line.text:SetColor(t.met and "ink-muted" or "ember-text")
         line:Show()
@@ -671,6 +672,35 @@ function P:SetCrafting(d)
     self:DrawList()
 end
 
+-- What is sized from the text styles' line heights: when built, and again
+-- when a theme changes them (then what is shown too): the head row's bars
+-- and Link, the search, the recipe pane.
+function P:PlaceForType()
+    local numeric = T.type.numeric.lineHeight
+    self.craftSkill:SetHeight(numeric)
+    self.craftRecipes:SetHeight(numeric)
+    for _, c in ipairs(self.cards) do
+        c.skill:SetHeight(numeric)
+        c.recipes:SetHeight(numeric)
+    end
+    self.link:SetPoint("RIGHT", self.crafting, "TOPRIGHT", 0, -T.type.header.lineHeight / 2)
+    self.search:SetPoint("TOPLEFT", self.crafting, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-5"]))
+    local v = self.recipe
+    v.scroll:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", -S["space-4"],
+        S["space-3"] + T.type.caption.lineHeight + S["space-3"])
+    if self.mode == "overview" then
+        self:SetOverview(self.overviewData)
+    elseif self.mode == "crafting" then
+        self:SetCrafting(self.craftData)
+        self:SetRecipe(self.recipeData)
+    end
+end
+
+local views = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for f in pairs(views) do f:PlaceForType() end
+end, "UI.Professions")
+
 --------------------------------------------------------------------------------
 -- The whole
 --------------------------------------------------------------------------------
@@ -715,17 +745,16 @@ function UI.Professions(parent, opts)
     -- board "Professions · Link")
     f.link = CreateFrame("Button", nil, f.crafting)
     f.link:SetSize(22, 22)
-    f.link:SetPoint("RIGHT", f.crafting, "TOPRIGHT", 0, -T.type.header.lineHeight / 2)
     f.link.edge = UI.Border(f.link, "gilt-line")
     f.link.edge:SetShown(false)
     f.link.glyph = f.link:CreateTexture(nil, "ARTWORK")
     f.link.glyph:SetTexture(GLYPHS .. "chain.tga")
     f.link.glyph:SetSize(14, 14)
     f.link.glyph:SetPoint("CENTER")
-    f.link.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(f.link.glyph, "ink-muted")
     f.link:SetScript("OnEnter", function(self)
         self.edge:SetShown(true)
-        self.glyph:SetVertexColor(UI.RGBA("ink"))
+        UI.Paint(self.glyph, "ink")
         local name = f.craftData and f.craftData.name or "this profession"
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
         GameTooltip_SetTitle(GameTooltip, "Link " .. name .. " in chat")
@@ -736,7 +765,7 @@ function UI.Professions(parent, opts)
     end)
     f.link:SetScript("OnLeave", function(self)
         self.edge:SetShown(false)
-        self.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(self.glyph, "ink-muted")
         GameTooltip:Hide()
     end)
     f.link:SetScript("OnClick", function() if f.onLink then f.onLink() end end)
@@ -744,7 +773,6 @@ function UI.Professions(parent, opts)
     -- (one row of the three didn't fit the 250 px column), then the recipes
     f.search = UI.TextField(f.crafting, { width = LIST_W, placeholder = "Search recipes",
         onTextChanged = function(text) if f.onSearch then f.onSearch(text) end end })
-    f.search:SetPoint("TOPLEFT", f.crafting, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-5"]))
     local half = math.floor((LIST_W - S["space-3"]) / 2)
     f.filterMenu = UI.FilterMenu(f.crafting, { groups = FILTER_GROUPS, defaults = UI.PROFESSION_FILTER_DEFAULTS,
         width = half, onChange = function(v) if f.onFilters then f.onFilters(v) end end })
@@ -783,8 +811,6 @@ function UI.Professions(parent, opts)
     -- everything above it scrolls when it's taller than the pane
     v.scroll = UI.ScrollArea(v, S["space-3"])
     v.scroll:SetPoint("TOPLEFT")
-    v.scroll:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", -S["space-4"],
-        S["space-3"] + T.type.caption.lineHeight + S["space-3"])
     v.body = v.scroll.child
     v.scroll:HookScript("OnSizeChanged", function(self) v.body:SetWidth(math.max(1, self:GetWidth())) end)
     local c = v.body
@@ -834,6 +860,8 @@ function UI.Professions(parent, opts)
     v.qty:SetPoint("RIGHT", v.createAll, "LEFT", -S["space-3"], 0)
     v.track = UI.Checkbox(v.foot, { label = "Track", onChange = function(on) if f.onTrack then f.onTrack(on) end end })
     v.track:SetPoint("LEFT", v.foot, "LEFT", 0, 0)
+    f:PlaceForType()
     f:SetRecipe(nil)
+    views[f] = true
     return f
 end

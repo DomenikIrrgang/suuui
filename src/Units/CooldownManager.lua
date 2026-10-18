@@ -998,7 +998,7 @@ local function glyphButton(parent, kind, onClick)
         local dy = kind == "up" and 1 or -1
         for _, sgn in ipairs({ -1, 1 }) do
             local t = b:CreateTexture(nil, "OVERLAY")
-            t:SetColorTexture(UI.RGBA("ink-muted"))
+            UI.PaintFill(t, "ink-muted")
             t:SetSize(6, 1.5)
             t:SetRotation(math.rad(45 * sgn * dy))
             t:SetPoint("CENTER", 2 * sgn, 0)
@@ -1042,7 +1042,7 @@ local function grip(parent)
     for col = 0, 1 do
         for row = 0, 2 do
             local d = g:CreateTexture(nil, "OVERLAY")
-            d:SetColorTexture(UI.RGBA("ink-faint"))
+            UI.PaintFill(d, "ink-faint")
             d:SetSize(2, 2)
             d:SetPoint("TOPLEFT", 2 + col * 4, -(2 + row * 5))
         end
@@ -1077,7 +1077,7 @@ local function foldButton(parent, onClick)
         end
     end
     function b:SetColor(name)
-        for _, t in ipairs(self.strokes) do t:SetVertexColor(UI.RGBA(name)) end
+        for _, t in ipairs(self.strokes) do UI.Paint(t, name) end
     end
     b:SetColor("ink-muted")
     b:SetOpen(false)
@@ -1254,7 +1254,7 @@ local function setRails(fr, rails, level)
             t:SetWidth(1)
             fr.rails[n] = t
         end
-        t:SetColorTexture(UI.RGBA(rl.faint and "gilt-line" or "gilt"))
+        UI.PaintFill(t, rl.faint and "gilt-line" or "gilt")
         t:ClearAllPoints()
         t:SetPoint("TOPLEFT", fr, "TOPLEFT", (rl.level - level) * INDENT + RAIL_X, 0)
         t:SetHeight(ROW_H + GAP)
@@ -1313,8 +1313,8 @@ local function buildEntryRow(parent)
     -- drag to reorder: the editor tracks the cursor and drops
     r:EnableMouse(true)
     r:RegisterForDrag("LeftButton")
-    r:SetScript("OnEnter", function() for _, t in ipairs({ r.grip:GetRegions() }) do t:SetColorTexture(UI.RGBA("ink-muted")) end end)
-    r:SetScript("OnLeave", function() for _, t in ipairs({ r.grip:GetRegions() }) do t:SetColorTexture(UI.RGBA("ink-faint")) end end)
+    r:SetScript("OnEnter", function() for _, t in ipairs({ r.grip:GetRegions() }) do UI.PaintFill(t, "ink-muted") end end)
+    r:SetScript("OnLeave", function() for _, t in ipairs({ r.grip:GetRegions() }) do UI.PaintFill(t, "ink-faint") end end)
     r:SetScript("OnDragStart", function() parent:StartDrag(r) end)
     r:SetScript("OnDragStop", function() parent:StopDrag() end)
     return r
@@ -1574,7 +1574,7 @@ local function buildEditor(parent)
     f.ghost.name:SetPoint("LEFT", f.ghost.icon, "RIGHT", 8, 0)
     f.ghost:Hide()
     f.line = f:CreateTexture(nil, "OVERLAY")
-    f.line:SetColorTexture(UI.RGBA("arcane"))
+    UI.PaintFill(f.line, "arcane")
     f.line:SetHeight(2)
     f.line:Hide()
 

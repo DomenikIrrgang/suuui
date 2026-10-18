@@ -23,6 +23,7 @@ local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local function hex(token) return T.color[token].hex end
+local live = setmetatable({}, { __mode = "k" }) -- built pages -> "points", "challenges", "track"
 
 -- Big tabular figures (the design's 20px numbers).
 local function bigNumber(parent)
@@ -38,6 +39,8 @@ end
 
 local Points = {}
 
+local function blockHeight() return T.type.caption.lineHeight + 1 + 24 end
+
 local function block(f, caption)
     local b = CreateFrame("Frame", nil, f)
     b.caption = UI.Text(b, "caption", "ink-muted")
@@ -47,12 +50,19 @@ local function block(f, caption)
     b.big:SetPoint("TOPLEFT", b.caption, "BOTTOMLEFT", 0, -1)
     b.rest = UI.Text(b, "caption", "ink-muted")
     b.rest:SetPoint("BOTTOMLEFT", b.big, "BOTTOMRIGHT", 0, 3)
-    b:SetHeight(T.type.caption.lineHeight + 1 + 24)
+    b:SetHeight(blockHeight())
     return b
+end
+
+-- after a theme change: the caption's height and the numbers' face
+local function restyleBlock(b)
+    b:SetHeight(blockHeight())
+    b.big:SetFont(T.type.numeric.file, 20, "")
 end
 
 function Points:SetPoints(d)
     d = d or {}
+    self.data = d
     local earned, total = d.earned or 0, d.total or 0
     local spent, cap, pending = d.spent or 0, d.cap or 0, d.pending or 0
     self.account.big:SetText(tostring(earned))
@@ -81,6 +91,7 @@ function UI.LegacyPoints(parent, opts)
     end
     f.char:SetWidth(200)
     f:SetHeight(f.account:GetHeight())
+    live[f] = "points"
     return f
 end
 
@@ -99,7 +110,7 @@ local function makeRow(parent)
     r.check:SetTexture(GLYPHS .. "check.tga")
     r.check:SetSize(11, 11)
     r.check:SetPoint("LEFT", 0, 0)
-    r.check:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(r.check, "ink-muted")
     r.bullet = UI.Diamond(r, 4, "ink-muted", "ARTWORK", 1)
     r.bullet:SetPoint("CENTER", r, "LEFT", 5, 0)
     r.worth = UI.Text(r, "caption", "ink-muted")
@@ -257,7 +268,7 @@ local function makeStep(parent)
     c.check:SetTexture(GLYPHS .. "check.tga")
     c.check:SetSize(10, 10)
     c.check:SetPoint("LEFT", 0, 0)
-    c.check:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(c.check, "ink-muted")
     c.ring = UI.Diamond(c, 7, "gilt-line", "ARTWORK", 1)
     c.ring:SetPoint("CENTER", c, "LEFT", 5, 0)
     c.hole = UI.Diamond(c, 4, "surface-sunk", "ARTWORK", 2)
@@ -280,12 +291,12 @@ local function makeDetailRow(view, parent)
     r.chevron = r:CreateTexture(nil, "ARTWORK")
     r.chevron:SetSize(10, 10)
     r.chevron:SetPoint("LEFT", 0, 0)
-    r.chevron:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(r.chevron, "gilt-text")
     r.check = r:CreateTexture(nil, "ARTWORK")
     r.check:SetTexture(GLYPHS .. "check.tga")
     r.check:SetSize(11, 11)
     r.check:SetPoint("LEFT", 0, 0)
-    r.check:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(r.check, "ink-muted")
     r.bullet = UI.Diamond(r, 4, "ink-muted", "ARTWORK", 1)
     r.bullet:SetPoint("CENTER", r, "LEFT", 5, 0)
     r.worth = UI.Text(r, "caption", "gilt-text")
@@ -523,7 +534,7 @@ function UI.LegacyChallenges(parent)
     f.back.chevron:SetTexture(GLYPHS .. "chevronLeft.tga")
     f.back.chevron:SetSize(10, 10)
     f.back.chevron:SetPoint("LEFT", S["space-5"], 0)
-    f.back.chevron:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(f.back.chevron, "gilt-text")
     f.back:SetPoint("TOPLEFT")
     f.detailTitle = UI.Text(f.detail, "header", "gilt-text")
     f.detailTitle:SetPoint("LEFT", f.back, "RIGHT", S["space-6"], 0)
@@ -536,6 +547,7 @@ function UI.LegacyChallenges(parent)
     f.scroll:SetPoint("TOPLEFT", f.back, "BOTTOMLEFT", 0, -S["space-5"])
     f.scroll:SetPoint("BOTTOMRIGHT", f.detail, "BOTTOMRIGHT", -10, 0)
     f:SetScript("OnSizeChanged", function() f:Layout() end)
+    live[f] = "challenges"
     return f
 end
 
@@ -551,7 +563,10 @@ local Track = {}
 local ICON = 24
 local LEFT_W = 150
 local TRACK_TOP = ICON + S["space-3"]
-UI.LEGACY_TRACK_H = TRACK_TOP + 6 + S["space-3"] + T.type.numeric.lineHeight + S["space-2"] + T.type.caption.lineHeight
+local function trackHeight()
+    return TRACK_TOP + 6 + S["space-3"] + T.type.numeric.lineHeight + S["space-2"] + T.type.caption.lineHeight
+end
+UI.LEGACY_TRACK_H = trackHeight()
 
 function Track:SetTrack(d)
     d = d or {}
@@ -586,7 +601,7 @@ function Track:SetTrack(d)
             st.check:SetTexture(GLYPHS .. "check.tga")
             st.check:SetSize(10, 10)
             st.check:SetPoint("TOPRIGHT", st.slot, "TOPRIGHT", 3, 3)
-            st.check:SetVertexColor(UI.RGBA("fel"))
+            UI.Paint(st.check, "fel")
             st.mark = UI.Diamond(st, 9, "gilt-line", "OVERLAY", 3)
             st.mark:SetPoint("CENTER", st, "TOP", 0, -(TRACK_TOP + 3))
             st.at = UI.Text(st, "numeric", "ink-muted")
@@ -596,7 +611,7 @@ function Track:SetTrack(d)
         local got = earned >= (s.at or 0)
         st.slot.stop = s
         st.slot.skin:SetItem({ icon = s.icon, quality = s.quality, dim = not got })
-        st.mark:SetVertexColor(UI.RGBA(got and "gilt" or "gilt-line"))
+        UI.Paint(st.mark, got and "gilt" or "gilt-line")
         st.at:SetValue(tostring(s.at or 0))
         st.at:SetColor(got and "gilt-text" or "ink-muted")
         st.check:SetShown(s.collected and true or false)
@@ -625,5 +640,30 @@ function UI.LegacyTrack(parent)
     f.next = UI.Text(f, "caption", "ink-muted")
     f.next:SetPoint("BOTTOM", f, "BOTTOM", LEFT_W / 2, 0)
     f:SetScript("OnSizeChanged", function() if f.data then f:SetTrack(f.data) end end)
+    live[f] = "track"
     return f
 end
+
+-- A theme can change the caption style (the heights above) and the colours
+-- in the texts: measured and drawn again. (The public copies of the two
+-- heights too: the Legacy window sizes itself from them.)
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    UI.LEGACY_CARD_H, UI.LEGACY_TRACK_H = cardHeight(), trackHeight()
+    local public = ns.API and ns.API.UI
+    if public then public.LEGACY_CARD_H, public.LEGACY_TRACK_H = UI.LEGACY_CARD_H, UI.LEGACY_TRACK_H end
+    for f, kind in pairs(live) do
+        if kind == "points" then
+            restyleBlock(f.account)
+            restyleBlock(f.char)
+            f:SetHeight(f.account:GetHeight())
+            if f.data then f:SetPoints(f.data) end
+        elseif kind == "challenges" then
+            f:Layout()
+            if f.openIndex then f:Open(f.openIndex, true) end
+        else
+            restyleBlock(f.points)
+            f:SetHeight(UI.LEGACY_TRACK_H)
+            for _, st in ipairs(f.stops) do st:SetHeight(UI.LEGACY_TRACK_H) end
+        end
+    end
+end, "UI.Legacy")

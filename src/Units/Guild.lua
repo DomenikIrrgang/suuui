@@ -905,7 +905,7 @@ function M:BuildPicker()
     plus.glyph = plus:CreateTexture(nil, "ARTWORK")
     plus.glyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\plus.tga")
     plus.glyph:SetSize(12, 12)
-    plus.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(plus.glyph, "ink-muted")
     plus.glyph:SetPoint("CENTER")
     plus:SetScript("OnEnter", function(self2)
         self2.edge:SetColor("gilt")
@@ -1025,7 +1025,7 @@ function M:LayChat()
     if f.Chat.MessageFrame then f.Chat.MessageFrame.suuOwn = true end
     if not f.Chat.suuBox then
         f.Chat.suuBox = f.Chat:CreateTexture(nil, "BACKGROUND", nil, -7)
-        f.Chat.suuBox:SetColorTexture(UI.RGBA("surface-sunk"))
+        UI.PaintFill(f.Chat.suuBox, "surface-sunk")
         f.Chat.suuBox:SetAllPoints()
         f.Chat.suuEdge = UI.Border(f.Chat, "gilt-faint")
     end
@@ -1233,6 +1233,13 @@ function M:OnEnable()
         if self.rowOver then self.rowOver:Hide() end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
+    -- the details' "No note" colour code and their rows' heights, the
+    -- banner's height: again with the theme
+    self:On("SUUUI_THEME_CHANGED", function()
+        local p = self.details
+        if p and p:IsShown() and p.member then self:ShowDetails(p.member) end
+        if self.onChat then self:RenderBanner() end
+    end)
     -- the new message comes with the event; the game's own copy
     -- (GetGuildRosterMOTD) can lag behind it
     if not valid or valid("GUILD_MOTD") then

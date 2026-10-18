@@ -715,6 +715,11 @@ function M:OnEnable()
     self:Watch("items", function() self:Refresh() end)
     self:Watch("recipes", function() self:Refresh() end)
     self:Watch("collapseInBossFights", function() self:ApplySecure() end)
+    -- a theme's line heights: laid out again (the preview too)
+    self:On("SUUUI_THEME_CHANGED", function()
+        self:QueueRefresh()
+        if self.preview then self.preview:SetQuests(PREVIEW_QUESTS) end
+    end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     -- a quest you accept goes on the tracker
     self:OnGameEvent("QUEST_ACCEPTED", function(_, a, b)

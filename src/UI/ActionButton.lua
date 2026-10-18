@@ -57,7 +57,7 @@ end
 function AB:UpdateHotkey()
     local show = self.hotkeyShown and self.hotkeyText ~= "" and self.hasAction
     self.hotkey:SetShown(show and true or false)
-    self.hotkey:SetTextColor(UI.RGBA(self.outOfRange and "ember-text" or "ink-muted"))
+    UI.Paint(self.hotkey, self.outOfRange and "ember-text" or "ink-muted")
 end
 
 -- The border: a state's colour, gilt while hovered, the hairline at rest.
@@ -221,7 +221,7 @@ function AB:ShowAutocast(on)
         local function add(horizontal, offset, edge)
             for pos = 0, size - dash, step do
                 local t = self.over:CreateTexture(nil, "OVERLAY", nil, 2)
-                t:SetColorTexture(UI.RGBA("ink"))
+                UI.PaintFill(t, "ink")
                 if horizontal then
                     t:SetSize(dash, 1)
                     t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "BOTTOMLEFT", inset + pos, offset)
@@ -309,17 +309,20 @@ end
 -- The text on buttons (key binding, count, cooldown digits): micro by
 -- default, never smaller (micro is the floor), with a thin dark outline so
 -- it reads on any icon art (as the aura digits do).
+-- (MICRO is the style's own table: a theme changes it in place.)
 local MICRO = T.type["micro"]
-local digitFonts = {}
+local digitFonts = {} -- key -> { name, font, px }
 
 local function digitFont(px)
     local key = math.floor(px * 10 + 0.5)
-    if not digitFonts[key] then
-        local name = "SuuUIActionDigits" .. key
-        CreateFont(name):SetFont(MICRO.file, px, "OUTLINE")
-        digitFonts[key] = name
+    local d = digitFonts[key]
+    if not d then
+        d = { name = "SuuUIActionDigits" .. key, px = px }
+        d.font = CreateFont(d.name)
+        d.font:SetFont(MICRO.file, px, "OUTLINE")
+        digitFonts[key] = d
     end
-    return digitFonts[key]
+    return d.name
 end
 
 function AB:SetTextSize(px)
@@ -336,6 +339,16 @@ function UI.SetActionTextSize(px)
     UI.actionTextSize = px
     for _, b in ipairs(UI.actionButtons) do b:SetTextSize(px) end
 end
+
+-- A theme can change the micro style's face and size (its floor): the digit
+-- fonts and every button's text again. Fonts only, so it is safe in combat.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for _, d in pairs(digitFonts) do d.font:SetFont(MICRO.file, d.px, "OUTLINE") end
+    for _, b in ipairs(UI.actionButtons) do
+        b.textSize = nil
+        b:SetTextSize(UI.actionTextSize)
+    end
+end, "ActionButton")
 
 -- Every action button made, for keybind mode (each bar sets b.bindCommand,
 -- the game's binding command, and b.bindLabel, a name people read).
@@ -361,7 +374,7 @@ function UI.ActionButton(parent, name, size)
 
     b.veil = face:CreateTexture(nil, "ARTWORK", nil, 2)
     b.veil:SetAllPoints(b.art)
-    b.veil:SetColorTexture(UI.RGBA("ember", 0.4))
+    UI.PaintFill(b.veil, "ember", 0.4)
     b.veil:Hide()
 
     b.cooldown = CreateFrame("Cooldown", nil, face, "CooldownFrameTemplate")
@@ -389,7 +402,7 @@ function UI.ActionButton(parent, name, size)
     b.ring:SetShown(false)
     b.flash = over:CreateTexture(nil, "OVERLAY", nil, 3)
     b.flash:SetAllPoints()
-    b.flash:SetColorTexture(UI.RGBA("arcane", 0.35))
+    UI.PaintFill(b.flash, "arcane", 0.35)
     b.flash:SetAlpha(0)
 
     b.hotkey = over:CreateFontString(nil, "OVERLAY")

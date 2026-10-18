@@ -62,6 +62,14 @@ local function mix(token)
     return r * 0.7 + sr * 0.3, g * 0.7 + sg * 0.3, b * 0.7 + sb * 0.3
 end
 
+-- the bar's fill: unit-fill-deep to unit-fill, each mixed (UI.Bind: again
+-- after a theme change)
+local function fillGradient(t)
+    local r1, g1, b1 = mix("unit-fill-deep")
+    local r2, g2, b2 = mix("unit-fill")
+    t:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+end
+
 --------------------------------------------------------------------------------
 -- Rows
 --------------------------------------------------------------------------------
@@ -155,9 +163,7 @@ local function buildRow(m)
     f.bar:SetAllPoints()
     f.bar:SetStatusBarTexture(WHITE)
     f.bar:SetMinMaxValues(0, 100)
-    local r1, g1, b1 = mix("unit-fill-deep")
-    local r2, g2, b2 = mix("unit-fill")
-    f.bar:GetStatusBarTexture():SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+    UI.Bind(f.bar:GetStatusBarTexture(), fillGradient)
     f.edge = UI.Border(f.bar, "gilt-hairline", { layer = "OVERLAY" })
     f.glow = UI.Shadow(f, "glow-ember")
     local o = CreateFrame("Frame", nil, f)
@@ -296,7 +302,7 @@ function UI.ThreatMeter(parent, opts)
     -- a secret name can't be measured: the target gets the head's free width
     f.target:SetWidth(w - 90)
     local rule = f:CreateTexture(nil, "BORDER")
-    rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(rule, "gilt-faint")
     rule:SetPoint("TOPLEFT", 1, -head)
     rule:SetPoint("TOPRIGHT", -1, -head)
     rule:SetHeight(1)
@@ -305,7 +311,7 @@ function UI.ThreatMeter(parent, opts)
     f.body:SetPoint("BOTTOMRIGHT")
     f.rows = {}
     f.pinLine = f.body:CreateTexture(nil, "ARTWORK")
-    f.pinLine:SetColorTexture(UI.RGBA("gilt-line"))
+    UI.PaintFill(f.pinLine, "gilt-line")
     f.pinLine:SetHeight(1)
     f.pinLine:Hide()
     f.note = UI.Text(f.body, "caption", "ink-muted")

@@ -346,7 +346,7 @@ function M:Build()
 
     -- XP (or reputation) along the foot; rested XP as a lighter run after it.
     self.xp = UI.StatusBar(d, { width = 100, height = "progress", fill = "progress-fill", track = "track", ghost = true })
-    self.xp.ghost:SetStatusBarColor(UI.RGBA("progress-rested"))
+    UI.Paint(self.xp.ghost, "progress-rested")
     self.xp:SetPoint("BOTTOMLEFT", d, "BOTTOMLEFT", S["space-3"], S["space-3"])
     self.xp:EnableMouse(true)
     self.xp:SetScript("OnEnter", function(bar) self:XPTooltip(bar) end)

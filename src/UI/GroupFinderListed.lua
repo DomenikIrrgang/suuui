@@ -40,6 +40,9 @@ local LINE_H = 18
 
 local P = {}
 
+-- the live pages, placed and drawn again when the theme changes
+local pages = setmetatable({}, { __mode = "k" })
+
 -- A sunk card: surface-sunk in a gilt-faint edge.
 local function card(parent)
     local c = CreateFrame("Frame", nil, parent)
@@ -158,6 +161,31 @@ function P:Count()
     a.post:SetEnabledState(not over and text:match("%S") ~= nil)
 end
 
+-- Where the parts by the titles and in the ad sit: from the text styles'
+-- line heights, which a theme can change.
+function P:Place()
+    local c, a = self.listing, self.ad
+    local mid = -(PAD + T.type.header.lineHeight / 2)
+    c.dot:SetPoint("CENTER", c, "TOPLEFT", PAD + 3, mid)
+    c.title:SetPoint("LEFT", c, "TOPLEFT", PAD + 6 + S["space-3"], mid)
+    c.time:SetPoint("RIGHT", c, "TOPRIGHT", -PAD, mid)
+    a.glyph:SetPoint("CENTER", a, "TOPLEFT", PAD + 7, mid)
+    local y = PAD + T.type.header.lineHeight + GAP
+    a.intro:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
+    y = y + T.type.caption.lineHeight * 2 + GAP
+    a.channelLabel:SetPoint("LEFT", a, "TOPLEFT", PAD, -(y + 15))
+    a.channel:SetPoint("TOPLEFT", a, "TOPLEFT", PAD + 56, -y)
+    y = y + 30 + GAP
+    -- the ad's field: several lines
+    a.field:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
+    y = y + a.field:GetHeight() + S["space-2"]
+    a.rewrite:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
+    a.count:SetPoint("RIGHT", a, "TOPRIGHT", -PAD, -(y + 11))
+    y = y + 22 + GAP + GAP
+    self.adH = y + BTN_H + PAD
+    a:SetHeight(self.adH)
+end
+
 function UI.GroupFinderListed(parent)
     local p = CreateFrame("Frame", nil, parent)
     Mixin(p, P)
@@ -167,12 +195,9 @@ function UI.GroupFinderListed(parent)
     c:SetPoint("TOPLEFT")
     c:SetPoint("RIGHT", p, "CENTER", -S["space-6"] / 2, 0)
     c.dot = UI.Diamond(c, 6, "arcane")
-    c.dot:SetPoint("CENTER", c, "TOPLEFT", PAD + 3, -(PAD + T.type.header.lineHeight / 2))
     c.title = UI.Text(c, "header", "gilt-text")
-    c.title:SetPoint("LEFT", c, "TOPLEFT", PAD + 6 + S["space-3"], -(PAD + T.type.header.lineHeight / 2))
     c.title:SetValue("Listed")
     c.time = UI.Text(c, "caption", "ink-muted")
-    c.time:SetPoint("RIGHT", c, "TOPRIGHT", -PAD, -(PAD + T.type.header.lineHeight / 2))
     c.facts = {}
     for i = 1, 5 do c.facts[i] = fact(c) end
     c.roleIcons = {}
@@ -184,7 +209,7 @@ function UI.GroupFinderListed(parent)
         ic.glyph = ic:CreateTexture(nil, "ARTWORK")
         ic.glyph:SetSize(12, 12)
         ic.glyph:SetPoint("CENTER")
-        ic.glyph:SetVertexColor(UI.RGBA("ink"))
+        UI.Paint(ic.glyph, "ink")
         ic:Hide()
         c.roleIcons[i] = ic
     end
@@ -206,28 +231,19 @@ function UI.GroupFinderListed(parent)
     a.glyph = a:CreateTexture(nil, "ARTWORK")
     a.glyph:SetTexture(GLYPHS .. "chat.tga")
     a.glyph:SetSize(14, 14)
-    a.glyph:SetVertexColor(UI.RGBA("gilt-text"))
-    a.glyph:SetPoint("CENTER", a, "TOPLEFT", PAD + 7, -(PAD + T.type.header.lineHeight / 2))
+    UI.Paint(a.glyph, "gilt-text")
     a.title = UI.Text(a, "header", "gilt-text")
     a.title:SetPoint("LEFT", a.glyph, "RIGHT", S["space-3"], 0)
     a.title:SetValue("Advertise in chat")
-    local y = PAD + T.type.header.lineHeight + GAP
     a.intro = UI.Text(a, "caption", "ink-muted")
-    a.intro:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
     a.intro:SetPoint("RIGHT", a, "RIGHT", -PAD, 0)
     a.intro:SetJustifyH("LEFT")
     a.intro:SetWordWrap(true)
     a.intro:SetValue("Your listing as one chat line. Edit it if you like; it goes only when you click Post.")
-    y = y + T.type.caption.lineHeight * 2 + GAP
     a.channelLabel = UI.Text(a, "caption", "ink-muted")
-    a.channelLabel:SetPoint("LEFT", a, "TOPLEFT", PAD, -(y + 15))
     a.channelLabel:SetValue("Channel")
     a.channel = UI.Select(a, { width = 180, onChange = function(v) if p.onChannel then p.onChannel(v) end end })
-    a.channel:SetPoint("TOPLEFT", a, "TOPLEFT", PAD + 56, -y)
-    y = y + 30 + GAP
-    -- the ad's field: several lines
     a.field = CreateFrame("Frame", nil, a)
-    a.field:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
     a.field:SetPoint("RIGHT", a, "RIGHT", -PAD, 0)
     a.field:SetHeight(FIELD_LINES * LINE_H + S["space-3"] * 2)
     UI.Fill(a.field, "surface-sunk"):SetAllPoints()
@@ -239,7 +255,7 @@ function UI.GroupFinderListed(parent)
     -- 0 cut every text to nothing (found in game)
     e:SetMaxLetters(1000)
     e:SetFontObject(ns.Fonts.Get("body"))
-    e:SetTextColor(UI.RGBA("ink"))
+    UI.Paint(e, "ink")
     e:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
     e:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-3"])
     e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
@@ -252,20 +268,15 @@ function UI.GroupFinderListed(parent)
     a.field:EnableMouse(true)
     a.field:SetScript("OnMouseDown", function() e:SetFocus() end)
     a.edit = e
-    y = y + a.field:GetHeight() + S["space-2"]
     a.rewrite = UI.Button(a, { text = "From my listing", icon = "reset",
         tooltip = { title = "From my listing", description = "Write it again from your listing" },
         onClick = function() if p.onRewrite then p.onRewrite() end end })
     a.rewrite:SetHeight(22)
-    a.rewrite:SetPoint("TOPLEFT", a, "TOPLEFT", PAD, -y)
     a.count = UI.Text(a, "caption", "ink-faint")
-    a.count:SetPoint("RIGHT", a, "TOPRIGHT", -PAD, -(y + 11))
-    y = y + 22 + GAP
     -- the foot, at the card's foot
     a.rule = rule(a)
     a.rule:SetPoint("BOTTOMLEFT", a, "BOTTOMLEFT", PAD, PAD + BTN_H + GAP)
     a.rule:SetPoint("BOTTOMRIGHT", a, "BOTTOMRIGHT", -PAD, PAD + BTN_H + GAP)
-    y = y + GAP
     a.last = UI.Text(a, "caption", "ink-muted")
     a.last:SetPoint("LEFT", a, "BOTTOMLEFT", PAD, PAD + BTN_H / 2)
     a.post = UI.Button(a, { text = "Post", variant = "primary", icon = "chat",
@@ -275,9 +286,16 @@ function UI.GroupFinderListed(parent)
         end })
     a.post:SetHeight(BTN_H)
     a.post:SetPoint("BOTTOMRIGHT", a, "BOTTOMRIGHT", -PAD, PAD)
-    p.adH = y + BTN_H + PAD
-    a:SetHeight(p.adH)
     p.ad = a
+    p:Place()
     p:HookScript("OnSizeChanged", function() if p.data then p:SetData(p.data) end end)
+    pages[p] = true
     return p
 end
+
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for p in pairs(pages) do
+        p:Place()
+        if p.data then p:SetData(p.data) end
+    end
+end, "GroupFinderListed")

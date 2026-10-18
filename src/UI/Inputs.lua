@@ -42,7 +42,7 @@ local function glyph(parent, size, color, strokes)
         g.parts[#g.parts + 1] = t
     end
     function g:SetColor(name)
-        for _, t in ipairs(self.parts) do t:SetVertexColor(UI.RGBA(name)) end
+        for _, t in ipairs(self.parts) do UI.Paint(t, name) end
     end
     g:SetColor(color or "ink-muted")
     return g
@@ -67,7 +67,7 @@ function UI.Check(parent, size, color)
     t:SetTexture(CHECK)
     t:SetDesaturated(true)
     t:SetSize(size, size)
-    t:SetVertexColor(UI.RGBA(color or "on-signal"))
+    UI.Paint(t, color or "on-signal")
     return t
 end
 
@@ -107,9 +107,9 @@ function Toggle:SetValue(on, animate)
     on = on and true or false
     local was = self.value
     self.value = on
-    self.bg:SetColorTexture(UI.RGBA(on and "arcane-soft" or "surface-sunk"))
+    UI.PaintFill(self.bg, on and "arcane-soft" or "surface-sunk")
     self.border:SetColor(on and "arcane" or (self:IsMouseOver() and "gilt" or "gilt-line"))
-    self.knob:SetVertexColor(UI.RGBA(on and "arcane" or "ink-muted"))
+    UI.Paint(self.knob, on and "arcane" or "ink-muted")
     local to = on and KNOB_ON or KNOB_OFF
     self:SetScript("OnUpdate", nil)
     self.knob:ClearAllPoints()
@@ -159,7 +159,7 @@ local Checkbox = {}
 
 function Checkbox:SetValue(on)
     self.value = on and true or false
-    self.box:SetColorTexture(UI.RGBA(self.value and "arcane" or "surface-sunk"))
+    UI.PaintFill(self.box, self.value and "arcane" or "surface-sunk")
     self.boxBorder:SetColor(self.value and "arcane" or "gilt-line")
     self.check:SetShown(self.value)
 end
@@ -296,11 +296,21 @@ Slider.SetDisabled = function(self, disabled)
     self.slider:EnableMouse(not self.disabled)
 end
 
+-- the value line's height comes from the numeric style, which a theme can change
+local sliders = setmetatable({}, { __mode = "k" })
+local function sliderHeight()
+    return T.type.numeric.lineHeight + S["space-2"] + 18
+end
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for f in pairs(sliders) do f:SetHeight(sliderHeight()) end
+end, "UI.Slider")
+
 function UI.Slider(parent, opts)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Slider)
     local width = opts.width or 200
-    f:SetSize(width, T.type.numeric.lineHeight + S["space-2"] + 18)
+    f:SetSize(width, sliderHeight())
+    sliders[f] = true
     f.min, f.max, f.step = opts.min or 0, opts.max or 1, opts.step
     f.unit, f.format, f.onChange = opts.unit, opts.format, opts.onChange
     f.live = opts.live ~= false

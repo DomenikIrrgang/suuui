@@ -134,17 +134,37 @@ function M:SkinStatusBar()
     bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
     bar:SetHeight(4)
     local track = bar:CreateTexture(nil, "BACKGROUND")
-    track:SetColorTexture(UI.RGBA("surface-sunk"))
+    UI.PaintFill(track, "surface-sunk")
     track:SetAllPoints()
-    local fill = { UI.RGBA("unit-fill") }
-    bar:SetStatusBarColor(unpack(fill))
+    bar:SetStatusBarColor(UI.RGBA("unit-fill"))
+    -- the game colours the bar on every show: it goes back to the unit fill,
+    -- read each time (a theme may have changed it)
     local setting = false
     hooksecurefunc(bar, "SetStatusBarColor", function(b)
         if setting then return end
         setting = true
-        b:SetStatusBarColor(unpack(fill))
+        b:SetStatusBarColor(UI.RGBA("unit-fill"))
         setting = false
     end)
+end
+
+-- A theme change: the fonts, the bar's fill, the aura tooltips' backdrop
+-- (set in the engine) and the aura panel's caption line.
+function M:ApplyTheme()
+    self:ApplyFonts()
+    local bar = _G.GameTooltipStatusBar
+    if bar and self.barSkinned then bar:SetStatusBarColor(UI.RGBA("unit-fill")) end
+    -- a unit's tooltip open now: its name in the new colour (the rest of
+    -- its lines are the game's, set again on the next show)
+    if GameTooltip:IsShown() then pcall(self.ColorUnit, self, GameTooltip) end
+    self:StyleAuraTooltip()
+    if self.auraPanel then
+        -- (anchored to by the game's aura container: sized out of combat)
+        self:RunOutOfCombat("auraPanel", function()
+            local size, gap = UI.Size("icon-md"), T.space["space-2"]
+            self.auraPanel:SetHeight(3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"])
+        end)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -485,4 +505,5 @@ function M:OnEnable()
         self:OnGameEvent(e, function() C_Timer.After(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
     end
     self:On("SUUUI_ROOT_SCALED", function() self:ApplyScale() end)
+    self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
 end

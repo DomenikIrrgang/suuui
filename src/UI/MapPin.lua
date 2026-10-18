@@ -53,6 +53,22 @@ local function disc(parent, layer, sub)
 end
 local function fit(t, box) t:SetSize(box, box) end
 
+-- "!" and "?" at 16 px, with the glyphs, in label's face (again when a
+-- theme changes it)
+local function charFont()
+    local font = _G.SuuUIMapPinChar
+    if not font then
+        font = CreateFont("SuuUIMapPinChar")
+        local function face()
+            local file, _, flags = ns.Fonts.Get("label"):GetFont()
+            font:SetFont(file, 16, flags or "")
+        end
+        face()
+        ns.Events.On("SUUUI_THEME_CHANGED", face, "MapPin")
+    end
+    return font
+end
+
 local Pin = {}
 
 function Pin:PinSize() return self.size end
@@ -79,28 +95,28 @@ function Pin:SetData(d)
     self.ringGap:SetShown(d.ring ~= nil)
     if d.ring then
         fit(self.ringOuter, size + 6)
-        self.ringOuter:SetVertexColor(UI.RGBA(d.ring))
+        UI.Paint(self.ringOuter, d.ring)
         fit(self.ringGap, size + 3)
-        self.ringGap:SetVertexColor(UI.RGBA("surface"))
+        UI.Paint(self.ringGap, "surface")
     end
     self.outline:SetShown(d.outline and true or false)
     if d.outline then
         fit(self.outline, size + 2)
-        self.outline:SetVertexColor(UI.RGBA("surface"))
+        UI.Paint(self.outline, "surface")
     end
     -- a split edge: the edge itself in surface (the gaps), an arc per item
     local arcs = d.arcs and #d.arcs > 1 and d.arcs or nil
     local n = arcs and math.min(#arcs, 4) or 0
     fit(self.edge, size)
-    self.edge:SetVertexColor(UI.RGBA(arcs and "surface" or (d.edge or "gilt-line")))
+    UI.Paint(self.edge, arcs and "surface" or (d.edge or "gilt-line"))
     fit(self.fill, size - 2 * (d.edgeWidth or 1))
-    self.fill:SetVertexColor(UI.RGBA("surface"))
+    UI.Paint(self.fill, "surface")
     for k = 1, 4 do
         local t = self.arcs[k]
         if k <= n then
             t:SetTexture(ARC .. n .. ".tga")
             fit(t, size)
-            t:SetVertexColor(UI.RGBA(arcs[k]))
+            UI.Paint(t, arcs[k])
             -- clockwise from the top: each arc turned by its share
             t:SetRotation(-(k - 1) * 2 * math.pi / n)
             t:Show()
@@ -112,14 +128,14 @@ function Pin:SetData(d)
     self.barEdge:SetShown(d.bar ~= nil)
     self.bar:SetShown(d.bar ~= nil)
     if d.bar then
-        self.bar:SetColorTexture(UI.RGBA(d.bar))
-        self.barEdge:SetColorTexture(UI.RGBA("surface"))
+        UI.PaintFill(self.bar, d.bar)
+        UI.PaintFill(self.barEdge, "surface")
     end
     local inner = d.small and 14 or 17
     if d.glyph then
         self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
         self.glyph:SetSize(inner, inner)
-        self.glyph:SetVertexColor(UI.RGBA(d.color or "ink"))
+        UI.Paint(self.glyph, d.color or "ink")
         self.glyph:Show()
         self.char:Hide()
         if d.spin then
@@ -152,7 +168,7 @@ function UI.MapPin(parent)
     local b = CreateFrame("Button", nil, parent)
     Mixin(b, Pin)
     b.hl = disc(b, "BACKGROUND", 0)
-    b.hl:SetVertexColor(UI.RGBA("ink"))
+    UI.Paint(b.hl, "ink")
     b.hl:Hide()
     b.ringOuter = disc(b, "BACKGROUND", 1)
     b.ringGap = disc(b, "BACKGROUND", 2)
@@ -184,14 +200,7 @@ function UI.MapPin(parent)
     turn:SetOrigin("CENTER", 0, 0)
     b.char = UI.Text(b, "label", "ink")
     b.char:SetPoint("CENTER", 0, 0)
-    -- "!" and "?" at 16 px, with the glyphs
-    local charFont = _G.SuuUIMapPinChar
-    if not charFont then
-        charFont = CreateFont("SuuUIMapPinChar")
-        local file, _, flags = ns.Fonts.Get("label"):GetFont()
-        charFont:SetFont(file, 16, flags or "")
-    end
-    b.char:SetFontObject(charFont)
+    b.char:SetFontObject(charFont())
     b.countTab = CreateFrame("Frame", nil, b)
     b.countTab:SetFrameLevel(b:GetFrameLevel() + 2)
     UI.Fill(b.countTab, "surface-raised"):SetAllPoints()

@@ -43,7 +43,6 @@ local function readable(v) return not isSecret(v) and type(v) == "number" end
 -- the zone lines (zone, subzone, the instance line) end this far above the
 -- disc: the north marker's 8px over the ring, plus space-3
 local ZONE_GAP = 8 + S["space-3"]
-local TIME_H = T.type.caption.lineHeight
 
 --------------------------------------------------------------------------------
 -- Round buttons and decorations (shared by the real map and the preview)
@@ -52,7 +51,7 @@ local TIME_H = T.type.caption.lineHeight
 local function circleTex(parent, file, color, layer, sublevel)
     local t = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel or 0)
     t:SetTexture(TEX .. file)
-    t:SetVertexColor(UI.RGBA(color))
+    UI.Paint(t, color)
     return t
 end
 
@@ -69,17 +68,22 @@ local function roundButton(parent, size, glyph, glyphSize)
     b.icon:SetPoint("CENTER")
     if glyph then
         b.icon:SetTexture(GLYPHS .. glyph .. ".tga")
-        b.icon:SetVertexColor(UI.RGBA("ink"))
+        UI.Paint(b.icon, "ink")
     end
     b:SetScript("OnEnter", function(self)
-        self.edge:SetVertexColor(UI.RGBA("gilt"))
+        UI.Paint(self.edge, "gilt")
         if self.tip then UI.ShowTooltip(self, self.tip()) end
     end)
     b:SetScript("OnLeave", function(self)
-        self.edge:SetVertexColor(UI.RGBA("gilt-line"))
+        UI.Paint(self.edge, "gilt-line")
         UI.HideTooltip()
     end)
     return b
+end
+
+-- The "N": 9.5 px in header's face (again when a theme changes it).
+local function northFace(text)
+    text:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 9.5, "")
 end
 
 -- The ring, ornaments, north marker and the ring's buttons around `disc`.
@@ -116,7 +120,7 @@ local function decorate(disc, handlers)
     circleTex(north, "CircleFill.tga", "surface", "BACKGROUND"):SetAllPoints()
     circleTex(north, "CircleEdge.tga", "gilt", "BORDER"):SetAllPoints()
     north.text = UI.Text(north, "micro", "gilt-text")
-    north.text:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 9.5, "")
+    northFace(north.text)
     north.text:SetPoint("CENTER", 0.5, 0)
     north.text:SetValue("N")
     d.north = north
@@ -201,7 +205,7 @@ local function layoutBlock(f, size, zone, clock)
     -- new one moves the map
     local top = 8
     f.disc:SetPoint("TOP", 0, -top)
-    f:SetSize(size, top + size + (clock and (S["space-3"] + TIME_H) or 0))
+    f:SetSize(size, top + size + (clock and (S["space-3"] + T.type.caption.lineHeight) or 0))
     stackZone(f)
 end
 
@@ -449,6 +453,22 @@ function M:Relayout()
     self:UpdateClock()
 end
 
+-- A theme changed: the "N"'s face, the instance line's colour code, the
+-- clock's line height (the block holds the map: after combat).
+function M:ApplyTheme()
+    if self.preview then
+        northFace(self.preview.deco.north.text)
+        self.preview.instance:SetValue(instanceLine("Dungeon", "5"))
+        if self.preview:IsVisible() then self:PreviewView(self.preview:GetParent()) end
+    end
+    if not self.block then return end
+    northFace(self.block.deco.north.text)
+    self:UpdateDifficulty()
+    if InCombatLockdown() then self.pendingTheme = true return end
+    self.pendingTheme = nil
+    layoutBlock(self.block, self:Get("size"), self:Get("zone"), self:Get("clock"))
+end
+
 function M:OnEnable()
     if not Minimap then return end
     if not self.block then
@@ -493,7 +513,11 @@ function M:OnEnable()
     for _, e in ipairs({ "UPDATE_PENDING_MAIL", "MAIL_CLOSED", "PLAYER_ENTERING_WORLD" }) do
         self:OnGameEvent(e, function() self:UpdateMail() end)
     end
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.pendingPlace then self:PlaceMinimap() end end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        if self.pendingTheme then self:ApplyTheme() end
+        if self.pendingPlace then self:PlaceMinimap() end
+    end)
+    self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_DIFFICULTY_CHANGED", "GROUP_ROSTER_UPDATE" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:UpdateDifficulty() end) end

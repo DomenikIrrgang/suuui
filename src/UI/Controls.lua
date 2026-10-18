@@ -40,7 +40,7 @@ function Button:SetIcon(name)
         self.icon = self:CreateTexture(nil, "ARTWORK")
         self.icon:SetSize(12, 12)
         self.icon:SetPoint("RIGHT", self.label, "LEFT", -S["space-3"], 0)
-        self.icon:SetVertexColor(UI.RGBA(self.variant == "primary" and "on-signal" or "ink-muted"))
+        UI.Paint(self.icon, self.variant == "primary" and "on-signal" or "ink-muted")
     end
     if self.icon then
         self.icon:SetShown(name ~= nil)
@@ -55,6 +55,12 @@ function Button:SetEnabledState(enabled)
     self:SetEnabled(enabled)
     self:SetAlpha(enabled and 1 or T.opacity["opacity-disabled"])
 end
+
+-- Sized to their text: measured again when a theme changes the text styles.
+local buttons = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for b in pairs(buttons) do b:Remeasure() end
+end, "UI.Button")
 
 local function onEnter(self)
     -- (a disabled one shows only its tooltip: why it's off)
@@ -110,6 +116,7 @@ function UI.Button(parent, opts)
     b:SetScript("OnMouseUp", function(self) self.label:SetPoint("CENTER", self.shift, 0) end)
     b:SetScript("OnClick", function(self) if opts.onClick then opts.onClick(self) end end)
     b:SetEnabledState(not opts.disabled)
+    buttons[b] = true
     return b
 end
 
@@ -130,7 +137,7 @@ local Badge = {}
 
 function Badge:SetState(tone, text)
     tone = TONE_FILL[tone] and tone or "neutral"
-    self.bg:SetColorTexture(UI.RGBA(TONE_FILL[tone]))
+    UI.PaintFill(self.bg, TONE_FILL[tone])
     self.label:SetColor(tone == "neutral" and "ink" or "on-signal")
     self.edge:SetShown(tone == "neutral")
     local wasShown = self:IsShown() and self.text ~= nil
@@ -142,6 +149,15 @@ function Badge:SetState(tone, text)
     if not wasShown then Motion.FadeIn(self, T.duration["dur-fast"]) end
 end
 
+local badges = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for f in pairs(badges) do
+        f:SetHeight(T.type.badge.lineHeight)
+        f.knownWidth = UI.MeasureText("badge", f.text or "") + 10
+        f:SetWidth(f.knownWidth)
+    end
+end, "UI.StateBadge")
+
 function UI.StateBadge(parent, tone, text)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Badge)
@@ -152,5 +168,6 @@ function UI.StateBadge(parent, tone, text)
     f.label = UI.Text(f, "badge", "on-signal")
     f.label:SetPoint("CENTER", 0, 0)
     f:SetState(tone, text or "")
+    badges[f] = true
     return f
 end

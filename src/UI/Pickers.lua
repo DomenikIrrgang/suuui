@@ -41,7 +41,7 @@ function AnchorPicker:SetValue(point)
     for p, cell in pairs(self.cells) do
         local on = p == point
         cell.dot:SetSize(on and 10 or 6, on and 10 or 6)
-        cell.dot:SetVertexColor(UI.RGBA(on and "arcane" or "ink-muted"))
+        UI.Paint(cell.dot, on and "arcane" or "ink-muted")
     end
 end
 AnchorPicker.SetDisabled = setDisabled

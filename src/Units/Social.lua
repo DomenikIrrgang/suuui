@@ -489,7 +489,6 @@ function M:DrawLockouts()
         local r = p.rows[i]
         if not r then
             r = CreateFrame("Frame", nil, p.body)
-            r:SetHeight(T.type.label.lineHeight + T.type.caption.lineHeight + 2)
             r.name = UI.Text(r, "label", "ink")
             r.name:SetPoint("TOPLEFT")
             r.progress = UI.Text(r, "numeric", "ink")
@@ -498,6 +497,8 @@ function M:DrawLockouts()
             r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -2)
             p.rows[i] = r
         end
+        -- set each time: a theme can change the text styles
+        r:SetHeight(T.type.label.lineHeight + T.type.caption.lineHeight + 2)
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", p.body, "RIGHT")
@@ -798,5 +799,7 @@ function M:OnEnable()
     if not valid or valid("UPDATE_INSTANCE_INFO") then
         self:OnGameEvent("UPDATE_INSTANCE_INFO", function() self:DrawLockouts() end)
     end
+    -- their rows' heights come from the text styles
+    self:On("SUUUI_THEME_CHANGED", function() self:DrawLockouts() end)
     self:RegisterCommand("raidtest", "test: the Raid page with 17 made-up members to drag around", function() self:TestRaid() end)
 end

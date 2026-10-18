@@ -161,9 +161,9 @@ local function buildCombo(target)
             -- Hidden in combat: each pip's alpha comes from an engine step curve.
             local cp = Enum.PowerType.ComboPoints
             for i, p in ipairs(self.pips) do
-                p.outer:SetVertexColor(UI.RGBA("gilt-line"))
-                p.inner:SetVertexColor(UI.RGBA("surface-sunk"))
-                p.lit:SetVertexColor(UI.RGBA("ink"))
+                UI.Paint(p.outer, "gilt-line")
+                UI.Paint(p.inner, "surface-sunk")
+                UI.Paint(p.lit, "ink")
                 p.lit:SetAlpha(UnitPowerPercent("player", cp, false, pipCurve(i)))
             end
             return
@@ -172,9 +172,9 @@ local function buildCombo(target)
         local full = n >= 5
         for i, p in ipairs(self.pips) do
             local on = i <= n
-            p.outer:SetVertexColor(UI.RGBA(full and "arcane" or "gilt-line"))
-            p.inner:SetVertexColor(UI.RGBA("surface-sunk"))
-            p.lit:SetVertexColor(UI.RGBA(full and "arcane" or "ink"))
+            UI.Paint(p.outer, full and "arcane" or "gilt-line")
+            UI.Paint(p.inner, "surface-sunk")
+            UI.Paint(p.lit, full and "arcane" or "ink")
             p.lit:SetAlpha(on and 1 or 0)
         end
     end

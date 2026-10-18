@@ -29,7 +29,7 @@ local function buildRow(r, i)
     local row = CreateFrame("Frame", nil, r.body)
     row:SetSize(WIDTH - S["space-5"] * 2, ROW_H)
     row.rule = row:CreateTexture(nil, "BORDER")
-    row.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(row.rule, "gilt-faint")
     row.rule:SetPoint("TOPLEFT")
     row.rule:SetPoint("TOPRIGHT")
     row.rule:SetHeight(1)
@@ -82,7 +82,7 @@ function Readiness:SetRows(list)
         row.who:SetValue(d.who or "")
         local c = d.class and T.color["class-" .. d.class:lower()] and ("class-" .. d.class:lower())
         row.diamond:SetShown(c and true or false)
-        if c then row.diamond:SetVertexColor(UI.RGBA(c)) end
+        if c then UI.Paint(row.diamond, c) end
         row:Show()
         y = y + ROW_H
     end
@@ -119,7 +119,7 @@ function UI.Readiness(parent, opts)
     Mixin(r, Readiness)
     r.rows, r.data = {}, {}
     r.footRule = r.body:CreateTexture(nil, "BORDER")
-    r.footRule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(r.footRule, "gilt-faint")
     r.footRule:SetHeight(1)
     r.action = UI.Button(r.body, { variant = "primary", text = "Ready check",
         onClick = function() if opts.onReadyCheck then opts.onReadyCheck() end end })

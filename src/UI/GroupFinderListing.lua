@@ -71,7 +71,7 @@ end
 local function circle(parent, file, color, layer, sub)
     local t = parent:CreateTexture(nil, layer, nil, sub)
     t:SetTexture(TEX .. file)
-    t:SetVertexColor(UI.RGBA(color))
+    UI.Paint(t, color)
     t:SetAllPoints()
     return t
 end
@@ -80,14 +80,14 @@ local function glyph(parent, name, size, color, layer)
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
     t:SetTexture(GLYPHS .. name .. ".tga")
     t:SetSize(size, size)
-    t:SetVertexColor(UI.RGBA(color))
+    UI.Paint(t, color)
     return t
 end
 
 local function font(fs, style, color)
     if not fs then return end
     ns.Fonts.Apply(fs, style)
-    if color then fs:SetTextColor(UI.RGBA(color)) end
+    if color then UI.Paint(fs, color) end
     fs:SetShadowOffset(0, 0)
 end
 
@@ -148,11 +148,11 @@ local function toggle(b, texture, word, glyphSize)
     function p.draw()
         local on = ask(check, "GetChecked") and true or false
         local usable = ask(check, "IsEnabled") ~= false and not (b.cover and b.cover:IsShown())
-        p.edge:SetVertexColor(UI.RGBA(on and "arcane" or (p.hover and "gilt" or "gilt-line")))
-        p.fill:SetVertexColor(UI.RGBA(on and "surface-raised" or "surface-sunk"))
-        p.glyph:SetVertexColor(UI.RGBA(on and "ink" or "ink-faint"))
+        UI.Paint(p.edge, on and "arcane" or (p.hover and "gilt" or "gilt-line"))
+        UI.Paint(p.fill, on and "surface-raised" or "surface-sunk")
+        UI.Paint(p.glyph, on and "ink" or "ink-faint")
         p.word:SetColor(on and "ink" or "ink-muted")
-        p.box.fill:SetColorTexture(UI.RGBA(on and "arcane" or "surface-sunk"))
+        UI.PaintFill(p.box.fill, on and "arcane" or "surface-sunk")
         p.box.edge:SetColor(on and "arcane" or "gilt-line")
         p.box.tick:SetShown(on)
         b:SetAlpha(usable and 1 or T.opacity["opacity-disabled"])
@@ -245,7 +245,7 @@ local function rowParts(row)
 end
 
 local function drawBox(p, state)
-    p.fill:SetColorTexture(UI.RGBA(state and "arcane" or "surface-sunk"))
+    UI.PaintFill(p.fill, state and "arcane" or "surface-sunk")
     p.edge:SetColor(state and "arcane" or "gilt-line")
     p.tick:SetShown(state == "all")
     p.mixed:SetShown(state == "some")
@@ -385,8 +385,8 @@ function L:LayoutCategories()
             p.line = UI.Text(b, "caption", "ink-muted")
             p.line:SetJustifyH("LEFT")
             p.line:SetWordWrap(true)
-            b:HookScript("OnEnter", function() p.edge:SetColor("gilt"); p.fill:SetColorTexture(UI.RGBA("surface-raised")) end)
-            b:HookScript("OnLeave", function() p.edge:SetColor("gilt-line"); p.fill:SetColorTexture(UI.RGBA("surface-sunk")) end)
+            b:HookScript("OnEnter", function() p.edge:SetColor("gilt"); UI.PaintFill(p.fill, "surface-raised") end)
+            b:HookScript("OnLeave", function() p.edge:SetColor("gilt-line"); UI.PaintFill(p.fill, "surface-sunk") end)
             -- a ResizeLayoutFrame: its own size, not its children's
             b.fixedWidth, b.fixedHeight = cw, 132
             parts[b] = p
@@ -584,9 +584,9 @@ function UI.SkinGroupFinderListing(f)
         if group.RoleIcon then
             local icon = group.RoleIcon
             local p = roundIcon(icon, ROLE_TEX.DAMAGER, "")
-            p.edge:SetVertexColor(UI.RGBA("arcane"))
-            p.fill:SetVertexColor(UI.RGBA("surface-raised"))
-            p.glyph:SetVertexColor(UI.RGBA("ink"))
+            UI.Paint(p.edge, "arcane")
+            UI.Paint(p.fill, "surface-raised")
+            UI.Paint(p.glyph, "ink")
             p.word:SetColor("ink")
             local function update()
                 local role = icon.roleID
@@ -670,7 +670,7 @@ function UI.SkinGroupFinderListing(f)
             local e = c.EditBox
             if e then
                 e:SetFontObject(ns.Fonts.Get("body"))
-                e:SetTextColor(UI.RGBA("ink"))
+                UI.Paint(e, "ink")
                 font(e.Instructions, "body", "ink-muted")
                 e:HookScript("OnTextChanged", function() s:UpdateCount() end)
                 e:HookScript("OnEditFocusGained", function() edge:SetColor("arcane") end)
@@ -717,5 +717,7 @@ function UI.SkinGroupFinderListing(f)
     hooksecurefunc(f, "UpdateFrameView", function() s:Queue() end)
     f:HookScript("OnShow", function() s:Layout(); s:Queue() end)
     if f:IsShown() then s:Layout() end
+    -- the labels' colour codes (Playstyle, More details) follow the theme
+    ns.Events.On("SUUUI_THEME_CHANGED", function() if f:IsShown() then s:Queue() end end, "GroupFinderListing")
     return s
 end

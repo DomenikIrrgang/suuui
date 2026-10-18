@@ -207,12 +207,9 @@ function M:Build()
     self.nameCount = UI.Text(id, "numeric", "ink-muted")
     self.nameCount:SetPoint("TOPRIGHT", 0, 1)
     self.iconButton = UI.Button(id, { text = "Change icon", icon = "gem", onClick = function() self:TogglePicker() end })
-    -- the field and Change icon on one line, under the label
-    local fieldY = -(T.type.caption.lineHeight + S["space-2"])
-    self.iconButton:SetPoint("TOPRIGHT", 0, fieldY)
     self.nameField = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
-    self.nameField:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], fieldY)
     self.nameField:SetPoint("RIGHT", self.iconButton, "LEFT", -S["space-4"], 0)
+    self:PlaceName()
     self.nameField.edit:SetMaxLetters(NAME_MAX)
     -- the body
     local bodyLabel = UI.Text(edit, "caption", "ink-muted")
@@ -282,6 +279,14 @@ end
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
+
+-- The name field and Change icon on one line, under the label (from the
+-- caption's line height, which a theme can change).
+function M:PlaceName()
+    local fieldY = -(T.type.caption.lineHeight + S["space-2"])
+    self.iconButton:SetPoint("TOPRIGHT", 0, fieldY)
+    self.nameField:SetPoint("TOPLEFT", self.big, "TOPRIGHT", S["space-5"], fieldY)
+end
 
 function M:Refresh()
     if not (self.window and self.window:IsShown()) then return end
@@ -507,19 +512,14 @@ function M:BuildPicker()
     local head = UI.Text(p, "header", "gilt-text")
     head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     head:SetValue("Choose an icon")
-    local y = S["space-5"] + T.type.header.lineHeight + S["space-3"]
     p.kind = UI.Select(p, { width = 120, value = "all", options = { { value = "all", label = "All icons" },
         { value = "spells", label = "Spells" }, { value = "items", label = "Items" } }, onChange = function(v)
             p.kindValue = v
             self:FillPicker(true)
         end })
-    p.kind:SetPoint("TOPRIGHT", -S["space-5"], -y)
     p.search = UI.TextField(p, { placeholder = "Search your spells and items", onTextChanged = function() self:FillPicker(true) end })
-    p.search:SetPoint("TOPLEFT", S["space-5"], -y)
     p.search:SetPoint("RIGHT", p.kind, "LEFT", -S["space-3"], 0)
-    y = y + 30 + S["space-4"]
     p.grid = CreateFrame("Frame", nil, p)
-    p.grid:SetPoint("TOPLEFT", S["space-5"], -y)
     p.grid:SetSize(COLS * CELL + (COLS - 1) * S["space-3"], VISIBLE_ROWS * CELL + (VISIBLE_ROWS - 1) * S["space-3"])
     p.grid:EnableMouseWheel(true)
     p.grid:SetScript("OnMouseWheel", function(_, delta)
@@ -543,13 +543,9 @@ function M:BuildPicker()
         end)
         p.cells[i] = cell
     end
-    y = y + p.grid:GetHeight() + S["space-3"]
     p.where = UI.Text(p, "caption", "ink-muted")
-    p.where:SetPoint("TOPLEFT", S["space-5"], -y)
-    y = y + T.type.caption.lineHeight + S["space-3"]
     -- the drop zone: a spell, an item or a macro dragged here gives its icon
     local drop = CreateFrame("Button", nil, p)
-    drop:SetPoint("TOPLEFT", S["space-5"], -y)
     drop:SetPoint("RIGHT", -S["space-5"], 0)
     drop:SetHeight(40)
     UI.Fill(drop, "surface-sunk"):SetAllPoints()
@@ -577,17 +573,34 @@ function M:BuildPicker()
     end
     drop:SetScript("OnReceiveDrag", dropped)
     drop:SetScript("OnClick", dropped)
-    y = y + 40 + S["space-4"]
-    local note = UI.Text(p, "caption", "ink-muted")
-    note:SetPoint("TOPLEFT", S["space-5"], -(y + 7))
-    note:SetValue("\"?\" uses the first spell's icon")
+    p.drop = drop
+    p.note = UI.Text(p, "caption", "ink-muted")
+    p.note:SetValue("\"?\" uses the first spell's icon")
     p.use = UI.Button(p, { text = "Use icon", variant = "primary", onClick = function() self:UseIcon() end })
-    p.use:SetPoint("TOPRIGHT", -S["space-5"], -y)
     local cancel = UI.Button(p, { text = "Cancel", onClick = function() self:ClosePicker() end })
     cancel:SetPoint("RIGHT", p.use, "LEFT", -S["space-3"], 0)
-    p:SetHeight(y + 30 + S["space-5"])
     p:Hide()
     self.picker = p
+    self:PlacePicker()
+end
+
+-- The picker's rows down from its heading (from the text styles' line
+-- heights, which a theme can change), and its height.
+function M:PlacePicker()
+    local p = self.picker
+    local y = S["space-5"] + T.type.header.lineHeight + S["space-3"]
+    p.kind:SetPoint("TOPRIGHT", -S["space-5"], -y)
+    p.search:SetPoint("TOPLEFT", S["space-5"], -y)
+    y = y + 30 + S["space-4"]
+    p.grid:SetPoint("TOPLEFT", S["space-5"], -y)
+    y = y + p.grid:GetHeight() + S["space-3"]
+    p.where:SetPoint("TOPLEFT", S["space-5"], -y)
+    y = y + T.type.caption.lineHeight + S["space-3"]
+    p.drop:SetPoint("TOPLEFT", S["space-5"], -y)
+    y = y + 40 + S["space-4"]
+    p.note:SetPoint("TOPLEFT", S["space-5"], -(y + 7))
+    p.use:SetPoint("TOPRIGHT", -S["space-5"], -y)
+    p:SetHeight(y + 30 + S["space-5"])
 end
 
 function M:FillPicker(reset)
@@ -671,6 +684,10 @@ function M:OnEnable()
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.window:IsShown() then self:DrawState() end
+    end)
+    self:On("SUUUI_THEME_CHANGED", function()
+        self:PlaceName()
+        if self.picker then self:PlacePicker() end
     end)
 end
 

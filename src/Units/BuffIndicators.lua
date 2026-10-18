@@ -261,7 +261,7 @@ end
 local function setApplies(control, applies, why)
     if control.SetDisabled then control:SetDisabled(not applies) else control:SetAlpha(applies and 1 or T.opacity["opacity-disabled"]) end
     control.reason:SetValue(applies and (control.note or "") or (why or ""))
-    control.reason:SetTextColor(UI.RGBA(applies and "ink-muted" or "ink-faint"))
+    UI.Paint(control.reason, applies and "ink-muted" or "ink-faint")
 end
 
 local PREVIEW_PERSON = { name = "Ysolde", class = "PRIEST", role = "HEALER", health = 0.62, max = 3900, power = 0.7 }
@@ -502,7 +502,7 @@ local function buildEditor(parent)
     UI.Fill(f.well, "surface-sunk"):SetAllPoints()
     UI.Border(f.well, "gilt-faint")
     f.line = f:CreateTexture(nil, "OVERLAY")
-    f.line:SetColorTexture(UI.RGBA("arcane"))
+    UI.PaintFill(f.line, "arcane")
     f.line:SetHeight(2)
     f.line:Hide()
     f.add = UI.Select(f, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,

@@ -277,7 +277,7 @@ function M:BuildBuy(page)
     fav.glyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\star.tga")
     fav.glyph:SetSize(14, 14)
     fav.glyph:SetPoint("CENTER")
-    fav.glyph:SetVertexColor(UI.RGBA("gilt"))
+    UI.Paint(fav.glyph, "gilt")
     fav:SetScript("OnClick", function() self:Favorites() end)
     fav:SetScript("OnEnter", function(b) b.edge:SetColor("gilt"); UI.ShowTooltip(b, { title = "Favourites", description = "The items you marked as favourites." }) end)
     fav:SetScript("OnLeave", function(b) b.edge:SetColor("gilt-line"); UI.HideTooltip() end)
@@ -1862,6 +1862,8 @@ function M:OnEnable()
         if self.itemKey then call(AH.SendSearchQuery, self.itemKey, sorts(), true) end
     end)
     self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function() self:Posted() end)
+    -- prices and "Yours" carry colour codes: drawn again
+    self:On("SUUUI_THEME_CHANGED", function() self:QueueRefresh() end)
     -- Auctions: the lists as the house sends them; after a change, asked again
     for _, e in ipairs({ "OWNED_AUCTIONS_UPDATED", "BIDS_UPDATED" }) do
         self:OnGameEvent(e, function() if self.tab == "auctions" then self:QueueRefresh() end end)

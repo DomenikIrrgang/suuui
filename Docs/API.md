@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, the first-run welcome (ShowWelcome), role presets (RolePresetName, ApplyRolePreset), colour vision (ColorVisionModes, ColorVision, SetColorVision, ColorVisionColor), AccountData, and SuuUI.Raw |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, the first-run welcome (ShowWelcome), role presets (RolePresetName, ApplyRolePreset), colour vision (ColorVisionModes, ColorVision, SetColorVision, ColorVisionColor), AccountData, SuuUI.Raw, and colours that follow the theme (UI.Paint, PaintFill, PaintGradient, Bind, SUUUI_THEME_CHANGED) |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -196,7 +196,7 @@ Settings: a module's settings section with `merge = "<section id>"` adds its gro
 
 | | |
 |---|---|
-| `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size, lineHeight } } }`; `colors` can also be `function(class)` returning that table, worked out at login for the player's class (`"MAGE"`, …). SuuUI ships its own: High contrast, Class accent, Darker, OLED black. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change takes a reload. Colour vision applies on top of it. An unknown token or style is an error |
+| `SuuUI.RegisterTheme(def)` | A theme the player can pick in Settings › General › Appearance › Theme: `{ id, name, description, colors = { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size, lineHeight } } }`; `colors` can also be `function(class)` returning that table, worked out at login for the player's class (`"MAGE"`, …). SuuUI ships its own: High contrast, Class accent, Darker, OLED black. `colors` change design tokens (`SuuUI.Tokens.color`; a token's own alpha is kept unless you give one), `fonts` change text styles (`SuuUI.Tokens.type`; keep `size` within the style's `lineHeight`). Register it when your addon's files load: the chosen theme applies at login, before SuuUI builds its frames, and a change applies at once (0.17: the tokens go back to the design's first, so a theme only gives what it changes; `SUUUI_THEME_CHANGED` follows). Colour vision applies on top of it. An unknown token or style is an error |
 
 ### Raw access (unstable)
 
@@ -261,6 +261,17 @@ All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or p
 | `ShowTooltip(owner, data)`, `HideTooltip()`, `AttachTooltip(frame, data)`, `TooltipFrame(parent)` | SuuUI's tooltip. `data`: `{ title, titleColor, subtitle, lines = { { left, right } }, description, meta }` ; 0.17: a line's `gap` (space before it), `data.maxWidth` (default 280: wider, and a description then wraps at that width), `RefreshTooltip(owner)` asks a `data` function again while the tooltip shows for `owner` (a modifier key changed what it says) |
 
 Drawing helpers: `Fill(parent, color, layer)`, `Border(frame, color, { width, inset, layer })` (stays one physical pixel), `Hairline(parent, color, fade = "out"/"both"/nil)`, `Diamond(parent, size, color)`, `Shadow(frame, shadowToken)`, `SoftEdge(frame)`, `Cross(parent, size, color)`, `RGBA(token[, alpha])`, `Size(token)`.
+
+**Colours that follow the theme (0.17).** The theme and colour vision change while you play: the colour tokens change in place, SuuUI sets every colour it was given by token again, and emits `SUUUI_THEME_CHANGED` (`themeId`). The helpers above, `Text` and its `:SetColor(token)` follow on their own. For your own regions, set token colours with these instead of `RGBA`, or your frames keep the old colours until a reload:
+
+| | |
+|---|---|
+| `Paint(region, token[, alpha])` | A FontString's or EditBox's text colour, a StatusBar's bar colour, or a texture's vertex colour |
+| `PaintFill(texture, token[, alpha])` | A solid colour texture (`SetColorTexture`) |
+| `PaintGradient(texture, orientation, fromToken, toToken[, fromAlpha, toAlpha])` | A gradient between two tokens |
+| `Bind(region, fn)` | `fn(region)` now and after every change: anything else worked out from tokens (read them inside `fn`) |
+
+`alpha` multiplies the token's own, as with `RGBA`. Setting a painted region's colour any other way (a class colour, raw numbers, a texture) lets it go, so a theme change never overwrites it. Colour codes in text (`"|cff" .. SuuUI.Tokens.color.gilt.hex`) and sizes taken from a text style: set them again on `SUUUI_THEME_CHANGED`.
 
 ## Layout and motion (0.2)
 
@@ -552,7 +563,7 @@ The first-run welcome (the Welcome module) shows once per account, at the first 
 | `SuuUI.RolePresetName(role)` (0.17) | A role's preset profile name: `"TANK"` → `"SuuTank"`, `"HEALER"` → `"SuuHeal"`, `"DAMAGER"` → `"SuuDps"`; `nil` for anything else |
 | `SuuUI.ApplyRolePreset(role[, switch])` (0.17) | Creates (or resets the layout of) the role's preset profile, copied from the profile you use, and puts it in its role's place under Profiles › By role, as Settings › Profiles › Role presets does. With `switch`, this character uses it from now on. Out of combat. Returns `true`, or `false` and why not |
 | `SuuUI.ColorVisionModes()` (0.17) | The colour vision presets this SuuUI has, in order: `{ { id = "normal" \| "redgreen" \| "blueyellow", label, hint } }` |
-| `SuuUI.ColorVision()` (0.17) | The colour vision chosen for the account, and the one in effect this session: they differ until a reload |
-| `SuuUI.SetColorVision(mode)` (0.17) | Chooses the account's colour vision (every character); it takes effect after a reload, which addon code can't start on Forever (a secure `/reload` macro button can). Returns `true`, or `false` and why not |
+| `SuuUI.ColorVision()` (0.17) | The colour vision chosen for the account, and the one in effect (the same: a change applies at once) |
+| `SuuUI.SetColorVision(mode)` (0.17) | Chooses the account's colour vision (every character); it applies at once (`SUUUI_THEME_CHANGED`). Returns `true`, or `false` and why not |
 | `SuuUI.ColorVisionColor(mode, token)` (0.17) | `r, g, b, a`: a colour token as a preset draws it, for previews of a preset that isn't in effect (`"normal"`: the design's own colour, whatever this session applied). An unknown token is an error |
 | `SuuUI.AccountData(namespace)` (0.17) | Your module's own table for the whole account (not per character or profile), saved with SuuUI and made on first use: a flag shown once per account. Never in a profile, an export or a reset. From `OnEnable` on; use your module's id as the namespace |

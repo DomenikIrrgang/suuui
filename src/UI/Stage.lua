@@ -27,6 +27,16 @@ local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
 -- the soft disc is solid over most of its middle, and its alpha didn't hold.)
 local LIGHT_A, POOL_A = 0.09, 0.08
 
+-- the light and the glow in the stage's tint (kept: Bind)
+local function tintLight(t)
+    local r, g, b = UI.RGBA(t:GetParent().stageTint)
+    t:SetVertexColor(r * LIGHT_A, g * LIGHT_A, b * LIGHT_A)
+end
+local function tintPool(t)
+    local r, g, b = UI.RGBA(t:GetParent().stageTint)
+    t:SetVertexColor(r * POOL_A, g * POOL_A, b * POOL_A)
+end
+
 function UI.ModelStage(stage, opts)
     opts = opts or {}
     local floorY = opts.floor or 40
@@ -100,9 +110,9 @@ function UI.ModelStage(stage, opts)
     end
 
     function stage:Tint(token)
-        local r, g, b = UI.RGBA(token)
-        light:SetVertexColor(r * LIGHT_A, g * LIGHT_A, b * LIGHT_A)
-        pool:SetVertexColor(r * POOL_A, g * POOL_A, b * POOL_A)
+        stage.stageTint = token
+        UI.Bind(light, tintLight)
+        UI.Bind(pool, tintPool)
     end
     return stage
 end

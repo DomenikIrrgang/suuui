@@ -64,7 +64,7 @@ local ICON = 24
 local ACTION_H = 26
 local FIELD_H = 30
 -- a row of round role toggles: the 36px icon and its word under it
-local ROLES_H = 36 + S["space-2"] + T.type.caption.lineHeight
+local function rolesH() return 36 + S["space-2"] + T.type.caption.lineHeight end
 
 local TONE_EDGE = { warning = "amber", danger = "ember" }
 
@@ -110,7 +110,7 @@ function Note:SetIcon(icon)
         art:ClearAllPoints()
         art:SetPoint("TOPLEFT", 4, -4)
         art:SetPoint("BOTTOMRIGHT", -4, 4)
-        art:SetVertexColor(UI.RGBA(icon.color or "ink"))
+        UI.Paint(art, icon.color or "ink")
     else
         art:SetTexture(icon.texture or (GLYPHS .. "bell.tga"))
         if icon.coords then art:SetTexCoord(unpack(icon.coords))
@@ -153,7 +153,7 @@ function Note:SetPresence(d)
     self.drain:Hide()
     self.border:SetColor("gilt-line")
     self.status:Show()
-    self.status:SetVertexColor(UI.RGBA(p.online and "arcane" or "ink-faint"))
+    UI.Paint(self.status, p.online and "arcane" or "ink-faint")
     -- a click on the card: whisper the one person on it
     self.onCardClick = single and people[1].whisper or nil
     if not p.online then
@@ -301,7 +301,7 @@ function Note:SetPresence(d)
     -- the drain of a timed note
     if d.duration and d.remaining then
         self.drain:Show()
-        self.drain:SetColorTexture(UI.RGBA("gilt-line"))
+        UI.PaintFill(self.drain, "gilt-line")
         self:SetRemaining(d.remaining)
     end
     return y
@@ -428,7 +428,7 @@ function Note:SetData(d)
     end
     -- the role choices (hosted), and a warning under them
     if d.host and d.host.roles and d.host.roles > 0 then
-        place(self.rolesRow, ROLES_H)
+        place(self.rolesRow, rolesH())
     end
     if d.warning and d.warning ~= "" then
         self.warningText:SetWidth(WIDTH - PAD * 2)
@@ -488,7 +488,7 @@ function Note:SetData(d)
     self:SetHeight(y)
     -- the drain
     self.drain:SetShown(hasTime and true or false)
-    self.drain:SetColorTexture(UI.RGBA(kind == "timed" and "gilt-line" or "ink-muted"))
+    UI.PaintFill(self.drain, kind == "timed" and "gilt-line" or "ink-muted")
     if hasTime then self:SetRemaining(d.remaining) end
     return y
 end
@@ -502,12 +502,15 @@ function Note:SetRemaining(remaining)
     local soon = (d.kind or "timed") ~= "timed" and remaining <= (d.soonAt or 10)
     self.time:SetValue(clock(remaining))
     self.time:SetColor(soon and "amber" or "ink-muted")
-    if soon then self.drain:SetColorTexture(UI.RGBA("amber")) end
+    if soon then UI.PaintFill(self.drain, "amber") end
 end
+
+local notes = setmetatable({}, { __mode = "k" })
 
 function UI.Notification(parent)
     local n = CreateFrame("Frame", nil, parent)
     Mixin(n, Note)
+    notes[n] = true
     n:SetSize(WIDTH, 80)
     n.buttons = {}
     UI.Fill(n, "surface-glass", "BACKGROUND"):SetAllPoints()
@@ -570,7 +573,7 @@ function UI.Notification(parent)
     n.untilRow = CreateFrame("Frame", nil, n)
     n.untilGlyph = n.untilRow:CreateTexture(nil, "ARTWORK")
     n.untilGlyph:SetTexture(GLYPHS .. "hourglass.tga")
-    n.untilGlyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(n.untilGlyph, "ink-muted")
     n.untilGlyph:SetSize(11, 11)
     n.untilGlyph:SetPoint("LEFT")
     n.untilText = UI.Text(n.untilRow, "caption", "ink-muted")
@@ -644,6 +647,7 @@ function Stack:CardFor(id)
 end
 
 function Stack:SetItems(items, inCombat)
+    self.items, self.inCombat = items, inCombat
     local list, held = {}, 0
     for i, d in ipairs(items or {}) do
         local kind = d.kind or "timed"
@@ -735,10 +739,27 @@ local function link(parent, text, onClick)
     return b
 end
 
+local stacks = setmetatable({}, { __mode = "k" })
+
+-- A theme change: the cards laid out again (colour codes in the titles and
+-- counts, the text styles' line heights), a stack's with its items.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for s in pairs(stacks) do
+        s.foot:SetHeight(T.type.caption.lineHeight)
+        s.moreLink:SetHeight(T.type.caption.lineHeight)
+        s.clearLink:SetHeight(T.type.caption.lineHeight)
+        if s.items then s:SetItems(s.items, s.inCombat) end
+    end
+    for n in pairs(notes) do
+        if n.data and not stacks[n:GetParent()] then n:SetData(n.data) end
+    end
+end, "UI.Notification")
+
 function UI.NotificationStack(parent, opts)
     opts = opts or {}
     local s = CreateFrame("Frame", opts.name, parent)
     Mixin(s, Stack)
+    stacks[s] = true
     s:SetSize(WIDTH, 1)
     s.max = opts.max or 5
     s.cards, s.spare = {}, {}

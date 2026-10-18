@@ -48,8 +48,10 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local HEAD_H = 18
-local TITLE_H = T.type.label.lineHeight
-local LINE_H = T.type.caption.lineHeight
+-- a title's and a line's height: the label's and caption's (read each
+-- layout: a theme can change them)
+local function titleH() return T.type.label.lineHeight end
+local function lineH() return T.type.caption.lineHeight end
 local INDENT = S["space-4"]
 local ICON = 16
 
@@ -71,9 +73,7 @@ end
 local function objectiveLine(row)
     local l = CreateFrame("Frame", nil, row)
     l.bullet = bullet(l)
-    l.bullet:SetPoint("TOPLEFT", 3, -(LINE_H - 4) / 2)
     l.check = UI.Check(l, 11, "ink-muted")
-    l.check:SetPoint("TOPLEFT", -1, -(LINE_H - 11) / 2)
     l.text = UI.Text(l, "caption", "ink")
     l.text:SetShadowed(true)
     l.text:SetWordWrap(true)
@@ -94,7 +94,6 @@ local function questRow(t)
     -- 0.13: an entry's own icon before the title (a tracked recipe's
     -- product) and a count after it ("×3")
     r.icon = UI.Icon(r, ICON)
-    r.icon:SetPoint("TOPLEFT", 0, -(TITLE_H - ICON) / 2)
     r.icon:Hide()
     r.count = UI.Text(r, "numeric", "arcane")
     r.count:SetShadowed(true)
@@ -106,7 +105,6 @@ local function questRow(t)
     r.done.text = UI.Text(r.done, "caption", "arcane")
     r.done.text:SetShadowed(true)
     r.done.text:SetPoint("LEFT", r.done.check, "RIGHT", S["space-2"], 0)
-    r.done:SetHeight(LINE_H)
     -- the settings preview's item: a plain icon left of the title
     r.preview = UI.Icon(r, "icon-md")
     r.preview:SetPoint("TOPRIGHT", r, "TOPLEFT", -S["space-3"], 2)
@@ -132,8 +130,12 @@ function Tracker:DrawQuest(r, q)
     r.quest = q
     r.title:SetValue(q.title or "")
     r.title:SetColor(q.color or DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
+    local titleHeight, lineHeight = titleH(), lineH()
     r.icon:SetShown(q.icon ~= nil)
-    if q.icon then r.icon:SetArt(q.icon) end
+    if q.icon then
+        r.icon:SetArt(q.icon)
+        r.icon:SetPoint("TOPLEFT", 0, -(titleHeight - ICON) / 2)
+    end
     r.count:SetValue(q.count or "")
     r.title:ClearAllPoints()
     r.title:SetPoint("TOPLEFT", q.icon and (ICON + S["space-3"]) or 0, 0)
@@ -143,12 +145,13 @@ function Tracker:DrawQuest(r, q)
         r.title:SetPoint("TOPRIGHT")
     end
     local w = self.contentWidth or self.width
-    local y = TITLE_H + S["space-1"]
+    local y = titleHeight + S["space-1"]
     for _, l in ipairs(r.lines) do l:Hide() end
     if q.complete or q.failed then
         r.done:ClearAllPoints()
         r.done:SetPoint("TOPLEFT", 0, -y)
         r.done:SetPoint("TOPRIGHT", 0, -y)
+        r.done:SetHeight(lineHeight)
         r.done.check:SetShown(not q.failed)
         r.done.text:SetColor(q.failed and "ember-text" or "arcane")
         r.done.text:ClearAllPoints()
@@ -156,14 +159,16 @@ function Tracker:DrawQuest(r, q)
         else r.done.text:SetPoint("LEFT", r.done.check, "RIGHT", S["space-2"], 0) end
         r.done.text:SetValue(q.failed and "Failed" or (q.turnIn or "Ready to turn in"))
         r.done:Show()
-        y = y + LINE_H
+        y = y + lineHeight
     else
         r.done:Hide()
         for i, o in ipairs(q.objectives or {}) do
             local l = r.lines[i] or objectiveLine(r)
             r.lines[i] = l
             l.bullet:SetShown(not o.done)
+            l.bullet:SetPoint("TOPLEFT", 3, -(lineHeight - 4) / 2)
             l.check:SetShown(o.done and true or false)
+            l.check:SetPoint("TOPLEFT", -1, -(lineHeight - 11) / 2)
             l.text:SetColor(o.done and "ink-muted" or "ink")
             l.count:SetColor(o.done and "ink-muted" or "ink")
             l.count:SetValue(o.progress or "")
@@ -171,7 +176,7 @@ function Tracker:DrawQuest(r, q)
             local textW = w - INDENT - 10 - S["space-3"] - countW
             l.text:SetWidth(textW)
             l.text:SetValue(o.text or "")
-            local h = math.max(LINE_H, math.ceil(l.text:GetStringHeight()))
+            local h = math.max(lineHeight, math.ceil(l.text:GetStringHeight()))
             l:ClearAllPoints()
             l:SetPoint("TOPLEFT", INDENT, -y)
             l:SetSize(w - INDENT, h)
@@ -188,7 +193,6 @@ end
 -- hairline fading out after it.
 local function zoneRow(t)
     local z = CreateFrame("Frame", nil, t.list)
-    z:SetHeight(LINE_H)
     z.text = UI.Text(z, "caption", "gilt-text")
     z.text:SetShadowed(true)
     z.text:SetPoint("LEFT")
@@ -367,9 +371,9 @@ function Tracker:LayOut(quests, freeze)
             -- space-5 over a zone's heading after the one before
             if prev then y = y + S["space-5"] end
             z.text:SetValue(e.zone)
-            z:SetWidth(self.contentWidth)
-            z.top, z.height, z.inUse = y, LINE_H, true
-            y = y + LINE_H
+            z:SetSize(self.contentWidth, lineH())
+            z.top, z.height, z.inUse = y, lineH(), true
+            y = y + lineH()
             prev = "zone"
         end
     end
@@ -380,7 +384,7 @@ end
 -- The quests' window: maxHeight less the head (all of them without one).
 function Tracker:ViewHeight()
     if not self.maxHeight then return self.listHeight or 0 end
-    return math.max(LINE_H, self.maxHeight - HEAD_H - S["space-4"])
+    return math.max(lineH(), self.maxHeight - HEAD_H - S["space-4"])
 end
 
 function Tracker:ScrollBy(px)
@@ -560,12 +564,12 @@ function UI.ObjectiveTracker(parent, opts)
     t.list:SetHeight(1)
     -- where the window is in the list: a gilt-line thumb, 1px, right of the quests
     t.thumb = t.clip:CreateTexture(nil, "OVERLAY")
-    t.thumb:SetColorTexture(UI.RGBA("gilt-line"))
+    UI.PaintFill(t.thumb, "gilt-line")
     t.thumb:SetWidth(1)
     t.thumb:Hide()
     t.scroll = 0
     t:EnableMouseWheel(true)
-    t:SetScript("OnMouseWheel", function(self, delta) self:ScrollBy(-delta * (TITLE_H + LINE_H * 2)) end)
+    t:SetScript("OnMouseWheel", function(self, delta) self:ScrollBy(-delta * (titleH() + lineH() * 2)) end)
     t:SetCollapsed(false)
     ns.Extend.Add("tracker", t, {})
     return t

@@ -79,11 +79,11 @@ local function roleIcon(parent)
             self.bg:Hide()
             if ROLE_TEX[has] then
                 self.glyph:SetTexture(ROLE_TEX[has])
-                self.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+                UI.Paint(self.glyph, "ink-faint")
                 self.edge:SetColor("gilt-faint")
             else
                 self.glyph:Hide(); self.edge:SetShown(false)
-                self.dot:SetVertexColor(UI.RGBA("ink-faint"))
+                UI.Paint(self.dot, "ink-faint")
                 self.dot:Show()
             end
         elseif ROLE_TEX[role] then
@@ -91,10 +91,10 @@ local function roleIcon(parent)
             if need then
                 self.bg:Hide()
                 self.edge:SetColor(mine and "arcane" or "ink-faint")
-                self.glyph:SetVertexColor(UI.RGBA(mine and "arcane" or "ink-muted"))
+                UI.Paint(self.glyph, mine and "arcane" or "ink-muted")
             else
                 self.edge:SetColor("gilt-line")
-                self.glyph:SetVertexColor(UI.RGBA("ink"))
+                UI.Paint(self.glyph, "ink")
             end
         else
             -- an open spot
@@ -133,7 +133,7 @@ local function iconButton(parent, glyph, title, description, onClick)
     btn.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
     btn.glyph:SetSize(12, 12)
     btn.glyph:SetPoint("CENTER")
-    btn.glyph:SetVertexColor(UI.RGBA("ink"))
+    UI.Paint(btn.glyph, "ink")
     return btn
 end
 
@@ -169,7 +169,7 @@ local function makeRow(b)
     r.sprout = r:CreateTexture(nil, "ARTWORK")
     r.sprout:SetTexture(GLYPHS .. "leaf.tga")
     r.sprout:SetSize(11, 11)
-    r.sprout:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(r.sprout, "ink-muted")
     r.reason = UI.Text(r, "caption", "arcane")
     -- line 2
     r.leader = UI.Text(r, "caption", "ink")
@@ -233,7 +233,7 @@ local function drawRow(b, r, d, y, width)
         r.lead:SetSize(20, 20)
     else
         r.lead:SetTexture(GLYPHS .. (d.isPlayer and "people.tga" or "crown.tga"))
-        r.lead:SetVertexColor(UI.RGBA("gilt-text"))
+        UI.Paint(r.lead, "gilt-text")
         local size = d.isPlayer and 20 or 16
         r.lead:SetSize(size, size)
     end
@@ -347,7 +347,7 @@ local function sectionHead(b, key, label)
     h.glyph = h:CreateTexture(nil, "ARTWORK")
     h.glyph:SetSize(12, 12)
     h.glyph:SetPoint("RIGHT", -S["space-4"], 0)
-    h.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(h.glyph, "ink-muted")
     -- a note before the chevron ("from chat so far" while the tool searches)
     h.note = UI.Text(h, "caption", "ink-faint")
     h.note:SetPoint("RIGHT", h.glyph, "LEFT", -S["space-3"], 0)
@@ -404,7 +404,7 @@ function B:SetData(d)
     end
     self.staleText:SetValue(text)
     self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
-    self.hourglass:SetVertexColor(UI.RGBA(tool.stale and "amber" or "ink-muted"))
+    UI.Paint(self.hourglass, tool.stale and "amber" or "ink-muted")
     -- stale: Refresh is the suggested action
     local stale = tool.stale and not tool.searching
     self.refreshQuiet:SetShown(not stale)
@@ -559,7 +559,7 @@ function UI.GroupFinderBrowse(parent)
     b.hourglass = b:CreateTexture(nil, "ARTWORK")
     b.hourglass:SetTexture(GLYPHS .. "hourglass.tga")
     b.hourglass:SetSize(12, 12)
-    b.hourglass:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(b.hourglass, "ink-muted")
     b.hourglass:SetPoint("RIGHT", b.staleText, "LEFT", -g, 0)
     b:HookScript("OnSizeChanged", function() b:LayoutBar() end)
     -- the list
@@ -583,7 +583,7 @@ function UI.GroupFinderBrowse(parent)
     e.glyph = e:CreateTexture(nil, "ARTWORK")
     e.glyph:SetTexture(GLYPHS .. "search.tga")
     e.glyph:SetSize(24, 24)
-    e.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+    UI.Paint(e.glyph, "ink-faint")
     e.glyph:SetPoint("TOP")
     e.title = UI.Text(e, "label", "ink")
     e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -g)

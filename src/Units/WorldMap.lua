@@ -1184,12 +1184,12 @@ function M:ShowRoutes(group)
             d = { rim = r:CreateTexture(nil, "ARTWORK", nil, 1), fill = r:CreateTexture(nil, "ARTWORK", nil, 2) }
             d.rim:SetTexture(DISC)
             d.rim:SetSize(ROUTE_DOT + 2, ROUTE_DOT + 2)
-            d.rim:SetVertexColor(UI.RGBA("surface"))
+            UI.Paint(d.rim, "surface")
             d.fill:SetTexture(DISC)
             d.fill:SetSize(ROUTE_DOT, ROUTE_DOT)
             r.dots[n] = d
         end
-        d.fill:SetVertexColor(UI.RGBA(color))
+        UI.Paint(d.fill, color)
         for _, t in ipairs({ d.rim, d.fill }) do
             t:ClearAllPoints()
             t:SetPoint("CENTER", r, "TOPLEFT", x, -y)
@@ -1443,11 +1443,11 @@ function M:StyleQuestPin(pin)
     if pin.suuLog then
         o.glow:Hide()
     elseif tracked then
-        o.glow:SetVertexColor(UI.RGBA("ink", 0.4))
+        UI.Paint(o.glow, "ink", 0.4)
         o.glow:SetSize(size + 24, size + 24)
         o.glow:Show()
     elseif kind == "complete" then
-        o.glow:SetVertexColor(UI.RGBA("arcane-glow"))
+        UI.Paint(o.glow, "arcane-glow")
         o.glow:SetSize(size + 16, size + 16)
         o.glow:Show()
     else
@@ -1777,6 +1777,8 @@ function M:OnEnable()
     -- when the map opens, so a holiday that starts while you play shows
     -- marks made, renamed, shared or removed
     self:On("SUUUI_MARKS_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
+    -- a theme: the pins' tooltip lines carry its colour codes, gathered again
+    self:On("SUUUI_THEME_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     self:OnGameEvent("CALENDAR_UPDATE_EVENT_LIST", function()
         if readCalendar() and self.map:IsShown() then self:Refresh() end
     end)

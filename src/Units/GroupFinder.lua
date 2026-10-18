@@ -642,6 +642,16 @@ function M:Configure()
                     extraLanguages = extra })
 end
 
+-- the settings' plain texts, set again when the theme changes (colour
+-- codes, the text styles' sizes): frame -> its text, or a function for it
+local plains = setmetatable({}, { __mode = "k" })
+
+local function fitPlain(f)
+    local text = plains[f]
+    f.text:SetValue(type(text) == "function" and text() or text)
+    f:SetSize(math.max(1, math.ceil(f.text:GetUnboundedStringWidth())), math.ceil(f.text:GetStringHeight()))
+end
+
 function M:OnEnable()
     self:Configure()
     for _, key in ipairs({ "channels", "joinLFG", "chatExpiry", "extraLanguages" }) do
@@ -668,6 +678,12 @@ function M:OnEnable()
     self:Build()
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     self:StartNotes()
+    -- the theme: the settings' plain texts, and the pages' widths measured from their text
+    self:On("SUUUI_THEME_CHANGED", function()
+        for f in pairs(plains) do fitPlain(f) end
+        if self.browse and self.browse:IsVisible() then self:Render() end
+        if self.listed and self.listed:IsVisible() then self:RenderListed() end
+    end)
 end
 
 function M:OnDisable()
@@ -705,8 +721,8 @@ local function plainText(parent, text, color)
     f.text = UI.Text(f, "body", color or "ink")
     f.text:SetPoint("TOPLEFT")
     f.text:SetJustifyH("LEFT")
-    f.text:SetValue(text)
-    f:SetSize(math.max(1, math.ceil(f.text:GetUnboundedStringWidth())), math.ceil(f.text:GetStringHeight()))
+    plains[f] = text
+    fitPlain(f)
     return f
 end
 
@@ -744,13 +760,15 @@ function M:SettingsSection()
                   end },
                 { label = "Other scripts", description = "Posts in Hangul, Chinese characters or Cyrillic are read with that language’s module whenever SuuUI has one.",
                   control = "custom", build = function(parent)
-                      local lines = {}
-                      for _, sc in ipairs(SCRIPTS) do
-                          local ready = modules[sc[1]] ~= nil
-                          lines[#lines + 1] = "|cff" .. T.color[ready and "ink" or "ink-faint"].hex .. sc[2] .. "|r |cff"
-                              .. T.color[ready and "ink-muted" or "ink-faint"].hex .. (ready and "· module ready" or "· no module yet") .. "|r"
-                      end
-                      return plainText(parent, table.concat(lines, "\n"))
+                      return plainText(parent, function()
+                          local lines = {}
+                          for _, sc in ipairs(SCRIPTS) do
+                              local ready = modules[sc[1]] ~= nil
+                              lines[#lines + 1] = "|cff" .. T.color[ready and "ink" or "ink-faint"].hex .. sc[2] .. "|r |cff"
+                                  .. T.color[ready and "ink-muted" or "ink-faint"].hex .. (ready and "· module ready" or "· no module yet") .. "|r"
+                          end
+                          return table.concat(lines, "\n")
+                      end)
                   end },
                 { key = "extraLanguages", label = "Also read", description = "Other Latin-script languages. Off by default: their words overlap with English, so each one adds false matches.",
                   control = "custom", stacked = true, build = function(parent, onChange)

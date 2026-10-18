@@ -101,6 +101,7 @@ end
 
 function M:Alert(phase, a)
     if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
+    self.rested = nil
     if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     if phase == "nearby" then
         -- stays until you rest (or walk away), or for the setting's seconds
@@ -125,8 +126,9 @@ function M:Alert(phase, a)
         local left = restLeft(a)
         local title = (left and left < 3500) and ("Camp Benefits · " .. clock(left) .. " left") or "Camp Benefits gained · 1h"
         local effect, count = effectOf(a)
-        if a and a.effect then effect, count = a.effect, 2 end
+        if a and a.effect then effect, count = a.effect(), 2 end
         SuuUI.ShowAlert(KEY, "info", title, effect or "For the next hour")
+        self.rested = { title = title, a = a }
         -- longer with more to read: 6 s and 2 more per benefit, at most 16
         self.briefTimer = C_Timer.NewTimer(math.min(16, BRIEF + 2 * (count or 1)), function()
             self.briefTimer = nil
@@ -192,8 +194,11 @@ end
 --------------------------------------------------------------------------------
 
 function M:Sample(phase)
-    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600),
-        effect = "Tent: |cffa39b8b(here: what it does, read from the buff itself)|r\nMana Well: |cffa39b8b(and each other benefit on its own line)|r" }
+    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600), effect = function()
+        local muted = SuuUI.Tokens.color["ink-muted"].hex
+        return "Tent: |cff" .. muted .. "(here: what it does, read from the buff itself)|r\nMana Well: |cff" .. muted
+            .. "(and each other benefit on its own line)|r"
+    end }
     self:Alert(phase or "nearby", fake)
     if phase ~= "rested" then
         -- a sample doesn't stay
@@ -262,6 +267,13 @@ function M:OnEnable()
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", sayNow)
     sayNow()
+    -- the benefits' lines carry a colour code: shown again while up
+    self:On("SUUUI_THEME_CHANGED", function()
+        local r = self.rested
+        if not (r and self.briefTimer) or InCombatLockdown() then return end
+        local effect = r.a and r.a.effect and r.a.effect() or effectOf(r.a)
+        SuuUI.ShowAlert(KEY, "info", r.title, effect or "For the next hour")
+    end)
 end
 
 function M:OnDisable()

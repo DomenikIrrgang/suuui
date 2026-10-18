@@ -108,6 +108,12 @@ local function durationFormatter()
     return formatter or nil
 end
 
+local function expiringPoints(c, seconds)
+    c:ClearPoints()
+    c:AddPoint(0, CreateColor(UI.RGBA("amber")))
+    c:AddPoint(seconds, CreateColor(UI.RGBA("ink")))
+end
+
 -- amber below `seconds` (EXPIRING by default), ink above: a step curve over
 -- the remaining time
 local function expiringColor(seconds)
@@ -117,11 +123,18 @@ local function expiringColor(seconds)
     if not (C_CurveUtil and C_CurveUtil.CreateColorCurve) then return nil end
     local c = C_CurveUtil.CreateColorCurve()
     c:SetType(Enum.LuaCurveType.Step)
-    c:AddPoint(0, CreateColor(UI.RGBA("amber")))
-    c:AddPoint(seconds, CreateColor(UI.RGBA("ink")))
+    expiringPoints(c, seconds)
     colorCurves[seconds] = c
     return c
 end
+
+-- The engine keeps the curves it was given: a theme change sets their
+-- colours again in place.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for seconds, c in pairs(colorCurves) do
+        if c then pcall(expiringPoints, c, seconds) end
+    end
+end, "Auras")
 
 local function durationOptions(seconds)
     local opts = { textFormatter = durationFormatter() }
@@ -189,7 +202,7 @@ local function makeInitializer(group, size, owner)
         icon:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
         local well = button:CreateTexture(nil, "BACKGROUND")
         well:SetAllPoints()
-        well:SetColorTexture(UI.RGBA("surface-sunk"))
+        UI.PaintFill(well, "surface-sunk")
 
         local over = CreateFrame("Frame", nil, button)
         over:SetAllPoints()
@@ -225,7 +238,7 @@ local function makeInitializer(group, size, owner)
         drain:SetPoint("BOTTOMRIGHT", -1, 1)
         drain:SetHeight(barH)
         drain:SetStatusBarTexture(WHITE)
-        drain:SetStatusBarColor(UI.RGBA(group.drain or "ink"))
+        UI.Paint(drain, group.drain or "ink")
         -- above the text layer: the digits' dark fade would dim it otherwise
         drain:SetFrameLevel(button:GetFrameLevel() + 6)
         -- No track behind it: the engine leaves the bar empty on permanent

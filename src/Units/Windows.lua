@@ -61,11 +61,11 @@ local function skinMaxMin(chrome, mm)
             glyph:SetTexture(GLYPHS .. (key == "MaximizeButton" and "plus" or "minus") .. ".tga")
             glyph:SetSize(12, 12)
             glyph:SetPoint("CENTER")
-            glyph:SetVertexColor(UI.RGBA("ink-muted"))
+            UI.Paint(glyph, "ink-muted")
             local edge = UI.Border(b, "gilt-line")
             edge:SetShown(false)
-            b:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
-            b:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+            b:HookScript("OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
+            b:HookScript("OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
             b:SetSize(22, 22)
         end
     end
@@ -444,15 +444,15 @@ function M:SkinGroupFinder()
     glyph:SetTexture(GLYPHS .. "gear.tga")
     glyph:SetSize(14, 14)
     glyph:SetPoint("CENTER")
-    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(glyph, "ink-muted")
     local edge = UI.Border(gear, "gilt-line")
     edge:SetShown(false)
     gear:SetScript("OnEnter", function(b)
-        edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink"))
+        edge:SetShown(true); UI.Paint(glyph, "ink")
         UI.ShowTooltip(b, { title = "Group Finder settings", description = "Channels, languages, your ad and the notifications" })
     end)
     gear:SetScript("OnLeave", function()
-        edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")); UI.HideTooltip()
+        edge:SetShown(false); UI.Paint(glyph, "ink-muted"); UI.HideTooltip()
     end)
     gear:SetScript("OnClick", function() SuuUI.OpenSettings("groupfinder") end)
     chrome.gear = gear
@@ -514,11 +514,11 @@ local function glyphButton(b, glyphName)
     glyph:SetTexture(GLYPHS .. glyphName .. ".tga")
     glyph:SetSize(14, 14)
     glyph:SetPoint("CENTER")
-    glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(glyph, "ink-muted")
     local edge = UI.Border(b, "gilt-line")
     edge:SetShown(false)
-    b:HookScript("OnEnter", function() edge:SetShown(true); glyph:SetVertexColor(UI.RGBA("ink")) end)
-    b:HookScript("OnLeave", function() edge:SetShown(false); glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+    b:HookScript("OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
+    b:HookScript("OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
     b:SetSize(22, 22)
 end
 
@@ -540,14 +540,14 @@ local function styleQuestSearch(sb)
         icon:ClearAllPoints()
         icon:SetPoint("LEFT", sb, "LEFT", S["space-1"], 0)
         icon:SetAlpha(1)
-        icon:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(icon, "ink-muted")
         -- (the game tints it on focus)
-        sb:HookScript("OnEditFocusGained", function() icon:SetVertexColor(UI.RGBA("ink")) end)
-        sb:HookScript("OnEditFocusLost", function() icon:SetVertexColor(UI.RGBA("ink-muted")) end)
+        sb:HookScript("OnEditFocusGained", function() UI.Paint(icon, "ink") end)
+        sb:HookScript("OnEditFocusLost", function() UI.Paint(icon, "ink-muted") end)
     end
     if sb.Instructions then
         sb.Instructions:SetFontObject(SuuUI.Fonts.Get("body"))
-        sb.Instructions:SetTextColor(UI.RGBA("ink-muted"))
+        UI.Paint(sb.Instructions, "ink-muted")
     end
     local x = sb.clearButton
     if x then
@@ -556,9 +556,9 @@ local function styleQuestSearch(sb)
         glyph:SetTexture(GLYPHS .. "close.tga")
         glyph:SetSize(10, 10)
         glyph:SetPoint("CENTER")
-        glyph:SetVertexColor(UI.RGBA("ink-muted"))
-        x:HookScript("OnEnter", function() glyph:SetVertexColor(UI.RGBA("ink")) end)
-        x:HookScript("OnLeave", function() glyph:SetVertexColor(UI.RGBA("ink-muted")) end)
+        UI.Paint(glyph, "ink-muted")
+        x:HookScript("OnEnter", function() UI.Paint(glyph, "ink") end)
+        x:HookScript("OnLeave", function() UI.Paint(glyph, "ink-muted") end)
     end
     sb.suuSearch = true
 end
@@ -595,6 +595,11 @@ local function fitQuestRows(list)
         end
     end
     if changed then list.Contents:Layout() end
+end
+
+-- a font object's colour in ink (UI.Paint colours regions, not fonts)
+local function inkFont(font)
+    font:SetTextColor(UI.RGBA("ink"))
 end
 
 function M:RestyleQuestLog()
@@ -655,7 +660,7 @@ function M:RestyleQuestLog()
                 line:SetPoint("TOPRIGHT", -6, 0)
                 if rewards.Label then
                     rewards.Label:SetFontObject(SuuUI.Fonts.Get("label"))
-                    rewards.Label:SetTextColor(UI.RGBA("ink"))
+                    UI.Paint(rewards.Label, "ink")
                 end
             end
         end
@@ -676,7 +681,7 @@ function M:RestyleQuestLog()
         if not label then
             label = CreateFont("SuuUIQuestHeaderFont")
             label:CopyFontObject(SuuUI.Fonts.Get("label"))
-            label:SetTextColor(UI.RGBA("ink"))
+            UI.Bind(label, inkFont)
         end
         for _, pool in ipairs({ list.headerFramePool, list.campaignHeaderMinimalFramePool }) do
             if pool and pool.EnumerateActive then
@@ -687,10 +692,10 @@ function M:RestyleQuestLog()
                         row:SetDisabledFontObject(label)
                     end
                     for _, r in ipairs({ row:GetRegions() }) do
-                        if r:GetObjectType() == "FontString" then r:SetFontObject(label); r:SetTextColor(UI.RGBA("ink")) end
+                        if r:GetObjectType() == "FontString" then r:SetFontObject(label); UI.Paint(r, "ink") end
                     end
                     local fs = row.ButtonText or (row.GetFontString and row:GetFontString())
-                    if fs then fs:SetFontObject(label); fs:SetTextColor(UI.RGBA("ink")) end
+                    if fs then fs:SetFontObject(label); UI.Paint(fs, "ink") end
                 end
             end
         end
@@ -707,7 +712,7 @@ function M:RestyleQuestLog()
                         eye:SetTexture(GLYPHS .. "eye.tga")
                         eye:SetSize(14, 14)
                         eye:SetPoint("CENTER")
-                        eye:SetVertexColor(UI.RGBA("ink-muted"))
+                        UI.Paint(eye, "ink-muted")
                         trackEyes[cb] = eye
                     end
                     eye:SetShown(cb.CheckMark and cb.CheckMark:IsShown() or false)
@@ -926,7 +931,7 @@ function M:SkinWorldMap()
                 g:SetTexture(GLYPHS .. (key == "OpenButton" and "chevronLeft" or "chevronRight") .. ".tga")
                 g:SetSize(12, 12)
                 g:SetPoint("CENTER")
-                g:SetVertexColor(UI.RGBA("ink-muted"))
+                UI.Paint(g, "ink-muted")
             end
         end
     end
@@ -943,7 +948,8 @@ function M:SkinWorldMap()
     status:SetFrameLevel(4000)
     -- (as wide as its text, at least as "00.0, 00.0": the zoom buttons it
     -- once held are gone)
-    local minW = math.ceil(UI.MeasureText("numeric", "00.0, 00.0"))
+    local function measureMin() return math.ceil(UI.MeasureText("numeric", "00.0, 00.0")) end
+    local minW = measureMin()
     status:SetSize(minW + 2 * S["space-4"], 26)
     status:SetPoint("BOTTOMLEFT", f.ScrollContainer or f, "BOTTOMLEFT", S["space-3"], S["space-3"])
     UI.Fill(status, "surface-glass"):SetAllPoints()
@@ -987,7 +993,6 @@ function M:SkinWorldMap()
     -- The game's own fullscreen isn't used: its black backdrop
     -- blocks the world and it shows the map alone.
     local mm = b and b.MaximizeMinimizeFrame
-    local rise = chrome.riseH or 0
     local function enlarged() return M:Get("mapEnlarged") end
     local function share()
         local wm = SuuUI.GetModule("worldmap")
@@ -1007,7 +1012,7 @@ function M:SkinWorldMap()
         -- than the screen
         local w0, h0 = (f.minimizedWidth or 702) - 5, (f.minimizedHeight or 534) - GAME_MAP_TOP - 2
         local margin = S["space-3"]
-        local mapH = UIParent:GetHeight() * share() - rise - MAP_TOP - 2
+        local mapH = UIParent:GetHeight() * share() - (chrome.riseH or 0) - MAP_TOP - 2
         local mapW = mapH * w0 / h0
         local roomW = UIParent:GetWidth() - 2 * margin - 5 - log
         if mapW > roomW then mapW, mapH = roomW, roomW * h0 / w0 end
@@ -1045,6 +1050,11 @@ function M:SkinWorldMap()
     self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
         if namespace == "worldmap" and key == "enlargedSize" and f:IsShown() then fit() end
     end)
+    -- a theme can change the header's height and the numbers' width
+    self:On("SUUUI_THEME_CHANGED", function()
+        minW = measureMin()
+        if f:IsShown() and not InCombatLockdown() then fit() end
+    end)
     fit()
     self.worldMap = chrome
 end
@@ -1068,18 +1078,18 @@ local function styleTrainerRow(b)
         if b.disabledBG then b.disabledBG:SetAlpha(0) end
         local hl = b:GetHighlightTexture()
         if hl then
-            hl:SetColorTexture(UI.RGBA("surface-raised"))
+            UI.PaintFill(hl, "surface-raised")
             hl:SetBlendMode("BLEND")
             hl:SetAlpha(0.6)
         end
         if b.selectedTex then
-            b.selectedTex:SetColorTexture(UI.RGBA("arcane-soft"))
+            UI.PaintFill(b.selectedTex, "arcane-soft")
             b.selectedTex:SetBlendMode("BLEND")
             b.selectedTex:ClearAllPoints()
             b.selectedTex:SetAllPoints()
         end
         b.suuRule = b:CreateTexture(nil, "ARTWORK")
-        b.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+        UI.PaintFill(b.suuRule, "gilt-faint")
         b.suuRule:SetHeight(1)
         b.suuRule:SetPoint("BOTTOMLEFT", S["space-2"], 0)
         b.suuRule:SetPoint("BOTTOMRIGHT", -S["space-2"], 0)
@@ -1096,9 +1106,9 @@ local function styleTrainerRow(b)
         SuuUI.Fonts.Apply(b.name, "label")
         SuuUI.Fonts.Apply(b.nameSubText, "caption")
         SuuUI.Fonts.Apply(b.subText, "caption")
-        b.name:SetTextColor(UI.RGBA("ink"))
-        b.nameSubText:SetTextColor(UI.RGBA("ink-muted"))
-        b.subText:SetTextColor(UI.RGBA("ink-muted"))
+        UI.Paint(b.name, "ink")
+        UI.Paint(b.nameSubText, "ink-muted")
+        UI.Paint(b.subText, "ink-muted")
         for _, fs in ipairs({ b.name, b.nameSubText, b.subText, b.alternateCost }) do
             fs.suuSkip = true
             fs:SetShadowOffset(0, 0)
@@ -1116,7 +1126,7 @@ local function styleTrainerRow(b)
     local cost = b.money and b.money:IsShown() and GetTrainerServiceCost and GetTrainerServiceCost(b:GetID())
     if cost and cost > 0 then
         b.suuMoney:SetCopper(cost)
-        b.suuMoney.text:SetTextColor(UI.RGBA((GetMoney() or 0) >= cost and "ink" or "ember-text"))
+        UI.Paint(b.suuMoney.text, (GetMoney() or 0) >= cost and "ink" or "ember-text")
         b.suuMoney:Show()
     else
         b.suuMoney:Hide()
@@ -1146,17 +1156,17 @@ local function styleTrainerCategory(c)
     end
     if c.Label then
         SuuUI.Fonts.Apply(c.Label, "header")
-        c.Label:SetTextColor(UI.RGBA("gilt-text"))
+        UI.Paint(c.Label, "gilt-text")
     end
-    if c.CollapseIcon then c.CollapseIcon:SetVertexColor(UI.RGBA("gilt-text")) end
+    if c.CollapseIcon then UI.Paint(c.CollapseIcon, "gilt-text") end
     c.suuRule = c:CreateTexture(nil, "ARTWORK")
-    c.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(c.suuRule, "gilt-faint")
     c.suuRule:SetHeight(1)
     c.suuRule:SetPoint("BOTTOMLEFT", S["space-2"], 1)
     c.suuRule:SetPoint("BOTTOMRIGHT", -S["space-2"], 1)
     -- the game sets its own fonts on hover: back to SuuUI's after
-    c:HookScript("OnEnter", function() SuuUI.Fonts.Apply(c.Label, "header"); c.Label:SetTextColor(UI.RGBA("ink")) end)
-    c:HookScript("OnLeave", function() SuuUI.Fonts.Apply(c.Label, "header"); c.Label:SetTextColor(UI.RGBA("gilt-text")) end)
+    c:HookScript("OnEnter", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "ink") end)
+    c:HookScript("OnLeave", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "gilt-text") end)
 end
 
 function M:SkinTrainer()
@@ -1384,7 +1394,7 @@ local function skinSlotButtons(frame, depth)
         if sel and not sel.suuGlow then
             sel.suuGlow = true
             sel:SetTexture(SOFT_DISC)
-            sel:SetVertexColor(UI.RGBA("arcane"))
+            UI.Paint(sel, "arcane")
             sel:SetAlpha(0.55)
             sel:SetDrawLayer("BACKGROUND", 2)
             sel:ClearAllPoints()
@@ -1483,4 +1493,14 @@ function M:OnEnable()
     self:OnGameEvent("ADDON_LOADED", function() self:SkinAll() end)
     -- the spells window is protected: skinned after combat if it loaded during one
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:SkinAll() end)
+    -- a theme's text styles: the quest headers' font copied again, the quest
+    -- log (its rows measured for the fonts) restyled
+    self:On("SUUUI_THEME_CHANGED", function()
+        local font = _G.SuuUIQuestHeaderFont
+        if font then
+            font:CopyFontObject(SuuUI.Fonts.Get("label"))
+            UI.Bind(font, inkFont)
+        end
+        if _G.QuestMapFrame and _G.QuestMapFrame:IsVisible() then self:RestyleQuestLog() end
+    end)
 end

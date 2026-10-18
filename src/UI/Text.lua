@@ -93,11 +93,22 @@ function UI.MeasureText(style, text)
     return measurer:GetUnboundedStringWidth()
 end
 
+local texts = setmetatable({}, { __mode = "k" })
+
 function UI.Text(parent, style, color, layer)
     local fs = parent:CreateFontString(nil, layer or "OVERLAY")
     Mixin(fs, Text)
     fs:SetWordWrap(false)
     fs:SetStyle(style or "body")
     fs:SetColor(color or "ink")
+    texts[fs] = true
     return fs
 end
+
+-- A theme can change a text style's size (the Font object follows by
+-- itself): the layouts holding SuuUI texts measure them again.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for fs in pairs(texts) do
+        if fs.layout then fs.layout:Invalidate() end
+    end
+end, "Text")

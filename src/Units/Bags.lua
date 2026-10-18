@@ -392,7 +392,7 @@ function M:LayoutRail(rail, entries, buy)
         if e.locked or not e.has then
             b.skin:SetItem(nil)
             b.glyph:SetTexture(GLYPHS .. (e.locked and "lock" or (e.kind == "reagent" and "leaf" or "bag")))
-            b.glyph:SetVertexColor(UI.RGBA("ink-faint"))
+            UI.Paint(b.glyph, "ink-faint")
             b.glyph:Show()
         else
             b.glyph:Hide()
@@ -426,7 +426,7 @@ function M:LayoutRail(rail, entries, buy)
         c:ClearAllPoints()
         c:SetPoint("TOP", rail, "TOP", 0, -y)
         c.off, c.why, c.price, c.next = buy.off, buy.why, buy.price, buy.next
-        c.glyph:SetVertexColor(UI.RGBA(buy.off and "ink-faint" or "gilt-text"))
+        UI.Paint(c.glyph, buy.off and "ink-faint" or "gilt-text")
         c:SetAlpha(buy.off and T.opacity["opacity-disabled"] or 1)
         c.cost:SetValue(buy.price and buy.price > 0 and not buy.done and coinText(buy.price) or "")
         c:Show()
@@ -1393,6 +1393,9 @@ function M:OnEnable()
         self:DrawRails()
     end)
     self:Watch("keyring", function() self:Refresh() end)
+    -- a theme can change the caption and micro styles the slots and rails
+    -- are laid out in
+    self:On("SUUUI_THEME_CHANGED", function() self:Refresh(); self:RebuildBank() end)
     -- Blizzard opening or closing bags, by any of its ways
     if not self.hooked then
         self.hooked = true

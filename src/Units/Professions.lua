@@ -992,4 +992,8 @@ function M:OnEnable()
     self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
         if self.waitingItems and self.view and self.view:IsVisible() then self:QueueRender() end
     end)
+    -- a recipe's sources carry colour codes: drawn again
+    self:On("SUUUI_THEME_CHANGED", function()
+        if self.view and self.view:IsVisible() then self:QueueRender() end
+    end)
 end

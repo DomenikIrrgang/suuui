@@ -130,8 +130,8 @@ function M:UpdateIdentity()
     local id = self.identity
     if not id then return end
     local _, class = UnitClass("player")
-    local c = class and T.color["class-" .. class:lower()]
-    if c then id.diamond:SetVertexColor(c[1], c[2], c[3], 1) end
+    local token = class and "class-" .. class:lower()
+    if token and T.color[token] then UI.Paint(id.diamond, token) end
     id.name:SetValue(SuuUI.FullName("player") or "")
     local parts = { "Level " .. (UnitLevel("player") or "?") }
     local race = UnitRace("player")
@@ -176,7 +176,7 @@ function M:SkinPopout(slotName, b)
     local glyph = p:CreateTexture(nil, "OVERLAY", nil, 7)
     glyph:SetSize(12, 12)
     glyph:SetPoint("CENTER")
-    glyph:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(glyph, "gilt-text")
     if WEAPONS[slotName] then
         glyph:SetTexture(GLYPH_DIR .. "chevronDown.tga")
         glyph:SetRotation(math.pi)
@@ -194,8 +194,8 @@ function M:SkinPopout(slotName, b)
     end
     hideArt()
     p:HookScript("OnShow", hideArt)
-    p:HookScript("OnEnter", function() glyph:SetVertexColor(UI.RGBA("gilt")) end)
-    p:HookScript("OnLeave", function() glyph:SetVertexColor(UI.RGBA("gilt-text")) end)
+    p:HookScript("OnEnter", function() UI.Paint(glyph, "gilt") end)
+    p:HookScript("OnLeave", function() UI.Paint(glyph, "gilt-text") end)
 end
 
 -- The flyout of items for a slot: glass behind, SuuUI item slots.
@@ -214,7 +214,7 @@ function M:SkinFlyout()
         if not holder.suuBg then
             holder.suuBg = holder:CreateTexture(nil, "BACKGROUND", nil, -8)
             holder.suuBg.suuArt = true
-            holder.suuBg:SetColorTexture(UI.RGBA("surface-glass"))
+            UI.PaintFill(holder.suuBg, "surface-glass")
             holder.suuBg:SetAllPoints()
             UI.Border(holder, "gilt-line")
         end
@@ -254,7 +254,7 @@ function M:SkinSetPopup()
         end
     end
     local bg = pop:CreateTexture(nil, "BACKGROUND", nil, -8)
-    bg:SetColorTexture(UI.RGBA("surface-glass"))
+    UI.PaintFill(bg, "surface-glass")
     bg:SetAllPoints()
     local edge = CreateFrame("Frame", nil, pop)
     edge:SetAllPoints()
@@ -398,7 +398,7 @@ function M:SkinStatRow(row)
     end
     if not row.suuRule then
         row.suuRule = row:CreateTexture(nil, "ARTWORK")
-        row.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+        UI.PaintFill(row.suuRule, "gilt-faint")
         row.suuRule:SetHeight(1)
         row.suuRule:SetPoint("TOPLEFT")
         row.suuRule:SetPoint("TOPRIGHT")
@@ -411,7 +411,7 @@ function M:SkinStatRow(row)
     if head then
         for _, t in ipairs(texts) do
             SuuUI.Fonts.Apply(t, "header")
-            t:SetTextColor(UI.RGBA("gilt-text"))
+            UI.Paint(t, "gilt-text")
             t:SetShadowOffset(0, 0)
         end
         return
@@ -426,15 +426,15 @@ function M:SkinStatRow(row)
     end
     if label then
         SuuUI.Fonts.Apply(label, "body")
-        label:SetTextColor(UI.RGBA("ink-muted"))
+        UI.Paint(label, "ink-muted")
         label:SetShadowOffset(0, 0)
     end
     if value and value ~= label then
         local r, g, b = value:GetTextColor()
         SuuUI.Fonts.Apply(value, "numeric")
-        if isGreen(r, g, b) then value:SetTextColor(UI.RGBA("fel"))
-        elseif isRed(r, g, b) then value:SetTextColor(UI.RGBA("ember-text"))
-        else value:SetTextColor(UI.RGBA("ink")) end
+        if isGreen(r, g, b) then UI.Paint(value, "fel")
+        elseif isRed(r, g, b) then UI.Paint(value, "ember-text")
+        else UI.Paint(value, "ink") end
         value:SetShadowOffset(0, 0)
     end
 end
@@ -477,7 +477,7 @@ function M:SkinScrollBar(bar)
         if thumb then
             alphaRegions(thumb)
             local t = thumb:CreateTexture(nil, "OVERLAY")
-            t:SetColorTexture(UI.RGBA("gilt-line"))
+            UI.PaintFill(t, "gilt-line")
             t:SetPoint("TOP")
             t:SetPoint("BOTTOM")
             t:SetWidth(2)
@@ -618,7 +618,7 @@ function M:SkinPaperDoll()
         local chev = toggle:CreateTexture(nil, "OVERLAY", nil, 7)
         chev:SetSize(14, 14)
         chev:SetPoint("CENTER")
-        chev:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(chev, "ink-muted")
         toggle.suuChevron = chev
         local right = _G.CharacterFrameRightPaneHost
         local function draw()
@@ -628,8 +628,8 @@ function M:SkinPaperDoll()
             chev:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. (open and "chevronLeft" or "chevronRight") .. ".tga")
         end
         toggle:SetSize(22, 22)
-        toggle:HookScript("OnEnter", function() edge:SetColor("gilt"); chev:SetVertexColor(UI.RGBA("ink")) end)
-        toggle:HookScript("OnLeave", function() edge:SetColor("gilt-line"); chev:SetVertexColor(UI.RGBA("ink-muted")) end)
+        toggle:HookScript("OnEnter", function() edge:SetColor("gilt"); UI.Paint(chev, "ink") end)
+        toggle:HookScript("OnLeave", function() edge:SetColor("gilt-line"); UI.Paint(chev, "ink-muted") end)
         toggle:HookScript("OnClick", function() C_Timer.After(0, draw) end)
         if right then
             right:HookScript("OnShow", draw)

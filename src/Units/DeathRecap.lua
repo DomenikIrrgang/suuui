@@ -86,7 +86,6 @@ function M:Build()
     -- the killing blow
     local head = CreateFrame("Frame", nil, c)
     head:SetPoint("TOPLEFT")
-    head:SetSize(inner, T.type.caption.lineHeight + T.type.label.lineHeight + T.type.caption.lineHeight)
     head.kicker = UI.Text(head, "caption", "ink-muted")
     head.kicker:SetPoint("TOPLEFT")
     head.kicker:SetValue("Killed by")
@@ -101,6 +100,7 @@ function M:Build()
     head.span = UI.Text(head, "caption", "ink-muted")
     head.span:SetPoint("TOPRIGHT", head.health, "BOTTOMRIGHT", 0, 0)
     self.head = head
+    self:SizeHead()
 
     -- the health line: health after each hit until the next, on a track
     local line = CreateFrame("Frame", nil, c)
@@ -178,6 +178,11 @@ local function piece(list, i, make)
     return list[i]
 end
 
+-- The head as tall as its three lines (again when a theme changes them).
+function M:SizeHead()
+    self.head:SetSize(WIDTH - S["space-5"] * 2, T.type.caption.lineHeight + T.type.label.lineHeight + T.type.caption.lineHeight)
+end
+
 -- The recap of `id` (nil: your last death).
 function M:ShowRecap(id)
     if not self.window then self:Build() end
@@ -250,7 +255,7 @@ function M:ShowRecap(id)
             if not readable(hp) then return end
             n = n + 1
             local s = piece(line.steps, n, function() return UI.Fill(line, "unit-fill", "ARTWORK") end)
-            s:SetColorTexture(UI.RGBA(hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill"))
+            UI.PaintFill(s, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")
             s:ClearAllPoints()
             local left, right = x(fromT), x(toT)
             s:SetPoint("BOTTOMLEFT", line, "BOTTOMLEFT", left, 1)
@@ -301,7 +306,7 @@ function M:ShowRecap(id)
         local hp = after[i]
         r.hp:SetValue(hp and group3(hp) or "")
         if hp and maxHP then
-            r.hpFill:SetColorTexture(UI.RGBA(hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill"))
+            UI.PaintFill(r.hpFill, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")
             r.hpFill:SetWidth(math.max(0.01, (HEALTH_W - S["space-3"]) * hp / maxHP))
             r.hpFill:SetShown(hp > 0)
         else
@@ -347,5 +352,11 @@ function M:OnEnable()
             self:Toggle(id)
         end)
     end
+    -- a theme's line heights: the head sized again, the recap shown laid out again
+    self:On("SUUUI_THEME_CHANGED", function()
+        if not self.window then return end
+        self:SizeHead()
+        if self.window:IsShown() then self:ShowRecap(self.shownID or nil) end
+    end)
     self:RegisterCommand("recap", "Shows the recap of your last death.", function() self:Toggle(nil) end)
 end

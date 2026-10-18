@@ -34,15 +34,16 @@ local Alert = {}
 function Alert:SetTone(tone)
     local t = TONES[tone] or TONES.danger
     self.tone = TONES[tone] and tone or "danger"
-    self.ground:SetColorTexture(UI.RGBA(t.ground))
+    UI.PaintFill(self.ground, t.ground)
     self.rules:SetColor(t.line)
-    self.left:SetVertexColor(UI.RGBA(t.jewel))
-    self.right:SetVertexColor(UI.RGBA(t.jewel))
+    UI.Paint(self.left, t.jewel)
+    UI.Paint(self.right, t.jewel)
     self.title:SetColor(t.title)
     self.glow:SetShown(t.glow and true or false)
 end
 
 -- The detail: plain text, or a format with arguments (secret ones allowed).
+-- Returns the text to measure, or nil when an argument is secret.
 local function setDetail(self, detail, ...)
     local n = select("#", ...)
     local secret = false
@@ -51,7 +52,7 @@ local function setDetail(self, detail, ...)
     end
     if not detail or detail == "" then
         self.detail:SetVisible(false)
-        return 0
+        return ""
     end
     self.detail:SetVisible(true)
     if n > 0 then
@@ -61,21 +62,23 @@ local function setDetail(self, detail, ...)
         self.detail:SetValue(detail)
     end
     if secret then return nil end
-    local text = n > 0 and detail:format(...) or detail
-    local widest, lines = 0, 0
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-        lines = lines + 1
-        widest = math.max(widest, UI.MeasureText("caption", line))
-    end
-    return widest, lines
+    return n > 0 and detail:format(...) or detail
 end
 
-function Alert:SetAlert(tone, title, detail, ...)
-    self:SetTone(tone)
-    self.title:SetValue(title or "")
-    local titleW = UI.MeasureText("alert", title or "")
-    local detailW, lines = setDetail(self, detail, ...)
+-- The band's size from the title and the readable detail (nil: secret);
+-- again after a theme changed the text styles.
+function Alert:Fit()
+    local text = self.detailText
+    local detailW, lines
+    if text then
+        detailW, lines = 0, 0
+        for line in (text .. "\n"):gmatch("(.-)\n") do
+            lines = lines + 1
+            detailW = math.max(detailW, UI.MeasureText("caption", line))
+        end
+    end
     lines = lines or 1
+    local titleW = UI.MeasureText("alert", self.titleText)
     local inner = math.max(titleW, detailW or UI.Size("notice-w"))
     -- a secret detail: fixed width, cut at the band's edge; several lines:
     -- as wide as the longest, centred
@@ -91,9 +94,23 @@ function Alert:SetAlert(tone, title, detail, ...)
     self:SetSize(math.ceil(inner) + S["space-6"] * 2, h)
 end
 
+local alerts = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for a in pairs(alerts) do a:Fit() end
+end, "UI.Alert")
+
+function Alert:SetAlert(tone, title, detail, ...)
+    self:SetTone(tone)
+    self.title:SetValue(title or "")
+    self.titleText = title or ""
+    self.detailText = setDetail(self, detail, ...)
+    self:Fit()
+end
+
 function UI.Alert(parent)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Alert)
+    alerts[f] = true
     f.ground = f:CreateTexture(nil, "BACKGROUND")
     f.ground:SetAllPoints()
     f.glow = UI.Shadow(f, "glow-ember")

@@ -167,9 +167,7 @@ local function belowLow()
 end
 
 local function gradient(bar, deep, fill)
-    local r1, g1, b1, a1 = UI.RGBA(deep)
-    local r2, g2, b2, a2 = UI.RGBA(fill)
-    bar:GetStatusBarTexture():SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    UI.PaintGradient(bar:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
 
 local Plate = {}
@@ -864,7 +862,7 @@ function M:PreviewView(parent)
             f.fakeLockArt = f.fakeLock:CreateTexture(nil, "OVERLAY")
             f.fakeLockArt:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-LOCK")
             f.fakeLockArt:SetDesaturated(true)
-            f.fakeLockArt:SetVertexColor(UI.RGBA("ink"))
+            UI.Paint(f.fakeLockArt, "ink")
             f.fakeLockArt:SetPoint("LEFT", 2, 0)
             f.fakeSpell = UI.Text(f, "caption", "ink")
             f.fakeSpell:SetShadowed(true)
@@ -927,7 +925,7 @@ function M:DrawPreview()
             f.fakeCast:SetMinMaxValues(0, 1)
             f.fakeCast:SetValue(d.cast.progress)
             local stoppable = not (d.cast.locked or d.friendly)
-            f.fakeCast:SetStatusBarColor(UI.RGBA(stoppable and "arcane-glow" or "unit-fill"))
+            UI.Paint(f.fakeCast, stoppable and "arcane-glow" or "unit-fill")
             f.fakeCastBorder:SetColor(stoppable and "arcane" or "gilt-hairline")
             f.fakeSpell:SetValue(d.cast.name)
             f.fakeIcon:SetArt(C_Spell.GetSpellTexture(d.cast.icon))
@@ -1082,6 +1080,8 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
     self:On("SUUUI_ROLE_CHANGED", function() self:ForEach(function(f) f:UpdateThreat() end) end)
+    -- the preview's target line carries a colour code
+    self:On("SUUUI_THEME_CHANGED", function() self:DrawPreview() end)
     -- a unit can turn attackable (a duel): re-check its plate
     self:OnGameEvent("UNIT_FACTION", function(_, unit)
         if unit and unit:find("^nameplate") and UnitExists(unit) then self:Recheck(unit) end

@@ -47,6 +47,7 @@ catcher:RegisterForClicks("AnyDown")
 catcher:SetScript("OnClick", function() if openMenu then openMenu:Close() end end)
 
 local Menu = {}
+local menus = setmetatable({}, { __mode = "k" })
 
 local function copyList(list)
     local out = {}
@@ -105,7 +106,7 @@ function Menu:Draw()
         self.changed:SetShown(n > 0)
     else
         self.text:SetValue((self.placeholder or "Filters") .. (n > 0 and (" · " .. n) or ""))
-        self.glyph:SetVertexColor(UI.RGBA(n > 0 and "arcane" or "ink-muted"))
+        UI.Paint(self.glyph, n > 0 and "arcane" or "ink-muted")
     end
     local p = self.panel
     if not p then return end
@@ -317,6 +318,23 @@ function Menu:Close()
     self.edge:SetColor("gilt-line")
 end
 
+-- The button style's width: its glyph, placeholder and diamond.
+local function buttonWidth(f)
+    return math.ceil(S["space-4"] + 12 + S["space-3"] + f.text:GetUnboundedStringWidth() + S["space-3"] + 5 + S["space-4"])
+end
+
+-- A theme can change the text styles the panel and the button are measured
+-- in: the panel is built again when it next opens, the button measured again.
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for m in pairs(menus) do
+        if m.panel then
+            m:Close()
+            m.panel = nil
+        end
+        if m.autoWidth then m:SetWidth(buttonWidth(m)) end
+    end
+end, "UI.FilterMenu")
+
 function UI.FilterMenu(parent, opts)
     local f = CreateFrame("Button", nil, parent)
     Mixin(f, Menu)
@@ -332,14 +350,14 @@ function UI.FilterMenu(parent, opts)
         f.edge = UI.Border(f, "gilt-line")
         f.glyph:SetSize(12, 12)
         f.glyph:SetPoint("LEFT", S["space-4"], 0)
-        f.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(f.glyph, "ink-muted")
         f.text = UI.Text(f, "label", "ink")
         f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
         f.text:SetValue(opts.placeholder or "Filters")
         f.changed = UI.Diamond(f, 5, "ink")
         f.changed:SetPoint("LEFT", f.text, "RIGHT", S["space-3"], 0)
-        f:SetSize(opts.width or math.ceil(S["space-4"] + 12 + S["space-3"] + f.text:GetUnboundedStringWidth()
-            + S["space-3"] + 5 + S["space-4"]), opts.height or 30)
+        f.autoWidth = not opts.width
+        f:SetSize(opts.width or buttonWidth(f), opts.height or 30)
     else
         f:SetSize(opts.width or 140, opts.height or 30)
         UI.Fill(f, "surface-sunk"):SetAllPoints()
@@ -348,7 +366,7 @@ function UI.FilterMenu(parent, opts)
         f.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
         f.chevron:SetSize(12, 12)
         f.chevron:SetPoint("RIGHT", -S["space-4"], 0)
-        f.chevron:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(f.chevron, "ink-muted")
         f.text = UI.Text(f, "body", "ink")
         f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
         f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
@@ -362,5 +380,6 @@ function UI.FilterMenu(parent, opts)
     f:HookScript("OnHide", function(self) self:Close() end)
     f.value = f:Full(opts.value)
     f:Draw()
+    menus[f] = true
     return f
 end

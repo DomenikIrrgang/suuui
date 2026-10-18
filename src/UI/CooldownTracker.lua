@@ -181,16 +181,27 @@ local function iconFor(entry)
     return C_Spell.GetSpellTexture(id)
 end
 
-local digitFonts = {}
-local function digitFont(px)
-    local key = math.floor(px)
-    if not digitFonts[key] then
-        local name = "SuuUITrackerDigits" .. key
-        CreateFont(name):SetFont(T.type["micro"].file, px, "OUTLINE")
-        digitFonts[key] = name
-    end
-    return digitFonts[key]
+-- px nil: the micro style's own size. A theme can change the style's face
+-- and size, so each font is kept and set again then.
+local digitFonts = {} -- key -> { name, font, px }
+local function setDigitFont(d)
+    local micro = T.type["micro"]
+    d.font:SetFont(micro.file, d.px or micro.size, "OUTLINE")
 end
+local function digitFont(px)
+    local key = px and math.floor(px) or "Micro"
+    local d = digitFonts[key]
+    if not d then
+        d = { name = "SuuUITrackerDigits" .. key, px = px }
+        d.font = CreateFont(d.name)
+        setDigitFont(d)
+        digitFonts[key] = d
+    end
+    return d.name
+end
+Events.On("SUUUI_THEME_CHANGED", function()
+    for _, d in pairs(digitFonts) do setDigitFont(d) end
+end, "CooldownTracker")
 
 local Cell = {}
 
@@ -342,7 +353,7 @@ local function newCell(parent, size)
     f.cooldown:SetDrawBling(false)
     f.cooldown:SetSwipeColor(0, 0, 0, 0.7)
     f.cooldown:SetHideCountdownNumbers(false)
-    if f.cooldown.SetCountdownFont then pcall(f.cooldown.SetCountdownFont, f.cooldown, digitFont(size >= 30 and 12 or T.type["micro"].size)) end
+    if f.cooldown.SetCountdownFont then pcall(f.cooldown.SetCountdownFont, f.cooldown, digitFont(size >= 30 and 12 or nil)) end
     f.cooldown:HookScript("OnCooldownDone", function() f.dirty = true end)
     local over = CreateFrame("Frame", nil, f)
     over:SetAllPoints()
@@ -351,7 +362,7 @@ local function newCell(parent, size)
     f.ring:SetShown(false)
     f.flash = over:CreateTexture(nil, "OVERLAY", nil, 3)
     f.flash:SetAllPoints()
-    f.flash:SetColorTexture(UI.RGBA("arcane", 0.35))
+    UI.PaintFill(f.flash, "arcane", 0.35)
     f.flash:SetAlpha(0)
     -- "Pulse" when ready: the icon breathes
     f.pulse = f.icon:CreateAnimationGroup()

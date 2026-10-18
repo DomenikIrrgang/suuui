@@ -26,9 +26,9 @@ end
 -- UI.Repaint sets every kept one again. Setting the region's colour any
 -- other way (a class colour, a raw value, a texture instead) lets it go,
 -- so a repaint never undoes what the code set since.
---   UI.Paint(region, token[, alpha])       a FontString's text colour, a
---                                          StatusBar's bar colour, or a
---                                          texture's vertex colour
+--   UI.Paint(region, token[, alpha])       a FontString's or EditBox's text
+--                                          colour, a StatusBar's bar colour,
+--                                          or a texture's vertex colour
 --   UI.PaintFill(texture, token[, alpha])  a solid colour texture
 --   UI.PaintGradient(texture, orientation, fromToken, toToken[, fromAlpha, toAlpha])
 --   UI.Bind(region, fn)                    fn(region) now and after each
@@ -90,15 +90,17 @@ local function paint(region, kind, token, alpha)
     local p = paints[region]
     if not p then p = {}; paints[region] = p end
     p.kind, p.token, p.alpha, p.fn = kind, token, alpha, nil
+    -- (a hook may paint while UI.Repaint runs: keep its flag)
+    local was = painting
     painting = true
     local ok, err = pcall(draw, region, p)
-    painting = false
+    painting = was
     if not ok then paints[region] = nil; error(err, 3) end
     watch(region, kind)
     return p
 end
 
-local KIND = { FontString = "text", StatusBar = "bar" }
+local KIND = { FontString = "text", EditBox = "text", StatusBar = "bar" }
 
 function UI.Paint(region, token, alpha)
     paint(region, KIND[region:GetObjectType()] or "vertex", token, alpha)
@@ -119,9 +121,10 @@ function UI.Bind(region, fn)
     local p = paints[region]
     if not p then p = {}; paints[region] = p end
     p.kind, p.fn = "fn", fn
+    local was = painting
     painting = true
     local ok, err = pcall(fn, region)
-    painting = false
+    painting = was
     if not ok then paints[region] = nil; error(err, 2) end
     watch(region, "fn")
 end
@@ -130,8 +133,11 @@ end
 -- changed the tokens).
 function UI.Repaint()
     painting = true
-    for region, p in pairs(paints) do
-        local ok, err = pcall(draw, region, p)
+    -- (a hook painting another region mid-loop adds to the table: walk a copy)
+    local list = {}
+    for region, p in pairs(paints) do list[#list + 1] = region; list[#list + 1] = p end
+    for i = 1, #list, 2 do
+        local ok, err = pcall(draw, list[i], list[i + 1])
         if not ok then geterrorhandler()(err) end
     end
     painting = false

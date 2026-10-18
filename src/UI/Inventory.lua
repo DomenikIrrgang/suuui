@@ -35,6 +35,7 @@ local SLOT = T.size["slot"]
 local GAP = S["space-2"]
 local PAD = S["space-5"]
 local CROP = 0.08
+local live = setmetatable({}, { __mode = "k" }) -- money and inventory panels, for a theme change
 
 --------------------------------------------------------------------------------
 -- The item slot
@@ -113,12 +114,12 @@ end
 function Skin:Draw()
     local item = self.item
     if not item then
-        self.well:SetColorTexture(UI.RGBA("surface-sunk"))
+        UI.PaintFill(self.well, "surface-sunk")
         self.border:SetColor(self.hover and "gilt" or "gilt-faint")
         self.button:SetAlpha(1)
         return
     end
-    self.well:SetColorTexture(UI.RGBA("surface-raised"))
+    UI.PaintFill(self.well, "surface-raised")
     local q = item.quality
     local edge = (q and q ~= "common" and ("quality-" .. q)) or "gilt-hairline"
     self.border:SetColor(self.hover and "gilt" or edge)
@@ -155,6 +156,7 @@ end
 
 function Money:SetCopper(total)
     total = math.max(0, math.floor(tonumber(total) or 0))
+    self.copper = total
     local g, s, c = math.floor(total / 10000), math.floor(total / 100) % 100, total % 100
     local parts = {}
     local function part(v, unit, token)
@@ -173,6 +175,7 @@ function UI.Money(parent)
     m.text = UI.Text(m, "numeric", "ink")
     m.text:SetPoint("RIGHT")
     m:SetCopper(0)
+    live[m] = "money"
     return m
 end
 
@@ -191,16 +194,15 @@ end
 
 -- A section's head in the grid: a gilt-faint hairline, then its label in
 -- gilt-text with the meta after it (or a quiet note alone).
-local HEAD_H = S["space-4"] + 1 + S["space-3"] + T.type.caption.lineHeight + S["space-3"]
+local function headHeight() return S["space-4"] + 1 + S["space-3"] + T.type.caption.lineHeight + S["space-3"] end
 
 local function sectionHead(inv, i)
     inv.heads = inv.heads or {}
     local h = inv.heads[i]
     if h then return h end
     h = CreateFrame("Frame", nil, inv.grid)
-    h:SetHeight(HEAD_H)
     h.rule = h:CreateTexture(nil, "ARTWORK")
-    h.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(h.rule, "gilt-faint")
     h.rule:SetHeight(1)
     h.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
     h.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
@@ -224,6 +226,7 @@ function Inv:LayoutSlots(buttons, sections)
         table.insert(starts[sct.at], sct)
     end
     local w = self:GridWidth()
+    local headH = headHeight()
     local y, col, used = 0, 0, 0
     for i = 1, #buttons + 1 do
         for _, sct in ipairs(starts[i] or {}) do
@@ -232,7 +235,7 @@ function Inv:LayoutSlots(buttons, sections)
             local h = sectionHead(self, used)
             h:ClearAllPoints()
             h:SetPoint("TOPLEFT", self.grid, "TOPLEFT", 0, -y)
-            h:SetWidth(w)
+            h:SetSize(w, headH)
             if sct.note and not sct.label then
                 h.label:SetValue(sct.note)
                 h.label:SetColor("ink-muted")
@@ -243,7 +246,7 @@ function Inv:LayoutSlots(buttons, sections)
                 h.meta:SetValue(sct.meta or sct.note or "")
             end
             h:Show()
-            y = y + HEAD_H
+            y = y + headH
         end
         local b = buttons[i]
         if b then
@@ -365,6 +368,7 @@ function Inv:FitBody()
     end
     if self.banner and self.banner:IsShown() then
         self.banner:SetPoint("TOPLEFT", 0, -y)
+        self.banner:SetHeight(T.type.caption.lineHeight)
         y = y + T.type.caption.lineHeight + S["space-4"]
     end
     local content = self.grid
@@ -407,7 +411,7 @@ local function glyphButton(parent, glyph, tip)
     b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
     b.glyph:SetSize(16, 16)
     b.glyph:SetPoint("CENTER")
-    b.glyph:SetVertexColor(UI.RGBA("ink"))
+    UI.Paint(b.glyph, "ink")
     b:SetScript("OnEnter", function(self)
         if self:IsEnabled() then self.edge:SetColor("gilt") end
         if tip then UI.ShowTooltip(self, tip) end
@@ -438,7 +442,7 @@ local function buildCharacters(inv, body)
     inv.banner.eye:SetTexture(GLYPHS .. "eye.tga")
     inv.banner.eye:SetSize(12, 12)
     inv.banner.eye:SetPoint("LEFT")
-    inv.banner.eye:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(inv.banner.eye, "ink-muted")
     inv.banner.text = UI.Text(inv.banner, "caption", "ink-muted")
     inv.banner.text:SetPoint("LEFT", inv.banner.eye, "RIGHT", S["space-3"], 0)
     inv.banner:Hide()
@@ -468,15 +472,25 @@ function UI.Inventory(parent, opts)
     if opts.characters then buildCharacters(inv, body) end
     -- the foot: a note and the money, over a gilt-faint rule
     inv.rule = body:CreateTexture(nil, "ARTWORK")
-    inv.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(inv.rule, "gilt-faint")
     inv.rule:SetHeight(1)
     inv.note = UI.Text(body, "caption", "ink-muted")
     inv.money = UI.Money(body)
     inv.money:Hide() -- until SetMoney: a bank holds no money
     inv:FitBody()
     ns.Extend.Add("inventory", inv, { name = opts and opts.name })
+    live[inv] = "inventory"
     return inv
 end
+
+-- A theme can change the coin colours and the caption style the rows are
+-- measured in. (The section heads follow when the owner lays the slots out
+-- again: Bags does on the same message.)
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for f, kind in pairs(live) do
+        if kind == "money" then f:SetCopper(f.copper) else f:FitBody() end
+    end
+end, "UI.Inventory")
 
 -- After `columns` changed: the widths that follow it.
 function Inv:SetColumns(columns)

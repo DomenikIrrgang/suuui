@@ -57,7 +57,10 @@ end
 -- so give the body a layout (or a size).
 --------------------------------------------------------------------------------
 
-local HEAD_H = S["space-5"] + T.type.header.lineHeight -- top padding + title line
+-- top padding + title line (the header style's, which a theme can change)
+local function headH()
+    return S["space-5"] + T.type.header.lineHeight
+end
 
 local Panel = {}
 ns.Mixins.Panel = Panel
@@ -69,7 +72,7 @@ end
 
 -- The offset of the body's top edge from the panel's top edge.
 function Panel:BodyTop()
-    if self.title then return HEAD_H + S["space-4"] + 1 + S["space-4"] end
+    if self.title then return headH() + S["space-4"] + 1 + S["space-4"] end
     return S["space-4"]
 end
 
@@ -80,20 +83,35 @@ function Panel:Fit()
     if not self.fixedHeight then self:SetHeight(self:BodyTop() + h + S["space-5"]) end
 end
 
+-- The head and the body from the title's line height: at build, and again
+-- when a theme changes it.
+function Panel:PlaceHead()
+    if not self.title then return end
+    self.headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
+    self.divider:SetPoint("TOPLEFT", S["space-5"], -(headH() + S["space-4"]))
+    self.divider:SetPoint("TOPRIGHT", -S["space-5"], -(headH() + S["space-4"]))
+end
+
+function Panel:PlaceBody()
+    local top = self:BodyTop()
+    self.body:SetPoint("TOPLEFT", S["space-5"], -top)
+    if self.fixedWidth then self.body:SetPoint("TOPRIGHT", -S["space-5"], -top) end
+    self:Fit()
+end
+
 local function buildHead(f, opts)
     f.title = UI.Text(f, "header", "gilt-text")
     f.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     f.title:SetValue(opts.title)
 
     -- Right of the title, right to left: close, key chip, meta, all centred
-    -- on the title's line.
-    local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
+    -- on the title's line (the first placed by PlaceHead).
     local prev
     local function chain(region, gap)
         if prev then
             region:SetPoint("RIGHT", prev, "LEFT", -gap, 0)
         else
-            region:SetPoint("RIGHT", f, "TOPRIGHT", -S["space-5"], lineY)
+            f.headRight = region
         end
         prev = region
     end
@@ -111,11 +129,32 @@ local function buildHead(f, opts)
 
     -- The divider: a gilt-line hairline fading at both ends, with its jewel.
     f.divider = UI.Hairline(f, "gilt-line", "both")
-    f.divider:SetPoint("TOPLEFT", S["space-5"], -(HEAD_H + S["space-4"]))
-    f.divider:SetPoint("TOPRIGHT", -S["space-5"], -(HEAD_H + S["space-4"]))
+    f:PlaceHead()
     f.jewel = UI.Diamond(f, 6, "gilt")
     f.jewel:SetPoint("CENTER", f.divider, "CENTER", 0, 0)
 end
+
+-- A theme can change the header style: titled panels and section headers
+-- are laid out again (after combat, as a panel may hold secure frames).
+local titled = setmetatable({}, { __mode = "k" })
+local headers = setmetatable({}, { __mode = "k" })
+local relayoutWait = CreateFrame("Frame")
+local function relayout()
+    if InCombatLockdown() then
+        relayoutWait:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    for f in pairs(titled) do
+        f:PlaceHead()
+        f:PlaceBody()
+    end
+    for f in pairs(headers) do f:SetHeight(T.type.header.lineHeight) end
+end
+relayoutWait:SetScript("OnEvent", function(self)
+    self:UnregisterAllEvents()
+    relayout()
+end)
+ns.Events.On("SUUUI_THEME_CHANGED", relayout, "UI.Panel")
 
 function UI.Panel(parent, opts)
     opts = opts or {}
@@ -157,6 +196,7 @@ function UI.Panel(parent, opts)
     end
     f.body:SetScript("OnSizeChanged", function() f:Fit() end)
     f:Fit()
+    if opts.title then titled[f] = true end
     return f
 end
 
@@ -266,8 +306,8 @@ local function makeGrip(scroll, parent)
             followCursor(scroll)
         end
     end)
-    grip:SetScript("OnEnter", function() scroll.thumb:SetColorTexture(UI.RGBA("ink")) end)
-    grip:SetScript("OnLeave", function() scroll.thumb:SetColorTexture(UI.RGBA("ink-muted")) end)
+    grip:SetScript("OnEnter", function() UI.PaintFill(scroll.thumb, "ink") end)
+    grip:SetScript("OnLeave", function() UI.PaintFill(scroll.thumb, "ink-muted") end)
     return grip
 end
 
@@ -384,7 +424,7 @@ function UI.Confirm(opts)
         p.slot:SetPoint("LEFT", p, "LEFT")
         p.slot:SetPoint("RIGHT", p, "RIGHT")
         p.group = CreateFrame("Frame", nil, p.slot)
-        p.group:SetSize(200, T.type.caption.lineHeight + 6 + 30)
+        p.group:SetWidth(200)
         p.group:SetPoint("CENTER")
         p.prompt = UI.Text(p.group, "caption", "ink-muted")
         p.prompt:SetPoint("TOP")
@@ -422,6 +462,7 @@ function UI.Confirm(opts)
     p.input = opts.input
     local field = p.word or p.input
     p.group:SetShown(field and true or false)
+    p.group:SetHeight(T.type.caption.lineHeight + 6 + 30)
     p.field:SetValue(p.input and p.input.value or "")
     p.ok:SetEnabledState(not field or (p.input and (p.input.value or "") ~= "") or false)
     if p.word then p.prompt:SetValue(("Type %q to confirm."):format(p.word))
@@ -441,6 +482,7 @@ end
 function UI.SectionHeader(parent, label, meta, width)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(width or 380, T.type.header.lineHeight)
+    headers[f] = true
     f.label = UI.Text(f, "header", "gilt-text")
     f.label:SetShadowed(true)
     f.label:SetPoint("LEFT")
@@ -498,25 +540,18 @@ function UI.WindowFrame(parent, opts)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetScript("OnShow", function(self) Motion.Enter(self, T.duration["dur-fast"]) end)
 
-    local top = f:BodyTop()
+    local TAB_H = 28
     if opts.tabs then
-        local TAB_H = 28
         f.tabRow = CreateFrame("Frame", nil, f)
-        f.tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
-        f.tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
         f.tabRow:SetHeight(TAB_H)
         f.tabButtons = {}
-        local x = 0
         for _, t in ipairs(opts.tabs) do
             local b = CreateFrame("Button", nil, f.tabRow)
             b.key = t.key
             b.label = UI.Text(b, "header", "ink-muted")
             b.label:SetPoint("CENTER", 0, 2)
             b.label:SetValue(t.label)
-            local w = UI.MeasureText("header", t.label) + 2 * S["space-4"]
-            b:SetSize(w, TAB_H)
-            b:SetPoint("LEFT", x, 0)
-            x = x + w + S["space-2"]
+            b:SetHeight(TAB_H)
             b.rule = UI.Hairline(b, "gilt-line", "both")
             b.rule:SetPoint("BOTTOMLEFT")
             b.rule:SetPoint("BOTTOMRIGHT")
@@ -531,8 +566,8 @@ function UI.WindowFrame(parent, opts)
             b.cover:SetScript("OnEnter", function(c) UI.ShowTooltip(c, { title = t.label, description = t.reason }) end)
             b.cover:SetScript("OnLeave", function() UI.HideTooltip() end)
             b.cover:Hide()
-            b:SetScript("OnEnter", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink")) end end)
-            b:SetScript("OnLeave", function(self) if f.tab ~= self.key then self.label:SetTextColor(UI.RGBA("ink-muted")) end end)
+            b:SetScript("OnEnter", function(self) if f.tab ~= self.key then UI.Paint(self.label, "ink") end end)
+            b:SetScript("OnLeave", function(self) if f.tab ~= self.key then UI.Paint(self.label, "ink-muted") end end)
             b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
             f.tabButtons[#f.tabButtons + 1] = b
         end
@@ -545,7 +580,7 @@ function UI.WindowFrame(parent, opts)
             for _, b in ipairs(self.tabButtons) do
                 local dis = off(b)
                 local on = not dis and b.key == self.tab
-                b.label:SetTextColor(UI.RGBA(dis and "ink-faint" or on and "gilt-text" or "ink-muted"))
+                UI.Paint(b.label, dis and "ink-faint" or on and "gilt-text" or "ink-muted")
                 b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
                 b.rule:SetShown(on)
                 b.jewel:SetShown(on)
@@ -557,7 +592,6 @@ function UI.WindowFrame(parent, opts)
             self:DrawTabs()
             if opts.onTab then opts.onTab(key) end
         end
-        top = top + TAB_H + S["space-4"]
     end
 
     local bottom = 0
@@ -574,10 +608,29 @@ function UI.WindowFrame(parent, opts)
         bottom = footH - S["space-5"] + S["space-4"]
     end
 
+    -- The tabs under the head, the body under them: at build, and again
+    -- when a theme changes the header style (Panel:PlaceHead).
+    function f:PlaceBody()
+        local top = self:BodyTop()
+        if self.tabRow then
+            self.tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
+            self.tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
+            local x = 0
+            for _, b in ipairs(self.tabButtons) do
+                local w = UI.MeasureText("header", b.def.label) + 2 * S["space-4"]
+                b:SetWidth(w)
+                b:SetPoint("LEFT", x, 0)
+                x = x + w + S["space-2"]
+            end
+            top = top + TAB_H + S["space-4"]
+        end
+        self.body:SetPoint("TOPLEFT", S["space-5"], -top)
+    end
+
     -- The body becomes a scroll frame; content goes into window.content.
     f.body:ClearAllPoints()
-    f.body:SetPoint("TOPLEFT", S["space-5"], -top)
     f.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
+    f:PlaceBody()
     f.body:SetScript("OnSizeChanged", nil)
     local scroll = CreateFrame("ScrollFrame", nil, f.body)
     scroll:SetAllPoints()

@@ -204,7 +204,7 @@ function M:BuildRow(parent)
     r.fold.glyph = r.fold:CreateTexture(nil, "ARTWORK")
     r.fold.glyph:SetSize(11, 11)
     r.fold.glyph:SetPoint("CENTER")
-    r.fold.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(r.fold.glyph, "ink-muted")
     r.fold:SetScript("OnClick", function()
         local name = r.addon.name
         self.folded[name] = not self.folded[name]
@@ -216,7 +216,7 @@ function M:BuildRow(parent)
     r.more = line:CreateTexture(nil, "ARTWORK")
     r.more:SetSize(12, 12)
     r.more:SetPoint("RIGHT", -S["space-3"], 0)
-    r.more:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(r.more, "ink-muted")
     r.chip = chip(line)
     r.chip:SetPoint("RIGHT", r.more, "LEFT", -S["space-4"], 0)
     r.mem = UI.Text(line, "numeric", "ink-muted")
@@ -506,7 +506,7 @@ function M:DrawRow(r, e)
         if type(e.icon) == "string" and e.icon:lower():find("^interface\\icons\\") then r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
     elseif e.suuui then
         r.icon:SetTexture(GLYPHS .. "markDiamond")
-        r.icon:SetVertexColor(UI.RGBA("gilt-text"))
+        UI.Paint(r.icon, "gilt-text")
     end
     r.icon:SetShown(e.icon ~= nil or e.suuui)
     r.title:ClearAllPoints()
@@ -587,6 +587,12 @@ function M:OnEnable()
     end
     -- the memory and CPU while it shows, every 15 seconds (the memory count is dear)
     C_Timer.NewTicker(15, function()
+        if self.window:IsShown() then self:DrawPerf(); self:Draw() end
+    end)
+    -- the theme: the 16px numbers' face (set apart from their style) and
+    -- the details' colour codes
+    self:On("SUUUI_THEME_CHANGED", function()
+        for _, v in ipairs({ self.memText, self.cpuText }) do v:SetFont(T.type.numeric.file, 16, "") end
         if self.window:IsShown() then self:DrawPerf(); self:Draw() end
     end)
 end

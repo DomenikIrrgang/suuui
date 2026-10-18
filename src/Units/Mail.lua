@@ -772,7 +772,7 @@ function M:DrawSuggest(keep)
             r:SetPoint("TOPLEFT", 0, -y)
             r:SetPoint("RIGHT", d.scroll.child, "RIGHT")
             r.dot:SetShown(row.diamond and true or false)
-            if row.diamond then r.dot:SetVertexColor(UI.RGBA(row.color or "ink")) end
+            if row.diamond then UI.Paint(r.dot, row.color or "ink") end
             r.name:ClearAllPoints()
             r.name:SetPoint("LEFT", row.diamond and (S["space-4"] + 10) or S["space-4"], 0)
             r.name:SetValue(row.name)
@@ -979,6 +979,11 @@ function M:OnEnable()
     end
     self:OnGameEvent("GUILD_ROSTER_UPDATE", function()
         if self.suggest and self.suggest:IsShown() or (self.send and self.send.to.edit:HasFocus()) then self:DrawSuggest() end
+    end)
+    -- amounts, COD and "Online" carry colour codes: drawn again
+    self:On("SUUUI_THEME_CHANGED", function()
+        self:Refresh()
+        if self.suggest and self.suggest:IsShown() then self:DrawSuggest() end
     end)
     self:OnGameEvent("MAIL_SEND_SUCCESS", function() self:SendDone(true) end)
     self:OnGameEvent("MAIL_FAILED", function() if self.sending then self:SendDone(false) end end)

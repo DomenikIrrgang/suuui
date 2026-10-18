@@ -95,19 +95,19 @@ function M:BuildItem(parent, def)
     b.glyph:SetSize(14, 14)
     b.glyph:SetPoint("LEFT", S["space-4"], 0)
     b.glyph:SetTexture(GLYPHS .. def[2])
-    b.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+    UI.Paint(b.glyph, "ink-muted")
     b.label = UI.Text(b, "label", "ink")
     b.label:SetPoint("LEFT", b.glyph, "RIGHT", S["space-4"], 0)
     b.label:SetValue(def[1])
     b.why = def[4]
     b:SetScript("OnEnter", function(self)
         self.hover:Show()
-        if not self.blocked then self.glyph:SetVertexColor(UI.RGBA("gilt-text")) end
+        if not self.blocked then UI.Paint(self.glyph, "gilt-text") end
         if self.blocked then UI.ShowTooltip(self, { title = def[1], description = self.blocked }) end
     end)
     b:SetScript("OnLeave", function(self)
         self.hover:Hide()
-        self.glyph:SetVertexColor(UI.RGBA("ink-muted"))
+        UI.Paint(self.glyph, "ink-muted")
         UI.HideTooltip()
     end)
     b:SetScript("OnClick", function(self)
@@ -207,6 +207,7 @@ function M:Build()
     y = y + T.type.caption.lineHeight
     body:SetSize(WIDTH - 2 * S["space-5"], y)
     p:Fit()
+    self.builtLine = T.type.caption.lineHeight
 end
 
 function M:Draw()
@@ -319,6 +320,10 @@ function M:OnEnable()
     self:Away(g)
     self:On("SUUUI_ADDITIONS_CHANGED", function(_, list) if list == "gamemenu" then self.stale = true end end)
     if #SuuUI.Additions("gamemenu") > 0 then self.stale = true end
+    -- a theme with another caption line height: built again (colours follow by themselves)
+    self:On("SUUUI_THEME_CHANGED", function()
+        if self.builtLine ~= T.type.caption.lineHeight then self.stale = true end
+    end)
     g:HookScript("OnShow", function()
         if not self:IsEnabled() then return end
         if self.stale then self:Rebuild() end

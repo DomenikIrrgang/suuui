@@ -54,8 +54,9 @@ local function pill(f, inset, layer)
     p.mid:SetPoint("TOPLEFT", p.left, "TOPRIGHT")
     p.mid:SetPoint("BOTTOMRIGHT", p.right, "BOTTOMLEFT")
     function p.Paint(token)
-        local cr, cg, cb, ca = UI.RGBA(token)
-        for _, t in ipairs({ p.left, p.right, p.mid }) do t:SetVertexColor(cr, cg, cb, ca) end
+        UI.Paint(p.left, token)
+        UI.Paint(p.right, token)
+        UI.Paint(p.mid, token)
     end
     return p
 end
@@ -82,7 +83,7 @@ local function buildButton(m, item)
     b.glyph:SetSize(18, 18)
     b.glyph:SetPoint("CENTER")
     b.glyph:SetTexture(GLYPHS .. item.glyph .. ".tga")
-    b.glyph:SetVertexColor(UI.RGBA("ink"))
+    UI.Paint(b.glyph, "ink")
     -- the alert: a 6px arcane diamond, 3px in from the top right, glowing
     b.alert = CreateFrame("Frame", nil, b)
     b.alert:SetSize(8, 8)
@@ -164,6 +165,19 @@ function Menu:SetAlert(key, text)
     b.alert:SetShown(text ~= nil)
 end
 
+local menus = setmetatable({}, { __mode = "k" })
+
+local function fitBadge(b)
+    b.badge:SetWidth(math.max(14, math.ceil(b.count:GetStringWidth()) + 6))
+end
+
+-- a theme's label size: the counts' pills fitted again
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for m in pairs(menus) do
+        for _, b in pairs(m.buttons) do fitBadge(b) end
+    end
+end, "MicroMenu")
+
 -- 0.17: a count on a button, in a pill on its bottom right corner (nil
 -- clears it): its text colour token (ink by default) and the pill's fill
 -- (surface by default).
@@ -175,10 +189,10 @@ function Menu:SetCount(key, text, color, fill)
         return
     end
     b.count:SetText(text)
-    b.count:SetTextColor(UI.RGBA(color or "ink"))
+    UI.Paint(b.count, color or "ink")
     b.badge.edge.Paint("gilt-line")
     b.badge.fill.Paint(fill or "surface")
-    b.badge:SetWidth(math.max(14, math.ceil(b.count:GetStringWidth()) + 6))
+    fitBadge(b)
     b.badge:Show()
 end
 
@@ -192,6 +206,7 @@ function UI.MicroMenu(parent, opts)
     UI.Border(m, "gilt-line")
     UI.Shadow(m, "shadow-panel")
     m:SetSize(1, 1)
+    menus[m] = true
     ns.Extend.Add("micromenu", m, { name = opts and opts.name })
     return m
 end

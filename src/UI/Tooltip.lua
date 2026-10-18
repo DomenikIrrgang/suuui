@@ -39,6 +39,7 @@ local function row(self, i)
 end
 
 function Tip:SetContent(d)
+    self.content = d
     local stack = self.stack
     stack:Clear()
     local pad = S["space-5"]
@@ -123,9 +124,18 @@ function Tip:SetContent(d)
     self:SetHeight(self.stackFrame:GetHeight() + pad * 2)
 end
 
+-- a theme change: the shown ones laid out again (the text styles' sizes)
+local tips = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for t in pairs(tips) do
+        if t:IsShown() and t.content then t:SetContent(t.content) end
+    end
+end, "UI.TooltipFrame")
+
 function UI.TooltipFrame(parent)
     local f = UI.Panel(parent, { ornament = true, solid = false })
     Mixin(f, Tip)
+    tips[f] = true
     -- Sized by SetContent, not by the panel body.
     f.body:SetScript("OnSizeChanged", nil)
     f.body:Hide()
@@ -211,7 +221,7 @@ function UI.SkinTooltip(tooltip)
     if not tooltip or skinned[tooltip] then return end
     local art = {}
     art.bg = tooltip:CreateTexture(nil, "BACKGROUND", nil, -8)
-    art.bg:SetColorTexture(UI.RGBA("surface-glass"))
+    UI.PaintFill(art.bg, "surface-glass")
     art.bg:SetAllPoints()
     art.border = UI.Border(tooltip, "gilt-line", { layer = "BACKGROUND", sublevel = -7 })
     art.ornament = UI.Diamond(tooltip, 7, "gilt", "OVERLAY", 7)

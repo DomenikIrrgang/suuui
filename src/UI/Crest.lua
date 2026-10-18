@@ -50,10 +50,8 @@ local function wing(c, color, x, y, length, toLeft)
     t:SetTexture(WHITE)
     t:SetSize(length, 1)
     t:SetPoint(toLeft and "RIGHT" or "LEFT", c, "CENTER", x, y)
-    local r, g, b, a = UI.RGBA(color)
-    local solid, clear = CreateColor(r, g, b, a), CreateColor(r, g, b, 0)
-    if not pcall(t.SetGradient, t, "HORIZONTAL", toLeft and clear or solid, toLeft and solid or clear) then
-        t:SetVertexColor(r, g, b, a)
+    if not pcall(UI.PaintGradient, t, "HORIZONTAL", color, color, toLeft and 0 or 1, toLeft and 1 or 0) then
+        UI.Paint(t, color)
     end
     return { t }
 end

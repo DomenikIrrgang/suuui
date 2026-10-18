@@ -98,8 +98,26 @@ function Card:IsHovered()
     return false
 end
 
+-- The head's lines, from the text styles' line heights.
+function Card:PlaceHead()
+    local titleMid = PAD_TOP + T.type.alert.lineHeight / 2
+    self.left:ClearAllPoints()
+    self.left:SetPoint("CENTER", self, "TOPLEFT", 0, -titleMid)
+    self.right:ClearAllPoints()
+    self.right:SetPoint("CENTER", self, "TOPRIGHT", 0, -titleMid)
+    local detailTop = PAD_TOP + T.type.alert.lineHeight + S["space-4"] - 6
+    self.detail:ClearAllPoints()
+    self.detail:SetPoint("TOP", 0, -detailTop)
+    local ruleTop = detailTop + T.type.caption.lineHeight + S["space-4"]
+    self.rule1:ClearAllPoints()
+    self.rule1:SetPoint("TOPLEFT", PAD_X, -ruleTop)
+    self.rule1:SetPoint("TOPRIGHT", -PAD_X, -ruleTop)
+    self.gridTop = ruleTop + 1 + S["space-4"]
+end
+
 function Card:SetLevelUp(d)
     d = d or {}
+    self.data = d
     local spells = d.spells or {}
     local n = math.min(#spells, MAX)
     local cols = n > 4 and 2 or 1
@@ -158,9 +176,20 @@ function Card:SetLevelUp(d)
     self:SetSize(width, y)
 end
 
+-- a theme change: the colour codes in the ranks and the cost, and the
+-- line heights, again
+local cards = setmetatable({}, { __mode = "k" })
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for c in pairs(cards) do
+        c:PlaceHead()
+        c:SetLevelUp(c.data)
+    end
+end, "UI.LevelUp")
+
 function UI.LevelUp(parent)
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Card)
+    cards[f] = true
     f.rows = {}
     f:EnableMouse(true)
     f:SetScript("OnHide", function()
@@ -171,27 +200,18 @@ function UI.LevelUp(parent)
     f:SetScript("OnMouseUp", function() if f.onClick then f.onClick() end end)
     f.ground = f:CreateTexture(nil, "BACKGROUND")
     f.ground:SetAllPoints()
-    f.ground:SetColorTexture(UI.RGBA("surface-glass"))
+    UI.PaintFill(f.ground, "surface-glass")
     f.rules = UI.Border(f, "gilt-line")
     f.rules.left:Hide()
     f.rules.right:Hide()
-    local titleMid = PAD_TOP + T.type.alert.lineHeight / 2
     f.left = UI.Diamond(f, JEWEL, "gilt")
-    f.left:SetPoint("CENTER", f, "TOPLEFT", 0, -titleMid)
     f.right = UI.Diamond(f, JEWEL, "gilt")
-    f.right:SetPoint("CENTER", f, "TOPRIGHT", 0, -titleMid)
     f.title = UI.Text(f, "alert", "gilt-text")
     -- the display face sits 2px low in its line box (as on the alert)
     f.title:SetPoint("TOP", 0, -PAD_TOP - 2)
     f.detail = UI.Text(f, "caption", "ink-muted")
-    local detailTop = PAD_TOP + T.type.alert.lineHeight + S["space-4"] - 6
-    f.detail:SetPoint("TOP", 0, -detailTop)
-    local ruleTop = detailTop + T.type.caption.lineHeight + S["space-4"]
     f.rule1 = UI.Fill(f, "gilt-faint", "ARTWORK")
     f.rule1:SetHeight(1)
-    f.rule1:SetPoint("TOPLEFT", PAD_X, -ruleTop)
-    f.rule1:SetPoint("TOPRIGHT", -PAD_X, -ruleTop)
-    f.gridTop = ruleTop + 1 + S["space-4"]
     f.more = UI.Text(f, "caption", "ink-muted")
     f.rule2 = UI.Fill(f, "gilt-faint", "ARTWORK")
     f.rule2:SetHeight(1)
@@ -201,6 +221,7 @@ function UI.LevelUp(parent)
     f.label:SetText("Train all at your class trainer · ")
     f.cost = UI.Text(f.foot, "numeric", "ink")
     f.cost:SetPoint("LEFT", f.label, "RIGHT", 0, 0)
+    f:PlaceHead()
     f:SetLevelUp({ title = "" })
     return f
 end

@@ -849,6 +849,12 @@ function M:OnEnable()
         if self.book then self:Render() end
         self:SayToTrain()
     end)
+    -- the page's ranks and costs carry colour codes: drawn again (after
+    -- combat, as any render)
+    self:On("SUUUI_THEME_CHANGED", function()
+        if self.book then self:Render() end
+        if self.previewView and self.previewView:IsVisible() then self:DrawPreview() end
+    end)
     SuuUI.AllowAlertOutOfCombat(LEVEL_UP)
     self:RegisterSettings(SECTION)
     self:OnGameEvent("PLAYER_LEVEL_UP", function(_, level) self:LevelGained(level) end)

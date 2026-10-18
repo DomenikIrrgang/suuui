@@ -79,12 +79,11 @@ function UI.LoadingMark(parent, opts)
     f.intro[1] = grow
     f.wingParts = {}
     if wings then
-        local r, g, b = UI.RGBA("gilt")
         for side = 1, 2 do
             local left = side == 1
             local w = f:CreateTexture(nil, "BACKGROUND")
             w:SetColorTexture(1, 1, 1, 1)
-            w:SetGradient("HORIZONTAL", CreateColor(r, g, b, left and 0.15 or 0.85), CreateColor(r, g, b, left and 0.85 or 0.15))
+            UI.PaintGradient(w, "HORIZONTAL", "gilt", "gilt", left and 0.15 or 0.85, left and 0.85 or 0.15)
             w:SetSize(118 * k, 1)
             w:SetPoint("TOPLEFT", (left and 30 or 252) * k, -59.5 * k)
             -- drawn out from its inner end after 0.2 s (hidden until then)

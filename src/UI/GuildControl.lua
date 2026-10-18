@@ -60,7 +60,7 @@ end
 local function style(fs, styleName, color)
     if not fs then return end
     ns.Fonts.Apply(fs, styleName)
-    fs:SetTextColor(UI.RGBA(color or "ink"))
+    UI.Paint(fs, color or "ink")
     fs:SetShadowOffset(0, 0)
 end
 
@@ -109,7 +109,7 @@ local function iconButton(b, glyph, danger, why)
     end
     hideArt(b)
     local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA("surface-raised"))
+    UI.PaintFill(bg, "surface-raised")
     bg:SetAllPoints()
     bg.suuArt = true
     local edge = UI.Border(b, "gilt-line")
@@ -124,7 +124,7 @@ local function iconButton(b, glyph, danger, why)
         b:SetAlpha(on and 1 or T.opacity["opacity-disabled"])
         local hot = on and st.hover
         edge:SetColor(hot and (danger and "ember" or "gilt") or "gilt-line")
-        g:SetVertexColor(UI.RGBA(hot and (danger and "ember-text" or "ink") or "ink-muted"))
+        UI.Paint(g, hot and (danger and "ember-text" or "ink") or "ink-muted")
     end
     b:HookScript("OnEnter", function(self)
         st.hover = true
@@ -200,7 +200,7 @@ function UI.GuildControl(host, ui)
     c.extra = UI.Text(band, "caption", "ink-muted")
     c.extra:SetPoint("RIGHT", 0, 0)
     local rule = head:CreateTexture(nil, "ARTWORK")
-    rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(rule, "gilt-faint")
     rule:SetHeight(1)
     rule:SetPoint("BOTTOMLEFT")
     rule:SetPoint("BOTTOMRIGHT")
@@ -214,6 +214,8 @@ function UI.GuildControl(host, ui)
     end
     ui:HookScript("OnShow", function() c:Layout() end)
     c:Layout()
+    -- the pages are sized from the text styles, which a theme can change
+    ns.Events.On("SUUUI_THEME_CHANGED", function() if ui:IsShown() then c:Layout() end end, c)
     return c
 end
 
@@ -336,7 +338,7 @@ function GuildControl:Ranks(page)
             new.suuPlus = new:CreateTexture(nil, "OVERLAY", nil, 7)
             new.suuPlus:SetTexture(GLYPHS .. "plus.tga")
             new.suuPlus:SetSize(12, 12)
-            new.suuPlus:SetVertexColor(UI.RGBA("ink-muted"))
+            UI.Paint(new.suuPlus, "ink-muted")
         end
         new:SetSize(120, ICON_B)
         if fs then
@@ -506,7 +508,7 @@ local function button(b, variant)
     hideArt(b)
     local primary, danger = variant == "primary", variant == "danger"
     local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
-    bg:SetColorTexture(UI.RGBA(primary and "arcane" or "surface-raised"))
+    UI.PaintFill(bg, primary and "arcane" or "surface-raised")
     bg:SetAllPoints()
     bg.suuArt = true
     local rest = primary and "arcane" or (danger and "ember" or "gilt-line")
@@ -519,7 +521,7 @@ local function button(b, variant)
         local fs = ask(b, "GetFontString")
         if fs then
             ns.Fonts.Apply(fs, "label")
-            fs:SetTextColor(UI.RGBA(primary and "on-signal" or (danger and "ember-text" or "ink")))
+            UI.Paint(fs, primary and "on-signal" or (danger and "ember-text" or "ink"))
             fs:SetShadowOffset(0, 0)
         end
     end
@@ -608,10 +610,10 @@ function GuildControl:Bank(page)
             y = y - TAB_ROW
             if not o.suuFill then
                 o.suuFill = o:CreateTexture(nil, "BACKGROUND", nil, -7)
-                o.suuFill:SetColorTexture(UI.RGBA("surface-sunk"))
+                UI.PaintFill(o.suuFill, "surface-sunk")
                 o.suuFill:SetAllPoints()
                 o.suuRule = o:CreateTexture(nil, "ARTWORK")
-                o.suuRule:SetColorTexture(UI.RGBA("gilt-faint"))
+                UI.PaintFill(o.suuRule, "gilt-faint")
                 o.suuRule:SetHeight(1)
                 o.suuRule:SetPoint("BOTTOMLEFT")
                 o.suuRule:SetPoint("BOTTOMRIGHT")
@@ -658,7 +660,7 @@ function GuildControl:Bank(page)
             y = y - BUY_H
             if not buy.suuFill then
                 buy.suuFill = buy:CreateTexture(nil, "BACKGROUND", nil, -7)
-                buy.suuFill:SetColorTexture(UI.RGBA("surface-sunk"))
+                UI.PaintFill(buy.suuFill, "surface-sunk")
                 buy.suuFill:SetAllPoints()
                 buy.suuEdge = UI.Border(buy, "gilt-faint")
                 buy.suuWhich = UI.Text(buy, "caption", "ink-muted")

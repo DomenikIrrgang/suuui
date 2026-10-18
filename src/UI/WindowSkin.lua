@@ -32,9 +32,15 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
-local TITLE_H = S["space-5"] + T.type.header.lineHeight -- top padding and the title line
-local TAB_H = S["space-2"] + T.type.header.lineHeight + S["space-3"]
-local HEAD_H = TITLE_H + S["space-3"] + TAB_H
+-- From the header style's line height, which a theme can change: worked
+-- out when used (Chrome:PlaceHead lays a header out again then).
+local function tabH()
+    return S["space-2"] + T.type.header.lineHeight + S["space-3"]
+end
+local function headH()
+    return S["space-5"] + T.type.header.lineHeight + S["space-3"] + tabH() -- the title line, then the tabs
+end
+local HEAD_H = headH() -- (UI.WINDOW_HEAD_H: the design's)
 
 local Chrome = {}
 ns.Mixins.WindowChrome = Chrome
@@ -124,7 +130,7 @@ function Chrome:LayoutTabs()
         local b = def.button
         local text = (short and def.short) or def.label
         def.skin.label:SetValue(text)
-        b:SetSize(math.ceil(UI.MeasureText("header", text)), TAB_H)
+        b:SetSize(math.ceil(UI.MeasureText("header", text)), tabH())
         b:ClearAllPoints()
         if prev then
             b:SetPoint("BOTTOMLEFT", prev, "BOTTOMRIGHT", gap, 0)
@@ -191,50 +197,42 @@ function UI.SkinWindow(frame, opts)
         frame:SetFrameStrata("HIGH")
     end
     for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
-    local inset = opts.topInset or 0
-    local headH = HEAD_H + (opts.headExtra or 0)
-    local rise = headH - inset -- the header's height above the window's top
-    chrome.riseH = rise
+    chrome.inset, chrome.headExtra = opts.topInset or 0, opts.headExtra or 0
     -- the line the second row's 22px controls sit centred on, up from the
     -- header's bottom (in the middle of headExtra)
-    chrome.rowMid = S["space-1"] + 11 + (opts.headExtra or 0) / 2
+    chrome.rowMid = S["space-1"] + 11 + chrome.headExtra / 2
 
     -- the art, on the window itself (behind every pane)
     local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
-    bg:SetColorTexture(UI.RGBA("surface-glass"))
-    bg:SetPoint("TOPLEFT", 0, rise)
+    UI.PaintFill(bg, "surface-glass")
     bg:SetPoint("BOTTOMRIGHT")
     chrome.bg = bg
     local edgeHolder = CreateFrame("Frame", nil, frame)
-    edgeHolder:SetPoint("TOPLEFT", 0, rise)
     edgeHolder:SetPoint("BOTTOMRIGHT")
     edgeHolder:SetFrameLevel(frame:GetFrameLevel() + 499)
     edgeHolder:EnableMouse(false)
     edgeHolder.suuOwn = true
+    chrome.edgeHolder = edgeHolder
     chrome.edge = UI.Border(edgeHolder, "gilt-line")
 
     -- the header: diamond, icon, title, key, close; the tab row under it
+    -- (placed by PlaceHead)
     local head = CreateFrame("Frame", nil, frame)
-    head:SetPoint("TOPLEFT", 0, rise)
-    head:SetPoint("TOPRIGHT", 0, rise)
-    head:SetHeight(headH)
     head:SetFrameLevel(frame:GetFrameLevel() + 500)
     head.suuOwn = true
     chrome.head = head
     chrome.jewel = UI.Diamond(head, 7, "gilt")
     chrome.jewel:SetPoint("CENTER", head, "TOPLEFT", 0, 0)
-    local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
     local x = S["space-5"]
     if opts.icon then
         chrome.icon = head:CreateTexture(nil, "ARTWORK")
         chrome.icon:SetTexture(GLYPHS .. opts.icon .. ".tga")
         chrome.icon:SetSize(15, 15)
-        chrome.icon:SetPoint("LEFT", head, "TOPLEFT", x, lineY)
-        chrome.icon:SetVertexColor(UI.RGBA("gilt-text"))
+        UI.Paint(chrome.icon, "gilt-text")
         x = x + 15 + S["space-4"]
     end
+    chrome.titleX = x
     chrome.title = UI.Text(head, "header", "gilt-text")
-    chrome.title:SetPoint("LEFT", head, "TOPLEFT", x, lineY)
     chrome.title:SetValue(opts.title or "")
     -- close: Blizzard's button (its click closes the window as always), SuuUI's cross
     local close = opts.close
@@ -243,7 +241,6 @@ function UI.SkinWindow(frame, opts)
         hideRegions(close)
         close:SetSize(22, 22)
         close:ClearAllPoints()
-        close:SetPoint("RIGHT", head, "TOPRIGHT", -S["space-5"], lineY)
         close:SetFrameLevel(head:GetFrameLevel() + 3)
         local border = UI.Border(close, "gilt-line")
         border:SetShown(false)
@@ -258,20 +255,26 @@ function UI.SkinWindow(frame, opts)
     local key = opts.binding and GetBindingKey(opts.binding)
     if key then
         chrome.key = UI.KeyChip(head, GetBindingText and GetBindingText(key, "KEY_") or key)
-        chrome.key:SetPoint("RIGHT", head, "TOPRIGHT", -right, lineY)
+        chrome.keyRight = right
     end
     -- the tab row's rule
     chrome.rule = head:CreateTexture(nil, "ARTWORK")
-    chrome.rule:SetColorTexture(UI.RGBA("gilt-faint"))
+    UI.PaintFill(chrome.rule, "gilt-faint")
     chrome.rule:SetHeight(1)
     chrome.rule:SetPoint("BOTTOMLEFT", S["space-5"], 0)
     chrome.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+    chrome:PlaceHead(true)
 
     frame:HookScript("OnSizeChanged", function() chrome:LayoutTabs() end)
     if chrome.protected then
         local wait = CreateFrame("Frame")
         wait:RegisterEvent("PLAYER_REGEN_ENABLED")
         wait:SetScript("OnEvent", function()
+            if chrome.headAfterCombat then
+                chrome.headAfterCombat = false
+                chrome:PlaceHead()
+                chrome:LayoutTabs()
+            end
             if chrome.layoutAfterCombat then
                 chrome.layoutAfterCombat = false
                 chrome:LayoutTabs()
@@ -281,12 +284,44 @@ function UI.SkinWindow(frame, opts)
 
     -- the panel-position rule: in a row under an anchor (the micro menu)
     if opts.under then
-        chrome.under, chrome.rise = opts.under, rise
+        chrome.under = opts.under
         ns.WindowRow.Add(chrome)
     end
     ns.Extend.Add("window", chrome, { name = frame:GetName(), skinned = frame })
     return chrome
 end
+
+-- The header's height and its title line, from the header style: when
+-- skinned (`now`), and again when a theme changes it (a protected window's
+-- close button and tabs move out of combat only).
+function Chrome:PlaceHead(now)
+    if not now and self.protected and InCombatLockdown() then
+        self.headAfterCombat = true
+        return
+    end
+    local h = headH() + self.headExtra
+    local rise = h - self.inset -- the header's height above the window's top
+    self.riseH, self.rise = rise, rise
+    local head = self.head
+    self.bg:SetPoint("TOPLEFT", 0, rise)
+    self.edgeHolder:SetPoint("TOPLEFT", 0, rise)
+    head:SetPoint("TOPLEFT", 0, rise)
+    head:SetPoint("TOPRIGHT", 0, rise)
+    head:SetHeight(h)
+    local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
+    if self.icon then self.icon:SetPoint("LEFT", head, "TOPLEFT", S["space-5"], lineY) end
+    self.title:SetPoint("LEFT", head, "TOPLEFT", self.titleX, lineY)
+    if self.close then self.close:SetPoint("RIGHT", head, "TOPRIGHT", -S["space-5"], lineY) end
+    if self.key then self.key:SetPoint("RIGHT", head, "TOPRIGHT", -self.keyRight, lineY) end
+end
+
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for _, c in ipairs(allChromes) do
+        c:PlaceHead()
+        c:LayoutTabs()
+    end
+    ns.WindowRow.Queue()
+end, "UI.SkinWindow")
 
 -- The title, and the key chip for another binding (a window whose tabs
 -- open with different keys).

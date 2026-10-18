@@ -144,7 +144,7 @@ function G:Draw()
         local color = m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or (m.online and "ink" or "ink-faint")
         -- offline: still the class colour, greyed out like the rest of the row
         local fade = m.online and 1 or T.opacity["opacity-disabled"]
-        r.diamond:SetVertexColor(UI.RGBA(color, fade))
+        UI.Paint(r.diamond, color, fade)
         r.diamond:ClearAllPoints()
         r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
         local values = { name = m.name, level = m.level and tostring(m.level) or "", class = m.className or "",
@@ -306,6 +306,16 @@ end
 
 local I = {}
 
+-- the live pages, drawn again when the theme changes (colour codes in
+-- their text, sizes from the text styles)
+local infos, logs, banners = {}, {}, {}
+for _, set in ipairs({ infos, logs, banners }) do setmetatable(set, { __mode = "k" }) end
+
+-- Edit level with the heading
+local function placeEdit(b)
+    b.edit:SetPoint("RIGHT", b, "TOPRIGHT", -S["space-4"], -(S["space-5"] + T.type.header.lineHeight / 2))
+end
+
 function I:SetData(d)
     self.data = d
     local function block(b, text, can, empty)
@@ -318,13 +328,13 @@ function I:SetData(d)
         local row = self.rankRows[i]
         if not row then
             row = CreateFrame("Frame", nil, self.ranks)
-            row:SetHeight(T.type.body.lineHeight + S["space-2"])
             row.name = UI.Text(row, "body", "ink")
             row.name:SetPoint("LEFT")
             row.count = UI.Text(row, "numeric", "ink-muted")
             row.count:SetPoint("RIGHT")
             self.rankRows[i] = row
         end
+        row:SetHeight(T.type.body.lineHeight + S["space-2"])
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", self.ranks, "TOPLEFT", 0, -(T.type.header.lineHeight + S["space-3"] + (i - 1) * row:GetHeight()))
         row:SetPoint("RIGHT", self.ranks, "RIGHT")
@@ -361,8 +371,7 @@ local function infoBlock(i, title, key)
     b.head:SetValue(title)
     b.edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function() if i.onEdit then i.onEdit(key) end end })
     b.edit:SetHeight(22)
-    -- level with the heading
-    b.edit:SetPoint("RIGHT", b, "TOPRIGHT", -S["space-4"], -(S["space-5"] + T.type.header.lineHeight / 2))
+    placeEdit(b)
     b.text = UI.Text(b, "body", "ink")
     b.text:SetPoint("TOPLEFT", b.head, "BOTTOMLEFT", 0, -S["space-3"])
     b.text:SetJustifyH("LEFT")
@@ -380,6 +389,7 @@ function UI.GuildInfo(parent)
     i.ranks.head:SetPoint("TOPLEFT")
     i.ranks.head:SetValue("Ranks")
     i:SetScript("OnSizeChanged", function(self) if self.data then self:Layout() end end)
+    infos[i] = true
     return i
 end
 
@@ -402,7 +412,6 @@ function L:SetData(d)
         local r = self.rows[i]
         if not r then
             r = CreateFrame("Frame", nil, child)
-            r:SetHeight(T.type.body.lineHeight + S["space-3"])
             r.when = UI.Text(r, "caption", "ink-faint")
             r.when:SetPoint("RIGHT", -S["space-4"], 0)
             r.text = UI.Text(r, "body", "ink")
@@ -415,6 +424,7 @@ function L:SetData(d)
             r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
             self.rows[i] = r
         end
+        r:SetHeight(T.type.body.lineHeight + S["space-3"])
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", child, "RIGHT")
@@ -441,6 +451,7 @@ function UI.GuildLog(parent)
     l.empty = UI.Text(l, "caption", "ink-muted")
     l.empty:SetPoint("CENTER")
     l.empty:SetValue("Nothing has happened in the guild yet.")
+    logs[l] = true
     return l
 end
 
@@ -502,7 +513,7 @@ function UI.GuildMotdBanner(parent)
     b.pin = b:CreateTexture(nil, "OVERLAY")
     b.pin:SetTexture(GLYPHS .. "pushpin.tga")
     b.pin:SetSize(12, 12)
-    b.pin:SetVertexColor(UI.RGBA("gilt-text"))
+    UI.Paint(b.pin, "gilt-text")
     -- all of it centred on the banner's middle, one line or two
     b.pin:SetPoint("LEFT", S["space-5"], 0)
     b.head = UI.Text(b, "header", "gilt-text")
@@ -510,7 +521,7 @@ function UI.GuildMotdBanner(parent)
     b.head:SetPoint("LEFT", b.pin, "RIGHT", S["space-3"], 0)
     b.message = b:CreateFontString(nil, "OVERLAY")
     ns.Fonts.Apply(b.message, "body")
-    b.message:SetTextColor(UI.RGBA("ink"))
+    UI.Paint(b.message, "ink")
     b.message:SetJustifyH("LEFT")
     b.message:SetJustifyV("TOP")
     b.message:SetWordWrap(true)
@@ -531,5 +542,15 @@ function UI.GuildMotdBanner(parent)
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     b:Hide()
+    banners[b] = true
     return b
 end
+
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for i in pairs(infos) do
+        placeEdit(i.info)
+        if i.data then i:SetData(i.data) end
+    end
+    for l in pairs(logs) do if l.data then l:SetData(l.data) end end
+    for b in pairs(banners) do b:Layout() end
+end, "Guild")
