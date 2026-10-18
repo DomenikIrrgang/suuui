@@ -1262,7 +1262,11 @@ function M:DividerText(m, at)
         math.floor(g[1] * 255 + 0.5), math.floor(g[2] * 255 + 0.5), math.floor(g[3] * 255 + 0.5))
     local label = "|cff" .. TIME_HEX .. "Earlier · logged out " .. ago(time() - (at or time())) .. "|r"
     local middle = "  " .. jewel .. "  " .. label .. "  " .. jewel .. "  "
-    local side = math.floor((logWidth() - 6 - measureBody(middle, size)) / 2)
+    -- the mirror's own width when it has one, with room to spare: a line
+    -- even a pixel too long wraps its right rule onto a line of its own
+    local width = m:GetWidth()
+    if not width or width <= 0 then width = logWidth() end
+    local side = math.floor((width - 24 - measureBody(middle, size)) / 2)
     if side < 12 then return middle end
     return rule(side, true) .. middle .. rule(side, false)
 end
