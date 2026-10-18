@@ -56,7 +56,9 @@ local M = SuuUI.RegisterModule({
         showPlates = true,     -- off: no nameplates at all (asked 2026-10-18)
         friendlyOpenWorld = true,
         friendlyStyle = true,
+        friendlyNPCs = true,   -- friendly NPCs' plates in the open world (asked 2026-10-18)
         questMarks = true,
+        levels = true,         -- the level before the name, in its difficulty's colour
         raidMarker = true,
     },
 })
@@ -185,6 +187,10 @@ local function buildPlate(parent, api)
     f.name:SetShadowed(true)
     f.name:SetWordWrap(false)
     f.name:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, -NAME_H)
+    -- the level before the name (after a quest mark), by difficulty
+    f.level = UI.Text(f, "micro", "ink")
+    f.level:SetShadowed(true)
+    f.levelW = 0
     f.pct = UI.Text(f, "micro", "ink")
     f.pct:SetShadowed(true)
     f.pct:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, -NAME_H)
@@ -275,7 +281,7 @@ function Plate:SetPlateWidth(w)
             self.badge:SetPoint("RIGHT", self, "TOPRIGHT", 0, -NAME_H / 2)
         end
     end
-    self.name:SetWidth(math.max(20, w - (self.questW or 0) - (textW > 0 and textW + S["space-2"] or 0)
+    self.name:SetWidth(math.max(20, w - (self.questW or 0) - (self.levelW or 0) - (textW > 0 and textW + S["space-2"] or 0)
         - (self.badge:IsShown() and (self.badge.knownWidth or 0) + S["space-2"] or 0)))
 end
 
@@ -346,9 +352,44 @@ function Plate:UpdateQuest()
     end
     self.quest:SetShown(text and true or false)
     self.questW = w
+    self:PlaceName()
+end
+
+-- The quest mark, the level, then the name.
+function Plate:PlaceName()
+    local x = self.questW or 0
+    self.level:ClearAllPoints()
+    self.level:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x, -NAME_H + 1)
     self.name:ClearAllPoints()
-    self.name:SetPoint("BOTTOMLEFT", self, "TOPLEFT", w, -NAME_H)
+    self.name:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x + (self.levelW or 0), -NAME_H)
     self:SetPlateWidth(M:Get("width"))
+end
+
+-- The unit's level before its name in its difficulty's colour, "+" for an
+-- elite (asked 2026-10-18; design "Nameplate level options", A): after a
+-- quest mark, before the name; on friendly plates too (asked); not when
+-- it's secret.
+local ELITE = { elite = true, rareelite = true }
+function Plate:UpdateLevel()
+    local A, u = self.api, self.unit
+    local text
+    if M:Get("levels") and A.UnitLevel then
+        local ok, level = pcall(A.UnitLevel, u)
+        if ok and level ~= nil and not isSecret(level) then
+            local okC, c = pcall(A.UnitClassification or UnitClassification, u)
+            local elite = okC and not isSecret(c) and ELITE[c]
+            -- "25+" an elite, "??" a boss or one far above you (the design's
+            -- direction A, chosen 2026-10-18; after a quest mark, as asked)
+            local boss = (okC and not isSecret(c) and c == "worldboss") or level <= 0
+            text = boss and "??" or (tostring(level) .. (elite and "+" or ""))
+            self.level:SetColor(UI.LevelColor(level))
+        end
+    end
+    self.level:SetValue(text or "")
+    self.level:SetShown(text ~= nil)
+    -- space-2 to the name, as after a quest mark (space-1 read cramped in game)
+    self.levelW = text and (math.ceil(self.level:GetUnboundedStringWidth()) + S["space-2"]) or 0
+    self:PlaceName()
 end
 
 function Plate:UpdateHealth()
@@ -471,6 +512,7 @@ end
 function Plate:Refresh()
     self:UpdateRaidMarker()
     self:UpdateQuest()
+    self:UpdateLevel()
     self:UpdateName()
     self:UpdateHealth()
     self:UpdateThreat()
@@ -727,6 +769,19 @@ function M:ApplyShown(changed)
     end)
 end
 
+-- Friendly NPCs' plates (guards, vendors, quest givers): the game shows none
+-- unless its own setting is on. With this, in the open world only, as the
+-- friendly players' (asked 2026-10-18: their level, as on every plate).
+-- Turned off, the game's setting goes back off once and is yours again.
+function M:ApplyFriendlyNPCs(released)
+    if not self:Get("friendlyNPCs") and not released then return end
+    self:RunOutOfCombat("friendlyNPCs", function()
+        if C_CVar.GetCVar("nameplateShowFriendlyNPCs") == nil then return end
+        local on = self:Get("showPlates") and self:Get("friendlyNPCs") and not inInstance()
+        pcall(C_CVar.SetCVar, "nameplateShowFriendlyNPCs", on and "1" or "0")
+    end)
+end
+
 -- Friendly players' plates in the open world only: inside a dungeon or raid
 -- the game locks them, and in a group they mostly cover the fight. Narrower
 -- than FriendlyStyled, on purpose: in battlegrounds and arenas they stay
@@ -913,6 +968,8 @@ local SECTION = {
         { title = "On the plate", rows = {
             { key = "auras", label = "Debuff icons", control = "stepper", min = 0, max = 4, step = 1,
               description = "Above the name, with their time. Only yours." },
+            { key = "levels", label = "Level", control = "toggle",
+              description = "The level before the name (after a quest mark), coloured by how hard it is for you (green, yellow, orange, red; grey when it gives nothing). A + for elites, ?? for bosses. Friendly plates too." },
             { key = "healthText", label = "Health text", control = "segmented",
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
@@ -929,6 +986,8 @@ local SECTION = {
         { title = "Friendly nameplates", rows = {
             { key = "friendlyOpenWorld", label = "Only in the open world", control = "toggle", combat = true,
               description = "Friendly players' plates show in the open world and hide in dungeons and raids. Turning it off brings them back everywhere; from then on the game's own nameplate setting decides." },
+            { key = "friendlyNPCs", label = "Friendly NPCs", control = "toggle", combat = true,
+              description = "Plates for friendly NPCs too (guards, vendors, quest givers), in the open world. Turning it off hands the game's own setting back." },
             { key = "friendlyStyle", label = "SuuUI's look", control = "toggle",
               description = "In the open world: the name in its class colour, the bar, the health text, the debuffs you can remove and casts. Inside dungeons, raids, battlegrounds and arenas the game keeps its own." },
         } },
@@ -944,9 +1003,15 @@ function M:OnEnable()
     self:ApplyGameSettings()
     self:ApplyShown()
     self:ApplyFriendly()
+    self:ApplyFriendlyNPCs()
+    -- your level up: the plates' levels change colour
+    self:OnGameEvent("PLAYER_LEVEL_UP", function()
+        C_Timer.After(0.5, function() for _, f in pairs(byUnit) do f:UpdateLevel() end end)
+    end)
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
         self:ApplyShown()
         self:ApplyFriendly()
+        self:ApplyFriendlyNPCs()
         wipe(questCache)
     end)
     -- quest progress: read every plate's objective again (once per burst)
@@ -971,7 +1036,8 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_QUEST_LOG_CHANGED", function(_, unit) if unit == "player" then questsChanged() end end)
     self:OnGameEvent("ZONE_CHANGED_NEW_AREA", function() self:ApplyFriendly() end)
     self:Watch("friendlyOpenWorld", function() self:ApplyFriendly(true) end)
-    self:Watch("showPlates", function() self:ApplyShown(true) end)
+    self:Watch("showPlates", function() self:ApplyShown(true); self:ApplyFriendlyNPCs(true) end)
+    self:Watch("friendlyNPCs", function() self:ApplyFriendlyNPCs(true) end)
     self:Watch("friendlyStyle", function()
         for i = 1, 40 do
             local unit = "nameplate" .. i
@@ -999,7 +1065,7 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_FACTION", function(_, unit)
         if unit and unit:find("^nameplate") and UnitExists(unit) then self:Recheck(unit) end
     end)
-    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks", "raidMarker" }) do
+    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks", "levels", "raidMarker" }) do
         self:Watch(key, function()
             for unit, f in pairs(byUnit) do
                 self:ApplyAuraCount(f)
