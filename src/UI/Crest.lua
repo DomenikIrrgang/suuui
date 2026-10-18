@@ -113,6 +113,10 @@ end
 -- placed as on Blizzard's 232 x 100 frame around its 58 px portrait, scaled
 -- so the right end of a bar `height` tall stands in for the portrait.
 --
+-- A rare elite's silver dragon wears the crest's gilt jewel ringed in silver
+-- on its breast (asked 2026-10-19, the design's A: 7 px on a 32 px frame),
+-- so it reads apart from a rare's.
+--
 --   local art = UI.DragonArt(UnitClassification(unit), UnitIsBossMob(unit))
 --   UI.PlaceDragon(texture, art, bar, bar:GetHeight())   -- nil art: hidden
 --------------------------------------------------------------------------------
@@ -122,17 +126,33 @@ local DRAGON = {
     boss = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", 110, 90, 11, -4 },
     rare = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", 110, 89, 8, -7 },
 }
+DRAGON.rareelite = { DRAGON.rare[1], DRAGON.rare[2], DRAGON.rare[3], DRAGON.rare[4], DRAGON.rare[5], jewel = true }
 
 function UI.DragonArt(classification, isBoss)
     local secret = issecretvalue or function() return false end
     if classification == nil or secret(classification) then return nil end
     if (not secret(isBoss) and isBoss) or classification == "worldboss" then return DRAGON.boss end
-    if classification == "rare" or classification == "rareelite" then return DRAGON.rare end
+    if classification == "rare" then return DRAGON.rare end
+    if classification == "rareelite" then return DRAGON.rareelite end
     if classification == "elite" then return DRAGON.elite end
+end
+
+-- The breast jewel: on the texture's parent, over it; 7 px at a 32 px
+-- height, its centre 31 x 50 of the art's px in from its top right.
+local function breastJewel(t)
+    if t.suuJewel then return t.suuJewel end
+    local host = t:GetParent()
+    local j = CreateFrame("Frame", nil, host)
+    j:SetSize(1, 1)
+    j:SetFrameLevel(host:GetFrameLevel() + 1)
+    jewel(j, "both", 7, 0, 0)
+    t.suuJewel = j
+    return j
 end
 
 -- TOPRIGHT at ((x + 26) s, (y + 19) s) of `anchor`, s = height / 58
 function UI.PlaceDragon(t, art, anchor, height)
+    if t.suuJewel then t.suuJewel:Hide() end
     if not art then return t:Hide() end
     local s = height / 58
     t:SetAtlas(art[1])
@@ -140,4 +160,11 @@ function UI.PlaceDragon(t, art, anchor, height)
     t:ClearAllPoints()
     t:SetPoint("TOPRIGHT", anchor, "TOPRIGHT", (art[4] + 26) * s, (art[5] + 19) * s)
     t:Show()
+    if art.jewel then
+        local j, k = breastJewel(t), height / 32
+        j:SetScale(k)
+        j:ClearAllPoints()
+        j:SetPoint("CENTER", t, "TOPRIGHT", -31 * s / k, -50 * s / k)
+        j:Show()
+    end
 end
