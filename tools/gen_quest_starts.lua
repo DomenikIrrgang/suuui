@@ -767,7 +767,7 @@ w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {
 w("--                  event (shown only while it's on: \"darkmoonFaire\", \"lunarFestival\", … a holiday; \"warEffort\",")
 w("--                  \"invasion\" one-off server events; \"seasonal\" some holiday) }")
 w("--   tags[id] = the quest's tag where the game's is wrong (1 elite, 41 PvP, 62 raid, 81 dungeon, …; the Questie addon's")
-w("--              corrections for the original game, github.com/Questie/Questie " .. (sources.questie or "?") .. ", GPL-3.0)")
+w("--              corrections for the original game, github.com/Questie/Questie " .. (sources.questie or "?") .. ", no license stated)")
 w("--   group[id] = \"elite\", \"dungeon\" or \"raid\": a quest that needs a group, until the game has told (set in a dungeon")
 w("--               or raid, or Classic's type: cMaNGOS classic-db " .. typesSource .. ", GPL-3.0); Forever's new quests only by their zone")
 w("--   objectives[id] = what the quest asks (its objectives text; $N, $C, $R and $Gmale:female; as the game writes them)")

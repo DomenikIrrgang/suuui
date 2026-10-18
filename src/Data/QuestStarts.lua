@@ -9,7 +9,7 @@
 --                  event (shown only while it's on: "darkmoonFaire", "lunarFestival", … a holiday; "warEffort",
 --                  "invasion" one-off server events; "seasonal" some holiday) }
 --   tags[id] = the quest's tag where the game's is wrong (1 elite, 41 PvP, 62 raid, 81 dungeon, …; the Questie addon's
---              corrections for the original game, github.com/Questie/Questie 2e9175880b1cac2ca3d39ddac374d5f29d8b15b8, GPL-3.0)
+--              corrections for the original game, github.com/Questie/Questie 2e9175880b1cac2ca3d39ddac374d5f29d8b15b8, no license stated)
 --   group[id] = "elite", "dungeon" or "raid": a quest that needs a group, until the game has told (set in a dungeon
 --               or raid, or Classic's type: cMaNGOS classic-db ec4f596146be6467ea93c57397858e329e2db852, GPL-3.0); Forever's new quests only by their zone
 --   objectives[id] = what the quest asks (its objectives text; $N, $C, $R and $Gmale:female; as the game writes them)

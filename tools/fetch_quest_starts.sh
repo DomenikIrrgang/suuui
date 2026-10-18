@@ -4,7 +4,7 @@
 # repo: QuestieDB's Forever quests, NPCs, objects and items with their corrections,
 # the enums the corrections use, Forever's area-to-map table and dungeon
 # entrances (github.com/Questie/QuestieDB, no license stated), the Questie
-# addon's quest tag corrections (github.com/Questie/Questie, GPL-3.0: where
+# addon's quest tag corrections (github.com/Questie/Questie, no license stated: where
 # the game's elite, dungeon or raid tag is wrong), and SOURCES (the
 # commits) for the data file's header. Pull requests named
 # after the folder (not merged yet) go on top as their diffs, only to the
