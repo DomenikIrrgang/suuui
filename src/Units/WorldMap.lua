@@ -570,7 +570,7 @@ function M:Collect(mapID)
                 local repeatable = best.state == "repeatable"
                 local lines = {}
                 for i, q in ipairs(list) do
-                    if i > 1 then lines[#lines + 1] = { q.name .. "  |cff" .. T.color["ink-muted"].hex .. "Level " .. q.level .. "|r" } end
+                    if i > 1 then lines[#lines + 1] = { q.name .. "  |cff" .. T.color["ink-muted"].hex .. "Level " .. q.level .. "|r", quest = ids[i] } end
                 end
                 -- who gives it, after its level ("Level 15 · Gorrik")
                 local from = giver and (" · " .. giver) or ""
@@ -613,7 +613,7 @@ function M:Collect(mapID)
             end
             if best then
                 local lines = { { "Starts from " .. item }, { muted .. (row[3] < 0 and "Found in " or "Dropped by ") .. source .. "|r" } }
-                for i = 2, #list do lines[#lines + 1] = { list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r" } end
+                for i = 2, #list do lines[#lines + 1] = { list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r", quest = ids[i] } end
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = "itemQuest", rank = best.rank,
                     pin = questPin(list, best),
@@ -954,20 +954,34 @@ local function addObjectives(tip, ids)
     local texts = starts.objectives or {}
     local muted = "|cff" .. T.color["ink-muted"].hex
     local function text(id)
-        return texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks."
+        return muted .. (texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks.") .. "|r"
     end
-    if #ids == 1 then
+    if #ids == 1 and not tip.lines then
         tip.description = text(ids[1])
         return tip
     end
-    local lines = tip.lines or {}
-    for i, id in ipairs(ids) do
-        if i > MAX_OBJECTIVES then lines[#lines + 1] = { ("and %d more"):format(#ids - MAX_OBJECTIVES), gap = ENTRY_GAP } break end
-        local q = starts.quests and starts.quests[id]
-        lines[#lines + 1] = { questName(q, id), gap = ENTRY_GAP }
-        lines[#lines + 1] = { muted .. text(id) .. "|r" }
+    -- each objective under its own quest: the title's first, then after
+    -- each line that names a quest (a giver's others, a merged pin's)
+    local out = {}
+    if tip.titleQuest then out[1] = { text(tip.titleQuest), gap = tip.subtitle and nil or FIRST_GAP } end
+    local shown = 0
+    for _, l in ipairs(tip.lines or {}) do
+        out[#out + 1] = l
+        if l.quest then
+            out[#out + 1] = { text(l.quest) }
+        elseif l.quests then
+            for k, id in ipairs(l.quests) do
+                if k > 1 then
+                    local q = starts.quests and starts.quests[id]
+                    out[#out + 1] = { questName(q, id), gap = S["space-2"] }
+                end
+                shown = shown + 1
+                if shown > MAX_OBJECTIVES * 2 then break end
+                out[#out + 1] = { text(id) }
+            end
+        end
     end
-    tip.lines = lines
+    tip.lines = out
     return tip
 end
 
@@ -997,7 +1011,7 @@ function tipBase(g, hint)
             detail = first.kindName
         end
         return { title = first.name, titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
-                 subtitle = detail, lines = #lines > 0 and lines or nil, meta = hint }
+                 subtitle = detail, lines = #lines > 0 and lines or nil, meta = hint, titleQuest = first.quests and first.quests[1] }
     end
     -- one line per name: the same NPC's spawn points, mailboxes, a chest
     -- kind read once with how many ("Mailbox ×2"; found in game)
@@ -1005,7 +1019,8 @@ function tipBase(g, hint)
     for _, it in ipairs(g.items) do
         local key = (it.name or "?") .. "\0" .. (it.detail or "")
         if not seen[key] then
-            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {}, teaches = it.teaches }
+            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {}, teaches = it.teaches,
+                          quests = it.quests }
             order[#order + 1] = seen[key]
         end
         -- (one NPC's spawn points once: "Mailbox ×2" is two mailboxes)
@@ -1022,7 +1037,7 @@ function tipBase(g, hint)
         local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
         -- a gap before each next one: which lines are whose (asked 2026-10-18)
         lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name,
-                              gap = i > 1 and ENTRY_GAP or FIRST_GAP }
+                              gap = i > 1 and ENTRY_GAP or FIRST_GAP, quests = e.quests }
         -- a weapon master's weapons under his name
         if e.teaches then lines[#lines + 1] = { muted .. "Teaches " .. e.teaches .. "|r" } end
     end
