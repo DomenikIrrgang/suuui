@@ -275,6 +275,27 @@ Split into three confirmable parts: **1.6a** bars 5–8 with per-bar show, colum
   - Rebind a key in keybind mode.
   - Calling a pet in combat shows the pet bar without any blocked action.
 
+### 1.6d Totem bar (asked 2026-10-18)
+- **What:** a shaman's totem bar in the stance bar's place, SuuUI's own.
+- **Design:** direction B of the board "Totem bar options" (chosen 2026-10-18):
+  - The four element buttons (earth, fire, water, air) cast the chosen totem.
+  - A thin timer strip above them shows each totem's time and drain; its tracks stay faint when nothing is down.
+  - Totemic Recall rides on the strip while a totem is down.
+  - Call of the Elements and Ghost Wolf follow on the cast row once learned.
+  - An element with no totem known yet is dashed.
+  - The picker is a labelled list over the slot (the chosen totem ticked), out of combat.
+  - Right-click dismisses a totem that is down.
+- **What the client has (Blizzard's Forever source):**
+  - The game's multi-cast bar (MultiCastActionBarFrame): slot buttons cast special action slots, and a flyout picks each slot's totem through SetMultiCastSpell.
+  - Call of the Elements and Totemic Recall are spells.
+  - GetTotemInfo / GetTotemDuration give each totem's time, the latter as a duration object.
+- **Probes (`/suu probe totems`):** these decide whether B works in combat:
+  - `buttons`: SuuUI's own secure buttons on those action slots and spells, clicked out of combat and in a fight.
+  - `choose`: SetMultiCastSpell from SuuUI.
+  - `destroy`: DestroyTotem for the right-click.
+  - The plain run, in combat: what is secret.
+- **Confirm:** totems cast from SuuUI's bar in combat; times and drains count down in combat; a slot's totem changes from the picker; Recall and right-click dismiss.
+
 ### 1.7 Cooldown Manager (SuuUI's own)
 Decided: SuuUI's own tracker, not a restyle of Blizzard's CooldownViewer (restyling it means living inside its taint rules: never write its frames, never hide its pool frames, lists only editable in Blizzard's panel). Nothing here touches Blizzard's viewer or needs its CVar.
 - **1.7a Probe** (a dungeon fight is enough; one boss fight later as confirmation). **Done for spell lists**: they filter in dungeon combat on the player and on an enemy target (see Client facts). Reactive procs and the proc-glow event still open:
