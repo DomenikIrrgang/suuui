@@ -158,6 +158,13 @@ local function row(self, i)
     local nameW = (WIDTH - S["space-5"] * 2) - TIME_W - ICON - S["space-3"] - AMOUNT_W - HEALTH_W
     r.name:SetWidth(nameW)
     r.by:SetWidth(nameW)
+    -- the spell's own tooltip; a melee swing or a fall, a short one of ours
+    r:EnableMouse(true)
+    r:SetScript("OnEnter", function()
+        if r.spellID then return UI.SpellTooltip(r, r.spellID) end
+        UI.ShowTooltip(r, { title = r.name:GetText(), subtitle = r.by:GetText() ~= "" and r.by:GetText() or nil })
+    end)
+    r:SetScript("OnLeave", function() GameTooltip:Hide(); UI.HideTooltip() end)
     self.rows[i] = r
     return r
 end
@@ -290,6 +297,7 @@ function M:ShowRecap(id)
         r.time:SetValue(t and (t < 0.05 and "0 s" or ("−%.1f s"):format(t)) or "")
         r.icon:SetArt(icon or 134400)
         r.name:SetValue(spell)
+        r.spellID = readable(e.spellId) and e.spellId > 0 and e.event ~= "SWING_DAMAGE" and e.spellId or nil
         r.name:SetColor(killing and "ember-text" or "ink")
         local by = {}
         if text(e.sourceName) and not e.hideCaster then by[1] = e.sourceName end
