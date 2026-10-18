@@ -208,6 +208,20 @@ function M:ShowRecap(id)
     local function before(e) return deathAt and readable(e.timestamp) and (deathAt - e.timestamp) or nil end
     local first, last = list[1], list[#list]
 
+    -- health after each hit (probe deathrecap: currentHP is the health
+    -- before it, and hits in the same moment share one reading, so a
+    -- reading the same as the hit before's goes on from that hit's)
+    local after, running = {}, nil
+    for i, e in ipairs(list) do
+        local prev = list[i - 1]
+        if readable(e.currentHP) and not (prev and readable(prev.currentHP) and prev.currentHP == e.currentHP and running) then
+            running = e.currentHP
+        end
+        if running and readable(e.amount) then running = math.max(0, running - e.amount) end
+        after[i] = running
+    end
+    local startHP = readable(first.currentHP) and first.currentHP or maxHP
+
     -- the head: the killing blow, its school, critical, overkill
     local h = self.head
     local name = spellOf(last)
@@ -219,17 +233,16 @@ function M:ShowRecap(id)
     if readable(last.overkill) and last.overkill > 0 then bits[#bits + 1] = group3(last.overkill) .. " overkill" end
     h.detail:SetValue(table.concat(bits, " · "))
     local span = before(first)
-    h.health:SetValue(maxHP and (group3(maxHP) .. " health to 0") or "")
+    h.health:SetValue(startHP and (group3(startHP) .. " health to 0") or "")
     h.span:SetValue(("%s%d hit%s"):format(span and ("in %.1f s, "):format(span) or "", #list, #list == 1 and "" or "s"))
 
     -- the health line: from the first hit to death, health after each hit
-    -- until the next (the start: the first hit's health before it)
+    -- until the next (the start: the health before the first)
     local line = self.line
     local lineW = line:GetWidth() - 2
     local healed = 0
     if maxHP and span and span > 0 then
         local function x(t) return 1 + (1 - t / span) * lineW end
-        local startHP = readable(first.currentHP) and readable(first.amount) and math.min(maxHP, first.currentHP + first.amount) or maxHP
         local n = 0
         local function step(fromT, toT, hp)
             if not readable(hp) then return end
@@ -243,15 +256,15 @@ function M:ShowRecap(id)
             if hp <= 0 then s:Hide() end
         end
         -- before the first hit, a sliver at full
-        step(span, span * 0.98, startHP)
+        step(span, span * 0.98, startHP or maxHP)
         for i, e in ipairs(list) do
             local t = before(e) or 0
             local nextT = list[i + 1] and before(list[i + 1]) or 0
-            step(t, nextT, e.currentHP)
+            step(t, nextT, after[i])
             -- health that rose before the next hit: healing
             local nxt = list[i + 1]
-            if nxt and readable(e.currentHP) and readable(nxt.currentHP) and readable(nxt.amount) then
-                local rise = nxt.currentHP + nxt.amount - e.currentHP
+            if nxt and after[i] and readable(nxt.currentHP) and nxt.currentHP ~= e.currentHP then
+                local rise = nxt.currentHP - after[i]
                 if rise > 0.5 then healed = healed + rise end
             end
         end
@@ -288,7 +301,7 @@ function M:ShowRecap(id)
         if e.critical == true then flag[#flag + 1] = "critical" end
         if readable(e.overkill) and e.overkill > 0 then flag[#flag + 1] = group3(e.overkill) .. " overkill" end
         r.flag:SetValue(table.concat(flag, " · "))
-        local hp = readable(e.currentHP) and math.max(0, e.currentHP) or nil
+        local hp = after[i]
         r.hp:SetValue(hp and group3(hp) or "")
         if hp and maxHP then
             r.hpFill:SetColorTexture(UI.RGBA(hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill"))
