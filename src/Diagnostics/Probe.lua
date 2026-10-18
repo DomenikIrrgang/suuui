@@ -859,6 +859,10 @@ function ns.Probe.Command(arg)
         ns.DragonProbe.Command(rest)
         return
     end
+    if sub == "taxi" then
+        ns.TaxiProbe.Command(rest)
+        return
+    end
     if sub == "deathrecap" then
         ns.DeathRecapProbe.Command(rest)
         return
