@@ -798,6 +798,30 @@ end
 -- A pass over a frame
 --------------------------------------------------------------------------------
 
+-- Blizzard's scrolling text (a side pane's description): it measures its
+-- text for the font it has when the text is set, so after SuuUI's font goes
+-- on the box was a line short and its first line out of view (the skills'
+-- description, seen 2026-10-18). Measured again, from the top, a frame
+-- after SuuUI's pass and after each text.
+local function refitScrollingFont(f)
+    local fs = ask(f, "GetFontString")
+    local box = ask(f, "GetScrollBox")
+    local container = ask(f, "GetFontStringContainer")
+    if not (fs and box and container) then return end
+    container:SetHeight(fs:GetStringHeight())
+    local consts = ScrollBoxConstants or {}
+    pcall(box.FullUpdate, box, consts.UpdateImmediately)
+    pcall(box.ScrollToBegin, box, consts.NoScrollInterpolation)
+end
+
+local function reskinScrollingFont(f)
+    if not f.suuScrollingFont then
+        f.suuScrollingFont = true
+        hooksecurefunc(f, "SetText", function() C_Timer.After(0, function() refitScrollingFont(f) end) end)
+    end
+    C_Timer.After(0, function() refitScrollingFont(f) end)
+end
+
 local function reskinTexture(t, ctx)
     local atlas = ask(t, "GetAtlas")
     local a = atlas and atlas:lower() or ""
@@ -831,6 +855,7 @@ local function pass(f, depth, ctx)
     -- never restyled
     if f.suuOwn then return end
     local kind = ask(f, "GetObjectType")
+    if f.GetFontStringContainer and f.ScrollBox and f.SetText then reskinScrollingFont(f) end
     -- Blizzard's coloured progress bar (a Fill it sizes itself: the
     -- reputation's and the skills' bars, the skills' a StatusBar)
     if f.Fill and f.FillArea and f.SetFillPercent then UI.ReskinFillBar(f); return end

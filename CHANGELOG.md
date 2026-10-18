@@ -12,7 +12,8 @@
 ### Fixed
 
 - Reputation: a faction's bar sometimes showed only a sliver though its figures were right (3,210 / 6,000 as a sliver); the bars fill to their value again.
-- Skills: the bars (professions, secondary and weapon skills) were empty; they fill to the skill's level again, in blue.
+- Skills: the bars (professions, secondary and weapon skills) were empty; they fill to the skill's level again.
+- Skills and Reputation: the description beside the list no longer hides its first line.
 
 ## 0.5.0-beta.4 (2026-10-18)
 
