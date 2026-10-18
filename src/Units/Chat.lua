@@ -38,6 +38,7 @@ local M = SuuUI.RegisterModule({
         globalTab = true, -- the numbered (global) channels in a "Global" tab, not in General
         timestamps = true,    -- the time before each line, while the chat is in use
         classDiamonds = true, -- the class diamond before names
+        classNames = true,    -- players' names in their class colour (asked 2026-10-18)
         shortChannels = true, -- "2. Trade", not "[2. Trade - City]"
         recall = true,        -- Up and Down bring back what you sent
     },
@@ -518,6 +519,7 @@ end
 function M:FormatLine(text)
     if not plain(text) or type(text) ~= "string" then return text end
     local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
+    local colored = self:Get("classNames")
     -- SuuUI shows the time: Blizzard's own goes
     if self:Get("timestamps") then text = stripBlizzardStamp(text) end
     -- channel tags: no brackets, numbered ones without the zone
@@ -536,11 +538,16 @@ function M:FormatLine(text)
             end
         end
     end
-    -- names: no brackets, the line's colour, the class diamond first
+    -- names: no brackets, the class diamond first, the name in its class
+    -- colour (or the line's)
     text = text:gsub("|Hplayer:([^|]*)|h%[(.-)%]|h", function(data, shown)
         local name, lineID = data:match("^([^:]+):?(%d*)")
-        local mark = diamonds and chip(classOf(name, lineID ~= "" and lineID or nil)) or ""
-        return mark .. "|Hplayer:" .. data .. "|h" .. stripColour(shown) .. "|h"
+        local class = (diamonds or colored) and classOf(name, lineID ~= "" and lineID or nil)
+        local mark = diamonds and chip(class) or ""
+        local c = colored and class and T.color["class-" .. class:lower()]
+        local label = stripColour(shown)
+        if c then label = "|cff" .. c.hex .. label .. "|r" end
+        return mark .. "|Hplayer:" .. data .. "|h" .. label .. "|h"
     end)
     text = text:gsub("(|HBNplayer:[^|]*|h)%[(.-)%](|h)", "%1%2%3")
     return text
@@ -1312,6 +1319,8 @@ local SECTION = {
         { title = "Lines", rows = {
             { key = "timestamps", label = "Timestamps", control = "toggle",
               description = "The time before each line while you're using the chat; gone when it fades. Blizzard's own (Options › Social) is left out then." },
+            { key = "classNames", label = "Names in class colour", control = "toggle",
+              description = "Players' names in chat in their class colour." },
             { key = "classDiamonds", label = "Class diamonds", control = "toggle",
               description = "A diamond in the class colour before each name. Names take the line's colour." },
             { key = "shortChannels", label = "Short channel names", control = "toggle",

@@ -451,6 +451,26 @@ end
 
 local CLASSIFICATION = { worldboss = "Boss", elite = "Elite", rareelite = "Rare Elite", rare = "Rare" }
 
+-- 0.17: a level's colour token by how hard it is for you (asked 2026-10-18:
+-- green, yellow, orange, red, grey as the game rates it): the game's own
+-- difficulty (its colour's font names it), drawn in the design's quest
+-- colours. A level unknown (secret, "??") is impossible.
+local DIFFICULTY_FONTS = {
+    { "VeryDifficult", "quest-very-difficult" }, { "Impossible", "quest-impossible" },
+    { "Difficult", "quest-difficult" }, { "Standard", "quest-standard" }, { "Trivial", "quest-trivial" },
+}
+function UI.LevelColor(level)
+    if level == nil or isSecret(level) or level <= 0 then return "quest-impossible" end
+    if not GetQuestDifficultyColor then return "quest-standard" end
+    local ok, c = pcall(GetQuestDifficultyColor, level)
+    local font = ok and type(c) == "table" and c.font
+    if type(font) ~= "string" then return "quest-standard" end
+    for _, d in ipairs(DIFFICULTY_FONTS) do
+        if font:find(d[1], 1, true) then return d[2] end
+    end
+    return "quest-standard"
+end
+
 local function metaText(A, u)
     local level = A.UnitLevel(u)
     local c = A.UnitClassification(u)
@@ -513,6 +533,9 @@ function UF:UpdateIdentity()
         self.meta:SetValue((not isSecret(family) and family) or "")
     else
         self.meta:SetValue(meta and metaText(A, u) or "")
+        -- the level in its difficulty's colour (a secret one: as it is)
+        local level = meta and A.UnitLevel(u)
+        if meta and not isSecret(level) then self.meta:SetColor(UI.LevelColor(level)) end
     end
     if self.opts.youWhenPlayer then
         -- "Is it you?" is a secret boolean in combat: the engine sets the

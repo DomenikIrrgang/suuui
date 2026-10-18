@@ -10,8 +10,10 @@
 - A quest you accept goes on the objective tracker at once (Settings › Objective tracker › Track accepted quests).
 - Trainer: **Train all** learns everything you can learn and afford in one go (after a question with the total; a new profession still asks on its own).
 - Nameplates: a switch to turn all nameplates off, enemies' and friends' (Settings › Nameplates).
+- Chat: players' names in their class colour (Settings › Chat › Names in class colour).
+- Levels in their difficulty colours (grey, green, yellow, orange, red, as the game rates them): after the name on the target, focus and boss frames, and on unit tooltips' level line.
 - Cast bars name a spell's target in its class colour everywhere, and say "You" when it's aimed at you.
-- Plugin API 0.17: `SuuUI.ApplyRolePreset`, `RolePresetName`, `ColorVision`, `SetColorVision`, `ColorVisionModes`, `ColorVisionColor`, `AccountData` (a module's table for the whole account), `ShowWelcome`, and a micro menu button's count (`SetCount`).
+- Plugin API 0.17: `SuuUI.ApplyRolePreset`, `RolePresetName`, `ColorVision`, `SetColorVision`, `ColorVisionModes`, `ColorVisionColor`, `AccountData` (a module's table for the whole account), `ShowWelcome`, a micro menu button's count (`SetCount`), and `SuuUI.UI.LevelColor(level)`.
 
 ### Changed
 

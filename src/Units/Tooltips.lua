@@ -103,6 +103,30 @@ function M:ColorUnit(tooltip)
     if line then line:SetTextColor(UI.RGBA(token)) end
 end
 
+-- The unit's level in its difficulty's colour on the "Level 34 …" line
+-- (asked 2026-10-18), the rest of the line as it is.
+function M:ColorLevel(tooltip)
+    if not tooltip.GetUnit then return end
+    local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
+    if not ok or not plain(unit) or not unit then return end
+    local level = UnitLevel(unit)
+    if not plain(level) then return end
+    local hex = T.color[UI.LevelColor(level)].hex
+    local word = LEVEL or "Level"
+    local name = tooltip:GetName()
+    for i = 2, math.min(5, tooltip:NumLines() or 0) do
+        local line = name and _G[name .. "TextLeft" .. i]
+        local text = line and line:GetText()
+        if plain(text) and text then
+            local before, num, after = text:match("^(.-" .. word .. " )(%S+)(.*)$")
+            if num and not num:find("|c", 1, true) then
+                line:SetText(before .. "|cff" .. hex .. num .. "|r" .. after)
+                return
+            end
+        end
+    end
+end
+
 function M:SkinStatusBar()
     local bar = _G.GameTooltipStatusBar
     if not bar or self.barSkinned then return end
@@ -441,6 +465,7 @@ function M:OnEnable()
             TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
                 if not self:IsEnabled() then return end
                 pcall(self.ColorUnit, self, tooltip)
+                pcall(self.ColorLevel, self, tooltip)
                 self:Guard(self.GroupAuras)(self, tooltip)
             end)
         end
