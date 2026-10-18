@@ -4,6 +4,7 @@
 
 ### New
 
+- **Death recap** (to test): Recap on the death request (or a death link in chat, or `/suu recap`) opens SuuUI's own: the killing blow on top, your health falling to zero across the last seconds, then every hit with its time, caster, amount and your health after it; the killing blow in ember.
 - **Themes** (Settings › General › Appearance › Theme, after a reload): High contrast (gilt edges, or ink edges), Class accent (your class colour in place of gilt, as it is or toned), Darker and OLED black. Ready, danger, quest and class colours stay the same in every theme.
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
