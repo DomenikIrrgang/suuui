@@ -855,6 +855,10 @@ function ns.Probe.Command(arg)
         ns.MenuProbe.Command(rest)
         return
     end
+    if sub == "dragon" then
+        ns.DragonProbe.Command(rest)
+        return
+    end
     if sub == "deathrecap" then
         ns.DeathRecapProbe.Command(rest)
         return
