@@ -47,6 +47,7 @@ local M = SuuUI.RegisterModule({
         items = true,                 -- quest items beside their quests
         recipes = true,               -- tracked recipes, their own block under the quests
         recipesCollapsed = false,     -- that block's head toggle
+        autoTrack = true,             -- a quest you accept is tracked (asked 2026-10-18)
     },
 })
 
@@ -642,6 +643,8 @@ local SECTION = {
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "maxHeight", label = "Height", control = "slider", min = 160, max = 800, step = 10, unit = "px", combat = true,
               description = "The most it takes down the screen; scroll with the mouse wheel for the quests below." },
+            { key = "autoTrack", label = "Track accepted quests", control = "toggle",
+              description = "A quest you accept goes on the tracker at once." },
             { key = "items", label = "Quest items", control = "toggle", combat = true,
               description = "A quest's usable item left of its title: click it to use, in combat too." },
             { key = "collapseInBossFights", label = "Collapse in boss fights", control = "toggle", combat = true,
@@ -713,6 +716,15 @@ function M:OnEnable()
     self:Watch("recipes", function() self:Refresh() end)
     self:Watch("collapseInBossFights", function() self:ApplySecure() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid
+    -- a quest you accept goes on the tracker
+    self:OnGameEvent("QUEST_ACCEPTED", function(_, a, b)
+        if not self:Get("autoTrack") then return end
+        -- (questLogIndex, questID) on older clients, (questID) on newer ones
+        local questID = b or a
+        if not (plain(questID) and questID and C_QuestLog.AddQuestWatch) then return end
+        local watched = C_QuestLog.GetQuestWatchType and C_QuestLog.GetQuestWatchType(questID)
+        if watched == nil then pcall(C_QuestLog.AddQuestWatch, questID) end
+    end)
     for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",
                          "QUEST_REMOVED", "QUEST_TURNED_IN", "QUEST_ITEM_UPDATE", "PLAYER_LEVEL_UP",
                          "PLAYER_ENTERING_WORLD",

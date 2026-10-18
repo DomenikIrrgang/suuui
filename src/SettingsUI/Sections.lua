@@ -96,6 +96,18 @@ Registry.Register({
                   if ns.EditMode.Enter() then ns.SettingsWindow.Toggle() end
               end },
         } },
+        -- the first-run welcome (the welcome module), for another look
+        { title = "Welcome", rows = {
+            { label = "First steps", control = "button", text = "Show the welcome again",
+              description = "Your role layout, colour vision and where things are, as on your first login.",
+              disabled = function()
+                  return ns.Services.Get("welcome") == nil, "The Welcome module is off (Settings › Modules)."
+              end,
+              onClick = function()
+                  ns.SettingsWindow.Close()
+                  ns.API.ShowWelcome()
+              end },
+        } },
     },
 })
 

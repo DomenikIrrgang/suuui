@@ -53,6 +53,7 @@ local M = SuuUI.RegisterModule({
         dimOthers = true,
         threat = true,
         healthText = "percent", -- "percent", "value", "both" or "none", as on the unit frames
+        showPlates = true,     -- off: no nameplates at all (asked 2026-10-18)
         friendlyOpenWorld = true,
         friendlyStyle = true,
         questMarks = true,
@@ -711,6 +712,18 @@ local function showFriendly(on)
     end
 end
 
+-- No nameplates at all (the game's enemy and friendly plate settings off):
+-- a choice of its own, kept until it's turned on again, which brings the
+-- enemies' back and leaves the friendly ones to the setting above.
+function M:ApplyShown(changed)
+    if self:Get("showPlates") and not changed then return end
+    self:RunOutOfCombat("shown", function()
+        local on = self:Get("showPlates")
+        if C_CVar.GetCVar("nameplateShowEnemies") ~= nil then pcall(C_CVar.SetCVar, "nameplateShowEnemies", on and "1" or "0") end
+        if on then self:ApplyFriendly(true) else showFriendly(false) end
+    end)
+end
+
 -- Friendly players' plates in the open world only: inside a dungeon or raid
 -- the game locks them, and in a group they mostly cover the fight. Narrower
 -- than FriendlyStyled, on purpose: in battlegrounds and arenas they stay
@@ -718,6 +731,7 @@ end
 -- turned off (`released`), the plates come back once and the game's setting
 -- is yours again.
 function M:ApplyFriendly(released)
+    if not self:Get("showPlates") then return end
     if not self:Get("friendlyOpenWorld") and not released then return end
     self:RunOutOfCombat("friendly", function()
         -- read again: the setting may have changed while combat lasted
@@ -870,6 +884,10 @@ local SECTION = {
     id = "nameplates", label = "Nameplates", category = "Frames", order = 20,
     preview = function(parent) return M:PreviewView(parent) end,
     groups = {
+        { title = "Nameplates", rows = {
+            { key = "showPlates", label = "Nameplates", control = "toggle", combat = true,
+              description = "Off: no nameplates at all, enemies' or friends' (the game's own nameplate settings, kept off until you turn this on again)." },
+        } },
         { title = "Size", description = "SuuUI's plates on enemies. Turning the module off brings Blizzard's back after a reload.", rows = {
             { key = "width", label = "Width", control = "slider", min = 100, max = 200, step = 2, unit = "px", live = false },
             { key = "barHeight", label = "Health bar height", control = "slider", min = 4, max = 24, step = 1, unit = "px", live = false },
@@ -921,8 +939,10 @@ local SECTION = {
 function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:ApplyGameSettings()
+    self:ApplyShown()
     self:ApplyFriendly()
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+        self:ApplyShown()
         self:ApplyFriendly()
         wipe(questCache)
     end)
@@ -948,6 +968,7 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_QUEST_LOG_CHANGED", function(_, unit) if unit == "player" then questsChanged() end end)
     self:OnGameEvent("ZONE_CHANGED_NEW_AREA", function() self:ApplyFriendly() end)
     self:Watch("friendlyOpenWorld", function() self:ApplyFriendly(true) end)
+    self:Watch("showPlates", function() self:ApplyShown(true) end)
     self:Watch("friendlyStyle", function()
         for i = 1, 40 do
             local unit = "nameplate" .. i

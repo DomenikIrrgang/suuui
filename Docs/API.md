@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, and SuuUI.Raw |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, the first-run welcome (ShowWelcome), role presets (RolePresetName, ApplyRolePreset), colour vision (ColorVisionModes, ColorVision, SetColorVision, ColorVisionColor), AccountData, and SuuUI.Raw |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -480,7 +480,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.LEGACY_TRACK_H` (0.12) | The height of the `LegacyTrack` strip |
 | `SuuUI.TrainerSpells()` (0.12) | What your class trainer teaches: `{ { name, level, cost, school, icon, text } }` (cost in copper; Data/Trainer, from the class probes; no ranks) |
 | `SuuUI.TrainerSpellIDs()` | 0.12: every spell ID this client has for each trainer spell name, `{ [name] = { id, ... } }` (players' ranks and others alike; pick a rank with `C_Spell.GetSpellLevelLearned`) |
-| `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears) |
+| `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears); 0.17: `m:SetCount(key, text[, colorToken])` (a small count at the button's bottom right, `nil` clears; the Bags button shows your free slots) |
 
 ## Professions, menus and social (0.13)
 
@@ -538,3 +538,18 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.GroupFinderListed(parent)` (0.13) | The Group Finder's My listing page: `p:SetData({ listing = { listedFor, left, category, activities, roles, playstyle, comment, voice }, ad = { text, channel, channels, lastPost, max } })`; `onDelist`, `onUpdate`, `onChannel(value)`, `onText(text)`, `onRewrite`, `onPost(channel, text)` |
 | `SuuUI.UI.GroupFinderBrowse(parent)` | The Group Finder's Browse page: `b:SetData({ groups, players, collapsed, tool = { age, stale, searching, loading }, category, categories, activities, activityOptions, search, fits, show })` (see UI/GroupFinder.lua for a row); `onRefresh`, `onFilter(changes)`, `onWhisper(row)`, `onInvite(row)`, `onToggle(section)`, `onClear()` (the empty state's Clear filters) |
 
+
+## The welcome, role presets and colour vision (0.17)
+
+The first-run welcome (the Welcome module) shows once per account, at the first login with SuuUI: your role layout, colour vision and where things are. Settings › General › Appearance › Welcome and `/suu welcome` open it again.
+
+| | |
+|---|---|
+| `SuuUI.ShowWelcome()` (0.17) | Opens the first-run welcome. `false` when the Welcome module is off |
+| `SuuUI.RolePresetName(role)` (0.17) | A role's preset profile name: `"TANK"` → `"SuuTank"`, `"HEALER"` → `"SuuHeal"`, `"DAMAGER"` → `"SuuDps"`; `nil` for anything else |
+| `SuuUI.ApplyRolePreset(role[, switch])` (0.17) | Creates (or resets the layout of) the role's preset profile, copied from the profile you use, and puts it in its role's place under Profiles › By role, as Settings › Profiles › Role presets does. With `switch`, this character uses it from now on. Out of combat. Returns `true`, or `false` and why not |
+| `SuuUI.ColorVisionModes()` (0.17) | The colour vision presets this SuuUI has, in order: `{ { id = "normal" \| "redgreen" \| "blueyellow", label, hint } }` |
+| `SuuUI.ColorVision()` (0.17) | The colour vision chosen for the account, and the one in effect this session: they differ until a reload |
+| `SuuUI.SetColorVision(mode)` (0.17) | Chooses the account's colour vision (every character); it takes effect after a reload, which addon code can't start on Forever (a secure `/reload` macro button can). Returns `true`, or `false` and why not |
+| `SuuUI.ColorVisionColor(mode, token)` (0.17) | `r, g, b, a`: a colour token as a preset draws it, for previews of a preset that isn't in effect (`"normal"`: the design's own colour, whatever this session applied). An unknown token is an error |
+| `SuuUI.AccountData(namespace)` (0.17) | Your module's own table for the whole account (not per character or profile), saved with SuuUI and made on first use: a flag shown once per account. Never in a profile, an export or a reset. From `OnEnable` on; use your module's id as the namespace |

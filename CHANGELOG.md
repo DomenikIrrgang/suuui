@@ -4,7 +4,19 @@
 
 ### New
 
+- **Welcome** (the first time you log in with SuuUI, once per account): three short steps to pick your role layout (Tank, Healer, DPS or keep yours: SuuTank, SuuHeal or SuuDps for this character), colour vision, and where settings, edit mode, keybind mode and the modules are. Skip changes nothing. `/suu welcome` or Settings › General › Welcome shows it again.
 - SuuUI's emblem as its icon in the game's AddOns list.
+- The micro menu's Bags button shows how many bag slots are free (in ember when none are).
+- A quest you accept goes on the objective tracker at once (Settings › Objective tracker › Track accepted quests).
+- Trainer: **Train all** learns everything you can learn and afford in one go (after a question with the total; a new profession still asks on its own).
+- Nameplates: a switch to turn all nameplates off, enemies' and friends' (Settings › Nameplates).
+- Cast bars name a spell's target in its class colour everywhere, and say "You" when it's aimed at you.
+- Plugin API 0.17: `SuuUI.ApplyRolePreset`, `RolePresetName`, `ColorVision`, `SetColorVision`, `ColorVisionModes`, `ColorVisionColor`, `AccountData` (a module's table for the whole account), `ShowWelcome`, and a micro menu button's count (`SetCount`).
+
+### Changed
+
+- The game's own level-up toast no longer shows while SuuUI's level-up card is on.
+- A spell the game puts on your bars by itself (one you just learned) no longer flies to where Blizzard's hidden bars would be: SuuUI's button that holds it pops and flashes instead.
 
 ## 0.5.0-beta.2 (2026-10-18)
 

@@ -134,6 +134,7 @@ function M:Layout()
     end
     self.pendingLayout = nil
     self:UpdateAlerts()
+    self:UpdateBagCount()
 end
 
 -- Which windows are open: a Blizzard micro button is pushed while its window
@@ -249,6 +250,18 @@ local SECTION = {
     },
 }
 
+-- The bags' free slots on the Bags button (asked 2026-10-18): the backpack
+-- and bags, not the reagent bag; ember when none are left.
+function M:UpdateBagCount()
+    if not (self.menu and C_Container) then return end
+    local free = 0
+    for bag = 0, (NUM_BAG_SLOTS or 4) do
+        local n = C_Container.GetContainerNumFreeSlots(bag)
+        if n then free = free + n end
+    end
+    self.menu:SetCount("bags", tostring(free), free == 0 and "ember-text" or "ink")
+end
+
 function M:OnEnable()
     if not self.menu then
         self.menu = UI.MicroMenu(SuuUI.Root, { name = "SuuUIMicroMenu" })
@@ -276,6 +289,8 @@ function M:OnEnable()
     for _, key in ipairs({ "shows", "position" }) do
         self:Watch(key, function() self:ApplyShows() end)
     end
+    self:OnGameEvent("BAG_UPDATE_DELAYED", function() self:UpdateBagCount() end)
+    self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:UpdateBagCount() end)
     self:On("SUUUI_ADDITIONS_CHANGED", function(_, list)
         if list ~= "micromenu" then return end
         self:AdoptPluginItems()

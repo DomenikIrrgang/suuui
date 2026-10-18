@@ -532,3 +532,88 @@ function API.CollectionSources() return ns.CollectionSources or {} end
 function API.TrainerSpellIDs()
     return ns.TrainerSpellIDs or {}
 end
+
+--------------------------------------------------------------------------------
+-- 0.17: the first-run welcome (Units/Welcome.lua) and what it sets: role
+-- presets, colour vision, a module's account-wide data, opening it again.
+--------------------------------------------------------------------------------
+
+-- The design's own signal colours, kept before colour vision or a theme
+-- replaces them in place at login: what "Normal" looks like, for previews.
+local designed = {}
+for name, c in pairs(ns.Tokens.color) do designed[name] = { c[1], c[2], c[3], c[4] } end
+
+-- A role's preset profile name ("TANK" -> "SuuTank"), or nil.
+function API.RolePresetName(role)
+    return ns.RolePresets.NAME[role]
+end
+
+-- Creates (or resets) a role's preset profile and puts it in its role's
+-- place under Profiles › By role; with `switch`, this character uses it from
+-- now on. Out of combat. -> true, or false and why not.
+function API.ApplyRolePreset(role, switch)
+    local ok, err = ns.RolePresets.Apply(role)
+    if not ok then return false, err end
+    if switch then
+        local name = ns.Profiles.Find(ns.RolePresets.NAME[role])
+        if not name then return false, "The preset's profile is missing." end
+        return ns.Profiles.Use(name)
+    end
+    return true
+end
+
+-- The colour vision presets this SuuUI has: { { id, label, hint } } in order.
+function API.ColorVisionModes()
+    local out = {}
+    for _, mode in ipairs(ns.Vision.MODES) do
+        if ns.Vision.Available(mode) then
+            out[#out + 1] = { id = mode, label = ns.Vision.LABEL[mode], hint = ns.Vision.HINT[mode] }
+        end
+    end
+    return out
+end
+
+-- The colour vision chosen for the account, and the one in effect this
+-- session (they differ until a reload).
+function API.ColorVision()
+    return ns.Settings.Account("colorVision") or "normal", ns.Vision.Applied()
+end
+
+-- Chooses the account's colour vision; it takes effect after a reload.
+-- -> true, or false and why not.
+function API.SetColorVision(mode)
+    if not ns.Vision.LABEL[mode] or not ns.Vision.Available(mode) then return false, "No such colour vision preset." end
+    ns.Settings.SetAccount("colorVision", mode ~= "normal" and mode or nil)
+    return true
+end
+
+-- A colour token as a colour vision preset draws it (for previews of a
+-- preset not in effect): r, g, b, a.
+function API.ColorVisionColor(mode, token)
+    local set = mode ~= "normal" and ns.Tokens.vision and ns.Tokens.vision[mode]
+    local c = (set and set[token]) or designed[token]
+    if not c then error("SuuUI: unknown colour token " .. tostring(token), 2) end
+    local base = designed[token] or c
+    return c[1], c[2], c[3], c[4] or base[4] or 1
+end
+
+-- A module's own table for the whole account (not per character or
+-- profile), saved with SuuUI and made on first use. From OnEnable on.
+function API.AccountData(namespace)
+    assert(type(namespace) == "string", "SuuUI.AccountData: a namespace is required")
+    local all = ns.Settings.Account("data")
+    if type(all) ~= "table" then
+        all = {}
+        ns.Settings.SetAccount("data", all)
+    end
+    all[namespace] = all[namespace] or {}
+    return all[namespace]
+end
+
+-- Opens the first-run welcome again (the welcome module). False when that
+-- module is off.
+function API.ShowWelcome()
+    local w = Services.Get("welcome")
+    if w and w.Show then w.Show(); return true end
+    return false
+end

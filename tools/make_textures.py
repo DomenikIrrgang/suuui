@@ -387,6 +387,9 @@ GLYPHS = {
     # the game's quest markers restyled (3.5): in progress, and its next step on another map
     "questDots": "M5.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M10.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M15.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0",
     "dash": "M3 12h11M10 6l6 6-6 6M20 5v14",
+    # the first-run welcome: the Tank role, and "turn a feature off" (modules)
+    "shield": "M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z",
+    "layers": "M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5",
     # the totem bar (1.6d): an empty element's glyph, and Call of the Elements
     "rock": "M3 19l6-10 4 6 3-4 5 8H3z",
     "sun": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",

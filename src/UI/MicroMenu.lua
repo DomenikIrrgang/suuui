@@ -67,6 +67,13 @@ local function buildButton(m, item)
     b.alertDot:SetPoint("CENTER")
     b.alertGlow = UI.Shadow(b.alert, "glow-arcane")
     b.alert:Hide()
+    -- a small count at the bottom right (the bags' free slots)
+    b.count = b:CreateFontString(nil, "OVERLAY")
+    ns.Fonts.Apply(b.count, "micro")
+    b.count:SetShadowColor(0, 0, 0, 1)
+    b.count:SetShadowOffset(0, -1)
+    b.count:SetPoint("BOTTOMRIGHT", -2, 1)
+    b.count:SetJustifyH("RIGHT")
     b.item = item
     b:HookScript("OnEnter", function(self)
         self.hover:Show()
@@ -122,6 +129,15 @@ function Menu:SetAlert(key, text)
     if not b then return end
     b.alertText = text
     b.alert:SetShown(text ~= nil)
+end
+
+-- 0.17: a small count on a button (nil clears it), in a text colour token
+-- (ink by default).
+function Menu:SetCount(key, text, color)
+    local b = self.buttons[key]
+    if not b then return end
+    b.count:SetText(text or "")
+    b.count:SetTextColor(UI.RGBA(color or "ink"))
 end
 
 function UI.MicroMenu(parent, opts)

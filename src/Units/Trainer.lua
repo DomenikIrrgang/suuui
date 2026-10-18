@@ -90,6 +90,74 @@ function M:Train()
     BuyTrainerService(e.index)
 end
 
+-- An amount of money as SuuUI writes it: "1g 20s 5c", each in its coin's
+-- colour (the game's coin icons sat above the line in the question).
+local function coins(copper)
+    local g, sv, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local out = {}
+    local function add(n, unit, token) out[#out + 1] = ("|cff%s%d%s|r"):format(T.color[token].hex, n, unit) end
+    if g > 0 then add(g, "g", "coin-gold") end
+    if sv > 0 then add(sv, "s", "coin-silver") end
+    if c > 0 or #out == 0 then add(c, "c", "coin-copper") end
+    return table.concat(out, " ")
+end
+
+-- Your professions' names (a trainer's service names its skill line).
+local function yourProfessions()
+    local out = {}
+    for _, index in pairs({ GetProfessions and GetProfessions() }) do
+        local name = index and call(GetProfessionInfo, index)
+        if name then out[name] = true end
+    end
+    return out
+end
+
+-- Everything you can learn now and afford together (asked 2026-10-18): the
+-- cheapest first while the money lasts. Never a profession you don't have
+-- yet (that one asks, one at a time); a profession trainer marks its own
+-- ranks and recipes as the profession too, and those count (found in game:
+-- leaving every marked one out left nothing at a profession trainer).
+function M:TrainAllList()
+    local list, money = {}, GetMoney() or 0
+    if isPetTrainer() then
+        local total, used = call(C_PetInfo.GetPetTrainingPoints)
+        money = (total or 0) - (used or 0)
+    end
+    local mine = yourProfessions()
+    for i = 1, (call(GetNumTrainerServices) or 0) do
+        local e = service(i)
+        if e and e.kind == "available" and learnable(e) then
+            local line = e.profession and call(GetTrainerServiceSkillLine, i)
+            if not e.profession or (line and mine[line]) then list[#list + 1] = e end
+        end
+    end
+    table.sort(list, function(a, b) return a.cost < b.cost end)
+    local out, total = {}, 0
+    for _, e in ipairs(list) do
+        if total + e.cost <= money then
+            out[#out + 1] = e
+            total = total + e.cost
+        end
+    end
+    return out, total
+end
+
+-- Learns them one at a time: the trainer's list changes after each one, so
+-- the next is looked up again once it has.
+function M:TrainAll()
+    local steps = 0
+    local function next()
+        steps = steps + 1
+        if steps > 60 or not (self.window and self.window:IsShown()) then return end
+        local list = self:TrainAllList()
+        local e = list[1]
+        if not e then return end
+        BuyTrainerService(e.index)
+        C_Timer.After(0.35, next)
+    end
+    next()
+end
+
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
@@ -247,6 +315,14 @@ function M:Build()
     self.money:SetPoint("LEFT")
     self.train = UI.Button(w.footer, { text = "Train", variant = "primary", width = 110, onClick = function() self:Train() end })
     self.train:SetPoint("RIGHT")
+    self.trainAll = UI.Button(w.footer, { text = "Train all", width = 110, onClick = self:Guard(function()
+        local list, total = self:TrainAllList()
+        if #list == 0 then return end
+        local cost = isPetTrainer() and (total .. " training points") or coins(total)
+        UI.Confirm({ title = "Train all?", text = ("Learn %d %s for %s."):format(#list, #list == 1 and "skill" or "skills", cost),
+            confirm = "Train all", onConfirm = function() self:TrainAll() end })
+    end) })
+    self.trainAll:SetPoint("RIGHT", self.train, "LEFT", -S["space-3"], 0)
 end
 
 -- The NPC's title under its name ("Warrior Trainer"), from its tooltip.
@@ -364,6 +440,13 @@ function M:Refresh()
     local ok, why = learnable(self.selected and service(self.selected))
     self.train:SetEnabledState(ok and true or false)
     self.train.tooltip = (not ok) and { title = "Train", description = self.selected and why or "Choose what to learn." } or nil
+    local all = self:TrainAllList()
+    self.trainAll:SetEnabledState(#all > 0)
+    local names = {}
+    for i = 1, math.min(6, #all) do names[i] = all[i].name end
+    self.trainAll.tooltip = { title = "Train all",
+        description = #all > 0 and (table.concat(names, ", ") .. (#all > 6 and (" and " .. (#all - 6) .. " more") or ""))
+            or "Nothing you can learn and afford right now." }
 end
 
 function M:QueueRefresh()
@@ -394,7 +477,32 @@ function M:Away(frame)
     frame:HookScript("OnShow", function() C_Timer.After(0, away) end)
 end
 
+-- "/suu trainall": at an open trainer, each service and whether Train all
+-- takes it, and why not (it did nothing at a blacksmithing trainer,
+-- 2026-10-18).
+function M:ExplainTrainAll()
+    local mine = yourProfessions()
+    local names = {}
+    for n in pairs(mine) do names[#names + 1] = n end
+    self:Print(("%d services; your professions: %s; money %s"):format(call(GetNumTrainerServices) or 0,
+        table.concat(names, ", "), tostring(GetMoney())))
+    for i = 1, math.min(25, call(GetNumTrainerServices) or 0) do
+        local e = service(i)
+        if e then
+            local ok, why = learnable(e)
+            local line = call(GetTrainerServiceSkillLine, i)
+            self:Print(("%d %s: kind=%s cost=%s profession=%s line=%s learnable=%s %s"):format(i, tostring(e.name), tostring(e.kind),
+                tostring(e.cost), tostring(e.profession), tostring(line), tostring(ok), why or ""))
+        end
+    end
+    local list, total = self:TrainAllList()
+    self:Print(("Train all would learn %d for %s."):format(#list, tostring(total)))
+end
+
 function M:OnEnable()
+    self:RegisterCommand("trainall", "At a trainer: what Train all would learn, and why it leaves something out.", function()
+        self:ExplainTrainAll()
+    end)
     if not self.window then self:Build() end
     self:OnGameEvent("TRAINER_SHOW", function()
         self.open = true

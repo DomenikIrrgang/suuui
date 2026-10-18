@@ -837,6 +837,15 @@ Asked 2026-10-18: plugins get as much access to SuuUI's UI as possible. Decided:
 
 ### 4.4 Release
 - **Build:** a first-run splash using the emblem, a default layout per role, the addon-list icon, the README, a CurseForge or Wago package, and a changelog.
+- **Built (2026-10-18; confirmed in game):**
+  - The addon-list icon (the emblem, `icon-texture` in wowlua.json).
+  - The first-run welcome, design "First-run splash" direction B (three steps), in Units/Welcome.lua:
+    - Shows once per account, through `SuuUI.AccountData("welcome").seen`.
+    - A chosen role applies its preset profile and switches this character to it.
+    - Changed colour vision reloads through a secure /reload button over Start playing.
+    - `/suu welcome` and Settings › General › Welcome open it again.
+  - Players who already use SuuUI see it once after updating as well.
+  - The role presets, README, packages and changelog were done before.
 
 ---
 

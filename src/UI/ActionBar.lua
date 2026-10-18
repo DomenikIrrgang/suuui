@@ -318,7 +318,21 @@ local function later(kind)
     end
 end
 
+-- A spell the game put on a bar by itself (one you just learned): the
+-- game's fly-in aims at its own bars, which SuuUI stood down, so the button
+-- that holds it pops and flashes instead (asked 2026-10-18).
+local function pushed(_, slot)
+    if type(slot) ~= "number" then return end
+    eachInSlot(slot, function(b)
+        b:Update()
+        ns.Motion.Pop(b.face)
+        b.flash:SetAlpha(1)
+        ns.Motion.AlphaTo(b.flash, 0, ns.Tokens.duration["dur-slow"])
+    end)
+end
+
 local HANDLERS = {
+    SPELL_PUSHED_TO_ACTIONBAR = pushed,
     ACTIONBAR_SLOT_CHANGED = function(slot)
         if not slot or slot == 0 then eachButton(function(b) b:Update(); rangeNow(b) end)
         else eachInSlot(slot, function(b) b:Update(); rangeNow(b) end) end

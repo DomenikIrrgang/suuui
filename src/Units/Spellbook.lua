@@ -787,7 +787,32 @@ function M:Restore()
     self.blizzHeight, self.blizzWidth = nil, nil
 end
 
+-- The game's own level-up toast (its event toasts: "Level 12", the spells it
+-- brings) out of sight while the level-up card is on (asked 2026-10-18).
+-- Only level-up toasts: the others (flight points, scenarios) stay.
+local LEVEL_TOASTS = {}
+if Enum.EventToastEventType then
+    for _, key in ipairs({ "LevelUp", "LevelUpSpell", "LevelUpDungeon", "LevelUpRaid", "LevelUpPvP" }) do
+        local v = Enum.EventToastEventType[key]
+        if v then LEVEL_TOASTS[v] = true end
+    end
+end
+
+function M:HideLevelToasts()
+    local f = _G.EventToastManagerFrame
+    if not f or self.toastsHooked then return end
+    self.toastsHooked = true
+    hooksecurefunc(f, "DisplayToast", function(frame)
+        local t = frame.currentDisplayingToast
+        local info = t and t.toastInfo
+        local level = self:IsEnabled() and self:Get("levelUp") and info and LEVEL_TOASTS[info.eventType]
+        frame:SetAlpha(level and 0 or 1)
+        frame:EnableMouse(not level)
+    end)
+end
+
 function M:OnEnable()
+    self:HideLevelToasts()
     local cf = _G.CharacterFrame
     if cf then
         cf:HookScript("OnShow", function() C_Timer.After(0, function() self:MeasureCharacter() end) end)

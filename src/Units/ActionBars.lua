@@ -206,6 +206,13 @@ local function standDownBlizzard()
     if M:Get("showXP") then
         suppressTracking()
     end
+    -- the game's fly-in for a newly learned spell aims at its own bars:
+    -- SuuUI's button pops instead (UI/ActionBar.lua)
+    local intro = _G.IconIntroTracker
+    if intro then
+        intro:UnregisterEvent("SPELL_PUSHED_TO_ACTIONBAR")
+        intro:UnregisterEvent("SPELL_PUSHED_TO_FLYOUT_ON_ACTIONBAR")
+    end
     local extras = { { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }
     if M:Get("showTotem") then extras[#extras + 1] = { "MultiCastActionBarFrame", "MultiCastActionButton" } end
     for _, extra in ipairs(extras) do

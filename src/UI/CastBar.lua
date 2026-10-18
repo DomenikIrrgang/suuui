@@ -403,7 +403,20 @@ local function spellTarget(unit)
     if not UnitShouldDisplaySpellTargetName(unit) then return end
     local name = UnitSpellTargetName(unit)
     if type(name) == "nil" then return end
-    return name, UnitSpellTargetClass and UnitSpellTargetClass(unit)
+    local class = UnitSpellTargetClass and UnitSpellTargetClass(unit)
+    -- aimed at you: "You" (asked 2026-10-18); a secret name stays as it is
+    if not isSecret(name) and name == UnitName("player") then name = "You" end
+    return name, class
+end
+
+-- A target's class colour as a colour code ("|cffrrggbb"), nil when the
+-- class is unknown or secret.
+local function classCode(class)
+    if type(class) == "nil" or isSecret(class) or not C_ClassColor then return nil end
+    local ok, c = pcall(C_ClassColor.GetClassColor, class)
+    if not (ok and c) then return nil end
+    local ok2, hex = pcall(c.GenerateHexColor, c)
+    return ok2 and hex and ("|c" .. hex) or nil
 end
 
 function CB:UpdateTarget()
@@ -413,8 +426,13 @@ function CB:UpdateTarget()
         local spell = self.spellName
         if type(spell) == "nil" then return end
         if self.targetShown then
-            local ok, name = pcall(spellTarget, self.unit)
-            if ok and type(name) ~= "nil" then return self.spell:SetFormattedText("%s › %s", spell, name) end
+            local ok, name, class = pcall(spellTarget, self.unit)
+            if ok and type(name) ~= "nil" then
+                -- the target's name in its class colour (asked 2026-10-18)
+                local code = classCode(class)
+                if code then return self.spell:SetFormattedText("%s › %s%s|r", spell, code, name) end
+                return self.spell:SetFormattedText("%s › %s", spell, name)
+            end
         end
         return self.spell:SetText(spell)
     end
