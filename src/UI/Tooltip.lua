@@ -138,10 +138,13 @@ end
 --------------------------------------------------------------------------------
 
 local shared, intent
+-- what the shared tooltip shows now: its owner and its data
+local current = {}
 
 function UI.HideTooltip()
     if intent then intent:Cancel() intent = nil end
     if shared then shared:Hide() end
+    current.owner, current.data = nil, nil
 end
 
 function UI.ShowTooltip(owner, data)
@@ -154,12 +157,21 @@ function UI.ShowTooltip(owner, data)
         -- seen even while the UI is faded out (the NPC dialogue's scene)
         shared:SetIgnoreParentAlpha(true)
         shared:SetClampedToScreen(true)
+        current.owner, current.data = owner, data
         shared:SetContent(type(data) == "function" and data(owner) or data)
         shared:ClearAllPoints()
         shared:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", S["space-4"], S["space-4"])
         shared:Show()
         Motion.FadeIn(shared, T.duration["dur-fast"])
     end)
+end
+
+-- 0.17: the shared tooltip shown for `owner` again, with its data a function
+-- asked again (a modifier key changes what it says): nothing when it shows
+-- for another frame, or not yet.
+function UI.RefreshTooltip(owner)
+    if not (shared and shared:IsShown() and current.owner == owner and type(current.data) == "function") then return end
+    shared:SetContent(current.data(owner))
 end
 
 -- Shows `data` (a table, or a function of the frame) while the mouse is over `frame`.

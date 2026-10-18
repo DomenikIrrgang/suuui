@@ -108,6 +108,7 @@ API.UI = {
     -- the tooltip
     ShowTooltip = UI.ShowTooltip,
     HideTooltip = UI.HideTooltip,
+    RefreshTooltip = UI.RefreshTooltip,
     AttachTooltip = UI.AttachTooltip,
     TooltipFrame = UI.TooltipFrame,
     -- drawing

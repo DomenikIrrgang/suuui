@@ -892,8 +892,64 @@ end
 -- The pins on the canvas
 --------------------------------------------------------------------------------
 
+-- A quest's objectives text with the game's placeholders filled in: $N
+-- your name, $C your class, $R your race, $Gmale:female; by your sex.
+local function fillText(text)
+    local name = UnitName("player")
+    local class = UnitClass("player")
+    local race = UnitRace("player")
+    local female = UnitSex("player") == 3
+    text = text:gsub("%$[Gg]%s*([^:;]*):([^;]*);", function(m, f) return female and f or m end)
+    return (text:gsub("%$(%a)", function(c)
+        c = c:upper()
+        if c == "N" then return plain(name) and name or "you" end
+        if c == "C" then return plain(class) and class or "adventurer" end
+        if c == "R" then return plain(race) and race or "adventurer" end
+    end))
+end
+
+-- The quests a pin's group holds (givers' and item drops'), once each.
+local function groupQuests(g)
+    local ids, seen = {}, {}
+    for _, it in ipairs(g.items) do
+        for _, id in ipairs(it.quests or {}) do
+            if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+        end
+    end
+    return ids
+end
+
+-- Shift on a quest pin (asked 2026-10-18): what each quest asks of you,
+-- from the quest data's objectives text.
+local MAX_OBJECTIVES = 6
+local function objectivesTip(g, ids)
+    local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
+    local texts = starts.objectives or {}
+    local muted = "|cff" .. T.color["ink-muted"].hex
+    local first = g.items[1]
+    local function text(id)
+        return texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks."
+    end
+    if #ids == 1 then
+        local q = starts.quests and starts.quests[ids[1]]
+        return { title = questName(q, ids[1]), titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
+                 subtitle = g.distinct == 1 and first.detail or nil, description = text(ids[1]) }
+    end
+    local lines = {}
+    for i, id in ipairs(ids) do
+        if i > MAX_OBJECTIVES then lines[#lines + 1] = { ("and %d more"):format(#ids - MAX_OBJECTIVES) } break end
+        local q = starts.quests and starts.quests[id]
+        lines[#lines + 1] = { questName(q, id) }
+        lines[#lines + 1] = { muted .. text(id) .. "|r" }
+    end
+    return { title = g.distinct == 1 and first.name or ("Quests to pick up · " .. #ids), lines = lines }
+end
+
 local function tipFor(g)
     local first = g.items[1]
+    local ids = groupQuests(g)
+    if #ids > 0 and IsShiftKeyDown() then return objectivesTip(g, ids) end
+    local hint = #ids > 0 and "Shift: what to do" or nil
     if g.distinct == 1 then
         local lines = {}
         if first.more and #first.more > 0 then
@@ -907,7 +963,7 @@ local function tipFor(g)
             detail = first.kindName
         end
         return { title = first.name, titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
-                 subtitle = detail, lines = #lines > 0 and lines or nil }
+                 subtitle = detail, lines = #lines > 0 and lines or nil, meta = hint }
     end
     -- one line per name: the same NPC's spawn points, mailboxes, a chest
     -- kind read once with how many ("Mailbox ×2"; found in game)
@@ -936,7 +992,7 @@ local function tipFor(g)
     if #order == 1 and order[1].detail == "" then lines = nil end
     local kind = first.kindName or (first.repeatable and "Repeatable quests") or (first.key == "available" and "Quests to pick up")
         or first.detail or ""
-    return { title = kind .. " · " .. g.distinct, lines = lines, meta = "Click to zoom in" }
+    return { title = kind .. " · " .. g.distinct, lines = lines, meta = "Click to zoom in" .. (hint and (" · " .. hint) or "") }
 end
 
 function M:Pin()
@@ -947,11 +1003,15 @@ function M:Pin()
         pin:RegisterForClicks("LeftButtonUp")
         pin:SetScript("OnEnter", function(p)
             if not p.group then return end
-            UI.ShowTooltip(p, tipFor(p.group))
+            self.hoveredPin = p
+            UI.ShowTooltip(p, function() return p.group and tipFor(p.group) or {} end)
             self:HighlightQuests(p.group)
             self:ShowRoutes(p.group)
         end)
-        pin:SetScript("OnLeave", function() UI.HideTooltip(); self:HighlightQuests(nil); self:ShowRoutes(nil) end)
+        pin:SetScript("OnLeave", function()
+            self.hoveredPin = nil
+            UI.HideTooltip(); self:HighlightQuests(nil); self:ShowRoutes(nil)
+        end)
         pin:SetScript("OnClick", function(p)
             local g = p.group
             -- a mark: its card
@@ -1586,6 +1646,10 @@ function M:OnEnable()
     end
     -- (here, past the wait for the map: this runs once)
     self:RegisterSettings(SECTION)
+    -- Shift pressed or let go over a quest pin: its objectives, or not
+    self:OnGameEvent("MODIFIER_STATE_CHANGED", function(_, key)
+        if self.hoveredPin and type(key) == "string" and key:find("SHIFT") then UI.RefreshTooltip(self.hoveredPin) end
+    end)
     self:HookQuestProviders()
     self:StyleQuestPins()
     -- (the log lays its quests out again on every change)

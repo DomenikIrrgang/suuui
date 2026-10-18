@@ -2,7 +2,8 @@
 -- Writes src/Data/QuestStarts.lua: where each of Forever's quests can be
 -- picked up (its quest givers' spawn points, by the game's map IDs), with
 -- what the world map needs to tell whether you can take it (levels, races,
--- classes, quests before it and instead of it), and the dungeon entrances.
+-- classes, quests before it and instead of it), what each asks of you, and
+-- the dungeon entrances.
 -- Reads QuestieDB's Forever data with its corrections applied in
 -- QuestieDB's order (inherited classic fixes, the generated Forever base,
 -- the Forever fixes), from the folder tools/fetch_quest_starts.sh fills.
@@ -722,6 +723,7 @@ w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 n
 w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value},")
 w("--                  event (shown only while it's on: \"darkmoonFaire\", \"lunarFestival\", … a holiday; \"warEffort\",")
 w("--                  \"invasion\" one-off server events; \"seasonal\" some holiday) }")
+w("--   objectives[id] = what the quest asks (its objectives text; $N, $C, $R and $Gmale:female; as the game writes them)")
 w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
 w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
 w("--                    (source: an NPC's ID, an object's negative) that drops it lives)")
@@ -741,6 +743,21 @@ for _, qid in ipairs(ids) do
             num(q[QK.specialFlags]), num(q[QK.parentQuest]), num(q[QK.breadcrumbForQuestId]),
             list(q[QK.requiredSkill]), list(q[QK.requiredMinRep]), list(q[QK.requiredMaxRep]),
             eventOf[qid] and (", %q"):format(eventOf[qid]) or ""))
+    end
+end
+-- what each quest asks of you, for the map's tooltips (Shift on a quest pin)
+w("}, objectives = {")
+local nObjectives = 0
+for _, qid in ipairs(ids) do
+    local t = used[qid] and quests[qid][QK.objectivesText]
+    if type(t) == "table" and #t > 0 then
+        local parts = {}
+        for _, line in ipairs(t) do if type(line) == "string" then parts[#parts + 1] = line end end
+        local text = table.concat(parts, " "):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")
+        if text ~= "" then
+            w(string.format("    [%d] = %q,", qid, text))
+            nObjectives = nObjectives + 1
+        end
     end
 end
 w("}, maps = {")
@@ -863,5 +880,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests, %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
+print(string.format("gen_quest_starts: %d quests (%d with objectives), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares and service NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
