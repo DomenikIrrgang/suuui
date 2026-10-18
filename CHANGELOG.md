@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.6 (2026-10-19)
 
 ### New
 
-- **Death recap** (to test): Recap on the death request (or a death link in chat, or `/suu recap`) opens SuuUI's own: the killing blow on top, your health falling to zero across the last seconds, then every hit with its time, caster, amount and your health after it; the killing blow in ember. Hover a hit for its spell's tooltip.
+- **Death recap**: Recap on the death request (or a death link in chat, or `/suu recap`) opens SuuUI's own: the killing blow on top, your health falling to zero across the last seconds, then every hit with its time, caster, amount and your health after it; the killing blow in ember. Hover a hit for its spell's tooltip.
 - **Rare and elite crest** on the target and focus frames (on the top edge over the right end) and beside nameplates: a gilt diamond with fading wings for elites, silver for rares, silver with a gilt jewel for rare elites, longer wings and three jewels for world bosses.
 - **Elite dragon** (Settings › Unit frames › Elite dragon, off by default): the game's own dragon around the target and focus frames' right end, gold for elites, winged silver for rares (with the crest's gilt jewel on its breast for a rare elite), winged gold for bosses, in place of the crest; friendly and neutral NPCs too. Nameplates have their own switch (Settings › Nameplates › Elite dragon): a small dragon round the bar's right end.
 - **Themes** (Settings › General › Appearance › Theme, applied at once, no reload): High contrast (gilt edges, or ink edges), Class accent (your class colour in place of gilt, as it is or toned), Darker and OLED black, and five from Azeroth's raids: Black Temple, Molten Core, Naxxramas, Karazhan and Sunwell. Ready, danger, quest and class colours stay the same in every theme.
@@ -21,6 +21,10 @@
 - World map: a tooltip for several things on one spot (two weapon masters, a giver's quests with Shift) leaves a gap under the title and before each entry, so it's clear which lines belong together; the map's tooltips can be a bit wider.
 - Colour vision (Settings › General › Appearance) applies at once, without a reload.
 - Plugin API 0.17: colours that follow the theme (`UI.Paint`, `PaintFill`, `PaintGradient`, `Bind`, the message `SUUUI_THEME_CHANGED`); a tooltip line's `gap`; a theme's `colors` can be a function of your class, and its fonts can set a line height.
+
+### Fixed
+
+- World map: with Shift, each quest's objective sits under that quest, not in a list after all of them.
 
 ## 0.5.0-beta.5 (2026-10-18)
 
