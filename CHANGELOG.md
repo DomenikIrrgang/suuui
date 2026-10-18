@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- Edit mode: right-click a frame to open its settings (the Settings window opens over edit mode, so you see the change in place).
+
 ### Changed
 
 - Nameplates: health drops as on the unit frames, a pale ghost of the lost health trailing the bar and easing down.

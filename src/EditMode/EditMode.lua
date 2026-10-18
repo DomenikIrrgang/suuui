@@ -177,6 +177,7 @@ local function buildOverlay(m)
     o:SetMovable(true)
     o:SetClampedToScreen(true)
     o:RegisterForDrag("LeftButton")
+    o:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     o.wash = o:CreateTexture(nil, "BACKGROUND")
     o.wash:SetAllPoints()
     UI.PaintFill(o.wash, "arcane", 0.06)
@@ -197,7 +198,10 @@ local function buildOverlay(m)
 
     o:SetScript("OnEnter", function(self) sync(self.mover) end)
     o:SetScript("OnLeave", function(self) sync(self.mover) end)
-    o:SetScript("OnClick", function(self) select(self.mover) end)
+    o:SetScript("OnClick", function(self, button)
+        select(self.mover)
+        if button == "RightButton" then EditMode.OpenSettings(self.mover) end
+    end)
     o:SetScript("OnDragStart", function(self)
         local m = self.mover
         select(m)
@@ -348,7 +352,7 @@ local function buildPanel()
     hint:SetWordWrap(true)
     hint:SetJustifyH("LEFT")
     hint:SetFixedWidth(226)
-    hint:SetValue("Drag a frame to move it. Arrow keys nudge the selected one, Shift for 10px.")
+    hint:SetValue("Drag a frame to move it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings.")
     stack:Add(hint)
     return p
 end
@@ -478,8 +482,21 @@ function EditMode.Exit()
         end
         place(m)
     end
+    if ns.SettingsWindow and ns.SettingsWindow.Raise then ns.SettingsWindow.Raise(false) end
     Events.Emit("SUUUI_EDITMODE_CHANGED", false)
     if groupPreview > 0 or groupPreviewAuras then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0, false) end
+end
+
+-- A frame's settings (its right-click): the Settings window at its module's
+-- section, over edit mode's layer while it is open.
+function EditMode.OpenSettings(m)
+    local section = m and m.owner and ns.SettingsRegistry.ForOwner(m.owner, m.namespace)
+    if not section then
+        ns.Print(("%s has no settings of its own."):format(m and m.label or "This frame"))
+        return
+    end
+    ns.SettingsWindow.Open(section.id)
+    ns.SettingsWindow.Raise(true)
 end
 
 function EditMode.Toggle()

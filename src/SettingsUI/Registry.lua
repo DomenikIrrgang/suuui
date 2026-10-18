@@ -95,6 +95,19 @@ local function before(a, b)
     return a.label < b.label
 end
 
+-- The first listed section a module registered (its own namespace first),
+-- for edit mode's right-click: the frame's settings.
+function Registry.ForOwner(owner, namespace)
+    local first
+    for _, s in ipairs(Registry.List()) do
+        if s.owner == owner then
+            if s.namespace == namespace then return s end
+            first = first or s
+        end
+    end
+    return first
+end
+
 -- The section a merged one shows on, while that one is registered (and isn't
 -- merged itself).
 function Registry.MergedInto(s)
