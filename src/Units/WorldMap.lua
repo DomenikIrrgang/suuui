@@ -944,6 +944,8 @@ end
 -- already says (nothing goes; a drop's source stays): one quest's as its
 -- description, several each under its name.
 local MAX_OBJECTIVES = 6
+-- space before each entry of a tooltip that lists several
+local ENTRY_GAP = S["space-4"]
 local QUEST_TIP_W = 360
 local function addObjectives(tip, ids)
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
@@ -957,11 +959,10 @@ local function addObjectives(tip, ids)
         return tip
     end
     local lines = tip.lines or {}
-    lines[#lines + 1] = { " " }
     for i, id in ipairs(ids) do
-        if i > MAX_OBJECTIVES then lines[#lines + 1] = { ("and %d more"):format(#ids - MAX_OBJECTIVES) } break end
+        if i > MAX_OBJECTIVES then lines[#lines + 1] = { ("and %d more"):format(#ids - MAX_OBJECTIVES), gap = ENTRY_GAP } break end
         local q = starts.quests and starts.quests[id]
-        lines[#lines + 1] = { questName(q, id) }
+        lines[#lines + 1] = { questName(q, id), gap = ENTRY_GAP }
         lines[#lines + 1] = { muted .. text(id) .. "|r" }
     end
     tip.lines = lines
@@ -1017,7 +1018,9 @@ function tipBase(g, hint)
     for i, e in ipairs(order) do
         if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#order - 12) } break end
         local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
-        lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name }
+        -- a gap before each next one: which lines are whose (asked 2026-10-18)
+        lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name,
+                              gap = i > 1 and ENTRY_GAP or nil }
         -- a weapon master's weapons under his name
         if e.teaches then lines[#lines + 1] = { muted .. "Teaches " .. e.teaches .. "|r" } end
     end

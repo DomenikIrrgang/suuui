@@ -7,6 +7,11 @@
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
 
+### Changed
+
+- World map: a tooltip for several things on one spot (two weapon masters, a giver's quests with Shift) leaves a gap before each, so it's clear which lines belong together.
+- Plugin API 0.17: a tooltip line's `gap`.
+
 ## 0.5.0-beta.5 (2026-10-18)
 
 ### New

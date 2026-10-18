@@ -8,6 +8,7 @@
 --       title = "Shield Wall", titleColor = "quality-epic",   -- default ink
 --       subtitle = "Warrior · Protection",
 --       lines = { { "Instant", "30 min cooldown" }, { "Requires a shield" } },
+--                 -- 0.17: a line's `gap` = space before it ({ "Next", gap = 8 })
 --       description = "Reduces all damage taken by 75% for 10 sec.",
 --       meta = "Ready in 21m",
 --       maxWidth = 360,                                       -- 0.17; default 280
@@ -63,7 +64,8 @@ function Tip:SetContent(d)
         natural = math.max(natural, w)
         r:SetHeight(T.type.body.lineHeight)
         r:Show()
-        stack:Add(r, { gapBefore = i == 1 and d.subtitle and S["space-2"] + S["space-1"] or nil })
+        -- l.gap (0.17): space before a line that starts a new entry
+        stack:Add(r, { gapBefore = (i == 1 and d.subtitle and S["space-2"] + S["space-1"]) or l.gap })
     end
 
     -- with a maxWidth (0.17), a description wraps at that width, not at the
