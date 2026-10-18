@@ -168,6 +168,7 @@ end
 -- totem slots (the first page's four action slots) and the summon and recall
 -- spells. Click them out of combat and in a fight: does the totem go down?
 function TP.Buttons()
+    ns.Print("Totem probe: placing the test buttons…")
     if InCombatLockdown() then ns.Print("Totem probe: out of combat, to place the buttons.") return end
     local UI = ns.UI
     local p = TP.panel or UI.Panel(UIParent, { title = "Totem probe", width = 260, height = 120, solid = true })
@@ -177,15 +178,29 @@ function TP.Buttons()
     p:SetPoint("LEFT", 40, 0)
     p.buttons = p.buttons or {}
     local defs = {}
-    for i = 1, 4 do
-        local b = _G["MultiCastActionButton" .. i]
-        local ok, action = pcall(b and b.CalculateAction or function() end, b)
-        if ok and action then defs[#defs + 1] = { kind = "action", value = action, label = "Slot " .. i } end
+    -- the earth slot (the game's first button): the spell it holds, cast as a
+    -- spell, and the slot's action itself (the first try did nothing)
+    local b1 = _G.MultiCastActionButton1
+    local ok, action = pcall(b1 and b1.CalculateAction or function() end, b1)
+    if ok and action then
+        local kind, id = GetActionInfo(action)
+        if kind == "spell" and id then defs[#defs + 1] = { kind = "spell", value = id, label = "Spell" } end
+        defs[#defs + 1] = { kind = "action", value = action, label = "Act" }
+        -- choosing securely: the game's multispell action puts another earth
+        -- totem in the slot (watch the game's bar)
+        local other
+        for _, sid in ipairs({ GetMultiCastTotemSpells(EARTH_TOTEM_SLOT or 2) }) do
+            if sid ~= id then other = sid break end
+        end
+        if other then defs[#defs + 1] = { kind = "multispell", value = other, action = action, label = "Pick" } end
     end
     local summon = MultiCastSummonSpellButton and MultiCastSummonSpellButton.spellId
     local recall = MultiCastRecallSpellButton and MultiCastRecallSpellButton.spellId
     if summon then defs[#defs + 1] = { kind = "spell", value = summon, label = "Call" } end
     if recall then defs[#defs + 1] = { kind = "spell", value = recall, label = "Recall" } end
+    -- the game's secure "destroy totem" action on the earth slot (DestroyTotem
+    -- itself is forbidden to addon code: seen 2026-10-18)
+    defs[#defs + 1] = { kind = "destroytotem", value = EARTH_TOTEM_SLOT or 2, label = "X earth" }
     for i, d in ipairs(defs) do
         local b = p.buttons[i]
         if not b then
@@ -200,14 +215,26 @@ function TP.Buttons()
         end
         b:SetPoint("TOPLEFT", (i - 1) * 40, 0)
         b:SetAttribute("type", d.kind)
-        b:SetAttribute(d.kind, d.value)
-        b.icon:SetTexture(d.kind == "action" and GetActionTexture(d.value) or C_Spell.GetSpellTexture(d.value) or 134400)
+        b:SetAttribute("action", nil)
+        b:SetAttribute("spell", nil)
+        if d.kind == "destroytotem" then
+            b:SetAttribute("totem-slot", d.value)
+            b.icon:SetColorTexture(0.5, 0.15, 0.1, 1)
+        elseif d.kind == "multispell" then
+            b:SetAttribute("action", d.action)
+            b:SetAttribute("spell", d.value)
+            b.icon:SetTexture(C_Spell.GetSpellTexture(d.value) or 134400)
+        else
+            b:SetAttribute(d.kind, d.value)
+            local tex = d.kind == "action" and GetActionTexture(d.value) or (d.kind == "spell" and C_Spell.GetSpellTexture(d.value))
+            b.icon:SetTexture(tex or 134400)
+        end
         b.label:SetValue(d.label)
         b:Show()
     end
     p:Show()
-    ns.Print(("Totem probe: %d buttons (%s). Click them, out of combat and in a fight."):format(#defs,
-        #defs > 0 and "slots, then Call/Recall when known" or "the game's bar has no slots yet"))
+    for i = #defs + 1, #p.buttons do p.buttons[i]:Hide() end
+    ns.Print(("Totem probe: %d buttons: Spell casts the earth slot's totem as a spell, Act uses the slot's action, Pick puts another earth totem in the slot, X earth dismisses it. Click each, out of combat and in a fight."):format(#defs))
 end
 
 -- "/suu probe totems choose": puts another totem of the same element in the
@@ -219,7 +246,7 @@ function TP.Choose(all)
     local c = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
     all.choose = c
     if not (ok and action) then c.result = "no slot action" ns.Print("Totem probe: no slot to choose for.") return end
-    local _, _, before = GetActionInfo(action)
+    local _, before = GetActionInfo(action)
     c.action, c.before = action, tostring(before)
     -- the slot's element: the action's own totem slot from the game's button
     local slot = b.slotButton and b.slotButton:GetID()
@@ -229,11 +256,11 @@ function TP.Choose(all)
     c.slot, c.other = tostring(slot), tostring(other)
     if not other then c.result = "only one totem known for that element" ns.Print("Totem probe: you know one totem of that element; nothing to swap to.") return end
     c.set = call(SetMultiCastSpell, action, other)
-    local _, _, now = GetActionInfo(action)
+    local _, now = GetActionInfo(action)
     c.after = tostring(now)
     C_Timer.After(1, function()
         c.restore = call(SetMultiCastSpell, action, before)
-        local _, _, back = GetActionInfo(action)
+        local _, back = GetActionInfo(action)
         c.restored = tostring(back)
     end)
     ns.Print("Totem probe: swapped the first slot's totem and puts it back in a second. Watch the game's bar, then /suu probe totems check and /reload.")

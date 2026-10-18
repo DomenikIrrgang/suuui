@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- **Totem bar** for shamans (to test), in the stance bar's place: your earth, fire, water and air totems as buttons that cast the totem chosen for each, in combat too, with a thin strip above them showing each totem's time left and drain (amber near the end). Right click dismisses a totem; the arrow on a hovered totem opens the list of that element's totems to choose another. Totemic Recall sits at the strip's end while a totem is down, Call of the Elements after the four once learned, Ghost Wolf on the right. An element with no totem yet is dashed. Settings › Action bars › Totem bar; the game's own totem bar comes back after a reload when it's off.
+
 ### Changed
 
 - Action bars 5–8 start hidden on a new character, as the design has them, even when the game put things on them (a new character's bar 5 showed with its starting items). Turn them on under Settings › Action bars.

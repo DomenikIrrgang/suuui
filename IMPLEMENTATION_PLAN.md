@@ -295,6 +295,27 @@ Split into three confirmable parts: **1.6a** bars 5–8 with per-bar show, colum
   - `destroy`: DestroyTotem for the right-click.
   - The plain run, in combat: what is secret.
 - **Confirm:** totems cast from SuuUI's bar in combat; times and drains count down in combat; a slot's totem changes from the picker; Recall and right-click dismiss.
+- **Probed (2026-10-18, shaman level 11, earth totems only; confirmed in game):**
+  - Out of combat the game tells everything. In combat GetTotemInfo and GetTotemTimeLeft are secret, but GetTotemDuration still gives a duration object (its values secret), and nil for an empty slot.
+  - SuuUI's own secure buttons:
+    - `type = "action"` on the game's slot action (132 + slot, page 1: earth 134) casts the slot's totem, in combat too.
+    - `multispell` (the slot action plus a spell) chooses the slot's totem, in combat too.
+    - `destroytotem` (`totem-slot`) dismisses one.
+  - What to avoid or work around:
+    - DestroyTotem from addon code is forbidden.
+    - SetMultiCastSpell from addon code left the slot empty.
+    - GetActionTexture gives nothing for these slots; GetActionInfo gives the spell, in combat too.
+- **Built (2026-10-18; confirmed in game on a level 11 shaman, earth totems):**
+  - `UI.TotemBar` in UI/ClassBars.lua, as design B. In the Action bars module it takes the stance bar's place and attachable entry ("Totem and stance bar"), and Ghost Wolf's stance bar follows on its right.
+  - Setting `showTotem`. Blizzard's MultiCastActionBarFrame is put away while it's on.
+  - New glyphs: rock, sun, drop, wave, totem. New `UI.DurationTextBinding` (0.17).
+  - What worked in game:
+    - Casting, right-click dismiss.
+    - The time and drain in combat.
+    - The picker list. Its arrow moved under the button: over the strip, the timer covered it.
+    - Edit mode.
+  - Still to see: Call of the Elements and Totemic Recall (not learned yet), fire, water and air, and Ghost Wolf beside it.
+  - The game has no key bindings for its totem buttons on this client: none yet.
 
 ### 1.7 Cooldown Manager (SuuUI's own)
 Decided: SuuUI's own tracker, not a restyle of Blizzard's CooldownViewer (restyling it means living inside its taint rules: never write its frames, never hide its pool frames, lists only editable in Blizzard's panel). Nothing here touches Blizzard's viewer or needs its CVar.

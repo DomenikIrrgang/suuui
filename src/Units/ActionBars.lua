@@ -41,6 +41,7 @@
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
+local _, CLASS = UnitClass("player")
 
 local M = SuuUI.RegisterModule({
     id = "actionbars",
@@ -74,6 +75,8 @@ local M = SuuUI.RegisterModule({
         off8 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
         offStance = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
         offPet = { point = "BOTTOMRIGHT", rel = "TOPRIGHT", x = 0, y = 4 },
+        -- a shaman's totem bar in the stance bar's place (1.6d)
+        showTotem = true,
         stancePosition = { point = "BOTTOM", x = -220, y = 120 },
         petPosition = { point = "BOTTOM", x = 220, y = 120 },
         show5 = false, show6 = false, show7 = false, show8 = false,
@@ -203,7 +206,9 @@ local function standDownBlizzard()
     if M:Get("showXP") then
         suppressTracking()
     end
-    for _, extra in ipairs({ { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }) do
+    local extras = { { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }
+    if M:Get("showTotem") then extras[#extras + 1] = { "MultiCastActionBarFrame", "MultiCastActionButton" } end
+    for _, extra in ipairs(extras) do
         if _G[extra[1]] then
             SuuUI.SuppressBlizzard(extra[1], { noHide = true })
             quietButtons(extra[2])
@@ -270,6 +275,7 @@ function M:ApplyOptions()
     for id = 1, 4 do self.bars[id]:Layout(nil, nil, 12, px) end
     self.stance:SetButtonSize(math.floor(px * 0.9 + 0.5))
     self.pet:SetButtonSize(math.floor(px * 0.9 + 0.5))
+    if self.totem then self.totem:SetButtonSize(math.floor(px * 0.9 + 0.5)) end
     -- attached bars fade with the dock but sit outside it: hovering one
     -- reveals a mouseover dock too
     local attached = {}
@@ -296,6 +302,10 @@ function M:ApplyOptions()
     end
     self.stance:SetEnabled(self:Get("showStance") and not self:Get("stancePosition").hidden)
     self.stance:SetHotkeysShown(keysOn.stance)
+    if self.totem then
+        self.totem:SetEnabled(self:Get("showTotem") and not self:Get("stancePosition").hidden)
+        self:FollowTotems()
+    end
     self.pet:SetEnabled(self:Get("showPet") and not self:Get("petPosition").hidden)
     self.pet:SetHotkeysShown(keysOn.pet)
     for _, a in ipairs(self.attachable) do
@@ -338,6 +348,12 @@ function M:Build()
     -- Stance and pet bars: attached above the dock's outer edges by default.
     self.stance = UI.StanceBar(d, { name = "SuuUIStanceBar", label = "Stance bar" })
     self.pet = UI.PetBar(d, { name = "SuuUIPetBar", label = "Pet bar" })
+    -- a shaman's totem bar takes the stance bar's place, Ghost Wolf's stance
+    -- bar follows it on the right (1.6d)
+    if CLASS == "SHAMAN" and UI.TotemBar then
+        self.totem = UI.TotemBar(d, { name = "SuuUITotemBar", label = "Totem bar",
+            onLayout = function() self:FollowTotems() end })
+    end
 
     d.suuManagedShow = true -- shown by its visibility setting
     self:RegisterMover(d, { key = "position", label = "Action bars" })
@@ -352,9 +368,15 @@ function M:Build()
                 enabled = function() return self:Get("show" .. id) end }
         end
     end
-    self.attachable[#self.attachable + 1] = { key = "Stance", header = self.stance.header,
-        pos = "stancePosition", label = "Stance bar",
-        enabled = function() return self:Get("showStance") and GetNumShapeshiftForms ~= nil and (GetNumShapeshiftForms() or 0) > 0 end }
+    if self.totem then
+        self.attachable[#self.attachable + 1] = { key = "Stance", header = self.totem.header,
+            pos = "stancePosition", label = "Totem and stance bar",
+            enabled = function() return self:Get("showTotem") or self:Get("showStance") end }
+    else
+        self.attachable[#self.attachable + 1] = { key = "Stance", header = self.stance.header,
+            pos = "stancePosition", label = "Stance bar",
+            enabled = function() return self:Get("showStance") and GetNumShapeshiftForms ~= nil and (GetNumShapeshiftForms() or 0) > 0 end }
+    end
     self.attachable[#self.attachable + 1] = { key = "Pet", header = self.pet.header,
         pos = "petPosition", label = "Pet bar", enabled = function() return self:Get("showPet") end }
 
@@ -414,6 +436,22 @@ function M:DockOffset(l, b, w, h)
     return { point = point, rel = rel, x = math.floor(px - rx + 0.5), y = math.floor(py - ry + 0.5) }
 end
 
+-- A shaman's stance bar (Ghost Wolf) on the totem bar's right, on its
+-- button row's line; on its own place while the totem bar is off. Out of
+-- combat.
+function M:FollowTotems()
+    if not self.totem or InCombatLockdown() then return end
+    local s, t = self.stance.header, self.totem.header
+    s:ClearAllPoints()
+    if self.totem.enabled and t:IsShown() then
+        s:SetParent(t:GetParent())
+        s:SetPoint("BOTTOMLEFT", t, "BOTTOMRIGHT", S["space-2"], 0)
+    else
+        s:SetParent(t:GetParent())
+        s:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT")
+    end
+end
+
 -- Attached: hangs off the dock (and shows and fades with it). Detached: on
 -- the screen at its own position.
 function M:Place(a)
@@ -428,6 +466,7 @@ function M:Place(a)
         local pos = self:Get(a.pos)
         f:SetPoint(pos.point or "CENTER", SuuUI.Root, pos.point or "CENTER", pos.x or 0, pos.y or 0)
     end
+    if self.totem and a.key == "Stance" then self:FollowTotems() end
 end
 
 -- Dragged (or nudged) in edit mode: an attached bar is part of the dock, so
@@ -543,6 +582,8 @@ local SECTION = {
         { title = "Stance and pet bars", rows = {
             { key = "showStance", label = "Stance and form bar", control = "toggle", combat = true,
               description = "Above the dock's left block, for classes with stances, forms or stealth. Blizzard's own comes back after a reload." },
+            { key = "showTotem", label = "Totem bar", control = "toggle", combat = true,
+              description = "For shamans, in the stance bar's place: your earth, fire, water and air totems with their time left above them. Left click casts, right click dismisses, the arrow on a totem chooses another. Ghost Wolf follows on its right. Blizzard's own comes back after a reload." },
             { key = "showPet", label = "Pet bar", control = "toggle", combat = true,
               description = "Above the dock's right block, while you have a pet. Right click an ability to switch its autocast." },
         } },
@@ -613,7 +654,7 @@ function M:OnEnable()
     if InCombatLockdown() then self:RunOutOfCombat("build", start) else start() end
     self:RegisterSettings(SECTION)
     self:RegisterSettings(KEYBINDS)
-    local keys = { "textSize", "showEmpty", "showXP", "showStance", "showPet", "showKeys", "keyBars", "dockSize", "dockVisibility", "position" }
+    local keys = { "textSize", "showEmpty", "showXP", "showStance", "showTotem", "showPet", "showKeys", "keyBars", "dockSize", "dockVisibility", "position" }
     for id = 5, 8 do
         keys[#keys + 1] = "show" .. id
         keys[#keys + 1] = "cols" .. id

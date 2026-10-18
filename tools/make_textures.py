@@ -387,6 +387,12 @@ GLYPHS = {
     # the game's quest markers restyled (3.5): in progress, and its next step on another map
     "questDots": "M5.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M10.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0M15.8 12a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0",
     "dash": "M3 12h11M10 6l6 6-6 6M20 5v14",
+    # the totem bar (1.6d): an empty element's glyph, and Call of the Elements
+    "rock": "M3 19l6-10 4 6 3-4 5 8H3z",
+    "sun": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+    "drop": "M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z",
+    "wave": "M3 10c2-3 4-3 6 0s4 3 6 0 4-3 6 0M3 16c2-3 4-3 6 0s4 3 6 0 4-3 6 0",
+    "totem": "M9 3h6v4H9zM8 7h8v5H8zM10 12h4v9h-4z",
     "markSkull": "M12 3a6.5 6.5 0 0 0-6.5 6.5c0 2.3 1.1 3.7 2.5 4.6V16.5h8v-2.4c1.4-.9 2.5-2.3 2.5-4.6A6.5 6.5 0 0 0 12 3zM9.5 10h.01M14.5 10h.01M11 13.5h2M4 18l16 3.5M20 18L4 21.5",
 }
 

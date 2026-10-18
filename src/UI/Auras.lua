@@ -134,6 +134,27 @@ local function durationOptions(seconds)
     return opts
 end
 
+-- 0.17: a text line the engine keeps showing a duration's time left (the
+-- aura icons' format: "42", "1:30", "5m"; amber below `seconds`), in combat
+-- too: b:SetDuration(d) then b:SetEnabled(true). Nil where the client has no
+-- duration text bindings.
+function UI.DurationTextBinding(fontString, seconds)
+    if not (C_DurationUtil and C_DurationUtil.CreateDurationTextBinding) then return nil end
+    local ok, b = pcall(C_DurationUtil.CreateDurationTextBinding)
+    if not ok or not b then return nil end
+    pcall(b.SetFontString, b, fontString)
+    local f = durationFormatter()
+    if f then pcall(b.SetFormatter, b, f) end
+    local curve = expiringColor(seconds)
+    if curve then
+        local prop = Enum.DurationTextBindingProperty and Enum.DurationTextBindingProperty.RemainingDuration
+        pcall(b.SetTextColorCurve, b, curve, prop or 0)
+    end
+    pcall(b.SetZeroDurationText, b, "")
+    pcall(b.SetExpiredText, b, "")
+    return b
+end
+
 -- Registers the duration text, dropping options step by step if the engine
 -- refuses them (never let it throw).
 local function setDurationText(button, fs, seconds)
