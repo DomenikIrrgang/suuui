@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- SuuUI's emblem as its icon in the game's AddOns list.
+
 ## 0.5.0-beta.2 (2026-10-18)
 
 ### New
