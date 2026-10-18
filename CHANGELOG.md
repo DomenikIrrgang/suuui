@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.2 (2026-10-18)
 
 ### New
 
 - **Totem bar** for shamans (to test), in the stance bar's place: your earth, fire, water and air totems as buttons that cast the totem chosen for each, in combat too, with a thin strip above them showing each totem's time left and drain (amber near the end). Right click dismisses a totem; the arrow on a hovered totem opens the list of that element's totems to choose another. Totemic Recall sits at the strip's end while a totem is down, Call of the Elements after the four once learned, Ghost Wolf on the right. With more than one summon spell (Call of the Elements, of the Ancestors, of the Spirits) the arrow under the Call button switches between their sets, each with its own four totems (remembered per character). An element with no totem yet is dashed. Settings › Action bars › Totem bar; the game's own totem bar comes back after a reload when it's off.
+- Plugin API 0.17: `SuuUI.UI.TotemBar` and `SuuUI.UI.DurationTextBinding` (a text line the game keeps showing a duration's time left, in combat too).
 
 ### Changed
 
