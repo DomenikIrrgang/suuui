@@ -199,8 +199,8 @@ local function buildOverlay(m)
     o:SetScript("OnEnter", function(self) sync(self.mover) end)
     o:SetScript("OnLeave", function(self) sync(self.mover) end)
     o:SetScript("OnClick", function(self, button)
+        if button == "RightButton" then return EditMode.OpenSettings(self.mover) end
         select(self.mover)
-        if button == "RightButton" then EditMode.OpenSettings(self.mover) end
     end)
     o:SetScript("OnDragStart", function(self)
         local m = self.mover
@@ -482,21 +482,20 @@ function EditMode.Exit()
         end
         place(m)
     end
-    if ns.SettingsWindow and ns.SettingsWindow.Raise then ns.SettingsWindow.Raise(false) end
     Events.Emit("SUUUI_EDITMODE_CHANGED", false)
     if groupPreview > 0 or groupPreviewAuras then Events.Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0, false) end
 end
 
--- A frame's settings (its right-click): the Settings window at its module's
--- section, over edit mode's layer while it is open.
+-- A frame's settings (its right-click): edit mode closes and the Settings
+-- window opens at its module's section.
 function EditMode.OpenSettings(m)
     local section = m and m.owner and ns.SettingsRegistry.ForOwner(m.owner, m.namespace)
     if not section then
         ns.Print(("%s has no settings of its own."):format(m and m.label or "This frame"))
         return
     end
+    EditMode.Exit()
     ns.SettingsWindow.Open(section.id)
-    ns.SettingsWindow.Raise(true)
 end
 
 function EditMode.Toggle()

@@ -4,7 +4,7 @@
 
 ### New
 
-- Edit mode: right-click a frame to open its settings (the Settings window opens over edit mode, so you see the change in place).
+- Edit mode: right-click a frame to open its settings (edit mode closes, the Settings window opens at that frame's section).
 
 ### Changed
 

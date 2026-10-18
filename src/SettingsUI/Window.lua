@@ -737,12 +737,6 @@ function W.Toggle()
     if frame and frame:IsShown() then frame:Hide() else W.Open() end
 end
 
--- Over edit mode's layer while it is open (opened from a frame's right-click
--- there), back to its own after.
-function W.Raise(on)
-    if frame then frame:SetFrameStrata(on and "FULLSCREEN_DIALOG" or "HIGH") end
-end
-
 function W.Close()
     if frame then frame:Hide() end
 end
