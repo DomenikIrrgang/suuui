@@ -102,6 +102,7 @@ API.UI = {
     CloseButton = UI.CloseButton,
     KeyChip = UI.KeyChip,
     StateBadge = UI.StateBadge,
+    Crest = UI.Crest,
     Icon = UI.Icon,
     StatusBar = UI.StatusBar,
     Text = UI.Text,

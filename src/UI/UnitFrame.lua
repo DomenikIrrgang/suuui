@@ -8,6 +8,7 @@
 --       anchor = false,     -- the player frame's double gilt frame and two diamonds
 --       you = false,        -- the "you" badge
 --       meta = false,       -- after the name: true for level and classification, "family" for a pet's family
+--       crest = false,      -- 0.17: the rare and elite crest (target, focus)
 --       poll = nil,         -- seconds: redraw on a timer, for units with no events (targettarget)
 --       power = true,       -- the power line
 --       healthText = "percent", -- "value" (12.3k), "both" (12.3k · 64%) or "none"
@@ -239,6 +240,12 @@ function UI.UnitFrame(parent, unit, opts)
     f.ghost:SetAllPoints(f.inner)
     f.health = bar(f, 2)
     f.health:SetAllPoints(f.inner)
+    -- opts.crest (0.17): the rare and elite crest on the top edge over the
+    -- right end (design "Rare and elite units" B)
+    if opts.crest then
+        f.crest = UI.Crest(f, "frame")
+        f.crest:SetPoint("CENTER", f, "TOPRIGHT", -64, -0.5)
+    end
     gradient(f.health, "unit-fill-deep", "unit-fill")
     f.healthLow = bar(f, 3)
     f.healthLow:SetAllPoints(f.inner)
@@ -526,6 +533,10 @@ function UF:UpdateIdentity()
         else
             self.name:SetColor("ink")
         end
+    end
+    if self.crest then
+        local c = not isPlayer and A.UnitClassification and A.UnitClassification(u) or nil
+        self.crest:SetClassification(c)
     end
     local meta = self.opts.meta
     if meta == "family" then

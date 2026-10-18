@@ -239,6 +239,10 @@ local function buildPlate(parent, api)
     edge:SetAllPoints()
     edge:SetFrameLevel(f.healthLow:GetFrameLevel() + 1)
     f.border = UI.Border(edge, "gilt-hairline")
+    -- rare and elite: the small crest just outside the bar's right end, as
+    -- the raid marker sits outside the left (design "Rare and elite units" B)
+    f.crest = UI.Crest(edge, "plate")
+    f.crest:SetPoint("CENTER", bar, "RIGHT", 7.5, 0)
     f.glow = UI.Shadow(bar, "glow-ember")
     f.glow:SetShown(false)
 
@@ -373,6 +377,9 @@ local ELITE = { elite = true, rareelite = true }
 function Plate:UpdateLevel()
     local A, u = self.api, self.unit
     local text
+    -- the rare and elite crest, whether the level shows or not
+    local okCrest, kind = pcall(A.UnitClassification or UnitClassification, u)
+    self.crest:SetClassification(okCrest and kind or nil)
     if M:Get("levels") and A.UnitLevel then
         local ok, level = pcall(A.UnitLevel, u)
         if ok and level ~= nil and not isSecret(level) then

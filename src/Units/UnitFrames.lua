@@ -67,11 +67,11 @@ local FRAMES = {
       -- Target of target keeps it, where it tells you a mob is on you.
       opts = { size = "lg", anchor = true, name = "SuuUIPlayerFrame" } },
     { key = "target", unit = "target", label = "Target", position = "targetPosition", watch = true,
-      opts = { size = "lg", meta = true, name = "SuuUITargetFrame" } },
+      opts = { size = "lg", meta = true, crest = true, name = "SuuUITargetFrame" } },
     { key = "tot", unit = "targettarget", label = "Target of target", position = "totPosition", watch = true, show = "showToT",
       opts = { size = "sm", width = "bar-tot", power = false, youWhenPlayer = true, poll = 0.2, name = "SuuUITargetTargetFrame" } },
     { key = "focus", unit = "focus", label = "Focus", position = "focusPosition", watch = true, show = "showFocus",
-      opts = { size = "md", meta = true, name = "SuuUIFocusFrame" } },
+      opts = { size = "md", meta = true, crest = true, name = "SuuUIFocusFrame" } },
     { key = "pet", unit = "pet", label = "Pet", position = "petPosition", watch = true, show = "showPet",
       opts = { size = "md", meta = "family", name = "SuuUIPetFrame" } },
 }
