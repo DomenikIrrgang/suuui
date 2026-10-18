@@ -5,6 +5,7 @@
 ### Changed
 
 - Totem bar: Totemic Recall is its own button at the right end, after Call of the Elements, shown once you know it and faded while no totem is down (it was a small cross that showed only with a totem down).
+- Totem bar: a slot's time left shows only for the totem its button casts. Choose another totem for the slot while the old one is still down and the old one's time goes away; it comes back when you put the new one down.
 
 ## 0.5.0-beta.3 (2026-10-18)
 

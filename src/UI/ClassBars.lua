@@ -469,15 +469,39 @@ local function stripSegment(bar, b)
     return s
 end
 
--- Every element's time and drain, and Recall faint while nothing is down. The
--- duration object comes in combat too (its values secret); none: empty.
+-- Whether the totem down in a slot is the one its button casts (asked
+-- 2026-10-18: a totem chosen in its place hides the old one's time). Out of
+-- combat the slot's spell answers (GetTotemInfo, by ID or by name: a rank
+-- may differ); in combat it is secret, so the answer is kept, and a totem
+-- that goes down just after its button or Call was clicked is the chosen one.
+local function totemIsChosen(b)
+    local slot = b.element.slot
+    local ok, have, _, _, _, _, _, spellID = pcall(GetTotemInfo, slot)
+    if not ok or isSecret(have) or isSecret(spellID) then
+        if b.castAt and GetTime() - b.castAt < 1 then b.chosen = true end
+        return b.chosen ~= false
+    end
+    b.castAt = nil
+    if not have then
+        b.chosen = nil
+        return true
+    end
+    local chosen = slotSpell(slot, b.bar.page)
+    b.chosen = not chosen or spellID == chosen
+        or (C_Spell.GetSpellName(spellID) or 1) == (C_Spell.GetSpellName(chosen) or 2)
+    return b.chosen
+end
+
+-- Every element's time and drain (only for the totem its button casts), and
+-- Recall faint while nothing is down. The duration object comes in combat
+-- too (its values secret); none: empty.
 function Totems:UpdateTimers()
     local any = false
     for _, b in ipairs(self.buttons) do
         local s = b.segment
         local ok, d = pcall(GetTotemDuration, b.element.slot)
-        if ok and d then
-            any = true
+        if ok and d then any = true end
+        if ok and d and totemIsChosen(b) then
             pcall(s.drain.SetTimerDuration, s.drain, d, IMMEDIATE, DIR.RemainingTime)
             s.drain:Show()
             if s.binding then
@@ -551,7 +575,7 @@ function Totems:UpdateAll()
 end
 
 -- The row and the strip over it (Call of the Elements after a hairline),
--- Recall after the strip's last segment.
+-- Call and Recall after a hairline.
 function Totems:Layout()
     Combat.Run("classbar:totemlayout:" .. self.name, function()
         local px, gap = self.size or 18, S["space-2"]
@@ -844,6 +868,7 @@ function UI.TotemBar(parent, opts)
         stripSegment(bar, b)
         b.bar = bar
         pickArrow(b, function() bar:OpenPicker(b) end, function() return #elementSpells(element.slot) > 1 end)
+        b:HookScript("OnClick", function(_, button) if button == "LeftButton" then b.castAt = GetTime() end end)
         bar.buttons[i] = b
     end
     -- Call of the Elements, after a hairline
@@ -860,6 +885,9 @@ function UI.TotemBar(parent, opts)
         if (bar.knownSets or 0) > 1 then GameTooltip:AddLine("The arrow: another set of totems.", UI.RGBA("ink-muted")) end
     end
     pickArrow(bar.call, function() bar:OpenSets() end, function() return (bar.knownSets or 0) > 1 end)
+    bar.call:HookScript("OnClick", function()
+        for _, b in ipairs(bar.buttons) do b.castAt = GetTime() end
+    end)
     -- Totemic Recall: the last button, on the right of Call
     bar.recall = UI.ActionButton(bar.header, opts.name .. "Recall", "action-sm")
     bar.recall:SetID(0)
@@ -877,6 +905,8 @@ function UI.TotemBar(parent, opts)
         Events.OnGame(e, all, bar)
     end
     Events.OnGame("PLAYER_TOTEM_UPDATE", function() bar:UpdateTimers() end, bar)
+    -- out of a fight the slots' totems can be read again
+    Events.OnGame("PLAYER_REGEN_ENABLED", function() bar:UpdateTimers() end, bar)
     -- a fight closes the list while it still may (the start of combat
     -- allows it)
     Events.OnGame("PLAYER_REGEN_DISABLED", function()

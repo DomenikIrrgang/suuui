@@ -281,6 +281,7 @@ Split into three confirmable parts: **1.6a** bars 5–8 with per-bar show, colum
   - The four element buttons (earth, fire, water, air) cast the chosen totem.
   - A thin timer strip above them shows each totem's time and drain; its tracks stay faint when nothing is down.
   - Totemic Recall rode on the strip while a totem was down; since 2026-10-18 (a tester with it learned didn't find it) it is its own button at the right end, after Call, faded while no totem is down.
+  - A slot's time shows only for the totem its button casts (asked 2026-10-18). Out of combat GetTotemInfo's spell ID answers (the probe: Earthbind 2484, the slot list's ID); in combat it is secret, so the answer is kept, and a totem that goes down within a second of a left click on its button or on Call counts as the chosen one. Checked again when the fight ends.
   - Call of the Elements and Ghost Wolf follow on the cast row once learned.
   - An element with no totem known yet is dashed.
   - The picker is a labelled list over the slot (the chosen totem ticked), out of combat.
