@@ -419,7 +419,10 @@ end
 function Plate:UpdateThreat()
     local A, u = self.api, self.unit
     local tone, word
-    if M:Get("threat") and not self.friendly then
+    -- never on players or their pets and totems (no threat table: an enemy
+    -- player's pet showed Aggro in a battleground, 2026-10-18)
+    local controlled = not self.preview and UnitPlayerControlled and UI.Flag(UnitPlayerControlled(u))
+    if M:Get("threat") and not self.friendly and not controlled then
         local status = A.UnitThreatSituation("player", u)
         if not isSecret(status) and status ~= nil then
             local tank

@@ -16,7 +16,15 @@
 ### Changed
 
 - The game's own level-up toast no longer shows while SuuUI's level-up card is on.
+- The level-up card fades out when it goes, instead of vanishing.
+- Exit Game in the game menu asks first.
+- Someone who is both in your guild (or a friend) and your Battle.net friend gets one online or offline card, the Battle.net one, instead of two.
 - A spell the game puts on your bars by itself (one you just learned) no longer flies to where Blizzard's hidden bars would be: SuuUI's button that holds it pops and flashes instead.
+
+### Fixed
+
+- Inviting a Battle.net friend no longer fails for "another realm": on Forever realms are rulesets, so only the game and side are checked.
+- No threat warnings or Aggro badges for enemy players' pets and totems, anywhere (seen in a battleground and the open world): only NPCs have threat.
 
 ## 0.5.0-beta.2 (2026-10-18)
 

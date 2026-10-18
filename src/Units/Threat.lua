@@ -160,8 +160,12 @@ end
 -- The meter and the warning
 --------------------------------------------------------------------------------
 
+-- An enemy with a threat table: never a player or a player's pet or
+-- totem (player-controlled: a tester in a battleground got aggro warnings
+-- from an enemy player's pet, 2026-10-18).
 local function hostileTarget()
     return UnitExists("target") and UI.Flag(UnitCanAttack("player", "target")) and not UI.Flag(UnitIsDeadOrGhost("target"))
+        and not UI.Flag(UnitPlayerControlled("target"))
 end
 
 local function inCombat()

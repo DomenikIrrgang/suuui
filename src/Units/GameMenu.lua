@@ -76,7 +76,8 @@ local GROUPS = {
     { "Session", {
         { "Reload UI", "reset", nil, notInCombat, slash = "/reload", sound = SOUNDKIT.IG_MAINMENU_OPTION },
         { "Log Out", "door", nil, exitBlocked, slash = "/logout", sound = SOUNDKIT.IG_MAINMENU_LOGOUT },
-        { "Exit Game", "close", nil, exitBlocked, slash = "/quit", sound = SOUNDKIT.IG_MAINMENU_QUIT },
+        -- asks first (asked 2026-10-18: a slip of the finger quit the game)
+        { "Exit Game", "close", closeThen(function() M:ConfirmQuit() end), exitBlocked },
     } },
 }
 
@@ -216,6 +217,33 @@ function M:Draw()
     local name, realm = UnitFullName("player")
     self.who:SetValue((name or "") .. ((realm and realm ~= "") and (" · " .. realm) or ""))
     self:DrawPerf()
+end
+
+-- Exit Game's question: SuuUI's dialog, its Exit Game button covered by a
+-- secure /quit (quitting from addon code is blocked on Forever). Out of
+-- combat; the cover goes with the dialog.
+function M:ConfirmQuit()
+    if InCombatLockdown() then return end
+    local d = UI.Confirm({ title = "Exit the game?", text = "You'll leave the world and the game closes.",
+        confirm = "Exit Game", onConfirm = function() end })
+    local over = self.quitOver
+    if not over then
+        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        over:SetAttribute("type1", "macro")
+        over:SetAttribute("macrotext1", "/quit")
+        over:SetScript("OnEnter", function() d.ok:GetScript("OnEnter")(d.ok) end)
+        over:SetScript("OnLeave", function() d.ok:GetScript("OnLeave")(d.ok) end)
+        over:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_QUIT) end)
+        d:HookScript("OnHide", function()
+            if not InCombatLockdown() then over:ClearAllPoints(); over:Hide() end
+        end)
+        self.quitOver = over
+    end
+    over:SetFrameStrata("FULLSCREEN_DIALOG")
+    over:ClearAllPoints()
+    over:SetAllPoints(d.ok)
+    over:Show()
 end
 
 -- The secure buttons over Reload UI, Log Out and Exit Game: there while the

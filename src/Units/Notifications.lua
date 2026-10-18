@@ -376,10 +376,10 @@ end
 -- the game draws; SuuUI never reads it).
 -- Can you invite them: in Forever, on your realm and in your faction (the
 -- game's own friends list asks the same).
+-- Same game and side (no realm check: Forever's realms are rulesets, and a
+-- friend on another realm ID still groups; the game says when it can't).
 local function canCooperate(game)
     if not (game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID) then return false end
-    local realm = GetRealmID and GetRealmID()
-    if not (plain(game.realmID) and game.realmID and realm and game.realmID == realm) then return false end
     return plain(game.factionName) and game.factionName == UnitFactionGroup("player")
 end
 
@@ -393,6 +393,12 @@ function M:BnetPerson(accountID)
         local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or ChatFrame_SendBNetTell
         if tell and info.accountName then tell(info.accountName) end
     end
+    -- the character they play, remembered so going offline matches too
+    self.bnetCharacters = self.bnetCharacters or {}
+    if plain(game.characterName) and game.characterName and game.characterName ~= "" then
+        self.bnetCharacters[accountID] = game.characterName
+    end
+    person.character = self.bnetCharacters[accountID]
     if game.clientProgram == (BNET_CLIENT_WOW or "WoW") and plain(game.characterName) and game.characterName then
         local file = CLASS_FILES[game.className or ""]
         person.color = classColor(file)
@@ -438,12 +444,53 @@ function M:Presence(kind, online, person)
     q.people[#q.people + 1] = person
 end
 
+-- A character's whole name ("Frassilla Grim": Battle.net gives the surname
+-- too, seen 2026-10-18), and its first name for a side that has none.
+local function wholeName(name)
+    return Ambiguate(name, "short")
+end
+local function firstName(name)
+    return (wholeName(name):match("^(%S+)"))
+end
+
+-- The characters your Battle.net friends play (now, or last seen): a
+-- guild member or friend who is one of them gets the Battle.net card only.
+function M:BnetCharacterSet()
+    local out = {}
+    local function add(name)
+        out[wholeName(name)] = true
+        -- a first name alone matches only a name without a surname
+        out["first:" .. firstName(name)] = true
+    end
+    for _, name in pairs(self.bnetCharacters or {}) do add(name) end
+    local n = BNGetNumFriends and BNGetNumFriends() or 0
+    for i = 1, n do
+        local info = C_BattleNet and C_BattleNet.GetFriendAccountInfo and C_BattleNet.GetFriendAccountInfo(i)
+        local game = info and info.gameAccountInfo
+        local name = game and game.characterName
+        if plain(name) and name and name ~= "" then add(name) end
+    end
+    return out
+end
+
 function M:FlushPresence(key)
     local q = self.presence and self.presence[key]
     if not q then return end
     -- in combat they wait for the fight's end
     if InCombatLockdown() then q.held = true return end
     self.presence[key] = nil
+    -- someone who is a guild member (or friend) and a Battle.net friend: one
+    -- card, the Battle.net one (asked 2026-10-18: two cards for one person)
+    if q.kind ~= "bnet" then
+        local bnet = self:BnetCharacterSet()
+        local kept = {}
+        for _, p in ipairs(q.people) do
+            local same = p.name and (bnet[wholeName(p.name)]
+                or (not wholeName(p.name):find(" ") and bnet["first:" .. firstName(p.name)]))
+            if not same then kept[#kept + 1] = p end
+        end
+        q.people = kept
+    end
     if not self:IsEnabled() or #q.people == 0 then return end
     local k = KINDS_OF[q.kind]
     local source = k.source or (GetGuildInfo("player")) or "Guild"

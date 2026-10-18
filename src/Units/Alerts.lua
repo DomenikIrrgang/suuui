@@ -56,6 +56,9 @@ function M:Present(key, tone, shown, hidden, args)
     hidden:Hide()
     shown:Show()
     if self:Get("position").hidden then return end
+    -- a card fading out (Hide) is back at full at once
+    if self.fading then self.fading:Cancel(); self.fading = nil end
+    SuuUI.Motion.AlphaTo(self.frame, 1, 0)
     self.frame:Show()
     if fresh then
         SuuUI.Motion.Enter(shown)
@@ -112,7 +115,21 @@ function M:Hide(key, now)
     end
     self:StopHolding()
     self.current, self.tone, self.last = nil, nil, nil
-    if self.frame then self.frame:Hide() end
+    if self.frame then
+        -- the level-up card fades out (asked 2026-10-18); alerts go at once
+        local f = self.frame
+        if self.card:IsShown() and f:IsShown() then
+            local d = SuuUI.Tokens.duration["dur-slow"]
+            SuuUI.Motion.AlphaTo(f, 0, d)
+            if self.fading then self.fading:Cancel() end
+            self.fading = C_Timer.NewTimer(d, function()
+                self.fading = nil
+                if not self.current then f:Hide(); f:SetAlpha(1) end
+            end)
+        else
+            f:Hide()
+        end
+    end
     -- the alert this one replaced, if it still holds
     local under = self.under
     self.under = nil
