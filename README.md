@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/status-beta-E6CC8A?style=for-the-badge&labelColor=131116" alt="Status: beta">
   <img src="https://img.shields.io/badge/Lua-5.1-F1EADB?style=for-the-badge&logo=lua&logoColor=F1EADB&labelColor=131116" alt="Lua 5.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-C9A75A?style=for-the-badge&labelColor=131116" alt="License: MIT"></a>
+  <a href="https://discord.gg/JkdTrRXdDw"><img src="https://img.shields.io/badge/Discord-join-3FD0FF?style=for-the-badge&logo=discord&logoColor=F1EADB&labelColor=131116" alt="Discord: join"></a>
 </p>
 
 <p align="center">
@@ -20,7 +21,8 @@
   <a href="#-installation">Installation</a> ·
   <a href="#-getting-started">Getting started</a> ·
   <a href="#-roadmap">Roadmap</a> ·
-  <a href="#-for-developers">For developers</a>
+  <a href="#-for-developers">For developers</a> ·
+  <a href="https://discord.gg/JkdTrRXdDw">Discord</a>
 </p>
 
 ---
@@ -141,6 +143,8 @@ wowlua install --release   # builds SuuUI and installs it into your game's AddOn
 | `/suu help` | Every command |
 
 **First steps:** open `/suu`, pick your preferences under **General → Appearance**, place your frames with **Edit layout**, and load your spec's preset in **Frames → Cooldown Manager**. Under **General → Profiles** you can set a profile per role (tank, healer, damage) — SuuUI switches when your role changes.
+
+**Questions, bugs or ideas?** Join the [SuuUI Discord](https://discord.gg/JkdTrRXdDw): ask in #help, report in #bug-reports, share your setup in #ui-showcase, and get a ping when a new version is out.
 
 ---
 
