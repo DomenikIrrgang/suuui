@@ -727,6 +727,7 @@ function M:Collect(mapID)
                     end
                     -- a weapon master: the weapons he teaches
                     if prof == "weapon" and WEAPON_MASTERS[id] then
+                        item.teaches = WEAPON_MASTERS[id]
                         item.more = item.more or {}
                         table.insert(item.more, 1, { "Teaches " .. WEAPON_MASTERS[id] })
                     end
@@ -1001,7 +1002,7 @@ function tipBase(g, hint)
     for _, it in ipairs(g.items) do
         local key = (it.name or "?") .. "\0" .. (it.detail or "")
         if not seen[key] then
-            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {} }
+            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {}, teaches = it.teaches }
             order[#order + 1] = seen[key]
         end
         -- (one NPC's spawn points once: "Mailbox ×2" is two mailboxes)
@@ -1017,6 +1018,8 @@ function tipBase(g, hint)
         if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#order - 12) } break end
         local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
         lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name }
+        -- a weapon master's weapons under his name
+        if e.teaches then lines[#lines + 1] = { muted .. "Teaches " .. e.teaches .. "|r" } end
     end
     -- all one name: the title says it all
     if #order == 1 and order[1].detail == "" then lines = nil end
