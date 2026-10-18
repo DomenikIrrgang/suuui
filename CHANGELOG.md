@@ -6,6 +6,7 @@
 
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
+- Cast bars: the spell's target in its class colour, and the "you" badge in the target's place when the spell is aimed at you, in combat too (the game hides who it is; SuuUI hands it to the bar without reading it).
 
 ### Changed
 

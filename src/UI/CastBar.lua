@@ -308,11 +308,26 @@ function UI.CastBar(parent, unit, opts)
         t.name:SetWordWrap(false)
         t.name:SetPoint("LEFT", t.mark, "RIGHT", 3, 0)
         t.name:SetWidth(UI.Size(opts.width or 300) - (f.lockW or 0) - 12)
+        -- aimed at you: the "you" badge in the name's place
+        t.you = UI.StateBadge(t, "neutral", "you")
+        t.you:SetPoint("LEFT", t.mark, "RIGHT", 3, 0)
+        t.you:SetAlpha(0)
         t:Hide()
         f.target = t
     end
     f.spell:SetShadowed(true)
     f.spell:SetPoint("LEFT", pad + (f.lockW or 0), 0)
+    -- aimed at you (off a plate): "Spell ›" and the "you" badge in the
+    -- line's place, shown by the game's answer (secret in combat)
+    if not plate then
+        f.spellYou = UI.Text(text, "label", "ink")
+        f.spellYou:SetShadowed(true)
+        f.spellYou:SetPoint("LEFT", pad + (f.lockW or 0), 0)
+        f.spellYou:SetAlpha(0)
+        f.you = UI.StateBadge(text, "neutral", "you")
+        f.you:SetPoint("LEFT", f.spellYou, "RIGHT", 4, 0)
+        f.you:SetAlpha(0)
+    end
     -- the name gives way to the time (and the interrupt): a fixed width, so a
     -- secret name is shortened by the engine with an ellipsis
     local reserve = 40 + ((enemy and opts.kick ~= false) and 30 or 0)
@@ -396,27 +411,34 @@ function CB:SetTargetShown(on)
     if self.duration then self:UpdateTarget() end
 end
 
--- Who the spell is aimed at. The name (and class) may be secret: never
--- tested, only handed to the text and the colour.
+-- Who the spell is aimed at. The name, class and whether it's you may be
+-- secret (probed 2026-10-18: in combat all three): never tested, only
+-- handed on, the class's colour to the text (its colour object's RGB and
+-- hex code take a secret class) and "is it you" to SetAlphaFromBoolean.
 local function spellTarget(unit)
     if not (UnitShouldDisplaySpellTargetName and UnitSpellTargetName) then return end
     if not UnitShouldDisplaySpellTargetName(unit) then return end
     local name = UnitSpellTargetName(unit)
     if type(name) == "nil" then return end
     local class = UnitSpellTargetClass and UnitSpellTargetClass(unit)
-    -- aimed at you: "You" (asked 2026-10-18); a secret name stays as it is
-    if not isSecret(name) and name == UnitName("player") then name = "You" end
-    return name, class
+    local you = PlayerIsSpellTarget and PlayerIsSpellTarget(unit)
+    return name, class, you
 end
 
--- A target's class colour as a colour code ("|cffrrggbb"), nil when the
--- class is unknown or secret.
-local function classCode(class)
-    if type(class) == "nil" or isSecret(class) or not C_ClassColor then return nil end
+-- A class's colour object (the class may be secret), or nil.
+local function classColor(class)
+    if type(class) == "nil" or not C_ClassColor then return nil end
     local ok, c = pcall(C_ClassColor.GetClassColor, class)
-    if not (ok and c) then return nil end
-    local ok2, hex = pcall(c.GenerateHexColor, c)
-    return ok2 and hex and ("|c" .. hex) or nil
+    return ok and c or nil
+end
+
+-- "you" shown or not by the game's answer, the line it stands in for the
+-- other way round
+local function showYou(you, badge, line, youLine)
+    if type(you) == "nil" then you = false end
+    if not pcall(badge.SetAlphaFromBoolean, badge, you, 1, 0) then badge:SetAlpha(0) end
+    if youLine then pcall(youLine.SetAlphaFromBoolean, youLine, you, 1, 0) end
+    if not pcall(line.SetAlphaFromBoolean, line, you, 0, 1) then line:SetAlpha(1) end
 end
 
 function CB:UpdateTarget()
@@ -426,27 +448,30 @@ function CB:UpdateTarget()
         local spell = self.spellName
         if type(spell) == "nil" then return end
         if self.targetShown then
-            local ok, name, class = pcall(spellTarget, self.unit)
+            local ok, name, class, you = pcall(spellTarget, self.unit)
             if ok and type(name) ~= "nil" then
+                self.spellYou:SetFormattedText("%s ›", spell)
+                showYou(you, self.you, self.spell, self.spellYou)
                 -- the target's name in its class colour (asked 2026-10-18)
-                local code = classCode(class)
-                if code then return self.spell:SetFormattedText("%s › %s%s|r", spell, code, name) end
+                local c = classColor(class)
+                local okHex, hex = pcall(function() return c and c:GenerateHexColor() end)
+                if okHex and hex then return self.spell:SetFormattedText("%s › |c%s%s|r", spell, hex, name) end
                 return self.spell:SetFormattedText("%s › %s", spell, name)
             end
         end
+        showYou(false, self.you, self.spell, self.spellYou)
         return self.spell:SetText(spell)
     end
     local t = self.target
     if not t then return end
     if self.targetShown == false then return t:Hide() end
-    local ok, name, class = pcall(spellTarget, self.unit)
+    local ok, name, class, you = pcall(spellTarget, self.unit)
     if not ok or type(name) == "nil" then return t:Hide() end
     t.name:SetText(name)
     t.name:SetColor("ink")
-    if type(class) ~= "nil" and C_ClassColor then
-        local okColor, c = pcall(C_ClassColor.GetClassColor, class)
-        if okColor and c then pcall(t.name.SetTextColor, t.name, c:GetRGB()) end
-    end
+    local c = classColor(class)
+    if c then pcall(function() t.name:SetTextColor(c:GetRGB()) end) end
+    showYou(you, t.you, t.name)
     t:Show()
 end
 
