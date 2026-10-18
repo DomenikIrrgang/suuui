@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.3 (2026-10-18)
 
 ### New
 
@@ -14,7 +14,6 @@
 - Levels in their difficulty colours (grey, green, yellow, orange, red, as the game rates them): after the name on the target, focus and boss frames, on unit tooltips' level line, and on nameplates before the name (after a quest mark; "25+" for elites, "??" for bosses; Settings › Nameplates › Level).
 - World map (to test): quest givers' "!" in gilt with a ring in the quest's difficulty colour, split into arcs for a giver with several quests (easiest to hardest), and a small bar under a group quest (where the game marks it as one; an arcane bar under a group quest to turn in).
 - Nameplates for friendly NPCs (guards, vendors, quest givers) in the open world, in SuuUI's look (Settings › Nameplates › Friendly NPCs).
-- Cast bars name a spell's target in its class colour everywhere, and say "You" when it's aimed at you.
 - Plugin API 0.17: `SuuUI.ApplyRolePreset`, `RolePresetName`, `ColorVision`, `SetColorVision`, `ColorVisionModes`, `ColorVisionColor`, `AccountData` (a module's table for the whole account), `ShowWelcome`, a micro menu button's count (`SetCount`), `SuuUI.UI.LevelColor(level)`, and map pins' `outline`, `arcs` and `bar`.
 
 ### Changed
