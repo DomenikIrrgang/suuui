@@ -276,14 +276,18 @@ local QUEST_RANK = { difficult = 1, standard = 2, ["very-difficult"] = 3, imposs
 -- Easiest to hardest: a split ring's arcs go clockwise in this order.
 local HARDNESS = { trivial = 1, standard = 2, difficult = 3, ["very-difficult"] = 4, impossible = 5 }
 
--- Whether a quest needs a group, as the game says (its tag, or a suggested
--- group size); nil when it can't tell (a quest it hasn't seen).
+-- Whether a quest needs a group: SuuUI's data (Classic's elite, dungeon and
+-- raid quests, and those set in one), else the game's tag or suggested
+-- group size, which it gives only for quests in your log (probe questgroup).
+local GROUP_TAGS = { [1] = true, [62] = true, [81] = true } -- elite, raid, dungeon
 local function isGroupQuest(id)
+    local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
+    if starts.group and starts.group[id] then return true end
     local C = C_QuestLog
     if not C then return nil end
     if C.GetQuestTagInfo then
         local ok, t = pcall(C.GetQuestTagInfo, id)
-        if ok and type(t) == "table" and t.tagID == 1 then return true end
+        if ok and type(t) == "table" and GROUP_TAGS[t.tagID] then return true end
     end
     if C.GetSuggestedGroupSize then
         local ok, n = pcall(C.GetSuggestedGroupSize, id)

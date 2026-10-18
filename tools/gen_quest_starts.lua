@@ -3,17 +3,21 @@
 -- picked up (its quest givers' spawn points, by the game's map IDs), with
 -- what the world map needs to tell whether you can take it (levels, races,
 -- classes, quests before it and instead of it), what each asks of you, and
--- the dungeon entrances.
+-- the dungeon entrances. Which quests need a group: Classic's quest types
+-- from cMaNGOS (tools/data/cmangos_quest_types.tsv, written by
+-- tools/extract_cmangos_quest_types.py) and the quests QuestieDB sets in a
+-- dungeon or raid.
 -- Reads QuestieDB's Forever data with its corrections applied in
 -- QuestieDB's order (inherited classic fixes, the generated Forever base,
 -- the Forever fixes), from the folder tools/fetch_quest_starts.sh fills.
 -- Also writes src/Data/MapPlaces.lua: the town services (from NPC flags
 -- and titles), mailboxes, rares and treasure chests, for the map's pins.
 -- Every downloaded file runs in a sandbox without io, os or require.
---   lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua src/Data/MapPlaces.lua
+--   lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua src/Data/MapPlaces.lua [<quest types.tsv>]
 
 local dir, out, placesOut = arg[1], arg[2], arg[3]
-assert(dir and out and placesOut, "usage: lua tools/gen_quest_starts.lua <dir> <quests.lua> <places.lua>")
+local typesPath = arg[4] or "tools/data/cmangos_quest_types.tsv"
+assert(dir and out and placesOut, "usage: lua tools/gen_quest_starts.lua <dir> <quests.lua> <places.lua> [<quest types.tsv>]")
 
 local function read(path)
     local f = assert(io.open(dir .. "/" .. path, "rb"), "missing " .. path .. " (run tools/fetch_quest_starts.sh)")
@@ -500,6 +504,31 @@ local LATER = { ["Blackrock Caverns"] = true, ["Blackwing Descent"] = true, ["Dr
 local RAIDS = { ["Molten Core"] = true, ["Onyxia's Lair"] = true, ["Blackwing Lair"] = true, ["Zul'Gurub"] = true,
                 ["Ruins of Ahn'Qiraj"] = true, ["Temple of Ahn'Qiraj"] = true, ["Naxxramas"] = true }
 local BATTLEGROUNDS = { ["Alterac Valley"] = true, ["Arathi Basin"] = true, ["Warsong Gulch"] = true }
+
+-- the areas inside a dungeon or raid (its own and its alternatives): a
+-- quest set there needs a group (Forever tags some the original didn't,
+-- Serpentbloom: probe questgroup)
+local instanceArea = {}
+for _, side in ipairs({ horde, alliance }) do
+    for area, d in pairs(side) do
+        if type(d) == "table" and type(d[1]) == "string" and not LATER[d[1]] and not BATTLEGROUNDS[d[1]] then
+            local kind = RAIDS[d[1]] and "raid" or "dungeon"
+            instanceArea[area] = kind
+            for _, alt in ipairs(type(d[2]) == "table" and d[2] or {}) do instanceArea[alt] = kind end
+        end
+    end
+end
+-- Classic's quest types (elite, dungeon, raid)
+local classicType, typesSource = {}, "?"
+do
+    local f = assert(io.open(typesPath, "rb"), "missing " .. typesPath)
+    for line in f:lines() do
+        local id, kind = line:match("^(%d+)\t(%a+)$")
+        if id then classicType[tonumber(id)] = kind end
+        typesSource = line:match("classic%-db (%x+)") or typesSource
+    end
+    f:close()
+end
 local seen = {}
 for _, side in ipairs({ { horde, "H" }, { alliance, "A" } }) do
     for area, d in pairs(side[1]) do
@@ -723,6 +752,8 @@ w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 n
 w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value},")
 w("--                  event (shown only while it's on: \"darkmoonFaire\", \"lunarFestival\", … a holiday; \"warEffort\",")
 w("--                  \"invasion\" one-off server events; \"seasonal\" some holiday) }")
+w("--   group[id] = \"elite\", \"dungeon\" or \"raid\": a quest that needs a group (set in a dungeon or raid, or Classic's")
+w("--               type: cMaNGOS classic-db " .. typesSource .. ", GPL-3.0); Forever's new quests only by their zone")
 w("--   objectives[id] = what the quest asks (its objectives text; $N, $C, $R and $Gmale:female; as the game writes them)")
 w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
 w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
@@ -758,6 +789,16 @@ for _, qid in ipairs(ids) do
             w(string.format("    [%d] = %q,", qid, text))
             nObjectives = nObjectives + 1
         end
+    end
+end
+-- the quests that need a group
+w("}, group = {")
+local nGroup = 0
+for _, qid in ipairs(ids) do
+    local kind = used[qid] and (instanceArea[quests[qid][QK.zoneOrSort]] or classicType[qid])
+    if kind then
+        w(string.format("    [%d] = %q,", qid, kind))
+        nGroup = nGroup + 1
     end
 end
 w("}, maps = {")
@@ -880,5 +921,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests (%d with objectives), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
+print(string.format("gen_quest_starts: %d quests (%d with objectives, %d for a group), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, nGroup, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares and service NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
