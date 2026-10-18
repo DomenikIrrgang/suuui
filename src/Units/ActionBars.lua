@@ -20,8 +20,8 @@
 --
 -- Bars 5-8 stand vertically at the right edge (bar 5 outermost, space-2
 -- apart), each movable in edit mode with its own columns and key bindings.
--- The design starts them hidden; on the first load each one that holds
--- anything is shown instead, so nobody loses spells they placed there.
+-- They start hidden, as the design has them, whatever the game put on them
+-- (a new character's bar 5 held its starting items and showed, 2026-10-18).
 --
 -- The stance/form bar sits space-2 above the dock's left outer edge and the
 -- pet bar above its right one (step 1.6b), at 9/10 of the dock's button
@@ -76,8 +76,6 @@ local M = SuuUI.RegisterModule({
         offPet = { point = "BOTTOMRIGHT", rel = "TOPRIGHT", x = 0, y = 4 },
         stancePosition = { point = "BOTTOM", x = -220, y = 120 },
         petPosition = { point = "BOTTOM", x = 220, y = 120 },
-        -- bars 5-8: seeded from what they hold on the first load
-        seeded = false,
         show5 = false, show6 = false, show7 = false, show8 = false,
         cols5 = 1, cols6 = 1, cols7 = 1, cols8 = 1,
         pos5 = { point = "TOPLEFT", x = 624, y = -208 },
@@ -108,6 +106,12 @@ local KEY_BARS = {
     { value = "7", label = "Bar 7" }, { value = "8", label = "Bar 8" },
     { value = "stance", label = "Stance" }, { value = "pet", label = "Pet" },
 }
+
+-- Bars 5-8 no longer start from what they hold: the flag that said it was
+-- done goes (2026-10-18).
+M:Migrate("dropSeeded", function(values)
+    values.seeded = nil
+end)
 
 -- One toggle per bar (keys1 to keys8, keysStance, keysPet) became the list
 -- keyBars under one switch, showKeys: the bars whose toggle was on (or never
@@ -258,19 +262,6 @@ function M:Arrange()
         self.bars[2].header:ClearAllPoints()
         self.bars[2].header:SetPoint("BOTTOM", self.bars[1].header, "TOP", 0, S["space-1"])
     end)
-end
-
--- Bars 5-8 on the first load: shown if they hold anything.
-function M:Seed()
-    if self:Get("seeded") then return end
-    for _, def in ipairs(BARS) do
-        if def.free then
-            local any = false
-            for i = 0, 11 do if HasAction(def.slot + i) then any = true break end end
-            self:Set("show" .. def.id, any)
-        end
-    end
-    self:Set("seeded", true)
 end
 
 function M:ApplyOptions()
@@ -641,13 +632,6 @@ function M:OnEnable()
     for _, e in ipairs({ "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_LEVEL_UP", "UPDATE_FACTION", "PLAYER_ENTERING_WORLD", "DISABLE_XP_GAIN", "ENABLE_XP_GAIN" }) do
         self:OnGameEvent(e, function() if self.dock then self:UpdateXP() end end)
     end
-    -- Action slots are loaded by the time you enter the world.
-    self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
-        if self.dock and not self:Get("seeded") then
-            self:Seed()
-            self:ApplyOptions()
-        end
-    end)
     if self:Get("showXP") then
         self:OnGameEvent("PLAYER_ENTERING_WORLD", suppressTracking)
     end

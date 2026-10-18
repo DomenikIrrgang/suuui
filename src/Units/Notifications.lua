@@ -86,6 +86,9 @@ local KINDS = {
     ABANDON_QUEST = { category = "Abandon quest", glyph = "scroll", tone = "danger", danger = 1 },
     QUEST_ACCEPT = { category = "Quest", glyph = "scroll", primary = 1 },
     CONFIRM_TALENT_WIPE = { category = "Talents", glyph = "tree", tone = "warning" },
+    -- items the game wanted to give you (the authenticator's bag bonus) that
+    -- didn't fit (seen at a first login, 2026-10-18)
+    CLIENT_INVENTORY_FULL_OVERFLOW = { category = "Inventory full", glyph = "bag", tone = "warning", primary = 1 },
     -- the bags' buy cell (a secure click on the game's purchase button):
     -- the game's own question, its cost on the card
     CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(dialog)

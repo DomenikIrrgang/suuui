@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Action bars 5–8 start hidden on a new character, as the design has them, even when the game put things on them (a new character's bar 5 showed with its starting items). Turn them on under Settings › Action bars.
+- The game's "Your inventory is full" notice (items it couldn't give you, such as the authenticator's bag bonus) comes as a notification card too.
+
 ## 0.5.0-beta.1 (2026-10-18)
 
 ### New

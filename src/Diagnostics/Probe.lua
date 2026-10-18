@@ -855,6 +855,10 @@ function ns.Probe.Command(arg)
         ns.MenuProbe.Command(rest)
         return
     end
+    if sub == "totems" then
+        ns.TotemProbe.Command(rest)
+        return
+    end
     if sub == "garbage" then
         ns.GarbageProbe.Command(rest)
         return
