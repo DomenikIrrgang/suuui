@@ -246,11 +246,12 @@ function UI.UnitFrame(parent, unit, opts)
     if opts.crest then
         f.crest = UI.Crest(f, "frame")
         f.crest:SetPoint("CENTER", f, "TOPRIGHT", -64, -0.5)
-        -- opts.dragon (0.17): the game's own dragon instead, under the
-        -- frame, the bar's right end where its portrait sat
+        -- opts.dragon (0.17): the game's own dragon instead, over the bars
+        -- (as Blizzard draws it over its frame) and under the name and
+        -- numbers; under the bar its head was hidden (seen in game)
         f.dragonHost = CreateFrame("Frame", nil, f)
         f.dragonHost:SetAllPoints()
-        f.dragonHost:SetFrameLevel(math.max(0, f:GetFrameLevel() - 1))
+        f.dragonHost:SetFrameLevel(f:GetFrameLevel() + 7)
         f.dragon = f.dragonHost:CreateTexture(nil, "ARTWORK")
         f.dragon:Hide()
     end
