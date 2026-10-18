@@ -154,3 +154,66 @@ Themes.Register({
     colors = colors({ ["surface"] = "#000000", ["surface-glass"] = "#000000FF", ["surface-sunk"] = "#000000",
                       ["surface-raised"] = "#0F0E11", ["track"] = "#161418" }),
 })
+
+--------------------------------------------------------------------------------
+-- From Azeroth's raids (asked 2026-10-18, design "Themes: from Azeroth's
+-- raids"): each its own surfaces, accent and ink, the accent moved off the
+-- signal colours it would read as (fel, ember, amber, arcane, dispel-curse,
+-- ward), the edges' alphas set so a panel's edge keeps its 2.2:1
+--------------------------------------------------------------------------------
+
+Themes.Register({
+    id = "blacktemple", name = "Black Temple",
+    description = "Illidan's fortress: moss-fel green on shadowed violet stone.",
+    colors = colors({
+        ["surface"] = "#140F1B", ["surface-glass"] = "#140F1BE6", ["surface-sunk"] = "#131019",
+        ["surface-raised"] = "#1B1622", ["track"] = "#231E29",
+        ["gilt"] = "#7DAF61", ["gilt-text"] = "#B7CD9D", ["gilt-line"] = "#7DAF6161",
+        ["gilt-hairline"] = "#7DAF614D", ["gilt-faint"] = "#7DAF6124",
+        ["ink"] = "#E8EDE1", ["ink-muted"] = "#9BA192", ["ink-faint"] = "#72776A",
+    }),
+})
+Themes.Register({
+    id = "moltencore", name = "Molten Core",
+    description = "Lava orange and molten gold on charred rock.",
+    colors = colors({
+        ["surface"] = "#190D0A", ["surface-glass"] = "#190D0AE6", ["surface-sunk"] = "#160D09",
+        ["surface-raised"] = "#211510", ["track"] = "#291D18",
+        ["gilt"] = "#BE5A0A", ["gilt-text"] = "#FFDF53", ["gilt-line"] = "#BE5A0A94",
+        ["gilt-hairline"] = "#BE5A0A75", ["gilt-faint"] = "#BE5A0A36",
+        ["ink"] = "#F6E9DA", ["ink-muted"] = "#AB9B8D", ["ink-faint"] = "#807165",
+    }),
+})
+Themes.Register({
+    id = "naxxramas", name = "Naxxramas",
+    description = "The necropolis: icy teal and bone on deep slate.",
+    colors = colors({
+        ["surface"] = "#0A141B", ["surface-glass"] = "#0A141BE6", ["surface-sunk"] = "#0B1318",
+        ["surface-raised"] = "#111B22", ["track"] = "#192329",
+        ["gilt"] = "#52B1A9", ["gilt-text"] = "#92F1F3", ["gilt-line"] = "#52B1A961",
+        ["gilt-hairline"] = "#52B1A94D", ["gilt-faint"] = "#52B1A924",
+        ["ink"] = "#F0EBDB", ["ink-muted"] = "#95A1A4", ["ink-faint"] = "#6C777A",
+    }),
+})
+Themes.Register({
+    id = "karazhan", name = "Karazhan",
+    description = "Medivh's tower: arcane violet and moonlit silver on dark plum.",
+    colors = colors({
+        ["surface"] = "#1A0D17", ["surface-glass"] = "#1A0D17E6", ["surface-sunk"] = "#180D17",
+        ["surface-raised"] = "#22141E", ["track"] = "#281C27",
+        ["gilt"] = "#8C6EBD", ["gilt-text"] = "#CACAEB", ["gilt-line"] = "#8C6EBD8A",
+        ["gilt-hairline"] = "#8C6EBD6E", ["gilt-faint"] = "#8C6EBD33",
+        ["ink"] = "#EBEAF3", ["ink-muted"] = "#A09CA8", ["ink-faint"] = "#77727D",
+    }),
+})
+Themes.Register({
+    id = "sunwell", name = "Sunwell",
+    description = "The Sunwell Plateau: sun-yellow and white light on warm stone.",
+    colors = colors({
+        ["surface"] = "#272017", ["surface-glass"] = "#272017E6", ["surface-sunk"] = "#19130C",
+        ["surface-raised"] = "#30291F", ["track"] = "#363026",
+        ["gilt"] = "#F5DC3A", ["gilt-text"] = "#FFF365", ["gilt-line"] = "#F5DC3A47",
+        ["gilt-hairline"] = "#F5DC3A3B", ["gilt-faint"] = "#F5DC3A1A",
+        ["ink"] = "#FAF7EA", ["ink-muted"] = "#B5AD9D", ["ink-faint"] = "#8B8273",
+    }),
+})
