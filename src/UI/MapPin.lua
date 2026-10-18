@@ -19,7 +19,15 @@
 --       count = nil,              -- a merged pin's count (2 and up)
 --       spin = nil,               -- true: the glyph turns, once in 6 s (a
 --                                 -- dungeon's portal); the disc stays still
+--       outline = false,          -- 0.17: a 1 px surface line outside the edge,
+--                                 -- so a coloured edge holds on light art
+--       arcs = nil,               -- 0.17: { token, … } a split edge, one arc per
+--                                 -- item (2-4), clockwise from the top
+--       bar = nil,                -- 0.17: a token: a 16 x 4 bar under the pin
 --   })
+-- The quest pins' difficulty (design "Map quest difficulty", direction D):
+-- the edge a 2 px ring in the quest's colour (split per quest for a giver
+-- with several), outlined; the bar under a group quest.
 --   pin:PinSize() -> its size in px
 --   pin:SetHighlight(state)  -- true: an ink ring around it (one of the
 --                            -- hovered quest's pins), fully opaque; "dim":
@@ -33,6 +41,7 @@ local UI = ns.UI
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
+local ARC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RingArc"
 local SIZE, SMALL = 26, 21
 
 -- A disc, centred; its size set with fit.
@@ -74,10 +83,38 @@ function Pin:SetData(d)
         fit(self.ringGap, size + 3)
         self.ringGap:SetVertexColor(UI.RGBA("surface"))
     end
+    self.outline:SetShown(d.outline and true or false)
+    if d.outline then
+        fit(self.outline, size + 2)
+        self.outline:SetVertexColor(UI.RGBA("surface"))
+    end
+    -- a split edge: the edge itself in surface (the gaps), an arc per item
+    local arcs = d.arcs and #d.arcs > 1 and d.arcs or nil
+    local n = arcs and math.min(#arcs, 4) or 0
     fit(self.edge, size)
-    self.edge:SetVertexColor(UI.RGBA(d.edge or "gilt-line"))
+    self.edge:SetVertexColor(UI.RGBA(arcs and "surface" or (d.edge or "gilt-line")))
     fit(self.fill, size - 2 * (d.edgeWidth or 1))
     self.fill:SetVertexColor(UI.RGBA("surface"))
+    for k = 1, 4 do
+        local t = self.arcs[k]
+        if k <= n then
+            t:SetTexture(ARC .. n .. ".tga")
+            fit(t, size)
+            t:SetVertexColor(UI.RGBA(arcs[k]))
+            -- clockwise from the top: each arc turned by its share
+            t:SetRotation(-(k - 1) * 2 * math.pi / n)
+            t:Show()
+        else
+            t:Hide()
+        end
+    end
+    -- the bar under the pin (a group quest), 4 px below, outlined
+    self.barEdge:SetShown(d.bar ~= nil)
+    self.bar:SetShown(d.bar ~= nil)
+    if d.bar then
+        self.bar:SetColorTexture(UI.RGBA(d.bar))
+        self.barEdge:SetColorTexture(UI.RGBA("surface"))
+    end
     local inner = d.small and 14 or 17
     if d.glyph then
         self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
@@ -119,8 +156,22 @@ function UI.MapPin(parent)
     b.hl:Hide()
     b.ringOuter = disc(b, "BACKGROUND", 1)
     b.ringGap = disc(b, "BACKGROUND", 2)
+    b.outline = disc(b, "BACKGROUND", 3)
     b.edge = disc(b, "BORDER", 1)
     b.fill = disc(b, "BORDER", 2)
+    b.arcs = {}
+    for k = 1, 4 do
+        local t = b:CreateTexture(nil, "BORDER", nil, 3)
+        t:SetPoint("CENTER")
+        t:Hide()
+        b.arcs[k] = t
+    end
+    b.barEdge = b:CreateTexture(nil, "BACKGROUND", nil, 4)
+    b.barEdge:SetSize(18, 6)
+    b.barEdge:SetPoint("TOP", b, "BOTTOM", 0, -3)
+    b.bar = b:CreateTexture(nil, "BORDER", nil, 4)
+    b.bar:SetSize(16, 4)
+    b.bar:SetPoint("TOP", b, "BOTTOM", 0, -4)
     b.glyph = b:CreateTexture(nil, "ARTWORK")
     b.glyph:SetPoint("CENTER")
     -- the turn: clockwise, as the game's instance portals turn (seen in

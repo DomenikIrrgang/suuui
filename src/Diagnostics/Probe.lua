@@ -855,6 +855,10 @@ function ns.Probe.Command(arg)
         ns.MenuProbe.Command(rest)
         return
     end
+    if sub == "questgroup" then
+        ns.QuestGroupProbe.Command(rest)
+        return
+    end
     if sub == "casttarget" then
         ns.CastTargetProbe.Command(rest)
         return

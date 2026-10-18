@@ -259,6 +259,45 @@ local PROFESSION_NAMES = {
 }
 local QUEST_RANK = { difficult = 1, standard = 2, ["very-difficult"] = 3, impossible = 4, trivial = 5 }
 
+-- Easiest to hardest: a split ring's arcs go clockwise in this order.
+local HARDNESS = { trivial = 1, standard = 2, difficult = 3, ["very-difficult"] = 4, impossible = 5 }
+
+-- Whether a quest needs a group, as the game says (its tag, or a suggested
+-- group size); nil when it can't tell (a quest it hasn't seen).
+local function isGroupQuest(id)
+    local C = C_QuestLog
+    if not C then return nil end
+    if C.GetQuestTagInfo then
+        local ok, t = pcall(C.GetQuestTagInfo, id)
+        if ok and type(t) == "table" and t.tagID == 1 then return true end
+    end
+    if C.GetSuggestedGroupSize then
+        local ok, n = pcall(C.GetSuggestedGroupSize, id)
+        if ok and type(n) == "number" and n > 1 then return true end
+    end
+    return nil
+end
+
+-- A quest pin's look (design "Map quest difficulty", D): a gilt "!", the
+-- edge a 2 px ring in the quest's difficulty colour (split per quest for
+-- several, easiest to hardest clockwise), outlined; the bar under it in the
+-- group quest's colour when one of them needs a group.
+local function questPin(list, best)
+    local sorted = {}
+    for i, q in ipairs(list) do sorted[i] = q end
+    table.sort(sorted, function(a, b) return (HARDNESS[a.difficulty] or 2) < (HARDNESS[b.difficulty] or 2) end)
+    local arcs, bar
+    if #sorted > 1 then
+        arcs = {}
+        for i, q in ipairs(sorted) do arcs[i] = "quest-" .. q.difficulty end
+    end
+    for _, q in ipairs(sorted) do
+        if q.group then bar = "quest-" .. q.difficulty end
+    end
+    return { char = "!", color = "gilt-text", edge = "quest-" .. best.difficulty, edgeWidth = 2, outline = true,
+             arcs = arcs, bar = bar }
+end
+
 -- The level at and below which a quest is grey for you, as the original
 -- game had it (Forever's own colour keeps a level 3 quest green for a level
 -- 15 character; found in game, Mulgore).
@@ -506,7 +545,8 @@ function M:Collect(mapID)
                 local state, difficulty, level
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (on.quests[state]) and (difficulty ~= "trivial" or on.quests.trivial) then
-                    list[#list + 1] = { name = questName(q, id), level = level, difficulty = difficulty, state = state }
+                    list[#list + 1] = { name = questName(q, id), level = level, difficulty = difficulty, state = state,
+                                        group = isGroupQuest(id) }
                     ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty, state = state } end
@@ -528,7 +568,7 @@ function M:Collect(mapID)
                 end
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = repeatable and "repeatable" or "available", rank = best.rank,
-                    pin = { char = "!", color = repeatable and "mana" or ("quest-" .. best.difficulty), edge = repeatable and "mana" or nil },
+                    pin = repeatable and { char = "!", color = "mana", edge = "mana" } or questPin(list, best),
                     name = list[1].name, detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
                     more = lines, difficulty = best.difficulty, repeatable = repeatable, uid = "g" .. row[3], quests = ids,
                     route = route,
@@ -551,7 +591,7 @@ function M:Collect(mapID)
                 local state, difficulty, level
                 if q then state, difficulty, level = questState(q, id, me, done) end
                 if state and (difficulty ~= "trivial" or on.quests.trivial) then
-                    list[#list + 1] = { name = questName(q, id), level = level }
+                    list[#list + 1] = { name = questName(q, id), level = level, difficulty = difficulty, group = isGroupQuest(id) }
                     ids[#ids + 1] = id
                     local rank = QUEST_RANK[difficulty] or 9
                     if not best or rank < best.rank then best = { rank = rank, difficulty = difficulty } end
@@ -562,7 +602,7 @@ function M:Collect(mapID)
                 for i = 2, #list do lines[#lines + 1] = { list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r" } end
                 items[#items + 1] = {
                     x = row[1] / 100, y = row[2] / 100, key = "itemQuest", rank = best.rank,
-                    pin = { char = "!", color = "quest-" .. best.difficulty, edge = "gilt" },
+                    pin = questPin(list, best),
                     name = list[1].name, detail = "Level " .. list[1].level,
                     listDetail = "Level " .. list[1].level .. " · " .. item .. " · " .. source,
                     more = lines, difficulty = best.difficulty, uid = "d" .. row[3] .. ":" .. row[4], kindName = "Quests from items", quests = ids,
@@ -1223,7 +1263,9 @@ function M:StyleQuestPin(pin)
     local lit = pin.HighlightTexture and pin.HighlightTexture:IsShown()
     local data
     if kind == "complete" then
-        data = { char = "?", color = "arcane", edge = "arcane" }
+        -- a group quest to turn in: the arcane bar under it (design D)
+        local group = pin.questID and isGroupQuest(pin.questID)
+        data = { char = "?", color = "arcane", edge = "arcane", bar = group and "arcane" or nil }
     elseif kind == "waypoint" then
         data = { glyph = "dash", color = "ink", edge = "ink-muted" }
     else

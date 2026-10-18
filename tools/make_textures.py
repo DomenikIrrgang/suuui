@@ -579,6 +579,27 @@ def player_arrow(size=64, ss=4):
     return lambda x, y: cache[(x, y)]
 
 
+def ring_arc(size, inner, outer, start, stop, ss=4):
+    """Alpha of a ring inner..outer (fractions of the radius) from `start` to
+    `stop` degrees, clockwise from the top (the map pins' split ring: turned
+    in game for each quest's arc)."""
+    r = size / 2
+    cache = {}
+    for py in range(size):
+        for px in range(size):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss - r
+                    y = py + (sy + 0.5) / ss - r
+                    d = math.hypot(x, y) / r
+                    a = math.degrees(math.atan2(x, -y)) % 360
+                    if inner <= d <= outer and start <= a <= stop:
+                        hits += 1
+            cache[(px, py)] = round(255 * hits / (ss * ss))
+    return lambda x, y: (255, 255, 255, cache[(x, y)])
+
+
 def dashed_ring(size, inner, outer, dashes=16, ss=4):
     """Alpha of a ring inner..outer (fractions of the radius) in `dashes` dashes, half on."""
     r = size / 2
@@ -622,6 +643,10 @@ def main():
     # a pin's dashed edge (a quest's next step on another map): 1 px at 26 px
     jobs.append(("CircleDash.tga", 104, dashed_ring(104, 1 - 2 / 26, 1)))
     jobs.append(("PlayerArrow.tga", 64, player_arrow()))
+    # a map pin's split ring (design "Map quest difficulty" D): one arc per
+    # quest of 2, 3 or 4, 8 degrees apart; 2 px at the pin's 26 px
+    for n in (2, 3, 4):
+        jobs.append(("RingArc%d.tga" % n, 104, ring_arc(104, 1 - 2 / 13, 1, 4, 360 / n - 4)))
     jobs.append(("ChatDiamond.tga", 32, diamond(32, 0.5)))
     only = set(os.sys.argv[1:])
     for name, size, pixel in jobs:
