@@ -5,7 +5,8 @@
 -- world map's shown zone (or your zone): every quest SuuUI's data has
 -- givers offering there, and every quest in your log, with
 -- C_QuestLog.GetQuestTagInfo and C_QuestLog.GetSuggestedGroupSize. Saved in
--- SuuUIProbe.questGroup on /reload.
+-- SuuUIProbe.questGroup on /reload. Asks each quest three times (now, after
+-- 2 s and 6 s): the game answers nil at first for a quest it hasn't loaded.
 
 local _, ns = ...
 
@@ -29,34 +30,65 @@ local function groupOf(id)
     return isSecret(n) and "SECRET" or tostring(n)
 end
 
+-- The game often answers nil the first time it's asked about a quest it
+-- hasn't loaded, and knows it a moment later: each quest is asked now
+-- (with a load request), after 2 s and after 6 s, and each answer kept.
+local PASSES = { 0, 2, 6 }
+
 function QG.Command()
     local mapID = (WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame:GetMapID()) or C_Map.GetBestMapForUnit("player")
     local starts = ns.QuestStarts or {}
-    local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = { tagged = 0, grouped = 0, quests = 0 } }
-    local seen = {}
+    local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = { quests = 0, ours = 0 } }
+    local ids, seen, inLog = {}, {}, {}
+    for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
+        local info = C_QuestLog.GetInfo(i)
+        if info and not info.isHeader and info.questID then inLog[info.questID] = true end
+    end
     for _, row in ipairs(starts.maps and starts.maps[mapID] or {}) do
         for i = 4, #row do
             local id = row[i]
-            if not seen[id] then
+            if not seen[id] and not inLog[id] then
                 seen[id] = true
-                local tag, group = tagOf(id), groupOf(id)
-                out.counts.quests = out.counts.quests + 1
-                if tag:find("tagID=") then out.counts.tagged = out.counts.tagged + 1 end
-                if tonumber(group) and tonumber(group) > 0 then out.counts.grouped = out.counts.grouped + 1 end
-                local q = starts.quests and starts.quests[id]
-                out.map[#out.map + 1] = ("%d %s: %s · group %s"):format(id, tostring(q and q[1]), tag, group)
+                ids[#ids + 1] = id
             end
         end
     end
-    for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
-        local info = C_QuestLog.GetInfo(i)
-        if info and not info.isHeader and info.questID then
-            out.log[#out.log + 1] = ("%d %s: %s · group %s · suggestedGroup %s"):format(info.questID, tostring(info.title),
-                tagOf(info.questID), groupOf(info.questID), tostring(info.suggestedGroup))
+    local answers = {}
+    local function pass(n)
+        local tagged = 0
+        for _, id in ipairs(ids) do
+            answers[id] = answers[id] or {}
+            local tag = tagOf(id)
+            answers[id][n] = tag
+            if tag:find("tagID=") then tagged = tagged + 1 end
+            if n == 1 and C_QuestLog.RequestLoadQuestByID then pcall(C_QuestLog.RequestLoadQuestByID, id) end
         end
+        out.counts["tagged" .. PASSES[n] .. "s"] = tagged
     end
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.questGroup = out
-    ns.Print(("Quest group probe: %d quests on map %s (%d tagged, %d with a group size), %d in your log. /reload to save it.")
-        :format(out.counts.quests, tostring(mapID), out.counts.tagged, out.counts.grouped, #out.log))
+    local function finish()
+        for _, id in ipairs(ids) do
+            local q = starts.quests and starts.quests[id]
+            local ours = starts.group and starts.group[id]
+            if ours then out.counts.ours = out.counts.ours + 1 end
+            local a = answers[id]
+            out.map[#out.map + 1] = ("%d %s: now %s | 2 s %s | 6 s %s · group %s · ours %s"):format(id, tostring(q and q[1]),
+                a[1], a[2], a[3], groupOf(id), tostring(ours))
+        end
+        out.counts.quests = #ids
+        for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
+            local info = C_QuestLog.GetInfo(i)
+            if info and not info.isHeader and info.questID then
+                out.log[#out.log + 1] = ("%d %s: %s · group %s · suggestedGroup %s · ours %s"):format(info.questID, tostring(info.title),
+                    tagOf(info.questID), groupOf(info.questID), tostring(info.suggestedGroup), tostring(starts.group and starts.group[info.questID]))
+            end
+        end
+        SuuUIProbe = SuuUIProbe or {}
+        SuuUIProbe.questGroup = out
+        ns.Print(("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it.")
+            :format(#ids, tostring(mapID), out.counts.tagged0s, out.counts.tagged2s, out.counts.tagged6s, out.counts.ours))
+    end
+    pass(1)
+    ns.Print(("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID)))
+    C_Timer.After(PASSES[2], function() pass(2) end)
+    C_Timer.After(PASSES[3], function() pass(3); finish() end)
 end
