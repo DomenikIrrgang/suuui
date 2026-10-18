@@ -59,6 +59,7 @@ local M = SuuUI.RegisterModule({
         friendlyNPCs = true,   -- friendly NPCs' plates in the open world (asked 2026-10-18)
         questMarks = true,
         levels = true,         -- the level before the name, in its difficulty's colour
+        eliteDragon = false,   -- the game's elite dragon round the bar's right end, in the crest's place
         raidMarker = true,
     },
 })
@@ -243,6 +244,13 @@ local function buildPlate(parent, api)
     -- the raid marker sits outside the left (design "Rare and elite units" B)
     f.crest = UI.Crest(edge, "plate")
     f.crest:SetPoint("CENTER", bar, "RIGHT", 7.5, 0)
+    -- or the game's elite dragon round the right end, over the bar as on
+    -- the target frame (design "Elite dragon (with crest B)" D)
+    local dragonHost = CreateFrame("Frame", nil, bar)
+    dragonHost:SetAllPoints()
+    dragonHost:SetFrameLevel(edge:GetFrameLevel() + 1)
+    f.dragon = dragonHost:CreateTexture(nil, "ARTWORK")
+    f.dragon:Hide()
     f.glow = UI.Shadow(bar, "glow-ember")
     f.glow:SetShown(false)
 
@@ -377,9 +385,13 @@ local ELITE = { elite = true, rareelite = true }
 function Plate:UpdateLevel()
     local A, u = self.api, self.unit
     local text
-    -- the rare and elite crest, whether the level shows or not
+    -- the rare and elite crest (or the dragon), whether the level shows or not
     local okCrest, kind = pcall(A.UnitClassification or UnitClassification, u)
-    self.crest:SetClassification(okCrest and kind or nil)
+    if not okCrest then kind = nil end
+    local okBoss, boss = pcall(A.UnitIsBossMob or UnitIsBossMob or function() end, u)
+    local art = M:Get("eliteDragon") and UI.DragonArt(kind, okBoss and boss or nil)
+    self.crest:SetClassification(not art and kind or nil)
+    UI.PlaceDragon(self.dragon, art, self.bar, self.bar:GetHeight())
     if M:Get("levels") and A.UnitLevel then
         local ok, level = pcall(A.UnitLevel, u)
         if ok and level ~= nil and not isSecret(level) then
@@ -977,6 +989,8 @@ local SECTION = {
               description = "Above the name, with their time. Only yours." },
             { key = "levels", label = "Level", control = "toggle",
               description = "The level before the name (after a quest mark), coloured by how hard it is for you (green, yellow, orange, red; grey when it gives nothing). A + for elites, ?? for bosses. Friendly plates too." },
+            { key = "eliteDragon", label = "Elite dragon", control = "toggle",
+              description = "The game's own dragon round the bar's right end for elites, rares and bosses, in place of the crest; friendly and neutral NPCs too." },
             { key = "healthText", label = "Health text", control = "segmented",
               options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
                           { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
@@ -1072,7 +1086,7 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_FACTION", function(_, unit)
         if unit and unit:find("^nameplate") and UnitExists(unit) then self:Recheck(unit) end
     end)
-    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks", "levels", "raidMarker" }) do
+    for _, key in ipairs({ "width", "barHeight", "castHeight", "auraSize", "auras", "castBars", "castTarget", "castKick", "dimOthers", "threat", "healthText", "questMarks", "levels", "eliteDragon", "raidMarker" }) do
         self:Watch(key, function()
             for unit, f in pairs(byUnit) do
                 self:ApplyAuraCount(f)

@@ -106,3 +106,40 @@ function UI.Crest(parent, variant)
     c:Hide()
     return c
 end
+
+--------------------------------------------------------------------------------
+-- The elite dragon (asked 2026-10-18, design "Elite dragon (with crest B)"
+-- A, in place of the crest when its setting is on): the art Forever's own
+-- target frame wears (Camelot TargetFrameUtils' GetBossPortraitFrameData),
+-- its size from the client (probe dragon: 100 x 100, 110 x 90, 110 x 89),
+-- placed as on Blizzard's 232 x 100 frame around its 58 px portrait, scaled
+-- so the right end of a bar `height` tall stands in for the portrait.
+--
+--   local art = UI.DragonArt(UnitClassification(unit), UnitIsBossMob(unit))
+--   UI.PlaceDragon(texture, art, bar, bar:GetHeight())   -- nil art: hidden
+--------------------------------------------------------------------------------
+
+local DRAGON = {
+    elite = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", 100, 100, 0, 1 },
+    boss = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", 110, 90, 11, -4 },
+    rare = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", 110, 89, 8, -7 },
+}
+
+function UI.DragonArt(classification, isBoss)
+    local secret = issecretvalue or function() return false end
+    if classification == nil or secret(classification) then return nil end
+    if (not secret(isBoss) and isBoss) or classification == "worldboss" then return DRAGON.boss end
+    if classification == "rare" or classification == "rareelite" then return DRAGON.rare end
+    if classification == "elite" then return DRAGON.elite end
+end
+
+-- TOPRIGHT at ((x + 26) s, (y + 19) s) of `anchor`, s = height / 58
+function UI.PlaceDragon(t, art, anchor, height)
+    if not art then return t:Hide() end
+    local s = height / 58
+    t:SetAtlas(art[1])
+    t:SetSize(art[2] * s, art[3] * s)
+    t:ClearAllPoints()
+    t:SetPoint("TOPRIGHT", anchor, "TOPRIGHT", (art[4] + 26) * s, (art[5] + 19) * s)
+    t:Show()
+end

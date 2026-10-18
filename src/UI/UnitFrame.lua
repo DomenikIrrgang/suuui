@@ -466,7 +466,6 @@ function UF:UpdatePower()
 end
 
 local CLASSIFICATION = { worldboss = "Boss", elite = "Elite", rareelite = "Rare Elite", rare = "Rare" }
-local dragonArt
 
 -- 0.17: a level's colour token by how hard it is for you (asked 2026-10-18:
 -- green, yellow, orange, red, grey as the game rates it): the game's own
@@ -498,35 +497,8 @@ local function metaText(A, u)
     return word and (lv .. " " .. word) or lv
 end
 
--- The elite dragon (asked 2026-10-18, design "Elite dragon (with crest B)"
--- A): the art Forever's own target frame wears (Camelot TargetFrameUtils'
--- GetBossPortraitFrameData), its size from the client (probe dragon:
--- 100 x 100, 110 x 90, 110 x 89), placed as on Blizzard's 232 x 100 frame
--- around its 58 px portrait, scaled so the bar's right end stands in for
--- the portrait: TOPRIGHT at ((x + 26) s, (y + 19) s), s = height / 58.
-local DRAGON = {
-    elite = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", 100, 100, 0, 1 },
-    boss = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", 110, 90, 11, -4 },
-    rare = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", 110, 89, 8, -7 },
-}
-function dragonArt(A, u, c)
-    if c == nil or isSecret(c) then return nil end
-    local isBoss = A.UnitIsBossMob and A.UnitIsBossMob(u)
-    if (not isSecret(isBoss) and isBoss) or c == "worldboss" then return DRAGON.boss end
-    if c == "rare" or c == "rareelite" then return DRAGON.rare end
-    if c == "elite" then return DRAGON.elite end
-end
-
 function UF:ShowDragon(art)
-    local t = self.dragon
-    if not t then return end
-    if not art then return t:Hide() end
-    local s = self:GetHeight() / 58
-    t:SetAtlas(art[1])
-    t:SetSize(art[2] * s, art[3] * s)
-    t:ClearAllPoints()
-    t:SetPoint("TOPRIGHT", self, "TOPRIGHT", (art[4] + 26) * s, (art[5] + 19) * s)
-    t:Show()
+    if self.dragon then UI.PlaceDragon(self.dragon, art, self, self:GetHeight()) end
 end
 
 function UF:UpdateIdentity()
@@ -577,7 +549,7 @@ function UF:UpdateIdentity()
     end
     if self.crest then
         local c = not isPlayer and A.UnitClassification and A.UnitClassification(u) or nil
-        local dragon = self.opts.dragon and dragonArt(A, u, c)
+        local dragon = self.opts.dragon and UI.DragonArt(c, A.UnitIsBossMob and A.UnitIsBossMob(u))
         self.crest:SetClassification(not dragon and c or nil)
         self:ShowDragon(dragon)
     end
