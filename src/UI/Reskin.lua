@@ -149,8 +149,9 @@ function UI.ReskinStatusBar(bar)
 end
 
 -- A bar Blizzard draws itself (a frame with a Fill texture it sizes and
--- tints: the reputation's standing bars): the fill flat in Blizzard's tint
--- (the standing's colour), a track in a gilt-hairline edge, the text centred.
+-- tints: the reputation's standing bars, the skills' bars): the fill flat in
+-- Blizzard's tint (the standing's colour) or its atlas's colour (the skills'
+-- blue), a track in a gilt-hairline edge, the text centred.
 function UI.ReskinFillBar(bar)
     local fill = bar and bar.Fill
     if not fill then return end
@@ -171,14 +172,28 @@ function UI.ReskinFillBar(bar)
         UI.Border(track, "gilt-hairline")
         bar.suuTrack = track
         fill:SetHeight(h - 2)
+        -- the colour: Blizzard's tint on a white atlas (the reputation's
+        -- standings); a coloured atlas (the skills' blue, tinted white on
+        -- top) keeps its colour as a token
         local flattening = false
+        local function tint()
+            local token = BAR_COLORS[bar.suuAtlasWord or ""]
+            if not token then return end
+            flattening = true
+            fill:SetVertexColor(UI.RGBA(token))
+            flattening = false
+        end
         local function flat()
             if flattening then return end
+            local a = (fill:GetAtlas() or ""):lower()
+            if a ~= "" then bar.suuAtlasWord = a:match("stat%-bar%-(%a+)") end
             flattening = true
             fill:SetTexture(WHITE)
             flattening = false
+            tint()
         end
         hooksecurefunc(fill, "SetAtlas", flat)
+        hooksecurefunc(fill, "SetVertexColor", function() if not flattening then tint() end end)
         bar.suuFlat = flat
         -- Blizzard sizes the fill as a share of its FillArea's width once
         -- (SetFillPercent); a row filled in before it had a width got 0,
@@ -816,6 +831,9 @@ local function pass(f, depth, ctx)
     -- never restyled
     if f.suuOwn then return end
     local kind = ask(f, "GetObjectType")
+    -- Blizzard's coloured progress bar (a Fill it sizes itself: the
+    -- reputation's and the skills' bars, the skills' a StatusBar)
+    if f.Fill and f.FillArea and f.SetFillPercent then UI.ReskinFillBar(f); return end
     if kind == "StatusBar" then UI.ReskinStatusBar(f); return end
     if kind == "CheckButton" and not f.suuNoCheck then UI.ReskinCheckButton(f) end
     if kind == "EditBox" then UI.ReskinEditBox(f) end
