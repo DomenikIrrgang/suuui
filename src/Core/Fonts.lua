@@ -39,6 +39,7 @@ function Fonts.Refresh()
         local style = T.type[name]
         font:SetFont(style.file, style.size, "")
         font:SetSpacing(style.lineHeight - style.size)
+        font:SetTextColor(unpack(T.color.ink))
     end
 end
 

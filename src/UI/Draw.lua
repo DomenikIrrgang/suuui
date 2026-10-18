@@ -19,6 +19,124 @@ function UI.RGBA(name, alpha)
     return c[1], c[2], c[3], c[4] * (alpha or 1)
 end
 
+--------------------------------------------------------------------------------
+-- Paint: colours that follow the theme (asked 2026-10-19: themes and colour
+-- vision change without a reload). A colour set by its token is kept with
+-- the region it was set on; when the theme or colour vision changes,
+-- UI.Repaint sets every kept one again. Setting the region's colour any
+-- other way (a class colour, a raw value, a texture instead) lets it go,
+-- so a repaint never undoes what the code set since.
+--   UI.Paint(region, token[, alpha])       a FontString's text colour, a
+--                                          StatusBar's bar colour, or a
+--                                          texture's vertex colour
+--   UI.PaintFill(texture, token[, alpha])  a solid colour texture
+--   UI.PaintGradient(texture, orientation, fromToken, toToken[, fromAlpha, toAlpha])
+--   UI.Bind(region, fn)                    fn(region) now and after each
+--                                          change, for anything else
+-- `alpha` multiplies the token's own, as with UI.RGBA. What can't be kept
+-- this way (colour codes in text, colours worked out from a token) is set
+-- again on the message SUUUI_THEME_CHANGED.
+--------------------------------------------------------------------------------
+
+local paints = setmetatable({}, { __mode = "k" })  -- region -> { kind, token, alpha, ... }
+local watched = setmetatable({}, { __mode = "k" }) -- region -> { [setter] = true }
+local painting = false
+
+-- the setters that take a colour away from each kind of paint
+local LETS_GO = {
+    fill = { "SetColorTexture", "SetTexture", "SetAtlas", "SetGradient" },
+    vertex = { "SetVertexColor", "SetGradient" },
+    text = { "SetTextColor" },
+    bar = { "SetStatusBarColor" },
+    gradient = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTexture", "SetAtlas" },
+    fn = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTextColor", "SetStatusBarColor" },
+}
+
+local function letGo(region)
+    if not painting then paints[region] = nil end
+end
+
+local function watch(region, kind)
+    local w = watched[region]
+    if not w then w = {}; watched[region] = w end
+    for _, setter in ipairs(LETS_GO[kind]) do
+        if not w[setter] and region[setter] then
+            w[setter] = true
+            hooksecurefunc(region, setter, letGo)
+        end
+    end
+end
+
+local function draw(region, p)
+    local kind = p.kind
+    if kind == "fill" then
+        region:SetColorTexture(UI.RGBA(p.token, p.alpha))
+    elseif kind == "vertex" then
+        region:SetVertexColor(UI.RGBA(p.token, p.alpha))
+    elseif kind == "text" then
+        region:SetTextColor(UI.RGBA(p.token, p.alpha))
+    elseif kind == "bar" then
+        region:SetStatusBarColor(UI.RGBA(p.token, p.alpha))
+    elseif kind == "gradient" then
+        local r1, g1, b1, a1 = UI.RGBA(p.token, p.alpha)
+        local r2, g2, b2, a2 = UI.RGBA(p.token2, p.alpha2)
+        region:SetGradient(p.orientation, CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    else
+        p.fn(region)
+    end
+end
+
+local function paint(region, kind, token, alpha)
+    local p = paints[region]
+    if not p then p = {}; paints[region] = p end
+    p.kind, p.token, p.alpha, p.fn = kind, token, alpha, nil
+    painting = true
+    local ok, err = pcall(draw, region, p)
+    painting = false
+    if not ok then paints[region] = nil; error(err, 3) end
+    watch(region, kind)
+    return p
+end
+
+local KIND = { FontString = "text", StatusBar = "bar" }
+
+function UI.Paint(region, token, alpha)
+    paint(region, KIND[region:GetObjectType()] or "vertex", token, alpha)
+end
+
+function UI.PaintFill(texture, token, alpha)
+    paint(texture, "fill", token, alpha)
+end
+
+function UI.PaintGradient(texture, orientation, from, to, fromAlpha, toAlpha)
+    local p = paints[texture] or {}
+    paints[texture] = p
+    p.token2, p.alpha2, p.orientation = to, toAlpha, orientation
+    paint(texture, "gradient", from, fromAlpha)
+end
+
+function UI.Bind(region, fn)
+    local p = paints[region]
+    if not p then p = {}; paints[region] = p end
+    p.kind, p.fn = "fn", fn
+    painting = true
+    local ok, err = pcall(fn, region)
+    painting = false
+    if not ok then paints[region] = nil; error(err, 2) end
+    watch(region, "fn")
+end
+
+-- Every kept colour again (Themes.lua, after the theme or colour vision
+-- changed the tokens).
+function UI.Repaint()
+    painting = true
+    for region, p in pairs(paints) do
+        local ok, err = pcall(draw, region, p)
+        if not ok then geterrorhandler()(err) end
+    end
+    painting = false
+end
+
 -- A size token in px, or a number passed through.
 function UI.Size(v)
     if type(v) == "number" then return v end
@@ -34,7 +152,7 @@ end
 -- A solid texture in a token colour.
 function UI.Fill(parent, color, layer, sublevel)
     local t = parent:CreateTexture(nil, layer or "BACKGROUND", nil, sublevel)
-    t:SetColorTexture(UI.RGBA(color))
+    UI.PaintFill(t, color)
     return t
 end
 
@@ -72,8 +190,11 @@ end
 
 -- A token name (plus an optional alpha multiplier), { r, g, b, a }, or r, g, b, a.
 function Border:SetColor(r, g, b, a)
-    if type(r) == "string" then r, g, b, a = UI.RGBA(r, g)
-    elseif type(r) == "table" then r, g, b, a = unpack(r) end
+    if type(r) == "string" then
+        for _, t in ipairs(self.parts) do UI.PaintFill(t, r, g) end
+        return
+    end
+    if type(r) == "table" then r, g, b, a = unpack(r) end
     for _, t in ipairs(self.parts) do t:SetColorTexture(r, g, b, a) end
 end
 
@@ -101,29 +222,28 @@ end
 
 local hairlines = setmetatable({}, { __mode = "k" })
 
-local function gradient(tex, r, g, b, a, fromAlpha, toAlpha)
+local function gradient(tex, color, fromAlpha, toAlpha)
     tex:SetColorTexture(1, 1, 1, 1)
-    tex:SetGradient("HORIZONTAL", CreateColor(r, g, b, a * fromAlpha), CreateColor(r, g, b, a * toAlpha))
+    UI.PaintGradient(tex, "HORIZONTAL", color, color, fromAlpha, toAlpha)
 end
 
 function UI.Hairline(parent, color, fade)
     local line = CreateFrame("Frame", nil, parent)
-    local r, g, b, a = UI.RGBA(color)
     if fade == "both" then
         local left, right = crisp(line:CreateTexture(nil, "ARTWORK")), crisp(line:CreateTexture(nil, "ARTWORK"))
         left:SetPoint("TOPLEFT")
         left:SetPoint("BOTTOMRIGHT", line, "BOTTOM")
         right:SetPoint("TOPLEFT", line, "TOP")
         right:SetPoint("BOTTOMRIGHT")
-        gradient(left, r, g, b, a, 0, 1)
-        gradient(right, r, g, b, a, 1, 0)
+        gradient(left, color, 0, 1)
+        gradient(right, color, 1, 0)
     else
         local t = crisp(line:CreateTexture(nil, "ARTWORK"))
         t:SetAllPoints()
         if fade == "out" then
-            gradient(t, r, g, b, a, 1, 0)
+            gradient(t, color, 1, 0)
         else
-            t:SetColorTexture(r, g, b, a)
+            UI.PaintFill(t, color)
         end
     end
     line:SetHeight(Pixel.Size(line))
@@ -139,7 +259,7 @@ end
 function UI.Diamond(parent, size, color, layer, sublevel)
     local t = parent:CreateTexture(nil, layer or "OVERLAY", nil, sublevel or 7)
     t:SetTexture(WHITE)
-    t:SetVertexColor(UI.RGBA(color or "gilt"))
+    UI.Paint(t, color or "gilt")
     t:SetSize(size, size)
     t:SetRotation(math.rad(45))
     return t
@@ -173,9 +293,18 @@ function SoftEdge:SetBlur(blur, x, y)
     for i = 1, 4 do self.corners[i]:SetSize(s, s) end
 end
 
+-- A token name (and alpha), a colour table (a shadow layer's, which colour
+-- vision and themes change in place: kept), or r, g, b, a.
 function SoftEdge:SetColor(r, g, b, a)
-    if type(r) == "string" then r, g, b, a = UI.RGBA(r, g)
-    elseif type(r) == "table" then r, g, b, a = unpack(r) end
+    if type(r) == "string" then
+        for _, t in ipairs(self.parts) do UI.Paint(t, r, g) end
+        return
+    end
+    if type(r) == "table" then
+        local c = r
+        for _, t in ipairs(self.parts) do UI.Bind(t, function(tex) tex:SetVertexColor(unpack(c)) end) end
+        return
+    end
     for _, t in ipairs(self.parts) do t:SetVertexColor(r, g, b, a) end
 end
 
@@ -249,7 +378,7 @@ function UI.Cross(parent, size, color)
         holder.strokes[i] = t
     end
     function holder:SetColor(name)
-        for _, t in ipairs(self.strokes) do t:SetVertexColor(UI.RGBA(name)) end
+        for _, t in ipairs(self.strokes) do UI.Paint(t, name) end
     end
     holder:SetColor(color or "ink-muted")
     return holder

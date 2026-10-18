@@ -33,7 +33,7 @@ Registry.Register({
               reset = function() Settings.Reset("ui", "scale") end,
               disabled = function() return scaleIsAuto(), "Turn automatic scale off first." end },
         } },
-        { title = "Theme", description = "SuuUI's colours and type, one of its themes (High contrast, Class accent, Darker…), or a theme a plugin brings. For every character; takes effect after a reload. Colour vision applies on top of it.",
+        { title = "Theme", description = "SuuUI's colours and type, one of its themes (High contrast, Class accent, Darker…), or a theme a plugin brings. For every character. Colour vision applies on top of it.",
           rows = {
             { label = "Theme", control = "select", width = 220,
               options = function()
@@ -44,19 +44,18 @@ Registry.Register({
               description = function()
                   local chosen = Settings.Account("theme") or ns.Themes.DEFAULT
                   local t = ns.Themes.Get(chosen)
-                  local text = t and t.description or "Its plugin isn't loaded: SuuUI's own applies."
-                  if chosen ~= ns.Themes.Applied() and t then text = text .. " Type /reload to apply it." end
-                  return text
+                  return t and t.description or "Its plugin isn't loaded: SuuUI's own applies."
               end,
               get = function() return Settings.Account("theme") or ns.Themes.DEFAULT end,
               set = function(v)
                   Settings.SetAccount("theme", v ~= ns.Themes.DEFAULT and v or nil)
+                  ns.Themes.Apply()
                   return true
               end,
               isDefault = function() return (Settings.Account("theme") or ns.Themes.DEFAULT) == ns.Themes.DEFAULT end,
-              reset = function() Settings.SetAccount("theme", nil) end },
+              reset = function() Settings.SetAccount("theme", nil); ns.Themes.Apply() end },
         } },
-        { title = "Colour vision", description = "SuuUI's signal colours (danger, low health, healing, warnings, the dispel types, friend and foe) for your eyes. Shapes, badges and labels stay as they are. For every character; takes effect after a reload.",
+        { title = "Colour vision", description = "SuuUI's signal colours (danger, low health, healing, warnings, the dispel types, friend and foe) for your eyes. Shapes, badges and labels stay as they are. For every character.",
           rows = {
             { label = "Colours", control = "select", width = 220,
               options = function()
@@ -69,7 +68,6 @@ Registry.Register({
               description = function()
                   local chosen = Settings.Account("colorVision") or "normal"
                   local text = ns.Vision.HINT[chosen] or ""
-                  if chosen ~= ns.Vision.Applied() then text = text .. " Type /reload to apply it." end
                   for _, mode in ipairs(ns.Vision.MODES) do
                       if not ns.Vision.Available(mode) then
                           text = text .. " " .. ns.Vision.LABEL[mode] .. " comes with the design's colours for it."
@@ -80,10 +78,11 @@ Registry.Register({
               get = function() return Settings.Account("colorVision") or "normal" end,
               set = function(v)
                   Settings.SetAccount("colorVision", v ~= "normal" and v or nil)
+                  ns.Themes.Apply()
                   return true
               end,
               isDefault = function() return (Settings.Account("colorVision") or "normal") == "normal" end,
-              reset = function() Settings.SetAccount("colorVision", nil) end },
+              reset = function() Settings.SetAccount("colorVision", nil); ns.Themes.Apply() end },
         } },
         { title = "Blizzard", rows = {
             { key = "hideIssueReporter", label = "Hide the issue reporter", control = "toggle",

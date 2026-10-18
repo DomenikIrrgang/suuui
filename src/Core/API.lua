@@ -124,6 +124,11 @@ API.UI = {
     Cross = UI.Cross,
     RGBA = UI.RGBA,
     Size = UI.Size,
+    -- colours that follow the theme (0.17)
+    Paint = UI.Paint,
+    PaintFill = UI.PaintFill,
+    PaintGradient = UI.PaintGradient,
+    Bind = UI.Bind,
 }
 
 API.Layout = {
@@ -578,17 +583,18 @@ function API.ColorVisionModes()
     return out
 end
 
--- The colour vision chosen for the account, and the one in effect this
--- session (they differ until a reload).
+-- The colour vision chosen for the account, and the one in effect (the
+-- same: a change applies at once).
 function API.ColorVision()
     return ns.Settings.Account("colorVision") or "normal", ns.Vision.Applied()
 end
 
--- Chooses the account's colour vision; it takes effect after a reload.
+-- Chooses the account's colour vision; it applies at once (0.17).
 -- -> true, or false and why not.
 function API.SetColorVision(mode)
     if not ns.Vision.LABEL[mode] or not ns.Vision.Available(mode) then return false, "No such colour vision preset." end
     ns.Settings.SetAccount("colorVision", mode ~= "normal" and mode or nil)
+    ns.Themes.Apply()
     return true
 end
 

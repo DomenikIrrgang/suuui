@@ -5,7 +5,8 @@
 -- the dispel types, reactions…) with the design's values for that vision;
 -- shapes, badges and labels never change. Account-wide (it is about your
 -- eyes, not a role or a character), applied when the saved settings load,
--- before any frame draws: a change takes effect after a reload.
+-- before any frame draws, and again with the theme when it changes
+-- (Themes.Apply: the tokens go back to the design's first).
 --
 -- The values come from the design system's tokens (Tokens.lua's T.vision,
 -- generated with the rest): { [mode] = { [token] = { r, g, b, a, hex } } }.
@@ -39,7 +40,7 @@ function Vision.Available(mode)
     return set ~= nil and next(set) ~= nil
 end
 
--- The preset in effect this session (changes take effect after a reload).
+-- The preset in effect.
 function Vision.Applied()
     return applied
 end

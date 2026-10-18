@@ -23,8 +23,9 @@ function Text:SetStyle(style)
     self:Changed()
 end
 
+-- A token (kept: it follows the theme, UI.Paint) or r, g, b, a.
 function Text:SetColor(r, g, b, a)
-    if type(r) == "string" then r, g, b, a = UI.RGBA(r, g) end
+    if type(r) == "string" then return UI.Paint(self, r, g) end
     self:SetTextColor(r, g, b, a)
 end
 
