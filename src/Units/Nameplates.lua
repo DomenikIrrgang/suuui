@@ -71,6 +71,9 @@ end)
 
 local isSecret = issecretvalue or function() return false end
 local WHITE = "Interface\\Buttons\\WHITE8X8"
+-- the damage ghost's hold before it eases down (the unit frames' own)
+local GHOST_HOLD = 0.15
+local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 local LOW = 0.35
 local NAME_H = 14
 -- The health text's room at the name row's right end, per mode: a secret
@@ -224,9 +227,17 @@ local function buildPlate(parent, api)
     inner:SetPoint("TOPLEFT", 1, -1)
     inner:SetPoint("BOTTOMRIGHT", -1, 1)
     inner:SetClipsChildren(true)
+    -- the damage ghost behind the fill, as on the unit frames: it trails the
+    -- health after a hold and the engine eases it down (asked 2026-10-19)
+    f.ghost = CreateFrame("StatusBar", nil, inner)
+    f.ghost:SetAllPoints()
+    f.ghost:SetStatusBarTexture(WHITE)
+    f.ghost:GetStatusBarTexture():SetSnapToPixelGrid(false)
+    UI.Paint(f.ghost, "ghost")
     f.health = CreateFrame("StatusBar", nil, inner)
     f.health:SetAllPoints()
     f.health:SetStatusBarTexture(WHITE)
+    f.health:SetFrameLevel(f.ghost:GetFrameLevel() + 1)
     gradient(f.health, "unit-fill-deep", "unit-fill")
     f.healthLow = CreateFrame("StatusBar", nil, inner)
     f.healthLow:SetAllPoints()
@@ -409,11 +420,25 @@ function Plate:UpdateLevel()
     self:PlaceName()
 end
 
-function Plate:UpdateHealth()
+-- `instant`: a plate given a unit (the ghost isn't the last mob's).
+function Plate:UpdateHealth(instant)
     local A, u = self.api, self.unit
     local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
     self.health:SetMinMaxValues(0, amount(max, 1))
     self.health:SetValue(amount(cur))
+    self.ghost:SetMinMaxValues(0, amount(max, 1))
+    if instant or not INTERPOLATE then
+        if self.ghostTimer then self.ghostTimer:Cancel() self.ghostTimer = nil end
+        self.ghost:SetValue(amount(cur))
+    else
+        self.ghostValue = amount(cur)
+        if not self.ghostTimer then
+            self.ghostTimer = C_Timer.NewTimer(GHOST_HOLD, function()
+                self.ghostTimer = nil
+                self.ghost:SetValue(self.ghostValue, INTERPOLATE)
+            end)
+        end
+    end
     self.healthLow:SetMinMaxValues(0, amount(max, 1))
     self.healthLow:SetValue(amount(cur))
     local curve = belowLow()
@@ -531,7 +556,7 @@ function Plate:Refresh()
     self:UpdateQuest()
     self:UpdateLevel()
     self:UpdateName()
-    self:UpdateHealth()
+    self:UpdateHealth(true)
     self:UpdateThreat()
     self:UpdateTarget()
 end
