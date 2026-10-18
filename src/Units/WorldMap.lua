@@ -920,36 +920,47 @@ local function groupQuests(g)
 end
 
 -- Shift on a quest pin (asked 2026-10-18): what each quest asks of you,
--- from the quest data's objectives text.
+-- from the quest data's objectives text, added under what the tooltip
+-- already says (nothing goes; a drop's source stays): one quest's as its
+-- description, several each under its name.
 local MAX_OBJECTIVES = 6
-local function objectivesTip(g, ids)
+local QUEST_TIP_W = 360
+local function addObjectives(tip, ids)
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local texts = starts.objectives or {}
     local muted = "|cff" .. T.color["ink-muted"].hex
-    local first = g.items[1]
     local function text(id)
         return texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks."
     end
     if #ids == 1 then
-        local q = starts.quests and starts.quests[ids[1]]
-        return { title = questName(q, ids[1]), titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
-                 subtitle = g.distinct == 1 and first.detail or nil, description = text(ids[1]) }
+        tip.description = text(ids[1])
+        return tip
     end
-    local lines = {}
+    local lines = tip.lines or {}
+    lines[#lines + 1] = { " " }
     for i, id in ipairs(ids) do
         if i > MAX_OBJECTIVES then lines[#lines + 1] = { ("and %d more"):format(#ids - MAX_OBJECTIVES) } break end
         local q = starts.quests and starts.quests[id]
         lines[#lines + 1] = { questName(q, id) }
         lines[#lines + 1] = { muted .. text(id) .. "|r" }
     end
-    return { title = g.distinct == 1 and first.name or ("Quests to pick up · " .. #ids), lines = lines }
+    tip.lines = lines
+    return tip
 end
 
+local tipBase
 local function tipFor(g)
-    local first = g.items[1]
     local ids = groupQuests(g)
-    if #ids > 0 and IsShiftKeyDown() then return objectivesTip(g, ids) end
-    local hint = #ids > 0 and "Shift: what to do" or nil
+    local tip = tipBase(g, #ids > 0 and not IsShiftKeyDown() and "Shift: what to do" or nil)
+    if #ids == 0 then return tip end
+    -- quest tooltips a bit wider (their objectives wrapped early; asked)
+    tip.maxWidth = QUEST_TIP_W
+    if IsShiftKeyDown() then addObjectives(tip, ids) end
+    return tip
+end
+
+function tipBase(g, hint)
+    local first = g.items[1]
     if g.distinct == 1 then
         local lines = {}
         if first.more and #first.more > 0 then
@@ -993,6 +1004,7 @@ local function tipFor(g)
     local kind = first.kindName or (first.repeatable and "Repeatable quests") or (first.key == "available" and "Quests to pick up")
         or first.detail or ""
     return { title = kind .. " · " .. g.distinct, lines = lines, meta = "Click to zoom in" .. (hint and (" · " .. hint) or "") }
+
 end
 
 function M:Pin()

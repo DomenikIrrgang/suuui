@@ -10,6 +10,7 @@
 --       lines = { { "Instant", "30 min cooldown" }, { "Requires a shield" } },
 --       description = "Reduces all damage taken by 75% for 10 sec.",
 --       meta = "Ready in 21m",
+--       maxWidth = 360,                                       -- 0.17; default 280
 --   })
 --   UI.HideTooltip()
 --   UI.TooltipFrame(parent) -> a standalone tooltip with :SetContent(data)
@@ -65,7 +66,13 @@ function Tip:SetContent(d)
         stack:Add(r, { gapBefore = i == 1 and d.subtitle and S["space-2"] + S["space-1"] or nil })
     end
 
-    local width = math.min(MAX_W, math.max(natural, 120) + pad * 2)
+    -- with a maxWidth (0.17), a description wraps at that width, not at the
+    -- title's (a short title made a quest's objectives wrap early)
+    if d.description and d.maxWidth then
+        self.desc:SetValue(d.description)
+        natural = math.max(natural, self.desc:GetUnboundedStringWidth())
+    end
+    local width = math.min(d.maxWidth or MAX_W, math.max(natural, 120) + pad * 2)
     local inner = width - pad * 2
 
     -- the title and subtitle wrap too when longer than the width

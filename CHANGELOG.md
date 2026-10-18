@@ -4,8 +4,8 @@
 
 ### New
 
-- World map: hold Shift over a quest pin to see what its quests ask of you (their objectives, from the quest data).
-- Plugin API 0.17: `SuuUI.UI.RefreshTooltip(owner)` and the quests' objectives in `SuuUI.QuestStarts().objectives`.
+- World map: hold Shift over a quest pin to see what its quests ask of you (their objectives, from the quest data), added under what the tooltip already says. Quest tooltips are a bit wider.
+- Plugin API 0.17: `SuuUI.UI.RefreshTooltip(owner)`, a tooltip's `maxWidth`, and the quests' objectives in `SuuUI.QuestStarts().objectives`.
 
 ### Changed
 
