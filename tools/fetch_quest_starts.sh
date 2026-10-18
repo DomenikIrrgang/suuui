@@ -3,8 +3,10 @@
 # Downloads what tools/gen_quest_starts.lua reads, into a folder outside the
 # repo: QuestieDB's Forever quests, NPCs, objects and items with their corrections,
 # the enums the corrections use, Forever's area-to-map table and dungeon
-# entrances (github.com/Questie/QuestieDB, no license stated), and SOURCES
-# (the QuestieDB commit) for the data file's header. Pull requests named
+# entrances (github.com/Questie/QuestieDB, no license stated), the Questie
+# addon's quest tag corrections (github.com/Questie/Questie, GPL-3.0: where
+# the game's elite, dungeon or raid tag is wrong), and SOURCES (the
+# commits) for the data file's header. Pull requests named
 # after the folder (not merged yet) go on top as their diffs, only to the
 # files fetched here (tools/apply_questiedb_pull.py); SOURCES records each
 # one's head commit.
@@ -34,6 +36,11 @@ for p in $FILES; do
     mkdir -p "$DIR/$(dirname "$p")"
     curl -sfL -o "$DIR/$p" "https://raw.githubusercontent.com/Questie/QuestieDB/$SHA/$p"
 done
+QUESTIE=$(curl -sfL https://api.github.com/repos/Questie/Questie/commits/HEAD | sed -n 's/^  "sha": "\([0-9a-f]*\)".*/\1/p' | head -1)
+[ -n "$QUESTIE" ] || { echo "fetch_quest_starts: no Questie commit (GitHub API)" >&2; exit 1; }
+mkdir -p "$DIR/questie"
+curl -sfL -o "$DIR/questie/questTagInfoCorrections.lua" \
+    "https://raw.githubusercontent.com/Questie/Questie/$QUESTIE/Database/Corrections/questTagInfoCorrections.lua"
 PRS=""
 for pr in "$@"; do
     HEAD=$(curl -sfL "https://api.github.com/repos/Questie/QuestieDB/pulls/$pr" | sed -n 's/^    "sha": "\([0-9a-f]*\)".*/\1/p' | head -1)
@@ -42,6 +49,6 @@ for pr in "$@"; do
     python3 -I "$(dirname "$0")/apply_questiedb_pull.py" "$DIR" "$DIR/pr$pr.diff" $FILES
     PRS="$PRS #$pr@$(echo "$HEAD" | cut -c1-7)"
 done
-printf 'questiedb\t%s\nfetched\t%s\n' "$SHA" "$(date +%Y-%m-%d)" > "$DIR/SOURCES"
+printf 'questiedb\t%s\nquestie\t%s\nfetched\t%s\n' "$SHA" "$QUESTIE" "$(date +%Y-%m-%d)" > "$DIR/SOURCES"
 [ -z "$PRS" ] || printf 'pulls\t%s\n' "${PRS# }" >> "$DIR/SOURCES"
 cat "$DIR/SOURCES"

@@ -276,24 +276,66 @@ local QUEST_RANK = { difficult = 1, standard = 2, ["very-difficult"] = 3, imposs
 -- Easiest to hardest: a split ring's arcs go clockwise in this order.
 local HARDNESS = { trivial = 1, standard = 2, difficult = 3, ["very-difficult"] = 4, impossible = 5 }
 
--- Whether a quest needs a group: SuuUI's data (Classic's elite, dungeon and
--- raid quests, and those set in one), else the game's tag or suggested
--- group size, which it gives only for quests in your log (probe questgroup).
+-- Whether a quest needs a group, as Questie decides it: its corrections
+-- where the game's tag is wrong (SuuUI's data), else the game's tag. The
+-- game knows a quest it hasn't loaded only a moment after it's first asked
+-- (probe questgroup: nil at first, the tag 2 to 6 s later): until it has
+-- told, SuuUI's own guess (Classic's elite, dungeon and raid quests, and
+-- those set in one), and the map is drawn again once the answers are in.
 local GROUP_TAGS = { [1] = true, [62] = true, [81] = true } -- elite, raid, dungeon
+local told, waiting, guessed = {}, nil, {}
+
+local function askTag(id)
+    local ok, t = pcall(C_QuestLog.GetQuestTagInfo, id)
+    if ok and type(t) == "table" and type(t.tagID) == "number" and not isSecret(t.tagID) then return t.tagID end
+    return nil
+end
+
+-- the quests asked and not told yet (when each was first asked): again
+-- after 2 s, and after 6 s (no tag 5 s after the first ask is the game's
+-- answer; a quest asked later waits for the next round); the map again
+-- when one turned out otherwise than guessed
+local askAgain
+local function startRound()
+    C_Timer.After(2, function() askAgain(false) end)
+    C_Timer.After(6, function() askAgain(true) end)
+end
+askAgain = function(final)
+    local changed, now = false, GetTime()
+    for id, since in pairs(waiting) do
+        local tag = askTag(id)
+        if tag or (final and now - since >= 5) then
+            told[id] = tag or false
+            waiting[id] = nil
+            if (GROUP_TAGS[tag] or false) ~= (guessed[id] or false) then changed = true end
+        end
+    end
+    if final then
+        if next(waiting) then startRound() else waiting = nil end
+    end
+    if changed and M.map and M.map:IsShown() then M:Refresh() end
+end
+
 local function isGroupQuest(id)
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
-    if starts.group and starts.group[id] then return true end
-    local C = C_QuestLog
-    if not C then return nil end
-    if C.GetQuestTagInfo then
-        local ok, t = pcall(C.GetQuestTagInfo, id)
-        if ok and type(t) == "table" and GROUP_TAGS[t.tagID] then return true end
+    local fixed = starts.tags and starts.tags[id]
+    if fixed then return GROUP_TAGS[fixed] or false end
+    if told[id] == nil and C_QuestLog and C_QuestLog.GetQuestTagInfo then
+        local tag = askTag(id)
+        if tag then
+            told[id] = tag
+        elseif not (waiting and waiting[id]) then
+            if not waiting then
+                waiting = {}
+                startRound()
+            end
+            waiting[id] = GetTime()
+            if C_QuestLog.RequestLoadQuestByID then pcall(C_QuestLog.RequestLoadQuestByID, id) end
+        end
     end
-    if C.GetSuggestedGroupSize then
-        local ok, n = pcall(C.GetSuggestedGroupSize, id)
-        if ok and type(n) == "number" and n > 1 then return true end
-    end
-    return nil
+    if told[id] ~= nil then return GROUP_TAGS[told[id]] or false end
+    guessed[id] = starts.group and starts.group[id] and true or false
+    return guessed[id]
 end
 
 -- A quest pin's look (design "Map quest difficulty", D): a gilt "!", the

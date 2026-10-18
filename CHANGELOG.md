@@ -11,7 +11,7 @@
 - Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
 - Chat keeps its history across logouts and reloads: each tab shows the lines it had (dimmed, above an "Earlier · logged out 2 h ago" divider), and whisper windows open with your earlier conversation. Settings › Chat › Kept chat turns it off or clears it.
 - Chat: a Search tab looks through everything kept (every tab and your whispers) for a name or a word, lists the matches by player, and opens a whisper window with any of them.
-- World map: group quests (elite, dungeon and raid) get the group bar under their pin before you take them, not only once they're in your log. Forever's own new quests show it once they're in your log, or when they're set in a dungeon.
+- World map: group quests (elite, dungeon and raid) get the group bar under their pin before you take them, not only once they're in your log, Forever's own new quests too: the game's tag (it takes a few seconds to load; the pins update when it has), with Questie's corrections where the game's is wrong.
 - World map: more vendors get a vendor pin, among them the mount sellers (Horse Breeder, Kodo Mounts, Raptor Handler and the others), Chromie and the commendation officers.
 - World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
 - Cast bars: the spell's target in its class colour, and the "you" badge in the target's place when the spell is aimed at you, in combat too (the game hides who it is; SuuUI hands it to the bar without reading it).

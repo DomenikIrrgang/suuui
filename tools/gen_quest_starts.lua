@@ -3,8 +3,10 @@
 -- picked up (its quest givers' spawn points, by the game's map IDs), with
 -- what the world map needs to tell whether you can take it (levels, races,
 -- classes, quests before it and instead of it), what each asks of you, and
--- the dungeon entrances. Which quests need a group: Classic's quest types
--- from cMaNGOS (tools/data/cmangos_quest_types.tsv, written by
+-- the dungeon entrances. Which quests need a group: the Questie addon's
+-- corrections to the game's quest tags (as for the original game), and,
+-- for the map until the game has told it, Classic's quest types from
+-- cMaNGOS (tools/data/cmangos_quest_types.tsv, written by
 -- tools/extract_cmangos_quest_types.py) and the quests QuestieDB sets in a
 -- dungeon or raid.
 -- Reads QuestieDB's Forever data with its corrections applied in
@@ -518,6 +520,17 @@ for _, side in ipairs({ horde, alliance }) do
         end
     end
 end
+-- the Questie addon's corrections to the game's quest tags, with the
+-- original game's values (Expansions.Current is Era above)
+local questTags = {}
+do
+    env.Questie = { IsTitanReforged = false }
+    run("questie/questTagInfoCorrections.lua")
+    module("QuestieDB").private.InitializeQuestTagInfoCorrections()
+    for id, t in pairs(module("QuestieDB").private.questTagCorrections or {}) do
+        if type(id) == "number" and type(t) == "table" and type(t[1]) == "number" then questTags[id] = t[1] end
+    end
+end
 -- Classic's quest types (elite, dungeon, raid)
 local classicType, typesSource = {}, "?"
 do
@@ -753,8 +766,10 @@ w("--                  exclusiveTo, nextInChain, specialFlags (1 repeatable, 2 n
 w("--                  breadcrumbFor, requiredSkill {skillLine, value}, minRep {faction, value}, maxRep {faction, value},")
 w("--                  event (shown only while it's on: \"darkmoonFaire\", \"lunarFestival\", … a holiday; \"warEffort\",")
 w("--                  \"invasion\" one-off server events; \"seasonal\" some holiday) }")
-w("--   group[id] = \"elite\", \"dungeon\" or \"raid\": a quest that needs a group (set in a dungeon or raid, or Classic's")
-w("--               type: cMaNGOS classic-db " .. typesSource .. ", GPL-3.0); Forever's new quests only by their zone")
+w("--   tags[id] = the quest's tag where the game's is wrong (1 elite, 41 PvP, 62 raid, 81 dungeon, …; the Questie addon's")
+w("--              corrections for the original game, github.com/Questie/Questie " .. (sources.questie or "?") .. ", GPL-3.0)")
+w("--   group[id] = \"elite\", \"dungeon\" or \"raid\": a quest that needs a group, until the game has told (set in a dungeon")
+w("--               or raid, or Classic's type: cMaNGOS classic-db " .. typesSource .. ", GPL-3.0); Forever's new quests only by their zone")
 w("--   objectives[id] = what the quest asks (its objectives text; $N, $C, $R and $Gmale:female; as the game writes them)")
 w("--   maps[uiMapID] = { { x, y, giver, questID, ... }, ... }   (x, y in percent; giver an NPC's ID, an object's negative)")
 w("--   drops[uiMapID] = { { x, y, source, itemID, questID, ... }, ... }   (quests started by an item: where a mob")
@@ -790,6 +805,15 @@ for _, qid in ipairs(ids) do
             w(string.format("    [%d] = %q,", qid, text))
             nObjectives = nObjectives + 1
         end
+    end
+end
+-- the game's tags corrected
+w("}, tags = {")
+local nTags = 0
+for _, qid in ipairs(ids) do
+    if used[qid] and questTags[qid] then
+        w(string.format("    [%d] = %d,", qid, questTags[qid]))
+        nTags = nTags + 1
     end
 end
 -- the quests that need a group
@@ -923,5 +947,5 @@ f:write(table.concat(o, "\n"))
 f:close()
 local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
-print(string.format("gen_quest_starts: %d quests (%d with objectives, %d for a group), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, nGroup, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
+print(string.format("gen_quest_starts: %d quests (%d with objectives, %d tags corrected, %d for a group), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, nTags, nGroup, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares and service NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
