@@ -9,7 +9,7 @@
 
 ### Changed
 
-- World map: a tooltip for several things on one spot (two weapon masters, a giver's quests with Shift) leaves a gap before each, so it's clear which lines belong together.
+- World map: a tooltip for several things on one spot (two weapon masters, a giver's quests with Shift) leaves a gap under the title and before each entry, so it's clear which lines belong together; the map's tooltips can be a bit wider.
 - Plugin API 0.17: a tooltip line's `gap`.
 
 ## 0.5.0-beta.5 (2026-10-18)

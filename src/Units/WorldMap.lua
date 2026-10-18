@@ -944,9 +944,11 @@ end
 -- already says (nothing goes; a drop's source stays): one quest's as its
 -- description, several each under its name.
 local MAX_OBJECTIVES = 6
--- space before each entry of a tooltip that lists several
-local ENTRY_GAP = S["space-4"]
-local QUEST_TIP_W = 360
+-- space before each entry of a tooltip that lists several, and before its
+-- first (under the title)
+local ENTRY_GAP = S["space-5"]
+local FIRST_GAP = S["space-4"]
+local MAP_TIP_W = 360
 local function addObjectives(tip, ids)
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local texts = starts.objectives or {}
@@ -973,9 +975,9 @@ local tipBase
 local function tipFor(g)
     local ids = groupQuests(g)
     local tip = tipBase(g, #ids > 0 and not IsShiftKeyDown() and "Shift: what to do" or nil)
+    -- the map's tooltips a bit wider (objectives and lists wrapped early; asked)
+    tip.maxWidth = MAP_TIP_W
     if #ids == 0 then return tip end
-    -- quest tooltips a bit wider (their objectives wrapped early; asked)
-    tip.maxWidth = QUEST_TIP_W
     if IsShiftKeyDown() then addObjectives(tip, ids) end
     return tip
 end
@@ -1020,7 +1022,7 @@ function tipBase(g, hint)
         local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
         -- a gap before each next one: which lines are whose (asked 2026-10-18)
         lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name,
-                              gap = i > 1 and ENTRY_GAP or nil }
+                              gap = i > 1 and ENTRY_GAP or FIRST_GAP }
         -- a weapon master's weapons under his name
         if e.teaches then lines[#lines + 1] = { muted .. "Teaches " .. e.teaches .. "|r" } end
     end
