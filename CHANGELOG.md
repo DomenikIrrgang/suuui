@@ -9,6 +9,10 @@
 - Chat: a right click on a tab opens Blizzard's chat settings for that window (whisper tabs still close with a right click).
 - Plugin API 0.17: `SetCount` on the micro menu takes the badge's fill colour too.
 
+### Fixed
+
+- Reputation: a faction's bar sometimes showed only a sliver though its figures were right (3,210 / 6,000 as a sliver); the bars fill to their value again.
+
 ## 0.5.0-beta.4 (2026-10-18)
 
 ### Changed

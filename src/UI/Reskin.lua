@@ -180,8 +180,32 @@ function UI.ReskinFillBar(bar)
         end
         hooksecurefunc(fill, "SetAtlas", flat)
         bar.suuFlat = flat
+        -- Blizzard sizes the fill as a share of its FillArea's width once
+        -- (SetFillPercent); a row filled in before it had a width got 0,
+        -- which a texture draws at its own size (8 px of white: seen
+        -- 2026-10-18, 3,210 / 6,000 as a sliver). Keep the share and size the
+        -- fill again whenever the width changes; none: no fill.
+        if bar.SetFillPercent and bar.FillArea then
+            -- the share Blizzard set before this: the right edge of its
+            -- texture coordinates (SetTexCoord(0, p, 1, 0)), read before
+            -- the flat texture goes on
+            local _, _, _, _, right = fill:GetTexCoord()
+            bar.suuPercent = tonumber(right) and math.min(1, math.max(0, right)) or nil
+            local function size()
+                local w = (bar.suuPercent or 0) * (bar.FillArea:GetWidth() or 0)
+                fill:SetAlpha(w >= 0.5 and 1 or 0)
+                if w >= 0.5 then fill:SetWidth(w) end
+            end
+            hooksecurefunc(bar, "SetFillPercent", function(_, percent)
+                bar.suuPercent = math.min(1, math.max(0, tonumber(percent) or 0))
+                size()
+            end)
+            bar.FillArea:HookScript("OnSizeChanged", size)
+            bar.suuSizeFill = size
+        end
     end
     bar.suuFlat()
+    if bar.suuSizeFill then bar.suuSizeFill() end
     for _, r in ipairs({ bar:GetRegions() }) do
         if r:GetObjectType() == "FontString" then
             ns.Fonts.Apply(r, "numeric")
