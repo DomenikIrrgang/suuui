@@ -955,12 +955,16 @@ function M:CombatFilterBar(show)
     end
 end
 
--- Right click on a whisper tab: close it. The windows' own settings (font
--- size, name, Blizzard's chat settings, new and closing) are in SuuUI's
--- settings, Chat › Windows.
+-- Right click on a tab: Blizzard's chat settings for its window (asked
+-- 2026-10-18); on a whisper tab, a menu to close it. The windows' font size,
+-- name, new and closing are in SuuUI's settings, Chat › Windows.
 function M:TabMenu(b)
     local cf = b.cf
-    if not (cf and cf.isTemporary and FCF_Close) then return end
+    if cf and not cf.isTemporary then
+        self:OpenChatSettings(cf)
+        return
+    end
+    if not (cf and FCF_Close) then return end
     UI.ContextMenuFrom(b, function(_, root)
         root:CreateButton("Close", function() self:CloseWindow(cf) end)
     end, "chatTab", { chatFrame = cf })
@@ -1313,7 +1317,7 @@ local SECTION = {
             { key = "globalTab", label = "Global channels in their own tab", control = "toggle",
               description = "General, Trade, LocalDefense and the rest in a Global tab (your Guild tab renamed, or a new one); the General tab keeps everything else. Channels you join later go there too. Off: SuuUI leaves your tabs as they are." },
         } },
-        { title = "Windows", description = "Each tab's window: its name, font size and Blizzard's settings for what it shows. Whisper windows close with a right click on their tab.", rows = {
+        { title = "Windows", description = "Each tab's window: its name, font size and Blizzard's settings for what it shows. A right click on a tab opens Blizzard's settings for it; whisper windows close with a right click on their tab.", rows = {
             { label = "Windows", control = "custom", build = buildWindows, stacked = true },
         } },
         { title = "Lines", rows = {
