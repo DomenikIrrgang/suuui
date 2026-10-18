@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Micro menu: Collections has a horse head for its icon.
+- Micro menu: the free bag slots on the Bags button sit in a small badge on its corner, larger and easier to read (an ember badge when none are free). Settings › Micro menu › Free bag slots turns it off.
+- Plugin API 0.17: `SetCount` on the micro menu takes the badge's fill colour too.
+
 ## 0.5.0-beta.4 (2026-10-18)
 
 ### Changed

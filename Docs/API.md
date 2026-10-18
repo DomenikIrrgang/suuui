@@ -481,7 +481,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 | `SuuUI.UI.LEGACY_TRACK_H` (0.12) | The height of the `LegacyTrack` strip |
 | `SuuUI.TrainerSpells()` (0.12) | What your class trainer teaches: `{ { name, level, cost, school, icon, text } }` (cost in copper; Data/Trainer, from the class probes; no ranks) |
 | `SuuUI.TrainerSpellIDs()` | 0.12: every spell ID this client has for each trainer spell name, `{ [name] = { id, ... } }` (players' ranks and others alike; pick a rank with `C_Spell.GetSpellLevelLearned`) |
-| `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears); 0.17: `m:SetCount(key, text[, colorToken])` (a small count at the button's bottom right, `nil` clears; the Bags button shows your free slots) |
+| `SuuUI.UI.MicroMenu(parent, { name })` | The micro menu panel: `m:SetItems({ { key, glyph, label, click = "<Blizzard micro button>" } or { …, onClick = fn } })` (out of combat: `click` items are secure buttons clicking the Blizzard button; glyphs from `Media/Textures/Glyphs`), `m:SetAlert(key, text)` (the arcane diamond, `nil` clears); 0.17: `m:SetCount(key, text[, colorToken[, fillToken]])` (a count in a small pill on the button's bottom right corner: its text colour, `ink` by default, and the pill's fill, `surface` by default; `nil` clears; the Bags button shows your free slots) |
 
 ## Professions, menus and social (0.13)
 

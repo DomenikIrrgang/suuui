@@ -20,6 +20,7 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 local Menu = {}
 ns.Mixins.MicroMenu = Menu
@@ -31,6 +32,32 @@ local function keyOf(blizzard)
     if type(tip) ~= "string" then return nil end
     local key = tip:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):match("%(([^%)]+)%)%s*$")
     return key
+end
+
+-- A pill's shape, `inset` px in from its frame: two half discs and the
+-- middle between them, apart, so a see-through colour stays even.
+local function pill(f, inset, layer)
+    local r = 7 - inset
+    local p = {}
+    p.left = f:CreateTexture(nil, layer)
+    p.left:SetTexture(DISC)
+    p.left:SetTexCoord(0, 0.5, 0, 1)
+    p.left:SetSize(r, r * 2)
+    p.left:SetPoint("LEFT", inset, 0)
+    p.right = f:CreateTexture(nil, layer)
+    p.right:SetTexture(DISC)
+    p.right:SetTexCoord(0.5, 1, 0, 1)
+    p.right:SetSize(r, r * 2)
+    p.right:SetPoint("RIGHT", -inset, 0)
+    p.mid = f:CreateTexture(nil, layer)
+    p.mid:SetTexture("Interface\\Buttons\\WHITE8X8")
+    p.mid:SetPoint("TOPLEFT", p.left, "TOPRIGHT")
+    p.mid:SetPoint("BOTTOMRIGHT", p.right, "BOTTOMLEFT")
+    function p.Paint(token)
+        local cr, cg, cb, ca = UI.RGBA(token)
+        for _, t in ipairs({ p.left, p.right, p.mid }) do t:SetVertexColor(cr, cg, cb, ca) end
+    end
+    return p
 end
 
 local function buildButton(m, item)
@@ -67,13 +94,19 @@ local function buildButton(m, item)
     b.alertDot:SetPoint("CENTER")
     b.alertGlow = UI.Shadow(b.alert, "glow-arcane")
     b.alert:Hide()
-    -- a small count at the bottom right (the bags' free slots)
-    b.count = b:CreateFontString(nil, "OVERLAY")
-    ns.Fonts.Apply(b.count, "micro")
-    b.count:SetShadowColor(0, 0, 0, 1)
-    b.count:SetShadowOffset(0, -1)
-    b.count:SetPoint("BOTTOMRIGHT", -2, 1)
-    b.count:SetJustifyH("RIGHT")
+    -- a count (the bags' free slots) in a pill on the bottom right corner
+    -- (design "Micro menu: Collections glyph and bag count" D): 14 px tall,
+    -- hanging into the panel's padding, a gilt-line edge around its fill
+    b.badge = CreateFrame("Frame", nil, b)
+    b.badge:SetHeight(14)
+    b.badge:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 4, -3)
+    b.badge:SetFrameLevel(b:GetFrameLevel() + 2)
+    b.badge.edge = pill(b.badge, 0, "BACKGROUND")
+    b.badge.fill = pill(b.badge, 1, "ARTWORK")
+    b.count = b.badge:CreateFontString(nil, "OVERLAY")
+    ns.Fonts.Apply(b.count, "label")
+    b.count:SetPoint("CENTER", 0, 0)
+    b.badge:Hide()
     b.item = item
     b:HookScript("OnEnter", function(self)
         self.hover:Show()
@@ -131,13 +164,22 @@ function Menu:SetAlert(key, text)
     b.alert:SetShown(text ~= nil)
 end
 
--- 0.17: a small count on a button (nil clears it), in a text colour token
--- (ink by default).
-function Menu:SetCount(key, text, color)
+-- 0.17: a count on a button, in a pill on its bottom right corner (nil
+-- clears it): its text colour token (ink by default) and the pill's fill
+-- (surface by default).
+function Menu:SetCount(key, text, color, fill)
     local b = self.buttons[key]
     if not b then return end
-    b.count:SetText(text or "")
+    if text == nil or text == "" then
+        b.badge:Hide()
+        return
+    end
+    b.count:SetText(text)
     b.count:SetTextColor(UI.RGBA(color or "ink"))
+    b.badge.edge.Paint("gilt-line")
+    b.badge.fill.Paint(fill or "surface")
+    b.badge:SetWidth(math.max(14, math.ceil(b.count:GetStringWidth()) + 6))
+    b.badge:Show()
 end
 
 function UI.MicroMenu(parent, opts)

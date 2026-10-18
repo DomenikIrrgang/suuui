@@ -19,6 +19,8 @@ local M = SuuUI.RegisterModule({
     defaults = {
         position = { point = "TOPLEFT", x = 28, y = -28 },
         shows = "always",
+        -- the bags' free slots on the Bags button
+        bagCount = true,
         buttons = { "character", "professions", "spellbook", "talents", "legacy", "questlog", "guild",
                     "groupfinder", "collections", "worldmap", "bags", "menu" },
         -- plugins' buttons seen so far (0.17): a new one starts shown, and
@@ -35,7 +37,7 @@ local TALENTS_OWN = { key = "talents", glyph = "tree", label = "Talents", bind =
     open = function() return SuuUI.TalentsShown() end }
 
 -- SuuUI's own Collections window, while the collections module is on (0.17)
-local COLLECTIONS_OWN = { key = "collections", glyph = "gem", label = "Collections", bind = "TOGGLECOLLECTIONS",
+local COLLECTIONS_OWN = { key = "collections", glyph = "mount", label = "Collections", bind = "TOGGLECOLLECTIONS",
     onClick = function() SuuUI.ToggleCollections() end,
     open = function() return SuuUI.CollectionsShown() end }
 
@@ -48,7 +50,7 @@ local ITEMS = {
     { key = "questlog", glyph = "scroll", label = "Quest log", click = "QuestLogMicroButton" },
     { key = "guild", glyph = "people", label = "Guild & Communities", click = "GuildMicroButton" },
     { key = "groupfinder", glyph = "search", label = "Group Finder", click = "LFDMicroButton" },
-    { key = "collections", glyph = "gem", label = "Collections", click = "CollectionsMicroButton" },
+    { key = "collections", glyph = "mount", label = "Collections", click = "CollectionsMicroButton" },
     { key = "shop", glyph = "coin", label = "Shop", click = "StoreMicroButton" },
     { key = "worldmap", glyph = "map", label = "World map", onClick = function() ToggleWorldMap() end, bind = "TOGGLEWORLDMAP",
       open = function() return WorldMapFrame and WorldMapFrame:IsShown() end },
@@ -246,6 +248,8 @@ local SECTION = {
               description = "Which ones show, in Blizzard's order." },
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
+            { key = "bagCount", label = "Free bag slots", control = "toggle",
+              description = "How many bag slots are free, on the Bags button (in ember when none are)." },
         } },
     },
 }
@@ -254,12 +258,20 @@ local SECTION = {
 -- and bags, not the reagent bag; ember when none are left.
 function M:UpdateBagCount()
     if not (self.menu and C_Container) then return end
+    if not self:Get("bagCount") then
+        self.menu:SetCount("bags", nil)
+        return
+    end
     local free = 0
     for bag = 0, (NUM_BAG_SLOTS or 4) do
         local n = C_Container.GetContainerNumFreeSlots(bag)
         if n then free = free + n end
     end
-    self.menu:SetCount("bags", tostring(free), free == 0 and "ember-text" or "ink")
+    if free == 0 then
+        self.menu:SetCount("bags", "0", "ember-text", "ember-soft")
+    else
+        self.menu:SetCount("bags", tostring(free))
+    end
 end
 
 function M:OnEnable()
@@ -290,6 +302,7 @@ function M:OnEnable()
         self:Watch(key, function() self:ApplyShows() end)
     end
     self:OnGameEvent("BAG_UPDATE_DELAYED", function() self:UpdateBagCount() end)
+    self:Watch("bagCount", function() self:UpdateBagCount() end)
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:UpdateBagCount() end)
     self:On("SUUUI_ADDITIONS_CHANGED", function(_, list)
         if list ~= "micromenu" then return end
