@@ -238,6 +238,20 @@ local SERVICE = {
     goods = { "goods", "bag" },
     vendor = { "vendor", "coin" },
 }
+-- What each weapon master teaches (asked 2026-10-18), from cMaNGOS's
+-- Classic world database (github.com/cmangos/classic-db ec4f596, GPL-3.0:
+-- their trainer lists); Classic's lists, Forever's own not recorded yet.
+local WEAPON_MASTERS = {
+    [2704] = "Bows, One-Handed Axes, Staves, Thrown, Two-Handed Axes", -- Hanashi, Orgrimmar
+    [11865] = "Fist Weapons, Guns, One-Handed Axes, One-Handed Maces, Two-Handed Axes, Two-Handed Maces", -- Buliwyf Stonehand, Ironforge
+    [11866] = "Bows, Daggers, Fist Weapons, Staves, Thrown", -- Ilyenia Moonfire, Darnassus
+    [11867] = "Crossbows, Daggers, One-Handed Swords, Polearms, Staves, Two-Handed Swords", -- Woo Ping, Stormwind
+    [11868] = "Bows, Daggers, Fist Weapons, One-Handed Axes, Thrown, Two-Handed Axes", -- Sayoc, Orgrimmar
+    [11869] = "Guns, One-Handed Maces, Staves, Two-Handed Maces", -- Ansekhwa, Thunder Bluff
+    [11870] = "Crossbows, Daggers, One-Handed Swords, Polearms, Two-Handed Swords", -- Archibald, Undercity
+    [13084] = "Crossbows, Daggers, Thrown", -- Bixi Wobblebonk, Ironforge
+}
+
 local SERVICE_NAMES = {
     spirit = "Spirit healer", inn = "Innkeeper", bank = "Banker", auction = "Auctioneer", battlemaster = "Battlemaster",
     guild = "Guild master", tabard = "Tabard designer", stable = "Stable master", repair = "Repair", food = "Food and drink",
@@ -710,6 +724,11 @@ function M:Collect(mapID)
                         item.route = route
                         item.more = { { "|cff" .. T.color["ink-muted"].hex .. "Walks a route" .. (mapName and (" through " .. mapName) or "")
                             .. ", shown on the map|r" } }
+                    end
+                    -- a weapon master: the weapons he teaches
+                    if prof == "weapon" and WEAPON_MASTERS[id] then
+                        item.more = item.more or {}
+                        table.insert(item.more, 1, { "Teaches " .. WEAPON_MASTERS[id] })
                     end
                     items[#items + 1] = item
                     break

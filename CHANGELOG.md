@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Chat: click a line's class diamond to copy the whole line (time, channel, name and message).
+- World map: a weapon master's tooltip says which weapons they teach (Classic's lists; tell us if one teaches otherwise on Forever).
+
 ## 0.5.0-beta.5 (2026-10-18)
 
 ### New

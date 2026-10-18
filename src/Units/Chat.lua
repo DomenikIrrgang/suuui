@@ -377,6 +377,12 @@ end
 
 local function linkClick(frame, link, text, button)
     if isSecret(link) or type(link) ~= "string" then return end
+    -- a line's class diamond: the whole line to copy
+    local copyID = link:match("^addon:suuui:copy:(%d+)$")
+    if copyID then
+        M:CopyLine(tonumber(copyID))
+        return
+    end
     if button == "RightButton" then
         local name = link:match("^player:([^:]+)")
         if name and name ~= "" and playerMenu(frame, name) then return end
@@ -386,6 +392,12 @@ end
 
 local function linkEnter(frame, link)
     if isSecret(link) or type(link) ~= "string" then return end
+    if link:find("^addon:suuui:copy:") then
+        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
+        GameTooltip:SetText("Click to copy this line")
+        GameTooltip:Show()
+        return
+    end
     local kind = link:match("^(%a+):")
     if kind == "item" or kind == "spell" or kind == "achievement" or kind == "quest" or kind == "currency" then
         GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
@@ -516,7 +528,7 @@ local function stripBlizzardStamp(text)
 end
 
 -- Blizzard's finished line → the design's (without the time).
-function M:FormatLine(text)
+function M:FormatLine(text, id)
     if not plain(text) or type(text) ~= "string" then return text end
     local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
     local colored = self:Get("classNames")
@@ -544,6 +556,8 @@ function M:FormatLine(text)
         local name, lineID = data:match("^([^:]+):?(%d*)")
         local class = (diamonds or colored) and classOf(name, lineID ~= "" and lineID or nil)
         local mark = diamonds and chip(class) or ""
+        -- the diamond copies the line (asked 2026-10-18)
+        if mark ~= "" and id then mark = "|Haddon:suuui:copy:" .. id .. "|h" .. mark .. "|h" end
         local c = colored and class and T.color["class-" .. class:lower()]
         local label = stripColour(shown)
         if c then label = "|cff" .. c.hex .. label .. "|r" end
@@ -555,14 +569,36 @@ end
 
 local TIME_HEX = T.color["ink-muted"].hex
 
+-- Lines by their ID, for the diamond's copy (gone with their mirror's
+-- oldest lines)
+local lineSeq = 0
+local linesByID = setmetatable({}, { __mode = "v" })
+
+-- A line as plain text: its time, tag, name and message, links as their
+-- labels, without colours, icons or the diamond.
+local function plainLine(text)
+    text = text:gsub("|T.-|t", ""):gsub("|A.-|a", "")
+    text = text:gsub("|H.-|h(.-)|h", "%1")
+    text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return (text:gsub("^%s+", ""))
+end
+
+function M:CopyLine(id)
+    local line = id and linesByID[id]
+    if not line then return end
+    askText("Copy line", plainLine(self:Render(line, true)), "Ctrl+C to copy · Esc closes")
+end
+
 -- One line into a mirror: kept (to show again with or without the time)
 -- and shown as the chat is now.
 function M:Put(m, text, r, g, b)
-    local line = { r = r, g = g, b = b, at = time() }
+    lineSeq = lineSeq + 1
+    local line = { r = r, g = g, b = b, at = time(), id = lineSeq }
     if m.raw or not plain(text) then
         line.text, line.raw = text, true
     else
-        line.text = self:FormatLine(text)
+        line.text = self:FormatLine(text, lineSeq)
+        linesByID[lineSeq] = line
     end
     local lines = m.lines
     lines[#lines + 1] = line
