@@ -351,7 +351,11 @@ function M:Build()
     -- a shaman's totem bar takes the stance bar's place, Ghost Wolf's stance
     -- bar follows it on the right (1.6d)
     if CLASS == "SHAMAN" and UI.TotemBar then
+        -- the set it works on (Call of the Elements, Ancestors, Spirits): this
+        -- character's own
+        local char = self:CharData()
         self.totem = UI.TotemBar(d, { name = "SuuUITotemBar", label = "Totem bar",
+            page = char.totemPage or 1, onPage = function(page) char.totemPage = page end,
             onLayout = function() self:FollowTotems() end })
     end
 

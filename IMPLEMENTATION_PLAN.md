@@ -314,7 +314,12 @@ Split into three confirmable parts: **1.6a** bars 5–8 with per-bar show, colum
     - The time and drain in combat.
     - The picker list. Its arrow moved under the button: over the strip, the timer covered it.
     - Edit mode.
-  - Still to see: Call of the Elements and Totemic Recall (not learned yet), fire, water and air, and Ghost Wolf beside it.
+  - Sets (asked 2026-10-18; Forever has all three summon spells):
+    - Call of the Elements, of the Ancestors and of the Spirits each use their own page of slot actions (132 + (page - 1) * 4 + slot).
+    - The arrow under the Call button lists the known sets with their four totems, out of combat.
+    - The four buttons, their lists and the Call button follow the chosen set, remembered per character (CharData totemPage).
+    - With one set the bar still works as before (confirmed in game).
+  - Still to see: Call of the Elements, Totemic Recall and switching sets (not learned yet), fire, water and air, and Ghost Wolf beside it.
   - The game has no key bindings for its totem buttons on this client: none yet.
 
 ### 1.7 Cooldown Manager (SuuUI's own)

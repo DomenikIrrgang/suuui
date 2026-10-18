@@ -325,14 +325,19 @@ end
 --   * the strip runs from GetTotemDuration's duration object (in combat the
 --     totem's values are secret, but the object comes, nil when empty):
 --     the drain through SetTimerDuration, the time through a text binding
+--   * sets (asked 2026-10-18): Call of the Elements, of the Ancestors and of
+--     the Spirits each drop their own four (the game's pages 1-3: slot
+--     actions 132 + (page - 1) * 4 + slot); the arrow under the Call button
+--     lists the sets you know, out of combat, and the four buttons, their
+--     lists and the Call button follow the chosen one
 --   * choosing a slot's totem: secure "multispell" buttons in a list over
 --     the slot, opened by the arrow that shows under it on hover (out of
 --     combat)
 --   * the slots' actions have no texture: the icon is the spell's
 -- The game has no key bindings for its totem buttons on this client.
 --
---   local totems = UI.TotemBar(parent, { name = "SuuUITotemBar" })
---   totems:SetButtonSize(px); totems:SetEnabled(on); totems.header
+--   local totems = UI.TotemBar(parent, { name = "SuuUITotemBar", page = 1, onPage = fn(page) })
+--   totems:SetButtonSize(px); totems:SetEnabled(on); totems:SetPage(page); totems.header
 
 local GLYPH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
@@ -346,6 +351,8 @@ local ELEMENTS = {
     { slot = AIR_TOTEM_SLOT or 4, glyph = "wave", word = "Air" },
 }
 local RECALL = (TOTEM_MULTI_CAST_RECALL_SPELLS and TOTEM_MULTI_CAST_RECALL_SPELLS[1]) or 36936
+-- the summon spells, one per set: Call of the Elements, Ancestors, Spirits
+local SUMMONS = TOTEM_MULTI_CAST_SUMMON_SPELLS or { 66842, 66843, 66844 }
 
 local DIR = Enum.StatusBarTimerDirection or {}
 local IMMEDIATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate
@@ -365,14 +372,14 @@ local function elementSpells(slot)
     return ok and list or {}
 end
 
--- The game's action for an element's slot (its own bar's page 1).
-local function slotAction(slot)
-    return 132 + slot
+-- The game's action for an element's slot in a set (its bar's page).
+local function slotAction(slot, page)
+    return 132 + ((page or 1) - 1) * 4 + slot
 end
 
--- The spell an element's slot holds (readable in combat too).
-local function slotSpell(slot)
-    local kind, id = GetActionInfo(slotAction(slot))
+-- The spell an element's slot holds in a set (readable in combat too).
+local function slotSpell(slot, page)
+    local kind, id = GetActionInfo(slotAction(slot, page))
     if kind == "spell" and id and not isSecret(id) then return id end
 end
 
@@ -390,7 +397,7 @@ local function showEmpty(b)
 end
 
 local function totemUpdate(b)
-    local spellID = slotSpell(b.element.slot)
+    local spellID = slotSpell(b.element.slot, b.bar.page)
     b.spellID = spellID
     b.hasAction = spellID ~= nil
     b.known = #elementSpells(b.element.slot) > 0
@@ -492,16 +499,20 @@ end
 function Totems:Refresh()
     Combat.Run("classbar:totems:" .. self.name, function()
         local anyKnown = false
+        -- the set: the chosen one while you know its summon spell, else the first
+        if self.page ~= 1 and not knows(SUMMONS[self.page]) then self.page = 1 end
         for _, b in ipairs(self.buttons) do
             local slot = b.element.slot
             b:SetAttribute("type1", "action")
-            b:SetAttribute("action", slotAction(slot))
+            b:SetAttribute("action", slotAction(slot, self.page))
             b:SetAttribute("type2", "destroytotem")
             b:SetAttribute("totem-slot", slot)
             if #elementSpells(slot) > 0 then anyKnown = true end
         end
-        local summon = TOTEM_MULTI_CAST_SUMMON_SPELLS and TOTEM_MULTI_CAST_SUMMON_SPELLS[1]
+        local summon = SUMMONS[self.page]
         self.hasCall = knows(summon)
+        self.knownSets = 0
+        for _, id in ipairs(SUMMONS) do if knows(id) then self.knownSets = self.knownSets + 1 end end
         self.call:SetAttribute("type", self.hasCall and "spell" or nil)
         self.call:SetAttribute("spell", self.hasCall and summon or nil)
         self.call.spellID = self.hasCall and summon or nil
@@ -603,7 +614,7 @@ function Totems:OpenPicker(b)
         self.picker = p
     end
     local slot = b.element.slot
-    local chosen = slotSpell(slot)
+    local chosen = slotSpell(slot, self.page)
     local spells = elementSpells(slot)
     p.title:SetValue((b.element.word .. " totems"):upper())
     local y = -6 - 12 - 4
@@ -635,7 +646,7 @@ function Totems:OpenPicker(b)
             p.rows[i] = r
         end
         r:SetAttribute("type", "multispell")
-        r:SetAttribute("action", slotAction(slot))
+        r:SetAttribute("action", slotAction(slot, self.page))
         r:SetAttribute("spell", id)
         r.icon:SetTexture(C_Spell.GetSpellTexture(id))
         r.label:SetValue(C_Spell.GetSpellName(id) or "")
@@ -665,9 +676,111 @@ function Totems:ClosePicker()
     self:UpdateAll()
 end
 
--- The arrow on a hovered element (one that has a totem to choose), under
--- its bottom edge: opens its list. Out of combat.
-local function pickArrow(bar, b)
+-- The set the bar works on (1-3: Call of the Elements, Ancestors,
+-- Spirits). Out of combat.
+function Totems:SetPage(page)
+    if InCombatLockdown() then return end
+    self.page = page
+    if self.onPage then self.onPage(page) end
+    self:Refresh()
+end
+
+-- The list of your sets over the Call button: each summon spell you know,
+-- its four chosen totems after it, the one in use ticked. Out of combat.
+function Totems:OpenSets()
+    if InCombatLockdown() then return end
+    local p = self.sets
+    if not p then
+        p = CreateFrame("Frame", nil, UIParent)
+        p:SetFrameStrata("DIALOG")
+        UI.Fill(p, "surface-glass", "BACKGROUND"):SetAllPoints()
+        UI.Border(p, "gilt-line")
+        p.title = UI.Text(p, "micro", "gilt-text")
+        p.title:SetPoint("TOPLEFT", 8, -6)
+        p.title:SetValue("TOTEM SETS")
+        p.rows = {}
+        p.catcher = CreateFrame("Button", nil, UIParent)
+        p.catcher:SetFrameStrata("DIALOG")
+        p.catcher:SetAllPoints(UIParent)
+        p.catcher:RegisterForClicks("AnyUp")
+        p.catcher:SetScript("OnClick", function() p:Hide(); p.catcher:Hide() end)
+        p.catcher:Hide()
+        p:SetFrameLevel(p.catcher:GetFrameLevel() + 5)
+        p:Hide()
+        self.sets = p
+    end
+    local y, n = -6 - 12 - 4, 0
+    for page, id in ipairs(SUMMONS) do
+        if knows(id) then
+            n = n + 1
+            local r = p.rows[n]
+            if not r then
+                r = CreateFrame("Button", nil, p)
+                r:SetHeight(22)
+                r.hover = UI.Fill(r, "surface-raised", "BACKGROUND")
+                r.hover:SetAllPoints()
+                r.hover:Hide()
+                r.icon = r:CreateTexture(nil, "ARTWORK")
+                r.icon:SetSize(16, 16)
+                r.icon:SetPoint("LEFT", 4, 0)
+                r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                r.label = UI.Text(r, "caption", "ink")
+                r.label:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+                r.totems = {}
+                for k = 1, 4 do
+                    local t = r:CreateTexture(nil, "ARTWORK")
+                    t:SetSize(12, 12)
+                    t:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                    r.totems[k] = t
+                end
+                r.check = r:CreateTexture(nil, "ARTWORK")
+                r.check:SetTexture(GLYPH .. "check.tga")
+                r.check:SetVertexColor(UI.RGBA("gilt-text"))
+                r.check:SetSize(10, 10)
+                r.check:SetPoint("RIGHT", -6, 0)
+                r:SetScript("OnEnter", function(row) row.hover:Show() end)
+                r:SetScript("OnLeave", function(row) row.hover:Hide() end)
+                r:SetScript("OnClick", function(row)
+                    p:Hide()
+                    p.catcher:Hide()
+                    self:SetPage(row.page)
+                end)
+                p.rows[n] = r
+            end
+            r.page = page
+            r.icon:SetTexture(C_Spell.GetSpellTexture(id))
+            r.label:SetValue(C_Spell.GetSpellName(id) or "")
+            -- its four totems, earth to air, before the tick
+            local x = -22
+            for k = #ELEMENTS, 1, -1 do
+                local t = r.totems[k]
+                local sid = slotSpell(ELEMENTS[k].slot, page)
+                t:ClearAllPoints()
+                t:SetPoint("RIGHT", x, 0)
+                t:SetTexture(sid and C_Spell.GetSpellTexture(sid) or nil)
+                t:SetShown(sid ~= nil)
+                x = x - 14
+            end
+            r.check:SetShown(page == self.page)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 4, y)
+            r:SetPoint("TOPRIGHT", -4, y)
+            r:Show()
+            y = y - 23
+        end
+    end
+    for i = n + 1, #p.rows do p.rows[i]:Hide() end
+    p:SetSize(240, -y + 4)
+    p:ClearAllPoints()
+    p:SetPoint("BOTTOMLEFT", self.call, "TOPLEFT", 0, STRIP_H + S["space-1"] + 6)
+    p.catcher:Show()
+    p:Show()
+end
+
+-- The arrow on a hovered button, under its bottom edge: opens its list
+-- (an element's totems while it has more than one; the Call button's sets
+-- while you know more than one). Out of combat.
+local function pickArrow(b, open, wanted)
     -- under the button: above it the strip shows the time (asked in game:
     -- the timer covered the arrow while a totem was down)
     local a = CreateFrame("Button", nil, b)
@@ -681,7 +794,7 @@ local function pickArrow(bar, b)
     a.icon:SetVertexColor(UI.RGBA("gilt-text"))
     a.icon:SetSize(10, 10)
     a.icon:SetPoint("CENTER")
-    a:SetScript("OnClick", function() bar:OpenPicker(b) end)
+    a:SetScript("OnClick", open)
     a:SetScript("OnEnter", function() a.over = true end)
     a:SetScript("OnLeave", function()
         a.over = false
@@ -689,7 +802,7 @@ local function pickArrow(bar, b)
     end)
     a:Hide()
     b:HookScript("OnEnter", function()
-        if not InCombatLockdown() and #elementSpells(b.element.slot) > 1 then a:Show() end
+        if not InCombatLockdown() and wanted() then a:Show() end
     end)
     b:HookScript("OnLeave", function()
         C_Timer.After(0.3, function() if not (a.over or b:IsMouseOver()) then a:Hide() end end)
@@ -700,6 +813,7 @@ end
 function UI.TotemBar(parent, opts)
     local bar = setmetatable({}, { __index = Totems })
     bar.name, bar.enabled = opts.name, true
+    bar.page, bar.onPage = opts.page or 1, opts.onPage
     bar.binding = "MULTICASTACTIONBUTTON"
     bar.onLayout = opts.onLayout
     bar.header = CreateFrame("Frame", opts.name, parent, "SecureHandlerStateTemplate")
@@ -716,7 +830,8 @@ function UI.TotemBar(parent, opts)
         b.Update = totemUpdate
         b.ShowTooltip = totemTooltip
         stripSegment(bar, b)
-        pickArrow(bar, b)
+        b.bar = bar
+        pickArrow(b, function() bar:OpenPicker(b) end, function() return #elementSpells(element.slot) > 1 end)
         bar.buttons[i] = b
     end
     -- Call of the Elements, after a hairline
@@ -728,7 +843,11 @@ function UI.TotemBar(parent, opts)
     bar.call:RegisterForClicks("AnyUp", "AnyDown")
     bar.call.showEmpty = false
     bar.call.Update = function() end
-    bar.call.ShowTooltip = function(c) if c.spellID then GameTooltip:SetSpellByID(c.spellID) end end
+    bar.call.ShowTooltip = function(c)
+        if c.spellID then GameTooltip:SetSpellByID(c.spellID) end
+        if (bar.knownSets or 0) > 1 then GameTooltip:AddLine("The arrow: another set of totems.", UI.RGBA("ink-muted")) end
+    end
+    pickArrow(bar.call, function() bar:OpenSets() end, function() return (bar.knownSets or 0) > 1 end)
     -- Totemic Recall: a small cross at the strip's end
     local r = CreateFrame("Button", opts.name .. "Recall", bar.header, "SecureActionButtonTemplate")
     r:RegisterForClicks("AnyUp", "AnyDown")
@@ -761,7 +880,10 @@ function UI.TotemBar(parent, opts)
     Events.OnGame("PLAYER_TOTEM_UPDATE", function() bar:UpdateTimers() end, bar)
     -- a fight closes the list while it still may (the start of combat
     -- allows it)
-    Events.OnGame("PLAYER_REGEN_DISABLED", function() bar:ClosePicker() end, bar)
+    Events.OnGame("PLAYER_REGEN_DISABLED", function()
+        bar:ClosePicker()
+        if bar.sets and bar.sets:IsShown() then bar.sets:Hide(); bar.sets.catcher:Hide() end
+    end, bar)
     bar:Refresh()
     ns.Extend.Add("actionbar", bar, { name = opts.name, totems = true })
     return bar
