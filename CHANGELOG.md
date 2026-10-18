@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Chat: the chosen tab's underline and jewel glide to a tab you pick, and the jewel follows the pointer along the tabs, as on suuui.dev (at once with reduced motion).
+
+### Fixed
+
+- Chat: a tab's name sits centred over its underline.
+
 ## 0.5.0-beta.6 (2026-10-19)
 
 ### New

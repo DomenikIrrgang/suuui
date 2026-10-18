@@ -143,6 +143,13 @@ function M:BuildPanel()
     p.tabs:SetPoint("TOPRIGHT", -PAD_X, -PAD_TOP)
     p.tabs:SetHeight(TABS_H)
     p.tabButtons = {}
+    -- the chosen tab's underline and jewel, one of each, moved (M:AimMarks)
+    p.rule = UI.Hairline(p.tabs, "gilt-line", "both")
+    p.rule:SetFrameLevel(p.tabs:GetFrameLevel() + 2)
+    p.jewelHolder = CreateFrame("Frame", nil, p.tabs)
+    p.jewelHolder:SetAllPoints()
+    p.jewelHolder:SetFrameLevel(p.tabs:GetFrameLevel() + 3)
+    p.jewel = UI.Diamond(p.jewelHolder, 5, "gilt")
     -- the lines' area: SuuUI's message frames, one per Blizzard window
     p.log = CreateFrame("Frame", nil, p)
     p.log:SetFrameStrata("LOW")
@@ -989,17 +996,23 @@ local function tabButton(m, i)
     b.label = UI.Text(b, "header", "ink-muted")
     tabFace(b.label)
     b.label:SetShadowed(true)
-    b.label:SetPoint("LEFT", 0, 1)
+    -- centred over the underline (it was left of it: measured in header's
+    -- own size, wider than the 12 px name)
+    b.label:SetPoint("CENTER", 0, 1)
+    b.label:SetJustifyH("CENTER")
     b.label:SetWordWrap(false)
-    b.line = UI.Hairline(b, "gilt-line", "both")
-    b.line:SetPoint("BOTTOMLEFT", 0, 2)
-    b.line:SetPoint("BOTTOMRIGHT", 0, 2)
-    b.jewel = UI.Diamond(b, 5, "gilt")
-    b.jewel:SetPoint("CENTER", b, "BOTTOM", 0, 2)
     b.unread = UI.Diamond(b, 4, "ink")
     b.unread:SetPoint("LEFT", b.label, "RIGHT", S["space-2"], 1)
-    b:SetScript("OnEnter", function(self) self.hover = true; if not self.active then self.label:SetColor("ink") end end)
-    b:SetScript("OnLeave", function(self) self.hover = false; if not self.active then self.label:SetColor("ink-muted") end end)
+    b:SetScript("OnEnter", function(self)
+        self.hover = true
+        if not self.active then self.label:SetColor("ink") end
+        m:AimMarks()
+    end)
+    b:SetScript("OnLeave", function(self)
+        self.hover = false
+        if not self.active then self.label:SetColor("ink-muted") end
+        m:AimMarks()
+    end)
     b:SetScript("OnClick", function(self, button)
         if button == "RightButton" then m:TabMenu(self) else m:Select(self.cf) end
     end)
@@ -1167,23 +1180,112 @@ function M:UpdateTabs()
         b.label.value = nil
         local w = 60
         if not isSecret(name) and type(name) == "string" then
-            w = math.min(140, math.ceil(UI.MeasureText("header", name)) + 2)
+            w = math.min(140, math.ceil(b.label:GetUnboundedStringWidth()) + 2)
         end
         b.label:SetWidth(w)
         local active = cf == self.selected
         b.active = active
         -- the hover's ink kept (this runs every tick: it reset it at once)
         b.label:SetColor(active and "gilt-text" or (b.hover and "ink" or "ink-muted"))
-        b.line:SetShown(active)
-        b.jewel:SetShown(active)
         b.unread:SetShown(not active and self.unread and self.unread[cf] or false)
         b:SetWidth(w + 8)
         b:ClearAllPoints()
         b:SetPoint("BOTTOMLEFT", p.tabs, "BOTTOMLEFT", x, 0)
         b:Show()
+        b.left, b.width = x, w + 8
         x = x + w + 8 + S["space-5"]
     end
     for i = #tabs + 1, #p.tabButtons do p.tabButtons[i]:Hide() end
+    self:AimMarks()
+end
+
+-- The underline and its jewel move as the website's nav marker does
+-- (asked 2026-10-19): the jewel glides to the tab under the pointer and
+-- back to the chosen one when it leaves, and both glide to a newly chosen
+-- tab; dur-base, ease-in-out. Reduced motion, a hidden panel or the first
+-- placing: there at once.
+local GLIDE = T.duration["dur-base"]
+local EASE = T.easing["ease-in-out"].bezier
+
+-- cubic-bezier(x1, y1, x2, y2) at time t: x solved for t by halving, then y
+local function ease(t)
+    local x1, y1, x2, y2 = EASE[1], EASE[2], EASE[3], EASE[4]
+    local function at(a, b, u) return 3 * a * u * (1 - u) ^ 2 + 3 * b * u ^ 2 * (1 - u) + u ^ 3 end
+    local lo, hi = 0, 1
+    for _ = 1, 14 do
+        local mid = (lo + hi) / 2
+        if at(x1, x2, mid) < t then lo = mid else hi = mid end
+    end
+    return at(y1, y2, (lo + hi) / 2)
+end
+
+local function copy(t)
+    local out = {}
+    for k, v in pairs(t) do out[k] = v end
+    return out
+end
+
+-- `at` is the mark's own table: it moves from `from` (where it was) to `to`
+local function glide(mark, to, now)
+    if now or mark.at == nil then
+        mark.at, mark.from, mark.to, mark.start = copy(to), to, to, nil
+        return
+    end
+    mark.from, mark.to, mark.start = copy(mark.at), to, GetTime()
+end
+
+local function step(mark)
+    if not mark.start then return false end
+    local t = (GetTime() - mark.start) / GLIDE
+    if t >= 1 then
+        for k, v in pairs(mark.to) do mark.at[k] = v end
+        mark.start = nil
+        return false
+    end
+    local e = ease(t)
+    for k in pairs(mark.to) do mark.at[k] = mark.from[k] + (mark.to[k] - mark.from[k]) * e end
+    return true
+end
+
+function M:AimMarks()
+    local p = self.panel
+    if not p then return end
+    local chosen, hovered
+    for _, b in ipairs(p.tabButtons) do
+        if b:IsShown() and b.left then
+            if b.active then chosen = b end
+            if b.hover then hovered = b end
+        end
+    end
+    p.rule:SetShown(chosen ~= nil)
+    p.jewel:SetShown(chosen ~= nil)
+    if not chosen then return end
+    local now = SuuUI.Motion.Reduced() or not p:IsVisible()
+    local over = hovered or chosen
+    p.ruleMark = p.ruleMark or {}
+    p.jewelMark = p.jewelMark or {}
+    -- (fresh tables only when the target moves: this runs every tick)
+    local r, j = p.ruleMark, p.jewelMark
+    if not (r.to and r.to.x == chosen.left and r.to.w == chosen.width) then
+        glide(r, { x = chosen.left, w = chosen.width }, now)
+    end
+    local cx = over.left + over.width / 2
+    if not (j.to and j.to.x == cx) then glide(j, { x = cx }, now) end
+    local function place()
+        local moving = step(r)
+        moving = step(j) or moving
+        p.rule:ClearAllPoints()
+        p.rule:SetPoint("BOTTOMLEFT", p.tabs, "BOTTOMLEFT", r.at.x, 2)
+        p.rule:SetWidth(r.at.w)
+        p.jewel:ClearAllPoints()
+        p.jewel:SetPoint("CENTER", p.tabs, "BOTTOMLEFT", j.at.x, 2)
+        return moving
+    end
+    if place() then
+        p.tabs:SetScript("OnUpdate", function()
+            if not place() then p.tabs:SetScript("OnUpdate", nil) end
+        end)
+    end
 end
 
 --------------------------------------------------------------------------------
