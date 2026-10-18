@@ -317,9 +317,10 @@ end
 -- A shaman's totems in the stance bar's place: the four elements (earth,
 -- fire, water, air) as action-sm buttons that cast the totem the game's own
 -- totem bar holds for each, a thin strip above them with each totem's time
--- left and its drain, Totemic Recall at the strip's end while a totem is
--- down, and Call of the Elements after a hairline once learned. An element
--- with no totem yet is dashed with its glyph. Probed 2026-10-18:
+-- left and its drain, and after a hairline Call of the Elements and Totemic
+-- Recall once learned (Recall faint while no totem is down; asked
+-- 2026-10-18: its own button at the right end). An element with no totem
+-- yet is dashed with its glyph. Probed 2026-10-18:
 --   * left click: the game's slot action (132 + slot on page 1), cast by a
 --     secure "action" button, in combat too; right click: "destroytotem"
 --   * the strip runs from GetTotemDuration's duration object (in combat the
@@ -468,7 +469,7 @@ local function stripSegment(bar, b)
     return s
 end
 
--- Every element's time and drain, and Recall while anything is down. The
+-- Every element's time and drain, and Recall faint while nothing is down. The
 -- duration object comes in combat too (its values secret); none: empty.
 function Totems:UpdateTimers()
     local any = false
@@ -491,8 +492,8 @@ function Totems:UpdateTimers()
             s.text:Hide()
         end
     end
-    -- Recall: on the strip only while a totem is down (an alpha: in combat too)
-    if self.recall then self.recall:SetAlpha(any and 1 or 0) end
+    -- Recall: faint while no totem is down (an alpha: in combat too)
+    if self.recall then self.recall:ShowUsable(not any) end
 end
 
 -- Which totem each button casts and what the bar holds: out of combat.
@@ -519,7 +520,6 @@ function Totems:Refresh()
         self.hasRecall = knows(RECALL)
         self.recall:SetAttribute("type", self.hasRecall and "spell" or nil)
         self.recall:SetAttribute("spell", self.hasRecall and RECALL or nil)
-        self.recall:SetShown(self.hasRecall)
         self.header:SetShown(self.enabled and anyKnown)
         self.anyKnown = anyKnown
         self:Layout()
@@ -539,6 +539,14 @@ function Totems:UpdateAll()
         c.hasAction = false
     end
     c:UpdateEmpty()
+    local r = self.recall
+    r.hasAction = self.hasRecall and true or false
+    if r.hasAction then
+        r.art:SetTexture(C_Spell.GetSpellTexture(RECALL))
+        r.art:Show()
+        r:ShowSpellCooldown(RECALL)
+    end
+    r:UpdateEmpty()
     self:UpdateTimers()
 end
 
@@ -564,14 +572,18 @@ function Totems:Layout()
         local rowEnd = #self.buttons * (px + gap) - gap
         self.rule:ClearAllPoints()
         self.rule:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", rowEnd + 2, math.floor((px - 12) / 2))
-        self.rule:SetShown(self.hasCall)
-        self.call:Resize(px)
-        self.call:ClearAllPoints()
-        self.call:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", rowEnd + 5, rowY)
-        self.call:SetShown(self.hasCall and true or false)
-        self.recall:ClearAllPoints()
-        self.recall:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", rowEnd + 8, stripY + 2)
-        local width = self.hasCall and (rowEnd + 5 + px) or (rowEnd + 8 + 8)
+        self.rule:SetShown(self.hasCall or self.hasRecall)
+        -- after the hairline: Call, then Recall, each only once learned
+        local x = rowEnd + 5
+        for _, extra in ipairs({ { self.call, self.hasCall }, { self.recall, self.hasRecall } }) do
+            local b, shown = extra[1], extra[2] and true or false
+            b:Resize(px)
+            b:ClearAllPoints()
+            b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", x, rowY)
+            b:SetShown(shown)
+            if shown then x = x + px + gap end
+        end
+        local width = (self.hasCall or self.hasRecall) and (x - gap) or rowEnd
         self.header:SetSize(width, stripY + STRIP_H)
         if self.onLayout then self.onLayout(self) end
     end, "Action bars")
@@ -848,26 +860,13 @@ function UI.TotemBar(parent, opts)
         if (bar.knownSets or 0) > 1 then GameTooltip:AddLine("The arrow: another set of totems.", UI.RGBA("ink-muted")) end
     end
     pickArrow(bar.call, function() bar:OpenSets() end, function() return (bar.knownSets or 0) > 1 end)
-    -- Totemic Recall: a small cross at the strip's end
-    local r = CreateFrame("Button", opts.name .. "Recall", bar.header, "SecureActionButtonTemplate")
-    r:RegisterForClicks("AnyUp", "AnyDown")
-    r:SetSize(8, 8)
-    r.icon = r:CreateTexture(nil, "ARTWORK")
-    r.icon:SetAllPoints()
-    r.icon:SetTexture(GLYPH .. "close.tga")
-    r.icon:SetVertexColor(UI.RGBA("ink-muted"))
-    r:SetScript("OnEnter", function(self)
-        self.icon:SetVertexColor(UI.RGBA("ink"))
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetSpellByID(RECALL)
-        GameTooltip:Show()
-    end)
-    r:SetScript("OnLeave", function(self)
-        self.icon:SetVertexColor(UI.RGBA("ink-muted"))
-        GameTooltip:Hide()
-    end)
-    r:SetAlpha(0)
-    bar.recall = r
+    -- Totemic Recall: the last button, on the right of Call
+    bar.recall = UI.ActionButton(bar.header, opts.name .. "Recall", "action-sm")
+    bar.recall:SetID(0)
+    bar.recall:RegisterForClicks("AnyUp", "AnyDown")
+    bar.recall.showEmpty = false
+    bar.recall.Update = function() end
+    bar.recall.ShowTooltip = function() GameTooltip:SetSpellByID(RECALL) end
 
     local function refresh() bar:Refresh() end
     local function all() bar:UpdateAll() end

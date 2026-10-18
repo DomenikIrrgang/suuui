@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Totem bar: Totemic Recall is its own button at the right end, after Call of the Elements, shown once you know it and faded while no totem is down (it was a small cross that showed only with a totem down).
+
 ## 0.5.0-beta.3 (2026-10-18)
 
 ### New
