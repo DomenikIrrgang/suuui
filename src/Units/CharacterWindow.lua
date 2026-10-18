@@ -506,7 +506,9 @@ function M:SkinSidebar()
     row:SetPoint("TOPRIGHT", -S["space-5"], -S["space-4"])
     UI.Fill(row, "surface-sunk"):SetAllPoints()
     UI.Border(row, "gilt-line")
-    self.sidebar = { row = row, buttons = {} }
+    -- the chosen one's fill and edge, gliding to the next (UI.TabMarker)
+    local marker = UI.TabMarker(row, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
+    self.sidebar = { row = row, buttons = {}, marker = marker }
     local prev
     local w = 0
     for _, def in ipairs(SIDE) do
@@ -519,9 +521,6 @@ function M:SkinSidebar()
                 local t = b[get] and b[get](b)
                 if t then t:SetAlpha(0) end
             end
-            b.suuFill = UI.Fill(b, "arcane-soft", "BACKGROUND", 7)
-            b.suuFill:SetAllPoints()
-            b.suuEdge = UI.Border(b, "arcane")
             b.suuLabel = UI.Text(b, "label", "ink-muted")
             b.suuLabel:SetPoint("CENTER")
             b.suuLabel:SetValue(def.label)
@@ -544,6 +543,7 @@ function M:SkinSidebar()
             b:SetPoint("TOPLEFT", row, "TOPLEFT", 3 + (i - 1) * (each + 2), -3)
             self.placingSide = false
         end
+        marker:Aim()
     end
     row:SetScript("OnSizeChanged", layout)
     for _, b in ipairs(self.sidebar.buttons) do
@@ -563,12 +563,13 @@ end
 
 function M:UpdateSidebar(hover)
     if not self.sidebar then return end
+    local chosen
     for i, b in ipairs(self.sidebar.buttons) do
         local on = (SIDE[i] and SIDE[i].tab) == self.sideIndex
-        b.suuFill:SetShown(on)
-        b.suuEdge:SetShown(on)
+        if on then chosen = b end
         b.suuLabel:SetColor(on and "arcane" or (b == hover and "ink" or "ink-muted"))
     end
+    self.sidebar.marker:SetChosen(chosen)
 end
 
 -- New Set (its own button, centred above Equip and Save: probed 2026-10-13)

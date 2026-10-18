@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Tabs everywhere (every window's tabs, the chat tabs, the Settings list, the Professions rail, the Spellbook's schools): the chosen tab's underline and jewel glide to a tab you pick, and the jewel follows the pointer along the tabs, as on suuui.dev (at once with reduced motion).
+- Tabs everywhere (every window's tabs, the chat tabs, the Settings list, the Professions rail, the Spellbook's schools): the chosen tab's underline and jewel glide to a tab you pick, and the jewel follows the pointer along the tabs, as on suuui.dev; in switches (Stats / Sets / Titles, Bags / Bank, the settings' choices…) the chosen option's fill glides to the one you pick. At once with reduced motion.
 
 ### Fixed
 

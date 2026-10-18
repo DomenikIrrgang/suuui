@@ -150,6 +150,7 @@ function M:Build()
     if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
         fit({ "General", "Character" })
     end
+    self.tabs.marker:Aim()
     self.tabs:SetWidth(LIST_W)
     self.count = UI.Text(left, "caption", "ink-muted")
     self.count:SetPoint("TOPLEFT", self.tabs, "BOTTOMLEFT", 0, -S["space-3"])

@@ -25,6 +25,11 @@
 --   level   frame levels above the row (2)
 --   vertical  true: entries above each other, the jewel beside them at
 --           `side` ("LEFT" or "RIGHT" of the entry) + `x` px; no line
+--   box     { fill = token, border = token }: a segmented control's chosen
+--           look instead (asked 2026-10-19): one fill and edge the size of
+--           the chosen option, gliding to the next; no line or jewel, and
+--           hover doesn't move it. Give it level 1 and the buttons a level
+--           above it, so their labels sit on top.
 
 local _, ns = ...
 
@@ -92,6 +97,13 @@ function Marker:Draw()
     local row = self.row
     local moving = step(self.ruleMark)
     moving = step(self.jewelMark) or moving
+    if self.box then
+        local r = self.ruleMark.at
+        self.box:ClearAllPoints()
+        self.box:SetPoint("BOTTOMLEFT", self.row, "BOTTOMLEFT", r.p, self.base)
+        self.box:SetSize(math.max(1, r.s), self.boxH)
+        return moving
+    end
     local j = self.jewelMark.at
     self.jewel:ClearAllPoints()
     if self.vertical then
@@ -113,7 +125,7 @@ function Marker:Aim()
     local chosen = self.chosen
     local shown = chosen ~= nil and chosen:IsShown()
     if self.rule then self.rule:SetShown(shown) end
-    self.jewel:SetShown(shown)
+    if self.box then self.box:SetShown(shown) else self.jewel:SetShown(shown) end
     if not shown then return end
     local left, bottom, width, height = self:Place(chosen)
     if not left then
@@ -131,7 +143,10 @@ function Marker:Aim()
         ol, ob, ow, oh = self:Place(over)
         if not ol then ol, ob, ow, oh = left, bottom, width, height end
     end
-    if self.vertical then
+    if self.box then
+        self.base, self.boxH = bottom, height
+        aim(self.ruleMark, left, width, now)
+    elseif self.vertical then
         self.jewelX = left + (self.side == "RIGHT" and width or 0) + self.x
         aim(self.jewelMark, ob + oh / 2, nil, now)
     else
@@ -171,6 +186,14 @@ function UI.TabMarker(row, opts)
     m.holder = CreateFrame("Frame", nil, row)
     m.holder:SetAllPoints()
     m.holder:SetFrameLevel(row:GetFrameLevel() + (opts.level or 2))
+    if opts.box then
+        m.box = CreateFrame("Frame", nil, m.holder)
+        UI.Fill(m.box, opts.box.fill):SetAllPoints()
+        UI.Border(m.box, opts.box.border)
+        m.box:Hide()
+        row:HookScript("OnShow", function() m:Aim() end)
+        return m
+    end
     if opts.rule ~= false and not opts.vertical then
         m.rule = UI.Hairline(m.holder, opts.rule or "gilt-line", "both")
         m.rule:Hide()

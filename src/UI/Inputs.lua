@@ -208,12 +208,13 @@ local Segmented = {}
 
 function Segmented:SetValue(v)
     self.value = v
+    local chosen
     for _, o in ipairs(self.buttons) do
         local on = o.option.value == v
-        o.bg:SetShown(on)
-        o.edge:SetShown(on)
+        if on then chosen = o end
         o.label:SetColor(on and "arcane" or (o.option.disabled and "ink-faint" or "ink-muted"))
     end
+    self.marker:SetChosen(chosen)
 end
 
 Segmented.SetDisabled = setDisabled
@@ -225,13 +226,13 @@ function UI.Segmented(parent, opts)
     UI.Border(f, "gilt-line")
     f.buttons = {}
     f.onChange = opts.onChange
+    -- the chosen option's fill and edge, gliding to the next (UI.TabMarker)
+    f.marker = UI.TabMarker(f, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
     local x = 3
     for _, option in ipairs(opts.options) do
         local b = CreateFrame("Button", nil, f)
+        b:SetFrameLevel(f:GetFrameLevel() + 3)
         b.option = option
-        b.bg = UI.Fill(b, "arcane-soft")
-        b.bg:SetAllPoints()
-        b.edge = UI.Border(b, "arcane")
         b.label = UI.Text(b, "label", "ink-muted")
         b.label:SetPoint("CENTER")
         b.label:SetValue(option.label)
