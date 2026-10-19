@@ -1,8 +1,8 @@
 -- Units/Bags.lua
 -- Your bags (step 2.5a, design board "Bags"): one window, every bag's slots
 -- in one grid (backpack, bags 1-4, the reagent bag; the keyring if you want
--- it), "18 free of 80", search (the game's own item search) and Blizzard's
--- sort, your money in the foot. It opens and closes with Blizzard's bags
+-- it), "18 free of 80", search (the game's own item search) and a sort
+-- (SuuUI's own orders or the game's; see Sorting), your money in the foot. It opens and closes with Blizzard's bags
 -- (B, the bag buttons, the mailbox, a vendor, the bank): Blizzard's bag
 -- frames still open and close, under a hidden parent, and SuuUI's window
 -- follows them. Bottom right, movable in edit mode.
@@ -51,6 +51,8 @@ local M = SuuUI.RegisterModule({
         itemCounts = true,
         bagSlots = true,       -- the bag slot rails beside the windows
         bankPosition = { point = "TOP", x = -216, y = -240 },
+        sortOrder = "type",    -- type, quality, level, name or game
+        sortDirection = "end", -- where the items gather: end or start
     },
 })
 
@@ -986,7 +988,7 @@ function M:Refresh()
     for bag, f in pairs(self.bagFrames) do
         if not isBank(bag) then f:SetShown(live) end
     end
-    inv.sort:SetEnabled(live)
+    inv.sort:SetEnabled(live and not self.sorting)
     self.more = nil
     if self:ShowingResults() then
         self:HideSaved()
@@ -1203,6 +1205,435 @@ function M:QueueSync()
 end
 
 --------------------------------------------------------------------------------
+-- Sorting (asked 2026-10-19): SuuUI sorts your bags and bank itself, in the
+-- order Settings › Bags › Sort picks (by type, quality, item level or name),
+-- the items gathered at the start or the end of the bags; or the game's own
+-- sort. What the client allows (/suu probe bagsort, 2026-10-19): picking an
+-- item up and putting it on another slot (C_Container.PickupContainerItem
+-- twice) works for addon code out of combat, nothing blocked; each move
+-- lands in about 0.35 s (ITEM_LOCK_CHANGED, then BAG_UPDATE and
+-- BAG_UPDATE_DELAYED), and moves on separate slots sent in one frame land
+-- together. An item put on a part stack of its own kind stacks onto it. The
+-- reagent bag takes only crafting reagents (its family reads 0; the game
+-- refuses anything else with an error).
+-- A sort runs in waves: the bags read as they are, where everything should
+-- be worked out again, up to WAVE moves on separate slots sent, then a wait
+-- for their locks to clear. Part stacks are put together first. Meanwhile
+-- the window waits under the loading mark; combat, an item you pick up, the
+-- window closing or the game refusing a move stops it where it is.
+--------------------------------------------------------------------------------
+
+local WAVE = 6            -- moves sent at once, on separate slots
+local WAVE_TIMEOUT = 4    -- s for a wave's moves to land
+local MAX_WAVES = 300
+local STACK_ROUNDS = 8
+
+-- By type: your gear first (weapons, armour, ammunition and quivers), then
+-- bags, what you use (consumables, enhancements, gems, glyphs), recipes,
+-- what you make things with (trade goods, reagents, profession items),
+-- quest items, keys and the rest; grey items last whatever they are. Item
+-- classes by Enum.ItemClass number.
+local CLASS_ORDER = {}
+for i, c in ipairs({ 2, 4, 6, 11, 1, 0, 8, 3, 16, 9, 7, 5, 19, 12, 13, 15, 17, 18 }) do CLASS_ORDER[c] = i end
+
+-- Gear by where it's worn: weapons, then head to feet, rings and trinkets.
+local EQUIP_ORDER = {}
+for i, loc in ipairs({ "INVTYPE_2HWEAPON", "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPON", "INVTYPE_WEAPONOFFHAND",
+    "INVTYPE_SHIELD", "INVTYPE_HOLDABLE", "INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT", "INVTYPE_THROWN", "INVTYPE_RELIC",
+    "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_CLOAK", "INVTYPE_CHEST", "INVTYPE_ROBE", "INVTYPE_BODY",
+    "INVTYPE_TABARD", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_FINGER",
+    "INVTYPE_TRINKET", "INVTYPE_AMMO", "INVTYPE_BAG", "INVTYPE_QUIVER" }) do EQUIP_ORDER[loc] = i end
+
+-- The parts an order compares, each ascending (a minus for highest first).
+local KEY = {
+    junk = function(a) return a.quality == 0 and 1 or 0 end,
+    class = function(a) return CLASS_ORDER[a.classID] or 99 end,
+    sub = function(a) return a.subclassID or 99 end,
+    equip = function(a) return EQUIP_ORDER[a.equipLoc] or 99 end,
+    quality = function(a) return -(a.quality or 0) end,
+    level = function(a) return -(a.level or 0) end,
+    name = function(a) return a.name or "" end,
+    id = function(a) return a.id end,
+    link = function(a) return a.link or "" end,
+    count = function(a) return -a.count end,
+}
+
+local ORDERS = {
+    type = { KEY.junk, KEY.class, KEY.sub, KEY.equip, KEY.quality, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
+    quality = { KEY.quality, KEY.class, KEY.sub, KEY.equip, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
+    level = { KEY.level, KEY.class, KEY.sub, KEY.equip, KEY.quality, KEY.name, KEY.id, KEY.link, KEY.count },
+    name = { KEY.name, KEY.quality, KEY.id, KEY.link, KEY.count },
+}
+
+local SORT_OPTIONS = {
+    { value = "type", label = "By type" },
+    { value = "quality", label = "By quality" },
+    { value = "level", label = "By item level" },
+    { value = "name", label = "By name" },
+    { value = "game", label = "The game's sort" },
+}
+
+local function before(a, b, keys)
+    for _, k in ipairs(keys) do
+        local x, y = k(a), k(b)
+        if x ~= y then return x < y end
+    end
+    return false
+end
+
+-- What an item is, read once per link (the game may not have it loaded yet:
+-- then what GetItemInfoInstant knows, and it's asked for).
+local itemCache = {}
+local function itemOf(info)
+    local id, link = info.itemID, info.hyperlink
+    local key = plain(link) and link or id
+    local d = itemCache[key]
+    if not d then
+        d = { id = id, link = plain(link) and link or nil }
+        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, _, classID, subclassID, _, _, _, reagent =
+            C_Item.GetItemInfo(d.link or id)
+        if name then
+            d.name, d.quality, d.level, d.maxStack, d.equipLoc = name, quality, level, maxStack, equipLoc
+            d.classID, d.subclassID, d.reagent = classID, subclassID, reagent and true or false
+            if d.link and C_Item.GetDetailedItemLevelInfo then
+                local ok, effective = pcall(C_Item.GetDetailedItemLevelInfo, d.link)
+                if ok and plain(effective) and type(effective) == "number" then d.level = effective end
+            end
+            itemCache[key] = d
+        else
+            local _, _, _, loc, _, cls, sub = C_Item.GetItemInfoInstant(id)
+            d.equipLoc, d.classID, d.subclassID = loc, cls, sub
+            if C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
+        end
+        if C_Item.GetItemFamily then
+            local ok, fam = pcall(C_Item.GetItemFamily, id)
+            if ok and plain(fam) then d.family = fam end
+        end
+    end
+    local count = plain(info.stackCount) and info.stackCount or 1
+    local quality = d.quality
+    if quality == nil and plain(info.quality) then quality = info.quality end
+    return setmetatable({ count = count, quality = quality }, { __index = d })
+end
+
+-- Whether an item may go into a bag of this family (0: any; "reagent": the
+-- reagent bag, crafting reagents only; else the bag's family bits). Bags
+-- themselves only into ordinary bags.
+local function fits(item, family)
+    if family == 0 then return true end
+    if item.classID == 1 then return false end
+    if family == "reagent" then return item.reagent == true end
+    return item.family ~= nil and bit.band(item.family, family) ~= 0
+end
+
+local function same(a, b)
+    if a == nil or b == nil then return a == b end
+    return a.id == b.id and a.count == b.count and a.link == b.link
+end
+
+-- The slots a sort covers, in the window's order, as they are now.
+function M:SortSlots(bank)
+    local bags = bank and self:BankBags() or { 0, 1, 2, 3, 4 }
+    if not bank and self:Get("reagentBag") then bags[#bags + 1] = REAGENT end
+    local slots = {}
+    for _, bag in ipairs(bags) do
+        local family = 0
+        if bag == REAGENT then
+            family = "reagent"
+        else
+            local _, f = C_Container.GetContainerNumFreeSlots(bag)
+            if plain(f) and type(f) == "number" then family = f end
+        end
+        for slot = 1, numSlots(bag) do
+            local s = { bag = bag, slot = slot, family = family }
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and plain(info.itemID) and info.itemID then
+                s.item = itemOf(info)
+                s.locked = plain(info.isLocked) and info.isLocked or false
+            end
+            slots[#slots + 1] = s
+        end
+    end
+    return slots
+end
+
+-- Part stacks of one item put together: for each item, its last part stack
+-- onto its first (one pair per item per wave).
+function M:PlanStacks(slots, st)
+    local first, moves = {}, {}
+    for i, s in ipairs(slots) do
+        local it = s.item
+        if it and not s.locked and (it.maxStack or 1) > 1 and it.count < it.maxStack then
+            local g = first[it.id]
+            if not g then first[it.id] = { i } else g[#g + 1] = i end
+        end
+    end
+    -- an item whose part stacks were no fewer after a round doesn't stack
+    -- (two of one item that differ): left as they are
+    for id, g in pairs(first) do
+        if #g > 1 then
+            if st.partials[id] and #g >= st.partials[id] then st.noStack[id] = true end
+            st.partials[id] = #g
+            if not st.noStack[id] and #moves < WAVE then moves[#moves + 1] = { from = slots[g[#g]], to = slots[g[1]] } end
+        end
+    end
+    return moves
+end
+
+-- Where each item belongs: target[i] for slots[i] (nil: empty). The bags of
+-- a family (the reagent bag, profession bags) take the items that fit them
+-- first; the rest go into the ordinary bags. toEnd: the items gather at the
+-- end, in the same order, the empty slots before them.
+function M:SortTarget(slots, order, toEnd)
+    local items = {}
+    for _, s in ipairs(slots) do if s.item then items[#items + 1] = s.item end end
+    local keys = ORDERS[order] or ORDERS.type
+    table.sort(items, function(a, b) return before(a, b, keys) end)
+    local target = {}
+    local function place(positions, list)
+        local offset = toEnd and (#positions - #list) or 0
+        for i, item in ipairs(list) do target[positions[offset + i]] = item end
+    end
+    -- the special bags, each in turn
+    local special, general = {}, {}
+    for i, s in ipairs(slots) do
+        if s.family == 0 then
+            general[#general + 1] = i
+        else
+            local list = special[s.bag]
+            if not list then
+                list = { family = s.family }
+                special[s.bag] = list
+                special[#special + 1] = list
+            end
+            list[#list + 1] = i
+        end
+    end
+    for _, positions in ipairs(special) do
+        local taken, rest = {}, {}
+        for _, item in ipairs(items) do
+            if #taken < #positions and fits(item, positions.family) then taken[#taken + 1] = item
+            else rest[#rest + 1] = item end
+        end
+        place(positions, taken)
+        items = rest
+    end
+    if #items > #general then return nil end
+    place(general, items)
+    return target
+end
+
+-- One wave of moves on separate slots: each puts an item where it belongs,
+-- taking it from a slot where it doesn't. What is in the way goes to that
+-- slot, so it must be allowed there; else first to an empty slot it may go
+-- to. Returns the moves and how many slots are still wrong.
+function M:PlanWave(slots, target)
+    local cur, touched, moves = {}, {}, {}
+    local wrong = 0
+    for i, s in ipairs(slots) do
+        cur[i] = s.item
+        if not same(s.item, target[i]) then wrong = wrong + 1 end
+    end
+    for p = 1, #slots do
+        if #moves >= WAVE then break end
+        local want = target[p]
+        if want and not touched[p] and not slots[p].locked and not same(cur[p], want) then
+            local from
+            for i = 1, #slots do
+                if i ~= p and not touched[i] and not slots[i].locked and same(cur[i], want) and not same(cur[i], target[i])
+                    and (cur[p] == nil or fits(cur[p], slots[i].family)) then
+                    from = i
+                    break
+                end
+            end
+            if from then
+                moves[#moves + 1] = { from = slots[from], to = slots[p] }
+                touched[from], touched[p] = true, true
+                cur[from], cur[p] = cur[p], cur[from]
+            elseif cur[p] then
+                for e = 1, #slots do
+                    if e ~= p and not touched[e] and not slots[e].locked and cur[e] == nil and fits(cur[p], slots[e].family) then
+                        moves[#moves + 1] = { from = slots[p], to = slots[e] }
+                        touched[e], touched[p] = true, true
+                        cur[e], cur[p] = cur[p], nil
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return moves, wrong
+end
+
+-- The window a sort covers, and the loading mark over its slots.
+function M:SortCover(inv, on, title)
+    local c = inv.sortCover
+    if not c then
+        c = CreateFrame("Frame", nil, inv.body)
+        c:SetAllPoints(inv.body)
+        c:SetFrameLevel(inv.body:GetFrameLevel() + 100)
+        c:EnableMouse(true)
+        c.fill = UI.Fill(c, "surface")
+        c.fill:SetAllPoints()
+        c.fill:SetAlpha(0.85)
+        c.mark = UI.LoadingMark(c, { size = 60 })
+        c.mark:SetPoint("CENTER", 0, 24)
+        c.title = UI.Text(c, "header", "gilt-text")
+        c.title:SetPoint("TOP", c.mark, "BOTTOM", 0, -S["space-4"])
+        c.caption = UI.Text(c, "caption", "ink-muted")
+        c.caption:SetPoint("TOP", c.title, "BOTTOM", 0, -S["space-2"])
+        c:Hide()
+        inv.sortCover = c
+    end
+    if on then
+        c.title:SetValue(title or "Sorting")
+        c.caption:SetValue("")
+        c:Show()
+        c.mark:Start()
+    else
+        c.mark:Stop()
+        c:Hide()
+    end
+    inv.sort:SetEnabled(not on and (inv ~= self.inv or self:IsLive()))
+end
+
+function M:SortCaption(text)
+    local st = self.sorting
+    if st and st.inv.sortCover then st.inv.sortCover.caption:SetValue(text or "") end
+end
+
+-- The Sort button: SuuUI's order, or the game's sort.
+function M:Sort(bank)
+    if self.sorting then return end
+    local inv = bank and self.bank or self.inv
+    if InCombatLockdown() then self:Print("Your bags can't be sorted in combat.") return end
+    if CursorHasItem() then self:Print("Put down the item you're holding first, then press Sort.") return end
+    local order, toEnd = self:Get("sortOrder"), self:Get("sortDirection") ~= "start"
+    self.sorting = { bank = bank, inv = inv, order = order, toEnd = toEnd, phase = "stack", rounds = 0, waves = 0,
+                     idle = 0, started = GetTime(), partials = {}, noStack = {} }
+    self:SortCover(inv, true, bank and "Sorting the bank" or "Sorting bags")
+    if order == "game" then
+        self.sorting.game = true
+        -- right to left off: the game fills the last bags and leaves the gaps
+        -- in the first (seen in the probe)
+        if C_Container.SetSortBagsRightToLeft then pcall(C_Container.SetSortBagsRightToLeft, not toEnd) end
+        if bank then sortBank() elseif C_Container.SortBags then pcall(C_Container.SortBags) end
+        self:SortCaption("The game is sorting…")
+        self.sorting.wait = { at = GetTime(), moves = {} }
+        self.sortDriver:Show()
+        return
+    end
+    self:SortStep()
+end
+
+local function locked(s)
+    local info = C_Container.GetContainerItemInfo(s.bag, s.slot)
+    return info and plain(info.isLocked) and info.isLocked or false
+end
+
+-- One wave: read, plan, send.
+function M:SortStep()
+    local st = self.sorting
+    if not st then return end
+    if CursorHasItem() then return self:StopSort("you picked up an item") end
+    local slots = self:SortSlots(st.bank)
+    local moves
+    if st.phase == "stack" then
+        st.rounds = st.rounds + 1
+        moves = self:PlanStacks(slots, st)
+        if #moves == 0 or st.rounds > STACK_ROUNDS then st.phase, moves = "place", nil
+        else self:SortCaption("Stacking…") end
+    end
+    if not moves then
+        local target = self:SortTarget(slots, st.order, st.toEnd)
+        if not target then return self:StopSort("there isn't room to put everything in order") end
+        local wrong
+        moves, wrong = self:PlanWave(slots, target)
+        if wrong == 0 then return self:FinishSort() end
+        st.total = math.max(st.total or 0, wrong)
+        self:SortCaption(("%d item%s to move"):format(wrong, wrong == 1 and "" or "s"))
+        -- every move puts one slot right: no fewer wrong for a while means stuck
+        if st.lastWrong and wrong >= st.lastWrong then st.idle = st.idle + 1 else st.idle = 0 end
+        st.lastWrong = wrong
+        if st.idle > 6 then return self:StopSort("some items wouldn't go where the order puts them") end
+    end
+    st.waves = st.waves + 1
+    if st.waves > MAX_WAVES then return self:StopSort("it took too long") end
+    for _, m in ipairs(moves) do
+        pcall(C_Container.PickupContainerItem, m.from.bag, m.from.slot)
+        if CursorHasItem() then
+            pcall(C_Container.PickupContainerItem, m.to.bag, m.to.slot)
+            if CursorHasItem() then
+                ClearCursor()
+                return self:StopSort("the game didn't take a move")
+            end
+        end
+    end
+    st.wait = { at = GetTime(), moves = moves }
+    self.sortDriver:Show()
+end
+
+-- Each frame while a wave is on its way: on when its slots are free again
+-- and the bags have updated (the game's sort: once the bags are quiet).
+function M:SortTick()
+    local st = self.sorting
+    local w = st and st.wait
+    if not w then self.sortDriver:Hide() return end
+    local now = GetTime()
+    if st.game then
+        local quiet = now - (st.lastUpdate or w.at)
+        if now - w.at > 8 or (now - w.at > 0.6 and quiet > 0.5) then return self:FinishSort() end
+        return
+    end
+    if now - w.at > WAVE_TIMEOUT then return self:StopSort("the game didn't answer") end
+    if now - w.at < 0.05 then return end
+    for _, m in ipairs(w.moves) do
+        if locked(m.from) or locked(m.to) then return end
+    end
+    -- the bags' contents follow the locks; nothing sent: just a moment
+    if #w.moves > 0 and not w.updated and now - w.at < 1 then return end
+    if #w.moves == 0 and now - w.at < 0.2 then return end
+    st.wait = nil
+    self.sortDriver:Hide()
+    self:SortStep()
+end
+
+function M:EndSort()
+    local st = self.sorting
+    if not st then return end
+    self.sorting = nil
+    if self.sortDriver then self.sortDriver:Hide() end
+    self:SortCover(st.inv, false)
+    if st.inv == self.inv then self:Rebuild() else self:RebuildBank() end
+end
+
+function M:FinishSort() self:EndSort() end
+
+-- Stopped where it is; Sort again finishes it. The bank's first wave refused:
+-- the game's bank sort instead.
+function M:StopSort(why)
+    local st = self.sorting
+    if not st then return end
+    self:EndSort()
+    if st.bank and not st.game and (st.waves or 0) <= 1 and why:find("^the game") then
+        sortBank()
+        self:Print("The game didn't let SuuUI move bank items; your bank got the game's own sort instead.")
+        return
+    end
+    self:Print(("Sorting stopped: %s. Press Sort to finish."):format(why))
+end
+
+-- The Sort button's tooltip, after the order and direction.
+function M:SortTip()
+    local label = "By type"
+    for _, o in ipairs(SORT_OPTIONS) do if o.value == self:Get("sortOrder") then label = o.label end end
+    local where = self:Get("sortDirection") == "start" and "the start" or "the end"
+    local tip = { title = "Sort", description = ("%s, gathered at %s of your bags. Settings › Bags › Sort changes it."):format(label, where) }
+    if self.inv then self.inv.sort.tip = tip end
+    if self.bank then self.bank.sort.tip = tip end
+end
+
+--------------------------------------------------------------------------------
 -- Settings
 --------------------------------------------------------------------------------
 
@@ -1282,6 +1713,13 @@ local SECTION = {
             { key = "bagSlots", label = "Bag slots", control = "toggle",
               description = "Your bags in a rail beside the window (and the bank's slots at a banker): drag a bag on to change it, hover one to see its slots. Also the Bags toggle in the window's header." },
         } },
+        { title = "Sort", description = "The Sort button in your bags and at the bank. SuuUI's own orders move your items a few at a time, stacking part stacks first; a full sort takes a few seconds, and the window waits under the loading mark meanwhile. Combat, picking up an item or closing the window stops it; Sort again finishes it.", rows = {
+            { key = "sortOrder", label = "Order", control = "select", width = 180, options = SORT_OPTIONS,
+              description = "By type: your gear first (by slot, best first), then bags, what you use, recipes, trade goods and reagents, quest items, keys and the rest; grey items last. The reagent bag and profession bags are filled with what fits them first. The game's sort: Blizzard's own, in one go." },
+            { key = "sortDirection", label = "Items gather at", control = "segmented",
+              options = { { value = "end", label = "End of bags" }, { value = "start", label = "Start of bags" } },
+              description = "Where your items go; the empty slots are left at the other end." },
+        } },
         { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
             { key = "itemCounts", label = "Counts in item tooltips", control = "toggle",
               description = "An item's tooltip lists which of your characters has how many, in their bags, bank or worn." },
@@ -1308,7 +1746,11 @@ function M:OnEnable()
     if not self.inv then
         self.savedSlots = {}
         self.inv = UI.Inventory(SuuUI.Root, { name = "SuuUIBags", title = "Bags", columns = self:Get("columns"), characters = true })
-        self.inv.who.onChange = self:Guard(function(key) self.who = key; self:Refresh() end)
+        self.inv.who.onChange = self:Guard(function(key)
+            if self.sorting and key ~= self:CharKey() then self:StopSort("you picked another character's bags") end
+            self.who = key
+            self:Refresh()
+        end)
         self.inv.view.onChange = self:Guard(function(v) self.view = v; self:Refresh() end)
         self.inv.all.onChange = self:Guard(function(on)
             self.inv.search.placeholder:SetValue(on and "Search every character" or "Search")
@@ -1324,18 +1766,25 @@ function M:OnEnable()
         self.inv:Hide()
         self.inv.onClose = function() self:SetOpen(false) end
         self.inv.suuManagedShow = true -- it follows Blizzard's bags, not edit mode
-        self.inv.sort:SetScript("OnClick", function()
-            if C_Container.SortBags then pcall(C_Container.SortBags) end
-        end)
-        self.bank = UI.Inventory(SuuUI.Root, { name = "SuuUIBank", title = "Bank", columns = self:Get("columns"),
-            sortTip = "Blizzard's own sort for your bank." })
+        self.inv.sort:SetScript("OnClick", self:Guard(function() self:Sort(false) end))
+        self.bank = UI.Inventory(SuuUI.Root, { name = "SuuUIBank", title = "Bank", columns = self:Get("columns") })
         self.bank:SetFrameStrata("MEDIUM")
         self.bank:SetToplevel(true)
         self.bank:EnableMouse(true)
         self.bank:Hide()
         self.bank.suuManagedShow = true -- shown at a banker
         self.bank.onClose = closeBank
-        self.bank.sort:SetScript("OnClick", sortBank)
+        self.bank.sort:SetScript("OnClick", self:Guard(function() self:Sort(true) end))
+        -- a sort stops when its window closes, or another character's bags show
+        self.inv:HookScript("OnHide", function()
+            if self.sorting and self.sorting.inv == self.inv then self:StopSort("the bags closed") end
+        end)
+        self.bank:HookScript("OnHide", function()
+            if self.sorting and self.sorting.inv == self.bank then self:StopSort("the bank closed") end
+        end)
+        self.sortDriver = CreateFrame("Frame")
+        self.sortDriver:Hide()
+        self.sortDriver:SetScript("OnUpdate", self:Guard(function() self:SortTick() end))
         -- one search across both windows; it ends with them
         local function search(from, other)
             from.search.onTextChanged = self:Guard(function(text)
@@ -1393,6 +1842,9 @@ function M:OnEnable()
         self:DrawRails()
     end)
     self:Watch("keyring", function() self:Refresh() end)
+    self:Watch("sortOrder", function() self:SortTip() end)
+    self:Watch("sortDirection", function() self:SortTip() end)
+    self:SortTip()
     -- a theme can change the caption and micro styles the slots and rails
     -- are laid out in
     self:On("SUUUI_THEME_CHANGED", function() self:Refresh(); self:RebuildBank() end)
@@ -1426,6 +1878,19 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_INVENTORY_CHANGED", function(_, unit) if unit == "player" then self:DrawRails() end end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if self.bank:IsShown() then self:DrawBankRail() end end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.buyOver then self.buyOver:Hide() end end)
+    -- a sort: its waves land, combat or a refused move stops it
+    self:OnGameEvent("BAG_UPDATE_DELAYED", function()
+        local st = self.sorting
+        if not st then return end
+        st.lastUpdate = GetTime()
+        if st.wait then st.wait.updated = true end
+    end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.sorting then self:StopSort("combat started") end end)
+    self:OnGameEvent("UI_ERROR_MESSAGE", function(_, _, message)
+        local st = self.sorting
+        if not (st and st.wait and not st.game) then return end
+        self:StopSort("the game refused a move" .. (plain(message) and message and (" (" .. tostring(message) .. ")") or ""))
+    end)
     self:OnGameEvent("BANKFRAME_OPENED", function()
         self.atBank = true
         self:ShowBank()

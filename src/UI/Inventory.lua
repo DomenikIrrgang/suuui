@@ -12,6 +12,7 @@
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv:SetAction({ text, onClick, tooltip }) or nil: a quiet button in the foot, before the note
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
+--   inv.sort.tip = { title, description }: its tooltip, changed any time (0.17)
 --
 -- With opts.characters (design board "Bags window"): a character picker in
 -- the header (inv.who, a bare Select, in place of the title), a row with
@@ -412,9 +413,10 @@ local function glyphButton(parent, glyph, tip)
     b.glyph:SetSize(16, 16)
     b.glyph:SetPoint("CENTER")
     UI.Paint(b.glyph, "ink")
+    b.tip = tip
     b:SetScript("OnEnter", function(self)
         if self:IsEnabled() then self.edge:SetColor("gilt") end
-        if tip then UI.ShowTooltip(self, tip) end
+        if self.tip then UI.ShowTooltip(self, self.tip) end
     end)
     b:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-line"); UI.HideTooltip() end)
     hooksecurefunc(b, "SetEnabled", function(self, on) self:SetAlpha(on and 1 or T.opacity["opacity-disabled"]) end)
