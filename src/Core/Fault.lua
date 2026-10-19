@@ -169,5 +169,15 @@ blocked:SetScript("OnEvent", function(_, event, addon, func)
         end
         return
     end
-    Fault.Report("Taint", ("%s: %s"):format(what, tostring(func)), debugstack(2))
+    -- what the refused code read that addon code wrote (the culprit, while
+    -- it's still there: these come and go)
+    local stack = debugstack(2)
+    local scan = ns.TaintProbe and ns.TaintProbe.Scan
+    if scan then
+        local ok, tainted = pcall(scan)
+        if ok and #tainted > 0 then
+            stack = stack .. "\nWritten by addon code: " .. table.concat(tainted, "; ", 1, math.min(#tainted, 40))
+        end
+    end
+    Fault.Report("Taint", ("%s: %s"):format(what, tostring(func)), stack)
 end)

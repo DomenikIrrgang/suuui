@@ -4,6 +4,10 @@
 -- addon wrote taints the Blizzard code that reads it; in combat, Escape then
 -- may not close windows ("Interface action failed", found in game with the
 -- spells window). Saved in SuuUIProbe.taint; also printed.
+-- (2026-10-20) Also what a bag slot's click reads before it uses the item
+-- (ContainerFrameItemButton_OnClick: "Forbidden: UseContainerItem()" seen
+-- once, not again); TP.Scan() is what SuuUI's error log runs by itself when
+-- the game refuses or blocks an action, so the culprit is caught then.
 
 local _, ns = ...
 
@@ -21,31 +25,59 @@ local GLOBALS = {
     "UISpecialFrames", "UIPanelWindows", "FramePositionDelegate", "GameMenuFrame", "GameMenuFrame_Show",
     "PlayerSpellsFrame", "CharacterFrame", "ContainerFrameContainer", "ContainerFrameCombinedBags",
     "EventRegistry", "ToggleFrame", "securecallfunction",
+    -- a bag slot's click (ContainerFrameItemButton_OnClick, Mainline)
+    "ContainerFrameItemButton_OnClick", "MerchantFrame_ResetRefundItem", "MerchantFrame_SetRefundItem",
+    "MerchantFrame_ConfirmExtendedItemCost", "MerchantFrame_ConfirmHighCostItem", "ContainerFrame_GetExtendedPriceString",
+    "ContainerFrame_IsAccountBankTab", "BankUtil_IsAccountBankDepositRefundable", "ItemButtonUtil", "ItemLocation",
+    "MerchantFrame", "BankFrame", "GuildBankFrame", "MailFrame", "AuctionFrame", "AuctionHouseFrame", "TradeFrame",
+    "ItemUpgradeFrame", "StackSplitFrame", "AzeriteRespecFrame", "RuneforgeFrame", "ObliterumForgeFrame",
+    "ChallengesKeystoneFrame", "StaticPopup_Show", "SpellCanTargetItem", "SpellCanTargetItemID", "GetCursorInfo",
+    "CursorHasItem", "IsModifiedClick", "C_Container", "C_Cursor", "C_Item", "C_Spell",
 }
+
+-- frames whose own fields those paths read
+local FRAMES = { "PlayerSpellsFrame", "CharacterFrame", "GameMenuFrame", "FramePositionDelegate", "ContainerFrame1",
+    "ContainerFrameCombinedBags", "MerchantFrame", "BankFrame", "StackSplitFrame", "MailFrame", "TradeFrame",
+    "ItemButtonUtil", "C_Container" }
+
+-- Every value on those paths last written by addon code ("name (by X)"),
+-- with the fields of SuuUI's own bag slot buttons and their bag frames
+-- (Blizzard's slot template reads its own and its parent's).
+function TP.Scan()
+    local tainted = {}
+    -- one check that fails (a forbidden table) doesn't end the scan
+    local function check(label, ...)
+        local ok, secure, by = pcall(issecurevariable, ...)
+        if ok and not secure then tainted[#tainted + 1] = label .. " (by " .. tostring(by) .. ")" end
+    end
+    local function fields(label, t)
+        if type(t) ~= "table" then return end
+        for k in pairs(t) do
+            if type(k) == "string" then check(label .. "." .. k, t, k) end
+        end
+    end
+    for _, name in ipairs(GLOBALS) do check(name, name) end
+    for i in ipairs(UISpecialFrames or {}) do
+        check("UISpecialFrames[" .. i .. "] = " .. tostring(UISpecialFrames[i]), UISpecialFrames, i)
+    end
+    for _, fname in ipairs(FRAMES) do fields(fname, _G[fname]) end
+    local bank = _G.BankFrame
+    if type(bank) == "table" then fields("BankFrame.BankPanel", bank.BankPanel) end
+    -- SuuUI's slots: one of each bag (they're made alike), and its bag frame
+    for bag = -3, 12 do
+        local b = _G[("SuuUIBag%dSlot1"):format(bag + 2)]
+        if b then
+            fields(b:GetName(), b)
+            fields(b:GetName() .. ":GetParent()", b:GetParent())
+        end
+    end
+    return tainted
+end
 
 function TP.Command()
     SuuUIProbe = SuuUIProbe or {}
-    local out = { at = date("%H:%M:%S"), combat = InCombatLockdown(), tainted = {} }
+    local out = { at = date("%H:%M:%S"), combat = InCombatLockdown(), tainted = TP.Scan() }
     SuuUIProbe.taint = out
-    local function check(label, ok, by)
-        if not ok then out.tainted[#out.tainted + 1] = label .. " (by " .. tostring(by) .. ")" end
-    end
-    for _, name in ipairs(GLOBALS) do
-        check(name, issecurevariable(name))
-    end
-    -- every entry of UISpecialFrames
-    for i in ipairs(UISpecialFrames or {}) do
-        check("UISpecialFrames[" .. i .. "] = " .. tostring(UISpecialFrames[i]), issecurevariable(UISpecialFrames, i))
-    end
-    -- the fields of the spells window and the Blizzard frames on the path
-    for _, fname in ipairs({ "PlayerSpellsFrame", "CharacterFrame", "GameMenuFrame", "FramePositionDelegate", "ContainerFrame1", "ContainerFrameCombinedBags" }) do
-        local f = _G[fname]
-        if type(f) == "table" then
-            for k in pairs(f) do
-                if type(k) == "string" then check(fname .. "." .. k, issecurevariable(f, k)) end
-            end
-        end
-    end
     for i, line in ipairs(out.tainted) do
         if i <= 25 then ns.Print("Taint: " .. line) end
     end
