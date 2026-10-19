@@ -16,8 +16,9 @@
 --   take (asked 2026-10-19: SuuUI's world map as the one map for flying):
 --          at the next flight master (or the open one), two SuuUI buttons:
 --          "Fly to <the first reachable node>" calls TakeTaxiNode from a
---          click, "Hide the game's map" hides it and records whether that
---          ends the taxi session (TAXIMAP_CLOSED, NumTaxiNodes after)
+--          click, "Make the game's map invisible" leaves it shown at alpha
+--          0 without the mouse and records whether the taxi session stays
+--          (TAXIMAP_CLOSED, NumTaxiNodes after; hiding it ends the session)
 -- Saved in SuuUIProbe.taxi on /reload. Values the game hides read SECRET.
 --
 --   /suu probe taxi        snapshot and listen
@@ -246,23 +247,21 @@ local function hideMap()
     take.hide = t
     take.hiding = true
     watchFor(t)
-    local f = _G.TaxiFrame
+    -- hiding it closes the flight master (probed 2026-10-19): shown, but unseen
+    -- and not in the mouse's way
+    local f = _G.FlightMapFrame and _G.FlightMapFrame:IsShown() and _G.FlightMapFrame or _G.TaxiFrame
     if f then
-        local ok, err = pcall(f.Hide, f)
-        t.call = ok and "TaxiFrame:Hide() ran" or ("error: " .. tostring(err):sub(1, 120))
+        local ok, err = pcall(f.SetAlpha, f, 0)
+        local ok2, err2 = pcall(f.EnableMouse, f, false)
+        t.call = ("%s:SetAlpha(0) %s; EnableMouse(false) %s"):format(f:GetName() or "?",
+            ok and "ran" or ("error: " .. tostring(err):sub(1, 120)), ok2 and "ran" or ("error: " .. tostring(err2):sub(1, 120)))
     else
         t.call = "no TaxiFrame"
     end
-    -- the flight map, when that is the one showing
-    local fm = _G.FlightMapFrame
-    if fm and fm:IsShown() then
-        local ok, err = pcall(fm.Hide, fm)
-        t.call = t.call .. "; FlightMapFrame:Hide() " .. (ok and "ran" or ("error: " .. tostring(err):sub(1, 120)))
-    end
     C_Timer.After(0.5, function()
-        t.after = ("frames %s, nodes %s"):format(frames(), show(call(NumTaxiNodes)))
+        t.after = ("frames %s, nodes %s, alpha %s"):format(frames(), show(call(NumTaxiNodes)), f and show(f:GetAlpha()) or "-")
         t.started = nil
-        ns.Print(("Taxi probe: the game's map hidden; after it: %s. Now click Fly to see whether a flight still starts."):format(t.after))
+        ns.Print(("Taxi probe: the game's map made invisible; after it: %s. Now click Fly to see whether a flight starts."):format(t.after))
     end)
     if hideButton then hideButton:Hide() end
 end
@@ -287,10 +286,10 @@ local function offerTake()
     flyButton:SetText("Fly to " .. show(name))
     flyButton:SetScript("OnClick", function() fly(slot, name) end)
     flyButton:Show()
-    hideButton = hideButton or button("Hide the game's map", 160, nil)
+    hideButton = hideButton or button("Make the game's map invisible", 220, nil)
     hideButton:SetScript("OnClick", hideMap)
     hideButton:Show()
-    ns.Print(("Taxi probe: two buttons above the middle. Click \"Hide the game's map\" first, then \"Fly to %s\" (how SuuUI's own map would fly); if hiding closed the flight master, open it again and click Fly alone. Then /reload."):format(show(name)))
+    ns.Print(("Taxi probe: two buttons above the middle. Click \"Make the game's map invisible\" first, then \"Fly to %s\" (how SuuUI's own map would fly); if the flight master closed, open it again and click Fly alone. Then /reload."):format(show(name)))
 end
 
 -- A flight, from losing control to getting it back; where you are every 5 s.
@@ -348,9 +347,16 @@ local function listen()
             local o = out()
             o.closed = o.closed or {}
             o.closed[#o.closed + 1] = ("%s TAXIMAP_CLOSED; nodes %s%s"):format(date("%H:%M:%S"), show(call(NumTaxiNodes)),
-                take and take.hiding and " (after the hide button)" or "")
-            -- walked away: the buttons go; closed by the hide button: Fly stays, to try it
+                take and take.hiding and " (after the invisible button)" or "")
+            -- walked away: the buttons go; closed after the invisible button: Fly stays, to try it
             if not (take and take.hiding) then hideButtons() end
+            -- the game's map seen again next time
+            for _, f in ipairs({ _G.TaxiFrame, _G.FlightMapFrame }) do
+                if f and f:GetAlpha() == 0 then
+                    pcall(f.SetAlpha, f, 1)
+                    pcall(f.EnableMouse, f, true)
+                end
+            end
         elseif event == "PLAYER_CONTROL_LOST" then
             -- on a taxi a moment after control goes
             C_Timer.After(0.5, flightStart)
