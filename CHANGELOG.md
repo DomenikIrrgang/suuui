@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.7 (2026-10-20)
 
 ### New
 
@@ -34,12 +34,14 @@
 - Nameplates: health drops as on the unit frames, a pale ghost of the lost health trailing the bar and easing down.
 - World map: the game's little city houses are gone (SuuUI's own pins show the towns' services), and your arrow is SuuUI's.
 - Rage is a clearer red on the unit frames and the resource bar.
-
+- Cooldown Manager presets: buffs that last 3 minutes or less or get used up by charges (the shaman's Lightning and Water Shield, Battle Shout, Inner Fire) are fixed slots that warn while missing and show their time and stacks while up (they were reminders). Your saved setups follow.
 - Tabs everywhere (every window's tabs, the chat tabs, the Settings list, the Professions rail, the Spellbook's schools): the chosen tab's underline and jewel glide to a tab you pick, and the jewel follows the pointer along the tabs, as on suuui.dev; in switches (Stats / Sets / Titles, Bags / Bank, the settings' choices…) the chosen option's fill glides to the one you pick. At once with reduced motion.
 
 ### Fixed
 
 - Chat: a tab's name sits centred over its underline.
+- Cooldown Manager: the shaman's Shields slot shows a shield you know, with the icon of the rank you cast (it showed the wrong one).
+- Tooltips: a long hint wraps instead of running past the edge, and the convergence tooltip has room between its rows.
 - Campsite: no "Campfire nearby" alert while you fly over one.
 - Windows: the character window (and the other reskinned game windows) comes to the front when it opens or you click it; at a merchant it opened behind the merchant's window, out of the repair cursor's reach.
 - Edit mode: the toolbar of a frame at the screen's top edge shows under the frame instead of off screen.
