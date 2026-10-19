@@ -863,6 +863,14 @@ function ns.Probe.Command(arg)
         ns.TaxiProbe.Command(rest)
         return
     end
+    if sub == "raid" then
+        ns.RaidProbe.Command(rest)
+        return
+    end
+    if sub == "durability" then
+        ns.DurabilityProbe.Command(rest)
+        return
+    end
     if sub == "deathrecap" then
         ns.DeathRecapProbe.Command(rest)
         return

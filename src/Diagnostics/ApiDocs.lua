@@ -85,6 +85,38 @@ function AD.Dump(words)
     return lines
 end
 
+-- What the documentation says of some functions beyond their types: every
+-- plain field of each one's entry (HasRestrictions, SecretArguments and the
+-- like), keyed by its full name; "not documented" for a name it lacks.
+function AD.Flags(names)
+    local docs = load()
+    if not docs or type(docs.systems) ~= "table" then
+        return nil, "the client's API documentation didn't load"
+    end
+    local found, seen = {}, {}
+    for _, sys in ipairs(docs.systems) do
+        for _, f in ipairs(sys.Functions or {}) do
+            for _, want in ipairs(names) do
+                if f.Name == want then
+                    local parts = {}
+                    for k, v in pairs(f) do
+                        if type(v) ~= "table" and type(v) ~= "function" and k ~= "Name" and k ~= "Type" then
+                            parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+                        end
+                    end
+                    table.sort(parts)
+                    found[(sys.Namespace and (sys.Namespace .. ".") or "") .. want] = #parts > 0 and table.concat(parts, "  ") or "no flags"
+                    seen[want] = true
+                end
+            end
+        end
+    end
+    for _, want in ipairs(names) do
+        if not seen[want] then found[want] = "not documented" end
+    end
+    return found
+end
+
 --------------------------------------------------------------------------------
 -- "/suu probe runtime": what the running client really has, where the
 -- documentation is silent: every Enum and global table whose name mentions
