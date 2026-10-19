@@ -369,44 +369,75 @@ local function secure()
     o.secure = r
     if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
     r.before = snapshot("before the click")
-    local f = WP.secureFrame
-    if not f then
-        local ok, c = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
-        r.container = ok and "made" or ("error: " .. tostring(c))
-        if not ok then ns.Print("Weapon enchant probe: no aura container (" .. tostring(c) .. "). /reload to save it.") return end
+    local function try(key, fn, ...)
+        if type(fn) ~= "function" then r[key] = "missing" return end
+        local ok, err = pcall(fn, ...)
+        r[key] = ok and "ran" or ("error: " .. tostring(err))
+        return ok, err
+    end
+    local c = WP.secureFrame
+    if not c then
+        local ok, made = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
+        r.container = ok and "made" or ("error: " .. tostring(made))
+        if not ok then ns.Print("Weapon enchant probe: no aura container (" .. tostring(made) .. "). /reload to save it.") return end
+        c = made
+        WP.secureFrame = c
         c:SetSize(44, 44)
         c:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
         c:SetFrameStrata("DIALOG")
+        -- as the buff bar sets its containers up: a unit, a flow layout
+        try("setUnit", c.SetUnit, c, "player")
+        try("anchor", c.SetFlowLayoutAnchorPoint, c, "TOPLEFT")
+        try("layout", c.SetItemEnchantmentLayout, c, { elementWidth = 40, elementHeight = 40 })
         local slot = AuraContainerItemEnchantmentSlot and AuraContainerItemEnchantmentSlot.MainHand or 0
         local ok2, button = pcall(c.AddItemEnchantment, c, slot, { hidePermanent = false })
         r.add = ok2 and show(button) or ("error: " .. tostring(button))
+        try("enable", c.SetItemEnchantmentEnabled, c, slot, true)
         if ok2 and button then
             local icon = button:CreateTexture(nil, "ARTWORK")
             icon:SetAllPoints()
-            local oki, erri = pcall(button.SetIcon, button, icon)
-            r.setIcon = oki and "ran" or ("error: " .. tostring(erri))
-            local okc, err = pcall(button.SetCancelAuraButtons, button, "RightButtonUp")
-            r.setCancel = okc and "ran" or ("error: " .. tostring(err))
-            pcall(button.SetSize, button, 40, 40)
-            local okh, errh = pcall(button.HookScript, button, "OnClick", function(_, which)
-                r.clicks = (r.clicks or 0) + 1
-                r.lastButton = show(which)
-                C_Timer.After(1, function()
-                    r.after = snapshot("1 s after the click")
-                    ns.Print(("Weapon enchant probe: clicked (%s); main hand now: %s. /reload to save it."):format(
-                        show(which), r.after.slots.MainHand.list))
-                end)
-            end)
-            r.hook = okh and "ran" or ("error: " .. tostring(errh))
+            try("setIcon", button.SetIcon, button, icon)
+            try("setCancel", button.SetCancelAuraButtons, button, "RightButtonUp")
+            local bg = c:CreateTexture(nil, "BACKGROUND")
+            bg:SetAllPoints()
+            bg:SetColorTexture(1, 0, 1, 0.25)
         end
         local label = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         label:SetPoint("BOTTOM", c, "TOP", 0, 6)
         label:SetText("Weapon enchant probe: right-click the icon to remove your main hand's enchant")
-        f = c
-        WP.secureFrame = c
     end
-    f:Show()
-    ns.Print("Weapon enchant probe: right-click the icon at the top of the screen; it REMOVES your main hand's temporary enchant (imbue, poison, stone or oil).")
+    c:Show()
+    -- what the button is a few seconds on (size, shown, its icon), and the
+    -- main hand each second for a minute: the moment its enchant goes
+    C_Timer.After(2, function()
+        local button = c.GetItemEnchantmentFrame and select(2, pcall(c.GetItemEnchantmentFrame, c, 0))
+        if type(button) == "table" and button.GetSize then
+            local w, h = button:GetSize()
+            r.button = ("shown %s visible %s size %s x %s"):format(show(button:IsShown()), show(button:IsVisible()), show(w), show(h))
+        else
+            r.button = show(button)
+        end
+    end)
+    -- (the list holds the time left, which ticks: only whether there is one)
+    local function has(snap) return (snap.slots.MainHand.list or ""):find("hasEnchant=true", 1, true) ~= nil end
+    local first = has(r.before)
+    local n = 0
+    local ticker
+    ticker = C_Timer.NewTicker(1, function()
+        n = n + 1
+        local now = snapshot("watching")
+        if has(now) ~= first then
+            r.after = now
+            r.goneAfter = n .. " s"
+            ticker:Cancel()
+            ns.Print("Weapon enchant probe: your main hand's enchant changed (" .. now.slots.MainHand.list .. "). /reload to save it.")
+        elseif n >= 60 then
+            ticker:Cancel()
+            r.after = now
+            ns.Print("Weapon enchant probe: a minute passed, the enchant is still there. /reload to save it.")
+        end
+    end)
+    ns.Print("Weapon enchant probe: right-click the icon at the top of the screen (a pink square shows where the container is); it REMOVES your main hand's temporary enchant. Watching for a minute.")
 end
 
 function WP.Command(rest)
