@@ -35,6 +35,7 @@ local M = SuuUI.RegisterModule({
 })
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
 
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
@@ -352,14 +353,16 @@ function M:Tip(spot)
     local left = self:BlessingLeft()
     local lines = {
         { "Elemental Blessing", left and (("%d min left"):format(math.ceil(left / 60))) or "not active" },
-        { "Gives", "+10% speed, 15 min" },
+        { "Gives", "+10% speed, 15 min", gap = S["space-3"] },
     }
     if spot.seed then
-        lines[#lines + 1] = { "Found", "SuuUI's data" }
+        lines[#lines + 1] = { "Found", "SuuUI's data", gap = S["space-3"] }
     elseif spot.by then
-        lines[#lines + 1] = { "Found", spot.by .. (spot.at and (", " .. day(spot.at)) or "") }
+        lines[#lines + 1] = { "Found", spot.by .. (spot.at and (", " .. day(spot.at)) or ""), gap = S["space-3"] }
     end
-    if spot.from and not spot.confirmed then lines[#lines + 1] = { muted .. "Shared by " .. spot.from .. "|r" } end
+    if spot.from and not spot.confirmed then
+        lines[#lines + 1] = { muted .. "Shared by " .. spot.from .. "|r", gap = S["space-3"] }
+    end
     local subtitle = ("%s · %.1f, %.1f"):format(self:MapName(spot.map) or "", spot.x * 100, spot.y * 100)
     return { title = "Convergence of Elements", subtitle = subtitle, lines = lines,
              meta = not left and "Use Skysight here for the long blessing" or nil }

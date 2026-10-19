@@ -75,6 +75,12 @@ function Tip:SetContent(d)
         self.desc:SetValue(d.description)
         natural = math.max(natural, self.desc:GetUnboundedStringWidth())
     end
+    -- the meta line counts too (a long hint ran past the edge), and wraps
+    -- below when wider than the most
+    if d.meta then
+        self.status:SetValue(d.meta)
+        natural = math.max(natural, self.status:GetUnboundedStringWidth())
+    end
     local width = math.min(d.maxWidth or MAX_W, math.max(natural, 120) + pad * 2)
     local inner = width - pad * 2
 
@@ -96,6 +102,9 @@ function Tip:SetContent(d)
     end
     self.status:SetShown(d.meta ~= nil)
     if d.meta then
+        self.status:SetWordWrap(true)
+        self.status:SetJustifyH("LEFT")
+        self.status:SetFixedWidth(inner)
         self.status:SetValue(d.meta)
         stack:Add(self.status, { gapBefore = S["space-2"] + S["space-1"] })
     end
