@@ -410,9 +410,18 @@ local function buildPanel()
         Settings.Set("layout", "panel", { x = math.floor(x * k - rx + 0.5), y = math.floor(y * k - ry + 0.5) })
         place()
     end)
-    p:SetScript("OnDoubleClick", function()
-        Settings.Set("layout", "panel", {})
-        place()
+    -- (a frame has no OnDoubleClick: two clicks within 0.35 s)
+    local last = 0
+    p:SetScript("OnMouseUp", function(_, button)
+        if button ~= "LeftButton" then return end
+        local now = GetTime()
+        if now - last < 0.35 then
+            last = 0
+            Settings.Set("layout", "panel", {})
+            place()
+        else
+            last = now
+        end
     end)
     local stack = Layout.Stack(p.body, { gap = S["space-4"], autoSize = "height" })
 
