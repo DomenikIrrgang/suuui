@@ -1160,8 +1160,7 @@ From: ui-units.
 - **D-Core3. `SuuUI.Raw.ns` is now the addon table**, which holds the wowlua
   runtime (`__wowlua`); the modules are no longer fields of it. `Raw.UI` is
   `rawUI`, built in API.wowlua with every component under its old name (182,
-  generated from the symbol map); `Raw.Mixins` is Core/Init's `mixins`. Draw's
-  leftover `ui` export (the old `ns.UI`, an empty table) is unused and can go.
+  generated from the symbol map); `Raw.Mixins` is Core/Init's `mixins`.
   Docs/API.md and Docs/PluginGuide.md describe the new `Raw.ns`.
   (`src/Core/API.wowlua`)
 - **D-Core4. The `/suu` command's `SlashCmdList` key is now `WOWLUA_SUUUI_1`**
