@@ -10,7 +10,8 @@
 -- In the air the same map shows your flight: the part flown solid, the rest
 -- dashed, the time left at the destination; with the map closed, the flight
 -- bar at the top of the screen does (the time left, the stops passed and
--- ahead, when you land). Every route is drawn the way
+-- ahead, when you land), with Land at to come down at the next stop.
+-- Every route is drawn the way
 -- the game flies it (SuuUI.FlightPaths: its waypoints, put on the shown map
 -- through world coordinates), else straight from master to master.
 --
@@ -29,7 +30,8 @@
 -- Classic's measured flight times; three flights on Forever came within
 -- 0.4% of it, 2026-10-19), and each flight moves it a quarter of the way
 -- toward what it measured. A flight far off its estimate (an early landing)
--- or begun before a reload teaches nothing. The speed is kept per
+-- or begun before a reload teaches nothing; one set down at a stop by Land
+-- at is timed as the route to that stop. The speed is kept per
 -- character, should Forever give one a faster flight; a route's time
 -- carries the speed of whoever flew it and is scaled to yours when the two
 -- differ by more than 3%.
@@ -328,8 +330,10 @@ function M:FlightStarted(at)
     self:UpdateTimer()
 end
 
--- Landed: at the destination, its time is learned; landed early (the
--- destination far off), nothing.
+-- Landed: at the destination, its time is learned; set down by Land at at
+-- the stop it asked for, the time of the route that far (the game flies it
+-- as that route: probed 2026-10-19, Ratchet to Crossroads of a longer
+-- flight landed in the hop's time); landed early elsewhere, nothing.
 function M:FlightEnded(at)
     local f = self.flight
     if not f then return end
@@ -337,16 +341,23 @@ function M:FlightEnded(at)
     self:CharData().flight = nil
     local seconds = at - f.started
     local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-    local to = f.path[#f.path]
-    local there = true
-    if continent then
-        local p = positions(continent)[to]
-        local me = call(C_Map.GetPlayerMapPosition, continent, "player")
-        local x, y
-        if me and me.GetXY then x, y = me:GetXY() end
-        if p and plain(x) and plain(y) then there = math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03 end
+    local spots = continent and positions(continent)
+    local me = continent and call(C_Map.GetPlayerMapPosition, continent, "player")
+    local x, y
+    if me and me.GetXY then x, y = me:GetXY() end
+    -- (where the game doesn't say, taken as there)
+    local function landedAt(id)
+        local p = spots and spots[id]
+        if not (p and plain(x) and plain(y)) then return true end
+        return math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03
     end
-    if there then self:Learn(f, seconds) end
+    if f.early and landedAt(f.path[f.early]) then
+        local path = {}
+        for i = 1, f.early do path[i] = f.path[i] end
+        self:Learn({ path = path, expected = self:FlightTime(path), reloaded = f.reloaded }, seconds)
+    elseif landedAt(f.path[#f.path]) then
+        self:Learn(f, seconds)
+    end
     self:QueueLayout()
     self:UpdateTimer()
 end
@@ -360,7 +371,7 @@ function M:ResumeFlight()
     if not UnitOnTaxi("player") or ago > MAX_FLIGHT or ago < 0 then data.flight = nil return end
     local expected, measured = self:FlightTime(kept.path)
     self.flight = { path = kept.path, started = GetTime() - ago, expected = expected, measured = measured,
-                    names = kept.names, reloaded = true }
+                    names = kept.names, early = kept.early, reloaded = true }
 end
 
 --------------------------------------------------------------------------------
@@ -1149,24 +1160,27 @@ function M:Along(points, w, h)
 end
 
 -- In the air: the route flown solid, the rest dashed, a dot at each stop,
--- the time left at the destination.
+-- the time left at the destination (landing early: up to that stop).
 function M:DrawFlight(w, h)
     local fl = self.flight
     local points, stops = self:Way(fl.path)
     if not points then return end
+    local last, share = #points, 1
+    local route = fl.early and self:FlightRoute(fl)
+    if route and stops[fl.early] and route.at[fl.early] then last, share = stops[fl.early], route.at[fl.early] end
     local k, qx, qy = self:Along(points, w, h)
     local flown = {}
     for i = 1, k do flown[i] = points[i] end
     flown[#flown + 1] = { qx, qy }
     self:Solid(flown, 3, "gilt")
     local rest = { { qx, qy } }
-    for i = k + 1, #points do rest[#rest + 1] = points[i] end
+    for i = k + 1, last do rest[#rest + 1] = points[i] end
     self:Dashes("BORDER", rest, 5, 5, 5, "surface", 0.65)
     self:Dashes("ARTWORK", rest, 5, 5, 2, "gilt-text")
-    for _, i in ipairs(stops) do self:Dot(points[i][1], points[i][2]) end
-    local dest = points[#points]
+    for _, i in ipairs(stops) do if i <= last then self:Dot(points[i][1], points[i][2]) end end
+    local dest = points[last]
     if fl.expected then
-        local left = fl.expected - (GetTime() - fl.started)
+        local left = fl.expected * share - (GetTime() - fl.started)
         local tag = self.ink.left
         setTag(tag, (fl.measured and "" or "~") .. clock(math.max(0, left)) .. " left", "ink")
         tag:ClearAllPoints()
@@ -1235,8 +1249,13 @@ end
 -- route, gilt once passed), the next stop and when you land under it. A
 -- route never flown says so: estimated (its time marked ~, the fill
 -- hatched), or with no estimate either, the time flown so far over a
--- sweep. The text once a second, the fill every frame; with Reduce motion
--- the fill once a second and the sweep still. Its height is its lines'.
+-- sweep. While a stop is ahead, Land at under them asks the game to set you
+-- down there (its early landing, as its own leave button does; from SuuUI's
+-- click it isn't blocked, probed 2026-10-19): the bar then shows that stop
+-- as the destination, the time to it its share of the route. The button is
+-- the bar's only part that takes the mouse. The text once a second, the
+-- fill every frame; with Reduce motion the fill once a second and the sweep
+-- still. Its height is its lines' (the button's row only while it shows).
 
 local TIMER_W = 300  -- a cast bar's width (the board's)
 local TRACK_H = 6
@@ -1375,6 +1394,8 @@ function M:BuildTimer()
     f.next = UI.Text(body, "caption", "ink-muted")
     f.next:SetJustifyH("LEFT")
     f.lands = UI.Text(body, "caption", "ink-faint")
+    f.land = UI.Button(body, { variant = "quiet", onClick = function() self:LandEarly() end })
+    f.land:Hide()
     local wait = 0
     f:SetScript("OnUpdate", function(_, elapsed)
         wait = wait - elapsed
@@ -1390,14 +1411,15 @@ function M:BuildTimer()
 end
 
 -- The lines from the text styles' line heights (a theme can change them):
--- the name and time, the bar, the next stop and landing; the panel fits.
+-- the name and time, the bar, the next stop and landing, Land at while it
+-- shows; the panel fits.
 function M:LayoutTimer()
     local f = self.timer
     if not f then return end
     local body, gap = f.body, S["space-3"]
     local head = math.max(T.type["unit-name-sm"].lineHeight, T.type.numeric.lineHeight, GLYPH)
     local foot = T.type.caption.lineHeight
-    for _, r in ipairs({ f.glyph, f.name, f.time, f.track, f.next, f.lands }) do r:ClearAllPoints() end
+    for _, r in ipairs({ f.glyph, f.name, f.time, f.track, f.next, f.lands, f.land }) do r:ClearAllPoints() end
     f.glyph:SetPoint("LEFT", body, "TOPLEFT", 0, -head / 2)
     f.time:SetPoint("RIGHT", body, "TOPRIGHT", 0, -head / 2)
     f.name:SetPoint("LEFT", body, "TOPLEFT", GLYPH + S["space-3"], -head / 2)
@@ -1408,8 +1430,11 @@ function M:LayoutTimer()
     f.lands:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
     f.next:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
     f.next:SetPoint("TOPRIGHT", f.lands, "TOPLEFT", -S["space-4"], 0)
+    f.land:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y - foot - S["space-4"])
     f.sweep:SetSize(math.max(1, (TIMER_W - S["space-5"] * 2) * SWEEP), TRACK_H)
-    body:SetHeight(head + gap + TRACK_H + gap + foot)
+    local height = head + gap + TRACK_H + gap + foot
+    if f.landAt then height = height + S["space-4"] + f.land:GetHeight() end
+    body:SetHeight(height)
 end
 
 -- a stop's diamond: gilt-text rim, gilt once passed, surface ahead
@@ -1425,9 +1450,16 @@ end
 
 -- What the bar shows: { name, time, timeColor, left, right, fill ("solid",
 -- "hatch" or nil: the sweep), frac, rate (of the bar a second, for the
--- fill between ticks), stops = { { at, passed } } }.
+-- fill between ticks), stops = { { at, passed } }, land (the stop Land at
+-- names; nil: no button) }.
 function M:PaintTimer(v)
     local f = self.timer
+    if f.landAt ~= v.land then
+        f.landAt = v.land
+        if v.land then f.land:SetLabel("Land at " .. v.land) end
+        f.land:SetShown(v.land ~= nil)
+        self:LayoutTimer()
+    end
     f.name:SetValue(v.name)
     f.time:SetValue(v.time)
     f.time:SetColor(v.timeColor)
@@ -1486,53 +1518,80 @@ function M:MoveTimer()
     end
 end
 
--- Once a second in the air: the flight as it stands.
+-- Once a second in the air: the flight as it stands. Landing early, it ends
+-- at that stop: the bar is the route up to it (its share, at, of the whole).
 function M:TickTimer()
     local f, fl = self.timer, self.flight
     if not (f and fl) then return end
     local route = self:FlightRoute(fl)
     local frac = self:Flown(fl, route)
     local flown = GetTime() - fl.started
-    local left = fl.expected and math.max(0, fl.expected - flown)
-    local v = { flight = fl, name = self:StopName(fl, fl.path[#fl.path]), frac = frac,
-                rate = fl.expected and fl.expected > 0 and 1 / fl.expected or 0, stops = {} }
-    -- the stops between, by their place along the route
+    local to, share = #fl.path, 1
+    if fl.early and route and (route.at[fl.early] or 0) > 0 then to, share = fl.early, route.at[fl.early] end
+    local expected = fl.expected and fl.expected * share
+    local left = expected and math.max(0, expected - flown)
+    local v = { flight = fl, name = self:StopName(fl, fl.path[to]), frac = frac and frac / share,
+                rate = expected and expected > 0 and 1 / expected or 0, stops = {} }
+    -- the stops between, by their place along the route (where you are
+    -- tells the next one even untimed; the diamonds show with a time)
     local ahead
-    if route and fl.expected then
-        for i = 2, #fl.path - 1 do
+    if route and frac then
+        for i = 2, to - 1 do
             local at = route.at[i]
-            local passed = frac and frac >= at or false
-            v.stops[#v.stops + 1] = { at = at, passed = passed }
+            local passed = frac >= at
+            if expected then v.stops[#v.stops + 1] = { at = at / share, passed = passed } end
             if not passed and not ahead then ahead = i end
         end
     end
+    fl.ahead = ahead
     if fl.measured then
         v.time, v.timeColor, v.fill = clock(left), "ink", "solid"
         if ahead then
             v.left = ("Next stop %s · %s"):format(self:StopName(fl, fl.path[ahead]), clock(math.max(0, route.at[ahead] * fl.expected - flown)))
+        elseif to < #fl.path then
+            v.left = "Landing early"
         else
             -- (stops it can't place: how many)
             v.left = route and (#fl.path > 2 and "No more stops" or "Direct") or stopsText(fl.path)
         end
         v.right = "lands " .. clockAt(left)
-    elseif fl.expected then
+    elseif expected then
         v.time, v.timeColor, v.fill = "~" .. clock(left), "ink-muted", "hatch"
-        v.left = "Not timed yet · estimated · " .. clock(flown) .. " so far"
+        v.left = (to < #fl.path and "Landing early" or "Not timed yet") .. " · estimated · " .. clock(flown) .. " so far"
         v.right = "about " .. clockAt(left)
     else
         v.time, v.timeColor, v.fill, v.frac, v.rate = clock(flown), "ink-muted", nil, 0, 0
         -- (a flight resumed after a reload isn't timed: its start isn't exact)
-        v.left = fl.reloaded and "Not timed yet" or "Not timed yet · timing this flight"
+        v.left = to < #fl.path and "Landing early" or fl.reloaded and "Not timed yet" or "Not timed yet · timing this flight"
         v.right = "so far"
     end
+    -- Land at: the next stop, while the game still flies you on past it
+    if ahead and not fl.early and TaxiRequestEarlyLanding and UnitOnTaxi("player") then
+        v.land = self:StopName(fl, fl.path[ahead])
+    end
     self:PaintTimer(v)
+end
+
+-- Land at (the flight bar): the game asked to set you down at the next
+-- stop; the flight now ends there, kept over a reload as well.
+function M:LandEarly()
+    local fl = self.flight
+    -- (the next stop as it stands now: the tick may be a second old)
+    if fl then self:TickTimer() end
+    if not (fl and fl.ahead and not fl.early and UnitOnTaxi("player")) then return end
+    if not pcall(TaxiRequestEarlyLanding) then return end
+    fl.early = fl.ahead
+    local kept = self:CharData().flight
+    if kept then kept.early = fl.early end
+    self:TickTimer()
+    self:QueueInk()
 end
 
 -- In edit mode on the ground: the board's timed flight, to place it by.
 function M:SampleTimer()
     self:PaintTimer({ name = "Crossroads", time = clock(95), timeColor = "ink", fill = "solid", frac = 0.4,
                       left = "Next stop Camp Taurajo · " .. clock(18), right = "lands " .. clockAt(95),
-                      stops = { { at = 0.51, passed = false } } })
+                      stops = { { at = 0.51, passed = false } }, land = "Camp Taurajo" })
 end
 
 -- Shown in the air while the world map is closed (and the setting is on);
@@ -1637,7 +1696,7 @@ local SECTION = {
             { key = "inFlight", label = "Your flight on the map", control = "toggle",
               description = "Open the map in the air to see your route: the part flown solid, the rest dashed, the time left at your destination." },
             { key = "timer", label = "Flight timer on screen", control = "toggle",
-              description = "While you fly with the map closed: a bar at the top of the screen with your destination and the time left, a diamond for each stop (gilt once passed), the next stop and when you land. A route not flown yet shows an estimate, marked ~. Move it in edit mode." },
+              description = "While you fly with the map closed: a bar at the top of the screen with your destination and the time left, a diamond for each stop (gilt once passed), the next stop and when you land, and Land at to come down at the next stop instead of flying on. A route not flown yet shows an estimate, marked ~. Move it in edit mode." },
         } },
         { title = "Flight times", rows = {
             { label = "Timed flights", control = "button", text = "Forget",
