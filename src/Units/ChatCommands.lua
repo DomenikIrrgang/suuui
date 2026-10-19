@@ -6,8 +6,9 @@
 -- comes from. A / alone lists them all. After a command and a space it shows
 -- what goes there: names for /invite, channels for /join, /suu's commands
 -- and /suu probe's topics. Up and Down mark a row, Tab (or a click) puts it
--- into the input, Ctrl-Tab and Ctrl-Shift-Tab (or a click) change the
--- category (Ctrl-Left/Right never reach the game on a Mac: desktops).
+-- into the input, Shift-Tab (or a click) steps to the next category, round
+-- the end. (Ctrl-Tab, Ctrl-Left/Right and Option-Tab never reach the game on
+-- a Mac; /suu probe chatpalette keys, 2026-10-19.)
 -- Enter always sends what you typed: nothing picks on Enter.
 --
 -- What the client allows (/suu probe chatpalette, 2026-10-19):
@@ -784,7 +785,7 @@ function M:SetCategory(c)
     self:Refresh(true)
 end
 
--- Ctrl-Tab / Ctrl-Shift-Tab: the category after or before.
+-- Shift-Tab: the category after (round the end).
 function M:StepCategory(step)
     local list = {}
     for _, c in ipairs(CATEGORIES) do
@@ -928,7 +929,7 @@ function M:DrawCommands(typed)
                 self:DrawCommandList(list, typed)
             end
         end
-        keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl Tab", "category" } }
+        keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
     else
         local list = byCat[cat]
         if list then
@@ -936,7 +937,7 @@ function M:DrawCommands(typed)
             self:DrawCommandList(list, typed)
             local more = elsewhere(byCat, cat)
             if more ~= "" then self:DrawLine(more) end
-            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl Tab", "category" } }
+            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
         else
             self:DrawLine(("No %s starts with %s"):format(NOUN[cat], typed), "ink", NONE_H)
             self:DrawHead("In other categories")
@@ -947,7 +948,7 @@ function M:DrawCommands(typed)
                     self:DrawCommandList(byCat[c], typed, 3)
                 end
             end
-            keys = { { "Tab", "take " .. first.item.cmd }, { "Ctrl Tab", "category" } }
+            keys = { { "Tab", "take " .. first.item.cmd }, { "Shift Tab", "category" } }
         end
     end
     if not self:Get("tab") then
@@ -1119,11 +1120,6 @@ function M:HookBox(box)
     self.hooked[box] = true
     box:HookScript("OnKeyDown", function(b, key)
         if not self:IsEnabled() or b ~= self.box then return end
-        -- with Ctrl held the key comes as "CTRL-TAB" (or "CTRL-SHIFT-TAB")
-        if key:find("TAB$") and IsControlKeyDown() and self:StepsCategory(b) then
-            self:StepCategory(IsShiftKeyDown() and -1 or 1)
-            return
-        end
         if IGNORED_KEYS[key] or key:find("SHIFT$") or key:find("CTRL$") or key:find("ALT$") or key:find("META$") then
             return
         end
@@ -1143,7 +1139,7 @@ function M:HookBox(box)
     end)
 end
 
--- Ctrl-Tab changes the category: the command list shows on this input.
+-- Shift-Tab changes the category: the command list shows on this input.
 function M:StepsCategory(box)
     return self.box == box and self.query and self.query.mode == "commands" and self.palette
         and self.palette:IsShown() or false
@@ -1151,8 +1147,11 @@ end
 
 -- Tab, from ChatEdit_CustomTabPressed: true when the palette took it.
 function M:OnTab(box)
-    -- Ctrl-Tab is the category's (OnKeyDown); the game's Tab doesn't run for it
-    if IsControlKeyDown() and self:StepsCategory(box) then return true end
+    -- Shift-Tab: the next category instead of putting a row in
+    if IsShiftKeyDown() and self:StepsCategory(box) then
+        self:StepCategory(1)
+        return true
+    end
     if not (self:TakesArrows(box) and self.flat[self.mark or 1]) then return false end
     return self:Put(self.flat[self.mark or 1])
 end
