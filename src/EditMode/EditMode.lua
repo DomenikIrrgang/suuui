@@ -381,8 +381,12 @@ local function drawGrid()
     line(false, H / 2, 0.25)
 end
 
+-- the panel's inside: room for its longest row, "Buffs and debuffs on every
+-- frame", with air at the edge
+local PANEL_BODY = 266
+
 local function buildPanel()
-    local p = UI.Panel(overlay, { title = "Edit mode", width = 250 })
+    local p = UI.Panel(overlay, { title = "Edit mode", width = PANEL_BODY + S["space-5"] * 2 })
     p:SetFrameStrata("FULLSCREEN_DIALOG")
     p:EnableMouse(true)
     -- dragged out of the way of a frame under it (asked 2026-10-19), by
@@ -426,7 +430,7 @@ local function buildPanel()
     local stack = Layout.Stack(p.body, { gap = S["space-4"], autoSize = "height" })
 
     local snapRow = CreateFrame("Frame", nil, p.body)
-    snapRow:SetSize(226, 20)
+    snapRow:SetSize(PANEL_BODY, 20)
     local snapToggle = UI.Toggle(snapRow, { value = Settings.Get("layout", "snap"),
         onChange = function(v) Settings.Set("layout", "snap", v) end })
     snapToggle:SetPoint("LEFT")
@@ -435,20 +439,20 @@ local function buildPanel()
     snapLabel:SetPoint("LEFT", snapToggle, "RIGHT", S["space-4"], 0)
     stack:Add(snapRow)
 
-    local size = UI.Slider(p.body, { label = "Grid size", min = 4, max = 32, step = 4, unit = "px", width = 226,
+    local size = UI.Slider(p.body, { label = "Grid size", min = 4, max = 32, step = 4, unit = "px", width = PANEL_BODY,
         value = Settings.Get("layout", "gridSize"),
         onChange = function(v) Settings.Set("layout", "gridSize", v) end })
     stack:Add(size)
 
     -- made-up players in the group frames, at their real place and size
     local previewRow = CreateFrame("Frame", nil, p.body)
-    previewRow:SetSize(226, T.type.label.lineHeight + S["space-2"] + 28)
+    previewRow:SetSize(PANEL_BODY, T.type.label.lineHeight + S["space-2"] + 28)
     p.previewRow, p.stack = previewRow, stack
     local previewLabel = UI.Text(previewRow, "label", "ink")
     previewLabel:SetValue("Group preview (players)")
     previewLabel:SetPoint("TOPLEFT")
     local previewPick = UI.Segmented(previewRow, {
-        -- players in the group: 5 the party, more the raid (fits the 226 body)
+        -- players in the group: 5 the party, more the raid (fits the body)
         options = { { value = 0, label = "Off" }, { value = 5, label = "5" }, { value = 10, label = "10" },
                     { value = 20, label = "20" }, { value = 40, label = "40" } },
         value = groupPreview,
@@ -458,7 +462,7 @@ local function buildPanel()
     stack:Add(previewRow)
     -- everyone with defensives and every dispel type, to see the icons fit
     local aurasRow = CreateFrame("Frame", nil, p.body)
-    aurasRow:SetSize(226, 20)
+    aurasRow:SetSize(PANEL_BODY, 20)
     local aurasToggle = UI.Toggle(aurasRow, { value = groupPreviewAuras,
         onChange = function(v) EditMode.SetGroupPreview(groupPreview, v) end })
     aurasToggle:SetPoint("LEFT")
