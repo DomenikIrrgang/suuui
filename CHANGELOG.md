@@ -29,6 +29,7 @@
 
 - Chat: a tab's name sits centred over its underline.
 - Campsite: no "Campfire nearby" alert while you fly over one.
+- Windows: the character window (and the other reskinned game windows) comes to the front when it opens or you click it; at a merchant it opened behind the merchant's window, out of the repair cursor's reach.
 - Edit mode: the toolbar of a frame at the screen's top edge shows under the frame instead of off screen.
 - World map: flight masters you haven't found show as such (faint, "not found yet"); they all looked found before. SuuUI notes which ones each character has found whenever a flight master's map opens, so until a character has opened one on a continent, that continent's read "not checked yet".
 
