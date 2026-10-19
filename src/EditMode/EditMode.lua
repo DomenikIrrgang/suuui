@@ -478,13 +478,6 @@ local function buildPanel()
     end }))
     bs:Add(UI.Button(buttons, { text = "Done", variant = "primary", onClick = function() EditMode.Exit() end }))
     stack:Add(buttons)
-
-    local hint = UI.Text(p.body, "caption", "ink-muted")
-    hint:SetWordWrap(true)
-    hint:SetJustifyH("LEFT")
-    hint:SetFixedWidth(226)
-    hint:SetValue("Drag a frame to move it, or type its place in the toolbar over it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings. Drag this panel to move it; double-click it to put it back.")
-    stack:Add(hint)
     return p
 end
 
