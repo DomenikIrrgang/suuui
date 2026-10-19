@@ -31,7 +31,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SRC = os.path.join(ROOT, "Design", "tokens.json")
-DST = os.path.join(ROOT, "Core", "Tokens.lua")
+DST = os.path.join(ROOT, "src", "Core", "Tokens.lua")
 
 FONT_DIR = "Interface\\AddOns\\SuuUI\\Media\\Fonts\\"
 
