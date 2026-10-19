@@ -16,8 +16,8 @@
 --            the events with their timing, player auras named like the
 --            enchant, samples 1 s and 5 s into each fight and after it
 --   cancel:  a button that removes the main hand's enchant (says so first)
---   secure:  (2026-10-20) the same through the game's secure "cancelaura"
---            action with "target-slot" 16, and whether CANCELABLE_ITEMS lists it
+--   secure:  (2026-10-20) the same through an aura container's item-enchantment
+--            button (the game's buff frame's way), right-click to cancel
 -- Saved in SuuUIProbe.weaponenchants on /reload. Values the game hides read
 -- SECRET.
 
@@ -356,45 +356,57 @@ local function cancel()
 end
 
 --------------------------------------------------------------------------------
--- Secure: the game's secure "cancelaura" action on a weapon slot (2026-10-20:
--- the direct call is refused; Blizzard's secure templates cancel a weapon's
--- enchant with type "cancelaura" and "target-slot", if CANCELABLE_ITEMS
--- lists the slot)
+-- Secure: the game's own cancel (2026-10-20: the direct call is refused, and
+-- the secure "cancelaura" action breaks on Forever: CANCELABLE_ITEMS is nil).
+-- The game's buff frame cancels a weapon's enchant from an aura container's
+-- item-enchantment button (AddItemEnchantment, SetCancelAuraButtons): one
+-- such container here, with the main hand's enchant, right-click to cancel.
 --------------------------------------------------------------------------------
 
 local function secure()
     local o = out()
-    local items = rawget(_G, "CANCELABLE_ITEMS")
-    local listed = {}
-    if type(items) == "table" then
-        for k, v in pairs(items) do listed[#listed + 1] = ("%s=%s"):format(show(k), show(v)) end
-        table.sort(listed)
+    local r = { armedAt = date("%H:%M:%S") }
+    o.secure = r
+    if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
+    r.before = snapshot("before the click")
+    local f = WP.secureFrame
+    if not f then
+        local ok, c = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
+        r.container = ok and "made" or ("error: " .. tostring(c))
+        if not ok then ns.Print("Weapon enchant probe: no aura container (" .. tostring(c) .. "). /reload to save it.") return end
+        c:SetSize(44, 44)
+        c:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+        c:SetFrameStrata("DIALOG")
+        local slot = AuraContainerItemEnchantmentSlot and AuraContainerItemEnchantmentSlot.MainHand or 0
+        local ok2, button = pcall(c.AddItemEnchantment, c, slot, { hidePermanent = false })
+        r.add = ok2 and show(button) or ("error: " .. tostring(button))
+        if ok2 and button then
+            local icon = button:CreateTexture(nil, "ARTWORK")
+            icon:SetAllPoints()
+            local oki, erri = pcall(button.SetIcon, button, icon)
+            r.setIcon = oki and "ran" or ("error: " .. tostring(erri))
+            local okc, err = pcall(button.SetCancelAuraButtons, button, "RightButtonUp")
+            r.setCancel = okc and "ran" or ("error: " .. tostring(err))
+            pcall(button.SetSize, button, 40, 40)
+            local okh, errh = pcall(button.HookScript, button, "OnClick", function(_, which)
+                r.clicks = (r.clicks or 0) + 1
+                r.lastButton = show(which)
+                C_Timer.After(1, function()
+                    r.after = snapshot("1 s after the click")
+                    ns.Print(("Weapon enchant probe: clicked (%s); main hand now: %s. /reload to save it."):format(
+                        show(which), r.after.slots.MainHand.list))
+                end)
+            end)
+            r.hook = okh and "ran" or ("error: " .. tostring(errh))
+        end
+        local label = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("BOTTOM", c, "TOP", 0, 6)
+        label:SetText("Weapon enchant probe: right-click the icon to remove your main hand's enchant")
+        f = c
+        WP.secureFrame = c
     end
-    o.secure = { armedAt = date("%H:%M:%S"), cancelable = type(items) == "table" and table.concat(listed, " ") or show(items) }
-    local b = WP.secureButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
-    WP.secureButton = b
-    b:SetSize(380, 30)
-    b:ClearAllPoints()
-    b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
-    b:SetFrameStrata("DIALOG")
-    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-    b:SetAttribute("type", "cancelaura")
-    b:SetAttribute("target-slot", 16)
-    b:SetText("Weapon enchant probe: remove the main hand's enchant (secure)")
-    o.secure.before = snapshot("before the secure click")
-    b:SetScript("PostClick", function(self)
-        local r = o.secure
-        r.clicks = (r.clicks or 0) + 1
-        if r.clicks > 1 then return end
-        C_Timer.After(1, function()
-            r.after = snapshot("1 s after the secure click")
-            local mh = r.after.slots.MainHand
-            if not InCombatLockdown() then self:Hide() end
-            ns.Print(("Weapon enchant probe: secure click done; main hand now: %s. /reload to save it."):format(mh.list))
-        end)
-    end)
-    b:Show()
-    ns.Print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil) through the game's secure cancel. Click it once if that's fine.")
+    f:Show()
+    ns.Print("Weapon enchant probe: right-click the icon at the top of the screen; it REMOVES your main hand's temporary enchant (imbue, poison, stone or oil).")
 end
 
 function WP.Command(rest)
