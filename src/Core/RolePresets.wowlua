@@ -1,4 +1,4 @@
--- Core/RolePresets.lua
+-- Core/RolePresets.wowlua
 -- Role presets (plan 4.1, asked 2026-10-17): a ready-made layout for each
 -- role from the design's role boards (Dungeon DPS, Dungeon Healer, Raid 20
 -- and 40 Tank and Healer), each its own profile (SuuTank, SuuHeal, SuuDps)
@@ -17,22 +17,18 @@
 -- layout back. Positions are design pixels from the screen's bottom centre,
 -- from the 2560 × 1440 boards; edit mode keeps their anchors on every size.
 
-local _, ns = ...
+import profiles from "./Settings"
+import * as extend from "./Extend"
 
-local Profiles, Settings, Events = ns.Profiles, ns.Settings, ns.Events
+export const ROLES: string[] = { "TANK", "HEALER", "DAMAGER" }
+export const NAME: { [string]: string } = { TANK = "SuuTank", HEALER = "SuuHeal", DAMAGER = "SuuDps" }
 
-local RolePresets = {}
-ns.RolePresets = RolePresets
-
-RolePresets.ROLES = { "TANK", "HEALER", "DAMAGER" }
-RolePresets.NAME = { TANK = "SuuTank", HEALER = "SuuHeal", DAMAGER = "SuuDps" }
-
-local function at(point, x, y, hidden)
+local function at(point: string, x: number, y: number, hidden: boolean?): { [string]: any }
     return { point = point, x = x, y = y, hidden = hidden or nil }
 end
 
 -- Every setting a preset decides; one a preset leaves out is its default.
-local KEYS = {
+local KEYS: string[][] = {
     { "unitframes", "playerPosition" }, { "unitframes", "targetPosition" }, { "unitframes", "totPosition" },
     { "unitframes", "focusPosition" }, { "unitframes", "petPosition" },
     { "castbars", "playerPosition" }, { "cooldowns", "position" }, { "swingtimer", "position" }, { "threat", "position" },
@@ -44,7 +40,7 @@ local KEYS = {
 
 -- The healer layout (boards Dungeon Healer, Raid 20 and 40 Healer): the
 -- group's top edge 332 above the bottom, 608 wide (5 × 120 + 4 × 2).
-local HEALER = {
+local HEALER: { [string]: { [string]: any } } = {
     unitframes = {
         playerPosition = at("BOTTOM", -474, 300),
         targetPosition = at("BOTTOM", 474, 300),
@@ -70,29 +66,30 @@ local HEALER = {
     },
 }
 
-RolePresets.LAYOUT = { TANK = {}, HEALER = HEALER, DAMAGER = {} }
+export const LAYOUT: { [string]: { [string]: { [string]: any } } } = { TANK = {}, HEALER = HEALER, DAMAGER = {} }
 
-function RolePresets.Exists(role)
-    local name = RolePresets.NAME[role]
-    local found = name and Profiles.Find(name)
-    return found ~= nil and found:lower() == name:lower()
+export function exists(role: string): boolean
+    local profileName = NAME[role]
+    if not profileName then return false end
+    local found = profiles.find(profileName)
+    return found ~= nil and found:lower() == profileName:lower()
 end
 
 -- Creates or resets a role's profile with its layout and puts it in its
 -- role's place. Out of combat (the HUD's frames move).
-function RolePresets.Apply(role)
+export function apply(role: string): (boolean, string?)
     if InCombatLockdown() then return false, "After the fight." end
-    local name, layout = RolePresets.NAME[role], RolePresets.LAYOUT[role]
-    if not name then return false, "No such role." end
-    local entries = {}
+    local profileName, layout = NAME[role], LAYOUT[role] or {}
+    if not profileName then return false, "No such role." end
+    local entries: any[][] = {}
     for _, k in ipairs(KEYS) do
         local values = layout[k[1]]
         entries[#entries + 1] = { k[1], k[2], values and values[k[2]] or nil }
     end
     -- 0.17: plugins' own settings per role (M:AddToRolePreset): every key a
     -- plugin set for any role, this role's value or its default
-    local added = {}
-    for _, a in ipairs(ns.Extend.Additions("rolepresets")) do
+    local added: { [string]: boolean } = {}
+    for _, a in ipairs(extend.additions("rolepresets")) do
         for key in pairs(a.values or {}) do
             local id = a.namespace .. "." .. key
             if not added[id] then
@@ -101,15 +98,15 @@ function RolePresets.Apply(role)
             end
         end
     end
-    for _, a in ipairs(ns.Extend.Additions("rolepresets")) do
+    for _, a in ipairs(extend.additions("rolepresets")) do
         if a.role == role then
             for _, e in ipairs(entries) do
                 if e[1] == a.namespace and a.values[e[2]] ~= nil then e[3] = a.values[e[2]] end
             end
         end
     end
-    local ok, err = Profiles.SetValues(name, entries)
+    local ok, err = profiles.setValues(profileName, entries)
     if not ok then return false, err end
-    Profiles.SetRoleProfile(role, err)
+    profiles.setRoleProfile(role, err)
     return true
 end

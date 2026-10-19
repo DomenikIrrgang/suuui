@@ -1,0 +1,109 @@
+-- Core/Events.wowlua
+-- One bus for SuuUI's own messages and the game's events, on wowlua:events.
+--
+--   on(name, fn, owner)                  SuuUI message, delivered by emit
+--   onGame(event, fn, owner)             a game event
+--   onUnit(event, units, fn, owner)      a unit event for the given unit(s), through
+--                                        RegisterUnitEvent so other units never wake it
+--   off(name, owner) / offAll(owner)
+--
+-- Every callback is fn(name, ...) and runs isolated: an error is reported
+-- through Fault against its owner and the other listeners still run.
+-- wowlua:events does the registering and dispatching; this layer keeps
+-- SuuUI's shape of it (the name first, an owner always, removal by name and
+-- owner, unit lists longer than two, errors under the owner's name).
+
+import * as wl from "wowlua:events"
+import * as fault from "./Fault"
+import ownerName from "./Util"
+
+export type Listener = (name: string, ...any) -> ()
+
+type Entry = { name: string, owner: any, sub: wl.Subscription? }
+
+-- every subscription made here, so off(name, owner) finds them
+local entries: Entry[] = {}
+
+-- A listener removed during a dispatch is skipped from then on (wowlua:events
+-- dispatches from a snapshot, which would still call it this time).
+local function guarded(entry: Entry, source: string, fn: Listener, name: string): (...any) -> ()
+    return function(...: any)
+        local sub = entry.sub
+        if sub and sub.active then fault.call(source, fn, name, ...) end
+    end
+end
+
+local function checked(fn: any, owner: any)
+    assert(type(fn) == "function", "SuuUI Events: callback must be a function")
+    assert(owner ~= nil, "SuuUI Events: an owner is required, so the listener can be removed")
+end
+
+local function listen(name: string, fn: Listener, owner: any)
+    checked(fn, owner)
+    local entry: Entry = { name = name, owner = owner, sub = nil }
+    entry.sub = wl.on(name :: any, guarded(entry, ownerName(owner), fn, name), owner)
+    entries[#entries + 1] = entry
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI messages
+--------------------------------------------------------------------------------
+
+-- Message names carry a prefix so they never collide with a game event:
+-- SUUUI_* for SuuUI's own, the plugin's own prefix for a plugin's.
+export function on(name: string, fn: Listener, owner: any)
+    listen(name, fn, owner)
+end
+
+export function emit(name: string, ...: any)
+    wl.send(name :: any, ...)
+end
+
+--------------------------------------------------------------------------------
+-- Game events
+--------------------------------------------------------------------------------
+
+export function onGame(event: string, fn: Listener, owner: any)
+    listen(event, fn, owner)
+end
+
+-- RegisterUnitEvent takes at most two units, so a longer list gets a
+-- registration per pair. An event the client refuses is an error, as
+-- RegisterUnitEvent's own.
+export function onUnit(event: string, units: string | string[], fn: Listener, owner: any)
+    checked(fn, owner)
+    local list: string[] = type(units) == "string" and { units } or units :: string[]
+    assert(type(list) == "table" and #list > 0, "SuuUI Events: a unit or a list of units is required")
+    local source = ownerName(owner)
+    for i = 1, #list, 2 do
+        local pair: string[] = list[i + 1] and { list[i], list[i + 1] } or { list[i] }
+        local entry: Entry = { name = event, owner = owner, sub = nil }
+        entry.sub = wl.onUnit(event :: any, pair :: any, guarded(entry, source, fn, event), owner)
+        entries[#entries + 1] = entry
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Removal
+--------------------------------------------------------------------------------
+
+export function off(name: string, owner: any)
+    for i = #entries, 1, -1 do
+        local e = entries[i]
+        if e.name == name and e.owner == owner then
+            if e.sub then e.sub:cancel() end
+            table.remove(entries, i)
+        end
+    end
+end
+
+export function offAll(owner: any)
+    if owner == nil then return end
+    for i = #entries, 1, -1 do
+        local e = entries[i]
+        if e.owner == owner then
+            if e.sub then e.sub:cancel() end
+            table.remove(entries, i)
+        end
+    end
+end

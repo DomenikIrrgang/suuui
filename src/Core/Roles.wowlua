@@ -1,30 +1,30 @@
--- Core/Roles.lua
+-- Core/Roles.wowlua
 -- Your role, and profiles by role. The role is the one you chose for this
 -- character, else the one assigned to you (role check, group finder), else
 -- your talents: the tree with the most points, read as a role per class.
--- Each role can name a profile (Profiles.RoleProfile); when your role
+-- Each role can name a profile (profiles.roleProfile); when your role
 -- changes, SuuUI switches to that profile, out of combat only. A profile you
 -- pick by hand stays until the role changes again, across reloads too: the
 -- role last switched for is saved per character.
 --
---   ns.Roles.Current()   -> "TANK" | "HEALER" | "DAMAGER", and where it came
---                           from: "chosen", "assigned" or "talents"
---   ns.Roles.Spec()      -> the talent tree with the most points (1-3), 0
---                           with none spent, and the points per tree
+--   current()   -> "TANK" | "HEALER" | "DAMAGER", and where it came
+--                  from: "chosen", "assigned" or "talents"
+--   spec()      -> the talent tree with the most points (1-3), 0
+--                  with none spent, and the points per tree
 
-local _, ns = ...
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import print from "./Init"
+import profiles from "./Settings"
+import * as events from "./Events"
+import * as combat from "./Combat"
 
-local Roles = {}
-ns.Roles = Roles
-
-local Events, Profiles, Combat = ns.Events, ns.Profiles, ns.Combat
-
-local isSecret = issecretvalue or function() return false end
-local _, CLASS = UnitClass("player")
+local _, classFile = UnitClass("player")
+local CLASS: string = secret.known(classFile, "")
 
 -- Each class's trees, left to right, as roles. Feral counts as damage (cat
 -- and bear share the tree): bear tanks choose Tank for the character.
-local TREE_ROLE = {
+const TREE_ROLE: { [string]: string[] } = {
     DRUID = { "DAMAGER", "DAMAGER", "HEALER" },
     PALADIN = { "HEALER", "TANK", "DAMAGER" },
     PRIEST = { "HEALER", "HEALER", "DAMAGER" },
@@ -32,18 +32,18 @@ local TREE_ROLE = {
     WARRIOR = { "DAMAGER", "DAMAGER", "TANK" },
 }
 
-Roles.LABEL = { TANK = "Tank", HEALER = "Healer", DAMAGER = "DPS" }
+export const LABEL: { [string]: string } = { TANK = "Tank", HEALER = "Healer", DAMAGER = "DPS" }
 
 -- Points per tree. Forever lays the three trees out side by side in one, so
 -- they are told apart by position (posX in thirds; far-off nodes excluded).
-local function treePoints()
+local function treePoints(): (number[], number)
     local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
     local info = cfg and C_Traits and C_Traits.GetConfigInfo(cfg)
     if not (info and info.treeIDs) then return { 0, 0, 0 }, 0 end
-    local nodes = {}
+    local nodes: { x: number, ranks: any }[] = {}
     for _, treeID in ipairs(info.treeIDs) do
         for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
-            local ni = C_Traits.GetNodeInfo(cfg, nodeID)
+            local ni: any = C_Traits.GetNodeInfo(cfg :: number, nodeID)
             if ni and ni.posX and ni.posX < 20000 then
                 nodes[#nodes + 1] = { x = ni.posX, ranks = ni.ranksPurchased or ni.activeRank or ni.currentRank or 0 }
             end
@@ -55,15 +55,15 @@ local function treePoints()
     local third = (hi - lo) / 3
     local pts, total = { 0, 0, 0 }, 0
     for _, n in ipairs(nodes) do
-        local r = isSecret(n.ranks) and 0 or (n.ranks or 0)
+        local r: number = secret.known(n.ranks, 0) or 0
         local tree = (n.x < lo + third and 1) or (n.x < lo + 2 * third and 2) or 3
-        pts[tree] = pts[tree] + r
-        total = total + r
+        pts[tree] += r
+        total += r
     end
     return pts, total
 end
 
-function Roles.Spec()
+export function spec(): (number, number[])
     local ok, pts, total = pcall(treePoints)
     if not ok or total == 0 then return 0, ok and pts or { 0, 0, 0 } end
     local best = 1
@@ -71,45 +71,46 @@ function Roles.Spec()
     return best, pts
 end
 
-function Roles.Current()
-    local chosen = Profiles.ChosenRole()
-    if chosen ~= "auto" and Roles.LABEL[chosen] then return chosen, "chosen" end
-    local assigned = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
-    if assigned and not isSecret(assigned) and Roles.LABEL[assigned] then return assigned, "assigned" end
-    local spec = Roles.Spec()
+export function current(): (string, string)
+    local chosen = profiles.chosenRole()
+    if chosen ~= "auto" and LABEL[chosen] then return chosen, "chosen" end
+    local assigned: string = UnitGroupRolesAssigned and secret.known(UnitGroupRolesAssigned("player"), "NONE") or "NONE"
+    if LABEL[assigned] then return assigned, "assigned" end
+    local tree = spec()
     local roles = TREE_ROLE[CLASS]
-    return (roles and roles[spec]) or "DAMAGER", "talents"
+    return (roles and roles[tree]) or "DAMAGER", "talents"
 end
 
 -- Switches to the role's profile when the role differs from the one saved
 -- for this character (or when `force`: a mapping or role choice changed), and
 -- tells everyone when the spec or role changed (SUUUI_SPEC_CHANGED,
 -- SUUUI_ROLE_CHANGED).
-local lastRole, lastSpec
-local function apply(force)
-    local spec = Roles.Spec()
-    if spec ~= lastSpec then
-        lastSpec = spec
-        Events.Emit("SUUUI_SPEC_CHANGED", spec)
+local lastRole: string? = nil
+local lastSpec: number? = nil
+local function apply(force: boolean)
+    local tree = spec()
+    if tree ~= lastSpec then
+        lastSpec = tree
+        events.emit("SUUUI_SPEC_CHANGED", tree)
     end
-    local role, source = Roles.Current()
+    local role, source = current()
     -- Right after login the talents can read as unspent for a moment: a
     -- character past level 10 with no tree read is that, not a real DPS role.
     -- Wait for the talent events instead of switching away and back.
-    if source == "talents" and spec == 0 and UnitLevel("player") >= 10 then return end
+    if source == "talents" and tree == 0 and UnitLevel("player") >= 10 then return end
     if role ~= lastRole then
         lastRole = role
-        Events.Emit("SUUUI_ROLE_CHANGED", role)
+        events.emit("SUUUI_ROLE_CHANGED", role)
     end
-    if role == Profiles.LastRole() and not force then return end
-    Profiles.SetLastRole(role)
-    local name = Profiles.RoleProfile(role)
-    if not name or name == Profiles.Current() then return end
-    Combat.Run("roleProfile", function()
+    if role == profiles.lastRole() and not force then return end
+    profiles.setLastRole(role)
+    local profileName = profiles.roleProfile(role)
+    if not profileName or profileName == profiles.current() then return end
+    combat.run("roleProfile", function()
         -- the role may have changed again while combat lasted
-        local now = Profiles.RoleProfile(Roles.Current())
-        if now and now ~= Profiles.Current() and Profiles.Use(now) then
-            ns.Print(("%s role: switched to the profile %s."):format(Roles.LABEL[Roles.Current()], now))
+        local now = profiles.roleProfile((current()))
+        if now and now ~= profiles.current() and profiles.use(now) then
+            print(("%s role: switched to the profile %s."):format(LABEL[(current())] or "?", now))
         end
     end, "Profiles by role")
 end
@@ -117,28 +118,29 @@ end
 -- Events come in bursts (a roster update fires several); settle first. A
 -- forced check stays forced when an unforced one is already waiting.
 local pending, pendingForce = false, false
-local function soon(force)
+local function soon(force: boolean?)
     pendingForce = pendingForce or force == true
     if pending then return end
     pending = true
-    C_Timer.After(0.5, function()
+    after(0.5, function()
         local f = pendingForce
         pending, pendingForce = false, false
         apply(f)
     end)
 end
 
-local valid = C_EventUtils and C_EventUtils.IsEventValid
-local function on(event, fn)
-    if not valid or valid(event) then Events.OnGame(event, fn, "Roles") end
+local function listen(event: string, fn: () -> ())
+    if not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid(event) then
+        events.onGame(event, fn, "Roles")
+    end
 end
 
-Events.On("SUUUI_SETTINGS_READY", function()
-    on("PLAYER_ENTERING_WORLD", function() soon() end)
+events.on("SUUUI_SETTINGS_READY", function()
+    listen("PLAYER_ENTERING_WORLD", function() soon() end)
     for _, e in ipairs({ "PLAYER_ROLES_ASSIGNED", "GROUP_ROSTER_UPDATE", "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED",
                          "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED", "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" }) do
-        on(e, function() soon() end)
+        listen(e, function() soon() end)
     end
     -- a new mapping or role choice applies at once
-    Events.On("SUUUI_ROLE_PROFILES_CHANGED", function() soon(true) end, "Roles")
+    events.on("SUUUI_ROLE_PROFILES_CHANGED", function() soon(true) end, "Roles")
 end, "Roles")

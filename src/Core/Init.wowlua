@@ -1,0 +1,108 @@
+-- Core/Init.wowlua
+-- SuuUI's name and version, chat output and the /suu command registry.
+-- Loads first: every other module imports what it needs from here.
+--
+-- The global SuuUI is the public API (Core/API.wowlua), the one surface
+-- built-in modules and plugin addons are written against.
+
+import addon, build from "wowlua:meta"
+import slash from "wowlua:slash"
+import * as fault from "./Fault"
+import * as settingsWindow from "/SettingsUI/Window"
+import API_VERSION from "./Modules"
+
+export const name: string = addon.name
+export const version: string = build.version
+-- components' method tables by name (UnitFrame = UF…), for SuuUI.Raw
+export local mixins: { [string]: any } = {}
+
+const PREFIX = "|cff9fd3c7SuuUI|r "
+
+export function print(...: any)
+    _G.print(PREFIX .. strjoin(" ", tostringall(...)))
+end
+
+--------------------------------------------------------------------------------
+-- Slash commands
+--
+-- Core files and modules add subcommands with registerCommand. "/suu" alone
+-- opens the settings window; "/suu help" lists the commands in registration
+-- order. A command registered with an owner (a module) is removed again with
+-- unregisterCommands(owner). `args`, optional: the words that can follow it
+-- (a list, or a function returning one), for the chat's command palette.
+--------------------------------------------------------------------------------
+
+export type CommandArgs = string[] | (() -> string[])
+export type CommandInfo = { name: string, help: string, args: string[]? }
+
+type Command = { help: string, fn: (rest: string) -> (), owner: any, args: CommandArgs? }
+
+local commands: { [string]: Command } = {}
+local order: string[] = {}
+
+export function registerCommand(cmd: string, help: string, fn: (rest: string) -> (), owner: any?, args: CommandArgs?)
+    local key = cmd:lower()
+    assert(not commands[key], "SuuUI: the command /suu " .. key .. " already exists")
+    commands[key] = { help = help, fn = fn, owner = owner, args = args }
+    order[#order + 1] = key
+end
+
+-- Every /suu subcommand in registration order, args a list of words (or nil).
+export function listCommands(): CommandInfo[]
+    local out: CommandInfo[] = {}
+    for _, key in ipairs(order) do
+        local c = commands[key]
+        if not c then continue end
+        local args: any = c.args
+        if type(args) == "function" then
+            local ok, list = pcall(args)
+            args = ok and type(list) == "table" and list or nil
+        end
+        out[#out + 1] = { name = key, help = c.help, args = args }
+    end
+    return out
+end
+
+export function unregisterCommands(owner: any)
+    for i = #order, 1, -1 do
+        local key = order[i]
+        local c = commands[key]
+        if c and c.owner == owner then
+            commands[key] = nil
+            table.remove(order, i)
+        end
+    end
+end
+
+local function showHelp()
+    print("version " .. version)
+    for _, key in ipairs(order) do
+        local c = commands[key]
+        if c then _G.print(("  /suu %s  -  %s"):format(key, c.help)) end
+    end
+end
+
+registerCommand("version", "Show the SuuUI and client versions.", function()
+    local clientVersion, clientBuild, _, toc = GetBuildInfo()
+    print(("SuuUI %s (API %s) on client %s (build %s, interface %d)")
+        :format(version, API_VERSION, clientVersion, clientBuild, toc))
+end)
+
+-- wowlua:slash names the command's SlashCmdList entry WOWLUA_SUUUI_1 (it
+-- was SUUUI); "/suu" and "/suuui" are the same as before.
+@slash("/suu", "/suuui")
+local function onSlash(msg: string)
+    local word, rest = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
+    local key = (word or ""):lower()
+    local cmd = commands[key]
+    if key == "" then
+        settingsWindow.toggle()
+    elseif cmd then
+        fault.call("/suu " .. key, cmd.fn, rest or "")
+    else
+        if key ~= "help" then
+            print(("Unknown command \"%s\"."):format(key))
+        end
+        showHelp()
+    end
+end

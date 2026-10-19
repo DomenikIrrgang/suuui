@@ -1,4 +1,4 @@
--- Core/Services.lua
+-- Core/Services.wowlua
 -- What one module does for the others (plan 4.3, 2026-10-18): open the bags,
 -- show a player's talents, post a notification… A module provides a service
 -- by name with a table of functions; whoever needs it asks for the name, not
@@ -7,33 +7,30 @@
 -- when it turns off. Built in: bags, talents, collections, professions,
 -- notifications, alerts (their functions in Docs/API.md).
 
-local _, ns = ...
+import * as events from "./Events"
 
-local Events = ns.Events
+type Provider = { impl: { [string]: any }, owner: any }
 
-local Services = {}
-ns.Services = Services
+local providers: { [string]: Provider } = {}
 
-local providers = {} -- name -> { impl, owner }
-
-function Services.Provide(name, impl, owner)
+export function provide(name: string, impl: { [string]: any }, owner: any)
     assert(type(name) == "string", "SuuUI Provide: a service name is required")
     assert(type(impl) == "table", "SuuUI Provide: a table of functions is required")
     providers[name] = { impl = impl, owner = owner }
-    Events.Emit("SUUUI_SERVICE_CHANGED", name)
+    events.emit("SUUUI_SERVICE_CHANGED", name)
 end
 
 -- The service's functions, or nil while nothing provides it.
-function Services.Get(name)
+export function get(name: string): { [string]: any }?
     local p = providers[name]
     return p and p.impl
 end
 
-function Services.Unregister(owner)
+export function unregister(owner: any)
     for name, p in pairs(providers) do
         if p.owner == owner then
             providers[name] = nil
-            Events.Emit("SUUUI_SERVICE_CHANGED", name)
+            events.emit("SUUUI_SERVICE_CHANGED", name)
         end
     end
 end

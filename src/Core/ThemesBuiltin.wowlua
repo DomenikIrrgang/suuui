@@ -1,4 +1,4 @@
--- Core/ThemesBuiltin.lua
+-- Core/ThemesBuiltin.wowlua
 -- SuuUI's own themes beside its look (asked 2026-10-18: every option of the
 -- design "Themes: High contrast, Class accent, Darker", for the player to
 -- choose). Signal and game colours (arcane, ember, quest-*, class-*, …)
@@ -9,20 +9,22 @@
 --     worked out at login for your class
 --   Darker (E near black, F OLED black): the surfaces
 
-local _, ns = ...
-
-local T = ns.Tokens
-local Themes = ns.Themes
+import tokens as T from "./Tokens"
+import register from "./Themes"
 
 -- "#RRGGBB" or "#RRGGBBAA" → { r, g, b[, a] }
-local function hex(s)
-    local r, g, b = tonumber(s:sub(2, 3), 16) / 255, tonumber(s:sub(4, 5), 16) / 255, tonumber(s:sub(6, 7), 16) / 255
-    if #s >= 9 then return { r, g, b, tonumber(s:sub(8, 9), 16) / 255 } end
+local function byte(s: string, i: number): number
+    return (tonumber(s:sub(i, i + 1), 16) or 0) / 255
+end
+
+local function hex(s: string): number[]
+    local r, g, b = byte(s, 2), byte(s, 4), byte(s, 6)
+    if #s >= 9 then return { r, g, b, byte(s, 8) } end
     return { r, g, b }
 end
 
-local function colors(list)
-    local out = {}
+local function colors(list: { [string]: string }): { [string]: number[] }
+    local out: { [string]: number[] } = {}
     for token, value in pairs(list) do out[token] = hex(value) end
     return out
 end
@@ -31,26 +33,26 @@ end
 -- High contrast
 --------------------------------------------------------------------------------
 
-local CONTRAST = {
+local CONTRAST: { [string]: string } = {
     ["ink"] = "#FFFDF7", ["ink-muted"] = "#D4CCBC", ["ink-faint"] = "#A39B8B",
     ["gilt"] = "#E3C274", ["gilt-text"] = "#F6E3AE", ["surface-glass"] = "#131116F7",
 }
 local CONTRAST_FONTS = { caption = { size = 12, lineHeight = 15 }, micro = { size = 10.5, lineHeight = 13 } }
 
-local function contrast(edges)
-    local list = {}
+local function contrast(edges: { [string]: string }): { [string]: number[] }
+    local list: { [string]: string } = {}
     for k, v in pairs(CONTRAST) do list[k] = v end
     for k, v in pairs(edges) do list[k] = v end
     return colors(list)
 end
 
-Themes.Register({
+register({
     id = "highcontrast", name = "High contrast",
     description = "Brighter text and gilt edges, captions and small digits a size up.",
     colors = contrast({ ["gilt-line"] = "#E3C274BF", ["gilt-hairline"] = "#E3C27499", ["gilt-faint"] = "#E3C2744D" }),
     fonts = CONTRAST_FONTS,
 })
-Themes.Register({
+register({
     id = "highcontrast-ink", name = "High contrast · ink edges",
     description = "Brighter text, light ink edges; gilt stays on titles, tabs and diamonds.",
     colors = contrast({ ["gilt-line"] = "#F1EADB99", ["gilt-hairline"] = "#F1EADB7A", ["gilt-faint"] = "#F1EADB38" }),
@@ -64,21 +66,21 @@ Themes.Register({
 -- the accent family's alphas (gilt's own: line, hairline, faint)
 local LINE_A, HAIRLINE_A, FAINT_A = 0x61 / 255, 0x4D / 255, 0x24 / 255
 
-local function linear(c) return c <= 0.04045 and c / 12.92 or ((c + 0.055) / 1.055) ^ 2.4 end
-local function gamma(c)
+local function linear(c: number): number return c <= 0.04045 and c / 12.92 or ((c + 0.055) / 1.055) ^ 2.4 end
+local function gamma(c: number): number
     c = c <= 0.0031308 and 12.92 * c or 1.055 * c ^ (1 / 2.4) - 0.055
     return math.max(0, math.min(1, c))
 end
-local function luminance(r, g, b) return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b) end
-local function ratio(a, b)
+local function luminance(r: number, g: number, b: number): number return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b) end
+local function ratio(a: number[], b: number[]): number
     local la, lb = luminance(a[1], a[2], a[3]), luminance(b[1], b[2], b[3])
     if la < lb then la, lb = lb, la end
     return (la + 0.05) / (lb + 0.05)
 end
-local function cbrt(x) return x < 0 and -((-x) ^ (1 / 3)) or x ^ (1 / 3) end
+local function cbrt(x: number): number return x < 0 and -((-x) ^ (1 / 3)) or x ^ (1 / 3) end
 
 -- sRGB → OKLab's hue (radians), and OKLCH → sRGB
-local function hue(r, g, b)
+local function hue(r: number, g: number, b: number): number
     r, g, b = linear(r), linear(g), linear(b)
     local l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
     local m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
@@ -87,7 +89,7 @@ local function hue(r, g, b)
     local B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
     return math.atan2(B, A)
 end
-local function oklch(L, C, h)
+local function oklch(L: number, C: number, h: number): number[]
     local A, B = C * math.cos(h), C * math.sin(h)
     local l = (L + 0.3963377774 * A + 0.2158037573 * B) ^ 3
     local m = (L - 0.1055613458 * A - 0.0638541728 * B) ^ 3
@@ -97,7 +99,7 @@ local function oklch(L, C, h)
              gamma(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s) }
 end
 
-local function family(base, text)
+local function family(base: number[], text: number[]): { [string]: number[] }
     return {
         ["gilt"] = { base[1], base[2], base[3] },
         ["gilt-text"] = { text[1], text[2], text[3] },
@@ -107,15 +109,15 @@ local function family(base, text)
     }
 end
 
-local function classColor(class)
-    local c = class and T.color["class-" .. class:lower()]
-    return c and { c[1], c[2], c[3] }
+local function classColor(class: string?): number[]?
+    local c = class and (T.color :: { [string]: number[] })["class-" .. class:lower()]
+    return c and { c[1], c[2], c[3] } or nil
 end
 
-Themes.Register({
+register({
     id = "classaccent", name = "Class accent",
     description = "Your class colour in place of gilt, as it is (mage blue sits close to the arcane of ready things).",
-    colors = function(class)
+    colors = function(class: string?): { [string]: number[] }
         local c = classColor(class)
         if not c then return {} end
         -- the text lightened toward white until it reads at 7:1 on surface
@@ -127,10 +129,10 @@ Themes.Register({
         return family(c, text)
     end,
 })
-Themes.Register({
+register({
     id = "classhue", name = "Class accent · toned",
     description = "Your class's hue at gilt's weight: softer, and always apart from the signal colours.",
-    colors = function(class)
+    colors = function(class: string?): { [string]: number[] }
         local c = classColor(class)
         if not c then return {} end
         local h = hue(c[1], c[2], c[3])
@@ -142,13 +144,13 @@ Themes.Register({
 -- Darker
 --------------------------------------------------------------------------------
 
-Themes.Register({
+register({
     id = "darker", name = "Darker",
     description = "Warm near-black panels; the world still shows faintly through them.",
     colors = colors({ ["surface"] = "#0B0A0C", ["surface-glass"] = "#0B0A0CF2", ["surface-sunk"] = "#070608",
                       ["surface-raised"] = "#161419", ["track"] = "#1B181C" }),
 })
-Themes.Register({
+register({
     id = "oled", name = "OLED black",
     description = "True black, opaque panels.",
     colors = colors({ ["surface"] = "#000000", ["surface-glass"] = "#000000FF", ["surface-sunk"] = "#000000",
@@ -162,7 +164,7 @@ Themes.Register({
 -- ward), the edges' alphas set so a panel's edge keeps its 2.2:1
 --------------------------------------------------------------------------------
 
-Themes.Register({
+register({
     id = "blacktemple", name = "Black Temple",
     description = "Illidan's fortress: moss-fel green on shadowed violet stone.",
     colors = colors({
@@ -173,7 +175,7 @@ Themes.Register({
         ["ink"] = "#E8EDE1", ["ink-muted"] = "#9BA192", ["ink-faint"] = "#72776A",
     }),
 })
-Themes.Register({
+register({
     id = "moltencore", name = "Molten Core",
     description = "Lava orange and molten gold on charred rock.",
     colors = colors({
@@ -184,7 +186,7 @@ Themes.Register({
         ["ink"] = "#F6E9DA", ["ink-muted"] = "#AB9B8D", ["ink-faint"] = "#807165",
     }),
 })
-Themes.Register({
+register({
     id = "naxxramas", name = "Naxxramas",
     description = "The necropolis: icy teal and bone on deep slate.",
     colors = colors({
@@ -195,7 +197,7 @@ Themes.Register({
         ["ink"] = "#F0EBDB", ["ink-muted"] = "#95A1A4", ["ink-faint"] = "#6C777A",
     }),
 })
-Themes.Register({
+register({
     id = "karazhan", name = "Karazhan",
     description = "Medivh's tower: arcane violet and moonlit silver on dark plum.",
     colors = colors({
@@ -206,7 +208,7 @@ Themes.Register({
         ["ink"] = "#EBEAF3", ["ink-muted"] = "#A09CA8", ["ink-faint"] = "#77727D",
     }),
 })
-Themes.Register({
+register({
     id = "sunwell", name = "Sunwell",
     description = "The Sunwell Plateau: sun-yellow and white light on warm stone.",
     colors = colors({

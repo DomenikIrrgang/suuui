@@ -1,61 +1,60 @@
--- Core/Motion.lua
+-- Core/Motion.wowlua
 -- The design's motion presets as AnimationGroups. Motion only ever decorates:
 -- a value is always set at once, and an animation never delays it. With
 -- ui.reducedMotion on, every preset jumps straight to its end state.
 --
---   Motion.FadeIn(frame[, duration])  alpha 0 -> 1 (default dur-base, ease-out)
---   Motion.Enter(frame[, duration])   the alert's enter: 6px drop and fade (dur-base)
---   Motion.Pop(frame)                 a ready cooldown: scale 0.86 -> 1, alpha 0.4 -> 1 (dur-base)
---   Motion.Stop(frame)
+--   fadeIn(frame[, duration])  alpha 0 -> 1 (default dur-base, ease-out)
+--   enter(frame[, duration])   the alert's enter: 6px drop and fade (dur-base)
+--   pop(frame)                 a ready cooldown: scale 0.86 -> 1, alpha 0.4 -> 1 (dur-base)
+--   stop(frame)
 
-local _, ns = ...
+import tokens as T from "./Tokens"
+import * as settings from "./Settings"
 
-local Motion = {}
-ns.Motion = Motion
-
-local T, Settings = ns.Tokens, ns.Settings
-
-local function reduced()
-    return Settings.Ready() and Settings.Get("ui", "reducedMotion")
+local function isReduced(): boolean
+    return settings.ready() and settings.get("ui", "reducedMotion") and true or false
 end
 
 -- Whether ui.reducedMotion is on: for motion of a caller's own (0.17).
-function Motion.Reduced()
-    return reduced() and true or false
+export function reduced(): boolean
+    return isReduced()
 end
 
-local function smoothing(easing)
-    return T.easing[easing].smoothing
+local function smoothing(easing: string): string
+    return (T.easing :: { [string]: any })[easing].smoothing
 end
 
--- Running AlphaTo fades, frame -> { from, to, start, duration }.
-local fades = {}
+type Fade = { from: number, to: number, start: number, duration: number }
 
--- One AnimationGroup per frame and preset, built on first use.
-local function group(frame, name, build)
+-- Running alphaTo fades.
+local fades: { [any]: Fade } = {}
+
+-- One AnimationGroup per frame and preset, built on first use (kept on the
+-- frame as suuMotion).
+local function group(frame: any, preset: string, build: (g: any) -> ()): any
     frame.suuMotion = frame.suuMotion or {}
-    local g = frame.suuMotion[name]
+    local g = frame.suuMotion[preset]
     if not g then
         g = frame:CreateAnimationGroup()
         build(g)
         g:SetScript("OnFinished", function() frame:SetAlpha(1) end)
-        frame.suuMotion[name] = g
+        frame.suuMotion[preset] = g
     end
     return g
 end
 
-function Motion.Stop(frame)
+export function stop(frame: any)
     if frame.suuMotion then
         for _, g in pairs(frame.suuMotion) do g:Stop() end
     end
-    fades[frame] = nil -- a running AlphaTo would override the alpha set here
+    fades[frame] = nil -- a running alphaTo would override the alpha set here
     frame:SetAlpha(1)
 end
 
-function Motion.FadeIn(frame, duration)
-    Motion.Stop(frame)
-    if reduced() then return end
-    local g = group(frame, "fadeIn", function(g)
+export function fadeIn(frame: any, duration: number?)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "fadeIn", function(g: any)
         local a = g:CreateAnimation("Alpha")
         a:SetFromAlpha(0)
         a:SetToAlpha(1)
@@ -66,10 +65,10 @@ function Motion.FadeIn(frame, duration)
     g:Play()
 end
 
-function Motion.Enter(frame, duration)
-    Motion.Stop(frame)
-    if reduced() then return end
-    local g = group(frame, "enter", function(g)
+export function enter(frame: any, duration: number?)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "enter", function(g: any)
         -- Jump 6px up instantly, then move back down while fading in.
         local up = g:CreateAnimation("Translation")
         up:SetOffset(0, 6)
@@ -97,7 +96,7 @@ end
 -- whose scripts can't be set in combat (alpha itself is never protected).
 local driver = CreateFrame("Frame")
 driver:Hide()
-driver:SetScript("OnUpdate", function(self)
+driver:SetScript("OnUpdate", function(self: Frame)
     local now, any = GetTime(), false
     for frame, f in pairs(fades) do
         local t = math.min(1, (now - f.start) / f.duration)
@@ -108,24 +107,24 @@ driver:SetScript("OnUpdate", function(self)
     if not any then self:Hide() end
 end)
 
-function Motion.AlphaTo(frame, to, duration)
-    duration = duration or T.duration["dur-slow"]
-    local from = frame:GetAlpha()
-    if reduced() or duration <= 0 or math.abs(from - to) < 0.01 then
+export function alphaTo(frame: any, to: number, duration: number?)
+    local d = duration or T.duration["dur-slow"]
+    local from: number = frame:GetAlpha()
+    if isReduced() or d <= 0 or math.abs(from - to) < 0.01 then
         fades[frame] = nil
         frame:SetAlpha(to)
         return
     end
     local f = fades[frame]
     if f and f.to == to then return end
-    fades[frame] = { from = from, to = to, start = GetTime(), duration = duration }
+    fades[frame] = { from = from, to = to, start = GetTime(), duration = d }
     driver:Show()
 end
 
-function Motion.Pop(frame)
-    Motion.Stop(frame)
-    if reduced() then return end
-    local g = group(frame, "pop", function(g)
+export function pop(frame: any)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "pop", function(g: any)
         local s = g:CreateAnimation("Scale")
         s:SetScaleFrom(0.86, 0.86)
         s:SetScaleTo(1, 1)

@@ -1,4 +1,4 @@
--- Core/Themes.lua
+-- Core/Themes.wowlua
 -- Themes (plan 4.3, asked 2026-10-18; after a reload, agreed): a plugin
 -- registers one with SuuUI.RegisterTheme, the player picks it in Settings ›
 -- General › Appearance (for every character, like colour vision), and it
@@ -17,85 +17,98 @@
 -- SUUUI_THEME_CHANGED tells the rest (colour codes in text, colours worked
 -- out from a token, sizes from a text style's line height).
 
-local _, ns = ...
+import tokens as T, TextStyle from "./Tokens"
+import * as settings from "./Settings"
+import * as events from "./Events"
+import * as vision from "./Vision"
+import * as fonts from "./Fonts"
+import * as draw from "/UI/Draw"
 
-local T = ns.Tokens
+export type ThemeColors = { [string]: number[] }
+export type ThemeFonts = { [string]: { file: string?, size: number?, lineHeight: number? } }
+export type Theme = {
+    id: string,
+    name: string,
+    description: string?,
+    colors: ThemeColors | ((class: string?) -> ThemeColors),
+    fonts: ThemeFonts,
+}
+
+local colors: { [string]: any } = T.color
+local styles: { [string]: TextStyle } = T.type
 
 -- the design's own colours and text styles, before any theme or colour
 -- vision (this file loads before the saved settings apply either)
-local design = { color = {}, type = {} }
-for name, c in pairs(T.color) do design.color[name] = { c[1], c[2], c[3], c[4], hex = c.hex } end
-for name, s in pairs(T.type) do design.type[name] = { file = s.file, size = s.size, lineHeight = s.lineHeight } end
+local design: { color: { [string]: any }, type: { [string]: { file: string, size: number, lineHeight: number } } } = { color = {}, type = {} }
+for tokenName, c in pairs(colors) do design.color[tokenName] = { c[1], c[2], c[3], c[4], hex = c.hex } end
+for styleName, s in pairs(styles) do design.type[styleName] = { file = s.file, size = s.size, lineHeight = s.lineHeight } end
 
 local function reset()
-    for name, d in pairs(design.color) do
-        local c = T.color[name]
+    for tokenName, d in pairs(design.color) do
+        local c = colors[tokenName]
         c[1], c[2], c[3], c[4], c.hex = d[1], d[2], d[3], d[4], d.hex
     end
-    for name, d in pairs(design.type) do
-        local s = T.type[name]
+    for styleName, d in pairs(design.type) do
+        local s = styles[styleName]
         s.file, s.size, s.lineHeight = d.file, d.size, d.lineHeight
     end
 end
 
-local Themes = {}
-ns.Themes = Themes
+export const DEFAULT = "suuui"
+local list: Theme[] = { { id = DEFAULT, name = "SuuUI", description = "SuuUI's own colours and type.", colors = {}, fonts = {} } }
+local byId: { [string]: Theme } = { [DEFAULT] = list[1] }
+local applied: string = DEFAULT
 
-Themes.DEFAULT = "suuui"
-local list = { { id = Themes.DEFAULT, name = "SuuUI", description = "SuuUI's own colours and type.", colors = {}, fonts = {} } }
-local byId = { [Themes.DEFAULT] = list[1] }
-local applied = Themes.DEFAULT
-
-function Themes.Register(def)
+export function register(def: any): Theme
     assert(type(def) == "table" and type(def.id) == "string" and def.id ~= "", "SuuUI.RegisterTheme: a theme needs an id")
     assert(not byId[def.id], "SuuUI.RegisterTheme: the theme " .. def.id .. " is taken")
     if type(def.colors) == "table" then
         for token in pairs(def.colors) do
-            if not T.color[token] then error(("SuuUI.RegisterTheme: %s has no colour token %q"):format(def.id, tostring(token)), 2) end
+            if not colors[token] then error(("SuuUI.RegisterTheme: %s has no colour token %q"):format(def.id, tostring(token)), 2) end
         end
     end
     for style in pairs(def.fonts or {}) do
-        if not T.type[style] then error(("SuuUI.RegisterTheme: %s has no text style %q"):format(def.id, tostring(style)), 2) end
+        if not styles[style] then error(("SuuUI.RegisterTheme: %s has no text style %q"):format(def.id, tostring(style)), 2) end
     end
-    local theme = { id = def.id, name = def.name or def.id, description = def.description, colors = def.colors or {}, fonts = def.fonts or {} }
+    local theme: Theme = { id = def.id, name = def.name or def.id, description = def.description, colors = def.colors or {}, fonts = def.fonts or {} }
     list[#list + 1] = theme
     byId[def.id] = theme
     return theme
 end
 
-function Themes.List()
+export function all(): Theme[]
     return list
 end
 
-function Themes.Get(id)
+export function get(id: string): Theme?
     return byId[id]
 end
 
 -- The theme in effect this session.
-function Themes.Applied()
+export function appliedTheme(): string
     return applied
 end
 
-local function hex(r, g, b)
+local function hex(r: number, g: number, b: number): string
     return ("%02x%02x%02x"):format(math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
 
 -- The chosen theme (a missing one: SuuUI's), then the chosen colour vision
 -- on top: at login, before the modules start, and again whenever either
 -- setting changes.
-function Themes.Apply()
+export function apply()
     reset()
-    local id = ns.Settings.Account("theme") or Themes.DEFAULT
-    local theme = byId[id] or byId[Themes.DEFAULT]
+    local id = settings.account("theme") or DEFAULT
+    local theme = byId[id] or byId[DEFAULT] :: Theme
     applied = theme.id
-    local colors = theme.colors
-    if type(colors) == "function" then
+    local worked: any = theme.colors
+    if type(worked) == "function" then
         local _, class = UnitClass("player")
-        local ok, t = pcall(colors, class)
-        colors = ok and type(t) == "table" and t or {}
+        local ok, t = pcall(worked, class)
+        worked = ok and type(t) == "table" and t or {}
     end
-    for name, c in pairs(colors) do
-        local token = T.color[name]
+    for tokenName, c in pairs(worked :: ThemeColors) do
+        local token = colors[tokenName]
         -- (a worked-out table may name a token that isn't one: skipped)
         if token then
             token[1], token[2], token[3] = c[1], c[2], c[3]
@@ -104,13 +117,14 @@ function Themes.Apply()
         end
     end
     for style, f in pairs(theme.fonts) do
-        local s = T.type[style]
+        local s = styles[style]
+        if not s then continue end
         if f.file then s.file = f.file end
         if f.size then s.size = f.size end
         if f.lineHeight then s.lineHeight = f.lineHeight end
     end
-    if ns.Vision then ns.Vision.Apply(ns.Settings.Account("colorVision")) end
-    ns.Fonts.Refresh()
-    ns.UI.Repaint()
-    ns.Events.Emit("SUUUI_THEME_CHANGED", applied)
+    vision.apply(settings.account("colorVision"))
+    fonts.refresh()
+    draw.repaint()
+    events.emit("SUUUI_THEME_CHANGED", applied)
 end

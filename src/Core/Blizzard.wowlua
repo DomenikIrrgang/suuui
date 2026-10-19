@@ -1,7 +1,7 @@
--- Core/Blizzard.lua
+-- Core/Blizzard.wowlua
 -- Standing Blizzard's own frames down when a SuuUI module replaces them.
 --
---   ns.SuppressBlizzard(frame, { children = { "healthbar", "HealthBarsContainer.healthBar" }, keepParent = false })
+--   suppress(frame, { children = { "healthbar", "HealthBarsContainer.healthBar" }, keepParent = false })
 --
 -- The frame (and the named children) stop their events, hide, and move under
 -- a hidden parent. Never with an OnShow -> Hide hook: Hide() on a protected
@@ -17,16 +17,20 @@
 -- the next combat transition; the hidden parent keeps them out of sight.
 -- Only a reload brings a suppressed frame back.
 
-local _, ns = ...
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import * as combat from "./Combat"
 
-local Combat = ns.Combat
+export type SuppressOptions = { children: string[]?, keepParent: boolean?, noHide: boolean? }
 
 local hiddenParent = CreateFrame("Frame", "SuuUIHiddenParent", UIParent)
 hiddenParent:Hide()
 
-local suppressed, hooked, pending = {}, {}, {}
+local suppressed: { [any]: boolean } = {}
+local hooked: { [any]: boolean } = {}
+local pending: { [any]: boolean } = {}
 
-local function resolve(frame, path)
+local function resolve(frame: any, path: string): any
     local v = frame
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
@@ -35,53 +39,55 @@ local function resolve(frame, path)
     return v
 end
 
-local function reparent(frame)
+local function reparent(frame: any)
     pending[frame] = nil
     if frame:GetParent() == hiddenParent then return end
     if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
         pending[frame] = true
-        C_Timer.After(0.25, function() reparent(frame) end)
+        after(0.25, function() reparent(frame) end)
     elseif InCombatLockdown() and frame:IsProtected() then
         pending[frame] = true
-        Combat.Run("blizzard:" .. (frame:GetName() or tostring(frame)), function() reparent(frame) end, "Hide Blizzard frame")
+        combat.run("blizzard:" .. (frame:GetName() or tostring(frame)), function() reparent(frame) end, "Hide Blizzard frame")
     else
         frame:SetParent(hiddenParent)
     end
 end
 
-function ns.SuppressBlizzard(frame, opts)
+export function suppress(target: any, opts: SuppressOptions?)
+    local frame = target
     if type(frame) == "string" then frame = _G[frame] end
     if not frame or suppressed[frame] then return end
     suppressed[frame] = true
-    opts = opts or {}
+    local o: SuppressOptions = opts or {}
 
     frame:UnregisterAllEvents()
-    for _, path in ipairs(opts.children or {}) do
+    for _, path in ipairs(o.children or {}) do
         local child = resolve(frame, path)
         if type(child) == "table" and child.UnregisterAllEvents then child:UnregisterAllEvents() end
     end
-    if not opts.noHide and not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
-    if opts.keepParent then return end
+    if not o.noHide and not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
+    if o.keepParent then return end
 
     reparent(frame)
     if not hooked[frame] then
         hooked[frame] = true
-        hooksecurefunc(frame, "SetParent", function(self, parent)
+        hook(frame, "SetParent", function(self: any, parent: any)
             if parent ~= hiddenParent and not pending[self] then
                 pending[self] = true
-                C_Timer.After(0, function() reparent(self) end)
+                after(0, function() reparent(self) end)
             end
         end)
     end
 end
 
 -- Suppressed frames come back only with a reload; this says whether one is.
-function ns.IsSuppressed(frame)
+export function isSuppressed(target: any): boolean
+    local frame = target
     if type(frame) == "string" then frame = _G[frame] end
     return frame ~= nil and suppressed[frame] == true
 end
 
 -- Kept for the public API: always false for a suppressed frame (reload to restore).
-function ns.RestoreBlizzard(frame)
-    return not ns.IsSuppressed(frame)
+export function restore(target: any): boolean
+    return not isSuppressed(target)
 end
