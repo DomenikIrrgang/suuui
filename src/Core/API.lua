@@ -550,6 +550,10 @@ function API.InstanceLevels() return ns.InstanceLevels or {} end
 -- { [fromNodeID] = { [toNodeID] = yards } }, nodeIDs as C_TaxiMap gives them;
 -- a longer flight is its hops added up
 function API.FlightRoutes() return ns.FlightRoutes or {} end
+-- 0.17: the way each of those routes flies, for drawing it (Data/FlightPaths.lua,
+-- the same tool): { [fromNodeID] = { [toNodeID] = { continentID, x1, y1, x2, y2, ... } } },
+-- world x, y in yards as C_Map.GetWorldPosFromMapPos gives them
+function API.FlightPaths() return ns.FlightPaths or {} end
 
 function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]

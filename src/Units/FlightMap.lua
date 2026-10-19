@@ -4,10 +4,13 @@
 -- the continent with every flight master of yours (the ones you haven't
 -- found faint, their edge dashed), the routes between those you have as
 -- faint lines, each destination's flight time beside it, and the
--- destinations listed in the side panel over the quest log. Picking one
--- draws its route and puts where it stops, the cost, the time and Fly in a
--- bar at the map's bottom. In the air the same map shows your flight: the
--- part flown solid, the rest dashed, the time left at the destination.
+-- destinations listed in the side panel over the quest log. Hovering one
+-- draws its route; clicking it flies there, or (Confirm before flying) puts
+-- where it stops, the cost, the time and Fly in a bar at the map's bottom.
+-- In the air the same map shows your flight: the part flown solid, the rest
+-- dashed, the time left at the destination. Every route is drawn the way
+-- the game flies it (SuuUI.FlightPaths: its waypoints, put on the shown map
+-- through world coordinates), else straight from master to master.
 --
 -- The game's own flight map (TaxiFrame) stays open underneath, unseen and
 -- without the mouse: hiding it ends the flight master's session, alpha 0
@@ -36,7 +39,7 @@ local M = SuuUI.RegisterModule({
     description = "The world map as the flight master's map: routes, costs and flight times, and your flight on the map while you fly.",
     api = "0.17",
     combatSafe = true,
-    defaults = { atMaster = true, inFlight = true },
+    defaults = { atMaster = true, inFlight = true, confirm = false },
 })
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -59,7 +62,7 @@ local MAX_FLIGHT = 1800 -- s: a flight kept over a reload longer than this is st
 
 local ROW_H = 36
 local PIN = 26 -- UI.MapPin's size
-local MAX_DASHES = 120 -- on one line of a route
+local MAX_DASHES = 120 -- on one dashed line
 
 --------------------------------------------------------------------------------
 -- What the game gives
@@ -132,6 +135,48 @@ local function pathYards(path)
         total = total + y
     end
     return total
+end
+
+-- A hop's way on a map: its waypoints (SuuUI.FlightPaths(); the reverse
+-- hop's backwards when only that one is there) as the map's positions, kept
+-- per map; false when there's none, or when the map puts its ends away from
+-- the two masters (pa, pb: their places on it), then it's drawn straight.
+local ways = {}
+
+local function hopWay(mapID, a, b, pa, pb)
+    ways[mapID] = ways[mapID] or {}
+    local key = a .. ">" .. b
+    local got = ways[mapID][key]
+    if got ~= nil then return got end
+    got = false
+    local paths = SuuUI.FlightPaths()
+    local data, back = paths[a] and paths[a][b], false
+    if not data then data, back = paths[b] and paths[b][a], true end
+    if data and C_Map.GetMapPosFromWorldPos and CreateVector2D then
+        local way = {}
+        for i = 2, #data - 1, 2 do
+            -- (the world's x, y as the client tables give them: x north, y west)
+            local ok, onMap, pos = pcall(C_Map.GetMapPosFromWorldPos, data[1], CreateVector2D(data[i], data[i + 1]), mapID)
+            local x, y
+            if ok and onMap == mapID and pos and pos.GetXY then x, y = pos:GetXY() end
+            if not (plain(x) and plain(y)) then way = nil break end
+            way[#way + 1] = { x, y }
+        end
+        if way and back then
+            for i = 1, math.floor(#way / 2) do way[i], way[#way + 1 - i] = way[#way + 1 - i], way[i] end
+        end
+        if way and #way >= 2 then
+            -- each end near its master: within a quarter of the hop
+            local far = 0.25 * math.sqrt((pb[1] - pa[1]) ^ 2 + (pb[2] - pa[2]) ^ 2)
+            local s, e = way[1], way[#way]
+            if math.sqrt((s[1] - pa[1]) ^ 2 + (s[2] - pa[2]) ^ 2) <= far
+                and math.sqrt((e[1] - pb[1]) ^ 2 + (e[2] - pb[2]) ^ 2) <= far then
+                got = way
+            end
+        end
+    end
+    ways[mapID][key] = got
+    return got
 end
 
 local function call(fn, ...)
@@ -431,10 +476,18 @@ function M:Select(node)
     self:QueueInk()
 end
 
-function M:Fly()
-    local node = self.selected
+function M:Fly(node)
+    node = node or self.selected
     if not (self.session and node) then return end
     TakeTaxiNode(node.slot)
+end
+
+-- A destination clicked (its pin or its row): flown to at once; with
+-- Confirm before flying, chosen for the bar's Fly.
+function M:Choose(node)
+    if not (self.session and node and node.kind == "REACHABLE") then return end
+    if self:Get("confirm") then self:Select(node) return end
+    self:Fly(node)
 end
 
 -- a destination's time: "4:12" when timed, "~3:30" estimated; and a word
@@ -544,7 +597,8 @@ function M:Tip(node)
         title = node.name, subtitle = viaText(node.path, s),
         lines = lines,
         description = t and (muted .. (measured and "Timed on an earlier flight." or "Estimated from the route's length; timed once you've flown it.") .. "|r") or nil,
-        meta = self.selected == node and "Fly in the bar below" or "Click to choose",
+        meta = not self:Get("confirm") and "Click to fly"
+            or (self.selected == node and "Fly in the bar below" or "Click to choose"),
     }
 end
 
@@ -613,7 +667,7 @@ function M:Row(i)
         self:QueueInk()
         UI.HideTooltip()
     end)
-    row:SetScript("OnClick", function(r) self:Select(r.node) end)
+    row:SetScript("OnClick", function(r) self:Choose(r.node) end)
     side.rows[i] = row
     return row
 end
@@ -800,7 +854,7 @@ function M:Pin()
             self:QueueInk()
             UI.HideTooltip()
         end)
-        pin:SetScript("OnClick", function(p) self:Select(p.node) end)
+        pin:SetScript("OnClick", function(p) self:Choose(p.node) end)
         -- a right-click goes through to the map (it zooms out)
         if pin.SetPassThroughButtons then pcall(pin.SetPassThroughButtons, pin, "RightButton") end
     end
@@ -832,20 +886,53 @@ function M:Line(layer, x1, y1, x2, y2, thickness, token, alpha)
     line:Show()
 end
 
--- dashes along a straight line: dash px drawn, gap px left out
-function M:Dashes(layer, x1, y1, x2, y2, dash, gap, thickness, token, alpha)
-    local len = math.sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
-    if len < 0.5 then return end
+local function span(a, b) return math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2) end
+
+-- dashes along a route's points: dash px drawn, gap px left out, the
+-- pattern carried on round its bends
+function M:Dashes(layer, points, dash, gap, thickness, token, alpha)
+    local total = 0
+    for i = 1, #points - 1 do total = total + span(points[i], points[i + 1]) end
+    if total < 0.5 then return end
     -- (zoomed far in, longer dashes: no more than MAX_DASHES on a line)
-    local stretch = math.max(1, len / (dash + gap) / MAX_DASHES)
+    local stretch = math.max(1, total / (dash + gap) / MAX_DASHES)
     dash, gap = dash * stretch, gap * stretch
-    local ux, uy = (x2 - x1) / len, (y2 - y1) / len
-    local t = 0
-    while t < len do
-        local e = math.min(len, t + dash)
-        self:Line(layer, x1 + ux * t, y1 + uy * t, x1 + ux * e, y1 + uy * e, thickness, token, alpha)
-        t = e + gap
+    local run = 0
+    for i = 1, #points - 1 do
+        local a, b = points[i], points[i + 1]
+        local len = span(a, b)
+        if len > 0 then
+            local ux, uy = (b[1] - a[1]) / len, (b[2] - a[2]) / len
+            -- where the pattern stands at this bend: a dash may go on round it
+            local t = -(run % (dash + gap))
+            while t < len do
+                local s, e = math.max(0, t), math.min(len, t + dash)
+                if e > s then self:Line(layer, a[1] + ux * s, a[2] + uy * s, a[1] + ux * e, a[2] + uy * e, thickness, token, alpha) end
+                t = t + dash + gap
+            end
+        end
+        run = run + len
     end
+end
+
+-- A route on the shown map, in px: its hops the way they fly (or straight)
+-- one after another, and where each master on it falls among the points;
+-- nil when one isn't on this map.
+function M:Way(path)
+    local v = self.view
+    local points, stops = {}, {}
+    for i, id in ipairs(path) do
+        local p = v.pos[id]
+        if not p then return nil end
+        if i > 1 then
+            -- (the hop's own ends left out: it runs from pin to pin)
+            local way = hopWay(v.map, path[i - 1], id, v.pos[path[i - 1]], p)
+            for k = 2, way and #way - 1 or 0 do points[#points + 1] = { way[k][1] * v.w, way[k][2] * v.h } end
+        end
+        points[#points + 1] = { p[1] * v.w, p[2] * v.h }
+        stops[#stops + 1] = #points
+    end
+    return points, stops
 end
 
 -- A route solid: the gilt line on a dark underlay, so it reads on any art.
@@ -955,20 +1042,15 @@ function M:InkMaster(pos, w, h)
         for j = i + 1, #known do
             local a, b = known[i], known[j]
             if hopYards(a.id, b.id) then
-                local pa, pb = pos[a.id], pos[b.id]
-                self:Dashes("ARTWORK", pa[1] * w, pa[2] * h, pb[1] * w, pb[2] * h, 4, 4, 1.5, "gilt-line")
+                local points = self:Way({ a.id, b.id })
+                if points then self:Dashes("ARTWORK", points, 4, 4, 1.5, "gilt-line") end
             end
         end
     end
     -- the route of the one hovered, else the one chosen
     local shown = self.hovered or self.selected
     if shown and shown.path then
-        local points = {}
-        for _, id in ipairs(shown.path) do
-            local p = pos[id]
-            if not p then points = nil break end
-            points[#points + 1] = { p[1] * w, p[2] * h }
-        end
+        local points = self:Way(shown.path)
         if points then self:Solid(points, 2.5, "gilt-text") end
     end
     for _, pin in ipairs(self.pins) do
@@ -978,9 +1060,9 @@ function M:InkMaster(pos, w, h)
 end
 
 -- How far along the flight you are: the point on the route nearest you
--- (the game gives your place in flight), else by the time flown along its
--- hops' lengths. -> the segment it's on, and the point.
-function M:Along(points, path, w, h)
+-- (the game gives your place in flight), else by the time flown along the
+-- route's length. -> the segment it's on, and the point.
+function M:Along(points, w, h)
     local f = self.map
     local me = call(C_Map.GetPlayerMapPosition, f:GetMapID(), "player")
     local x, y
@@ -1004,14 +1086,14 @@ function M:Along(points, path, w, h)
     if not total then return 1, points[1][1], points[1][2] end
     local frac = math.min(1, (GetTime() - fl.started) / total)
     local lengths, sum = {}, 0
-    for k = 1, #path - 1 do
-        lengths[k] = hopYards(path[k], path[k + 1]) or 1
+    for k = 1, #points - 1 do
+        lengths[k] = span(points[k], points[k + 1])
         sum = sum + lengths[k]
     end
     local want, run = frac * sum, 0
-    for k = 1, #path - 1 do
+    for k = 1, #points - 1 do
         if run + lengths[k] >= want then
-            local t = (want - run) / lengths[k]
+            local t = lengths[k] > 0 and (want - run) / lengths[k] or 0
             local a, b = points[k], points[k + 1]
             return k, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t
         end
@@ -1023,27 +1105,20 @@ end
 
 -- In the air: the route flown solid, the rest dashed, a dot at each stop,
 -- the time left at the destination.
-function M:DrawFlight(pos, w, h)
+function M:DrawFlight(w, h)
     local fl = self.flight
-    local points = {}
-    for _, id in ipairs(fl.path) do
-        local p = pos[id]
-        if not p then return end
-        points[#points + 1] = { p[1] * w, p[2] * h }
-    end
-    local k, qx, qy = self:Along(points, fl.path, w, h)
+    local points, stops = self:Way(fl.path)
+    if not points then return end
+    local k, qx, qy = self:Along(points, w, h)
     local flown = {}
     for i = 1, k do flown[i] = points[i] end
     flown[#flown + 1] = { qx, qy }
     self:Solid(flown, 3, "gilt")
     local rest = { { qx, qy } }
     for i = k + 1, #points do rest[#rest + 1] = points[i] end
-    for i = 1, #rest - 1 do
-        local a, b = rest[i], rest[i + 1]
-        self:Dashes("BORDER", a[1], a[2], b[1], b[2], 5, 5, 5, "surface", 0.65)
-        self:Dashes("ARTWORK", a[1], a[2], b[1], b[2], 5, 5, 2, "gilt-text")
-    end
-    for _, p in ipairs(points) do self:Dot(p[1], p[2]) end
+    self:Dashes("BORDER", rest, 5, 5, 5, "surface", 0.65)
+    self:Dashes("ARTWORK", rest, 5, 5, 2, "gilt-text")
+    for _, i in ipairs(stops) do self:Dot(points[i][1], points[i][2]) end
     local dest = points[#points]
     if fl.expected then
         local left = fl.expected - (GetTime() - fl.started)
@@ -1073,7 +1148,7 @@ function M:Layout()
     ink:ClearAllPoints()
     ink:SetPoint("TOPLEFT", self.layer, "TOPLEFT")
     ink:SetSize(w, h)
-    self.view = { pos = positions(f:GetMapID()), w = w, h = h }
+    self.view = { map = f:GetMapID(), pos = positions(f:GetMapID()), w = w, h = h }
     if self.session then self:DrawMaster(self.view.pos, w, h, cs) end
     self:DrawInk()
 end
@@ -1088,7 +1163,7 @@ function M:DrawInk()
     if self.session then
         self:InkMaster(v.pos, v.w, v.h)
     elseif self.flight and self:Get("inFlight") then
-        self:DrawFlight(v.pos, v.w, v.h)
+        self:DrawFlight(v.w, v.h)
     end
 end
 
@@ -1180,7 +1255,9 @@ local SECTION = {
     groups = {
         { title = "At a flight master", rows = {
             { key = "atMaster", label = "The world map as the flight map", control = "toggle",
-              description = "At a flight master SuuUI's world map shows where you can fly: every flight master, the routes between the ones you've found, and each flight's time and cost. Click a destination, then Fly. Off: the game's own flight map." },
+              description = "At a flight master SuuUI's world map shows where you can fly: every flight master, the routes between the ones you've found, and each flight's time and cost. Click a destination to fly there. Off: the game's own flight map." },
+            { key = "confirm", label = "Confirm before flying", control = "toggle", disabled = function() return not M:Get("atMaster"), "The world map as the flight map is off." end,
+              description = "A click on a destination chooses it, and Fly in the bar at the map's bottom takes the flight. Off: the click flies there at once (hovering still shows the route, the cost and the time)." },
         } },
         { title = "While flying", rows = {
             { key = "inFlight", label = "Your flight on the map", control = "toggle",
@@ -1249,6 +1326,15 @@ function M:OnEnable()
     end)
     self:Watch("atMaster", function() if not self:Get("atMaster") and self.session then self:LeaveMaster(false) end end)
     self:Watch("inFlight", function() self:QueueLayout() end)
+    -- (a destination chosen to confirm: let go when clicks fly at once)
+    self:Watch("confirm", function()
+        if self.session and not self:Get("confirm") and self.selected then
+            self.selected = nil
+            self:UpdateBar()
+            self:UpdateRows()
+            self:QueueInk()
+        end
+    end)
     -- a theme: the tags and the bar measured again
     self:On("SUUUI_THEME_CHANGED", function()
         if self.session then self:UpdateBar() end
