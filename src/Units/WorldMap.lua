@@ -8,8 +8,9 @@
 --              showQuestLevel, showQuestDifficultyColor), quests to pick
 --              up, repeatable and daily, trivial quests
 --   Places     dungeon and raid entrances, battleground entrances, flight
---              masters (the game's taxi nodes), campfires you found (the
---              Campfire module remembers them)
+--              masters (the game's taxi nodes; which ones you've found,
+--              from SuuUI's own record), campfires you found (the Campfire
+--              module remembers them)
 --   Services   innkeepers, repair (on); vendors, stable masters,
 --              battlemasters, guild masters, tabard designers, spirit
 --              healers (off)
@@ -551,6 +552,53 @@ local function questState(q, id, me, done)
     return repeatable and "repeatable" or "available", difficulty, level
 end
 
+-- The continent a map lies on (itself for a continent), or nil (the world).
+local function continentOf(mapID)
+    local info = mapID and C_Map.GetMapInfo(mapID)
+    local guard = 0
+    while info and guard < 8 do
+        if info.mapType == (Enum.UIMapType and Enum.UIMapType.Continent or 2) then return info.mapID end
+        info = info.parentMapID and info.parentMapID > 0 and C_Map.GetMapInfo(info.parentMapID)
+        guard = guard + 1
+    end
+end
+
+-- Taxi nodes the client still lists that no one flies to (an old copy of
+-- Powderfuse Port, transports, quest flights)
+local function junkTaxiNode(name)
+    return type(name) ~= "string" or isSecret(name) or name:find("^zzOLD") ~= nil or name:find("^Transport,") ~= nil
+        or name:find("^Quest Path") ~= nil
+end
+
+-- The flight masters this character has found, saved whenever a flight
+-- master's map opens: the game marks none undiscovered away from one on
+-- Forever (isUndiscovered is always false; probed 2026-10-19), but there it
+-- lists each node of the continent with its state (0 where you are, 1 one
+-- you can fly to, 2 not found). A continent no flight master's map has
+-- opened on yet is "not checked".
+function M:RecordTaxiNodes()
+    if not (C_TaxiMap and C_TaxiMap.GetAllTaxiNodes) then return end
+    local zone = C_Map.GetBestMapForUnit("player")
+    local data = self:CharData()
+    local taxi = data.taxi or { known = {}, checked = {} }
+    local seen = false
+    for _, m in ipairs({ zone, continentOf(zone), _G.GetTaxiMapID and GetTaxiMapID() }) do
+        local ok, nodes = pcall(C_TaxiMap.GetAllTaxiNodes, m)
+        for _, n in ipairs(ok and type(nodes) == "table" and nodes or {}) do
+            if plain(n.nodeID) and plain(n.state) and (n.state == 0 or n.state == 1) and not junkTaxiNode(n.name) then
+                taxi.known[n.nodeID] = true
+                seen = true
+            end
+        end
+        if seen then break end
+    end
+    if not seen then return end
+    local continent = continentOf(zone)
+    if continent then taxi.checked[continent] = true end
+    data.taxi = taxi
+    if self.map and self.map:IsShown() then self:Refresh() end
+end
+
 -- every pin the map would show, before merging: { x, y (0-1), key (what
 -- merges with what, nil: never), small, pin (MapPin data), tip (tooltip
 -- lines), rank (a merged quest pin takes the best) }
@@ -699,17 +747,28 @@ function M:Collect(mapID)
         end
     end
 
-    -- flight masters: the game's taxi nodes for this map (yours and neutral)
+    -- flight masters: the game's taxi nodes for this map (yours and
+    -- neutral), found or not by this character's own record (the game's
+    -- isUndiscovered is always false on Forever; see RecordTaxiNodes)
     if on.places.flight and C_TaxiMap and C_TaxiMap.GetTaxiNodesForMap then
         local ok, nodes = pcall(C_TaxiMap.GetTaxiNodesForMap, mapID)
         local mine = me.faction == "H" and 1 or me.faction == "A" and 2 or -1
+        local taxi = self:CharData().taxi
+        local continent = continentOf(mapID)
+        local checked = taxi and (continent and taxi.checked[continent] or (not continent and next(taxi.checked) ~= nil))
+        local muted = "|cff" .. T.color["ink-muted"].hex
         for _, n in ipairs(ok and type(nodes) == "table" and nodes or {}) do
             local x, y
             if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-            if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (n.faction == 0 or n.faction == mine) then
+            if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (n.faction == 0 or n.faction == mine)
+                and not junkTaxiNode(n.name) then
+                local known = taxi and plain(n.nodeID) and taxi.known[n.nodeID]
                 items[#items + 1] = { x = x, y = y, fixed = true,
-                    pin = { glyph = "wing", color = n.isUndiscovered and "ink-muted" or "gilt-text" },
-                    name = n.name, detail = n.isUndiscovered and "Flight master · not yet found" or "Flight master" }
+                    pin = { glyph = "wing", color = known and "gilt-text" or "ink-muted" },
+                    name = n.name,
+                    detail = known and "Flight master" or checked and "Flight master · not found yet"
+                        or "Flight master · not checked yet",
+                    more = not (known or checked) and { { muted .. "Open any flight master's map on this continent: SuuUI notes which ones this character has found|r" } } or nil }
             end
         end
     end
@@ -1597,7 +1656,14 @@ function M:Refresh()
     local mapID = f:GetMapID()
     readCalendar()
     self:Reveal(mapID)
-    self.items = mapID and self:Collect(mapID) or {}
+    -- the flight master's map (the flight map module) has its own pins:
+    -- quests, services and marks stay off until it closes
+    local flight = SuuUI.GetModule("flightmap")
+    if flight and flight:IsEnabled() and flight:AtMaster() then
+        self.items = {}
+    else
+        self.items = mapID and self:Collect(mapID) or {}
+    end
     self:Layout()
 end
 
@@ -1777,6 +1843,9 @@ function M:OnEnable()
     -- when the map opens, so a holiday that starts while you play shows
     -- marks made, renamed, shared or removed
     self:On("SUUUI_MARKS_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
+    -- the flight masters this character has found (the game's list at a
+    -- flight master; its nodes are in a moment after it opens)
+    self:OnGameEvent("TAXIMAP_OPENED", function() C_Timer.After(0.2, function() self:RecordTaxiNodes() end) end)
     -- a theme: the pins' tooltip lines carry its colour codes, gathered again
     self:On("SUUUI_THEME_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     self:OnGameEvent("CALENDAR_UPDATE_EVENT_LIST", function()

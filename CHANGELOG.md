@@ -12,6 +12,9 @@
 - Durability: at a merchant who repairs, a line over the merchant window's foot names what is worn, and Repair all turns primary.
 - Durability: the Damaged gear note names the worn pieces and has a Show repairers button (the world map: turn on Map filters › Services › Repair for the repair pins). One alert when a piece breaks in combat.
 - Durability: Repair at merchants (off by default): SuuUI repairs everything by itself at a merchant who repairs, from the guild bank first if you choose, and says in chat what it paid.
+- **Flight map**: at a flight master SuuUI's world map becomes the flight map (no window of its own): every flight master on the continent, the ones you haven't found faint, the routes between the ones you have, and each destination's flight time beside it; the side panel lists the destinations. Click one to see its route, stops, cost and time, then Fly. Closing the map closes the flight master. Settings › Flight map; with the module off, the game's own flight map.
+- Flight map: every flight is timed, so a route shows its real time once you've flown it (until then an estimate from the route's length, marked ~). Open the map while flying to see your route: the part flown solid, the rest dashed, the time left at your destination.
+- Plugin API 0.17: `SuuUI.FlightRoutes()`, how far each of Forever's flight routes flies.
 - Plugin API 0.17: `SuuUI.Durability()` and `SUUUI_DURABILITY_CHANGED`, your gear's wear as the Durability module reads it; the micro menu's `m:SetLines(key, lines)` for a button's tooltip.
 
 ### Changed
@@ -24,6 +27,7 @@
 
 - Chat: a tab's name sits centred over its underline.
 - Edit mode: the toolbar of a frame at the screen's top edge shows under the frame instead of off screen.
+- World map: flight masters you haven't found show as such (faint, "not found yet"); they all looked found before. SuuUI notes which ones each character has found whenever a flight master's map opens, so until a character has opened one on a continent, that continent's read "not checked yet".
 
 ## 0.5.0-beta.6 (2026-10-19)
 

@@ -540,6 +540,11 @@ function API.MapOverlays() return ns.MapOverlays or {} end
 -- the client tables: tools/update_instance_levels.sh):
 -- { [kind] = { [name] = { min, max, { wing, min, max }, ... } } }
 function API.InstanceLevels() return ns.InstanceLevels or {} end
+-- 0.17: how far each of Forever's flight master routes flies, one hop
+-- (Data/FlightRoutes.lua, from the client tables: tools/update_flight_routes.sh):
+-- { [fromNodeID] = { [toNodeID] = yards } }, nodeIDs as C_TaxiMap gives them;
+-- a longer flight is its hops added up
+function API.FlightRoutes() return ns.FlightRoutes or {} end
 
 function API.RecipeSources(recipeID)
     return ns.RecipeSources and ns.RecipeSources[recipeID]
