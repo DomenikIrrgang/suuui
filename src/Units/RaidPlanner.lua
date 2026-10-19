@@ -41,6 +41,13 @@ local M = SuuUI.RegisterModule({
     },
 })
 
+-- Strength of Earth and Grace of Air were one item ("earth"); Grace of Air
+-- is its own now, tracked wherever the pair was
+M:Migrate("graceOfAir", function(values)
+    local t = values.tracked
+    if type(t) == "table" and t.earth and t.graceOfAir == nil then t.graceOfAir = true end
+end)
+
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
 
@@ -557,13 +564,29 @@ function M:KnownTree(name, you)
     if e and e.tree and time() - (e.at or 0) < SPEC_FRESH then return e.tree end
 end
 
--- Out of combat only (roster values may be secret in combat).
+-- Whether you're in a raid now: IsInRaid, else (should it read false or
+-- secret while you are in one) your own index in the raid.
+local function inRaidNow()
+    if UI.Flag(IsInRaid()) then return true end
+    local n = call(GetNumGroupMembers)
+    if not (plain(n) and type(n) == "number" and n > 0) then return false end
+    local index = call(UnitInRaid, "player")
+    return plain(index) and index ~= nil
+end
+
+-- Decides once whether you're in a raid (self.inRaid): the roster, the
+-- view, Arrange groups, inspecting and sharing all go by it until the next
+-- read, so they can't disagree. The roster itself out of combat only
+-- (its values may be secret in combat).
 function M:ReadRoster()
     local out, byKey = {}, {}
-    if InCombatLockdown() or not UI.Flag(IsInRaid()) then
-        if not UI.Flag(IsInRaid()) then self.roster, self.byKey = out, byKey end
-        return self.roster or out
+    self.inRaid = inRaidNow()
+    if not self.inRaid then
+        self.roster, self.byKey, self.me = out, byKey, nil
+        return out
     end
+    if InCombatLockdown() then return self.roster or out end
+    local me
     for i = 1, GetNumGroupMembers() do
         local name, rank, group, _, _, file, _, online, _, _, _, combatRole = call(GetRaidRosterInfo, i)
         if plain(name) and name and plain(file) and file and plain(group) and group then
@@ -580,9 +603,10 @@ function M:ReadRoster()
             m.tree = self:KnownTree(name, you)
             out[#out + 1] = m
             byKey[m.key] = m
+            if you then me = m end
         end
     end
-    self.roster, self.byKey = out, byKey
+    self.roster, self.byKey, self.me = out, byKey, me
     return out
 end
 
@@ -849,7 +873,7 @@ end
 -- Inspects the next player in the queue (while asked to: automatically with
 -- the planner open, or the Inspect button's round).
 function M:InspectNext()
-    if self.inspecting or InCombatLockdown() or not UI.Flag(IsInRaid()) then return end
+    if self.inspecting or InCombatLockdown() or not self.inRaid then return end
     local auto = self:Get("inspect") == "auto" and self.window and self.window:IsShown()
     if not (auto or self.inspectRound) then return end
     -- never over the player's own inspect
@@ -918,7 +942,7 @@ local function chatRestricted()
 end
 
 function M:Send(text)
-    if InCombatLockdown() or not UI.Flag(IsInRaid()) or chatRestricted() then return end
+    if InCombatLockdown() or not self.inRaid or chatRestricted() then return end
     call(C_ChatInfo.SendAddonMessage, PREFIX, text, "RAID")
 end
 
@@ -1003,7 +1027,7 @@ end
 function M:People()
     local people, open = {}, {}
     local w = self:Work()
-    local inRaid = #(self.roster or {}) > 0
+    local inRaid = self.inRaid and true or false
     for _, s in ipairs(w.slots) do
         local f = self.fill and self.fill.slot[s.id]
         if f then
@@ -1044,6 +1068,33 @@ local function classesOf(item, list, word)
     return joinAnd(out, word)
 end
 
+-- Who brings an item, class by class: "druids: Valen and Moonfall"; slots
+-- without a player (a plan out of a raid) as a count: "druids: 2 slots".
+local function byClass(list)
+    local order, of = {}, {}
+    for _, p in ipairs(list) do
+        local c = of[p.class]
+        if not c then
+            c = { names = {}, slots = 0 }
+            of[p.class] = c
+            order[#order + 1] = p.class
+        end
+        if p.name then c.names[#c.names + 1] = p.name else c.slots = c.slots + 1 end
+    end
+    local parts = {}
+    for _, class in ipairs(order) do
+        local c = of[class]
+        local shown = {}
+        for i = 1, math.min(#c.names, 3) do shown[i] = c.names[i] end
+        if #c.names > 3 then shown[#shown + 1] = ("%d more"):format(#c.names - 3) end
+        local bits = {}
+        if #shown > 0 then bits[1] = joinAnd(shown) end
+        if c.slots > 0 then bits[#bits + 1] = ("%d slot%s"):format(c.slots, c.slots == 1 and "" or "s") end
+        parts[#parts + 1] = plural(class) .. ": " .. table.concat(bits, ", ")
+    end
+    return table.concat(parts, "; ")
+end
+
 -- One raid-wide item: { n, warn, detail, lines }.
 function M:RaidItem(item, people, open)
     local yes, maybe, slots = {}, {}, {}
@@ -1052,7 +1103,6 @@ function M:RaidItem(item, people, open)
         if how == "yes" then yes[#yes + 1] = p elseif how == "maybe" then maybe[#maybe + 1] = p end
     end
     for _, p in ipairs(open) do if provides(item, p) then slots[#slots + 1] = p end end
-    local talent = item.by[1] and item.by[1].talent
     local r = { lines = {} }
     if item.ask then
         r.n, r.detail = "ask", "from books, not trainers: ask your " .. classesOf(item, yes)
@@ -1075,7 +1125,7 @@ function M:RaidItem(item, people, open)
             bits[1] = "none: no " .. classesOf(item, {}, "or")
         end
     else
-        bits[1] = item.detail or (talent and names(yes) or classesOf(item, yes))
+        bits[1] = byClass(yes)
         if #maybe > 0 then bits[#bits + 1] = ("+%d if specced"):format(#maybe) end
         if #slots > 0 then bits[#bits + 1] = ("+%d in open slots"):format(#slots) end
     end
@@ -1084,51 +1134,26 @@ function M:RaidItem(item, people, open)
     return r
 end
 
--- The raid-wide rows: tracked items, those sharing a line in one row.
+-- The raid-wide rows: one per tracked item, each counted on its own (Mark
+-- of the Wild apart from Arcane Intellect). Its tooltip: what it is, then
+-- who brings it.
 function M:RaidWide(people, open)
-    local rows, byLine = {}, {}
+    local out = {}
     for _, item in ipairs(ITEMS) do
         local fam = familyOf(item.family)
         if fam and fam.scope == "raid" and self:IsTracked(item.key) then
             local r = self:RaidItem(item, people, open)
-            local row = item.line and byLine[item.line]
-            if row then
-                row.items[#row.items + 1] = item
-                row.parts[#row.parts + 1] = r
-            else
-                row = { items = { item }, parts = { r } }
-                rows[#rows + 1] = row
-                if item.line then byLine[item.line] = row end
-            end
+            local about = {}
+            if item.detail then about[1] = item.detail end
+            if r.detail and r.detail ~= "" then about[#about + 1] = r.detail end
+            out[#out + 1] = {
+                label = item.label,
+                n = tostring(r.n),
+                detail = r.detail,
+                warn = r.warn,
+                tip = { description = table.concat(about, "\n"), lines = r.lines },
+            }
         end
-    end
-    local out = {}
-    for _, row in ipairs(rows) do
-        local labels, ns, details, warn, lines = {}, {}, {}, false, {}
-        local single = #row.items == 1
-        for i, item in ipairs(row.items) do
-            local r = row.parts[i]
-            labels[i] = single and item.label or item.short
-            ns[i] = tostring(r.n)
-            if r.detail and r.detail ~= "" then
-                local d = single and r.detail or (item.short .. ": " .. r.detail)
-                details[#details + 1] = d
-            end
-            warn = warn or r.warn
-            lines[#lines + 1] = { item.label, tostring(r.n) }
-        end
-        -- one count when they all say the same (Fortitude and Spirit: every priest)
-        local sameN = true
-        for i = 2, #ns do if ns[i] ~= ns[1] then sameN = false end end
-        local sameDetail = #row.parts > 1
-        for i = 2, #row.parts do if row.parts[i].detail ~= row.parts[1].detail then sameDetail = false end end
-        out[#out + 1] = {
-            label = table.concat(labels, " · "),
-            n = sameN and ns[1] or table.concat(ns, " · "),
-            detail = sameDetail and row.parts[1].detail or table.concat(details, "; "),
-            warn = warn,
-            tip = { description = table.concat(details, "\n"), lines = lines },
-        }
     end
     return out
 end
@@ -1227,12 +1252,18 @@ local function groupKind(slots)
     return any >= 3 and "flex" or "mixed"
 end
 
+-- Whether Arrange groups can run, and the reason when it can't: in a raid
+-- as the last roster read found it (the view says the same), leading or
+-- assisting (the roster's rank too), out of combat, someone to move.
 function M:CanArrange()
-    if not UI.Flag(IsInRaid()) then return false, "Not in a raid." end
-    if not (UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player"))) then
-        return false, "Only the raid leader or an assistant can move players."
-    end
+    if not self.inRaid then return false, "Not in a raid." end
+    local me = self.me
+    local leads = UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player"))
+        or (me and (me.lead or me.assist))
+    if not leads then return false, "Only the raid leader or an assistant can move players." end
     if InCombatLockdown() then return false, "Not in combat." end
+    if #self:Work().slots == 0 then return false, "The setup has no slots yet." end
+    if not (self.fill and next(self.fill.placed)) then return false, "Nobody in the raid fills a slot yet." end
     if #self:Moves() == 0 then return false, "Everyone is in their slot's group already." end
     return true
 end
@@ -1256,7 +1287,7 @@ function M:ViewData()
     local w = self:Work()
     local fill = self.fill or { slot = {}, conflict = {}, unplaced = {}, placed = {} }
     local roster = self.roster or {}
-    local inRaid = #roster > 0
+    local inRaid = self.inRaid and true or false
     local changed = self:Changed()
     local people, open = self:People()
     local v = {}
@@ -1568,9 +1599,9 @@ end
 -- once the raid has caught up, another round for what's left (a few at most).
 function M:RunMoves(round)
     if InCombatLockdown() or round > 4 then return end
+    self:ReadRoster()
     local ok = self:CanArrange()
     if not ok then return end
-    self:ReadRoster()
     local roster = self.roster
     local count, target = {}, {}
     for _, m in ipairs(roster) do count[m.group] = (count[m.group] or 0) + 1 end
@@ -1794,6 +1825,7 @@ end
 function M:OnEnable()
     loadCatalog()
     self.roster, self.byKey = self.roster or {}, self.byKey or {}
+    self.inRaid = self.inRaid or false
     -- specs older than a day are forgotten (a respec)
     local specs = self:Data().specs
     for k, e in pairs(specs) do
@@ -1810,10 +1842,10 @@ function M:OnEnable()
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     local function on(event, fn) if not valid or valid(event) then self:OnGameEvent(event, fn) end end
     on("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
-    self.wasInRaid = UI.Flag(IsInRaid())
+    self.wasInRaid = inRaidNow()
     on("GROUP_ROSTER_UPDATE", function()
         self:RefillSoon()
-        local inRaid = UI.Flag(IsInRaid())
+        local inRaid = inRaidNow()
         -- your spec to the raid once, as you join (later only when asked)
         if inRaid and not self.wasInRaid then self:ShareSoon(3) end
         self.wasInRaid = inRaid

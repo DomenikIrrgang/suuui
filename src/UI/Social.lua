@@ -463,11 +463,7 @@ function R:Draw()
         b.reason = not d.canLead and (d.reason or "Only the leader or an assistant can.") or nil
     end
     self.info:Show()
-    -- Plan: left of the checks in a raid, else next to Raid Info
     self.plan:SetShown(d.plan and true or false)
-    self.plan:ClearAllPoints()
-    self.plan:SetPoint("RIGHT", inRaid and self.ready or self.info, "LEFT", -S["space-3"], 0)
-    if not inRaid then return end
     local n = 0
     local byGroup = {}
     for _, m in ipairs(d.members or {}) do
@@ -476,6 +472,8 @@ function R:Draw()
         n = n + 1
     end
     self.count:SetValue(n .. " of " .. (d.size or 40))
+    self:LayoutHead()
+    if not inRaid then return end
     for g = 1, 8 do
         local list = byGroup[g] or {}
         for i = 1, 5 do
@@ -522,13 +520,52 @@ function R:PlaceSlots()
     end
 end
 
+-- The head: the count at the left; right to left Raid Info, in a raid Role
+-- check and Ready check, then Plan. The page is as wide as the game's
+-- Social window, so when the count and every button don't fit in one row
+-- (Plan covered the count, found in game) the buttons tighten their
+-- padding and gaps; still too wide, the count goes under them, on a row of
+-- its own, and the groups move down.
+function R:LayoutHead()
+    local inRaid = self.data and self.data.inRaid
+    local list = { self.info }
+    if inRaid then list[#list + 1] = self.roles; list[#list + 1] = self.ready end
+    if self.plan:IsShown() then list[#list + 1] = self.plan end
+    local countW = inRaid and math.ceil(UI.MeasureText("header", self.count:GetText() or "")) + S["space-5"] or 0
+    local function width(pad, gap)
+        local sum = gap * (#list - 1)
+        for _, b in ipairs(list) do sum = sum + math.ceil(UI.MeasureText("label", b.text)) + pad * 2 end
+        return sum
+    end
+    local w = self:GetWidth() or 0
+    local pad, gap = S["space-5"], S["space-3"]
+    if w > 0 and countW + width(pad, gap) > w then pad, gap = S["space-3"], S["space-2"] end
+    local below = inRaid and w > 0 and countW + width(pad, gap) > w
+    local prev
+    for _, b in ipairs(list) do
+        -- kept as the button's own width (it measures itself again on show)
+        b.fixedWidth = math.ceil(UI.MeasureText("label", b.text)) + pad * 2
+        b:SetWidth(b.fixedWidth)
+        b:ClearAllPoints()
+        if prev then b:SetPoint("RIGHT", prev, "LEFT", -gap, 0) else b:SetPoint("TOPRIGHT") end
+        prev = b
+    end
+    self.count:ClearAllPoints()
+    self.count:SetPoint("TOPLEFT", 0, below and -(30 + S["space-3"]) or -6)
+    local h = below and (30 + S["space-3"] + T.type.header.lineHeight) or 30
+    if h ~= self.headH then
+        self.headH = h
+        self:Layout()
+    end
+end
+
 -- The groups laid out: two columns of four, filling the page's width.
 function R:Layout()
     local w = self:GetWidth()
     if not w or w <= 0 then return end
     local gap = S["space-5"]
     local colW = math.floor((w - gap) / 2)
-    local top = 30 + S["space-5"]
+    local top = (self.headH or 30) + S["space-5"]
     local groupH = groupLabelH() + 5 * SLOT_H + 4 * S["space-1"]
     for g = 1, 8 do
         local col, row = (g - 1) % 2, math.floor((g - 1) / 2)
@@ -541,6 +578,7 @@ end
 
 local function headButton(parent, text, variant, onClick)
     local b = UI.Button(parent, { text = text, variant = variant, onClick = onClick })
+    b.text = text
     b:HookScript("OnEnter", function(self)
         if self.reason and not self:IsEnabled() then UI.ShowTooltip(self, { title = text, description = self.reason }) end
     end)
@@ -553,12 +591,10 @@ function UI.RaidGroups(parent)
     Mixin(r, R)
     r.count = UI.Text(r, "header", "gilt-text")
     r.count:SetPoint("TOPLEFT", 0, -6)
+    -- (placed by LayoutHead)
     r.info = headButton(r, "Raid Info", "quiet", function() if r.onRaidInfo then r.onRaidInfo() end end)
-    r.info:SetPoint("TOPRIGHT")
     r.roles = headButton(r, "Role check", "quiet", function() if r.onRoleCheck then r.onRoleCheck() end end)
-    r.roles:SetPoint("RIGHT", r.info, "LEFT", -S["space-3"], 0)
     r.ready = headButton(r, "Ready check", "quiet", function() if r.onReadyCheck then r.onReadyCheck() end end)
-    r.ready:SetPoint("RIGHT", r.roles, "LEFT", -S["space-3"], 0)
     r.plan = headButton(r, "Plan", "quiet", function() if r.onPlan then r.onPlan() end end)
     r.plan:Hide()
     r.groups, r.slots = {}, {}
@@ -587,7 +623,8 @@ function UI.RaidGroups(parent)
     r.convert = UI.Button(r, { text = "Convert to raid", variant = "primary",
         onClick = function() if r.onConvert then r.onConvert() end end })
     r.convert:SetPoint("TOPLEFT", r.notIn, "BOTTOMLEFT", 0, -S["space-5"])
-    r:SetScript("OnSizeChanged", function(self) self:Layout() end)
+    r:SetScript("OnSizeChanged", function(self) self:LayoutHead(); self:Layout() end)
+    r:LayoutHead()
     raidGroups[r] = true
     return r
 end
@@ -732,5 +769,5 @@ end
 ns.Events.On("SUUUI_THEME_CHANGED", function()
     for c in pairs(contacts) do if c.data then c:SetData(c.data) end end
     for l in pairs(peopleLists) do if l.data then l:Draw() end end
-    for r in pairs(raidGroups) do r:PlaceSlots(); r:Layout() end
+    for r in pairs(raidGroups) do r:PlaceSlots(); r:LayoutHead(); r:Layout() end
 end, "Social")

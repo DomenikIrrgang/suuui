@@ -545,7 +545,7 @@ end
 function M:RaidMembers()
     if self.raidTest then return self.raidTest end
     local out = {}
-    if not IsInRaid() then return out end
+    if not UI.Flag(IsInRaid()) then return out end
     for i = 1, GetNumGroupMembers() do
         local name, rank, group, level, className, file, zone, online, dead, _, _, combatRole = GetRaidRosterInfo(i)
         if plain(name) and name then
@@ -563,8 +563,9 @@ function M:RenderRaid()
     local page = self.raidPage
     if not (page and page:IsVisible()) then return end
     local test = self.raidTest ~= nil
-    local canLead = test or UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
-    page:SetData({ inRaid = test or IsInRaid(), inParty = IsInGroup() and not IsInRaid(), canLead = canLead and true or false,
+    local canLead = test or UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player"))
+    local inRaid = UI.Flag(IsInRaid())
+    page:SetData({ inRaid = test or inRaid, inParty = UI.Flag(IsInGroup()) and not inRaid, canLead = canLead and true or false,
                    reason = InCombatLockdown() and "Not in combat." or nil, size = 40, members = self:RaidMembers(),
                    plan = SuuUI.Service("raidplanner") ~= nil })
 end

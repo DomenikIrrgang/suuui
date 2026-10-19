@@ -13,12 +13,13 @@
 --             is seen in a talent tree)
 --   families  the settings' groups, in order: key, title, scope ("raid":
 --             counted once for the whole raid; "party": per group of five)
---   items     what can be tracked: key, label, short (chips and merged
---             rows), family, spell, by = { { class, tree, talent } } (a
---             tree with talent = true: only that spec, "if specced"; a tree
---             without: that spec only), note (the settings' small print),
---             essential (in the "The essentials" preset), and:
---               line     raid-wide items sharing a line share a row
+--   items     what can be tracked, each counted on its own (its own
+--             coverage row, its own box in the settings): key, label, short
+--             (chips and lists), family, spell, by = { { class, tree,
+--             talent } } (a tree with talent = true: only that spec, "if
+--             specced"; a tree without: that spec only), note (the
+--             settings' small print), essential (in the "The essentials"
+--             preset), detail (what it is, in the row's tooltip), and:
 --               users    party-wide: who in a group uses it ("melee",
 --                        "hunter", "healer"); missing is flagged only where
 --                        someone does
@@ -86,13 +87,13 @@ ns.RaidCatalog = {
     items = {
         -- raid-wide buffs
         { key = "fortitude", label = "Power Word: Fortitude", short = "Fortitude", family = "raid", spell = 1243,
-          by = { { "PRIEST" } }, line = "priest", essential = true },
+          by = { { "PRIEST" } }, essential = true },
         { key = "spirit", label = "Divine Spirit", short = "Divine Spirit", family = "raid", spell = 14752,
-          by = { { "PRIEST" } }, line = "priest", note = "baseline" },
+          by = { { "PRIEST" } }, note = "baseline" },
         { key = "mark", label = "Mark of the Wild", short = "Mark", family = "raid", spell = 1126,
-          by = { { "DRUID" } }, line = "mark", essential = true },
+          by = { { "DRUID" } }, essential = true },
         { key = "intellect", label = "Arcane Intellect", short = "Intellect", family = "raid", spell = 1459,
-          by = { { "MAGE" } }, line = "mark", essential = true },
+          by = { { "MAGE" } }, essential = true },
         { key = "blessings", label = "Blessings", short = "Blessings", family = "raid", spell = 20217,
           by = { { "PALADIN" } }, count = "blessings", note = "per paladin", essential = true,
           detail = "Kings, Might or Wisdom, Light" },
@@ -101,15 +102,17 @@ ns.RaidCatalog = {
         { key = "shadowProtection", label = "Shadow Protection", short = "Shadow Protection", family = "raid", spell = 976,
           by = { { "PRIEST" } } },
         { key = "battleShout", label = "Battle Shout", short = "Battle Shout", family = "raid", spell = 6673,
-          by = { { "WARRIOR" } }, line = "shouts", essential = true },
+          by = { { "WARRIOR" } }, essential = true },
         { key = "leaderOfThePack", label = "Leader of the Pack", short = "Pack", family = "raid", spell = 17007,
-          by = { { "DRUID", 2, talent = true } }, line = "shouts", note = "Feral" },
+          by = { { "DRUID", 2, talent = true } }, note = "Feral" },
         { key = "moonkin", label = "Moonkin Aura", short = "Moonkin", family = "raid", spell = 24858,
-          by = { { "DRUID", 1, talent = true } }, line = "shouts", note = "Balance" },
+          by = { { "DRUID", 1, talent = true } }, note = "Balance" },
         { key = "windfury", label = "Windfury Totem", short = "Windfury", family = "raid", spell = 8512,
-          by = { { "SHAMAN" } }, line = "totems", note = "30 yd", essential = true },
-        { key = "earth", label = "Strength of Earth, Grace of Air", short = "Strength of Earth", family = "raid", spell = 8075,
-          by = { { "SHAMAN" } }, line = "totems", note = "30 yd" },
+          by = { { "SHAMAN" } }, note = "30 yd", essential = true },
+        { key = "earth", label = "Strength of Earth Totem", short = "Strength of Earth", family = "raid", spell = 8075,
+          by = { { "SHAMAN" } }, note = "30 yd" },
+        { key = "graceOfAir", label = "Grace of Air Totem", short = "Grace of Air", family = "raid", spell = 8835,
+          by = { { "SHAMAN" } }, note = "30 yd" },
         { key = "resistance", label = "Resistance auras and totems", short = "Resistances", family = "raid", spell = 19876,
           by = { { "PALADIN" }, { "SHAMAN" }, { "HUNTER" } }, note = "30 yd",
           detail = "paladins' and shamans' resistances, Aspect of the Wild; in range" },
@@ -135,43 +138,43 @@ ns.RaidCatalog = {
 
         -- debuffs on the boss
         { key = "sunder", label = "Sunder Armor", short = "Sunder", family = "boss", spell = 7386,
-          by = { { "WARRIOR" } }, line = "armor", essential = true },
+          by = { { "WARRIOR" } }, essential = true },
         { key = "expose", label = "Expose Armor", short = "Expose Armor", family = "boss", spell = 8647,
-          by = { { "ROGUE" } }, line = "armor" },
+          by = { { "ROGUE" } } },
         { key = "faerieFire", label = "Faerie Fire", short = "Faerie Fire", family = "boss", spell = 770,
-          by = { { "DRUID" } }, line = "armor", essential = true },
+          by = { { "DRUID" } }, essential = true },
         { key = "recklessness", label = "Curse of Recklessness", short = "Recklessness", family = "boss", spell = 704,
-          by = { { "WARLOCK" } }, line = "curses", essential = true },
+          by = { { "WARLOCK" } }, essential = true },
         { key = "elements", label = "Curse of the Elements", short = "Elements", family = "boss", spell = 11723,
-          by = { { "WARLOCK" } }, line = "curses", essential = true },
+          by = { { "WARLOCK" } }, essential = true },
         { key = "judgements", label = "Judgements", short = "Judgements", family = "boss", spell = 20271,
           by = { { "PALADIN" } } },
         { key = "huntersMark", label = "Hunter's Mark", short = "Hunter's Mark", family = "boss", spell = 1130,
           by = { { "HUNTER" } } },
         { key = "demoralize", label = "Demoralizing Shout, Roar", short = "Demoralizing", family = "boss", spell = 1160,
-          by = { { "WARRIOR" }, { "DRUID" } }, line = "weaken" },
+          by = { { "WARRIOR" }, { "DRUID" } } },
         { key = "thunderClap", label = "Thunder Clap", short = "Thunder Clap", family = "boss", spell = 6343,
-          by = { { "WARRIOR" } }, line = "weaken" },
+          by = { { "WARRIOR" } } },
 
         -- dispels
-        { key = "dispelMagic", label = "Magic", short = "Magic", family = "dispel", spell = 527,
-          by = { { "PRIEST" }, { "PALADIN" } }, line = "dispels", essential = true },
-        { key = "dispelCurse", label = "Curse", short = "Decurse", family = "dispel", spell = 2782,
-          by = { { "MAGE" }, { "DRUID" } }, line = "dispels", essential = true },
-        { key = "dispelPoison", label = "Poison", short = "Poison", family = "dispel", spell = 2893,
-          by = { { "DRUID" }, { "SHAMAN" }, { "PALADIN" } }, line = "cures" },
-        { key = "dispelDisease", label = "Disease", short = "Disease", family = "dispel", spell = 528,
-          by = { { "PRIEST" }, { "SHAMAN" }, { "PALADIN" } }, line = "cures" },
+        { key = "dispelMagic", label = "Magic dispels", short = "Magic", family = "dispel", spell = 527,
+          by = { { "PRIEST" }, { "PALADIN" } }, essential = true },
+        { key = "dispelCurse", label = "Curse removal", short = "Decurse", family = "dispel", spell = 2782,
+          by = { { "MAGE" }, { "DRUID" } }, essential = true },
+        { key = "dispelPoison", label = "Poison cures", short = "Poison", family = "dispel", spell = 2893,
+          by = { { "DRUID" }, { "SHAMAN" }, { "PALADIN" } } },
+        { key = "dispelDisease", label = "Disease cures", short = "Disease", family = "dispel", spell = 528,
+          by = { { "PRIEST" }, { "SHAMAN" }, { "PALADIN" } } },
 
         -- rescue and mana
         { key = "rebirth", label = "Rebirth", short = "Rebirth", family = "rescue", spell = 20484,
-          by = { { "DRUID" } }, line = "rescue", essential = true },
+          by = { { "DRUID" } }, essential = true },
         { key = "soulstone", label = "Soulstone", short = "Soulstone", family = "rescue", spell = 693,
-          by = { { "WARLOCK" } }, line = "rescue", essential = true },
+          by = { { "WARLOCK" } }, essential = true },
         { key = "innervate", label = "Innervate", short = "Innervate", family = "rescue", spell = 29166,
-          by = { { "DRUID" } }, line = "mana", note = "baseline", essential = true },
+          by = { { "DRUID" } }, note = "baseline", essential = true },
         { key = "powerInfusion", label = "Power Infusion", short = "Power Infusion", family = "rescue", spell = 10060,
-          by = { { "PRIEST", 1, talent = true } }, line = "mana", note = "Disc" },
+          by = { { "PRIEST", 1, talent = true } }, note = "Disc" },
         { key = "fearWard", label = "Fear Ward", short = "Fear Ward", family = "rescue", spell = 6346,
           by = { { "PRIEST" } } },
         { key = "tranquilizingShot", label = "Tranquilizing Shot", short = "Tranquilizing Shot", family = "rescue", spell = 19801,
