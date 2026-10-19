@@ -461,6 +461,64 @@ local function stopsText(path)
     return stops == 1 and "1 stop" or (stops .. " stops")
 end
 
+-- Your quests' next steps (asked 2026-10-19): where the game's quest pins
+-- put each quest in your log, its objectives' area or, done, where it's
+-- turned in; each counted for the flight master nearest to it, within
+-- NEAR yards. { [nodeID] = { questID, ... } } for the session's masters.
+local NEAR = 800
+
+local function worldXY(mapID, x, y)
+    local ok, _, pos = pcall(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(x, y))
+    if ok and pos then return pos:GetXY() end
+end
+
+function M:QuestSteps(s)
+    local out = {}
+    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
+    if not (s and continent and C_Map.GetWorldPosFromMapPos and CreateVector2D) then return out end
+    -- the masters you can fly to, and the one you're at, in yards
+    local at, masters = positions(continent), {}
+    for _, n in ipairs(s.nodes) do
+        local p = at[n.id]
+        local x, y = p and worldXY(continent, p[1], p[2])
+        if x and n.kind ~= "DISTANT" then masters[#masters + 1] = { node = n, x = x, y = y } end
+    end
+    -- each quest once: on its zone's map, else the continent's
+    local maps = { continent }
+    local children = call(C_Map.GetMapChildrenInfo, continent, nil, true)
+    for _, c in ipairs(type(children) == "table" and children or {}) do
+        if c.mapType == Enum.UIMapType.Zone then table.insert(maps, 1, c.mapID) end
+    end
+    local seen = {}
+    for _, map in ipairs(maps) do
+        local quests = call(C_QuestLog.GetQuestsOnMap, map)
+        for _, q in ipairs(type(quests) == "table" and quests or {}) do
+            local id = q.questID
+            if plain(id) and plain(q.x) and plain(q.y) and not seen[id] then
+                seen[id] = true
+                local x, y = worldXY(map, q.x, q.y)
+                local best, far = nil, NEAR * NEAR
+                for _, m in ipairs(x and masters or {}) do
+                    local d = (m.x - x) ^ 2 + (m.y - y) ^ 2
+                    if d < far then best, far = m.node, d end
+                end
+                -- (nearest the master you're at: not a reason to fly)
+                if best and best.kind == "REACHABLE" then
+                    out[best.id] = out[best.id] or {}
+                    table.insert(out[best.id], id)
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function stepsText(steps)
+    local n = steps and #steps or 0
+    if n == 0 then return nil end
+    return n == 1 and "1 quest step nearby" or (n .. " quest steps nearby")
+end
+
 -- A flight master's tooltip on the flight map.
 function M:Tip(node)
     local s = self.session
@@ -474,9 +532,17 @@ function M:Tip(node)
     end
     local t, measured = self:FlightTime(node.path)
     local muted = "|cff" .. T.color["ink-muted"].hex
+    local lines = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } }
+    -- the quests with a step near it
+    for _, id in ipairs(self.steps and self.steps[node.id] or {}) do
+        local title = call(C_QuestLog.GetTitleForQuestID, id)
+        if plain(title) and title then
+            lines[#lines + 1] = { title, call(C_QuestLog.IsComplete, id) and "turn in" or "objective" }
+        end
+    end
     return {
         title = node.name, subtitle = viaText(node.path, s),
-        lines = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } },
+        lines = lines,
         description = t and (muted .. (measured and "Timed on an earlier flight." or "Estimated from the route's length; timed once you've flown it.") .. "|r") or nil,
         meta = self.selected == node and "Fly in the bar below" or "Click to choose",
     }
@@ -497,15 +563,9 @@ function M:BuildSide()
     side.head = UI.SectionHeader(side, "Destinations", "")
     side.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     side.head:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"])
-    side.note = UI.Text(side, "caption", "ink-faint")
-    side.note:SetWordWrap(true)
-    side.note:SetJustifyH("LEFT")
-    side.note:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
-    side.note:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"])
-    side.note:SetValue("Quests, services and your marks stay off while the flight master's map is open; they come back when it closes.")
     side.scroll = UI.ScrollArea(side, 2)
     side.scroll:SetPoint("TOPLEFT", side.head, "BOTTOMLEFT", 0, -S["space-4"])
-    side.scroll:SetPoint("BOTTOMRIGHT", side.note, "TOPRIGHT", -S["space-3"], S["space-4"])
+    side.scroll:SetPoint("BOTTOMRIGHT", -S["space-5"] - S["space-3"], S["space-5"])
     side.rows = {}
     self.side = side
 end
@@ -573,6 +633,7 @@ function M:FillSide()
         if n.kind == "REACHABLE" then list[#list + 1] = n end
     end
     table.sort(list, function(a, b) return a.name < b.name end)
+    self.steps = self:QuestSteps(s)
     local side = self.side
     side.head:SetLabel("Destinations", tostring(#list))
     local width = math.max(1, side.scroll:GetWidth())
@@ -583,7 +644,8 @@ function M:FillSide()
         row:SetPoint("TOPLEFT", side.scroll.child, "TOPLEFT", 0, -(i - 1) * ROW_H)
         row:SetWidth(width)
         row.name:SetValue(short(node.name))
-        row.stops:SetValue(stopsText(node.path))
+        local steps = stepsText(self.steps[node.id])
+        row.stops:SetValue(stopsText(node.path) .. (steps and (" · " .. steps) or ""))
         row:Show()
     end
     for i = #list + 1, #side.rows do side.rows[i]:Hide(); side.rows[i].node = nil end
