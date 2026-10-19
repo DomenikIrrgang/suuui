@@ -1,4 +1,4 @@
--- Libs/ForeverLFG/Chat.lua
+-- ForeverLFG/Chat.wowlua
 -- The chat source: the public channels (LookingForGroup, General, Trade,
 -- Services) and Say/Yell, as they arrive, through the parser into the
 -- store. Lines the game hides (secret values) are skipped. Probed
@@ -7,29 +7,72 @@
 -- LookingForGroup: you aren't in it by default. The library joins it at
 -- start (works from a timer) and keeps it off every chat window (the game
 -- puts it on one when joining), so its posts only show in the Group Finder.
---   LFG.IsHiddenChannel(name)  -- SuuUI's chat Global tab skips these
+--   LFG.IsHiddenChannel(name)  -- SuuUI's chat Global tab skips these (isHiddenChannel)
 --   LFG.Chat.Leave()           -- leaves LookingForGroup again
 
-local _, ns = ...
-local LFG = ns.LFG
+import * as events from "wowlua:events"
+import after from "wowlua:timer"
+import config, isRunning, now from "./LFG"
+import type Part from "./LFG"
+import parser from "./Parser"
+import languages from "./Interest"
+import store, entry from "./Store"
 
-local CH = {}
-LFG.Chat = CH
+-- What a chat post adds to its entry (entry.sources.chat).
+export type ChatSource = {
+    channel: string,
+    text: string,
+    intent?: string,
+    activities: string[],
+    quests: number[],
+    roles: { [string]: boolean },
+    classes: { [string]: boolean },
+    need?: number,
+    members?: number[],
+    level?: { [number]: number? },
+    confidence: number,
+    languages: string[],
+    guid?: string,
+    class?: string,
+    lastPost: number,
+    posts: number,
+    self: boolean,
+}
 
-local isSecret = issecretvalue or function() return false end
+-- What happened to the lines (LFG.Chat.stats).
+export type ChatStats = {
+    seen: number, secret: number, channelOff: number, nothing: number,
+    lowConfidence: number, entries: number, errors: number,
+}
+
+export type ChatApi = {
+    stats: ChatStats,
+    joined?: boolean,
+    lastError?: string,
+    Hide: () -> (),
+    Join: () -> (),
+    Leave: () -> (),
+    Read: (event: string, ...any) -> (),
+}
+
+export const chat = {} :: ChatApi
+local CH = chat
+
+local isSecret: (v: any) -> boolean = issecretvalue or function(_: any) return false end
 local LFG_CHANNEL = "LookingForGroup"
-local frame
+-- the events' owner (wowlua:events), for Stop
+local OWNER = {}
 
-function LFG.IsHiddenChannel(name)
-    return LFG.running and LFG.config.hideLookingForGroup and type(name) == "string"
+export function isHiddenChannel(name: any): boolean
+    return isRunning() and config.hideLookingForGroup and type(name) == "string"
         and name:lower() == LFG_CHANNEL:lower() or false
 end
 
 -- The windows a channel is on.
-local function windowsWith(channel)
-    local out = {}
+local function windowsWith(channel: string): number[]
+    local out: number[] = {}
     for i = 1, (NUM_CHAT_WINDOWS or 10) do
-        local list = { GetChatWindowChannels(i) }
+        local list: any[] = { GetChatWindowChannels(i) }
         for j = 1, #list, 2 do
             if type(list[j]) == "string" and list[j]:lower() == channel:lower() then out[#out + 1] = i end
         end
@@ -38,21 +81,21 @@ local function windowsWith(channel)
 end
 
 function CH.Hide()
-    if not LFG.config.hideLookingForGroup or InCombatLockdown() then return end
+    if not config.hideLookingForGroup or InCombatLockdown() then return end
     for _, i in ipairs(windowsWith(LFG_CHANNEL)) do
-        local cf = _G["ChatFrame" .. i]
+        local cf = (_G :: any)["ChatFrame" .. i]
         if cf and cf.RemoveChannel then pcall(cf.RemoveChannel, cf, LFG_CHANNEL) end
     end
 end
 
 function CH.Join()
-    if not LFG.config.joinLookingForGroup then return end
+    if not config.joinLookingForGroup then return end
     local index = GetChannelName(LFG_CHANNEL)
     if not index or index == 0 then
-        pcall(JoinChannelByName, LFG_CHANNEL)
+        pcall(JoinChannelByName :: any, LFG_CHANNEL)
         CH.joined = true
     end
-    C_Timer.After(1, CH.Hide)
+    after(1, CH.Hide)
 end
 
 function CH.Leave()
@@ -60,18 +103,26 @@ function CH.Leave()
     CH.joined = false
 end
 
-local function player()
-    return SuuUI and SuuUI.FullName and SuuUI.FullName("player")
+-- Your own whole name, from SuuUI when it's there (SuuUI.FullName: Forever's
+-- characters have a surname). A soft use of the host addon's public API:
+-- the library imports nothing from SuuUI.
+local function player(): any
+    local host = (_G :: any).SuuUI
+    return host and host.FullName and host.FullName("player")
 end
 
 -- What happened to the lines, for diagnostics: seen, secret, channel off,
 -- not group content, below the confidence, entries made; the last error.
 CH.stats = { seen = 0, secret = 0, channelOff = 0, nothing = 0, lowConfidence = 0, entries = 0, errors = 0 }
 
-local function count(k) CH.stats[k] = (CH.stats[k] or 0) + 1 end
+local function count(k: string)
+    local stats = CH.stats :: any
+    stats[k] = (stats[k] or 0) + 1
+end
 
 -- One line.
-function CH.Read(event, text, author, _, channelName, _, _, _, _, channelBase, _, _, guid)
+function CH.Read(event: string, text: any, author: any, _: any, channelName: any, _: any, _: any, _: any, _: any,
+                 channelBase: any, _: any, _: any, guid: any)
     count("seen")
     if isSecret(text) or isSecret(author) or type(text) ~= "string" or type(author) ~= "string" then count("secret") return end
     local channel
@@ -83,49 +134,51 @@ function CH.Read(event, text, author, _, channelName, _, _, _, _, channelBase, _
     else
         channel = event == "CHAT_MSG_SAY" and "SAY" or "YELL"
     end
-    if not LFG.config.channels[channel] then count("channelOff") return end
-    local r = LFG.Parser.Parse(text, { languages = LFG.Languages() })
+    if not config.channels[channel] then count("channelOff") return end
+    local r = parser.Parse(text, { languages = languages() })
     if not r then count("nothing") return end
-    if r.confidence < (LFG.config.minConfidence or 0.5) then count("lowConfidence") return end
+    if r.confidence < (config.minConfidence or 0.5) then count("lowConfidence") return end
     count("entries")
     local key = author
-    local old = LFG.Entry(key)
+    local old = entry(key)
     local prev = old and old.sources.chat
     local class
     if not isSecret(guid) and type(guid) == "string" and GetPlayerInfoByGUID then
         local ok, _, file = pcall(GetPlayerInfoByGUID, guid)
         if ok then class = file end
     end
-    LFG.Store.Put(key, "chat", {
+    local data: ChatSource = {
         channel = channel, text = text, intent = r.intent, activities = r.activities, quests = r.quests,
         roles = r.roles, classes = r.classes, need = r.need, members = r.members, level = r.level,
         confidence = r.confidence, languages = r.languages, guid = not isSecret(guid) and guid or nil, class = class,
-        lastPost = LFG.Now(), posts = (prev and prev.posts or 0) + 1, self = (author == player()),
-    })
+        lastPost = now(), posts = (prev and prev.posts or 0) + 1, self = (author == player()),
+    }
+    store.Put(key, "chat", data)
 end
 
-LFG.AddPart({
+local function onEvent(event: string, ...: any)
+    if event == "CHANNEL_UI_UPDATE" then
+        -- joined (by anyone): off the windows again
+        after(0.5, CH.Hide)
+        return
+    end
+    local ok, err = pcall(CH.Read, event, ...)
+    if not ok then
+        count("errors")
+        CH.lastError = tostring(err)
+    end
+end
+
+-- Started and stopped with the library (init adds it with LFG.AddPart).
+export const part = {
     Start = function()
-        frame = frame or CreateFrame("Frame")
         for _, e in ipairs({ "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHANNEL_UI_UPDATE" }) do
-            frame:RegisterEvent(e)
+            events.on(e, function(...: any) onEvent(e, ...) end, OWNER)
         end
-        frame:SetScript("OnEvent", function(_, event, ...)
-            if event == "CHANNEL_UI_UPDATE" then
-                -- joined (by anyone): off the windows again
-                C_Timer.After(0.5, CH.Hide)
-                return
-            end
-            local ok, err = pcall(CH.Read, event, ...)
-            if not ok then
-                count("errors")
-                CH.lastError = tostring(err)
-            end
-        end)
         -- after the login's own channel joins
-        C_Timer.After(5, CH.Join)
+        after(5, CH.Join)
     end,
     Stop = function()
-        if frame then frame:UnregisterAllEvents() end
+        events.offAll(OWNER)
     end,
-})
+} :: Part

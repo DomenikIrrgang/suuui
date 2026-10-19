@@ -1,4 +1,4 @@
--- Libs/ForeverLFG/Catalogue.lua
+-- ForeverLFG/Catalogue.wowlua
 -- What a group can be for. The table below knows no language: stable keys,
 -- kinds, the tool's activity IDs (probed on Forever, 2026-10-14: they don't
 -- change with the client's language) and sizes. Names and level ranges come
@@ -14,24 +14,48 @@
 --   LFG.Catalogue.Expand(key)         -- an umbrella ("dungeon:sm") as its parts
 --   LFG.Catalogue.ReadTool()          -- names, levels, new activities from the tool
 
-local _, ns = ...
-local LFG = ns.LFG
+import lang, parser from "./Parser"
+import languages from "./Interest"
 
-local C = {}
-LFG.Catalogue = C
+-- What a group can be for (Docs/ForeverLFG.md, "Activity").
+export type Activity = {
+    key: string,
+    kind: string,           -- "dungeon" | "raid" | "zone" | "boss" | "custom" | "other"
+    toolActivity?: number,  -- the tool's activity ID
+    size?: number,
+    name?: string,          -- the tool's name (client language), read at run time
+    category?: number,      -- the tool's category
+    toolGroup?: number,     -- its activity group
+    level?: number[],       -- { min, max } suggested
+    parts?: string[],       -- an umbrella's activities
+}
 
-local byKey, byTool = {}, {}
+export type CatalogueApi = {
+    read?: boolean,         -- ReadTool ran
+    Get: (key: string) -> Activity?,
+    Name: (key: string) -> string,
+    ForTool: (activityID: number) -> string?,
+    All: (kind: string?) -> Activity[],
+    Expand: (key: string) -> string[],
+    ReadTool: () -> (),
+}
 
-local function add(key, kind, tool, size, extra)
-    local a = { key = key, kind = kind, toolActivity = tool, size = size }
-    for k, v in pairs(extra or {}) do a[k] = v end
+export const catalogue = {} :: CatalogueApi
+local C = catalogue
+
+local byKey: { [string]: Activity } = {}
+local byTool: { [number]: string } = {}
+
+local function add(key: string, kind: string, tool: number?, size: number?, extra: { [string]: any }?): Activity
+    local a: Activity = { key = key, kind = kind, toolActivity = tool, size = size }
+    for k, v in pairs(extra or {}) do (a :: any)[k] = v end
     byKey[key] = a
     if tool then byTool[tool] = key end
     return a
 end
 
 -- Dungeons (category 2 on Forever), the tool's IDs
-local DUNGEONS = {
+local DUNGEONS: { [number]: any }[] = {
     { "rfc", 798 }, { "wc", 796 }, { "dm", 799 }, { "sfk", 800 }, { "bfd", 801 }, { "stocks" },
     { "gnomer", 803 }, { "rfk", 804 }, { "smgy", 805 }, { "smlib", 829 }, { "smarm", 827 }, { "smcath", 828 },
     { "rfd", 806 }, { "ulda", 807 }, { "zf", 808 }, { "mara", 809 }, { "st", 810 }, { "brd", 811 },
@@ -43,17 +67,18 @@ local DUNGEONS = {
 for _, d in ipairs(DUNGEONS) do add("dungeon:" .. d[1], "dungeon", d[2], d[3] or 5) end
 
 -- Umbrellas: a word that means any of several ("SM", "Strat", "DM" for Dire Maul)
-local UMBRELLAS = {
+local UMBRELLAS: { [string]: string[] } = {
     ["dungeon:sm"] = { "dungeon:smgy", "dungeon:smlib", "dungeon:smarm", "dungeon:smcath" },
     ["dungeon:strat"] = { "dungeon:stratlive", "dungeon:stratud" },
     ["dungeon:diremaul"] = { "dungeon:dme", "dungeon:dmw", "dungeon:dmn" },
     ["boss:dragons"] = { "boss:ysondre", "boss:lethon", "boss:emeriss", "boss:taerar" },
 }
-for key, parts in pairs(UMBRELLAS) do add(key, key:match("^(%a+)"), nil, nil, { parts = parts }) end
+for key, parts in pairs(UMBRELLAS) do add(key, key:match("^(%a+)") :: string, nil, nil, { parts = parts }) end
 
 -- Raids (no tool category for them at low levels yet)
-for _, r in ipairs({ { "mc", 40, 60 }, { "ony", 40, 60 }, { "bwl", 40, 60 }, { "zg", 20, 60 }, { "aq20", 20, 60 },
-                     { "aq40", 40, 60 }, { "naxx", 40, 60 } }) do
+local RAIDS: { [number]: any }[] = { { "mc", 40, 60 }, { "ony", 40, 60 }, { "bwl", 40, 60 }, { "zg", 20, 60 },
+                                     { "aq20", 20, 60 }, { "aq40", 40, 60 }, { "naxx", 40, 60 } }
+for _, r in ipairs(RAIDS) do
     add("raid:" .. r[1], "raid", nil, r[2], { level = { r[3], r[3] } })
 end
 
@@ -63,7 +88,7 @@ for _, b in ipairs({ "azuregos", "kazzak", "ysondre", "lethon", "emeriss", "taer
 end
 
 -- Zones (Quests & Zones, category 116), the tool's IDs
-local ZONES = {
+local ZONES: { [string]: number } = {
     elwynn = 853, westfall = 854, duskwood = 855, dunmorogh = 856, lochmodan = 857, wetlands = 858,
     stranglethorn = 859, blastedlands = 860, swampofsorrows = 861, redridge = 862, burningsteppes = 863,
     searinggorge = 864, badlands = 865, arathi = 866, hillsbrad = 867, hinterlands = 868,
@@ -79,53 +104,52 @@ add("custom", "custom", 1064, nil)
 
 --------------------------------------------------------------------------------
 
-function C.Get(key) return byKey[key] end
+function C.Get(key: string): Activity? return byKey[key] end
 
 -- What to call it: the tool's name (the client's language), else the
 -- first word a language module has for it, in title case ("molten core").
-function C.Name(key)
+function C.Name(key: string): string
     local a = byKey[key]
     if a and a.name then return a.name end
-    local Lang = LFG.Lang
-    local codes = LFG.Languages and LFG.Languages() or { "enUS" }
+    local codes = languages()
     codes[#codes + 1] = "enUS"
     for _, code in ipairs(codes) do
-        local m = Lang and Lang.modules[code]
+        local m = lang.modules[code]
         local list = m and m.activities and m.activities[key]
         if list and list[1] then
-            return (list[1]:gsub("(%a)([%w']*)", function(first, rest) return first:upper() .. rest end))
+            return (list[1]:gsub("(%a)([%w']*)", function(first: string, rest: string) return first:upper() .. rest end))
         end
     end
     return key
 end
-function C.ForTool(activityID) return byTool[activityID] end
+function C.ForTool(activityID: number): string? return byTool[activityID] end
 
-function C.All(kind)
-    local out = {}
+function C.All(kind: string?): Activity[]
+    local out: Activity[] = {}
     for _, a in pairs(byKey) do
         if (not kind or a.kind == kind) and not a.parts then out[#out + 1] = a end
     end
-    table.sort(out, function(x, y) return x.key < y.key end)
+    table.sort(out, function(x: Activity, y: Activity) return x.key < y.key end)
     return out
 end
 
-function C.Expand(key)
+function C.Expand(key: string): string[]
     local a = byKey[key]
     if a and a.parts then return a.parts end
     return { key }
 end
 
 -- The tool's categories as kinds; anything new by its size.
-local CATEGORY_KIND = { [2] = "dungeon", [116] = "zone", [120] = "custom" }
+local CATEGORY_KIND: { [number]: string } = { [2] = "dungeon", [116] = "zone", [120] = "custom" }
 
 -- From the tool: each activity's name (client language), its level range,
 -- its category; new activities join. Names go to the parser as words.
 function C.ReadTool()
-    local lfg = C_LFGList
+    local lfg = C_LFGList :: any
     if not (lfg and lfg.GetAvailableCategories) then return end
     local okCats, cats = pcall(lfg.GetAvailableCategories)
     for _, cat in ipairs(okCats and cats or {}) do
-        local acts, seen = {}, {}
+        local acts: number[], seen: { [number]: boolean } = {}, {}
         local okG, groups = pcall(lfg.GetAvailableActivityGroups, cat)
         for _, g in ipairs(okG and groups or {}) do
             local okA, ga = pcall(lfg.GetAvailableActivities, cat, g)
@@ -142,13 +166,13 @@ function C.ReadTool()
                     key = "tool:" .. id
                     add(key, kind, id, t.maxNumPlayers ~= 0 and t.maxNumPlayers or nil)
                 end
-                local a = byKey[key]
+                local a = byKey[key] :: Activity
                 a.name = t.fullName
                 a.category = cat
                 a.toolGroup = t.groupFinderActivityGroupID
                 if (t.maxLevelSuggestion or 0) > 0 then a.level = { t.minLevelSuggestion or 0, t.maxLevelSuggestion } end
-                if LFG.Parser and t.fullName then LFG.Parser.AddName(key, t.fullName) end
-                if LFG.Parser and t.shortName and t.shortName ~= t.fullName then LFG.Parser.AddName(key, t.shortName) end
+                if t.fullName then parser.AddName(key, t.fullName) end
+                if t.shortName and t.shortName ~= t.fullName then parser.AddName(key, t.shortName) end
             end
         end
     end
