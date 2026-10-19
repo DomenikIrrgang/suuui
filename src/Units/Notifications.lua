@@ -183,6 +183,9 @@ end
 -- The world map, for its Repair pins (the World map pins module's filter:
 -- Map filters › Services › Repair).
 local function showRepairers()
+    -- SuuUI's world map with its Repair pins on; else the game's map
+    local map = SuuUI.GetModule("worldmap")
+    if map and map:IsEnabled() and map.OpenWith then return map:OpenWith("services", "repair") end
     if WorldMapFrame and WorldMapFrame:IsShown() then return end
     ToggleWorldMap()
 end

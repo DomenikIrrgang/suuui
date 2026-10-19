@@ -220,6 +220,24 @@ function M:OnFilters(value)
     self:Refresh()
 end
 
+-- The map open with one filter on (another module's "show me": the Damaged
+-- gear note's Show repairers turns Services › Repair on, asked 2026-10-19),
+-- at your zone; the menu shows it ticked. ("services", "repair")
+function M:OpenWith(group, item)
+    local value = self:MenuValue()
+    local list = value[group]
+    if list then
+        local has = false
+        for _, v in ipairs(list) do if v == item then has = true end end
+        if not has then
+            list[#list + 1] = item
+            self:OnFilters(value)
+            if self.menu then self.menu:SetValue(self:MenuValue()) end
+        end
+    end
+    if self.map and not self.map:IsShown() then ToggleWorldMap() end
+end
+
 --------------------------------------------------------------------------------
 -- What's on a map
 --------------------------------------------------------------------------------
