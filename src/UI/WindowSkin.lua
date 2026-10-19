@@ -196,6 +196,13 @@ function UI.SkinWindow(frame, opts)
     if not (chrome.protected and InCombatLockdown()) and frame:GetFrameStrata() ~= "HIGH" then
         frame:SetFrameStrata("HIGH")
     end
+    -- in front when it opens or is clicked, as SuuUI's own windows: the
+    -- character window came up behind the merchant's, its gear out of the
+    -- repair cursor's reach (found in game, 2026-10-19)
+    if not (chrome.protected and InCombatLockdown()) then frame:SetToplevel(true) end
+    frame:HookScript("OnShow", function(f)
+        if not (chrome.protected and InCombatLockdown()) then f:Raise() end
+    end)
     for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
     chrome.inset, chrome.headExtra = opts.topInset or 0, opts.headExtra or 0
     -- the line the second row's 22px controls sit centred on, up from the
