@@ -720,7 +720,7 @@ ns.Probe.TOPICS = {
     "flicker", "gamemenu", "garbage", "givers", "group", "hold", "hovertip", "icons", "legacy", "lfg", "loot", "map",
     "mappins", "marks", "memory", "meter", "micro", "minimap", "mountfeet", "mountframe", "npcportrait", "partyauras",
     "plates", "popups", "power", "professions", "proficons", "quest", "questgroup", "raid", "runtime", "show",
-    "skysight", "social", "sound", "spellbook", "spells", "support", "taint", "talents", "taxi", "timeline",
+    "skysight", "social", "sound", "spellbook", "spells", "support", "taint", "talentbuilds", "talents", "taxi", "timeline",
     "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "windows",
 }
 
@@ -981,6 +981,10 @@ function ns.Probe.Command(arg)
     end
     if sub == "talents" then
         ns.TalentProbe.Command(rest)
+        return
+    end
+    if sub == "talentbuilds" then
+        ns.TalentBuildProbe.Command(rest)
         return
     end
     if sub == "group" then
