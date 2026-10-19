@@ -143,10 +143,31 @@ local function listen()
             local name = call(C_Spell.GetSpellName, c)
             if not matches(name) then return end
             o.casts = o.casts or {}
-            o.casts[#o.casts + 1] = ("%s: %s (spell %s) %s; target %s, mouseover %s; vignettes: %s"):format(date("%H:%M:%S"),
+            local line = ("%s: %s (spell %s) %s; target %s, mouseover %s; vignettes: %s"):format(date("%H:%M:%S"),
                 show(name), show(c), here(), show(call(UnitName, "target")), show(call(UnitName, "mouseover")),
                 table.concat(vignettes(), " | "))
-            ns.Print(("Skysight probe: %s recorded where you stand."):format(show(name)))
+            local i = #o.casts + 1
+            o.casts[i] = line
+            -- the buff it gives: longer at a convergence (the user, 2026-10-19),
+            -- so its duration tells whether you stood at one
+            C_Timer.After(0.5, function()
+                local buffs = {}
+                for n = 1, 40 do
+                    local a = call(C_UnitAuras.GetAuraDataByIndex, "player", n, "HELPFUL")
+                    if type(a) ~= "table" then break end
+                    -- by its name or spell, or any buff that just began (it may
+                    -- be named otherwise)
+                    local d, e = a.duration, a.expirationTime
+                    local fresh = not isSecret(d) and not isSecret(e) and type(d) == "number" and type(e) == "number"
+                        and d > 0 and math.abs((e - d) - GetTime()) < 2
+                    if matches(a.name) or a.spellId == c or fresh then
+                        buffs[#buffs + 1] = ("%s (spell %s): duration %s, expires %s"):format(show(a.name), show(a.spellId),
+                            show(d), show(e))
+                    end
+                end
+                o.casts[i] = line .. "; buff: " .. (#buffs > 0 and table.concat(buffs, " | ") or "none found by name")
+                ns.Print(("Skysight probe: %s recorded where you stand; buff %s."):format(show(name), #buffs > 0 and buffs[1] or "not found"))
+            end)
         else
             o.vignetteEvents = o.vignetteEvents or {}
             if #o.vignetteEvents < 80 then
