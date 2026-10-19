@@ -28,6 +28,7 @@
 ### Fixed
 
 - Chat: a tab's name sits centred over its underline.
+- Campsite: no "Campfire nearby" alert while you fly over one.
 - Edit mode: the toolbar of a frame at the screen's top edge shows under the frame instead of off screen.
 - World map: flight masters you haven't found show as such (faint, "not found yet"); they all looked found before. SuuUI notes which ones each character has found whenever a flight master's map opens, so until a character has opened one on a continent, that continent's read "not checked yet".
 

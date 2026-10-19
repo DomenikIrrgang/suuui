@@ -104,6 +104,8 @@ function M:Alert(phase, a)
     self.rested = nil
     if self.ticker then self.ticker:Cancel(); self.ticker = nil end
     if phase == "nearby" then
+        -- (flying over one: no fire to sit at; asked 2026-10-19)
+        if UnitOnTaxi("player") then SuuUI.HideAlert(KEY) return end
         -- stays until you rest (or walk away), or for the setting's seconds
         SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
         local stay = self:Get("nearbyFor")
