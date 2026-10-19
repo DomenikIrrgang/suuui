@@ -533,8 +533,9 @@ function M:QuestSteps(s)
     local at, masters = positions(continent), {}
     for _, n in ipairs(s.nodes) do
         local p = at[n.id]
-        local x, y = p and worldXY(continent, p[1], p[2])
-        if x and n.kind ~= "DISTANT" then masters[#masters + 1] = { node = n, x = x, y = y } end
+        local x, y
+        if p then x, y = worldXY(continent, p[1], p[2]) end
+        if x and y and n.kind ~= "DISTANT" then masters[#masters + 1] = { node = n, x = x, y = y } end
     end
     -- each quest once: on its zone's map, else the continent's
     local maps = { continent }
@@ -551,7 +552,7 @@ function M:QuestSteps(s)
                 seen[id] = true
                 local x, y = worldXY(map, q.x, q.y)
                 local best, far = nil, NEAR * NEAR
-                for _, m in ipairs(x and masters or {}) do
+                for _, m in ipairs(x and y and masters or {}) do
                     local d = (m.x - x) ^ 2 + (m.y - y) ^ 2
                     if d < far then best, far = m.node, d end
                 end
@@ -685,7 +686,9 @@ function M:FillSide()
         if n.kind == "REACHABLE" then list[#list + 1] = n end
     end
     table.sort(list, function(a, b) return a.name < b.name end)
-    self.steps = self:QuestSteps(s)
+    -- (the list shows whatever the quests say)
+    local ok, steps = pcall(self.QuestSteps, self, s)
+    self.steps = ok and steps or {}
     local side = self.side
     side.head:SetLabel("Destinations", tostring(#list))
     local width = math.max(1, side.scroll:GetWidth())
