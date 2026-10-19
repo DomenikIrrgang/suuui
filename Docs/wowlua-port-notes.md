@@ -74,6 +74,8 @@ suspicions: Data's presets, trainer lists and spot reads matched; ForeverLFG's
 parser parity and runtime smoke tests passed). The other areas didn't run the
 VM.
 
+<a id="v1"></a>
+
 ### V1. `debugstack()` paths lack the `Interface/AddOns/<Addon>/` prefix
 
 In `wowlua test`, a stack line reads `tests/smoke/x.test.wowlua:5: in function 'fn'`
@@ -90,6 +92,8 @@ Repro: `expect(debugstack(1, 3, 0)).toEqual("")` in any test file.
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not
 bugs, but every agent tripped over them.
+
+<a id="c1"></a>
 
 ### C1. `export const x: T = { … }` exports the literal's type, not `T`
 
@@ -128,6 +132,8 @@ form.
 
 From: main, ui-hud, data.
 
+<a id="c2"></a>
+
 ### C2. A `table.sort` comparator with a wider parameter type fails to check
 
 The element type is inferred as the union of the list's element type and the
@@ -144,6 +150,8 @@ The comparator only reads `ms`, so it should be accepted (parameters are
 contravariant). Workaround: name the row type and use it for the comparator.
 
 From: main.
+
+<a id="c3"></a>
 
 ### C3. `table` is not assignable to `{ [string]: any }`
 
@@ -258,6 +266,8 @@ works.
 
 From: ui-units (U2), units-character, units-social (C-b), ui-hud.
 
+<a id="c6"></a>
+
 ### C6. Values imported from a wowlua library package are `any`
 
 §10.5.1 says "the consumer sees its exported types". Exported types do come
@@ -278,6 +288,8 @@ Workaround: ForeverLFG exports an explicit `ForeverLFG` record type (no
 
 From: foreverlfg, diag-social.
 
+<a id="c7"></a>
+
 ### C7. Fields added after a table literal are untyped for importers
 
 ```wowlua
@@ -292,6 +304,8 @@ assignments are checked against the type). Used for ForeverLFG's `catalogue`,
 `chat`, `store`, `tool`, `parser`, `lang` and `lfg`.
 
 From: foreverlfg.
+
+<a id="c8"></a>
 
 ### C8. E5001 instead of the upvalue fallback of spec §5.5
 
@@ -314,6 +328,8 @@ probe modules became a table `TOPIC_COMMANDS` of one small function per
 topic, each capturing one module.
 
 From: diag-core.
+
+<a id="c9"></a>
 
 ### C9. Hook warnings ignore an existence check (W8102, W8040)
 
@@ -349,6 +365,8 @@ Workarounds differ by area (see D-X2): the suggested `{ addon = … }` form
 
 From: diag-world, ui-social, units-character, units-windows, units-chat.
 
+<a id="c10"></a>
+
 ### C10. `cond and x` with a boolean `cond` keeps `true` in its type
 
 `a and b` with a boolean `a` can only be `false` or `b`, but 0.9.1 types it
@@ -381,6 +399,8 @@ local (`local dir: number | false = …`, UI/Inputs NumberField;
 
 From: ui-primitives, units-notices, units-windows, units-maps (U4).
 
+<a id="c11"></a>
+
 ### C11. `pcall` widens a `false` return to `boolean`
 
 ```wowlua
@@ -396,6 +416,8 @@ Called directly, `r` narrows to `string`. Workaround (Units/Nameplates
 `questText`): `if ok and r then result = r :: string end`.
 
 From: units-windows.
+
+<a id="c12"></a>
 
 ### C12. A generic predicate `v is V` doesn't infer `V`
 
@@ -417,6 +439,8 @@ Workaround everywhere: a non-generic predicate,
 `local function plain(v: unknown): v is string | number | boolean | table`.
 
 From: units-talents, units-maps (U2), units-bags.
+
+<a id="c13"></a>
 
 ### C13. Narrowing is lost inside loops
 
@@ -447,6 +471,8 @@ optional one after the loop (UI/Alert `Alert:Fit`; Units/FlightMap `hopWay`,
 
 From: ui-windows, units-maps (U3).
 
+<a id="c14"></a>
+
 ### C14. *Pattern:* closures see a reassigned local or parameter as declared
 
 `opts = opts or {}` reassigns the parameter, so closures see it as `T?` (E2005
@@ -459,6 +485,8 @@ closures must re-read stay `any` or are cast at use (Diagnostics TaxiProbe
 `land`, TalentBuildProbe `step`).
 
 From: ui-primitives, ui-settings, units-bags, units-talents, diag-combat.
+
+<a id="c15"></a>
 
 ### C15. *Pattern:* `x: T?` is a required field; `x?: T` is optional
 
@@ -481,6 +509,8 @@ at `?:` (units-trade), or `x: T?` could accept an absent key as Luau does
 
 From: ui-primitives, ui-windows, ui-world, units-trade, units-cooldowns.
 
+<a id="c16"></a>
+
 ### C16. A field with a bracketed key can't be optional
 
 ```wowlua
@@ -495,6 +525,8 @@ of the field (`src/Data/Presets/init.wowlua`), which loses the typo check
 (E2003) on conditions.
 
 From: data (D1).
+
+<a id="c17"></a>
 
 ### C17. A list literal doesn't fit a record with a numeric indexer and optional fields
 
@@ -514,6 +546,8 @@ assignable to the record although every named field is optional (§2.2.4 lists
 without a jewel (UI/Crest).
 
 From: data (D2), ui-primitives.
+
+<a id="c18"></a>
 
 ### C18. A method on a `setmetatable` table doesn't override the `__index` base's
 
@@ -538,6 +572,8 @@ types `self` as the mixin table.
 
 From: ui-units (U3), ui-primitives.
 
+<a id="c19"></a>
+
 ### C19. `export function x` silently replaces a local `x`; indexing a function value isn't an error
 
 ```wowlua
@@ -558,6 +594,8 @@ Found in UI/Social, where weak sets of live pages had the export names
 
 From: ui-social.
 
+<a id="c20"></a>
+
 ### C20. A cast can't drop a `Secret<…>` member
 
 `(pct :: number?)` on `number | colorRGBA | Secret<number | colorRGBA>` is
@@ -567,6 +605,8 @@ member doesn't fit). units-group saw `string | Secret<string>` refused as
 `string?` (E2015) and cast the realm to `string` instead (Readiness, Marks).
 
 From: units-hud, units-group.
+
+<a id="c21"></a>
 
 ### C21. False "unused local" for a forward-declared local defined by `function name`
 
@@ -581,6 +621,8 @@ The generated Lua is right. Workaround: `tipBase = function(...) ... end`
 
 From: units-maps (U5).
 
+<a id="c22"></a>
+
 ### C22. *Pattern:* a multi-return function can't `return nil` alone
 
 A function typed `(number?, number, number, number)` must write every value.
@@ -588,6 +630,8 @@ This forced `EditMode.Rect` to return four nils (see D-UI-settings) and
 `TabMarker:Place` to be typed `(number?, any, any, any)`.
 
 From: ui-settings, ui-primitives.
+
+<a id="c23"></a>
 
 ### C23. W4306 for a library package without a license
 
@@ -597,6 +641,8 @@ check. `"license": "MIT"` in the library's `package` silences it
 (libs/ForeverLFG).
 
 From: foreverlfg.
+
+<a id="c24"></a>
 
 ### C24. Hard-to-read diagnostics
 
@@ -612,6 +658,8 @@ From: foreverlfg.
 Wrong, missing or too strict declarations, by API. The calls in SuuUI pass
 what they passed before; each cast is a workaround, not a fix. Most were not
 verified against the client's documentation in this session.
+
+<a id="c25"></a>
 
 ### C25. `C_AuctionHouse` money is typed `string` (`WOWMONEY`)
 
@@ -630,6 +678,8 @@ reads `number?`, so it's per field). Workarounds: `pcall(AH.GetReplicateItemInfo
 
 From: units-trade, diag-world.
 
+<a id="c26"></a>
+
 ### C26. `GameTooltip:SetInboxItem` / `SetSendMailItem` take too few parameters
 
 Declared `SetInboxItem(index: any?)` and `SetSendMailItem()` in
@@ -640,12 +690,16 @@ Declared `SetInboxItem(index: any?)` and `SetSendMailItem()` in
 
 From: units-bags.
 
+<a id="c27"></a>
+
 ### C27. `Minimap:GetZoom()` / `GetZoomLevels()` have no returns
 
 `local z: number = Minimap:GetZoom()` → "`nil` is not assignable to `number`".
 Workaround (Units/Minimap `M:Zoom`, `M:PlaceMinimap`): `Minimap:GetZoom() :: any`.
 
 From: units-windows.
+
+<a id="c28"></a>
 
 ### C28. `C_NamePlate.SetNamePlateSize(width, height)` takes `string`s
 
@@ -654,6 +708,8 @@ The game takes numbers (`SetNamePlateSize(140, 30)` → E2001). Workaround
 
 From: units-windows.
 
+<a id="c29"></a>
+
 ### C29. `issecrettable` takes a `function`
 
 Declared `(table: function) -> boolean`, so
@@ -661,6 +717,8 @@ Declared `(table: function) -> boolean`, so
 (Units/DeathRecap): `issecrettable(events :: any)`.
 
 From: units-notices.
+
+<a id="c30"></a>
 
 ### C30. Quest functions lack their index parameter
 
@@ -673,6 +731,8 @@ Unverified which form Forever takes.
 
 From: units-notices.
 
+<a id="c31"></a>
+
 ### C31. `JoinChannelByName`'s `hasVoice` is required
 
 `password` and `frameID` are optional but `hasVoice` isn't, so the
@@ -682,6 +742,8 @@ Workaround (Diagnostics/LfgProbe `join`, `timerJoin`):
 `pcall(JoinChannelByName :: any, "LookingForGroup")`. See also C24.
 
 From: diag-social.
+
+<a id="c32"></a>
 
 ### C32. Other parameters declared required or with the wrong type
 
@@ -698,6 +760,8 @@ From: diag-social.
   declaration; the aura formatter's breakpoints are annotated with the type
   (UI/Auras). (ui-units)
 
+<a id="c33"></a>
+
 ### C33. Wrong or missing fields
 
 - `FetchNextPurchasableBankTabData(...).tabCost` is `string?`; the code and the
@@ -707,6 +771,8 @@ From: diag-social.
   (UI/TalentTree `traitTooltip`). Either the declaration lacks it or the
   client's struct does, and the "spend N more points" line never shows: check
   `C_Traits.GetConditionInfo` in the client docs or with a probe. (ui-settings)
+
+<a id="c34"></a>
 
 ### C34. Whole tables typed as possibly secret
 
@@ -724,6 +790,8 @@ the declarations should be `T?` with secret fields.
 From: units-hud, ui-hud, units-windows, units-talents, ui-units, units-group,
 units-maps, diag-world.
 
+<a id="c35"></a>
+
 ### C35. `ChatFrame1` is declared `Frame`, without the chat frame mixin
 
 Lacks `ApplySystemAnchor` and the other mixin methods (see C9).
@@ -731,12 +799,16 @@ Workaround (Units/Chat): `ChatFrame1 :: any`.
 
 From: units-chat.
 
+<a id="c36"></a>
+
 ### C36. Namespace members missing
 
 - `C_TradeSkillUI.GetRecipeNumItemsProduced`, `GetRecipeTools`
   (Diagnostics/ProfessionProbe). (diag-world)
 - `C_BattleNet.SetFriendNote`, `RemoveFriend`, `SendFriendInvite`, read through
   `local bn: any = C_BattleNet` (Units/Social). (units-social)
+
+<a id="c37"></a>
 
 ### C37. Undeclared globals (read through `_G`)
 
@@ -765,6 +837,8 @@ From: units-chat.
   (`dedupe-strings`, `cache-globals`, `inline` left out for the file to stay
   under a Lua 5.1 limit) is informational (data).
 
+<a id="c38"></a>
+
 ### C38. `wowlua publish --dry-run` waited without output
 
 Run in this worktree without a terminal (a background job), it packaged both
@@ -772,6 +846,8 @@ zips into `dist/packages/` and then sat at 0% CPU for over ten minutes with no
 further output until killed. Not investigated: it may wait for the OS
 credential store (macOS keychain prompt) while looking up the publish
 tokens. `wowlua package` packages without it.
+
+<a id="c39"></a>
 
 ### C39. The test profile's `runtime-checks = "all"` and half-built frames
 
@@ -788,6 +864,8 @@ whether wowlua should offer a cast that is never checked at run time, or skip
 `::` checks of interface types against tables still being built.
 
 ## 3. Standard library gaps
+
+<a id="s1"></a>
 
 ### S1. wowlua:events: SuuUI's bus shape
 
@@ -849,6 +927,8 @@ client's `xpcall` takes them (not probed).
 
 From: ui-primitives, units-windows, ui-windows; stdlib source checked.
 
+<a id="s3"></a>
+
 ### S3. wowlua:events: re-pointing a unit subscription
 
 Each nameplate keeps its own event frame with `RegisterUnitEvent(e, f.unit)`,
@@ -858,6 +938,8 @@ unsubscribed by `off`) can re-point a subscription. Kept the frame
 (Units/Nameplates).
 
 From: units-windows.
+
+<a id="s4"></a>
 
 ### S4. wowlua:errors: per-owner attribution, no context for `onError`
 
@@ -871,6 +953,8 @@ need the context (owner/source) passed to `onError`, or an owner per `hook` /
 
 Source: `src/Core/Fault.wowlua`; stdlib `errors.wowlua`.
 
+<a id="s5"></a>
+
 ### S5. wowlua:errors: a quiet guarded call
 
 SuuUI's `call(fn, ...)`: nil when `fn` isn't a function, `pcall`'s results on
@@ -881,6 +965,8 @@ Guild, Social, AuctionHouse), typed to return `any`s.
 
 From: units-character, units-social, units-trade.
 
+<a id="s6"></a>
+
 ### S6. wowlua:combat: keyed work with replacement
 
 Core/Combat keys the combat queue: the first request for a key takes the place
@@ -890,6 +976,8 @@ the keys are SuuUI's. The stdlib would need `defer(key, fn)` with replacement.
 
 Source: `src/Core/Combat.wowlua`.
 
+<a id="s7"></a>
+
 ### S7. wowlua:combat: `inCombat` counting `UnitAffectingCombat`
 
 Units/Threat and DamageMeter define `inCombat()` as `InCombatLockdown() or
@@ -898,6 +986,8 @@ UI.Flag(UnitAffectingCombat("player"))` (in combat before lockdown starts).
 `inCombat({ affecting = true })` or `affectingCombat()` would cover it.
 
 From: units-hud.
+
+<a id="s8"></a>
 
 ### S8. wowlua:saved: SuuUI's profile model
 
@@ -911,6 +1001,8 @@ SavedVariable and whole values per profile, and SuuUIDB's shape must stay.
 
 Source: `src/Core/DB.wowlua`, `src/Core/Settings.wowlua`.
 
+<a id="s9"></a>
+
 ### S9. wowlua:slash: SuuUI's command registry
 
 `/suu` is one `@slash("/suu", "/suuui")` handler over SuuUI's registry:
@@ -922,6 +1014,8 @@ It would need owners, unregistering, dynamic registration and argument
 palettes.
 
 Source: `src/Core/Init.wowlua`.
+
+<a id="s10"></a>
 
 ### S10. wowlua:log: prefix format and a run-time debug toggle
 
@@ -935,6 +1029,8 @@ a configurable prefix/colour and a level that can be lowered at run time.
 
 Source: `src/Core/Init.wowlua`, `src/Core/Settings.wowlua`; stdlib `log.wowlua`.
 
+<a id="s11"></a>
+
 ### S11. wowlua:table: `copy` keeps shared tables shared; `keys` sorts one type
 
 SuuUI's deep copy copies a table that appears twice as two tables and keeps
@@ -946,6 +1042,8 @@ also keeps its own sorted `keys`: wowlua:table's sorts only keys of one type,
 and plugin data may mix them.
 
 From: units-cooldowns; `src/Core/Util.wowlua`.
+
+<a id="s12"></a>
 
 ### S12. wowlua:format: SuuUI's money, number and time texts
 
@@ -967,6 +1065,8 @@ D-UI-world for the one difference).
 
 From: ui-settings, units-trade, ui-units, ui-world.
 
+<a id="s13"></a>
+
 ### S13. wowlua:pool: index-stable reuse
 
 UI/RaidPlanner's `pool(list, i, make)` returns the i-th frame (made when
@@ -975,6 +1075,8 @@ same frame. `wowlua:pool` hands out any free frame. Needs `pool:at(i)` and
 `pool:trim(n)`.
 
 From: ui-world.
+
+<a id="s14"></a>
 
 ### S14. wowlua:aura: `container`
 
@@ -988,6 +1090,8 @@ through Core/Events with the container as owner.
 
 From: ui-units.
 
+<a id="s15"></a>
+
 ### S15. wowlua:tooltip: knowing whether the post-call is in use
 
 UI/Tooltip `spellTooltip` keeps its own `TooltipDataProcessor` post-call. It
@@ -999,6 +1103,8 @@ script fallback.
 
 From: ui-windows.
 
+<a id="s16"></a>
+
 ### S16. wowlua:secure: snippet-driven drivers, visibility with unregistering
 
 - UI/ActionBar registers bar 1's paging with `RegisterStateDriver(header,
@@ -1009,12 +1115,16 @@ From: ui-windows.
 - The pet bar unregisters its state driver and shows itself in keybind mode
   inside one `combat.run` job; `secure.visibility` only registers. (ui-units)
 
+<a id="s17"></a>
+
 ### S17. wowlua:secret: `flag` semantics
 
 `secret.flag(b)` returns `b == true`; SuuUI's `flag` (UI/Text) turns any truthy
 value into `true` (callers pass non-boolean game results). Kept SuuUI's body.
 
 From: ui-primitives.
+
+<a id="s18"></a>
 
 ### S18. wowlua:secret: a "present and readable" predicate
 
@@ -1028,6 +1138,8 @@ narrows `T | Secret<T> | nil` to `T` would replace it.
 From: units-talents, units-maps, units-bags, units-character, units-social,
 units-chat, units-windows.
 
+<a id="s19"></a>
+
 ### S19. wowlua:timer: `every` can't stop and restart
 
 Units/Threat and DamageMeter drive ticks from a hidden frame's OnUpdate,
@@ -1036,6 +1148,8 @@ would need stop, restart, `isRunning()`, and the first tick one interval after
 starting. Kept.
 
 From: units-hud.
+
+<a id="s20"></a>
 
 ### S20. wowlua:timer: coalescing a set of kinds on the next frame
 
@@ -1047,6 +1161,8 @@ flusher frame.
 
 From: ui-hud.
 
+<a id="s21"></a>
+
 ### S21. wowlua:callbacks: removal by function
 
 ForeverLFG's public `LFG.On` returns the function and `LFG.Off(event, fn)`
@@ -1056,6 +1172,8 @@ SuuUI keeps the library's small bus.
 
 From: foreverlfg.
 
+<a id="s22"></a>
+
 ### S22. wowlua:locale: several parser languages at once
 
 ForeverLFG's Lang modules are parser keyword data per chat language: several
@@ -1064,6 +1182,8 @@ script. `wowlua:locale` is for one client language's UI strings. They stay
 data modules.
 
 From: foreverlfg.
+
+<a id="s23"></a>
 
 ### S23. wowlua:unit: reading through a stand-in
 
@@ -1088,7 +1208,6 @@ From: ui-units.
   a dev build's runtime check would have errored on every unit frame.
 - Constructor casts (C39).
 
-
 ### Cross-cutting
 
 <a id="d-x1"></a>
@@ -1103,6 +1222,8 @@ From: ui-units.
   Also: `after(0, fn)` makes a `C_Timer.NewTimer` instead of `C_Timer.After`
   (same timing), and a hook's return value is dropped (none returned one).
   `HookScript` on SuuUI's own frames stays a method call. (all areas)
+<a id="d-x2"></a>
+
 - **D-X2. Load-on-demand hooks are written two ways.** With the W8102 form
   `hook(_G, name, fn, { addon = … })` in Diagnostics/CollectionsArtProbe,
   UI/GroupFinderListing (six functions of `Blizzard_GroupFinder_VanillaStyle`)
@@ -1111,31 +1232,45 @@ From: ui-units.
   without the option (`ClassTrainerFrame_*`, `CollectionsJournal_UpdateSelectedTab`),
   because the option would change when they're installed. Worth making
   consistent. (diag-world, ui-social, units-character, units-windows)
+<a id="d-x3"></a>
+
 - **D-X3. Secret guards added where the checker saw a possible secret**; the
   old code would have raised on a secret there, so nothing that worked changes
   (UnitClass tokens through `secret.known(class, "")`, cooldown and aura
   tables, `UnitGUID`, `UnitSex`, roles, realm). Your own name, class and GUID
   are cast instead (never secret on Forever). (ui-units, ui-hud, units-*)
+<a id="d-x4"></a>
+
 - **D-X4. `plain(v)` test order is inconsistent.** units-bags kept
   `v ~= nil and not isSecret(v)` (compares before testing secrecy) in every
   file it touched; Units/Chat, Tooltips, Addons, FlightMap, WorldMap swapped it
   to secrecy first. If comparing a secret with nil errors in the client, the
   first order is wrong: worth a probe. (units-bags, units-windows, units-maps)
+<a id="d-x5"></a>
+
 - **D-X5. `SuuUIProbe = SuuUIProbe or {}` is gone**: probes write
   `DB.probe.<same key>` and read `DB.db` for `SuuUIDB`, same keys and shape;
   nothing touches DB at load. Exception: Units/Timeline still writes the global
   `SuuUIProbe` (Units use only the public API; same table). (diag-*, ui-settings,
   units-hud)
+<a id="d-x6"></a>
+
 - **D-X6. `ns.X` existence guards dropped** (`ns.EditMode and …`,
   `ns.ApiDocs and ns.ApiDocs.Dump`, `UI.CloseButton and …`, ForeverLFG's
   `LFG.Lang and …`): the modules are static imports now. (many)
+<a id="d-x7"></a>
+
 - **D-X7. Event owners that were file tables are now strings or module-local
   tables** (ClassData, SpellData: `"ClassData"`, `"SpellData"`; Plate, Meter,
   Timeline probes: a local `OWNER = {}`, so Fault still names it
   `tostring(table)`). Other owner strings are unchanged. (diag-core, diag-combat)
+<a id="d-x8"></a>
+
 - **D-X8. Tables of functions became module exports** (KeybindMode, Probe,
   TokenSheet, Gallery, the probes, `ns.WindowRow`, `ns.Interrupt`); state that
   lived on them is now module-local. `import * as x` gives the old shape.
+<a id="d-x9"></a>
+
 - **D-X9. Pre-existing warnings were left** (unused locals, shadows) in many
   files; listed in each area's notes.
 
@@ -1157,24 +1292,34 @@ From: ui-units.
   with a checkable type, and the casts of half-built frames
   (`CreateFrame(…) :: Panel`, see C18) would fail. `"exports"` checks exported
   functions, public methods, `@global` functions and event/slash/hook handlers.
+<a id="d-core3"></a>
+
 - **D-Core3. `SuuUI.Raw.ns` is now the addon table**, which holds the wowlua
   runtime (`__wowlua`); the modules are no longer fields of it. `Raw.UI` is
   `rawUI`, built in API.wowlua with every component under its old name (182,
   generated from the symbol map); `Raw.Mixins` is Core/Init's `mixins`.
   Docs/API.md and Docs/PluginGuide.md describe the new `Raw.ns`.
   (`src/Core/API.wowlua`)
+<a id="d-core4"></a>
+
 - **D-Core4. The `/suu` command's `SlashCmdList` key is now `WOWLUA_SUUUI_1`**
   (was `SUUUI`); `/suu` and `/suuui` work as before. Anything that called
   `SlashCmdList.SUUUI` directly breaks. (`src/Core/Init.wowlua`)
+<a id="d-core5"></a>
+
 - **D-Core5. SavedVariables through wowlua:saved** add a `__version` key to
   `SuuUIDB` and `SuuUIProbe`; neither defaults nor stripping are used, so the
   rest is written back as SuuUI left it. Touching `DB.db`/`DB.probe` before
   they load raises an error. (`src/Core/DB.wowlua`)
+<a id="d-core6"></a>
+
 - **D-Core6. Core/Events now dispatches through wowlua:events**, so every
   SuuUI listener pays the stdlib's per-handler allocations (S2) on top of
   `fault.call`. An event the client doesn't know never fires (wowlua:events
   checks `C_EventUtils.IsEventValid`), where `pcall(RegisterEvent)` used to be
   the guard. (`src/Core/Events.wowlua`, ui-hud)
+<a id="d-core7"></a>
+
 - **D-Core7. `SuuUI.LFG`** is `lfg :: ForeverLFG` from the `foreverlfg`
   package (C6). (foreverlfg)
 
@@ -1204,7 +1349,7 @@ From: ui-units.
   use `themes.all()`; LayoutCheck writes `DB.probe.layoutCheck`. (ui-settings)
 - **Window `export`** casts `profiles.export()` to `settings.Exported`
   (a nil would have errored before too). (ui-settings)
-- **Bug left: Sections `moduleRow`** walks `{ m.description, … }` with
+- **Fixed (361539f): Sections `moduleRow`** walks `{ m.description, … }` with
   `ipairs`, so a module without a description shows an empty row (no "Built
   in", no state, no error). Fix: drop nils first. (ui-settings)
 - **Check: TalentTree `traitTooltip`** (C33). (ui-settings)
@@ -1250,7 +1395,7 @@ From: ui-units.
   error can no longer break the caller's chain. Secure and taint paths are
   unchanged (slot buttons, the buy cell, `InCombatLockdown` guards, hidden
   parents, `TooltipDataProcessor`). (units-bags)
-- **Bug left: Bags `SortTarget`**: `special` mixes bag keys and array slots,
+- **Fixed (361539f): Bags `SortTarget`**: `special` mixes bag keys and array slots,
   so profession bags in bags 1–4 collide with array indexes and two special
   bags can leave a hole `ipairs` skips. The reagent bag alone works.
   (units-bags)
@@ -1274,9 +1419,9 @@ From: ui-units.
   `AddSource` (inside `M:Guard`); not changed. (units-windows)
 - **Maps call the global `issecretvalue` directly** (C4); on a client without
   it the call would error (the old fallback returned false). (units-maps)
-- **Bug left: Campsite `M:Alert`**: every branch returns, so the `BRIEF` timer
+- **Fixed (361539f): Campsite `M:Alert`**: every branch returns, so the `BRIEF` timer
   after it never runs (W1005). (units-maps)
-- **Bug left: Collections `LayoutCells` / `LayoutTiles` / `LayoutShelf`**
+- **Fixed (361539f): Collections `LayoutCells` / `LayoutTiles` / `LayoutShelf`**
   compare `w <= 0` before `isSecret(w)`. (units-character)
 - **Inspect**: `M:Asked(unit)` lost its unused parameter; the
   `INSPECT_READY` handler skips the redraw for a secret `UnitGUID` and calls
@@ -1294,7 +1439,7 @@ From: ui-units.
 - **CooldownManager**: `spellLookup` returns nil before the name lookup for a
   non-number query; `specPreset(nil)` still falls back to the first preset.
   (units-cooldowns)
-- **Bug-ish left: AuctionHouse `M:OnEnable`** starts a 30 s ticker each run
+- **Fixed (361539f): AuctionHouse `M:OnEnable`** starts a 30 s ticker each run
   and never cancels it (runs once per session: reloadToToggle). (units-trade)
 - **Secure group frames, spellbook buttons and talent bindings are
   unchanged** (headers, `INIT`, state drivers, unit watches, `InCombatLockdown`
@@ -1330,7 +1475,7 @@ From: ui-units.
 - **WindowsProbe**: `show(C_AddOns.IsAddOnLoaded(a))` passed the second return
   as `depth`; now `show((…))`, same output. Without EventUtil the probe would
   now still hook load-on-demand windows later. (diag-social)
-- **Bug left: MountFeetProbe / MountFrameProbe `place`** make their buttons on
+- **Fixed (361539f): MountFeetProbe / MountFrameProbe `place`** make their buttons on
   the first run only, so a second run's Up/Down/Next/… act on the first run's
   state. (diag-world)
 - **PresetSpellIDs** matches `tools/gen_presets.lua`'s output byte for byte.
@@ -1388,9 +1533,9 @@ No area notes cover `Examples/` (SuuUI_HelloPlugin, SuuUI_LevelBadge); they
 are workspace members (`wowlua.json` `workspace.members`). Nothing recorded to
 review.
 
-### In game checks
-
 <a id="in-game-checks"></a>
+
+### In game checks
 
 Taint-sensitive paths and open questions to try on Forever (with
 `/suu probe taint`, never `/console taintLog`):
