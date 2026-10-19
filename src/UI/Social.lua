@@ -308,12 +308,13 @@ end
 -- offline players at opacity-oor; empty slots in a faint edge. The leader
 -- (and assistants) drag players between groups: onto an empty slot moves
 -- them, onto a player swaps the two. Not in a raid: the explanation, and
--- "Convert to raid" in a party.
+-- "Convert to raid" in a party. With `plan` (0.17), a Plan button opens the
+-- raid planner.
 --
 --   local r = UI.RaidGroups(parent)
---   r:SetData({ inRaid, inParty, canLead, reason, size, members = { { index,
+--   r:SetData({ inRaid, inParty, canLead, reason, size, plan, members = { { index,
 --       name, class, role, group, leader, assistant, online, dead, you } } })
---   r.onReadyCheck(), r.onRoleCheck(), r.onRaidInfo(), r.onConvert(),
+--   r.onReadyCheck(), r.onRoleCheck(), r.onRaidInfo(), r.onConvert(), r.onPlan(),
 --   r.onMove(index, group), r.onSwap(index, otherIndex), r.onMember(member, button, owner)
 --------------------------------------------------------------------------------
 
@@ -462,6 +463,10 @@ function R:Draw()
         b.reason = not d.canLead and (d.reason or "Only the leader or an assistant can.") or nil
     end
     self.info:Show()
+    -- Plan: left of the checks in a raid, else next to Raid Info
+    self.plan:SetShown(d.plan and true or false)
+    self.plan:ClearAllPoints()
+    self.plan:SetPoint("RIGHT", inRaid and self.ready or self.info, "LEFT", -S["space-3"], 0)
     if not inRaid then return end
     local n = 0
     local byGroup = {}
@@ -554,6 +559,8 @@ function UI.RaidGroups(parent)
     r.roles:SetPoint("RIGHT", r.info, "LEFT", -S["space-3"], 0)
     r.ready = headButton(r, "Ready check", "quiet", function() if r.onReadyCheck then r.onReadyCheck() end end)
     r.ready:SetPoint("RIGHT", r.roles, "LEFT", -S["space-3"], 0)
+    r.plan = headButton(r, "Plan", "quiet", function() if r.onPlan then r.onPlan() end end)
+    r.plan:Hide()
     r.groups, r.slots = {}, {}
     for g = 1, 8 do
         local f = CreateFrame("Frame", nil, r)

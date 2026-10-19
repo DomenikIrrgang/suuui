@@ -1,0 +1,1073 @@
+-- UI/RaidPlanner.lua
+-- The raid planner's window (design "Raid planner", A1 "Workbench", picked
+-- 2026-10-19): setups down the left by raid size, with the class and spec
+-- palette under them; the raid's groups in the middle, each slot a card with
+-- what it asks for and who filled it, the group's party-wide buffs at its
+-- foot; the raid-wide coverage on the right, then the open slots and the
+-- players without a slot. 1400 wide, everything in view.
+-- Drag a spec from the palette onto a slot (or a group's Add slot) and the
+-- slot asks for it; drag a player onto a slot to place them there, onto
+-- another player to swap, onto Without a slot to let them go. The module
+-- works out everything shown; this only draws it and reports what was done.
+--
+--   local w = UI.RaidPlanner(parent)
+--   w:SetData({ meta, stats = { { n, label, warn } }, note, size,
+--       setups = { { id, name, meta, loaded, changed } },
+--       palette = { { class, name, specs = { { spec, label, role } } } },
+--       groups = { { n, kind, canAdd, slots = { { id, req, who, class, spec,
+--           state, pinned, player, tip } }, chips = { { text, tone, tip } } } },
+--       raidWide = { { label, detail, n, warn, tip } }, raidWideMeta, raidWideEmpty,
+--       open = { { label, detail } }, unplaced = { { name, class, detail } },
+--       hint, fill = { shown, enabled, reason }, inspect = { shown, label, enabled,
+--       reason }, arrange = { enabled, reason } })
+--   slot states: "filled", "provisional" (spec "?", underlined in dots),
+--   "open", "conflict" (two fit it), "away" (pinned, not in the raid); a
+--   slot's `player` (a name) makes it draggable
+--   chip tones: "ok", "warn" (doubled, missing), "open" (its slot is open)
+--   w:EditSlot({ id, title, meta, class, spec, role, label, who, classes,
+--       specs, whoOptions }, card) -- the slot editor beside the card
+--   w:CloseEditor(), w:EditingSlot(), w:CardFor(id), w:Rename(id), w:ShowMoves({ meta, moves = { { name,
+--       class, from, to } }, note }, onConfirm)
+--   w.onSize(size), w.onSetup(id), w.onSetupMenu(id, owner), w.onNew(owner),
+--   w.onRename(id, text), w.onSave(), w.onSaveAsNew(), w.onDuplicate(),
+--   w.onDelete(), w.onSlot(id, owner, button), w.onAdd(group, owner),
+--   w.onDrop(what, where), w.onPerson(name, owner, button),
+--   w.onSlotChange(id, changes), w.onSlotRemove(id), w.onInspect(),
+--   w.onArrange(), w.onFill()
+--   what: { spec = { class, spec, role } } or { player = name, from = slotId };
+--   where: { slot = id } | { group = n } | { unplaced = true }
+
+local _, ns = ...
+
+local UI, T = ns.UI, ns.Tokens
+local S = T.space
+
+local WIDTH, HEIGHT = 1400, 860
+local LEFT_W, RIGHT_W, COL_GAP = 220, 270, 16
+local GROUP_GAP = 10
+local CHIP_H = 16
+local PAL_H = 18
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local ROLE_GLYPH = { TANK = "shield", HEALER = "plus", DAMAGER = "sword" }
+
+local function lineH(style) return T.type[style].lineHeight end
+-- a slot card: who and their spec on top, what the slot asks for under it
+local function cardH() return 3 + lineH("label") + lineH("caption") + 4 end
+
+local function classToken(file)
+    local t = file and ("class-" .. file:lower())
+    return (t and T.color[t]) and t or "ink"
+end
+
+local function pool(list, i, make)
+    list[i] = list[i] or make()
+    list[i]:Show()
+    return list[i]
+end
+
+local function hideFrom(list, i)
+    for k = i, #list do list[k]:Hide() end
+end
+
+local P = {}
+
+--------------------------------------------------------------------------------
+-- Dragging: a card follows the cursor; the target under it lights up arcane
+--------------------------------------------------------------------------------
+
+-- Everything that takes a drop, shown now: slot cards, Add slot, Without a slot.
+function P:Targets()
+    local out = {}
+    for _, g in ipairs(self.groupFrames) do
+        if g:IsShown() then
+            for _, c in ipairs(g.cards) do if c:IsShown() then out[#out + 1] = c end end
+            if g.add:IsShown() then out[#out + 1] = g.add end
+        end
+    end
+    if self.unplacedZone:IsShown() then out[#out + 1] = self.unplacedZone end
+    return out
+end
+
+function P:TargetUnderCursor()
+    for _, t in ipairs(self:Targets()) do
+        if t:IsMouseOver() then return t end
+    end
+end
+
+function P:StartDrag(what, text, token)
+    self.dragging = what
+    local gh = self.ghost
+    if not gh then
+        gh = CreateFrame("Frame", nil, UIParent)
+        gh:SetFrameStrata("TOOLTIP")
+        gh:SetHeight(22)
+        UI.Fill(gh, "surface-raised"):SetAllPoints()
+        UI.Border(gh, "arcane")
+        gh.text = UI.Text(gh, "label", "ink")
+        gh.text:SetPoint("LEFT", S["space-4"], 0)
+        gh:SetScript("OnUpdate", function(f)
+            local scale = f:GetEffectiveScale()
+            local x, y = GetCursorPosition()
+            f:ClearAllPoints()
+            f:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / scale + 12, y / scale)
+            local over = self:TargetUnderCursor()
+            if over ~= self.over then
+                if self.over then self.over:SetDropHover(false) end
+                if over then over:SetDropHover(true) end
+                self.over = over
+            end
+        end)
+        self.ghost = gh
+    end
+    gh.text:SetValue(text or "")
+    gh.text:SetColor(token or "ink")
+    gh:SetWidth(UI.MeasureText("label", text or "") + S["space-4"] * 2)
+    gh:Show()
+end
+
+function P:StopDrag()
+    local over = self:TargetUnderCursor()
+    if self.ghost then self.ghost:Hide() end
+    if self.over then self.over:SetDropHover(false); self.over = nil end
+    local what = self.dragging
+    self.dragging = nil
+    if what and over and self.onDrop then self.onDrop(what, over.where) end
+end
+
+-- A frame that can be dragged: what it carries comes from carry(frame).
+local function draggable(self, f, carry)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(b)
+        local what, text, token = carry(b)
+        if not what then return end
+        UI.HideTooltip()
+        self:StartDrag(what, text, token)
+    end)
+    f:SetScript("OnDragStop", function() self:StopDrag() end)
+end
+
+--------------------------------------------------------------------------------
+-- Pieces
+--------------------------------------------------------------------------------
+
+-- A small chip (the palette's specs, a group's buffs): caption text in a
+-- hairline box.
+local function chip(parent, glyph)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetHeight(PAL_H)
+    b.bg = UI.Fill(b, "surface-raised")
+    b.bg:SetAllPoints()
+    b.edge = UI.Border(b, "gilt-faint")
+    if glyph then
+        b.glyph = b:CreateTexture(nil, "ARTWORK")
+        b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+        b.glyph:SetSize(10, 10)
+        b.glyph:SetPoint("LEFT", 4, 0)
+        UI.Paint(b.glyph, "ink-muted")
+    end
+    b.label = UI.Text(b, "caption", "ink-muted")
+    b.label:SetPoint("LEFT", glyph and 17 or 4, 0)
+    function b:SetText(text)
+        self.label:SetValue(text)
+        self:SetWidth(UI.MeasureText("caption", text) + (glyph and 21 or 8))
+    end
+    b:SetScript("OnEnter", function(self) self.edge:SetColor("gilt"); self.label:SetColor("ink") end)
+    b:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-faint"); self.label:SetColor("ink-muted") end)
+    return b
+end
+
+-- How a slot card looks in its state (and while a drag hovers it).
+local function styleCard(c)
+    local s = c.state or "filled"
+    local hover = c.dropHover
+    local open = s == "open" or s == "away"
+    c.fill:SetShown(hover or not open)
+    UI.PaintFill(c.fill, hover and "arcane-soft" or "surface-raised")
+    c.edge:SetShown(hover or open or s == "conflict")
+    c.edge:SetColor(hover and "arcane" or "amber", (open and not hover) and 0.7 or nil)
+    c.who:SetColor(hover and "ink" or (s == "open" and "amber") or (s == "away" and "ink-muted") or classToken(c.class))
+    c.req:SetColor((s == "conflict" and not hover) and "amber" or ((open or hover) and "ink-muted") or "ink-faint")
+end
+
+function P:Card(g)
+    local c = CreateFrame("Button", nil, g)
+    c:SetHeight(cardH())
+    c:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    c.fill = UI.Fill(c, "surface-raised")
+    c.fill:SetAllPoints()
+    c.edge = UI.Border(c, "amber")
+    c.diamond = UI.Diamond(c, 5, "ink")
+    c.diamond:SetPoint("TOPLEFT", 6 + 1, -(3 + lineH("label") / 2 - 2.5))
+    c.who = UI.Text(c, "label", "ink")
+    c.who:SetPoint("TOPLEFT", 17, -3)
+    c.who:SetJustifyH("LEFT")
+    c.pin = c:CreateTexture(nil, "ARTWORK")
+    c.pin:SetTexture(GLYPHS .. "pushpin.tga")
+    c.pin:SetSize(9, 9)
+    c.pin:SetPoint("LEFT", c.who, "RIGHT", S["space-2"], 0)
+    UI.Paint(c.pin, "gilt-text")
+    c.spec = UI.Text(c, "caption", "ink-muted")
+    c.spec:SetPoint("TOPRIGHT", -6, -4)
+    -- "?": provisional until inspected, underlined in dots
+    c.dots = {}
+    for i = 1, 3 do
+        local d = UI.Fill(c, "ink-muted", "ARTWORK")
+        d:SetSize(1, 1)
+        d:SetPoint("TOPLEFT", c.spec, "BOTTOMLEFT", (i - 1) * 2.5, 0)
+        c.dots[i] = d
+    end
+    c.req = UI.Text(c, "caption", "ink-faint")
+    c.req:SetPoint("TOPLEFT", 17, -(3 + lineH("label")))
+    c.req:SetJustifyH("LEFT")
+    c.SetDropHover = function(self, on) self.dropHover = on; styleCard(self) end
+    c:SetScript("OnClick", function(self, button)
+        if self.slot and self.planner.onSlot then self.planner.onSlot(self.slot.id, self, button) end
+    end)
+    c:SetScript("OnEnter", function(self)
+        if self.planner.dragging then return end
+        if not self.dropHover and self.state ~= "open" and self.state ~= "away" then self.edge:SetShown(true); self.edge:SetColor("gilt-line") end
+        local s = self.slot
+        if s then UI.ShowTooltip(self, { title = s.who or s.req, subtitle = s.who and s.req or nil, description = s.tip }) end
+    end)
+    c:SetScript("OnLeave", function(self) styleCard(self); UI.HideTooltip() end)
+    draggable(self, c, function(b)
+        local s = b.slot
+        if not (s and s.player) then return end
+        return { player = s.player, from = s.id }, s.player, classToken(s.class)
+    end)
+    c.planner = self
+    return c
+end
+
+function P:SetCard(c, s, w)
+    c.slot = s
+    c.state, c.class = s.state, s.class
+    c:SetSize(w, cardH())
+    c.diamond:SetShown(s.state ~= "open")
+    UI.Paint(c.diamond, s.state == "away" and "ink-faint" or classToken(s.class))
+    c.who:SetValue(s.who or "Open")
+    c.pin:SetShown(s.pinned and true or false)
+    c.spec:SetValue(s.spec or "")
+    local q = s.spec == "?"
+    c.spec:SetColor(q and "ink" or "ink-muted")
+    for _, d in ipairs(c.dots) do d:SetShown(q) end
+    c.req:SetValue(s.req or "")
+    -- placed from the text styles each time (a theme can change them)
+    c.diamond:SetPoint("TOPLEFT", 7, -(3 + lineH("label") / 2 - 2.5))
+    c.req:SetPoint("TOPLEFT", 17, -(3 + lineH("label")))
+    -- the name and what it asks for stop short of the spec and the edge
+    local specW = (s.spec and s.spec ~= "") and (UI.MeasureText("caption", s.spec) + S["space-3"]) or 0
+    -- (as wide as the name, so the pin sits right after it)
+    local room = math.max(10, w - 17 - 6 - specW - (s.pinned and 13 or 0))
+    c.who:SetWidth(math.min(room, UI.MeasureText("label", s.who or "Open") + 1))
+    c.req:SetWidth(w - 17 - 6)
+    c.dropHover = false
+    styleCard(c)
+end
+
+-- A group of five: its head, slot cards, Add slot, its party-wide buffs.
+function P:Group()
+    local g = CreateFrame("Frame", nil, self.mid)
+    UI.Fill(g, "surface-sunk"):SetAllPoints()
+    UI.Border(g, "gilt-faint")
+    g.title = UI.Text(g, "header", "gilt-text")
+    g.title:SetPoint("TOPLEFT", 7, -6)
+    g.kind = UI.Text(g, "caption", "ink-muted")
+    g.kind:SetPoint("TOPRIGHT", -7, -7)
+    g.cards, g.chips = {}, {}
+    -- Add slot: a click makes an open slot, a drop one that asks for it
+    local add = CreateFrame("Button", nil, g)
+    add:SetHeight(22)
+    add.edge = UI.Border(add, "gilt-faint")
+    add.fill = UI.Fill(add, "arcane-soft")
+    add.fill:SetAllPoints()
+    add.fill:Hide()
+    add.label = UI.Text(add, "caption", "ink-faint")
+    add.label:SetPoint("CENTER")
+    add.label:SetValue("+ Add slot")
+    add.SetDropHover = function(b, on)
+        b.fill:SetShown(on)
+        b.edge:SetColor(on and "arcane" or "gilt-faint")
+        b.label:SetColor(on and "ink" or "ink-faint")
+    end
+    add:SetScript("OnEnter", function(b) if not self.dragging then b.label:SetColor("ink-muted") end end)
+    add:SetScript("OnLeave", function(b) b.label:SetColor("ink-faint") end)
+    add:SetScript("OnClick", function(b) if self.onAdd then self.onAdd(g.n, b) end end)
+    g.add = add
+    g.rule = UI.Fill(g, "gilt-faint", "ARTWORK")
+    g.rule:SetHeight(1)
+    return g
+end
+
+local function groupChip(g)
+    local f = CreateFrame("Frame", nil, g)
+    f:SetHeight(CHIP_H)
+    f.edge = UI.Border(f, "gilt-faint")
+    f.text = UI.Text(f, "caption", "ink-muted")
+    f.text:SetPoint("CENTER", 0, 0)
+    f:EnableMouse(true)
+    f:SetScript("OnEnter", function(self)
+        if self.tip then UI.ShowTooltip(self, { title = self.text:GetText(), description = self.tip }) end
+    end)
+    f:SetScript("OnLeave", function() UI.HideTooltip() end)
+    return f
+end
+
+-- Lays one group out at width w; returns its height.
+function P:DrawGroup(g, d, w)
+    g.n = d.n
+    g.title:SetValue("Group " .. d.n)
+    g.kind:SetValue(d.kind or "")
+    local inner = w - 14
+    local y = 6 + lineH("header") + 4
+    for i, s in ipairs(d.slots or {}) do
+        local c = pool(g.cards, i, function() return self:Card(g) end)
+        self:SetCard(c, s, inner)
+        c.where = { slot = s.id }
+        c:ClearAllPoints()
+        c:SetPoint("TOPLEFT", 7, -y)
+        y = y + cardH() + 3
+    end
+    hideFrom(g.cards, #(d.slots or {}) + 1)
+    g.add:SetShown(d.canAdd and true or false)
+    if d.canAdd then
+        g.add.where = { group = d.n }
+        g.add:SetSize(inner, 22)
+        g.add:ClearAllPoints()
+        g.add:SetPoint("TOPLEFT", 7, -y)
+        y = y + 22 + 3
+    end
+    -- the party-wide buffs, wrapping, under a faint rule
+    local chips = d.chips or {}
+    g.rule:SetShown(#chips > 0)
+    if #chips > 0 then
+        y = y + 2
+        g.rule:ClearAllPoints()
+        g.rule:SetPoint("TOPLEFT", 7, -y)
+        g.rule:SetWidth(inner)
+        y = y + 4
+        local x = 0
+        for i, ch in ipairs(chips) do
+            local f = pool(g.chips, i, function() return groupChip(g) end)
+            f.text:SetValue(ch.text)
+            local cw = math.ceil(UI.MeasureText("caption", ch.text)) + 10
+            if x > 0 and x + cw > inner then x = 0; y = y + CHIP_H + 3 end
+            f:SetWidth(math.min(cw, inner))
+            local warn = ch.tone == "warn" or ch.tone == "open"
+            f.edge:SetColor(warn and "amber" or "gilt-faint", ch.tone == "open" and 0.7 or nil)
+            f.text:SetColor(warn and "amber" or "ink-muted")
+            f.tip = ch.tip
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", 7 + x, -y)
+            x = x + cw + 3
+        end
+        y = y + CHIP_H
+    end
+    hideFrom(g.chips, #chips + 1)
+    return y + 7
+end
+
+--------------------------------------------------------------------------------
+-- The columns
+--------------------------------------------------------------------------------
+
+local function setupRow(self)
+    local r = CreateFrame("Button", nil, self.left)
+    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    r.fill = UI.Fill(r, "surface-raised")
+    r.fill:SetAllPoints()
+    r.edge = UI.Border(r, "gilt-line")
+    r.name = UI.Text(r, "label", "ink")
+    r.name:SetPoint("TOPLEFT", 7, -5)
+    r.name:SetJustifyH("LEFT")
+    r.changed = UI.Diamond(r, 5, "ink")
+    r.changed:SetPoint("LEFT", r.name, "RIGHT", 6, 0)
+    r.meta = UI.Text(r, "caption", "ink-muted")
+    r.meta:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
+    r.meta:SetJustifyH("LEFT")
+    r:SetScript("OnEnter", function(b) if not b.loaded then b.fill:Show(); b.fill:SetAlpha(0.5) end end)
+    r:SetScript("OnLeave", function(b) if not b.loaded then b.fill:Hide() end; b.fill:SetAlpha(1) end)
+    r:SetScript("OnClick", function(b, button)
+        if not b.id then return end
+        if button == "RightButton" then
+            if self.onSetupMenu then self.onSetupMenu(b.id, b) end
+        elseif self.onSetup then
+            self.onSetup(b.id)
+        end
+    end)
+    return r
+end
+
+function P:DrawLeft(d)
+    local L = self.left
+    local y = 0
+    local setups = d.setups or {}
+    self.setupsHead:SetPoint("TOPLEFT", 0, 0)
+    self.setupsHead:SetLabel("Setups", tostring(#setups))
+    y = y + lineH("header") + S["space-4"]
+    self.sizes:ClearAllPoints()
+    self.sizes:SetPoint("TOPLEFT", 0, -y)
+    self.sizes:SetValue(d.size)
+    y = y + 30 + S["space-4"]
+    local rowH = 5 + lineH("label") + 1 + lineH("caption") + 5
+    self.renameField:Hide()
+    for i, s in ipairs(setups) do
+        local r = pool(self.setupRows, i, function() return setupRow(self) end)
+        r.id, r.loaded = s.id, s.loaded
+        r:SetSize(LEFT_W, rowH)
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -y)
+        r.fill:SetShown(s.loaded and true or false)
+        r.edge:SetShown(s.loaded and true or false)
+        r.name:SetValue(s.name or "")
+        r.name:SetWidth(math.min(LEFT_W - 28, UI.MeasureText("label", s.name or "") + 1))
+        r.changed:SetShown(s.changed and true or false)
+        r.meta:SetValue(s.meta or "")
+        r.meta:SetWidth(LEFT_W - 14)
+        if self.renaming == s.id then
+            -- renaming in place: the field over the row's name
+            local f = self.renameField
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", r, "TOPLEFT", 0, 0)
+            f:Show()
+            f.id = s.id
+            if not f.edit:HasFocus() then
+                f:SetValue(s.name or "")
+                f.edit:SetFocus()
+                f.edit:HighlightText()
+            end
+            r.meta:SetValue("Renaming · Enter to keep")
+            r:SetHeight(30 + 1 + lineH("caption") + 5)
+            r.meta:ClearAllPoints()
+            r.meta:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 7, -1)
+        else
+            r.meta:ClearAllPoints()
+            r.meta:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
+        end
+        y = y + r:GetHeight() + S["space-1"]
+    end
+    hideFrom(self.setupRows, #setups + 1)
+    self.newRow:ClearAllPoints()
+    self.newRow:SetPoint("TOPLEFT", 0, -y)
+    y = y + 24 + S["space-4"]
+    -- Save, Save as new, Duplicate, Delete: two by two
+    local bw = (LEFT_W - S["space-2"]) / 2
+    for i, b in ipairs(self.tools) do
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", ((i - 1) % 2) * (bw + S["space-2"]), -(y + math.floor((i - 1) / 2) * (30 + S["space-2"])))
+    end
+    y = y + 2 * 30 + S["space-2"] + S["space-6"]
+    -- the palette: any by role, then each class's specs
+    self.paletteHead:ClearAllPoints()
+    self.paletteHead:SetPoint("TOPLEFT", 0, -y)
+    y = y + lineH("header") + S["space-4"]
+    local x = 0
+    for _, b in ipairs(self.roleChips) do
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", x, -y)
+        x = x + b:GetWidth() + S["space-2"]
+    end
+    y = y + PAL_H + S["space-3"]
+    for i, c in ipairs(d.palette or {}) do
+        local row = pool(self.palRows, i, function()
+            local f = CreateFrame("Frame", nil, L)
+            f:SetSize(LEFT_W, PAL_H)
+            f.diamond = UI.Diamond(f, 5, "ink")
+            f.diamond:SetPoint("LEFT", 2, 0)
+            f.name = chip(f)
+            f.name.bg:Hide()
+            f.name.edge:SetShown(false)
+            f.name:SetPoint("LEFT", 8, 0)
+            f.name:SetScript("OnEnter", nil)
+            f.name:SetScript("OnLeave", nil)
+            draggable(self, f.name, function(b) return { spec = { class = b.class } }, b.text, classToken(b.class) end)
+            f.specs = {}
+            for k = 1, 3 do
+                local s = chip(f)
+                draggable(self, s, function(b) return { spec = { class = b.class, spec = b.spec, role = b.role } }, b.text, classToken(b.class) end)
+                f.specs[k] = s
+            end
+            return f
+        end)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", 0, -y)
+        UI.Paint(row.diamond, classToken(c.class))
+        row.name:SetText(c.name)
+        row.name.label:SetColor(classToken(c.class))
+        row.name.class, row.name.text = c.class, "Any " .. c.name:lower()
+        local sx = 66
+        for k, s in ipairs(row.specs) do
+            local sp = c.specs and c.specs[k]
+            s:SetShown(sp ~= nil)
+            if sp then
+                s:SetText(sp.label)
+                s.class, s.spec, s.role, s.text = c.class, sp.spec, sp.role, c.name .. " · " .. (sp.name or sp.label)
+                s:ClearAllPoints()
+                s:SetPoint("LEFT", sx, 0)
+                sx = sx + s:GetWidth() + S["space-2"]
+            end
+        end
+        y = y + PAL_H + S["space-1"]
+    end
+    hideFrom(self.palRows, #(d.palette or {}) + 1)
+    return y
+end
+
+function P:DrawGroups(d, w)
+    local groups = d.groups or {}
+    local cols = 4
+    local gw = math.floor((w - (cols - 1) * GROUP_GAP) / cols)
+    local y = 0
+    for first = 1, #groups, cols do
+        local rowH = 0
+        for i = first, math.min(#groups, first + cols - 1) do
+            local g = pool(self.groupFrames, i, function() return self:Group() end)
+            local h = self:DrawGroup(g, groups[i], gw)
+            g.h = h
+            rowH = math.max(rowH, h)
+            g:ClearAllPoints()
+            g:SetPoint("TOPLEFT", (i - first) * (gw + GROUP_GAP), -y)
+        end
+        for i = first, math.min(#groups, first + cols - 1) do self.groupFrames[i]:SetSize(gw, rowH) end
+        y = y + rowH + GROUP_GAP
+    end
+    hideFrom(self.groupFrames, #groups + 1)
+    return y
+end
+
+local function listRow(parent)
+    local r = CreateFrame("Frame", nil, parent)
+    r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
+    r.rule:SetHeight(1)
+    r.rule:SetPoint("TOPLEFT")
+    r.rule:SetPoint("TOPRIGHT")
+    r.mark = UI.Diamond(r, 5, "ink-muted")
+    r.label = UI.Text(r, "label", "ink")
+    r.label:SetPoint("TOPLEFT", 14, -4)
+    r.label:SetJustifyH("LEFT")
+    r.mark:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+    r.n = UI.Text(r, "numeric", "ink")
+    r.n:SetPoint("TOPRIGHT", 0, -4)
+    r.detail = UI.Text(r, "caption", "ink-muted")
+    r.detail:SetPoint("TOPLEFT", r.label, "BOTTOMLEFT", 0, 0)
+    r.detail:SetJustifyH("LEFT")
+    r.detail:SetWordWrap(true)
+    r:EnableMouse(true)
+    r:SetScript("OnEnter", function(self)
+        if self.tip then UI.ShowTooltip(self, { title = self.label:GetText(), description = self.tip.description, lines = self.tip.lines }) end
+    end)
+    r:SetScript("OnLeave", function() UI.HideTooltip() end)
+    return r
+end
+
+-- One coverage or open-slot row; returns its height.
+local function drawListRow(r, item, first, w)
+    r.rule:SetShown(not first)
+    r.mark:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+    local warn = item.warn
+    r.mark:SetSize(warn and 6 or 5, warn and 6 or 5)
+    UI.Paint(r.mark, warn and "amber" or "ink-muted")
+    r.label:SetValue(item.label or "")
+    r.label:SetColor(warn and "amber" or "ink")
+    r.n:SetValue(item.n and tostring(item.n) or "")
+    r.n:SetColor(warn and "amber" or "ink")
+    local nW = item.n and (UI.MeasureText("numeric", tostring(item.n)) + S["space-4"]) or 0
+    r.label:SetWidth(w - 14 - nW)
+    r.detail:SetFixedWidth(w - 14 - nW)
+    r.detail:SetValue(item.detail or "")
+    r.detail:SetShown((item.detail or "") ~= "")
+    r.tip = item.tip
+    local h = 4 + lineH("label") + ((item.detail or "") ~= "" and r.detail:GetStringHeight() or 0) + 4
+    r:SetSize(w, h)
+    return h
+end
+
+local function personRow(self)
+    local r = CreateFrame("Button", nil, self.unplacedZone)
+    r:RegisterForClicks("RightButtonUp")
+    r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
+    r.rule:SetHeight(1)
+    r.rule:SetPoint("TOPLEFT")
+    r.rule:SetPoint("TOPRIGHT")
+    r.diamond = UI.Diamond(r, 5, "ink")
+    r.diamond:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+    r.name = UI.Text(r, "label", "ink")
+    r.name:SetPoint("TOPLEFT", 14, -4)
+    r.detail = UI.Text(r, "caption", "ink-muted")
+    r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, 0)
+    r.detail:SetJustifyH("LEFT")
+    r.detail:SetWordWrap(true)
+    r:SetScript("OnClick", function(b, button) if self.onPerson then self.onPerson(b.person, b, button) end end)
+    draggable(self, r, function(b) return { player = b.person }, b.person, classToken(b.class) end)
+    return r
+end
+
+function P:DrawRight(d)
+    local R = self.right
+    local y = 0
+    local list = d.raidWide or {}
+    self.raidHead:SetPoint("TOPLEFT", 0, 0)
+    self.raidHead:SetLabel("Raid-wide", d.raidWideMeta or "tracked only")
+    y = y + lineH("header") + S["space-3"]
+    for i, item in ipairs(list) do
+        local r = pool(self.raidRows, i, function() return listRow(R) end)
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -y)
+        y = y + drawListRow(r, item, i == 1, RIGHT_W)
+    end
+    hideFrom(self.raidRows, #list + 1)
+    self.raidEmpty:SetShown(#list == 0)
+    if #list == 0 then
+        self.raidEmpty:ClearAllPoints()
+        self.raidEmpty:SetPoint("TOPLEFT", 0, -y)
+        self.raidEmpty:SetValue(d.raidWideEmpty or "Nothing raid-wide is tracked (Settings › Raid planner).")
+        y = y + self.raidEmpty:GetStringHeight()
+    end
+    y = y + S["space-6"]
+    -- open slots
+    local open = d.open or {}
+    self.openHead:ClearAllPoints()
+    self.openHead:SetPoint("TOPLEFT", 0, -y)
+    self.openHead:SetLabel("Open slots", tostring(#open))
+    y = y + lineH("header") + S["space-3"]
+    for i, item in ipairs(open) do
+        local r = pool(self.openRows, i, function() return listRow(R) end)
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -y)
+        y = y + drawListRow(r, { label = item.label, detail = item.detail, warn = true }, i == 1, RIGHT_W)
+    end
+    hideFrom(self.openRows, #open + 1)
+    if #open == 0 then
+        self.openEmpty:Show()
+        self.openEmpty:ClearAllPoints()
+        self.openEmpty:SetPoint("TOPLEFT", 0, -y)
+        y = y + lineH("caption")
+    else
+        self.openEmpty:Hide()
+    end
+    y = y + S["space-6"]
+    -- players without a slot: a drop here lets a placed player go
+    local people = d.unplaced or {}
+    self.unplacedHead:ClearAllPoints()
+    self.unplacedHead:SetPoint("TOPLEFT", 0, -y)
+    self.unplacedHead:SetLabel("Without a slot", d.unplacedMeta or tostring(#people))
+    y = y + lineH("header") + S["space-3"]
+    local zone = self.unplacedZone
+    zone:ClearAllPoints()
+    zone:SetPoint("TOPLEFT", 0, -y)
+    zone.where = { unplaced = true }
+    local zy = 0
+    for i, p in ipairs(people) do
+        local r = pool(self.personRows, i, function() return personRow(self) end)
+        r.person, r.class = p.name, p.class
+        r.rule:SetShown(i > 1)
+        r.diamond:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+        UI.Paint(r.diamond, classToken(p.class))
+        r.name:SetValue(p.name or "")
+        r.name:SetColor(classToken(p.class))
+        r.detail:SetFixedWidth(RIGHT_W - 14)
+        r.detail:SetValue(p.detail or "")
+        local h = 4 + lineH("label") + r.detail:GetStringHeight() + 4
+        r:SetSize(RIGHT_W, h)
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -zy)
+        zy = zy + h
+    end
+    hideFrom(self.personRows, #people + 1)
+    zone.empty:SetShown(#people == 0)
+    zone:SetSize(RIGHT_W, math.max(zy, 24))
+    y = y + zone:GetHeight()
+    return y
+end
+
+--------------------------------------------------------------------------------
+-- Drawing it all
+--------------------------------------------------------------------------------
+
+function P:DrawStatus(d)
+    local x = 0
+    for i, st in ipairs(d.stats or {}) do
+        local f = pool(self.stats, i, function()
+            local s = CreateFrame("Frame", nil, self.status)
+            s.n = UI.Text(s, "numeric", "ink")
+            s.n:SetPoint("LEFT")
+            s.label = UI.Text(s, "caption", "ink-muted")
+            s.label:SetPoint("LEFT", s.n, "RIGHT", S["space-2"], 0)
+            return s
+        end)
+        f.n:SetValue(tostring(st.n))
+        f.n:SetColor(st.warn and "amber" or "ink")
+        f.label:SetValue(st.label)
+        local w = UI.MeasureText("numeric", tostring(st.n)) + S["space-2"] + UI.MeasureText("caption", st.label)
+        f:SetSize(w, 20)
+        f:ClearAllPoints()
+        f:SetPoint("LEFT", x, 0)
+        x = x + w + 14
+    end
+    hideFrom(self.stats, #(d.stats or {}) + 1)
+    self.note:SetValue(d.note or "")
+end
+
+function P:Draw()
+    local d = self.data or {}
+    self:SetTitle("Raid planner", d.meta or "")
+    self:DrawStatus(d)
+    local contentW = WIDTH - S["space-5"] * 2
+    local midW = contentW - LEFT_W - RIGHT_W - COL_GAP * 2
+    self.mid:SetWidth(midW)
+    local top = 20 + S["space-5"]
+    local h = math.max(self:DrawLeft(d), self:DrawGroups(d, midW), self:DrawRight(d))
+    self.content:SetHeight(top + h + S["space-4"])
+    -- the footer: the hint, then Fill, Inspect, Arrange groups
+    self.hint:SetValue(d.hint or "")
+    local function button(b, def, label)
+        def = def or {}
+        b:SetShown(def.shown ~= false)
+        if label then b:SetLabel(label) end
+        b:SetEnabledState(def.enabled and true or false)
+        b.tooltip = (not def.enabled and def.reason) and { title = b.label:GetText(), description = def.reason } or nil
+    end
+    button(self.arrange, d.arrange)
+    button(self.inspect, d.inspect, d.inspect and d.inspect.label)
+    button(self.fill, d.fill)
+    local prev = self.arrange
+    for _, b in ipairs({ self.inspect, self.fill }) do
+        b:ClearAllPoints()
+        if b:IsShown() then
+            b:SetPoint("RIGHT", prev, "LEFT", -S["space-4"], 0)
+            prev = b
+        end
+    end
+    self.hint:SetPoint("RIGHT", prev, "LEFT", -S["space-5"], 0)
+end
+
+function P:SetData(d)
+    self.data = d
+    if self:IsShown() then self:Draw() else self.dirty = true end
+end
+
+-- Renaming setup `id` in its row (nil: done).
+function P:Rename(id)
+    self.renaming = id
+    self:Draw()
+end
+
+--------------------------------------------------------------------------------
+-- The slot editor: what a slot asks for, beside its card
+--------------------------------------------------------------------------------
+
+local ROLES = { { value = "any", label = "Any" }, { value = "TANK", label = "Tank" },
+                { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
+local EDITOR_W = 320
+
+local function field(parent, label)
+    local t = UI.Text(parent, "caption", "ink-muted")
+    t:SetValue(label)
+    return t
+end
+
+function P:BuildEditor()
+    local p = UI.Panel(self, { title = "Slot", closable = true, solid = true, width = EDITOR_W })
+    p:SetFrameLevel(self:GetFrameLevel() + 60)
+    p:EnableMouse(true)
+    local b = p.body
+    local inner = EDITOR_W - S["space-5"] * 2
+    local function send(changes) if p.def and self.onSlotChange then self.onSlotChange(p.def.id, changes) end end
+    p.classLabel = field(b, "Class")
+    p.class = UI.Select(b, { options = {}, width = inner, onChange = function(v) send({ class = v ~= "any" and v or false }) end })
+    p.specLabel = field(b, "Spec")
+    p.specs = {} -- one switch per class (its three specs), made when first needed
+    p.roleLabel = field(b, "Role")
+    p.role = UI.Segmented(b, { options = ROLES, onChange = function(v) send({ role = v ~= "any" and v or false }) end })
+    p.labelLabel = field(b, "Label (optional)")
+    p.label = UI.TextField(b, { width = inner, placeholder = "Main tank", onChange = function(text) send({ label = strtrim(text or "") }) end })
+    p.whoLabel = field(b, "Who")
+    p.who = UI.Select(b, { options = {}, width = inner, onChange = function(v) send({ pin = v ~= "any" and v or false }) end })
+    p.remove = UI.Button(b, { text = "Remove slot", onClick = function()
+        local id = p.def and p.def.id
+        p:Hide()
+        if id and self.onSlotRemove then self.onSlotRemove(id) end
+    end })
+    p.done = UI.Button(b, { text = "Done", variant = "primary", onClick = function() p:Hide() end })
+    p:HookScript("OnHide", function() p.label.edit:ClearFocus() end)
+    p:Hide()
+    self.editor = p
+end
+
+function P:SpecSwitch(class, options)
+    local p = self.editor
+    local key = class or "any"
+    if not p.specs[key] then
+        p.specs[key] = UI.Segmented(p.body, { options = options, onChange = function(v)
+            if p.def and self.onSlotChange then self.onSlotChange(p.def.id, { spec = v ~= "any" and v or false }) end
+        end })
+    end
+    for k, s in pairs(p.specs) do s:SetShown(k == key) end
+    return p.specs[key]
+end
+
+-- def: { id, title, meta, class, spec, role, label, who, classes, specs, whoOptions }
+function P:EditSlot(def, card)
+    if not self.editor then self:BuildEditor() end
+    local p = self.editor
+    p.def = def
+    p:SetTitle(def.title or "Slot", def.meta or "")
+    local y = 0
+    local function place(region, h, gap)
+        region:ClearAllPoints()
+        region:SetPoint("TOPLEFT", 0, -y)
+        y = y + h + (gap or S["space-2"])
+    end
+    place(p.classLabel, lineH("caption"))
+    p.class:SetOptions(def.classes or {})
+    p.class:SetValue(def.class or "any")
+    place(p.class, 30, S["space-5"])
+    place(p.specLabel, lineH("caption"))
+    local spec = self:SpecSwitch(def.class, def.specs or { { value = "any", label = "Any" } })
+    spec:SetValue(def.spec or "any")
+    spec:SetDisabled(def.class == nil)
+    place(spec, 30, S["space-5"])
+    place(p.roleLabel, lineH("caption"))
+    p.role:SetValue(def.role or "any")
+    place(p.role, 30, S["space-5"])
+    place(p.labelLabel, lineH("caption"))
+    if not p.label.edit:HasFocus() then p.label:SetValue(def.label or "") end
+    place(p.label, 30, S["space-5"])
+    place(p.whoLabel, lineH("caption"))
+    p.who:SetOptions(def.whoOptions or { { value = "any", label = "Anyone who fits" } })
+    p.who:SetValue(def.who or "any")
+    place(p.who, 30, S["space-5"])
+    p.done:ClearAllPoints()
+    p.done:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -y)
+    p.remove:ClearAllPoints()
+    p.remove:SetPoint("RIGHT", p.done, "LEFT", -S["space-4"], 0)
+    y = y + 30
+    p.body:SetHeight(y)
+    p:Fit()
+    if card then
+        -- beside the card, on whichever side has room
+        p:ClearAllPoints()
+        local right = card:GetRight() and self:GetRight() and (self:GetRight() - card:GetRight() > EDITOR_W + 20)
+        if right then p:SetPoint("TOPLEFT", card, "TOPRIGHT", 12, 0) else p:SetPoint("TOPRIGHT", card, "TOPLEFT", -12, 0) end
+        p:SetClampedToScreen(true)
+    elseif not p:GetPoint() then
+        p:SetPoint("CENTER", self, "CENTER")
+    end
+    p:Show()
+end
+
+-- The card showing slot `id`, if it's drawn.
+function P:CardFor(id)
+    for _, g in ipairs(self.groupFrames) do
+        for _, c in ipairs(g.cards) do
+            if c:IsShown() and c.slot and c.slot.id == id then return c end
+        end
+    end
+end
+
+function P:CloseEditor()
+    if self.editor then self.editor:Hide() end
+end
+
+function P:EditingSlot()
+    return self.editor and self.editor:IsShown() and self.editor.def and self.editor.def.id or nil
+end
+
+--------------------------------------------------------------------------------
+-- Arrange groups: the moves listed before they're made
+--------------------------------------------------------------------------------
+
+local MOVES_W = 340
+
+function P:ShowMoves(def, onConfirm)
+    local p = self.movesPanel
+    if not p then
+        p = UI.Panel(self, { title = "Arrange groups", closable = true, solid = true, width = MOVES_W })
+        p:SetFrameLevel(self:GetFrameLevel() + 60)
+        p:EnableMouse(true)
+        p.rows = {}
+        p.note = UI.Text(p.body, "caption", "ink-muted")
+        p.note:SetWordWrap(true)
+        p.note:SetJustifyH("LEFT")
+        p.go = UI.Button(p.body, { text = "Move", variant = "primary", onClick = function()
+            local fn = p.onConfirm
+            p:Hide()
+            if fn then fn() end
+        end })
+        p.cancel = UI.Button(p.body, { text = "Cancel", onClick = function() p:Hide() end })
+        p:Hide()
+        self.movesPanel = p
+    end
+    p.onConfirm = onConfirm
+    local moves = def.moves or {}
+    p:SetTitle("Arrange groups", def.meta or (#moves == 1 and "1 move" or (#moves .. " moves")))
+    local inner = MOVES_W - S["space-5"] * 2
+    local y = 0
+    for i, m in ipairs(moves) do
+        local r = pool(p.rows, i, function()
+            local f = CreateFrame("Frame", nil, p.body)
+            f:SetHeight(20)
+            f.diamond = UI.Diamond(f, 5, "ink")
+            f.diamond:SetPoint("LEFT", 2, 0)
+            f.name = UI.Text(f, "label", "ink")
+            f.name:SetPoint("LEFT", 18, 0)
+            f.name:SetJustifyH("LEFT")
+            f.from = UI.Text(f, "caption", "ink-muted")
+            f.from:SetPoint("RIGHT")
+            return f
+        end)
+        r:SetWidth(inner)
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", 0, -y)
+        UI.Paint(r.diamond, classToken(m.class))
+        r.name:SetValue(m.name or "")
+        r.name:SetColor(classToken(m.class))
+        r.name:SetWidth(inner - 18 - 90)
+        r.from:SetValue(("group %d → %d"):format(m.from or 0, m.to or 0))
+        y = y + 20 + S["space-1"]
+    end
+    hideFrom(p.rows, #moves + 1)
+    y = y + S["space-4"]
+    p.note:SetFixedWidth(inner)
+    p.note:SetValue(def.note or "")
+    p.note:ClearAllPoints()
+    p.note:SetPoint("TOPLEFT", 0, -y)
+    y = y + p.note:GetStringHeight() + S["space-5"]
+    p.go:SetLabel(#moves == 1 and "Move 1 player" or ("Move " .. #moves .. " players"))
+    p.go:ClearAllPoints()
+    p.go:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -y)
+    p.cancel:ClearAllPoints()
+    p.cancel:SetPoint("RIGHT", p.go, "LEFT", -S["space-4"], 0)
+    p.body:SetHeight(y + 30)
+    p:Fit()
+    p:ClearAllPoints()
+    p:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -S["space-5"], 30 + S["space-4"] * 2 + S["space-4"])
+    p:Show()
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+local planners = setmetatable({}, { __mode = "k" })
+-- a theme's line heights: everything laid out again
+ns.Events.On("SUUUI_THEME_CHANGED", function()
+    for w in pairs(planners) do if w.data and w:IsShown() then w:Draw() end end
+end, "UI.RaidPlanner")
+
+function UI.RaidPlanner(parent)
+    local w = UI.WindowFrame(parent, { name = "SuuUIRaidPlanner", title = "Raid planner", width = WIDTH, height = HEIGHT,
+        footer = true, onClose = function(win) win:Hide() end })
+    Mixin(w, P)
+    w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
+    local c = w.content
+    local contentW = WIDTH - S["space-5"] * 2
+    c:SetWidth(contentW)
+
+    -- the status line: counts, and how auto-fill works
+    w.status = CreateFrame("Frame", nil, c)
+    w.status:SetPoint("TOPLEFT")
+    w.status:SetSize(contentW, 20)
+    w.stats = {}
+    w.note = UI.Text(w.status, "caption", "ink-muted")
+    w.note:SetPoint("RIGHT")
+
+    local top = 20 + S["space-5"]
+    w.left = CreateFrame("Frame", nil, c)
+    w.left:SetPoint("TOPLEFT", 0, -top)
+    w.left:SetSize(LEFT_W, 10)
+    w.mid = CreateFrame("Frame", nil, c)
+    w.mid:SetPoint("TOPLEFT", LEFT_W + COL_GAP, -top)
+    w.mid:SetSize(10, 10)
+    w.right = CreateFrame("Frame", nil, c)
+    w.right:SetPoint("TOPLEFT", contentW - RIGHT_W, -top)
+    w.right:SetSize(RIGHT_W, 10)
+
+    -- left: setups, then the palette
+    w.setupsHead = UI.SectionHeader(w.left, "Setups", "", LEFT_W)
+    w.sizes = UI.Segmented(w.left, { options = { { value = 40, label = "40" }, { value = 20, label = "20" }, { value = 10, label = "10" } },
+        onChange = function(v) if w.onSize then w.onSize(v) end end })
+    w.setupRows = {}
+    w.renameField = UI.TextField(w.left, { width = LEFT_W, onChange = function(text)
+        local id = w.renameField.id
+        w.renaming = nil
+        if id and w.onRename then w.onRename(id, strtrim(text or "")) end
+    end })
+    w.renameField.edit:HookScript("OnEditFocusLost", function()
+        C_Timer.After(0, function() if w.renaming then w:Rename(nil) end end)
+    end)
+    w.renameField:Hide()
+    w.newRow = CreateFrame("Button", nil, w.left)
+    w.newRow:SetSize(LEFT_W, 24)
+    w.newRow.label = UI.Text(w.newRow, "caption", "ink-muted")
+    w.newRow.label:SetPoint("LEFT", 7, 0)
+    w.newRow.label:SetValue("+ New setup")
+    w.newRow:SetScript("OnEnter", function(b) b.label:SetColor("ink") end)
+    w.newRow:SetScript("OnLeave", function(b) b.label:SetColor("ink-muted") end)
+    w.newRow:SetScript("OnClick", function(b) if w.onNew then w.onNew(b) end end)
+    local bw = (LEFT_W - S["space-2"]) / 2
+    w.tools = {
+        UI.Button(w.left, { text = "Save", variant = "primary", width = bw, onClick = function() if w.onSave then w.onSave() end end }),
+        UI.Button(w.left, { text = "Save as new", width = bw, onClick = function() if w.onSaveAsNew then w.onSaveAsNew() end end }),
+        UI.Button(w.left, { text = "Duplicate", width = bw, onClick = function() if w.onDuplicate then w.onDuplicate() end end }),
+        UI.Button(w.left, { text = "Delete", width = bw, onClick = function() if w.onDelete then w.onDelete() end end }),
+    }
+    w.paletteHead = UI.SectionHeader(w.left, "Slot palette", "drag onto a slot", LEFT_W)
+    w.roleChips = {}
+    for _, r in ipairs({ { "TANK", "Any tank" }, { "HEALER", "Any healer" }, { "DAMAGER", "Any damage" } }) do
+        local b = chip(w.left, ROLE_GLYPH[r[1]])
+        b:SetText(r[2])
+        b.role, b.text = r[1], r[2]
+        draggable(w, b, function(x) return { spec = { role = x.role } }, x.text, "ink" end)
+        w.roleChips[#w.roleChips + 1] = b
+    end
+    w.palRows = {}
+
+    -- middle: the groups
+    w.groupFrames = {}
+
+    -- right: raid-wide, open slots, without a slot
+    w.raidHead = UI.SectionHeader(w.right, "Raid-wide", "tracked only", RIGHT_W)
+    w.raidRows = {}
+    w.raidEmpty = UI.Text(w.right, "caption", "ink-faint")
+    w.raidEmpty:SetWordWrap(true)
+    w.raidEmpty:SetJustifyH("LEFT")
+    w.raidEmpty:SetFixedWidth(RIGHT_W)
+    w.openHead = UI.SectionHeader(w.right, "Open slots", "", RIGHT_W)
+    w.openRows = {}
+    w.openEmpty = UI.Text(w.right, "caption", "ink-faint")
+    w.openEmpty:SetValue("None: every slot is filled.")
+    w.unplacedHead = UI.SectionHeader(w.right, "Without a slot", "", RIGHT_W)
+    w.unplacedZone = CreateFrame("Frame", nil, w.right)
+    w.unplacedZone:SetSize(RIGHT_W, 24)
+    w.unplacedZone.fill = UI.Fill(w.unplacedZone, "arcane-soft")
+    w.unplacedZone.fill:SetAllPoints()
+    w.unplacedZone.fill:Hide()
+    w.unplacedZone.SetDropHover = function(z, on) z.fill:SetShown(on) end
+    w.unplacedZone.empty = UI.Text(w.unplacedZone, "caption", "ink-faint")
+    w.unplacedZone.empty:SetPoint("TOPLEFT", 0, -4)
+    w.unplacedZone.empty:SetValue("Nobody: everyone has a slot.")
+    w.personRows = {}
+
+    -- the footer
+    w.arrange = UI.Button(w.footer, { text = "Arrange groups", variant = "primary", onClick = function() if w.onArrange then w.onArrange() end end })
+    w.arrange:SetPoint("RIGHT", 0, 0)
+    w.inspect = UI.Button(w.footer, { text = "Inspect", icon = "eye", onClick = function() if w.onInspect then w.onInspect() end end })
+    w.fill = UI.Button(w.footer, { text = "Fill slots", onClick = function() if w.onFill then w.onFill() end end })
+    w.hint = UI.Text(w.footer, "caption", "ink-muted")
+    w.hint:SetPoint("LEFT", 0, 0)
+    w.hint:SetJustifyH("LEFT")
+    w.hint:SetWordWrap(false)
+
+    w:HookScript("OnShow", function(self)
+        if self.dirty then self.dirty = nil; self:Draw() end
+    end)
+    w:HookScript("OnHide", function(self)
+        if self.dragging then self:StopDrag() end
+        if self.editor then self.editor:Hide() end
+        if self.movesPanel then self.movesPanel:Hide() end
+    end)
+    w:Hide()
+    planners[w] = true
+    return w
+end

@@ -264,6 +264,10 @@ function API.AuraCatalog() return ns.AuraCatalog or {} end
 -- 0.16: SuuUI's default defensives, { { name, kind = "external" | "defensive",
 -- ward, note, ids = { ... } } } (Data/Defensives.lua, generated)
 function API.Defensives() return ns.Defensives or {} end
+-- 0.17: what each class and spec brings to a raid, for the raid planner's
+-- coverage: { classes, families, items } (Data/RaidPlanner.lua; its layout
+-- is in its header)
+function API.RaidCatalog() return ns.RaidCatalog or { classes = {}, families = {}, items = {} } end
 API.UI.SetActionTextSize = UI.SetActionTextSize -- px, never below micro (9.5)
 API.UI.SetVisibility = UI.SetVisibility -- "always" | "combat" | "mouseover" | "hidden"
 API.UI.VISIBILITY_OPTIONS = UI.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"
@@ -409,7 +413,8 @@ API.UI.ContextMenu = UI.ContextMenu -- ContextMenu(owner, { title, items = { { l
 API.UI.ContextMenuFrom = UI.ContextMenuFrom -- ContextMenuFrom(owner, fn(owner, root)): the same, described like MenuUtil's (root:CreateTitle, CreateButton, CreateDivider)
 API.UI.CloseContextMenu = UI.CloseContextMenu
 API.UI.Contacts = UI.Contacts -- Contacts(parent) -> SetData({ view, status, online, total, friends, ignored, selected }); onView, onStatus, onSelect, onWhisper, onInvite, onAdd, onIgnore, onUnignore, onMenu
-API.UI.RaidGroups = UI.RaidGroups -- RaidGroups(parent) -> SetData({ inRaid, inParty, canLead, reason, size, members }); onReadyCheck, onRoleCheck, onRaidInfo, onConvert, onMove, onSwap, onMember
+API.UI.RaidGroups = UI.RaidGroups -- RaidGroups(parent) -> SetData({ inRaid, inParty, canLead, reason, size, members, plan }); onReadyCheck, onRoleCheck, onRaidInfo, onConvert, onMove, onSwap, onMember, onPlan (0.17)
+API.UI.RaidPlanner = UI.RaidPlanner -- 0.17: RaidPlanner(parent) -> the raid planner's window: SetData(view), EditSlot, ShowMoves, Rename (see UI/RaidPlanner.lua)
 API.UI.PeopleList = UI.PeopleList -- PeopleList(parent) -> SetData({ title, empty, rows = { { key, name, color, glyph, online, detail, note, pinned, actions } } }); onMenu(row, owner)
 API.UI.GuildRoster = UI.GuildRoster -- GuildRoster(parent) -> SetData({ online, total, showOffline, sort, members, selected, actions }); onSearch, onShowOffline, onSort, onSelect, onAction(name, member), onMenu
 API.UI.GuildInfo = UI.GuildInfo -- GuildInfo(parent) -> SetData({ info, canEditInfo, ranks }); onEdit("info")

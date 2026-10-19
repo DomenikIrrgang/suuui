@@ -564,13 +564,19 @@ function M:RenderRaid()
     local test = self.raidTest ~= nil
     local canLead = test or UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
     page:SetData({ inRaid = test or IsInRaid(), inParty = IsInGroup() and not IsInRaid(), canLead = canLead and true or false,
-                   reason = InCombatLockdown() and "Not in combat." or nil, size = 40, members = self:RaidMembers() })
+                   reason = InCombatLockdown() and "Not in combat." or nil, size = 40, members = self:RaidMembers(),
+                   plan = SuuUI.Service("raidplanner") ~= nil })
 end
 
 function M:WireRaid(page)
     page.onReadyCheck = function() if DoReadyCheck then DoReadyCheck() end end
     page.onRoleCheck = function() if InitiateRolePoll then pcall(InitiateRolePoll) end end
     page.onRaidInfo = function() self:ToggleLockouts() end
+    -- the raid planner (its own module), while it's on
+    page.onPlan = function()
+        local planner = SuuUI.Service("raidplanner")
+        if planner then planner.Toggle() end
+    end
     page.onConvert = function()
         local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or ConvertToRaid
         if convert then pcall(convert) end
@@ -801,5 +807,7 @@ function M:OnEnable()
     end
     -- their rows' heights come from the text styles
     self:On("SUUUI_THEME_CHANGED", function() self:DrawLockouts() end)
+    -- Plan follows the raid planner turned on or off
+    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "raidplanner" then self:RenderRaid() end end)
     self:RegisterCommand("raidtest", "test: the Raid page with 17 made-up members to drag around", function() self:TestRaid() end)
 end
