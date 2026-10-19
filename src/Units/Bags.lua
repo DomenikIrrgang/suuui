@@ -1228,28 +1228,33 @@ local WAVE_TIMEOUT = 4    -- s for a wave's moves to land
 local MAX_WAVES = 300
 local STACK_ROUNDS = 8
 
--- By type: your gear first (weapons, armour, ammunition and quivers), then
--- bags, what you use (consumables, enhancements, gems, glyphs), recipes,
--- what you make things with (trade goods, reagents, profession items),
--- quest items, keys and the rest; grey items last whatever they are. Item
--- classes by Enum.ItemClass number.
-local CLASS_ORDER = {}
-for i, c in ipairs({ 2, 4, 6, 11, 1, 0, 8, 3, 16, 9, 7, 5, 19, 12, 13, 15, 17, 18 }) do CLASS_ORDER[c] = i end
-
--- Gear by where it's worn: weapons, then head to feet, rings and trinkets.
-local EQUIP_ORDER = {}
-for i, loc in ipairs({ "INVTYPE_2HWEAPON", "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPON", "INVTYPE_WEAPONOFFHAND",
-    "INVTYPE_SHIELD", "INVTYPE_HOLDABLE", "INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT", "INVTYPE_THROWN", "INVTYPE_RELIC",
-    "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_CLOAK", "INVTYPE_CHEST", "INVTYPE_ROBE", "INVTYPE_BODY",
-    "INVTYPE_TABARD", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_FINGER",
-    "INVTYPE_TRINKET", "INVTYPE_AMMO", "INVTYPE_BAG", "INVTYPE_QUIVER" }) do EQUIP_ORDER[loc] = i end
+-- By type: the best quality first, conjured items after even the grey ones
+-- (they don't last); within a quality by item class (Enum.ItemClass order:
+-- what you use, bags, weapons, gems, armour, reagents, ..., trade goods,
+-- recipes, quest items, keys), gear by where it's worn, the rest by
+-- subclass; then the highest item level, the dearest to sell, the name, and
+-- an item's part stacks before its full ones.
+local SLOT_ORDER = {}
+for i, loc in ipairs({ "INVTYPE_AMMO", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY",
+    "INVTYPE_CHEST INVTYPE_ROBE", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND",
+    "INVTYPE_FINGER", "INVTYPE_TRINKET", "INVTYPE_CLOAK", "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_2HWEAPON",
+    "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE", "INVTYPE_RANGED", "INVTYPE_THROWN",
+    "INVTYPE_RANGEDRIGHT", "INVTYPE_RELIC", "INVTYPE_TABARD" }) do
+    for l in loc:gmatch("%S+") do SLOT_ORDER[l] = i end
+end
+local function isGear(a) return a.classID == 2 or a.classID == 4 end
 
 -- The parts an order compares, each ascending (a minus for highest first).
 local KEY = {
-    junk = function(a) return a.quality == 0 and 1 or 0 end,
-    class = function(a) return CLASS_ORDER[a.classID] or 99 end,
+    rank = function(a) return a.conjured and 1 or -(a.quality or 0) end,
+    classID = function(a) return a.classID or 99 end,
+    slot = function(a) return isGear(a) and (SLOT_ORDER[a.equipLoc] or -1) or 0 end,
+    kind = function(a) return isGear(a) and 0 or (a.subclassID or 99) end,
+    price = function(a) return -(a.price or 0) end,
+    fewer = function(a) return a.count end,
+    class = function(a) return a.classID or 99 end,
     sub = function(a) return a.subclassID or 99 end,
-    equip = function(a) return EQUIP_ORDER[a.equipLoc] or 99 end,
+    equip = function(a) return SLOT_ORDER[a.equipLoc] or 99 end,
     quality = function(a) return -(a.quality or 0) end,
     level = function(a) return -(a.level or 0) end,
     name = function(a) return a.name or "" end,
@@ -1259,7 +1264,7 @@ local KEY = {
 }
 
 local ORDERS = {
-    type = { KEY.junk, KEY.class, KEY.sub, KEY.equip, KEY.quality, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
+    type = { KEY.rank, KEY.classID, KEY.slot, KEY.kind, KEY.level, KEY.price, KEY.name, KEY.id, KEY.link, KEY.fewer },
     quality = { KEY.quality, KEY.class, KEY.sub, KEY.equip, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
     level = { KEY.level, KEY.class, KEY.sub, KEY.equip, KEY.quality, KEY.name, KEY.id, KEY.link, KEY.count },
     name = { KEY.name, KEY.quality, KEY.id, KEY.link, KEY.count },
@@ -1281,6 +1286,20 @@ local function before(a, b, keys)
     return false
 end
 
+-- Made by a spell and gone in time (mage food, healthstones, mana gems):
+-- the game's tooltip says "Conjured Item".
+local function conjured(id)
+    local get = C_TooltipInfo and C_TooltipInfo.GetItemByID
+    local ok, data = pcall(get or error, id)
+    if not ok or type(data) ~= "table" or type(data.lines) ~= "table" then return false end
+    local mark = ITEM_CONJURED or "Conjured Item"
+    for _, line in ipairs(data.lines) do
+        local t = line.leftText
+        if plain(t) and t == mark then return true end
+    end
+    return false
+end
+
 -- What an item is, read once per link (the game may not have it loaded yet:
 -- then what GetItemInfoInstant knows, and it's asked for).
 local itemCache = {}
@@ -1290,10 +1309,11 @@ local function itemOf(info)
     local d = itemCache[key]
     if not d then
         d = { id = id, link = plain(link) and link or nil }
-        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, _, classID, subclassID, _, _, _, reagent =
+        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, price, classID, subclassID, _, _, _, reagent =
             C_Item.GetItemInfo(d.link or id)
         if name then
             d.name, d.quality, d.level, d.maxStack, d.equipLoc = name, quality, level, maxStack, equipLoc
+            d.price, d.conjured = plain(price) and price or 0, conjured(id)
             d.classID, d.subclassID, d.reagent = classID, subclassID, reagent and true or false
             if d.link and C_Item.GetDetailedItemLevelInfo then
                 local ok, effective = pcall(C_Item.GetDetailedItemLevelInfo, d.link)
@@ -1383,7 +1403,8 @@ end
 -- Where each item belongs: target[i] for slots[i] (nil: empty). The bags of
 -- a family (the reagent bag, profession bags) take the items that fit them
 -- first; the rest go into the ordinary bags. toEnd: the items gather at the
--- end, in the same order, the empty slots before them.
+-- end, mirrored (the first item in the order in the last slot), the empty
+-- slots before them.
 function M:SortTarget(slots, order, toEnd)
     local items = {}
     for _, s in ipairs(slots) do if s.item then items[#items + 1] = s.item end end
@@ -1391,8 +1412,9 @@ function M:SortTarget(slots, order, toEnd)
     table.sort(items, function(a, b) return before(a, b, keys) end)
     local target = {}
     local function place(positions, list)
-        local offset = toEnd and (#positions - #list) or 0
-        for i, item in ipairs(list) do target[positions[offset + i]] = item end
+        for i, item in ipairs(list) do
+            target[positions[toEnd and (#positions - i + 1) or i]] = item
+        end
     end
     -- the special bags, each in turn
     local special, general = {}, {}
@@ -1715,10 +1737,10 @@ local SECTION = {
         } },
         { title = "Sort", description = "The Sort button in your bags and at the bank. SuuUI's own orders move your items a few at a time, stacking part stacks first; a full sort takes a few seconds, and the window waits under the loading mark meanwhile. Combat, picking up an item or closing the window stops it; Sort again finishes it.", rows = {
             { key = "sortOrder", label = "Order", control = "select", width = 180, options = SORT_OPTIONS,
-              description = "By type: your gear first (by slot, best first), then bags, what you use, recipes, trade goods and reagents, quest items, keys and the rest; grey items last. The reagent bag and profession bags are filled with what fits them first. The game's sort: Blizzard's own, in one go." },
+              description = "By type: the best quality first, conjured items last; within a quality what you use, bags, weapons, gems, armour, reagents, trade goods, recipes, quest items and keys, gear by slot, then the highest item level and the dearest to sell. The reagent bag and profession bags are filled with what fits them first. The game's sort: Blizzard's own, in one go." },
             { key = "sortDirection", label = "Items gather at", control = "segmented",
               options = { { value = "end", label = "End of bags" }, { value = "start", label = "Start of bags" } },
-              description = "Where your items go; the empty slots are left at the other end." },
+              description = "Where your items go; the empty slots are left at the other end. At the end the order is mirrored: the first item in it sits in the last slot." },
         } },
         { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
             { key = "itemCounts", label = "Counts in item tooltips", control = "toggle",
