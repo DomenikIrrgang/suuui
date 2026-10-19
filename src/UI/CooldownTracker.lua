@@ -720,13 +720,16 @@ end
 -- (iconFor); a shared slot's `icon` when fixedIcon is set, else automatic:
 -- the first member (of those its conditions leave in) that you know, else
 -- the first whose `when` is met now (none: met), else `icon`. A member's art
--- is its own `icon`, else its first ID.
+-- is its own `icon`, else its first ID; a member you know shows the rank you
+-- know (a spell's IDs can carry two arts: Lightning Shield's majority is
+-- another one than the one shamans cast).
 local function slotArt(entry, ctx)
     if not entry.group or entry.fixedIcon then return iconFor(entry) end
     local members = entry.members or {}
     local function art(m) return C_Spell.GetSpellTexture(m.icon or m.ids[1]) end
     for _, m in ipairs(members) do
-        if m.ids and #m.ids > 0 and knownRank(m) then return art(m) end
+        local rank = m.ids and #m.ids > 0 and knownRank(m)
+        if rank then return C_Spell.GetSpellTexture(rank) end
     end
     for _, m in ipairs(members) do
         if m.ids and #m.ids > 0 and conditionMet(m.when, ctx) then return art(m) end
