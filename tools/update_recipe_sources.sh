@@ -1,6 +1,6 @@
 #!/bin/sh
 # tools/update_recipe_sources.sh
-# Refreshes src/Data/RecipeSources.lua: merges the profession trainers SuuUI
+# Refreshes src/Data/RecipeSources.wowlua: merges the profession trainers SuuUI
 # recorded in game into tools/data/trainer_records.tsv, fetches the build's
 # ItemSparse (the skill each recipe item needs) from wago.tools into a cache
 # outside the repo, and regenerates the data file.
@@ -16,6 +16,6 @@ if [ $# -eq 0 ]; then
     set -- "/Applications/World of Warcraft/_classic_beta_/WTF/Account/"*/SavedVariables/SuuUI.lua
 fi
 lua tools/merge_trainer_records.lua tools/data/trainer_records.tsv "$@"
-python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.lua \
+python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.wowlua \
     --itemsparse "$CACHE/ItemSparse.csv" --trainers tools/data/trainer_records.tsv \
     --cmangos tools/data/cmangos_trainers.tsv
