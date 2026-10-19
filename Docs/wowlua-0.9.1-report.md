@@ -79,6 +79,7 @@ over them; a better diagnostic would help).
 | [C37](#c37) | WoW API declarations | low | Undeclared globals (read through `_G`) |
 | [C38](#c38) | tooling | medium | `wowlua publish --dry-run` waited without output |
 | [C39](#c39) | tooling | high | The test profile's `runtime-checks = "all"` and half-built frames |
+| [C40](#c40) | tooling | high | `wowlua test --coverage` panics: "stale handle" (VM heap) |
 | [S1](#s1) | stdlib | feature | wowlua:events: SuuUI's bus shape |
 | [S2](#s2) | stdlib | high | Per-call allocations in wowlua:events, hooks and timer |
 | [S3](#s3) | stdlib | feature | wowlua:events: re-pointing a unit subscription |
@@ -916,6 +917,54 @@ static type), and `wowlua.json` sets `profiles.test.runtime-checks` to
 in tests, which is what a dev build in the game checks too. Worth deciding
 whether wowlua should offer a cast that is never checked at run time, or skip
 `::` checks of interface types against tables still being built.
+
+<a id="c40"></a>
+
+### C40. `wowlua test --coverage` panics: "stale handle" (VM heap)
+
+`wowlua test --coverage` dies with `internal compiler error: panicked at
+crates/wowlua-vm/src/heap.rs:127:18: stale handle N/0` whenever a garbage
+collection runs after the addon's files loaded (enough allocation at login,
+or any `collectgarbage("collect")`). Without `--coverage` the same tests pass.
+
+Minimal repro (fresh `wowlua new --flavors camelot fresh`, delete
+`tests/main.test.wowlua`):
+
+```wowlua
+-- src/Mod.wowlua
+export function hello(): string
+    return "hi"
+end
+
+local t: { [string]: any } = {}
+local v = t.zzOnlyHereNeverStored
+-- tests/mod.test.wowlua
+import test, expect from "wowlua:test"
+import hello from "/Mod"
+
+@test("hello")
+local function h()
+    collectgarbage("collect")
+    expect(hello()).toBe("hi")
+end
+```
+
+`wowlua test --coverage` panics; it passes without the `collectgarbage` line,
+with a computed key instead of `.zzOnlyHereNeverStored`, or without
+`--coverage`. `test.blizzard-ui` isn't needed.
+
+Likely cause (from reading v0.9.1's `crates/wowlua-test/src/coverage.rs`): the
+report's `generated_checks(vm, proto)` reads the string constants used as
+field keys through `vm.str_bytes`. Coverage keeps every loaded function's
+`Rc<Proto>`, but the GC doesn't count those constants as live, so a field
+name used nowhere else (in a top-level chunk or a dropped function) is freed
+and reading it at report time panics. `test.coverage.exclude` doesn't help
+(applied after the report is built).
+
+Workaround in SuuUI: `tests/mocks/gc.wowlua` runs `collectgarbage("stop")`
+(mocks load after Blizzard's UI, before the addon), so no automatic
+collection runs during tests. An explicit `collectgarbage("collect")` in a
+test would still crash coverage.
 
 ## Standard library gaps
 
