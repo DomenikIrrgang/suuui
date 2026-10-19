@@ -329,14 +329,15 @@ local function doWrite(eb)
     local o = out()
     local w = write
     if not (w and not w.done) then return end
+    local r = o.writes[w.variant]
     w.done = true
     w.at = GetTime()
-    o.write.before = state(eb, "before the write")
+    r.before = state(eb, "before the write")
     local ok, err
     if w.variant == "a" then
         ok, err = pcall(eb.SetText, eb, w.text)
     elseif w.variant == "b" then
-        o.write.emptyBefore = text(eb) == ""
+        r.emptyBefore = text(eb) == ""
         ok, err = pcall(eb.Insert, eb, w.text)
     else
         local open = (ChatFrameUtil and ChatFrameUtil.OpenChat) or ChatFrame_OpenChat
@@ -347,19 +348,19 @@ local function doWrite(eb)
             else err = box end
         end
     end
-    o.write.call = ok and "ran" or ("error: " .. tostring(err))
+    r.call = ok and "ran" or ("error: " .. tostring(err))
     w.box = eb
-    C_Timer.After(0.1, function() o.write.after = state(eb, "0.1 s after the write") end)
-    ns.Print(("Chat palette probe: %s put %q into the input (%s). Press Enter to send it, then open the input and type /camp yourself (Cancel the logout if it starts); then /suu probe taint. In 60 s a result line comes."):format(
-        w.label, w.text, o.write.call))
+    C_Timer.After(0.1, function() r.after = state(eb, "0.1 s after the write") end)
+    ns.Print(("Chat palette probe: %s put %q into the input (%s). Press Enter to send it, then open the input and type /camp yourself (Cancel the logout if it starts); then /suu probe taint. Wait for the result line (60 s) before you /reload."):format(
+        w.label, w.text, r.call))
     C_Timer.After(60, function()
         local later = state(eb, "60 s after the write")
-        o.write.later = later
-        local blocked = o.write.blocked or {}
-        local before = o.write.before and o.write.before.taintedCount or 0
-        o.write.result = ("write %s (%s): %d blocked/forbidden in 60 s%s; input values written by addon code: %d before, %d now"):format(
+        r.later = later
+        local blocked = r.blocked or {}
+        local before = r.before and r.before.taintedCount or 0
+        r.result = ("write %s (%s): %d blocked/forbidden in 60 s%s; input values written by addon code: %d before, %d now"):format(
             w.variant, w.label, #blocked, #blocked > 0 and (" (" .. blocked[1] .. ")") or "", before, later.taintedCount)
-        ns.Print("Chat palette probe: " .. o.write.result .. ". /reload to save it, and tell Claude whether /camp worked.")
+        ns.Print("Chat palette probe: " .. r.result .. ". /reload to save it, and tell Claude whether /camp worked.")
     end)
 end
 
@@ -409,9 +410,10 @@ local function listen()
         local line = ("%s %s %s %s (%s, combat %s)"):format(date("%H:%M:%S"), event, show(addon), show(func), since,
             tostring(InCombatLockdown()))
         push(p.blocked, line, 40)
-        if write and write.at and GetTime() - write.at <= 60 and p.write then
-            p.write.blocked = p.write.blocked or {}
-            push(p.write.blocked, line, 20)
+        local r = write and p.writes and p.writes[write.variant]
+        if r and write.at and GetTime() - write.at <= 60 then
+            r.blocked = r.blocked or {}
+            push(r.blocked, line, 20)
         end
     end)
 end
@@ -545,8 +547,12 @@ function CP.Command(arg)
             return
         end
         write = { variant = variant, label = VARIANTS[variant], text = "/played", reopened = {} }
-        o.write = { variant = variant, label = VARIANTS[variant], text = write.text, armedAt = date("%H:%M:%S"),
-                    reopened = write.reopened }
+        -- each variant keeps its own record (one per session, so a, b and c
+        -- add up across the /reloads)
+        o.write = nil
+        o.writes = o.writes or {}
+        o.writes[variant] = { label = VARIANTS[variant], text = write.text, armedAt = date("%H:%M:%S"),
+                              reopened = write.reopened }
         if variant == "c" then
             C_Timer.After(2, function() doWrite(ChatFrameUtil and ChatFrameUtil.GetLastActiveWindow and ChatFrameUtil.GetLastActiveWindow() or ChatFrame1EditBox) end)
             ns.Print("Chat palette probe: in 2 s SuuUI opens the input with /played in it (don't press Up or Down this session: recall taints by itself).")
