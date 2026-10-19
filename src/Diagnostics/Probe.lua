@@ -715,7 +715,7 @@ ns.Probe = {}
 -- The topics /suu probe takes (the chat's command palette lists them): a
 -- new topic in Command below goes here too.
 ns.Probe.TOPICS = {
-    "ahdata", "ahpost", "ahscan", "api", "bags", "bankslots", "calendar", "camp", "casttarget", "character", "chat",
+    "ahdata", "ahpost", "ahscan", "api", "bags", "bagsort", "bankslots", "calendar", "camp", "casttarget", "character", "chat",
     "chatpalette", "class", "collart", "collown", "colltiles", "deathrecap", "dragon", "durability", "filters",
     "flicker", "gamemenu", "garbage", "givers", "group", "hold", "hovertip", "icons", "legacy", "lfg", "loot", "map",
     "mappins", "marks", "memory", "meter", "micro", "minimap", "mountfeet", "mountframe", "npcportrait", "partyauras",
@@ -773,6 +773,10 @@ function ns.Probe.Command(arg)
     end
     if sub == "bags" then
         ns.BagProbe.Command(rest)
+        return
+    end
+    if sub == "bagsort" then
+        ns.BagSortProbe.Command(rest)
         return
     end
     if sub == "loot" then
