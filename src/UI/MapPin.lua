@@ -24,6 +24,8 @@
 --       arcs = nil,               -- 0.17: { token, … } a split edge, one arc per
 --                                 -- item (2-4), clockwise from the top
 --       bar = nil,                -- 0.17: a token: a 16 x 4 bar under the pin
+--       glow = nil,               -- 0.17: a token: a soft glow around the pin
+--                                 -- (a convergence while you lack its blessing)
 --   })
 -- The quest pins' difficulty (design "Map quest difficulty", direction D):
 -- the edge a 2 px ring in the quest's colour (split per quest for a giver
@@ -41,6 +43,7 @@ local UI = ns.UI
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
+local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
 local ARC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RingArc"
 local SIZE, SMALL = 26, 21
 
@@ -98,6 +101,11 @@ function Pin:SetData(d)
         UI.Paint(self.ringOuter, d.ring)
         fit(self.ringGap, size + 3)
         UI.Paint(self.ringGap, "surface")
+    end
+    self.glow:SetShown(d.glow ~= nil)
+    if d.glow then
+        fit(self.glow, size + 16)
+        UI.Paint(self.glow, d.glow)
     end
     self.outline:SetShown(d.outline and true or false)
     if d.outline then
@@ -167,6 +175,8 @@ end
 function UI.MapPin(parent)
     local b = CreateFrame("Button", nil, parent)
     Mixin(b, Pin)
+    b.glow = disc(b, "BACKGROUND", -1)
+    b.glow:SetTexture(SOFT)
     b.hl = disc(b, "BACKGROUND", 0)
     UI.Paint(b.hl, "ink")
     b.hl:Hide()

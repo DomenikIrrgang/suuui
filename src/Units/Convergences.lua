@@ -1,0 +1,533 @@
+-- Units/Convergences.lua
+-- The Convergences of Elements (design "Convergences of Elements", B: a
+-- Skyborne layer): the tornadoes where a Skyborne's Skysight gives the long
+-- Elemental Blessing. The game marks them nowhere (no vignette, no area
+-- POI; /suu probe skysight), so SuuUI learns each one from your casts and
+-- keeps them for the whole account. Probed 2026-10-19:
+--   Skysight (1259686) next to a convergence  → Elemental Blessing 1270893,
+--                                               15 min or more, +10% speed
+--   anywhere else                             → Elemental Blessing 1259688, 30 s
+--   in combat the blessing reads as secret: the cast's place is kept and
+--   the blessing read once combat ends (it outlasts any fight)
+-- A cast within 40 yards of a known one is that one. One is seeded, from
+-- the quest data SuuUI carries (Zephra's Isle).
+--
+-- Shared with your group and guild (asked 2026-10-19): a convergence you
+-- find or use goes to both by addon message, and Share all in the settings
+-- sends every one you know. Every character with SuuUI saves what it's
+-- sent, whatever its race, so your Skyborne alts have them; a shared one
+-- reads "Shared by" until you use Skysight there yourself.
+--
+-- Only Skyborne characters see them: the world map's Skyborne filters
+-- (WorldMap reads Spots, PlaceOn and Tip here), and the minimap when near.
+-- A built-in module written against the public API only.
+--
+-- A spot: { map (uiMapID), x, y (0-1), by (who found it), at (time()),
+-- from (who shared it with you; nil: found here or seeded), confirmed (you
+-- used Skysight there), seed (SuuUI's data) }.
+
+local M = SuuUI.RegisterModule({
+    id = "convergences",
+    name = "Convergences of Elements",
+    description = "The tornadoes where a Skyborne's Skysight gives the long Elemental Blessing: learned from your casts, shared with your group and guild, on the world map and minimap.",
+    api = "0.17",
+    defaults = { send = true, receive = true, minimap = true },
+})
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+
+local isSecret = issecretvalue or function() return false end
+local function plain(v) return v ~= nil and not isSecret(v) end
+
+local SKYSIGHT = 1259686
+local BLESSING = 1270893      -- the long one, at a convergence
+local SKYBORNE_RACES = { [95] = true, [96] = true }
+local SAME_SPOT = 40          -- yards
+local PENDING_FOR = 20 * 60   -- seconds a cast waits to be read
+local MAX_SPOTS = 200
+local MAX_PER_SENDER = 30     -- shared spots taken from one sender a session
+local PREFIX = "SuuUI"
+local TAG = "CONV"
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
+
+local SEED = { map = 2521, x = 0.4828, y = 0.2062, seed = true, confirmed = true }
+
+--------------------------------------------------------------------------------
+-- The spots
+--------------------------------------------------------------------------------
+
+local function store()
+    local d = SuuUI.AccountData("convergences")
+    d.spots = d.spots or {}
+    if not d.seeded then
+        d.seeded = true
+        local s = {}
+        for k, v in pairs(SEED) do s[k] = v end
+        table.insert(d.spots, 1, s)
+    end
+    return d
+end
+
+function M:Spots()
+    return store().spots
+end
+
+-- Skyborne: by race, or by Skysight in the spellbook.
+function M:IsSkyborne()
+    local _, _, race = UnitRace("player")
+    if plain(race) and SKYBORNE_RACES[race] then return true end
+    local ok, known = pcall(IsPlayerSpell, SKYSIGHT)
+    return ok and plain(known) and known or false
+end
+
+-- Whether this character sees them (Skyborne, the module on).
+function M:Shown()
+    return self:IsEnabled() and self:IsSkyborne()
+end
+
+-- A spot's place in the world: { continent, north, west }, cached.
+local worldCache = setmetatable({}, { __mode = "k" })
+local function worldOf(spot)
+    local w = worldCache[spot]
+    if w == nil then
+        w = false
+        if C_Map.GetWorldPosFromMapPos and CreateVector2D then
+            local ok, continent, pos = pcall(C_Map.GetWorldPosFromMapPos, spot.map, CreateVector2D(spot.x, spot.y))
+            if ok and plain(continent) and pos then
+                local n, wv = pos:GetXY()
+                if plain(n) and plain(wv) then w = { continent, n, wv } end
+            end
+        end
+        worldCache[spot] = w
+    end
+    return w or nil
+end
+
+-- Yards between two spots; nil when they can't be compared.
+local function yards(a, b)
+    local wa, wb = worldOf(a), worldOf(b)
+    if wa and wb then
+        if wa[1] ~= wb[1] then return nil end
+        local dn, dw = wa[2] - wb[2], wa[3] - wb[3]
+        return math.sqrt(dn * dn + dw * dw)
+    end
+    if a.map ~= b.map then return nil end
+    local ok, w, h = pcall(C_Map.GetMapWorldSize, a.map)
+    if not (ok and plain(w) and plain(h) and w > 0 and h > 0) then return nil end
+    local dx, dy = (a.x - b.x) * w, (a.y - b.y) * h
+    return math.sqrt(dx * dx + dy * dy)
+end
+
+function M:Near(spot)
+    for _, s in ipairs(self:Spots()) do
+        local d = yards(s, spot)
+        if d and d <= SAME_SPOT then return s end
+    end
+end
+
+local function changed(self)
+    self:Emit("SUUUI_CONVERGENCES_CHANGED")
+    self:UpdateMinimap()
+end
+
+-- (room for one more: the oldest shared one not confirmed goes first)
+local function makeRoom(list)
+    if #list < MAX_SPOTS then return end
+    for i, s in ipairs(list) do
+        if s.from and not s.confirmed then table.remove(list, i) return end
+    end
+    for i, s in ipairs(list) do
+        if not s.seed then table.remove(list, i) return end
+    end
+end
+
+function M:Add(spot)
+    local list = self:Spots()
+    makeRoom(list)
+    list[#list + 1] = spot
+    changed(self)
+    return spot
+end
+
+-- A spot's place on another map (a zone's on its continent).
+function M:PlaceOn(spot, mapID)
+    if spot.map == mapID then return spot.x, spot.y end
+    local w = worldOf(spot)
+    if not (w and C_Map.GetMapPosFromWorldPos and CreateVector2D) then return end
+    local ok, onMap, pos = pcall(C_Map.GetMapPosFromWorldPos, w[1], CreateVector2D(w[2], w[3]), mapID)
+    if not (ok and onMap == mapID and pos) then return end
+    local x, y = pos:GetXY()
+    if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
+end
+
+function M:MapName(map)
+    local info = map and C_Map.GetMapInfo(map)
+    return info and info.name
+end
+
+function M:Where(spot)
+    return ("%s %.1f, %.1f"):format(self:MapName(spot.map) or "", spot.x * 100, spot.y * 100)
+end
+
+--------------------------------------------------------------------------------
+-- The blessing
+--------------------------------------------------------------------------------
+
+-- The long blessing on you: the aura, nil without it, false when it can't
+-- be read (combat).
+local function blessing()
+    local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, BLESSING)
+    if not ok then return false end
+    if a == nil then return InCombatLockdown() and false or nil end
+    if not (plain(a.expirationTime) and plain(a.duration)) then return false end
+    return a
+end
+
+-- Whether you have it (the last known while it can't be read).
+function M:Blessed()
+    return self.blessed and true or false
+end
+
+-- Seconds of it left, or nil.
+function M:BlessingLeft()
+    local a = blessing()
+    if a and a.expirationTime > 0 then return math.max(0, a.expirationTime - GetTime()) end
+end
+
+local function readBlessing(self)
+    local a = blessing()
+    if a == false then return end
+    local now = a and true or false
+    if now ~= self.blessed then
+        self.blessed = now
+        changed(self)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Learning: a Skysight cast's place, kept until the blessing can be read
+--------------------------------------------------------------------------------
+
+function M:OnCast()
+    local map = C_Map.GetBestMapForUnit("player")
+    if not plain(map) then return end
+    local pos = C_Map.GetPlayerMapPosition(map, "player")
+    local x, y
+    if pos then x, y = pos:GetXY() end
+    if not (plain(x) and plain(y)) then return end
+    self.pending = { map = map, x = x, y = y, cast = GetTime() }
+    C_Timer.After(0.5, function() self:Resolve() end)
+end
+
+-- Which blessing the cast gave, once it can be read: the long one begun at
+-- the cast means a convergence (one from an earlier cast began before).
+function M:Resolve()
+    local p = self.pending
+    if not p then return end
+    if GetTime() - p.cast > PENDING_FOR then self.pending = nil return end
+    local a = blessing()
+    if a == false then return end -- combat: after it
+    self.pending = nil
+    if not (a and a.duration > 0 and math.abs((a.expirationTime - a.duration) - p.cast) < 3) then return end
+    self:AtConvergence({ map = p.map, x = p.x, y = p.y })
+end
+
+function M:AtConvergence(here)
+    local known = self:Near(here)
+    if known then
+        if not known.confirmed then
+            known.confirmed = true
+            changed(self)
+        end
+        self:Send(known)
+        return
+    end
+    local name = UnitName("player")
+    local spot = self:Add({ map = here.map, x = here.x, y = here.y, by = plain(name) and name or nil, at = time(), confirmed = true })
+    self:Send(spot)
+    if self:Shown() then
+        SuuUI.Notify({ id = "suu:convergence:found", kind = "timed", category = "Skysight",
+            icon = { glyph = "tornado", color = "arcane" },
+            title = "Convergence of Elements found",
+            body = self:Where(spot) .. ". Saved for all your characters." })
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Sharing: your group and your guild
+--------------------------------------------------------------------------------
+
+local function groupChannel()
+    if UI.Flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
+    if UI.Flag(IsInRaid()) then return "RAID" end
+    if UI.Flag(IsInGroup()) then return "PARTY" end
+end
+
+function M:Channels()
+    local list = {}
+    local g = groupChannel()
+    if g then list[#list + 1] = g end
+    if UI.Flag(IsInGuild()) then list[#list + 1] = "GUILD" end
+    return list
+end
+
+-- (names can't break the message: no tabs, newlines or escapes)
+local function clean(s) return (tostring(s or ""):gsub("[\t\n\r|]", " "):sub(1, 40)) end
+
+local function message(spot)
+    return ("%s\t1\t%d\t%.4f\t%.4f\t%s\t%d"):format(TAG, spot.map, spot.x, spot.y, clean(spot.by), spot.at or 0)
+end
+
+local function send(text, channels)
+    if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return end
+    for _, ch in ipairs(channels) do pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, ch) end
+end
+
+-- One spot, when you find or use it (Sharing › Send on).
+function M:Send(spot)
+    if not self:Get("send") then return end
+    local channels = self:Channels()
+    if #channels > 0 then send(message(spot), channels) end
+end
+
+-- Every spot you know (the settings' Share all), a few a second.
+function M:ShareAll()
+    local channels = self:Channels()
+    if #channels == 0 then return end
+    for i, spot in ipairs(self:Spots()) do
+        C_Timer.After((i - 1) * 0.25, function() send(message(spot), channels) end)
+    end
+end
+
+local function fromMe(sender)
+    local name, realm = UnitFullName("player")
+    return sender == name or (realm and (sender == name .. "-" .. realm or sender == name .. " " .. realm))
+end
+
+-- A spot from someone else's SuuUI: untrusted, so checked before it's kept.
+function M:OnMessage(prefix, text, channel, sender)
+    if prefix ~= PREFIX or not (plain(text) and plain(sender)) or type(text) ~= "string" then return end
+    local tag, version, map, x, y, by, at = strsplit("\t", text)
+    if tag ~= TAG or version ~= "1" or not self:Get("receive") or fromMe(sender) then return end
+    map, x, y, at = tonumber(map), tonumber(x), tonumber(y), tonumber(at)
+    if not (map and x and y and map == math.floor(map) and map > 0 and map < 100000
+            and x >= 0 and x <= 1 and y >= 0 and y <= 1) then return end
+    if not C_Map.GetMapInfo(map) then return end
+    self.taken = self.taken or {}
+    if (self.taken[sender] or 0) >= MAX_PER_SENDER then return end
+    local spot = { map = map, x = x, y = y }
+    if self:Near(spot) then return end
+    self.taken[sender] = (self.taken[sender] or 0) + 1
+    local now = time()
+    spot.at = (at and at > 1.6e9 and at <= now + 86400) and math.floor(at) or now
+    by = by and clean(by) or ""
+    spot.by = by ~= "" and by or nil
+    spot.from = clean(sender)
+    self:Add(spot)
+    if self:Shown() then
+        SuuUI.Notify({ id = "suu:convergence:shared", kind = "timed", category = "Skysight",
+            icon = { glyph = "tornado", color = "arcane" },
+            title = "Convergence of Elements shared",
+            body = self:Where(spot) .. ". Shared by " .. spot.from .. ", saved for all your characters." })
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The look: the map pin, its tooltip
+--------------------------------------------------------------------------------
+
+-- The world map's pin: the tornado in arcane on an arcane edge, glowing
+-- while you lack the blessing (a nudge to cast there), resting with it.
+function M:PinLook()
+    return { glyph = "tornado", color = "arcane", edge = "arcane", glow = not self:Blessed() and "arcane-glow" or nil }
+end
+
+local function day(at)
+    return ("%d %s"):format(tonumber(date("%d", at)), date("%b", at))
+end
+
+function M:Tip(spot)
+    local muted = "|cff" .. T.color["ink-muted"].hex
+    local left = self:BlessingLeft()
+    local lines = {
+        { "Elemental Blessing", left and (("%d min left"):format(math.ceil(left / 60))) or "not active" },
+        { "Gives", "+10% speed, 15 min" },
+    }
+    if spot.seed then
+        lines[#lines + 1] = { "Found", "SuuUI's data" }
+    elseif spot.by then
+        lines[#lines + 1] = { "Found", spot.by .. (spot.at and (", " .. day(spot.at)) or "") }
+    end
+    if spot.from and not spot.confirmed then lines[#lines + 1] = { muted .. "Shared by " .. spot.from .. "|r" } end
+    local subtitle = ("%s · %.1f, %.1f"):format(self:MapName(spot.map) or "", spot.x * 100, spot.y * 100)
+    return { title = "Convergence of Elements", subtitle = subtitle, lines = lines,
+             meta = not left and "Use Skysight here for the long blessing" or nil }
+end
+
+--------------------------------------------------------------------------------
+-- The minimap, when near: the tornado where it is, in range only
+--------------------------------------------------------------------------------
+
+function M:MinimapPlaces()
+    local mm = _G.Minimap
+    if not (mm and C_Minimap and C_Minimap.GetViewRadius) then return {} end
+    local okP, north, west, _, instance = pcall(UnitPosition, "player")
+    if not (okP and plain(north) and plain(west) and plain(instance)) then return {} end
+    local range = C_Minimap.GetViewRadius()
+    if not (plain(range) and range > 0) then return {} end
+    local half = mm:GetWidth() / 2
+    local turn = 0
+    if GetCVar("rotateMinimap") == "1" and GetPlayerFacing then
+        local f = GetPlayerFacing()
+        if plain(f) then turn = -f end
+    end
+    local out = {}
+    for _, spot in ipairs(self:Spots()) do
+        local w = worldOf(spot)
+        if w and w[1] == instance then
+            local east, up = west - w[3], w[2] - north
+            if turn ~= 0 then
+                local c, sn = math.cos(turn), math.sin(turn)
+                east, up = east * c - up * sn, east * sn + up * c
+            end
+            -- (inside the ring, the pin whole)
+            if math.sqrt(east * east + up * up) <= range * 0.9 then
+                out[#out + 1] = { spot = spot, x = east / range * half, y = up / range * half }
+            end
+        end
+    end
+    return out
+end
+
+local function minimapPin(parent)
+    local b = CreateFrame("Frame", nil, parent)
+    b:SetSize(16, 16)
+    b.glow = b:CreateTexture(nil, "BACKGROUND")
+    b.glow:SetTexture(SOFT)
+    b.glow:SetPoint("CENTER")
+    b.glow:SetSize(28, 28)
+    UI.Paint(b.glow, "arcane-glow")
+    b.glyph = b:CreateTexture(nil, "ARTWORK")
+    b.glyph:SetTexture(GLYPHS .. "tornado.tga")
+    b.glyph:SetAllPoints()
+    UI.Paint(b.glyph, "arcane")
+    b:EnableMouse(true)
+    b:SetScript("OnEnter", function(self)
+        if self.spot then UI.ShowTooltip(self, function() return M:Tip(self.spot) end) end
+    end)
+    b:SetScript("OnLeave", function() UI.HideTooltip() end)
+    return b
+end
+
+function M:UpdateMinimap()
+    local mm = _G.Minimap
+    if not mm then return end
+    local layer = self.mmLayer
+    if not layer then
+        if not self:Shown() then return end
+        layer = CreateFrame("Frame", nil, mm)
+        layer:SetAllPoints()
+        layer:SetFrameLevel(mm:GetFrameLevel() + 5)
+        layer.pins = {}
+        local wait = 0
+        layer:SetScript("OnUpdate", function(_, elapsed)
+            wait = wait - elapsed
+            if wait > 0 then return end
+            wait = 0.1
+            self:PlaceMinimapPins()
+        end)
+        self.mmLayer = layer
+    end
+    layer:SetShown(self:Shown() and self:Get("minimap") and true or false)
+    self:PlaceMinimapPins()
+end
+
+function M:PlaceMinimapPins()
+    local layer = self.mmLayer
+    if not (layer and layer:IsShown()) then return end
+    local places = self:MinimapPlaces()
+    local glow = not self:Blessed()
+    for i, p in ipairs(places) do
+        local pin = layer.pins[i]
+        if not pin then
+            pin = minimapPin(layer)
+            layer.pins[i] = pin
+        end
+        pin.spot = p.spot
+        pin.glow:SetShown(glow)
+        pin:ClearAllPoints()
+        pin:SetPoint("CENTER", layer, "CENTER", p.x, p.y)
+        pin:Show()
+    end
+    for i = #places + 1, #layer.pins do layer.pins[i]:Hide() end
+end
+
+--------------------------------------------------------------------------------
+-- Settings › Convergences of Elements
+--------------------------------------------------------------------------------
+
+local function shareReason()
+    if #M:Channels() == 0 then return true, "You're in no group or guild." end
+end
+
+local SECTION = {
+    id = "convergences", label = "Convergences of Elements", category = "World", order = 14,
+    groups = {
+        { title = "On the map", description = "Skyborne characters see the convergences on the world map (Map filters › Skyborne) and, near one, on the minimap. They glow while you don't have the long Elemental Blessing.", rows = {
+            { key = "minimap", label = "On the minimap when near", control = "toggle",
+              disabled = function() if not M:IsSkyborne() then return true, "Only Skyborne characters see the convergences." end end,
+              description = "A convergence within the minimap's range shows there, glowing while you don't have the blessing." },
+        } },
+        { title = "Sharing", description = "Your group and your guild, for players with SuuUI. Every character saves what it's sent, whatever its race, so your Skyborne characters have them.", rows = {
+            { key = "send", label = "Send the ones you find", control = "toggle",
+              description = "A convergence you find, or use Skysight at, goes to your group and guild." },
+            { key = "receive", label = "Save shared ones", control = "toggle",
+              description = "Convergences your group or guild sends are saved for all your characters, marked with who shared them until you use Skysight there yourself." },
+            { label = "Share all", control = "button", text = "Share all",
+              disabled = shareReason,
+              description = function()
+                  local n = #M:Spots()
+                  return ("Sends every convergence you know (%d) to your group and guild."):format(n)
+              end,
+              onClick = function() M:ShareAll() end },
+        } },
+    },
+}
+
+--------------------------------------------------------------------------------
+-- Lifecycle
+--------------------------------------------------------------------------------
+
+function M:OnEnable()
+    store()
+    self:RegisterSettings(SECTION)
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
+    self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
+    self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
+        if plain(spellID) and spellID == SKYSIGHT then self:OnCast() end
+    end)
+    self:OnUnitEvent("UNIT_AURA", { "player" }, function()
+        readBlessing(self)
+        if self.pending and not InCombatLockdown() then self:Resolve() end
+    end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        C_Timer.After(0.5, function()
+            readBlessing(self)
+            self:Resolve()
+        end)
+    end)
+    self:Watch("minimap", function() self:UpdateMinimap() end)
+    C_Timer.After(1, function()
+        if not self:IsEnabled() then return end
+        readBlessing(self)
+        self:UpdateMinimap()
+    end)
+    changed(self)
+end
+
+function M:OnDisable()
+    self.pending = nil
+    if self.mmLayer then self.mmLayer:Hide() end
+    self:Emit("SUUUI_CONVERGENCES_CHANGED")
+end

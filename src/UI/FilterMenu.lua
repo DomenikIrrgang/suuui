@@ -26,6 +26,7 @@
 --       onChange = fn(value),   -- value by group key: one → a value,
 --   })                          -- many and toggles → a list of values
 --   menu:SetValue(value), menu:GetValue(), menu:Count(), menu:Close()
+--   menu:SetGroups(groups)   -- 0.17: other groups (built again when it next opens)
 
 local _, ns = ...
 
@@ -90,6 +91,14 @@ function Menu:GetValue() return self:Full(self.value) end
 
 function Menu:SetValue(value)
     self.value = self:Full(value)
+    self:Draw()
+end
+
+function Menu:SetGroups(groups)
+    self:Close()
+    self.panel = nil
+    self.groups = groups or {}
+    self.value = self:Full(self.value)
     self:Draw()
 end
 

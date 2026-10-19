@@ -432,8 +432,8 @@ API.UI.GroupFinderBrowse = UI.GroupFinderBrowse -- GroupFinderBrowse(parent) -> 
 -- ForeverLFG: the game's group finder and public chat as one list of groups
 -- and players looking (Docs/ForeverLFG.md); idle until SuuUI.LFG.Start()
 API.LFG = ns.LFG
-API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", column, options = { { value, label, color } } } }, defaults, value, placeholder, width, height, style = "button", done, onChange }) -> SetValue, GetValue, Count, Close
-API.UI.MapPin = UI.MapPin -- 0.14: MapPin(parent) -> SetData({ glyph or char, color, edge, small, ring, count }), PinSize(), SetHighlight(true | "dim" | nil)
+API.UI.FilterMenu = UI.FilterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", column, options = { { value, label, color } } } }, defaults, value, placeholder, width, height, style = "button", done, onChange }) -> SetValue, GetValue, Count, Close; 0.17: SetGroups(groups)
+API.UI.MapPin = UI.MapPin -- 0.14: MapPin(parent) -> SetData({ glyph or char, color, edge, small, ring, count; 0.17: outline, arcs, bar, glow }), PinSize(), SetHighlight(true | "dim" | nil)
 API.UI.PROFESSIONS_W = UI.PROFESSIONS_W
 API.UI.PROFESSIONS_H = UI.PROFESSIONS_H
 API.UI.LegacyTrack = UI.LegacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip

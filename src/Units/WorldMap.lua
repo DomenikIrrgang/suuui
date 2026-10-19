@@ -18,6 +18,8 @@
 --   Trainers   your class trainer (on); profession trainers, weapon
 --              masters, riding and pet trainers (off)
 --   Rares and treasures
+--   Skyborne   the Convergences of Elements (the convergences module's),
+--              for Skyborne characters only
 -- Quests to pick up, entrances, services, rares and chests come from
 -- SuuUI's generated data (SuuUI.QuestStarts, SuuUI.MapPlaces).
 -- Where pins crowd: services are small and drawn under the rest; pins of
@@ -36,6 +38,7 @@ local DEFAULT_FILTERS = {
     trainers = { "class" },
     rares = {},
     marks = { "yours", "shared" },
+    skyborne = { "convergences" },
 }
 
 local M = SuuUI.RegisterModule({
@@ -110,14 +113,32 @@ local GROUPS = {
         { value = "yours", label = "Your marks" },
         { value = "shared", label = "Shared marks" },
     } },
+    -- (shown to Skyborne characters only: menuGroups)
+    { key = "skyborne", label = "Skyborne", kind = "toggles", options = {
+        { value = "convergences", label = "Convergences of Elements" },
+    } },
 }
+
+-- The convergences module, while this character sees them (Skyborne).
+local function convergences()
+    local c = SuuUI.GetModule and SuuUI.GetModule("convergences")
+    return c and c.Shown and c:Shown() and c or nil
+end
+
+-- The menu's groups: Skyborne only for a Skyborne character.
+local function menuGroups()
+    if convergences() then return GROUPS end
+    local out = {}
+    for _, g in ipairs(GROUPS) do if g.key ~= "skyborne" then out[#out + 1] = g end end
+    return out
+end
 
 -- The saved filters in the current groups: each saved choice goes to the
 -- group that has it now (mailboxes, bankers and auctioneers moved from
 -- Services to Trading, the trainers to Trainers), so an earlier layout's
 -- choices carry over; new options start off.
 local LEGACY = { classTrainer = { "trainers", "class" }, trainers = { "trainers", "professions" } }
-local FILTERS_VERSION = 4 -- 2: quests from items, 3: unexplored areas, 4: marks (each on for everyone once)
+local FILTERS_VERSION = 5 -- 2: quests from items, 3: unexplored areas, 4: marks, 5: convergences (each on for everyone once)
 function M:Saved()
     local saved = self:Get("filters") or DEFAULT_FILTERS
     local owner = {}
@@ -135,7 +156,8 @@ function M:Saved()
             end
         end
     end
-    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" }, { 4, "marks", "yours" }, { 4, "marks", "shared" } }) do
+    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" }, { 4, "marks", "yours" }, { 4, "marks", "shared" },
+                           { 5, "skyborne", "convergences" } }) do
         if (saved.v or 1) < new[1] then
             local has = false
             for _, v in ipairs(out[new[2]]) do if v == new[3] then has = true end end
@@ -198,6 +220,8 @@ function M:MenuValue()
 end
 
 function M:OnFilters(value)
+    -- (a character without the Skyborne group keeps its saved choice)
+    if value.skyborne == nil then value.skyborne = self:Saved().skyborne end
     local want = {}
     for _, v in ipairs(value.quests or {}) do want[v] = true end
     local changed = false
@@ -922,6 +946,20 @@ function M:Collect(mapID)
             end
         end
     end
+    -- the Convergences of Elements (a Skyborne's): glowing while you lack
+    -- the blessing; their tooltip read when shown (the blessing's time left)
+    local conv = on.skyborne.convergences and convergences()
+    if conv then
+        local look = conv:PinLook()
+        for i, spot in ipairs(conv:Spots()) do
+            local x, y = conv:PlaceOn(spot, mapID)
+            if x then
+                items[#items + 1] = { x = x, y = y, fixed = true, key = "convergence", uid = "c" .. i, pin = look,
+                    name = "Convergence of Elements", kindName = "Convergences of Elements", detail = conv:Where(spot),
+                    tip = function() return conv:Tip(spot) end }
+            end
+        end
+    end
     return items
 end
 
@@ -1121,6 +1159,7 @@ end
 
 function tipBase(g, hint)
     local first = g.items[1]
+    if g.distinct == 1 and first.tip then return first.tip() end
     if g.distinct == 1 then
         local lines = {}
         if first.more and #first.more > 0 then
@@ -1361,7 +1400,7 @@ function M:Layout()
                 data = best.pin
             end
             data = { glyph = data.glyph, char = data.char, color = data.color, edge = data.edge, small = data.small,
-                     ring = data.ring, spin = data.spin, edgeWidth = data.edgeWidth, count = g.distinct }
+                     ring = data.ring, spin = data.spin, edgeWidth = data.edgeWidth, glow = data.glow, count = g.distinct }
         end
         pin:SetData(data)
         pin:SetBaseAlpha((self:Get("pinAlpha") or 100) / 100)
@@ -1777,14 +1816,21 @@ function M:Attach()
     provider.OnCanvasSizeChanged = function() self:QueueLayout() end
     self.provider = provider
     self.menu = UI.FilterMenu(f, {
-        groups = GROUPS, defaults = DEFAULT_FILTERS, value = self:MenuValue(),
+        groups = menuGroups(), defaults = DEFAULT_FILTERS, value = self:MenuValue(),
         placeholder = "Map filters", style = "button", height = 22, done = true,
         onChange = function(value) self:OnFilters(value) end,
     })
     -- every time the map opens: the game's place for its filter comes back
+    self.skyborneMenu = convergences() ~= nil
     f:HookScript("OnShow", function()
         if not self:IsEnabled() then return end
         self:StyleArrow(true)
+        -- (the convergences module may come up after the map's menu)
+        local skyborne = convergences() ~= nil
+        if skyborne ~= self.skyborneMenu then
+            self.skyborneMenu = skyborne
+            self.menu:SetGroups(menuGroups())
+        end
         self.menu:SetValue(self:MenuValue())
         self:PlaceFilters()
     end)
@@ -1892,6 +1938,8 @@ function M:OnEnable()
     -- when the map opens, so a holiday that starts while you play shows
     -- marks made, renamed, shared or removed
     self:On("SUUUI_MARKS_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
+    -- convergences learned or shared, the blessing gained or lost
+    self:On("SUUUI_CONVERGENCES_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     -- the flight masters this character has found (the game's list at a
     -- flight master; its nodes are in a moment after it opens)
     self:OnGameEvent("TAXIMAP_OPENED", function() C_Timer.After(0.2, function() self:RecordTaxiNodes() end) end)

@@ -211,7 +211,7 @@ SuuUI is released under the [MIT License](LICENSE). The bundled typefaces keep t
 ## ✦ Credits
 
 - Typefaces: **[Figtree](https://github.com/erikdkennedy/figtree)** and **[Marcellus SC](https://fonts.google.com/specimen/Marcellus+SC)**, both under the SIL Open Font License (see [`Media/Fonts`](Media/Fonts)).
-- Quest and map data: **[QuestieDB](https://github.com/Questie/QuestieDB)**'s Forever data (where quests are picked up, what they ask, town services, rares and treasures), generated into [`src/Data`](src/Data) by [`tools/gen_quest_starts.lua`](tools/gen_quest_starts.lua).
+- Quest and map data: **[QuestieDB](https://github.com/Questie/QuestieDB)**'s Forever data (where quests are picked up, what they ask, town services, rares and treasures, the Convergence of Elements on Zephra's Isle), generated into [`src/Data`](src/Data) by [`tools/gen_quest_starts.lua`](tools/gen_quest_starts.lua).
 - Quest tags: **[Questie](https://github.com/Questie/Questie)** (no license stated), its corrections where the game marks a quest elite, dungeon or raid wrongly.
 - Trainer data: **[cMaNGOS classic-db](https://github.com/cmangos/classic-db)** (GPL-3.0), Classic's profession recipes, what each weapon master teaches, and which quests need a group.
 - Flight times: the speed SuuUI estimates flights with is fitted to the measured Classic flight times in **[InFlight](https://github.com/LudiusMaximus/InFlight)**'s data (MIT).
