@@ -25,8 +25,12 @@
 -- An enchant's name is the spell cast just before it appeared (the imbue or
 -- poison: the cast comes a moment before the change), else the weapon
 -- tooltip's line ("Rockbiter 2 (60 min)" reads "Rockbiter"). Removing one is
--- forbidden to addons (C_Spell.CancelItemTempEnchantment: tried, refused), so
--- a click does nothing and the tooltip says so.
+-- forbidden to addons, so a click does nothing and the tooltip says so.
+-- Probed 2026-10-20: C_Spell.CancelItemTempEnchantment is refused; the secure
+-- "cancelaura" action with "target-slot" breaks (CANCELABLE_ITEMS is nil on
+-- Forever); an aura container's AddItemEnchantment button never fills, as
+-- C_PaperDollInfo.GetTemporaryEnchantmentInfo reads nothing for an imbue.
+-- The game's buff frame cancels from its own trusted code.
 
 local _, ns = ...
 
