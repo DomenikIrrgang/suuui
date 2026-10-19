@@ -1786,6 +1786,15 @@ function M:OnEnable()
                          "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_REGEN_DISABLED" }) do
         if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRender() end) end
     end
+    -- a trainer's reset: the talents read 0 within half a second of its
+    -- events (probed 2026-10-20), so a build waiting for it looks again then
+    for _, e in ipairs({ "PLAYER_TALENT_UPDATE", "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function()
+                if next(store().reset[charKey()] or {}) then C_Timer.After(0.5, function() self:CheckReset() end) end
+            end)
+        end
+    end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if not self.page then self:Build() end
         if self.awayAfterCombat and self.away then self.awayAfterCombat = nil; self.away() end
