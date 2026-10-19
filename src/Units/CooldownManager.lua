@@ -150,10 +150,10 @@ local function copyLists(p)
         out[key] = {}
         for i, e in ipairs(p.lists[key] or {}) do
             local c = deepCopy(e)
-            if c.group or c.collection then c.uid = c.uid or (p.id .. key .. i) end
+            if c.group or c.collection or c.enchant then c.uid = c.uid or (p.id .. key .. i) end
             if c.collection then
                 for j, x in ipairs(c.entries or {}) do
-                    if x.group then x.uid = x.uid or (c.uid .. "." .. j) end
+                    if x.group or x.enchant then x.uid = x.uid or (c.uid .. "." .. j) end
                 end
             end
             out[key][#out[key] + 1] = c
@@ -451,6 +451,16 @@ end
 
 local function newUid() return tostring(time()) .. math.random(1000, 9999) end
 
+-- A weapon enchant entry (buffs only): { enchant = "main"|"off"|"ranged",
+-- name, uid }, whatever is on that weapon (the tracker's own slot; no
+-- spells). It goes by its uid, as its name follows the weapon.
+local ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
+local ENCHANT_INV = { main = 16, off = 17, ranged = 18 }
+local function enchantArt(e)
+    local info = UI.WeaponEnchant(e.enchant)
+    return info and info.icon or GetInventoryItemTexture("player", ENCHANT_INV[e.enchant] or 16) or 134400
+end
+
 -- The container a path points into (a list, a collection's entries or a
 -- shared slot's members), the index in it, and the shared slot it's in.
 local function locate(l, p)
@@ -738,10 +748,11 @@ end
 
 -- What the Behaviour panel sets on an entry (its Reset clears them all).
 local BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
-                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when", "fixedIcon" }
+                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when", "fixedIcon",
+                         "warnCombat" }
 -- What else makes an entry differ from the preset's: shown or not, and a
 -- shared slot's own settings and members (their whose and when included).
-local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members" }
+local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members", "enchant" }
 -- A collection's own settings.
 local COLLECTION_KEYS = { "name", "when", "hidden" }
 
@@ -877,7 +888,7 @@ local function candidates(kind)
     for _, p in ipairs(presets()) do
         for _, key in ipairs(keys) do
             walk(p.lists[key], key, function(e, path)
-                if e.collection then return end
+                if e.collection or e.enchant then return end
                 if e.group then
                     groups[e.name] = groups[e.name] or { entry = e, key = key }
                 else
@@ -1009,6 +1020,8 @@ end
 -- An option's value as an entry: a name (every ID it carries), "id:123", or
 -- "group:Name" (a preset's shared slot, a copy with its own uid).
 local function entryFor(value, byName, groups)
+    local hand = type(value) == "string" and value:match("^enchant:(%a+)$")
+    if hand and ENCHANT_NAME[hand] then return { enchant = hand, name = ENCHANT_NAME[hand], ids = {}, uid = newUid() } end
     local id = type(value) == "string" and tonumber(value:match("^id:(%d+)$"))
     if id then return { name = C_Spell.GetSpellName(id), ids = { id } } end
     local gname = type(value) == "string" and value:match("^group:(.+)$")
@@ -1165,6 +1178,7 @@ end
 -- (a cooldown slot's: the member it shows; an aura slot's, unless its icon
 -- is fixed: the first member you know, else its icon).
 local function artOf(e, cooldown)
+    if e.enchant then return enchantArt(e) end
     local id
     if e.group and cooldown then
         local m = knownMember(e) or (e.members or {})[1]
@@ -1263,6 +1277,11 @@ end
 local function accepts(from, to)
     local kind = from.kind
     local plain = kind == "entry" or kind == "member"
+    -- a weapon enchant: only to another place in Buffs on you (or a
+    -- collection there), never into a shared slot
+    if from.enchant then
+        return to.path.key == "buffs" and not to.path.m and (to.onto == nil or to.onto == "collection")
+    end
     if to.onto == "entry" then return plain and not samePath(from.path, to.path) end
     if to.onto == "slot" then
         local p = from.path
@@ -1391,6 +1410,10 @@ local function fillEntryRow(r, c)
         if not c.open then
             for _, m in ipairs(e.members or {}) do strip[#strip + 1] = artOf(m, cooldown) or false end
         end
+    elseif e.enchant then
+        add("weapon enchant")
+        local info = UI.WeaponEnchant(e.enchant)
+        add(info and info.name or nil)
     else
         local rank = rankText(e)
         dim = rank == "Not learned"
@@ -1410,9 +1433,11 @@ local function fillEntryRow(r, c)
     -- its conditions, in words
     if not (member and cooldown) then add(conditionWords(e.when)) end
     -- what the Behaviour panel changed, at a glance
-    if not cooldown and key ~= "procs" and (kind == "entry" or kind == "slot") then
+    if not cooldown and key ~= "procs" and (kind == "entry" or kind == "slot") and not e.enchant then
         local m = e.missing and MISSING_LABEL[e.missing]
         if m then add("missing: " .. m) end
+    elseif e.enchant and e.missing and e.missing ~= "warn" then
+        add("missing: " .. (MISSING_LABEL[e.missing] or e.missing))
     end
     r.rank:SetValue(table.concat(parts, " · "))
 
@@ -1430,7 +1455,8 @@ local function fillEntryRow(r, c)
     -- right to left: remove, Move to… (top rows), Behaviour (not a cooldown
     -- slot's members: theirs is the slot's), shown (not members)
     local top = c.level == 0
-    r.move:SetShown(top)
+    -- (a weapon enchant stays in Buffs on you)
+    r.move:SetShown(top and not e.enchant)
     r.behaviour:SetShown(not (member and cooldown))
     r.shown:SetShown(not member)
     local anchor, gap, used = r.remove, 6, r.remove:GetWidth()
@@ -1547,7 +1573,7 @@ local function buildEditor(parent)
                     if box and box.collection then
                         box.entries = box.entries or {}
                         table.insert(box.entries, e)
-                    elseif box and box.group then
+                    elseif box and box.group and not e.enchant then
                         box.members = box.members or {}
                         table.insert(box.members, { name = e.name, ids = e.ids })
                         regroup(box)
@@ -1592,6 +1618,21 @@ local function buildEditor(parent)
             top[#top + 1] = { heading = "All" }
             for _, o in ipairs(options) do top[#top + 1] = o end
             options = top
+        end
+        -- Buffs on you (not in a shared slot): one entry per weapon, first
+        if key == "buffs" and slots then
+            local weapons = {}
+            for _, hand in ipairs({ "main", "off" }) do
+                if not present[ENCHANT_NAME[hand]] then
+                    weapons[#weapons + 1] = { value = "enchant:" .. hand, label = ENCHANT_NAME[hand], icon = enchantArt({ enchant = hand }) }
+                end
+            end
+            if #weapons > 0 then
+                table.insert(weapons, 1, { heading = "Weapon enchants" })
+                if not (options[1] and options[1].heading) then weapons[#weapons + 1] = { heading = "Auras" } end
+                for _, o in ipairs(options) do weapons[#weapons + 1] = o end
+                options = weapons
+            end
         end
         return options
     end
@@ -1671,7 +1712,7 @@ local function buildEditor(parent)
     end
 
     function f:StartDrag(row)
-        self.drag = { path = row.path, kind = row.kind }
+        self.drag = { path = row.path, kind = row.kind, enchant = row.entry and row.entry.enchant }
         row:SetAlpha(0.4)
         self.dragRow = row
         self.ghost.icon:SetArt(row.icon:IsShown() and row.icon.art:GetTexture() or nil)
@@ -1820,7 +1861,8 @@ local function buildEditor(parent)
             -- a single entry, or a shared slot and (open) its members
             local function entryRows(e, p, level, rails)
                 if not e.group then
-                    row({ path = p, entry = e, kind = "entry", level = level, rails = rails, onto = "entry" })
+                    -- (nothing joins a weapon enchant in a shared slot)
+                    row({ path = p, entry = e, kind = "entry", level = level, rails = rails, onto = not e.enchant and "entry" or nil })
                     return
                 end
                 local open = self:IsOpen(e, p)
@@ -2437,6 +2479,25 @@ local function buildEditor(parent)
         au.height = h + 22
         b.au = au
 
+        -- a weapon enchant: which weapon, while it has nothing on it (warn:
+        -- the ember edge pulses), and whether the warning waits for the end
+        -- of a fight
+        local we, addW = section(b)
+        b.weapon = UI.Segmented(we, { options = { { value = "main", label = "Main hand" }, { value = "off", label = "Off hand" },
+            { value = "ranged", label = "Ranged" } },
+            onChange = function(v) mutateEntry(function(e) e.enchant, e.name = v, ENCHANT_NAME[v] end) end })
+        addW("Weapon", b.weapon)
+        b.weaponMissing = UI.Segmented(we, { options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Grey" },
+            { value = "warn", label = "Warn" } },
+            onChange = function(v)
+                mutateEntry(function(e) e.missing = v ~= "warn" and v or nil end)
+                b.warnOoc:SetDisabled(v ~= "warn")
+            end })
+        addW("When missing (Warn: the ember edge pulses)", b.weaponMissing)
+        b.warnOoc = UI.Toggle(we, { onChange = function(v) mutateEntry(function(e) e.warnCombat = (not v) or nil end) end })
+        addW("Warn only out of combat", b.warnOoc)
+        b.weaponSection = we
+
         buildConditions(b)
 
         b.reset = UI.Button(b.inner, { text = "Reset", width = 90, onClick = function()
@@ -2480,6 +2541,8 @@ local function buildEditor(parent)
                 shown = { b.naming, b.iconSection, b.au, b.cond }
                 meta = ("Shared slot · %d %s"):format(n, n == 1 and "aura" or "auras")
             end
+        elseif e.enchant then
+            shown, meta = { b.weaponSection, b.cond }, b.path.j and "Weapon enchant · in a collection" or "Weapon enchant"
         else
             shown = { cooldown and b.cd or b.au, b.cond }
             meta = cooldown and ("Cooldown · " .. LIST_INFO[b.key].label)
@@ -2532,6 +2595,11 @@ local function buildEditor(parent)
             b.effectAura:SetOptions(options)
             b.effectAura:SetValue(current)
             b.effectAura:SetDisabled(not e.effect)
+        elseif e.enchant then
+            b.weapon:SetValue(e.enchant)
+            b.weaponMissing:SetValue(e.missing or "warn")
+            b.warnOoc:SetValue(not e.warnCombat)
+            b.warnOoc:SetDisabled((e.missing or "warn") ~= "warn")
         elseif ctx == "single" or ctx == "slot" then
             b.source:SetValue(entrySource(e, b.key))
             local debuff = b.key == "debuffs"

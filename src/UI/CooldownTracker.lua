@@ -112,6 +112,12 @@
 -- The timers row centres on its divider, since a packed list's width can't
 -- be known: buffs and procs grow left of it, your debuffs right. Order from
 -- the divider outward: grey slots, reminders, then the packed ones.
+-- A weapon enchant entry ({ enchant = "main"|"off"|"ranged", name }, buffs
+-- only) is a fixed slot of SuuUI's own (UI.WeaponEnchantIcon: enchants stay
+-- readable in combat): whatever is on that weapon, with its MH/OH tag; with
+-- nothing on it, its "when missing": hide, grey, or warn (the default; the
+-- ember edge, only out of combat unless entry.warnCombat). No weapon in the
+-- slot (a shield in the off hand): not shown.
 
 local _, ns = ...
 
@@ -990,6 +996,17 @@ function TR:Reminder(entry, unit, parts, size)
     return f
 end
 
+-- A weapon enchant slot for an entry (UpdateEnchants fills it).
+function TR:Enchant(entry, size)
+    local f = self:Take("ench|" .. size, function() return UI.WeaponEnchantIcon(self, size) end)
+    f.enchant, f.entry = true, entry
+    f:SetSlot(entry.enchant)
+    f:SetTag(true)
+    f.wantShown, f.withTarget, f.coll, f.whens, f.condOK = nil, nil, nil, nil, nil
+    f:Show()
+    return f
+end
+
 -- Hands back everything built (kept for the next build).
 function TR:Clear()
     for _, t in ipairs(self.taken or {}) do
@@ -1035,7 +1052,7 @@ function TR:Build()
             local state = stateOf(whens, ctx)
             if state == "unmet" then return end
             e = withMetMembers(e, ctx)
-            if e.ids and #e.ids > 0 then
+            if (e.ids and #e.ids > 0) or e.enchant then
                 table.insert(lists[key], e)
                 collOf[e] = coll
                 if state == "live" then whensOf[e] = whens end
@@ -1102,9 +1119,14 @@ function TR:Build()
     -- A buff you don't know gets no grey slot or reminder (a level 12 priest
     -- isn't reminded of Shadow Protection); it packs with the hidden ones.
     for i, entry in ipairs(lists.buffs or {}) do
-        local parts = auraParts("HELPFUL", entry, "any", ctx)
+        local parts = not entry.enchant and auraParts("HELPFUL", entry, "any", ctx)
         local mode = entry.missing or "grey"
-        if mode == "hide" or not knowsEntry(entry) then
+        if entry.enchant then
+            local slot = self:Enchant(entry, auraSize(entry))
+            slot.coll = collOf[entry]
+            self:Watch(slot, whensOf[entry])
+            table.insert(self.built.buffs, slot)
+        elseif mode == "hide" or not knowsEntry(entry) then
             auraGroups(leftGroups, "b" .. i, entry, parts)
         elseif mode == "remind" then
             local r = self:Reminder(entry, "player", parts, auraSize(entry))
@@ -1176,6 +1198,7 @@ function TR:Build()
     self.condSig = self:ConditionSignature()
     self:UpdateLive(true)
     self:UpdateReminders(true)
+    self:UpdateEnchants(true)
     self:Layout()
     self:UpdateMissing()
     self:UpdateCooldowns()
@@ -1203,10 +1226,13 @@ function TR:Layout()
         end
         return out
     end
-    -- fixed slots whose live conditions are met (the rest close up)
+    -- fixed slots whose live conditions are met (the rest close up; a
+    -- weapon enchant's too while it has nothing to show)
     local function present(list)
         local out = {}
-        for _, f in ipairs(list) do if f.condOK ~= false then out[#out + 1] = f end end
+        for _, f in ipairs(list) do
+            if f.condOK ~= false and f.wantShown ~= false then out[#out + 1] = f end
+        end
         return out
     end
     local ess, util = cells(self.built.essential), cells(self.built.utility)
@@ -1355,7 +1381,9 @@ function TR:UpdateMissing()
     local opts = self.opts or {}
     -- fixed slots are the grey ones: their placeholder always shows; a
     -- "with a target" list shows its debuff slots only on a hostile target
-    for _, slot in ipairs(self.built.buffs) do slot.placeholder:Show() end
+    for _, slot in ipairs(self.built.buffs) do
+        if slot.placeholder then slot.placeholder:Show() end
+    end
     -- the hairline goes with them when every debuff slot waits for a target
     local allTarget = #self.built.debuffs > 0
     for _, slot in ipairs(self.built.debuffs) do
@@ -1400,6 +1428,31 @@ function TR:UpdateReminders(noLayout)
     if changed and not noLayout then self:Layout() end
 end
 
+-- Weapon enchant slots: what is on each weapon now, or its "when missing"
+-- (warn only out of combat unless the entry warns in combat too). A slot
+-- that comes or goes (hide, no weapon) relays the row.
+function TR:UpdateEnchants(noLayout)
+    local fight = self.inFight or InCombatLockdown()
+    local changed = false
+    for _, f in ipairs(self.built.buffs) do
+        if f.enchant then
+            local e = f.entry
+            local mode = e.missing or "warn"
+            if mode ~= "hide" and mode ~= "warn" then mode = "grey" end
+            if mode == "warn" and fight and not e.warnCombat then mode = "grey" end
+            f:SetMissing(mode ~= "hide" and mode or nil)
+            local has = f:Refresh()
+            local want = UI.WeaponEnchantable(e.enchant) and (has or mode ~= "hide")
+            if want ~= f.wantShown then
+                f.wantShown = want
+                changed = true
+            end
+            f:SetShown(want and f.condOK ~= false)
+        end
+    end
+    if changed and not noLayout then self:Layout() end
+end
+
 function TR:UpdateCooldowns(noLayout)
     local changed = false
     for _, cell in ipairs(self.cells or {}) do
@@ -1439,7 +1492,7 @@ function TR:UpdateLive(noLayout)
     -- fixed slots show or hide here; cells and reminders by their updates
     for _, key in ipairs({ "buffs", "debuffs" }) do
         for _, slot in ipairs(self.built[key]) do
-            if slot.condOK ~= nil then slot:SetShown(slot.condOK) end
+            if slot.condOK ~= nil then slot:SetShown(slot.condOK and slot.wantShown ~= false) end
         end
     end
     if changed and not noLayout then
@@ -1538,9 +1591,11 @@ function TR:Start()
     Events.OnUnit("UNIT_AURA", { "player", "target" }, function()
         if not (t.inFight or InCombatLockdown()) then t:UpdateReminders() end
     end, t)
-    Events.OnGame("PLAYER_REGEN_DISABLED", function() t.inFight = true; t:UpdateLive(); t:UpdateReminders() end, t)
+    Events.OnGame("PLAYER_REGEN_DISABLED", function() t.inFight = true; t:UpdateLive(); t:UpdateReminders(); t:UpdateEnchants() end, t)
+    Events.On("SUUUI_WEAPON_ENCHANTS_CHANGED", function() t:UpdateEnchants() end, t)
     Events.OnGame("PLAYER_REGEN_ENABLED", function()
         t.inFight = false
+        t:UpdateEnchants()
         -- live conditions, and engine maxes refused in combat
         t:UpdateLive()
         C_Timer.After(0, function() t:UpdateReminders() end)

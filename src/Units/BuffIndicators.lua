@@ -86,7 +86,7 @@ local function knownBuffs()
     for _, p in ipairs(presets) do
         for _, key in ipairs({ "buffs", "procs" }) do
             for _, e in ipairs(p.lists and p.lists[key] or {}) do
-                if not e.group and e.name and e.ids then byName[e.name] = byName[e.name] or e.ids end
+                if not e.group and not e.enchant and e.name and e.ids then byName[e.name] = byName[e.name] or e.ids end
             end
         end
     end

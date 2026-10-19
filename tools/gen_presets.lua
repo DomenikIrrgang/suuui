@@ -388,7 +388,17 @@ end
 
 -- Any entry of a list: a collection (aura lists only, one level: its
 -- entries are single entries and groups), a group, or a single entry.
+local ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
 local function resolveEntry(entry, key, where, class, inCollection)
+    if type(entry) == "table" and entry.enchant then
+        local w = ("%s: enchant %s"):format(where, tostring(entry.enchant))
+        if key ~= "buffs" or not ENCHANT_NAME[entry.enchant] then
+            invalid[#invalid + 1] = w .. ": a weapon enchant is main, off or ranged, in buffs only"
+            return nil
+        end
+        return { enchant = entry.enchant, name = ENCHANT_NAME[entry.enchant], ids = {}, behaviour = behaviour(entry, w, class),
+                 when = checkWhen(entry.when, w, class) }
+    end
     if type(entry) == "table" and entry.collection then
         local cwhere = ("%s / collection %s"):format(where, tostring(entry.collection))
         if inCollection then
@@ -455,7 +465,7 @@ for _, class in ipairs(classes) do
         end
         local function walk(e, kind, whose, where, hidden)
             if type(e) == "string" then return note(kind, e, whose, where .. (hidden and " (hidden)" or "")) end
-            if type(e) ~= "table" then return end
+            if type(e) ~= "table" or e.enchant then return end
             hidden = hidden or e.hidden
             if e.collection then
                 for _, x in ipairs(e.entries or {}) do walk(x, kind, whose, where .. " / " .. e.collection, hidden) end
@@ -577,7 +587,10 @@ end
 -- An entry as Lua lines at `indent`: a collection (its entries one level
 -- in), a group (a cooldown list's without source and max), or a single one.
 local function writeEntry(lines, e, indent)
-    if e.collection then
+    if e.enchant then
+        lines[#lines + 1] = ("%s{ enchant = %q, name = %q,%s%s ids = {} },"):format(indent, e.enchant, e.name,
+            behaviourText(e.behaviour), whenText(e.when))
+    elseif e.collection then
         lines[#lines + 1] = ("%s{ collection = true, name = %q,%s%s entries = {"):format(indent, e.name, e.hidden and " hidden = true," or "", whenText(e.when))
         for _, sub in ipairs(e.entries) do writeEntry(lines, sub, indent .. "    ") end
         lines[#lines + 1] = indent .. "} },"
@@ -681,6 +694,7 @@ if not arg[1] then
         if not a.classSet[class] then a.classSet[class] = true; a.classes[#a.classes + 1] = CLASS_LABEL[class] or class end
     end
     local function walkAura(class, e)
+        if e.enchant then return end
         if e.collection then
             for _, x in ipairs(e.entries or {}) do walkAura(class, x) end
         elseif e.group then

@@ -28,6 +28,8 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Slice and Dice", icon = 5171, missing = "grey", ids = { 5171, 6434, 6774 } },
+            { enchant = "main", name = "Main-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
+            { enchant = "off", name = "Off-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
         },
         debuffs = {
             { name = "Rupture", icon = 1943, ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
@@ -104,6 +106,8 @@ ns.CooldownPresets = {
         buffs = {
             { name = "Slice and Dice", icon = 5171, missing = "warn", ids = { 5171, 6434, 6774 } },
             { name = "Venom", icon = 1310703, missing = "warn", ids = { 1310703 } },
+            { enchant = "main", name = "Main-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
+            { enchant = "off", name = "Off-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
         },
         debuffs = {
             { name = "Rupture", icon = 1943, ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
@@ -181,6 +185,8 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Slice and Dice", icon = 5171, missing = "warn", ids = { 5171, 6434, 6774 } },
+            { enchant = "main", name = "Main-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
+            { enchant = "off", name = "Off-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
         },
         debuffs = {
             { name = "Rupture", icon = 1943, ids = { 1943, 8639, 8640, 8642, 11273, 11274, 11275, 14874, 14903, 15583, 1271514, 1272982 } },
@@ -258,6 +264,8 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Slice and Dice", icon = 5171, missing = "warn", ids = { 5171, 6434, 6774 } },
+            { enchant = "main", name = "Main-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
+            { enchant = "off", name = "Off-hand enchant", when = { conditions = { { type = "talent", talents = { 2842, 2995 } } } }, ids = {} },
         },
         debuffs = {
             { name = "Hemorrhage", icon = 16511, ids = { 16511 } },

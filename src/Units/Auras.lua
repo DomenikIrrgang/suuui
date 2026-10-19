@@ -14,8 +14,12 @@
 --   bosses         your debuffs left of each boss bar, growing left
 --
 -- Blizzard's BuffFrame and DebuffFrame are stood down; they come back after
--- a reload, so this module turns off or on with a reload. Temporary weapon
--- enchants (poisons, oils) aren't shown yet.
+-- a reload, so this module turns off or on with a reload.
+--
+-- Temporary weapon enchants (imbues, poisons, stones, oils) aren't auras:
+-- SuuUI draws them itself (UI.WeaponEnchantIcon) as their own group at the
+-- edge your buffs grow from, an MH or OH tag on each, then a gilt line, then
+-- the buffs, their container moved past them.
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -30,6 +34,7 @@ local M = SuuUI.RegisterModule({
     defaults = {
         buffPosition = { point = "TOPRIGHT", x = -224, y = -28 },
         showBuffs = true,
+        showEnchants = true,
         showDebuffs = true,
         showTarget = true,
         targetDebuffs = "all",  -- on your target: "all" (everyone's, yours first) or "mine"
@@ -175,6 +180,7 @@ function M:ApplyOptions()
         self.buffs.container:SetShown(shown)
         -- "playerBuffs": what sits under your buffs (the campfire strip) follows the holder
         SuuUI.PublishAnchor("playerBuffs", shown and self.buffHolder or nil)
+        self:LayoutEnchants()
     end
 end
 
@@ -202,6 +208,10 @@ local PREVIEW_DEBUFFS = {
     { 122, "dispel-magic" }, { 980, "dispel-curse" }, { 2818, "dispel-poison" }, { 18278, "dispel-disease" },
     { 6788, "ember" }, { 1715, "ember" },
 }
+-- Weapon enchants: main hand, off hand, ranged, from the edge the row grows
+-- from; space-3 either side of the gilt line after them.
+local ENCHANT_SLOTS = { "main", "off", "ranged" }
+local ENCHANT_ART = { 8232, 8024 } -- the preview's: Windfury and Flametongue Weapon
 local PREVIEW_FOR = {
     player = "debuffs", targetDebuffs = "debuffs", focusDebuffs = "debuffs",
     targetBuffs = "buffs", focusBuffs = "buffs",
@@ -216,9 +226,26 @@ function M:AuraPreview(on)
         if not on then c:HidePreview() return end
         c:ShowPreview(kind == "buffs" and buffs or debuffs, place)
     end
-    -- each where this module put it (the game won't say where its containers are)
+    -- each where this module put it (the game won't say where its containers are);
+    -- your buffs after two made-up weapon enchants
     local corner = self:Get("buffGrowth") == "right" and "TOPLEFT" or "TOPRIGHT"
-    show(self.buffs, "buffs", { corner, self.buffHolder, corner, 0, 0 })
+    local offset = self.enchantOffset or 0
+    if self.enchantIcons then
+        if on and self:Get("showEnchants") then
+            self.enchantPreview = true
+            for i, slot in ipairs({ "main", "off" }) do
+                self.enchantIcons[slot]:SetPreview(C_Spell.GetSpellTexture(ENCHANT_ART[i]))
+            end
+            offset = self:ArrangeEnchants({ "main", "off" })
+        elseif self.enchantPreview then
+            self.enchantPreview = nil
+            for _, slot in ipairs(ENCHANT_SLOTS) do self.enchantIcons[slot]:SetPreview(nil) end
+            self.enchantOffset = nil
+            self:LayoutEnchants()
+        end
+    end
+    local dx = corner == "TOPLEFT" and offset or -offset
+    show(self.buffs, "buffs", { corner, self.buffHolder, corner, dx, 0 })
     for name, c in pairs(self.attached or {}) do
         local def, frame = ATTACHED[name], self.attachedTo and self.attachedTo[name]
         local at = def and def.at
@@ -249,9 +276,83 @@ function M:BuffsPerRow(size, sp)
     return math.max(4, math.min(n, math.floor((room + sp) / (size + sp))))
 end
 
+-- The buff container at its edge of the holder, `offset` px in (past the
+-- enchants), its line that much shorter.
+function M:PlaceBuffs(offset)
+    local c = self.buffs.container
+    local w = self.buffRowW or self.buffHolder:GetWidth()
+    c:ClearAllPoints()
+    if self:Get("buffGrowth") == "right" then
+        c:SetPoint("TOPLEFT", self.buffHolder, "TOPLEFT", offset, 0)
+    else
+        c:SetPoint("TOPRIGHT", self.buffHolder, "TOPRIGHT", -offset, 0)
+    end
+    if self.buffs.SetLineWidth then self.buffs:SetLineWidth(math.max(self:Get("buffSize"), w - offset)) end
+end
+
+-- The enchant icons for `slots` in a row from the holder's edge, the line
+-- after them; the rest hidden. Returns how far in the buffs start (0: none).
+function M:ArrangeEnchants(slots)
+    local size, sp = self:Get("buffSize"), S["space-2"]
+    local right = self:Get("buffGrowth") == "right"
+    local corner = right and "TOPLEFT" or "TOPRIGHT"
+    local dir = right and 1 or -1
+    local used = {}
+    for i, slot in ipairs(slots) do
+        local icon = self.enchantIcons[slot]
+        used[slot] = true
+        icon:Resize(size)
+        icon:ClearAllPoints()
+        icon:SetPoint(corner, self.buffHolder, corner, dir * (i - 1) * (size + sp), 0)
+        icon:Show()
+    end
+    for _, slot in ipairs(ENCHANT_SLOTS) do
+        if not used[slot] then self.enchantIcons[slot]:Hide() end
+    end
+    local line = self.enchantLine
+    if #slots == 0 then line:Hide(); return 0 end
+    local w = #slots * size + (#slots - 1) * sp
+    line:ClearAllPoints()
+    line:SetSize(1, size)
+    line:SetPoint(corner, self.buffHolder, corner, dir * (w + S["space-3"]), 0)
+    line:Show()
+    return w + S["space-3"] * 2 + 1
+end
+
+-- Which weapons show an enchant now, and the row laid out for them. In
+-- combat the buff container may refuse to move: then every enchant keeps
+-- its place until the fight ends (one that ran out leaves its gap, a new
+-- one waits).
+function M:LayoutEnchants()
+    if not (self.enchantIcons and self.buffs) then return end
+    if self.enchantPreview then return end
+    local on = self:Get("showEnchants") and self:Get("showBuffs") and not self:Get("buffPosition").hidden
+    local up = {}
+    for _, slot in ipairs(ENCHANT_SLOTS) do
+        local icon = self.enchantIcons[slot]
+        if icon:Refresh() and on then up[#up + 1] = slot end
+    end
+    local offset = self:ArrangeEnchants(up)
+    if offset == self.enchantOffset then self.enchantPlaced = up; return end
+    local ok = true
+    if InCombatLockdown() then ok = pcall(self.PlaceBuffs, self, offset) else self:PlaceBuffs(offset) end
+    if ok then
+        self.enchantOffset, self.enchantPlaced = offset, up
+        return
+    end
+    -- refused: the places as they were (an icon whose enchant ran out shows
+    -- nothing there), until the fight ends
+    self:ArrangeEnchants(self.enchantPlaced or {})
+    self:RunOutOfCombat("enchants", function()
+        self.enchantOffset = nil
+        self:LayoutEnchants()
+    end)
+end
+
 -- Sizes, row length and growth, out of combat: the engine's buttons refuse a
 -- resize in combat. The holder (the edit-mode outline) is a row of the
--- setting's icons, two rows tall, and the icons start at the edge they grow from.
+-- setting's icons, two rows tall, and the icons start at the edge they grow
+-- from (the weapon enchants first).
 function M:ApplyLayout()
     self:RunOutOfCombat("layout", function()
         local sp = S["space-2"]
@@ -259,18 +360,17 @@ function M:ApplyLayout()
             local size = self:Get("buffSize")
             local n = self:BuffsPerRow(size, sp)
             local w = n * (size + sp)
+            self.buffRowW = w
             self.buffHolder:SetSize(w, 2 * (size + sp))
             self.buffs:SetGroupSize("buffs", size)
-            if self.buffs.SetLineWidth then self.buffs:SetLineWidth(w) end
-            local c = self.buffs.container
-            c:ClearAllPoints()
             if self:Get("buffGrowth") == "right" then
-                c:SetPoint("TOPLEFT", self.buffHolder, "TOPLEFT")
                 self.buffs:SetFlow("TOPLEFT", { "RIGHT", "DOWN" })
             else
-                c:SetPoint("TOPRIGHT", self.buffHolder, "TOPRIGHT")
                 self.buffs:SetFlow("TOPRIGHT", { "LEFT", "DOWN" })
             end
+            self.enchantOffset = nil
+            self:PlaceBuffs(0)
+            self:LayoutEnchants()
         end
         if self.attached.player then self.attached.player:SetGroupSize("debuffs", self:Get("debuffSize")) end
         SuuUI.EditMode.Refresh()
@@ -287,6 +387,8 @@ local SECTION = {
         { title = "On you", description = "In combat the game hides which spell an aura is from addons, so the game itself fills these in: SuuUI only styles them.", rows = {
             { key = "showBuffs", label = "Your buffs", control = "toggle",
               description = "Top right, left of the minimap. Right click cancels one." },
+            { key = "showEnchants", label = "Weapon enchants", control = "toggle", disabled = buffsOff,
+              description = "Imbues, poisons, stones and oils first in the row, an MH or OH tag on each, then a gilt line, then your buffs. The game doesn't let SuuUI remove one." },
             { key = "buffSize", label = "Buff size", control = "slider", min = 20, max = 48, step = 1, unit = "px",
               live = false, combat = true, disabled = buffsOff },
             { key = "buffsPerRow", label = "Buffs per row", control = "slider", min = 4, max = 32, step = 1,
@@ -330,6 +432,16 @@ function M:OnEnable()
             groups = { { key = "buffs", filter = { "HELPFUL" }, max = 32, cancel = true } },
         })
         if self.buffs then self.buffs.container:SetPoint("TOPRIGHT", holder, "TOPRIGHT") end
+        -- the weapon enchants' icons and the line after them
+        self.enchantIcons = {}
+        for _, slot in ipairs(ENCHANT_SLOTS) do
+            local icon = UI.WeaponEnchantIcon(holder, self:Get("buffSize"))
+            icon:SetSlot(slot)
+            icon:Hide()
+            self.enchantIcons[slot] = icon
+        end
+        self.enchantLine = UI.Fill(holder, "gilt-line", "ARTWORK")
+        self.enchantLine:Hide()
     end
     self.buffHolder.suuManagedShow = true
     self:RegisterMover(self.buffHolder, { key = "buffPosition", label = "Your buffs",
@@ -346,6 +458,8 @@ function M:OnEnable()
     end)
     -- edit mode's "With buffs and debuffs"
     self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, _, auras) self:AuraPreview(auras and true or false) end)
+    self:On("SUUUI_WEAPON_ENCHANTS_CHANGED", function() self:LayoutEnchants() end)
+    self:Watch("showEnchants", function() self:LayoutEnchants() end)
     -- the screen's width changed: the room beside the timeline with it
     self:On("SUUUI_ROOT_SCALED", function() self:ApplyLayout() end)
     for _, key in ipairs({ "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
@@ -363,4 +477,6 @@ function M:OnDisable()
     SuuUI.PublishAnchor("playerBuffs", nil)
     if self.buffs then self.buffs.container:Hide() end
     for _, c in pairs(self.attached or {}) do c.container:Hide() end
+    for _, icon in pairs(self.enchantIcons or {}) do icon:Hide() end
+    if self.enchantLine then self.enchantLine:Hide() end
 end

@@ -15,9 +15,12 @@
 --   Earthbind is the totem's, from any shaman (a totem's aura may not count
 --   as yours).
 --   Not tracked: Purge, Tremor Totem, Totemic Recall, Totemic Projection
---   (no cooldown to show), Astral Recall (a hearthstone), weapon imbues
---   (enchants, not auras), Mana Tide's aura (none on you in classic; its
---   cooldown has no condition: solo it restores your own mana).
+--   (no cooldown to show), Astral Recall (a hearthstone), Mana Tide's aura
+--   (none on you in classic; its cooldown has no condition: solo it
+--   restores your own mana).
+--   Weapon imbues: the main hand's enchant entry (Rockbiter from level 1),
+--   Enhancement's off hand too (shown only with a weapon there); they warn
+--   out of combat while the weapon has none.
 --   Maelstrom Weapon's aura IDs come from tools/data/found.tsv (/suu probe
 --   spells find), the passive talent's ID left out.
 --   Lightning Shield / Water Shield (10 min) reminds while missing, out of
@@ -42,19 +45,21 @@ local function totems(...) return { collection = "Totems", entries = { ... } } e
 -- the shared shock cooldown: the last one you know (Earth Shock from level 4)
 local SHOCKS = { group = "Shocks", icon = "Earth Shock", members = { "Frost Shock", "Flame Shock", "Earth Shock" } }
 local FROST_SHOCK = { "Frost Shock", missing = "hide" }
+-- the imbue on each weapon (whichever: Rockbiter, Flametongue, Windfury...)
+local MAIN_HAND, OFF_HAND = { enchant = "main" }, { enchant = "off" }
 local EARTHBIND = { "Earthbind", source = "any", missing = "hide" }
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { SHOCKS, "Chain Lightning", "Fire Nova" },
       utility = { "Grounding Totem", "Stoneclaw Totem", "Earthbind Totem", "Reincarnation" },
-      buffs = { shields("Lightning Shield"), totems(EARTH, WATER, air("Grace of Air")) },
+      buffs = { shields("Lightning Shield"), MAIN_HAND, totems(EARTH, WATER, air("Grace of Air")) },
       debuffs = { "Flame Shock", FROST_SHOCK, EARTHBIND },
       procs = {} },
     { id = "elemental", name = "Elemental", tree = 1,
       essential = { "Lava Burst", SHOCKS, "Chain Lightning", "Fire Nova" },
       utility = { "Grounding Totem", "Earthbind Totem", "Stoneclaw Totem", "Reincarnation" },
-      buffs = { shields("Lightning Shield"), totems(WATER, EARTH, air("Nature Resistance")) },
+      buffs = { shields("Lightning Shield"), MAIN_HAND, totems(WATER, EARTH, air("Nature Resistance")) },
       -- Flame Shock kept up (Lava Burst crits on it)
       debuffs = { "Flame Shock", FROST_SHOCK, EARTHBIND },
       -- Elemental Focus
@@ -65,7 +70,7 @@ return {
       -- Farseer is Enhancement's burst, used on cooldown
       essential = { { "Stormstrike", effect = "target" }, SHOCKS, { "Rage of the Farseer", effect = "you" } },
       utility = { "Fire Nova", "Grounding Totem", "Earthbind Totem", "Stoneclaw Totem", "Reincarnation" },
-      buffs = { shields("Lightning Shield"), totems(air("Windfury Totem"), EARTH, WATER) },
+      buffs = { shields("Lightning Shield"), MAIN_HAND, OFF_HAND, totems(air("Windfury Totem"), EARTH, WATER) },
       debuffs = { "Flame Shock", FROST_SHOCK, EARTHBIND, S.physical() },
       procs = { "Maelstrom Weapon", "Flurry", "Elemental Devastation" } },
     { id = "restoration", name = "Restoration", tree = 3,
@@ -73,7 +78,7 @@ return {
       -- in the big row; the shock is the interrupt
       essential = { "Riptide", { "Nature's Swiftness", effect = "you" }, "Mana Tide Totem", SHOCKS },
       utility = { "Grounding Totem", "Earthbind Totem", "Stoneclaw Totem", "Reincarnation" },
-      buffs = { shields("Water Shield"), totems(WATER, EARTH, air("Windwall")) },
+      buffs = { shields("Water Shield"), MAIN_HAND, totems(WATER, EARTH, air("Windwall")) },
       debuffs = { FROST_SHOCK },
       procs = {} },
 }

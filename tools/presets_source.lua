@@ -17,6 +17,9 @@
 -- or a group: { group = "Seal", source = "mine"|"others"|"any", max = 1..4,
 -- icon = "Member name", members = { "Name", ... } } (one slot for several).
 -- Group names are plural ("Seals"), so they read as groups next to spells.
+-- In buffs, { enchant = "main"|"off"|"ranged" } is the weapon enchant entry
+-- (whatever is on that weapon; "Main-hand enchant"), with conditions and
+-- missing = "hide"|"grey" (default warn) like an aura's.
 -- icon is optional: named, the slot always shows that member's art while
 -- nothing is up (written as fixedIcon = true; a name that isn't a member
 -- stops the generator); left out, the tracker picks it: the first member the

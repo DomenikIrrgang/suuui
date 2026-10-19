@@ -67,20 +67,24 @@ local opener = function(name) return { name, when = stealthed() } end
 local kidney = { "Kidney Shot", when = notBoss() }
 local feint = { "Feint", when = grouped() }
 local garrote = { "Garrote", missing = "hide" }
+-- the poison on each weapon, once you can make poisons (the Poisons skill;
+-- shown only with a weapon in the hand)
+local function poisoned() return { conditions = { { type = "talent", talents = { 2842, 2995 } } } } end
+local MAIN_HAND, OFF_HAND = { enchant = "main", when = poisoned() }, { enchant = "off", when = poisoned() }
 local sap = { "Sap", missing = "hide" }
 
 return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { kidney, target("Gouge"), feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract", opener("Sap") },
-      buffs = { { "Slice and Dice", missing = "grey" } },
+      buffs = { { "Slice and Dice", missing = "grey" }, MAIN_HAND, OFF_HAND },
       debuffs = { "Rupture", garrote, S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
       procs = {} },
     { id = "assassination", name = "Assassination", tree = 1,
       -- Improved Kidney Shot: the stun is a damage window, so it leads
       essential = { you("Cold Blood"), kidney, opener("Garrote"), opener("Cheap Shot"), target("Gouge"), feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Blind"), "Distract", opener("Sap") },
-      buffs = { { "Slice and Dice", missing = "warn" }, { "Venom", missing = "warn" } },
+      buffs = { { "Slice and Dice", missing = "warn" }, { "Venom", missing = "warn" }, MAIN_HAND, OFF_HAND },
       -- Mutilate and Venom want a poison up: grey while none is (on a hostile target)
       debuffs = { "Rupture", POISONS, garrote, S.physical(), S.STUNS, sap, HEALING_REDUCTION },
       procs = { "Remorseless" } },
@@ -89,7 +93,7 @@ return {
       essential = { { "Riposte", effect = "target" }, you("Adrenaline Rush"), you("Blade Flurry"), opener("Cheap Shot"),
           kidney, feint, "Kick" },
       utility = { you("Evasion"), you("Sprint"), you("Vanish"), target("Gouge"), target("Blind"), "Distract", opener("Sap") },
-      buffs = { { "Slice and Dice", missing = "warn" } },
+      buffs = { { "Slice and Dice", missing = "warn" }, MAIN_HAND, OFF_HAND },
       debuffs = { "Rupture", S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
       procs = {} },
     { id = "subtlety", name = "Subtlety", tree = 3,
@@ -100,7 +104,7 @@ return {
       -- Elusiveness shortens Vanish and Blind
       utility = { "Preparation", you("Vanish"), target("Blind"), target("Gouge"), you("Evasion"), you("Sprint"), "Distract",
           opener("Sap") },
-      buffs = { { "Slice and Dice", missing = "warn" } },
+      buffs = { { "Slice and Dice", missing = "warn" }, MAIN_HAND, OFF_HAND },
       -- Hemorrhage feeds Rupture: grey while it's off
       debuffs = { "Hemorrhage", "Rupture", garrote, S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
       procs = { "Thousand Cuts", "Cutthroat" } },
