@@ -392,7 +392,7 @@ end
 -- The world map module's pins away while the flight map shows, back after.
 local function refreshPins()
     local wm = SuuUI.GetModule("worldmap")
-    if wm and wm:IsEnabled() and wm.map and wm.map:IsShown() then wm:Refresh() end
+    if wm and wm:IsEnabled() and wm.map then wm:Refresh() end
 end
 
 function M:OnTaxiOpened()
@@ -427,6 +427,7 @@ function M:EnterMaster(retry)
     self.side:Show()
     self:UpdateBar()
     self:SetTitle(true)
+    self:QuietHeader(true)
     refreshPins()
     self:QueueLayout()
 end
@@ -441,6 +442,7 @@ function M:LeaveMaster(closeMap)
     if self.bar then self.bar:Hide() end
     if not was then return end
     self:SetTitle(false)
+    self:QuietHeader(false)
     local f = self.map
     if closeMap and f and f:IsShown() then
         self.closing = true
@@ -466,6 +468,25 @@ function M:SetTitle(master)
     local continent = continentOf(mapID)
     local c = continent and continent ~= mapID and C_Map.GetMapInfo(continent)
     chrome:SetTitle(c and (c.name .. " › " .. info.name) or info.name)
+end
+
+-- The header row's quest log controls (its search, count and settings) and
+-- the waypoint pin: nothing to do at a flight master (asked 2026-10-19);
+-- unseen and out of the mouse's way, back after. (The world map module
+-- puts its own Map filters away.)
+local function headerControls()
+    local list = _G.QuestScrollFrame
+    local f = _G.WorldMapFrame
+    return { list and list.SearchBox, _G.QuestLogCount, list and list.SettingsDropdown, f and f.WorldMapTrackingPinButton }
+end
+
+function M:QuietHeader(on)
+    for _, c in pairs(headerControls()) do
+        if c then
+            c:SetAlpha(on and 0 or 1)
+            if c.EnableMouse then c:EnableMouse(not on) end
+        end
+    end
 end
 
 function M:Select(node)

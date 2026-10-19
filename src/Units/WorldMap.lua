@@ -1678,14 +1678,17 @@ end
 function M:Refresh()
     local f = self.map
     if not (f and self:IsEnabled()) then return end
+    -- the flight master's map (the flight map module) has its own pins:
+    -- quests, services and marks stay off until it closes, and Map filters
+    -- with them
+    local flight = SuuUI.GetModule("flightmap")
+    local atMaster = flight and flight:IsEnabled() and flight:AtMaster()
+    self.menu:SetShown(not atMaster)
     if not f:IsShown() then self.items = nil; self:ClearPins(); return end
     local mapID = f:GetMapID()
     readCalendar()
     self:Reveal(mapID)
-    -- the flight master's map (the flight map module) has its own pins:
-    -- quests, services and marks stay off until it closes
-    local flight = SuuUI.GetModule("flightmap")
-    if flight and flight:IsEnabled() and flight:AtMaster() then
+    if atMaster then
         self.items = {}
     else
         self.items = mapID and self:Collect(mapID) or {}
