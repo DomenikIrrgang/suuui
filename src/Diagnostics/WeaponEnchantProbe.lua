@@ -390,18 +390,23 @@ local function secure()
         try("anchor", c.SetFlowLayoutAnchorPoint, c, "TOPLEFT")
         try("layout", c.SetItemEnchantmentLayout, c, { elementWidth = 40, elementHeight = 40 })
         local slot = AuraContainerItemEnchantmentSlot and AuraContainerItemEnchantmentSlot.MainHand or 0
-        local ok2, button = pcall(c.AddItemEnchantment, c, slot, { hidePermanent = false })
-        r.add = ok2 and show(button) or ("error: " .. tostring(button))
-        try("enable", c.SetItemEnchantmentEnabled, c, slot, true)
-        if ok2 and button then
+        -- as the buff bar's buttons: the engine only anchors them, their
+        -- size is ours (unsized, nothing renders), regions made before
+        -- they're registered
+        local function init(button)
+            try("size", button.SetSize, button, 40, 40)
             local icon = button:CreateTexture(nil, "ARTWORK")
             icon:SetAllPoints()
             try("setIcon", button.SetIcon, button, icon)
             try("setCancel", button.SetCancelAuraButtons, button, "RightButtonUp")
-            local bg = c:CreateTexture(nil, "BACKGROUND")
-            bg:SetAllPoints()
-            bg:SetColorTexture(1, 0, 1, 0.25)
         end
+        local ok2, button = pcall(c.AddItemEnchantment, c, slot, { hidePermanent = false, initializeFrame = init })
+        r.add = ok2 and show(button) or ("error: " .. tostring(button))
+        try("enable", c.SetItemEnchantmentEnabled, c, slot, true)
+        if ok2 and button and not r.size then init(button) end
+        local bg = c:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(1, 0, 1, 0.25)
         local label = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         label:SetPoint("BOTTOM", c, "TOP", 0, 6)
         label:SetText("Weapon enchant probe: right-click the icon to remove your main hand's enchant")
