@@ -584,7 +584,6 @@ function M:Tip(node)
                  description = "Talk to its flight master once to fly there." }
     end
     local t, measured = self:FlightTime(node.path)
-    local muted = "|cff" .. T.color["ink-muted"].hex
     local lines = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } }
     -- the quests with a step near it
     for _, id in ipairs(self.steps and self.steps[node.id] or {}) do
@@ -596,7 +595,6 @@ function M:Tip(node)
     return {
         title = node.name, subtitle = viaText(node.path, s),
         lines = lines,
-        description = t and (muted .. (measured and "Timed on an earlier flight." or "Estimated from the route's length; timed once you've flown it.") .. "|r") or nil,
         meta = not self:Get("confirm") and "Click to fly"
             or (self.selected == node and "Fly in the bar below" or "Click to choose"),
     }
