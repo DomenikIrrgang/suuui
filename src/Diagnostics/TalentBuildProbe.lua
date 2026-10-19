@@ -584,7 +584,8 @@ end
 
 function TB.Trainer()
     local s = watch("trainer")
-    s.before = talentState()
+    local ok, before = pcall(talentState)
+    s.before = ok and before or ("error: " .. tostring(before):sub(1, 160))
     s.timeline = {}
     trainerUntil = GetTime() + 180
     local function mark(line) push(s.timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
@@ -598,7 +599,10 @@ function TB.Trainer()
             -- the state right after anything that may change it
             if event ~= "GOSSIP_SHOW" and event ~= "GOSSIP_CLOSED" then
                 C_Timer.After(0.5, function()
-                    if trainerUntil and GetTime() <= trainerUntil then mark("  after: " .. talentState()) end
+                    if trainerUntil and GetTime() <= trainerUntil then
+                        local ok, now = pcall(talentState)
+                        mark("  after: " .. (ok and now or ("error: " .. tostring(now):sub(1, 160))))
+                    end
                 end)
             end
         end)
@@ -616,8 +620,10 @@ function TB.Trainer()
     C_Timer.After(180, function()
         for _, e in ipairs(TRAINER_EVENTS) do pcall(trainerFrame.UnregisterEvent, trainerFrame, e) end
         trainerUntil = nil
-        s.after = talentState()
+        -- say done first: an error reading the state must not swallow it
         ns.Print("Talent builds probe: trainer watch done. /reload to save.")
+        local ok, after = pcall(talentState)
+        s.after = ok and after or ("error: " .. tostring(after):sub(1, 160))
     end)
     ns.Print("Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload.")
 end
