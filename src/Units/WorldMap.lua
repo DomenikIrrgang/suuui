@@ -1572,11 +1572,26 @@ function M:HookQuestProviders()
     local f = self.map
     if not f or self.questHooked then return end
     self.questHooked = true
-    local quest = _G.QuestDataProviderMixin
+    local quest, area = _G.QuestDataProviderMixin, _G.AreaPOIDataProviderMixin
     for provider in pairs(f.dataProviders or {}) do
         if quest and provider.RefreshAllData == quest.RefreshAllData then
             hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestPins() end end)
+        elseif area and provider.RefreshAllData == area.RefreshAllData then
+            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:HideTownPins() end end)
         end
+    end
+end
+
+-- The game's little houses for the cities (asked 2026-10-19): area POIs
+-- drawn from its old POI icon sheet, no atlas (probed: Darnassus,
+-- Orgrimmar, Thunder Bluff on Kalimdor). Hidden outside instances; a
+-- battleground's bases are area POIs from the same sheet.
+function M:HideTownPins()
+    local f = self.map
+    if not f or not f.EnumeratePinsByTemplate or IsInInstance() then return end
+    for pin in f:EnumeratePinsByTemplate("AreaPOIPinTemplate") do
+        local info = pin.poiInfo
+        if type(info) == "table" and info.atlasName == nil then pin:Hide() end
     end
 end
 
